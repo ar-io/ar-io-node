@@ -13,6 +13,7 @@ import * as os from 'node:os';
 
 import { Cdb64RootTxIndex } from './cdb64-root-tx-index.js';
 import { Cdb64Writer } from '../lib/cdb64.js';
+import { PartitionedCdb64Writer } from '../lib/partitioned-cdb64-writer.js';
 import { encodeCdb64Value } from '../lib/cdb64-encoding.js';
 import { toB64Url } from '../lib/encoding.js';
 import { createTestLogger } from '../../test/test-logger.js';
@@ -585,6 +586,290 @@ describe('Cdb64RootTxIndex', () => {
       assert.equal(result.rootTxId, toB64Url(createTxId(100)));
 
       await index.close();
+    });
+  });
+
+  describe('partitioned directory support', () => {
+    // Helper to create a partitioned index
+    const createPartitionedIndex = async (
+      indexDir: string,
+      entries: Array<{
+        dataItemId: Buffer;
+        rootTxId: Buffer;
+        rootDataItemOffset?: number;
+        rootDataOffset?: number;
+      }>,
+    ): Promise<void> => {
+      const writer = new PartitionedCdb64Writer(indexDir);
+      await writer.open();
+
+      for (const entry of entries) {
+        const value =
+          entry.rootDataItemOffset !== undefined &&
+          entry.rootDataOffset !== undefined
+            ? {
+                rootTxId: entry.rootTxId,
+                rootDataItemOffset: entry.rootDataItemOffset,
+                rootDataOffset: entry.rootDataOffset,
+              }
+            : { rootTxId: entry.rootTxId };
+
+        await writer.add(entry.dataItemId, encodeCdb64Value(value));
+      }
+
+      await writer.finalize();
+    };
+
+    it('should load partitioned directory with manifest.json', async () => {
+      const indexDir = path.join(tempDir, 'partitioned');
+      const dataItemId = createTxId(1);
+      const rootTxId = createTxId(100);
+
+      await createPartitionedIndex(indexDir, [{ dataItemId, rootTxId }]);
+
+      const index = new Cdb64RootTxIndex({ log, sources: [indexDir] });
+      const result = await index.getRootTx(toB64Url(dataItemId));
+
+      assert(result !== undefined);
+      assert.equal(result.rootTxId, toB64Url(rootTxId));
+
+      await index.close();
+    });
+
+    it('should return undefined for missing key in partitioned index', async () => {
+      const indexDir = path.join(tempDir, 'partitioned-missing');
+      const existingId = createTxId(1);
+      const missingId = createTxId(999);
+
+      await createPartitionedIndex(indexDir, [
+        { dataItemId: existingId, rootTxId: createTxId(100) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({ log, sources: [indexDir] });
+      const result = await index.getRootTx(toB64Url(missingId));
+
+      assert.equal(result, undefined);
+
+      await index.close();
+    });
+
+    it('should return complete format with offsets', async () => {
+      const indexDir = path.join(tempDir, 'partitioned-complete');
+      const dataItemId = createTxId(2);
+      const rootTxId = createTxId(200);
+      const rootDataItemOffset = 12345;
+      const rootDataOffset = 67890;
+
+      await createPartitionedIndex(indexDir, [
+        { dataItemId, rootTxId, rootDataItemOffset, rootDataOffset },
+      ]);
+
+      const index = new Cdb64RootTxIndex({ log, sources: [indexDir] });
+      const result = await index.getRootTx(toB64Url(dataItemId));
+
+      assert(result !== undefined);
+      assert.equal(result.rootTxId, toB64Url(rootTxId));
+      assert.equal(result.rootOffset, rootDataItemOffset);
+      assert.equal(result.rootDataOffset, rootDataOffset);
+
+      await index.close();
+    });
+
+    it('should handle entries across multiple partitions', async () => {
+      const indexDir = path.join(tempDir, 'partitioned-multi');
+
+      // Create entries that will go to different partitions (different first bytes)
+      const entries = [
+        { dataItemId: Buffer.alloc(32, 0x00), rootTxId: createTxId(100) }, // partition 00
+        { dataItemId: Buffer.alloc(32, 0x7f), rootTxId: createTxId(200) }, // partition 7f
+        { dataItemId: Buffer.alloc(32, 0xff), rootTxId: createTxId(300) }, // partition ff
+      ];
+      // Set unique second bytes so keys differ
+      entries[0].dataItemId[1] = 0x01;
+      entries[1].dataItemId[1] = 0x02;
+      entries[2].dataItemId[1] = 0x03;
+
+      await createPartitionedIndex(indexDir, entries);
+
+      const index = new Cdb64RootTxIndex({ log, sources: [indexDir] });
+
+      for (const entry of entries) {
+        const result = await index.getRootTx(toB64Url(entry.dataItemId));
+        assert(result !== undefined);
+        assert.equal(result.rootTxId, toB64Url(entry.rootTxId));
+      }
+
+      await index.close();
+    });
+
+    it('should return undefined for key in non-existent partition', async () => {
+      const indexDir = path.join(tempDir, 'partitioned-sparse');
+
+      // Create entry that goes to partition 0x00
+      const existingId = Buffer.alloc(32, 0x00);
+      existingId[1] = 0x01;
+
+      await createPartitionedIndex(indexDir, [
+        { dataItemId: existingId, rootTxId: createTxId(100) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({ log, sources: [indexDir] });
+
+      // Query for key in partition 0xff (which doesn't exist)
+      const missingId = Buffer.alloc(32, 0xff);
+      missingId[1] = 0x01;
+      const result = await index.getRootTx(toB64Url(missingId));
+
+      assert.equal(result, undefined);
+
+      await index.close();
+    });
+
+    it('should prefer manifest.json over loose .cdb files', async () => {
+      const indexDir = path.join(tempDir, 'manifest-priority');
+      await fs.mkdir(indexDir);
+
+      const dataItemId = createTxId(1);
+
+      // Create a loose .cdb file first
+      await createTestCdb(path.join(indexDir, 'loose.cdb'), [
+        { dataItemId, rootTxId: createTxId(999) }, // This should be ignored
+      ]);
+
+      // Create partitioned index (creates manifest.json)
+      const partitionedDir = path.join(tempDir, 'partitioned-temp');
+      await createPartitionedIndex(partitionedDir, [
+        { dataItemId, rootTxId: createTxId(100) }, // This should be used
+      ]);
+
+      // Copy manifest and partition to indexDir
+      await fs.copyFile(
+        path.join(partitionedDir, 'manifest.json'),
+        path.join(indexDir, 'manifest.json'),
+      );
+      const partitionFiles = await fs.readdir(partitionedDir);
+      for (const file of partitionFiles) {
+        if (file.endsWith('.cdb')) {
+          await fs.copyFile(
+            path.join(partitionedDir, file),
+            path.join(indexDir, file),
+          );
+        }
+      }
+
+      const index = new Cdb64RootTxIndex({ log, sources: [indexDir] });
+      const result = await index.getRootTx(toB64Url(dataItemId));
+
+      // Should get value from partitioned index, not loose.cdb
+      assert(result !== undefined);
+      assert.equal(result.rootTxId, toB64Url(createTxId(100)));
+
+      await index.close();
+    });
+
+    it('should support mixed sources (partitioned + single file)', async () => {
+      const partitionedDir = path.join(tempDir, 'mixed-partitioned');
+      const singleCdb = path.join(tempDir, 'single.cdb');
+
+      const partitionedId = createTxId(1);
+      const singleFileId = createTxId(2);
+
+      // Create partitioned index
+      await createPartitionedIndex(partitionedDir, [
+        { dataItemId: partitionedId, rootTxId: createTxId(100) },
+      ]);
+
+      // Create single CDB file
+      await createTestCdb(singleCdb, [
+        { dataItemId: singleFileId, rootTxId: createTxId(200) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [partitionedDir, singleCdb],
+      });
+
+      // Should find entry from partitioned index
+      const result1 = await index.getRootTx(toB64Url(partitionedId));
+      assert(result1 !== undefined);
+      assert.equal(result1.rootTxId, toB64Url(createTxId(100)));
+
+      // Should find entry from single file
+      const result2 = await index.getRootTx(toB64Url(singleFileId));
+      assert(result2 !== undefined);
+      assert.equal(result2.rootTxId, toB64Url(createTxId(200)));
+
+      await index.close();
+    });
+
+    it('should handle empty partitioned index', async () => {
+      const indexDir = path.join(tempDir, 'partitioned-empty');
+      await createPartitionedIndex(indexDir, []);
+
+      const index = new Cdb64RootTxIndex({ log, sources: [indexDir] });
+      const result = await index.getRootTx(toB64Url(createTxId(1)));
+
+      assert.equal(result, undefined);
+
+      await index.close();
+    });
+
+    describe('manifest file watching', () => {
+      const waitForWatcher = (ms: number) =>
+        new Promise((resolve) => setTimeout(resolve, ms));
+
+      it('should detect manifest.json changes', async () => {
+        const indexDir = path.join(tempDir, 'watch-manifest');
+
+        // Create initial partitioned index with one entry
+        const initialId = Buffer.alloc(32, 0xab);
+        initialId[1] = 0x01;
+        await createPartitionedIndex(indexDir, [
+          { dataItemId: initialId, rootTxId: createTxId(100) },
+        ]);
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [indexDir],
+          watch: true,
+        });
+
+        // Trigger initialization
+        const result1 = await index.getRootTx(toB64Url(initialId));
+        assert(result1 !== undefined);
+
+        // New entry should not exist yet
+        const newId = Buffer.alloc(32, 0xcd);
+        newId[1] = 0x02;
+        const beforeUpdate = await index.getRootTx(toB64Url(newId));
+        assert.equal(beforeUpdate, undefined);
+
+        // Create a new partitioned index in a temp location
+        const tempIndexDir = path.join(tempDir, 'watch-manifest-temp');
+        await createPartitionedIndex(tempIndexDir, [
+          { dataItemId: initialId, rootTxId: createTxId(100) },
+          { dataItemId: newId, rootTxId: createTxId(200) },
+        ]);
+
+        // Copy new partition files over existing ones (update in place)
+        const newFiles = await fs.readdir(tempIndexDir);
+        for (const file of newFiles) {
+          await fs.copyFile(
+            path.join(tempIndexDir, file),
+            path.join(indexDir, file),
+          );
+        }
+
+        // Wait for watcher to detect the manifest.json change
+        await waitForWatcher(1500);
+
+        // Should now find the new entry
+        const afterUpdate = await index.getRootTx(toB64Url(newId));
+        assert(afterUpdate !== undefined);
+        assert.equal(afterUpdate.rootTxId, toB64Url(createTxId(200)));
+
+        await index.close();
+      });
     });
   });
 });

@@ -28,7 +28,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { parse } from 'csv-parse';
 import { CdbWriter } from 'cdb64/node/index.js';
@@ -38,13 +37,13 @@ import {
   Cdb64RootTxValue,
 } from '../../src/lib/cdb64-encoding.js';
 import { fromB64Url } from '../../src/lib/encoding.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { PartitionedCdb64Writer } from '../../src/lib/partitioned-cdb64-writer.js';
 
 interface Config {
   inputPath: string;
   outputPath: string;
+  outputDir?: string;
+  partitioned: boolean;
   skipHeader: boolean;
   force: boolean;
 }
@@ -55,16 +54,18 @@ Generate CDB64 Root TX Index (Rust)
 
 This tool generates a CDB64 index file from a CSV file containing
 data item ID to root transaction ID mappings. Uses the Rust-backed
-cdb64 library for improved performance.
+cdb64 library for improved single-file performance.
 
 Usage: ./tools/generate-cdb64-root-tx-index-rs [options]
 
 Options:
-  --input, -i <path>   Input CSV file path (required)
-  --output, -o <path>  Output CDB64 file path (required)
-  --skip-header        Skip the first line of the CSV (default: false)
-  --force, -f          Overwrite output file if it exists
-  --help, -h           Show this help message
+  --input, -i <path>    Input CSV file path (required)
+  --output, -o <path>   Output CDB64 file path (single file mode, required unless --partitioned)
+  --partitioned         Enable partitioned output (uses TypeScript writer for each partition)
+  --output-dir <path>   Output directory for partitioned index (required with --partitioned)
+  --skip-header         Skip the first line of the CSV (default: false)
+  --force, -f           Overwrite output file if it exists
+  --help, -h            Show this help message
 
 CSV Format:
   data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
@@ -85,8 +86,11 @@ Supported Value Formats:
   - Path Complete: path + offsets (nested bundles with offsets)
 
 Example:
+  # Single file output (uses Rust writer for speed)
   ./tools/generate-cdb64-root-tx-index-rs --input mappings.csv --output index.cdb
-  ./tools/generate-cdb64-root-tx-index-rs --input data.csv --output index.cdb --skip-header
+
+  # Partitioned output
+  ./tools/generate-cdb64-root-tx-index-rs --input data.csv --partitioned --output-dir ./index/
 `);
 }
 
@@ -94,6 +98,8 @@ function parseArgs(): Config | null {
   const args = process.argv.slice(2);
   let inputPath: string | undefined;
   let outputPath: string | undefined;
+  let outputDir: string | undefined;
+  let partitioned = false;
   let skipHeader = false;
   let force = false;
 
@@ -114,6 +120,14 @@ function parseArgs(): Config | null {
         outputPath = path.resolve(nextArg);
         i++;
         break;
+      case '--output-dir':
+        if (!nextArg) throw new Error('--output-dir requires a path');
+        outputDir = path.resolve(nextArg);
+        i++;
+        break;
+      case '--partitioned':
+        partitioned = true;
+        break;
       case '--skip-header':
         skipHeader = true;
         break;
@@ -133,11 +147,19 @@ function parseArgs(): Config | null {
   if (!inputPath) {
     throw new Error('--input is required');
   }
-  if (!outputPath) {
-    throw new Error('--output is required');
+
+  if (partitioned) {
+    if (!outputDir) {
+      throw new Error('--output-dir is required when using --partitioned');
+    }
+    outputPath = outputDir;
+  } else {
+    if (!outputPath) {
+      throw new Error('--output is required');
+    }
   }
 
-  return { inputPath, outputPath, skipHeader, force };
+  return { inputPath, outputPath, outputDir, partitioned, skipHeader, force };
 }
 
 /**
@@ -229,6 +251,9 @@ async function generateIndex(config: Config): Promise<void> {
   console.log('=== CDB64 Root TX Index Generator (Rust) ===\n');
   console.log(`Input:  ${config.inputPath}`);
   console.log(`Output: ${config.outputPath}`);
+  if (config.partitioned) {
+    console.log('Mode:   Partitioned (using TypeScript writer)');
+  }
   console.log('');
 
   // Verify input file exists
@@ -236,11 +261,16 @@ async function generateIndex(config: Config): Promise<void> {
     throw new Error(`Input file not found: ${config.inputPath}`);
   }
 
-  // Check if output file exists (unless --force)
+  // Check if output file/directory exists (unless --force)
   if (fs.existsSync(config.outputPath) && !config.force) {
     throw new Error(
-      `Output file already exists: ${config.outputPath} (use --force to overwrite)`,
+      `Output ${config.partitioned ? 'directory' : 'file'} already exists: ${config.outputPath} (use --force to overwrite)`,
     );
+  }
+
+  // For partitioned mode, use PartitionedCdb64Writer
+  if (config.partitioned) {
+    return generatePartitionedIndex(config);
   }
 
   // Write to temp file first, rename on success (atomic write)
@@ -418,6 +448,182 @@ async function generateIndex(config: Config): Promise<void> {
     } catch {
       // Ignore cleanup errors
     }
+    throw error;
+  }
+}
+
+/**
+ * Generates a partitioned index using the TypeScript PartitionedCdb64Writer.
+ */
+async function generatePartitionedIndex(config: Config): Promise<void> {
+  const writer = new PartitionedCdb64Writer(config.outputDir!);
+  await writer.open();
+
+  let recordNumber = 0;
+  let recordCount = 0;
+  let simpleCount = 0;
+  let completeCount = 0;
+  let pathCount = 0;
+  let pathCompleteCount = 0;
+  let errorCount = 0;
+  let headerSkipped = false;
+  const startTime = Date.now();
+
+  // Create CSV parser with RFC 4180 support
+  const parser = fs.createReadStream(config.inputPath).pipe(
+    parse({
+      columns: false,
+      skip_empty_lines: true,
+      trim: true,
+      relax_quotes: true,
+      comment: '#',
+    }),
+  );
+
+  try {
+    for await (const record of parser) {
+      recordNumber++;
+
+      if (
+        !headerSkipped &&
+        (config.skipHeader || looksLikeHeader(record as string[]))
+      ) {
+        headerSkipped = true;
+        if (config.skipHeader) {
+          console.log('Skipping header (--skip-header)');
+        } else {
+          console.log('Header auto-detected, skipping first line');
+        }
+        continue;
+      }
+      headerSkipped = true;
+
+      try {
+        const parts = record as string[];
+
+        if (parts.length < 2) {
+          throw new Error('CSV record must have at least 2 columns');
+        }
+
+        const dataItemId = parseBase64UrlId(parts[0], 'data_item_id');
+        const rootTxId = parseBase64UrlId(parts[1], 'root_tx_id');
+
+        const pathValue =
+          parts.length >= 3 ? parsePath(parts[2], recordNumber) : undefined;
+
+        const hasOffsetCols = parts.length >= 5;
+        const hasOffset1 = hasOffsetCols && parts[3].trim() !== '';
+        const hasOffset2 = hasOffsetCols && parts[4].trim() !== '';
+
+        if (hasOffset1 !== hasOffset2) {
+          throw new Error(
+            'If offset columns are present, both root_data_item_offset and root_data_offset must be provided',
+          );
+        }
+
+        let value: Cdb64RootTxValue;
+        if (pathValue !== undefined) {
+          if (hasOffset1 && hasOffset2) {
+            const rootDataItemOffset = parseOffset(
+              parts[3],
+              'root_data_item_offset',
+            );
+            const rootDataOffset = parseOffset(parts[4], 'root_data_offset');
+            value = {
+              path: pathValue,
+              rootDataItemOffset,
+              rootDataOffset,
+            };
+            pathCompleteCount++;
+          } else {
+            value = { path: pathValue };
+            pathCount++;
+          }
+        } else {
+          if (hasOffset1 && hasOffset2) {
+            const rootDataItemOffset = parseOffset(
+              parts[3],
+              'root_data_item_offset',
+            );
+            const rootDataOffset = parseOffset(parts[4], 'root_data_offset');
+            value = {
+              rootTxId,
+              rootDataItemOffset,
+              rootDataOffset,
+            };
+            completeCount++;
+          } else {
+            value = { rootTxId };
+            simpleCount++;
+          }
+        }
+
+        await writer.add(dataItemId, encodeCdb64Value(value));
+        recordCount++;
+
+        if (recordCount % 100000 === 0) {
+          const elapsedSec = (Date.now() - startTime) / 1000;
+          const recordsPerSec = Math.round(recordCount / elapsedSec);
+          const stats = writer.getPartitionStats();
+          console.log(
+            `Processed ${recordCount.toLocaleString()} records, ${stats.length} partitions... (${recordsPerSec.toLocaleString()} records/sec)`,
+          );
+        }
+      } catch (error: any) {
+        errorCount++;
+        console.error(`Error on record ${recordNumber}: ${error.message}`);
+
+        if (errorCount > 100) {
+          throw new Error('Too many errors, aborting');
+        }
+      }
+    }
+
+    const manifest = await writer.finalize();
+
+    const totalElapsedSec = (Date.now() - startTime) / 1000;
+    const avgRecordsPerSec =
+      totalElapsedSec > 0 ? Math.round(recordCount / totalElapsedSec) : 0;
+
+    console.log('\n=== Generation Complete ===');
+    console.log(`Total records processed: ${recordNumber.toLocaleString()}`);
+    console.log(`Records written: ${recordCount.toLocaleString()}`);
+    console.log('  Legacy formats:');
+    console.log(`    - Simple: ${simpleCount.toLocaleString()}`);
+    console.log(`    - Complete: ${completeCount.toLocaleString()}`);
+    console.log('  Path formats:');
+    console.log(`    - Path: ${pathCount.toLocaleString()}`);
+    console.log(`    - Path Complete: ${pathCompleteCount.toLocaleString()}`);
+    if (errorCount > 0) {
+      console.log(`Errors: ${errorCount}`);
+    }
+    console.log(`Output: ${config.outputPath}`);
+    console.log(`Partitions: ${manifest.partitions.length}`);
+
+    const totalSize = manifest.partitions.reduce((sum, p) => sum + p.size, 0);
+    const sizeMB = (totalSize / 1024 / 1024).toFixed(2);
+    console.log(`Total size: ${sizeMB} MB`);
+
+    // Show partition distribution
+    console.log('\nPartition distribution:');
+    const sortedPartitions = [...manifest.partitions].sort(
+      (a, b) => b.recordCount - a.recordCount,
+    );
+    const top5 = sortedPartitions.slice(0, 5);
+    for (const p of top5) {
+      console.log(
+        `  ${p.prefix}: ${p.recordCount.toLocaleString()} records (${(p.size / 1024 / 1024).toFixed(2)} MB)`,
+      );
+    }
+    if (sortedPartitions.length > 5) {
+      console.log(`  ... and ${sortedPartitions.length - 5} more partitions`);
+    }
+
+    console.log(
+      `\nElapsed time: ${totalElapsedSec.toFixed(1)}s (${avgRecordsPerSec.toLocaleString()} records/sec)`,
+    );
+  } catch (error) {
+    await writer.abort();
     throw error;
   }
 }

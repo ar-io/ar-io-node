@@ -27,23 +27,22 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { parse } from 'csv-parse';
 
 import { Cdb64Writer } from '../../src/lib/cdb64.js';
+import { PartitionedCdb64Writer } from '../../src/lib/partitioned-cdb64-writer.js';
 import {
   encodeCdb64Value,
   Cdb64RootTxValue,
 } from '../../src/lib/cdb64-encoding.js';
 import { fromB64Url } from '../../src/lib/encoding.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 interface Config {
   inputPath: string;
   outputPath: string;
+  outputDir?: string;
+  partitioned: boolean;
   skipHeader: boolean;
   force: boolean;
 }
@@ -58,11 +57,13 @@ data item ID to root transaction ID mappings.
 Usage: ./tools/generate-cdb64-root-tx-index [options]
 
 Options:
-  --input, -i <path>   Input CSV file path (required)
-  --output, -o <path>  Output CDB64 file path (required)
-  --skip-header        Skip the first line of the CSV (default: false)
-  --force, -f          Overwrite output file if it exists
-  --help, -h           Show this help message
+  --input, -i <path>    Input CSV file path (required)
+  --output, -o <path>   Output CDB64 file path (single file mode, required unless --partitioned)
+  --partitioned         Enable partitioned output (splits by key prefix into 00.cdb-ff.cdb)
+  --output-dir <path>   Output directory for partitioned index (required with --partitioned)
+  --skip-header         Skip the first line of the CSV (default: false)
+  --force, -f           Overwrite output file/directory if it exists
+  --help, -h            Show this help message
 
 CSV Format:
   data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
@@ -83,8 +84,11 @@ Supported Value Formats:
   - Path Complete: path + offsets (nested bundles with offsets)
 
 Example:
+  # Single file output
   ./tools/generate-cdb64-root-tx-index --input mappings.csv --output index.cdb
-  ./tools/generate-cdb64-root-tx-index --input data.csv --output index.cdb --skip-header
+
+  # Partitioned output
+  ./tools/generate-cdb64-root-tx-index --input mappings.csv --partitioned --output-dir ./index/
 `);
 }
 
@@ -92,6 +96,8 @@ function parseArgs(): Config | null {
   const args = process.argv.slice(2);
   let inputPath: string | undefined;
   let outputPath: string | undefined;
+  let outputDir: string | undefined;
+  let partitioned = false;
   let skipHeader = false;
   let force = false;
 
@@ -112,6 +118,14 @@ function parseArgs(): Config | null {
         outputPath = path.resolve(nextArg);
         i++;
         break;
+      case '--output-dir':
+        if (!nextArg) throw new Error('--output-dir requires a path');
+        outputDir = path.resolve(nextArg);
+        i++;
+        break;
+      case '--partitioned':
+        partitioned = true;
+        break;
       case '--skip-header':
         skipHeader = true;
         break;
@@ -131,11 +145,20 @@ function parseArgs(): Config | null {
   if (!inputPath) {
     throw new Error('--input is required');
   }
-  if (!outputPath) {
-    throw new Error('--output is required');
+
+  if (partitioned) {
+    if (!outputDir) {
+      throw new Error('--output-dir is required when using --partitioned');
+    }
+    // For partitioned mode, outputPath is used for logging only
+    outputPath = outputDir;
+  } else {
+    if (!outputPath) {
+      throw new Error('--output is required');
+    }
   }
 
-  return { inputPath, outputPath, skipHeader, force };
+  return { inputPath, outputPath, outputDir, partitioned, skipHeader, force };
 }
 
 /**
@@ -227,6 +250,9 @@ async function generateIndex(config: Config): Promise<void> {
   console.log('=== CDB64 Root TX Index Generator ===\n');
   console.log(`Input:  ${config.inputPath}`);
   console.log(`Output: ${config.outputPath}`);
+  if (config.partitioned) {
+    console.log('Mode:   Partitioned (prefix-based sharding)');
+  }
   console.log('');
 
   // Verify input file exists
@@ -234,14 +260,17 @@ async function generateIndex(config: Config): Promise<void> {
     throw new Error(`Input file not found: ${config.inputPath}`);
   }
 
-  // Check if output file exists (unless --force)
+  // Check if output file/directory exists (unless --force)
   if (fs.existsSync(config.outputPath) && !config.force) {
     throw new Error(
-      `Output file already exists: ${config.outputPath} (use --force to overwrite)`,
+      `Output ${config.partitioned ? 'directory' : 'file'} already exists: ${config.outputPath} (use --force to overwrite)`,
     );
   }
 
-  const writer = new Cdb64Writer(config.outputPath);
+  // Create appropriate writer
+  const writer = config.partitioned
+    ? new PartitionedCdb64Writer(config.outputDir!)
+    : new Cdb64Writer(config.outputPath);
   await writer.open();
 
   let recordNumber = 0;
@@ -372,7 +401,7 @@ async function generateIndex(config: Config): Promise<void> {
       }
     }
 
-    await writer.finalize();
+    const manifest = await writer.finalize();
 
     const totalElapsedSec = (Date.now() - startTime) / 1000;
     const avgRecordsPerSec =
@@ -392,10 +421,36 @@ async function generateIndex(config: Config): Promise<void> {
     }
     console.log(`Output: ${config.outputPath}`);
 
-    // Show file size
-    const stats = fs.statSync(config.outputPath);
-    const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
-    console.log(`File size: ${sizeMB} MB`);
+    // Show partition stats for partitioned mode
+    if (config.partitioned && manifest) {
+      console.log(`Partitions: ${manifest.partitions.length}`);
+      const totalSize = manifest.partitions.reduce(
+        (sum, p) => sum + p.size,
+        0,
+      );
+      const sizeMB = (totalSize / 1024 / 1024).toFixed(2);
+      console.log(`Total size: ${sizeMB} MB`);
+
+      // Show partition distribution
+      console.log('\nPartition distribution:');
+      const sortedPartitions = [...manifest.partitions].sort(
+        (a, b) => b.recordCount - a.recordCount,
+      );
+      const top5 = sortedPartitions.slice(0, 5);
+      for (const p of top5) {
+        console.log(
+          `  ${p.prefix}: ${p.recordCount.toLocaleString()} records (${(p.size / 1024 / 1024).toFixed(2)} MB)`,
+        );
+      }
+      if (sortedPartitions.length > 5) {
+        console.log(`  ... and ${sortedPartitions.length - 5} more partitions`);
+      }
+    } else {
+      // Show file size for single-file mode
+      const stats = fs.statSync(config.outputPath);
+      const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
+      console.log(`File size: ${sizeMB} MB`);
+    }
     console.log(
       `Elapsed time: ${totalElapsedSec.toFixed(1)}s (${avgRecordsPerSec.toLocaleString()} records/sec)`,
     );

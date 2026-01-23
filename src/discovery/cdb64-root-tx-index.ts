@@ -44,6 +44,8 @@ import {
   getPath,
 } from '../lib/cdb64-encoding.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
+import { PartitionedCdb64Reader } from '../lib/partitioned-cdb64-reader.js';
+import { Cdb64Manifest, parseManifest } from '../lib/cdb64-manifest.js';
 
 /** Valid CDB64 file extensions */
 const CDB64_EXTENSIONS = ['.cdb', '.cdb64'];
@@ -58,33 +60,66 @@ type ParsedSource =
   | { type: 'file'; path: string }
   | { type: 'arweave-tx'; id: string }
   | { type: 'arweave-bundle-item'; id: string; offset: number; size: number }
-  | { type: 'http'; url: string };
+  | { type: 'http'; url: string }
+  | { type: 'partitioned-directory'; path: string }
+  | { type: 'partitioned-http'; url: string }
+  | { type: 'partitioned-arweave-tx'; id: string }
+  | {
+      type: 'partitioned-arweave-bundle-item';
+      id: string;
+      offset: number;
+      size: number;
+    };
 
 /**
  * Parses a source specification string into a structured format.
  *
  * Supported formats:
  * - HTTP URLs: "https://..." or "http://..."
+ * - HTTP URL ending in /manifest.json: partitioned HTTP source
  * - Arweave TX ID: 43-char base64url string
+ * - Arweave TX ID with :manifest suffix: partitioned Arweave TX
  * - Bundle data item: "txId:offset:size" (colon-separated)
+ * - Bundle data item with :manifest suffix: partitioned bundle item
  * - Local path: anything else (file or directory, determined at runtime)
+ *
+ * Note: For local paths, partitioned directories are detected at runtime
+ * by checking for the presence of manifest.json in the directory.
  */
 function parseSourceSpec(spec: string): ParsedSource {
   // HTTP URL
   if (spec.startsWith('http://') || spec.startsWith('https://')) {
     try {
       new URL(spec);
+      // Check if URL ends with /manifest.json (partitioned HTTP)
+      if (spec.endsWith('/manifest.json')) {
+        return { type: 'partitioned-http', url: spec };
+      }
       return { type: 'http', url: spec };
     } catch {
       throw new Error(`Invalid HTTP URL: ${spec}`);
     }
   }
 
-  // Check for bundle data item format: txId:offset:size
+  // Check for bundle data item format: txId:offset:size or txId:offset:size:manifest
   const colonParts = spec.split(':');
+
+  // txId:offset:size:manifest format (partitioned bundle item)
+  if (colonParts.length === 4 && colonParts[3] === 'manifest') {
+    const [id, offsetStr, sizeStr] = colonParts;
+    if (/^[A-Za-z0-9_-]{43}$/.test(id)) {
+      const offset = parseInt(offsetStr, 10);
+      const size = parseInt(sizeStr, 10);
+
+      if (!isNaN(offset) && !isNaN(size) && offset >= 0 && size > 0) {
+        return { type: 'partitioned-arweave-bundle-item', id, offset, size };
+      }
+    }
+  }
+
+  // txId:offset:size format (regular bundle item)
   if (colonParts.length === 3) {
     const [id, offsetStr, sizeStr] = colonParts;
-    // Validate that it looks like a TX ID (43 chars, base64url)
     if (/^[A-Za-z0-9_-]{43}$/.test(id)) {
       const offset = parseInt(offsetStr, 10);
       const size = parseInt(sizeStr, 10);
@@ -95,20 +130,29 @@ function parseSourceSpec(spec: string): ParsedSource {
     }
   }
 
+  // txId:manifest format (partitioned Arweave TX)
+  if (colonParts.length === 2 && colonParts[1] === 'manifest') {
+    const id = colonParts[0];
+    if (/^[A-Za-z0-9_-]{43}$/.test(id)) {
+      return { type: 'partitioned-arweave-tx', id };
+    }
+  }
+
   // Simple Arweave TX ID (43 chars, base64url, no colons)
   if (/^[A-Za-z0-9_-]{43}$/.test(spec)) {
     return { type: 'arweave-tx', id: spec };
   }
 
-  // Default to local path (file vs directory determined at runtime)
+  // Default to local path (file vs directory/partitioned determined at runtime)
   return { type: 'file', path: spec };
 }
 
-/** Reader entry with metadata for logging */
+/** Reader entry with metadata for logging (supports both single-file and partitioned readers) */
 interface ReaderEntry {
-  reader: Cdb64Reader;
+  reader: Cdb64Reader | PartitionedCdb64Reader;
   sourceSpec: string;
   sourceType: string;
+  isPartitioned: boolean;
 }
 
 export class Cdb64RootTxIndex implements DataItemRootIndex {
@@ -232,6 +276,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       reader,
       sourceSpec,
       sourceType: parsed.type,
+      isPartitioned: false,
     };
   }
 
@@ -317,6 +362,101 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
+   * Starts watching a partitioned directory's manifest.json for changes.
+   */
+  private startWatchingManifest(dirPath: string): void {
+    if (!this.watchEnabled) return;
+
+    // Only one directory can be watched at a time
+    if (this.watchedDirectory !== null && this.watchedDirectory !== dirPath) {
+      this.log.warn(
+        'Multiple directory sources configured; only one can be watched',
+        {
+          watchedDirectory: this.watchedDirectory,
+          skippedDirectory: dirPath,
+        },
+      );
+      return;
+    }
+
+    // Already watching this directory
+    if (this.watcher && this.watchedDirectory === dirPath) {
+      return;
+    }
+
+    this.watchedDirectory = dirPath;
+    const manifestPath = path.join(dirPath, 'manifest.json');
+
+    this.watcher = watch(manifestPath, {
+      persistent: true,
+      ignoreInitial: true,
+      awaitWriteFinish: {
+        stabilityThreshold: 1000,
+        pollInterval: 100,
+      },
+    });
+
+    this.watcher.on('change', async () => {
+      this.log.info('Manifest changed, reloading partitioned index', {
+        path: dirPath,
+      });
+      await this.reloadPartitionedDirectory(dirPath).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.error(
+          'Failed to reload partitioned index after manifest change',
+          {
+            path: dirPath,
+            error: message,
+          },
+        );
+      });
+    });
+
+    this.watcher.on('error', (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.error('Manifest watcher error', { error: message });
+    });
+
+    this.log.info('Manifest watcher started', { path: manifestPath });
+  }
+
+  /**
+   * Reloads a partitioned directory after manifest change.
+   */
+  private async reloadPartitionedDirectory(dirPath: string): Promise<void> {
+    // Close existing reader
+    const existingEntry = this.readerMap.get(dirPath);
+    if (existingEntry) {
+      if (existingEntry.reader.isOpen()) {
+        await existingEntry.reader.close();
+      }
+      this.readerMap.delete(dirPath);
+    }
+
+    // Create new reader with updated manifest
+    try {
+      const entry = await this.createPartitionedReader(dirPath, {
+        type: 'partitioned-directory',
+        path: dirPath,
+      });
+      this.readerMap.set(dirPath, entry);
+      this.rebuildReaderList();
+      this.log.info('Partitioned CDB64 index reloaded', {
+        path: dirPath,
+        partitionCount: (
+          entry.reader as PartitionedCdb64Reader
+        ).getTotalPartitionCount(),
+      });
+    } catch (error: any) {
+      this.log.error('Failed to reload partitioned CDB64 directory', {
+        path: dirPath,
+        error: error.message,
+      });
+      this.rebuildReaderList();
+    }
+  }
+
+  /**
    * Stops watching the directory.
    */
   private async stopWatching(): Promise<void> {
@@ -343,7 +483,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       // Verify file still exists after opening
       await fs.stat(filePath);
 
-      const entry = { reader, sourceSpec: filePath, sourceType: 'file' };
+      const entry: ReaderEntry = {
+        reader,
+        sourceSpec: filePath,
+        sourceType: 'file',
+        isPartitioned: false,
+      };
       this.readerMap.set(filePath, entry);
       this.rebuildReaderList();
       this.log.info('CDB64 file added', { path: filePath });
@@ -445,7 +590,202 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Initializes all CDB64 files from a directory.
+   * Checks if a directory contains a manifest.json (is a partitioned index).
+   */
+  private async isPartitionedDirectory(dirPath: string): Promise<boolean> {
+    try {
+      const manifestPath = path.join(dirPath, 'manifest.json');
+      await fs.stat(manifestPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Loads a manifest from a local file.
+   */
+  private async loadLocalManifest(dirPath: string): Promise<Cdb64Manifest> {
+    const manifestPath = path.join(dirPath, 'manifest.json');
+    const content = await fs.readFile(manifestPath, 'utf-8');
+    return parseManifest(content);
+  }
+
+  /**
+   * Loads a manifest from a remote source (HTTP or Arweave).
+   */
+  private async loadRemoteManifest(
+    parsed: ParsedSource,
+  ): Promise<Cdb64Manifest> {
+    switch (parsed.type) {
+      case 'partitioned-http': {
+        const response = await fetch(parsed.url, {
+          signal: AbortSignal.timeout(this.remoteRequestTimeoutMs),
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const content = await response.text();
+        return parseManifest(content);
+      }
+
+      case 'partitioned-arweave-tx': {
+        if (!this.contiguousDataSource) {
+          throw new Error(
+            'ContiguousDataSource required for Arweave TX manifest sources',
+          );
+        }
+        const data = await this.contiguousDataSource.getData({
+          id: parsed.id,
+        });
+        const chunks: Buffer[] = [];
+        for await (const chunk of data.stream) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const content = Buffer.concat(chunks).toString('utf-8');
+        return parseManifest(content);
+      }
+
+      case 'partitioned-arweave-bundle-item': {
+        if (!this.contiguousDataSource) {
+          throw new Error(
+            'ContiguousDataSource required for Arweave bundle item manifest sources',
+          );
+        }
+        const data = await this.contiguousDataSource.getData({
+          id: parsed.id,
+          region: {
+            offset: parsed.offset,
+            size: parsed.size,
+          },
+        });
+        const chunks: Buffer[] = [];
+        for await (const chunk of data.stream) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const content = Buffer.concat(chunks).toString('utf-8');
+        return parseManifest(content);
+      }
+
+      default:
+        throw new Error(
+          `Cannot load manifest from source type: ${(parsed as ParsedSource).type}`,
+        );
+    }
+  }
+
+  /**
+   * Creates a partitioned reader for a parsed source specification.
+   */
+  private async createPartitionedReader(
+    sourceSpec: string,
+    parsed: ParsedSource,
+  ): Promise<ReaderEntry> {
+    let manifest: Cdb64Manifest;
+    let baseDir: string | undefined;
+
+    switch (parsed.type) {
+      case 'partitioned-directory':
+        manifest = await this.loadLocalManifest(parsed.path);
+        baseDir = parsed.path;
+        break;
+
+      case 'partitioned-http': {
+        manifest = await this.loadRemoteManifest(parsed);
+        // For HTTP, the base URL is the manifest URL without 'manifest.json'
+        // Note: The PartitionedCdb64Reader will handle constructing partition URLs
+        // For HTTP sources, we need to transform the manifest's file locations to HTTP locations
+        const baseUrl = parsed.url.replace(/manifest\.json$/, '');
+        manifest = this.transformManifestLocationsToHttp(manifest, baseUrl);
+        break;
+      }
+
+      case 'partitioned-arweave-tx':
+      case 'partitioned-arweave-bundle-item':
+        manifest = await this.loadRemoteManifest(parsed);
+        // For Arweave sources, partitions should already have arweave-* location types
+        // in the manifest (they need to be stored as separate TXs or bundle items)
+        break;
+
+      default:
+        throw new Error(
+          `Cannot create partitioned reader for source type: ${(parsed as ParsedSource).type}`,
+        );
+    }
+
+    const reader = new PartitionedCdb64Reader({
+      manifest,
+      baseDir,
+      contiguousDataSource: this.contiguousDataSource,
+      remoteCacheMaxRegions: this.remoteCacheMaxRegions,
+      remoteCacheTtlMs: this.remoteCacheTtlMs,
+      remoteRequestTimeoutMs: this.remoteRequestTimeoutMs,
+      log: this.log,
+    });
+
+    await reader.open();
+
+    return {
+      reader,
+      sourceSpec,
+      sourceType: parsed.type,
+      isPartitioned: true,
+    };
+  }
+
+  /**
+   * Transforms file locations in a manifest to HTTP locations using a base URL.
+   */
+  private transformManifestLocationsToHttp(
+    manifest: Cdb64Manifest,
+    baseUrl: string,
+  ): Cdb64Manifest {
+    return {
+      ...manifest,
+      partitions: manifest.partitions.map((p) => {
+        if (p.location.type === 'file') {
+          return {
+            ...p,
+            location: {
+              type: 'http' as const,
+              url: baseUrl + p.location.filename,
+            },
+          };
+        }
+        return p;
+      }),
+    };
+  }
+
+  /**
+   * Initializes a partitioned directory (has manifest.json).
+   */
+  private async initializePartitionedDirectory(dirPath: string): Promise<void> {
+    try {
+      const entry = await this.createPartitionedReader(dirPath, {
+        type: 'partitioned-directory',
+        path: dirPath,
+      });
+      this.readerMap.set(dirPath, entry);
+      this.log.info('Partitioned CDB64 index initialized', {
+        path: dirPath,
+        partitionCount: (
+          entry.reader as PartitionedCdb64Reader
+        ).getTotalPartitionCount(),
+      });
+
+      // Watch manifest.json for changes
+      this.startWatchingManifest(dirPath);
+    } catch (error: any) {
+      this.log.error('Failed to initialize partitioned CDB64 directory', {
+        path: dirPath,
+        error: error.message,
+      });
+    }
+  }
+
+  /**
+   * Initializes all CDB64 files from a non-partitioned directory.
    */
   private async initializeDirectory(dirPath: string): Promise<void> {
     const files = await this.discoverFilesInDirectory(dirPath);
@@ -463,6 +803,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           reader,
           sourceSpec: filePath,
           sourceType: 'file',
+          isPartitioned: false,
         });
       } catch (fileError: any) {
         this.log.error('Failed to initialize CDB64 file in directory', {
@@ -482,13 +823,50 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   private async doInitialize(): Promise<void> {
     try {
       for (const sourceSpec of this.sources) {
-        // Check if this is a directory before trying to create a reader
-        const dirPath = await this.checkIfDirectory(sourceSpec);
-        if (dirPath !== undefined) {
-          await this.initializeDirectory(dirPath);
+        const parsed = parseSourceSpec(sourceSpec);
+
+        // Handle partitioned remote sources
+        if (
+          parsed.type === 'partitioned-http' ||
+          parsed.type === 'partitioned-arweave-tx' ||
+          parsed.type === 'partitioned-arweave-bundle-item'
+        ) {
+          try {
+            const entry = await this.createPartitionedReader(
+              sourceSpec,
+              parsed,
+            );
+            this.readerMap.set(sourceSpec, entry);
+            this.log.info('Partitioned CDB64 source initialized', {
+              source: sourceSpec,
+              type: entry.sourceType,
+              partitionCount: (
+                entry.reader as PartitionedCdb64Reader
+              ).getTotalPartitionCount(),
+            });
+          } catch (error: any) {
+            this.log.error('Failed to initialize partitioned CDB64 source', {
+              source: sourceSpec,
+              error: error.message,
+            });
+          }
           continue;
         }
 
+        // Check if this is a local directory
+        const dirPath = await this.checkIfDirectory(sourceSpec);
+        if (dirPath !== undefined) {
+          // Check if it's a partitioned directory (has manifest.json)
+          const isPartitioned = await this.isPartitionedDirectory(dirPath);
+          if (isPartitioned) {
+            await this.initializePartitionedDirectory(dirPath);
+          } else {
+            await this.initializeDirectory(dirPath);
+          }
+          continue;
+        }
+
+        // Single file or remote source
         try {
           const entry = await this.createReader(sourceSpec);
           this.readerMap.set(sourceSpec, entry);
