@@ -363,13 +363,7 @@ export class PartitionedCdb64Reader {
    * Returns the number of partitions that have been opened.
    */
   getOpenPartitionCount(): number {
-    let count = 0;
-    for (const state of this.partitions) {
-      if (state !== null && state !== undefined) {
-        count++;
-      }
-    }
-    return count;
+    return this.partitions.filter((s) => s != null).length;
   }
 
   /**

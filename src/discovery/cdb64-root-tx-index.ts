@@ -207,6 +207,30 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
+   * Wraps a ByteRangeSource with caching using the configured cache settings.
+   */
+  private wrapWithCache(source: ByteRangeSource): CachingByteRangeSource {
+    return new CachingByteRangeSource({
+      source,
+      cacheMaxSize: this.remoteCacheMaxRegions,
+      cacheTtlMs: this.remoteCacheTtlMs,
+    });
+  }
+
+  /**
+   * Collects an async stream into a string.
+   */
+  private async streamToString(
+    stream: AsyncIterable<Uint8Array | Buffer>,
+  ): Promise<string> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks).toString('utf-8');
+  }
+
+  /**
    * Creates a ByteRangeSource for a parsed source specification.
    */
   private createByteRangeSource(parsed: ParsedSource): ByteRangeSource {
@@ -215,14 +239,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         return new FileByteRangeSource(parsed.path);
 
       case 'http':
-        return new CachingByteRangeSource({
-          source: new HttpByteRangeSource({
+        return this.wrapWithCache(
+          new HttpByteRangeSource({
             url: parsed.url,
             timeout: this.remoteRequestTimeoutMs,
           }),
-          cacheMaxSize: this.remoteCacheMaxRegions,
-          cacheTtlMs: this.remoteCacheTtlMs,
-        });
+        );
 
       case 'arweave-tx':
         if (!this.contiguousDataSource) {
@@ -230,14 +252,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
             'ContiguousDataSource required for Arweave TX sources',
           );
         }
-        return new CachingByteRangeSource({
-          source: new ContiguousDataByteRangeSource({
+        return this.wrapWithCache(
+          new ContiguousDataByteRangeSource({
             dataSource: this.contiguousDataSource,
             id: parsed.id,
           }),
-          cacheMaxSize: this.remoteCacheMaxRegions,
-          cacheTtlMs: this.remoteCacheTtlMs,
-        });
+        );
 
       case 'arweave-bundle-item':
         if (!this.contiguousDataSource) {
@@ -245,16 +265,14 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
             'ContiguousDataSource required for Arweave bundle item sources',
           );
         }
-        return new CachingByteRangeSource({
-          source: new ContiguousDataByteRangeSource({
+        return this.wrapWithCache(
+          new ContiguousDataByteRangeSource({
             dataSource: this.contiguousDataSource,
             id: parsed.id,
             baseOffset: parsed.offset,
             totalSize: parsed.size,
           }),
-          cacheMaxSize: this.remoteCacheMaxRegions,
-          cacheTtlMs: this.remoteCacheTtlMs,
-        });
+        );
 
       default:
         throw new Error(`Unknown source type: ${(parsed as any).type}`);
@@ -638,11 +656,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         const data = await this.contiguousDataSource.getData({
           id: parsed.id,
         });
-        const chunks: Buffer[] = [];
-        for await (const chunk of data.stream) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        const content = Buffer.concat(chunks).toString('utf-8');
+        const content = await this.streamToString(data.stream);
         return parseManifest(content);
       }
 
@@ -659,11 +673,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
             size: parsed.size,
           },
         });
-        const chunks: Buffer[] = [];
-        for await (const chunk of data.stream) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        const content = Buffer.concat(chunks).toString('utf-8');
+        const content = await this.streamToString(data.stream);
         return parseManifest(content);
       }
 
@@ -751,7 +761,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
             ...p,
             location: {
               type: 'http' as const,
-              url: baseUrl + p.location.filename,
+              url: new URL(p.location.filename, baseUrl).toString(),
             },
           };
         }

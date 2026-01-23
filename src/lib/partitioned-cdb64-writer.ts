@@ -274,26 +274,16 @@ export class PartitionedCdb64Writer {
    * Returns the total number of records added so far.
    */
   getTotalRecordCount(): number {
-    let total = 0;
-    for (const partition of this.partitions) {
-      if (partition !== null) {
-        total += partition.recordCount;
-      }
-    }
-    return total;
+    return this.partitions
+      .filter((p): p is PartitionState => p !== null)
+      .reduce((sum, p) => sum + p.recordCount, 0);
   }
 
   /**
    * Returns the number of partitions created so far.
    */
   getPartitionCount(): number {
-    let count = 0;
-    for (const partition of this.partitions) {
-      if (partition !== null) {
-        count++;
-      }
-    }
-    return count;
+    return this.partitions.filter((p) => p !== null).length;
   }
 
   /**
