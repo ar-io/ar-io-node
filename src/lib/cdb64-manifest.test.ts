@@ -428,6 +428,23 @@ describe('cdb64-manifest', () => {
       assert.strictEqual(validateManifest(manifest), false);
     });
 
+    it('should reject zero size', () => {
+      const manifest = {
+        version: 1,
+        createdAt: '2024-01-01T00:00:00.000Z',
+        totalRecords: 100,
+        partitions: [
+          {
+            prefix: '00',
+            location: { type: 'file', filename: '00.cdb' },
+            recordCount: 100,
+            size: 0,
+          },
+        ],
+      };
+      assert.strictEqual(validateManifest(manifest), false);
+    });
+
     it('should reject negative size', () => {
       const manifest = {
         version: 1,

@@ -456,7 +456,10 @@ async function generateIndex(config: Config): Promise<void> {
  * Generates a partitioned index using the TypeScript PartitionedCdb64Writer.
  */
 async function generatePartitionedIndex(config: Config): Promise<void> {
-  const writer = new PartitionedCdb64Writer(config.outputDir!);
+  if (!config.outputDir) {
+    throw new Error('outputDir is required for partitioned index generation');
+  }
+  const writer = new PartitionedCdb64Writer(config.outputDir);
   await writer.open();
 
   let recordNumber = 0;
