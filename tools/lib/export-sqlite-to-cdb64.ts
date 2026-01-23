@@ -166,9 +166,15 @@ async function exportToCdb64(config: Config): Promise<void> {
     }
 
     // Create appropriate writer
-    const writer = config.partitioned
-      ? new PartitionedCdb64Writer(config.outputDir!)
-      : new Cdb64Writer(config.outputPath);
+    let writer: Cdb64Writer | PartitionedCdb64Writer;
+    if (config.partitioned) {
+      if (!config.outputDir) {
+        throw new Error('outputDir is required when partitioned mode is enabled');
+      }
+      writer = new PartitionedCdb64Writer(config.outputDir);
+    } else {
+      writer = new Cdb64Writer(config.outputPath);
+    }
     await writer.open();
 
     let recordCount = 0;

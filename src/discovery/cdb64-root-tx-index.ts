@@ -693,9 +693,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       case 'partitioned-http': {
         manifest = await this.loadRemoteManifest(parsed);
         // For HTTP, the base URL is the manifest URL without 'manifest.json'
-        // Note: The PartitionedCdb64Reader will handle constructing partition URLs
+        // Ensure the base URL ends with a trailing slash for proper path concatenation
+        let baseUrl = parsed.url.replace(/manifest\.json$/, '');
+        if (!baseUrl.endsWith('/')) {
+          baseUrl += '/';
+        }
         // For HTTP sources, we need to transform the manifest's file locations to HTTP locations
-        const baseUrl = parsed.url.replace(/manifest\.json$/, '');
         manifest = this.transformManifestLocationsToHttp(manifest, baseUrl);
         break;
       }

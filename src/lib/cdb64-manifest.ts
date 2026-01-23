@@ -159,7 +159,7 @@ function isValidPartitionInfo(value: unknown): value is PartitionInfo {
   if (
     typeof obj.size !== 'number' ||
     !Number.isInteger(obj.size) ||
-    obj.size < 0
+    obj.size < 1
   ) {
     return false;
   }
