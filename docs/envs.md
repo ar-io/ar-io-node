@@ -194,3 +194,46 @@ This document describes the environment variables that can be used to configure 
 | OTEL_TAIL_SAMPLING_OFFSET_OVERWRITE_RATE         | Number               | 10                                            | Percentage (1-100) of offset overwrite risk traces to sample. Captures traces where both DynamoDB offsets AND raw data paths executed, the scenario that triggered the Release 59 offset bug |
 
 **Security Note:** Variables marked as **SENSITIVE SECRET** (such as `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, and `CDP_API_KEY_SECRET_FILE`) contain confidential credentials that must never be printed to logs, exposed in error messages, or included in any diagnostic output. Always mask or omit these values in logs, store them in a secure secrets manager, and restrict access using the principle of least privilege.
+
+## Observer Configuration
+
+The following environment variables configure the Observer service for network gateway observations.
+
+### Reference Gateway Configuration
+
+These settings control which gateways are used as references for ArNS resolution and chunk verification checks.
+
+| ENV_NAME                                         | TYPE                 | DEFAULT_VALUE                                 | DESCRIPTION                                                                                                                                                          |
+| ------------------------------------------------ | -------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| REFERENCE_GATEWAY_HOSTS                          | String               | "turbo-gateway.com,ar-io.net"                 | Comma-separated list of reference gateway hosts for ArNS and chunk checks. These gateways are tried in order before network fallback                                |
+| REFERENCE_GATEWAY_NETWORK_ONLY                   | Boolean              | false                                         | If true, uses only network gateways for reference checks (no explicit hosts). Enables fully decentralized observation                                               |
+| REFERENCE_GATEWAY_NETWORK_FALLBACK               | Boolean              | true                                          | If true, falls back to network consensus when explicit reference hosts fail or disagree                                                                             |
+| REFERENCE_GATEWAY_CONSENSUS_SIZE                 | Number               | 3                                             | Number of network gateways to query when building consensus for ArNS resolution                                                                                     |
+| REFERENCE_GATEWAY_CONSENSUS_THRESHOLD            | Number               | 2                                             | Minimum number of agreeing gateways required to establish consensus                                                                                                 |
+| REFERENCE_GATEWAY_MIN_PASS_RATE                  | Number               | 0.8                                           | Minimum historical pass rate (0.0-1.0) for a network gateway to be eligible for consensus queries                                                                   |
+| REFERENCE_GATEWAY_MIN_CONSECUTIVE_PASSES         | Number               | 2                                             | Minimum consecutive passing epochs required for network gateway eligibility                                                                                         |
+| REFERENCE_GATEWAY_MIN_EPOCH_COUNT                | Number               | 5                                             | Minimum total epochs observed for a network gateway to be considered for eligibility                                                                                |
+| REFERENCE_GATEWAY_MAX_NETWORK_POOL               | Number               | 10                                            | Maximum number of eligible network gateways to keep in the pool for random selection                                                                                |
+| REFERENCE_GATEWAY_NETWORK_CACHE_TTL_SECONDS      | Number               | 300                                           | TTL in seconds for caching the list of eligible network gateways from the AR.IO contract                                                                            |
+| REFERENCE_GATEWAY_CONSENSUS_MAX_ATTEMPTS         | Number               | 5                                             | Maximum number of gateway queries to attempt when trying to reach consensus threshold                                                                               |
+
+### Continuous Observation Configuration
+
+These settings control the continuous observation mode, which spreads observations across the epoch window and uses majority voting for pass/fail determination.
+
+| ENV_NAME                                         | TYPE                 | DEFAULT_VALUE                                 | DESCRIPTION                                                                                                                                                          |
+| ------------------------------------------------ | -------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OBSERVATIONS_PER_GATEWAY                         | Number               | 3                                             | Number of times each gateway is observed during an epoch. Results are aggregated using majority voting                                                              |
+| OBSERVATION_WINDOW_FRACTION                      | Number               | 0.5                                           | Fraction of the epoch window (0.1-0.9) during which observations are spread. Higher values spread observations over more time                                       |
+| OBSERVATION_CYCLE_INTERVAL_MS                    | Number               | 60000                                         | Interval in milliseconds between observation cycles. Each cycle processes scheduled observations                                                                    |
+| MAJORITY_VOTE_THRESHOLD                          | Number               | 2                                             | Number of passing observations needed for a gateway to pass overall. Should be ≤ OBSERVATIONS_PER_GATEWAY                                                           |
+
+### Offset Observation Configuration
+
+These settings control chunk offset verification observations, which validate that gateways correctly return chunk data with proper offset information.
+
+| ENV_NAME                                         | TYPE                 | DEFAULT_VALUE                                 | DESCRIPTION                                                                                                                                                          |
+| ------------------------------------------------ | -------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OFFSET_OBSERVATION_SAMPLE_RATE                   | Number               | 0.10                                          | Sample rate (0.0-1.0) for offset observations. Higher values test more chunks but increase load on observed gateways                                                |
+| OFFSET_OBSERVATION_ENABLED                       | Boolean              | true                                          | If true, enables offset observation checks. When false, offset observations are skipped entirely                                                                    |
+| OFFSET_OBSERVATION_ENFORCEMENT_ENABLED           | Boolean              | false                                         | If true, offset observation failures affect gateway pass/fail status. When false, failures are logged but don't impact scoring                                      |
