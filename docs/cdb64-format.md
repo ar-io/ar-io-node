@@ -303,3 +303,224 @@ The reader only needs to keep the 4096-byte header in memory. All lookups are do
 - Invalid files can be detected by checking if table positions are within file bounds
 - Corrupted records can be detected by checking if key/value lengths are reasonable
 - Hash collisions are handled correctly by the linear probing algorithm
+
+---
+
+# Partitioned CDB64 Index Format
+
+For very large indexes, CDB64 files can be partitioned by key prefix into up to 256 separate files. This enables:
+
+- **Manageable file sizes**: Each partition contains only keys with a specific first byte
+- **Parallel I/O**: Different partitions can be accessed concurrently
+- **Lazy loading**: Only open partitions that are actually accessed
+- **Flexible storage**: Partitions can be stored locally, on HTTP servers, or on Arweave
+
+## Directory Structure
+
+A partitioned index consists of a directory containing:
+
+```
+index/
+  manifest.json    # Index manifest with partition metadata
+  00.cdb           # Records with keys starting 0x00
+  01.cdb           # Records with keys starting 0x01
+  ...
+  ff.cdb           # Records with keys starting 0xff
+```
+
+Not all 256 partition files need to exist - only partitions that contain records are created.
+
+## Manifest Format
+
+The `manifest.json` file describes the partitioned index:
+
+```json
+{
+  "version": 1,
+  "createdAt": "2025-01-15T12:00:00.000Z",
+  "totalRecords": 1000000,
+  "partitions": [
+    {
+      "prefix": "00",
+      "location": { "type": "file", "filename": "00.cdb" },
+      "recordCount": 3921,
+      "size": 245760,
+      "sha256": "abc123..."
+    },
+    {
+      "prefix": "01",
+      "location": { "type": "file", "filename": "01.cdb" },
+      "recordCount": 3847,
+      "size": 241664
+    }
+  ],
+  "metadata": {
+    "source": "custom metadata"
+  }
+}
+```
+
+### Manifest Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `version` | integer | Yes | Manifest format version (currently 1) |
+| `createdAt` | string | Yes | ISO 8601 creation timestamp |
+| `totalRecords` | integer | Yes | Total records across all partitions |
+| `partitions` | array | Yes | List of partition descriptors |
+| `metadata` | object | No | Optional custom metadata |
+
+### Partition Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `prefix` | string | Yes | Two-character lowercase hex prefix ("00" - "ff") |
+| `location` | object | Yes | Location descriptor (see below) |
+| `recordCount` | integer | Yes | Number of records in this partition |
+| `size` | integer | Yes | File size in bytes |
+| `sha256` | string | No | SHA-256 hash for integrity verification |
+
+### Location Types
+
+Partitions support flexible storage locations:
+
+#### File Location
+
+Partition stored as a local file:
+
+```json
+{ "type": "file", "filename": "00.cdb" }
+```
+
+#### HTTP Location
+
+Partition accessible via HTTP(S):
+
+```json
+{ "type": "http", "url": "https://example.com/index/00.cdb" }
+```
+
+#### Arweave Transaction Location
+
+Partition stored as an Arweave transaction:
+
+```json
+{ "type": "arweave-tx", "txId": "abc123..." }
+```
+
+#### Arweave Bundle Item Location
+
+Partition stored as a data item within an Arweave bundle:
+
+```json
+{
+  "type": "arweave-bundle-item",
+  "txId": "abc123...",
+  "offset": 1024,
+  "size": 245760
+}
+```
+
+## Partitioning Scheme
+
+Records are partitioned based on the first byte of the 32-byte key:
+
+- Key prefix `0x00` → `00.cdb`
+- Key prefix `0x01` → `01.cdb`
+- ...
+- Key prefix `0xff` → `ff.cdb`
+
+This provides uniform distribution for random keys (like transaction IDs).
+
+## Lookup Algorithm
+
+To look up a key in a partitioned index:
+
+1. Read the first byte of the key to determine prefix
+2. Find the partition with matching prefix in the manifest
+3. If no partition exists for that prefix, key is not present
+4. Open/read the partition CDB64 file
+5. Look up the key using standard CDB64 lookup
+
+## Reader Implementation
+
+The partitioned reader (`PartitionedCdb64Reader`) features:
+
+- **Lazy partition opening**: Partitions are only opened when first accessed
+- **Graceful degradation**: Missing partition files return undefined rather than throwing
+- **Multiple location types**: Supports file, HTTP, and Arweave sources
+- **Caching for remote sources**: HTTP and Arweave partitions use byte-range caching
+
+## Writer Implementation
+
+The partitioned writer (`PartitionedCdb64Writer`) features:
+
+- **Lazy partition creation**: Partition files are only created when records arrive
+- **Atomic directory creation**: Writes to temp directory, then renames atomically
+- **Automatic manifest generation**: Creates `manifest.json` with all partition metadata
+
+## Usage Examples
+
+### Creating a Partitioned Index
+
+```typescript
+import { PartitionedCdb64Writer } from './src/lib/partitioned-cdb64-writer.js';
+
+const writer = new PartitionedCdb64Writer('/path/to/output-dir');
+await writer.open();
+
+for (const { key, value } of records) {
+  await writer.add(key, value);  // Routes to partition based on key[0]
+}
+
+const manifest = await writer.finalize();
+console.log(`Created ${manifest.partitions.length} partitions`);
+```
+
+### Reading from a Partitioned Index
+
+```typescript
+import { PartitionedCdb64Reader } from './src/lib/partitioned-cdb64-reader.js';
+import { parseManifest } from './src/lib/cdb64-manifest.js';
+
+const manifestJson = await fs.readFile('/path/to/index/manifest.json', 'utf-8');
+const manifest = parseManifest(manifestJson);
+
+const reader = new PartitionedCdb64Reader({
+  manifest,
+  baseDir: '/path/to/index',
+});
+await reader.open();
+
+const value = await reader.get(keyBuffer);
+await reader.close();
+```
+
+### CLI Tool Usage
+
+```bash
+# Create partitioned index from CSV
+./tools/generate-cdb64-root-tx-index --input data.csv --partitioned --output-dir ./index/
+
+# Create partitioned index from SQLite
+./tools/export-sqlite-to-cdb64 --partitioned --output-dir ./index/
+```
+
+## Configuration
+
+The gateway automatically detects partitioned indexes when a directory contains a `manifest.json` file:
+
+```bash
+# Configure with partitioned directory
+CDB64_ROOT_TX_INDEX_SOURCES=/path/to/partitioned-index/ yarn start
+
+# Mix of single-file and partitioned sources
+CDB64_ROOT_TX_INDEX_SOURCES=/path/to/single.cdb,/path/to/partitioned-index/ yarn start
+```
+
+## Backward Compatibility
+
+- The gateway supports both single-file and partitioned CDB64 sources simultaneously
+- When a directory contains `manifest.json`, it is treated as partitioned (ignoring loose `.cdb` files)
+- When a directory contains no `manifest.json`, all `.cdb` files are loaded as individual indexes
+- Single `.cdb` file paths continue to work unchanged

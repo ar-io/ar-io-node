@@ -25,11 +25,14 @@ import * as path from 'node:path';
 import Sqlite, { Database } from 'better-sqlite3';
 
 import { Cdb64Writer } from '../../src/lib/cdb64.js';
+import { PartitionedCdb64Writer } from '../../src/lib/partitioned-cdb64-writer.js';
 import { encodeCdb64Value } from '../../src/lib/cdb64-encoding.js';
 
 interface Config {
   dataDbPath: string;
   outputPath: string;
+  outputDir?: string;
+  partitioned: boolean;
 }
 
 interface DataRow {
@@ -52,13 +55,18 @@ this tool to ensure data consistency during the export.
 Usage: ./tools/export-sqlite-to-cdb64 [options]
 
 Options:
-  --data-db <path>   Path to data.db file (default: ./data/sqlite/data.db)
-  --output <path>    Output CDB64 file path (required)
-  --help             Show this help message
+  --data-db <path>     Path to data.db file (default: ./data/sqlite/data.db)
+  --output <path>      Output CDB64 file path (single file mode, required unless --partitioned)
+  --partitioned        Enable partitioned output (splits by key prefix into 00.cdb-ff.cdb)
+  --output-dir <path>  Output directory for partitioned index (required with --partitioned)
+  --help               Show this help message
 
 Example:
+  # Single file output
   ./tools/export-sqlite-to-cdb64 --output root-tx-index.cdb
-  ./tools/export-sqlite-to-cdb64 --data-db ./data/sqlite/data.db --output root-tx-index.cdb
+
+  # Partitioned output
+  ./tools/export-sqlite-to-cdb64 --partitioned --output-dir ./root-tx-index/
 `);
 }
 
@@ -66,6 +74,8 @@ function parseArgs(): Config | null {
   const args = process.argv.slice(2);
   let dataDbPath = './data/sqlite/data.db';
   let outputPath: string | undefined;
+  let outputDir: string | undefined;
+  let partitioned = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -83,6 +93,14 @@ function parseArgs(): Config | null {
         outputPath = path.resolve(nextArg);
         i++;
         break;
+      case '--output-dir':
+        if (!nextArg) throw new Error('--output-dir requires a path');
+        outputDir = path.resolve(nextArg);
+        i++;
+        break;
+      case '--partitioned':
+        partitioned = true;
+        break;
       case '--help':
       case '-h':
         printUsage();
@@ -92,17 +110,27 @@ function parseArgs(): Config | null {
     }
   }
 
-  if (!outputPath) {
-    throw new Error('--output is required');
+  if (partitioned) {
+    if (!outputDir) {
+      throw new Error('--output-dir is required when using --partitioned');
+    }
+    outputPath = outputDir;
+  } else {
+    if (!outputPath) {
+      throw new Error('--output is required');
+    }
   }
 
-  return { dataDbPath, outputPath };
+  return { dataDbPath, outputPath, outputDir, partitioned };
 }
 
 async function exportToCdb64(config: Config): Promise<void> {
   console.log('=== SQLite to CDB64 Exporter ===\n');
   console.log(`Database: ${config.dataDbPath}`);
   console.log(`Output:   ${config.outputPath}`);
+  if (config.partitioned) {
+    console.log('Mode:     Partitioned (prefix-based sharding)');
+  }
   console.log('');
 
   // Check if data.db exists
@@ -137,8 +165,10 @@ async function exportToCdb64(config: Config): Promise<void> {
       return;
     }
 
-    // Create CDB64 writer
-    const writer = new Cdb64Writer(config.outputPath);
+    // Create appropriate writer
+    const writer = config.partitioned
+      ? new PartitionedCdb64Writer(config.outputDir!)
+      : new Cdb64Writer(config.outputPath);
     await writer.open();
 
     let recordCount = 0;
@@ -206,21 +236,34 @@ async function exportToCdb64(config: Config): Promise<void> {
         }
       }
 
-      await writer.finalize();
+      const manifest = await writer.finalize();
 
       console.log('\n=== Export Complete ===');
       console.log(`Records exported: ${recordCount.toLocaleString()}`);
       console.log(`  - Simple format: ${simpleCount.toLocaleString()}`);
       console.log(`  - Complete format: ${completeCount.toLocaleString()}`);
       if (skippedCount > 0) {
-        console.log(`Records skipped (invalid): ${skippedCount.toLocaleString()}`);
+        console.log(
+          `Records skipped (invalid): ${skippedCount.toLocaleString()}`,
+        );
       }
       console.log(`Output: ${config.outputPath}`);
 
-      // Show file size
-      const stats = fs.statSync(config.outputPath);
-      const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
-      console.log(`File size: ${sizeMB} MB`);
+      // Show partition stats for partitioned mode
+      if (config.partitioned && manifest) {
+        console.log(`Partitions: ${manifest.partitions.length}`);
+        const totalSize = manifest.partitions.reduce(
+          (sum, p) => sum + p.size,
+          0,
+        );
+        const sizeMB = (totalSize / 1024 / 1024).toFixed(2);
+        console.log(`Total size: ${sizeMB} MB`);
+      } else {
+        // Show file size for single-file mode
+        const stats = fs.statSync(config.outputPath);
+        const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
+        console.log(`File size: ${sizeMB} MB`);
+      }
     } catch (error) {
       await writer.abort();
       throw error;
