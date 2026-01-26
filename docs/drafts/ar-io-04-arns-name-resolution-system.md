@@ -886,7 +886,7 @@ const timeouts = {
 | `ARNS_MAX_CONCURRENT_RESOLUTIONS` | `5` | Parallel resolution limit | 100% |
 | `ARNS_RESOLVER_OVERRIDE_TTL_SECONDS` | - | Force TTL for all resolutions | 100% |
 | `ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT` | `true` | Enforce undername limits | 100% |
-| `TRUSTED_ARNS_GATEWAY_URL` | `https://__NAME__.arweave.dev` | Gateway fallback | 100% |
+| `TRUSTED_ARNS_GATEWAY_URL` | `https://__NAME__.ar-io.net` | Gateway fallback | 100% |
 
 ### AO Network Configuration
 

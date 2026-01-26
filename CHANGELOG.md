@@ -28,6 +28,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Updated `TRUSTED_ARNS_GATEWAY_URL` default value in documentation from
+  `arweave.dev` to `ar-io.net` to match the actual code default
+
 ## [Release 66] - 2026-01-21
 
 This is a **recommended release** focusing on **nested bundle performance** and
