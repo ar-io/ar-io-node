@@ -26,6 +26,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Observer Update to `8fb7b2f`**: Updated observer with network gateway
+  fallback for reference resolution
+  - When explicit reference gateways fail or disagree, the observer now falls
+    back to querying healthy gateways from the AR.IO network for consensus
+  - Three operating modes: explicit only, explicit + network fallback (default),
+    or network only for fully decentralized observation
+  - New `REFERENCE_GATEWAY_HOSTS` supports multiple comma-separated fallback
+    gateways with sequential failover
+  - Network consensus uses configurable gateway selection criteria (pass rate,
+    consecutive passes, epoch count) with stale-while-error caching
+  - Treats 404/410 responses as authoritative "chunk not found" to avoid
+    unnecessary network fallback queries
+  - New metrics: `observer_network_fallback_total`,
+    `observer_network_consensus_agreement`, `observer_network_eligible_gateways`
+  - See `docs/envs.md` for full configuration options
+
 ### Fixed
 
 - Updated `TRUSTED_ARNS_GATEWAY_URL` default value in documentation from
