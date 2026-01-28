@@ -88,6 +88,7 @@
     "cookie": "0.7.0"
   },
   "devDependencies": {
+    "@ardrive/turbo-sdk": "^1.40.2",
     "@aws-lite/s3-types": "^0.2.6",
     "@cucumber/cucumber": "^12.2.0",
     "@eslint/eslintrc": "^3.3.1",
