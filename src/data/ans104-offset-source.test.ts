@@ -884,5 +884,214 @@ describe('Ans104OffsetSource', () => {
       // Should use first Content-Type tag
       assert.strictEqual(result?.contentType, 'text/plain');
     });
+
+    it('should throw AbortError when signal is already aborted', async () => {
+      const dataItemId = 'test-item-id';
+      const rootBundleId = 'root-bundle-id';
+
+      // Create an already aborted signal
+      const controller = new AbortController();
+      controller.abort();
+
+      await assert.rejects(
+        async () => {
+          await ans104OffsetSource.getDataItemOffset(
+            dataItemId,
+            rootBundleId,
+            controller.signal,
+          );
+        },
+        (error: Error) => {
+          assert.strictEqual(error.name, 'AbortError');
+          return true;
+        },
+      );
+
+      // Verify no data source calls were made
+      assert.strictEqual(getDataMock.mock.calls.length, 0);
+    });
+
+    it('should abort when signal is triggered during bundle scanning', async () => {
+      const itemIdBuffer = Buffer.alloc(32);
+      itemIdBuffer.write('test-item-abort');
+      const dataItemId = itemIdBuffer.toString('base64url');
+      const rootBundleId = 'root-bundle-id';
+
+      const controller = new AbortController();
+
+      // Create a mock bundle with many items to simulate long scan
+      const itemCount = Buffer.alloc(32);
+      itemCount.writeBigInt64LE(10n, 0);
+
+      // Create headers for 10 items (none matching our target)
+      const headerParts = [itemCount];
+      for (let i = 0; i < 10; i++) {
+        const size = Buffer.alloc(32);
+        size.writeBigInt64LE(1000n, 0);
+        const id = Buffer.alloc(32);
+        id.write(`other-item-${i}`);
+        headerParts.push(size, id);
+      }
+      const bundleHeader = Buffer.concat(headerParts);
+
+      // Non-bundle item check data (small non-bundle items)
+      const itemCheckData = Buffer.concat([
+        Buffer.from([0x01, 0x00]),
+        Buffer.alloc(512),
+        Buffer.alloc(512),
+        Buffer.from([0]),
+        Buffer.from([0]),
+        Buffer.alloc(16), // No tags
+      ]);
+
+      let callCount = 0;
+      getDataMock.mock.mockImplementation(async (args: any) => {
+        callCount++;
+
+        // Abort after a few calls to simulate mid-scan abort
+        if (callCount === 3) {
+          controller.abort();
+        }
+
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 0 &&
+          args.region?.size === 32
+        ) {
+          return {
+            stream: Readable.from([itemCount]),
+            size: 32,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 0 &&
+          args.region?.size === 32 + 64 * 10
+        ) {
+          return {
+            stream: Readable.from([bundleHeader]),
+            size: bundleHeader.length,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        // Return item check data for any item offset checks
+        return {
+          stream: Readable.from([itemCheckData]),
+          size: itemCheckData.length,
+          verified: false,
+          trusted: false,
+          cached: false,
+        };
+      });
+
+      await assert.rejects(
+        async () => {
+          await ans104OffsetSource.getDataItemOffset(
+            dataItemId,
+            rootBundleId,
+            controller.signal,
+          );
+        },
+        (error: Error) => {
+          assert.strictEqual(error.name, 'AbortError');
+          return true;
+        },
+      );
+
+      // Verify scan was aborted early (shouldn't have checked all 10 items)
+      assert.ok(callCount < 15, `Expected fewer calls, got ${callCount}`);
+    });
+
+    it('should pass signal through to underlying data source', async () => {
+      const itemIdBuffer = Buffer.alloc(32);
+      itemIdBuffer.write('test-item-signal');
+      const dataItemId = itemIdBuffer.toString('base64url');
+      const rootBundleId = 'root-bundle-id';
+
+      const controller = new AbortController();
+
+      const itemCount = Buffer.alloc(32);
+      itemCount.writeBigInt64LE(1n, 0);
+
+      const itemSize = Buffer.alloc(32);
+      itemSize.writeBigInt64LE(2000n, 0);
+
+      const bundleHeader = Buffer.concat([itemCount, itemSize, itemIdBuffer]);
+
+      const dataItemHeader = Buffer.concat([
+        Buffer.from([0x01, 0x00]),
+        Buffer.alloc(512),
+        Buffer.alloc(512),
+        Buffer.from([0]),
+        Buffer.from([0]),
+        Buffer.alloc(16),
+        Buffer.from('test data'),
+      ]);
+
+      const receivedSignals: (AbortSignal | undefined)[] = [];
+
+      getDataMock.mock.mockImplementation(async (args: any) => {
+        // Track which signals were passed
+        receivedSignals.push(args.signal);
+
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 0 &&
+          args.region?.size === 32
+        ) {
+          return {
+            stream: Readable.from([itemCount]),
+            size: 32,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 0 &&
+          args.region?.size === 96
+        ) {
+          return {
+            stream: Readable.from([bundleHeader]),
+            size: 96,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        if (args.id === rootBundleId && args.region?.offset === 96) {
+          return {
+            stream: Readable.from([dataItemHeader]),
+            size: dataItemHeader.length,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        throw new Error('Unexpected call');
+      });
+
+      await ans104OffsetSource.getDataItemOffset(
+        dataItemId,
+        rootBundleId,
+        controller.signal,
+      );
+
+      // Verify signal was passed to all data source calls
+      assert.ok(receivedSignals.length > 0, 'Expected at least one call');
+      for (const signal of receivedSignals) {
+        assert.strictEqual(
+          signal,
+          controller.signal,
+          'Signal should be passed to data source',
+        );
+      }
+    });
   });
 });

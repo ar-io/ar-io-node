@@ -229,11 +229,13 @@ export class RootParentDataSource implements ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'RootParentDataSource.getData',
@@ -378,6 +380,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             requestAttributes,
             region: finalRegion,
             parentSpan: fetchSpan,
+            signal,
           });
 
           span.setAttributes({
@@ -546,6 +549,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             requestAttributes,
             region,
             parentSpan: span,
+            signal,
           });
         } catch (error: any) {
           span.recordException(error);
@@ -620,6 +624,7 @@ export class RootParentDataSource implements ContiguousDataSource {
               await this.ans104OffsetSource.getDataItemOffsetWithPath(
                 id,
                 rootResult.path,
+                signal,
               );
             offsetParseSpan.setAttributes({
               'offset.method': 'path_guided',
@@ -630,6 +635,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             bundleParseResult = await this.ans104OffsetSource.getDataItemOffset(
               id,
               rootTxId,
+              signal,
             );
             offsetParseSpan.setAttributes({
               'offset.method': 'linear_search',
@@ -786,6 +792,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           requestAttributes,
           region: finalRegion,
           parentSpan: fetchSpan,
+          signal,
         });
 
         span.setAttributes({
