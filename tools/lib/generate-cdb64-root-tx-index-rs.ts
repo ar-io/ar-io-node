@@ -57,7 +57,7 @@ async function generateIndex(config: Config): Promise<void> {
   console.log(`Input:  ${config.inputPath}`);
   console.log(`Output: ${config.outputPath}`);
   if (config.partitioned) {
-    console.log('Mode:   Partitioned (using TypeScript writer)');
+    console.log('Mode:   Partitioned (using Rust writer)');
   }
   console.log('');
 
