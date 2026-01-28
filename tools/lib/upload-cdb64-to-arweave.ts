@@ -76,6 +76,7 @@ interface Config {
 interface TurboOffsetsResponse {
   rootBundleId?: string;
   startOffsetInRootBundle?: number;
+  payloadDataStart: number;
   payloadContentLength: number;
 }
 
@@ -707,13 +708,17 @@ async function runUpload(config: Config): Promise<void> {
       const offsets = await pollForOffsets(axiosInstance, dataItemId, config.verbose);
 
       if (offsets && offsets.rootBundleId && offsets.startOffsetInRootBundle != null) {
+        // Calculate payload offset: data item start + header size
+        // startOffsetInRootBundle points to data item header, payloadDataStart is the header size
+        const payloadOffset = offsets.startOffsetInRootBundle + offsets.payloadDataStart;
+
         // Update to bundle-item location
         outputManifest.partitions[idx] = {
           ...partition,
           location: {
             type: 'arweave-bundle-item',
             txId: offsets.rootBundleId,
-            offset: offsets.startOffsetInRootBundle,
+            offset: payloadOffset,
             size: offsets.payloadContentLength,
           },
         };
@@ -723,7 +728,7 @@ async function runUpload(config: Config): Promise<void> {
 
         if (config.verbose) {
           console.log(
-            `    Resolved: txId=${offsets.rootBundleId}, offset=${offsets.startOffsetInRootBundle}`,
+            `    Resolved: txId=${offsets.rootBundleId}, offset=${payloadOffset} (dataItem=${offsets.startOffsetInRootBundle}, headerSize=${offsets.payloadDataStart})`,
           );
         } else if (resolvedCount % 10 === 0) {
           const elapsed = (Date.now() - startTime) / 1000;
