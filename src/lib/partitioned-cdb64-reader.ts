@@ -105,6 +105,10 @@ export class PartitionedCdb64Reader {
   // Quick lookup from prefix to partition info
   private partitionInfoByPrefix: Map<string, PartitionInfo> = new Map();
 
+  // Track in-flight partition opens to dedupe concurrent requests
+  private partitionOpenPromises: Map<number, Promise<PartitionState | null>> =
+    new Map();
+
   private opened = false;
 
   constructor(options: PartitionedCdb64ReaderOptions) {
@@ -164,7 +168,7 @@ export class PartitionedCdb64Reader {
       return undefined;
     }
 
-    // Lazily open partition
+    // Lazily open partition (with deduplication of concurrent opens)
     if (partitionState === undefined) {
       const prefix = partitionIndex.toString(16).padStart(2, '0');
       const partitionInfo = this.partitionInfoByPrefix.get(prefix);
@@ -176,21 +180,35 @@ export class PartitionedCdb64Reader {
         return undefined;
       }
 
-      try {
-        const opened = await this.openPartition(partitionInfo);
-        this.partitions[partitionIndex] = opened;
-      } catch (error) {
-        // Configuration errors should be propagated
-        if (this.isConfigurationError(error)) {
-          throw error;
-        }
+      // Check for in-flight open to prevent concurrent opens from leaking readers
+      let openPromise = this.partitionOpenPromises.get(partitionIndex);
+      if (openPromise === undefined) {
+        // Start new open and track it
+        openPromise = this.openPartition(partitionInfo)
+          .then((state) => {
+            this.partitions[partitionIndex] = state;
+            return state;
+          })
+          .catch((error) => {
+            if (this.isConfigurationError(error)) {
+              throw error;
+            }
+            this.log.debug('Failed to open partition', {
+              prefix,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            this.partitions[partitionIndex] = null;
+            return null;
+          })
+          .finally(() => {
+            this.partitionOpenPromises.delete(partitionIndex);
+          });
+        this.partitionOpenPromises.set(partitionIndex, openPromise);
+      }
 
-        this.log.debug('Failed to open partition', {
-          prefix,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        // Mark as unavailable so we don't retry
-        this.partitions[partitionIndex] = null;
+      // Await the shared promise
+      const result = await openPromise;
+      if (result === null) {
         return undefined;
       }
     }
@@ -339,6 +357,9 @@ export class PartitionedCdb64Reader {
     }
 
     await Promise.allSettled(closePromises);
+
+    // Clear any in-flight opens
+    this.partitionOpenPromises.clear();
 
     // Reset partition states
     for (let i = 0; i < 256; i++) {
