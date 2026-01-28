@@ -77,6 +77,9 @@ export interface PartitionedCdb64ReaderOptions {
   /** Timeout for remote requests in ms (default: 30000) */
   remoteRequestTimeoutMs?: number;
 
+  /** Max concurrent HTTP requests per source (undefined = unlimited) */
+  remoteMaxConcurrentRequests?: number;
+
   /** Logger instance */
   log?: winston.Logger;
 }
@@ -91,6 +94,7 @@ export class PartitionedCdb64Reader {
   private remoteCacheMaxRegions: number;
   private remoteCacheTtlMs: number;
   private remoteRequestTimeoutMs: number;
+  private remoteMaxConcurrentRequests?: number;
   private log: winston.Logger;
 
   // Map from prefix (00-ff) to partition state
@@ -110,6 +114,7 @@ export class PartitionedCdb64Reader {
     this.remoteCacheMaxRegions = options.remoteCacheMaxRegions ?? 100;
     this.remoteCacheTtlMs = options.remoteCacheTtlMs ?? 300000;
     this.remoteRequestTimeoutMs = options.remoteRequestTimeoutMs ?? 30000;
+    this.remoteMaxConcurrentRequests = options.remoteMaxConcurrentRequests;
     this.log =
       options.log ??
       winston.createLogger({
@@ -242,6 +247,7 @@ export class PartitionedCdb64Reader {
         const httpSource = new HttpByteRangeSource({
           url: location.url,
           timeout: this.remoteRequestTimeoutMs,
+          maxConcurrentRequests: this.remoteMaxConcurrentRequests,
         });
         return new CachingByteRangeSource({
           source: httpSource,

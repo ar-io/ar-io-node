@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Prefix-Partitioned CDB64 Indexes**: CDB64 root TX indexes can now be split
+  across 256 partition files based on key prefix
+  - Each partition file (00.cdb - ff.cdb) contains records for keys starting
+    with that byte
+  - Enables parallel processing and reduces memory requirements for large
+    indexes
+  - Manifest file tracks partition metadata and record counts
+  - Tools updated: `generate-cdb64-root-tx-index` and
+    `generate-cdb64-root-tx-index-rs` support `--partitioned` flag
+
+- **HTTP Request Concurrency Limit for Remote CDB64 Sources**: New
+  `CDB64_REMOTE_MAX_CONCURRENT_REQUESTS` environment variable limits concurrent
+  HTTP requests per remote CDB64 source
+  - Prevents request pile-up when reading CDB files from HTTP/S3 endpoints
+  - Default: 4 concurrent requests per source
+
 ### Changed
 
 ### Fixed
