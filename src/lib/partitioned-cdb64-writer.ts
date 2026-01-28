@@ -104,7 +104,8 @@ export class PartitionedCdb64Writer {
     const parentDir = path.dirname(this.outputDir);
     await fs.mkdir(parentDir, { recursive: true });
 
-    // Create temp directory
+    // Create temp directory (clean first to avoid stale partitions from crashed processes)
+    await fs.rm(this.tempDir, { recursive: true, force: true });
     await fs.mkdir(this.tempDir, { recursive: true });
 
     this.opened = true;
