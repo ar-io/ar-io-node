@@ -35,7 +35,7 @@ import {
   encodeCdb64Value,
   Cdb64RootTxValue,
 } from '../../src/lib/cdb64-encoding.js';
-import { PartitionedCdb64Writer } from '../../src/lib/partitioned-cdb64-writer.js';
+import { PartitionedRustCdb64Writer } from '../../src/lib/partitioned-rust-cdb64-writer.js';
 
 import {
   Config,
@@ -225,13 +225,13 @@ async function generateIndex(config: Config): Promise<void> {
 }
 
 /**
- * Generates a partitioned index using the TypeScript PartitionedCdb64Writer.
+ * Generates a partitioned index using the Rust-backed PartitionedRustCdb64Writer.
  */
 async function generatePartitionedIndex(config: Config): Promise<void> {
   if (!config.outputDir) {
     throw new Error('outputDir is required for partitioned index generation');
   }
-  const writer = new PartitionedCdb64Writer(config.outputDir);
+  const writer = new PartitionedRustCdb64Writer(config.outputDir);
   await writer.open();
 
   const stats: ProcessingStats = createStats();
@@ -326,7 +326,7 @@ async function generatePartitionedIndex(config: Config): Promise<void> {
           }
         }
 
-        await writer.add(dataItemId, encodeCdb64Value(value));
+        writer.add(dataItemId, encodeCdb64Value(value));
         stats.recordCount++;
 
         if (stats.recordCount % 100000 === 0) {
