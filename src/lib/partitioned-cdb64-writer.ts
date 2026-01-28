@@ -163,8 +163,6 @@ export class PartitionedCdb64Writer {
       throw new Error('Already finalized');
     }
 
-    this.finalized = true;
-
     // Finalize all open partition writers
     const partitionInfos: PartitionInfo[] = [];
     let totalRecords = 0;
@@ -220,6 +218,9 @@ export class PartitionedCdb64Writer {
     }
 
     await fs.rename(this.tempDir, this.outputDir);
+
+    // Mark as finalized only after successful completion
+    this.finalized = true;
 
     return manifest;
   }

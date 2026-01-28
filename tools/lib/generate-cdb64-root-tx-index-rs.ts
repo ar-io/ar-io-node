@@ -346,7 +346,7 @@ async function generatePartitionedIndex(config: Config): Promise<void> {
     const manifest = await writer.finalize();
 
     const totalSize = manifest.partitions.reduce((sum, p) => sum + p.size, 0);
-    printGenerationSummary(stats, config.outputPath, {
+    printGenerationSummary(stats, config.outputDir!, {
       count: manifest.partitions.length,
       totalSize,
     });
