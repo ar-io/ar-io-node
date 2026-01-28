@@ -222,15 +222,48 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     });
   }
 
+  /** Maximum manifest size in bytes (10 MB) */
+  private static readonly MAX_MANIFEST_SIZE = 10 * 1024 * 1024;
+
   /**
-   * Collects an async stream into a string.
+   * Converts a fetch Response body to an AsyncIterable.
+   */
+  private async *responseToAsyncIterable(
+    response: Response,
+  ): AsyncIterable<Uint8Array> {
+    if (response.body === null) {
+      return;
+    }
+    const reader = response.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        yield value;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /**
+   * Collects an async stream into a string with optional size limit.
+   * @param maxBytes Maximum bytes to read (default: MAX_MANIFEST_SIZE)
+   * @throws Error if the stream exceeds the size limit
    */
   private async streamToString(
     stream: AsyncIterable<Uint8Array | Buffer>,
+    maxBytes: number = Cdb64RootTxIndex.MAX_MANIFEST_SIZE,
   ): Promise<string> {
     const chunks: Buffer[] = [];
+    let totalBytes = 0;
     for await (const chunk of stream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > maxBytes) {
+        throw new Error(`Stream exceeds maximum size of ${maxBytes} bytes`);
+      }
+      chunks.push(buffer);
     }
     return Buffer.concat(chunks).toString('utf-8');
   }
@@ -420,7 +453,8 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       },
     });
 
-    this.watcher.on('change', async () => {
+    // Handler for manifest changes (reused for both 'change' and 'add' events)
+    const handleManifestChange = async () => {
       this.log.info('Manifest changed, reloading partitioned index', {
         path: dirPath,
       });
@@ -434,7 +468,11 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           },
         );
       });
-    });
+    };
+
+    this.watcher.on('change', handleManifestChange);
+    // Handle atomic renames (common in production): unlink + add rather than change
+    this.watcher.on('add', handleManifestChange);
 
     this.watcher.on('error', (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
@@ -649,7 +687,20 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
-        const content = await response.text();
+        // Check Content-Length if available
+        const contentLength = response.headers.get('content-length');
+        if (contentLength !== null) {
+          const size = parseInt(contentLength, 10);
+          if (!isNaN(size) && size > Cdb64RootTxIndex.MAX_MANIFEST_SIZE) {
+            throw new Error(
+              `Manifest exceeds maximum size of ${Cdb64RootTxIndex.MAX_MANIFEST_SIZE} bytes (Content-Length: ${size})`,
+            );
+          }
+        }
+        // Also enforce limit while reading in case Content-Length was missing or inaccurate
+        const content = await this.streamToString(
+          this.responseToAsyncIterable(response),
+        );
         return parseManifest(content);
       }
 
@@ -720,11 +771,20 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       }
 
       case 'partitioned-arweave-tx':
-      case 'partitioned-arweave-bundle-item':
+      case 'partitioned-arweave-bundle-item': {
         manifest = await this.loadRemoteManifest(parsed);
-        // For Arweave sources, partitions should already have arweave-* location types
-        // in the manifest (they need to be stored as separate TXs or bundle items)
+        // Validate: Arweave manifests cannot contain file locations
+        const fileLocations = manifest.partitions.filter(
+          (p) => p.location.type === 'file',
+        );
+        if (fileLocations.length > 0) {
+          throw new Error(
+            `Arweave manifest contains ${fileLocations.length} partition(s) with file locations. ` +
+              `Arweave manifests must use arweave-tx, arweave-bundle-item, or http location types.`,
+          );
+        }
         break;
+      }
 
       default:
         throw new Error(
