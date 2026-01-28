@@ -297,10 +297,24 @@ function loadOutputManifest(outputPath: string): ExtendedCdb64Manifest | null {
   if (!fs.existsSync(outputPath)) {
     return null;
   }
-  const manifestJson = fs.readFileSync(outputPath, 'utf-8');
-  // Parse as extended manifest (allows arweave-pending locations)
-  const data = JSON.parse(manifestJson);
-  return data as ExtendedCdb64Manifest;
+  try {
+    const manifestJson = fs.readFileSync(outputPath, 'utf-8');
+    const data = JSON.parse(manifestJson);
+    // Basic structure validation
+    if (
+      typeof data.version !== 'number' ||
+      !Array.isArray(data.partitions) ||
+      typeof data.totalRecords !== 'number'
+    ) {
+      throw new Error('Invalid manifest structure: missing required fields');
+    }
+    return data as ExtendedCdb64Manifest;
+  } catch (error) {
+    throw new Error(
+      `Failed to load output manifest: ${outputPath}\n` +
+        `${error instanceof Error ? error.message : 'parse error'}`,
+    );
+  }
 }
 
 function saveManifestAtomic(
@@ -325,6 +339,25 @@ function formatWinc(winc: string): string {
   const winstonBigInt = BigInt(winc);
   const arValue = Number(winstonBigInt) / 1e12;
   return `${arValue.toFixed(6)} AR`;
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  const queue = [...items];
+  const workers = Array(Math.min(concurrency, queue.length))
+    .fill(null)
+    .map(async () => {
+      while (queue.length > 0) {
+        const item = queue.shift();
+        if (item !== undefined) {
+          await fn(item);
+        }
+      }
+    });
+  await Promise.all(workers);
 }
 
 async function getWalletAddress(jwk: any): Promise<string> {
@@ -609,68 +642,85 @@ async function runUpload(config: Config): Promise<void> {
   // Phase 1: Upload partitions
   if (!config.resolveOnly && partitionsToUpload.length > 0) {
     console.log('=== Phase 1: Upload Partitions ===');
+    if (config.concurrency > 1) {
+      console.log(`Concurrency: ${config.concurrency}`);
+    }
     const startTime = Date.now();
     let uploadedCount = 0;
+    let lastProgressLog = 0;
 
-    for (const idx of partitionsToUpload) {
-      const partition = outputManifest.partitions[idx];
-      const sourcePartition = sourceManifest.partitions[idx];
+    await runWithConcurrency(
+      partitionsToUpload,
+      config.concurrency,
+      async (idx) => {
+        const partition = outputManifest.partitions[idx];
+        const sourcePartition = sourceManifest.partitions[idx];
 
-      if (sourcePartition.location.type !== 'file') {
-        console.error(`  Partition ${partition.prefix}: not a file location, skipping`);
-        continue;
-      }
+        if (sourcePartition.location.type !== 'file') {
+          console.error(
+            `  Partition ${partition.prefix}: not a file location, skipping`,
+          );
+          return;
+        }
 
-      const partitionPath = path.join(
-        config.inputDir,
-        sourcePartition.location.filename,
-      );
-
-      if (!fs.existsSync(partitionPath)) {
-        throw new Error(`Partition file not found: ${partitionPath}`);
-      }
-
-      if (config.verbose) {
-        console.log(
-          `  Uploading ${partition.prefix} (${formatBytes(partition.size)})...`,
-        );
-      }
-
-      try {
-        const dataItemId = await uploadPartition(
-          turbo,
-          partitionPath,
-          sourcePartition,
-          config,
+        const partitionPath = path.join(
+          config.inputDir,
+          sourcePartition.location.filename,
         );
 
-        // Update manifest with pending location
-        outputManifest.partitions[idx] = {
-          ...partition,
-          location: {
-            type: 'arweave-pending',
-            dataItemId,
-          },
-        };
-
-        // Atomic save
-        saveManifestAtomic(outputManifest, config.outputPath);
-        partitionsToResolve.push(idx);
-        uploadedCount++;
+        if (!fs.existsSync(partitionPath)) {
+          throw new Error(`Partition file not found: ${partitionPath}`);
+        }
 
         if (config.verbose) {
-          console.log(`    Data item ID: ${dataItemId}`);
-        } else if (uploadedCount % 10 === 0) {
-          const elapsed = (Date.now() - startTime) / 1000;
           console.log(
-            `  Uploaded ${uploadedCount}/${partitionsToUpload.length} partitions (${elapsed.toFixed(1)}s)`,
+            `  Uploading ${partition.prefix} (${formatBytes(partition.size)})...`,
           );
         }
-      } catch (error: any) {
-        console.error(`  Failed to upload ${partition.prefix}: ${error.message}`);
-        throw error;
-      }
-    }
+
+        try {
+          const dataItemId = await uploadPartition(
+            turbo,
+            partitionPath,
+            sourcePartition,
+            config,
+          );
+
+          // Update manifest with pending location
+          outputManifest.partitions[idx] = {
+            ...partition,
+            location: {
+              type: 'arweave-pending',
+              dataItemId,
+            },
+          };
+
+          // Atomic save
+          saveManifestAtomic(outputManifest, config.outputPath);
+          partitionsToResolve.push(idx);
+          uploadedCount++;
+
+          if (config.verbose) {
+            console.log(`    Data item ID: ${dataItemId}`);
+          } else {
+            // Log progress every 10 uploads (check to avoid duplicate logs from concurrent workers)
+            const currentTens = Math.floor(uploadedCount / 10);
+            if (currentTens > lastProgressLog) {
+              lastProgressLog = currentTens;
+              const elapsed = (Date.now() - startTime) / 1000;
+              console.log(
+                `  Uploaded ${uploadedCount}/${partitionsToUpload.length} partitions (${elapsed.toFixed(1)}s)`,
+              );
+            }
+          }
+        } catch (error: any) {
+          console.error(
+            `  Failed to upload ${partition.prefix}: ${error.message}`,
+          );
+          throw error;
+        }
+      },
+    );
 
     const totalElapsed = (Date.now() - startTime) / 1000;
     console.log(
