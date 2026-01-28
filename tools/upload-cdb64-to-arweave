@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Upload Partitioned CDB64 to Arweave Tool
+#
+# This tool uploads partitioned CDB64 partition files (.cdb) to Arweave using
+# the Turbo SDK and generates a new local manifest with arweave-bundle-item
+# location types (includes offsets for byte-range reads).
+#
+# Usage: ./tools/upload-cdb64-to-arweave [options]
+#
+# Options:
+#   --input, -i <path>     Input directory with partitioned CDB64 (required)
+#   --wallet, -w <path>    Path to Arweave JWK wallet file (required)
+#   --output, -o <path>    Output manifest path (default: <input>/manifest-arweave.json)
+#   --name, -n <name>      Descriptive name for this CDB index (added to tags)
+#   --dry-run              Show cost estimate and exit without uploading
+#   --resume               Resume from previous partial upload/resolution
+#   --upload-only          Upload partitions but skip offset resolution phase
+#   --resolve-only         Skip upload, only resolve offsets for pending partitions
+#   --upload-manifest      Upload final manifest via Turbo after all partitions resolved
+#   --upload-manifest-l1   Upload final manifest directly to Arweave L1 (not bundled)
+#   --concurrency <n>      Parallel uploads (default: 1)
+#   --app-name <name>      App-Name tag (default: "AR.IO-CDB64")
+#   --verbose              Show detailed per-partition progress
+#   --help, -h             Show help
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+exec node --import ./register.js tools/lib/upload-cdb64-to-arweave.ts "$@"
