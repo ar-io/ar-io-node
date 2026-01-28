@@ -56,12 +56,14 @@ export class Ans104OffsetSource {
    *
    * @param dataItemId - The ID of the data item to find
    * @param rootBundleId - The ID of the root bundle to search within
+   * @param signal - Optional abort signal to cancel the operation
    * @returns Object with offsets, sizes, and content type if found, null otherwise
-   * @throws Error if bundle parsing fails
+   * @throws Error if bundle parsing fails or operation is aborted
    */
   async getDataItemOffset(
     dataItemId: string,
     rootBundleId: string,
+    signal?: AbortSignal,
   ): Promise<{
     itemOffset: number;
     dataOffset: number;
@@ -75,6 +77,9 @@ export class Ans104OffsetSource {
       rootBundleId,
     });
 
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     log.debug('Searching for data item in root bundle');
 
     try {
@@ -83,6 +88,8 @@ export class Ans104OffsetSource {
         rootBundleId,
         0,
         new Set<string>(),
+        undefined,
+        signal,
       );
 
       if (result) {
@@ -117,11 +124,13 @@ export class Ans104OffsetSource {
    *
    * @param dataItemId - The ID of the data item to find
    * @param path - Array of TX IDs from root to immediate parent
+   * @param signal - Optional abort signal to cancel the operation
    * @returns Object with offsets, sizes, and content type if found, null otherwise
    */
   async getDataItemOffsetWithPath(
     dataItemId: string,
     path: string[],
+    signal?: AbortSignal,
   ): Promise<{
     itemOffset: number;
     dataOffset: number;
@@ -134,6 +143,9 @@ export class Ans104OffsetSource {
       dataItemId,
       pathLength: path.length,
     });
+
+    // Check for abort before starting
+    signal?.throwIfAborted();
 
     if (path.length === 0) {
       log.warn('Empty path provided');
@@ -148,15 +160,24 @@ export class Ans104OffsetSource {
     });
 
     try {
-      return await this.navigatePathAndFind(dataItemId, path, rootBundleId);
+      return await this.navigatePathAndFind(
+        dataItemId,
+        path,
+        rootBundleId,
+        signal,
+      );
     } catch (error: any) {
+      // Don't fallback on abort - re-throw immediately
+      if (error.name === 'AbortError') {
+        throw error;
+      }
       log.warn('Path-guided navigation failed, falling back to linear search', {
         error: error.message,
         dataItemId,
         pathLength: path.length,
       });
       // Graceful fallback to existing linear search method
-      return this.getDataItemOffset(dataItemId, rootBundleId);
+      return this.getDataItemOffset(dataItemId, rootBundleId, signal);
     }
   }
 
@@ -167,6 +188,7 @@ export class Ans104OffsetSource {
     dataItemId: string,
     path: string[],
     rootBundleId: string,
+    signal?: AbortSignal,
   ): Promise<{
     itemOffset: number;
     dataOffset: number;
@@ -186,6 +208,9 @@ export class Ans104OffsetSource {
     // Path: [root, bundle1, bundle2, ..., parentBundle]
     // We need to navigate through bundle1, bundle2, etc. to reach parentBundle
     for (let level = 1; level < path.length; level++) {
+      // Check for abort before each level of navigation
+      signal?.throwIfAborted();
+
       const nextBundleId = path[level];
 
       log.debug('Navigating to next bundle in path', {
@@ -198,6 +223,7 @@ export class Ans104OffsetSource {
       const bundleInfo = await this.parseBundleHeadersAtOffset(
         rootBundleId,
         currentOffset,
+        signal,
       );
 
       // Find the next bundle in the path
@@ -215,11 +241,15 @@ export class Ans104OffsetSource {
         rootBundleId,
         currentOffset + nextBundle.offset,
         nextBundle.size,
+        signal,
       );
 
       // Move offset into the nested bundle's payload
       currentOffset += nextBundle.offset + bundleHeaderInfo.headerSize;
     }
+
+    // Check for abort before final search
+    signal?.throwIfAborted();
 
     // Now we're at the final level (the immediate parent bundle)
     // Parse its headers and search for the target data item
@@ -230,6 +260,7 @@ export class Ans104OffsetSource {
     const parentBundleInfo = await this.parseBundleHeadersAtOffset(
       rootBundleId,
       currentOffset,
+      signal,
     );
 
     const targetItem = parentBundleInfo.items.find(
@@ -249,6 +280,7 @@ export class Ans104OffsetSource {
       rootBundleId,
       itemOffset,
       targetItem.size,
+      signal,
     );
 
     log.debug('Found data item via path navigation', {
@@ -274,11 +306,16 @@ export class Ans104OffsetSource {
   private async parseBundleHeadersAtOffset(
     rootBundleId: string,
     offset: number,
+    signal?: AbortSignal,
   ): Promise<{ items: DataItemHeader[] }> {
+    // Check for abort before fetching
+    signal?.throwIfAborted();
+
     // Fetch item count (first 32 bytes)
     const countData = await this.dataSource.getData({
       id: rootBundleId,
       region: { offset, size: 32 },
+      signal,
     });
     const itemCount = await this.parseItemCount(countData.stream);
 
@@ -286,11 +323,15 @@ export class Ans104OffsetSource {
       return { items: [] };
     }
 
+    // Check for abort before fetching headers
+    signal?.throwIfAborted();
+
     // Fetch and parse headers
     const headerSize = 32 + 64 * itemCount;
     const headerData = await this.dataSource.getData({
       id: rootBundleId,
       region: { offset, size: headerSize },
+      signal,
     });
     const items = await this.parseHeaders(headerData.stream, itemCount);
 
@@ -303,6 +344,7 @@ export class Ans104OffsetSource {
     currentOffset: number,
     visited: Set<string>,
     rootBundleId?: string,
+    signal?: AbortSignal,
   ): Promise<{
     itemOffset: number;
     dataOffset: number;
@@ -310,6 +352,9 @@ export class Ans104OffsetSource {
     dataSize: number;
     contentType?: string;
   } | null> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     // Root bundle ID defaults to the current bundle ID on first call
     const actualRootBundleId =
       rootBundleId !== undefined && rootBundleId !== ''
@@ -337,6 +382,7 @@ export class Ans104OffsetSource {
       const countData = await this.dataSource.getData({
         id: actualRootBundleId,
         region: { offset: currentOffset, size: 32 },
+        signal,
       });
 
       const itemCount = await this.parseItemCount(countData.stream);
@@ -348,11 +394,15 @@ export class Ans104OffsetSource {
 
       log.debug('Bundle has items', { itemCount });
 
+      // Check for abort before fetching headers
+      signal?.throwIfAborted();
+
       // Calculate header size and fetch headers
       const headerSize = 32 + 64 * itemCount;
       const headerData = await this.dataSource.getData({
         id: actualRootBundleId,
         region: { offset: currentOffset, size: headerSize },
+        signal,
       });
 
       const items = await this.parseHeaders(headerData.stream, itemCount);
@@ -370,6 +420,7 @@ export class Ans104OffsetSource {
           actualRootBundleId,
           currentOffset + targetItem.offset,
           targetItem.size,
+          signal,
         );
 
         const itemOffset = currentOffset + targetItem.offset;
@@ -385,10 +436,14 @@ export class Ans104OffsetSource {
       // Check nested bundles
       log.debug('Checking for nested bundles');
       for (const item of items) {
+        // Check for abort before processing each nested bundle
+        signal?.throwIfAborted();
+
         const isBundleResult = await this.isBundle(
           actualRootBundleId,
           currentOffset + item.offset,
           item,
+          signal,
         );
         if (isBundleResult) {
           log.debug('Found nested bundle', { nestedId: item.id });
@@ -398,6 +453,7 @@ export class Ans104OffsetSource {
             actualRootBundleId,
             currentOffset + item.offset,
             item.size,
+            signal,
           );
 
           // Recursively search within the nested bundle's payload
@@ -408,6 +464,7 @@ export class Ans104OffsetSource {
             currentOffset + item.offset + nestedBundleInfo.headerSize,
             visited,
             actualRootBundleId,
+            signal,
           );
           if (result) {
             return result;
@@ -509,6 +566,7 @@ export class Ans104OffsetSource {
     rootBundleId: string,
     cumulativeOffset: number,
     item: DataItemHeader,
+    signal?: AbortSignal,
   ): Promise<boolean> {
     const log = this.log.child({
       method: 'isBundle',
@@ -518,6 +576,9 @@ export class Ans104OffsetSource {
     });
 
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
+
       // ANS-104 data items have a minimum size of 80 bytes (MIN_BINARY_SIZE) based on
       // the required structure: signature type (2 bytes), signature (varies), owner (varies),
       // target presence (1 byte), anchor presence (1 byte), tag count (8 bytes), tag bytes (8 bytes).
@@ -538,6 +599,7 @@ export class Ans104OffsetSource {
       const itemData = await this.dataSource.getData({
         id: rootBundleId,
         region: { offset: cumulativeOffset, size: checkSize },
+        signal,
       });
 
       const reader = getReader(itemData.stream);
@@ -643,6 +705,7 @@ export class Ans104OffsetSource {
     bundleId: string,
     itemOffset: number,
     totalSize: number,
+    signal?: AbortSignal,
   ): Promise<{
     headerSize: number;
     payloadSize: number;
@@ -656,6 +719,9 @@ export class Ans104OffsetSource {
     });
 
     try {
+      // Check for abort before fetching
+      signal?.throwIfAborted();
+
       // Fetch enough data to parse the full header including tags
       // The arbundles library enforces MAX_TAG_BYTES (4096 bytes) as the maximum tag section size
       // MAX_DATA_ITEM_HEADER_SIZE accounts for all header components plus this tag limit
@@ -664,6 +730,7 @@ export class Ans104OffsetSource {
       const headerData = await this.dataSource.getData({
         id: bundleId,
         region: { offset: itemOffset, size: fetchSize },
+        signal,
       });
 
       const reader = getReader(headerData.stream);
