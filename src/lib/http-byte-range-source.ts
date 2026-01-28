@@ -8,6 +8,7 @@
 import { default as axios, AxiosInstance } from 'axios';
 import { ByteRangeSource } from './byte-range-source.js';
 import { buildRangeHeader } from './http-utils.js';
+import { Semaphore } from './semaphore.js';
 
 /**
  * ByteRangeSource implementation for HTTP endpoints.
@@ -24,20 +25,28 @@ export class HttpByteRangeSource implements ByteRangeSource {
   private url: string;
   private httpClient: AxiosInstance;
   private opened = true;
+  private semaphore: Semaphore | undefined;
 
   constructor({
     url,
     timeout = 30000,
+    maxConcurrentRequests,
     httpClient,
   }: {
     /** URL to fetch byte ranges from */
     url: string;
     /** Request timeout in milliseconds (default: 30000) */
     timeout?: number;
+    /** Maximum concurrent HTTP requests (undefined = unlimited) */
+    maxConcurrentRequests?: number;
     /** Optional pre-configured axios instance */
     httpClient?: AxiosInstance;
   }) {
     this.url = url;
+    this.semaphore =
+      maxConcurrentRequests !== undefined
+        ? new Semaphore(maxConcurrentRequests)
+        : undefined;
     this.httpClient =
       httpClient ??
       axios.create({
@@ -52,29 +61,38 @@ export class HttpByteRangeSource implements ByteRangeSource {
   }
 
   async read(offset: number, size: number): Promise<Buffer> {
-    const response = await this.httpClient.get(this.url, {
-      headers: {
-        Range: buildRangeHeader(offset, offset + size - 1),
-      },
-      responseType: 'arraybuffer',
-    });
-
-    // Verify we got a partial content response
-    if (response.status !== 206) {
-      throw new Error(
-        `HTTP byte range request failed: expected 206 Partial Content, got ${response.status}`,
-      );
+    if (this.semaphore) {
+      await this.semaphore.acquire();
     }
+    try {
+      const response = await this.httpClient.get(this.url, {
+        headers: {
+          Range: buildRangeHeader(offset, offset + size - 1),
+        },
+        responseType: 'arraybuffer',
+      });
 
-    const buffer = Buffer.from(response.data);
+      // Verify we got a partial content response
+      if (response.status !== 206) {
+        throw new Error(
+          `HTTP byte range request failed: expected 206 Partial Content, got ${response.status}`,
+        );
+      }
 
-    if (buffer.length !== size) {
-      throw new Error(
-        `HTTP byte range short read: expected ${size} bytes, got ${buffer.length}`,
-      );
+      const buffer = Buffer.from(response.data);
+
+      if (buffer.length !== size) {
+        throw new Error(
+          `HTTP byte range short read: expected ${size} bytes, got ${buffer.length}`,
+        );
+      }
+
+      return buffer;
+    } finally {
+      if (this.semaphore) {
+        this.semaphore.release();
+      }
     }
-
-    return buffer;
   }
 
   async close(): Promise<void> {

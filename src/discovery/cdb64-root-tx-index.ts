@@ -173,6 +173,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   private remoteCacheMaxRegions: number;
   private remoteCacheTtlMs: number;
   private remoteRequestTimeoutMs: number;
+  private remoteMaxConcurrentRequests?: number;
 
   constructor({
     log,
@@ -182,6 +183,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     remoteCacheMaxRegions = 100,
     remoteCacheTtlMs = 300000,
     remoteRequestTimeoutMs = 30000,
+    remoteMaxConcurrentRequests,
   }: {
     log: winston.Logger;
     /** List of source specifications (local paths, TX IDs, URLs) */
@@ -196,6 +198,8 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     remoteCacheTtlMs?: number;
     /** Request timeout for remote sources in ms (default: 30000 = 30 seconds) */
     remoteRequestTimeoutMs?: number;
+    /** Max concurrent HTTP requests per source (undefined = unlimited) */
+    remoteMaxConcurrentRequests?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.sources = sources;
@@ -204,6 +208,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     this.remoteCacheMaxRegions = remoteCacheMaxRegions;
     this.remoteCacheTtlMs = remoteCacheTtlMs;
     this.remoteRequestTimeoutMs = remoteRequestTimeoutMs;
+    this.remoteMaxConcurrentRequests = remoteMaxConcurrentRequests;
   }
 
   /**
@@ -243,6 +248,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           new HttpByteRangeSource({
             url: parsed.url,
             timeout: this.remoteRequestTimeoutMs,
+            maxConcurrentRequests: this.remoteMaxConcurrentRequests,
           }),
         );
 
@@ -733,6 +739,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       remoteCacheMaxRegions: this.remoteCacheMaxRegions,
       remoteCacheTtlMs: this.remoteCacheTtlMs,
       remoteRequestTimeoutMs: this.remoteRequestTimeoutMs,
+      remoteMaxConcurrentRequests: this.remoteMaxConcurrentRequests,
       log: this.log,
     });
 

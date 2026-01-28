@@ -47,6 +47,18 @@ export function positiveIntOrDefault(
   return value;
 }
 
+export function positiveIntOrUndefined(envVarName: string): number | undefined {
+  const raw = varOrUndefined(envVarName);
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${envVarName} must be a positive integer, got: ${raw}`);
+  }
+  return value;
+}
+
 export function enumOrDefault<T extends string>(
   envVarName: string,
   validValues: readonly T[],

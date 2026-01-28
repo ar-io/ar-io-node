@@ -737,6 +737,8 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
         remoteCacheMaxRegions: config.CDB64_REMOTE_CACHE_MAX_REGIONS,
         remoteCacheTtlMs: config.CDB64_REMOTE_CACHE_TTL_MS,
         remoteRequestTimeoutMs: config.CDB64_REMOTE_REQUEST_TIMEOUT_MS,
+        remoteMaxConcurrentRequests:
+          config.CDB64_REMOTE_MAX_CONCURRENT_REQUESTS,
       });
       rootTxIndexes.push(cdb64RootTxIndex);
       registerCleanupHandler('cdb64-root-tx-index', async () => {
