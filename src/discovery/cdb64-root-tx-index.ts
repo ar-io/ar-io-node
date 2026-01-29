@@ -60,13 +60,13 @@ function isCdb64File(filePath: string): boolean {
 type ParsedSource =
   | { type: 'file'; path: string }
   | { type: 'arweave-tx'; id: string }
-  | { type: 'arweave-bundle-item'; id: string; offset: number; size: number }
+  | { type: 'arweave-byte-range'; id: string; offset: number; size: number }
   | { type: 'http'; url: string }
   | { type: 'partitioned-directory'; path: string }
   | { type: 'partitioned-http'; url: string }
   | { type: 'partitioned-arweave-tx'; id: string }
   | {
-      type: 'partitioned-arweave-bundle-item';
+      type: 'partitioned-arweave-byte-range';
       id: string;
       offset: number;
       size: number;
@@ -113,7 +113,7 @@ function parseSourceSpec(spec: string): ParsedSource {
       const size = parseInt(sizeStr, 10);
 
       if (!isNaN(offset) && !isNaN(size) && offset >= 0 && size > 0) {
-        return { type: 'partitioned-arweave-bundle-item', id, offset, size };
+        return { type: 'partitioned-arweave-byte-range', id, offset, size };
       }
     }
   }
@@ -126,7 +126,7 @@ function parseSourceSpec(spec: string): ParsedSource {
       const size = parseInt(sizeStr, 10);
 
       if (!isNaN(offset) && !isNaN(size) && offset >= 0 && size > 0) {
-        return { type: 'arweave-bundle-item', id, offset, size };
+        return { type: 'arweave-byte-range', id, offset, size };
       }
     }
   }
@@ -305,7 +305,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           }),
         );
 
-      case 'arweave-bundle-item':
+      case 'arweave-byte-range':
         if (!this.contiguousDataSource) {
           throw new Error(
             'ContiguousDataSource required for Arweave bundle item sources',
@@ -724,7 +724,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         return parseManifest(content);
       }
 
-      case 'partitioned-arweave-bundle-item': {
+      case 'partitioned-arweave-byte-range': {
         if (!this.contiguousDataSource) {
           throw new Error(
             'ContiguousDataSource required for Arweave bundle item manifest sources',
@@ -778,7 +778,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       }
 
       case 'partitioned-arweave-tx':
-      case 'partitioned-arweave-bundle-item': {
+      case 'partitioned-arweave-byte-range': {
         manifest = await this.loadRemoteManifest(parsed);
         // Validate: Arweave manifests cannot contain file locations
         const fileLocations = manifest.partitions.filter(
@@ -787,7 +787,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         if (fileLocations.length > 0) {
           throw new Error(
             `Arweave manifest contains ${fileLocations.length} partition(s) with file locations. ` +
-              `Arweave manifests must use arweave-tx, arweave-bundle-item, or http location types.`,
+              `Arweave manifests must use arweave-id, arweave-byte-range, or http location types.`,
           );
         }
         break;
@@ -917,7 +917,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         if (
           parsed.type === 'partitioned-http' ||
           parsed.type === 'partitioned-arweave-tx' ||
-          parsed.type === 'partitioned-arweave-bundle-item'
+          parsed.type === 'partitioned-arweave-byte-range'
         ) {
           try {
             const entry = await this.createPartitionedReader(

@@ -13,7 +13,7 @@
  * 2. Phase 2 (Resolve): Polls Turbo offsets API to get root bundle IDs and offsets
  * 3. Phase 3 (Manifest Upload): Optionally uploads the final manifest to Arweave
  *
- * The output manifest contains arweave-bundle-item location types with offsets
+ * The output manifest contains arweave-byte-range location types with offsets
  * suitable for byte-range reads from Arweave gateways.
  *
  * Usage:
@@ -91,7 +91,7 @@ function printUsage(): void {
 Upload Partitioned CDB64 to Arweave
 
 This tool uploads partitioned CDB64 partition files (.cdb) to Arweave using
-the Turbo SDK and generates a new local manifest with arweave-bundle-item
+the Turbo SDK and generates a new local manifest with arweave-byte-range
 location types (includes offsets for byte-range reads).
 
 Usage: ./tools/upload-cdb64-to-arweave [options]
@@ -120,7 +120,7 @@ Phases:
 
   Phase 2 (Resolve):
     - Polls Turbo /tx/:id/offsets API for each pending partition
-    - Updates to 'arweave-bundle-item' location type with offset info
+    - Updates to 'arweave-byte-range' location type with offset info
     - Atomic save after each resolved partition
 
   Phase 3 (Manifest Upload, optional):
@@ -601,7 +601,7 @@ async function runUpload(config: Config): Promise<void> {
 
   for (let i = 0; i < outputManifest.partitions.length; i++) {
     const partition = outputManifest.partitions[i];
-    if (partition.location.type === 'arweave-bundle-item') {
+    if (partition.location.type === 'arweave-byte-range') {
       // Already complete
       continue;
     } else if (partition.location.type === 'arweave-pending') {
@@ -625,7 +625,7 @@ async function runUpload(config: Config): Promise<void> {
     0,
   );
 
-  if (bytesToUpload > 0) {
+  if (bytesToUpload > 0 && !config.resolveOnly) {
     console.log('=== Cost Estimate ===');
     const estimate = await estimateCost(turbo, bytesToUpload);
     console.log(`Bytes to upload: ${formatBytes(bytesToUpload)}`);
@@ -770,14 +770,17 @@ async function runUpload(config: Config): Promise<void> {
         // startOffsetInRootBundle points to data item header, payloadDataStart is the header size
         const payloadOffset = offsets.startOffsetInRootBundle + offsets.payloadDataStart;
 
-        // Update to bundle-item location
+        // Preserve dataItemId from the pending location for fallback/debugging
+        const pendingLocation = partition.location as PartitionArweavePendingLocation;
+
+        // Update to byte-range location
         outputManifest.partitions[idx] = {
           ...partition,
           location: {
-            type: 'arweave-bundle-item',
-            txId: offsets.rootBundleId,
-            offset: payloadOffset,
-            size: offsets.payloadContentLength,
+            type: 'arweave-byte-range',
+            rootTxId: offsets.rootBundleId,
+            dataOffsetInRootTx: payloadOffset,
+            dataItemId: pendingLocation.dataItemId,
           },
         };
 
@@ -813,9 +816,9 @@ async function runUpload(config: Config): Promise<void> {
     }
   }
 
-  // Check if all partitions are resolved (must be arweave-bundle-item)
+  // Check if all partitions are resolved (must be arweave-byte-range)
   const unresolvedCount = outputManifest.partitions.filter(
-    (p) => p.location.type !== 'arweave-bundle-item',
+    (p) => p.location.type !== 'arweave-byte-range',
   ).length;
 
   if (unresolvedCount > 0) {
@@ -837,7 +840,7 @@ async function runUpload(config: Config): Promise<void> {
   if (config.uploadManifest || config.uploadManifestL1) {
     console.log('=== Phase 3: Upload Manifest ===');
 
-    // Convert to final manifest (all locations should be arweave-bundle-item now)
+    // Convert to final manifest (all locations should be arweave-byte-range now)
     const finalManifest: Cdb64Manifest = {
       version: 1,
       createdAt: outputManifest.createdAt,

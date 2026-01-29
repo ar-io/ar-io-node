@@ -400,26 +400,34 @@ Partition accessible via HTTP(S):
 { "type": "http", "url": "https://example.com/index/00.cdb" }
 ```
 
-#### Arweave Transaction Location
+#### Arweave ID Location
 
-Partition stored as an Arweave transaction:
+Partition accessed by Arweave ID (transaction or data item):
 
 ```json
-{ "type": "arweave-tx", "txId": "abc123..." }
+{ "type": "arweave-id", "id": "abc123..." }
 ```
 
-#### Arweave Bundle Item Location
+#### Arweave Byte Range Location
 
-Partition stored as a data item within an Arweave bundle:
+Partition stored within an Arweave transaction, accessed via byte-range:
 
 ```json
 {
-  "type": "arweave-bundle-item",
-  "txId": "abc123...",
-  "offset": 1024,
-  "size": 245760
+  "type": "arweave-byte-range",
+  "rootTxId": "abc123...",
+  "dataOffsetInRootTx": 1024,
+  "dataItemId": "xyz789..."
 }
 ```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `rootTxId` | Yes | L1 transaction ID containing the data |
+| `dataOffsetInRootTx` | Yes | Byte offset where partition data begins |
+| `dataItemId` | No | Original data item ID (for fallback/debugging) |
+
+Note: Partition size comes from `partition.size`, not the location.
 
 ## Partitioning Scheme
 
