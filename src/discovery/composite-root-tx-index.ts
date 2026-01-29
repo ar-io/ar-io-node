@@ -30,6 +30,21 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
     >
   >;
 
+  // Map class names to source labels for metrics
+  private static readonly SOURCE_NAME_MAP: Record<string, string> = {
+    TurboRootTxIndex: 'turbo',
+    GatewaysRootTxIndex: 'gateways',
+    GraphQLRootTxIndex: 'graphql',
+    StandaloneSqlite: 'db',
+    Cdb64RootTxIndex: 'cdb64',
+  };
+
+  private getSourceName(className: string): string {
+    return (
+      CompositeRootTxIndex.SOURCE_NAME_MAP[className] ?? className.toLowerCase()
+    );
+  }
+
   constructor({
     log,
     indexes,
@@ -93,6 +108,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
     | undefined
   > {
     const log = this.log.child({ method: 'getRootTx', id });
+    const compositeStartTime = Date.now();
 
     // Keep track of incomplete result as fallback
     let fallbackResult:
@@ -106,10 +122,13 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
           dataSize?: number;
         }
       | undefined;
+    let fallbackSourceName: string | undefined;
+    let winningSourceName: string | undefined;
 
     for (let i = 0; i < this.indexes.length; i++) {
       const index = this.indexes[i];
       const indexName = index.constructor.name;
+      const sourceName = this.getSourceName(indexName);
       const circuitBreaker = this.circuitBreakers.get(indexName)!;
 
       // Skip if circuit is open
@@ -119,9 +138,15 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
           indexClass: indexName,
           circuitState: 'OPEN',
         });
+        metrics.rootTxLookupTotal.inc({
+          source: sourceName,
+          status: 'circuit_open',
+          has_offsets: 'false',
+        });
         continue;
       }
 
+      const lookupStartTime = Date.now();
       try {
         log.debug('Trying index', {
           indexNumber: i + 1,
@@ -132,6 +157,11 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
 
         // Execute with circuit breaker protection
         const result = await circuitBreaker.fire(id);
+        const lookupDuration = Date.now() - lookupStartTime;
+        metrics.rootTxLookupDurationSummary.observe(
+          { source: sourceName },
+          lookupDuration,
+        );
 
         if (result !== undefined) {
           // Check if result has complete offset information
@@ -142,17 +172,36 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
             result.size !== undefined &&
             result.dataSize !== undefined;
 
+          metrics.rootTxLookupTotal.inc({
+            source: sourceName,
+            status: 'found',
+            has_offsets: hasCompleteOffsets ? 'true' : 'false',
+          });
+
           if (hasCompleteOffsets) {
             log.debug('Found root TX ID with complete offsets', {
               rootTxId: result.rootTxId,
               indexNumber: i + 1,
               indexClass: indexName,
             });
+            winningSourceName = sourceName;
+
+            // Record composite lookup metrics
+            metrics.compositeRootTxLookupTotal.inc({
+              status: 'found',
+              winning_source: winningSourceName,
+              has_complete_offsets: 'true',
+            });
+            metrics.compositeRootTxLookupDurationSummary.observe(
+              Date.now() - compositeStartTime,
+            );
+
             return result;
           } else {
             // Save as fallback if we don't have one yet
             if (fallbackResult === undefined) {
               fallbackResult = result;
+              fallbackSourceName = sourceName;
               log.debug(
                 'Found root TX ID but missing offsets, saving as fallback',
                 {
@@ -169,12 +218,27 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
             // Continue to next index for complete data
           }
         } else {
+          metrics.rootTxLookupTotal.inc({
+            source: sourceName,
+            status: 'not_found',
+            has_offsets: 'false',
+          });
           log.debug('Index returned undefined', {
             indexNumber: i + 1,
             indexClass: indexName,
           });
         }
       } catch (error: any) {
+        const lookupDuration = Date.now() - lookupStartTime;
+        metrics.rootTxLookupDurationSummary.observe(
+          { source: sourceName },
+          lookupDuration,
+        );
+        metrics.rootTxLookupTotal.inc({
+          source: sourceName,
+          status: 'error',
+          has_offsets: 'false',
+        });
         log.debug('Index failed with error', {
           indexNumber: i + 1,
           indexClass: indexName,
@@ -193,6 +257,17 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
         hasRootDataOffset: fallbackResult.rootDataOffset !== undefined,
         hasSize: fallbackResult.size !== undefined,
       });
+
+      // Record composite lookup metrics for fallback result
+      metrics.compositeRootTxLookupTotal.inc({
+        status: 'found',
+        winning_source: fallbackSourceName ?? 'fallback',
+        has_complete_offsets: 'false',
+      });
+      metrics.compositeRootTxLookupDurationSummary.observe(
+        Date.now() - compositeStartTime,
+      );
+
       return fallbackResult;
     }
 
@@ -200,6 +275,16 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
       id,
       triedIndexes: this.indexes.length,
     });
+
+    // Record composite lookup metrics for not found case
+    metrics.compositeRootTxLookupTotal.inc({
+      status: 'not_found',
+      winning_source: 'none',
+      has_complete_offsets: 'false',
+    });
+    metrics.compositeRootTxLookupDurationSummary.observe(
+      Date.now() - compositeStartTime,
+    );
 
     return undefined;
   }

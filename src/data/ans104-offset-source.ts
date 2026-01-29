@@ -15,6 +15,7 @@ import {
 
 import { ContiguousDataSource } from '../types.js';
 import { readBytes, getReader, getSignatureMeta } from '../lib/bundles.js';
+import * as metrics from '../metrics.js';
 
 // Maximum ANS-104 data item header size calculation:
 // - Signature type: 2 bytes
@@ -76,6 +77,7 @@ export class Ans104OffsetSource {
       dataItemId,
       rootBundleId,
     });
+    const startTime = Date.now();
 
     // Check for abort before starting
     signal?.throwIfAborted();
@@ -92,7 +94,17 @@ export class Ans104OffsetSource {
         signal,
       );
 
+      const duration = Date.now() - startTime;
+      metrics.ans104OffsetLookupDurationSummary.observe(
+        { method: 'linear_search' },
+        duration,
+      );
+
       if (result) {
+        metrics.ans104OffsetLookupTotal.inc({
+          method: 'linear_search',
+          status: 'found',
+        });
         log.debug('Found data item', {
           itemOffset: result.itemOffset,
           dataOffset: result.dataOffset,
@@ -101,11 +113,24 @@ export class Ans104OffsetSource {
           contentType: result.contentType,
         });
       } else {
+        metrics.ans104OffsetLookupTotal.inc({
+          method: 'linear_search',
+          status: 'not_found',
+        });
         log.debug('Data item not found in bundle');
       }
 
       return result;
     } catch (error: any) {
+      const duration = Date.now() - startTime;
+      metrics.ans104OffsetLookupDurationSummary.observe(
+        { method: 'linear_search' },
+        duration,
+      );
+      metrics.ans104OffsetLookupTotal.inc({
+        method: 'linear_search',
+        status: 'error',
+      });
       log.error('Error searching for data item', {
         error: error.message,
         stack: error.stack,
@@ -143,14 +168,22 @@ export class Ans104OffsetSource {
       dataItemId,
       pathLength: path.length,
     });
+    const startTime = Date.now();
 
     // Check for abort before starting
     signal?.throwIfAborted();
 
     if (path.length === 0) {
       log.warn('Empty path provided');
+      metrics.ans104OffsetLookupTotal.inc({
+        method: 'path_guided',
+        status: 'not_found',
+      });
       return null;
     }
+
+    // Track path depth for metrics
+    metrics.ans104OffsetPathDepthHistogram.observe(path.length);
 
     const rootBundleId = path[0];
 
@@ -160,23 +193,50 @@ export class Ans104OffsetSource {
     });
 
     try {
-      return await this.navigatePathAndFind(
+      const result = await this.navigatePathAndFind(
         dataItemId,
         path,
         rootBundleId,
         signal,
       );
+
+      const duration = Date.now() - startTime;
+      metrics.ans104OffsetLookupDurationSummary.observe(
+        { method: 'path_guided' },
+        duration,
+      );
+
+      if (result) {
+        metrics.ans104OffsetLookupTotal.inc({
+          method: 'path_guided',
+          status: 'found',
+        });
+      } else {
+        metrics.ans104OffsetLookupTotal.inc({
+          method: 'path_guided',
+          status: 'not_found',
+        });
+      }
+
+      return result;
     } catch (error: any) {
       // Don't fallback on abort - re-throw immediately
       if (error.name === 'AbortError') {
         throw error;
       }
+
+      metrics.ans104OffsetLookupTotal.inc({
+        method: 'path_guided',
+        status: 'fallback_to_linear',
+      });
+
       log.warn('Path-guided navigation failed, falling back to linear search', {
         error: error.message,
         dataItemId,
         pathLength: path.length,
       });
       // Graceful fallback to existing linear search method
+      // Note: getDataItemOffset tracks its own metrics
       return this.getDataItemOffset(dataItemId, rootBundleId, signal);
     }
   }

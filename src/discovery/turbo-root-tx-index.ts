@@ -11,6 +11,7 @@ import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 import { isValidTxId } from '../lib/validation.js';
 import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
 
@@ -204,8 +205,10 @@ export class TurboRootTxIndex implements DataItemRootIndex {
     const cached = this.cache?.get(id);
     if (cached !== undefined) {
       log.debug('Cache hit for Turbo offsets lookup', { id });
+      metrics.rootTxCacheHitTotal.inc({ source: 'turbo' });
       return cached;
     }
+    metrics.rootTxCacheMissTotal.inc({ source: 'turbo' });
 
     try {
       const url = `${this.turboEndpoint}/tx/${id}/offsets`;

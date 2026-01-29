@@ -597,3 +597,64 @@ export const rateLimitTokensConsumedTotal = new promClient.Counter({
   help: 'Total tokens consumed by rate limiter with breakdown by bucket and token type',
   labelNames: ['bucket_type', 'token_type', 'domain'],
 });
+
+//
+// Root TX Index metrics
+//
+
+export const rootTxLookupTotal = new promClient.Counter({
+  name: 'root_tx_lookup_total',
+  help: 'Total root TX index lookups by source and status',
+  labelNames: ['source', 'status', 'has_offsets'] as const,
+});
+
+export const rootTxLookupDurationSummary = new promClient.Summary({
+  name: 'root_tx_lookup_duration_ms',
+  help: 'Duration of root TX lookups in milliseconds by source',
+  labelNames: ['source'] as const,
+});
+
+export const rootTxCacheHitTotal = new promClient.Counter({
+  name: 'root_tx_cache_hit_total',
+  help: 'Cache hits in root TX index LRU caches',
+  labelNames: ['source'] as const,
+});
+
+export const rootTxCacheMissTotal = new promClient.Counter({
+  name: 'root_tx_cache_miss_total',
+  help: 'Cache misses in root TX index LRU caches',
+  labelNames: ['source'] as const,
+});
+
+export const compositeRootTxLookupTotal = new promClient.Counter({
+  name: 'composite_root_tx_lookup_total',
+  help: 'Total composite root TX lookups with final outcome',
+  labelNames: ['status', 'winning_source', 'has_complete_offsets'] as const,
+});
+
+export const compositeRootTxLookupDurationSummary = new promClient.Summary({
+  name: 'composite_root_tx_lookup_duration_ms',
+  help: 'Total duration of composite root TX lookups',
+});
+
+//
+// ANS-104 Offset Source metrics
+//
+
+export const ans104OffsetLookupTotal = new promClient.Counter({
+  name: 'ans104_offset_lookup_total',
+  help: 'Total ANS-104 offset lookups by method and result',
+  labelNames: ['method', 'status'] as const,
+});
+
+export const ans104OffsetLookupDurationSummary = new promClient.Summary({
+  name: 'ans104_offset_lookup_duration_ms',
+  help: 'Duration of ANS-104 offset lookups in milliseconds',
+  labelNames: ['method'] as const,
+});
+
+export const ans104OffsetPathDepthHistogram = new promClient.Histogram({
+  name: 'ans104_offset_path_depth',
+  help: 'Depth of bundle path in path-guided offset lookups',
+  buckets: [1, 2],
+});

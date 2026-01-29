@@ -12,6 +12,7 @@ import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import { parseNonNegativeInt } from '../lib/http-utils.js';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 
 export type CachedGatewayOffsets = {
   rootTxId: string;
@@ -117,8 +118,10 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
     const cached = this.cache?.get(id);
     if (cached !== undefined) {
       log.debug('Cache hit for gateway offsets lookup', { id });
+      metrics.rootTxCacheHitTotal.inc({ source: 'gateways' });
       return cached;
     }
+    metrics.rootTxCacheMissTotal.inc({ source: 'gateways' });
 
     // lower number = higher priority
     const priorities = Array.from(this.trustedGateways.keys()).sort(
