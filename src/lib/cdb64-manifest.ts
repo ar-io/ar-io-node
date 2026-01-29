@@ -24,23 +24,23 @@ export type PartitionHttpLocation = {
   url: string;
 };
 
-export type PartitionArweaveTxLocation = {
-  type: 'arweave-tx';
-  txId: string;
+export type PartitionArweaveIdLocation = {
+  type: 'arweave-id';
+  id: string;
 };
 
-export type PartitionArweaveBundleItemLocation = {
-  type: 'arweave-bundle-item';
-  txId: string;
-  offset: number;
-  size: number;
+export type PartitionArweaveByteRangeLocation = {
+  type: 'arweave-byte-range';
+  rootTxId: string;
+  dataOffsetInRootTx: number;
+  dataItemId?: string;
 };
 
 export type PartitionLocation =
   | PartitionFileLocation
   | PartitionHttpLocation
-  | PartitionArweaveTxLocation
-  | PartitionArweaveBundleItemLocation;
+  | PartitionArweaveIdLocation
+  | PartitionArweaveByteRangeLocation;
 
 // Partition info - metadata about a single partition
 export interface PartitionInfo {
@@ -77,8 +77,8 @@ const HEX_PREFIX_PATTERN = /^[0-9a-f]{2}$/;
 const VALID_LOCATION_TYPES = [
   'file',
   'http',
-  'arweave-tx',
-  'arweave-bundle-item',
+  'arweave-id',
+  'arweave-byte-range',
 ];
 
 /**
@@ -109,19 +109,18 @@ function isValidPartitionLocation(value: unknown): value is PartitionLocation {
     case 'http':
       return typeof obj.url === 'string' && obj.url.length > 0;
 
-    case 'arweave-tx':
-      return typeof obj.txId === 'string' && obj.txId.length > 0;
+    case 'arweave-id':
+      return typeof obj.id === 'string' && obj.id.length > 0;
 
-    case 'arweave-bundle-item':
+    case 'arweave-byte-range':
       return (
-        typeof obj.txId === 'string' &&
-        obj.txId.length > 0 &&
-        typeof obj.offset === 'number' &&
-        Number.isInteger(obj.offset) &&
-        obj.offset >= 0 &&
-        typeof obj.size === 'number' &&
-        Number.isInteger(obj.size) &&
-        obj.size > 0
+        typeof obj.rootTxId === 'string' &&
+        obj.rootTxId.length > 0 &&
+        typeof obj.dataOffsetInRootTx === 'number' &&
+        Number.isInteger(obj.dataOffsetInRootTx) &&
+        obj.dataOffsetInRootTx >= 0 &&
+        (obj.dataItemId === undefined ||
+          (typeof obj.dataItemId === 'string' && obj.dataItemId.length > 0))
       );
 
     default:

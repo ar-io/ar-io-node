@@ -75,7 +75,7 @@ describe('cdb64-manifest', () => {
       assert.strictEqual(validateManifest(manifest), true);
     });
 
-    it('should validate a manifest with arweave-tx partitions', () => {
+    it('should validate a manifest with arweave-id partitions', () => {
       const manifest = {
         version: 1,
         createdAt: '2024-01-01T00:00:00.000Z',
@@ -84,8 +84,8 @@ describe('cdb64-manifest', () => {
           {
             prefix: 'cd',
             location: {
-              type: 'arweave-tx',
-              txId: 'ABC123def456ghi789jkl012mno345pqr678stu9',
+              type: 'arweave-id',
+              id: 'ABC123def456ghi789jkl012mno345pqr678stu9',
             },
             recordCount: 100,
             size: 10240,
@@ -95,7 +95,7 @@ describe('cdb64-manifest', () => {
       assert.strictEqual(validateManifest(manifest), true);
     });
 
-    it('should validate a manifest with arweave-bundle-item partitions', () => {
+    it('should validate a manifest with arweave-byte-range partitions', () => {
       const manifest = {
         version: 1,
         createdAt: '2024-01-01T00:00:00.000Z',
@@ -104,10 +104,31 @@ describe('cdb64-manifest', () => {
           {
             prefix: 'ef',
             location: {
-              type: 'arweave-bundle-item',
-              txId: 'ABC123def456ghi789jkl012mno345pqr678stu9',
-              offset: 1024,
-              size: 10240,
+              type: 'arweave-byte-range',
+              rootTxId: 'ABC123def456ghi789jkl012mno345pqr678stu9',
+              dataOffsetInRootTx: 1024,
+            },
+            recordCount: 100,
+            size: 10240,
+          },
+        ],
+      };
+      assert.strictEqual(validateManifest(manifest), true);
+    });
+
+    it('should validate a manifest with arweave-byte-range partitions with optional dataItemId', () => {
+      const manifest = {
+        version: 1,
+        createdAt: '2024-01-01T00:00:00.000Z',
+        totalRecords: 100,
+        partitions: [
+          {
+            prefix: 'ef',
+            location: {
+              type: 'arweave-byte-range',
+              rootTxId: 'ABC123def456ghi789jkl012mno345pqr678stu9',
+              dataOffsetInRootTx: 1024,
+              dataItemId: 'XYZ789abc012def345ghi678jkl901mno234pqr5',
             },
             recordCount: 100,
             size: 10240,
@@ -367,7 +388,7 @@ describe('cdb64-manifest', () => {
       assert.strictEqual(validateManifest(manifest), false);
     });
 
-    it('should reject arweave-bundle-item with negative offset', () => {
+    it('should reject arweave-byte-range with negative dataOffsetInRootTx', () => {
       const manifest = {
         version: 1,
         createdAt: '2024-01-01T00:00:00.000Z',
@@ -376,10 +397,9 @@ describe('cdb64-manifest', () => {
           {
             prefix: '00',
             location: {
-              type: 'arweave-bundle-item',
-              txId: 'ABC123',
-              offset: -1,
-              size: 10240,
+              type: 'arweave-byte-range',
+              rootTxId: 'ABC123',
+              dataOffsetInRootTx: -1,
             },
             recordCount: 100,
             size: 10240,
@@ -389,7 +409,7 @@ describe('cdb64-manifest', () => {
       assert.strictEqual(validateManifest(manifest), false);
     });
 
-    it('should reject arweave-bundle-item with zero size', () => {
+    it('should reject arweave-byte-range with empty dataItemId', () => {
       const manifest = {
         version: 1,
         createdAt: '2024-01-01T00:00:00.000Z',
@@ -398,10 +418,10 @@ describe('cdb64-manifest', () => {
           {
             prefix: '00',
             location: {
-              type: 'arweave-bundle-item',
-              txId: 'ABC123',
-              offset: 0,
-              size: 0,
+              type: 'arweave-byte-range',
+              rootTxId: 'ABC123',
+              dataOffsetInRootTx: 0,
+              dataItemId: '',
             },
             recordCount: 100,
             size: 10240,
@@ -655,17 +675,16 @@ describe('cdb64-manifest', () => {
           },
           {
             prefix: 'cd',
-            location: { type: 'arweave-tx', txId: 'txid123' },
+            location: { type: 'arweave-id', id: 'txid123' },
             recordCount: 100,
             size: 10240,
           },
           {
             prefix: 'ef',
             location: {
-              type: 'arweave-bundle-item',
-              txId: 'txid456',
-              offset: 1024,
-              size: 10240,
+              type: 'arweave-byte-range',
+              rootTxId: 'txid456',
+              dataOffsetInRootTx: 1024,
             },
             recordCount: 150,
             size: 15360,

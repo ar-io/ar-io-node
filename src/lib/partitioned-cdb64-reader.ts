@@ -243,7 +243,7 @@ export class PartitionedCdb64Reader {
   private async openPartition(
     partitionInfo: PartitionInfo,
   ): Promise<PartitionState> {
-    const source = await this.createByteRangeSource(partitionInfo.location);
+    const source = await this.createByteRangeSource(partitionInfo);
     const reader = Cdb64Reader.fromSource(source, true);
     await reader.open();
 
@@ -254,8 +254,9 @@ export class PartitionedCdb64Reader {
    * Creates a ByteRangeSource for a partition location.
    */
   private async createByteRangeSource(
-    location: PartitionLocation,
+    partitionInfo: PartitionInfo,
   ): Promise<ByteRangeSource> {
+    const location = partitionInfo.location;
     switch (location.type) {
       case 'file': {
         if (this.baseDir === undefined) {
@@ -282,15 +283,15 @@ export class PartitionedCdb64Reader {
         });
       }
 
-      case 'arweave-tx': {
+      case 'arweave-id': {
         if (this.contiguousDataSource === undefined) {
           throw new Error(
-            'contiguousDataSource is required for arweave-tx partition locations',
+            'contiguousDataSource is required for arweave-id partition locations',
           );
         }
         const txSource = new ContiguousDataByteRangeSource({
           dataSource: this.contiguousDataSource,
-          id: location.txId,
+          id: location.id,
         });
         return new CachingByteRangeSource({
           source: txSource,
@@ -300,17 +301,17 @@ export class PartitionedCdb64Reader {
         });
       }
 
-      case 'arweave-bundle-item': {
+      case 'arweave-byte-range': {
         if (this.contiguousDataSource === undefined) {
           throw new Error(
-            'contiguousDataSource is required for arweave-bundle-item partition locations',
+            'contiguousDataSource is required for arweave-byte-range partition locations',
           );
         }
         const bundleSource = new ContiguousDataByteRangeSource({
           dataSource: this.contiguousDataSource,
-          id: location.txId,
-          baseOffset: location.offset,
-          totalSize: location.size,
+          id: location.rootTxId,
+          baseOffset: location.dataOffsetInRootTx,
+          totalSize: partitionInfo.size,
         });
         return new CachingByteRangeSource({
           source: bundleSource,

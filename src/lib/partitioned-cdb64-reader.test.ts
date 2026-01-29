@@ -409,7 +409,7 @@ describe('PartitionedCdb64Reader', () => {
         partitions: [
           {
             prefix: '00',
-            location: { type: 'arweave-tx', txId: 'someTxId123' },
+            location: { type: 'arweave-id', id: 'someTxId123' },
             recordCount: 1,
             size: 4096,
           },
@@ -421,7 +421,7 @@ describe('PartitionedCdb64Reader', () => {
 
       await assert.rejects(
         async () => reader.get(Buffer.from([0x00, 0x01, 0x02])),
-        /contiguousDataSource is required for arweave-tx partition locations/,
+        /contiguousDataSource is required for arweave-id partition locations/,
       );
 
       await reader.close();

@@ -6,10 +6,10 @@
     {
       "prefix": "00",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "G02uQHvdhUL9ya5pmFmJ1IETap2e97TJe0X8543ASVA",
-        "offset": 476132274,
-        "size": 475898202
+        "type": "arweave-byte-range",
+        "rootTxId": "G02uQHvdhUL9ya5pmFmJ1IETap2e97TJe0X8543ASVA",
+        "dataOffsetInRootTx": 476132274,
+        "dataItemId": "q_BOlNtAlOGcOFxe6ybdvcooo5bkzMKt5s0PQTr1-OM"
       },
       "recordCount": 3767238,
       "size": 475898202
@@ -17,10 +17,10 @@
     {
       "prefix": "01",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "G02uQHvdhUL9ya5pmFmJ1IETap2e97TJe0X8543ASVA",
-        "offset": 193226,
-        "size": 475780688
+        "type": "arweave-byte-range",
+        "rootTxId": "G02uQHvdhUL9ya5pmFmJ1IETap2e97TJe0X8543ASVA",
+        "dataOffsetInRootTx": 193226,
+        "dataItemId": "zXjsmsuDtjK9w7f6OelOyd4WoiSfzV6Q5ZMvUA6xIXs"
       },
       "recordCount": 3766201,
       "size": 475780688
@@ -28,10 +28,10 @@
     {
       "prefix": "02",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "G02uQHvdhUL9ya5pmFmJ1IETap2e97TJe0X8543ASVA",
-        "offset": 952103205,
-        "size": 476044371
+        "type": "arweave-byte-range",
+        "rootTxId": "G02uQHvdhUL9ya5pmFmJ1IETap2e97TJe0X8543ASVA",
+        "dataOffsetInRootTx": 952103205,
+        "dataItemId": "958CDAzujQX2z_RFrRBTi2OUMb0wlpvuhQAV975vB8c"
       },
       "recordCount": 3768455,
       "size": 476044371
@@ -39,10 +39,10 @@
     {
       "prefix": "03",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
-        "offset": 2380706742,
-        "size": 475641138
+        "type": "arweave-byte-range",
+        "rootTxId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
+        "dataOffsetInRootTx": 2380706742,
+        "dataItemId": "T7A3zb8mlHmquYPzUENYsnei0aSwtKolftu2adCxH6k"
       },
       "recordCount": 3765454,
       "size": 475641138
@@ -50,10 +50,10 @@
     {
       "prefix": "04",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
-        "offset": 477743752,
-        "size": 475989846
+        "type": "arweave-byte-range",
+        "rootTxId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
+        "dataOffsetInRootTx": 477743752,
+        "dataItemId": "J-5RwXrBieQxr0lKw_55GgryIrEmirCixBPA_qgqEfk"
       },
       "recordCount": 3768158,
       "size": 475989846
@@ -61,10 +61,10 @@
     {
       "prefix": "05",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
-        "offset": 953742091,
-        "size": 475682517
+        "type": "arweave-byte-range",
+        "rootTxId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
+        "dataOffsetInRootTx": 953742091,
+        "dataItemId": "mQEIdyB1ymhLPptS7K6B_D6lIJXI2nmQSQkFIOgeetM"
       },
       "recordCount": 3765589,
       "size": 475682517
@@ -72,10 +72,10 @@
     {
       "prefix": "06",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
-        "offset": 2856349093,
-        "size": 475799783
+        "type": "arweave-byte-range",
+        "rootTxId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
+        "dataOffsetInRootTx": 2856349093,
+        "dataItemId": "VdwEBRxBesRskFKuNlBQ0a8SUSO-AUzeNVL17858pLI"
       },
       "recordCount": 3766506,
       "size": 475799783
@@ -83,10 +83,10 @@
     {
       "prefix": "07",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
-        "offset": 708809,
-        "size": 475381888
+        "type": "arweave-byte-range",
+        "rootTxId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
+        "dataOffsetInRootTx": 708809,
+        "dataItemId": "68wOto8OSsyGwGjWbjm6Bvgbt1wdFUFYPY8tjWEsoPw"
       },
       "recordCount": 3763304,
       "size": 475381888
@@ -94,10 +94,10 @@
     {
       "prefix": "08",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
-        "offset": 1429427703,
-        "size": 475365158
+        "type": "arweave-byte-range",
+        "rootTxId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
+        "dataOffsetInRootTx": 1429427703,
+        "dataItemId": "pQ65REkjtTsZ3wCLphK7V3AviIdqQNSlizFfm9lrU90"
       },
       "recordCount": 3763056,
       "size": 475365158
@@ -105,10 +105,10 @@
     {
       "prefix": "09",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
-        "offset": 1904794074,
-        "size": 475911455
+        "type": "arweave-byte-range",
+        "rootTxId": "5y3equN7z4xodfAZP85wFFIzV4xEj9r-9gJaldmOIIU",
+        "dataOffsetInRootTx": 1904794074,
+        "dataItemId": "rKyB66gzZ7TNdypS4uUADkc82buin1Zn0GxhrXhx_qE"
       },
       "recordCount": 3767132,
       "size": 475911455
@@ -116,10 +116,10 @@
     {
       "prefix": "0a",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ATmpN6Sm_mtiqS6dgu8OeGx54DvSmR2G0LVUzkj-zIU",
-        "offset": 951839994,
-        "size": 475537524
+        "type": "arweave-byte-range",
+        "rootTxId": "ATmpN6Sm_mtiqS6dgu8OeGx54DvSmR2G0LVUzkj-zIU",
+        "dataOffsetInRootTx": 951839994,
+        "dataItemId": "FJGa3Id-2lC6gu8fD5KvkTbBpG5oJTfE8OszT-JBRRU"
       },
       "recordCount": 3764330,
       "size": 475537524
@@ -127,10 +127,10 @@
     {
       "prefix": "0b",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ATmpN6Sm_mtiqS6dgu8OeGx54DvSmR2G0LVUzkj-zIU",
-        "offset": 1903305771,
-        "size": 475649352
+        "type": "arweave-byte-range",
+        "rootTxId": "ATmpN6Sm_mtiqS6dgu8OeGx54DvSmR2G0LVUzkj-zIU",
+        "dataOffsetInRootTx": 1903305771,
+        "dataItemId": "wJaS5EaddtxwvXPYhbkzXKnGHIoUn_BfV_3FpfRhLXg"
       },
       "recordCount": 3765243,
       "size": 475649352
@@ -138,10 +138,10 @@
     {
       "prefix": "0c",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ATmpN6Sm_mtiqS6dgu8OeGx54DvSmR2G0LVUzkj-zIU",
-        "offset": 1427406833,
-        "size": 475895965
+        "type": "arweave-byte-range",
+        "rootTxId": "ATmpN6Sm_mtiqS6dgu8OeGx54DvSmR2G0LVUzkj-zIU",
+        "dataOffsetInRootTx": 1427406833,
+        "dataItemId": "vOmC-h2_lNvvA58aU-XJLW8C_-xJiRr7NZSBmbdyQ2k"
       },
       "recordCount": 3767107,
       "size": 475895965
@@ -149,10 +149,10 @@
     {
       "prefix": "0d",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ATmpN6Sm_mtiqS6dgu8OeGx54DvSmR2G0LVUzkj-zIU",
-        "offset": 475906346,
-        "size": 475932435
+        "type": "arweave-byte-range",
+        "rootTxId": "ATmpN6Sm_mtiqS6dgu8OeGx54DvSmR2G0LVUzkj-zIU",
+        "dataOffsetInRootTx": 475906346,
+        "dataItemId": "DOIguC4AVcNScxIus60B0vIiY72j6D1yCHgZvPl367U"
       },
       "recordCount": 3767355,
       "size": 475932435
@@ -160,10 +160,10 @@
     {
       "prefix": "0e",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ATmpN6Sm_mtiqS6dgu8OeGx54DvSmR2G0LVUzkj-zIU",
-        "offset": 190652,
-        "size": 475709207
+        "type": "arweave-byte-range",
+        "rootTxId": "ATmpN6Sm_mtiqS6dgu8OeGx54DvSmR2G0LVUzkj-zIU",
+        "dataOffsetInRootTx": 190652,
+        "dataItemId": "BLJS4mO2PIpZ9VPAMLHoY4UtTg81ykmY5MpsTTFnWXw"
       },
       "recordCount": 3765258,
       "size": 475709207
@@ -171,10 +171,10 @@
     {
       "prefix": "0f",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "CLMRmIugtnCe-QHCotZq1CuCq5Vn3VjoXCfwYicywK4",
-        "offset": 1427801731,
-        "size": 475569534
+        "type": "arweave-byte-range",
+        "rootTxId": "CLMRmIugtnCe-QHCotZq1CuCq5Vn3VjoXCfwYicywK4",
+        "dataOffsetInRootTx": 1427801731,
+        "dataItemId": "ID0B97HJhUjXgKGwoaskpktws4SAieVlcM3uXVvjhiA"
       },
       "recordCount": 3764804,
       "size": 475569534
@@ -182,10 +182,10 @@
     {
       "prefix": "10",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "CLMRmIugtnCe-QHCotZq1CuCq5Vn3VjoXCfwYicywK4",
-        "offset": 1903391318,
-        "size": 475767809
+        "type": "arweave-byte-range",
+        "rootTxId": "CLMRmIugtnCe-QHCotZq1CuCq5Vn3VjoXCfwYicywK4",
+        "dataOffsetInRootTx": 1903391318,
+        "dataItemId": "u6B7QGr6cw2ZYtz71-dB1zClhJ5j9Os60cXheutgvCk"
       },
       "recordCount": 3765889,
       "size": 475767809
@@ -193,10 +193,10 @@
     {
       "prefix": "11",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "CLMRmIugtnCe-QHCotZq1CuCq5Vn3VjoXCfwYicywK4",
-        "offset": 4186,
-        "size": 476118687
+        "type": "arweave-byte-range",
+        "rootTxId": "CLMRmIugtnCe-QHCotZq1CuCq5Vn3VjoXCfwYicywK4",
+        "dataOffsetInRootTx": 4186,
+        "dataItemId": "WQMYU6ZvjqoMp9M-SCr8qFD5SsKIrW-3Dk1FXYRhy1w"
       },
       "recordCount": 3768768,
       "size": 476118687
@@ -204,10 +204,10 @@
     {
       "prefix": "12",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "CLMRmIugtnCe-QHCotZq1CuCq5Vn3VjoXCfwYicywK4",
-        "offset": 476124086,
-        "size": 475784819
+        "type": "arweave-byte-range",
+        "rootTxId": "CLMRmIugtnCe-QHCotZq1CuCq5Vn3VjoXCfwYicywK4",
+        "dataOffsetInRootTx": 476124086,
+        "dataItemId": "iSbrA6g2FsdOawD8zQIGzr4in9tkqLk4g4PCI8Gb-Hk"
       },
       "recordCount": 3766379,
       "size": 475784819
@@ -215,10 +215,10 @@
     {
       "prefix": "13",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "CLMRmIugtnCe-QHCotZq1CuCq5Vn3VjoXCfwYicywK4",
-        "offset": 951910118,
-        "size": 475746387
+        "type": "arweave-byte-range",
+        "rootTxId": "CLMRmIugtnCe-QHCotZq1CuCq5Vn3VjoXCfwYicywK4",
+        "dataOffsetInRootTx": 951910118,
+        "dataItemId": "l_gQ14uCf7lGOwHjGfc9fy0tgunGL3sSeukzra5KGT0"
       },
       "recordCount": 3766166,
       "size": 475746387
@@ -226,10 +226,10 @@
     {
       "prefix": "14",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "gb5T_DHGY5ip6YHkjwb8GtGQ3HkZ7KtKG-WC0KPRFDE",
-        "offset": 477075612,
-        "size": 475992693
+        "type": "arweave-byte-range",
+        "rootTxId": "gb5T_DHGY5ip6YHkjwb8GtGQ3HkZ7KtKG-WC0KPRFDE",
+        "dataOffsetInRootTx": 477075612,
+        "dataItemId": "oZs1g-Xi3Y1dho5jT16yBmeMwV6dcHZt6-EYgObQvsA"
       },
       "recordCount": 3767914,
       "size": 475992693
@@ -237,10 +237,10 @@
     {
       "prefix": "15",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "gb5T_DHGY5ip6YHkjwb8GtGQ3HkZ7KtKG-WC0KPRFDE",
-        "offset": 5597,
-        "size": 476500830
+        "type": "arweave-byte-range",
+        "rootTxId": "gb5T_DHGY5ip6YHkjwb8GtGQ3HkZ7KtKG-WC0KPRFDE",
+        "dataOffsetInRootTx": 5597,
+        "dataItemId": "aCqCNKiqkypSyj3Z4EXbTsFbyQWRlxggJWO29uLiiYI"
       },
       "recordCount": 3771925,
       "size": 476500830
@@ -248,10 +248,10 @@
     {
       "prefix": "16",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "gb5T_DHGY5ip6YHkjwb8GtGQ3HkZ7KtKG-WC0KPRFDE",
-        "offset": 953089809,
-        "size": 475760713
+        "type": "arweave-byte-range",
+        "rootTxId": "gb5T_DHGY5ip6YHkjwb8GtGQ3HkZ7KtKG-WC0KPRFDE",
+        "dataOffsetInRootTx": 953089809,
+        "dataItemId": "Kc-zU4ZwkLARS8nA3ExxJHLu82JRqS8i9V3e9aUjMg0"
       },
       "recordCount": 3766237,
       "size": 475760713
@@ -259,10 +259,10 @@
     {
       "prefix": "17",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "gb5T_DHGY5ip6YHkjwb8GtGQ3HkZ7KtKG-WC0KPRFDE",
-        "offset": 1428889807,
-        "size": 475924520
+        "type": "arweave-byte-range",
+        "rootTxId": "gb5T_DHGY5ip6YHkjwb8GtGQ3HkZ7KtKG-WC0KPRFDE",
+        "dataOffsetInRootTx": 1428889807,
+        "dataItemId": "KT5t0gWHvsYeX9AxqmTLWfDJNqnANp-kMIaEmcz4gkU"
       },
       "recordCount": 3767512,
       "size": 475924520
@@ -270,10 +270,10 @@
     {
       "prefix": "18",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "gb5T_DHGY5ip6YHkjwb8GtGQ3HkZ7KtKG-WC0KPRFDE",
-        "offset": 1908097664,
-        "size": 476127892
+        "type": "arweave-byte-range",
+        "rootTxId": "gb5T_DHGY5ip6YHkjwb8GtGQ3HkZ7KtKG-WC0KPRFDE",
+        "dataOffsetInRootTx": 1908097664,
+        "dataItemId": "bb1qkRtFxEGXA52feLOf3Cofir7H0pJ6pt-124d90WA"
       },
       "recordCount": 3769232,
       "size": 476127892
@@ -281,10 +281,10 @@
     {
       "prefix": "19",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
-        "offset": 2378438915,
-        "size": 476094210
+        "type": "arweave-byte-range",
+        "rootTxId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
+        "dataOffsetInRootTx": 2378438915,
+        "dataItemId": "ungKripjbOnC2ewF1wfy-K82Qikb9pElcz7LtecAZww"
       },
       "recordCount": 3768872,
       "size": 476094210
@@ -292,10 +292,10 @@
     {
       "prefix": "1a",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
-        "offset": 475925108,
-        "size": 475340438
+        "type": "arweave-byte-range",
+        "rootTxId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
+        "dataOffsetInRootTx": 475925108,
+        "dataItemId": "Cdc2Vs5Uk0FM5EClBuSpfqJ2jkglTWPZBOZ9J5f8PlA"
       },
       "recordCount": 3762749,
       "size": 475340438
@@ -303,10 +303,10 @@
     {
       "prefix": "1b",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
-        "offset": 1427308710,
-        "size": 475578448
+        "type": "arweave-byte-range",
+        "rootTxId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
+        "dataOffsetInRootTx": 1427308710,
+        "dataItemId": "qV_EqSFBHdb21Kon5Pq1jSwjcy1cZkGO7C5UcREBzXU"
       },
       "recordCount": 3764497,
       "size": 475578448
@@ -314,10 +314,10 @@
     {
       "prefix": "1c",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
-        "offset": 23893,
-        "size": 475774849
+        "type": "arweave-byte-range",
+        "rootTxId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
+        "dataOffsetInRootTx": 23893,
+        "dataItemId": "gsPRzcV6_tS_ngwWi_H2yrt91hWQFUsXGWjsX6azZMM"
       },
       "recordCount": 3766464,
       "size": 475774849
@@ -325,10 +325,10 @@
     {
       "prefix": "1d",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
-        "offset": 951267844,
-        "size": 476020381
+        "type": "arweave-byte-range",
+        "rootTxId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
+        "dataOffsetInRootTx": 951267844,
+        "dataItemId": "HI5cmLEPebshtnmDCFYFrGUjxtDPFS7dyh-WeznPhnc"
       },
       "recordCount": 3768203,
       "size": 476020381
@@ -336,10 +336,10 @@
     {
       "prefix": "1e",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
-        "offset": 1902888371,
-        "size": 475549331
+        "type": "arweave-byte-range",
+        "rootTxId": "XQJle0xqU8N4eYdA0xB9DDnfYPCP-3gmYBl9g2ayGN8",
+        "dataOffsetInRootTx": 1902888371,
+        "dataItemId": "ccRPvvo0ST5iCMeCgnd-PP4vcNQ5HycLhbSLS83HP2Q"
       },
       "recordCount": 3764885,
       "size": 475549331
@@ -347,10 +347,10 @@
     {
       "prefix": "1f",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
-        "offset": 322983,
-        "size": 475608171
+        "type": "arweave-byte-range",
+        "rootTxId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
+        "dataOffsetInRootTx": 322983,
+        "dataItemId": "1VU1soUtWiR4_HtJQ1i94VmZ95hc-x4-9XqnEuT1P54"
       },
       "recordCount": 3764801,
       "size": 475608171
@@ -358,10 +358,10 @@
     {
       "prefix": "20",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
-        "offset": 475948292,
-        "size": 475676986
+        "type": "arweave-byte-range",
+        "rootTxId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
+        "dataOffsetInRootTx": 475948292,
+        "dataItemId": "bMNdyjSdvYOGuufsIVxb_U8O8PJr6UgHS53TqETb2Fs"
       },
       "recordCount": 3764816,
       "size": 475676986
@@ -369,10 +369,10 @@
     {
       "prefix": "21",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
-        "offset": 1427092097,
-        "size": 475722592
+        "type": "arweave-byte-range",
+        "rootTxId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
+        "dataOffsetInRootTx": 1427092097,
+        "dataItemId": "KOG5lcyaCgTZyzrQ_Y-m3Jt9Tzvh8zdG47Pdn6xMmdM"
       },
       "recordCount": 3765904,
       "size": 475722592
@@ -380,10 +380,10 @@
     {
       "prefix": "22",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
-        "offset": 1902815902,
-        "size": 475692943
+        "type": "arweave-byte-range",
+        "rootTxId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
+        "dataOffsetInRootTx": 1902815902,
+        "dataItemId": "OwpA7n6_0KVOP8lH63Ll5FL71xN5kxrzLUqNzqmybJc"
       },
       "recordCount": 3765574,
       "size": 475692943
@@ -391,10 +391,10 @@
     {
       "prefix": "23",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
-        "offset": 951626491,
-        "size": 475459455
+        "type": "arweave-byte-range",
+        "rootTxId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
+        "dataOffsetInRootTx": 951626491,
+        "dataItemId": "dEjeC6lasMSVv5T3B6vyI_R9igwA49g40SvIoGn5cYM"
       },
       "recordCount": 3763497,
       "size": 475459455
@@ -402,10 +402,10 @@
     {
       "prefix": "24",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
-        "offset": 2378510058,
-        "size": 475838909
+        "type": "arweave-byte-range",
+        "rootTxId": "ZOWnNDIjjnvvmF8GZI-Y-XEHd3jSV88cd-UDLZaVFFk",
+        "dataOffsetInRootTx": 2378510058,
+        "dataItemId": "P7EI873DuGPZWWbx7GBHCEFMKdBLWugvSFXDlthc9i0"
       },
       "recordCount": 3766284,
       "size": 475838909
@@ -413,10 +413,10 @@
     {
       "prefix": "25",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
-        "offset": 475717868,
-        "size": 475934159
+        "type": "arweave-byte-range",
+        "rootTxId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
+        "dataOffsetInRootTx": 475717868,
+        "dataItemId": "tA9kbaJYl8IKzU6g9SSPefm6Oik2CDlQsFCVs7S_4oo"
       },
       "recordCount": 3767592,
       "size": 475934159
@@ -424,10 +424,10 @@
     {
       "prefix": "26",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
-        "offset": 951670820,
-        "size": 475717974
+        "type": "arweave-byte-range",
+        "rootTxId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
+        "dataOffsetInRootTx": 951670820,
+        "dataItemId": "fMm0NC4vrA8ny2TtEJbYRLJNg3EXfxl5gii6u0cI-BA"
       },
       "recordCount": 3765347,
       "size": 475717974
@@ -435,10 +435,10 @@
     {
       "prefix": "27",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
-        "offset": 9049,
-        "size": 475705858
+        "type": "arweave-byte-range",
+        "rootTxId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
+        "dataOffsetInRootTx": 9049,
+        "dataItemId": "DrQSvqXoRjPwzY9p89xlwyLCgVrf9DjfynV1cn_CegQ"
       },
       "recordCount": 3765577,
       "size": 475705858
@@ -446,10 +446,10 @@
     {
       "prefix": "28",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
-        "offset": 1505086914,
-        "size": 475961298
+        "type": "arweave-byte-range",
+        "rootTxId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
+        "dataOffsetInRootTx": 1505086914,
+        "dataItemId": "8mc5iDcP8WeZUzYB8T0Jg0lrN1oHKgJUzRIMIM6wFbE"
       },
       "recordCount": 3767771,
       "size": 475961298
@@ -457,10 +457,10 @@
     {
       "prefix": "29",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
-        "offset": 1982165016,
-        "size": 475946807
+        "type": "arweave-byte-range",
+        "rootTxId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
+        "dataOffsetInRootTx": 1982165016,
+        "dataItemId": "prfjmjC7YaLP5iTi-34CEV6YrwT2ZdixfhJPvObgCGk"
       },
       "recordCount": 3767453,
       "size": 475946807
@@ -468,10 +468,10 @@
     {
       "prefix": "2a",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
-        "offset": 2459393022,
-        "size": 475005880
+        "type": "arweave-byte-range",
+        "rootTxId": "mz_OJ0xpYA1fGwlLuhDUPq_bvu7tI4Og9U9BMlp9s8Q",
+        "dataOffsetInRootTx": 2459393022,
+        "dataItemId": "cMgC6HoT6-k-v8aHgXjgrT_bwN2cRJZHxiIpwWBmnbo"
       },
       "recordCount": 3759967,
       "size": 475005880
@@ -479,10 +479,10 @@
     {
       "prefix": "2b",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
-        "offset": 477985423,
-        "size": 475650324
+        "type": "arweave-byte-range",
+        "rootTxId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
+        "dataOffsetInRootTx": 477985423,
+        "dataItemId": "w5OshRdNzqM-rqB3onTI5_JcnPGIFBvxmHNwnMyfxFI"
       },
       "recordCount": 3765012,
       "size": 475650324
@@ -490,10 +490,10 @@
     {
       "prefix": "2c",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
-        "offset": 1432139386,
-        "size": 475235257
+        "type": "arweave-byte-range",
+        "rootTxId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
+        "dataOffsetInRootTx": 1432139386,
+        "dataItemId": "6CoI1vr1C4usd7fULET9yQaOFl0wNeXYx_fhDpAmDTY"
       },
       "recordCount": 3762133,
       "size": 475235257
@@ -501,10 +501,10 @@
     {
       "prefix": "2d",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
-        "offset": 918934,
-        "size": 476036879
+        "type": "arweave-byte-range",
+        "rootTxId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
+        "dataOffsetInRootTx": 918934,
+        "dataItemId": "9G_51SS0ibZ216byEI99vJNgWscHsS2IM_zA8sCzBes"
       },
       "recordCount": 3768216,
       "size": 476036879
@@ -512,10 +512,10 @@
     {
       "prefix": "2e",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
-        "offset": 956486480,
-        "size": 475649813
+        "type": "arweave-byte-range",
+        "rootTxId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
+        "dataOffsetInRootTx": 956486480,
+        "dataItemId": "r1ZEDIYajy6-CSCxlRe2r997R6NxH67xCoDQN7GQLR0"
       },
       "recordCount": 3765681,
       "size": 475649813
@@ -523,10 +523,10 @@
     {
       "prefix": "2f",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
-        "offset": 1907408593,
-        "size": 475616714
+        "type": "arweave-byte-range",
+        "rootTxId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
+        "dataOffsetInRootTx": 1907408593,
+        "dataItemId": "FwR0L4FWqjRais-FWv5lC0hmwR-ifFolSBXTFA4djMg"
       },
       "recordCount": 3765367,
       "size": 475616714
@@ -534,10 +534,10 @@
     {
       "prefix": "30",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
-        "offset": 2383916196,
-        "size": 476047988
+        "type": "arweave-byte-range",
+        "rootTxId": "ku_HLCPdNFM0ue9hwlyYaX3aj-KFNgRkg44lVhwXx4Y",
+        "dataOffsetInRootTx": 2383916196,
+        "dataItemId": "EgZfEMo-cBaWX2XVt1qiLICqN448gifK9-PHbbREC9A"
       },
       "recordCount": 3768246,
       "size": 476047988
@@ -545,10 +545,10 @@
     {
       "prefix": "31",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
-        "offset": 2293383,
-        "size": 476052444
+        "type": "arweave-byte-range",
+        "rootTxId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
+        "dataOffsetInRootTx": 2293383,
+        "dataItemId": "tf3tQrurnqwb6_mM-4KTspfSDrtd8mTslLHNXCe07aA"
       },
       "recordCount": 3768457,
       "size": 476052444
@@ -556,10 +556,10 @@
     {
       "prefix": "32",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
-        "offset": 1436262684,
-        "size": 475783019
+        "type": "arweave-byte-range",
+        "rootTxId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
+        "dataOffsetInRootTx": 1436262684,
+        "dataItemId": "FcyyhmcHyCApYHL9wHpvk3avE1Li92K3fLd6_HUjbV0"
       },
       "recordCount": 3766687,
       "size": 475783019
@@ -567,10 +567,10 @@
     {
       "prefix": "33",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
-        "offset": 1912953781,
-        "size": 475358788
+        "type": "arweave-byte-range",
+        "rootTxId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
+        "dataOffsetInRootTx": 1912953781,
+        "dataItemId": "LOrQ-vt_XnPdsBokvlZRe-7FLd4y9BFVCvYqXJuci8U"
       },
       "recordCount": 3763476,
       "size": 475358788
@@ -578,10 +578,10 @@
     {
       "prefix": "34",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
-        "offset": 2391941034,
-        "size": 475541388
+        "type": "arweave-byte-range",
+        "rootTxId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
+        "dataOffsetInRootTx": 2391941034,
+        "dataItemId": "M8gH_LMqPLp6f9b-pHmffMQwb_XygcgFXIBq0pQQH9o"
       },
       "recordCount": 3764226,
       "size": 475541388
@@ -589,10 +589,10 @@
     {
       "prefix": "35",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
-        "offset": 478347040,
-        "size": 475863599
+        "type": "arweave-byte-range",
+        "rootTxId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
+        "dataOffsetInRootTx": 478347040,
+        "dataItemId": "wWUBZ-kdo0q_cLWNh7rSxLyBgPIK0qdhvuRSoEpKCBM"
       },
       "recordCount": 3766784,
       "size": 475863599
@@ -600,10 +600,10 @@
     {
       "prefix": "36",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
-        "offset": 959002160,
-        "size": 476223579
+        "type": "arweave-byte-range",
+        "rootTxId": "qk_d1sHQx9oiy1TKj2IalRQu_Qgo-iJ17Z6PyE6gqQc",
+        "dataOffsetInRootTx": 959002160,
+        "dataItemId": "zgkL47R6KvybiXfVPAHjP65clclHkfiEToteIFpIgkA"
       },
       "recordCount": 3769424,
       "size": 476223579
@@ -611,10 +611,10 @@
     {
       "prefix": "37",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "-cIlpU-2Ly9cEcseGrq8wOw1F9l3NMPlzNFHgUu36VQ",
-        "offset": 6682539,
-        "size": 475981917
+        "type": "arweave-byte-range",
+        "rootTxId": "-cIlpU-2Ly9cEcseGrq8wOw1F9l3NMPlzNFHgUu36VQ",
+        "dataOffsetInRootTx": 6682539,
+        "dataItemId": "1i9bojSrt8VeRxz3M0yQ82fJy4zDB8fpOdNyU9PIHzE"
       },
       "recordCount": 3767751,
       "size": 475981917
@@ -622,10 +622,10 @@
     {
       "prefix": "38",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "-cIlpU-2Ly9cEcseGrq8wOw1F9l3NMPlzNFHgUu36VQ",
-        "offset": 487212648,
-        "size": 475436401
+        "type": "arweave-byte-range",
+        "rootTxId": "-cIlpU-2Ly9cEcseGrq8wOw1F9l3NMPlzNFHgUu36VQ",
+        "dataOffsetInRootTx": 487212648,
+        "dataItemId": "kmtvJ8VPXrCQ584c9x3_yICnNNuhWWGdMDmFdL-Iww4"
       },
       "recordCount": 3763883,
       "size": 475436401
@@ -633,10 +633,10 @@
     {
       "prefix": "39",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "-cIlpU-2Ly9cEcseGrq8wOw1F9l3NMPlzNFHgUu36VQ",
-        "offset": 964679173,
-        "size": 475603890
+        "type": "arweave-byte-range",
+        "rootTxId": "-cIlpU-2Ly9cEcseGrq8wOw1F9l3NMPlzNFHgUu36VQ",
+        "dataOffsetInRootTx": 964679173,
+        "dataItemId": "iAyUPVZwprUPmSam9epL11Uxg65ikN-ppckiGmcyy1k"
       },
       "recordCount": 3764765,
       "size": 475603890
@@ -644,10 +644,10 @@
     {
       "prefix": "3a",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "wxAcR6QGmNB0z0rA2dum01eaop7HD_8r_rcfxzeEFMQ",
-        "offset": 479036463,
-        "size": 475720998
+        "type": "arweave-byte-range",
+        "rootTxId": "wxAcR6QGmNB0z0rA2dum01eaop7HD_8r_rcfxzeEFMQ",
+        "dataOffsetInRootTx": 479036463,
+        "dataItemId": "pgNfsZ4FNIQuCZ2j7chb4KAmni2mDXfJuMd-z6_MtM4"
       },
       "recordCount": 3765596,
       "size": 475720998
@@ -655,10 +655,10 @@
     {
       "prefix": "3b",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "wxAcR6QGmNB0z0rA2dum01eaop7HD_8r_rcfxzeEFMQ",
-        "offset": 1431891785,
-        "size": 476068270
+        "type": "arweave-byte-range",
+        "rootTxId": "wxAcR6QGmNB0z0rA2dum01eaop7HD_8r_rcfxzeEFMQ",
+        "dataOffsetInRootTx": 1431891785,
+        "dataItemId": "k91hEzo8TneabLno_dBrXi2sSKL0nqgZgwCP44BpoZk"
       },
       "recordCount": 3768157,
       "size": 476068270
@@ -666,10 +666,10 @@
     {
       "prefix": "3c",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "wxAcR6QGmNB0z0rA2dum01eaop7HD_8r_rcfxzeEFMQ",
-        "offset": 955829322,
-        "size": 475282958
+        "type": "arweave-byte-range",
+        "rootTxId": "wxAcR6QGmNB0z0rA2dum01eaop7HD_8r_rcfxzeEFMQ",
+        "dataOffsetInRootTx": 955829322,
+        "dataItemId": "Ju78aP35oEUQpiGwo_CgbOZKtLHMeJp8_QkqsGVvkJ8"
       },
       "recordCount": 3762156,
       "size": 475282958
@@ -677,10 +677,10 @@
     {
       "prefix": "3d",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "wxAcR6QGmNB0z0rA2dum01eaop7HD_8r_rcfxzeEFMQ",
-        "offset": 1464155,
-        "size": 475631410
+        "type": "arweave-byte-range",
+        "rootTxId": "wxAcR6QGmNB0z0rA2dum01eaop7HD_8r_rcfxzeEFMQ",
+        "dataOffsetInRootTx": 1464155,
+        "dataItemId": "LJNC7PeLv5HiBDwXr-BS7mWrg96YdxZkrhGDQJ4US2o"
       },
       "recordCount": 3764830,
       "size": 475631410
@@ -688,10 +688,10 @@
     {
       "prefix": "3e",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "_scEak7JEXfI_RvULTm3F1tbLozHB-8slqUQ6AoKwNI",
-        "offset": 22573,
-        "size": 475512863
+        "type": "arweave-byte-range",
+        "rootTxId": "_scEak7JEXfI_RvULTm3F1tbLozHB-8slqUQ6AoKwNI",
+        "dataOffsetInRootTx": 22573,
+        "dataItemId": "DTrOPz5kLzYNdZBI4inrwTsfyY3BkzhJuelJM_WfGUQ"
       },
       "recordCount": 3764226,
       "size": 475512863
@@ -699,10 +699,10 @@
     {
       "prefix": "3f",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "_scEak7JEXfI_RvULTm3F1tbLozHB-8slqUQ6AoKwNI",
-        "offset": 962262372,
-        "size": 475201118
+        "type": "arweave-byte-range",
+        "rootTxId": "_scEak7JEXfI_RvULTm3F1tbLozHB-8slqUQ6AoKwNI",
+        "dataOffsetInRootTx": 962262372,
+        "dataItemId": "Fuh-JNrinNS2RSGKUavAsVK_AnC7Ef9qBG3roVs7qhQ"
       },
       "recordCount": 3761779,
       "size": 475201118
@@ -710,10 +710,10 @@
     {
       "prefix": "40",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "_scEak7JEXfI_RvULTm3F1tbLozHB-8slqUQ6AoKwNI",
-        "offset": 1446522745,
-        "size": 474937454
+        "type": "arweave-byte-range",
+        "rootTxId": "_scEak7JEXfI_RvULTm3F1tbLozHB-8slqUQ6AoKwNI",
+        "dataOffsetInRootTx": 1446522745,
+        "dataItemId": "r7ETRlroKHa0D2wNRMSwEBgVaLrhVnQpNNlWdtEIel0"
       },
       "recordCount": 3759579,
       "size": 474937454
@@ -721,10 +721,10 @@
     {
       "prefix": "41",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "_scEak7JEXfI_RvULTm3F1tbLozHB-8slqUQ6AoKwNI",
-        "offset": 485103213,
-        "size": 476027844
+        "type": "arweave-byte-range",
+        "rootTxId": "_scEak7JEXfI_RvULTm3F1tbLozHB-8slqUQ6AoKwNI",
+        "dataOffsetInRootTx": 485103213,
+        "dataItemId": "1AAz_A08FTFcSAwHJeCVHocudVjyD_8tU6T-bocTSm4"
       },
       "recordCount": 3767667,
       "size": 476027844
@@ -732,10 +732,10 @@
     {
       "prefix": "42",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "0YR8sgjPj1sPTe0N9mrAn1_1onNcNFW-FPQcWnrtjaI",
-        "offset": 481395736,
-        "size": 475786949
+        "type": "arweave-byte-range",
+        "rootTxId": "0YR8sgjPj1sPTe0N9mrAn1_1onNcNFW-FPQcWnrtjaI",
+        "dataOffsetInRootTx": 481395736,
+        "dataItemId": "DmBVy0-pgH0tV6K8nwmJMlA9fRVqBPOD4vMlfEK8tVk"
       },
       "recordCount": 3765699,
       "size": 475786949
@@ -743,10 +743,10 @@
     {
       "prefix": "43",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "0YR8sgjPj1sPTe0N9mrAn1_1onNcNFW-FPQcWnrtjaI",
-        "offset": 1143904,
-        "size": 476261783
+        "type": "arweave-byte-range",
+        "rootTxId": "0YR8sgjPj1sPTe0N9mrAn1_1onNcNFW-FPQcWnrtjaI",
+        "dataOffsetInRootTx": 1143904,
+        "dataItemId": "EUsZvZvUYPunZ-4gMuvoSkdKXDMOPwOZfNChQgSIaf8"
       },
       "recordCount": 3770219,
       "size": 476261783
@@ -754,10 +754,10 @@
     {
       "prefix": "44",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "0YR8sgjPj1sPTe0N9mrAn1_1onNcNFW-FPQcWnrtjaI",
-        "offset": 972034630,
-        "size": 475482037
+        "type": "arweave-byte-range",
+        "rootTxId": "0YR8sgjPj1sPTe0N9mrAn1_1onNcNFW-FPQcWnrtjaI",
+        "dataOffsetInRootTx": 972034630,
+        "dataItemId": "47Fqkiamja__FP51z328ii4qykPeZEczlbAVqOW_QFg"
       },
       "recordCount": 3764256,
       "size": 475482037
@@ -765,10 +765,10 @@
     {
       "prefix": "45",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "w0-kLVntOJBiyIPeuO1A4VF4zZ6CbCcgQ-f59LoBBFg",
-        "offset": 485285411,
-        "size": 475865426
+        "type": "arweave-byte-range",
+        "rootTxId": "w0-kLVntOJBiyIPeuO1A4VF4zZ6CbCcgQ-f59LoBBFg",
+        "dataOffsetInRootTx": 485285411,
+        "dataItemId": "IzIHqX3w_swQBKvNu1AhuOAS50rN0nHwT8eM7TzHxe8"
       },
       "recordCount": 3766840,
       "size": 475865426
@@ -776,10 +776,10 @@
     {
       "prefix": "46",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "w0-kLVntOJBiyIPeuO1A4VF4zZ6CbCcgQ-f59LoBBFg",
-        "offset": 973813157,
-        "size": 476147403
+        "type": "arweave-byte-range",
+        "rootTxId": "w0-kLVntOJBiyIPeuO1A4VF4zZ6CbCcgQ-f59LoBBFg",
+        "dataOffsetInRootTx": 973813157,
+        "dataItemId": "ppvu9Ebe7ruvYxbJ2yId_pUsTKxM9505y5kTCsMxUFA"
       },
       "recordCount": 3769134,
       "size": 476147403
@@ -787,10 +787,10 @@
     {
       "prefix": "47",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "w0-kLVntOJBiyIPeuO1A4VF4zZ6CbCcgQ-f59LoBBFg",
-        "offset": 3043214,
-        "size": 476123441
+        "type": "arweave-byte-range",
+        "rootTxId": "w0-kLVntOJBiyIPeuO1A4VF4zZ6CbCcgQ-f59LoBBFg",
+        "dataOffsetInRootTx": 3043214,
+        "dataItemId": "VEPlpSelQTSXhTdUPJF2K2HoN5fLsNr5EzR4u_zxkyw"
       },
       "recordCount": 3769065,
       "size": 476123441
@@ -798,10 +798,10 @@
     {
       "prefix": "48",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dw9I6Dhcwi-Lueh1dsC5b7bDKEyhKOeG5qrZkpweXIo",
-        "offset": 1433212375,
-        "size": 475636264
+        "type": "arweave-byte-range",
+        "rootTxId": "dw9I6Dhcwi-Lueh1dsC5b7bDKEyhKOeG5qrZkpweXIo",
+        "dataOffsetInRootTx": 1433212375,
+        "dataItemId": "stgRThl6wxhx3g8AcZlWjRY4oMotSFBxqx2RrImB8OU"
       },
       "recordCount": 3764727,
       "size": 475636264
@@ -809,10 +809,10 @@
     {
       "prefix": "49",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dw9I6Dhcwi-Lueh1dsC5b7bDKEyhKOeG5qrZkpweXIo",
-        "offset": 479039821,
-        "size": 475651023
+        "type": "arweave-byte-range",
+        "rootTxId": "dw9I6Dhcwi-Lueh1dsC5b7bDKEyhKOeG5qrZkpweXIo",
+        "dataOffsetInRootTx": 479039821,
+        "dataItemId": "bzkO20V7iSK4QLRST2kkDKJhG91RnLcfMEHwvms0xnA"
       },
       "recordCount": 3765251,
       "size": 475651023
@@ -820,10 +820,10 @@
     {
       "prefix": "4a",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dw9I6Dhcwi-Lueh1dsC5b7bDKEyhKOeG5qrZkpweXIo",
-        "offset": 956761360,
-        "size": 475316309
+        "type": "arweave-byte-range",
+        "rootTxId": "dw9I6Dhcwi-Lueh1dsC5b7bDKEyhKOeG5qrZkpweXIo",
+        "dataOffsetInRootTx": 956761360,
+        "dataItemId": "FlJrKpNDTVjrEm0cJCtJPJjpahTI7pr8dL5fe0NogJo"
       },
       "recordCount": 3762322,
       "size": 475316309
@@ -831,10 +831,10 @@
     {
       "prefix": "4b",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dw9I6Dhcwi-Lueh1dsC5b7bDKEyhKOeG5qrZkpweXIo",
-        "offset": 3173590,
-        "size": 475563227
+        "type": "arweave-byte-range",
+        "rootTxId": "dw9I6Dhcwi-Lueh1dsC5b7bDKEyhKOeG5qrZkpweXIo",
+        "dataOffsetInRootTx": 3173590,
+        "dataItemId": "A6QYpbxiSC0Esr8bB-kiAgRPrHDygtj_PNsKqsfwVdQ"
       },
       "recordCount": 3764923,
       "size": 475563227
@@ -842,10 +842,10 @@
     {
       "prefix": "4c",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ApURVSHw19-9vmz8hq7LQWRQ9OM6v40cOWb8HaNKXJ8",
-        "offset": 487598229,
-        "size": 475462839
+        "type": "arweave-byte-range",
+        "rootTxId": "ApURVSHw19-9vmz8hq7LQWRQ9OM6v40cOWb8HaNKXJ8",
+        "dataOffsetInRootTx": 487598229,
+        "dataItemId": "PnE9PgRajGF5ViJZPnvAwt8YkeZdSD7OdgiBkj0gArM"
       },
       "recordCount": 3763814,
       "size": 475462839
@@ -853,10 +853,10 @@
     {
       "prefix": "4d",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ApURVSHw19-9vmz8hq7LQWRQ9OM6v40cOWb8HaNKXJ8",
-        "offset": 1049010060,
-        "size": 475958268
+        "type": "arweave-byte-range",
+        "rootTxId": "ApURVSHw19-9vmz8hq7LQWRQ9OM6v40cOWb8HaNKXJ8",
+        "dataOffsetInRootTx": 1049010060,
+        "dataItemId": "JGWYE9Y68f0mgCIFXJFEGphT4PL3Rcx7fN5UzpO3k8k"
       },
       "recordCount": 3767364,
       "size": 475958268
@@ -864,10 +864,10 @@
     {
       "prefix": "4e",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ApURVSHw19-9vmz8hq7LQWRQ9OM6v40cOWb8HaNKXJ8",
-        "offset": 1527059,
-        "size": 475883009
+        "type": "arweave-byte-range",
+        "rootTxId": "ApURVSHw19-9vmz8hq7LQWRQ9OM6v40cOWb8HaNKXJ8",
+        "dataOffsetInRootTx": 1527059,
+        "dataItemId": "jEQbiyeOWnDdunCnP3TC6KWH3r7-HTENTAmkOcpQmKg"
       },
       "recordCount": 3767057,
       "size": 475883009
@@ -875,10 +875,10 @@
     {
       "prefix": "4f",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "3cKK4KjQ5OseFGZYW5p_LsRG0sCVCboaS04vpWOYXRw",
-        "offset": 519938437,
-        "size": 476044758
+        "type": "arweave-byte-range",
+        "rootTxId": "3cKK4KjQ5OseFGZYW5p_LsRG0sCVCboaS04vpWOYXRw",
+        "dataOffsetInRootTx": 519938437,
+        "dataItemId": "OhThzFd8qqH-b3eT_gXVTBuA-jb1fRgXMQNevWJF1g4"
       },
       "recordCount": 3768044,
       "size": 476044758
@@ -886,10 +886,10 @@
     {
       "prefix": "50",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "3cKK4KjQ5OseFGZYW5p_LsRG0sCVCboaS04vpWOYXRw",
-        "offset": 44377402,
-        "size": 475541781
+        "type": "arweave-byte-range",
+        "rootTxId": "3cKK4KjQ5OseFGZYW5p_LsRG0sCVCboaS04vpWOYXRw",
+        "dataOffsetInRootTx": 44377402,
+        "dataItemId": "PLxxuUwupQCIMa7ZrlCbRMjjpqIPwy_KWEFP1VPYCc4"
       },
       "recordCount": 3764043,
       "size": 475541781
@@ -897,10 +897,10 @@
     {
       "prefix": "51",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "3cKK4KjQ5OseFGZYW5p_LsRG0sCVCboaS04vpWOYXRw",
-        "offset": 996038822,
-        "size": 475725833
+        "type": "arweave-byte-range",
+        "rootTxId": "3cKK4KjQ5OseFGZYW5p_LsRG0sCVCboaS04vpWOYXRw",
+        "dataOffsetInRootTx": 996038822,
+        "dataItemId": "GtbCrPapyGz3HaXYeeXFMf_YFF2QjAoI-ddPzp12kvQ"
       },
       "recordCount": 3765681,
       "size": 475725833
@@ -908,10 +908,10 @@
     {
       "prefix": "52",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "3cKK4KjQ5OseFGZYW5p_LsRG0sCVCboaS04vpWOYXRw",
-        "offset": 1471787156,
-        "size": 475898488
+        "type": "arweave-byte-range",
+        "rootTxId": "3cKK4KjQ5OseFGZYW5p_LsRG0sCVCboaS04vpWOYXRw",
+        "dataOffsetInRootTx": 1471787156,
+        "dataItemId": "tSPUdzoJ5TSU-39mp-pfW12GYM0DYBmAyagdmahsI3A"
       },
       "recordCount": 3767017,
       "size": 475898488
@@ -919,10 +919,10 @@
     {
       "prefix": "53",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "rwyXumW41gXXKUXnyLTw2OaWXaQgoGavpDsGgxV7r9k",
-        "offset": 952786003,
-        "size": 475786465
+        "type": "arweave-byte-range",
+        "rootTxId": "rwyXumW41gXXKUXnyLTw2OaWXaQgoGavpDsGgxV7r9k",
+        "dataOffsetInRootTx": 952786003,
+        "dataItemId": "CrBIh3GixnbNXhxaHriIe8tW6jmaw3b5YsjWsUic45E"
       },
       "recordCount": 3766070,
       "size": 475786465
@@ -930,10 +930,10 @@
     {
       "prefix": "54",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "rwyXumW41gXXKUXnyLTw2OaWXaQgoGavpDsGgxV7r9k",
-        "offset": 24485,
-        "size": 475942828
+        "type": "arweave-byte-range",
+        "rootTxId": "rwyXumW41gXXKUXnyLTw2OaWXaQgoGavpDsGgxV7r9k",
+        "dataOffsetInRootTx": 24485,
+        "dataItemId": "1cFlQoOCZHQouOp94udO7cQ3eVhPx-BJVV9-o4RZFWk"
       },
       "recordCount": 3766999,
       "size": 475942828
@@ -941,10 +941,10 @@
     {
       "prefix": "55",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "rwyXumW41gXXKUXnyLTw2OaWXaQgoGavpDsGgxV7r9k",
-        "offset": 476027104,
-        "size": 476587286
+        "type": "arweave-byte-range",
+        "rootTxId": "rwyXumW41gXXKUXnyLTw2OaWXaQgoGavpDsGgxV7r9k",
+        "dataOffsetInRootTx": 476027104,
+        "dataItemId": "TC78c2YG_NCggfzolDTyQdpJLbofd9HUhmBo-GpSYk8"
       },
       "recordCount": 3772710,
       "size": 476587286
@@ -952,10 +952,10 @@
     {
       "prefix": "56",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "YinfL7M40caTgJmWJNLfDX0zVz0fmUMctX8AauyEdAk",
-        "offset": 475580977,
-        "size": 475934075
+        "type": "arweave-byte-range",
+        "rootTxId": "YinfL7M40caTgJmWJNLfDX0zVz0fmUMctX8AauyEdAk",
+        "dataOffsetInRootTx": 475580977,
+        "dataItemId": "3UiT8BRHwe5eU5fDlflwa0ypCVw7h4ZRqBZKyptovQA"
       },
       "recordCount": 3767480,
       "size": 475934075
@@ -963,10 +963,10 @@
     {
       "prefix": "57",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "YinfL7M40caTgJmWJNLfDX0zVz0fmUMctX8AauyEdAk",
-        "offset": 22788,
-        "size": 475515003
+        "type": "arweave-byte-range",
+        "rootTxId": "YinfL7M40caTgJmWJNLfDX0zVz0fmUMctX8AauyEdAk",
+        "dataOffsetInRootTx": 22788,
+        "dataItemId": "dACJURk4MGhSbclu_KLax6eA69HS-PO0fneVmp0Pnno"
       },
       "recordCount": 3764209,
       "size": 475515003
@@ -974,10 +974,10 @@
     {
       "prefix": "58",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "YinfL7M40caTgJmWJNLfDX0zVz0fmUMctX8AauyEdAk",
-        "offset": 951539167,
-        "size": 475770050
+        "type": "arweave-byte-range",
+        "rootTxId": "YinfL7M40caTgJmWJNLfDX0zVz0fmUMctX8AauyEdAk",
+        "dataOffsetInRootTx": 951539167,
+        "dataItemId": "IMRKO3YyWpWHvvmJ05Q-ZzLfXsYbOuuCaY48FEjg4_M"
       },
       "recordCount": 3766242,
       "size": 475770050
@@ -985,10 +985,10 @@
     {
       "prefix": "59",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "DAPCUaqs0BAv0uGzNTC34yQJjbYEQoUoseMUnaMYN6s",
-        "offset": 1431160383,
-        "size": 475712823
+        "type": "arweave-byte-range",
+        "rootTxId": "DAPCUaqs0BAv0uGzNTC34yQJjbYEQoUoseMUnaMYN6s",
+        "dataOffsetInRootTx": 1431160383,
+        "dataItemId": "bV7GgEL7DWjWcVzrQayYZf8RoprYc_Qd5x_pCHnpISI"
       },
       "recordCount": 3765612,
       "size": 475712823
@@ -996,10 +996,10 @@
     {
       "prefix": "5a",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "DAPCUaqs0BAv0uGzNTC34yQJjbYEQoUoseMUnaMYN6s",
-        "offset": 475334583,
-        "size": 475679579
+        "type": "arweave-byte-range",
+        "rootTxId": "DAPCUaqs0BAv0uGzNTC34yQJjbYEQoUoseMUnaMYN6s",
+        "dataOffsetInRootTx": 475334583,
+        "dataItemId": "vSQA0Rr9orqO9G5Rz_Ku67SdVXtCiU1eZZGSQcMPfzE"
       },
       "recordCount": 3765662,
       "size": 475679579
@@ -1007,10 +1007,10 @@
     {
       "prefix": "5b",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "DAPCUaqs0BAv0uGzNTC34yQJjbYEQoUoseMUnaMYN6s",
-        "offset": 955435993,
-        "size": 475719445
+        "type": "arweave-byte-range",
+        "rootTxId": "DAPCUaqs0BAv0uGzNTC34yQJjbYEQoUoseMUnaMYN6s",
+        "dataOffsetInRootTx": 955435993,
+        "dataItemId": "vGjyS3wvJgysze7NSKmN1_6yUg2JJCOxZaQxoknIIwk"
       },
       "recordCount": 3765633,
       "size": 475719445
@@ -1018,10 +1018,10 @@
     {
       "prefix": "5c",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "DAPCUaqs0BAv0uGzNTC34yQJjbYEQoUoseMUnaMYN6s",
-        "offset": 8087,
-        "size": 475198106
+        "type": "arweave-byte-range",
+        "rootTxId": "DAPCUaqs0BAv0uGzNTC34yQJjbYEQoUoseMUnaMYN6s",
+        "dataOffsetInRootTx": 8087,
+        "dataItemId": "Gqq1D8q7Pu1skoLrCxl8XSRmFlKtxevB3zbk0R7kPGE"
       },
       "recordCount": 3761776,
       "size": 475198106
@@ -1029,10 +1029,10 @@
     {
       "prefix": "5d",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "NH0KMBDDyAmvVUVsekH3SXHYhqrY5AA5hfA-9BkTGuo",
-        "offset": 475723047,
-        "size": 475668788
+        "type": "arweave-byte-range",
+        "rootTxId": "NH0KMBDDyAmvVUVsekH3SXHYhqrY5AA5hfA-9BkTGuo",
+        "dataOffsetInRootTx": 475723047,
+        "dataItemId": "xoYD0AvU9p-2sr6iIoPV3POZVRvMCGow46QUgY9_WF8"
       },
       "recordCount": 3765241,
       "size": 475668788
@@ -1040,10 +1040,10 @@
     {
       "prefix": "5e",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "NH0KMBDDyAmvVUVsekH3SXHYhqrY5AA5hfA-9BkTGuo",
-        "offset": 1467951495,
-        "size": 476174799
+        "type": "arweave-byte-range",
+        "rootTxId": "NH0KMBDDyAmvVUVsekH3SXHYhqrY5AA5hfA-9BkTGuo",
+        "dataOffsetInRootTx": 1467951495,
+        "dataItemId": "BNhIZ536qprW-gKdMZCTCJhJxBOhIUS-r7dcWNGNIo8"
       },
       "recordCount": 3769174,
       "size": 476174799
@@ -1051,10 +1051,10 @@
     {
       "prefix": "5f",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "NH0KMBDDyAmvVUVsekH3SXHYhqrY5AA5hfA-9BkTGuo",
-        "offset": 5149,
-        "size": 475520157
+        "type": "arweave-byte-range",
+        "rootTxId": "NH0KMBDDyAmvVUVsekH3SXHYhqrY5AA5hfA-9BkTGuo",
+        "dataOffsetInRootTx": 5149,
+        "dataItemId": "vx_I-XSCSULs81yqiocIlmDRyR3vGdTczEfb8IHAve4"
       },
       "recordCount": 3764414,
       "size": 475520157
@@ -1062,10 +1062,10 @@
     {
       "prefix": "60",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "NH0KMBDDyAmvVUVsekH3SXHYhqrY5AA5hfA-9BkTGuo",
-        "offset": 991935809,
-        "size": 475752511
+        "type": "arweave-byte-range",
+        "rootTxId": "NH0KMBDDyAmvVUVsekH3SXHYhqrY5AA5hfA-9BkTGuo",
+        "dataOffsetInRootTx": 991935809,
+        "dataItemId": "lV1e3fmzIV1peKiHy9RF7dGXFcCJUJPqh6f5U1Ic1qw"
       },
       "recordCount": 3766198,
       "size": 475752511
@@ -1073,10 +1073,10 @@
     {
       "prefix": "61",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "g9abR5DSMGBCPKcHhiJADu1RzvmPyj2VxgzK4CbJL7I",
-        "offset": 951873014,
-        "size": 475951331
+        "type": "arweave-byte-range",
+        "rootTxId": "g9abR5DSMGBCPKcHhiJADu1RzvmPyj2VxgzK4CbJL7I",
+        "dataOffsetInRootTx": 951873014,
+        "dataItemId": "WobpMa02s1dq56uUrdkagJ0MTyZQI0eQ-pAMvmLsHiM"
       },
       "recordCount": 3767760,
       "size": 475951331
@@ -1084,10 +1084,10 @@
     {
       "prefix": "62",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "g9abR5DSMGBCPKcHhiJADu1RzvmPyj2VxgzK4CbJL7I",
-        "offset": 57033,
-        "size": 475800282
+        "type": "arweave-byte-range",
+        "rootTxId": "g9abR5DSMGBCPKcHhiJADu1RzvmPyj2VxgzK4CbJL7I",
+        "dataOffsetInRootTx": 57033,
+        "dataItemId": "IFpfz5Qhbz2RCqvLmuFlpVdfsX8iozDCYSxndBQj1Gk"
       },
       "recordCount": 3766221,
       "size": 475800282
@@ -1095,10 +1095,10 @@
     {
       "prefix": "63",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "g9abR5DSMGBCPKcHhiJADu1RzvmPyj2VxgzK4CbJL7I",
-        "offset": 476012875,
-        "size": 475476038
+        "type": "arweave-byte-range",
+        "rootTxId": "g9abR5DSMGBCPKcHhiJADu1RzvmPyj2VxgzK4CbJL7I",
+        "dataOffsetInRootTx": 476012875,
+        "dataItemId": "-2WbKgjqX2XLOz9zUoGOyYYOlgUc_Dy6oXt6RdayeaI"
       },
       "recordCount": 3763832,
       "size": 475476038
@@ -1106,10 +1106,10 @@
     {
       "prefix": "64",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "p75kjZeBz4ad9veqXVQretTIrkf98WJ_IeOBVgEirBo",
-        "offset": 1427781479,
-        "size": 476013766
+        "type": "arweave-byte-range",
+        "rootTxId": "p75kjZeBz4ad9veqXVQretTIrkf98WJ_IeOBVgEirBo",
+        "dataOffsetInRootTx": 1427781479,
+        "dataItemId": "nZ49CCH6BYb0H1V_VY7sp-WccJ-h-JOhuexIkwpid2Q"
       },
       "recordCount": 3768133,
       "size": 476013766
@@ -1117,10 +1117,10 @@
     {
       "prefix": "65",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "p75kjZeBz4ad9veqXVQretTIrkf98WJ_IeOBVgEirBo",
-        "offset": 475400770,
-        "size": 475912895
+        "type": "arweave-byte-range",
+        "rootTxId": "p75kjZeBz4ad9veqXVQretTIrkf98WJ_IeOBVgEirBo",
+        "dataOffsetInRootTx": 475400770,
+        "dataItemId": "yAHSJzZtNEwnEbU6Gv9ram3X3JnnCgxhlx9r9983HpI"
       },
       "recordCount": 3767007,
       "size": 475912895
@@ -1128,10 +1128,10 @@
     {
       "prefix": "66",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "p75kjZeBz4ad9veqXVQretTIrkf98WJ_IeOBVgEirBo",
-        "offset": 951452638,
-        "size": 476005401
+        "type": "arweave-byte-range",
+        "rootTxId": "p75kjZeBz4ad9veqXVQretTIrkf98WJ_IeOBVgEirBo",
+        "dataOffsetInRootTx": 951452638,
+        "dataItemId": "dli_jfY9WmdWBIy8AUbpuLq-BkFl3CTbNsMyMCwDxXs"
       },
       "recordCount": 3768410,
       "size": 476005401
@@ -1139,10 +1139,10 @@
     {
       "prefix": "67",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "p75kjZeBz4ad9veqXVQretTIrkf98WJ_IeOBVgEirBo",
-        "offset": 36186,
-        "size": 475361625
+        "type": "arweave-byte-range",
+        "rootTxId": "p75kjZeBz4ad9veqXVQretTIrkf98WJ_IeOBVgEirBo",
+        "dataOffsetInRootTx": 36186,
+        "dataItemId": "_JAw4_4vKSRKz2ayxoO1hYD446oeihLSmUed0TY9RWw"
       },
       "recordCount": 3762820,
       "size": 475361625
@@ -1150,10 +1150,10 @@
     {
       "prefix": "68",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "xXFZqTHybccbqR9TWmmZbej1joGuQ5LSnpk08u1Hlh4",
-        "offset": 954469013,
-        "size": 475571172
+        "type": "arweave-byte-range",
+        "rootTxId": "xXFZqTHybccbqR9TWmmZbej1joGuQ5LSnpk08u1Hlh4",
+        "dataOffsetInRootTx": 954469013,
+        "dataItemId": "uOKmm732tJnKMa0akBCLehCT6innsCzm8wY6g10pIEA"
       },
       "recordCount": 3764821,
       "size": 475571172
@@ -1161,10 +1161,10 @@
     {
       "prefix": "69",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "xXFZqTHybccbqR9TWmmZbej1joGuQ5LSnpk08u1Hlh4",
-        "offset": 478785204,
-        "size": 475666016
+        "type": "arweave-byte-range",
+        "rootTxId": "xXFZqTHybccbqR9TWmmZbej1joGuQ5LSnpk08u1Hlh4",
+        "dataOffsetInRootTx": 478785204,
+        "dataItemId": "MrCrZloGK-nfJgL6DhXo-eE7q4ua7a0i85g3PM8qLRs"
       },
       "recordCount": 3765605,
       "size": 475666016
@@ -1172,10 +1172,10 @@
     {
       "prefix": "6a",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "xXFZqTHybccbqR9TWmmZbej1joGuQ5LSnpk08u1Hlh4",
-        "offset": 598915,
-        "size": 475328063
+        "type": "arweave-byte-range",
+        "rootTxId": "xXFZqTHybccbqR9TWmmZbej1joGuQ5LSnpk08u1Hlh4",
+        "dataOffsetInRootTx": 598915,
+        "dataItemId": "dHGi0_oUfWOFH0lwmqIO4Hh7TCVjeycfcYZOodTQ2Lk"
       },
       "recordCount": 3762686,
       "size": 475328063
@@ -1183,10 +1183,10 @@
     {
       "prefix": "6b",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "I2SA-gGg95T-vtk92w_AmVMDfhBReUeGmWJ5Tl30dyk",
-        "offset": 951694019,
-        "size": 476279548
+        "type": "arweave-byte-range",
+        "rootTxId": "I2SA-gGg95T-vtk92w_AmVMDfhBReUeGmWJ5Tl30dyk",
+        "dataOffsetInRootTx": 951694019,
+        "dataItemId": "PcAirn58mo-14mYIH4xus1aPDaNiNBNNhuV77pPG0I4"
       },
       "recordCount": 3769929,
       "size": 476279548
@@ -1194,10 +1194,10 @@
     {
       "prefix": "6c",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "I2SA-gGg95T-vtk92w_AmVMDfhBReUeGmWJ5Tl30dyk",
-        "offset": 9525,
-        "size": 475377025
+        "type": "arweave-byte-range",
+        "rootTxId": "I2SA-gGg95T-vtk92w_AmVMDfhBReUeGmWJ5Tl30dyk",
+        "dataOffsetInRootTx": 9525,
+        "dataItemId": "8bEv3xchr0A6e3EwkERDeEQZfvdfGzfqMQc7C7b7YRo"
       },
       "recordCount": 3762925,
       "size": 475377025
@@ -1205,10 +1205,10 @@
     {
       "prefix": "6d",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "I2SA-gGg95T-vtk92w_AmVMDfhBReUeGmWJ5Tl30dyk",
-        "offset": 475623379,
-        "size": 475630496
+        "type": "arweave-byte-range",
+        "rootTxId": "I2SA-gGg95T-vtk92w_AmVMDfhBReUeGmWJ5Tl30dyk",
+        "dataOffsetInRootTx": 475623379,
+        "dataItemId": "wQnyuSgDfhJ4jeYyS_F69Psbwck3_OKbJqNPV9xc1z8"
       },
       "recordCount": 3765063,
       "size": 475630496
@@ -1216,10 +1216,10 @@
     {
       "prefix": "6e",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "g3Kgo7ovXlWAxLh6oZ0DERiL4uNrDKWXzMQgpocMAGY",
-        "offset": 6677,
-        "size": 475324577
+        "type": "arweave-byte-range",
+        "rootTxId": "g3Kgo7ovXlWAxLh6oZ0DERiL4uNrDKWXzMQgpocMAGY",
+        "dataOffsetInRootTx": 6677,
+        "dataItemId": "el31SwBgRKMpNolbUNTHGQxr7KkvQNC1XUu5GBy1wfs"
       },
       "recordCount": 3763113,
       "size": 475324577
@@ -1227,10 +1227,10 @@
     {
       "prefix": "6f",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "g3Kgo7ovXlWAxLh6oZ0DERiL4uNrDKWXzMQgpocMAGY",
-        "offset": 961390083,
-        "size": 475848621
+        "type": "arweave-byte-range",
+        "rootTxId": "g3Kgo7ovXlWAxLh6oZ0DERiL4uNrDKWXzMQgpocMAGY",
+        "dataOffsetInRootTx": 961390083,
+        "dataItemId": "FclouspciTFwBECOqrOaDrsCddeMCwgobT2gcr9a1MY"
       },
       "recordCount": 3766755,
       "size": 475848621
@@ -1238,10 +1238,10 @@
     {
       "prefix": "70",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "g3Kgo7ovXlWAxLh6oZ0DERiL4uNrDKWXzMQgpocMAGY",
-        "offset": 479129168,
-        "size": 475786730
+        "type": "arweave-byte-range",
+        "rootTxId": "g3Kgo7ovXlWAxLh6oZ0DERiL4uNrDKWXzMQgpocMAGY",
+        "dataOffsetInRootTx": 479129168,
+        "dataItemId": "-6JzTdEjAW2il6Hdyv5jks66Jastay96wjHkWga-4sM"
       },
       "recordCount": 3766483,
       "size": 475786730
@@ -1249,10 +1249,10 @@
     {
       "prefix": "71",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "d_wAEUGflTSCrip9QZf_p8zbht2TU7cTgQDpJvFT0ts",
-        "offset": 12953031,
-        "size": 475587280
+        "type": "arweave-byte-range",
+        "rootTxId": "d_wAEUGflTSCrip9QZf_p8zbht2TU7cTgQDpJvFT0ts",
+        "dataOffsetInRootTx": 12953031,
+        "dataItemId": "zAofGxT03J5-UTxlf6vcrkWEt-qnkg4sl_gWNOaXB_Y"
       },
       "recordCount": 3764807,
       "size": 475587280
@@ -1260,10 +1260,10 @@
     {
       "prefix": "72",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "d_wAEUGflTSCrip9QZf_p8zbht2TU7cTgQDpJvFT0ts",
-        "offset": 491638374,
-        "size": 475755699
+        "type": "arweave-byte-range",
+        "rootTxId": "d_wAEUGflTSCrip9QZf_p8zbht2TU7cTgQDpJvFT0ts",
+        "dataOffsetInRootTx": 491638374,
+        "dataItemId": "58qQiVuHiIPArr5wybsu5LiwhE-S0pzrfoGJdlhOAEA"
       },
       "recordCount": 3765959,
       "size": 475755699
@@ -1271,10 +1271,10 @@
     {
       "prefix": "73",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "d_wAEUGflTSCrip9QZf_p8zbht2TU7cTgQDpJvFT0ts",
-        "offset": 967430871,
-        "size": 475764650
+        "type": "arweave-byte-range",
+        "rootTxId": "d_wAEUGflTSCrip9QZf_p8zbht2TU7cTgQDpJvFT0ts",
+        "dataOffsetInRootTx": 967430871,
+        "dataItemId": "lhuwbCkUH-1z4ceetA1Gxmt5P-GhG681oIOs1eKtULM"
       },
       "recordCount": 3766180,
       "size": 475764650
@@ -1282,10 +1282,10 @@
     {
       "prefix": "74",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "NQbsLbh6zGS4It6WUzpvk3AeLAwIGwlCoT8Db5GDLY8",
-        "offset": 475535413,
-        "size": 476054078
+        "type": "arweave-byte-range",
+        "rootTxId": "NQbsLbh6zGS4It6WUzpvk3AeLAwIGwlCoT8Db5GDLY8",
+        "dataOffsetInRootTx": 475535413,
+        "dataItemId": "8vWsakB0OtVCeBr58JVpwB3pgxsxrH3v2MNyKvLMWHk"
       },
       "recordCount": 3768561,
       "size": 476054078
@@ -1293,10 +1293,10 @@
     {
       "prefix": "75",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "NQbsLbh6zGS4It6WUzpvk3AeLAwIGwlCoT8Db5GDLY8",
-        "offset": 955275078,
-        "size": 475509847
+        "type": "arweave-byte-range",
+        "rootTxId": "NQbsLbh6zGS4It6WUzpvk3AeLAwIGwlCoT8Db5GDLY8",
+        "dataOffsetInRootTx": 955275078,
+        "dataItemId": "XOAOtbdeRLyzVYEkDihFGV2WG72-BBZiwUHo27mzRec"
       },
       "recordCount": 3763963,
       "size": 475509847
@@ -1304,10 +1304,10 @@
     {
       "prefix": "76",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "NQbsLbh6zGS4It6WUzpvk3AeLAwIGwlCoT8Db5GDLY8",
-        "offset": 3165,
-        "size": 475426669
+        "type": "arweave-byte-range",
+        "rootTxId": "NQbsLbh6zGS4It6WUzpvk3AeLAwIGwlCoT8Db5GDLY8",
+        "dataOffsetInRootTx": 3165,
+        "dataItemId": "2CZMGnPxrdDGkCIGcahTDDBO5Uppbu7qQDp1p-GU3Bk"
       },
       "recordCount": 3763524,
       "size": 475426669
@@ -1315,10 +1315,10 @@
     {
       "prefix": "77",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "B-5dCQ2V_LrEHVPAaaLJ-duV_0Bcut1HVSkN8l7yVtc",
-        "offset": 93913,
-        "size": 475650232
+        "type": "arweave-byte-range",
+        "rootTxId": "B-5dCQ2V_LrEHVPAaaLJ-duV_0Bcut1HVSkN8l7yVtc",
+        "dataOffsetInRootTx": 93913,
+        "dataItemId": "r2KnkRMILPUcb-Wajq_ihzbiANmRdzRpPMzJrCFVPjs"
       },
       "recordCount": 3765226,
       "size": 475650232
@@ -1326,10 +1326,10 @@
     {
       "prefix": "78",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "B-5dCQ2V_LrEHVPAaaLJ-duV_0Bcut1HVSkN8l7yVtc",
-        "offset": 1440289847,
-        "size": 475718720
+        "type": "arweave-byte-range",
+        "rootTxId": "B-5dCQ2V_LrEHVPAaaLJ-duV_0Bcut1HVSkN8l7yVtc",
+        "dataOffsetInRootTx": 1440289847,
+        "dataItemId": "yIVQBjYLoS_z_asieNpnuUZD9K-9Z6tvs_-HezagcEY"
       },
       "recordCount": 3765870,
       "size": 475718720
@@ -1337,10 +1337,10 @@
     {
       "prefix": "79",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "B-5dCQ2V_LrEHVPAaaLJ-duV_0Bcut1HVSkN8l7yVtc",
-        "offset": 475833872,
-        "size": 476118478
+        "type": "arweave-byte-range",
+        "rootTxId": "B-5dCQ2V_LrEHVPAaaLJ-duV_0Bcut1HVSkN8l7yVtc",
+        "dataOffsetInRootTx": 475833872,
+        "dataItemId": "4qT6gVIlOzHjDnhTDulu1wjtwH9bi2jJQEPLg6_emLE"
       },
       "recordCount": 3768844,
       "size": 476118478
@@ -1348,10 +1348,10 @@
     {
       "prefix": "7a",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "B-5dCQ2V_LrEHVPAaaLJ-duV_0Bcut1HVSkN8l7yVtc",
-        "offset": 964344335,
-        "size": 475774708
+        "type": "arweave-byte-range",
+        "rootTxId": "B-5dCQ2V_LrEHVPAaaLJ-duV_0Bcut1HVSkN8l7yVtc",
+        "dataOffsetInRootTx": 964344335,
+        "dataItemId": "OD8hkWnw1CvKiYZ_sUGoA_a3TpPevQ99rVa0YW-ICOA"
       },
       "recordCount": 3765869,
       "size": 475774708
@@ -1359,10 +1359,10 @@
     {
       "prefix": "7b",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "fefi6sff1Mus3G25c3pN4roJg5Mn8UOuQg6VyEWC8Lw",
-        "offset": 1430011440,
-        "size": 476035807
+        "type": "arweave-byte-range",
+        "rootTxId": "fefi6sff1Mus3G25c3pN4roJg5Mn8UOuQg6VyEWC8Lw",
+        "dataOffsetInRootTx": 1430011440,
+        "dataItemId": "KhSbTQmSs4F-XzlrD7QnsYdOeIlLf8-azfXUTCZWMQw"
       },
       "recordCount": 3768246,
       "size": 476035807
@@ -1370,10 +1370,10 @@
     {
       "prefix": "7c",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "fefi6sff1Mus3G25c3pN4roJg5Mn8UOuQg6VyEWC8Lw",
-        "offset": 195399,
-        "size": 475754914
+        "type": "arweave-byte-range",
+        "rootTxId": "fefi6sff1Mus3G25c3pN4roJg5Mn8UOuQg6VyEWC8Lw",
+        "dataOffsetInRootTx": 195399,
+        "dataItemId": "WQTBIgeLE0rIEIcxFEMSBv_PtW-CkwMPqfea5vJpTLM"
       },
       "recordCount": 3765917,
       "size": 475754914
@@ -1381,10 +1381,10 @@
     {
       "prefix": "7d",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "fefi6sff1Mus3G25c3pN4roJg5Mn8UOuQg6VyEWC8Lw",
-        "offset": 476114134,
-        "size": 475498076
+        "type": "arweave-byte-range",
+        "rootTxId": "fefi6sff1Mus3G25c3pN4roJg5Mn8UOuQg6VyEWC8Lw",
+        "dataOffsetInRootTx": 476114134,
+        "dataItemId": "M4nGmBI4jhObxV3_xXf6hY35NIFlHYho5gJdr2UWVyI"
       },
       "recordCount": 3764108,
       "size": 475498076
@@ -1392,10 +1392,10 @@
     {
       "prefix": "7e",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "fefi6sff1Mus3G25c3pN4roJg5Mn8UOuQg6VyEWC8Lw",
-        "offset": 951698232,
-        "size": 475633782
+        "type": "arweave-byte-range",
+        "rootTxId": "fefi6sff1Mus3G25c3pN4roJg5Mn8UOuQg6VyEWC8Lw",
+        "dataOffsetInRootTx": 951698232,
+        "dataItemId": "t1PB3GbK7PBs-ghdgz0HIKcCTYkxgw6KWy5XhetapVs"
       },
       "recordCount": 3764946,
       "size": 475633782
@@ -1403,10 +1403,10 @@
     {
       "prefix": "7f",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "QtDah96TH8QOCVb4kAkoLhz5TZeX9TXfhYfEya12mhg",
-        "offset": 952505945,
-        "size": 475685088
+        "type": "arweave-byte-range",
+        "rootTxId": "QtDah96TH8QOCVb4kAkoLhz5TZeX9TXfhYfEya12mhg",
+        "dataOffsetInRootTx": 952505945,
+        "dataItemId": "UITrhpMVxs6o99UOLs7yQRLpO2B7m3gnofHb9_KEA74"
       },
       "recordCount": 3765596,
       "size": 475685088
@@ -1414,10 +1414,10 @@
     {
       "prefix": "80",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "QtDah96TH8QOCVb4kAkoLhz5TZeX9TXfhYfEya12mhg",
-        "offset": 21777,
-        "size": 475666580
+        "type": "arweave-byte-range",
+        "rootTxId": "QtDah96TH8QOCVb4kAkoLhz5TZeX9TXfhYfEya12mhg",
+        "dataOffsetInRootTx": 21777,
+        "dataItemId": "eM4RbW43VjTc3YSW4dnPuF_LT6tMPb7K2DSHcB78zZ0"
       },
       "recordCount": 3765553,
       "size": 475666580
@@ -1425,10 +1425,10 @@
     {
       "prefix": "81",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "QtDah96TH8QOCVb4kAkoLhz5TZeX9TXfhYfEya12mhg",
-        "offset": 475770580,
-        "size": 475457221
+        "type": "arweave-byte-range",
+        "rootTxId": "QtDah96TH8QOCVb4kAkoLhz5TZeX9TXfhYfEya12mhg",
+        "dataOffsetInRootTx": 475770580,
+        "dataItemId": "hVgeJzqXSLk1mhvBiLzPGxXzJRJxfbVSM9aeRL_zak8"
       },
       "recordCount": 3763658,
       "size": 475457221
@@ -1436,10 +1436,10 @@
     {
       "prefix": "82",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dE8P3vnvJoeJSUSlnu01D6lwCt38XvKzw-Mr-uP8r6w",
-        "offset": 953084439,
-        "size": 475767488
+        "type": "arweave-byte-range",
+        "rootTxId": "dE8P3vnvJoeJSUSlnu01D6lwCt38XvKzw-Mr-uP8r6w",
+        "dataOffsetInRootTx": 953084439,
+        "dataItemId": "jXGeZjEg6zb9dcedN9od9CN5_-uM8vsGR_lo_0YhZqI"
       },
       "recordCount": 3766329,
       "size": 475767488
@@ -1447,10 +1447,10 @@
     {
       "prefix": "83",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dE8P3vnvJoeJSUSlnu01D6lwCt38XvKzw-Mr-uP8r6w",
-        "offset": 10677,
-        "size": 475975889
+        "type": "arweave-byte-range",
+        "rootTxId": "dE8P3vnvJoeJSUSlnu01D6lwCt38XvKzw-Mr-uP8r6w",
+        "dataOffsetInRootTx": 10677,
+        "dataItemId": "6l5upn5h_UajnfrunBj_mQJ9TQiUixJTv-ERIn8Pgi4"
       },
       "recordCount": 3767377,
       "size": 475975889
@@ -1458,10 +1458,10 @@
     {
       "prefix": "84",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dE8P3vnvJoeJSUSlnu01D6lwCt38XvKzw-Mr-uP8r6w",
-        "offset": 476566291,
-        "size": 475583849
+        "type": "arweave-byte-range",
+        "rootTxId": "dE8P3vnvJoeJSUSlnu01D6lwCt38XvKzw-Mr-uP8r6w",
+        "dataOffsetInRootTx": 476566291,
+        "dataItemId": "7NMSoLCB6y9Mzq241GR18k96rzrzeNW0H9Vd8_sHHP0"
       },
       "recordCount": 3764737,
       "size": 475583849
@@ -1469,10 +1469,10 @@
     {
       "prefix": "85",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dE8P3vnvJoeJSUSlnu01D6lwCt38XvKzw-Mr-uP8r6w",
-        "offset": 1429659208,
-        "size": 475732083
+        "type": "arweave-byte-range",
+        "rootTxId": "dE8P3vnvJoeJSUSlnu01D6lwCt38XvKzw-Mr-uP8r6w",
+        "dataOffsetInRootTx": 1429659208,
+        "dataItemId": "tGdr6HxJ84uT9keoxPT6RxCPPKEodoviwUc7cSPzWaQ"
       },
       "recordCount": 3766126,
       "size": 475732083
@@ -1480,10 +1480,10 @@
     {
       "prefix": "86",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "EavvqWRuGhxqOjeB25wRu_xgmLBCiX8N7859lMW8g4E",
-        "offset": 954313147,
-        "size": 475644517
+        "type": "arweave-byte-range",
+        "rootTxId": "EavvqWRuGhxqOjeB25wRu_xgmLBCiX8N7859lMW8g4E",
+        "dataOffsetInRootTx": 954313147,
+        "dataItemId": "IOVvV8Ak58vgcDBQpHXyPjEpZ79X_0mry_0c_3AgmcI"
       },
       "recordCount": 3765158,
       "size": 475644517
@@ -1491,10 +1491,10 @@
     {
       "prefix": "87",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "EavvqWRuGhxqOjeB25wRu_xgmLBCiX8N7859lMW8g4E",
-        "offset": 52582,
-        "size": 475798100
+        "type": "arweave-byte-range",
+        "rootTxId": "EavvqWRuGhxqOjeB25wRu_xgmLBCiX8N7859lMW8g4E",
+        "dataOffsetInRootTx": 52582,
+        "dataItemId": "d0Uh2O0cFht5pPpkCqs0gzM7OL7jJ3izY3gqbBqhIN4"
       },
       "recordCount": 3766252,
       "size": 475798100
@@ -1502,10 +1502,10 @@
     {
       "prefix": "88",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "EavvqWRuGhxqOjeB25wRu_xgmLBCiX8N7859lMW8g4E",
-        "offset": 477261701,
-        "size": 475562209
+        "type": "arweave-byte-range",
+        "rootTxId": "EavvqWRuGhxqOjeB25wRu_xgmLBCiX8N7859lMW8g4E",
+        "dataOffsetInRootTx": 477261701,
+        "dataItemId": "YrlLqVugqtI_RZMACzOsSeqVxwhchA0qp2NOTyPf4cg"
       },
       "recordCount": 3764144,
       "size": 475562209
@@ -1513,10 +1513,10 @@
     {
       "prefix": "89",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "Ap1CXCzGBfHofkjMKkO7krqG2r49jTvI_FYxLiNFmsI",
-        "offset": 6453,
-        "size": 475967229
+        "type": "arweave-byte-range",
+        "rootTxId": "Ap1CXCzGBfHofkjMKkO7krqG2r49jTvI_FYxLiNFmsI",
+        "dataOffsetInRootTx": 6453,
+        "dataItemId": "1R9HVZtzWzxOuHX1RYNAC9TPUKpEvvoMxZIZDKCdzm0"
       },
       "recordCount": 3767854,
       "size": 475967229
@@ -1524,10 +1524,10 @@
     {
       "prefix": "8a",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "Ap1CXCzGBfHofkjMKkO7krqG2r49jTvI_FYxLiNFmsI",
-        "offset": 983259138,
-        "size": 475991331
+        "type": "arweave-byte-range",
+        "rootTxId": "Ap1CXCzGBfHofkjMKkO7krqG2r49jTvI_FYxLiNFmsI",
+        "dataOffsetInRootTx": 983259138,
+        "dataItemId": "W4WfoRevmV6k5xSv0YYHhimmOGnzpMZuVCy7T1t0OeA"
       },
       "recordCount": 3768060,
       "size": 475991331
@@ -1535,10 +1535,10 @@
     {
       "prefix": "8b",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "Ap1CXCzGBfHofkjMKkO7krqG2r49jTvI_FYxLiNFmsI",
-        "offset": 480476056,
-        "size": 475768842
+        "type": "arweave-byte-range",
+        "rootTxId": "Ap1CXCzGBfHofkjMKkO7krqG2r49jTvI_FYxLiNFmsI",
+        "dataOffsetInRootTx": 480476056,
+        "dataItemId": "9QXw3VgMQCOdxWcO3dttcIIKyWmA_c9HYlfDLlfeUJY"
       },
       "recordCount": 3766401,
       "size": 475768842
@@ -1546,10 +1546,10 @@
     {
       "prefix": "8c",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "BvQBAPUdc2nc7vDnQzex8GUKKOKFz82ArQJ6_paxVLs",
-        "offset": 478999338,
-        "size": 475808618
+        "type": "arweave-byte-range",
+        "rootTxId": "BvQBAPUdc2nc7vDnQzex8GUKKOKFz82ArQJ6_paxVLs",
+        "dataOffsetInRootTx": 478999338,
+        "dataItemId": "hF1icH-yMS0iVS6y7Nl2U9cOg9zWuybiCy3C3YoKLus"
       },
       "recordCount": 3766694,
       "size": 475808618
@@ -1557,10 +1557,10 @@
     {
       "prefix": "8d",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "BvQBAPUdc2nc7vDnQzex8GUKKOKFz82ArQJ6_paxVLs",
-        "offset": 956378493,
-        "size": 475460358
+        "type": "arweave-byte-range",
+        "rootTxId": "BvQBAPUdc2nc7vDnQzex8GUKKOKFz82ArQJ6_paxVLs",
+        "dataOffsetInRootTx": 956378493,
+        "dataItemId": "19voPyoQM2r93bl588fJmJ_ylGRTEBtMx4ubZB75UFY"
       },
       "recordCount": 3763444,
       "size": 475460358
@@ -1568,10 +1568,10 @@
     {
       "prefix": "8e",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "BvQBAPUdc2nc7vDnQzex8GUKKOKFz82ArQJ6_paxVLs",
-        "offset": 18343,
-        "size": 476021139
+        "type": "arweave-byte-range",
+        "rootTxId": "BvQBAPUdc2nc7vDnQzex8GUKKOKFz82ArQJ6_paxVLs",
+        "dataOffsetInRootTx": 18343,
+        "dataItemId": "eJ0qZr9jUmIzo7a307q_ED6Vrpl7RQJW16wab_xHueo"
       },
       "recordCount": 3767989,
       "size": 476021139
@@ -1579,10 +1579,10 @@
     {
       "prefix": "8f",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZoYFfygHkVjrbyK7oDhtYRZOHgQTd0zsZx8L-4tA1XY",
-        "offset": 479858149,
-        "size": 475854353
+        "type": "arweave-byte-range",
+        "rootTxId": "ZoYFfygHkVjrbyK7oDhtYRZOHgQTd0zsZx8L-4tA1XY",
+        "dataOffsetInRootTx": 479858149,
+        "dataItemId": "L0BLm0NHsPjrNhFkEq92qp1qG5yvQQRM69OzkATLnf0"
       },
       "recordCount": 3766836,
       "size": 475854353
@@ -1590,10 +1590,10 @@
     {
       "prefix": "90",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZoYFfygHkVjrbyK7oDhtYRZOHgQTd0zsZx8L-4tA1XY",
-        "offset": 958842828,
-        "size": 475825211
+        "type": "arweave-byte-range",
+        "rootTxId": "ZoYFfygHkVjrbyK7oDhtYRZOHgQTd0zsZx8L-4tA1XY",
+        "dataOffsetInRootTx": 958842828,
+        "dataItemId": "PgALEm9WcERna4d7oafgNLFDelA3_q5DozijUH8N0Ag"
       },
       "recordCount": 3766735,
       "size": 475825211
@@ -1601,10 +1601,10 @@
     {
       "prefix": "91",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZoYFfygHkVjrbyK7oDhtYRZOHgQTd0zsZx8L-4tA1XY",
-        "offset": 4711188,
-        "size": 475072592
+        "type": "arweave-byte-range",
+        "rootTxId": "ZoYFfygHkVjrbyK7oDhtYRZOHgQTd0zsZx8L-4tA1XY",
+        "dataOffsetInRootTx": 4711188,
+        "dataItemId": "eRWv9EapjrYUZH1C4k5GM3on_TbJ7x9aUCwIzEJNRvM"
       },
       "recordCount": 3760813,
       "size": 475072592
@@ -1612,10 +1612,10 @@
     {
       "prefix": "92",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "Nfa-M6an22pDzJV8kB5K10xlPGuKr3hbYT0eoZM0YGA",
-        "offset": 436008,
-        "size": 475399239
+        "type": "arweave-byte-range",
+        "rootTxId": "Nfa-M6an22pDzJV8kB5K10xlPGuKr3hbYT0eoZM0YGA",
+        "dataOffsetInRootTx": 436008,
+        "dataItemId": "7nz8crnkrKX58U0uGshYwCpXwDchXj4xsgtkocmOfus"
       },
       "recordCount": 3763557,
       "size": 475399239
@@ -1623,10 +1623,10 @@
     {
       "prefix": "93",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "Nfa-M6an22pDzJV8kB5K10xlPGuKr3hbYT0eoZM0YGA",
-        "offset": 951810430,
-        "size": 475944158
+        "type": "arweave-byte-range",
+        "rootTxId": "Nfa-M6an22pDzJV8kB5K10xlPGuKr3hbYT0eoZM0YGA",
+        "dataOffsetInRootTx": 951810430,
+        "dataItemId": "qRMFqcnaJ2dDpYljDLTc4RR72ET2H85GfojVGkyLd5w"
       },
       "recordCount": 3768049,
       "size": 475944158
@@ -1634,10 +1634,10 @@
     {
       "prefix": "94",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "Nfa-M6an22pDzJV8kB5K10xlPGuKr3hbYT0eoZM0YGA",
-        "offset": 475841854,
-        "size": 475519566
+        "type": "arweave-byte-range",
+        "rootTxId": "Nfa-M6an22pDzJV8kB5K10xlPGuKr3hbYT0eoZM0YGA",
+        "dataOffsetInRootTx": 475841854,
+        "dataItemId": "DCGYJx4FrhgRupi47WVe7ZQ88-WORycuC6iPxGIgAC4"
       },
       "recordCount": 3764385,
       "size": 475519566
@@ -1645,10 +1645,10 @@
     {
       "prefix": "95",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "6Asob0h9pSXf0rJ96tPbgQzIJRPBht7y67ewqCL_aSM",
-        "offset": 478164647,
-        "size": 476024611
+        "type": "arweave-byte-range",
+        "rootTxId": "6Asob0h9pSXf0rJ96tPbgQzIJRPBht7y67ewqCL_aSM",
+        "dataOffsetInRootTx": 478164647,
+        "dataItemId": "gv_UbKBvjyS--FY6Id4Xfugur_Zo_m_0zPTLuniuDeI"
       },
       "recordCount": 3768541,
       "size": 476024611
@@ -1656,10 +1656,10 @@
     {
       "prefix": "96",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "6Asob0h9pSXf0rJ96tPbgQzIJRPBht7y67ewqCL_aSM",
-        "offset": 2466953,
-        "size": 475676224
+        "type": "arweave-byte-range",
+        "rootTxId": "6Asob0h9pSXf0rJ96tPbgQzIJRPBht7y67ewqCL_aSM",
+        "dataOffsetInRootTx": 2466953,
+        "dataItemId": "26jy3PeObFKA17Sm56LgWQFZ36ETHbRVtt_f5z2WhZQ"
       },
       "recordCount": 3765499,
       "size": 475676224
@@ -1667,10 +1667,10 @@
     {
       "prefix": "97",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "6Asob0h9pSXf0rJ96tPbgQzIJRPBht7y67ewqCL_aSM",
-        "offset": 954199255,
-        "size": 475549737
+        "type": "arweave-byte-range",
+        "rootTxId": "6Asob0h9pSXf0rJ96tPbgQzIJRPBht7y67ewqCL_aSM",
+        "dataOffsetInRootTx": 954199255,
+        "dataItemId": "K5gNhguvJAR7RtdEn9r8PgsqxsonGAb2GBuPH3zbJXU"
       },
       "recordCount": 3764353,
       "size": 475549737
@@ -1678,10 +1678,10 @@
     {
       "prefix": "98",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "6Asob0h9pSXf0rJ96tPbgQzIJRPBht7y67ewqCL_aSM",
-        "offset": 1431067721,
-        "size": 475893733
+        "type": "arweave-byte-range",
+        "rootTxId": "6Asob0h9pSXf0rJ96tPbgQzIJRPBht7y67ewqCL_aSM",
+        "dataOffsetInRootTx": 1431067721,
+        "dataItemId": "ucZw2U_5r--ZOR5x8L_RYfZ41RWEB3J4qSHcAfY1g94"
       },
       "recordCount": 3767446,
       "size": 475893733
@@ -1689,10 +1689,10 @@
     {
       "prefix": "99",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ArfT4z9v14jj1rEh5nod3B-p4FtzZB3_0BFKQFiNTwo",
-        "offset": 475649425,
-        "size": 475571410
+        "type": "arweave-byte-range",
+        "rootTxId": "ArfT4z9v14jj1rEh5nod3B-p4FtzZB3_0BFKQFiNTwo",
+        "dataOffsetInRootTx": 475649425,
+        "dataItemId": "DUeTCjjDYYzWD1KUawuniG_Bs-TAo4AZWR3t73kG30Y"
       },
       "recordCount": 3765223,
       "size": 475571410
@@ -1700,10 +1700,10 @@
     {
       "prefix": "9a",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ArfT4z9v14jj1rEh5nod3B-p4FtzZB3_0BFKQFiNTwo",
-        "offset": 951327696,
-        "size": 475981594
+        "type": "arweave-byte-range",
+        "rootTxId": "ArfT4z9v14jj1rEh5nod3B-p4FtzZB3_0BFKQFiNTwo",
+        "dataOffsetInRootTx": 951327696,
+        "dataItemId": "QYzUuga00ylID0YO49LZCg4U3PwPIOjLsBWbjqtfO5g"
       },
       "recordCount": 3767937,
       "size": 475981594
@@ -1711,10 +1711,10 @@
     {
       "prefix": "9b",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ArfT4z9v14jj1rEh5nod3B-p4FtzZB3_0BFKQFiNTwo",
-        "offset": 9013,
-        "size": 475627182
+        "type": "arweave-byte-range",
+        "rootTxId": "ArfT4z9v14jj1rEh5nod3B-p4FtzZB3_0BFKQFiNTwo",
+        "dataOffsetInRootTx": 9013,
+        "dataItemId": "_3JN5g36QZd8lmFd5HAvzqttKjLSOjv2ryIrZrsEhLQ"
       },
       "recordCount": 3765026,
       "size": 475627182
@@ -1722,10 +1722,10 @@
     {
       "prefix": "9c",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "beL1gVa8_rr-0in_R_G1QjK5xqutIWiiMa196gjDqX8",
-        "offset": 1052863132,
-        "size": 475372490
+        "type": "arweave-byte-range",
+        "rootTxId": "beL1gVa8_rr-0in_R_G1QjK5xqutIWiiMa196gjDqX8",
+        "dataOffsetInRootTx": 1052863132,
+        "dataItemId": "X4xoT9qMYXjMtKEVVydwdp5QUdviwD9jEm3J-cdOckM"
       },
       "recordCount": 3763145,
       "size": 475372490
@@ -1733,10 +1733,10 @@
     {
       "prefix": "9d",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "beL1gVa8_rr-0in_R_G1QjK5xqutIWiiMa196gjDqX8",
-        "offset": 477320461,
-        "size": 476004994
+        "type": "arweave-byte-range",
+        "rootTxId": "beL1gVa8_rr-0in_R_G1QjK5xqutIWiiMa196gjDqX8",
+        "dataOffsetInRootTx": 477320461,
+        "dataItemId": "qwEP06p29cxvI6oKcz-XHsEZe4L01IN7qfQ17k88TSw"
       },
       "recordCount": 3768169,
       "size": 476004994
@@ -1744,10 +1744,10 @@
     {
       "prefix": "9e",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "beL1gVa8_rr-0in_R_G1QjK5xqutIWiiMa196gjDqX8",
-        "offset": 434778,
-        "size": 475471078
+        "type": "arweave-byte-range",
+        "rootTxId": "beL1gVa8_rr-0in_R_G1QjK5xqutIWiiMa196gjDqX8",
+        "dataOffsetInRootTx": 434778,
+        "dataItemId": "kR8YD5XhMwdy7oCArmqUV6icj4eiP9wBlu2hF7n5Mhw"
       },
       "recordCount": 3763681,
       "size": 475471078
@@ -1755,10 +1755,10 @@
     {
       "prefix": "9f",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "fMRcod8paRk2m4dxqbwAM2A3xSNO9cBXrH8kQ34xZSs",
-        "offset": 475526666,
-        "size": 475747138
+        "type": "arweave-byte-range",
+        "rootTxId": "fMRcod8paRk2m4dxqbwAM2A3xSNO9cBXrH8kQ34xZSs",
+        "dataOffsetInRootTx": 475526666,
+        "dataItemId": "gsbojtNv0rgsyD5FKGMtbLIBzXqka8-eRoKyVuS_wXs"
       },
       "recordCount": 3765724,
       "size": 475747138
@@ -1766,10 +1766,10 @@
     {
       "prefix": "a0",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "fMRcod8paRk2m4dxqbwAM2A3xSNO9cBXrH8kQ34xZSs",
-        "offset": 15000,
-        "size": 475482149
+        "type": "arweave-byte-range",
+        "rootTxId": "fMRcod8paRk2m4dxqbwAM2A3xSNO9cBXrH8kQ34xZSs",
+        "dataOffsetInRootTx": 15000,
+        "dataItemId": "5tete9KtgXSqRdX-TYhgRUEEJd7BmrSPohbbsYZgy0E"
       },
       "recordCount": 3764099,
       "size": 475482149
@@ -1777,10 +1777,10 @@
     {
       "prefix": "a1",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "fMRcod8paRk2m4dxqbwAM2A3xSNO9cBXrH8kQ34xZSs",
-        "offset": 951296284,
-        "size": 475760171
+        "type": "arweave-byte-range",
+        "rootTxId": "fMRcod8paRk2m4dxqbwAM2A3xSNO9cBXrH8kQ34xZSs",
+        "dataOffsetInRootTx": 951296284,
+        "dataItemId": "ON6xMW6VJlDiAELVJWm2TSqS0qI-_M69vmdVvogdcHk"
       },
       "recordCount": 3765935,
       "size": 475760171
@@ -1788,10 +1788,10 @@
     {
       "prefix": "a2",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "fMRcod8paRk2m4dxqbwAM2A3xSNO9cBXrH8kQ34xZSs",
-        "offset": 1435029543,
-        "size": 475650076
+        "type": "arweave-byte-range",
+        "rootTxId": "fMRcod8paRk2m4dxqbwAM2A3xSNO9cBXrH8kQ34xZSs",
+        "dataOffsetInRootTx": 1435029543,
+        "dataItemId": "xp9qXbB-JvA9G_FZWmb9vAVJp5VPLTsXAY7f3ZQtNq4"
       },
       "recordCount": 3765315,
       "size": 475650076
@@ -1799,10 +1799,10 @@
     {
       "prefix": "a3",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "q7GmNSaLgieB_mHq_vjA0PO5amnGCquxSw7-ff9Bl0E",
-        "offset": 1427463790,
-        "size": 475519470
+        "type": "arweave-byte-range",
+        "rootTxId": "q7GmNSaLgieB_mHq_vjA0PO5amnGCquxSw7-ff9Bl0E",
+        "dataOffsetInRootTx": 1427463790,
+        "dataItemId": "wKoY5oNjtM2pmrxKBYWz2mA1hhqREtdIEmcWjDG4EGI"
       },
       "recordCount": 3764275,
       "size": 475519470
@@ -1810,10 +1810,10 @@
     {
       "prefix": "a4",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "q7GmNSaLgieB_mHq_vjA0PO5amnGCquxSw7-ff9Bl0E",
-        "offset": 15633,
-        "size": 476118843
+        "type": "arweave-byte-range",
+        "rootTxId": "q7GmNSaLgieB_mHq_vjA0PO5amnGCquxSw7-ff9Bl0E",
+        "dataOffsetInRootTx": 15633,
+        "dataItemId": "5x9xJQHbHjx418gq_d_IyOBiRPJ1kJJ8ddG9vTIvHSA"
       },
       "recordCount": 3768959,
       "size": 476118843
@@ -1821,10 +1821,10 @@
     {
       "prefix": "a5",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "q7GmNSaLgieB_mHq_vjA0PO5amnGCquxSw7-ff9Bl0E",
-        "offset": 951746557,
-        "size": 475716020
+        "type": "arweave-byte-range",
+        "rootTxId": "q7GmNSaLgieB_mHq_vjA0PO5amnGCquxSw7-ff9Bl0E",
+        "dataOffsetInRootTx": 951746557,
+        "dataItemId": "W3JEnrhBlJwbdEFWFIwdn6xW7X4zajTyYW2boTRWLhQ"
       },
       "recordCount": 3765957,
       "size": 475716020
@@ -1832,10 +1832,10 @@
     {
       "prefix": "a6",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "q7GmNSaLgieB_mHq_vjA0PO5amnGCquxSw7-ff9Bl0E",
-        "offset": 476180835,
-        "size": 475564509
+        "type": "arweave-byte-range",
+        "rootTxId": "q7GmNSaLgieB_mHq_vjA0PO5amnGCquxSw7-ff9Bl0E",
+        "dataOffsetInRootTx": 476180835,
+        "dataItemId": "t7ZplMaMnHWP1TDWrusOBO3yodv1lO2hwkz0hYVY9mE"
       },
       "recordCount": 3764534,
       "size": 475564509
@@ -1843,10 +1843,10 @@
     {
       "prefix": "a7",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "eh4Y25JCfKjJYVmIXu-fgOzBripy8sKFvty4oBXR2mM",
-        "offset": 592194,
-        "size": 475329673
+        "type": "arweave-byte-range",
+        "rootTxId": "eh4Y25JCfKjJYVmIXu-fgOzBripy8sKFvty4oBXR2mM",
+        "dataOffsetInRootTx": 592194,
+        "dataItemId": "Nze83k1_ZTjLYf14J3zfjNvD6ToYEXbhe5XpSRTO-nc"
       },
       "recordCount": 3762931,
       "size": 475329673
@@ -1854,10 +1854,10 @@
     {
       "prefix": "a8",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "eh4Y25JCfKjJYVmIXu-fgOzBripy8sKFvty4oBXR2mM",
-        "offset": 475923080,
-        "size": 476201930
+        "type": "arweave-byte-range",
+        "rootTxId": "eh4Y25JCfKjJYVmIXu-fgOzBripy8sKFvty4oBXR2mM",
+        "dataOffsetInRootTx": 475923080,
+        "dataItemId": "p23IGt_vqTvqO4HDq342bWhal4YL-r2OumEKFI8xIE4"
       },
       "recordCount": 3769510,
       "size": 476201930
@@ -1865,10 +1865,10 @@
     {
       "prefix": "a9",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "eh4Y25JCfKjJYVmIXu-fgOzBripy8sKFvty4oBXR2mM",
-        "offset": 952126223,
-        "size": 475570884
+        "type": "arweave-byte-range",
+        "rootTxId": "eh4Y25JCfKjJYVmIXu-fgOzBripy8sKFvty4oBXR2mM",
+        "dataOffsetInRootTx": 952126223,
+        "dataItemId": "pkAi2anNcQ81B-OfbDy9ij4GXXN_PANQj_JH7eDol0E"
       },
       "recordCount": 3764625,
       "size": 475570884
@@ -1876,10 +1876,10 @@
     {
       "prefix": "aa",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "eh4Y25JCfKjJYVmIXu-fgOzBripy8sKFvty4oBXR2mM",
-        "offset": 1427698320,
-        "size": 475626375
+        "type": "arweave-byte-range",
+        "rootTxId": "eh4Y25JCfKjJYVmIXu-fgOzBripy8sKFvty4oBXR2mM",
+        "dataOffsetInRootTx": 1427698320,
+        "dataItemId": "RykFBeEr0h18ZW_Op9fbTKd9D4UpwFrfX8xb172z_4o"
       },
       "recordCount": 3765475,
       "size": 475626375
@@ -1887,10 +1887,10 @@
     {
       "prefix": "ab",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "EkTKQswdNoUY-dRYdJQHdinYOGzByLTaeextcxANnOQ",
-        "offset": 645995574,
-        "size": 475904074
+        "type": "arweave-byte-range",
+        "rootTxId": "EkTKQswdNoUY-dRYdJQHdinYOGzByLTaeextcxANnOQ",
+        "dataOffsetInRootTx": 645995574,
+        "dataItemId": "lLQmuGsQdJWleg228cEc7GNijD_TXQLVRqfaVVdrLlY"
       },
       "recordCount": 3767010,
       "size": 475904074
@@ -1898,10 +1898,10 @@
     {
       "prefix": "ac",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "EkTKQswdNoUY-dRYdJQHdinYOGzByLTaeextcxANnOQ",
-        "offset": 173886,
-        "size": 476109753
+        "type": "arweave-byte-range",
+        "rootTxId": "EkTKQswdNoUY-dRYdJQHdinYOGzByLTaeextcxANnOQ",
+        "dataOffsetInRootTx": 173886,
+        "dataItemId": "3WqZmtxZ4qAieulqs7uzXjVUe1Ts3NiJnHgHFVkVr34"
       },
       "recordCount": 3768884,
       "size": 476109753
@@ -1909,10 +1909,10 @@
     {
       "prefix": "ad",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "EkTKQswdNoUY-dRYdJQHdinYOGzByLTaeextcxANnOQ",
-        "offset": 1122086322,
-        "size": 476024666
+        "type": "arweave-byte-range",
+        "rootTxId": "EkTKQswdNoUY-dRYdJQHdinYOGzByLTaeextcxANnOQ",
+        "dataOffsetInRootTx": 1122086322,
+        "dataItemId": "TsISais7D2gnxUkoAg60Gd9tKg624SFiOV49t_ZeFnw"
       },
       "recordCount": 3767825,
       "size": 476024666
@@ -1920,10 +1920,10 @@
     {
       "prefix": "ae",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "VJOskOAA34uIVteq9geTjXqLGF80d86QpDWVu2SCI-k",
-        "offset": 104770,
-        "size": 475713003
+        "type": "arweave-byte-range",
+        "rootTxId": "VJOskOAA34uIVteq9geTjXqLGF80d86QpDWVu2SCI-k",
+        "dataOffsetInRootTx": 104770,
+        "dataItemId": "8-1VUL2Zz-z8m1DRngWst_T-jnMv4SFdF5Zrb6zvOPY"
       },
       "recordCount": 3765869,
       "size": 475713003
@@ -1931,10 +1931,10 @@
     {
       "prefix": "af",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "VJOskOAA34uIVteq9geTjXqLGF80d86QpDWVu2SCI-k",
-        "offset": 475820740,
-        "size": 475977806
+        "type": "arweave-byte-range",
+        "rootTxId": "VJOskOAA34uIVteq9geTjXqLGF80d86QpDWVu2SCI-k",
+        "dataOffsetInRootTx": 475820740,
+        "dataItemId": "eHu_Q6hpD85IKXCgpGJCZC5bvIkllEfPXQLvaYMsSR8"
       },
       "recordCount": 3767948,
       "size": 475977806
@@ -1942,10 +1942,10 @@
     {
       "prefix": "b0",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "VJOskOAA34uIVteq9geTjXqLGF80d86QpDWVu2SCI-k",
-        "offset": 951825742,
-        "size": 476222912
+        "type": "arweave-byte-range",
+        "rootTxId": "VJOskOAA34uIVteq9geTjXqLGF80d86QpDWVu2SCI-k",
+        "dataOffsetInRootTx": 951825742,
+        "dataItemId": "mZQHKSR8xU5siewgJswkPauddKBoO3mnH6mLch0FUY4"
       },
       "recordCount": 3769803,
       "size": 476222912
@@ -1953,10 +1953,10 @@
     {
       "prefix": "b1",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "zN5BuxeCOR6hcxZcV5dkSfUwXvZxLKWlt1k0qBIgXbk",
-        "offset": 475544252,
-        "size": 475753630
+        "type": "arweave-byte-range",
+        "rootTxId": "zN5BuxeCOR6hcxZcV5dkSfUwXvZxLKWlt1k0qBIgXbk",
+        "dataOffsetInRootTx": 475544252,
+        "dataItemId": "yUjsTFm3xxygJXg3qw9IyX-yjAMcSENbg5wlEkdspCw"
       },
       "recordCount": 3766542,
       "size": 475753630
@@ -1964,10 +1964,10 @@
     {
       "prefix": "b2",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "zN5BuxeCOR6hcxZcV5dkSfUwXvZxLKWlt1k0qBIgXbk",
-        "offset": 951300180,
-        "size": 475434882
+        "type": "arweave-byte-range",
+        "rootTxId": "zN5BuxeCOR6hcxZcV5dkSfUwXvZxLKWlt1k0qBIgXbk",
+        "dataOffsetInRootTx": 951300180,
+        "dataItemId": "B7QVNI3mYT0HiYUISM3eq6BYKGa4McIZFC5zyedVus4"
       },
       "recordCount": 3763211,
       "size": 475434882
@@ -1975,10 +1975,10 @@
     {
       "prefix": "b3",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "zN5BuxeCOR6hcxZcV5dkSfUwXvZxLKWlt1k0qBIgXbk",
-        "offset": 1426757307,
-        "size": 475628508
+        "type": "arweave-byte-range",
+        "rootTxId": "zN5BuxeCOR6hcxZcV5dkSfUwXvZxLKWlt1k0qBIgXbk",
+        "dataOffsetInRootTx": 1426757307,
+        "dataItemId": "RCTdIVmcBYV0NaGmSHHFeDC5BUqH_Iv7si3KKlZV_CQ"
       },
       "recordCount": 3765055,
       "size": 475628508
@@ -1986,10 +1986,10 @@
     {
       "prefix": "b4",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "zN5BuxeCOR6hcxZcV5dkSfUwXvZxLKWlt1k0qBIgXbk",
-        "offset": 9405,
-        "size": 475522025
+        "type": "arweave-byte-range",
+        "rootTxId": "zN5BuxeCOR6hcxZcV5dkSfUwXvZxLKWlt1k0qBIgXbk",
+        "dataOffsetInRootTx": 9405,
+        "dataItemId": "zkIYPoZnQTFaDGamqUDwkQMRu1kBWdwDOa8nI5PsQK8"
       },
       "recordCount": 3764237,
       "size": 475522025
@@ -1997,10 +1997,10 @@
     {
       "prefix": "b5",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "TbcNs5NOLVteA3wGA5C5mBa__O5foPMIs5CXHO6SZo8",
-        "offset": 476322586,
-        "size": 476208432
+        "type": "arweave-byte-range",
+        "rootTxId": "TbcNs5NOLVteA3wGA5C5mBa__O5foPMIs5CXHO6SZo8",
+        "dataOffsetInRootTx": 476322586,
+        "dataItemId": "Ioua-aFMquDsJZVJZ_0sonj9ug1Y0Jfi6kbeodkWI8g"
       },
       "recordCount": 3769448,
       "size": 476208432
@@ -2008,10 +2008,10 @@
     {
       "prefix": "b6",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "TbcNs5NOLVteA3wGA5C5mBa__O5foPMIs5CXHO6SZo8",
-        "offset": 1428110876,
-        "size": 475685580
+        "type": "arweave-byte-range",
+        "rootTxId": "TbcNs5NOLVteA3wGA5C5mBa__O5foPMIs5CXHO6SZo8",
+        "dataOffsetInRootTx": 1428110876,
+        "dataItemId": "Yao3KIFEmuRBASqpAuthGxlreBxD9wpNBGSPcNhUL38"
       },
       "recordCount": 3765710,
       "size": 475685580
@@ -2019,10 +2019,10 @@
     {
       "prefix": "b7",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "TbcNs5NOLVteA3wGA5C5mBa__O5foPMIs5CXHO6SZo8",
-        "offset": 8491,
-        "size": 476304889
+        "type": "arweave-byte-range",
+        "rootTxId": "TbcNs5NOLVteA3wGA5C5mBa__O5foPMIs5CXHO6SZo8",
+        "dataOffsetInRootTx": 8491,
+        "dataItemId": "4UfBsrLrXEC0Rpdq-rfOxj5Rvbm5CvfZnMEcmvHunWk"
       },
       "recordCount": 3770702,
       "size": 476304889
@@ -2030,10 +2030,10 @@
     {
       "prefix": "b8",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "TbcNs5NOLVteA3wGA5C5mBa__O5foPMIs5CXHO6SZo8",
-        "offset": 952723786,
-        "size": 475336784
+        "type": "arweave-byte-range",
+        "rootTxId": "TbcNs5NOLVteA3wGA5C5mBa__O5foPMIs5CXHO6SZo8",
+        "dataOffsetInRootTx": 952723786,
+        "dataItemId": "T2HJrnjXLW4Cq0sndZXPI4L0uMcNglG0hHsQp0cx0dk"
       },
       "recordCount": 3762949,
       "size": 475336784
@@ -2041,10 +2041,10 @@
     {
       "prefix": "b9",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "nKOOcCKjbXpeX6Ol-8z8BXVFzem0CTazwHrDIsSvbEU",
-        "offset": 482801379,
-        "size": 476146055
+        "type": "arweave-byte-range",
+        "rootTxId": "nKOOcCKjbXpeX6Ol-8z8BXVFzem0CTazwHrDIsSvbEU",
+        "dataOffsetInRootTx": 482801379,
+        "dataItemId": "_rVTGy3siTMJIcxBU9EqY-yrJlgyd7r7bVPMViotRc0"
       },
       "recordCount": 3768517,
       "size": 476146055
@@ -2052,10 +2052,10 @@
     {
       "prefix": "ba",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "nKOOcCKjbXpeX6Ol-8z8BXVFzem0CTazwHrDIsSvbEU",
-        "offset": 959542722,
-        "size": 475558507
+        "type": "arweave-byte-range",
+        "rootTxId": "nKOOcCKjbXpeX6Ol-8z8BXVFzem0CTazwHrDIsSvbEU",
+        "dataOffsetInRootTx": 959542722,
+        "dataItemId": "ZntFmS_66iO-Duq5IIfzlV6wXsw2INeWfo7dzOSoPPU"
       },
       "recordCount": 3764594,
       "size": 475558507
@@ -2063,10 +2063,10 @@
     {
       "prefix": "bb",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "nKOOcCKjbXpeX6Ol-8z8BXVFzem0CTazwHrDIsSvbEU",
-        "offset": 6969887,
-        "size": 475690126
+        "type": "arweave-byte-range",
+        "rootTxId": "nKOOcCKjbXpeX6Ol-8z8BXVFzem0CTazwHrDIsSvbEU",
+        "dataOffsetInRootTx": 6969887,
+        "dataItemId": "3Ahnilzr_GJnmlVlEu9lxxPBe5alv4tyxdyA96hY3PY"
       },
       "recordCount": 3765768,
       "size": 475690126
@@ -2074,10 +2074,10 @@
     {
       "prefix": "bc",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "E9rY39rRfreFTNJzTdV0JE9SYyyWpWN-C8XB2013BcY",
-        "offset": 2333,
-        "size": 475686601
+        "type": "arweave-byte-range",
+        "rootTxId": "E9rY39rRfreFTNJzTdV0JE9SYyyWpWN-C8XB2013BcY",
+        "dataOffsetInRootTx": 2333,
+        "dataItemId": "0jKUBR83jOlbotU7DWQdMuEDGELR_V10vs2Bgu3woQQ"
       },
       "recordCount": 3765935,
       "size": 475686601
@@ -2085,10 +2085,10 @@
     {
       "prefix": "bd",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "E9rY39rRfreFTNJzTdV0JE9SYyyWpWN-C8XB2013BcY",
-        "offset": 1026734625,
-        "size": 475703608
+        "type": "arweave-byte-range",
+        "rootTxId": "E9rY39rRfreFTNJzTdV0JE9SYyyWpWN-C8XB2013BcY",
+        "dataOffsetInRootTx": 1026734625,
+        "dataItemId": "UDzpsi9_SGtlZjn3VTgQI6_zviUggh4WesPcYfK-56I"
       },
       "recordCount": 3766034,
       "size": 475703608
@@ -2096,10 +2096,10 @@
     {
       "prefix": "be",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "E9rY39rRfreFTNJzTdV0JE9SYyyWpWN-C8XB2013BcY",
-        "offset": 550921916,
-        "size": 475807720
+        "type": "arweave-byte-range",
+        "rootTxId": "E9rY39rRfreFTNJzTdV0JE9SYyyWpWN-C8XB2013BcY",
+        "dataOffsetInRootTx": 550921916,
+        "dataItemId": "QFHtld63AECfPOwCIEBPGLgpPx08oPWQScA3WEqqtDw"
       },
       "recordCount": 3766167,
       "size": 475807720
@@ -2107,10 +2107,10 @@
     {
       "prefix": "bf",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "MDe9284SFYW0vPiTTZvNQwteKivcyiDjV2JiZvHtD9A",
-        "offset": 1427869736,
-        "size": 476077506
+        "type": "arweave-byte-range",
+        "rootTxId": "MDe9284SFYW0vPiTTZvNQwteKivcyiDjV2JiZvHtD9A",
+        "dataOffsetInRootTx": 1427869736,
+        "dataItemId": "XSHdBqdFgH0NXkofamGmu4vSZoxMz1N4A9Wgoo9GE_k"
       },
       "recordCount": 3768425,
       "size": 476077506
@@ -2118,10 +2118,10 @@
     {
       "prefix": "c0",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "MDe9284SFYW0vPiTTZvNQwteKivcyiDjV2JiZvHtD9A",
-        "offset": 14253,
-        "size": 475875202
+        "type": "arweave-byte-range",
+        "rootTxId": "MDe9284SFYW0vPiTTZvNQwteKivcyiDjV2JiZvHtD9A",
+        "dataOffsetInRootTx": 14253,
+        "dataItemId": "e0r7PhkQKdd6-HfHlT-DYT_B108IxbfY3dPHuc2PArI"
       },
       "recordCount": 3766488,
       "size": 475875202
@@ -2129,10 +2129,10 @@
     {
       "prefix": "c1",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "MDe9284SFYW0vPiTTZvNQwteKivcyiDjV2JiZvHtD9A",
-        "offset": 952038809,
-        "size": 475682666
+        "type": "arweave-byte-range",
+        "rootTxId": "MDe9284SFYW0vPiTTZvNQwteKivcyiDjV2JiZvHtD9A",
+        "dataOffsetInRootTx": 952038809,
+        "dataItemId": "ITJeeogdOMNxTmMCpXY39MREeJNht6FY7q9LTCGnYRg"
       },
       "recordCount": 3765581,
       "size": 475682666
@@ -2140,10 +2140,10 @@
     {
       "prefix": "c2",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "MDe9284SFYW0vPiTTZvNQwteKivcyiDjV2JiZvHtD9A",
-        "offset": 475893868,
-        "size": 476140096
+        "type": "arweave-byte-range",
+        "rootTxId": "MDe9284SFYW0vPiTTZvNQwteKivcyiDjV2JiZvHtD9A",
+        "dataOffsetInRootTx": 475893868,
+        "dataItemId": "hGntoq9Jh-VrDt8Fc-dfcJQH9xu7skZ6k_BnFy-DXH4"
       },
       "recordCount": 3769260,
       "size": 476140096
@@ -2151,10 +2151,10 @@
     {
       "prefix": "c3",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "CLj2scphIzYhxQ2zg9o1TZdDihn-8s3Q_MCNjvn9OSM",
-        "offset": 1074596873,
-        "size": 476006616
+        "type": "arweave-byte-range",
+        "rootTxId": "CLj2scphIzYhxQ2zg9o1TZdDihn-8s3Q_MCNjvn9OSM",
+        "dataOffsetInRootTx": 1074596873,
+        "dataItemId": "huoZ5QgPcg-mR_0bWtUhfp4ixhJ9_U2JaxGMWGsIUEU"
       },
       "recordCount": 3768173,
       "size": 476006616
@@ -2162,10 +2162,10 @@
     {
       "prefix": "c4",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "CLj2scphIzYhxQ2zg9o1TZdDihn-8s3Q_MCNjvn9OSM",
-        "offset": 6221,
-        "size": 475816862
+        "type": "arweave-byte-range",
+        "rootTxId": "CLj2scphIzYhxQ2zg9o1TZdDihn-8s3Q_MCNjvn9OSM",
+        "dataOffsetInRootTx": 6221,
+        "dataItemId": "3qXldOD6ce-VA48KlgDbIivGFwjVMZXtYmynytUw0cE"
       },
       "recordCount": 3766191,
       "size": 475816862
@@ -2173,10 +2173,10 @@
     {
       "prefix": "c5",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "CLj2scphIzYhxQ2zg9o1TZdDihn-8s3Q_MCNjvn9OSM",
-        "offset": 1550604702,
-        "size": 475679869
+        "type": "arweave-byte-range",
+        "rootTxId": "CLj2scphIzYhxQ2zg9o1TZdDihn-8s3Q_MCNjvn9OSM",
+        "dataOffsetInRootTx": 1550604702,
+        "dataItemId": "NLWHzVsyceLDoYrY1LMkETXG1Vk7OiFF54O1DZAISss"
       },
       "recordCount": 3765727,
       "size": 475679869
@@ -2184,10 +2184,10 @@
     {
       "prefix": "c6",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "CLj2scphIzYhxQ2zg9o1TZdDihn-8s3Q_MCNjvn9OSM",
-        "offset": 598417227,
-        "size": 476174929
+        "type": "arweave-byte-range",
+        "rootTxId": "CLj2scphIzYhxQ2zg9o1TZdDihn-8s3Q_MCNjvn9OSM",
+        "dataOffsetInRootTx": 598417227,
+        "dataItemId": "_Fm7fjJyMuDPLMycT4ecvGsAg0PUwLxaD9J0w8Wxygg"
       },
       "recordCount": 3769144,
       "size": 476174929
@@ -2195,10 +2195,10 @@
     {
       "prefix": "c7",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "HQdYpyA3ZmnV6xblciTEsa7cxg3Zl-ZrnJGxWv6fjw8",
-        "offset": 588227,
-        "size": 475850194
+        "type": "arweave-byte-range",
+        "rootTxId": "HQdYpyA3ZmnV6xblciTEsa7cxg3Zl-ZrnJGxWv6fjw8",
+        "dataOffsetInRootTx": 588227,
+        "dataItemId": "1YZh-f4G6NcRA-ANp2Dwx5QSM0guH6j5sKeRtg6hOHI"
       },
       "recordCount": 3766854,
       "size": 475850194
@@ -2206,10 +2206,10 @@
     {
       "prefix": "c8",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "HQdYpyA3ZmnV6xblciTEsa7cxg3Zl-ZrnJGxWv6fjw8",
-        "offset": 477352876,
-        "size": 475860859
+        "type": "arweave-byte-range",
+        "rootTxId": "HQdYpyA3ZmnV6xblciTEsa7cxg3Zl-ZrnJGxWv6fjw8",
+        "dataOffsetInRootTx": 477352876,
+        "dataItemId": "LHgWHgxZUUBxjiGUsigtsGQJrQI2-gDG9a-B-ExxnT8"
       },
       "recordCount": 3766935,
       "size": 475860859
@@ -2217,10 +2217,10 @@
     {
       "prefix": "c9",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "HQdYpyA3ZmnV6xblciTEsa7cxg3Zl-ZrnJGxWv6fjw8",
-        "offset": 956539270,
-        "size": 476012674
+        "type": "arweave-byte-range",
+        "rootTxId": "HQdYpyA3ZmnV6xblciTEsa7cxg3Zl-ZrnJGxWv6fjw8",
+        "dataOffsetInRootTx": 956539270,
+        "dataItemId": "WMjiPyEXZMx2slFtGVO4MrA1WayU-8Y3vDvKFJU8yEA"
       },
       "recordCount": 3768004,
       "size": 476012674
@@ -2228,10 +2228,10 @@
     {
       "prefix": "ca",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "cQCS_gqMuQnjrNP0w2Hj_XCgX3GkIpZDN4MPAGa7d6Q",
-        "offset": 30005685,
-        "size": 475164938
+        "type": "arweave-byte-range",
+        "rootTxId": "cQCS_gqMuQnjrNP0w2Hj_XCgX3GkIpZDN4MPAGa7d6Q",
+        "dataOffsetInRootTx": 30005685,
+        "dataItemId": "t6dUt_9awIorjvt2K_gsdN-76aSgAaypS-DT_u4QMqI"
       },
       "recordCount": 3761144,
       "size": 475164938
@@ -2239,10 +2239,10 @@
     {
       "prefix": "cb",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "cQCS_gqMuQnjrNP0w2Hj_XCgX3GkIpZDN4MPAGa7d6Q",
-        "offset": 981014236,
-        "size": 475677311
+        "type": "arweave-byte-range",
+        "rootTxId": "cQCS_gqMuQnjrNP0w2Hj_XCgX3GkIpZDN4MPAGa7d6Q",
+        "dataOffsetInRootTx": 981014236,
+        "dataItemId": "XxozYv6fMWkYTKjo3X7atIctDlEMbkdtuwJSMppuCuM"
       },
       "recordCount": 3765820,
       "size": 475677311
@@ -2250,10 +2250,10 @@
     {
       "prefix": "cc",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "cQCS_gqMuQnjrNP0w2Hj_XCgX3GkIpZDN4MPAGa7d6Q",
-        "offset": 505177342,
-        "size": 475730761
+        "type": "arweave-byte-range",
+        "rootTxId": "cQCS_gqMuQnjrNP0w2Hj_XCgX3GkIpZDN4MPAGa7d6Q",
+        "dataOffsetInRootTx": 505177342,
+        "dataItemId": "vuihS0gjiwUqAqKNyXPfToCB0iLMMwMwb-wLXE8gfPw"
       },
       "recordCount": 3765736,
       "size": 475730761
@@ -2261,10 +2261,10 @@
     {
       "prefix": "cd",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "P-ZLwWkWJ3n-07b8LNyz8hSSRyrsYtG_QKzZqnUZTpw",
-        "offset": 478259880,
-        "size": 475779045
+        "type": "arweave-byte-range",
+        "rootTxId": "P-ZLwWkWJ3n-07b8LNyz8hSSRyrsYtG_QKzZqnUZTpw",
+        "dataOffsetInRootTx": 478259880,
+        "dataItemId": "N00Os9snR6TXkDtMM_Pg76N1A8unglko9ANcs2ij_u8"
       },
       "recordCount": 3766041,
       "size": 475779045
@@ -2272,10 +2272,10 @@
     {
       "prefix": "ce",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "P-ZLwWkWJ3n-07b8LNyz8hSSRyrsYtG_QKzZqnUZTpw",
-        "offset": 8085,
-        "size": 475791141
+        "type": "arweave-byte-range",
+        "rootTxId": "P-ZLwWkWJ3n-07b8LNyz8hSSRyrsYtG_QKzZqnUZTpw",
+        "dataOffsetInRootTx": 8085,
+        "dataItemId": "41f0GefgCHlxXV4CMw_fCeakPwhh2ybJexQ8NVN6jZ0"
       },
       "recordCount": 3765885,
       "size": 475791141
@@ -2283,10 +2283,10 @@
     {
       "prefix": "cf",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "P-ZLwWkWJ3n-07b8LNyz8hSSRyrsYtG_QKzZqnUZTpw",
-        "offset": 956025998,
-        "size": 476036817
+        "type": "arweave-byte-range",
+        "rootTxId": "P-ZLwWkWJ3n-07b8LNyz8hSSRyrsYtG_QKzZqnUZTpw",
+        "dataOffsetInRootTx": 956025998,
+        "dataItemId": "ZAj29iC9ufpUbJT7xK7MTEov4wufyYCwsNDSwWUOpmo"
       },
       "recordCount": 3768683,
       "size": 476036817
@@ -2294,10 +2294,10 @@
     {
       "prefix": "d0",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "c743K7MuKevgFS_Oz4DcO3eHPRiIZlWY8asaS2PLLbQ",
-        "offset": 951823330,
-        "size": 475348393
+        "type": "arweave-byte-range",
+        "rootTxId": "c743K7MuKevgFS_Oz4DcO3eHPRiIZlWY8asaS2PLLbQ",
+        "dataOffsetInRootTx": 951823330,
+        "dataItemId": "zivgPWBv9flYbIhipLIfOCgxB4pk7p5Kpaa7moaGtWg"
       },
       "recordCount": 3762849,
       "size": 475348393
@@ -2305,10 +2305,10 @@
     {
       "prefix": "d1",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "c743K7MuKevgFS_Oz4DcO3eHPRiIZlWY8asaS2PLLbQ",
-        "offset": 476122431,
-        "size": 475681240
+        "type": "arweave-byte-range",
+        "rootTxId": "c743K7MuKevgFS_Oz4DcO3eHPRiIZlWY8asaS2PLLbQ",
+        "dataOffsetInRootTx": 476122431,
+        "dataItemId": "p7fKWAvgiJ5XbF5SeBYGsb6em7FgmdYChF-qVjiLKq4"
       },
       "recordCount": 3765500,
       "size": 475681240
@@ -2316,10 +2316,10 @@
     {
       "prefix": "d2",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "c743K7MuKevgFS_Oz4DcO3eHPRiIZlWY8asaS2PLLbQ",
-        "offset": 12771,
-        "size": 475954988
+        "type": "arweave-byte-range",
+        "rootTxId": "c743K7MuKevgFS_Oz4DcO3eHPRiIZlWY8asaS2PLLbQ",
+        "dataOffsetInRootTx": 12771,
+        "dataItemId": "8rVFnMyjzRDwOZ_iyzSX2XoZLbrMf9T424gRKGkkd7o"
       },
       "recordCount": 3767181,
       "size": 475954988
@@ -2327,10 +2327,10 @@
     {
       "prefix": "d3",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "1iv3UbbxB5z5kR1ux8sJUhm6fj23OzYr0Aet1zT4VDE",
-        "offset": 2589,
-        "size": 475516822
+        "type": "arweave-byte-range",
+        "rootTxId": "1iv3UbbxB5z5kR1ux8sJUhm6fj23OzYr0Aet1zT4VDE",
+        "dataOffsetInRootTx": 2589,
+        "dataItemId": "2HWN5oi6LaGXiDe-vtft5p3tYshcBEyzHIbemnljvmQ"
       },
       "recordCount": 3764066,
       "size": 475516822
@@ -2338,10 +2338,10 @@
     {
       "prefix": "d4",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "1iv3UbbxB5z5kR1ux8sJUhm6fj23OzYr0Aet1zT4VDE",
-        "offset": 951559818,
-        "size": 476068642
+        "type": "arweave-byte-range",
+        "rootTxId": "1iv3UbbxB5z5kR1ux8sJUhm6fj23OzYr0Aet1zT4VDE",
+        "dataOffsetInRootTx": 951559818,
+        "dataItemId": "PR_zQSWHAGE5qV1_dDqYZUKRz-_1ncqFQz80nlqbvdg"
       },
       "recordCount": 3768646,
       "size": 476068642
@@ -2349,10 +2349,10 @@
     {
       "prefix": "d5",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "1iv3UbbxB5z5kR1ux8sJUhm6fj23OzYr0Aet1zT4VDE",
-        "offset": 475520624,
-        "size": 475876881
+        "type": "arweave-byte-range",
+        "rootTxId": "1iv3UbbxB5z5kR1ux8sJUhm6fj23OzYr0Aet1zT4VDE",
+        "dataOffsetInRootTx": 475520624,
+        "dataItemId": "2T3qzmfh22Mi6y_DfHGbxONuwJK2L1UMtyFq5lhtyrw"
       },
       "recordCount": 3766701,
       "size": 475876881
@@ -2360,10 +2360,10 @@
     {
       "prefix": "d6",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dv3x9axAMd8vXmCbvU53r1HCkKIXal_5yEeB05rWomQ",
-        "offset": 212367,
-        "size": 475681965
+        "type": "arweave-byte-range",
+        "rootTxId": "dv3x9axAMd8vXmCbvU53r1HCkKIXal_5yEeB05rWomQ",
+        "dataOffsetInRootTx": 212367,
+        "dataItemId": "YHl8A0e4GzNuku2Rlh8sAsKL4TAUysBq-cISZRfyNjE"
       },
       "recordCount": 3765785,
       "size": 475681965
@@ -2371,10 +2371,10 @@
     {
       "prefix": "d7",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dv3x9axAMd8vXmCbvU53r1HCkKIXal_5yEeB05rWomQ",
-        "offset": 475896630,
-        "size": 475740300
+        "type": "arweave-byte-range",
+        "rootTxId": "dv3x9axAMd8vXmCbvU53r1HCkKIXal_5yEeB05rWomQ",
+        "dataOffsetInRootTx": 475896630,
+        "dataItemId": "qfTielVV_7hjE98dTiiPAfoRDgZZ_uwMB4okk2BaPJg"
       },
       "recordCount": 3766102,
       "size": 475740300
@@ -2382,10 +2382,10 @@
     {
       "prefix": "d8",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "UyX2FyNV7AktbB4SoKn_Cov684fnxifWUE3bSea0KaE",
-        "offset": 476182622,
-        "size": 475563279
+        "type": "arweave-byte-range",
+        "rootTxId": "UyX2FyNV7AktbB4SoKn_Cov684fnxifWUE3bSea0KaE",
+        "dataOffsetInRootTx": 476182622,
+        "dataItemId": "khkyZJIHTmn--NXSUKwliW09qvn01GUC3YDE0JqxNIo"
       },
       "recordCount": 3764764,
       "size": 475563279
@@ -2393,10 +2393,10 @@
     {
       "prefix": "d9",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "UyX2FyNV7AktbB4SoKn_Cov684fnxifWUE3bSea0KaE",
-        "offset": 951815743,
-        "size": 475841312
+        "type": "arweave-byte-range",
+        "rootTxId": "UyX2FyNV7AktbB4SoKn_Cov684fnxifWUE3bSea0KaE",
+        "dataOffsetInRootTx": 951815743,
+        "dataItemId": "hpPtSkCVdsgGlIAY6vp5k24BhJU-cL1PkjS8-pY8z1A"
       },
       "recordCount": 3766426,
       "size": 475841312
@@ -2404,10 +2404,10 @@
     {
       "prefix": "da",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "UyX2FyNV7AktbB4SoKn_Cov684fnxifWUE3bSea0KaE",
-        "offset": 9038,
-        "size": 476169564
+        "type": "arweave-byte-range",
+        "rootTxId": "UyX2FyNV7AktbB4SoKn_Cov684fnxifWUE3bSea0KaE",
+        "dataOffsetInRootTx": 9038,
+        "dataItemId": "MgAH-u6iilyXBjePwwNanxm3lam4SqmA4deUa4MrVII"
       },
       "recordCount": 3769400,
       "size": 476169564
@@ -2415,10 +2415,10 @@
     {
       "prefix": "db",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dvt1qF2p2VwVL5ISu5KYaZHE_Cr-3zgaGdLO4V5qD74",
-        "offset": 476086339,
-        "size": 475622607
+        "type": "arweave-byte-range",
+        "rootTxId": "dvt1qF2p2VwVL5ISu5KYaZHE_Cr-3zgaGdLO4V5qD74",
+        "dataOffsetInRootTx": 476086339,
+        "dataItemId": "j_zfM_3U7tJ8_DaNKu4FOLymkqqSGGF14I9hsge03nQ"
       },
       "recordCount": 3764811,
       "size": 475622607
@@ -2426,10 +2426,10 @@
     {
       "prefix": "dc",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dvt1qF2p2VwVL5ISu5KYaZHE_Cr-3zgaGdLO4V5qD74",
-        "offset": 951726738,
-        "size": 475773790
+        "type": "arweave-byte-range",
+        "rootTxId": "dvt1qF2p2VwVL5ISu5KYaZHE_Cr-3zgaGdLO4V5qD74",
+        "dataOffsetInRootTx": 951726738,
+        "dataItemId": "qS_eln6bnCWta3NCZ27JUDGZ-9c-GyVR6Dn7PdOADHE"
       },
       "recordCount": 3766163,
       "size": 475773790
@@ -2437,10 +2437,10 @@
     {
       "prefix": "dd",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dvt1qF2p2VwVL5ISu5KYaZHE_Cr-3zgaGdLO4V5qD74",
-        "offset": 1427517601,
-        "size": 475541909
+        "type": "arweave-byte-range",
+        "rootTxId": "dvt1qF2p2VwVL5ISu5KYaZHE_Cr-3zgaGdLO4V5qD74",
+        "dataOffsetInRootTx": 1427517601,
+        "dataItemId": "yIQHcfPeM0vk1ldo2KqXdYZOgo1qgyEq8iQGBWEtnLo"
       },
       "recordCount": 3764459,
       "size": 475541909
@@ -2448,10 +2448,10 @@
     {
       "prefix": "de",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "dvt1qF2p2VwVL5ISu5KYaZHE_Cr-3zgaGdLO4V5qD74",
-        "offset": 36724,
-        "size": 476048402
+        "type": "arweave-byte-range",
+        "rootTxId": "dvt1qF2p2VwVL5ISu5KYaZHE_Cr-3zgaGdLO4V5qD74",
+        "dataOffsetInRootTx": 36724,
+        "dataItemId": "jtDNzXera9WTqEzZ1ywhKEpLv2MKX2_p09rGKgZXcE0"
       },
       "recordCount": 3768263,
       "size": 476048402
@@ -2459,10 +2459,10 @@
     {
       "prefix": "df",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "6jkHFvlPA39cFY3GeH0hDhubjBZ-gW2UImbMHxXJrbs",
-        "offset": 7365599,
-        "size": 475525159
+        "type": "arweave-byte-range",
+        "rootTxId": "6jkHFvlPA39cFY3GeH0hDhubjBZ-gW2UImbMHxXJrbs",
+        "dataOffsetInRootTx": 7365599,
+        "dataItemId": "xWMBiHd1WcFitExr685n4MUSBWZasHuZF2uw_smqbq8"
       },
       "recordCount": 3764160,
       "size": 475525159
@@ -2470,10 +2470,10 @@
     {
       "prefix": "e0",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "6jkHFvlPA39cFY3GeH0hDhubjBZ-gW2UImbMHxXJrbs",
-        "offset": 958916653,
-        "size": 476049989
+        "type": "arweave-byte-range",
+        "rootTxId": "6jkHFvlPA39cFY3GeH0hDhubjBZ-gW2UImbMHxXJrbs",
+        "dataOffsetInRootTx": 958916653,
+        "dataItemId": "Xa2WNlblZbHnYaxJ8VFWYpb-dFN7-TaIl14gLCRNO5A"
       },
       "recordCount": 3768369,
       "size": 476049989
@@ -2481,10 +2481,10 @@
     {
       "prefix": "e1",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "6jkHFvlPA39cFY3GeH0hDhubjBZ-gW2UImbMHxXJrbs",
-        "offset": 482891971,
-        "size": 475896675
+        "type": "arweave-byte-range",
+        "rootTxId": "6jkHFvlPA39cFY3GeH0hDhubjBZ-gW2UImbMHxXJrbs",
+        "dataOffsetInRootTx": 482891971,
+        "dataItemId": "0SlVRTOJF1_sj9kuAR4FEVquaPv1DlDYRgyd-XT0YE4"
       },
       "recordCount": 3766930,
       "size": 475896675
@@ -2492,10 +2492,10 @@
     {
       "prefix": "e2",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "hOjwXMxLLQtenuf9UP4UGnTHv3muz9d0SMmTauinT7A",
-        "offset": 1429357310,
-        "size": 475946570
+        "type": "arweave-byte-range",
+        "rootTxId": "hOjwXMxLLQtenuf9UP4UGnTHv3muz9d0SMmTauinT7A",
+        "dataOffsetInRootTx": 1429357310,
+        "dataItemId": "aWPnEUSsmmpmTZ9TeGxW9uojNpY1egSmq-Lt5H2_Rxg"
       },
       "recordCount": 3767095,
       "size": 475946570
@@ -2503,10 +2503,10 @@
     {
       "prefix": "e3",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "hOjwXMxLLQtenuf9UP4UGnTHv3muz9d0SMmTauinT7A",
-        "offset": 8217,
-        "size": 475607172
+        "type": "arweave-byte-range",
+        "rootTxId": "hOjwXMxLLQtenuf9UP4UGnTHv3muz9d0SMmTauinT7A",
+        "dataOffsetInRootTx": 8217,
+        "dataItemId": "zIvkHORSB1He3DwNAKSOKmeWdCZMuqIxJ9oG-Niz25U"
       },
       "recordCount": 3764563,
       "size": 475607172
@@ -2514,10 +2514,10 @@
     {
       "prefix": "e4",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "hOjwXMxLLQtenuf9UP4UGnTHv3muz9d0SMmTauinT7A",
-        "offset": 475651828,
-        "size": 475807239
+        "type": "arweave-byte-range",
+        "rootTxId": "hOjwXMxLLQtenuf9UP4UGnTHv3muz9d0SMmTauinT7A",
+        "dataOffsetInRootTx": 475651828,
+        "dataItemId": "CKNX9te1OB5UB1VsWxRB2sbdVNbGJS9osDM0OjpI240"
       },
       "recordCount": 3766544,
       "size": 475807239
@@ -2525,10 +2525,10 @@
     {
       "prefix": "e5",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "hOjwXMxLLQtenuf9UP4UGnTHv3muz9d0SMmTauinT7A",
-        "offset": 952820970,
-        "size": 476209381
+        "type": "arweave-byte-range",
+        "rootTxId": "hOjwXMxLLQtenuf9UP4UGnTHv3muz9d0SMmTauinT7A",
+        "dataOffsetInRootTx": 952820970,
+        "dataItemId": "WkZQUa3R23yr6AlV2eY76gXua_j-BoPrhGC186PWTQQ"
       },
       "recordCount": 3769635,
       "size": 476209381
@@ -2536,10 +2536,10 @@
     {
       "prefix": "e6",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZEAo7Kvq77lqQx4jkvBOg96-Iv9NnokQVBGa6k-RaJU",
-        "offset": 1507704375,
-        "size": 475679272
+        "type": "arweave-byte-range",
+        "rootTxId": "ZEAo7Kvq77lqQx4jkvBOg96-Iv9NnokQVBGa6k-RaJU",
+        "dataOffsetInRootTx": 1507704375,
+        "dataItemId": "-7lV7JzEIiTxVr0Gy8k45cAHKukurZnNU2aR4TVbmDs"
       },
       "recordCount": 3765237,
       "size": 475679272
@@ -2547,10 +2547,10 @@
     {
       "prefix": "e7",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZEAo7Kvq77lqQx4jkvBOg96-Iv9NnokQVBGa6k-RaJU",
-        "offset": 6493,
-        "size": 475689102
+        "type": "arweave-byte-range",
+        "rootTxId": "ZEAo7Kvq77lqQx4jkvBOg96-Iv9NnokQVBGa6k-RaJU",
+        "dataOffsetInRootTx": 6493,
+        "dataItemId": "64yFHghErnCTiFjOLYS_0K8n8kuqKHNOSuQaAzc8MZU"
       },
       "recordCount": 3765114,
       "size": 475689102
@@ -2558,10 +2558,10 @@
     {
       "prefix": "e8",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZEAo7Kvq77lqQx4jkvBOg96-Iv9NnokQVBGa6k-RaJU",
-        "offset": 554637462,
-        "size": 475612658
+        "type": "arweave-byte-range",
+        "rootTxId": "ZEAo7Kvq77lqQx4jkvBOg96-Iv9NnokQVBGa6k-RaJU",
+        "dataOffsetInRootTx": 554637462,
+        "dataItemId": "Ure9kovRunSDrozmXKwYinLnklMk01RPM14YKwdmVRc"
       },
       "recordCount": 3765061,
       "size": 475612658
@@ -2569,10 +2569,10 @@
     {
       "prefix": "e9",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "ZEAo7Kvq77lqQx4jkvBOg96-Iv9NnokQVBGa6k-RaJU",
-        "offset": 1031978319,
-        "size": 475709755
+        "type": "arweave-byte-range",
+        "rootTxId": "ZEAo7Kvq77lqQx4jkvBOg96-Iv9NnokQVBGa6k-RaJU",
+        "dataOffsetInRootTx": 1031978319,
+        "dataItemId": "omLgT_gFGZ2LHDU-hHPOatpi-2XVLMmmG93BCNjZf1I"
       },
       "recordCount": 3765785,
       "size": 475709755
@@ -2580,10 +2580,10 @@
     {
       "prefix": "ea",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "PIwyTxOqBkQvHCMsNfJPc1CvWuuBdCLQGXrr-4tcvm4",
-        "offset": 995967581,
-        "size": 475826818
+        "type": "arweave-byte-range",
+        "rootTxId": "PIwyTxOqBkQvHCMsNfJPc1CvWuuBdCLQGXrr-4tcvm4",
+        "dataOffsetInRootTx": 995967581,
+        "dataItemId": "s9fYJogVjekoPT7kYc6PaM2BeCqEcMSEwZUqZzCyLZQ"
       },
       "recordCount": 3766516,
       "size": 475826818
@@ -2591,10 +2591,10 @@
     {
       "prefix": "eb",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "PIwyTxOqBkQvHCMsNfJPc1CvWuuBdCLQGXrr-4tcvm4",
-        "offset": 8583098,
-        "size": 475869367
+        "type": "arweave-byte-range",
+        "rootTxId": "PIwyTxOqBkQvHCMsNfJPc1CvWuuBdCLQGXrr-4tcvm4",
+        "dataOffsetInRootTx": 8583098,
+        "dataItemId": "2zIE9cKYBnvMSxkWTqq22Q6gMwpUetMS7P30AaK1RDg"
       },
       "recordCount": 3767291,
       "size": 475869367
@@ -2602,10 +2602,10 @@
     {
       "prefix": "ec",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "PIwyTxOqBkQvHCMsNfJPc1CvWuuBdCLQGXrr-4tcvm4",
-        "offset": 512133861,
-        "size": 475847496
+        "type": "arweave-byte-range",
+        "rootTxId": "PIwyTxOqBkQvHCMsNfJPc1CvWuuBdCLQGXrr-4tcvm4",
+        "dataOffsetInRootTx": 512133861,
+        "dataItemId": "949kII9UbmLcGr_tmAqNwEpUlgiLgDR2zMApbbBtRvE"
       },
       "recordCount": 3766915,
       "size": 475847496
@@ -2613,10 +2613,10 @@
     {
       "prefix": "ed",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "GJtU3VbKALmgdNkby61APkJR4GfqqEd9INg45OodDYE",
-        "offset": 500920898,
-        "size": 475773632
+        "type": "arweave-byte-range",
+        "rootTxId": "GJtU3VbKALmgdNkby61APkJR4GfqqEd9INg45OodDYE",
+        "dataOffsetInRootTx": 500920898,
+        "dataItemId": "BbRajtJieMDuhAoyFHReSl9TfEWCR0uKAKabDbm6JIA"
       },
       "recordCount": 3766001,
       "size": 475773632
@@ -2624,10 +2624,10 @@
     {
       "prefix": "ee",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "GJtU3VbKALmgdNkby61APkJR4GfqqEd9INg45OodDYE",
-        "offset": 3485,
-        "size": 475590109
+        "type": "arweave-byte-range",
+        "rootTxId": "GJtU3VbKALmgdNkby61APkJR4GfqqEd9INg45OodDYE",
+        "dataOffsetInRootTx": 3485,
+        "dataItemId": "0-L9xux0c_aiOYqHpZUbpkeAffP3pifAESAY_JLJZW8"
       },
       "recordCount": 3765212,
       "size": 475590109
@@ -2635,10 +2635,10 @@
     {
       "prefix": "ef",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "rrAP6bUTP13EMzDwWs3BoAPrL1BOpJlrLqar1zSAxPY",
-        "offset": 246777,
-        "size": 475922362
+        "type": "arweave-byte-range",
+        "rootTxId": "rrAP6bUTP13EMzDwWs3BoAPrL1BOpJlrLqar1zSAxPY",
+        "dataOffsetInRootTx": 246777,
+        "dataItemId": "733AoLo1iLF5ctXzLW_H46yw0XbD7igLgQHWDKGzzeU"
       },
       "recordCount": 3766988,
       "size": 475922362
@@ -2646,10 +2646,10 @@
     {
       "prefix": "f0",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "rrAP6bUTP13EMzDwWs3BoAPrL1BOpJlrLqar1zSAxPY",
-        "offset": 952647433,
-        "size": 475930720
+        "type": "arweave-byte-range",
+        "rootTxId": "rrAP6bUTP13EMzDwWs3BoAPrL1BOpJlrLqar1zSAxPY",
+        "dataOffsetInRootTx": 952647433,
+        "dataItemId": "-X9mEl1Q1lUf0Y0BjzVQf-D6t9KYEpSorikBlYpmqr0"
       },
       "recordCount": 3767396,
       "size": 475930720
@@ -2657,10 +2657,10 @@
     {
       "prefix": "f1",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "rrAP6bUTP13EMzDwWs3BoAPrL1BOpJlrLqar1zSAxPY",
-        "offset": 476561547,
-        "size": 476060194
+        "type": "arweave-byte-range",
+        "rootTxId": "rrAP6bUTP13EMzDwWs3BoAPrL1BOpJlrLqar1zSAxPY",
+        "dataOffsetInRootTx": 476561547,
+        "dataItemId": "U2ZgQK1ULQ-7-LpKSnkDDHg7zyOk4QeA-Q7QGKQNMbo"
       },
       "recordCount": 3768467,
       "size": 476060194
@@ -2668,10 +2668,10 @@
     {
       "prefix": "f2",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "MHE9xjibHpLBMSDXX-kpewe_Hk3YkITCzRg-b2ZVUKc",
-        "offset": 2756771,
-        "size": 475657730
+        "type": "arweave-byte-range",
+        "rootTxId": "MHE9xjibHpLBMSDXX-kpewe_Hk3YkITCzRg-b2ZVUKc",
+        "dataOffsetInRootTx": 2756771,
+        "dataItemId": "Bxl6LN1OIX0VijjmCB0902GuLpmuiIGJVPL9aMMGMOw"
       },
       "recordCount": 3765708,
       "size": 475657730
@@ -2679,10 +2679,10 @@
     {
       "prefix": "f3",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "MHE9xjibHpLBMSDXX-kpewe_Hk3YkITCzRg-b2ZVUKc",
-        "offset": 478632845,
-        "size": 475582697
+        "type": "arweave-byte-range",
+        "rootTxId": "MHE9xjibHpLBMSDXX-kpewe_Hk3YkITCzRg-b2ZVUKc",
+        "dataOffsetInRootTx": 478632845,
+        "dataItemId": "R3nQDfj95IeHrkpIwi-8eliBQfCczE_68SOSFR9XKRM"
       },
       "recordCount": 3765023,
       "size": 475582697
@@ -2690,10 +2690,10 @@
     {
       "prefix": "f4",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "psnQ4hg3Bbo1h0oSGlTGN6K6f0oYtZGxNBWIFduOa4M",
-        "offset": 952887667,
-        "size": 475907925
+        "type": "arweave-byte-range",
+        "rootTxId": "psnQ4hg3Bbo1h0oSGlTGN6K6f0oYtZGxNBWIFduOa4M",
+        "dataOffsetInRootTx": 952887667,
+        "dataItemId": "TCMHKVPpyDR_kcFlBVUTiI3cvA4A-CDm9b_BSQLp_HY"
       },
       "recordCount": 3767287,
       "size": 475907925
@@ -2701,10 +2701,10 @@
     {
       "prefix": "f5",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "psnQ4hg3Bbo1h0oSGlTGN6K6f0oYtZGxNBWIFduOa4M",
-        "offset": 6874,
-        "size": 475814747
+        "type": "arweave-byte-range",
+        "rootTxId": "psnQ4hg3Bbo1h0oSGlTGN6K6f0oYtZGxNBWIFduOa4M",
+        "dataOffsetInRootTx": 6874,
+        "dataItemId": "ErXX0ZowFMnaB6OCRzLk2g8obw-_dcCnwDyV0EbMZ3A"
       },
       "recordCount": 3766289,
       "size": 475814747
@@ -2712,10 +2712,10 @@
     {
       "prefix": "f6",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "psnQ4hg3Bbo1h0oSGlTGN6K6f0oYtZGxNBWIFduOa4M",
-        "offset": 476583157,
-        "size": 476021545
+        "type": "arweave-byte-range",
+        "rootTxId": "psnQ4hg3Bbo1h0oSGlTGN6K6f0oYtZGxNBWIFduOa4M",
+        "dataOffsetInRootTx": 476583157,
+        "dataItemId": "zE4czL6ztS9zcCTKyWDkF7M2Gz3Orzvt8KhvoQrf-iE"
       },
       "recordCount": 3768093,
       "size": 476021545
@@ -2723,10 +2723,10 @@
     {
       "prefix": "f7",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "6KJ_MI1A-K9TxS3b2tbxRFPEMhzRgJS-HlQTcg7kRJo",
-        "offset": 477463220,
-        "size": 476193769
+        "type": "arweave-byte-range",
+        "rootTxId": "6KJ_MI1A-K9TxS3b2tbxRFPEMhzRgJS-HlQTcg7kRJo",
+        "dataOffsetInRootTx": 477463220,
+        "dataItemId": "ZldkTxAe0RuyHouxBH5OLFtoPsGuKRlq0vEY-YOrU1M"
       },
       "recordCount": 3769457,
       "size": 476193769
@@ -2734,10 +2734,10 @@
     {
       "prefix": "f8",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "6KJ_MI1A-K9TxS3b2tbxRFPEMhzRgJS-HlQTcg7kRJo",
-        "offset": 74693,
-        "size": 475923722
+        "type": "arweave-byte-range",
+        "rootTxId": "6KJ_MI1A-K9TxS3b2tbxRFPEMhzRgJS-HlQTcg7kRJo",
+        "dataOffsetInRootTx": 74693,
+        "dataItemId": "FvftglEdesqd2rQH_lt_5TYdLikN4rxTulFYs-Kk4rg"
       },
       "recordCount": 3767151,
       "size": 475923722
@@ -2745,10 +2745,10 @@
     {
       "prefix": "f9",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "6KJ_MI1A-K9TxS3b2tbxRFPEMhzRgJS-HlQTcg7kRJo",
-        "offset": 954044961,
-        "size": 475733187
+        "type": "arweave-byte-range",
+        "rootTxId": "6KJ_MI1A-K9TxS3b2tbxRFPEMhzRgJS-HlQTcg7kRJo",
+        "dataOffsetInRootTx": 954044961,
+        "dataItemId": "ZooQNumbvMcEACMZq__UKeYi0_7l5gHG5e90mfgi-60"
       },
       "recordCount": 3765973,
       "size": 475733187
@@ -2756,10 +2756,10 @@
     {
       "prefix": "fa",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "zla-hU1xCqS4KDIbBcWM-pspLByh6N-ft4IO1kdotSw",
-        "offset": 952008921,
-        "size": 476136917
+        "type": "arweave-byte-range",
+        "rootTxId": "zla-hU1xCqS4KDIbBcWM-pspLByh6N-ft4IO1kdotSw",
+        "dataOffsetInRootTx": 952008921,
+        "dataItemId": "8oGJhVbFJUCslXhvdCzglGwoGihL1VsYw2VPfESbues"
       },
       "recordCount": 3769208,
       "size": 476136917
@@ -2767,10 +2767,10 @@
     {
       "prefix": "fb",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "zla-hU1xCqS4KDIbBcWM-pspLByh6N-ft4IO1kdotSw",
-        "offset": 177107,
-        "size": 475723224
+        "type": "arweave-byte-range",
+        "rootTxId": "zla-hU1xCqS4KDIbBcWM-pspLByh6N-ft4IO1kdotSw",
+        "dataOffsetInRootTx": 177107,
+        "dataItemId": "euIBpxIEJRNKrwsCbWYtzwe2M8XC_NQ443qFCUtiisQ"
       },
       "recordCount": 3765904,
       "size": 475723224
@@ -2778,10 +2778,10 @@
     {
       "prefix": "fc",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "zla-hU1xCqS4KDIbBcWM-pspLByh6N-ft4IO1kdotSw",
-        "offset": 475902644,
-        "size": 475437377
+        "type": "arweave-byte-range",
+        "rootTxId": "zla-hU1xCqS4KDIbBcWM-pspLByh6N-ft4IO1kdotSw",
+        "dataOffsetInRootTx": 475902644,
+        "dataItemId": "2si7UwrDw39kjz-_Vezb-2Lbs55veaS6aKpFx5OIpog"
       },
       "recordCount": 3763276,
       "size": 475437377
@@ -2789,10 +2789,10 @@
     {
       "prefix": "fd",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "p2B2GG0w0UVBNA3hOSrsIys7ZLMmCxE5xvLDtXVMAF0",
-        "offset": 476232601,
-        "size": 476194583
+        "type": "arweave-byte-range",
+        "rootTxId": "p2B2GG0w0UVBNA3hOSrsIys7ZLMmCxE5xvLDtXVMAF0",
+        "dataOffsetInRootTx": 476232601,
+        "dataItemId": "0CNh-R34jGtlDhfVpq5qUKV-HyDPZIgKzMxxtxnoSfg"
       },
       "recordCount": 3769586,
       "size": 476194583
@@ -2800,10 +2800,10 @@
     {
       "prefix": "fe",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "p2B2GG0w0UVBNA3hOSrsIys7ZLMmCxE5xvLDtXVMAF0",
-        "offset": 952668924,
-        "size": 475715366
+        "type": "arweave-byte-range",
+        "rootTxId": "p2B2GG0w0UVBNA3hOSrsIys7ZLMmCxE5xvLDtXVMAF0",
+        "dataOffsetInRootTx": 952668924,
+        "dataItemId": "jtWdLv5bQL9TWcorm5Yu-losCXj9VpSPp-3l5flgOrU"
       },
       "recordCount": 3765678,
       "size": 475715366
@@ -2811,10 +2811,10 @@
     {
       "prefix": "ff",
       "location": {
-        "type": "arweave-bundle-item",
-        "txId": "p2B2GG0w0UVBNA3hOSrsIys7ZLMmCxE5xvLDtXVMAF0",
-        "offset": 98979,
-        "size": 475554071
+        "type": "arweave-byte-range",
+        "rootTxId": "p2B2GG0w0UVBNA3hOSrsIys7ZLMmCxE5xvLDtXVMAF0",
+        "dataOffsetInRootTx": 98979,
+        "dataItemId": "rfyc7Uw1q32R-EYxIXS90w452aCid5U0Vywq4R107N0"
       },
       "recordCount": 3764545,
       "size": 475554071
