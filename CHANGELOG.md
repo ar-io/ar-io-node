@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **CDB64 Upload Tool**: New CLI tool (`tools/upload-cdb64-to-arweave`) to upload
+  partitioned CDB64 indexes to Arweave via Turbo SDK
+  - Three-phase workflow: upload partitions, poll for bundle offsets, upload
+    manifest
+  - Supports concurrent uploads with configurable parallelism (`--concurrency`)
+  - Resumable: saves progress to output manifest, restart with `--resume`
+  - Dry-run mode for cost estimation before uploading
+  - Optional L1 manifest upload for permanent on-chain storage
+
+- **Default Remote CDB64 Index**: Ships with a pre-built CDB64 manifest for
+  remote index lookups on Arweave
+  - Covers non-AO, non-Redstone data items with content types up to block height
+    1,820,000
+  - CDB lookups now enabled by default in `ROOT_TX_LOOKUP_ORDER`
+    (`db,gateways,cdb,graphql`)
+  - Default `CDB64_ROOT_TX_INDEX_SOURCES` points to shipped manifest
+
 - **Prefix-Partitioned CDB64 Indexes**: CDB64 root TX indexes can now be split
   across 256 partition files based on key prefix
   - Each partition file (00.cdb - ff.cdb) contains records for keys starting
