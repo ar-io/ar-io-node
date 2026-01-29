@@ -658,3 +658,26 @@ export const ans104OffsetPathDepthHistogram = new promClient.Histogram({
   help: 'Depth of bundle path in path-guided offset lookups',
   buckets: [2, 3, 4],
 });
+
+//
+// Sampling data source metrics
+//
+
+export const samplingDecisionTotal = new promClient.Counter({
+  name: 'sampling_decision_total',
+  help: 'Count of sampling decisions by source and outcome',
+  labelNames: ['source', 'decision'] as const,
+});
+
+export const samplingRequestTotal = new promClient.Counter({
+  name: 'sampling_request_total',
+  help: 'Count of sampled requests by source and status',
+  labelNames: ['source', 'status'] as const,
+});
+
+export const samplingLatencyMs = new promClient.Histogram({
+  name: 'sampling_latency_ms',
+  help: 'Latency of sampled requests in milliseconds',
+  labelNames: ['source', 'status'] as const,
+  buckets: [50, 100, 250, 500, 1000, 2500, 5000, 10000],
+});
