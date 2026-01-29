@@ -17,6 +17,7 @@ import * as config from './config.js';
 import { GatewaysDataSource } from './data/gateways-data-source.js';
 import { FilteredContiguousDataSource } from './data/filtered-contiguous-data-source.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
+import { SamplingContiguousDataSource } from './data/sampling-contiguous-data-source.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { RootParentDataSource } from './data/root-parent-data-source.js';
@@ -919,7 +920,34 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
   }
 }
 
+// Create sampling data source if enabled
+let samplingDataSource: ContiguousDataSource | undefined;
+if (
+  config.ENABLE_SAMPLING_DATA_SOURCE &&
+  config.SAMPLING_DATA_SOURCE !== undefined
+) {
+  const innerSource = getDataSource(config.SAMPLING_DATA_SOURCE);
+  if (innerSource === undefined) {
+    throw new Error(
+      `Sampling data source not found: ${config.SAMPLING_DATA_SOURCE}`,
+    );
+  }
+  samplingDataSource = new SamplingContiguousDataSource({
+    log,
+    dataSource: innerSource,
+    sourceName: config.SAMPLING_DATA_SOURCE,
+    samplingRate: config.SAMPLING_RATE,
+    strategy: config.SAMPLING_STRATEGY,
+  });
+}
+
 const onDemandDataSources: ContiguousDataSource[] = [];
+
+// Add sampling source first if enabled (tried before normal sources)
+if (samplingDataSource !== undefined) {
+  onDemandDataSources.push(samplingDataSource);
+}
+
 for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
   const dataSource = getDataSource(sourceName);
   if (dataSource !== undefined) {

@@ -1603,3 +1603,36 @@ BUNDLER_URLS.forEach((url) => {
     throw new Error(`Invalid URL in BUNDLER_URLS: ${url}`);
   }
 });
+
+//
+// Sampling data source configuration
+//
+
+export const ENABLE_SAMPLING_DATA_SOURCE =
+  env.varOrDefault('ENABLE_SAMPLING_DATA_SOURCE', 'false') === 'true';
+
+export const SAMPLING_DATA_SOURCE = env.varOrUndefined('SAMPLING_DATA_SOURCE');
+
+export const SAMPLING_RATE = +env.varOrDefault('SAMPLING_RATE', '0.1');
+
+const VALID_SAMPLING_STRATEGIES = ['random', 'deterministic'] as const;
+export type SamplingStrategy = (typeof VALID_SAMPLING_STRATEGIES)[number];
+export const SAMPLING_STRATEGY = env.enumOrDefault(
+  'SAMPLING_STRATEGY',
+  VALID_SAMPLING_STRATEGIES,
+  'random',
+);
+
+// Validation for sampling configuration
+if (ENABLE_SAMPLING_DATA_SOURCE) {
+  if (SAMPLING_RATE < 0 || SAMPLING_RATE > 1) {
+    throw new Error(
+      `SAMPLING_RATE must be between 0 and 1, got: ${SAMPLING_RATE}`,
+    );
+  }
+  if (SAMPLING_DATA_SOURCE === undefined) {
+    throw new Error(
+      'SAMPLING_DATA_SOURCE must be set when ENABLE_SAMPLING_DATA_SOURCE is true',
+    );
+  }
+}
