@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [Release 67] - 2026-01-29
+
+This is a **recommended release** focusing on **CDB64 index accessibility** and
+**operational observability**. CDB64 lookups are now enabled by default with a
+shipped manifest covering data items up to block height 1,820,000, eliminating
+the need for operators to generate or configure their own indexes. New
+Prometheus metrics provide detailed visibility into root TX index and ANS-104
+offset lookup performance. The release also includes tooling for uploading
+partitioned CDB64 indexes to Arweave and an observer update with network gateway
+fallback for more resilient reference resolution.
+
 ### Added
 
 - **CDB64 Upload Tool**: New CLI tool (`tools/upload-cdb64-to-arweave`) to upload
