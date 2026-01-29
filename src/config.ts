@@ -266,7 +266,7 @@ export const GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
 
 // Root TX index lookup order configuration
 export const ROOT_TX_LOOKUP_ORDER = env
-  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql')
+  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,cdb,graphql')
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
@@ -281,8 +281,12 @@ export const CDB64_ROOT_TX_INDEX_WATCH =
 //   - Arweave TX ID: "ABC123def456..." (43-char base64url)
 //   - Bundle data item: "TxId:offset:size" (offset and size in bytes)
 //   - HTTP URL: "https://example.com/index.cdb"
+// Default points to shipped manifest for remote CDB64 index on Arweave
 export const CDB64_ROOT_TX_INDEX_SOURCES = env
-  .varOrDefault('CDB64_ROOT_TX_INDEX_SOURCES', 'data/cdb64-root-tx-index')
+  .varOrDefault(
+    'CDB64_ROOT_TX_INDEX_SOURCES',
+    'resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000',
+  )
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
