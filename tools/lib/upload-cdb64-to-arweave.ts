@@ -566,6 +566,14 @@ async function runUpload(config: Config): Promise<void> {
           'Use --resume to continue from previous state, or delete the file to start fresh.',
       );
     }
+    // Validate partition counts match
+    if (existingManifest.partitions.length !== sourceManifest.partitions.length) {
+      throw new Error(
+        `Partition count mismatch: output manifest has ${existingManifest.partitions.length} ` +
+          `but source has ${sourceManifest.partitions.length}. ` +
+          'Delete output manifest and restart if source changed.',
+      );
+    }
     console.log('Resuming from existing manifest...');
     outputManifest = existingManifest;
   } else {
@@ -805,15 +813,22 @@ async function runUpload(config: Config): Promise<void> {
     }
   }
 
-  // Check if all partitions are resolved
-  const pendingCount = outputManifest.partitions.filter(
-    (p) => p.location.type === 'arweave-pending',
+  // Check if all partitions are resolved (must be arweave-bundle-item)
+  const unresolvedCount = outputManifest.partitions.filter(
+    (p) => p.location.type !== 'arweave-bundle-item',
   ).length;
 
-  if (pendingCount > 0) {
+  if (unresolvedCount > 0) {
+    const pendingCount = outputManifest.partitions.filter(
+      (p) => p.location.type === 'arweave-pending',
+    ).length;
+    const fileCount = outputManifest.partitions.filter(
+      (p) => p.location.type === 'file',
+    ).length;
     console.log(
-      `${pendingCount} partitions still pending. Cannot upload manifest until all are resolved.`,
+      `${unresolvedCount} partitions not resolved (${fileCount} not uploaded, ${pendingCount} pending).`,
     );
+    console.log('Cannot upload manifest until all partitions are resolved.');
     console.log(`Output manifest: ${config.outputPath}`);
     return;
   }
