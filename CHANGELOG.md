@@ -44,6 +44,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Prevents request pile-up when reading CDB files from HTTP/S3 endpoints
   - Requests exceeding the timeout fail fast rather than waiting indefinitely
 
+- **Prometheus Metrics for Root TX Index and ANS-104 Offset Lookups**: New
+  instrumentation to track lookup performance, cache effectiveness, and data
+  source usage
+  - `root_tx_lookup_total`: Per-source lookups by status and offset availability
+  - `root_tx_lookup_duration_ms`: Per-source lookup latency
+  - `root_tx_cache_hit_total` / `root_tx_cache_miss_total`: LRU cache
+    effectiveness tracking
+  - `composite_root_tx_lookup_total`: Final lookup outcome with winning source
+  - `composite_root_tx_lookup_duration_ms`: Total composite lookup duration
+  - `ans104_offset_lookup_total`: Offset lookups by method (`path_guided` vs
+    `linear_search`)
+  - `ans104_offset_lookup_duration_ms`: Offset lookup latency by method
+  - `ans104_offset_path_depth`: Histogram of bundle nesting depth (buckets: 2,
+    3, 4)
+
 ### Changed
 
 - **Observer Update to `8fb7b2f`**: Updated observer with network gateway

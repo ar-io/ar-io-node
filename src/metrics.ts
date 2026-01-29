@@ -656,5 +656,5 @@ export const ans104OffsetLookupDurationSummary = new promClient.Summary({
 export const ans104OffsetPathDepthHistogram = new promClient.Histogram({
   name: 'ans104_offset_path_depth',
   help: 'Depth of bundle path in path-guided offset lookups',
-  buckets: [1, 2],
+  buckets: [2, 3, 4],
 });
