@@ -39,6 +39,7 @@ import { FileByteRangeSource, ByteRangeSource } from './byte-range-source.js';
 import { HttpByteRangeSource } from './http-byte-range-source.js';
 import { ContiguousDataByteRangeSource } from './contiguous-data-byte-range-source.js';
 import { CachingByteRangeSource } from './caching-byte-range-source.js';
+import { Semaphore } from './semaphore.js';
 import {
   Cdb64Manifest,
   PartitionInfo,
@@ -77,8 +78,11 @@ export interface PartitionedCdb64ReaderOptions {
   /** Timeout for remote requests in ms (default: 30000) */
   remoteRequestTimeoutMs?: number;
 
-  /** Max concurrent HTTP requests per source (undefined = unlimited) */
-  remoteMaxConcurrentRequests?: number;
+  /** Shared semaphore for limiting concurrent HTTP requests */
+  remoteSemaphore?: Semaphore;
+
+  /** Timeout for acquiring the semaphore in ms (default: 5000) */
+  remoteSemaphoreTimeoutMs?: number;
 
   /** Logger instance */
   log?: winston.Logger;
@@ -94,7 +98,8 @@ export class PartitionedCdb64Reader {
   private remoteCacheMaxRegions: number;
   private remoteCacheTtlMs: number;
   private remoteRequestTimeoutMs: number;
-  private remoteMaxConcurrentRequests?: number;
+  private remoteSemaphore?: Semaphore;
+  private remoteSemaphoreTimeoutMs?: number;
   private log: winston.Logger;
 
   // Map from prefix (00-ff) to partition state
@@ -118,7 +123,8 @@ export class PartitionedCdb64Reader {
     this.remoteCacheMaxRegions = options.remoteCacheMaxRegions ?? 100;
     this.remoteCacheTtlMs = options.remoteCacheTtlMs ?? 300000;
     this.remoteRequestTimeoutMs = options.remoteRequestTimeoutMs ?? 30000;
-    this.remoteMaxConcurrentRequests = options.remoteMaxConcurrentRequests;
+    this.remoteSemaphore = options.remoteSemaphore;
+    this.remoteSemaphoreTimeoutMs = options.remoteSemaphoreTimeoutMs;
     this.log =
       options.log ??
       winston.createLogger({
@@ -265,7 +271,8 @@ export class PartitionedCdb64Reader {
         const httpSource = new HttpByteRangeSource({
           url: location.url,
           timeout: this.remoteRequestTimeoutMs,
-          maxConcurrentRequests: this.remoteMaxConcurrentRequests,
+          semaphore: this.remoteSemaphore,
+          semaphoreTimeoutMs: this.remoteSemaphoreTimeoutMs,
         });
         return new CachingByteRangeSource({
           source: httpSource,

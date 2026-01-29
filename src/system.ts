@@ -115,6 +115,7 @@ import { CompositeDataAttributesSource } from './data/composite-data-attributes-
 import { ContiguousDataAttributesStore } from './types.js';
 import { createRateLimiter } from './limiter/factory.js';
 import { createPaymentProcessor } from './payments/factory.js';
+import { Semaphore } from './lib/semaphore.js';
 
 // Shutdown registry for managing cleanup handlers
 type CleanupHandler = {
@@ -673,6 +674,11 @@ const cdb64BaseDataSource =
     ? new SequentialDataSource({ log, dataSources: cdb64DataSources })
     : undefined;
 
+// Global semaphore for limiting concurrent CDB64 HTTP requests
+const cdb64HttpSemaphore = new Semaphore(
+  config.CDB64_REMOTE_MAX_CONCURRENT_REQUESTS,
+);
+
 // Build root TX indexes based on configuration
 let cdb64RootTxIndex: Cdb64RootTxIndex | undefined;
 const rootTxIndexes: DataItemRootIndex[] = [];
@@ -737,8 +743,8 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
         remoteCacheMaxRegions: config.CDB64_REMOTE_CACHE_MAX_REGIONS,
         remoteCacheTtlMs: config.CDB64_REMOTE_CACHE_TTL_MS,
         remoteRequestTimeoutMs: config.CDB64_REMOTE_REQUEST_TIMEOUT_MS,
-        remoteMaxConcurrentRequests:
-          config.CDB64_REMOTE_MAX_CONCURRENT_REQUESTS,
+        remoteSemaphore: cdb64HttpSemaphore,
+        remoteSemaphoreTimeoutMs: config.CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS,
       });
       rootTxIndexes.push(cdb64RootTxIndex);
       registerCleanupHandler('cdb64-root-tx-index', async () => {

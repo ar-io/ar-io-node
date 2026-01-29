@@ -26,27 +26,29 @@ export class HttpByteRangeSource implements ByteRangeSource {
   private httpClient: AxiosInstance;
   private opened = true;
   private semaphore: Semaphore | undefined;
+  private semaphoreTimeoutMs: number | undefined;
 
   constructor({
     url,
     timeout = 30000,
-    maxConcurrentRequests,
+    semaphore,
+    semaphoreTimeoutMs,
     httpClient,
   }: {
     /** URL to fetch byte ranges from */
     url: string;
     /** Request timeout in milliseconds (default: 30000) */
     timeout?: number;
-    /** Maximum concurrent HTTP requests (undefined = unlimited) */
-    maxConcurrentRequests?: number;
+    /** Optional shared semaphore for limiting concurrent HTTP requests */
+    semaphore?: Semaphore;
+    /** Timeout for acquiring the semaphore in milliseconds */
+    semaphoreTimeoutMs?: number;
     /** Optional pre-configured axios instance */
     httpClient?: AxiosInstance;
   }) {
     this.url = url;
-    this.semaphore =
-      maxConcurrentRequests !== undefined
-        ? new Semaphore(maxConcurrentRequests)
-        : undefined;
+    this.semaphore = semaphore;
+    this.semaphoreTimeoutMs = semaphoreTimeoutMs;
     this.httpClient =
       httpClient ??
       axios.create({
@@ -62,7 +64,7 @@ export class HttpByteRangeSource implements ByteRangeSource {
 
   async read(offset: number, size: number): Promise<Buffer> {
     if (this.semaphore) {
-      await this.semaphore.acquire();
+      await this.semaphore.acquire(this.semaphoreTimeoutMs);
     }
     try {
       const response = await this.httpClient.get(this.url, {

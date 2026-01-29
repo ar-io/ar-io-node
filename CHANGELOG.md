@@ -35,11 +35,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Tools updated: `generate-cdb64-root-tx-index` and
     `generate-cdb64-root-tx-index-rs` support `--partitioned` flag
 
-- **HTTP Request Concurrency Limit for Remote CDB64 Sources**: New
-  `CDB64_REMOTE_MAX_CONCURRENT_REQUESTS` environment variable limits concurrent
-  HTTP requests per remote CDB64 source
+- **HTTP Request Concurrency Limit for Remote CDB64 Sources**: New environment
+  variables limit concurrent HTTP requests across all remote CDB64 sources
+  - `CDB64_REMOTE_MAX_CONCURRENT_REQUESTS`: Global limit on concurrent HTTP
+    requests (default: 4)
+  - `CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS`: Maximum time to wait for a request slot
+    before failing (default: 5000ms)
   - Prevents request pile-up when reading CDB files from HTTP/S3 endpoints
-  - Default: 4 concurrent requests per source
+  - Requests exceeding the timeout fail fast rather than waiting indefinitely
 
 ### Changed
 

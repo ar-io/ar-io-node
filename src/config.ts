@@ -308,6 +308,10 @@ export const CDB64_REMOTE_MAX_CONCURRENT_REQUESTS = env.positiveIntOrDefault(
   'CDB64_REMOTE_MAX_CONCURRENT_REQUESTS',
   4,
 );
+export const CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS = env.positiveIntOrDefault(
+  'CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS',
+  5000, // 5 seconds
+);
 
 // CDB64 remote retrieval order for fetching CDB files from Arweave
 // Available sources: gateways, chunks, tx-data

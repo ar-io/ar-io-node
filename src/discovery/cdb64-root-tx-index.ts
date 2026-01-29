@@ -36,6 +36,7 @@ import {
 import { HttpByteRangeSource } from '../lib/http-byte-range-source.js';
 import { ContiguousDataByteRangeSource } from '../lib/contiguous-data-byte-range-source.js';
 import { CachingByteRangeSource } from '../lib/caching-byte-range-source.js';
+import { Semaphore } from '../lib/semaphore.js';
 import {
   decodeCdb64Value,
   isCompleteValue,
@@ -173,7 +174,8 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   private remoteCacheMaxRegions: number;
   private remoteCacheTtlMs: number;
   private remoteRequestTimeoutMs: number;
-  private remoteMaxConcurrentRequests?: number;
+  private remoteSemaphore?: Semaphore;
+  private remoteSemaphoreTimeoutMs?: number;
 
   constructor({
     log,
@@ -183,7 +185,8 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     remoteCacheMaxRegions = 100,
     remoteCacheTtlMs = 300000,
     remoteRequestTimeoutMs = 30000,
-    remoteMaxConcurrentRequests,
+    remoteSemaphore,
+    remoteSemaphoreTimeoutMs,
   }: {
     log: winston.Logger;
     /** List of source specifications (local paths, TX IDs, URLs) */
@@ -198,8 +201,10 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     remoteCacheTtlMs?: number;
     /** Request timeout for remote sources in ms (default: 30000 = 30 seconds) */
     remoteRequestTimeoutMs?: number;
-    /** Max concurrent HTTP requests per source (undefined = unlimited) */
-    remoteMaxConcurrentRequests?: number;
+    /** Shared semaphore for limiting concurrent HTTP requests */
+    remoteSemaphore?: Semaphore;
+    /** Timeout for acquiring the semaphore in ms */
+    remoteSemaphoreTimeoutMs?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.sources = sources;
@@ -208,7 +213,8 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     this.remoteCacheMaxRegions = remoteCacheMaxRegions;
     this.remoteCacheTtlMs = remoteCacheTtlMs;
     this.remoteRequestTimeoutMs = remoteRequestTimeoutMs;
-    this.remoteMaxConcurrentRequests = remoteMaxConcurrentRequests;
+    this.remoteSemaphore = remoteSemaphore;
+    this.remoteSemaphoreTimeoutMs = remoteSemaphoreTimeoutMs;
   }
 
   /**
@@ -281,7 +287,8 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           new HttpByteRangeSource({
             url: parsed.url,
             timeout: this.remoteRequestTimeoutMs,
-            maxConcurrentRequests: this.remoteMaxConcurrentRequests,
+            semaphore: this.remoteSemaphore,
+            semaphoreTimeoutMs: this.remoteSemaphoreTimeoutMs,
           }),
         );
 
@@ -799,7 +806,8 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       remoteCacheMaxRegions: this.remoteCacheMaxRegions,
       remoteCacheTtlMs: this.remoteCacheTtlMs,
       remoteRequestTimeoutMs: this.remoteRequestTimeoutMs,
-      remoteMaxConcurrentRequests: this.remoteMaxConcurrentRequests,
+      remoteSemaphore: this.remoteSemaphore,
+      remoteSemaphoreTimeoutMs: this.remoteSemaphoreTimeoutMs,
       log: this.log,
     });
 

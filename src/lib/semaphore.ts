@@ -22,7 +22,10 @@
  */
 export class Semaphore {
   private permits: number;
-  private waiting: Array<() => void> = [];
+  private waiting: Array<{
+    resolve: () => void;
+    reject: (err: Error) => void;
+  }> = [];
 
   /**
    * @param permits Maximum number of concurrent acquisitions allowed
@@ -36,16 +39,30 @@ export class Semaphore {
 
   /**
    * Acquire a permit. Resolves immediately if permits are available,
-   * otherwise waits until a permit is released.
+   * otherwise waits until a permit is released or timeout expires.
+   *
+   * @param timeoutMs Optional timeout in milliseconds. If specified and the
+   *   permit cannot be acquired within this time, the promise rejects.
    */
-  acquire(): Promise<void> {
+  acquire(timeoutMs?: number): Promise<void> {
     if (this.permits > 0) {
       this.permits--;
       return Promise.resolve();
     }
 
-    return new Promise<void>((resolve) => {
-      this.waiting.push(resolve);
+    return new Promise<void>((resolve, reject) => {
+      const waiter = { resolve, reject };
+      this.waiting.push(waiter);
+
+      if (timeoutMs !== undefined) {
+        setTimeout(() => {
+          const index = this.waiting.indexOf(waiter);
+          if (index !== -1) {
+            this.waiting.splice(index, 1);
+            reject(new Error(`Semaphore acquire timeout after ${timeoutMs}ms`));
+          }
+        }, timeoutMs);
+      }
     });
   }
 
@@ -55,7 +72,7 @@ export class Semaphore {
   release(): void {
     const next = this.waiting.shift();
     if (next) {
-      next();
+      next.resolve();
     } else {
       this.permits++;
     }
