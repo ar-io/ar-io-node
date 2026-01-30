@@ -6,6 +6,7 @@
  */
 
 import axios from 'axios';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { performance } from 'node:perf_hooks';
@@ -41,6 +42,7 @@ interface TestConfig {
   verbose: boolean;
   continuous: boolean;
   outputFile: string | undefined;
+  bytes: number | undefined; // Number of bytes to retrieve with Range header
 }
 
 interface RequestResult {
@@ -64,6 +66,13 @@ interface RequestResult {
   contentTypeMatch?: boolean;
   // GraphQL verification (for 404 mismatches with --cdb64)
   graphqlVerification?: GraphQLVerificationResult;
+  // Byte range retrieval fields (only present when --bytes is used)
+  requestedBytes?: number; // Bytes requested via Range header
+  receivedBytes?: number; // Actual bytes received
+  bytesHash?: string; // SHA-256 hash of received bytes (base64url)
+  rangeSupported?: boolean; // Server returned 206 (true) or 200 (false)
+  referenceBytesHash?: string; // Reference gateway bytes hash
+  bytesMatch?: boolean; // Whether bytes content matches reference
 }
 
 interface Statistics {
@@ -90,6 +99,19 @@ interface Statistics {
   graphqlVerification?: GraphQLVerificationStats;
   // CDB64 verification stats (for every tested ID)
   cdb64Verification?: Cdb64VerificationStats;
+  // Byte range retrieval stats (only present when --bytes is used)
+  byteRangeRetrieval?: ByteRangeStats;
+}
+
+interface ByteRangeStats {
+  requestedBytesPerRequest: number;
+  totalRequests: number;
+  rangeSupported206: number;
+  rangeFallback200: number;
+  totalBytesReceived: number;
+  bytesCompared: number;
+  bytesMatches: number;
+  bytesMismatches: number;
 }
 
 interface Cdb64LookupResult {
@@ -205,6 +227,20 @@ class DataRetrievalTester {
         rootMissing: 0,
         verifiedOk: 0,
         errors: 0,
+      };
+    }
+
+    // Initialize byte range retrieval stats when --bytes is specified
+    if (this.config.bytes !== undefined) {
+      this.stats.byteRangeRetrieval = {
+        requestedBytesPerRequest: this.config.bytes,
+        totalRequests: 0,
+        rangeSupported206: 0,
+        rangeFallback200: 0,
+        totalBytesReceived: 0,
+        bytesCompared: 0,
+        bytesMatches: 0,
+        bytesMismatches: 0,
       };
     }
   }
@@ -535,33 +571,82 @@ class DataRetrievalTester {
     let result: RequestResult;
 
     try {
-      // Use HEAD request to test availability without downloading content
-      // Use Accept-Encoding: identity to get actual Content-Length (not chunked)
-      const response = await axios.head(`${this.config.gateway}/raw/${id}`, {
-        timeout: this.config.timeout,
-        headers: {
-          'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
-          'Accept-Encoding': 'identity',
-        },
-        validateStatus: () => true,
-      });
+      // If --bytes is specified, use GET with Range header to retrieve bytes
+      // Otherwise use HEAD request to test availability without downloading content
+      if (this.config.bytes !== undefined) {
+        const rangeEnd = this.config.bytes - 1;
+        const response = await axios.get(`${this.config.gateway}/raw/${id}`, {
+          timeout: this.config.timeout,
+          headers: {
+            'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+            'Accept-Encoding': 'identity',
+            Range: `bytes=0-${rangeEnd}`,
+          },
+          responseType: 'arraybuffer',
+          validateStatus: () => true,
+        });
 
-      const responseTime = performance.now() - startTime;
-      const contentLength = response.headers['content-length']
-        ? parseInt(response.headers['content-length'], 10)
-        : undefined;
-      const contentType = response.headers['content-type'] as string | undefined;
-      const cacheStatus = response.headers['x-cache'] as string | undefined;
+        const responseTime = performance.now() - startTime;
+        const contentLength = response.headers['content-length']
+          ? parseInt(response.headers['content-length'], 10)
+          : undefined;
+        const contentType = response.headers['content-type'] as string | undefined;
+        const cacheStatus = response.headers['x-cache'] as string | undefined;
 
-      result = {
-        id,
-        success: response.status >= 200 && response.status < 300,
-        statusCode: response.status,
-        responseTime,
-        contentLength,
-        contentType,
-        cacheStatus,
-      };
+        // Compute hash of received bytes for comparison
+        let bytesHash: string | undefined;
+        let receivedBytes: number | undefined;
+        if (
+          response.status >= 200 &&
+          response.status < 300 &&
+          response.data instanceof Buffer
+        ) {
+          receivedBytes = response.data.length;
+          bytesHash = toB64Url(createHash('sha256').update(response.data).digest());
+        }
+
+        result = {
+          id,
+          success: response.status >= 200 && response.status < 300,
+          statusCode: response.status,
+          responseTime,
+          contentLength,
+          contentType,
+          cacheStatus,
+          requestedBytes: this.config.bytes,
+          receivedBytes,
+          bytesHash,
+          rangeSupported: response.status === 206,
+        };
+      } else {
+        // Use HEAD request to test availability without downloading content
+        // Use Accept-Encoding: identity to get actual Content-Length (not chunked)
+        const response = await axios.head(`${this.config.gateway}/raw/${id}`, {
+          timeout: this.config.timeout,
+          headers: {
+            'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+            'Accept-Encoding': 'identity',
+          },
+          validateStatus: () => true,
+        });
+
+        const responseTime = performance.now() - startTime;
+        const contentLength = response.headers['content-length']
+          ? parseInt(response.headers['content-length'], 10)
+          : undefined;
+        const contentType = response.headers['content-type'] as string | undefined;
+        const cacheStatus = response.headers['x-cache'] as string | undefined;
+
+        result = {
+          id,
+          success: response.status >= 200 && response.status < 300,
+          statusCode: response.status,
+          responseTime,
+          contentLength,
+          contentType,
+          cacheStatus,
+        };
+      }
 
       // If reference gateway is configured, make comparison request
       if (this.config.reference) {
@@ -630,14 +715,44 @@ class DataRetrievalTester {
     const refStartTime = performance.now();
 
     try {
-      const refResponse = await axios.head(`${this.config.reference}/raw/${id}`, {
-        timeout: this.config.timeout,
-        headers: {
-          'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
-          'Accept-Encoding': 'identity',
-        },
-        validateStatus: () => true,
-      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let refResponse: any;
+      let refBytesHash: string | undefined;
+
+      // If --bytes is specified, use GET with Range header for reference too
+      if (this.config.bytes !== undefined) {
+        const rangeEnd = this.config.bytes - 1;
+        refResponse = await axios.get(`${this.config.reference}/raw/${id}`, {
+          timeout: this.config.timeout,
+          headers: {
+            'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+            'Accept-Encoding': 'identity',
+            Range: `bytes=0-${rangeEnd}`,
+          },
+          responseType: 'arraybuffer',
+          validateStatus: () => true,
+        });
+
+        // Compute hash of reference bytes for comparison
+        if (
+          refResponse.status >= 200 &&
+          refResponse.status < 300 &&
+          refResponse.data instanceof Buffer
+        ) {
+          refBytesHash = toB64Url(
+            createHash('sha256').update(refResponse.data).digest(),
+          );
+        }
+      } else {
+        refResponse = await axios.head(`${this.config.reference}/raw/${id}`, {
+          timeout: this.config.timeout,
+          headers: {
+            'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+            'Accept-Encoding': 'identity',
+          },
+          validateStatus: () => true,
+        });
+      }
 
       result.referenceResponseTime = performance.now() - refStartTime;
       result.referenceStatusCode = refResponse.status;
@@ -664,6 +779,12 @@ class DataRetrievalTester {
         const testCt = normalizeContentType(result.contentType);
         const refCt = normalizeContentType(result.referenceContentType);
         result.contentTypeMatch = testCt === refCt;
+
+        // Compare bytes hash if --bytes was used
+        if (this.config.bytes !== undefined && refBytesHash !== undefined) {
+          result.referenceBytesHash = refBytesHash;
+          result.bytesMatch = result.bytesHash === refBytesHash;
+        }
       } else {
         // Don't flag content mismatches when test gateway returned an error
         // The status mismatch (if any) is the meaningful finding
@@ -818,6 +939,28 @@ class DataRetrievalTester {
     ) {
       this.failedIds.push(result.id);
     }
+
+    // Track byte range retrieval stats
+    if (result.requestedBytes !== undefined && this.stats.byteRangeRetrieval) {
+      this.stats.byteRangeRetrieval.totalRequests++;
+      if (result.receivedBytes !== undefined) {
+        this.stats.byteRangeRetrieval.totalBytesReceived += result.receivedBytes;
+      }
+      if (result.rangeSupported === true) {
+        this.stats.byteRangeRetrieval.rangeSupported206++;
+      } else if (result.rangeSupported === false && result.success) {
+        this.stats.byteRangeRetrieval.rangeFallback200++;
+      }
+      // Track bytes comparison stats
+      if (result.bytesMatch !== undefined) {
+        this.stats.byteRangeRetrieval.bytesCompared++;
+        if (result.bytesMatch) {
+          this.stats.byteRangeRetrieval.bytesMatches++;
+        } else {
+          this.stats.byteRangeRetrieval.bytesMismatches++;
+        }
+      }
+    }
   }
 
   getStatusText(statusCode: number): string {
@@ -874,6 +1017,14 @@ class DataRetrievalTester {
     const error = result.error ? ` (${result.error})` : '';
     const size = result.contentLength ? ` ${this.formatBytes(result.contentLength)}` : '';
 
+    // Add byte range info when --bytes is used
+    let bytesInfo = '';
+    if (result.requestedBytes !== undefined) {
+      const rangeStatus = result.rangeSupported ? '206' : '200';
+      const received = result.receivedBytes !== undefined ? this.formatBytes(result.receivedBytes) : '0 B';
+      bytesInfo = ` [range: ${rangeStatus}, ${received}]`;
+    }
+
     let refInfo = '';
     if (this.config.reference) {
       if (result.referenceError) {
@@ -891,6 +1042,10 @@ class DataRetrievalTester {
         if (!result.contentTypeMatch) {
           const normalizeCt = (ct: string | undefined) => ct?.split(';')[0].trim().toLowerCase() ?? 'none';
           mismatches.push(`type: ${normalizeCt(result.contentType)} (test) vs ${normalizeCt(result.referenceContentType)} (ref)`);
+        }
+        // Add bytes mismatch if applicable
+        if (result.bytesMatch === false) {
+          mismatches.push('bytes: content differs');
         }
 
         if (mismatches.length > 0) {
@@ -915,7 +1070,7 @@ class DataRetrievalTester {
     }
 
     console.log(
-      `${status} ${result.id}: ${result.statusCode} in ${time}ms${cache}${size}${error}${refInfo}${cdb64Info}`,
+      `${status} ${result.id}: ${result.statusCode} in ${time}ms${cache}${size}${bytesInfo}${error}${refInfo}${cdb64Info}`,
     );
   }
 
@@ -1091,6 +1246,30 @@ class DataRetrievalTester {
         console.log(`    Errors: ${gv.errors.toLocaleString()}`);
       }
     }
+
+    // Byte range retrieval results
+    if (this.stats.byteRangeRetrieval && this.stats.byteRangeRetrieval.totalRequests > 0) {
+      const br = this.stats.byteRangeRetrieval;
+      console.log('\nByte Range Retrieval:');
+      console.log(`  Bytes Requested Per Request: ${this.formatBytes(br.requestedBytesPerRequest)}`);
+      console.log(`  Total Requests: ${br.totalRequests.toLocaleString()}`);
+      console.log(`  Total Data Retrieved: ${this.formatBytes(br.totalBytesReceived)}`);
+      const successfulRequests = br.rangeSupported206 + br.rangeFallback200;
+      if (successfulRequests > 0) {
+        const range206Pct = ((br.rangeSupported206 / successfulRequests) * 100).toFixed(1);
+        const range200Pct = ((br.rangeFallback200 / successfulRequests) * 100).toFixed(1);
+        console.log(`  Range Support (206): ${br.rangeSupported206.toLocaleString()} (${range206Pct}%)`);
+        console.log(`  Full Content (200): ${br.rangeFallback200.toLocaleString()} (${range200Pct}%)`);
+      }
+      if (br.bytesCompared > 0) {
+        const matchPct = ((br.bytesMatches / br.bytesCompared) * 100).toFixed(2);
+        console.log(`  Content Comparisons: ${br.bytesCompared.toLocaleString()}`);
+        console.log(`  Content Matches: ${br.bytesMatches.toLocaleString()} (${matchPct}%)`);
+        if (br.bytesMismatches > 0) {
+          console.log(`  Content Mismatches: ${br.bytesMismatches.toLocaleString()}`);
+        }
+      }
+    }
   }
 
   private getJsonResults(): object {
@@ -1182,6 +1361,21 @@ class DataRetrievalTester {
               rootMissing: this.stats.graphqlVerification.rootMissing,
               verifiedOk: this.stats.graphqlVerification.verifiedOk,
               errors: this.stats.graphqlVerification.errors,
+            }
+          : null,
+      byteRangeRetrieval:
+        this.stats.byteRangeRetrieval &&
+        this.stats.byteRangeRetrieval.totalRequests > 0
+          ? {
+              requestedBytesPerRequest:
+                this.stats.byteRangeRetrieval.requestedBytesPerRequest,
+              totalRequests: this.stats.byteRangeRetrieval.totalRequests,
+              rangeSupported206: this.stats.byteRangeRetrieval.rangeSupported206,
+              rangeFallback200: this.stats.byteRangeRetrieval.rangeFallback200,
+              totalBytesReceived: this.stats.byteRangeRetrieval.totalBytesReceived,
+              bytesCompared: this.stats.byteRangeRetrieval.bytesCompared,
+              bytesMatches: this.stats.byteRangeRetrieval.bytesMatches,
+              bytesMismatches: this.stats.byteRangeRetrieval.bytesMismatches,
             }
           : null,
     };
@@ -1373,6 +1567,7 @@ function parseArguments(): TestConfig {
     verbose: false,
     continuous: false,
     outputFile: undefined,
+    bytes: undefined,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -1484,6 +1679,14 @@ function parseArguments(): TestConfig {
         i++;
         break;
 
+      case '--bytes':
+        if (!nextArg || isNaN(parseInt(nextArg)) || parseInt(nextArg) < 1) {
+          throw new Error('--bytes requires a positive number');
+        }
+        config.bytes = parseInt(nextArg);
+        i++;
+        break;
+
       case '--help':
       case '-h':
         printUsage();
@@ -1545,6 +1748,7 @@ Options:
   --reference <url>      Reference gateway URL for comparison (optional)
   --cdb64 <file>         CDB64 file for verifying IDs exist in the index (optional)
   --failed-ids <file>    Write IDs that fail on test but succeed on reference to file (requires --reference)
+  --bytes <n>            Retrieve first N bytes using GET with Range header (default: HEAD only)
   --mode <mode>          Sampling mode: 'random' or 'sequential' (default: sequential)
   --count <n>            Number of IDs to test (default: all for sequential, 100 for random)
   --concurrency <n>      Number of concurrent requests (default: 1)
@@ -1588,6 +1792,16 @@ GraphQL Verification (404 Mismatches):
     - verified-ok: Everything matches (likely a timing issue)
     - error: GraphQL query failure
 
+Byte Range Retrieval:
+  When --bytes is specified, the tool uses GET requests with Range headers instead
+  of HEAD requests. This enables content validation and comparison between gateways.
+
+  - Requests the first N bytes using "Range: bytes=0-{N-1}" header
+  - Computes SHA-256 hash of received bytes for comparison
+  - Tracks whether server returns 206 (range supported) or 200 (full content)
+  - When combined with --reference, compares byte content hashes between gateways
+  - Content smaller than requested is valid (e.g., file smaller than N bytes)
+
 Examples:
   ./tools/test-data-retrieval --csv ids.csv
   ./tools/test-data-retrieval --csv ids.csv --gateway https://ar-io.dev
@@ -1613,6 +1827,13 @@ Examples:
   # Continuous random sampling (Ctrl+C to stop and save results)
   ./tools/test-data-retrieval --csv ids.csv --continuous --concurrency 10
   ./tools/test-data-retrieval --csv ids.csv --continuous --output results.json
+
+  # Fetch first 1024 bytes of each data item
+  ./tools/test-data-retrieval --csv ids.csv --bytes 1024
+
+  # Compare first 4KB content between gateways
+  ./tools/test-data-retrieval --csv ids.csv --gateway http://localhost:4000 \\
+    --reference https://arweave.net --bytes 4096 --verbose
 `);
 }
 
