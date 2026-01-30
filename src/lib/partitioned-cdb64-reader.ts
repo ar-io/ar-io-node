@@ -14,7 +14,7 @@
  *
  * ## Features
  * - Lazy partition opening: only opens partitions on first access
- * - Multiple location types: local files, HTTP, Arweave TX, bundle items
+ * - Multiple location types: local files, HTTP, Arweave ID, byte-range
  * - Caching for remote sources to reduce network round trips
  * - Graceful error handling: logs errors and returns undefined
  *

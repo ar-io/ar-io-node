@@ -9,8 +9,18 @@ import * as fs from 'node:fs';
 
 const GATEWAY_URL = 'https://arweave.net';
 
-// Read a 256-bit little-endian integer from a buffer (only first 8 bytes needed)
+// Read a 256-bit little-endian integer from a buffer.
+// Only the lower 64 bits are used; throws if upper bytes are non-zero.
 function readUint256LE(buffer, offset) {
+  // Check that upper 24 bytes are zero to avoid silent truncation
+  for (let i = 8; i < 32; i++) {
+    if (buffer[offset + i] !== 0) {
+      throw new Error(
+        `Value at offset ${offset} exceeds 64-bit range (non-zero byte at position ${i})`,
+      );
+    }
+  }
+
   let value = 0n;
   for (let i = 0; i < 8; i++) {
     value |= BigInt(buffer[offset + i]) << BigInt(i * 8);
