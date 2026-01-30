@@ -93,8 +93,8 @@ export class SamplingContiguousDataSource implements ContiguousDataSource {
     const hash = createHash('sha256').update(id).digest();
     // Take the first 4 bytes as an unsigned 32-bit integer
     const hashValue = hash.readUInt32BE(0);
-    // Normalize to [0, 1) range
-    const normalized = hashValue / 0xffffffff;
+    // Normalize to [0, 1) range (use 2^32 to ensure max hash < 1.0)
+    const normalized = hashValue / 0x100000000;
     return normalized < this.samplingRate;
   }
 
