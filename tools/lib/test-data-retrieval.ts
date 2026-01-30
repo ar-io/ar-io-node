@@ -43,6 +43,7 @@ interface TestConfig {
   continuous: boolean;
   outputFile: string | undefined;
   bytes: number | undefined; // Number of bytes to retrieve with Range header
+  maxSize: number | undefined; // Max size threshold for full content retrieval
 }
 
 interface RequestResult {
@@ -73,6 +74,12 @@ interface RequestResult {
   rangeSupported?: boolean; // Server returned 206 (true) or 200 (false)
   referenceBytesHash?: string; // Reference gateway bytes hash
   bytesMatch?: boolean; // Whether bytes content matches reference
+  // Full content retrieval fields (only present when --max-size is used)
+  fullContentFetched?: boolean; // Whether full content was fetched (size <= threshold)
+  fullContentSize?: number; // Size of fetched content
+  fullContentHash?: string; // SHA-256 hash of full content (base64url)
+  referenceFullContentHash?: string; // Reference gateway full content hash
+  fullContentMatch?: boolean; // Whether full content matches reference
 }
 
 interface Statistics {
@@ -101,6 +108,8 @@ interface Statistics {
   cdb64Verification?: Cdb64VerificationStats;
   // Byte range retrieval stats (only present when --bytes is used)
   byteRangeRetrieval?: ByteRangeStats;
+  // Full content retrieval stats (only present when --max-size is used)
+  fullContentRetrieval?: FullContentStats;
 }
 
 interface ByteRangeStats {
@@ -112,6 +121,17 @@ interface ByteRangeStats {
   bytesCompared: number;
   bytesMatches: number;
   bytesMismatches: number;
+}
+
+interface FullContentStats {
+  sizeThreshold: number;
+  totalChecked: number;
+  underThreshold: number;
+  overThreshold: number;
+  totalBytesFetched: number;
+  contentCompared: number;
+  contentMatches: number;
+  contentMismatches: number;
 }
 
 interface Cdb64LookupResult {
@@ -241,6 +261,20 @@ class DataRetrievalTester {
         bytesCompared: 0,
         bytesMatches: 0,
         bytesMismatches: 0,
+      };
+    }
+
+    // Initialize full content retrieval stats when --max-size is specified
+    if (this.config.maxSize !== undefined) {
+      this.stats.fullContentRetrieval = {
+        sizeThreshold: this.config.maxSize,
+        totalChecked: 0,
+        underThreshold: 0,
+        overThreshold: 0,
+        totalBytesFetched: 0,
+        contentCompared: 0,
+        contentMatches: 0,
+        contentMismatches: 0,
       };
     }
   }
@@ -618,6 +652,68 @@ class DataRetrievalTester {
           bytesHash,
           rangeSupported: response.status === 206,
         };
+      } else if (this.config.maxSize !== undefined) {
+        // Two-phase: HEAD to check size, then GET if under threshold
+        const headResponse = await axios.head(`${this.config.gateway}/raw/${id}`, {
+          timeout: this.config.timeout,
+          headers: {
+            'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+            'Accept-Encoding': 'identity',
+          },
+          validateStatus: () => true,
+        });
+
+        const responseTime = performance.now() - startTime;
+        const contentLength = headResponse.headers['content-length']
+          ? parseInt(headResponse.headers['content-length'], 10)
+          : undefined;
+        const contentType = headResponse.headers['content-type'] as string | undefined;
+        const cacheStatus = headResponse.headers['x-cache'] as string | undefined;
+
+        let fullContentFetched = false;
+        let fullContentSize: number | undefined;
+        let fullContentHash: string | undefined;
+
+        // Fetch full content if under threshold
+        if (
+          headResponse.status >= 200 &&
+          headResponse.status < 300 &&
+          contentLength !== undefined &&
+          contentLength <= this.config.maxSize
+        ) {
+          const getResponse = await axios.get(`${this.config.gateway}/raw/${id}`, {
+            timeout: this.config.timeout,
+            headers: {
+              'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+              'Accept-Encoding': 'identity',
+            },
+            responseType: 'arraybuffer',
+            validateStatus: () => true,
+          });
+
+          if (
+            getResponse.status >= 200 &&
+            getResponse.status < 300 &&
+            getResponse.data instanceof Buffer
+          ) {
+            fullContentFetched = true;
+            fullContentSize = getResponse.data.length;
+            fullContentHash = toB64Url(createHash('sha256').update(getResponse.data).digest());
+          }
+        }
+
+        result = {
+          id,
+          success: headResponse.status >= 200 && headResponse.status < 300,
+          statusCode: headResponse.status,
+          responseTime,
+          contentLength,
+          contentType,
+          cacheStatus,
+          fullContentFetched,
+          fullContentSize,
+          fullContentHash,
+        };
       } else {
         // Use HEAD request to test availability without downloading content
         // Use Accept-Encoding: identity to get actual Content-Length (not chunked)
@@ -718,6 +814,7 @@ class DataRetrievalTester {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let refResponse: any;
       let refBytesHash: string | undefined;
+      let refFullContentHash: string | undefined;
 
       // If --bytes is specified, use GET with Range header for reference too
       if (this.config.bytes !== undefined) {
@@ -742,6 +839,48 @@ class DataRetrievalTester {
           refBytesHash = toB64Url(
             createHash('sha256').update(refResponse.data).digest(),
           );
+        }
+      } else if (this.config.maxSize !== undefined) {
+        // Two-phase for reference: HEAD then GET if under threshold
+        refResponse = await axios.head(`${this.config.reference}/raw/${id}`, {
+          timeout: this.config.timeout,
+          headers: {
+            'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+            'Accept-Encoding': 'identity',
+          },
+          validateStatus: () => true,
+        });
+
+        const refContentLength = refResponse.headers['content-length']
+          ? parseInt(refResponse.headers['content-length'], 10)
+          : undefined;
+
+        // Fetch full content from reference if under threshold
+        if (
+          refResponse.status >= 200 &&
+          refResponse.status < 300 &&
+          refContentLength !== undefined &&
+          refContentLength <= this.config.maxSize
+        ) {
+          const refGetResponse = await axios.get(`${this.config.reference}/raw/${id}`, {
+            timeout: this.config.timeout,
+            headers: {
+              'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+              'Accept-Encoding': 'identity',
+            },
+            responseType: 'arraybuffer',
+            validateStatus: () => true,
+          });
+
+          if (
+            refGetResponse.status >= 200 &&
+            refGetResponse.status < 300 &&
+            refGetResponse.data instanceof Buffer
+          ) {
+            refFullContentHash = toB64Url(
+              createHash('sha256').update(refGetResponse.data).digest(),
+            );
+          }
         }
       } else {
         refResponse = await axios.head(`${this.config.reference}/raw/${id}`, {
@@ -784,6 +923,12 @@ class DataRetrievalTester {
         if (this.config.bytes !== undefined && refBytesHash !== undefined) {
           result.referenceBytesHash = refBytesHash;
           result.bytesMatch = result.bytesHash === refBytesHash;
+        }
+
+        // Compare full content hash if --max-size was used
+        if (this.config.maxSize !== undefined && refFullContentHash !== undefined) {
+          result.referenceFullContentHash = refFullContentHash;
+          result.fullContentMatch = result.fullContentHash === refFullContentHash;
         }
       } else {
         // Don't flag content mismatches when test gateway returned an error
@@ -961,6 +1106,29 @@ class DataRetrievalTester {
         }
       }
     }
+
+    // Track full content retrieval stats
+    if (this.config.maxSize !== undefined && this.stats.fullContentRetrieval) {
+      this.stats.fullContentRetrieval.totalChecked++;
+      if (result.fullContentFetched) {
+        this.stats.fullContentRetrieval.underThreshold++;
+        if (result.fullContentSize !== undefined) {
+          this.stats.fullContentRetrieval.totalBytesFetched += result.fullContentSize;
+        }
+      } else if (result.success) {
+        // Only count as over threshold if HEAD succeeded
+        this.stats.fullContentRetrieval.overThreshold++;
+      }
+      // Track content comparison stats
+      if (result.fullContentMatch !== undefined) {
+        this.stats.fullContentRetrieval.contentCompared++;
+        if (result.fullContentMatch) {
+          this.stats.fullContentRetrieval.contentMatches++;
+        } else {
+          this.stats.fullContentRetrieval.contentMismatches++;
+        }
+      }
+    }
   }
 
   getStatusText(statusCode: number): string {
@@ -1025,6 +1193,17 @@ class DataRetrievalTester {
       bytesInfo = ` [range: ${rangeStatus}, ${received}]`;
     }
 
+    // Add full content info when --max-size is used
+    let fullContentInfo = '';
+    if (this.config.maxSize !== undefined) {
+      if (result.fullContentFetched) {
+        const fcSize = result.fullContentSize !== undefined ? this.formatBytes(result.fullContentSize) : '0 B';
+        fullContentInfo = ` [full: ${fcSize}]`;
+      } else if (result.success) {
+        fullContentInfo = ` [full: skipped, over ${this.formatBytes(this.config.maxSize)}]`;
+      }
+    }
+
     let refInfo = '';
     if (this.config.reference) {
       if (result.referenceError) {
@@ -1046,6 +1225,10 @@ class DataRetrievalTester {
         // Add bytes mismatch if applicable
         if (result.bytesMatch === false) {
           mismatches.push('bytes: content differs');
+        }
+        // Add full content mismatch if applicable
+        if (result.fullContentMatch === false) {
+          mismatches.push('content: full content differs');
         }
 
         if (mismatches.length > 0) {
@@ -1070,7 +1253,7 @@ class DataRetrievalTester {
     }
 
     console.log(
-      `${status} ${result.id}: ${result.statusCode} in ${time}ms${cache}${size}${bytesInfo}${error}${refInfo}${cdb64Info}`,
+      `${status} ${result.id}: ${result.statusCode} in ${time}ms${cache}${size}${bytesInfo}${fullContentInfo}${error}${refInfo}${cdb64Info}`,
     );
   }
 
@@ -1112,6 +1295,10 @@ class DataRetrievalTester {
     console.log(`  Total: ${this.stats.totalRequests.toLocaleString()}`);
     console.log(`  Success: ${this.stats.successes.toLocaleString()} (${successRate}%)`);
     console.log(`  Failed: ${this.stats.failures.toLocaleString()} (${failureRate}%)`);
+    if (duration > 0) {
+      const rps = (this.stats.totalRequests / (duration / 1000)).toFixed(2);
+      console.log(`  RPS: ${rps}`);
+    }
 
     if (this.stats.statusCodeCounts.size > 0) {
       console.log('\nStatus Codes:');
@@ -1270,6 +1457,26 @@ class DataRetrievalTester {
         }
       }
     }
+
+    // Full content retrieval results
+    if (this.stats.fullContentRetrieval && this.stats.fullContentRetrieval.totalChecked > 0) {
+      const fc = this.stats.fullContentRetrieval;
+      console.log('\nFull Content Retrieval:');
+      console.log(`  Size Threshold: ${this.formatBytes(fc.sizeThreshold)}`);
+      console.log(`  Total Checked: ${fc.totalChecked.toLocaleString()}`);
+      const underPct = ((fc.underThreshold / fc.totalChecked) * 100).toFixed(1);
+      console.log(`  Under Threshold: ${fc.underThreshold.toLocaleString()} (${underPct}%)`);
+      console.log(`  Over Threshold: ${fc.overThreshold.toLocaleString()}`);
+      console.log(`  Total Data Fetched: ${this.formatBytes(fc.totalBytesFetched)}`);
+      if (fc.contentCompared > 0) {
+        const matchPct = ((fc.contentMatches / fc.contentCompared) * 100).toFixed(2);
+        console.log(`  Content Comparisons: ${fc.contentCompared.toLocaleString()}`);
+        console.log(`  Content Matches: ${fc.contentMatches.toLocaleString()} (${matchPct}%)`);
+        if (fc.contentMismatches > 0) {
+          console.log(`  Content Mismatches: ${fc.contentMismatches.toLocaleString()}`);
+        }
+      }
+    }
   }
 
   private getJsonResults(): object {
@@ -1292,6 +1499,7 @@ class DataRetrievalTester {
             ? parseFloat(((this.stats.successes / this.stats.totalRequests) * 100).toFixed(2))
             : 0,
         durationMs: duration,
+        rps: duration > 0 ? parseFloat((this.stats.totalRequests / (duration / 1000)).toFixed(2)) : 0,
         bytesTransferred: this.stats.totalBytes,
       },
       statusCodes: Object.fromEntries(this.stats.statusCodeCounts),
@@ -1376,6 +1584,20 @@ class DataRetrievalTester {
               bytesCompared: this.stats.byteRangeRetrieval.bytesCompared,
               bytesMatches: this.stats.byteRangeRetrieval.bytesMatches,
               bytesMismatches: this.stats.byteRangeRetrieval.bytesMismatches,
+            }
+          : null,
+      fullContentRetrieval:
+        this.stats.fullContentRetrieval &&
+        this.stats.fullContentRetrieval.totalChecked > 0
+          ? {
+              sizeThreshold: this.stats.fullContentRetrieval.sizeThreshold,
+              totalChecked: this.stats.fullContentRetrieval.totalChecked,
+              underThreshold: this.stats.fullContentRetrieval.underThreshold,
+              overThreshold: this.stats.fullContentRetrieval.overThreshold,
+              totalBytesFetched: this.stats.fullContentRetrieval.totalBytesFetched,
+              contentCompared: this.stats.fullContentRetrieval.contentCompared,
+              contentMatches: this.stats.fullContentRetrieval.contentMatches,
+              contentMismatches: this.stats.fullContentRetrieval.contentMismatches,
             }
           : null,
     };
@@ -1568,6 +1790,7 @@ function parseArguments(): TestConfig {
     continuous: false,
     outputFile: undefined,
     bytes: undefined,
+    maxSize: undefined,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -1687,6 +1910,14 @@ function parseArguments(): TestConfig {
         i++;
         break;
 
+      case '--max-size':
+        if (!nextArg || isNaN(parseInt(nextArg)) || parseInt(nextArg) < 1) {
+          throw new Error('--max-size requires a positive number');
+        }
+        config.maxSize = parseInt(nextArg);
+        i++;
+        break;
+
       case '--help':
       case '-h':
         printUsage();
@@ -1733,6 +1964,11 @@ function parseArguments(): TestConfig {
     throw new Error('--failed-ids requires --reference to also be specified');
   }
 
+  // Validate mutually exclusive options
+  if (config.bytes !== undefined && config.maxSize !== undefined) {
+    throw new Error('--bytes and --max-size cannot be used together');
+  }
+
   return config;
 }
 
@@ -1749,6 +1985,7 @@ Options:
   --cdb64 <file>         CDB64 file for verifying IDs exist in the index (optional)
   --failed-ids <file>    Write IDs that fail on test but succeed on reference to file (requires --reference)
   --bytes <n>            Retrieve first N bytes using GET with Range header (default: HEAD only)
+  --max-size <n>         Fetch full content if size ≤ N bytes (HEAD then GET)
   --mode <mode>          Sampling mode: 'random' or 'sequential' (default: sequential)
   --count <n>            Number of IDs to test (default: all for sequential, 100 for random)
   --concurrency <n>      Number of concurrent requests (default: 1)
@@ -1802,6 +2039,15 @@ Byte Range Retrieval:
   - When combined with --reference, compares byte content hashes between gateways
   - Content smaller than requested is valid (e.g., file smaller than N bytes)
 
+Full Content Retrieval:
+  When --max-size is specified, the tool performs a two-phase request:
+  1. HEAD request to check Content-Length
+  2. GET request to fetch full content if size ≤ threshold
+
+  - Computes SHA-256 hash of full content for comparison
+  - Skips GET for items over the threshold (saves bandwidth)
+  - Cannot be used together with --bytes
+
 Examples:
   ./tools/test-data-retrieval --csv ids.csv
   ./tools/test-data-retrieval --csv ids.csv --gateway https://ar-io.dev
@@ -1834,6 +2080,13 @@ Examples:
   # Compare first 4KB content between gateways
   ./tools/test-data-retrieval --csv ids.csv --gateway http://localhost:4000 \\
     --reference https://arweave.net --bytes 4096 --verbose
+
+  # Fetch full content for items under 100KB
+  ./tools/test-data-retrieval --csv ids.csv --max-size 102400
+
+  # Compare full content between gateways for small items
+  ./tools/test-data-retrieval --csv ids.csv --gateway http://localhost:4000 \\
+    --reference https://arweave.net --max-size 102400 --verbose
 `);
 }
 
