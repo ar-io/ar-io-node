@@ -71,6 +71,32 @@ describe('SamplingContiguousDataSource', () => {
       );
     });
 
+    it('should throw for NaN sampling rate', () => {
+      assert.throws(
+        () =>
+          new SamplingContiguousDataSource({
+            log,
+            dataSource: mockDataSource,
+            sourceName: 'test-source',
+            samplingRate: NaN,
+          }),
+        /samplingRate must be between 0 and 1/,
+      );
+    });
+
+    it('should throw for Infinity sampling rate', () => {
+      assert.throws(
+        () =>
+          new SamplingContiguousDataSource({
+            log,
+            dataSource: mockDataSource,
+            sourceName: 'test-source',
+            samplingRate: Infinity,
+          }),
+        /samplingRate must be between 0 and 1/,
+      );
+    });
+
     it('should accept sampling rate of 0', () => {
       const source = new SamplingContiguousDataSource({
         log,

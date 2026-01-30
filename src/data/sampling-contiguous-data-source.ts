@@ -58,7 +58,11 @@ export class SamplingContiguousDataSource implements ContiguousDataSource {
     samplingRate: number;
     strategy?: SamplingStrategy;
   }) {
-    if (samplingRate < 0 || samplingRate > 1) {
+    if (
+      !Number.isFinite(samplingRate) ||
+      samplingRate < 0 ||
+      samplingRate > 1
+    ) {
       throw new Error(
         `samplingRate must be between 0 and 1, got: ${samplingRate}`,
       );
