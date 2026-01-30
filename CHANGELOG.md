@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
 ## [Release 67] - 2026-01-29
 
 This is a **recommended release** focusing on **CDB64 index accessibility** and
