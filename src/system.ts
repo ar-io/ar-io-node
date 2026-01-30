@@ -921,21 +921,13 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
 }
 
 // Create sampling data source if enabled
+// Note: config validation guarantees SAMPLING_DATA_SOURCE is defined and valid when enabled
 let samplingDataSource: ContiguousDataSource | undefined;
-if (
-  config.ENABLE_SAMPLING_DATA_SOURCE &&
-  config.SAMPLING_DATA_SOURCE !== undefined
-) {
-  const innerSource = getDataSource(config.SAMPLING_DATA_SOURCE);
-  if (innerSource === undefined) {
-    throw new Error(
-      `Sampling data source not found: ${config.SAMPLING_DATA_SOURCE}`,
-    );
-  }
+if (config.ENABLE_SAMPLING_DATA_SOURCE) {
   samplingDataSource = new SamplingContiguousDataSource({
     log,
-    dataSource: innerSource,
-    sourceName: config.SAMPLING_DATA_SOURCE,
+    dataSource: getDataSource(config.SAMPLING_DATA_SOURCE!)!,
+    sourceName: config.SAMPLING_DATA_SOURCE!,
     samplingRate: config.SAMPLING_RATE,
     strategy: config.SAMPLING_STRATEGY,
   });

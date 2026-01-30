@@ -16,8 +16,7 @@ import {
 } from '../types.js';
 import { startChildSpan } from '../tracing.js';
 import * as metrics from '../metrics.js';
-
-export type SamplingStrategy = 'random' | 'deterministic';
+import { SamplingStrategy } from '../config.js';
 
 /**
  * A wrapper around ContiguousDataSource that probabilistically routes requests
@@ -40,11 +39,11 @@ export type SamplingStrategy = 'random' | 'deterministic';
  * ```
  */
 export class SamplingContiguousDataSource implements ContiguousDataSource {
-  private log: winston.Logger;
-  private innerDataSource: ContiguousDataSource;
-  private sourceName: string;
-  private samplingRate: number;
-  private strategy: SamplingStrategy;
+  private readonly log: winston.Logger;
+  private readonly innerDataSource: ContiguousDataSource;
+  private readonly sourceName: string;
+  private readonly samplingRate: number;
+  private readonly strategy: SamplingStrategy;
 
   constructor({
     log,
