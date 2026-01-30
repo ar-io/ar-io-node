@@ -308,7 +308,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       case 'arweave-byte-range':
         if (!this.contiguousDataSource) {
           throw new Error(
-            'ContiguousDataSource required for Arweave bundle item sources',
+            'ContiguousDataSource required for Arweave byte-range sources',
           );
         }
         return this.wrapWithCache(
@@ -727,7 +727,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       case 'partitioned-arweave-byte-range': {
         if (!this.contiguousDataSource) {
           throw new Error(
-            'ContiguousDataSource required for Arweave bundle item manifest sources',
+            'ContiguousDataSource required for Arweave byte-range manifest sources',
           );
         }
         const data = await this.contiguousDataSource.getData({
