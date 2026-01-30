@@ -80,8 +80,8 @@ type ParsedSource =
  * - HTTP URL ending in /manifest.json: partitioned HTTP source
  * - Arweave TX ID: 43-char base64url string
  * - Arweave TX ID with :manifest suffix: partitioned Arweave TX
- * - Bundle data item: "txId:offset:size" (colon-separated)
- * - Bundle data item with :manifest suffix: partitioned bundle item
+ * - Arweave byte range: "rootTxId:offset:size" (colon-separated)
+ * - Arweave byte range with :manifest suffix: partitioned byte-range source
  * - Local path: anything else (file or directory, determined at runtime)
  *
  * Note: For local paths, partitioned directories are detected at runtime
@@ -102,30 +102,40 @@ function parseSourceSpec(spec: string): ParsedSource {
     }
   }
 
-  // Check for bundle data item format: txId:offset:size or txId:offset:size:manifest
+  // Check for byte-range format: rootTxId:offset:size or rootTxId:offset:size:manifest
   const colonParts = spec.split(':');
 
-  // txId:offset:size:manifest format (partitioned bundle item)
+  // rootTxId:offset:size:manifest format (partitioned byte-range)
   if (colonParts.length === 4 && colonParts[3] === 'manifest') {
     const [id, offsetStr, sizeStr] = colonParts;
     if (/^[A-Za-z0-9_-]{43}$/.test(id)) {
       const offset = parseInt(offsetStr, 10);
       const size = parseInt(sizeStr, 10);
 
-      if (!isNaN(offset) && !isNaN(size) && offset >= 0 && size > 0) {
+      if (
+        Number.isSafeInteger(offset) &&
+        Number.isSafeInteger(size) &&
+        offset >= 0 &&
+        size > 0
+      ) {
         return { type: 'partitioned-arweave-byte-range', id, offset, size };
       }
     }
   }
 
-  // txId:offset:size format (regular bundle item)
+  // rootTxId:offset:size format (regular byte-range)
   if (colonParts.length === 3) {
     const [id, offsetStr, sizeStr] = colonParts;
     if (/^[A-Za-z0-9_-]{43}$/.test(id)) {
       const offset = parseInt(offsetStr, 10);
       const size = parseInt(sizeStr, 10);
 
-      if (!isNaN(offset) && !isNaN(size) && offset >= 0 && size > 0) {
+      if (
+        Number.isSafeInteger(offset) &&
+        Number.isSafeInteger(size) &&
+        offset >= 0 &&
+        size > 0
+      ) {
         return { type: 'arweave-byte-range', id, offset, size };
       }
     }
