@@ -6,13 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [Unreleased]
+## [Release 68] - 2026-02-04
 
 ### Added
 
+- **SamplingContiguousDataSource for A/B Testing**: New data source wrapper that
+  probabilistically routes requests through an experimental source (PE-8900)
+  - Enables safe A/B testing of new retrieval strategies with controlled traffic
+    exposure
+  - Two sampling strategies: `random` (per-request) or `deterministic`
+    (consistent per ID using SHA-256 hash)
+  - Configurable sampling rate (0-1) with validation to reject invalid values
+  - New Prometheus metrics: `sampling_decision_total`, `sampling_request_total`,
+    `sampling_latency_ms`
+  - OpenTelemetry span instrumentation for sampled requests
+
+- **Data Retrieval Tool Enhancements**: New options in `tools/test-data-retrieval`
+  for content validation
+  - `--bytes <n>`: Fetch first N bytes using HTTP Range headers for content
+    comparison
+  - `--max-size <bytes>`: Two-phase retrieval (HEAD then GET) for content under
+    size threshold
+  - RPS (requests per second) statistics in console and JSON output
+  - SHA-256 hash computation for content comparison between gateways
+
 ### Changed
 
-### Fixed
+- **CDB64 Arweave Location Type Renames**: Renamed location types in CDB64
+  manifests for clarity
+  - `arweave-tx` → `arweave-id` (field: `txId` → `id`)
+  - `arweave-bundle-item` → `arweave-byte-range` (field: `txId` → `rootTxId`,
+    `offset` → `dataOffsetInRootTx`, added optional `dataItemId`, removed `size`
+    from location)
+  - Includes script to add `dataItemId` fields by reading ANS-104 headers
+  - Updated bundled manifest with new format
 
 ## [Release 67] - 2026-01-29
 
