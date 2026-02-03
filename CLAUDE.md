@@ -296,6 +296,11 @@ const log = createTestLogger({
 
 - Documentation index is at `docs/INDEX.md` - start here for an overview of all
   available documentation
+- **Keep docs in sync with code**: When making changes that affect documented
+  behavior (environment variables, configuration, APIs, CLI tools), update the
+  relevant documentation in the same PR. Check `docs/envs.md` for env var
+  changes, feature-specific guides for behavior changes, and `docs/INDEX.md` to
+  find the right doc to update.
 - The project includes a comprehensive glossary at `docs/glossary.md`
 - When adding new concepts, features, or technical terms, update the glossary
 - Keep glossary definitions concise and focused on concepts rather than
