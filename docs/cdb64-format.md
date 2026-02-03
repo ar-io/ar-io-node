@@ -2,6 +2,18 @@
 
 CDB64 is a 64-bit variant of D. J. Bernstein's [Constant Database (CDB)](https://cr.yp.to/cdb.html) format. It provides O(1) key-value lookups with minimal overhead, designed for static datasets that are written once and read many times.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [File Structure](#file-structure)
+- [Hash Function](#hash-function)
+- [Lookup Algorithm](#lookup-algorithm)
+- [Writing Algorithm](#writing-algorithm)
+- [Differences from Original CDB](#differences-from-original-cdb)
+- [Root TX Index Value Format](#root-tx-index-value-format)
+- [Implementation Notes](#implementation-notes)
+- [Partitioned CDB64 Index Format](#partitioned-cdb64-index-format)
+
 ## Overview
 
 CDB64 extends the original CDB format to support files larger than 4GB by using 64-bit file offsets instead of 32-bit. This is necessary for large historical indexes that can exceed the 4GB limit.
@@ -304,6 +316,15 @@ The reader only needs to keep the 4096-byte header in memory. All lookups are do
 - Corrupted records can be detected by checking if key/value lengths are reasonable
 - Hash collisions are handled correctly by the linear probing algorithm
 
+## File Size Limits
+
+While CDB64 uses 64-bit offsets supporting files up to 16 exabytes theoretically, practical limits apply:
+
+- **JavaScript/Node.js**: ~8TB (`Number.MAX_SAFE_INTEGER` = 2^53 - 1 bytes)
+- **Rust cdb64-rs**: Full 64-bit support
+
+The AR.IO Gateway implementation will throw an error for file positions exceeding the safe integer limit.
+
 ---
 
 # Partitioned CDB64 Index Format
@@ -467,68 +488,9 @@ The partitioned writer (`PartitionedCdb64Writer`) features:
 - **Atomic directory creation**: Writes to temp directory, then renames atomically
 - **Automatic manifest generation**: Creates `manifest.json` with all partition metadata
 
-## Usage Examples
+---
 
-### Creating a Partitioned Index
+## Related Documentation
 
-```typescript
-import { PartitionedCdb64Writer } from './src/lib/partitioned-cdb64-writer.js';
-
-const writer = new PartitionedCdb64Writer('/path/to/output-dir');
-await writer.open();
-
-for (const { key, value } of records) {
-  await writer.add(key, value);  // Routes to partition based on key[0]
-}
-
-const manifest = await writer.finalize();
-console.log(`Created ${manifest.partitions.length} partitions`);
-```
-
-### Reading from a Partitioned Index
-
-```typescript
-import { PartitionedCdb64Reader } from './src/lib/partitioned-cdb64-reader.js';
-import { parseManifest } from './src/lib/cdb64-manifest.js';
-
-const manifestJson = await fs.readFile('/path/to/index/manifest.json', 'utf-8');
-const manifest = parseManifest(manifestJson);
-
-const reader = new PartitionedCdb64Reader({
-  manifest,
-  baseDir: '/path/to/index',
-});
-await reader.open();
-
-const value = await reader.get(keyBuffer);
-await reader.close();
-```
-
-### CLI Tool Usage
-
-```bash
-# Create partitioned index from CSV
-./tools/generate-cdb64-root-tx-index --input data.csv --partitioned --output-dir ./index/
-
-# Create partitioned index from SQLite
-./tools/export-sqlite-to-cdb64 --partitioned --output-dir ./index/
-```
-
-## Configuration
-
-The gateway automatically detects partitioned indexes when a directory contains a `manifest.json` file:
-
-```bash
-# Configure with partitioned directory
-CDB64_ROOT_TX_INDEX_SOURCES=/path/to/partitioned-index/ yarn start
-
-# Mix of single-file and partitioned sources
-CDB64_ROOT_TX_INDEX_SOURCES=/path/to/single.cdb,/path/to/partitioned-index/ yarn start
-```
-
-## Backward Compatibility
-
-- The gateway supports both single-file and partitioned CDB64 sources simultaneously
-- When a directory contains `manifest.json`, it is treated as partitioned (ignoring loose `.cdb` files)
-- When a directory contains no `manifest.json`, all `.cdb` files are loaded as individual indexes
-- Single `.cdb` file paths continue to work unchanged
+- **[CDB64 Tools Reference](cdb64-tools.md)** - CLI tools for creating, verifying, and uploading CDB64 indexes
+- **[CDB64 Operator Guide](cdb64-guide.md)** - Configuration, usage, and troubleshooting for gateway operators
