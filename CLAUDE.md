@@ -86,7 +86,7 @@ Data retrieval uses composite sources that try multiple backends in order:
 
 - `CompositeChunkDataSource` - tries local cache, S3, AR.IO peers, trusted
   gateways, Arweave nodes
-- `CompositeTxOffsetSource` - tries database, ANS-104 offsets, chain offsets
+- `CompositeDataAttributesSource` - aggregates transaction/data item metadata
 - Components implement common interfaces (`ChunkDataSource`,
   `ContiguousDataSource`, etc.)
 
