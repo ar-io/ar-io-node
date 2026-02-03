@@ -294,6 +294,8 @@ const log = createTestLogger({
 
 ## Documentation
 
+- Documentation index is at `docs/INDEX.md` - start here for an overview of all
+  available documentation
 - The project includes a comprehensive glossary at `docs/glossary.md`
 - When adding new concepts, features, or technical terms, update the glossary
 - Keep glossary definitions concise and focused on concepts rather than
