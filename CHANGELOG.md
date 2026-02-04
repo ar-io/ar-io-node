@@ -6,8 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [Unreleased]
-
 ### Added
 
 ### Changed
@@ -15,6 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 ## [Release 68] - 2026-02-04
+
+This is an **optional release** that introduces **A/B testing infrastructure for data sources** via the
+new `SamplingContiguousDataSource`, enabling operators to safely evaluate
+alternative retrieval strategies with controlled traffic exposure and built-in
+metrics. It also includes **CDB64 location type renames** for improved clarity in
+manifest schemas, and **data retrieval tooling enhancements** with content
+validation options for easier gateway comparison testing.
 
 ### Added
 
