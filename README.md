@@ -196,6 +196,79 @@ encounter problems with it when indexing larger sets of transactions.
 
 For detailed information about filter types, operators, and advanced examples, see [Filter Documentation](docs/filters.md).
 
+### Root Transaction Index (CDB64)
+
+The ar.io gateway uses a root transaction index to efficiently resolve data item
+IDs to their containing L1 Arweave transactions. Starting with Release 67, the
+gateway ships with a pre-built CDB64 index enabled by default, providing O(1)
+lookups for historical data items without requiring local indexing or network
+requests.
+
+The default index covers non-AO, non-Redstone data items with content types up
+to block height 1,820,000 (~964 million records).
+
+#### Configuration
+
+The lookup order is controlled by `ROOT_TX_LOOKUP_ORDER`:
+
+```
+ROOT_TX_LOOKUP_ORDER=db,gateways,cdb,graphql
+```
+
+Available sources (in recommended order):
+- `db` - Local SQLite database
+- `gateways` - AR.IO gateway HEAD requests
+- `cdb` - CDB64 file-based index
+- `graphql` - GraphQL queries to trusted gateways
+- `turbo` - Turbo API
+
+To disable CDB64 lookups, remove `cdb` from the lookup order.
+
+#### Custom Index Sources
+
+Custom CDB64 index sources can be configured via `CDB64_ROOT_TX_INDEX_SOURCES`:
+
+```
+# Local file or directory
+CDB64_ROOT_TX_INDEX_SOURCES=/path/to/index.cdb
+
+# Multiple sources (tried in order)
+CDB64_ROOT_TX_INDEX_SOURCES=/local/index.cdb,https://cdn.example.com/index/
+
+# Arweave transaction (43-character base64url ID)
+CDB64_ROOT_TX_INDEX_SOURCES=ABC123def456xyz789ABC123def456xyz789ABC12
+
+# Bundle data item (txId:offset:size format)
+CDB64_ROOT_TX_INDEX_SOURCES=TxId123...:1024:245760
+```
+
+For partitioned indexes, point to a directory containing `manifest.json` or
+append `:manifest` to an Arweave transaction ID.
+
+#### Remote Index Configuration
+
+When using HTTP or Arweave-based indexes:
+
+```
+CDB64_REMOTE_RETRIEVAL_ORDER=gateways,chunks    # Data sources for fetching CDB files
+CDB64_REMOTE_CACHE_MAX_REGIONS=100              # Max cached byte-range regions
+CDB64_REMOTE_CACHE_TTL_MS=300000                # Cache TTL (5 minutes)
+CDB64_REMOTE_REQUEST_TIMEOUT_MS=30000           # Request timeout
+CDB64_REMOTE_MAX_CONCURRENT_REQUESTS=4          # Concurrent HTTP request limit
+```
+
+#### File Watching
+
+By default, local CDB64 directories are watched for changes. New `.cdb` files
+are automatically loaded without restart:
+
+```
+CDB64_ROOT_TX_INDEX_WATCH=true   # Enable/disable file watching
+```
+
+For detailed information about the CDB64 file format and tools, see
+[CDB64 Format Documentation](docs/cdb64-format.md).
+
 ### Webhook Emission
 
 The ar.io gateway includes a feature to emit webhooks to specified servers when a transaction or data item is indexed and matches a predefined filter. This feature allows for real-time notifications and integrations based on the transaction and data indexing.
