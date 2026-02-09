@@ -1,0 +1,27 @@
+[
+  {
+    "start": 1183000,
+    "end": 1183005,
+    "description": "Small bundles, basic ANS-104 case"
+  },
+  {
+    "start": 1280000,
+    "end": 1280003,
+    "description": "Bundles with varied data item counts"
+  },
+  {
+    "start": 1310000,
+    "end": 1310005,
+    "description": "Bundles with diverse tag sets"
+  },
+  {
+    "start": 1350000,
+    "end": 1350003,
+    "description": "Bundles with multiple signature types"
+  },
+  {
+    "start": 1400000,
+    "end": 1400005,
+    "description": "Higher volume bundles"
+  }
+]
