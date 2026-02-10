@@ -26,6 +26,8 @@ services:
       - TVAL_ARWEAVE_POST_DRY_RUN=${ARWEAVE_POST_DRY_RUN:-false}
       - TVAL_ENABLE_ARWEAVE_PEER_EDS=${ENABLE_ARWEAVE_PEER_EDS:-true}
       - TVAL_ARWEAVE_PEER_DNS_TLS=${ARWEAVE_PEER_DNS_TLS:-false}
+      - TVAL_ARWEAVE_PEER_DNS_RECORDS=${ARWEAVE_PEER_DNS_RECORDS:-peers.arweave.xyz}
+      - TVAL_ARWEAVE_PEER_DNS_PORT=${ARWEAVE_PEER_DNS_PORT:-1984}
     volumes:
       - envoy-eds-data:/data/envoy-eds
     ulimits:

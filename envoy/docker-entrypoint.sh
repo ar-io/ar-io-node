@@ -16,9 +16,25 @@ chmod go+r /etc/envoy/envoy.yaml
 if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
     mkdir -p /data/envoy-eds
 
-    # Seed full_nodes with trusted node so Envoy has an upstream at startup
-    TRUSTED_HOST="${TVAL_TRUSTED_NODE_HOST:-arweave.net}"
-    TRUSTED_PORT="${TVAL_TRUSTED_NODE_PORT:-443}"
+    PEER_DNS_RECORDS="${TVAL_ARWEAVE_PEER_DNS_RECORDS:-peers.arweave.xyz}"
+    PEER_PORT="${TVAL_ARWEAVE_PEER_DNS_PORT:-1984}"
+
+    # Resolve first DNS record to seed EDS with real peer IPs
+    FIRST_RECORD=$(echo "${PEER_DNS_RECORDS}" | cut -d',' -f1 | tr -d ' ')
+    SEED_ENDPOINTS=""
+    if [ -n "${FIRST_RECORD}" ]; then
+        SEED_IPS=$(getent ahostsv4 "${FIRST_RECORD}" 2>/dev/null | awk '{print $1}' | sort -u)
+        FIRST=true
+        for IP in ${SEED_IPS}; do
+            if [ "${FIRST}" = "true" ]; then
+                FIRST=false
+            else
+                SEED_ENDPOINTS="${SEED_ENDPOINTS},"
+            fi
+            SEED_ENDPOINTS="${SEED_ENDPOINTS}{\"endpoint\":{\"address\":{\"socket_address\":{\"address\":\"${IP}\",\"port_value\":${PEER_PORT}}}},\"health_status\":\"HEALTHY\"}"
+        done
+    fi
+
     cat > /data/envoy-eds/arweave_full_nodes.json <<EDSEOF
 {
   "version_info": "seed",
@@ -26,14 +42,7 @@ if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
     "@type": "type.googleapis.com/envoy.config.endpoint.v3.ClusterLoadAssignment",
     "cluster_name": "arweave_full_nodes",
     "endpoints": [{
-      "lb_endpoints": [{
-        "endpoint": {
-          "address": {
-            "socket_address": { "address": "${TRUSTED_HOST}", "port_value": ${TRUSTED_PORT} }
-          }
-        },
-        "health_status": "HEALTHY"
-      }]
+      "lb_endpoints": [${SEED_ENDPOINTS}]
     }]
   }]
 }
