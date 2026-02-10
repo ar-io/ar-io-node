@@ -347,16 +347,6 @@ static_resources:
         base_ejection_time: 30s
         max_ejection_percent: 50
         enforcing_consecutive_5xx: 100
-      #@ if data.values.ARWEAVE_PEER_DNS_TLS == "true":
-      transport_socket:
-        name: envoy.transport_sockets.tls
-        typed_config:
-          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-          common_tls_context:
-            validation_context:
-              trusted_ca:
-                filename: /etc/ssl/certs/ca-certificates.crt
-      #@ end
 
     - name: arweave_partial_nodes
       connect_timeout: 1s
@@ -375,16 +365,6 @@ static_resources:
         base_ejection_time: 30s
         max_ejection_percent: 50
         enforcing_consecutive_5xx: 100
-      #@ if data.values.ARWEAVE_PEER_DNS_TLS == "true":
-      transport_socket:
-        name: envoy.transport_sockets.tls
-        typed_config:
-          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-          common_tls_context:
-            validation_context:
-              trusted_ca:
-                filename: /etc/ssl/certs/ca-certificates.crt
-      #@ end
 
     - name: trusted_arweave_nodes
       connect_timeout: 1s

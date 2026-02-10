@@ -50,7 +50,6 @@ describe('EnvoyEndpointHealthWorker', () => {
     overrides: Partial<{
       dnsRecords: string[];
       port: number;
-      useTls: boolean;
       maxHeightLag: number;
       maxHeightLead: number;
       minConsensusCount: number;
@@ -63,7 +62,6 @@ describe('EnvoyEndpointHealthWorker', () => {
       chainIndex: chainIndex as any,
       dnsRecords: overrides.dnsRecords ?? ['test.example.com'],
       port: overrides.port ?? 1984,
-      useTls: overrides.useTls ?? false,
       maxHeightLag: overrides.maxHeightLag ?? 5,
       maxHeightLead: overrides.maxHeightLead ?? 5,
       minConsensusCount: overrides.minConsensusCount ?? 2,
