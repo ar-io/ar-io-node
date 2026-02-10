@@ -37,7 +37,7 @@ describe('EnvoyEndpointHealthWorker', () => {
       `eds-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     await fs.promises.mkdir(edsDirectory, { recursive: true });
-    chainIndex = { getMaxHeight: async () => 1000 };
+    chainIndex = { getMaxHeight: mock.fn(async () => 1000) };
   });
 
   afterEach(async () => {
