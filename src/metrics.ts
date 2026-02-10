@@ -681,3 +681,53 @@ export const samplingLatencyMs = new promClient.Histogram({
   labelNames: ['source', 'status'] as const,
   buckets: [50, 100, 250, 500, 1000, 2500, 5000, 10000],
 });
+
+//
+// Envoy EDS peer discovery metrics
+//
+
+export const envoyEdsPeersDiscovered = new promClient.Gauge({
+  name: 'envoy_eds_peers_discovered',
+  help: 'Number of IPs found via DNS resolution',
+});
+
+export const envoyEdsPeersHealthy = new promClient.Gauge({
+  name: 'envoy_eds_peers_healthy',
+  help: 'Number of peers responding to /info',
+});
+
+export const envoyEdsPeersFull = new promClient.Gauge({
+  name: 'envoy_eds_peers_full',
+  help: 'Number of peers classified as full nodes',
+});
+
+export const envoyEdsPeersPartial = new promClient.Gauge({
+  name: 'envoy_eds_peers_partial',
+  help: 'Number of peers classified as partial nodes',
+});
+
+export const envoyEdsPeersExcluded = new promClient.Gauge({
+  name: 'envoy_eds_peers_excluded',
+  help: 'Number of peers excluded due to height outliers',
+});
+
+export const envoyEdsReferenceHeight = new promClient.Gauge({
+  name: 'envoy_eds_reference_height',
+  help: 'Computed reference height for peer classification',
+});
+
+export const envoyEdsHealthCheckCyclesTotal = new promClient.Counter({
+  name: 'envoy_eds_health_check_cycles_total',
+  help: 'Total number of completed health check cycles',
+});
+
+export const envoyEdsHealthCheckErrorsTotal = new promClient.Counter({
+  name: 'envoy_eds_health_check_errors_total',
+  help: 'Total number of failed /info requests',
+});
+
+export const envoyEdsFileWritesTotal = new promClient.Counter({
+  name: 'envoy_eds_file_writes_total',
+  help: 'Total number of EDS file writes',
+  labelNames: ['cluster'] as const,
+});
