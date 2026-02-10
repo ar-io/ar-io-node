@@ -93,6 +93,7 @@ import {
   createChunkDataSource,
   createChunkMetadataSource,
 } from './init/chunk-sources.js';
+import { EnvoyEndpointHealthWorker } from './workers/envoy-endpoint-health-worker.js';
 import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { DataVerificationWorker } from './workers/data-verification.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
@@ -330,6 +331,23 @@ export const blockImporter = new BlockImporter({
   startHeight: config.START_HEIGHT,
   stopHeight: config.STOP_HEIGHT,
 });
+
+export const envoyEndpointHealthWorker =
+  config.ARWEAVE_PEER_DNS_RECORDS.length > 0
+    ? new EnvoyEndpointHealthWorker({
+        log,
+        chainIndex,
+        dnsRecords: config.ARWEAVE_PEER_DNS_RECORDS,
+        port: config.ARWEAVE_PEER_DNS_PORT,
+        useTls: config.ARWEAVE_PEER_DNS_TLS,
+        maxHeightLag: config.ARWEAVE_NODE_MAX_HEIGHT_LAG,
+        maxHeightLead: config.ARWEAVE_NODE_MAX_HEIGHT_LEAD,
+        minConsensusCount: config.ARWEAVE_HEIGHT_MIN_CONSENSUS_COUNT,
+        fullSyncThreshold: config.ARWEAVE_NODE_FULL_SYNC_THRESHOLD,
+        intervalMs: config.ARWEAVE_PEER_HEALTH_CHECK_INTERVAL_MS,
+        edsDirectory: config.ENVOY_EDS_DIRECTORY,
+      })
+    : undefined;
 
 eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
   eventEmitter.emit(events.TX_INDEXED, tx);
@@ -887,6 +905,7 @@ const symlinkCleanupWorker = config.ENABLE_CHUNK_SYMLINK_CLEANUP
   : undefined;
 
 symlinkCleanupWorker?.start();
+envoyEndpointHealthWorker?.start();
 
 function getDataSource(sourceName: string): ContiguousDataSource | undefined {
   switch (sourceName) {
@@ -1348,6 +1367,7 @@ export const shutdown = async (exitCode = 0) => {
     dataSqliteWalCleanupWorker?.stop();
     await arnsResolutionCache.close();
     await arnsRegistryCache.close();
+    await envoyEndpointHealthWorker?.stop();
     await mempoolWatcher?.stop();
     await blockImporter.stop();
     await dataItemIndexer.stop();

@@ -540,6 +540,60 @@ export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
 );
 
 //
+// DNS-based peer discovery and Envoy EDS
+//
+
+// Comma-separated list of DNS hostnames to resolve for Arweave peer discovery.
+// Set to empty string to disable DNS-based peer discovery and fall back to
+// static Envoy clusters (TRUSTED_NODE_HOST/FALLBACK_NODE_HOST).
+const ARWEAVE_PEER_DNS_RECORDS_STRING = env.varOrDefault(
+  'ARWEAVE_PEER_DNS_RECORDS',
+  'peers.arweave.xyz',
+);
+export const ARWEAVE_PEER_DNS_RECORDS =
+  ARWEAVE_PEER_DNS_RECORDS_STRING.trim() !== ''
+    ? ARWEAVE_PEER_DNS_RECORDS_STRING.split(',').map((s) => s.trim())
+    : [];
+
+export const ARWEAVE_PEER_DNS_PORT = env.positiveIntOrDefault(
+  'ARWEAVE_PEER_DNS_PORT',
+  1984,
+);
+
+export const ARWEAVE_PEER_DNS_TLS =
+  env.varOrDefault('ARWEAVE_PEER_DNS_TLS', 'false').toLowerCase() === 'true';
+
+export const ARWEAVE_NODE_MAX_HEIGHT_LAG = env.positiveIntOrDefault(
+  'ARWEAVE_NODE_MAX_HEIGHT_LAG',
+  5,
+);
+
+export const ARWEAVE_NODE_MAX_HEIGHT_LEAD = env.positiveIntOrDefault(
+  'ARWEAVE_NODE_MAX_HEIGHT_LEAD',
+  5,
+);
+
+export const ARWEAVE_HEIGHT_MIN_CONSENSUS_COUNT = env.positiveIntOrDefault(
+  'ARWEAVE_HEIGHT_MIN_CONSENSUS_COUNT',
+  2,
+);
+
+export const ARWEAVE_NODE_FULL_SYNC_THRESHOLD = env.positiveIntOrDefault(
+  'ARWEAVE_NODE_FULL_SYNC_THRESHOLD',
+  100,
+);
+
+export const ARWEAVE_PEER_HEALTH_CHECK_INTERVAL_MS = env.positiveIntOrDefault(
+  'ARWEAVE_PEER_HEALTH_CHECK_INTERVAL_MS',
+  30000,
+);
+
+export const ENVOY_EDS_DIRECTORY = env.varOrDefault(
+  'ENVOY_EDS_DIRECTORY',
+  'data/envoy-eds',
+);
+
+//
 // Data
 //
 

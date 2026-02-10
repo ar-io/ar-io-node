@@ -329,6 +329,74 @@ static_resources:
                       address: #@ data.values.OBSERVER_HOST
                       port_value: #@ data.values.OBSERVER_PORT
                       ipv4_compat: true
+    #@ if data.values.ENABLE_ARWEAVE_PEER_EDS == "true":
+    - name: arweave_full_nodes
+      connect_timeout: 1s
+      type: EDS
+      lb_policy: ROUND_ROBIN
+      eds_cluster_config:
+        eds_config:
+          resource_api_version: V3
+          path_config_source:
+            path: /data/envoy-eds/arweave_full_nodes.json
+            watched_directory:
+              path: /data/envoy-eds
+      outlier_detection:
+        consecutive_5xx: 5
+        interval: 30s
+        base_ejection_time: 30s
+        max_ejection_percent: 50
+        enforcing_consecutive_5xx: 100
+      #@ if data.values.ARWEAVE_PEER_DNS_TLS == "true":
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          common_tls_context:
+            validation_context:
+              trusted_ca:
+                filename: /etc/ssl/certs/ca-certificates.crt
+      #@ end
+
+    - name: arweave_partial_nodes
+      connect_timeout: 1s
+      type: EDS
+      lb_policy: ROUND_ROBIN
+      eds_cluster_config:
+        eds_config:
+          resource_api_version: V3
+          path_config_source:
+            path: /data/envoy-eds/arweave_partial_nodes.json
+            watched_directory:
+              path: /data/envoy-eds
+      outlier_detection:
+        consecutive_5xx: 5
+        interval: 30s
+        base_ejection_time: 30s
+        max_ejection_percent: 50
+        enforcing_consecutive_5xx: 100
+      #@ if data.values.ARWEAVE_PEER_DNS_TLS == "true":
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          common_tls_context:
+            validation_context:
+              trusted_ca:
+                filename: /etc/ssl/certs/ca-certificates.crt
+      #@ end
+
+    - name: trusted_arweave_nodes
+      connect_timeout: 1s
+      lb_policy: CLUSTER_PROVIDED
+      cluster_type:
+        name: envoy.clusters.aggregate
+        typed_config:
+          '@type': type.googleapis.com/envoy.extensions.clusters.aggregate.v3.ClusterConfig
+          clusters:
+            - arweave_full_nodes
+            - arweave_partial_nodes
+    #@ else:
     - name: trusted_arweave_nodes_primary
       connect_timeout: 1s
       type: LOGICAL_DNS
@@ -416,6 +484,7 @@ static_resources:
             #@ if data.values.FALLBACK_NODE_HOST:
             - trusted_arweave_nodes_fallback
             #@ end
+    #@ end
 
     - name: upload_service_cluster
       connect_timeout: 1s
