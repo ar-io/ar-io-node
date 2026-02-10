@@ -35,7 +35,8 @@ if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
         done
     fi
 
-    cat > /data/envoy-eds/arweave_full_nodes.json <<EDSEOF
+    if [ ! -f /data/envoy-eds/arweave_full_nodes.json ]; then
+        cat > /data/envoy-eds/arweave_full_nodes.json <<EDSEOF
 {
   "version_info": "seed",
   "resources": [{
@@ -47,9 +48,11 @@ if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
   }]
 }
 EDSEOF
+    fi
 
     # Seed partial_nodes with empty endpoints
-    cat > /data/envoy-eds/arweave_partial_nodes.json <<EDSEOF
+    if [ ! -f /data/envoy-eds/arweave_partial_nodes.json ]; then
+        cat > /data/envoy-eds/arweave_partial_nodes.json <<EDSEOF
 {
   "version_info": "seed",
   "resources": [{
@@ -61,8 +64,9 @@ EDSEOF
   }]
 }
 EDSEOF
+    fi
 
-    chmod -R go+r /data/envoy-eds
+    chmod -R a+rX /data/envoy-eds
 fi
 
 # if the first argument look like a parameter (i.e. start with '-'), run Envoy

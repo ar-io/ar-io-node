@@ -543,16 +543,20 @@ export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
 // DNS-based peer discovery and Envoy EDS
 //
 
-// Comma-separated list of DNS hostnames to resolve for Arweave peer discovery.
-// Set to empty string to disable DNS-based peer discovery and fall back to
-// static Envoy clusters (TRUSTED_NODE_HOST/FALLBACK_NODE_HOST).
+/**
+ * Comma-separated list of DNS hostnames to resolve for Arweave peer discovery.
+ * Set to empty string to disable DNS-based peer discovery and fall back to
+ * static Envoy clusters (TRUSTED_NODE_HOST/FALLBACK_NODE_HOST).
+ */
 const ARWEAVE_PEER_DNS_RECORDS_STRING = env.varOrDefault(
   'ARWEAVE_PEER_DNS_RECORDS',
   'peers.arweave.xyz',
 );
 export const ARWEAVE_PEER_DNS_RECORDS =
   ARWEAVE_PEER_DNS_RECORDS_STRING.trim() !== ''
-    ? ARWEAVE_PEER_DNS_RECORDS_STRING.split(',').map((s) => s.trim())
+    ? ARWEAVE_PEER_DNS_RECORDS_STRING.split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
     : [];
 
 export const ARWEAVE_PEER_DNS_PORT = env.positiveIntOrDefault(

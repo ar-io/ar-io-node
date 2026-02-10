@@ -6,7 +6,6 @@
  */
 import dns from 'node:dns';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import pLimit from 'p-limit';
 import * as winston from 'winston';
@@ -29,6 +28,7 @@ interface EdsEndpoint {
   port: number;
 }
 
+/** Periodically resolves DNS records, health-checks discovered Arweave peers, and writes Envoy EDS files. */
 export class EnvoyEndpointHealthWorker {
   private log: winston.Logger;
   private chainIndex: ChainIndex;
@@ -356,10 +356,10 @@ export class EnvoyEndpointHealthWorker {
 
     const content = JSON.stringify(edsJson, null, 2);
 
-    // Atomic write: write to temp file then rename
+    // Atomic write: write to temp file in same directory then rename
     const tmpFile = path.join(
-      os.tmpdir(),
-      `eds-${clusterName}-${Date.now()}.tmp`,
+      this.edsDirectory,
+      `.eds-${clusterName}-${Date.now()}.tmp`,
     );
     await fs.promises.writeFile(tmpFile, content, 'utf-8');
     await fs.promises.rename(tmpFile, filePath);
