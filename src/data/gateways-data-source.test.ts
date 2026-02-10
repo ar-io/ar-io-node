@@ -518,6 +518,16 @@ describe('GatewayDataSource', () => {
       });
     });
 
+    it('should throw when skipRemoteForwarding is set', async () => {
+      await assert.rejects(
+        dataSource.getData({
+          id: 'some-id',
+          requestAttributes: { hops: 0, skipRemoteForwarding: true },
+        }),
+        /Remote forwarding skipped for compute-origin request/,
+      );
+    });
+
     describe('abort signal handling', () => {
       it('should throw immediately when signal is already aborted', async () => {
         const controller = new AbortController();

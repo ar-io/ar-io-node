@@ -557,6 +557,15 @@ export const ON_DEMAND_RETRIEVAL_ORDER = env
   )
   .split(',');
 
+// Headers that indicate a compute-origin request (e.g., from HyperBEAM).
+// When any of these headers are present, remote forwarding is skipped to
+// prevent request loops.
+export const SKIP_FORWARDING_HEADERS = env
+  .varOrDefault('SKIP_FORWARDING_HEADERS', 'ao-peer-port')
+  .split(',')
+  .map((h) => h.trim().toLowerCase())
+  .filter((h) => h.length > 0);
+
 // Background data retrieval priority order
 export const BACKGROUND_RETRIEVAL_ORDER = env
   .varOrDefault('BACKGROUND_RETRIEVAL_ORDER', 'chunks')
