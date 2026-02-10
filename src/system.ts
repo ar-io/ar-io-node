@@ -339,7 +339,6 @@ export const envoyEndpointHealthWorker =
         chainIndex,
         dnsRecords: config.ARWEAVE_PEER_DNS_RECORDS,
         port: config.ARWEAVE_PEER_DNS_PORT,
-        useTls: config.ARWEAVE_PEER_DNS_TLS,
         maxHeightLag: config.ARWEAVE_NODE_MAX_HEIGHT_LAG,
         maxHeightLead: config.ARWEAVE_NODE_MAX_HEIGHT_LEAD,
         minConsensusCount: config.ARWEAVE_HEIGHT_MIN_CONSENSUS_COUNT,

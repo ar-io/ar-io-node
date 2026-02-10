@@ -564,13 +564,6 @@ export const ARWEAVE_PEER_DNS_PORT = env.positiveIntOrDefault(
   1984,
 );
 
-// Note: TLS health checks against raw IP addresses (common for Arweave peers)
-// will fail certificate validation. This is acceptable since peers typically use
-// plain HTTP on port 1984. Only enable TLS if peers resolve to hostnames with
-// valid certificates.
-export const ARWEAVE_PEER_DNS_TLS =
-  env.varOrDefault('ARWEAVE_PEER_DNS_TLS', 'false').toLowerCase() === 'true';
-
 export const ARWEAVE_NODE_MAX_HEIGHT_LAG = env.positiveIntOrDefault(
   'ARWEAVE_NODE_MAX_HEIGHT_LAG',
   5,

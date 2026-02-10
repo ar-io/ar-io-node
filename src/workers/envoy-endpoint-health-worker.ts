@@ -34,7 +34,6 @@ export class EnvoyEndpointHealthWorker {
   private chainIndex: ChainIndex;
   private dnsRecords: string[];
   private port: number;
-  private useTls: boolean;
   private maxHeightLag: number;
   private maxHeightLead: number;
   private minConsensusCount: number;
@@ -49,7 +48,6 @@ export class EnvoyEndpointHealthWorker {
     chainIndex,
     dnsRecords,
     port,
-    useTls,
     maxHeightLag,
     maxHeightLead,
     minConsensusCount,
@@ -61,7 +59,6 @@ export class EnvoyEndpointHealthWorker {
     chainIndex: ChainIndex;
     dnsRecords: string[];
     port: number;
-    useTls: boolean;
     maxHeightLag: number;
     maxHeightLead: number;
     minConsensusCount: number;
@@ -73,7 +70,6 @@ export class EnvoyEndpointHealthWorker {
     this.chainIndex = chainIndex;
     this.dnsRecords = dnsRecords;
     this.port = port;
-    this.useTls = useTls;
     this.maxHeightLag = maxHeightLag;
     this.maxHeightLead = maxHeightLead;
     this.minConsensusCount = minConsensusCount;
@@ -204,8 +200,7 @@ export class EnvoyEndpointHealthWorker {
       ips.map((ip) =>
         limit(async (): Promise<PeerInfo | null> => {
           try {
-            const protocol = this.useTls ? 'https' : 'http';
-            const url = `${protocol}://${ip}:${this.port}/info`;
+            const url = `http://${ip}:${this.port}/info`;
             const controller = new AbortController();
             const timeout = setTimeout(
               () => controller.abort(),
