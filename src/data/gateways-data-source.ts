@@ -87,6 +87,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
     try {
       // Check for abort before starting
       signal?.throwIfAborted();
+
+      // Skip remote forwarding for compute-origin requests to prevent loops
+      if (requestAttributes?.skipRemoteForwarding) {
+        throw new Error('Remote forwarding skipped for compute-origin request');
+      }
+
       const path = `/raw/${id}`;
       const requestAttributesHeaders =
         generateRequestAttributes(requestAttributes);

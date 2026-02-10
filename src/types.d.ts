@@ -447,6 +447,9 @@ export interface RequestAttributes {
   clientIp?: string;
   /** Complete list of client IPs from X-Forwarded-For and socket.remoteAddress */
   clientIps: string[];
+  /** When true, remote data sources (AR.IO peers, trusted gateways) should be
+   * skipped to prevent request loops from compute-origin callers like HyperBEAM. */
+  skipRemoteForwarding?: boolean;
 }
 
 export interface GqlQueryable {

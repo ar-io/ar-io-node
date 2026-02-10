@@ -54,6 +54,34 @@ afterEach(async () => {
 });
 
 describe('ArIOChunkSource', () => {
+  describe('skipRemoteForwarding', () => {
+    it('should throw when skipRemoteForwarding is set on getChunkByAny', async () => {
+      await assert.rejects(
+        arIOChunkSource.getChunkByAny({
+          ...testChunkParams,
+          requestAttributes: { hops: 0, skipRemoteForwarding: true },
+        }),
+        /Remote forwarding skipped for compute-origin request/,
+      );
+
+      // Verify no peers were selected
+      assert.equal(mockPeerManager.selectPeers.mock.callCount(), 0);
+    });
+
+    it('should throw when skipRemoteForwarding is set on getUnvalidatedChunk', async () => {
+      await assert.rejects(
+        arIOChunkSource.getUnvalidatedChunk(12345, {
+          hops: 0,
+          skipRemoteForwarding: true,
+        }),
+        /Remote forwarding skipped for compute-origin request/,
+      );
+
+      // Verify no peers were selected
+      assert.equal(mockPeerManager.selectPeers.mock.callCount(), 0);
+    });
+  });
+
   describe('getChunkByAny abort signal handling', () => {
     it('should throw immediately when signal is already aborted', async () => {
       const controller = new AbortController();

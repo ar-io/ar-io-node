@@ -950,6 +950,19 @@ describe('ArIODataSource', () => {
       }
     });
 
+    it('should throw when skipRemoteForwarding is set', async () => {
+      await assert.rejects(
+        dataSource.getData({
+          id: 'dataId',
+          requestAttributes: { hops: 0, skipRemoteForwarding: true },
+        }),
+        /Remote forwarding skipped for compute-origin request/,
+      );
+
+      // Verify no peer requests were made
+      assert.equal((axios.get as any).mock.callCount(), 0);
+    });
+
     it('should include request attribute headers along with other headers', async () => {
       let capturedHeaders: any;
 

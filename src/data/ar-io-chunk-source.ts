@@ -176,6 +176,11 @@ export class ArIOChunkSource
     // Check for abort before starting
     clientSignal?.throwIfAborted();
 
+    // Skip remote forwarding for compute-origin requests to prevent loops
+    if (requestAttributes?.skipRemoteForwarding) {
+      throw new Error('Remote forwarding skipped for compute-origin request');
+    }
+
     const isValidated = validationParams !== undefined;
     const spanName = isValidated
       ? 'ArIOChunkSource.fetchChunkFromArIOPeer'

@@ -452,6 +452,13 @@ export const getRequestAttributes = (
   // Extract and validate client IPs from request headers and connection
   const { clientIp, clientIps } = extractAllClientIPs(req);
 
+  // Detect compute-origin requests (e.g., from HyperBEAM) by checking for
+  // configured headers that indicate the request should not be forwarded
+  // to remote sources, preventing request loops.
+  const skipRemoteForwarding = config.SKIP_FORWARDING_HEADERS.some(
+    (header) => req.headers[header] !== undefined,
+  );
+
   return {
     hops,
     origin,
@@ -461,6 +468,7 @@ export const getRequestAttributes = (
     arnsRecord: req.arns?.record,
     clientIp,
     clientIps,
+    ...(skipRemoteForwarding && { skipRemoteForwarding }),
   };
 };
 
