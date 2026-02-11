@@ -34,6 +34,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Local data sources (cache, S3, database) continue to serve data normally
   - Configurable via `SKIP_FORWARDING_HEADERS` environment variable
 
+- **CDB64 Documentation**: Comprehensive documentation for the CDB64 root
+  transaction index feature
+  - Operator guide (`docs/cdb64-guide.md`) covering configuration, monitoring,
+    custom index sources, and troubleshooting
+  - Format specification (`docs/cdb64-format.md`) detailing the CDB64 binary
+    format, key encoding, and location types
+  - Tools reference (`docs/cdb64-tools.md`) documenting all 6 CDB64 CLI tools
+    with usage examples
+  - Overview page (`docs/cdb64.md`) linking all CDB64 documentation
+  - Documentation index (`docs/INDEX.md`) providing a navigable overview of all
+    gateway documentation
+  - CDB64 section added to README for quick orientation
+  - Glossary entries for CDB64-related terms
+  - Fixed default values for `CDB64_CACHE_SIZE` and `CDB64_ROOT_TX_INDEX_SOURCES`
+    in `docs/envs.md`
+  - Build script (`tools/build-cdb64-napi`) for compiling the native CDB64
+    N-API module from source
+
 ### Changed
 
 - Updated observer to increase default chunk observation sample rate to 20%
