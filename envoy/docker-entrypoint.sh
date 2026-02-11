@@ -63,7 +63,7 @@ if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
 
         ATTEMPT=$((ATTEMPT + 1))
         if [ "${NEED_SEED}" = "false" ] || [ "${ATTEMPT}" -ge "${MAX_RETRIES}" ]; then
-            echo "DNS resolution failed (attempt ${ATTEMPT}), existing EDS file: ${NEED_SEED}, giving up"
+            echo "DNS resolution failed (attempt ${ATTEMPT}), has existing EDS file: $([ "${NEED_SEED}" = "false" ] && echo "yes" || echo "no"), giving up"
             break
         fi
 
