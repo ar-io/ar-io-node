@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Build CDB64 Native Module
+#
+# Builds the Rust-backed cdb64 napi-rs native module. This must be run
+# before using tools that depend on the native cdb64 library (e.g.,
+# generate-cdb64-root-tx-index-rs).
+#
+# Prerequisites:
+#   - Rust toolchain (install via https://rustup.rs/)
+#   - Node.js development headers
+#
+# Usage: ./tools/build-cdb64-napi
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CDB64_DIR="${PROJECT_ROOT}/node_modules/cdb64/node"
+
+if [ ! -d "${CDB64_DIR}" ]; then
+  echo "Error: cdb64 node bindings not found at ${CDB64_DIR}" >&2
+  echo "Run 'yarn install' first." >&2
+  exit 1
+fi
+
+echo "Building cdb64 native module..."
+cd "${CDB64_DIR}"
+yarn install
+yarn build
+
+echo "Build complete."

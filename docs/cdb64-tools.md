@@ -14,6 +14,7 @@ Tools for generating, exporting, verifying, and uploading CDB64 index files. See
 | [`export-cdb64-root-tx-index`](#export-cdb64-root-tx-index) | Export CDB64 back to CSV | TypeScript |
 | [`upload-cdb64-to-arweave`](#upload-cdb64-to-arweave) | Upload partitioned CDB64 to Arweave | TypeScript (Turbo SDK) |
 | [`verify-cdb64`](#verify-cdb64) | Verify CDB64 against CSV | TypeScript |
+| [`build-cdb64-napi`](#building-the-native-dependency) | Build the Rust napi-rs native module | Bash |
 
 ## CSV Format
 
@@ -367,17 +368,7 @@ binaries available.
 **Build steps:**
 
 ```bash
-# Navigate to the cdb64 node bindings directory
-cd node_modules/cdb64/node
-
-# Install build dependencies
-yarn install
-
-# Build the native module
-yarn build
-
-# Return to project root
-cd ../../..
+./tools/build-cdb64-napi
 ```
 
 After building, you should see a `.node` file in `node_modules/cdb64/node/`:
