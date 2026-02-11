@@ -19,6 +19,16 @@ if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
     PEER_DNS_RECORDS="${TVAL_ARWEAVE_PEER_DNS_RECORDS:-peers.arweave.xyz}"
     PEER_PORT="${TVAL_ARWEAVE_PEER_DNS_PORT:-1984}"
 
+    # Validate existing EDS files - remove corrupt files so they get re-seeded
+    for EDS_FILE in /data/envoy-eds/arweave_full_nodes.json /data/envoy-eds/arweave_partial_nodes.json; do
+        if [ -f "${EDS_FILE}" ]; then
+            if ! jq -e '.resources[0].cluster_name' "${EDS_FILE}" > /dev/null 2>&1; then
+                echo "Removing corrupt EDS file: ${EDS_FILE}"
+                rm -f "${EDS_FILE}"
+            fi
+        fi
+    done
+
     # Resolve first DNS record to seed EDS with real peer IPs
     FIRST_RECORD=$(echo "${PEER_DNS_RECORDS}" | cut -d',' -f1 | tr -d ' ')
     SEED_ENDPOINTS=""
