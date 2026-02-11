@@ -30,7 +30,7 @@ CDB64 extends the original CDB format to support files larger than 4GB by using 
 
 A CDB64 file consists of three sections in order:
 
-```
+```text
 +------------------+
 |      Header      |  4096 bytes (256 × 16-byte pointers)
 +------------------+
@@ -79,7 +79,7 @@ The number of slots in each table is always 2× the number of records that hash 
 
 CDB64 uses the DJB hash function (same as original CDB), computed with 64-bit arithmetic:
 
-```
+```text
 hash = 5381
 for each byte in key:
     hash = ((hash << 5) + hash) ^ byte
@@ -150,7 +150,7 @@ For the AR.IO Gateway's root TX index, CDB64 keys and values have specific forma
 
 Keys are 32-byte data item IDs (binary, not base64-encoded):
 
-```
+```text
 Key: <32 bytes> - Raw data item ID
 ```
 
@@ -218,7 +218,7 @@ The path array contains transaction/data item IDs representing the bundle hierar
 - The data item ID itself is NOT included in the path
 
 **Example path for a deeply nested data item:**
-```
+```text
 Root TX → Bundle A → Bundle B → Data Item
 path = [RootTxId, BundleAId, BundleBId]
 ```
@@ -249,7 +249,7 @@ The path array is limited to a maximum of 10 elements (`MAX_BUNDLE_NESTING_DEPTH
 For a data item `abc123...` nested directly in root TX `xyz789...` at offset 1024 with data at offset 1536:
 
 **Key** (32 bytes):
-```
+```text
 abc123... (raw binary data item ID)
 ```
 
@@ -269,7 +269,7 @@ abc123... (raw binary data item ID)
 For a data item `def456...` nested inside Bundle B (`bbb...`) which is inside Bundle A (`aaa...`) which is inside root TX `xyz789...`:
 
 **Key** (32 bytes):
-```
+```text
 def456... (raw binary data item ID)
 ```
 
@@ -320,7 +320,7 @@ The reader only needs to keep the 4096-byte header in memory. All lookups are do
 
 While CDB64 uses 64-bit offsets supporting files up to 16 exabytes theoretically, practical limits apply:
 
-- **JavaScript/Node.js**: ~8TB (`Number.MAX_SAFE_INTEGER` = 2^53 - 1 bytes)
+- **JavaScript/Node.js**: ~8 PiB (~9 PB) (`Number.MAX_SAFE_INTEGER` = 2^53 - 1 bytes)
 - **Rust cdb64-rs**: Full 64-bit support
 
 The AR.IO Gateway implementation will throw an error for file positions exceeding the safe integer limit.
@@ -340,7 +340,7 @@ For very large indexes, CDB64 files can be partitioned by key prefix into up to 
 
 A partitioned index consists of a directory containing:
 
-```
+```text
 index/
   manifest.json    # Index manifest with partition metadata
   00.cdb           # Records with keys starting 0x00

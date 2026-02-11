@@ -33,7 +33,7 @@ CDB64 indexes provide O(1) lookups for mapping data item IDs to their root trans
 |----------|---------|-------------|
 | `CDB64_ROOT_TX_INDEX_SOURCES` | `data/cdb64-root-tx-index` | Comma-separated list of index sources |
 | `CDB64_ROOT_TX_INDEX_WATCH` | `true` | Enable file watching for local directories |
-| `ROOT_TX_LOOKUP_ORDER` | `db,gateways,graphql` | Order of lookup sources (add `cdb` to enable CDB64) |
+| `ROOT_TX_LOOKUP_ORDER` | `db,gateways,cdb,graphql` | Order of lookup sources (CDB64 enabled by default) |
 | `CDB64_REMOTE_RETRIEVAL_ORDER` | `gateways,chunks` | Data sources for fetching remote CDB64 files |
 | `CDB64_REMOTE_CACHE_MAX_REGIONS` | `100` | Max cached byte-range regions per remote source |
 | `CDB64_REMOTE_CACHE_TTL_MS` | `300000` | TTL for cached regions (5 minutes) |

@@ -49,13 +49,13 @@ CDB64_ROOT_TX_INDEX_SOURCES=/path/to/indexes/,https://cdn.example.com/index.cdb
 
 Check the logs for successful initialization:
 
-```
+```text
 CDB64 root TX index initialized { sourceCount: 1, readerCount: 3, watching: true }
 ```
 
 ## Architecture Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                     Data Request                            │
 │                   GET /raw/{dataItemId}                     │
@@ -120,7 +120,7 @@ CDB64_ROOT_TX_INDEX_SOURCES=/local/indexes/,https://cdn.example.com/index.cdb,Ar
 
 For large datasets, indexes can be split into 256 partitions by key prefix:
 
-```
+```text
 index/
   manifest.json   # Metadata and partition locations
   00.cdb          # Keys starting with 0x00
