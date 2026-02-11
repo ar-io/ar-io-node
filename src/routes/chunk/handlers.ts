@@ -624,6 +624,9 @@ export const createChunkPostHandler = ({
           [headerNames.origin]: req.headers[
             headerNames.origin.toLowerCase()
           ] as string | undefined,
+          [headerNames.via]: req.headers[headerNames.via.toLowerCase()] as
+            | string
+            | undefined,
         };
 
         // Broadcast the chunk using your system's Arweave client

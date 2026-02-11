@@ -133,6 +133,7 @@ export class ArIODataSource implements ContiguousDataSource {
         'ar-io-arns-record': requestAttributesHeaders?.attributes.arnsRecord,
         'ar-io-arns-basename':
           requestAttributesHeaders?.attributes.arnsBasename,
+        'ar-io-via': requestAttributesHeaders?.attributes.via?.join(', '),
       },
     });
 

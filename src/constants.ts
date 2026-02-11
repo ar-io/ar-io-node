@@ -63,6 +63,7 @@ export const headerNames = {
   arnsResolvedAt: 'X-ArNS-Resolved-At',
   arnsLimit: 'X-ArNS-Undername-Limit',
   arnsIndex: 'X-ArNS-Record-Index',
+  via: 'X-AR-IO-Via',
 };
 
 export const verificationPriorities = {
