@@ -217,6 +217,8 @@ export class GatewaysDataSource implements ContiguousDataSource {
                     requestAttributesHeaders?.attributes.arnsRecord,
                   'ar-io-arns-basename':
                     requestAttributesHeaders?.attributes.arnsBasename,
+                  'ar-io-via':
+                    requestAttributesHeaders?.attributes.via?.join(', '),
                 },
               });
 

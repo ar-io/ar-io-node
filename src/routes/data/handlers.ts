@@ -19,6 +19,10 @@ import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { extractAllClientIPs } from '../../lib/ip-utils.js';
 import {
+  parseViaHeader,
+  detectLoopInViaChain,
+} from '../../lib/request-attributes.js';
+import {
   DataBlockListValidator,
   ContiguousData,
   ContiguousDataAttributes,
@@ -455,9 +459,27 @@ export const getRequestAttributes = (
   // Detect compute-origin requests (e.g., from HyperBEAM) by checking for
   // configured headers that indicate the request should not be forwarded
   // to remote sources, preventing request loops.
-  const skipRemoteForwarding = config.SKIP_FORWARDING_HEADERS.some(
+  let skipRemoteForwarding = config.SKIP_FORWARDING_HEADERS.some(
     (header) => req.headers[header] !== undefined,
   );
+
+  // Parse incoming via chain for loop detection
+  const incomingVia = parseViaHeader(
+    req.headers[headerNames.via.toLowerCase()] as string | undefined,
+  );
+
+  let via: string[] | undefined;
+  if (arnsRootHost != null) {
+    // Detect loop: if our own identity is already in the via chain
+    if (detectLoopInViaChain(incomingVia, arnsRootHost)) {
+      skipRemoteForwarding = true;
+    }
+    // Append our identity to the via chain
+    via = [...incomingVia, arnsRootHost.toLowerCase()];
+  } else if (incomingVia.length > 0) {
+    // No self-identity configured, but propagate the existing chain
+    via = incomingVia;
+  }
 
   return {
     hops,
@@ -469,6 +491,7 @@ export const getRequestAttributes = (
     clientIp,
     clientIps,
     ...(skipRemoteForwarding && { skipRemoteForwarding }),
+    ...(via != null && via.length > 0 && { via }),
   };
 };
 

@@ -9,6 +9,24 @@ import { headerNames } from '../constants.js';
 import { RequestAttributes } from '../types.js';
 import { parseNonNegativeInt } from './http-utils.js';
 
+export function parseViaHeader(header: string | undefined): string[] {
+  if (header == null || header.trim() === '') {
+    return [];
+  }
+  return header
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry !== '');
+}
+
+export function detectLoopInViaChain(
+  via: string[],
+  selfIdentity: string,
+): boolean {
+  const normalizedSelf = selfIdentity.toLowerCase();
+  return via.some((entry) => entry === normalizedSelf);
+}
+
 export function validateHopCount(currentHops: number, maxHops: number): void {
   if (currentHops >= maxHops) {
     throw new Error(`Maximum hops (${maxHops}) exceeded`);
@@ -62,6 +80,11 @@ export const generateRequestAttributes = (
     attributes.arnsRecord = requestAttributes.arnsRecord;
   }
 
+  if (requestAttributes.via != null && requestAttributes.via.length > 0) {
+    headers[headerNames.via] = requestAttributes.via.join(', ');
+    attributes.via = requestAttributes.via;
+  }
+
   return { headers, attributes };
 };
 
@@ -90,6 +113,9 @@ export const parseRequestAttributesHeaders = ({
     headersLowercaseKeys[headerNames.arnsBasename.toLowerCase()];
   const arnsRecord = headersLowercaseKeys[headerNames.arnsRecord.toLowerCase()];
 
+  const viaHeader = headersLowercaseKeys[headerNames.via.toLowerCase()];
+  const via = parseViaHeader(viaHeader);
+
   return {
     hops,
     origin: headersLowercaseKeys[headerNames.origin.toLowerCase()],
@@ -99,5 +125,6 @@ export const parseRequestAttributesHeaders = ({
     ...(arnsName != null && { arnsName }),
     ...(arnsBasename != null && { arnsBasename }),
     ...(arnsRecord != null && { arnsRecord }),
+    ...(via.length > 0 && { via }),
   };
 };

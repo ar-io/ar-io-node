@@ -9,8 +9,10 @@ import { describe, it } from 'node:test';
 import { headerNames } from '../constants.js';
 import { RequestAttributes } from '../types.js';
 import {
+  detectLoopInViaChain,
   generateRequestAttributes,
   parseRequestAttributesHeaders,
+  parseViaHeader,
   validateHopCount,
 } from './request-attributes.js';
 
@@ -184,6 +186,165 @@ describe('Request attributes functions', () => {
 
       const result = parseRequestAttributesHeaders({ headers });
       assert.deepStrictEqual(result, expected);
+    });
+  });
+
+  describe('parseViaHeader', () => {
+    it('should return empty array for undefined input', () => {
+      assert.deepStrictEqual(parseViaHeader(undefined), []);
+    });
+
+    it('should return empty array for empty string', () => {
+      assert.deepStrictEqual(parseViaHeader(''), []);
+    });
+
+    it('should return empty array for whitespace-only string', () => {
+      assert.deepStrictEqual(parseViaHeader('   '), []);
+    });
+
+    it('should parse a single entry', () => {
+      assert.deepStrictEqual(parseViaHeader('gateway-a.example.com'), [
+        'gateway-a.example.com',
+      ]);
+    });
+
+    it('should parse multiple entries', () => {
+      assert.deepStrictEqual(
+        parseViaHeader('gateway-a.example.com, gateway-b.example.com'),
+        ['gateway-a.example.com', 'gateway-b.example.com'],
+      );
+    });
+
+    it('should trim whitespace from entries', () => {
+      assert.deepStrictEqual(
+        parseViaHeader('  gateway-a.example.com ,  gateway-b.example.com  '),
+        ['gateway-a.example.com', 'gateway-b.example.com'],
+      );
+    });
+
+    it('should lowercase entries', () => {
+      assert.deepStrictEqual(
+        parseViaHeader('Gateway-A.Example.COM, GATEWAY-B.EXAMPLE.COM'),
+        ['gateway-a.example.com', 'gateway-b.example.com'],
+      );
+    });
+
+    it('should filter out empty entries from extra commas', () => {
+      assert.deepStrictEqual(
+        parseViaHeader('gateway-a.example.com,,gateway-b.example.com,'),
+        ['gateway-a.example.com', 'gateway-b.example.com'],
+      );
+    });
+  });
+
+  describe('detectLoopInViaChain', () => {
+    it('should return false for empty chain', () => {
+      assert.strictEqual(
+        detectLoopInViaChain([], 'gateway.example.com'),
+        false,
+      );
+    });
+
+    it('should return false when self is not in chain', () => {
+      assert.strictEqual(
+        detectLoopInViaChain(
+          ['gateway-a.example.com', 'gateway-b.example.com'],
+          'gateway-c.example.com',
+        ),
+        false,
+      );
+    });
+
+    it('should return true when self is in chain', () => {
+      assert.strictEqual(
+        detectLoopInViaChain(
+          ['gateway-a.example.com', 'gateway-b.example.com'],
+          'gateway-a.example.com',
+        ),
+        true,
+      );
+    });
+
+    it('should be case insensitive', () => {
+      assert.strictEqual(
+        detectLoopInViaChain(
+          ['gateway-a.example.com'],
+          'Gateway-A.Example.COM',
+        ),
+        true,
+      );
+    });
+  });
+
+  describe('generateRequestAttributes with via', () => {
+    it('should propagate via in headers', () => {
+      const input: RequestAttributes = {
+        hops: 1,
+        via: ['gateway-a.example.com', 'gateway-b.example.com'],
+      };
+      const result = generateRequestAttributes(input);
+      assert.strictEqual(
+        result?.headers[headerNames.via],
+        'gateway-a.example.com, gateway-b.example.com',
+      );
+      assert.deepStrictEqual(result?.attributes.via, [
+        'gateway-a.example.com',
+        'gateway-b.example.com',
+      ]);
+    });
+
+    it('should omit via header when via is undefined', () => {
+      const input: RequestAttributes = {
+        hops: 1,
+      };
+      const result = generateRequestAttributes(input);
+      assert.strictEqual(result?.headers[headerNames.via], undefined);
+      assert.strictEqual(result?.attributes.via, undefined);
+    });
+
+    it('should omit via header when via is empty array', () => {
+      const input: RequestAttributes = {
+        hops: 1,
+        via: [],
+      };
+      const result = generateRequestAttributes(input);
+      assert.strictEqual(result?.headers[headerNames.via], undefined);
+      assert.strictEqual(result?.attributes.via, undefined);
+    });
+  });
+
+  describe('parseRequestAttributesHeaders with via', () => {
+    it('should parse via header', () => {
+      const headers = {
+        [headerNames.hops]: '2',
+        [headerNames.via]: 'gateway-a.example.com, gateway-b.example.com',
+      };
+      const result = parseRequestAttributesHeaders({ headers });
+      assert.deepStrictEqual(result.via, [
+        'gateway-a.example.com',
+        'gateway-b.example.com',
+      ]);
+    });
+
+    it('should omit via when header is absent', () => {
+      const headers = {
+        [headerNames.hops]: '1',
+      };
+      const result = parseRequestAttributesHeaders({ headers });
+      assert.strictEqual(result.via, undefined);
+    });
+
+    it('should round-trip via through generate and parse', () => {
+      const input: RequestAttributes = {
+        hops: 1,
+        via: ['gateway-a.example.com', 'gateway-b.example.com'],
+      };
+      const generated = generateRequestAttributes(input);
+      assert.ok(generated);
+      const parsed = parseRequestAttributesHeaders({
+        headers: generated.headers,
+      });
+      assert.deepStrictEqual(parsed.via, input.via);
     });
   });
 

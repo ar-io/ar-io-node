@@ -450,6 +450,8 @@ export interface RequestAttributes {
   /** When true, remote data sources (AR.IO peers, trusted gateways) should be
    * skipped to prevent request loops from compute-origin callers like HyperBEAM. */
   skipRemoteForwarding?: boolean;
+  /** Chain of gateway identities this request has traversed, for loop detection */
+  via?: string[];
 }
 
 export interface GqlQueryable {
