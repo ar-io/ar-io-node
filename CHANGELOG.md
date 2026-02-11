@@ -8,7 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **DNS-Based Multi-Peer Discovery with Envoy EDS**: Automatic Arweave peer
+  discovery and health-checked routing via Envoy's Endpoint Discovery Service
+  - Resolves DNS records (e.g., `peers.arweave.xyz`) to discover Arweave peers
+    automatically
+  - Health-checks peers and classifies them as "full" (complete blockchain data)
+    or "partial" (incomplete) based on sync status
+  - Routes requests to fully-synced peers first with automatic failover to
+    partial peers
+  - Consensus-based reference height calculation prevents routing to stale or
+    outlier peers
+  - New Prometheus metrics for peer discovery, classification, and health check
+    monitoring
+  - Configurable via `ARWEAVE_PEER_DNS_RECORDS`, `ARWEAVE_PEER_DNS_PORT`,
+    `ARWEAVE_PEER_HEALTH_CHECK_INTERVAL_MS`, and related environment variables
+  - Enabled by default with `ENABLE_ARWEAVE_PEER_EDS=true`; falls back to
+    static `TRUSTED_NODE_HOST` when disabled
+  - EDS files validated on startup with corrupt files automatically removed and
+    re-seeded
+
+- **HyperBEAM Request Loop Prevention**: Detects compute-origin requests and
+  prevents infinite forwarding loops between gateways
+  - Requests with configured headers (default: `ao-peer-port`) are identified as
+    compute-origin and blocked from remote forwarding
+  - Local data sources (cache, S3, database) continue to serve data normally
+  - Configurable via `SKIP_FORWARDING_HEADERS` environment variable
+
 ### Changed
+
+- Updated observer to increase default chunk observation sample rate to 20%
 
 ### Fixed
 
