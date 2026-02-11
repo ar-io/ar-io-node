@@ -22,9 +22,15 @@ if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
     # Resolve first DNS record to seed EDS with real peer IPs
     FIRST_RECORD=$(echo "${PEER_DNS_RECORDS}" | cut -d',' -f1 | tr -d ' ')
     SEED_ENDPOINTS=""
-    if [ -n "${FIRST_RECORD}" ]; then
+    NEED_SEED=$([ ! -f /data/envoy-eds/arweave_full_nodes.json ] && echo "true" || echo "false")
+    MAX_RETRIES=10
+    RETRY_DELAY=5
+    ATTEMPT=0
+
+    while [ -n "${FIRST_RECORD}" ]; do
         SEED_IPS=$(getent ahostsv4 "${FIRST_RECORD}" 2>/dev/null | awk '{print $1}' | sort -u)
         FIRST=true
+        SEED_ENDPOINTS=""
         for IP in ${SEED_IPS}; do
             if [ "${FIRST}" = "true" ]; then
                 FIRST=false
@@ -33,7 +39,20 @@ if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
             fi
             SEED_ENDPOINTS="${SEED_ENDPOINTS}{\"endpoint\":{\"address\":{\"socket_address\":{\"address\":\"${IP}\",\"port_value\":${PEER_PORT}}}},\"health_status\":\"HEALTHY\"}"
         done
-    fi
+
+        if [ -n "${SEED_ENDPOINTS}" ]; then
+            break
+        fi
+
+        ATTEMPT=$((ATTEMPT + 1))
+        if [ "${NEED_SEED}" = "false" ] || [ "${ATTEMPT}" -ge "${MAX_RETRIES}" ]; then
+            echo "DNS resolution failed (attempt ${ATTEMPT}), existing EDS file: ${NEED_SEED}, giving up"
+            break
+        fi
+
+        echo "DNS resolution failed (attempt ${ATTEMPT}/${MAX_RETRIES}), retrying in ${RETRY_DELAY}s..."
+        sleep "${RETRY_DELAY}"
+    done
 
     if [ ! -f /data/envoy-eds/arweave_full_nodes.json ]; then
         cat > /data/envoy-eds/arweave_full_nodes.json <<EDSEOF
