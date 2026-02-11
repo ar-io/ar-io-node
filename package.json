@@ -32,7 +32,7 @@
     "any-signal": "^4.1.1",
     "apollo-server-express": "^3.13.0",
     "arweave": "^2.0.0-ec.0",
-    "axios": "^1.12.2",
+    "axios": "^1.13.5",
     "better-sqlite3": "^9.4.5",
     "change-case": "^5.4.4",
     "chokidar": "^5.0.0",
