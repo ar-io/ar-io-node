@@ -166,6 +166,26 @@ verification status, and retry attempts.
 **Moderation Database** - SQLite database managing content blocking and
 filtering rules.
 
+## CDB64 Indexing
+
+**CDB64** — Constant database format with 64-bit file offset support, used for
+fast O(1) key-value lookups in read-only index files.
+
+<a id="cdb64-root-tx-index"></a> **CDB64 Root Transaction Index** — Index
+mapping data item IDs to their root transaction locations (transaction ID,
+offsets, and path).
+
+<a id="partitioned-index"></a> **Partitioned Index** — A CDB64 index split into
+256 files (`00.cdb`–`ff.cdb`) by key prefix byte, enabling parallel processing
+and scalable storage.
+
+<a id="index-manifest"></a> **Index Manifest** — JSON metadata file describing
+the partitions and sources of a partitioned CDB64 index.
+
+<a id="cdb64-source"></a> **CDB64 Source** — A location where a CDB64 index can
+be loaded from: local file, local directory, HTTP URL, Arweave transaction, or
+Arweave byte-range.
+
 ## Data Storage Architecture
 
 **Cache Store** - High-speed storage layer (Redis or filesystem) for frequently
