@@ -32,7 +32,12 @@ if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
     # Resolve first DNS record to seed EDS with real peer IPs
     FIRST_RECORD=$(echo "${PEER_DNS_RECORDS}" | cut -d',' -f1 | tr -d ' ')
     SEED_ENDPOINTS=""
-    NEED_SEED=$([ ! -f /data/envoy-eds/arweave_full_nodes.json ] && echo "true" || echo "false")
+    if [ -f /data/envoy-eds/arweave_full_nodes.json ]; then
+        NEED_SEED="false"
+        echo "Using existing EDS file: arweave_full_nodes.json"
+    else
+        NEED_SEED="true"
+    fi
     MAX_RETRIES=10
     RETRY_DELAY=5
     ATTEMPT=0
@@ -51,6 +56,8 @@ if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
         done
 
         if [ -n "${SEED_ENDPOINTS}" ]; then
+            SEED_COUNT=$(echo "${SEED_IPS}" | wc -w)
+            echo "Resolved ${SEED_COUNT} IPs from ${FIRST_RECORD}"
             break
         fi
 
@@ -65,6 +72,7 @@ if [ "${TVAL_ENABLE_ARWEAVE_PEER_EDS}" = "true" ]; then
     done
 
     if [ ! -f /data/envoy-eds/arweave_full_nodes.json ]; then
+        echo "Seeding EDS file: arweave_full_nodes.json"
         cat > /data/envoy-eds/arweave_full_nodes.json <<EDSEOF
 {
   "version_info": "seed",
@@ -81,6 +89,7 @@ EDSEOF
 
     # Seed partial_nodes with empty endpoints
     if [ ! -f /data/envoy-eds/arweave_partial_nodes.json ]; then
+        echo "Seeding EDS file: arweave_partial_nodes.json"
         cat > /data/envoy-eds/arweave_partial_nodes.json <<EDSEOF
 {
   "version_info": "seed",
