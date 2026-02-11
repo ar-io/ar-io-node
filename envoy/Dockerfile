@@ -1,6 +1,7 @@
 FROM envoyproxy/envoy:v1.34-latest
 
-RUN apt-get update -y && apt-get install -y curl jq
+RUN apt-get update -y && apt-get install -y --no-install-recommends curl jq \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY install-ytt.sh /install-ytt.sh
 RUN /install-ytt.sh && rm /install-ytt.sh

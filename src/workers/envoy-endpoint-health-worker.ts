@@ -356,8 +356,13 @@ export class EnvoyEndpointHealthWorker {
       this.edsDirectory,
       `.eds-${clusterName}-${Date.now()}.tmp`,
     );
-    await fs.promises.writeFile(tmpFile, content, 'utf-8');
-    await fs.promises.rename(tmpFile, filePath);
+    try {
+      await fs.promises.writeFile(tmpFile, content, 'utf-8');
+      await fs.promises.rename(tmpFile, filePath);
+    } catch (error) {
+      await fs.promises.unlink(tmpFile).catch(() => {});
+      throw error;
+    }
 
     metrics.envoyEdsFileWritesTotal.inc({ cluster: clusterName });
 
