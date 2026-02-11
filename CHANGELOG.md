@@ -27,12 +27,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - EDS files validated on startup with corrupt files automatically removed and
     re-seeded
 
-- **HyperBEAM Request Loop Prevention**: Detects compute-origin requests and
-  prevents infinite forwarding loops between gateways
-  - Requests with configured headers (default: `ao-peer-port`) are identified as
-    compute-origin and blocked from remote forwarding
-  - Local data sources (cache, S3, database) continue to serve data normally
-  - Configurable via `SKIP_FORWARDING_HEADERS` environment variable
+- **HyperBEAM Request Loop Prevention**: Multi-layered detection of
+  compute-origin requests to prevent infinite forwarding loops between gateways.
+  Local data sources (cache, S3, database) always continue to serve data
+  normally.
+  - **Header-based detection**: Requests with configured headers (default:
+    `ao-peer-port`) are identified as compute-origin and blocked from remote
+    forwarding. Configurable via `SKIP_FORWARDING_HEADERS`.
+  - **Via-chain loop detection**: New `X-AR-IO-Via` header tracks the chain of
+    gateway identities across hops. When a gateway detects its own identity in
+    the via chain, it stops forwarding to prevent loops. Gracefully degrades when
+    `ARNS_ROOT_HOST` is not configured.
+  - **User-Agent detection**: Requests with missing or empty User-Agent headers
+    skip remote forwarding by default, catching HTTP clients like Erlang's `gun`
+    (used by HyperBEAM) that don't send a User-Agent. Configurable via
+    `SKIP_FORWARDING_EMPTY_USER_AGENT` (default: `true`). Additionally,
+    `SKIP_FORWARDING_USER_AGENTS` allows specifying User-Agent substrings for
+    case-insensitive matching (e.g., `HyperBEAM`).
 
 - **CDB64 Documentation**: Comprehensive documentation for the CDB64 root
   transaction index feature

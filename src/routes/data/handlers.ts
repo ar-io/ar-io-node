@@ -431,9 +431,13 @@ export const getRequestAttributes = (
   {
     arnsRootHost = config.ARNS_ROOT_HOST,
     nodeRelease = release,
+    skipForwardingEmptyUserAgent = config.SKIP_FORWARDING_EMPTY_USER_AGENT,
+    skipForwardingUserAgents = config.SKIP_FORWARDING_USER_AGENTS,
   }: {
     arnsRootHost?: string;
     nodeRelease?: string;
+    skipForwardingEmptyUserAgent?: boolean;
+    skipForwardingUserAgents?: string[];
   } = {},
 ): RequestAttributes => {
   const hopsHeader = req.headers[headerNames.hops.toLowerCase()] as string;
@@ -462,6 +466,21 @@ export const getRequestAttributes = (
   let skipRemoteForwarding = config.SKIP_FORWARDING_HEADERS.some(
     (header) => req.headers[header] !== undefined,
   );
+
+  // Check User-Agent for additional skip-forwarding signals
+  if (!skipRemoteForwarding) {
+    const userAgent = (req.headers['user-agent'] ?? '').trim();
+    if (skipForwardingEmptyUserAgent && userAgent === '') {
+      skipRemoteForwarding = true;
+    } else if (
+      skipForwardingUserAgents.length > 0 &&
+      skipForwardingUserAgents.some((ua) =>
+        userAgent.toLowerCase().includes(ua),
+      )
+    ) {
+      skipRemoteForwarding = true;
+    }
+  }
 
   // Parse incoming via chain for loop detection
   const incomingVia = parseViaHeader(

@@ -621,6 +621,20 @@ export const SKIP_FORWARDING_HEADERS = env
   .map((h) => h.trim().toLowerCase())
   .filter((h) => h.length > 0);
 
+// User-Agent substrings that indicate a request should skip remote forwarding.
+// Comma-separated list of substrings for case-insensitive matching.
+export const SKIP_FORWARDING_USER_AGENTS = env
+  .varOrDefault('SKIP_FORWARDING_USER_AGENTS', '')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter((s) => s.length > 0);
+
+// When true, requests with missing or empty User-Agent headers skip remote
+// forwarding. This catches HTTP clients like Erlang's gun (used by HyperBEAM)
+// that don't send a User-Agent header.
+export const SKIP_FORWARDING_EMPTY_USER_AGENT =
+  env.varOrDefault('SKIP_FORWARDING_EMPTY_USER_AGENT', 'true') === 'true';
+
 // Background data retrieval priority order
 export const BACKGROUND_RETRIEVAL_ORDER = env
   .varOrDefault('BACKGROUND_RETRIEVAL_ORDER', 'chunks')
