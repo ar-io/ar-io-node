@@ -21,7 +21,7 @@ Tools for generating, exporting, verifying, and uploading CDB64 index files. See
 The generate, export, and verify tools share a common CSV format for data item
 to root transaction mappings:
 
-```
+```text
 data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
 ```
 
@@ -333,6 +333,9 @@ yarn service:start
 
 # 5. Verify the exported CDB64 (random sample)
 ./tools/verify-cdb64 --cdb64 ./root-tx-index/00.cdb --csv ./verify.csv --mode random --count 5000
+# Note: Steps 4-5 are a round-trip sanity check verifying that the CDB64
+# export/import pipeline works correctly for a single partition. This does
+# NOT verify all partitions or compare against the original SQLite database.
 
 # 6. Dry run to check upload cost
 ./tools/upload-cdb64-to-arweave -i ./root-tx-index -w ./wallet.json --dry-run
@@ -382,7 +385,7 @@ After building, you should see a `.node` file in `node_modules/cdb64/node/`:
 
 If you see an error like:
 
-```
+```text
 Error: Cannot find module 'cdb64-linux-x64-gnu'
 ```
 

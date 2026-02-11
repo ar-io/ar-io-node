@@ -204,7 +204,7 @@ For very large indexes, partitioning splits data across 256 files by key prefix.
 
 ### Directory Structure
 
-```
+```text
 index/
   manifest.json    # Index manifest with partition metadata
   00.cdb           # Records with keys starting 0x00
@@ -311,7 +311,7 @@ xxd data/cdb64-root-tx-index/index.cdb | head -20
 3. Files have correct extensions
 
 **Logs to look for:**
-```
+```text
 CDB64 file watcher started
 CDB64 file added
 CDB64 source removed
