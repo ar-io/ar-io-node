@@ -1944,6 +1944,90 @@ st
           assert.equal(requestAttributes.arnsRecord, undefined);
         });
       });
+
+      describe('User-Agent based skip forwarding', () => {
+        const mockRes = { get: () => undefined } as any;
+
+        it('should skip forwarding when User-Agent is empty and skipForwardingEmptyUserAgent is true', () => {
+          const mockReq = { headers: {} } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes, {
+            skipForwardingEmptyUserAgent: true,
+            skipForwardingUserAgents: [],
+          });
+          assert.equal(attrs.skipRemoteForwarding, true);
+        });
+
+        it('should not skip forwarding when User-Agent is empty and skipForwardingEmptyUserAgent is false', () => {
+          const mockReq = { headers: {} } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes, {
+            skipForwardingEmptyUserAgent: false,
+            skipForwardingUserAgents: [],
+          });
+          assert.equal(attrs.skipRemoteForwarding, undefined);
+        });
+
+        it('should skip forwarding when User-Agent matches a configured substring', () => {
+          const mockReq = {
+            headers: { 'user-agent': 'HyperBEAM/1.0' },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes, {
+            skipForwardingEmptyUserAgent: false,
+            skipForwardingUserAgents: ['hyperbeam'],
+          });
+          assert.equal(attrs.skipRemoteForwarding, true);
+        });
+
+        it('should not skip forwarding when User-Agent does not match any configured substring', () => {
+          const mockReq = {
+            headers: { 'user-agent': 'Mozilla/5.0' },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes, {
+            skipForwardingEmptyUserAgent: false,
+            skipForwardingUserAgents: ['hyperbeam'],
+          });
+          assert.equal(attrs.skipRemoteForwarding, undefined);
+        });
+
+        it('should not perform substring matching when skipForwardingUserAgents is empty', () => {
+          const mockReq = {
+            headers: { 'user-agent': 'SomeAgent/1.0' },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes, {
+            skipForwardingEmptyUserAgent: false,
+            skipForwardingUserAgents: [],
+          });
+          assert.equal(attrs.skipRemoteForwarding, undefined);
+        });
+
+        it('should perform case-insensitive substring matching', () => {
+          const mockReq = {
+            headers: { 'user-agent': 'HYPERBEAM/2.0 (Linux)' },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes, {
+            skipForwardingEmptyUserAgent: false,
+            skipForwardingUserAgents: ['hyperbeam'],
+          });
+          assert.equal(attrs.skipRemoteForwarding, true);
+        });
+
+        it('should not check User-Agent when headers already triggered skip forwarding', () => {
+          const mockReq = {
+            headers: { 'ao-peer-port': '9000', 'user-agent': 'Mozilla/5.0' },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes, {
+            skipForwardingEmptyUserAgent: true,
+            skipForwardingUserAgents: [],
+          });
+          assert.equal(attrs.skipRemoteForwarding, true);
+        });
+      });
     });
 
     // Test stub for PaymentProcessor
