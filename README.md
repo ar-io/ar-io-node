@@ -196,6 +196,18 @@ encounter problems with it when indexing larger sets of transactions.
 
 For detailed information about filter types, operators, and advanced examples, see [Filter Documentation](docs/filters.md).
 
+### Root Transaction Index (CDB64)
+
+The gateway ships with a pre-built CDB64 index that provides O(1) lookups to
+resolve data item IDs to their containing L1 Arweave transactions. It is enabled
+by default and covers ~964 million non-AO, non-Redstone data items up to block
+height 1,820,000.
+
+To disable it, remove `cdb` from `ROOT_TX_LOOKUP_ORDER`. To use custom index
+sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See [docs/envs.md](docs/envs.md)
+for all CDB64 configuration options and [docs/cdb64-guide.md](docs/cdb64-guide.md)
+for operational guidance.
+
 ### Webhook Emission
 
 The ar.io gateway includes a feature to emit webhooks to specified servers when a transaction or data item is indexed and matches a predefined filter. This feature allows for real-time notifications and integrations based on the transaction and data indexing.
