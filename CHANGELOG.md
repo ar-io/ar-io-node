@@ -4,7 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 69] - 2026-02-11
+
+This is a **recommended release** that introduces **DNS-based multi-peer
+discovery** via Envoy's Endpoint Discovery Service, enabling automatic Arweave
+peer detection with health-checked routing and consensus-based failover. It also
+adds **multi-layered HyperBEAM request loop prevention** using header, via-chain,
+and User-Agent detection to block infinite forwarding loops between gateways.
+Additionally, this release includes **comprehensive CDB64 documentation** covering
+operator guides, format specifications, and tooling reference.
 
 ### Added
 
@@ -66,8 +74,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Updated observer to increase default chunk observation sample rate to 20%
-
-### Fixed
 
 ## [Release 68] - 2026-02-04
 
