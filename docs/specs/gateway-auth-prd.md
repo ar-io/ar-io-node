@@ -34,38 +34,97 @@ The service will be a standalone application that sits in front of or alongside 
 
 ---
 
+## Integration Context
+
+### Existing AR.IO Ecosystem
+
+GAS integrates with the existing AR.IO ecosystem:
+
+| Existing Service | Integration |
+|-----------------|-------------|
+| **ar.io Console** | Dashboard UI integrated into existing console (Arweave-hosted) |
+| **ArDrive Turbo** | Unified credits for uploads AND gateway access |
+| **AR.IO Gateways** | GAS sits in front of managed gateway clusters |
+| **ArNS** | Name resolution through authenticated gateway |
+
+### Relationship to Existing Services
+
+AR.IO already offers pay-as-you-go and free services for:
+- **Data uploads** via ArDrive Turbo credits
+- **Data access** via public gateways
+
+GAS extends this by providing:
+- **Authenticated access** with usage tracking per user/org
+- **Enterprise features** (SSO, team management, SLAs)
+- **Unified billing** across uploads and gateway access
+
+### Account Linking Strategy
+
+Users may already have:
+- **ArDrive/Turbo accounts** with credit balances
+- **Arweave wallets** with transaction history
+- **ar.io console accounts** (if exists)
+
+GAS should:
+1. Allow linking existing Arweave wallets to GAS accounts
+2. Display Turbo credit balance in dashboard
+3. Allow Turbo credits to pay for gateway usage (Phase 2)
+4. Support "Sign in with Arweave" as primary auth for crypto-native users
+
+---
+
 ## Architecture Overview
 
 ### Deployment Topology
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
+│                           ar.io Console (Arweave)                            │
+│                    Dashboard UI integrated into existing app                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │ API calls
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Load Balancer                                   │
 │                         (nginx/cloudflare/etc)                              │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        Gateway Auth Service (GAS)                            │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │   Auth      │  │   Metering  │  │   Proxy     │  │   Admin/Dashboard   │ │
-│  │   Module    │  │   Module    │  │   Module    │  │   Web UI            │ │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────────────┘ │
-│         │                │                │                    │            │
-│         └────────────────┴────────────────┴────────────────────┘            │
-│                                   │                                          │
-│  ┌─────────────┐  ┌─────────────┐                                           │
-│  │  PostgreSQL │  │    Redis    │                                           │
-│  │  (primary)  │  │   (cache)   │                                           │
-│  └─────────────┘  └─────────────┘                                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
+                    ┌─────────────────┴─────────────────┐
+                    ▼                                   ▼
+┌───────────────────────────────────┐   ┌───────────────────────────────────┐
+│    Gateway Auth Service (GAS)      │   │     ar.io Console API (existing)  │
+│         (API Backend)              │   │                                   │
+│  ┌─────────────┐  ┌─────────────┐ │   └───────────────────────────────────┘
+│  │   Auth      │  │   Metering  │ │
+│  │   Module    │  │   Module    │ │
+│  └─────────────┘  └─────────────┘ │
+│  ┌─────────────┐  ┌─────────────┐ │
+│  │   Proxy     │  │   API       │ │
+│  │   Module    │  │   (REST)    │ │
+│  └─────────────┘  └─────────────┘ │
+│         │                         │
+│  ┌─────────────┐  ┌─────────────┐ │
+│  │  PostgreSQL │  │    Redis    │ │
+│  │(self-hosted)│  │(self-hosted)│ │
+│  └─────────────┘  └─────────────┘ │
+└───────────────────────────────────┘
+                    │
+                    ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           AR.IO Gateway Cluster                              │
 │                     (existing ar-io-node instances)                          │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Key Architecture Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| **Dashboard hosting** | Integrated into ar.io console | Leverage existing Arweave-hosted app |
+| **Database** | Self-hosted PostgreSQL | Co-located with GAS on AR.IO backend |
+| **Cache** | Self-hosted Redis | Low latency, no external dependency |
+| **Email** | Mailchimp Transactional | Reliable delivery, existing relationship |
+| **Monitoring** | Prometheus + Honeycomb | Metrics + distributed tracing |
 
 ### Service Components
 
@@ -392,6 +451,133 @@ When quota exceeded:
 - Automatic purge of logs older than 90 days
 - No export required (per requirements)
 
+### FR-8: Developer Experience
+
+#### FR-8.1: Frictionless Onboarding
+- **One-click signup**: GitHub OAuth as fastest path to first API call
+- **No credit card required**: Generous free tier to start
+- **Instant API key**: Generated immediately after signup
+- **Time to first request**: < 2 minutes from landing page
+
+#### FR-8.2: API Documentation
+- **OpenAPI 3.0 specification**: Machine-readable API definition
+- **Interactive documentation**: Swagger UI or similar
+- **Try-it-now**: Execute API calls directly from docs
+- **Code examples**: Curl, JavaScript, Python, Go for each endpoint
+- **Authentication examples**: Clear examples for API key and JWT usage
+
+#### FR-8.3: Getting Started Guide
+- **Quickstart tutorial**: 5-minute guide to first API call
+- **Language-specific guides**: Node.js, Python, Go, Rust
+- **Use case examples**:
+  - Fetching Arweave data
+  - Querying via GraphQL
+  - Resolving ArNS names
+  - Building an app with gateway access
+
+#### FR-8.4: SDKs (Phase 2)
+- **TypeScript/JavaScript SDK**: Primary SDK, npm package
+- **Python SDK**: For data science and scripting use cases
+- **Auto-generated clients**: From OpenAPI spec for other languages
+
+#### FR-8.5: Developer Dashboard
+- **API key management**: Front and center in dashboard
+- **Live request log**: See recent requests (last 100) in real-time
+- **Usage visualization**: Clear graphs of consumption
+- **Quota indicators**: Visual progress bars showing usage vs limits
+- **Quick copy**: One-click copy for API keys, endpoints, examples
+
+#### FR-8.6: Error Experience
+- **Clear error messages**: Human-readable, actionable
+- **Error codes**: Machine-parseable for programmatic handling
+- **Troubleshooting links**: Link to relevant documentation
+- **Example response**:
+```json
+{
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "You have exceeded your rate limit of 100 requests/second",
+    "details": {
+      "limit": 100,
+      "reset_at": "2024-01-15T10:30:00Z",
+      "retry_after_seconds": 45
+    },
+    "docs_url": "https://docs.ar.io/gateway/rate-limits"
+  }
+}
+```
+
+#### FR-8.7: Sandbox/Test Mode (Phase 2)
+- **Test API keys**: Prefixed with `ario_test_`
+- **No quota consumption**: Test requests don't count toward limits
+- **Simulated responses**: For testing error handling
+- **Test environment**: Separate from production data
+
+### FR-9: Free Tier & Pricing
+
+#### FR-9.1: Free Tier Inclusions
+| Resource | Free Tier Limit |
+|----------|-----------------|
+| Monthly egress | 1 GB |
+| Monthly requests | 100,000 |
+| API keys | 3 |
+| Organizations | 1 (personal) |
+| Team members | 1 (self) |
+| Data retention | 30 days |
+| Rate limit | 10 requests/second |
+| Support | Community (Discord) |
+
+#### FR-9.2: Upgrade Triggers
+Display upgrade prompts when:
+- Usage reaches 80% of free tier limit
+- User tries to create 4th API key
+- User tries to invite team member
+- User tries to configure SSO
+
+#### FR-9.3: Paid Tier Features (to be defined)
+- Higher quotas
+- Team collaboration
+- SSO/SAML
+- Priority support
+- SLA guarantees
+- Custom rate limits
+
+### FR-10: Integration with Existing Services
+
+#### FR-10.1: Turbo Credit Integration
+- **Display balance**: Show Turbo credit balance in dashboard
+- **Unified credits**: Use same credits for uploads and gateway access
+- **Top-up flow**: Link to Turbo purchase flow
+- **Usage breakdown**: Show credits used for uploads vs gateway
+
+#### FR-10.2: Arweave Wallet Integration
+- **Wallet linking**: Connect ArConnect or other Arweave wallets
+- **Wallet-based auth**: Sign in with Arweave wallet
+- **Transaction history**: View user's Arweave transaction history
+- **Identity verification**: Prove ownership of Arweave addresses
+
+#### FR-10.3: ar.io Console Integration
+- **Embedded UI**: GAS dashboard as section in existing console
+- **Shared navigation**: Consistent with console UX
+- **Single session**: Same auth session across console features
+- **Unified settings**: User profile shared with console
+
+### FR-11: Webhooks (Phase 2)
+
+#### FR-11.1: Webhook Events
+| Event | Trigger |
+|-------|---------|
+| `usage.threshold` | Usage reaches 80%, 90%, 100% of quota |
+| `apikey.created` | New API key created |
+| `apikey.revoked` | API key revoked |
+| `org.member_added` | Team member added |
+| `billing.payment_failed` | Payment processing failed |
+
+#### FR-11.2: Webhook Security
+- **HMAC signatures**: Sign payloads with shared secret
+- **Retry logic**: Retry failed deliveries with exponential backoff
+- **Event logs**: Show delivery status in dashboard
+
 ---
 
 ## Non-Functional Requirements
@@ -686,9 +872,11 @@ NODE_ENV=production
 PORT=3000
 LOG_LEVEL=info
 
-# Database
-DATABASE_URL=postgresql://user:pass@host:5432/gas
-REDIS_URL=redis://host:6379
+# Database (self-hosted PostgreSQL)
+DATABASE_URL=postgresql://gas:password@localhost:5432/gas
+
+# Cache (self-hosted Redis)
+REDIS_URL=redis://localhost:6379
 
 # JWT
 JWT_PRIVATE_KEY=<RS256 private key PEM>
@@ -705,33 +893,39 @@ API_KEY_HASH_PARALLELISM=4        # Argon2 parallelism
 GATEWAY_URL=http://localhost:4000 # AR.IO Gateway URL
 GATEWAY_TIMEOUT=30000             # Proxy timeout ms
 
-# OAuth Providers (optional)
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-GITHUB_CLIENT_ID=
+# OAuth Providers
+GITHUB_CLIENT_ID=                 # Required for Phase 1
 GITHUB_CLIENT_SECRET=
+GOOGLE_CLIENT_ID=                 # Phase 2
+GOOGLE_CLIENT_SECRET=
 # ... etc for each provider
 
-# Email (for verification, password reset)
-SMTP_HOST=
-SMTP_PORT=
-SMTP_USER=
-SMTP_PASS=
-EMAIL_FROM=noreply@example.com
+# Email (Mailchimp Transactional)
+MAILCHIMP_API_KEY=
+MAILCHIMP_FROM_EMAIL=noreply@ar.io
+MAILCHIMP_FROM_NAME=AR.IO Gateway
 
-# Dashboard
-DASHBOARD_URL=https://dashboard.example.com
-CORS_ORIGINS=https://dashboard.example.com
+# ar.io Console Integration
+CONSOLE_URL=https://console.ar.io  # Arweave-hosted console
+CORS_ORIGINS=https://console.ar.io
+
+# Turbo Integration (Phase 4)
+TURBO_API_URL=https://api.ardrive.io
+TURBO_API_KEY=
+
+# Monitoring
+HONEYCOMB_API_KEY=                # Distributed tracing
+PROMETHEUS_ENABLED=true           # Metrics endpoint
 
 # Rate Limiting (auth endpoints)
 AUTH_RATE_LIMIT_LOGIN=5           # per minute per IP
 AUTH_RATE_LIMIT_REGISTER=3        # per minute per IP
 
-# Defaults
-DEFAULT_MONTHLY_EGRESS=107374182400   # 100GB
-DEFAULT_MONTHLY_REQUESTS=1000000
-DEFAULT_API_KEYS_LIMIT=10
-DEFAULT_MEMBERS_LIMIT=5
+# Free Tier Defaults
+FREE_TIER_MONTHLY_EGRESS=1073741824     # 1GB
+FREE_TIER_MONTHLY_REQUESTS=100000
+FREE_TIER_API_KEYS_LIMIT=3
+FREE_TIER_RATE_LIMIT_RPS=10             # requests per second
 ```
 
 ---
@@ -1208,6 +1402,113 @@ DEFAULT_MEMBERS_LIMIT=5
 - [ ] Verify signature matches linked wallet
 - [ ] Issue JWT tokens as normal
 
+### Epic 8: Developer Experience
+
+#### US-8.1: One-Click GitHub Signup
+**As a** developer
+**I want to** sign up with one click using GitHub
+**So that** I can start using the API immediately
+
+**Acceptance Criteria:**
+- [ ] "Continue with GitHub" button prominent on signup page
+- [ ] OAuth flow completes in single redirect
+- [ ] Account created with GitHub email and avatar
+- [ ] API key auto-generated on first signup
+- [ ] Redirected to dashboard with key visible
+- [ ] Time from click to API key < 30 seconds
+
+#### US-8.2: View Interactive API Documentation
+**As a** developer
+**I want to** explore the API interactively
+**So that** I can understand how to use it
+
+**Acceptance Criteria:**
+- [ ] OpenAPI spec available at `/openapi.json`
+- [ ] Swagger UI at `/docs` or similar
+- [ ] Can execute requests directly from docs
+- [ ] Authentication pre-filled when logged in
+- [ ] Code examples in multiple languages
+
+#### US-8.3: Copy Code Examples
+**As a** developer
+**I want to** copy working code examples
+**So that** I can integrate quickly
+
+**Acceptance Criteria:**
+- [ ] Code examples for curl, JavaScript, Python, Go
+- [ ] Examples include authentication headers
+- [ ] One-click copy button
+- [ ] Examples use user's actual API key when logged in
+
+#### US-8.4: View Live Request Log
+**As a** developer
+**I want to** see my recent API requests
+**So that** I can debug issues
+
+**Acceptance Criteria:**
+- [ ] Dashboard shows last 100 requests
+- [ ] Shows: timestamp, method, path, status, latency, bytes
+- [ ] Updates in real-time (websocket or polling)
+- [ ] Can filter by status code
+- [ ] Can click to see request/response details
+
+#### US-8.5: Understand Errors
+**As a** developer
+**I want** clear error messages
+**So that** I can fix issues quickly
+
+**Acceptance Criteria:**
+- [ ] All errors return JSON with code, message, details
+- [ ] Error codes are documented
+- [ ] Errors include links to relevant documentation
+- [ ] Rate limit errors include retry-after information
+
+### Epic 9: Free Tier Experience
+
+#### US-9.1: Start for Free
+**As a** new user
+**I want to** try the service without payment
+**So that** I can evaluate before committing
+
+**Acceptance Criteria:**
+- [ ] No credit card required to sign up
+- [ ] Free tier includes 1GB egress, 100k requests
+- [ ] Clear display of free tier limits
+- [ ] Usage counter shows consumption
+
+#### US-9.2: See Upgrade Prompts
+**As a** free tier user approaching limits
+**I want to** see clear upgrade options
+**So that** I can continue using the service
+
+**Acceptance Criteria:**
+- [ ] Banner at 80% usage: "You've used 80% of your free tier"
+- [ ] Soft limit at 100%: requests continue with warning header
+- [ ] Clear pricing information
+- [ ] One-click upgrade flow
+
+### Epic 10: Turbo Integration
+
+#### US-10.1: See Turbo Balance
+**As a** user with Turbo credits
+**I want to** see my balance in the gateway dashboard
+**So that** I know how much I can use
+
+**Acceptance Criteria:**
+- [ ] Turbo credit balance displayed in dashboard
+- [ ] Balance updates after usage
+- [ ] Link to top up credits
+
+#### US-10.2: Pay with Turbo Credits
+**As a** user
+**I want to** use my Turbo credits for gateway access
+**So that** I have unified billing
+
+**Acceptance Criteria:**
+- [ ] Gateway usage deducts from Turbo balance
+- [ ] Clear conversion rate displayed
+- [ ] Usage breakdown shows credits consumed
+
 ---
 
 ## Implementation Phases
@@ -1215,79 +1516,148 @@ DEFAULT_MEMBERS_LIMIT=5
 ### Phase 1: Core Authentication (MVP)
 **Duration: 4-6 weeks**
 
+**Focus**: Get developers making API calls ASAP
+
+- GitHub OAuth signup (fastest path to API key)
 - Email registration and login
 - JWT + refresh token flow
-- Basic API key management
-- Single organization per user
+- API key management (create, list, revoke)
+- Single organization per user (personal org)
 - Gateway proxy with metering
-- Basic usage dashboard
-- PostgreSQL + Redis setup
+- Basic usage display
+- PostgreSQL + Redis setup (self-hosted)
+- OpenAPI spec + Swagger UI
+- Integration scaffolding for ar.io console
 
 **Deliverables:**
-- Working auth service
-- API key authentication
-- Basic dashboard UI
+- Working GAS API backend
+- API key authentication working
+- Interactive API documentation
 - Docker compose deployment
+- Console integration endpoints ready
 
-### Phase 2: Multi-Org & SSO
+**Success Criteria:**
+- Developer can go from signup to first API call in < 2 minutes
+- API documentation is live and interactive
+
+### Phase 2: Developer Experience & Social Auth
+**Duration: 3-4 weeks**
+
+**Focus**: Polish the developer journey
+
+- Google OAuth
+- Code examples in docs (curl, JS, Python, Go)
+- Getting started guide
+- Live request log in dashboard
+- Clear error messages with docs links
+- Usage visualization (charts)
+- Quota warnings (80%, 100%)
+- Email notifications (Mailchimp integration)
+
+**Deliverables:**
+- Multiple OAuth providers
+- Comprehensive documentation
+- Developer-friendly dashboard
+- Email notification system
+
+### Phase 3: Multi-Org & Enterprise SSO
 **Duration: 4-6 weeks**
 
+**Focus**: Enterprise readiness
+
 - Multi-organization support
+- Team member invitations
+- Organization roles (owner, admin, member)
 - OIDC SSO integration
 - SAML SSO integration
-- GitHub/Google OAuth
-- Organization member management
-- Role-based permissions
+- SSO configuration UI
+- Audit log viewer
 
 **Deliverables:**
 - Full multi-tenancy
-- SSO configuration UI
-- Member invitation flow
+- Enterprise SSO
+- Team collaboration features
 
-### Phase 3: Advanced Features
-**Duration: 4-6 weeks**
+### Phase 4: Arweave Integration
+**Duration: 3-4 weeks**
 
-- Wallet authentication (SIWE, ArConnect)
-- Advanced usage analytics
-- Quota management UI
-- Audit log viewer
-- Email notifications
+**Focus**: Crypto-native features
+
+- Arweave wallet authentication (ArConnect)
+- Ethereum wallet authentication (SIWE)
+- Wallet linking to accounts
+- Turbo credit balance display
+- Turbo credit consumption for gateway usage
 
 **Deliverables:**
-- Wallet login
-- Complete dashboard
-- Notification system
+- Wallet-based authentication
+- Turbo integration
+- Unified credit system
 
-### Phase 4: Billing Integration
+### Phase 5: Advanced Features
 **Duration: 2-4 weeks**
 
-- ArDrive Turbo credit integration
-- Usage-based billing
-- Payment UI
+**Focus**: Polish and scale
+
+- Webhooks for events
+- TypeScript SDK
+- Sandbox/test mode
+- Advanced analytics
+- Rate limit customization per org
 
 **Deliverables:**
-- Credit system integration
-- Billing dashboard
+- Webhook system
+- Official SDK
+- Test environment
 
 ---
 
 ## Open Questions
 
-1. **Branding**: What should the service be called? "AR.IO Gateway Auth"? "AR.IO Access"?
+### Resolved
 
-2. **Pricing Tiers**: What are the plan names and quota limits for free/starter/growth/enterprise?
+| Question | Decision |
+|----------|----------|
+| **Email Provider** | Mailchimp Transactional |
+| **Monitoring** | Prometheus + Honeycomb |
+| **Database hosting** | Self-hosted PostgreSQL on AR.IO backend |
+| **Redis hosting** | Self-hosted locally |
+| **Dashboard** | Integrated into existing ar.io console (Arweave-hosted) |
 
-3. **Default Quotas**: What are reasonable defaults for the free tier?
+### Still Open
 
-4. **Domain**: What domain will the auth service and dashboard use?
+1. **Branding**: What should the service be called? "AR.IO Gateway Auth"? "AR.IO Access"? "AR.IO Gateway API"?
 
-5. **Email Provider**: What SMTP service will be used for transactional emails?
+2. **Pricing Tiers**: What are the plan names and quota limits?
+   - Free: 1GB egress, 100k requests (proposed)
+   - Starter: ?
+   - Growth: ?
+   - Enterprise: ?
 
-6. **Monitoring**: What observability stack (Prometheus/Grafana, Datadog, etc.)?
+3. **Domain**: What domain will the GAS API use? `api.ar.io`? `gateway-api.ar.io`?
 
-7. **Key Format**: Is `ario_<env>_<random>` acceptable or prefer different format?
+4. **ar.io Console Integration**:
+   - Does the console currently have user accounts?
+   - If yes, how do we migrate/link existing users?
+   - What auth does the console currently use?
 
-8. **Turbo Integration**: What's the Turbo API for credit balance and consumption?
+5. **Turbo Integration Details**:
+   - What's the Turbo API for credit balance lookup?
+   - What's the API for credit consumption/deduction?
+   - Is there a test/sandbox Turbo environment?
+
+6. **Key Format**: Is `ario_<env>_<random>` acceptable or prefer different format?
+
+7. **Credit Conversion Rate**: How many Turbo credits per GB of egress? Per 1000 requests?
+
+8. **Free Tier Limits**: Are the proposed limits (1GB, 100k requests) appropriate?
+
+9. **Rate Limits**: What should the default rate limit be per tier?
+   - Free: 10 req/sec (proposed)
+   - Paid: 100 req/sec? 1000 req/sec?
+
+10. **Arweave Wallet Auth Priority**: Should "Sign in with Arweave" be Phase 1 or Phase 2?
+    - Given the crypto-native audience, might be worth prioritizing
 
 ---
 

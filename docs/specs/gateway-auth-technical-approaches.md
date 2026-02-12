@@ -343,32 +343,35 @@ Custom build with selective use of battle-tested libraries.
 - Need to build dashboard UI from scratch
 - SAML testing requires IdP sandboxes
 
-### Cost Breakdown
-| Item | Monthly Cost |
-|------|-------------|
-| PostgreSQL (managed, e.g., Supabase, Neon, RDS) | $15-50 |
-| Redis (managed, e.g., Upstash, ElastiCache) | $15-50 |
-| Compute (2-4 instances, e.g., Railway, Render, EC2) | $20-100 |
-| Email sending (e.g., Resend, SendGrid, SES) | $0-20 |
-| **Total** | **$50-220** |
+### Cost Breakdown (AR.IO Infrastructure)
 
-### Third-Party Services Needed
-| Service | Purpose | Free Tier | Paid |
-|---------|---------|-----------|------|
-| **Email** | Verification, password reset, notifications | | |
-| Resend | Modern email API | 3,000/month | $20/month for 50k |
-| SendGrid | Established, good deliverability | 100/day | $20/month for 50k |
-| AWS SES | Cheapest at scale | None | $0.10/1,000 |
-| **Database** | | | |
-| Supabase | Postgres + extras | 500MB | $25/month |
-| Neon | Serverless Postgres | 512MB | $19/month |
-| AWS RDS | Standard managed | None | $15-50/month |
-| **Redis** | | | |
-| Upstash | Serverless Redis | 10k commands/day | $10/month |
-| Redis Cloud | Managed Redis | 30MB | $7/month |
-| **Monitoring** | | | |
-| Grafana Cloud | Metrics + dashboards | 10k series | $50/month |
-| Datadog | Full observability | None | $15/host/month |
+Based on AR.IO's infrastructure decisions:
+
+| Item | Hosting | Monthly Cost |
+|------|---------|-------------|
+| PostgreSQL | Self-hosted on AR.IO backend | $0 (existing infra) |
+| Redis | Self-hosted locally | $0 (existing infra) |
+| Compute (GAS service) | AR.IO backend | $20-100 |
+| Email (Mailchimp Transactional) | Managed | $0-20 |
+| Monitoring (Prometheus + Honeycomb) | Self-hosted + managed | $0-50 |
+| **Total incremental cost** | | **$20-170** |
+
+### Infrastructure Decisions
+
+| Component | Decision | Notes |
+|-----------|----------|-------|
+| **PostgreSQL** | Self-hosted on AR.IO backend | Co-located with GAS service |
+| **Redis** | Self-hosted locally | For sessions, rate limits, real-time counters |
+| **Email** | Mailchimp Transactional | For verification, password reset, notifications |
+| **Monitoring** | Prometheus + Honeycomb | Metrics + distributed tracing |
+| **Dashboard** | Integrated into ar.io console | Existing Arweave-hosted app |
+
+### Third-Party Services Required
+
+| Service | Purpose | Estimated Cost |
+|---------|---------|----------------|
+| **Mailchimp Transactional** | Email delivery | Free up to 500/day, then ~$20/month |
+| **Honeycomb** | Distributed tracing | Free tier available, ~$50/month for production |
 
 ---
 
@@ -445,3 +448,77 @@ If timeline is critical and budget allows, **WorkOS for SSO only + custom for ev
 - [node-saml](https://github.com/node-saml/node-saml)
 - [jose JWT Library](https://github.com/panva/jose)
 - [SIWE - Sign-In with Ethereum](https://docs.login.xyz/)
+
+---
+
+## Selected Approach
+
+**Decision**: Approach F (Hybrid Custom Build) with AR.IO infrastructure.
+
+### Final Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   ar.io Console (Arweave-hosted)                │
+│               Dashboard UI integrated into existing app          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Gateway Auth Service (GAS)                    │
+│                      (Node.js/Fastify Backend)                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│  │   Auth      │  │   Metering  │  │   Proxy     │             │
+│  │  (Arctic,   │  │  (Custom)   │  │  (undici)   │             │
+│  │  node-saml, │  │             │  │             │             │
+│  │  jose)      │  │             │  │             │             │
+│  └─────────────┘  └─────────────┘  └─────────────┘             │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              AR.IO Backend Infrastructure                │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐  │   │
+│  │  │  PostgreSQL │  │    Redis    │  │   Prometheus    │  │   │
+│  │  │(self-hosted)│  │(self-hosted)│  │  + Honeycomb    │  │   │
+│  │  └─────────────┘  └─────────────┘  └─────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     AR.IO Gateway Cluster                        │
+│                   (existing ar-io-node instances)                │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │  Mailchimp      │
+                    │  Transactional  │
+                    │  (Email)        │
+                    └─────────────────┘
+```
+
+### Key Decisions Summary
+
+| Component | Technology | Hosting |
+|-----------|------------|---------|
+| Backend Framework | Fastify (Node.js) | AR.IO Backend |
+| Database | PostgreSQL | Self-hosted |
+| Cache | Redis | Self-hosted |
+| OAuth | Arctic library | - |
+| SAML | node-saml | - |
+| JWT | jose | - |
+| Email | Mailchimp Transactional | Managed |
+| Metrics | Prometheus | Self-hosted |
+| Tracing | Honeycomb | Managed |
+| Dashboard | ar.io console | Arweave |
+
+### Estimated Timeline
+
+| Phase | Duration | Key Deliverables |
+|-------|----------|------------------|
+| Phase 1: Core Auth | 4-6 weeks | GitHub OAuth, API keys, metering, OpenAPI docs |
+| Phase 2: DX & Social | 3-4 weeks | Google OAuth, code examples, usage dashboard |
+| Phase 3: Enterprise | 4-6 weeks | Multi-org, OIDC, SAML, team management |
+| Phase 4: Arweave | 3-4 weeks | Wallet auth, Turbo integration |
+| Phase 5: Advanced | 2-4 weeks | Webhooks, SDK, sandbox mode |
+| **Total** | **16-24 weeks** | Full-featured auth service |
