@@ -9,6 +9,7 @@ import winston from 'winston';
 import {
   generateRequestAttributes,
   parseRequestAttributesHeaders,
+  validateHopCount,
 } from '../lib/request-attributes.js';
 import { shuffleArray } from '../lib/random.js';
 import {
@@ -23,22 +24,28 @@ import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
 import { buildRangeHeader, parseContentLength } from '../lib/http-utils.js';
 
+const MAX_DATA_HOPS = 3;
+
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private trustedGateways: Map<number, string[]>;
   private readonly requestTimeoutMs: number;
+  private readonly maxHopsAllowed: number;
 
   constructor({
     log,
     trustedGatewaysUrls,
     requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
+    maxHopsAllowed = MAX_DATA_HOPS,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, number>;
     requestTimeoutMs?: number;
+    maxHopsAllowed?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
+    this.maxHopsAllowed = maxHopsAllowed;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -91,6 +98,11 @@ export class GatewaysDataSource implements ContiguousDataSource {
       // Skip remote forwarding for compute-origin requests to prevent loops
       if (requestAttributes?.skipRemoteForwarding) {
         throw new Error('Remote forwarding skipped for compute-origin request');
+      }
+
+      // Validate hop count before forwarding
+      if (requestAttributes !== undefined) {
+        validateHopCount(requestAttributes.hops, this.maxHopsAllowed);
       }
 
       const path = `/raw/${id}`;
