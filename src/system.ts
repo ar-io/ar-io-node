@@ -545,10 +545,18 @@ export const arIOPeerManager = new ArIOPeerManager({
   nodeWallet: config.AR_IO_WALLET,
 });
 
-export const arIODataSource = new ArIODataSource({
+const baseArIODataSource = new ArIODataSource({
   log,
   peerManager: arIOPeerManager,
   dataAttributesStore,
+});
+
+// Wrap with filtering for peer forwarding (same blocked lists as gateway forwarding)
+export const arIODataSource = new FilteredContiguousDataSource({
+  log,
+  dataSource: baseArIODataSource,
+  blockedOrigins: config.TRUSTED_GATEWAYS_BLOCKED_ORIGINS,
+  blockedIpsAndCidrs: config.TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS,
 });
 
 export const arIOChunkSource = new ArIOChunkSource({

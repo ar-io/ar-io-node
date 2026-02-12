@@ -1093,6 +1093,23 @@ export const ARNS_ROOT_HOST = env.varOrUndefined('ARNS_ROOT_HOST');
 export const ROOT_HOST_SUBDOMAIN_LENGTH =
   ARNS_ROOT_HOST !== undefined ? ARNS_ROOT_HOST.split('.').length - 2 : 0;
 
+// Warn if TRUSTED_GATEWAYS_URLS contains this gateway's own hostname
+if (ARNS_ROOT_HOST !== undefined) {
+  for (const url of Object.keys(TRUSTED_GATEWAYS_URLS)) {
+    try {
+      const hostname = new URL(url).hostname;
+      if (hostname === ARNS_ROOT_HOST) {
+        logger.warn(
+          `TRUSTED_GATEWAYS_URLS contains this gateway's own ARNS_ROOT_HOST (${ARNS_ROOT_HOST}). ` +
+            'This creates a self-forwarding loop. Remove it from TRUSTED_GATEWAYS_URLS.',
+        );
+      }
+    } catch {
+      /* URL already validated above */
+    }
+  }
+}
+
 // The protocol to use for sandboxing redirects (defaults to https)
 export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
 
