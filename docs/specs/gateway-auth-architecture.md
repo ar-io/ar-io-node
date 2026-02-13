@@ -1203,6 +1203,43 @@ Ask the Turbo team: "Can I get the wallet signature verification code you use fo
 
 That's the core of this system. Everything else is straightforward CRUD + proxying.
 
+### Turbo's Auth Pattern (ANS-104 Data Items)
+
+**Important**: Turbo uses ANS-104 data item signatures for authentication, NOT a simple challenge-response. ANS-104 is the standard for bundled data on Arweave.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     How Turbo Auth Works                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1. User creates an ANS-104 data item (signed with their wallet)        │
+│  2. Data item contains auth request info (nonce, timestamp, etc.)       │
+│  3. User sends signed data item to Turbo                                │
+│  4. Turbo verifies the data item signature matches the wallet address   │
+│  5. If valid, user is authenticated                                     │
+│                                                                          │
+│  Key insight: The signature IS the authentication                        │
+│  - No separate "sign this challenge" step                               │
+│  - User just signs a data item, signature proves ownership              │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**For GAS implementation**, you have two options:
+
+| Option | Description | Complexity |
+|--------|-------------|------------|
+| **A: Mirror Turbo exactly** | Accept ANS-104 signed data items for auth | Lower (reuse Turbo code) |
+| **B: Simple challenge-response** | Sign a text message (as shown in this doc) | Also simple |
+
+**Recommendation**: Start by talking to the Turbo team. If their ANS-104 verification code is easy to extract and reuse, use Option A. The signature verification is already battle-tested.
+
+**ANS-104 Resources**:
+- Spec: https://github.com/ArweaveTeam/arweave-standards/blob/master/ans/ANS-104.md
+- Used by: Turbo, Irys (formerly Bundlr), ar.io bundlers
+
+The challenge-response flow in this doc is a fallback if ANS-104 is too complex to integrate. Both approaches prove wallet ownership - ANS-104 is just the "Arweave native" way.
+
 ---
 
 ## Developer Quick Start Experience
