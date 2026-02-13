@@ -974,6 +974,149 @@ volumes:
 
 ---
 
+## Console Integration
+
+The ar.io console (dashboard UI) connects to this auth service. Here's how they work together:
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         ar.io Console (Frontend)                         │
+│                     (Hosted on Arweave / permaweb)                       │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐│
+│  │  1. User clicks "Connect Wallet"                                    ││
+│  │  2. Wallet extension (ArConnect/MetaMask/Phantom) opens             ││
+│  │  3. User signs challenge message                                    ││
+│  │  4. Console sends signature to GAS /auth/verify                     ││
+│  │  5. GAS returns JWT                                                 ││
+│  │  6. Console stores JWT in localStorage                              ││
+│  │  7. All subsequent API calls include JWT in Authorization header    ││
+│  └─────────────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ HTTPS + CORS
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Gateway Auth Service (GAS)                            │
+│                         https://auth.ar.io                               │
+│                                                                          │
+│  CORS Configuration:                                                     │
+│  - Allow-Origin: https://console.ar.io, https://*.arweave.net           │
+│  - Allow-Methods: GET, POST, DELETE, OPTIONS                            │
+│  - Allow-Headers: Authorization, Content-Type, X-API-Key                │
+│  - Allow-Credentials: true                                              │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ Internal network
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         AR.IO Gateway                                    │
+│                      http://gateway:3000                                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### CORS Configuration
+
+```typescript
+// Fastify CORS setup for console integration
+import cors from '@fastify/cors';
+
+fastify.register(cors, {
+  origin: [
+    'https://console.ar.io',           // Production console
+    'https://*.arweave.net',           // Arweave-hosted versions
+    'http://localhost:3000',           // Local development
+  ],
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type', 'X-API-Key'],
+  credentials: true,                    // Allow cookies/auth headers
+  maxAge: 86400,                        // Cache preflight for 24 hours
+});
+```
+
+### Console Authentication Flow
+
+```typescript
+// Console frontend code (pseudocode)
+
+async function connectWallet() {
+  // 1. Detect wallet
+  const wallet = await detectWallet(); // ArConnect, MetaMask, or Phantom
+  const address = await wallet.getAddress();
+  const chain = wallet.chain; // 'arweave', 'ethereum', 'solana'
+
+  // 2. Get challenge from GAS
+  const challengeRes = await fetch(
+    `https://auth.ar.io/auth/challenge?wallet=${address}&chain=${chain}`
+  );
+  const { message, nonce } = await challengeRes.json();
+
+  // 3. Sign challenge with wallet
+  const signature = await wallet.signMessage(message);
+
+  // 4. Verify signature and get JWT
+  const verifyRes = await fetch('https://auth.ar.io/auth/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ wallet: address, chain, signature, message }),
+  });
+  const { token, wallet: user, firstApiKey } = await verifyRes.json();
+
+  // 5. Store JWT
+  localStorage.setItem('gas_token', token);
+
+  // 6. If new user, show the first API key
+  if (firstApiKey) {
+    showFirstKeyModal(firstApiKey);
+  }
+
+  return user;
+}
+
+// All subsequent API calls
+async function apiCall(endpoint, options = {}) {
+  const token = localStorage.getItem('gas_token');
+  return fetch(`https://auth.ar.io${endpoint}`, {
+    ...options,
+    headers: {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+}
+```
+
+### Console API Endpoints Used
+
+| Console Feature | GAS Endpoint | Method |
+|-----------------|--------------|--------|
+| Login | `/auth/challenge` + `/auth/verify` | GET + POST |
+| Get user info | `/auth/me` | GET |
+| Logout | `/auth/logout` | POST |
+| List API keys | `/keys` | GET |
+| Create API key | `/keys` | POST |
+| Delete API key | `/keys/:id` | DELETE |
+| Manage origins | `/keys/:id/origins` | GET/POST/DELETE |
+| Manage IPs | `/keys/:id/ips` | GET/POST/DELETE |
+| View usage | `/usage` | GET |
+| Usage history | `/usage/history` | GET |
+| Recent requests | `/requests` | GET |
+
+### Environment Variables for CORS
+
+```bash
+# Add to GAS environment
+CORS_ORIGINS=https://console.ar.io,https://*.arweave.net
+CORS_CREDENTIALS=true
+```
+
+---
+
 ## Security Checklist
 
 - [ ] API keys hashed with argon2id (never stored plaintext)
