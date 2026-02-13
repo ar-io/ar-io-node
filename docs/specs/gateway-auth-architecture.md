@@ -259,11 +259,28 @@ CREATE TABLE api_keys (
     key_prefix VARCHAR(16) NOT NULL,         -- "ario_prod_xxxx"
     key_hash VARCHAR(255) NOT NULL,          -- argon2 hash
 
+    -- Key type determines security model
+    key_type VARCHAR(20) DEFAULT 'server',   -- 'server' or 'browser'
+
     is_active BOOLEAN DEFAULT TRUE,
     expires_at TIMESTAMPTZ,                   -- NULL = never
 
     last_used_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Allowed Origins for Browser Keys (Domain Restrictions)
+-- If a key has entries here, requests MUST come from matching origins
+CREATE TABLE api_key_allowed_origins (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    api_key_id UUID REFERENCES api_keys(id) ON DELETE CASCADE,
+
+    -- Pattern can be exact or wildcard: 'myapp.com', '*.myapp.com', 'localhost:3000'
+    pattern VARCHAR(255) NOT NULL,
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE(api_key_id, pattern)
 );
 
 -- Usage (daily aggregates)
@@ -284,6 +301,7 @@ CREATE INDEX idx_wallets_address ON wallets(address, chain);
 CREATE INDEX idx_auth_challenges_wallet ON auth_challenges(wallet_address)
     WHERE used_at IS NULL AND expires_at > NOW();
 CREATE INDEX idx_api_keys_prefix ON api_keys(key_prefix) WHERE is_active = TRUE;
+CREATE INDEX idx_api_key_allowed_origins ON api_key_allowed_origins(api_key_id);
 CREATE INDEX idx_usage_daily_org_date ON usage_daily(org_id, date);
 ```
 
@@ -310,9 +328,23 @@ GET    /auth/me                # Get current user info
 # API Keys
 GET    /keys                   # List my keys
 POST   /keys                   # Create key (returns secret ONCE)
-       { name: "My App" }
+       {
+         name: "My App",
+         type: "browser",                    # 'server' (default) or 'browser'
+         allowed_origins: [                  # Required for browser keys
+           "myapp.com",
+           "*.myapp.com",
+           "localhost:3000"
+         ]
+       }
 
 DELETE /keys/:id               # Revoke key
+
+# Allowed Origins (for existing keys)
+GET    /keys/:id/origins       # List allowed origins for a key
+POST   /keys/:id/origins       # Add allowed origin
+       { pattern: "newdomain.com" }
+DELETE /keys/:id/origins/:oid  # Remove allowed origin
 
 # Usage
 GET    /usage                  # Get current period usage
@@ -385,7 +417,7 @@ async function verifyHandler(req, res) {
     return res.json({ token, wallet: walletRecord });
 }
 
-// Pseudocode for main proxy handler (unchanged - uses API keys)
+// Pseudocode for main proxy handler (with origin validation)
 
 async function proxyHandler(req, res) {
     // 1. Extract API key
@@ -397,7 +429,23 @@ async function proxyHandler(req, res) {
     if (!keyData) return res.status(401).json({ error: 'Invalid API key' });
     if (keyData.expired) return res.status(401).json({ error: 'API key expired' });
 
-    // 3. Check rate limit
+    // 3. Validate origin for browser keys (IMPORTANT SECURITY CHECK)
+    if (keyData.type === 'browser' && keyData.allowedOrigins.length > 0) {
+        const origin = req.headers['origin'] || req.headers['referer'];
+        if (!origin) {
+            return res.status(403).json({
+                error: 'Origin header required for browser keys'
+            });
+        }
+        if (!isOriginAllowed(origin, keyData.allowedOrigins)) {
+            return res.status(403).json({
+                error: 'Origin not allowed',
+                origin: origin
+            });
+        }
+    }
+
+    // 4. Check rate limit
     const rateLimitOk = await checkRateLimit(keyData.orgId, keyData.rateLimit);
     if (!rateLimitOk) {
         return res.status(429).json({
@@ -406,28 +454,47 @@ async function proxyHandler(req, res) {
         });
     }
 
-    // 4. Check quota (soft limit - warn but allow)
+    // 5. Check quota (soft limit - warn but allow)
     const quota = await checkQuota(keyData.orgId);
     if (quota.exceeded) {
         res.setHeader('X-Quota-Exceeded', 'true');
         // Continue anyway (soft limit)
     }
 
-    // 5. Proxy to gateway
+    // 6. Proxy to gateway
     const gatewayUrl = process.env.GATEWAY_URL + req.url.replace('/v1', '');
     const response = await proxy(gatewayUrl, req);
 
-    // 6. Stream response and count bytes
+    // 7. Stream response and count bytes
     let bytesTransferred = 0;
     response.body.on('data', chunk => bytesTransferred += chunk.length);
 
-    // 7. Record usage (async, don't block response)
+    // 8. Record usage (async, don't block response)
     response.body.on('end', () => {
         recordUsage(keyData.orgId, keyData.id, bytesTransferred).catch(log.error);
     });
 
-    // 8. Return response
+    // 9. Return response
     return response.pipe(res);
+}
+
+// Origin matching utility
+function isOriginAllowed(origin: string, patterns: string[]): boolean {
+    const originHost = new URL(origin).host;
+
+    for (const pattern of patterns) {
+        if (pattern.startsWith('*.')) {
+            // Wildcard match: *.example.com matches sub.example.com
+            const suffix = pattern.slice(1); // .example.com
+            if (originHost.endsWith(suffix) || originHost === pattern.slice(2)) {
+                return true;
+            }
+        } else if (originHost === pattern) {
+            // Exact match
+            return true;
+        }
+    }
+    return false;
 }
 ```
 
@@ -443,7 +510,7 @@ usage:{org_id}:requests      # Request count
 usage:{org_id}:bytes         # Bytes transferred
 
 # API key cache (avoid DB lookup on every request)
-apikey:{key_prefix}          # JSON: { orgId, keyHash, rateLimit, expires }
+apikey:{key_prefix}          # JSON: { orgId, keyHash, rateLimit, expires, type, allowedOrigins }
 
 # JWT sessions (optional - for logout/revocation)
 session:{wallet_id}:{jti}    # Exists if session valid, TTL matches JWT exp
@@ -478,11 +545,13 @@ JWT_EXPIRY=604800                  # 7 days
 - [ ] Wallet auth endpoints (challenge/verify)
 - [ ] **Copy signature verification from Turbo** (Arweave, ETH, Solana)
 - [ ] JWT issuance after successful auth
-- [ ] API key validation
+- [ ] API key creation (server and browser types)
+- [ ] **Origin validation for browser keys** (security requirement)
+- [ ] API key validation with origin check
 - [ ] Proxy handler with API key auth
 - [ ] Basic rate limiting (Redis)
 
-**Milestone**: User can authenticate with wallet, create API key, make proxied requests
+**Milestone**: User can authenticate with wallet, create API key (with optional domain restrictions), make proxied requests
 
 ### Week 2: Usage Tracking + Dashboard API
 
@@ -549,6 +618,111 @@ ario_prod_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
 
 ---
 
+## API Key Types & Domain Restrictions
+
+### Key Types
+
+| Type | Allowed Origins | Use Case | Security |
+|------|-----------------|----------|----------|
+| **Server** | None (any origin) | Backend services, scripts | Key is kept secret server-side |
+| **Browser** | Required | Frontend apps, SPAs | Key visible in browser, restricted by domain |
+
+### Domain Restriction Security Model
+
+Browser keys with domain restrictions provide defense-in-depth:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Why Domain Restrictions Work                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Browsers CANNOT spoof the Origin header (enforced by browser)       │
+│                                                                      │
+│  ✅ Protects against:                                                │
+│     • Someone copying key from your site's source code               │
+│     • Using your key on a different website                          │
+│     • Casual abuse from leaked keys                                  │
+│                                                                      │
+│  ⚠️ Does NOT protect against:                                        │
+│     • Server-side requests (can spoof any header)                    │
+│     • Determined attacker with backend                               │
+│                                                                      │
+│  This is the same model used by:                                     │
+│     • Google Maps API                                                │
+│     • QuickNode                                                      │
+│     • Firebase                                                       │
+│     • Stripe (publishable keys)                                      │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Allowed Origin Patterns
+
+| Pattern | Matches | Does NOT Match |
+|---------|---------|----------------|
+| `myapp.com` | `myapp.com` | `sub.myapp.com`, `myapp.com:8080` |
+| `*.myapp.com` | `sub.myapp.com`, `api.myapp.com` | `myapp.com` (no subdomain) |
+| `localhost:3000` | `localhost:3000` | `localhost:8080` |
+| `*.localhost:3000` | `sub.localhost:3000` | `localhost:3000` |
+
+### Example: Creating a Browser Key
+
+```bash
+# Create a browser key with domain restrictions
+curl -X POST https://auth.gateway.example.com/keys \
+  -H "Authorization: Bearer <jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Frontend App",
+    "type": "browser",
+    "allowed_origins": [
+      "myapp.com",
+      "*.myapp.com",
+      "localhost:3000"
+    ]
+  }'
+
+# Response (key shown ONCE, save it!)
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "name": "My Frontend App",
+  "type": "browser",
+  "key": "ario_prod_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+  "key_prefix": "ario_prod_a1b2",
+  "allowed_origins": ["myapp.com", "*.myapp.com", "localhost:3000"]
+}
+```
+
+### Using Browser Keys in Frontend Code
+
+```javascript
+// This is safe because the key is restricted to your domain
+const response = await fetch('https://auth.gateway.example.com/v1/raw/TX_ID', {
+  headers: {
+    'X-API-Key': 'ario_prod_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6'
+  }
+});
+
+// Browser automatically sends Origin header
+// Auth service validates: Origin matches allowed_origins? ✅
+```
+
+### Adding Origins to Existing Keys
+
+```bash
+# Add a new allowed origin
+curl -X POST https://auth.gateway.example.com/keys/{key_id}/origins \
+  -H "Authorization: Bearer <jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{ "pattern": "staging.myapp.com" }'
+
+# Remove an allowed origin
+curl -X DELETE https://auth.gateway.example.com/keys/{key_id}/origins/{origin_id} \
+  -H "Authorization: Bearer <jwt>"
+```
+
+---
+
 ## Error Response Format
 
 ```json
@@ -568,6 +742,8 @@ ario_prod_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
 Standard error codes:
 - `INVALID_API_KEY` - Key doesn't exist or is revoked
 - `EXPIRED_API_KEY` - Key has passed expiration date
+- `ORIGIN_NOT_ALLOWED` - Request origin doesn't match allowed origins for browser key
+- `ORIGIN_REQUIRED` - Browser key used without Origin header
 - `RATE_LIMIT_EXCEEDED` - Too many requests
 - `QUOTA_EXCEEDED` - Monthly quota exceeded (soft limit)
 - `GATEWAY_ERROR` - Upstream gateway error
@@ -633,6 +809,9 @@ volumes:
 - [ ] SQL injection prevented (Prisma parameterization)
 - [ ] API key not returned after creation
 - [ ] Timing-safe comparison for key validation
+- [ ] Origin validation for browser keys (check Origin/Referer header)
+- [ ] Browser keys require at least one allowed origin
+- [ ] Wildcard pattern matching tested (*.example.com)
 
 ---
 
