@@ -255,6 +255,35 @@ API keys can be scoped to specific route categories:
 - Org admins can view (but not reveal) all org keys
 - Org admins can revoke any org key
 
+#### FR-2.5: Key Security Restrictions
+API keys can have optional security restrictions to limit where they can be used:
+
+**Browser Keys (Domain Restrictions)**
+- Keys marked as "browser" type require allowed origins
+- Requests must include matching `Origin` or `Referer` header
+- Supports exact matches (`myapp.com`) and wildcards (`*.myapp.com`)
+- Protects against key theft when used in frontend code
+- Same model as Google Maps API, QuickNode, Firebase
+
+**Server Keys (IP Allowlist)**
+- Keys marked as "server" type can optionally have IP allowlist
+- Requests must come from listed IP addresses or CIDR ranges
+- Supports single IPs (`192.168.1.1`) and CIDR notation (`10.0.0.0/8`)
+- Extra security layer for backend services
+- Empty allowlist = allow all IPs (default)
+
+| Key Type | Origin Check | IP Check | Use Case |
+|----------|--------------|----------|----------|
+| **Server** | No | Optional | Backend services, scripts |
+| **Browser** | Required | No | Frontend apps, SPAs |
+
+#### FR-2.6: First-Time User Experience
+- On first signup, auto-generate a "My First Key" API key
+- Key is a server key with full access (`*` scopes)
+- Key is displayed immediately in the dashboard after signup
+- Dashboard shows ready-to-copy curl command with the key
+- Goal: < 2 minutes from signup to first successful API call
+
 ### FR-3: Organization & Tenant Management
 
 #### FR-3.1: Organization Model
