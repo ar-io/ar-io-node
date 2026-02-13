@@ -65,6 +65,10 @@ test-results.xml
 CLAUDE.local.md
 .claude/settings.local.json
 
+# Worktree directories
+/wt/*
+!/wt/.gitkeep
+
 # WIP scratch documents
 /scratch/*
 

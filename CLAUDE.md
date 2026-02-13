@@ -59,6 +59,19 @@ ARWEAVE_POST_DRY_RUN=true yarn start
   nodes
 - `GET /tx` requests are always proxied by Envoy to the trusted Arweave node
 
+### Worktrees
+
+Git worktrees enable parallel development without switching branches. Worktrees
+live under `wt/<branch-name>` with `.env` and `CLAUDE.local.md` symlinked from
+the main checkout.
+
+- Add a worktree: `./tools/wt add <branch>` (creates new branch off develop)
+- Add from existing branch: `./tools/wt add <branch> --existing`
+- Remove a worktree: `./tools/wt rm <branch>`
+- List worktrees: `./tools/wt ls`
+- Each worktree runs its own `yarn install` automatically on creation
+- Each worktree gets a clean `data/` directory (not shared with main checkout)
+
 ## Architecture
 
 ### High-Level Structure

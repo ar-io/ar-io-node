@@ -339,6 +339,35 @@ Performs post-release cleanup to prepare the development branch for the next rel
 - Ensure consistent post-release state across all releases
 - Automate repetitive cleanup tasks
 
+### `wt`
+Git worktree helper for parallel development. Creates worktrees under `wt/<branch>` with `.env` and `CLAUDE.local.md` symlinked from the main checkout.
+
+**Usage:**
+```bash
+# Create a new branch off develop with a worktree
+./tools/wt add my-feature
+
+# Check out an existing branch into a worktree
+./tools/wt add my-feature --existing
+
+# Remove a worktree
+./tools/wt rm my-feature
+
+# List all worktrees
+./tools/wt ls
+```
+
+**Behavior:**
+- Creates worktree at `wt/<branch>/`
+- Symlinks `.env` and `CLAUDE.local.md` from the main checkout (if they exist)
+- Runs `yarn install` in the new worktree automatically
+- Each worktree gets a clean `data/` directory (not shared with main checkout)
+
+**Use Cases:**
+- Work on a feature branch while keeping develop clean for reviews
+- Run tests on one branch while developing on another
+- Quickly switch between multiple in-flight features
+
 ## Workflow
 
 To generate a complete architecture review document:

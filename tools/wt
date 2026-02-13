@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Git Worktree Helper
+#
+# Manages git worktrees under wt/<branch> with shared resources symlinked
+# from the main checkout to avoid duplicating large directories.
+#
+# Usage:
+#   ./tools/wt add <branch>              Create worktree on new branch off develop
+#   ./tools/wt add <branch> --existing   Check out an existing branch
+#   ./tools/wt rm <branch>               Remove a worktree
+#   ./tools/wt ls                        List all worktrees
+#
+
+set -euo pipefail
+
+# Get the directory containing this script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+# Shared resources to symlink into worktrees (relative target assumes wt/<branch>/)
+SHARED_RESOURCES=(
+  ".env"
+  "CLAUDE.local.md"
+)
+
+usage() {
+  cat <<EOF
+Usage:
+  ./tools/wt add <branch>              Create worktree on new branch off develop
+  ./tools/wt add <branch> --existing   Check out an existing branch
+  ./tools/wt rm <branch>               Remove a worktree
+  ./tools/wt ls                        List all worktrees
+EOF
+}
+
+cmd_add() {
+  local branch="${1:-}"
+  local existing=false
+
+  if [[ -z "${branch}" ]]; then
+    echo "Error: branch name is required" >&2
+    usage >&2
+    exit 1
+  fi
+
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --existing) existing=true; shift ;;
+      *)
+        echo "Error: unknown option: $1" >&2
+        usage >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  local wt_dir="${PROJECT_ROOT}/wt/${branch}"
+
+  if [[ -d "${wt_dir}" ]]; then
+    echo "Error: worktree already exists at wt/${branch}" >&2
+    exit 1
+  fi
+
+  echo "Creating worktree wt/${branch}..."
+  if [[ "${existing}" == true ]]; then
+    git worktree add "${wt_dir}" "${branch}"
+  else
+    git worktree add -b "${branch}" "${wt_dir}" develop
+  fi
+
+  # Symlink shared resources
+  for resource in "${SHARED_RESOURCES[@]}"; do
+    if [[ -e "${PROJECT_ROOT}/${resource}" ]]; then
+      ln -s "../../${resource}" "${wt_dir}/${resource}"
+      echo "  Symlinked ${resource}"
+    fi
+  done
+
+  echo "  Running yarn install..."
+  (cd "${wt_dir}" && yarn install)
+
+  # Allow direnv if installed
+  if command -v direnv &>/dev/null; then
+    echo "  Allowing direnv..."
+    (cd "${wt_dir}" && direnv allow)
+  fi
+
+  echo ""
+  echo "Worktree ready at wt/${branch}"
+}
+
+cmd_rm() {
+  local branch="${1:-}"
+
+  if [[ -z "${branch}" ]]; then
+    echo "Error: branch name is required" >&2
+    usage >&2
+    exit 1
+  fi
+
+  local wt_dir="${PROJECT_ROOT}/wt/${branch}"
+
+  if [[ ! -d "${wt_dir}" ]]; then
+    echo "Error: no worktree at wt/${branch}" >&2
+    exit 1
+  fi
+
+  echo "Removing worktree wt/${branch}..."
+  git worktree remove "${wt_dir}"
+  echo "Done."
+}
+
+cmd_ls() {
+  git worktree list
+}
+
+# Main dispatch
+command="${1:-}"
+shift || true
+
+case "${command}" in
+  add) cmd_add "$@" ;;
+  rm)  cmd_rm "$@" ;;
+  ls)  cmd_ls ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
