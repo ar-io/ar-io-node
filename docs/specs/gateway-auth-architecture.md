@@ -262,11 +262,29 @@ CREATE TABLE api_keys (
     -- Key type determines security model
     key_type VARCHAR(20) DEFAULT 'server',   -- 'server' or 'browser'
 
+    -- Route scopes (what the key can access)
+    -- '*' = all, or specific: ['data:read', 'graphql', 'arns:resolve']
+    scopes TEXT[] DEFAULT ARRAY['*'],
+
     is_active BOOLEAN DEFAULT TRUE,
     expires_at TIMESTAMPTZ,                   -- NULL = never
 
     last_used_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- IP Allowlist for Server Keys (optional extra security)
+-- If a server key has entries here, requests MUST come from these IPs
+CREATE TABLE api_key_allowed_ips (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    api_key_id UUID REFERENCES api_keys(id) ON DELETE CASCADE,
+
+    -- Can be single IP or CIDR: '192.168.1.1', '10.0.0.0/8'
+    ip_pattern VARCHAR(50) NOT NULL,
+
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE(api_key_id, ip_pattern)
 );
 
 -- Allowed Origins for Browser Keys (Domain Restrictions)
@@ -296,12 +314,50 @@ CREATE TABLE usage_daily (
     UNIQUE(org_id, api_key_id, date)
 );
 
+-- Recent Request Logs (for debugging - like QuickNode's request explorer)
+-- Stores last N requests per org for debugging/troubleshooting
+CREATE TABLE request_logs (
+    id BIGSERIAL PRIMARY KEY,
+    org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    api_key_id UUID REFERENCES api_keys(id) ON DELETE SET NULL,
+
+    -- Request details
+    method VARCHAR(10) NOT NULL,             -- GET, POST, etc.
+    path VARCHAR(500) NOT NULL,              -- /raw/TX_ID, /graphql, etc.
+    status_code INT NOT NULL,                -- 200, 401, 429, etc.
+
+    -- Timing
+    request_at TIMESTAMPTZ DEFAULT NOW(),
+    duration_ms INT,                         -- Response time
+
+    -- Size
+    request_bytes INT DEFAULT 0,
+    response_bytes INT DEFAULT 0,
+
+    -- Client info (for debugging)
+    origin VARCHAR(255),                     -- Origin header
+    user_agent VARCHAR(500),
+    client_ip VARCHAR(50),
+
+    -- Error info (if applicable)
+    error_code VARCHAR(50),                  -- RATE_LIMIT_EXCEEDED, etc.
+
+    -- Auto-cleanup: Only keep last 7 days
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Index for efficient recent request queries
+CREATE INDEX idx_request_logs_org_recent ON request_logs(org_id, request_at DESC);
+-- Auto-cleanup old logs (run daily cron)
+-- DELETE FROM request_logs WHERE created_at < NOW() - INTERVAL '7 days';
+
 -- Indexes
 CREATE INDEX idx_wallets_address ON wallets(address, chain);
 CREATE INDEX idx_auth_challenges_wallet ON auth_challenges(wallet_address)
     WHERE used_at IS NULL AND expires_at > NOW();
 CREATE INDEX idx_api_keys_prefix ON api_keys(key_prefix) WHERE is_active = TRUE;
 CREATE INDEX idx_api_key_allowed_origins ON api_key_allowed_origins(api_key_id);
+CREATE INDEX idx_api_key_allowed_ips ON api_key_allowed_ips(api_key_id);
 CREATE INDEX idx_usage_daily_org_date ON usage_daily(org_id, date);
 ```
 
@@ -331,24 +387,41 @@ POST   /keys                   # Create key (returns secret ONCE)
        {
          name: "My App",
          type: "browser",                    # 'server' (default) or 'browser'
-         allowed_origins: [                  # Required for browser keys
+         scopes: ["data:read", "graphql"],   # Route scopes (default: ['*'])
+         allowed_origins: [                  # For browser keys
            "myapp.com",
            "*.myapp.com",
            "localhost:3000"
+         ],
+         allowed_ips: [                      # For server keys (optional)
+           "192.168.1.0/24",
+           "10.0.0.5"
          ]
        }
 
 DELETE /keys/:id               # Revoke key
 
-# Allowed Origins (for existing keys)
+# Allowed Origins (for browser keys)
 GET    /keys/:id/origins       # List allowed origins for a key
 POST   /keys/:id/origins       # Add allowed origin
        { pattern: "newdomain.com" }
 DELETE /keys/:id/origins/:oid  # Remove allowed origin
 
+# Allowed IPs (for server keys)
+GET    /keys/:id/ips           # List allowed IPs for a key
+POST   /keys/:id/ips           # Add allowed IP
+       { pattern: "10.0.0.0/8" }
+DELETE /keys/:id/ips/:iid      # Remove allowed IP
+
 # Usage
 GET    /usage                  # Get current period usage
 GET    /usage/history          # Get daily breakdown
+
+# Request Logs (for debugging - like QuickNode's request explorer)
+GET    /requests               # Get recent requests (last 100)
+       ?key_id=<uuid>          # Filter by API key (optional)
+       ?status=4xx             # Filter by status (optional: 2xx, 4xx, 5xx)
+       ?limit=50               # Number of results (default 100, max 500)
 
 # Gateway Proxy (the main event)
 ALL    /v1/*                   # Proxy to gateway with API key auth
@@ -417,65 +490,127 @@ async function verifyHandler(req, res) {
     return res.json({ token, wallet: walletRecord });
 }
 
-// Pseudocode for main proxy handler (with origin validation)
+// Pseudocode for main proxy handler (full security + logging)
 
 async function proxyHandler(req, res) {
-    // 1. Extract API key
-    const apiKey = req.headers['x-api-key'];
-    if (!apiKey) return res.status(401).json({ error: 'Missing API key' });
+    const startTime = Date.now();
+    let statusCode = 200;
+    let errorCode = null;
 
-    // 2. Validate key (cache lookup first, then DB)
-    const keyData = await validateApiKey(apiKey);
-    if (!keyData) return res.status(401).json({ error: 'Invalid API key' });
-    if (keyData.expired) return res.status(401).json({ error: 'API key expired' });
+    try {
+        // 1. Extract API key
+        const apiKey = req.headers['x-api-key'];
+        if (!apiKey) {
+            statusCode = 401; errorCode = 'MISSING_API_KEY';
+            return res.status(401).json({ error: 'Missing API key' });
+        }
 
-    // 3. Validate origin for browser keys (IMPORTANT SECURITY CHECK)
-    if (keyData.type === 'browser' && keyData.allowedOrigins.length > 0) {
-        const origin = req.headers['origin'] || req.headers['referer'];
-        if (!origin) {
+        // 2. Validate key (cache lookup first, then DB)
+        const keyData = await validateApiKey(apiKey);
+        if (!keyData) {
+            statusCode = 401; errorCode = 'INVALID_API_KEY';
+            return res.status(401).json({ error: 'Invalid API key' });
+        }
+        if (keyData.expired) {
+            statusCode = 401; errorCode = 'EXPIRED_API_KEY';
+            return res.status(401).json({ error: 'API key expired' });
+        }
+
+        // 3. Validate origin for BROWSER keys
+        if (keyData.type === 'browser' && keyData.allowedOrigins.length > 0) {
+            const origin = req.headers['origin'] || req.headers['referer'];
+            if (!origin) {
+                statusCode = 403; errorCode = 'ORIGIN_REQUIRED';
+                return res.status(403).json({ error: 'Origin header required for browser keys' });
+            }
+            if (!isOriginAllowed(origin, keyData.allowedOrigins)) {
+                statusCode = 403; errorCode = 'ORIGIN_NOT_ALLOWED';
+                return res.status(403).json({ error: 'Origin not allowed', origin });
+            }
+        }
+
+        // 4. Validate IP for SERVER keys (if allowlist configured)
+        if (keyData.type === 'server' && keyData.allowedIps.length > 0) {
+            const clientIp = getClientIp(req);
+            if (!isIpAllowed(clientIp, keyData.allowedIps)) {
+                statusCode = 403; errorCode = 'IP_NOT_ALLOWED';
+                return res.status(403).json({ error: 'IP not allowed', ip: clientIp });
+            }
+        }
+
+        // 5. Check route scopes
+        const routeScope = getRouteScope(req.url);  // e.g., 'data:read', 'graphql'
+        if (!keyData.scopes.includes('*') && !keyData.scopes.includes(routeScope)) {
+            statusCode = 403; errorCode = 'SCOPE_NOT_ALLOWED';
             return res.status(403).json({
-                error: 'Origin header required for browser keys'
+                error: 'API key does not have permission for this route',
+                required_scope: routeScope,
+                key_scopes: keyData.scopes
             });
         }
-        if (!isOriginAllowed(origin, keyData.allowedOrigins)) {
-            return res.status(403).json({
-                error: 'Origin not allowed',
-                origin: origin
+
+        // 6. Check rate limit
+        const rateLimitOk = await checkRateLimit(keyData.orgId, keyData.rateLimit);
+        if (!rateLimitOk) {
+            statusCode = 429; errorCode = 'RATE_LIMIT_EXCEEDED';
+            return res.status(429).json({
+                error: 'Rate limit exceeded',
+                retry_after: rateLimitOk.retryAfter
             });
         }
-    }
 
-    // 4. Check rate limit
-    const rateLimitOk = await checkRateLimit(keyData.orgId, keyData.rateLimit);
-    if (!rateLimitOk) {
-        return res.status(429).json({
-            error: 'Rate limit exceeded',
-            retry_after: rateLimitOk.retryAfter
+        // 7. Check quota (soft limit - warn but allow)
+        const quota = await checkQuota(keyData.orgId);
+        if (quota.exceeded) {
+            res.setHeader('X-Quota-Exceeded', 'true');
+        }
+
+        // 8. Add CORS headers for browser requests
+        const origin = req.headers['origin'];
+        if (origin && keyData.type === 'browser') {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'X-API-Key, Content-Type');
+            res.setHeader('Access-Control-Max-Age', '86400');
+        }
+
+        // 9. Proxy to gateway
+        const gatewayUrl = process.env.GATEWAY_URL + req.url.replace('/v1', '');
+        const response = await proxy(gatewayUrl, req);
+        statusCode = response.statusCode;
+
+        // 10. Stream response and count bytes
+        let bytesTransferred = 0;
+        response.body.on('data', chunk => bytesTransferred += chunk.length);
+
+        // 11. Record usage + request log (async, don't block response)
+        response.body.on('end', () => {
+            const duration = Date.now() - startTime;
+            recordUsage(keyData.orgId, keyData.id, bytesTransferred).catch(log.error);
+            logRequest(keyData, req, statusCode, duration, bytesTransferred, errorCode).catch(log.error);
         });
+
+        return response.pipe(res);
+
+    } finally {
+        // Always log the request, even on errors
+        if (errorCode) {
+            const duration = Date.now() - startTime;
+            logRequest(null, req, statusCode, duration, 0, errorCode).catch(log.error);
+        }
     }
+}
 
-    // 5. Check quota (soft limit - warn but allow)
-    const quota = await checkQuota(keyData.orgId);
-    if (quota.exceeded) {
-        res.setHeader('X-Quota-Exceeded', 'true');
-        // Continue anyway (soft limit)
+// Handle CORS preflight for browser keys
+async function corsPreflightHandler(req, res) {
+    const origin = req.headers['origin'];
+    if (origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'X-API-Key, Content-Type');
+        res.setHeader('Access-Control-Max-Age', '86400');
     }
-
-    // 6. Proxy to gateway
-    const gatewayUrl = process.env.GATEWAY_URL + req.url.replace('/v1', '');
-    const response = await proxy(gatewayUrl, req);
-
-    // 7. Stream response and count bytes
-    let bytesTransferred = 0;
-    response.body.on('data', chunk => bytesTransferred += chunk.length);
-
-    // 8. Record usage (async, don't block response)
-    response.body.on('end', () => {
-        recordUsage(keyData.orgId, keyData.id, bytesTransferred).catch(log.error);
-    });
-
-    // 9. Return response
-    return response.pipe(res);
+    return res.status(204).end();
 }
 
 // Origin matching utility
@@ -510,7 +645,7 @@ usage:{org_id}:requests      # Request count
 usage:{org_id}:bytes         # Bytes transferred
 
 # API key cache (avoid DB lookup on every request)
-apikey:{key_prefix}          # JSON: { orgId, keyHash, rateLimit, expires, type, allowedOrigins }
+apikey:{key_prefix}          # JSON: { orgId, keyHash, rateLimit, expires, type, scopes, allowedOrigins, allowedIps }
 
 # JWT sessions (optional - for logout/revocation)
 session:{wallet_id}:{jti}    # Exists if session valid, TTL matches JWT exp
@@ -541,29 +676,35 @@ JWT_EXPIRY=604800                  # 7 days
 ### Week 1: Wallet Auth + Core Proxy
 
 - [ ] Project setup (Fastify, TypeScript, Prisma)
-- [ ] Database schema + migrations
+- [ ] Database schema + migrations (all tables)
 - [ ] Wallet auth endpoints (challenge/verify)
 - [ ] **Copy signature verification from Turbo** (Arweave, ETH, Solana)
 - [ ] JWT issuance after successful auth
+- [ ] Auto-create personal org + first API key on signup
 - [ ] API key creation (server and browser types)
-- [ ] **Origin validation for browser keys** (security requirement)
-- [ ] API key validation with origin check
-- [ ] Proxy handler with API key auth
+- [ ] Route scopes on API keys
+- [ ] **Origin validation for browser keys** (security)
+- [ ] **IP validation for server keys** (security)
+- [ ] Proxy handler with full validation
+- [ ] CORS headers for browser requests
 - [ ] Basic rate limiting (Redis)
 
-**Milestone**: User can authenticate with wallet, create API key (with optional domain restrictions), make proxied requests
+**Milestone**: User can authenticate with wallet, get auto-generated first key, make proxied requests
 
-### Week 2: Usage Tracking + Dashboard API
+### Week 2: Usage Tracking + Developer Experience
 
 - [ ] Request counting (Redis)
 - [ ] Byte counting on responses
 - [ ] Usage persistence to PostgreSQL (async)
+- [ ] **Request logging** (recent requests for debugging)
 - [ ] Quota checking (soft limits)
-- [ ] API key CRUD endpoints
+- [ ] API key CRUD endpoints (with origins/IPs management)
 - [ ] Usage API endpoints
+- [ ] **Recent requests API** (GET /requests)
 - [ ] Daily aggregation job (cron)
+- [ ] Request log cleanup job (7-day retention)
 
-**Milestone**: Full usage tracking, API keys working, usage visible via API
+**Milestone**: Full usage tracking, request logs for debugging, usage visible via API
 
 ### Week 3: Polish & Deploy
 
@@ -615,6 +756,37 @@ ario_prod_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
 - **Random**: 32 character base62 string
 - **Storage**: Only store argon2 hash, never plaintext
 - **Display**: Show `ario_prod_a1b2...` (prefix + first 4)
+
+---
+
+## Route Scopes
+
+API keys can be scoped to specific route categories for least-privilege access:
+
+| Scope | Routes Covered | Example Use Case |
+|-------|---------------|------------------|
+| `data:read` | `GET /raw/:id`, `GET /:id`, `GET /:id/*` | Data retrieval apps |
+| `chunks:read` | `GET /chunk/:offset`, `GET /chunk/:offset/data` | Low-level chunk access |
+| `graphql` | `POST /graphql`, `GET /graphql` | GraphQL query apps |
+| `arns:resolve` | `GET /ar-io/resolver/:name` | ArNS name resolution |
+| `gateway:info` | `GET /ar-io/info`, `GET /ar-io/healthcheck` | Monitoring/status |
+| `*` | All routes | Full access (default) |
+
+### Scope Examples
+
+```bash
+# Create a GraphQL-only key
+curl -X POST https://auth.gateway.example.com/keys \
+  -H "Authorization: Bearer <jwt>" \
+  -d '{ "name": "GraphQL App", "scopes": ["graphql"] }'
+
+# Create a read-only data key
+curl -X POST https://auth.gateway.example.com/keys \
+  -H "Authorization: Bearer <jwt>" \
+  -d '{ "name": "Data Reader", "scopes": ["data:read", "arns:resolve"] }'
+```
+
+**Security benefit**: If a scoped key leaks, attackers can only access permitted routes.
 
 ---
 
@@ -740,10 +912,13 @@ curl -X DELETE https://auth.gateway.example.com/keys/{key_id}/origins/{origin_id
 ```
 
 Standard error codes:
+- `MISSING_API_KEY` - No API key provided in request
 - `INVALID_API_KEY` - Key doesn't exist or is revoked
 - `EXPIRED_API_KEY` - Key has passed expiration date
 - `ORIGIN_NOT_ALLOWED` - Request origin doesn't match allowed origins for browser key
 - `ORIGIN_REQUIRED` - Browser key used without Origin header
+- `IP_NOT_ALLOWED` - Request IP doesn't match allowed IPs for server key
+- `SCOPE_NOT_ALLOWED` - API key doesn't have permission for this route
 - `RATE_LIMIT_EXCEEDED` - Too many requests
 - `QUOTA_EXCEEDED` - Monthly quota exceeded (soft limit)
 - `GATEWAY_ERROR` - Upstream gateway error
@@ -804,14 +979,19 @@ volumes:
 - [ ] API keys hashed with argon2id (never stored plaintext)
 - [ ] JWT signed with strong secret (256-bit minimum)
 - [ ] Rate limiting on all auth endpoints
-- [ ] No secrets in logs
+- [ ] No secrets in logs (API keys, JWTs, etc.)
 - [ ] HTTPS only (enforce at load balancer)
 - [ ] SQL injection prevented (Prisma parameterization)
-- [ ] API key not returned after creation
+- [ ] API key not returned after creation (shown once only)
 - [ ] Timing-safe comparison for key validation
 - [ ] Origin validation for browser keys (check Origin/Referer header)
 - [ ] Browser keys require at least one allowed origin
-- [ ] Wildcard pattern matching tested (*.example.com)
+- [ ] Wildcard origin pattern matching tested (*.example.com)
+- [ ] IP validation for server keys (when allowlist configured)
+- [ ] CIDR pattern matching tested (10.0.0.0/8)
+- [ ] Route scope enforcement (keys only access permitted routes)
+- [ ] CORS headers set correctly for browser keys
+- [ ] Request logs don't contain sensitive data (no full keys, no auth tokens)
 
 ---
 
@@ -879,3 +1059,184 @@ volumes:
 Ask the Turbo team: "Can I get the wallet signature verification code you use for auth?"
 
 That's the core of this system. Everything else is straightforward CRUD + proxying.
+
+---
+
+## Developer Quick Start Experience
+
+This is the flow we want for new users (inspired by QuickNode):
+
+### First-Time User Flow (< 2 minutes to first request)
+
+```
+1. User lands on dashboard
+   └─> "Connect Wallet" button (ArConnect, MetaMask, Phantom)
+
+2. User signs challenge message
+   └─> Account auto-created
+   └─> Redirected to dashboard
+
+3. Dashboard shows:
+   ┌─────────────────────────────────────────────────────────────┐
+   │  🎉 Welcome! Your first API key is ready.                   │
+   │                                                              │
+   │  API Key: ario_prod_a1b2c3d4...  [Copy]                     │
+   │                                                              │
+   │  Endpoint: https://auth.ar.io/v1                            │
+   │                                                              │
+   │  ┌─ Quick Start ─────────────────────────────────────────┐  │
+   │  │                                                        │  │
+   │  │  curl https://auth.ar.io/v1/raw/TX_ID \               │  │
+   │  │    -H "X-API-Key: ario_prod_a1b2c3d4..."              │  │
+   │  │                                                   [Copy] │  │
+   │  └────────────────────────────────────────────────────────┘  │
+   │                                                              │
+   │  [JavaScript] [Python] [Go] [Rust]  <- toggle examples      │
+   │                                                              │
+   └─────────────────────────────────────────────────────────────┘
+
+4. User copies curl command, runs it
+   └─> Success! Data returned
+
+5. Dashboard updates to show:
+   - "1 request made" in usage
+   - Request appears in "Recent Requests" log
+```
+
+### Auto-Generated First API Key
+
+On first login, automatically create a "My First Key" API key:
+
+```typescript
+// On successful wallet auth, if this is a new user:
+if (isNewUser) {
+    const firstKey = await createApiKey({
+        org_id: personalOrg.id,
+        name: 'My First Key',
+        type: 'server',  // Server key (no restrictions) for easy start
+        scopes: ['*'],   // Full access
+        expires_at: null // Never expires
+    });
+
+    // Return the key in the auth response so dashboard can display it
+    return { token, wallet, firstApiKey: firstKey.plaintext };
+}
+```
+
+### Code Examples (Show in Dashboard)
+
+```javascript
+// JavaScript (fetch)
+const response = await fetch('https://auth.ar.io/v1/raw/TX_ID', {
+  headers: { 'X-API-Key': 'YOUR_API_KEY' }
+});
+const data = await response.text();
+```
+
+```python
+# Python (requests)
+import requests
+
+response = requests.get(
+    'https://auth.ar.io/v1/raw/TX_ID',
+    headers={'X-API-Key': 'YOUR_API_KEY'}
+)
+data = response.text
+```
+
+```bash
+# curl
+curl https://auth.ar.io/v1/raw/TX_ID \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+```go
+// Go
+req, _ := http.NewRequest("GET", "https://auth.ar.io/v1/raw/TX_ID", nil)
+req.Header.Set("X-API-Key", "YOUR_API_KEY")
+resp, _ := http.DefaultClient.Do(req)
+```
+
+### Dashboard Features (QuickNode-inspired)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  AR.IO Gateway Dashboard                          [wallet: 0x1234...] │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  📊 Usage This Month                              🔑 API Keys (3)    │
+│  ┌──────────────────────────────┐                 ┌───────────────┐ │
+│  │ Requests: 45,231 / 100,000   │                 │ My First Key  │ │
+│  │ ████████████░░░░░░░░  45%    │                 │ Production    │ │
+│  │                              │                 │ GraphQL App   │ │
+│  │ Egress: 2.3 GB / 10 GB       │                 │ [+ New Key]   │ │
+│  │ ██████░░░░░░░░░░░░░░  23%    │                 └───────────────┘ │
+│  └──────────────────────────────┘                                    │
+│                                                                      │
+│  📝 Recent Requests                                                  │
+│  ┌─────────────────────────────────────────────────────────────────┐│
+│  │ Time       Method  Path              Status  Duration  Bytes    ││
+│  │ 12:34:56   GET     /raw/abc123...    200     45ms      1.2KB   ││
+│  │ 12:34:52   POST    /graphql          200     123ms     4.5KB   ││
+│  │ 12:34:48   GET     /ar-io/info       200     12ms      0.3KB   ││
+│  │ 12:34:45   GET     /raw/xyz789...    404     8ms       0.1KB   ││
+│  │ ...                                                             ││
+│  └─────────────────────────────────────────────────────────────────┘│
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Management UX
+
+When creating a new key, show a clear modal:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Create New API Key                                           [X]   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Name: [Production Backend________________]                          │
+│                                                                      │
+│  Type: (•) Server Key    ( ) Browser Key                            │
+│                                                                      │
+│  ┌─ Scopes ───────────────────────────────────────────────────────┐ │
+│  │ [✓] All routes (*)                                             │ │
+│  │ [ ] Data read only (data:read)                                 │ │
+│  │ [ ] GraphQL only (graphql)                                     │ │
+│  │ [ ] ArNS resolution (arns:resolve)                             │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│  ┌─ Security (optional) ──────────────────────────────────────────┐ │
+│  │ IP Allowlist: [10.0.0.0/8, 192.168.1.0/24_________________]    │ │
+│  │               Leave empty to allow all IPs                      │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│  Expiration: [Never ▼]                                              │
+│                                                                      │
+│                              [Cancel]  [Create Key]                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+After creation, show the key ONE TIME:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  ✅ API Key Created                                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ⚠️  Copy this key now. You won't be able to see it again!         │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────────┐│
+│  │ ario_prod_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6              [Copy] ││
+│  └─────────────────────────────────────────────────────────────────┘│
+│                                                                      │
+│  Quick test:                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐│
+│  │ curl https://auth.ar.io/v1/ar-io/info \                         ││
+│  │   -H "X-API-Key: ario_prod_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"   ││
+│  │                                                          [Copy] ││
+│  └─────────────────────────────────────────────────────────────────┘│
+│                                                                      │
+│                                              [Done, I've saved it]   │
+└─────────────────────────────────────────────────────────────────────┘
+```
