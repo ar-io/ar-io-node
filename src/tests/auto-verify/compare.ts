@@ -16,7 +16,6 @@ const COMMON_FIELDS: (keyof CanonicalDataItem)[] = [
   'anchor',
   'dataSize',
   'contentType',
-  'tags',
 ];
 
 const EXTENDED_FIELDS: (keyof CanonicalDataItem)[] = [
@@ -37,10 +36,8 @@ const SOURCE_EXCLUDED_FIELDS: Record<string, Set<string>> = {
   'bundle-parser': new Set(['rootParentOffset']),
 };
 
-type SourceName = string;
-
 interface SourceData {
-  name: SourceName;
+  name: string;
   itemsById: Map<string, CanonicalDataItem>;
 }
 
@@ -95,20 +92,13 @@ export function compareAllSources(
     if (presentSources.length < 2) continue;
 
     // Compare all fields across each pair of sources
-    const allFields = [...COMMON_FIELDS, ...EXTENDED_FIELDS].filter(
-      (f) => f !== 'tags',
-    );
+    const allFields = [...COMMON_FIELDS, ...EXTENDED_FIELDS];
 
     for (const field of allFields) {
       const values: Record<string, unknown> = {};
-      const comparableSources = presentSources.filter((s) => {
-        // Skip fields not available for this source
-        const excluded = SOURCE_EXCLUDED_FIELDS[s.name];
-        if (excluded?.has(field)) {
-          return false;
-        }
-        return true;
-      });
+      const comparableSources = presentSources.filter(
+        (s) => !SOURCE_EXCLUDED_FIELDS[s.name]?.has(field),
+      );
 
       if (comparableSources.length < 2) continue;
 
@@ -140,9 +130,8 @@ export function compareAllSources(
     }
 
     // Phase 4: Tag comparison
-    const tagComparableSources = presentSources;
-    if (tagComparableSources.length >= 2) {
-      const tagDiscrepancies = compareTags(id, tagComparableSources);
+    if (presentSources.length >= 2) {
+      const tagDiscrepancies = compareTags(id, presentSources);
       discrepancies.push(...tagDiscrepancies);
     }
   }

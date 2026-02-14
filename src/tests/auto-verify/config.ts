@@ -8,7 +8,6 @@
 export interface AutoVerifyConfig {
   iterations: number;
   referenceUrl: string;
-  gatewayPort: number;
   resultsDir: string;
   failFast: boolean;
   preserveCache: boolean;
@@ -24,7 +23,6 @@ export function loadConfig(): AutoVerifyConfig {
     iterations: parseInt(process.env.AUTO_VERIFY_ITERATIONS ?? '0', 10),
     referenceUrl:
       process.env.AUTO_VERIFY_REFERENCE_URL ?? 'https://arweave.net',
-    gatewayPort: parseInt(process.env.AUTO_VERIFY_GATEWAY_PORT ?? '4000', 10),
     resultsDir:
       process.env.AUTO_VERIFY_RESULTS_DIR ?? `${cwd}/data/test-auto-verify`,
     failFast: process.env.AUTO_VERIFY_FAIL_FAST === 'true',

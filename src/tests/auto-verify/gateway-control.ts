@@ -298,14 +298,22 @@ export async function exportParquet(
  * bundles flush because the bundles flush joins against
  * core.stable_block_transactions.
  */
-export function flushToStable(config: AutoVerifyConfig, endHeight: number): void {
-  console.log(`Flushing new data to stable tables (end_height=${endHeight + 1})...`);
+export function flushToStable(
+  config: AutoVerifyConfig,
+  endHeight: number,
+): void {
+  const exclusiveEndHeight = endHeight + 1;
+  console.log(
+    `Flushing new data to stable tables (end_height=${exclusiveEndHeight})...`,
+  );
 
   const coreDb = new Sqlite(config.coreDbPath);
   try {
     coreDb.exec('BEGIN');
 
-    coreDb.prepare(`
+    coreDb
+      .prepare(
+        `
       INSERT INTO stable_blocks (
         height, indep_hash, previous_block, nonce, hash,
         block_timestamp, diff, cumulative_diff, last_retarget,
@@ -325,9 +333,13 @@ export function flushToStable(config: AutoVerifyConfig, endHeight: number): void
       FROM new_blocks nb
       WHERE nb.height < @end_height
       ON CONFLICT DO NOTHING
-    `).run({ end_height: endHeight + 1 });
+    `,
+      )
+      .run({ end_height: exclusiveEndHeight });
 
-    coreDb.prepare(`
+    coreDb
+      .prepare(
+        `
       INSERT INTO stable_block_transactions (
         block_indep_hash, transaction_id, block_transaction_index
       ) SELECT
@@ -335,9 +347,13 @@ export function flushToStable(config: AutoVerifyConfig, endHeight: number): void
       FROM new_block_transactions nbt
       WHERE nbt.height < @end_height
       ON CONFLICT DO NOTHING
-    `).run({ end_height: endHeight + 1 });
+    `,
+      )
+      .run({ end_height: exclusiveEndHeight });
 
-    coreDb.prepare(`
+    coreDb
+      .prepare(
+        `
       INSERT INTO stable_transactions (
         id, height, block_transaction_index, signature,
         format, last_tx, owner_address, target, quantity,
@@ -352,9 +368,13 @@ export function flushToStable(config: AutoVerifyConfig, endHeight: number): void
       JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
       WHERE nbt.height < @end_height
       ON CONFLICT DO NOTHING
-    `).run({ end_height: endHeight + 1 });
+    `,
+      )
+      .run({ end_height: exclusiveEndHeight });
 
-    coreDb.prepare(`
+    coreDb
+      .prepare(
+        `
       INSERT INTO stable_transaction_tags (
         tag_name_hash, tag_value_hash, height,
         block_transaction_index, transaction_tag_index,
@@ -367,7 +387,9 @@ export function flushToStable(config: AutoVerifyConfig, endHeight: number): void
       JOIN new_block_transactions nbt ON nbt.transaction_id = ntt.transaction_id
       WHERE nbt.height < @end_height
       ON CONFLICT DO NOTHING
-    `).run({ end_height: endHeight + 1 });
+    `,
+      )
+      .run({ end_height: exclusiveEndHeight });
 
     coreDb.exec('COMMIT');
   } catch (err) {
@@ -384,7 +406,9 @@ export function flushToStable(config: AutoVerifyConfig, endHeight: number): void
     bundlesDb.exec(`ATTACH DATABASE '${config.coreDbPath}' AS core`);
     bundlesDb.exec('BEGIN');
 
-    bundlesDb.prepare(`
+    bundlesDb
+      .prepare(
+        `
       INSERT INTO stable_data_items (
         id, parent_id, root_transaction_id,
         height, block_transaction_index,
@@ -408,9 +432,13 @@ export function flushToStable(config: AutoVerifyConfig, endHeight: number): void
         ON ndi.root_transaction_id = sbt.transaction_id
       WHERE ndi.height < @end_height
       ON CONFLICT DO NOTHING
-    `).run({ end_height: endHeight + 1 });
+    `,
+      )
+      .run({ end_height: exclusiveEndHeight });
 
-    bundlesDb.prepare(`
+    bundlesDb
+      .prepare(
+        `
       INSERT INTO stable_data_item_tags (
         tag_name_hash, tag_value_hash,
         height, block_transaction_index,
@@ -428,10 +456,14 @@ export function flushToStable(config: AutoVerifyConfig, endHeight: number): void
         ON ndit.root_transaction_id = sbt.transaction_id
       WHERE ndit.height < @end_height
       ON CONFLICT DO NOTHING
-    `).run({ end_height: endHeight + 1 });
+    `,
+      )
+      .run({ end_height: exclusiveEndHeight });
 
     // Mark bundles as fully indexed where all matched data items are present
-    bundlesDb.prepare(`
+    bundlesDb
+      .prepare(
+        `
       UPDATE bundles
       SET
         first_fully_indexed_at = IFNULL(first_fully_indexed_at, @fully_indexed_at),
@@ -445,7 +477,9 @@ export function flushToStable(config: AutoVerifyConfig, endHeight: number): void
             AND bdi.filter_id = bundles.index_filter_id
         ) = bundles.matched_data_item_count
         AND last_fully_indexed_at IS NULL
-    `).run({ fully_indexed_at: Math.floor(Date.now() / 1000) });
+    `,
+      )
+      .run({ fully_indexed_at: Math.floor(Date.now() / 1000) });
 
     bundlesDb.exec('COMMIT');
   } catch (err) {

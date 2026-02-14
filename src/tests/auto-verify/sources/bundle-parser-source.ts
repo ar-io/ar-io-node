@@ -6,7 +6,6 @@
  */
 import Sqlite from 'better-sqlite3';
 import axios from 'axios';
-import { Readable } from 'node:stream';
 
 import { processBundleStream } from '../../../lib/bundles.js';
 import { fromB64Url, sha256B64Url, toB64Url } from '../../../lib/encoding.js';
@@ -55,29 +54,20 @@ export class BundleParserSource implements SourceAdapter {
           ? toB64Url(bundleRow.root_transaction_id)
           : bundleTxId;
 
-        // Look up the height from core DB or bundles DB
-        const heightRow = coreDb
-          .prepare(
-            `
-            SELECT height FROM stable_transactions WHERE id = ?
-            LIMIT 1
-            `,
-          )
-          .get(bundleRow.root_transaction_id ?? bundleRow.id) as any;
-
-        const bundleHeight = heightRow?.height;
-        if (bundleHeight == null) {
-          // Could be a nested bundle; try bundles DB
-          const diRow = bundlesDb
-            .prepare(
-              `SELECT height FROM stable_data_items WHERE id = ? LIMIT 1`,
-            )
-            .get(bundleRow.id) as any;
-          if (!diRow) continue;
+        // Skip bundles we can't find in either DB
+        const inCore = coreDb
+          .prepare('SELECT 1 FROM stable_transactions WHERE id = ? LIMIT 1')
+          .get(bundleRow.root_transaction_id ?? bundleRow.id);
+        if (!inCore) {
+          const inBundles = bundlesDb
+            .prepare('SELECT 1 FROM stable_data_items WHERE id = ? LIMIT 1')
+            .get(bundleRow.id);
+          if (!inBundles) continue;
         }
 
         try {
           const items = await this.fetchAndParseBundleItems(
+            bundlesDb,
             bundleTxId,
             rootTxId,
             startHeight,
@@ -112,6 +102,7 @@ export class BundleParserSource implements SourceAdapter {
   }
 
   private async fetchAndParseBundleItems(
+    bundlesDb: Sqlite.Database,
     bundleTxId: string,
     rootTxId: string,
     startHeight: number,
@@ -124,68 +115,61 @@ export class BundleParserSource implements SourceAdapter {
       timeout: 120000,
     });
 
-    const stream: Readable = response.data;
-    const dataItems = await processBundleStream(stream);
+    const dataItems = await processBundleStream(response.data);
 
-    // Look up height for these data items from the bundles DB
-    const bundlesDb = new Sqlite(this.bundlesDbPath, { readonly: true });
-    try {
-      const heightStmt = bundlesDb.prepare(
-        `SELECT height FROM stable_data_items WHERE id = ? LIMIT 1`,
-      );
+    const heightStmt = bundlesDb.prepare(
+      'SELECT height FROM stable_data_items WHERE id = ? LIMIT 1',
+    );
 
-      return dataItems.reduce<CanonicalDataItem[]>((acc, di) => {
-          const heightRow = heightStmt.get(fromB64Url(di.id)) as any;
-          const height = heightRow?.height;
+    return dataItems.reduce<CanonicalDataItem[]>((acc, di) => {
+      const heightRow = heightStmt.get(fromB64Url(di.id)) as any;
+      const height = heightRow?.height;
 
-          // Skip items outside our height range
-          if (height == null || height < startHeight || height > endHeight) {
-            return acc;
-          }
+      // Skip items outside our height range
+      if (height == null || height < startHeight || height > endHeight) {
+        return acc;
+      }
 
-          const ownerAddress = sha256B64Url(fromB64Url(di.owner));
+      const ownerAddress = sha256B64Url(fromB64Url(di.owner));
 
-          // Parse tags from the raw bundle
-          const tags: CanonicalTag[] = di.tags.map((t, i) => ({
-            name: t.name,
-            value: t.value,
-            index: i,
-          }));
+      // Parse tags from the raw bundle
+      const tags: CanonicalTag[] = di.tags.map((t, i) => ({
+        name: t.name,
+        value: t.value,
+        index: i,
+      }));
 
-          // Extract content type from tags (first match wins)
-          let contentType: string | null = null;
-          for (const tag of di.tags) {
-            if (tag.name.toLowerCase() === 'content-type') {
-              contentType = tag.value;
-              break;
-            }
-          }
+      // Extract content type from tags (first match wins)
+      let contentType: string | null = null;
+      for (const tag of di.tags) {
+        if (tag.name.toLowerCase() === 'content-type') {
+          contentType = tag.value;
+          break;
+        }
+      }
 
-          acc.push({
-            id: di.id,
-            parentId: bundleTxId,
-            rootTransactionId: rootTxId,
-            height,
-            ownerAddress,
-            target: di.target,
-            anchor: di.anchor,
-            dataSize: di.dataSize,
-            dataOffset: di.dataOffset,
-            offset: di.offset,
-            size: di.size,
-            ownerOffset: di.ownerOffset,
-            ownerSize: di.ownerSize,
-            signatureOffset: di.signatureOffset,
-            signatureSize: di.signatureSize,
-            rootParentOffset: null, // not available from raw parsing
-            contentType,
-            signatureType: di.signatureType,
-            tags,
-          });
-          return acc;
-        }, []);
-    } finally {
-      bundlesDb.close();
-    }
+      acc.push({
+        id: di.id,
+        parentId: bundleTxId,
+        rootTransactionId: rootTxId,
+        height,
+        ownerAddress,
+        target: di.target,
+        anchor: di.anchor,
+        dataSize: di.dataSize,
+        dataOffset: di.dataOffset,
+        offset: di.offset,
+        size: di.size,
+        ownerOffset: di.ownerOffset,
+        ownerSize: di.ownerSize,
+        signatureOffset: di.signatureOffset,
+        signatureSize: di.signatureSize,
+        rootParentOffset: null, // not available from raw parsing
+        contentType,
+        signatureType: di.signatureType,
+        tags,
+      });
+      return acc;
+    }, []);
   }
 }

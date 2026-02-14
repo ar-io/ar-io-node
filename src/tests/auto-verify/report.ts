@@ -20,7 +20,10 @@ export function writeIterationReport(
   // Write JSONL discrepancies
   const discrepanciesPath = path.join(iterDir, 'discrepancies.jsonl');
   const lines = result.discrepancies.map((d) => JSON.stringify(d));
-  fs.writeFileSync(discrepanciesPath, lines.join('\n') + '\n');
+  fs.writeFileSync(
+    discrepanciesPath,
+    lines.length > 0 ? lines.join('\n') + '\n' : '',
+  );
 
   // Write iteration summary
   const summaryPath = path.join(iterDir, 'summary.json');
@@ -95,10 +98,10 @@ export function printIterationSummary(
     const preview = result.discrepancies.slice(0, 10);
     for (const d of preview) {
       const parts: string[] = [d.type];
-      if (d.dataItemId) parts.push(`id=${d.dataItemId}`);
-      if (d.field) parts.push(`field=${d.field}`);
+      if (d.dataItemId != null) parts.push(`id=${d.dataItemId}`);
+      if (d.field != null) parts.push(`field=${d.field}`);
       if (d.tagIndex != null) parts.push(`tagIndex=${d.tagIndex}`);
-      if (d.details) parts.push(d.details);
+      if (d.details != null) parts.push(d.details);
 
       const sourceEntries = Object.entries(d.sources);
       if (sourceEntries.length > 0) {
