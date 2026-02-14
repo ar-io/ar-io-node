@@ -30,7 +30,6 @@ const getParquetExporter = () => {
   if (parquetExporter === null) {
     parquetExporter = new ParquetExporter({
       log,
-      duckDbPath: 'data/duckdb/db.duckdb',
       bundlesDbPath: 'data/sqlite/bundles.db',
       coreDbPath: 'data/sqlite/core.db',
     });
@@ -521,6 +520,7 @@ arIoRouter.post(
         startHeight,
         endHeight,
         maxFileRows,
+        heightPartitionSize,
         skipL1Transactions,
         skipL1Tags,
       } = req.body;
@@ -533,6 +533,9 @@ arIoRouter.post(
         !Number.isInteger(endHeight) ||
         endHeight < 0 ||
         (Number.isInteger(maxFileRows) && maxFileRows <= 0) ||
+        (heightPartitionSize !== undefined &&
+          (!Number.isInteger(heightPartitionSize) ||
+            heightPartitionSize <= 0)) ||
         (skipL1Transactions !== undefined &&
           typeof skipL1Transactions !== 'boolean') ||
         (skipL1Tags !== undefined && typeof skipL1Tags !== 'boolean')
@@ -548,6 +551,7 @@ arIoRouter.post(
         startHeight,
         endHeight,
         maxFileRows,
+        heightPartitionSize,
         skipL1Transactions:
           skipL1Transactions === undefined ? true : skipL1Transactions,
         skipL1Tags: skipL1Tags === undefined ? true : skipL1Tags,

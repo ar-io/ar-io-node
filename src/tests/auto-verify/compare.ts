@@ -4,10 +4,15 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { CanonicalDataItem, Discrepancy } from './types.js';
+import {
+  CanonicalDataItem,
+  CanonicalTag,
+  CanonicalTransaction,
+  Discrepancy,
+} from './types.js';
 
-// Fields available per source
-const COMMON_FIELDS: (keyof CanonicalDataItem)[] = [
+// Data item fields
+const DATA_ITEM_COMMON_FIELDS: (keyof CanonicalDataItem)[] = [
   'id',
   'parentId',
   'height',
@@ -18,7 +23,7 @@ const COMMON_FIELDS: (keyof CanonicalDataItem)[] = [
   'contentType',
 ];
 
-const EXTENDED_FIELDS: (keyof CanonicalDataItem)[] = [
+const DATA_ITEM_EXTENDED_FIELDS: (keyof CanonicalDataItem)[] = [
   'rootTransactionId',
   'dataOffset',
   'offset',
@@ -32,21 +37,47 @@ const EXTENDED_FIELDS: (keyof CanonicalDataItem)[] = [
 ];
 
 // Bundle parser can't determine rootParentOffset from raw data
-const SOURCE_EXCLUDED_FIELDS: Record<string, Set<string>> = {
+const DATA_ITEM_SOURCE_EXCLUDED_FIELDS: Record<string, Set<string>> = {
   'bundle-parser': new Set(['rootParentOffset']),
 };
 
-interface SourceData {
+// Transaction fields
+const TRANSACTION_FIELDS: (keyof CanonicalTransaction)[] = [
+  'id',
+  'height',
+  'blockTransactionIndex',
+  'target',
+  'quantity',
+  'reward',
+  'anchor',
+  'dataSize',
+  'contentType',
+  'format',
+  'ownerAddress',
+  'dataRoot',
+  'offset',
+];
+
+interface SourceData<T extends { id: string; tags: CanonicalTag[] }> {
   name: string;
-  itemsById: Map<string, CanonicalDataItem>;
+  itemsById: Map<string, T>;
 }
 
-export function compareAllSources(
-  sources: { name: string; items: CanonicalDataItem[] }[],
-): Discrepancy[] {
+function compareItems<T extends { id: string; tags: CanonicalTag[] }>({
+  sources,
+  fields,
+  excludedFields = {},
+  entityType,
+}: {
+  sources: { name: string; items: T[] }[];
+  fields: string[];
+  excludedFields?: Record<string, Set<string>>;
+  entityType: 'data_item' | 'transaction';
+}): Discrepancy[] {
   const discrepancies: Discrepancy[] = [];
+  const entityLabel = entityType === 'data_item' ? 'Data item' : 'Transaction';
 
-  const sourceData: SourceData[] = sources.map((s) => ({
+  const sourceData: SourceData<T>[] = sources.map((s) => ({
     name: s.name,
     itemsById: new Map(s.items.map((item) => [item.id, item])),
   }));
@@ -60,12 +91,13 @@ export function compareAllSources(
   if (uniqueCounts.size > 1) {
     discrepancies.push({
       type: 'count_mismatch',
+      entityType,
       sources: counts,
-      details: `Data item counts differ across sources`,
+      details: `${entityLabel} counts differ across sources`,
     });
   }
 
-  // Phase 2: ID set comparison - find IDs in one source but not another
+  // Phase 2: ID set comparison
   const allIds = new Set<string>();
   for (const s of sourceData) {
     for (const id of s.itemsById.keys()) {
@@ -78,37 +110,35 @@ export function compareAllSources(
       if (!s.itemsById.has(id)) {
         discrepancies.push({
           type: 'missing_in_source',
-          dataItemId: id,
+          entityType,
+          itemId: id,
           sources: { missing: s.name },
-          details: `Data item ${id} missing from ${s.name}`,
+          details: `${entityLabel} ${id} missing from ${s.name}`,
         });
       }
     }
   }
 
-  // Phase 3: Field-by-field comparison for items present in all sources
+  // Phase 3: Field-by-field comparison
   for (const id of allIds) {
     const presentSources = sourceData.filter((s) => s.itemsById.has(id));
     if (presentSources.length < 2) continue;
 
-    // Compare all fields across each pair of sources
-    const allFields = [...COMMON_FIELDS, ...EXTENDED_FIELDS];
-
-    for (const field of allFields) {
-      const values: Record<string, unknown> = {};
+    for (const field of fields) {
       const comparableSources = presentSources.filter(
-        (s) => !SOURCE_EXCLUDED_FIELDS[s.name]?.has(field),
+        (s) => !excludedFields[s.name]?.has(field),
       );
 
       if (comparableSources.length < 2) continue;
 
+      const values: Record<string, unknown> = {};
       let mismatch = false;
       let firstValue: unknown = undefined;
       let firstSource: string | undefined;
 
       for (const s of comparableSources) {
         const item = s.itemsById.get(id)!;
-        const value = item[field as keyof CanonicalDataItem];
+        const value = (item as Record<string, unknown>)[field];
         values[s.name] = value;
 
         if (firstSource === undefined) {
@@ -122,7 +152,8 @@ export function compareAllSources(
       if (mismatch) {
         discrepancies.push({
           type: 'field_mismatch',
-          dataItemId: id,
+          entityType,
+          itemId: id,
           field,
           sources: values,
         });
@@ -131,7 +162,7 @@ export function compareAllSources(
 
     // Phase 4: Tag comparison
     if (presentSources.length >= 2) {
-      const tagDiscrepancies = compareTags(id, presentSources);
+      const tagDiscrepancies = compareTags(id, entityType, presentSources);
       discrepancies.push(...tagDiscrepancies);
     }
   }
@@ -139,23 +170,48 @@ export function compareAllSources(
   return discrepancies;
 }
 
-function compareTags(dataItemId: string, sources: SourceData[]): Discrepancy[] {
+export function compareAllSources(
+  sources: { name: string; items: CanonicalDataItem[] }[],
+): Discrepancy[] {
+  return compareItems({
+    sources,
+    fields: [...DATA_ITEM_COMMON_FIELDS, ...DATA_ITEM_EXTENDED_FIELDS],
+    excludedFields: DATA_ITEM_SOURCE_EXCLUDED_FIELDS,
+    entityType: 'data_item',
+  });
+}
+
+export function compareAllTransactions(
+  sources: { name: string; items: CanonicalTransaction[] }[],
+): Discrepancy[] {
+  return compareItems({
+    sources,
+    fields: TRANSACTION_FIELDS as string[],
+    entityType: 'transaction',
+  });
+}
+
+function compareTags<T extends { id: string; tags: CanonicalTag[] }>(
+  itemId: string,
+  entityType: 'data_item' | 'transaction',
+  sources: SourceData<T>[],
+): Discrepancy[] {
   const discrepancies: Discrepancy[] = [];
 
   const firstSource = sources[0];
-  const firstItem = firstSource.itemsById.get(dataItemId)!;
+  const firstItem = firstSource.itemsById.get(itemId)!;
   const firstTags = firstItem.tags;
 
   for (let i = 1; i < sources.length; i++) {
     const otherSource = sources[i];
-    const otherItem = otherSource.itemsById.get(dataItemId)!;
+    const otherItem = otherSource.itemsById.get(itemId)!;
     const otherTags = otherItem.tags;
 
-    // Tag count mismatch
     if (firstTags.length !== otherTags.length) {
       discrepancies.push({
         type: 'tag_mismatch',
-        dataItemId,
+        entityType,
+        itemId,
         sources: {
           [firstSource.name]: firstTags.length,
           [otherSource.name]: otherTags.length,
@@ -165,7 +221,6 @@ function compareTags(dataItemId: string, sources: SourceData[]): Discrepancy[] {
       continue;
     }
 
-    // Compare individual tags
     for (let j = 0; j < firstTags.length; j++) {
       const t1 = firstTags[j];
       const t2 = otherTags[j];
@@ -173,7 +228,8 @@ function compareTags(dataItemId: string, sources: SourceData[]): Discrepancy[] {
       if (t1.name !== t2.name) {
         discrepancies.push({
           type: 'tag_mismatch',
-          dataItemId,
+          entityType,
+          itemId,
           tagIndex: j,
           field: 'name',
           sources: {
@@ -186,7 +242,8 @@ function compareTags(dataItemId: string, sources: SourceData[]): Discrepancy[] {
       if (t1.value !== t2.value) {
         discrepancies.push({
           type: 'tag_mismatch',
-          dataItemId,
+          entityType,
+          itemId,
           tagIndex: j,
           field: 'value',
           sources: {

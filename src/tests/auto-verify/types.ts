@@ -33,6 +33,23 @@ export interface CanonicalDataItem {
   tags: CanonicalTag[];
 }
 
+export interface CanonicalTransaction {
+  id: string; // base64url
+  height: number;
+  blockTransactionIndex: number;
+  target: string; // base64url, empty string if none
+  quantity: string; // decimal string
+  reward: string; // decimal string
+  anchor: string; // base64url (last_tx)
+  dataSize: number;
+  contentType: string | null;
+  format: number;
+  ownerAddress: string; // base64url (SHA-256 of owner pubkey)
+  dataRoot: string; // base64url, empty string if none
+  offset: number | null;
+  tags: CanonicalTag[];
+}
+
 export interface BlockRange {
   start: number;
   end: number;
@@ -45,7 +62,8 @@ export interface Discrepancy {
     | 'missing_in_source'
     | 'tag_mismatch'
     | 'count_mismatch';
-  dataItemId?: string;
+  entityType?: 'data_item' | 'transaction';
+  itemId?: string;
   field?: string;
   tagIndex?: number;
   sources: Record<string, unknown>;
@@ -55,8 +73,10 @@ export interface Discrepancy {
 export interface IterationResult {
   blockRange: BlockRange;
   totalDataItems: number;
+  totalTransactions: number;
   discrepancies: Discrepancy[];
   sourceCounts: Record<string, number>;
+  transactionSourceCounts: Record<string, number>;
   durationMs: number;
 }
 
@@ -66,4 +86,8 @@ export interface SourceAdapter {
     startHeight: number,
     endHeight: number,
   ): Promise<CanonicalDataItem[]>;
+  getTransactions?(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<CanonicalTransaction[]>;
 }

@@ -5,16 +5,18 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { Connection, Database } from 'duckdb-async';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   isMainThread,
   parentPort,
   Worker,
   workerData,
 } from 'node:worker_threads';
+import Sqlite from 'better-sqlite3';
 import * as winston from 'winston';
-import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
 
 type EventName = 'export-complete' | 'export-error' | 'start' | 'timing-log';
 
@@ -46,6 +48,7 @@ type ExportData = {
   startHeight?: number;
   endHeight?: number;
   maxFileRows?: number;
+  heightPartitionSize?: number;
   skipL1Transactions?: boolean;
   skipL1Tags?: boolean;
   durationInSeconds?: number;
@@ -54,16 +57,9 @@ type ExportData = {
   error?: string;
 };
 
-type HeightRange = {
-  startHeight: bigint;
-  endHeight: bigint;
-  rowCount: bigint;
-};
-
 export class ParquetExporter {
   private log: winston.Logger;
   private worker: Worker | null = null;
-  private duckDbPath: string;
   private bundlesDbPath: string;
   private coreDbPath: string;
   private exportStatus: ExportData = {
@@ -72,17 +68,14 @@ export class ParquetExporter {
 
   constructor({
     log,
-    duckDbPath,
     bundlesDbPath,
     coreDbPath,
   }: {
     log: winston.Logger;
-    duckDbPath: string;
     bundlesDbPath: string;
     coreDbPath: string;
   }) {
     this.log = log.child({ class: 'ParquetExporter' });
-    this.duckDbPath = duckDbPath;
     this.bundlesDbPath = bundlesDbPath;
     this.coreDbPath = coreDbPath;
   }
@@ -92,6 +85,7 @@ export class ParquetExporter {
     startHeight,
     endHeight,
     maxFileRows,
+    heightPartitionSize = 1000,
     skipL1Transactions = true,
     skipL1Tags = true,
   }: {
@@ -99,6 +93,7 @@ export class ParquetExporter {
     startHeight: number;
     endHeight: number;
     maxFileRows?: number;
+    heightPartitionSize?: number;
     skipL1Transactions?: boolean;
     skipL1Tags?: boolean;
   }): Promise<void> {
@@ -118,9 +113,9 @@ export class ParquetExporter {
           startHeight,
           endHeight,
           maxFileRows,
+          heightPartitionSize,
           skipL1Transactions,
           skipL1Tags,
-          duckDbPath: this.duckDbPath,
           bundlesDbPath: this.bundlesDbPath,
           coreDbPath: this.coreDbPath,
         },
@@ -136,6 +131,7 @@ export class ParquetExporter {
           startHeight,
           endHeight,
           maxFileRows,
+          heightPartitionSize,
           skipL1Transactions,
           skipL1Tags,
         });
@@ -146,13 +142,14 @@ export class ParquetExporter {
       this.worker.on('message', (message: Message) => {
         if (message.eventName === EXPORT_COMPLETE) {
           const endTime = new Date();
-          const durationInSeconds = (endTime.getTime() - startTime) / 1000; // Convert to seconds
+          const durationInSeconds = (endTime.getTime() - startTime) / 1000;
 
           this.log.info(`Parquet export completed`, {
             outputDir,
             startHeight,
             endHeight,
             maxFileRows,
+            heightPartitionSize,
             skipL1Transactions,
             skipL1Tags,
             durationInSeconds,
@@ -164,6 +161,7 @@ export class ParquetExporter {
             startHeight,
             endHeight,
             maxFileRows,
+            heightPartitionSize,
             skipL1Transactions,
             skipL1Tags,
             endTime: endTime.toISOString(),
@@ -174,7 +172,7 @@ export class ParquetExporter {
           resolve();
         } else if (message.eventName === EXPORT_ERROR) {
           const endTime = new Date();
-          const durationInSeconds = (endTime.getTime() - startTime) / 1000; // Convert to seconds
+          const durationInSeconds = (endTime.getTime() - startTime) / 1000;
 
           this.exportStatus = {
             status: ERRORED,
@@ -257,342 +255,61 @@ export class ParquetExporter {
   }
 }
 
-const importBlocks = async ({
-  db,
-  startHeight,
-  endHeight,
-}: {
-  db: Connection;
-  startHeight: number;
-  endHeight: number;
-}) => {
-  const query = `
-      INSERT INTO blocks
-      SELECT
-        indep_hash,
-        height,
-        previous_block,
-        nonce,
-        hash,
-        block_timestamp,
-        tx_count,
-        block_size
-      FROM
-        core.stable_blocks
-      WHERE
-        height BETWEEN ${startHeight} AND ${endHeight}
-    `;
+const TEMP_SQLITE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS blocks (
+  indep_hash BLOB,
+  height INTEGER NOT NULL,
+  previous_block BLOB,
+  nonce BLOB NOT NULL,
+  hash BLOB NOT NULL,
+  block_timestamp INTEGER NOT NULL,
+  tx_count INTEGER NOT NULL,
+  block_size INTEGER
+);
 
-  try {
-    await db.exec(query);
-  } catch (error: any) {
-    const newError = new Error('Error importing blocks');
-    newError.stack = error.stack;
-    throw newError;
-  }
-};
+CREATE TABLE IF NOT EXISTS transactions (
+  id BLOB NOT NULL,
+  indexed_at INTEGER,
+  block_transaction_index INTEGER,
+  is_data_item INTEGER,
+  target BLOB,
+  quantity TEXT,
+  reward TEXT,
+  anchor BLOB NOT NULL,
+  data_size INTEGER,
+  content_type TEXT,
+  format INTEGER,
+  height INTEGER NOT NULL,
+  owner_address BLOB,
+  data_root BLOB,
+  parent BLOB,
+  "offset" INTEGER,
+  size INTEGER,
+  data_offset INTEGER,
+  owner_offset INTEGER,
+  owner_size INTEGER,
+  owner BLOB,
+  signature_offset INTEGER,
+  signature_size INTEGER,
+  signature_type INTEGER,
+  root_transaction_id BLOB,
+  root_parent_offset INTEGER
+);
 
-const importTransactions = async ({
-  db,
-  startHeight,
-  endHeight,
-}: {
-  db: Connection;
-  startHeight: number;
-  endHeight: number;
-}) => {
-  const query = `
-      INSERT INTO transactions
-      SELECT
-        st.id,
-        NULL AS indexed_at,
-        st.block_transaction_index,
-        0 AS is_data_item,
-        st.target,
-        st.quantity,
-        st.reward,
-        st.last_tx as anchor,
-        st.data_size,
-        st.content_type,
-        st.format,
-        st.height,
-        st.owner_address,
-        st.data_root,
-        NULL AS parent,
-        st."offset",
-        NULL AS size,
-        NULL AS data_offset,
-        NULL AS owner_offset,
-        NULL AS owner_size,
-        CASE
-          WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus
-          ELSE NULL
-        END AS owner,
-        NULL AS signature_offset,
-        NULL AS signature_size,
-        NULL AS signature_type,
-        NULL AS root_transaction_id,
-        NULL AS root_parent_offset
-      FROM
-        core.stable_transactions st
-      LEFT JOIN
-        core.wallets w ON st.owner_address = w.address
-      WHERE
-        st.height BETWEEN ${startHeight} AND ${endHeight}
-    `;
-
-  try {
-    await db.exec(query);
-  } catch (error: any) {
-    const newError = new Error('Error importing transactions');
-    newError.stack = error.stack;
-    throw newError;
-  }
-};
-
-const importDataItems = async ({
-  db,
-  startHeight,
-  endHeight,
-}: {
-  db: Connection;
-  startHeight: number;
-  endHeight: number;
-}) => {
-  const query = `
-      INSERT INTO transactions
-      SELECT
-        sdi.id,
-        sdi.indexed_at,
-        block_transaction_index,
-        1 AS is_data_item,
-        sdi.target,
-        NULL AS quantity,
-        NULL AS reward,
-        sdi.anchor,
-        sdi.data_size,
-        sdi.content_type,
-        NULL AS format,
-        sdi.height,
-        sdi.owner_address,
-        NULL AS data_root,
-        sdi.parent_id AS parent,
-        sdi."offset",
-        sdi.size,
-        sdi.data_offset,
-        sdi.owner_offset,
-        sdi.owner_size,
-        CASE
-          WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus
-          ELSE NULL
-        END AS owner,
-        sdi.signature_offset,
-        sdi.signature_size,
-        sdi.signature_type,
-        sdi.root_transaction_id,
-        sdi.root_parent_offset
-      FROM
-        bundles.stable_data_items sdi
-      LEFT JOIN
-        bundles.wallets w ON sdi.owner_address = w.address
-      WHERE
-        sdi.height BETWEEN ${startHeight} AND ${endHeight}
-    `;
-
-  try {
-    await db.exec(query);
-  } catch (error: any) {
-    const newError = new Error('Error importing data items');
-    newError.stack = error.stack;
-    throw newError;
-  }
-};
-
-const importTransactionTags = async ({
-  db,
-  startHeight,
-  endHeight,
-}: {
-  db: Connection;
-  startHeight: number;
-  endHeight: number;
-}) => {
-  const query = `
-      INSERT INTO tags
-      SELECT
-        st.height,
-        st.id,
-        stt.transaction_tag_index AS tag_index,
-        NULL AS indexed_at,
-        tn.name AS tag_name,
-        tv.value AS tag_value,
-        0 AS is_data_item
-      FROM
-        core.stable_transactions st
-      CROSS JOIN
-        core.stable_transaction_tags stt
-      CROSS JOIN
-        core.tag_names tn
-      CROSS JOIN
-        core.tag_values tv
-      WHERE
-        st.id = stt.transaction_id
-        AND stt.tag_name_hash = tn.hash
-        AND stt.tag_value_hash = tv.hash
-        AND st.height BETWEEN ${startHeight} AND ${endHeight}
-    `;
-
-  try {
-    await db.exec(query);
-  } catch (error: any) {
-    const newError = new Error('Error importing transaction tags');
-    newError.stack = error.stack;
-    throw newError;
-  }
-};
-
-const importDataItemTags = async ({
-  db,
-  startHeight,
-  endHeight,
-}: {
-  db: Connection;
-  startHeight: number;
-  endHeight: number;
-}) => {
-  const query = `
-      INSERT INTO tags
-      SELECT
-        sdi.height,
-        sdi.id,
-        sdit.data_item_tag_index AS tag_index,
-        sdi.indexed_at,
-        tn.name AS tag_name,
-        tv.value AS tag_value,
-        1 AS is_data_item
-      FROM
-        bundles.stable_data_items sdi
-      CROSS JOIN
-        bundles.stable_data_item_tags sdit
-      CROSS JOIN
-        bundles.tag_names tn
-      CROSS JOIN
-        bundles.tag_values tv
-      WHERE
-        sdi.id = sdit.data_item_id
-        AND sdit.tag_name_hash = tn.hash
-        AND sdit.tag_value_hash = tv.hash
-        AND sdi.height BETWEEN ${startHeight} AND ${endHeight}
-    `;
-
-  try {
-    await db.exec(query);
-  } catch (error: any) {
-    const newError = new Error('Error importing data item tags');
-    newError.stack = error.stack;
-    throw newError;
-  }
-};
-
-const exportToParquet = async ({
-  db,
-  outputDir,
-  tableName,
-  startHeight,
-  endHeight,
-  maxFileRows,
-}: {
-  db: Connection;
-  outputDir: string;
-  tableName: string;
-  startHeight: number;
-  endHeight: number;
-  maxFileRows?: number;
-}): Promise<HeightRange[]> => {
-  if (!existsSync(outputDir)) {
-    mkdirSync(outputDir, { recursive: true });
-  }
-
-  const heightRanges: HeightRange[] = [];
-  const minHeight = BigInt(startHeight);
-  const maxHeight = BigInt(endHeight);
-  let rowCount = 0n;
-  let currentRangeStart = BigInt(startHeight);
-
-  for (let height = minHeight; height <= maxHeight; height++) {
-    const heightRowCount = await getRowCountForHeight(db, tableName, height);
-    rowCount += heightRowCount;
-
-    if (
-      (maxFileRows !== undefined && rowCount >= maxFileRows) ||
-      height === maxHeight
-    ) {
-      heightRanges.push({
-        startHeight: currentRangeStart,
-        endHeight: height,
-        rowCount,
-      });
-
-      const fileName = `${tableName}-minHeight:${currentRangeStart}-maxHeight:${height}-rowCount:${rowCount}.parquet`;
-      const filePath = `${outputDir}/${fileName}`;
-
-      try {
-        const fileExportStartTime = Date.now();
-        await db.exec(`
-            COPY (
-              SELECT * FROM ${tableName}
-              WHERE height >= ${currentRangeStart} AND height <= ${height}
-            ) TO '${filePath}' (FORMAT PARQUET, COMPRESSION 'zstd')
-          `);
-        const fileExportEndTime = Date.now();
-        const fileExportDurationMs = fileExportEndTime - fileExportStartTime;
-
-        parentPort?.postMessage({
-          eventName: TIMING_LOG,
-          timingKey: `file-export-${tableName}-${currentRangeStart}-${height}`,
-          startTime: fileExportStartTime,
-          endTime: fileExportEndTime,
-          durationMs: fileExportDurationMs,
-        });
-
-        currentRangeStart = height + 1n;
-        rowCount = 0n;
-      } catch (error: any) {
-        const newError = new Error(`Error exporting Parquet file ${fileName}`);
-        newError.stack = error.stack;
-        throw newError;
-      }
-    }
-  }
-
-  return heightRanges;
-};
-
-const getRowCountForHeight = async (
-  db: Connection,
-  tableName: string,
-  height: bigint,
-): Promise<bigint> => {
-  const query = `
-      SELECT COUNT(*) as count
-      FROM ${tableName}
-      WHERE height = ${height}
-    `;
-
-  try {
-    const result = await db.all(query);
-
-    return result[0].count;
-  } catch (error: any) {
-    const newError = new Error(
-      `Error getting row count for height ${height} in ${tableName}`,
-    );
-    newError.stack = error.stack;
-    throw newError;
-  }
-};
+CREATE TABLE IF NOT EXISTS tags (
+  height INTEGER NOT NULL,
+  id BLOB NOT NULL,
+  tag_index INTEGER NOT NULL,
+  indexed_at INTEGER,
+  tag_name BLOB NOT NULL,
+  tag_value BLOB NOT NULL,
+  is_data_item INTEGER NOT NULL
+);
+`;
 
 if (!isMainThread) {
+  const escapeSqlString = (s: string): string => s.replace(/'/g, "''");
+
   const logTiming = async <T>(
     operation: string,
     fn: () => Promise<T>,
@@ -613,25 +330,222 @@ if (!isMainThread) {
     }
   };
 
-  const gracefulExit = async ({
+  const populateTempDb = ({
+    tempDb,
+    coreDbPath,
+    bundlesDbPath,
+    startHeight,
+    endHeight,
+    skipL1Transactions,
+    skipL1Tags,
+  }: {
+    tempDb: InstanceType<typeof Sqlite>;
+    coreDbPath: string;
+    bundlesDbPath: string;
+    startHeight: number;
+    endHeight: number;
+    skipL1Transactions: boolean;
+    skipL1Tags: boolean;
+  }) => {
+    // Attach core database and import blocks + L1 data
+    tempDb.exec(`ATTACH DATABASE '${escapeSqlString(coreDbPath)}' AS core`);
+
+    tempDb.exec(`
+      INSERT INTO blocks
+      SELECT
+        indep_hash,
+        height,
+        previous_block,
+        nonce,
+        hash,
+        block_timestamp,
+        tx_count,
+        block_size
+      FROM core.stable_blocks
+      WHERE height BETWEEN ${startHeight} AND ${endHeight}
+    `);
+
+    if (!skipL1Transactions) {
+      tempDb.exec(`
+        INSERT INTO transactions
+        SELECT
+          st.id,
+          NULL AS indexed_at,
+          st.block_transaction_index,
+          0 AS is_data_item,
+          st.target,
+          st.quantity,
+          st.reward,
+          st.last_tx AS anchor,
+          st.data_size,
+          st.content_type,
+          st.format,
+          st.height,
+          st.owner_address,
+          st.data_root,
+          NULL AS parent,
+          st."offset",
+          NULL AS size,
+          NULL AS data_offset,
+          NULL AS owner_offset,
+          NULL AS owner_size,
+          CASE
+            WHEN length(w.public_modulus) <= 64 THEN w.public_modulus
+            ELSE NULL
+          END AS owner,
+          NULL AS signature_offset,
+          NULL AS signature_size,
+          NULL AS signature_type,
+          st.id AS root_transaction_id,
+          NULL AS root_parent_offset
+        FROM core.stable_transactions st
+        LEFT JOIN core.wallets w ON st.owner_address = w.address
+        WHERE st.height BETWEEN ${startHeight} AND ${endHeight}
+      `);
+    }
+
+    if (!skipL1Tags) {
+      tempDb.exec(`
+        INSERT INTO tags
+        SELECT
+          st.height,
+          st.id,
+          stt.transaction_tag_index AS tag_index,
+          NULL AS indexed_at,
+          tn.name AS tag_name,
+          tv.value AS tag_value,
+          0 AS is_data_item
+        FROM core.stable_transactions st
+        JOIN core.stable_transaction_tags stt ON st.id = stt.transaction_id
+        JOIN core.tag_names tn ON stt.tag_name_hash = tn.hash
+        JOIN core.tag_values tv ON stt.tag_value_hash = tv.hash
+        WHERE st.height BETWEEN ${startHeight} AND ${endHeight}
+      `);
+    }
+
+    tempDb.exec('DETACH core');
+
+    // Attach bundles database and import L2 data
+    tempDb.exec(
+      `ATTACH DATABASE '${escapeSqlString(bundlesDbPath)}' AS bundles`,
+    );
+
+    tempDb.exec(`
+      INSERT INTO transactions
+      SELECT
+        sdi.id,
+        sdi.indexed_at,
+        sdi.block_transaction_index,
+        1 AS is_data_item,
+        sdi.target,
+        NULL AS quantity,
+        NULL AS reward,
+        sdi.anchor,
+        sdi.data_size,
+        sdi.content_type,
+        NULL AS format,
+        sdi.height,
+        sdi.owner_address,
+        NULL AS data_root,
+        sdi.parent_id AS parent,
+        sdi."offset",
+        sdi.size,
+        sdi.data_offset,
+        sdi.owner_offset,
+        sdi.owner_size,
+        CASE
+          WHEN length(w.public_modulus) <= 64 THEN w.public_modulus
+          ELSE NULL
+        END AS owner,
+        sdi.signature_offset,
+        sdi.signature_size,
+        sdi.signature_type,
+        sdi.root_transaction_id,
+        sdi.root_parent_offset
+      FROM bundles.stable_data_items sdi
+      LEFT JOIN bundles.wallets w ON sdi.owner_address = w.address
+      WHERE sdi.height BETWEEN ${startHeight} AND ${endHeight}
+    `);
+
+    tempDb.exec(`
+      INSERT INTO tags
+      SELECT
+        sdi.height,
+        sdi.id,
+        sdit.data_item_tag_index AS tag_index,
+        sdi.indexed_at,
+        tn.name AS tag_name,
+        tv.value AS tag_value,
+        1 AS is_data_item
+      FROM bundles.stable_data_items sdi
+      JOIN bundles.stable_data_item_tags sdit ON sdi.id = sdit.data_item_id
+      JOIN bundles.tag_names tn ON sdit.tag_name_hash = tn.hash
+      JOIN bundles.tag_values tv ON sdit.tag_value_hash = tv.hash
+      WHERE sdi.height BETWEEN ${startHeight} AND ${endHeight}
+    `);
+
+    tempDb.exec('DETACH bundles');
+  };
+
+  const exportTableToParquet = async ({
     connection,
-    db,
-    duckDbPath,
-    statusCode,
+    tableName,
+    outputDir,
+    partitionStart,
+    partitionEnd,
+    runId,
+    maxFileRows,
   }: {
     connection: Connection;
-    db: Database;
-    duckDbPath: string;
-    statusCode: number;
+    tableName: string;
+    outputDir: string;
+    partitionStart: number;
+    partitionEnd: number;
+    runId: string;
+    maxFileRows?: number;
   }) => {
-    await connection.close();
-    await db.close();
+    const partitionDir = `height=${partitionStart}-${partitionEnd}`;
+    const tableOutputDir = join(outputDir, tableName, 'data', partitionDir);
+    mkdirSync(tableOutputDir, { recursive: true });
 
-    // Delete the duckdb file
-    rmSync(duckDbPath, { recursive: true, force: true });
-    rmSync(`${duckDbPath}.wal`, { force: true });
+    const countResult = await connection.all(
+      `SELECT COUNT(*) AS cnt FROM ${tableName}`,
+    );
+    const rowCount = Number(countResult[0].cnt);
 
-    process.exit(statusCode);
+    if (rowCount === 0) return;
+
+    const orderBy =
+      tableName === 'blocks'
+        ? 'ORDER BY height, indep_hash'
+        : tableName === 'transactions'
+          ? 'ORDER BY height, id'
+          : 'ORDER BY height, id, tag_index';
+
+    if (maxFileRows === undefined || rowCount <= maxFileRows) {
+      const fileName = `${tableName}_${partitionStart}_${partitionEnd}_${runId}.parquet`;
+      await connection.exec(`
+        COPY (SELECT * FROM ${tableName} ${orderBy})
+        TO '${escapeSqlString(join(tableOutputDir, fileName))}'
+        (FORMAT PARQUET, COMPRESSION 'zstd')
+      `);
+    } else {
+      let offset = 0;
+      let fileNum = 0;
+      while (offset < rowCount) {
+        const fileName = `${tableName}_${partitionStart}_${partitionEnd}_${fileNum}_${runId}.parquet`;
+        await connection.exec(`
+          COPY (
+            SELECT * FROM ${tableName} ${orderBy}
+            LIMIT ${maxFileRows} OFFSET ${offset}
+          )
+          TO '${escapeSqlString(join(tableOutputDir, fileName))}'
+          (FORMAT PARQUET, COMPRESSION 'zstd')
+        `);
+        offset += maxFileRows;
+        fileNum++;
+      }
+    }
   };
 
   const runExport = async (data: any) => {
@@ -642,130 +556,136 @@ if (!isMainThread) {
       startHeight,
       endHeight,
       maxFileRows,
+      heightPartitionSize,
       skipL1Transactions,
       skipL1Tags,
-      duckDbPath,
       bundlesDbPath,
       coreDbPath,
     } = data;
 
-    const db = await Database.create(duckDbPath);
-    const connection = await db.connect();
+    const runId = `${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}_${process.pid}`;
 
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
+    // Create temp directory for intermediate files
+    let tempDir: string | null = null;
+    let db: Database | null = null;
+    let connection: Connection | null = null;
+    let tempDb: InstanceType<typeof Sqlite> | null = null;
+    let exitCode = 1;
 
     try {
+      tempDir = mkdtempSync(join(tmpdir(), 'parquet-export-'));
+      const tempDbPath = join(tempDir, 'temp.db');
+      const duckDbPath = join(tempDir, 'export.duckdb');
+
+      const __filename = fileURLToPath(import.meta.url);
+      const __dirname = dirname(__filename);
+
+      // Initialize DuckDB with schema
+      db = await Database.create(duckDbPath);
+      connection = await db.connect();
+
       await logTiming('init-schema', async () => {
         const duckDbSchema = readFileSync(
-          `${__dirname}/../database/duckdb/schema.sql`,
+          join(__dirname, '..', 'database', 'duckdb', 'schema.sql'),
           'utf8',
         );
-        await connection.exec(duckDbSchema);
-        await connection.exec(`INSTALL sqlite; LOAD sqlite;`);
+        await connection!.exec(duckDbSchema);
+        await connection!.exec('INSTALL sqlite; LOAD sqlite;');
       });
 
-      await logTiming('attach-databases', async () => {
-        await db.exec(`
-          ATTACH '${coreDbPath}' AS core (
-            TYPE SQLITE,
-            READONLY,
-            BUSY_TIMEOUT 30000
-          );
+      // Create temp SQLite database
+      tempDb = new Sqlite(tempDbPath);
+      tempDb.pragma('busy_timeout = 30000');
+      tempDb.exec(TEMP_SQLITE_SCHEMA);
 
-          ATTACH '${bundlesDbPath}' AS bundles (
-            TYPE SQLITE,
-            READONLY,
-            BUSY_TIMEOUT 30000
-          );
-        `);
-      });
+      // Create output directory structure
+      mkdirSync(outputDir, { recursive: true });
 
-      // Import data into DuckDB
-      await logTiming('import-blocks', async () => {
-        await importBlocks({
-          db: connection,
-          startHeight,
-          endHeight,
-        });
-      });
+      // Process partitions
+      for (
+        let partStart = startHeight;
+        partStart <= endHeight;
+        partStart += heightPartitionSize
+      ) {
+        let partEnd = partStart + heightPartitionSize - 1;
+        if (partEnd > endHeight) {
+          partEnd = endHeight;
+        }
 
-      if (!skipL1Transactions) {
-        await logTiming('import-transactions', async () => {
-          await importTransactions({
-            db: connection,
-            startHeight,
-            endHeight,
-          });
-        });
-      }
-
-      await logTiming('import-data-items', async () => {
-        await importDataItems({
-          db: connection,
-          startHeight,
-          endHeight,
-        });
-      });
-
-      if (!skipL1Tags) {
-        await logTiming('import-transaction-tags', async () => {
-          await importTransactionTags({
-            db: connection,
-            startHeight,
-            endHeight,
-          });
-        });
-      }
-
-      await logTiming('import-data-item-tags', async () => {
-        await importDataItemTags({
-          db: connection,
-          startHeight,
-          endHeight,
-        });
-      });
-
-      const transactionRanges = await logTiming(
-        'export-transactions-parquet',
-        async () => {
-          return exportToParquet({
-            db: connection,
-            outputDir,
-            tableName: 'transactions',
-            startHeight,
-            endHeight,
-            maxFileRows,
-          });
-        },
-      );
-
-      let rangeIndex = 0;
-      for (const range of transactionRanges) {
-        await logTiming(
-          `export-blocks-parquet-range-${rangeIndex}`,
-          async () => {
-            await exportToParquet({
-              db: connection,
-              outputDir,
-              tableName: 'blocks',
-              startHeight: Number(range.startHeight),
-              endHeight: Number(range.endHeight),
+        await logTiming(`partition-${partStart}-${partEnd}`, async () => {
+          // Step 1: Populate temp SQLite from source DBs (uses SQLite indexes)
+          await logTiming(`populate-temp-${partStart}-${partEnd}`, async () => {
+            populateTempDb({
+              tempDb: tempDb!,
+              coreDbPath,
+              bundlesDbPath,
+              startHeight: partStart,
+              endHeight: partEnd,
+              skipL1Transactions,
+              skipL1Tags,
             });
-          },
-        );
-
-        await logTiming(`export-tags-parquet-range-${rangeIndex}`, async () => {
-          await exportToParquet({
-            db: connection,
-            outputDir,
-            tableName: 'tags',
-            startHeight: Number(range.startHeight),
-            endHeight: Number(range.endHeight),
           });
-        });
 
-        rangeIndex++;
+          // Step 2: Import from temp SQLite into DuckDB (proper types)
+          await logTiming(`duckdb-import-${partStart}-${partEnd}`, async () => {
+            await connection!.exec(
+              `ATTACH '${escapeSqlString(tempDbPath)}' AS staging (TYPE SQLITE, READONLY)`,
+            );
+            await connection!.exec(
+              'INSERT INTO blocks SELECT * FROM staging.blocks',
+            );
+            await connection!.exec(
+              'INSERT INTO transactions SELECT * FROM staging.transactions',
+            );
+            await connection!.exec(
+              'INSERT INTO tags SELECT * FROM staging.tags',
+            );
+            await connection!.exec('DETACH staging');
+          });
+
+          // Step 3: Export to Parquet files
+          await logTiming(
+            `export-parquet-${partStart}-${partEnd}`,
+            async () => {
+              await exportTableToParquet({
+                connection: connection!,
+                tableName: 'blocks',
+                outputDir,
+                partitionStart: partStart,
+                partitionEnd: partEnd,
+                runId,
+              });
+
+              await exportTableToParquet({
+                connection: connection!,
+                tableName: 'transactions',
+                outputDir,
+                partitionStart: partStart,
+                partitionEnd: partEnd,
+                runId,
+                maxFileRows,
+              });
+
+              await exportTableToParquet({
+                connection: connection!,
+                tableName: 'tags',
+                outputDir,
+                partitionStart: partStart,
+                partitionEnd: partEnd,
+                runId,
+                maxFileRows,
+              });
+            },
+          );
+
+          // Step 4: Clear tables for next partition
+          await connection!.exec(
+            'DELETE FROM blocks; DELETE FROM transactions; DELETE FROM tags;',
+          );
+          tempDb!.exec(
+            'DELETE FROM blocks; DELETE FROM transactions; DELETE FROM tags;',
+          );
+        });
       }
 
       const totalEndTime = Date.now();
@@ -780,26 +700,33 @@ if (!isMainThread) {
       });
 
       parentPort?.postMessage({ eventName: EXPORT_COMPLETE });
-
-      await gracefulExit({
-        connection,
-        db,
-        duckDbPath,
-        statusCode: 0,
-      });
+      exitCode = 0;
     } catch (error: any) {
       parentPort?.postMessage({
         eventName: EXPORT_ERROR,
         error: error.message,
         stack: error.stack,
       });
-
-      await gracefulExit({
-        connection,
-        db,
-        duckDbPath,
-        statusCode: 1,
-      });
+    } finally {
+      try {
+        tempDb?.close();
+      } catch {
+        // ignore cleanup errors
+      }
+      try {
+        await connection?.close();
+      } catch {
+        // ignore cleanup errors
+      }
+      try {
+        await db?.close();
+      } catch {
+        // ignore cleanup errors
+      }
+      if (tempDir !== null) {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+      process.exit(exitCode);
     }
   };
 
