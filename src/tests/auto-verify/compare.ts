@@ -81,11 +81,13 @@ function compareItems<T extends { id: string; tags: CanonicalTag[] }>({
   fields,
   excludedFields = {},
   entityType,
+  itemContext,
 }: {
   sources: { name: string; items: T[] }[];
   fields: string[];
   excludedFields?: Record<string, Set<string>>;
   entityType: 'data_item' | 'transaction' | 'block';
+  itemContext?: (item: T) => string;
 }): Discrepancy[] {
   const discrepancies: Discrepancy[] = [];
   const ENTITY_LABELS: Record<string, string> = {
@@ -126,12 +128,20 @@ function compareItems<T extends { id: string; tags: CanonicalTag[] }>({
   for (const id of allIds) {
     for (const s of sourceData) {
       if (!s.itemsById.has(id)) {
+        // Look up item from a source that has it for context
+        let context = '';
+        if (itemContext) {
+          const presentSource = sourceData.find((src) => src.itemsById.has(id));
+          if (presentSource) {
+            context = ` (${itemContext(presentSource.itemsById.get(id)!)})`;
+          }
+        }
         discrepancies.push({
           type: 'missing_in_source',
           entityType,
           itemId: id,
           sources: { missing: s.name },
-          details: `${entityLabel} ${id} missing from ${s.name}`,
+          details: `${entityLabel} ${id} missing from ${s.name}${context}`,
         });
       }
     }
@@ -196,6 +206,7 @@ export function compareAllSources(
     fields: [...DATA_ITEM_COMMON_FIELDS, ...DATA_ITEM_EXTENDED_FIELDS],
     excludedFields: DATA_ITEM_SOURCE_EXCLUDED_FIELDS,
     entityType: 'data_item',
+    itemContext: (item) => `bundle ${item.parentId}`,
   });
 }
 
