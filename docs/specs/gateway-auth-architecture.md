@@ -9,203 +9,124 @@
 
 ## Executive Summary
 
-Build a minimal authentication proxy using **wallet-based auth** (same as Turbo platform), deployable in **2-3 weeks** for the initial customer.
+Build gateway authentication by **extending Turbo Payment Services** (for auth, API keys, billing) and adding a **thin proxy sidecar** (for fast validation and proxying) deployed alongside each gateway.
 
-### Key Insight
+### Architecture Decision: Extend Turbo + Thin Proxy
 
-**Use the same wallet auth that Turbo already uses.** This means:
-- No email/password to build
-- No OAuth (GitHub, Google) complexity
-- No password reset flows
-- No email verification
-- Crypto-native users already have wallets
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              EXISTING CODEBASES                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐         │
+│  │   ar.io Console │    │ Turbo Payment   │    │   ar-io-node    │         │
+│  │    (Frontend)   │    │    Services     │    │    (Gateway)    │         │
+│  │                 │    │     (AWS)       │    │                 │         │
+│  │  Hosted on      │    │                 │    │  Serves Arweave │         │
+│  │  Arweave        │    │  - Wallet auth  │    │  data           │         │
+│  │                 │    │  - Payments     │    │                 │         │
+│  │                 │    │  - Credits      │    │                 │         │
+│  └─────────────────┘    └─────────────────┘    └─────────────────┘         │
+│                                                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                              WHAT WE'RE ADDING                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────┐                           ┌─────────────────┐         │
+│  │ Turbo Payment   │                           │   Thin Proxy    │         │
+│  │   (EXTEND)      │◄─────── sync keys ───────►│   (NEW)         │         │
+│  │                 │                           │                 │         │
+│  │  + API key CRUD │                           │  - Validate key │         │
+│  │  + Key storage  │                           │  - Rate limit   │         │
+│  │  + Usage billing│◄─────── usage data ───────│  - Proxy req    │         │
+│  │  + Gateway quota│                           │  - Count bytes  │         │
+│  └─────────────────┘                           └─────────────────┘         │
+│        (AWS)                                    (with ar-io-node)          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
-### Reality Check
+### Why This Architecture?
 
-| Factor | Implication |
-|--------|-------------|
-| 1 potential customer | Don't over-engineer |
-| Turbo already has wallet auth | Reuse that pattern |
-| Crypto-native audience | They have wallets, use them |
-| No budget for paid services | $0 third-party auth costs |
+| Factor | Decision |
+|--------|----------|
+| **Turbo already has wallet auth** | Reuse ANS-104 verification, don't rebuild |
+| **Turbo already has user/wallet DB** | Single source of truth for identity |
+| **Turbo already has billing** | Unified credits for uploads + gateway |
+| **Turbo is in AWS** | API key management stays there, sync to edge |
+| **Gateway needs low latency** | Thin proxy deployed locally, caches keys |
+| **Console already talks to Turbo** | Add gateway section to existing UI |
 
-### What We Actually Need (Phase 1)
+### Component Responsibilities
 
-| Need | Solution |
-|------|----------|
-| User authentication | Wallet signature (Arweave/ETH/Solana) |
-| API request auth | API keys tied to wallet address |
-| Track usage | Count requests + bytes per key |
-| Enforce limits | Rate limiting + quota checks |
-| Dashboard | Integrate into existing ar.io console |
-
-### What We DON'T Need
-
-| Feature | Why Skip |
-|---------|----------|
-| Email/password | Wallet auth is simpler and already proven |
-| OAuth (GitHub, Google) | Adds complexity, users have wallets |
-| SAML/OIDC SSO | Enterprise feature, add later if needed |
-| Email verification | No emails = no verification needed |
-| Password reset | No passwords = no reset flow |
+| Component | Location | Responsibility |
+|-----------|----------|----------------|
+| **Turbo Payment Services** | AWS | Auth (ANS-104), API key CRUD, usage billing, quotas |
+| **Thin Proxy** | With each gateway | Key validation (cached), rate limiting, proxying, byte counting |
+| **ar.io Console** | Arweave | Dashboard UI - talks to Turbo for everything |
+| **ar-io-node** | Customer infra | Gateway - unchanged, receives proxied requests |
 
 ---
 
-## Recommended Approach: Wallet Auth + API Keys
+## Part 1: Turbo Payment Services Extensions
 
-### Why Wallet Auth?
-
-| Reason | Benefit |
-|--------|---------|
-| **Already built for Turbo** | Reuse existing auth patterns/code |
-| **Crypto-native audience** | Users already have wallets |
-| **No passwords to manage** | No hashing, no reset flows, no breaches |
-| **No email infrastructure** | No verification, no transactional emails needed |
-| **Multi-chain support** | Arweave, Ethereum, Solana - same pattern |
-| **Decentralized identity** | Aligns with Arweave/permaweb ethos |
-
-### Why Not The Others?
-
-| Approach | Verdict | Reason |
-|----------|---------|--------|
-| **Email/Password** | ❌ Skip | More complexity, Turbo doesn't use it |
-| **OAuth (GitHub/Google)** | ❌ Skip | Users have wallets, unnecessary |
-| **Auth0/WorkOS** | ❌ Reject | Expensive, overkill |
-| **Keycloak/Ory** | ❌ Reject | Way overkill for wallet auth |
-
-### Core Principle
-
-**Use what Turbo already does. Don't reinvent auth.**
-
----
-
-## Phase 1 Architecture (MVP - 2-3 weeks)
-
-### System Diagram
+### What to Add to Turbo
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        User with Wallet                          │
-│            (ArConnect, MetaMask, Phantom, etc.)                 │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                    Signs challenge message
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Gateway Auth Service (GAS)                    │
-│                         Node.js / Fastify                        │
-│                                                                  │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │                    Authentication Flow                      │ │
-│  │                                                             │ │
-│  │  1. GET /auth/challenge?wallet=<address>                    │ │
-│  │     → Returns: { challenge: "Sign this: <nonce>:<ts>" }     │ │
-│  │                                                             │ │
-│  │  2. POST /auth/verify                                       │ │
-│  │     → Body: { wallet, signature, challenge }                │ │
-│  │     → Verify signature matches wallet                       │ │
-│  │     → Returns: { token: <JWT>, expires_at }                 │ │
-│  │                                                             │ │
-│  │  3. Use JWT for dashboard, API key for programmatic access  │ │
-│  │                                                             │ │
-│  └────────────────────────────────────────────────────────────┘ │
-│                                                                  │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │                    API Request Flow                         │ │
-│  │                                                             │ │
-│  │  1. Extract API key from X-API-Key header                   │ │
-│  │  2. Validate key (Redis cache → PostgreSQL)                 │ │
-│  │  3. Check rate limit (Redis sliding window)                 │ │
-│  │  4. Check quota (Redis counter)                             │ │
-│  │  5. Proxy request to gateway                                │ │
-│  │  6. Stream response, count bytes                            │ │
-│  │  7. Update usage counters (async)                           │ │
-│  │                                                             │ │
-│  └────────────────────────────────────────────────────────────┘ │
-│                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │  PostgreSQL  │  │    Redis     │  │   Fastify    │          │
-│  │              │  │              │  │   Routes     │          │
-│  │  - wallets   │  │  - sessions  │  │              │          │
-│  │  - api_keys  │  │  - rate lim  │  │  /auth/*     │          │
-│  │  - usage     │  │  - counters  │  │  /keys/*     │          │
-│  │  - orgs      │  │  - nonces    │  │  /usage/*    │          │
-│  └──────────────┘  └──────────────┘  │  /v1/*       │          │
-│                                       └──────────────┘          │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      AR.IO Gateway                               │
-│                  (existing ar-io-node)                          │
-└─────────────────────────────────────────────────────────────────┘
+turbo-payment-services/
+├── existing/
+│   ├── wallet-auth/          # ANS-104 signature verification
+│   ├── users/                # User/wallet database
+│   ├── payments/             # Credit purchases
+│   └── balances/             # Credit balances
+│
+└── NEW: gateway/
+    ├── api-keys/             # CRUD for gateway API keys
+    │   ├── create            # Generate key, store hash
+    │   ├── list              # List user's keys
+    │   ├── revoke            # Disable key
+    │   └── rotate            # Create new, revoke old
+    │
+    ├── key-restrictions/     # Security settings
+    │   ├── allowed-origins   # For browser keys
+    │   └── allowed-ips       # For server keys
+    │
+    ├── usage/                # Usage tracking
+    │   ├── ingest            # Receive usage from proxies
+    │   ├── aggregate         # Daily/monthly rollups
+    │   └── query             # Usage API for console
+    │
+    └── sync/                 # Key sync for proxies
+        └── keys              # Endpoint for proxy to fetch keys
 ```
 
-### Wallet Auth Flow (Detailed)
+### New API Endpoints (in Turbo)
 
 ```
-┌──────────┐          ┌──────────┐          ┌──────────┐
-│  Wallet  │          │   GAS    │          │   DB     │
-│ (client) │          │  Server  │          │          │
-└────┬─────┘          └────┬─────┘          └────┬─────┘
-     │                     │                     │
-     │ GET /auth/challenge │                     │
-     │ ?wallet=<addr>      │                     │
-     │────────────────────>│                     │
-     │                     │                     │
-     │                     │ Store nonce        │
-     │                     │────────────────────>│
-     │                     │                     │
-     │   { challenge }     │                     │
-     │<────────────────────│                     │
-     │                     │                     │
-     │  [User signs msg]   │                     │
-     │                     │                     │
-     │ POST /auth/verify   │                     │
-     │ {wallet, sig, msg}  │                     │
-     │────────────────────>│                     │
-     │                     │                     │
-     │                     │ Verify nonce valid │
-     │                     │────────────────────>│
-     │                     │                     │
-     │                     │ Verify signature    │
-     │                     │ (crypto library)    │
-     │                     │                     │
-     │                     │ Create/get user     │
-     │                     │────────────────────>│
-     │                     │                     │
-     │                     │ Issue JWT           │
-     │                     │                     │
-     │   { token, user }   │                     │
-     │<────────────────────│                     │
-     │                     │                     │
+# API Keys (authenticated via existing Turbo auth)
+GET    /v1/gateway/keys                # List my keys
+POST   /v1/gateway/keys                # Create key
+DELETE /v1/gateway/keys/:id            # Revoke key
+
+# Key restrictions
+GET    /v1/gateway/keys/:id/origins    # List origins
+POST   /v1/gateway/keys/:id/origins    # Add origin
+DELETE /v1/gateway/keys/:id/origins/:oid
+
+GET    /v1/gateway/keys/:id/ips        # List IPs
+POST   /v1/gateway/keys/:id/ips        # Add IP
+DELETE /v1/gateway/keys/:id/ips/:iid
+
+# Usage (for console dashboard)
+GET    /v1/gateway/usage               # Current period
+GET    /v1/gateway/usage/history       # Daily breakdown
+
+# For thin proxy (internal/authenticated)
+GET    /internal/gateway/keys/sync     # Get all active keys for caching
+POST   /internal/gateway/usage/ingest  # Batch usage data from proxy
 ```
 
-### Tech Stack (Minimal)
-
-| Component | Technology | Why |
-|-----------|------------|-----|
-| **Runtime** | Node.js 20 | Same as ar-io-node, team knows it |
-| **Framework** | Fastify | Fast, TypeScript, minimal overhead |
-| **Database** | PostgreSQL | Already have it, self-hosted |
-| **Cache** | Redis | Already have it, self-hosted |
-| **ORM** | Prisma | Type-safe, good migrations |
-| **JWT** | jose | Session tokens after wallet auth |
-| **Proxy** | undici | Fast HTTP client, streams well |
-| **Validation** | zod | Type-safe request validation |
-
-### Wallet Signature Verification Libraries
-
-| Chain | Library | Notes |
-|-------|---------|-------|
-| **Arweave** | `arweave` | Use existing Turbo verification code |
-| **Ethereum** | `ethers` or `viem` | SIWE-style message verification |
-| **Solana** | `@solana/web3.js` | Ed25519 signature verification |
-
-**Note**: Check what Turbo uses and mirror that exactly.
-
-### Database Schema (Minimal)
+### New Database Tables (in Turbo's DB)
 
 ```sql
 -- Wallets (users identified by wallet address)
@@ -361,7 +282,241 @@ CREATE INDEX idx_api_key_allowed_ips ON api_key_allowed_ips(api_key_id);
 CREATE INDEX idx_usage_daily_org_date ON usage_daily(org_id, date);
 ```
 
-### API Endpoints (Minimal)
+---
+
+## Part 2: Thin Proxy (New Codebase)
+
+The thin proxy is a **small, focused service** deployed alongside each ar-io-node gateway. It's the only new codebase needed.
+
+### What It Does (and Doesn't Do)
+
+| Does | Doesn't Do |
+|------|------------|
+| Validate API keys (cached) | Store API keys (Turbo does) |
+| Check rate limits | Manage users (Turbo does) |
+| Check origin/IP restrictions | Handle auth (Turbo does) |
+| Proxy requests to gateway | Aggregate billing (Turbo does) |
+| Count bytes transferred | |
+| Report usage to Turbo (async) | |
+
+### System Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Developer's App                                    │
+│                                                                              │
+│    fetch('https://gateway.example.com/v1/raw/TX_ID', {                      │
+│      headers: { 'X-API-Key': 'ario_prod_xxxx' }                             │
+│    })                                                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            Thin Proxy                                        │
+│                        (Node.js / ~500 lines)                                │
+│                                                                              │
+│   1. Extract X-API-Key header                                               │
+│   2. Check Redis cache for key data                                         │
+│      └─> Cache miss? Fetch from Turbo, cache for 5 min                      │
+│   3. Validate: origin, IP, scopes, expiration                               │
+│   4. Check rate limit (Redis sliding window)                                │
+│   5. Proxy request to ar-io-node                                            │
+│   6. Stream response, count bytes                                           │
+│   7. Record usage in Redis (async)                                          │
+│   8. Batch send usage to Turbo every 60 seconds                             │
+│                                                                              │
+│   ┌──────────────┐                                                          │
+│   │    Redis     │  - API key cache (from Turbo)                            │
+│   │   (local)    │  - Rate limit counters                                   │
+│   │              │  - Usage counters (pending sync)                         │
+│   └──────────────┘                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           ar-io-node                                         │
+│                      http://localhost:3000                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Thin Proxy Code Structure
+
+```
+gateway-proxy/                    # New repo, small and focused
+├── src/
+│   ├── index.ts                 # Fastify server entry
+│   ├── proxy.ts                 # Proxy handler (~100 lines)
+│   ├── auth.ts                  # Key validation (~50 lines)
+│   ├── rate-limit.ts            # Redis rate limiting (~50 lines)
+│   ├── usage.ts                 # Usage tracking + Turbo sync (~100 lines)
+│   └── config.ts                # Environment config
+├── Dockerfile
+├── docker-compose.yml           # Proxy + Redis
+├── package.json
+└── README.md
+```
+
+### Thin Proxy Pseudocode
+
+```typescript
+// ~200 lines total for the core logic
+
+import Fastify from 'fastify';
+import { createClient } from 'redis';
+import { request } from 'undici';
+
+const redis = createClient({ url: process.env.REDIS_URL });
+const TURBO_URL = process.env.TURBO_URL;
+const GATEWAY_URL = process.env.GATEWAY_URL || 'http://localhost:3000';
+const KEY_CACHE_TTL = 300; // 5 minutes
+
+// Main proxy handler
+async function proxyHandler(req, res) {
+  const startTime = Date.now();
+
+  // 1. Get API key
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey) {
+    return res.status(401).send({ error: 'Missing API key' });
+  }
+
+  // 2. Validate key (cache first, then Turbo)
+  const keyData = await getKeyData(apiKey);
+  if (!keyData || !keyData.active) {
+    return res.status(401).send({ error: 'Invalid API key' });
+  }
+
+  // 3. Security checks
+  if (!checkOrigin(req, keyData)) {
+    return res.status(403).send({ error: 'Origin not allowed' });
+  }
+  if (!checkIP(req, keyData)) {
+    return res.status(403).send({ error: 'IP not allowed' });
+  }
+  if (!checkScope(req.url, keyData)) {
+    return res.status(403).send({ error: 'Route not allowed' });
+  }
+
+  // 4. Rate limit
+  const rateLimitOk = await checkRateLimit(keyData.orgId);
+  if (!rateLimitOk) {
+    return res.status(429).send({ error: 'Rate limit exceeded' });
+  }
+
+  // 5. Proxy to gateway
+  const targetUrl = GATEWAY_URL + req.url.replace(/^\/v1/, '');
+  const response = await request(targetUrl, {
+    method: req.method,
+    headers: { ...req.headers, host: undefined },
+    body: req.body,
+  });
+
+  // 6. Stream response, count bytes
+  let bytes = 0;
+  res.status(response.statusCode);
+  for await (const chunk of response.body) {
+    bytes += chunk.length;
+    res.raw.write(chunk);
+  }
+  res.raw.end();
+
+  // 7. Record usage (async, don't block)
+  recordUsage(keyData.orgId, keyData.keyId, bytes, Date.now() - startTime);
+}
+
+// Key validation with caching
+async function getKeyData(apiKey: string) {
+  const prefix = apiKey.slice(0, 16);
+  const cacheKey = `key:${prefix}`;
+
+  // Check cache
+  let keyData = await redis.get(cacheKey);
+  if (keyData) return JSON.parse(keyData);
+
+  // Fetch from Turbo
+  const response = await request(`${TURBO_URL}/internal/gateway/keys/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: apiKey }),
+  });
+
+  if (response.statusCode !== 200) return null;
+
+  keyData = await response.body.json();
+  await redis.setEx(cacheKey, KEY_CACHE_TTL, JSON.stringify(keyData));
+  return keyData;
+}
+
+// Usage batching - send to Turbo every 60 seconds
+setInterval(async () => {
+  const pending = await redis.hGetAll('usage:pending');
+  if (Object.keys(pending).length === 0) return;
+
+  await request(`${TURBO_URL}/internal/gateway/usage/ingest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ usage: pending }),
+  });
+
+  await redis.del('usage:pending');
+}, 60_000);
+```
+
+### Thin Proxy Environment Variables
+
+```bash
+# Required
+GATEWAY_URL=http://localhost:3000    # ar-io-node
+TURBO_URL=https://payment.ardrive.io # Turbo payment services
+REDIS_URL=redis://localhost:6379
+TURBO_INTERNAL_KEY=<secret>          # For internal API auth
+
+# Optional
+PORT=4000
+KEY_CACHE_TTL=300                    # 5 minutes
+USAGE_SYNC_INTERVAL=60000            # 1 minute
+RATE_LIMIT_WINDOW=1000               # 1 second
+```
+
+### Deployment
+
+```yaml
+# docker-compose.yml (runs alongside ar-io-node)
+version: '3.8'
+services:
+  proxy:
+    image: ghcr.io/ar-io/gateway-proxy:latest
+    ports:
+      - "4000:4000"
+    environment:
+      - GATEWAY_URL=http://gateway:3000
+      - TURBO_URL=https://payment.ardrive.io
+      - REDIS_URL=redis://redis:6379
+      - TURBO_INTERNAL_KEY=${TURBO_INTERNAL_KEY}
+    depends_on:
+      - redis
+      - gateway
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+
+  gateway:
+    image: ghcr.io/ar-io/ar-io-node:latest
+    # ... existing ar-io-node config
+
+volumes:
+  redis_data:
+```
+
+---
+
+## Part 3: Console Integration
+
+The ar.io console talks to **Turbo** (not the proxy) for all management operations.
+
+### API Endpoints (All in Turbo)
 
 ```
 # Wallet Authentication
@@ -673,72 +828,82 @@ JWT_EXPIRY=604800                  # 7 days
 
 ## What To Build (Ordered)
 
-### Week 1: Wallet Auth + Core Proxy
+Two parallel workstreams - can be done by different developers:
 
-- [ ] Project setup (Fastify, TypeScript, Prisma)
-- [ ] Database schema + migrations (all tables)
-- [ ] Wallet auth endpoints (challenge/verify)
-- [ ] **Copy signature verification from Turbo** (Arweave, ETH, Solana)
-- [ ] JWT issuance after successful auth
-- [ ] Auto-create personal org + first API key on signup
-- [ ] API key creation (server and browser types)
-- [ ] Route scopes on API keys
-- [ ] **Origin validation for browser keys** (security)
-- [ ] **IP validation for server keys** (security)
-- [ ] Proxy handler with full validation
-- [ ] CORS headers for browser requests
-- [ ] Basic rate limiting (Redis)
+### Workstream A: Turbo Extensions (AWS)
 
-**Milestone**: User can authenticate with wallet, get auto-generated first key, make proxied requests
+#### Week 1: API Key Management
 
-### Week 2: Usage Tracking + Developer Experience
+- [ ] Database migrations (api_keys, origins, ips tables)
+- [ ] API key CRUD endpoints (`/v1/gateway/keys/*`)
+- [ ] Key generation with argon2 hashing
+- [ ] Origin/IP restriction endpoints
+- [ ] Route scopes on keys
+- [ ] Auto-create first key on new user (if no gateway keys exist)
 
-- [ ] Request counting (Redis)
+**Milestone**: Users can create/manage API keys via Turbo API
+
+#### Week 2: Usage & Sync
+
+- [ ] Internal key sync endpoint (`/internal/gateway/keys/sync`)
+- [ ] Internal key validation endpoint (`/internal/gateway/keys/validate`)
+- [ ] Usage ingestion endpoint (`/internal/gateway/usage/ingest`)
+- [ ] Usage aggregation (daily rollups)
+- [ ] Usage query endpoints for console (`/v1/gateway/usage/*`)
+- [ ] Request logs storage + query
+
+**Milestone**: Proxy can sync keys and report usage
+
+### Workstream B: Thin Proxy (New Repo)
+
+#### Week 1: Core Proxy
+
+- [ ] Project setup (Fastify, TypeScript, minimal deps)
+- [ ] Key validation with Redis caching
+- [ ] Fetch keys from Turbo on cache miss
+- [ ] Origin validation for browser keys
+- [ ] IP validation for server keys
+- [ ] Scope validation
+- [ ] Rate limiting (Redis sliding window)
+- [ ] Proxy handler with streaming
+
+**Milestone**: Proxy validates keys and proxies to gateway
+
+#### Week 2: Usage & Polish
+
 - [ ] Byte counting on responses
-- [ ] Usage persistence to PostgreSQL (async)
-- [ ] **Request logging** (recent requests for debugging)
-- [ ] Quota checking (soft limits)
-- [ ] API key CRUD endpoints (with origins/IPs management)
-- [ ] Usage API endpoints
-- [ ] **Recent requests API** (GET /requests)
-- [ ] Daily aggregation job (cron)
-- [ ] Request log cleanup job (7-day retention)
-
-**Milestone**: Full usage tracking, request logs for debugging, usage visible via API
-
-### Week 3: Polish & Deploy
-
-- [ ] Error handling polish
-- [ ] OpenAPI spec generation
+- [ ] Usage recording to Redis
+- [ ] Batch usage sync to Turbo (every 60s)
 - [ ] Docker compose setup
-- [ ] Health check endpoints
-- [ ] Prometheus metrics endpoint
-- [ ] Deploy to staging
+- [ ] Health check endpoint
+- [ ] Prometheus metrics
+- [ ] Error handling polish
+
+**Milestone**: Full usage tracking, ready for deployment
+
+### Week 3: Integration & Testing
+
+- [ ] Deploy proxy alongside test gateway
+- [ ] End-to-end testing (console → Turbo → proxy → gateway)
+- [ ] Console UI updates for gateway section
+- [ ] Documentation
 - [ ] Test with initial customer
 
 **Milestone**: Ready for customer pilot
 
-### Optional Week 4: Console Integration
-
-- [ ] CORS setup for ar.io console
-- [ ] API endpoints for console dashboard
-- [ ] Any console-specific adjustments
-
-**Milestone**: Integrated into ar.io console UI
-
 ---
 
-## What NOT To Build (Yet)
+## What NOT To Build
 
-| Feature | Why Skip | When to Add |
-|---------|----------|-------------|
-| Email/password auth | Wallet auth is simpler | Probably never |
-| OAuth (GitHub, Google) | Users have wallets | If users request it |
-| SAML/OIDC SSO | Enterprise feature | When enterprise customer requires it |
-| Multi-org / teams | Single customer = single org | When customer needs teams |
-| Webhooks | Nice to have | When customer needs notifications |
-| SDKs | Curl is fine initially | After API is stable |
-| Email notifications | No email in system | If we add email auth |
+| Feature | Why | When to Add |
+|---------|-----|-------------|
+| Separate auth system | Turbo already has ANS-104 auth | Never |
+| Separate user database | Turbo already has users | Never |
+| Separate billing | Turbo credits work | Never |
+| Email/password auth | Wallet auth works | If customers demand |
+| SAML/OIDC SSO | Enterprise feature | When enterprise requires |
+| Webhooks | Nice to have | When customer needs |
+| SDKs | Curl works | After API stable |
 
 ---
 
@@ -1172,51 +1337,58 @@ CORS_CREDENTIALS=true
 
 ## Summary
 
-**Build wallet-authenticated proxy using same auth as Turbo:**
+**Extend Turbo + Add Thin Proxy:**
 
-1. **Wallet auth** (Arweave/ETH/Solana) - reuse Turbo's verification code
-2. **API keys** for programmatic access (tied to wallet)
-3. **Redis** for rate limiting and counters
-4. **PostgreSQL** for wallets, keys, and usage
-5. **Fastify** for fast, simple Node.js server
-6. **Proxy** requests to existing ar-io-node
+| Component | What | Where |
+|-----------|------|-------|
+| **Turbo Payment Services** | Add API key management, usage tracking | Extend existing (AWS) |
+| **Thin Proxy** | Key validation, rate limiting, proxying | New small repo (~500 lines) |
+| **ar.io Console** | Add gateway dashboard section | Extend existing |
+| **ar-io-node** | Unchanged | Existing |
 
-**Timeline**: 3 weeks to customer pilot
+**Timeline**: 3 weeks to customer pilot (2 parallel workstreams)
 
-**Cost**: $0 additional (using existing infrastructure, no email service needed)
+**New Code**: ~500 lines for thin proxy + Turbo extensions
 
-**Risk**: Very low - wallet auth already proven in Turbo
+**Cost**: $0 additional (extends existing infrastructure)
+
+**Risk**: Very low - Turbo auth already proven, proxy is simple
 
 ---
 
 ## Key Developer Instructions
 
-1. **Start with Turbo's wallet verification code** - don't reinvent it
-2. **Support all three chains** (Arweave, Ethereum, Solana) from day 1
-3. **Challenge-response pattern** prevents replay attacks
-4. **JWTs for dashboard sessions**, API keys for programmatic access
-5. **Keep it simple** - we can add complexity later if needed
+### For Turbo Team
 
-### First Thing To Do
+1. Add gateway API key tables to existing database
+2. Add `/v1/gateway/keys/*` endpoints (CRUD for API keys)
+3. Add `/internal/gateway/*` endpoints (for proxy to sync keys + report usage)
+4. Reuse existing ANS-104 auth - users are already authenticated
+5. Add gateway section to billing (Turbo credits for gateway access)
 
-Ask the Turbo team: "Can I get the wallet signature verification code you use for auth?"
+### For Proxy Developer
 
-That's the core of this system. Everything else is straightforward CRUD + proxying.
+1. Keep it minimal - ~500 lines of code total
+2. Cache API keys in Redis (fetch from Turbo on miss)
+3. Validate: origin, IP, scopes, rate limit
+4. Proxy to ar-io-node, count bytes
+5. Batch usage to Turbo every 60 seconds
 
 ### Turbo's Auth Pattern (ANS-104 Data Items)
 
-**Important**: Turbo uses ANS-104 data item signatures for authentication, NOT a simple challenge-response. ANS-104 is the standard for bundled data on Arweave.
+**Important**: Turbo uses ANS-104 data item signatures for authentication. Users authenticate to Turbo via signed data items, then use API keys for gateway access.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                     How Turbo Auth Works                                 │
+│                     How It All Fits Together                             │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
-│  1. User creates an ANS-104 data item (signed with their wallet)        │
-│  2. Data item contains auth request info (nonce, timestamp, etc.)       │
-│  3. User sends signed data item to Turbo                                │
-│  4. Turbo verifies the data item signature matches the wallet address   │
-│  5. If valid, user is authenticated                                     │
+│  1. User authenticates to Turbo (ANS-104 signed data item)              │
+│  2. User creates gateway API key via Turbo API                          │
+│  3. User puts API key in their app                                      │
+│  4. App calls gateway through thin proxy with X-API-Key header          │
+│  5. Proxy validates key (cached from Turbo), proxies to ar-io-node      │
+│  6. Proxy reports usage to Turbo for billing                            │
 │                                                                          │
 │  Key insight: The signature IS the authentication                        │
 │  - No separate "sign this challenge" step                               │
