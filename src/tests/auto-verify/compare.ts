@@ -186,7 +186,7 @@ export function compareAllTransactions(
 ): Discrepancy[] {
   return compareItems({
     sources,
-    fields: TRANSACTION_FIELDS as string[],
+    fields: [...TRANSACTION_FIELDS],
     entityType: 'transaction',
   });
 }

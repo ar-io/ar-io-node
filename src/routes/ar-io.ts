@@ -552,9 +552,8 @@ arIoRouter.post(
         endHeight,
         maxFileRows,
         heightPartitionSize,
-        skipL1Transactions:
-          skipL1Transactions === undefined ? true : skipL1Transactions,
-        skipL1Tags: skipL1Tags === undefined ? true : skipL1Tags,
+        skipL1Transactions,
+        skipL1Tags,
       });
 
       res.json({ message: 'Parquet export started' });

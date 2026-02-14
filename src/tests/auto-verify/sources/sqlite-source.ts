@@ -14,6 +14,14 @@ import {
   SourceAdapter,
 } from '../types.js';
 
+function mapTagRows(tagRows: any[]): CanonicalTag[] {
+  return tagRows.map((t) => ({
+    name: Buffer.from(t.tag_name).toString('utf8'),
+    value: Buffer.from(t.tag_value).toString('utf8'),
+    index: t.tag_index,
+  }));
+}
+
 export class SqliteSource implements SourceAdapter {
   name = 'sqlite';
   private bundlesDbPath: string;
@@ -75,13 +83,7 @@ export class SqliteSource implements SourceAdapter {
       );
 
       return rows.map((row) => {
-        const tagRows = tagStmt.all(row.id) as any[];
-
-        const tags: CanonicalTag[] = tagRows.map((t) => ({
-          name: Buffer.from(t.tag_name).toString('utf8'),
-          value: Buffer.from(t.tag_value).toString('utf8'),
-          index: t.tag_index,
-        }));
+        const tags = mapTagRows(tagStmt.all(row.id) as any[]);
 
         return {
           id: toB64Url(row.id),
@@ -156,13 +158,7 @@ export class SqliteSource implements SourceAdapter {
       );
 
       return rows.map((row) => {
-        const tagRows = tagStmt.all(row.id) as any[];
-
-        const tags: CanonicalTag[] = tagRows.map((t) => ({
-          name: Buffer.from(t.tag_name).toString('utf8'),
-          value: Buffer.from(t.tag_value).toString('utf8'),
-          index: t.tag_index,
-        }));
+        const tags = mapTagRows(tagStmt.all(row.id) as any[]);
 
         return {
           id: toB64Url(row.id),

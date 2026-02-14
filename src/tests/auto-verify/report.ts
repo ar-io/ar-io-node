@@ -71,6 +71,7 @@ export function writeFinalSummary(
       iteration: i,
       blockRange: r.blockRange,
       totalDataItems: r.totalDataItems,
+      totalTransactions: r.totalTransactions,
       discrepancyCount: r.discrepancies.length,
       passed: r.discrepancies.length === 0,
       durationMs: r.durationMs,

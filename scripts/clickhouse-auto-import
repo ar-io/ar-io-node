@@ -90,7 +90,7 @@ while true; do
         batch_start_time=$(date +%s)
         echo "-------------------------------------------"
         echo "Starting batch at $(date)"
-        end_height=$((current_height + height_interval))
+        end_height=$((current_height + height_interval - 1))
 
         echo "Processing heights $current_height to $end_height..."
 
@@ -132,7 +132,7 @@ while true; do
             import_start_time=$(date +%s)
             
             # Generate partition name matching the height range format
-            partition_name="height=${current_height}-$((end_height - 1))"
+            partition_name="height=${current_height}-${end_height}"
             
             import_args=(--input-dir "$job_staging_dir" --partition "$partition_name")
             [ -n "${CLICKHOUSE_HOST:-}" ]     && import_args+=(--clickhouse-host "$CLICKHOUSE_HOST")
@@ -154,9 +154,9 @@ while true; do
                 move_start_time=$(date +%s)
                 
                 for table in blocks transactions tags; do
-                    if [ -d "$job_staging_dir/$table" ]; then
+                    if [ -d "$job_staging_dir/$table/data" ]; then
                         mkdir -p "$dataset_dir/$table/data"
-                        mv "$job_staging_dir/$table"/* "$dataset_dir/$table/data/" 2>/dev/null || true
+                        mv "$job_staging_dir/$table/data"/* "$dataset_dir/$table/data/" 2>/dev/null || true
                     fi
                 done
                 
@@ -248,7 +248,7 @@ while true; do
         log_timing "Batch processing (heights $current_height to $end_height)" "$batch_start_time" "$batch_end_time"
 
         # Bump current_height
-        current_height=$end_height
+        current_height=$((end_height + 1))
     done
 
     # Log timing for the heights processing
