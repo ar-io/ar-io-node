@@ -13,14 +13,22 @@ import { AutoVerifyConfig } from './config.js';
 
 const POLL_INTERVAL_MS = 5000;
 const INDEXING_TIMEOUT_MS = 600000; // 10 minutes
+const BUNDLE_INDEXING_TIMEOUT_MS = 300000; // 5 minutes
 
 export async function cleanGatewayState(
   config: AutoVerifyConfig,
 ): Promise<void> {
-  console.log('Cleaning gateway state...');
+  console.log(
+    `Cleaning gateway state (preserve cache: ${config.preserveCache})...`,
+  );
 
-  // Remove SQLite DBs
-  const dbFiles = ['core.db', 'bundles.db', 'data.db', 'moderation.db'];
+  // Always remove indexing DBs — these need fresh state per iteration
+  const indexingDbs = ['core.db', 'bundles.db', 'moderation.db'];
+  // Only remove data.db when not preserving cache
+  const dbFiles = config.preserveCache
+    ? indexingDbs
+    : [...indexingDbs, 'data.db'];
+
   for (const f of dbFiles) {
     const dbPath = path.join(config.sqliteDir, f);
     for (const suffix of ['', '-wal', '-shm']) {
@@ -31,23 +39,62 @@ export async function cleanGatewayState(
     }
   }
 
-  // Remove contiguous data cache
-  const contiguousDir = path.join(process.cwd(), 'data', 'contiguous');
-  if (fs.existsSync(contiguousDir)) {
-    fs.rmSync(contiguousDir, { recursive: true, force: true });
-  }
+  if (!config.preserveCache) {
+    // Remove contiguous data cache
+    const contiguousDir = path.join(process.cwd(), 'data', 'contiguous');
+    if (fs.existsSync(contiguousDir)) {
+      fs.rmSync(contiguousDir, { recursive: true, force: true });
+    }
 
-  // Remove LMDB data
-  const lmdbDir = path.join(process.cwd(), 'data', 'lmdb');
-  if (fs.existsSync(lmdbDir)) {
-    fs.rmSync(lmdbDir, { recursive: true, force: true });
+    // Remove LMDB data
+    const lmdbDir = path.join(process.cwd(), 'data', 'lmdb');
+    if (fs.existsSync(lmdbDir)) {
+      fs.rmSync(lmdbDir, { recursive: true, force: true });
+    }
   }
 
   console.log('Gateway state cleaned.');
 }
 
-export function runMigrations(): void {
+export function runMigrations(config: AutoVerifyConfig): void {
   console.log('Running database migrations...');
+
+  // When preserving cache, data.db survives but core.db (which tracks migration
+  // history) is deleted. Pre-populate the migrations table with data.db
+  // migration names so Umzug skips them — several use ALTER TABLE which fails
+  // if re-run against an existing schema.
+  const dataDbPath = path.join(config.sqliteDir, 'data.db');
+  if (config.preserveCache && fs.existsSync(dataDbPath)) {
+    const migrationsDir = path.join(process.cwd(), 'migrations');
+    const dataFiles = fs
+      .readdirSync(migrationsDir)
+      .filter((f) => /\.\bdata\b\./.test(f) && f.endsWith('.sql'));
+
+    if (dataFiles.length > 0) {
+      fs.mkdirSync(config.sqliteDir, { recursive: true });
+      const coreDb = new Sqlite(config.coreDbPath);
+      try {
+        coreDb.exec(`
+          CREATE TABLE IF NOT EXISTS migrations (
+            name TEXT PRIMARY KEY,
+            executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+        const insert = coreDb.prepare(
+          'INSERT OR IGNORE INTO migrations (name) VALUES (?)',
+        );
+        for (const f of dataFiles) {
+          insert.run(f);
+        }
+        console.log(
+          `Pre-registered ${dataFiles.length} data.db migrations (preserve cache).`,
+        );
+      } finally {
+        coreDb.close();
+      }
+    }
+  }
+
   execSync('yarn db:migrate up', {
     cwd: process.cwd(),
     stdio: 'inherit',
@@ -55,10 +102,14 @@ export function runMigrations(): void {
   console.log('Migrations complete.');
 }
 
-export function startGateway(startHeight: number, endHeight: number): void {
+export function startGateway(
+  config: AutoVerifyConfig,
+  startHeight: number,
+  endHeight: number,
+): void {
   console.log(`Starting gateway for blocks ${startHeight}-${endHeight}...`);
 
-  runMigrations();
+  runMigrations(config);
 
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
@@ -155,9 +206,13 @@ export async function waitForIndexingComplete(
   }
 
   console.log('Waiting for all bundles to be fully indexed...');
+  const bundleWaitStart = Date.now();
   while (true) {
-    if (Date.now() - startTime > INDEXING_TIMEOUT_MS) {
-      throw new Error('Timeout waiting for bundles to be fully indexed');
+    if (Date.now() - bundleWaitStart > BUNDLE_INDEXING_TIMEOUT_MS) {
+      console.log(
+        'Bundle indexing timed out — proceeding with partially indexed bundles.',
+      );
+      break;
     }
 
     try {

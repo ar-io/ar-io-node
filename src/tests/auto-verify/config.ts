@@ -11,6 +11,7 @@ export interface AutoVerifyConfig {
   gatewayPort: number;
   resultsDir: string;
   failFast: boolean;
+  preserveCache: boolean;
   coreDbPath: string;
   bundlesDbPath: string;
   sqliteDir: string;
@@ -27,6 +28,7 @@ export function loadConfig(): AutoVerifyConfig {
     resultsDir:
       process.env.AUTO_VERIFY_RESULTS_DIR ?? `${cwd}/data/test-auto-verify`,
     failFast: process.env.AUTO_VERIFY_FAIL_FAST === 'true',
+    preserveCache: process.env.AUTO_VERIFY_PRESERVE_CACHE !== 'false',
     coreDbPath: `${cwd}/data/sqlite/core.db`,
     bundlesDbPath: `${cwd}/data/sqlite/bundles.db`,
     sqliteDir: `${cwd}/data/sqlite`,

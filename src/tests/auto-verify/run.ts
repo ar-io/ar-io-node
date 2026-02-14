@@ -66,7 +66,7 @@ async function main() {
       await cleanGatewayState(config);
 
       // 2. Start gateway with range config
-      startGateway(range.start, range.end);
+      startGateway(config, range.start, range.end);
 
       // 3. Wait for indexing completion
       await waitForIndexingComplete(config, range.end);
