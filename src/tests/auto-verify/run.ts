@@ -9,7 +9,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import { loadConfig } from './config.js';
-import { compareAllSources, compareAllTransactions } from './compare.js';
+import {
+  compareAllBlocks,
+  compareAllSources,
+  compareAllTransactions,
+} from './compare.js';
 import {
   cleanGatewayState,
   exportParquet,
@@ -93,12 +97,16 @@ async function main() {
       );
 
       const [
+        sqliteBlocks,
+        parquetBlocks,
         sqliteItems,
         parquetItems,
         bundleParserItems,
         sqliteTxs,
         parquetTxs,
       ] = await Promise.all([
+        sqliteSource.getBlocks(range.start, range.end),
+        parquetSource.getBlocks(range.start, range.end),
         sqliteSource.getDataItems(range.start, range.end),
         parquetSource.getDataItems(range.start, range.end),
         bundleParserSource.getDataItems(range.start, range.end),
@@ -107,6 +115,9 @@ async function main() {
       ]);
 
       console.log(
+        `  Blocks - SQLite: ${sqliteBlocks.length}, Parquet: ${parquetBlocks.length}`,
+      );
+      console.log(
         `  Data items - SQLite: ${sqliteItems.length}, Parquet: ${parquetItems.length}, BundleParser: ${bundleParserItems.length}`,
       );
       console.log(
@@ -114,6 +125,11 @@ async function main() {
       );
 
       // 7. Run comparison
+      const blockDiscrepancies = compareAllBlocks([
+        { name: 'sqlite', items: sqliteBlocks },
+        { name: 'parquet', items: parquetBlocks },
+      ]);
+
       const dataItemDiscrepancies = compareAllSources([
         { name: 'sqlite', items: sqliteItems },
         { name: 'parquet', items: parquetItems },
@@ -126,9 +142,12 @@ async function main() {
       ]);
 
       const discrepancies = [
+        ...blockDiscrepancies,
         ...dataItemDiscrepancies,
         ...transactionDiscrepancies,
       ];
+
+      const totalBlocks = Math.max(sqliteBlocks.length, parquetBlocks.length);
 
       const totalDataItems = Math.max(
         sqliteItems.length,
@@ -140,9 +159,14 @@ async function main() {
 
       const result: IterationResult = {
         blockRange: range,
+        totalBlocks,
         totalDataItems,
         totalTransactions,
         discrepancies,
+        blockSourceCounts: {
+          sqlite: sqliteBlocks.length,
+          parquet: parquetBlocks.length,
+        },
         sourceCounts: {
           sqlite: sqliteItems.length,
           parquet: parquetItems.length,
@@ -172,6 +196,7 @@ async function main() {
 
       results.push({
         blockRange: range,
+        totalBlocks: 0,
         totalDataItems: 0,
         totalTransactions: 0,
         discrepancies: [
@@ -181,6 +206,7 @@ async function main() {
             details: `Iteration error: ${err.message}`,
           },
         ],
+        blockSourceCounts: {},
         sourceCounts: {},
         transactionSourceCounts: {},
         durationMs: Date.now() - iterStart,

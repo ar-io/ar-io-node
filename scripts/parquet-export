@@ -110,18 +110,6 @@ while [[ $# -gt 0 ]]; do
       STAGING_JOB_DIR=$2
       shift 2
       ;;
-    # Legacy options accepted but ignored (handled by TS exporter now)
-    --core-db|--bundles-db|--staging-dir)
-      shift 2
-      ;;
-    --resume|--skip-dataset-move|--show-timing|--debug)
-      shift 1
-      ;;
-    --dataset-dir)
-      # Map legacy --dataset-dir to --output-dir
-      OUTPUT_DIR=$2
-      shift 2
-      ;;
     -h|--help)
       usage
       exit 0

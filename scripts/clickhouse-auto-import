@@ -110,7 +110,6 @@ while true; do
             --height-partition-size "$height_interval" \
             --staging-job-dir "$job_staging_dir" \
             --output-dir "$dataset_dir" \
-            --skip-dataset-move \
             --max-file-rows "$max_rows_per_file"
         
         export_status=$?

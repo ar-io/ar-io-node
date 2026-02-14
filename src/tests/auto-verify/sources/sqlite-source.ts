@@ -8,6 +8,7 @@ import Sqlite from 'better-sqlite3';
 
 import { toB64Url } from '../../../lib/encoding.js';
 import {
+  CanonicalBlock,
   CanonicalDataItem,
   CanonicalTag,
   CanonicalTransaction,
@@ -30,6 +31,47 @@ export class SqliteSource implements SourceAdapter {
   constructor(bundlesDbPath: string, coreDbPath: string) {
     this.bundlesDbPath = bundlesDbPath;
     this.coreDbPath = coreDbPath;
+  }
+
+  async getBlocks(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<CanonicalBlock[]> {
+    const db = new Sqlite(this.coreDbPath, { readonly: true });
+
+    try {
+      const rows = db
+        .prepare(
+          `
+          SELECT
+            sb.indep_hash,
+            sb.height,
+            sb.previous_block,
+            sb.nonce,
+            sb.hash,
+            sb.block_timestamp,
+            sb.tx_count,
+            sb.block_size
+          FROM stable_blocks sb
+          WHERE sb.height BETWEEN ? AND ?
+          ORDER BY sb.height
+          `,
+        )
+        .all(startHeight, endHeight) as any[];
+
+      return rows.map((row) => ({
+        indepHash: toB64Url(row.indep_hash),
+        height: row.height,
+        previousBlock: row.previous_block ? toB64Url(row.previous_block) : '',
+        nonce: toB64Url(row.nonce),
+        hash: toB64Url(row.hash),
+        blockTimestamp: row.block_timestamp,
+        txCount: row.tx_count,
+        blockSize: row.block_size ?? null,
+      }));
+    } finally {
+      db.close();
+    }
   }
 
   async getDataItems(

@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import {
+  CanonicalBlock,
   CanonicalDataItem,
   CanonicalTag,
   CanonicalTransaction,
@@ -41,6 +42,18 @@ const DATA_ITEM_SOURCE_EXCLUDED_FIELDS: Record<string, Set<string>> = {
   'bundle-parser': new Set(['rootParentOffset']),
 };
 
+// Block fields
+const BLOCK_FIELDS: (keyof CanonicalBlock)[] = [
+  'indepHash',
+  'height',
+  'previousBlock',
+  'nonce',
+  'hash',
+  'blockTimestamp',
+  'txCount',
+  'blockSize',
+];
+
 // Transaction fields
 const TRANSACTION_FIELDS: (keyof CanonicalTransaction)[] = [
   'id',
@@ -72,10 +85,15 @@ function compareItems<T extends { id: string; tags: CanonicalTag[] }>({
   sources: { name: string; items: T[] }[];
   fields: string[];
   excludedFields?: Record<string, Set<string>>;
-  entityType: 'data_item' | 'transaction';
+  entityType: 'data_item' | 'transaction' | 'block';
 }): Discrepancy[] {
   const discrepancies: Discrepancy[] = [];
-  const entityLabel = entityType === 'data_item' ? 'Data item' : 'Transaction';
+  const entityLabel =
+    entityType === 'data_item'
+      ? 'Data item'
+      : entityType === 'transaction'
+        ? 'Transaction'
+        : 'Block';
 
   const sourceData: SourceData<T>[] = sources.map((s) => ({
     name: s.name,
@@ -191,9 +209,94 @@ export function compareAllTransactions(
   });
 }
 
+export function compareAllBlocks(
+  sources: { name: string; items: CanonicalBlock[] }[],
+): Discrepancy[] {
+  const discrepancies: Discrepancy[] = [];
+
+  const sourceData = sources.map((s) => ({
+    name: s.name,
+    blocksByHeight: new Map(s.items.map((b) => [b.height, b])),
+  }));
+
+  // Count check
+  const counts: Record<string, number> = {};
+  for (const s of sources) {
+    counts[s.name] = s.items.length;
+  }
+  if (new Set(Object.values(counts)).size > 1) {
+    discrepancies.push({
+      type: 'count_mismatch',
+      entityType: 'block',
+      sources: counts,
+      details: 'Block counts differ across sources',
+    });
+  }
+
+  // Height set comparison
+  const allHeights = new Set<number>();
+  for (const s of sourceData) {
+    for (const h of s.blocksByHeight.keys()) {
+      allHeights.add(h);
+    }
+  }
+
+  for (const height of allHeights) {
+    for (const s of sourceData) {
+      if (!s.blocksByHeight.has(height)) {
+        discrepancies.push({
+          type: 'missing_in_source',
+          entityType: 'block',
+          itemId: String(height),
+          sources: { missing: s.name },
+          details: `Block at height ${height} missing from ${s.name}`,
+        });
+      }
+    }
+
+    // Field-by-field comparison
+    const presentSources = sourceData.filter((s) =>
+      s.blocksByHeight.has(height),
+    );
+    if (presentSources.length < 2) continue;
+
+    for (const field of BLOCK_FIELDS) {
+      let mismatch = false;
+      let firstValue: unknown = undefined;
+      let firstSet = false;
+      const values: Record<string, unknown> = {};
+
+      for (const s of presentSources) {
+        const block = s.blocksByHeight.get(height)!;
+        const value = (block as Record<string, unknown>)[field];
+        values[s.name] = value;
+
+        if (!firstSet) {
+          firstValue = value;
+          firstSet = true;
+        } else if (!valuesEqual(firstValue, value)) {
+          mismatch = true;
+        }
+      }
+
+      if (mismatch) {
+        discrepancies.push({
+          type: 'field_mismatch',
+          entityType: 'block',
+          itemId: String(height),
+          field,
+          sources: values,
+        });
+      }
+    }
+  }
+
+  return discrepancies;
+}
+
 function compareTags<T extends { id: string; tags: CanonicalTag[] }>(
   itemId: string,
-  entityType: 'data_item' | 'transaction',
+  entityType: 'data_item' | 'transaction' | 'block',
   sources: SourceData<T>[],
 ): Discrepancy[] {
   const discrepancies: Discrepancy[] = [];

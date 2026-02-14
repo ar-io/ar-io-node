@@ -32,9 +32,11 @@ export function writeIterationReport(
     JSON.stringify(
       {
         blockRange: result.blockRange,
+        totalBlocks: result.totalBlocks,
         totalDataItems: result.totalDataItems,
         totalTransactions: result.totalTransactions,
         discrepancyCount: result.discrepancies.length,
+        blockSourceCounts: result.blockSourceCounts,
         sourceCounts: result.sourceCounts,
         transactionSourceCounts: result.transactionSourceCounts,
         durationMs: result.durationMs,
@@ -55,6 +57,7 @@ export function writeFinalSummary(
     passedIterations: results.filter((r) => r.discrepancies.length === 0)
       .length,
     failedIterations: results.filter((r) => r.discrepancies.length > 0).length,
+    totalBlocksChecked: results.reduce((sum, r) => sum + r.totalBlocks, 0),
     totalDataItemsChecked: results.reduce(
       (sum, r) => sum + r.totalDataItems,
       0,
@@ -70,6 +73,7 @@ export function writeFinalSummary(
     iterations: results.map((r, i) => ({
       iteration: i,
       blockRange: r.blockRange,
+      totalBlocks: r.totalBlocks,
       totalDataItems: r.totalDataItems,
       totalTransactions: r.totalTransactions,
       discrepancyCount: r.discrepancies.length,
@@ -98,7 +102,7 @@ export function printIterationSummary(
   const durationStr = `${(result.durationMs / 1000).toFixed(1)}s`;
 
   console.log(
-    `[Iteration ${iteration}] ${status} | blocks ${rangeStr} | ${result.totalDataItems} data items, ${result.totalTransactions} txs | ${durationStr}${discStr}`,
+    `[Iteration ${iteration}] ${status} | blocks ${rangeStr} | ${result.totalBlocks} blocks, ${result.totalDataItems} data items, ${result.totalTransactions} txs | ${durationStr}${discStr}`,
   );
 
   if (result.discrepancies.length > 0) {
