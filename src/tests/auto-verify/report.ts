@@ -92,13 +92,26 @@ export function printIterationSummary(
   );
 
   if (result.discrepancies.length > 0) {
-    // Show first few discrepancies
-    const preview = result.discrepancies.slice(0, 5);
+    const preview = result.discrepancies.slice(0, 10);
     for (const d of preview) {
-      console.log(`  - ${d.type}: ${d.details ?? d.field ?? ''}`);
+      const parts: string[] = [d.type];
+      if (d.dataItemId) parts.push(`id=${d.dataItemId}`);
+      if (d.field) parts.push(`field=${d.field}`);
+      if (d.tagIndex != null) parts.push(`tagIndex=${d.tagIndex}`);
+      if (d.details) parts.push(d.details);
+
+      const sourceEntries = Object.entries(d.sources);
+      if (sourceEntries.length > 0) {
+        const vals = sourceEntries
+          .map(([name, val]) => `${name}=${JSON.stringify(val)}`)
+          .join(' vs ');
+        parts.push(vals);
+      }
+
+      console.log(`  - ${parts.join(' | ')}`);
     }
-    if (result.discrepancies.length > 5) {
-      console.log(`  ... and ${result.discrepancies.length - 5} more`);
+    if (result.discrepancies.length > 10) {
+      console.log(`  ... and ${result.discrepancies.length - 10} more`);
     }
   }
 }
