@@ -109,11 +109,17 @@ export class ParquetSource implements SourceAdapter {
           dataOffset: row.data_offset != null ? Number(row.data_offset) : null,
           offset: row.offset != null ? Number(row.offset) : null,
           size: row.size != null ? Number(row.size) : null,
-          ownerOffset: row.owner_offset != null ? Number(row.owner_offset) : null,
+          ownerOffset:
+            row.owner_offset != null ? Number(row.owner_offset) : null,
           ownerSize: row.owner_size != null ? Number(row.owner_size) : null,
-          signatureOffset: row.signature_offset != null ? Number(row.signature_offset) : null,
-          signatureSize: row.signature_size != null ? Number(row.signature_size) : null,
-          rootParentOffset: row.root_parent_offset != null ? Number(row.root_parent_offset) : null,
+          signatureOffset:
+            row.signature_offset != null ? Number(row.signature_offset) : null,
+          signatureSize:
+            row.signature_size != null ? Number(row.signature_size) : null,
+          rootParentOffset:
+            row.root_parent_offset != null
+              ? Number(row.root_parent_offset)
+              : null,
           contentType: row.content_type ?? null,
           signatureType:
             row.signature_type != null ? Number(row.signature_type) : null,

@@ -89,12 +89,11 @@ async function main() {
         config.referenceUrl,
       );
 
-      const [sqliteItems, parquetItems, bundleParserItems] =
-        await Promise.all([
-          sqliteSource.getDataItems(range.start, range.end),
-          parquetSource.getDataItems(range.start, range.end),
-          bundleParserSource.getDataItems(range.start, range.end),
-        ]);
+      const [sqliteItems, parquetItems, bundleParserItems] = await Promise.all([
+        sqliteSource.getDataItems(range.start, range.end),
+        parquetSource.getDataItems(range.start, range.end),
+        bundleParserSource.getDataItems(range.start, range.end),
+      ]);
 
       console.log(
         `  SQLite: ${sqliteItems.length}, Parquet: ${parquetItems.length}, BundleParser: ${bundleParserItems.length}`,
