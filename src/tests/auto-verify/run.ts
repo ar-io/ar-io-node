@@ -13,6 +13,7 @@ import { compareAllSources } from './compare.js';
 import {
   cleanGatewayState,
   exportParquet,
+  flushToStable,
   startGateway,
   stopGateway,
   waitForIndexingComplete,
@@ -24,7 +25,6 @@ import {
 } from './report.js';
 import { SqliteSource } from './sources/sqlite-source.js';
 import { ParquetSource } from './sources/parquet-source.js';
-import { GraphqlSource } from './sources/graphql-source.js';
 import { BundleParserSource } from './sources/bundle-parser-source.js';
 import { BlockRange, IterationResult } from './types.js';
 
@@ -71,45 +71,45 @@ async function main() {
       // 3. Wait for indexing completion
       await waitForIndexingComplete(config, range.end);
 
-      // 4. Export to Parquet
+      // 4. Stop gateway and flush new data to stable tables
+      stopGateway();
+      flushToStable(config, range.end);
+
+      // 5. Export to Parquet
       const stagingDir = await exportParquet(config, range.start, range.end);
 
-      // 5. Collect data from all sources
+      // 6. Collect data from all sources
       console.log('Collecting data from all sources...');
 
       const sqliteSource = new SqliteSource(config.bundlesDbPath);
       const parquetSource = new ParquetSource(stagingDir);
-      const graphqlSource = new GraphqlSource(config.gatewayPort);
       const bundleParserSource = new BundleParserSource(
         config.bundlesDbPath,
         config.coreDbPath,
         config.referenceUrl,
       );
 
-      const [sqliteItems, parquetItems, graphqlItems, bundleParserItems] =
+      const [sqliteItems, parquetItems, bundleParserItems] =
         await Promise.all([
           sqliteSource.getDataItems(range.start, range.end),
           parquetSource.getDataItems(range.start, range.end),
-          graphqlSource.getDataItems(range.start, range.end),
           bundleParserSource.getDataItems(range.start, range.end),
         ]);
 
       console.log(
-        `  SQLite: ${sqliteItems.length}, Parquet: ${parquetItems.length}, GraphQL: ${graphqlItems.length}, BundleParser: ${bundleParserItems.length}`,
+        `  SQLite: ${sqliteItems.length}, Parquet: ${parquetItems.length}, BundleParser: ${bundleParserItems.length}`,
       );
 
-      // 6. Run comparison
+      // 7. Run comparison
       const discrepancies = compareAllSources([
         { name: 'sqlite', items: sqliteItems },
         { name: 'parquet', items: parquetItems },
-        { name: 'graphql', items: graphqlItems },
         { name: 'bundle-parser', items: bundleParserItems },
       ]);
 
       const totalDataItems = Math.max(
         sqliteItems.length,
         parquetItems.length,
-        graphqlItems.length,
         bundleParserItems.length,
       );
 
@@ -120,19 +120,15 @@ async function main() {
         sourceCounts: {
           sqlite: sqliteItems.length,
           parquet: parquetItems.length,
-          graphql: graphqlItems.length,
           'bundle-parser': bundleParserItems.length,
         },
         durationMs: Date.now() - iterStart,
       };
 
-      // 7. Write reports
+      // 8. Write reports
       writeIterationReport(config.resultsDir, i, result);
       printIterationSummary(i, result);
       results.push(result);
-
-      // 8. Stop gateway
-      stopGateway();
 
       // 9. Fail fast check
       if (config.failFast && discrepancies.length > 0) {

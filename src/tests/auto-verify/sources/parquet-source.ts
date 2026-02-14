@@ -45,6 +45,13 @@ export class ParquetSource implements SourceAdapter {
           anchor,
           data_size,
           data_offset,
+          "offset",
+          size,
+          owner_offset,
+          owner_size,
+          signature_offset,
+          signature_size,
+          root_parent_offset,
           content_type,
           signature_type
         FROM read_parquet('${txGlob}', hive_partitioning=false)
@@ -100,6 +107,13 @@ export class ParquetSource implements SourceAdapter {
           anchor: row.anchor ? toB64Url(Buffer.from(row.anchor)) : '',
           dataSize: Number(row.data_size),
           dataOffset: row.data_offset != null ? Number(row.data_offset) : null,
+          offset: row.offset != null ? Number(row.offset) : null,
+          size: row.size != null ? Number(row.size) : null,
+          ownerOffset: row.owner_offset != null ? Number(row.owner_offset) : null,
+          ownerSize: row.owner_size != null ? Number(row.owner_size) : null,
+          signatureOffset: row.signature_offset != null ? Number(row.signature_offset) : null,
+          signatureSize: row.signature_size != null ? Number(row.signature_size) : null,
+          rootParentOffset: row.root_parent_offset != null ? Number(row.root_parent_offset) : null,
           contentType: row.content_type ?? null,
           signatureType:
             row.signature_type != null ? Number(row.signature_type) : null,

@@ -21,6 +21,13 @@ export interface CanonicalDataItem {
   anchor: string; // base64url
   dataSize: number;
   dataOffset: number | null;
+  offset: number | null;
+  size: number | null;
+  ownerOffset: number | null;
+  ownerSize: number | null;
+  signatureOffset: number | null;
+  signatureSize: number | null;
+  rootParentOffset: number | null;
   contentType: string | null;
   signatureType: number | null;
   tags: CanonicalTag[];

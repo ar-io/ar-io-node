@@ -60,15 +60,10 @@ export class BundleParserSource implements SourceAdapter {
           .prepare(
             `
             SELECT height FROM stable_transactions WHERE id = ?
-            UNION
-            SELECT height FROM new_transactions WHERE id = ?
             LIMIT 1
             `,
           )
-          .get(
-            bundleRow.root_transaction_id ?? bundleRow.id,
-            bundleRow.root_transaction_id ?? bundleRow.id,
-          ) as any;
+          .get(bundleRow.root_transaction_id ?? bundleRow.id) as any;
 
         const bundleHeight = heightRow?.height;
         if (bundleHeight == null) {
@@ -176,6 +171,13 @@ export class BundleParserSource implements SourceAdapter {
             anchor: di.anchor,
             dataSize: di.dataSize,
             dataOffset: di.dataOffset,
+            offset: di.offset,
+            size: di.size,
+            ownerOffset: di.ownerOffset,
+            ownerSize: di.ownerSize,
+            signatureOffset: di.signatureOffset,
+            signatureSize: di.signatureSize,
+            rootParentOffset: null, // not available from raw parsing
             contentType,
             signatureType: di.signatureType,
             tags,

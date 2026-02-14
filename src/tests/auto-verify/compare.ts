@@ -22,15 +22,20 @@ const COMMON_FIELDS: (keyof CanonicalDataItem)[] = [
 const EXTENDED_FIELDS: (keyof CanonicalDataItem)[] = [
   'rootTransactionId',
   'dataOffset',
+  'offset',
+  'size',
+  'ownerOffset',
+  'ownerSize',
+  'signatureOffset',
+  'signatureSize',
+  'rootParentOffset',
   'signatureType',
 ];
 
-// GraphQL doesn't expose these fields
-const GRAPHQL_EXCLUDED: Set<string> = new Set([
-  'rootTransactionId',
-  'dataOffset',
-  'signatureType',
-]);
+// Bundle parser can't determine rootParentOffset from raw data
+const SOURCE_EXCLUDED_FIELDS: Record<string, Set<string>> = {
+  'bundle-parser': new Set(['rootParentOffset']),
+};
 
 type SourceName = string;
 
@@ -98,7 +103,8 @@ export function compareAllSources(
       const values: Record<string, unknown> = {};
       const comparableSources = presentSources.filter((s) => {
         // Skip fields not available for this source
-        if (s.name === 'graphql' && GRAPHQL_EXCLUDED.has(field)) {
+        const excluded = SOURCE_EXCLUDED_FIELDS[s.name];
+        if (excluded?.has(field)) {
           return false;
         }
         return true;

@@ -46,8 +46,19 @@ export async function cleanGatewayState(
   console.log('Gateway state cleaned.');
 }
 
+export function runMigrations(): void {
+  console.log('Running database migrations...');
+  execSync('yarn db:migrate up', {
+    cwd: process.cwd(),
+    stdio: 'inherit',
+  });
+  console.log('Migrations complete.');
+}
+
 export function startGateway(startHeight: number, endHeight: number): void {
   console.log(`Starting gateway for blocks ${startHeight}-${endHeight}...`);
+
+  runMigrations();
 
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
@@ -110,7 +121,13 @@ export async function waitForIndexingComplete(
       const coreDb = new Sqlite(config.coreDbPath, { readonly: true });
       try {
         const row = coreDb
-          .prepare('SELECT MAX(height) as max_height FROM stable_blocks')
+          .prepare(
+            `SELECT MAX(height) as max_height FROM (
+              SELECT height FROM stable_blocks
+              UNION ALL
+              SELECT height FROM new_blocks
+            )`,
+          )
           .get() as any;
         const maxHeight = row?.max_height;
 
@@ -149,19 +166,35 @@ export async function waitForIndexingComplete(
         const row = bundlesDb
           .prepare(
             `
-            SELECT COUNT(*) as pending
-            FROM bundles
-            WHERE last_fully_indexed_at IS NULL
-              AND last_queued_at IS NOT NULL
+            SELECT
+              COUNT(*) as total_queued,
+              SUM(CASE WHEN matched_data_item_count IS NULL THEN 1 ELSE 0 END) as awaiting_unbundle,
+              IFNULL(SUM(matched_data_item_count), 0) as expected_data_items,
+              IFNULL(SUM(
+                (SELECT COUNT(*) FROM bundle_data_items bdi
+                 WHERE bdi.parent_id = b.id
+                   AND bdi.filter_id = b.index_filter_id)
+              ), 0) as indexed_data_items
+            FROM bundles b
+            WHERE last_queued_at IS NOT NULL
             `,
           )
           .get() as any;
 
-        if (row.pending === 0) {
-          console.log('All bundles fully indexed.');
+        const done =
+          row.total_queued > 0 &&
+          row.awaiting_unbundle === 0 &&
+          row.indexed_data_items >= row.expected_data_items;
+
+        if (done) {
+          console.log(
+            `All bundles fully indexed (${row.indexed_data_items} data items across ${row.total_queued} bundles).`,
+          );
           break;
         }
-        console.log(`  ${row.pending} bundles still pending...`);
+        console.log(
+          `  ${row.total_queued} bundles queued, ${row.awaiting_unbundle} awaiting unbundle, ${row.indexed_data_items}/${row.expected_data_items} data items indexed...`,
+        );
       } finally {
         bundlesDb.close();
       }
@@ -179,6 +212,9 @@ export async function exportParquet(
   endHeight: number,
 ): Promise<string> {
   const stagingDir = path.join(config.resultsDir, 'parquet-staging');
+  if (fs.existsSync(stagingDir)) {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+  }
   fs.mkdirSync(stagingDir, { recursive: true });
 
   console.log(
@@ -201,6 +237,172 @@ export async function exportParquet(
 
   console.log('Parquet export complete.');
   return stagingDir;
+}
+
+/**
+ * Flush all new_* data to stable_* tables. This must be run after the gateway
+ * is stopped so there's no contention. The core flush must happen before the
+ * bundles flush because the bundles flush joins against
+ * core.stable_block_transactions.
+ */
+export function flushToStable(config: AutoVerifyConfig, endHeight: number): void {
+  console.log(`Flushing new data to stable tables (end_height=${endHeight + 1})...`);
+
+  const coreDb = new Sqlite(config.coreDbPath);
+  try {
+    coreDb.exec('BEGIN');
+
+    coreDb.prepare(`
+      INSERT INTO stable_blocks (
+        height, indep_hash, previous_block, nonce, hash,
+        block_timestamp, diff, cumulative_diff, last_retarget,
+        reward_addr, reward_pool, block_size, weave_size,
+        usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
+        scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
+        hash_list_merkle, wallet_list, tx_root,
+        tx_count, missing_tx_count
+      ) SELECT
+        nb.height, nb.indep_hash, nb.previous_block, nb.nonce, nb.hash,
+        nb.block_timestamp, nb.diff, nb.cumulative_diff, nb.last_retarget,
+        nb.reward_addr, nb.reward_pool, nb.block_size, nb.weave_size,
+        nb.usd_to_ar_rate_dividend, nb.usd_to_ar_rate_divisor,
+        nb.scheduled_usd_to_ar_rate_dividend, nb.scheduled_usd_to_ar_rate_divisor,
+        nb.hash_list_merkle, nb.wallet_list, nb.tx_root,
+        nb.tx_count, nb.missing_tx_count
+      FROM new_blocks nb
+      WHERE nb.height < @end_height
+      ON CONFLICT DO NOTHING
+    `).run({ end_height: endHeight + 1 });
+
+    coreDb.prepare(`
+      INSERT INTO stable_block_transactions (
+        block_indep_hash, transaction_id, block_transaction_index
+      ) SELECT
+        nbt.block_indep_hash, nbt.transaction_id, nbt.block_transaction_index
+      FROM new_block_transactions nbt
+      WHERE nbt.height < @end_height
+      ON CONFLICT DO NOTHING
+    `).run({ end_height: endHeight + 1 });
+
+    coreDb.prepare(`
+      INSERT INTO stable_transactions (
+        id, height, block_transaction_index, signature,
+        format, last_tx, owner_address, target, quantity,
+        reward, data_size, data_root, content_type, tag_count,
+        content_encoding, indexed_at
+      ) SELECT
+        nt.id, nbt.height, nbt.block_transaction_index, nt.signature,
+        nt.format, nt.last_tx, nt.owner_address, nt.target, nt.quantity,
+        nt.reward, nt.data_size, nt.data_root, nt.content_type, nt.tag_count,
+        nt.content_encoding, nt.indexed_at
+      FROM new_transactions nt
+      JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
+      WHERE nbt.height < @end_height
+      ON CONFLICT DO NOTHING
+    `).run({ end_height: endHeight + 1 });
+
+    coreDb.prepare(`
+      INSERT INTO stable_transaction_tags (
+        tag_name_hash, tag_value_hash, height,
+        block_transaction_index, transaction_tag_index,
+        transaction_id
+      ) SELECT
+        ntt.tag_name_hash, ntt.tag_value_hash, nbt.height,
+        nbt.block_transaction_index, ntt.transaction_tag_index,
+        ntt.transaction_id
+      FROM new_transaction_tags ntt
+      JOIN new_block_transactions nbt ON nbt.transaction_id = ntt.transaction_id
+      WHERE nbt.height < @end_height
+      ON CONFLICT DO NOTHING
+    `).run({ end_height: endHeight + 1 });
+
+    coreDb.exec('COMMIT');
+  } catch (err) {
+    coreDb.exec('ROLLBACK');
+    throw err;
+  } finally {
+    coreDb.close();
+  }
+
+  console.log('Core flush complete. Flushing bundles...');
+
+  const bundlesDb = new Sqlite(config.bundlesDbPath);
+  try {
+    bundlesDb.exec(`ATTACH DATABASE '${config.coreDbPath}' AS core`);
+    bundlesDb.exec('BEGIN');
+
+    bundlesDb.prepare(`
+      INSERT INTO stable_data_items (
+        id, parent_id, root_transaction_id,
+        height, block_transaction_index,
+        signature, anchor, owner_address, target,
+        data_offset, data_size, content_type,
+        tag_count, indexed_at, signature_type,
+        offset, size, owner_offset, owner_size,
+        signature_offset, signature_size, content_encoding,
+        root_parent_offset
+      ) SELECT
+        ndi.id, ndi.parent_id, ndi.root_transaction_id,
+        ndi.height, sbt.block_transaction_index,
+        ndi.signature, ndi.anchor, ndi.owner_address, ndi.target,
+        ndi.data_offset, ndi.data_size, ndi.content_type,
+        ndi.tag_count, ndi.indexed_at, ndi.signature_type,
+        ndi.offset, ndi.size, ndi.owner_offset, ndi.owner_size,
+        ndi.signature_offset, ndi.signature_size, ndi.content_encoding,
+        ndi.root_parent_offset
+      FROM new_data_items ndi
+      JOIN core.stable_block_transactions sbt
+        ON ndi.root_transaction_id = sbt.transaction_id
+      WHERE ndi.height < @end_height
+      ON CONFLICT DO NOTHING
+    `).run({ end_height: endHeight + 1 });
+
+    bundlesDb.prepare(`
+      INSERT INTO stable_data_item_tags (
+        tag_name_hash, tag_value_hash,
+        height, block_transaction_index,
+        data_item_tag_index, data_item_id,
+        parent_id, root_transaction_id
+      ) SELECT
+        ndit.tag_name_hash, ndit.tag_value_hash,
+        ndit.height, sbt.block_transaction_index,
+        ndit.data_item_tag_index, ndit.data_item_id,
+        ndi.parent_id, ndit.root_transaction_id
+      FROM new_data_item_tags ndit
+      JOIN new_data_items ndi
+        ON ndit.data_item_id = ndi.id
+      JOIN core.stable_block_transactions sbt
+        ON ndit.root_transaction_id = sbt.transaction_id
+      WHERE ndit.height < @end_height
+      ON CONFLICT DO NOTHING
+    `).run({ end_height: endHeight + 1 });
+
+    // Mark bundles as fully indexed where all matched data items are present
+    bundlesDb.prepare(`
+      UPDATE bundles
+      SET
+        first_fully_indexed_at = IFNULL(first_fully_indexed_at, @fully_indexed_at),
+        last_fully_indexed_at = @fully_indexed_at
+      WHERE matched_data_item_count IS NOT NULL
+        AND matched_data_item_count > 0
+        AND (
+          SELECT COUNT(*)
+          FROM bundle_data_items bdi
+          WHERE bdi.parent_id = bundles.id
+            AND bdi.filter_id = bundles.index_filter_id
+        ) = bundles.matched_data_item_count
+        AND last_fully_indexed_at IS NULL
+    `).run({ fully_indexed_at: Math.floor(Date.now() / 1000) });
+
+    bundlesDb.exec('COMMIT');
+  } catch (err) {
+    bundlesDb.exec('ROLLBACK');
+    throw err;
+  } finally {
+    bundlesDb.close();
+  }
+
+  console.log('Flush to stable complete.');
 }
 
 function sleep(ms: number): Promise<void> {

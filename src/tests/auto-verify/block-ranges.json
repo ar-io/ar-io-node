@@ -1,5 +1,10 @@
 [
   {
+    "start": 1200000,
+    "end": 1200000,
+    "description": "Single block, minimal iteration"
+  },
+  {
     "start": 1183000,
     "end": 1183005,
     "description": "Small bundles, basic ANS-104 case"
