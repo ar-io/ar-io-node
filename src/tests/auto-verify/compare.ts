@@ -279,7 +279,7 @@ export function compareAllBlocks(
 
       for (const s of presentSources) {
         const block = s.blocksByHeight.get(height)!;
-        const value = (block as Record<string, unknown>)[field];
+        const value = (block as unknown as Record<string, unknown>)[field];
         values[s.name] = value;
 
         if (!firstSet) {
