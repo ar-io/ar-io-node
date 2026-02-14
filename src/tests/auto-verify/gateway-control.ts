@@ -40,16 +40,14 @@ export async function cleanGatewayState(
   }
 
   if (!config.preserveCache) {
-    // Remove contiguous data cache
-    const contiguousDir = path.join(process.cwd(), 'data', 'contiguous');
-    if (fs.existsSync(contiguousDir)) {
-      fs.rmSync(contiguousDir, { recursive: true, force: true });
-    }
-
-    // Remove LMDB data
-    const lmdbDir = path.join(process.cwd(), 'data', 'lmdb');
-    if (fs.existsSync(lmdbDir)) {
-      fs.rmSync(lmdbDir, { recursive: true, force: true });
+    // Remove contiguous data cache and LMDB, preserving .gitkeep
+    for (const dir of ['contiguous', 'lmdb']) {
+      const fullDir = path.join(process.cwd(), 'data', dir);
+      if (fs.existsSync(fullDir)) {
+        fs.rmSync(fullDir, { recursive: true, force: true });
+        fs.mkdirSync(fullDir, { recursive: true });
+        fs.writeFileSync(path.join(fullDir, '.gitkeep'), '');
+      }
     }
   }
 
