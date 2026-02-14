@@ -8,8 +8,10 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import Sqlite from 'better-sqlite3';
+import * as winston from 'winston';
 
 import { AutoVerifyConfig } from './config.js';
+import { ParquetExporter } from '../../workers/parquet-exporter.js';
 
 const POLL_INTERVAL_MS = 5000;
 const INDEXING_TIMEOUT_MS = 600000; // 10 minutes
@@ -274,19 +276,25 @@ export async function exportParquet(
     `Exporting Parquet data for blocks ${startHeight}-${endHeight}...`,
   );
 
-  execSync(
-    [
-      'scripts/parquet-export',
-      `--start-height ${startHeight}`,
-      `--end-height ${endHeight}`,
-      `--staging-job-dir ${stagingDir}`,
-      '--skip-dataset-move',
-    ].join(' '),
-    {
-      cwd: process.cwd(),
-      stdio: 'inherit',
-    },
-  );
+  const log = winston.createLogger({
+    level: 'info',
+    transports: [new winston.transports.Console()],
+  });
+
+  const exporter = new ParquetExporter({
+    log,
+    bundlesDbPath: config.bundlesDbPath,
+    coreDbPath: config.coreDbPath,
+  });
+
+  await exporter.export({
+    outputDir: stagingDir,
+    startHeight,
+    endHeight,
+    heightPartitionSize: endHeight - startHeight + 1,
+    skipL1Transactions: false,
+    skipL1Tags: false,
+  });
 
   console.log('Parquet export complete.');
   return stagingDir;

@@ -33,8 +33,10 @@ export function writeIterationReport(
       {
         blockRange: result.blockRange,
         totalDataItems: result.totalDataItems,
+        totalTransactions: result.totalTransactions,
         discrepancyCount: result.discrepancies.length,
         sourceCounts: result.sourceCounts,
+        transactionSourceCounts: result.transactionSourceCounts,
         durationMs: result.durationMs,
         passed: result.discrepancies.length === 0,
       },
@@ -55,6 +57,10 @@ export function writeFinalSummary(
     failedIterations: results.filter((r) => r.discrepancies.length > 0).length,
     totalDataItemsChecked: results.reduce(
       (sum, r) => sum + r.totalDataItems,
+      0,
+    ),
+    totalTransactionsChecked: results.reduce(
+      (sum, r) => sum + r.totalTransactions,
       0,
     ),
     totalDiscrepancies: results.reduce(
@@ -91,14 +97,15 @@ export function printIterationSummary(
   const durationStr = `${(result.durationMs / 1000).toFixed(1)}s`;
 
   console.log(
-    `[Iteration ${iteration}] ${status} | blocks ${rangeStr} | ${result.totalDataItems} data items | ${durationStr}${discStr}`,
+    `[Iteration ${iteration}] ${status} | blocks ${rangeStr} | ${result.totalDataItems} data items, ${result.totalTransactions} txs | ${durationStr}${discStr}`,
   );
 
   if (result.discrepancies.length > 0) {
     const preview = result.discrepancies.slice(0, 10);
     for (const d of preview) {
       const parts: string[] = [d.type];
-      if (d.dataItemId != null) parts.push(`id=${d.dataItemId}`);
+      if (d.entityType != null) parts.push(d.entityType);
+      if (d.itemId != null) parts.push(`id=${d.itemId}`);
       if (d.field != null) parts.push(`field=${d.field}`);
       if (d.tagIndex != null) parts.push(`tagIndex=${d.tagIndex}`);
       if (d.details != null) parts.push(d.details);

@@ -8,7 +8,12 @@ import { Database } from 'duckdb-async';
 import path from 'node:path';
 
 import { toB64Url } from '../../../lib/encoding.js';
-import { CanonicalDataItem, CanonicalTag, SourceAdapter } from '../types.js';
+import {
+  CanonicalDataItem,
+  CanonicalTag,
+  CanonicalTransaction,
+  SourceAdapter,
+} from '../types.js';
 
 export class ParquetSource implements SourceAdapter {
   name = 'parquet';
@@ -124,6 +129,99 @@ export class ParquetSource implements SourceAdapter {
           signatureType:
             row.signature_type != null ? Number(row.signature_type) : null,
           tags: tagsByItemId.get(id) ?? [],
+        };
+      });
+    } finally {
+      await db.close();
+    }
+  }
+
+  async getTransactions(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<CanonicalTransaction[]> {
+    const db = await Database.create(':memory:');
+
+    try {
+      const txGlob = path.join(
+        this.stagingDir,
+        'transactions',
+        '**',
+        '*.parquet',
+      );
+      const tagsGlob = path.join(this.stagingDir, 'tags', '**', '*.parquet');
+
+      const rows = await db.all(
+        `
+        SELECT
+          id,
+          height,
+          block_transaction_index,
+          target,
+          quantity,
+          reward,
+          anchor,
+          data_size,
+          content_type,
+          format,
+          owner_address,
+          data_root,
+          "offset"
+        FROM read_parquet('${txGlob}', hive_partitioning=false)
+        WHERE is_data_item = false
+          AND height >= ${startHeight}
+          AND height <= ${endHeight}
+        ORDER BY height, id
+        `,
+      );
+
+      const tagRows = await db.all(
+        `
+        SELECT
+          id,
+          tag_index,
+          tag_name,
+          tag_value
+        FROM read_parquet('${tagsGlob}', hive_partitioning=false)
+        WHERE is_data_item = false
+          AND height >= ${startHeight}
+          AND height <= ${endHeight}
+        ORDER BY id, tag_index
+        `,
+      );
+
+      const tagsByTxId = new Map<string, CanonicalTag[]>();
+      for (const t of tagRows) {
+        const txId = toB64Url(Buffer.from(t.id));
+        if (!tagsByTxId.has(txId)) {
+          tagsByTxId.set(txId, []);
+        }
+        tagsByTxId.get(txId)!.push({
+          name: Buffer.from(t.tag_name).toString('utf8'),
+          value: Buffer.from(t.tag_value).toString('utf8'),
+          index: t.tag_index,
+        });
+      }
+
+      return rows.map((row) => {
+        const id = toB64Url(Buffer.from(row.id));
+        return {
+          id,
+          height: Number(row.height),
+          blockTransactionIndex: Number(row.block_transaction_index),
+          target: row.target ? toB64Url(Buffer.from(row.target)) : '',
+          quantity: String(row.quantity ?? '0'),
+          reward: String(row.reward ?? '0'),
+          anchor: row.anchor ? toB64Url(Buffer.from(row.anchor)) : '',
+          dataSize: Number(row.data_size),
+          contentType: row.content_type ?? null,
+          format: Number(row.format),
+          ownerAddress: row.owner_address
+            ? toB64Url(Buffer.from(row.owner_address))
+            : '',
+          dataRoot: row.data_root ? toB64Url(Buffer.from(row.data_root)) : '',
+          offset: row.offset != null ? Number(row.offset) : null,
+          tags: tagsByTxId.get(id) ?? [],
         };
       });
     } finally {

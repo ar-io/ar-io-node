@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import { loadConfig } from './config.js';
-import { compareAllSources } from './compare.js';
+import { compareAllSources, compareAllTransactions } from './compare.js';
 import {
   cleanGatewayState,
   exportParquet,
@@ -81,7 +81,10 @@ async function main() {
       // 6. Collect data from all sources
       console.log('Collecting data from all sources...');
 
-      const sqliteSource = new SqliteSource(config.bundlesDbPath);
+      const sqliteSource = new SqliteSource(
+        config.bundlesDbPath,
+        config.coreDbPath,
+      );
       const parquetSource = new ParquetSource(stagingDir);
       const bundleParserSource = new BundleParserSource(
         config.bundlesDbPath,
@@ -89,22 +92,43 @@ async function main() {
         config.referenceUrl,
       );
 
-      const [sqliteItems, parquetItems, bundleParserItems] = await Promise.all([
+      const [
+        sqliteItems,
+        parquetItems,
+        bundleParserItems,
+        sqliteTxs,
+        parquetTxs,
+      ] = await Promise.all([
         sqliteSource.getDataItems(range.start, range.end),
         parquetSource.getDataItems(range.start, range.end),
         bundleParserSource.getDataItems(range.start, range.end),
+        sqliteSource.getTransactions(range.start, range.end),
+        parquetSource.getTransactions(range.start, range.end),
       ]);
 
       console.log(
-        `  SQLite: ${sqliteItems.length}, Parquet: ${parquetItems.length}, BundleParser: ${bundleParserItems.length}`,
+        `  Data items - SQLite: ${sqliteItems.length}, Parquet: ${parquetItems.length}, BundleParser: ${bundleParserItems.length}`,
+      );
+      console.log(
+        `  Transactions - SQLite: ${sqliteTxs.length}, Parquet: ${parquetTxs.length}`,
       );
 
       // 7. Run comparison
-      const discrepancies = compareAllSources([
+      const dataItemDiscrepancies = compareAllSources([
         { name: 'sqlite', items: sqliteItems },
         { name: 'parquet', items: parquetItems },
         { name: 'bundle-parser', items: bundleParserItems },
       ]);
+
+      const transactionDiscrepancies = compareAllTransactions([
+        { name: 'sqlite', items: sqliteTxs },
+        { name: 'parquet', items: parquetTxs },
+      ]);
+
+      const discrepancies = [
+        ...dataItemDiscrepancies,
+        ...transactionDiscrepancies,
+      ];
 
       const totalDataItems = Math.max(
         sqliteItems.length,
@@ -112,14 +136,21 @@ async function main() {
         bundleParserItems.length,
       );
 
+      const totalTransactions = Math.max(sqliteTxs.length, parquetTxs.length);
+
       const result: IterationResult = {
         blockRange: range,
         totalDataItems,
+        totalTransactions,
         discrepancies,
         sourceCounts: {
           sqlite: sqliteItems.length,
           parquet: parquetItems.length,
           'bundle-parser': bundleParserItems.length,
+        },
+        transactionSourceCounts: {
+          sqlite: sqliteTxs.length,
+          parquet: parquetTxs.length,
         },
         durationMs: Date.now() - iterStart,
       };
@@ -142,6 +173,7 @@ async function main() {
       results.push({
         blockRange: range,
         totalDataItems: 0,
+        totalTransactions: 0,
         discrepancies: [
           {
             type: 'count_mismatch',
@@ -150,6 +182,7 @@ async function main() {
           },
         ],
         sourceCounts: {},
+        transactionSourceCounts: {},
         durationMs: Date.now() - iterStart,
       });
 
