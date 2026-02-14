@@ -26,7 +26,7 @@ function setNoStore(res: Response): void {
   res.setHeader('Cache-Control', 'no-store');
 }
 
-const getParquetExporter = () => {
+function getParquetExporter(): ParquetExporter {
   if (parquetExporter === null) {
     parquetExporter = new ParquetExporter({
       log,
@@ -45,7 +45,7 @@ const getParquetExporter = () => {
   }
 
   return parquetExporter;
-};
+}
 
 arIoRouter.use(
   promBundle({
@@ -563,21 +563,13 @@ arIoRouter.post(
   },
 );
 
-arIoRouter.get(
-  '/ar-io/admin/export-parquet/status',
-  express.json(),
-  async (_, res) => {
-    try {
-      const exporter = getParquetExporter();
-
-      const status = exporter.status();
-
-      res.json(status);
-    } catch (error: any) {
-      res.status(500).send(error?.message);
-    }
-  },
-);
+arIoRouter.get('/ar-io/admin/export-parquet/status', async (_, res) => {
+  try {
+    res.json(getParquetExporter().status());
+  } catch (error: any) {
+    res.status(500).send(error?.message);
+  }
+});
 
 // Prune stable data items before a given timestamp and within a height range
 arIoRouter.post(

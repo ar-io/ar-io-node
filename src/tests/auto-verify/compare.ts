@@ -12,6 +12,12 @@ import {
   Discrepancy,
 } from './types.js';
 
+const ENTITY_LABELS: Record<string, string> = {
+  data_item: 'Data item',
+  transaction: 'Transaction',
+  block: 'Block',
+};
+
 // Data item fields
 const DATA_ITEM_COMMON_FIELDS: (keyof CanonicalDataItem)[] = [
   'id',
@@ -90,11 +96,6 @@ function compareItems<T extends { id: string; tags: CanonicalTag[] }>({
   itemContext?: (item: T) => string;
 }): Discrepancy[] {
   const discrepancies: Discrepancy[] = [];
-  const ENTITY_LABELS: Record<string, string> = {
-    data_item: 'Data item',
-    transaction: 'Transaction',
-    block: 'Block',
-  };
   const entityLabel = ENTITY_LABELS[entityType];
 
   const sourceData: SourceData<T>[] = sources.map((s) => ({
