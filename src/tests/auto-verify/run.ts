@@ -15,9 +15,11 @@ import {
   compareAllTransactions,
 } from './compare.js';
 import {
+  cleanClickHouseTables,
   cleanGatewayState,
   exportParquet,
   flushToStable,
+  importToClickHouse,
   startGateway,
   stopGateway,
   waitForIndexingComplete,
@@ -30,6 +32,7 @@ import {
 import { SqliteSource } from './sources/sqlite-source.js';
 import { ParquetSource } from './sources/parquet-source.js';
 import { BundleParserSource } from './sources/bundle-parser-source.js';
+import { ClickHouseSource } from './sources/clickhouse-source.js';
 import { BlockRange, IterationResult } from './types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -82,6 +85,12 @@ async function main() {
       // 5. Export to Parquet
       const stagingDir = await exportParquet(config, range.start, range.end);
 
+      // 5b. Optionally import to ClickHouse
+      if (config.clickhouseUrl !== null) {
+        await cleanClickHouseTables(config);
+        importToClickHouse(config, stagingDir);
+      }
+
       // 6. Collect data from all sources
       console.log('Collecting data from all sources...');
 
@@ -95,16 +104,12 @@ async function main() {
         config.coreDbPath,
         config.referenceUrl,
       );
+      const clickhouseSource =
+        config.clickhouseUrl !== null
+          ? new ClickHouseSource(config.clickhouseUrl)
+          : null;
 
-      const [
-        sqliteBlocks,
-        parquetBlocks,
-        sqliteItems,
-        parquetItems,
-        bundleParserItems,
-        sqliteTxs,
-        parquetTxs,
-      ] = await Promise.all([
+      const dataPromises: Promise<any>[] = [
         sqliteSource.getBlocks(range.start, range.end),
         parquetSource.getBlocks(range.start, range.end),
         sqliteSource.getDataItems(range.start, range.end),
@@ -112,16 +117,41 @@ async function main() {
         bundleParserSource.getDataItems(range.start, range.end),
         sqliteSource.getTransactions(range.start, range.end),
         parquetSource.getTransactions(range.start, range.end),
-      ]);
+      ];
+
+      if (clickhouseSource) {
+        dataPromises.push(
+          clickhouseSource.getDataItems(range.start, range.end),
+          clickhouseSource.getTransactions(range.start, range.end),
+        );
+      }
+
+      const dataResults = await Promise.all(dataPromises);
+
+      const sqliteBlocks = dataResults[0];
+      const parquetBlocks = dataResults[1];
+      const sqliteItems = dataResults[2];
+      const parquetItems = dataResults[3];
+      const bundleParserItems = dataResults[4];
+      const sqliteTxs = dataResults[5];
+      const parquetTxs = dataResults[6];
+      const clickhouseItems = clickhouseSource ? dataResults[7] : null;
+      const clickhouseTxs = clickhouseSource ? dataResults[8] : null;
+
+      if (clickhouseSource) {
+        await clickhouseSource.close();
+      }
 
       console.log(
         `  Blocks - SQLite: ${sqliteBlocks.length}, Parquet: ${parquetBlocks.length}`,
       );
+      const itemCounts = `SQLite: ${sqliteItems.length}, Parquet: ${parquetItems.length}, BundleParser: ${bundleParserItems.length}`;
       console.log(
-        `  Data items - SQLite: ${sqliteItems.length}, Parquet: ${parquetItems.length}, BundleParser: ${bundleParserItems.length}`,
+        `  Data items - ${itemCounts}${clickhouseItems ? `, ClickHouse: ${clickhouseItems.length}` : ''}`,
       );
+      const txCounts = `SQLite: ${sqliteTxs.length}, Parquet: ${parquetTxs.length}`;
       console.log(
-        `  Transactions - SQLite: ${sqliteTxs.length}, Parquet: ${parquetTxs.length}`,
+        `  Transactions - ${txCounts}${clickhouseTxs ? `, ClickHouse: ${clickhouseTxs.length}` : ''}`,
       );
 
       // 7. Run comparison
@@ -130,16 +160,25 @@ async function main() {
         { name: 'parquet', items: parquetBlocks },
       ]);
 
-      const dataItemDiscrepancies = compareAllSources([
+      const dataItemSources = [
         { name: 'sqlite', items: sqliteItems },
         { name: 'parquet', items: parquetItems },
         { name: 'bundle-parser', items: bundleParserItems },
-      ]);
+      ];
+      if (clickhouseItems) {
+        dataItemSources.push({ name: 'clickhouse', items: clickhouseItems });
+      }
+      const dataItemDiscrepancies = compareAllSources(dataItemSources);
 
-      const transactionDiscrepancies = compareAllTransactions([
+      const transactionSources = [
         { name: 'sqlite', items: sqliteTxs },
         { name: 'parquet', items: parquetTxs },
-      ]);
+      ];
+      if (clickhouseTxs) {
+        transactionSources.push({ name: 'clickhouse', items: clickhouseTxs });
+      }
+      const transactionDiscrepancies =
+        compareAllTransactions(transactionSources);
 
       const discrepancies = [
         ...blockDiscrepancies,
@@ -149,13 +188,34 @@ async function main() {
 
       const totalBlocks = Math.max(sqliteBlocks.length, parquetBlocks.length);
 
-      const totalDataItems = Math.max(
+      const dataItemCounts = [
         sqliteItems.length,
         parquetItems.length,
         bundleParserItems.length,
-      );
+      ];
+      if (clickhouseItems) dataItemCounts.push(clickhouseItems.length);
+      const totalDataItems = Math.max(...dataItemCounts);
 
-      const totalTransactions = Math.max(sqliteTxs.length, parquetTxs.length);
+      const txCountValues = [sqliteTxs.length, parquetTxs.length];
+      if (clickhouseTxs) txCountValues.push(clickhouseTxs.length);
+      const totalTransactions = Math.max(...txCountValues);
+
+      const sourceCounts: Record<string, number> = {
+        sqlite: sqliteItems.length,
+        parquet: parquetItems.length,
+        'bundle-parser': bundleParserItems.length,
+      };
+      if (clickhouseItems) {
+        sourceCounts['clickhouse'] = clickhouseItems.length;
+      }
+
+      const transactionSourceCounts: Record<string, number> = {
+        sqlite: sqliteTxs.length,
+        parquet: parquetTxs.length,
+      };
+      if (clickhouseTxs) {
+        transactionSourceCounts['clickhouse'] = clickhouseTxs.length;
+      }
 
       const result: IterationResult = {
         blockRange: range,
@@ -167,15 +227,8 @@ async function main() {
           sqlite: sqliteBlocks.length,
           parquet: parquetBlocks.length,
         },
-        sourceCounts: {
-          sqlite: sqliteItems.length,
-          parquet: parquetItems.length,
-          'bundle-parser': bundleParserItems.length,
-        },
-        transactionSourceCounts: {
-          sqlite: sqliteTxs.length,
-          parquet: parquetTxs.length,
-        },
+        sourceCounts,
+        transactionSourceCounts,
         durationMs: Date.now() - iterStart,
       };
 

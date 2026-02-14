@@ -500,6 +500,62 @@ export function flushToStable(
   console.log('Flush to stable complete.');
 }
 
+export async function cleanClickHouseTables(
+  config: AutoVerifyConfig,
+): Promise<void> {
+  if (config.clickhouseUrl === null) return;
+
+  console.log('Cleaning ClickHouse tables...');
+
+  const { createClient } = await import('@clickhouse/client');
+  const client = createClient({ url: config.clickhouseUrl });
+
+  try {
+    const tables = [
+      'staging_blocks',
+      'staging_transactions',
+      'staging_tags',
+      'transactions',
+      'id_transactions',
+      'owner_transactions',
+      'target_transactions',
+    ];
+
+    for (const table of tables) {
+      await client.command({ query: `TRUNCATE TABLE IF EXISTS ${table}` });
+    }
+
+    console.log('ClickHouse tables cleaned.');
+  } finally {
+    await client.close();
+  }
+}
+
+export function importToClickHouse(
+  config: AutoVerifyConfig,
+  stagingDir: string,
+): void {
+  if (config.clickhouseUrl === null) return;
+
+  console.log('Importing Parquet data to ClickHouse...');
+
+  const args = [
+    `--input-dir "${stagingDir}"`,
+    '--all-partitions',
+    `--clickhouse-host "${config.clickhouseHost}"`,
+    `--clickhouse-port "${config.clickhousePort}"`,
+    `--clickhouse-user "${config.clickhouseUser}"`,
+    `--clickhouse-password "${config.clickhousePassword}"`,
+  ].join(' ');
+
+  execSync(`scripts/clickhouse-import ${args}`, {
+    cwd: process.cwd(),
+    stdio: 'inherit',
+  });
+
+  console.log('ClickHouse import complete.');
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
