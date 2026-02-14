@@ -50,6 +50,17 @@ export interface CanonicalTransaction {
   tags: CanonicalTag[];
 }
 
+export interface CanonicalBlock {
+  indepHash: string; // base64url
+  height: number;
+  previousBlock: string; // base64url, empty string if none
+  nonce: string; // base64url
+  hash: string; // base64url
+  blockTimestamp: number;
+  txCount: number;
+  blockSize: number | null;
+}
+
 export interface BlockRange {
   start: number;
   end: number;
@@ -62,7 +73,7 @@ export interface Discrepancy {
     | 'missing_in_source'
     | 'tag_mismatch'
     | 'count_mismatch';
-  entityType?: 'data_item' | 'transaction';
+  entityType?: 'data_item' | 'transaction' | 'block';
   itemId?: string;
   field?: string;
   tagIndex?: number;
@@ -72,9 +83,11 @@ export interface Discrepancy {
 
 export interface IterationResult {
   blockRange: BlockRange;
+  totalBlocks: number;
   totalDataItems: number;
   totalTransactions: number;
   discrepancies: Discrepancy[];
+  blockSourceCounts: Record<string, number>;
   sourceCounts: Record<string, number>;
   transactionSourceCounts: Record<string, number>;
   durationMs: number;
@@ -82,6 +95,7 @@ export interface IterationResult {
 
 export interface SourceAdapter {
   name: string;
+  getBlocks?(startHeight: number, endHeight: number): Promise<CanonicalBlock[]>;
   getDataItems(
     startHeight: number,
     endHeight: number,

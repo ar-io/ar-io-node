@@ -9,6 +9,7 @@ import path from 'node:path';
 
 import { toB64Url } from '../../../lib/encoding.js';
 import {
+  CanonicalBlock,
   CanonicalDataItem,
   CanonicalTag,
   CanonicalTransaction,
@@ -43,8 +44,54 @@ export class ParquetSource implements SourceAdapter {
     return path.join(this.stagingDir, 'transactions', '**', '*.parquet');
   }
 
+  private blocksGlob(): string {
+    return path.join(this.stagingDir, 'blocks', '**', '*.parquet');
+  }
+
   private tagsGlob(): string {
     return path.join(this.stagingDir, 'tags', '**', '*.parquet');
+  }
+
+  async getBlocks(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<CanonicalBlock[]> {
+    const db = await Database.create(':memory:');
+
+    try {
+      const rows = await db.all(
+        `
+        SELECT
+          indep_hash,
+          height,
+          previous_block,
+          nonce,
+          hash,
+          block_timestamp,
+          tx_count,
+          block_size
+        FROM read_parquet('${this.blocksGlob()}', hive_partitioning=false)
+        WHERE height >= ${startHeight}
+          AND height <= ${endHeight}
+        ORDER BY height
+        `,
+      );
+
+      return rows.map((row) => ({
+        indepHash: toB64Url(Buffer.from(row.indep_hash)),
+        height: Number(row.height),
+        previousBlock: row.previous_block
+          ? toB64Url(Buffer.from(row.previous_block))
+          : '',
+        nonce: toB64Url(Buffer.from(row.nonce)),
+        hash: toB64Url(Buffer.from(row.hash)),
+        blockTimestamp: Number(row.block_timestamp),
+        txCount: Number(row.tx_count),
+        blockSize: row.block_size != null ? Number(row.block_size) : null,
+      }));
+    } finally {
+      await db.close();
+    }
   }
 
   async getDataItems(
