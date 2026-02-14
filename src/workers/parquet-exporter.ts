@@ -194,11 +194,11 @@ export class ParquetExporter {
             exportStep: message.timingKey,
             startTime:
               typeof message.startTime === 'number'
-                ? new Date(message.startTime as number).toISOString()
+                ? new Date(message.startTime).toISOString()
                 : undefined,
             endTime:
               typeof message.endTime === 'number'
-                ? new Date(message.endTime as number).toISOString()
+                ? new Date(message.endTime).toISOString()
                 : undefined,
             durationMs: message.durationMs,
             durationSeconds:

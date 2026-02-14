@@ -58,10 +58,11 @@ while true; do
     echo "Attempting to fetch debug info from admin endpoint..."
     fetch_debug_start_time=$(date +%s)
     debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
+    curl_status=$?
+    fetch_debug_end_time=$(date +%s)
 
     # If curl fails or returns non-200, skip this iteration
-    fetch_debug_end_time=$(date +%s)
-    if [ $? -ne 0 ] || [ -z "$debug_info" ]; then
+    if [ $curl_status -ne 0 ] || [ -z "$debug_info" ]; then
         log_timing "Fetch debug info (failed)" "$fetch_debug_start_time" "$fetch_debug_end_time"
         echo "Warning: Failed to get debug info or received empty response. Skipping this iteration."
         sleep 10
@@ -180,16 +181,12 @@ while true; do
                     fi
                     
                     # Run the metadata generation
-                    if python3 ./scripts/generate-iceberg-metadata "${iceberg_args[@]}"; then
-                        iceberg_status=0
-                    else
-                        iceberg_status=1
-                    fi
-                    
+                    python3 ./scripts/generate-iceberg-metadata "${iceberg_args[@]}"
+                    iceberg_status=$?
                     iceberg_complete_time=$(date +%s)
-                    
+
                     if [ $iceberg_status -eq 0 ]; then
-                        echo "✓ Iceberg metadata updated successfully."
+                        echo "Iceberg metadata updated successfully."
                         log_timing "Iceberg metadata generation" "$iceberg_start_time" "$iceberg_complete_time"
                     else
                         echo "Warning: Iceberg metadata generation failed (non-critical, continuing)"
@@ -214,13 +211,10 @@ while true; do
             import_success=false
         fi
 
-        # Step 4: Mark this height range as processed
+        # Step 4: Mark as processed and prune stable data items
         if [ "$import_success" = true ]; then
             touch "$processed_dir/heights_${current_height}_${end_height}.done"
-        fi
 
-        # Step 4: Prune stable data items only if import was successful
-        if [ "$import_success" = true ]; then
             echo "Pruning stable data items from height $current_height to $end_height..."
             prune_start_time=$(date +%s)
             curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
@@ -231,8 +225,9 @@ while true; do
                     \"startHeight\": $current_height,
                     \"endHeight\": $end_height
                 }"
+            prune_status=$?
             prune_end_time=$(date +%s)
-            if [ $? -ne 0 ]; then
+            if [ $prune_status -ne 0 ]; then
                 log_timing "Prune stable data items (failed)" "$prune_start_time" "$prune_end_time"
                 echo "Warning: Prune request failed. Continuing to next batch."
             else
