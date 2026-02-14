@@ -139,14 +139,13 @@ export class BundleParserSource implements SourceAdapter {
         `SELECT height FROM stable_data_items WHERE id = ? LIMIT 1`,
       );
 
-      return dataItems
-        .map((di) => {
+      return dataItems.reduce<CanonicalDataItem[]>((acc, di) => {
           const heightRow = heightStmt.get(fromB64Url(di.id)) as any;
           const height = heightRow?.height;
 
           // Skip items outside our height range
           if (height == null || height < startHeight || height > endHeight) {
-            return null;
+            return acc;
           }
 
           const ownerAddress = sha256B64Url(fromB64Url(di.owner));
@@ -167,7 +166,7 @@ export class BundleParserSource implements SourceAdapter {
             }
           }
 
-          return {
+          acc.push({
             id: di.id,
             parentId: bundleTxId,
             rootTransactionId: rootTxId,
@@ -180,9 +179,9 @@ export class BundleParserSource implements SourceAdapter {
             contentType,
             signatureType: di.signatureType,
             tags,
-          } satisfies CanonicalDataItem;
-        })
-        .filter((item): item is CanonicalDataItem => item !== null);
+          });
+          return acc;
+        }, []);
     } finally {
       bundlesDb.close();
     }

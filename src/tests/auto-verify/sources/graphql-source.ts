@@ -8,48 +8,6 @@ import axios from 'axios';
 
 import { CanonicalDataItem, CanonicalTag, SourceAdapter } from '../types.js';
 
-const TRANSACTIONS_QUERY = `
-  query($after: String, $minHeight: Int, $maxHeight: Int) {
-    transactions(
-      first: 100,
-      after: $after,
-      sort: HEIGHT_ASC,
-      block: { min: $minHeight, max: $maxHeight },
-      bundledIn: []
-    ) {
-      pageInfo {
-        hasNextPage
-      }
-      edges {
-        cursor
-        node {
-          id
-          anchor
-          recipient
-          owner {
-            address
-          }
-          data {
-            size
-            type
-          }
-          tags {
-            name
-            value
-          }
-          block {
-            height
-          }
-          bundledIn {
-            id
-          }
-        }
-      }
-    }
-  }
-`;
-
-// Separate query for bundled data items - uses bundledIn filter differently
 const DATA_ITEMS_QUERY = `
   query($after: String, $minHeight: Int, $maxHeight: Int) {
     transactions(
@@ -107,7 +65,7 @@ export class GraphqlSource implements SourceAdapter {
     let hasNextPage = true;
 
     while (hasNextPage) {
-      const response = await axios.post(this.gatewayUrl, {
+      const response: any = await axios.post(this.gatewayUrl, {
         query: DATA_ITEMS_QUERY,
         variables: {
           after: cursor,

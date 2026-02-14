@@ -6,7 +6,7 @@
  */
 import Sqlite from 'better-sqlite3';
 
-import { toB64Url, b64UrlToUtf8 } from '../../../lib/encoding.js';
+import { toB64Url } from '../../../lib/encoding.js';
 import { CanonicalDataItem, CanonicalTag, SourceAdapter } from '../types.js';
 
 export class SqliteSource implements SourceAdapter {

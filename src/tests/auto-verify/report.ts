@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { Discrepancy, IterationResult } from './types.js';
+import { IterationResult } from './types.js';
 
 export function writeIterationReport(
   resultsDir: string,
