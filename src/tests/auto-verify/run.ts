@@ -78,20 +78,32 @@ async function main() {
       // 3. Wait for indexing completion
       await waitForIndexingComplete(config, range.end);
 
-      // 4. Stop gateway and flush new data to stable tables
+      // 4. Prefetch bundle data from local gateway before stopping it
+      const bundleParserSource = new BundleParserSource(
+        config.bundlesDbPath,
+        config.coreDbPath,
+        config.referenceUrl,
+      );
+      await bundleParserSource.prefetchBundles(
+        range.start,
+        range.end,
+        config.gatewayUrl,
+      );
+
+      // 5. Stop gateway and flush new data to stable tables
       stopGateway();
       flushToStable(config, range.end);
 
-      // 5. Export to Parquet
+      // 6. Export to Parquet
       const stagingDir = await exportParquet(config, range.start, range.end);
 
-      // 5b. Optionally import to ClickHouse
+      // 6b. Optionally import to ClickHouse
       if (config.clickhouseUrl !== null) {
         await cleanClickHouseTables(config);
         importToClickHouse(config, stagingDir);
       }
 
-      // 6. Collect data from all sources
+      // 7. Collect data from all sources
       console.log('Collecting data from all sources...');
 
       const sqliteSource = new SqliteSource(
@@ -99,11 +111,6 @@ async function main() {
         config.coreDbPath,
       );
       const parquetSource = new ParquetSource(stagingDir);
-      const bundleParserSource = new BundleParserSource(
-        config.bundlesDbPath,
-        config.coreDbPath,
-        config.referenceUrl,
-      );
       const clickhouseSource =
         config.clickhouseUrl !== null
           ? new ClickHouseSource(config.clickhouseUrl)
@@ -154,7 +161,7 @@ async function main() {
         `  Transactions - ${txCounts}${clickhouseTxs ? `, ClickHouse: ${clickhouseTxs.length}` : ''}`,
       );
 
-      // 7. Run comparison
+      // 8. Run comparison
       const blockDiscrepancies = compareAllBlocks([
         { name: 'sqlite', items: sqliteBlocks },
         { name: 'parquet', items: parquetBlocks },
@@ -232,12 +239,12 @@ async function main() {
         durationMs: Date.now() - iterStart,
       };
 
-      // 8. Write reports
+      // 9. Write reports
       writeIterationReport(config.resultsDir, i, result);
       printIterationSummary(i, result);
       results.push(result);
 
-      // 9. Fail fast check
+      // 10. Fail fast check
       if (config.failFast && discrepancies.length > 0) {
         console.log('\nFail-fast enabled: stopping on first failure.');
         writeFinalSummary(config.resultsDir, results);

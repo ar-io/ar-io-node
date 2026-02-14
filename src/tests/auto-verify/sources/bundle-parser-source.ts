@@ -4,6 +4,8 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { Readable } from 'node:stream';
+
 import Sqlite from 'better-sqlite3';
 import axios from 'axios';
 
@@ -16,11 +18,63 @@ export class BundleParserSource implements SourceAdapter {
   private bundlesDbPath: string;
   private coreDbPath: string;
   private referenceUrl: string;
+  private prefetchedData: Map<string, Buffer> = new Map();
 
   constructor(bundlesDbPath: string, coreDbPath: string, referenceUrl: string) {
     this.bundlesDbPath = bundlesDbPath;
     this.coreDbPath = coreDbPath;
     this.referenceUrl = referenceUrl;
+  }
+
+  async prefetchBundles(
+    startHeight: number,
+    endHeight: number,
+    gatewayUrl: string,
+  ): Promise<void> {
+    const bundlesDb = new Sqlite(this.bundlesDbPath, { readonly: true });
+
+    try {
+      // Query new_data_items since this runs before flush to stable
+      const bundleRows = bundlesDb
+        .prepare(
+          `
+          SELECT DISTINCT b.id
+          FROM bundles b
+          JOIN new_data_items ndi ON b.id = ndi.parent_id OR b.id = ndi.root_transaction_id
+          WHERE ndi.height BETWEEN ? AND ?
+            AND b.last_fully_indexed_at IS NOT NULL
+          `,
+        )
+        .all(startHeight, endHeight) as any[];
+
+      console.log(
+        `Prefetching ${bundleRows.length} bundle(s) from local gateway...`,
+      );
+
+      for (const row of bundleRows) {
+        const bundleTxId = toB64Url(row.id);
+        const url = `${gatewayUrl}/raw/${bundleTxId}`;
+
+        try {
+          const response = await axios.get(url, {
+            responseType: 'arraybuffer',
+            timeout: 120000,
+          });
+          this.prefetchedData.set(bundleTxId, Buffer.from(response.data));
+          console.log(`  Prefetched bundle ${bundleTxId}`);
+        } catch (err: any) {
+          console.error(
+            `  Failed to prefetch bundle ${bundleTxId}: ${err.message}`,
+          );
+        }
+      }
+
+      console.log(
+        `Prefetched ${this.prefetchedData.size}/${bundleRows.length} bundle(s)`,
+      );
+    } finally {
+      bundlesDb.close();
+    }
   }
 
   async getDataItems(
@@ -108,14 +162,21 @@ export class BundleParserSource implements SourceAdapter {
     startHeight: number,
     endHeight: number,
   ): Promise<CanonicalDataItem[]> {
-    const url = `${this.referenceUrl}/raw/${bundleTxId}`;
+    let stream: Readable;
 
-    const response = await axios.get(url, {
-      responseType: 'stream',
-      timeout: 120000,
-    });
+    const prefetched = this.prefetchedData.get(bundleTxId);
+    if (prefetched) {
+      stream = Readable.from(prefetched);
+    } else {
+      const url = `${this.referenceUrl}/raw/${bundleTxId}`;
+      const response = await axios.get(url, {
+        responseType: 'stream',
+        timeout: 120000,
+      });
+      stream = response.data;
+    }
 
-    const dataItems = await processBundleStream(response.data);
+    const dataItems = await processBundleStream(stream);
 
     const heightStmt = bundlesDb.prepare(
       'SELECT height FROM stable_data_items WHERE id = ? LIMIT 1',
