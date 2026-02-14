@@ -210,11 +210,11 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
     const tagValueHash = hashTagPart(tagValue);
     tagValues.push({ value: tagValue, hash: tagValueHash });
 
-    if (isContentTypeTag(tagName)) {
+    if (contentType === undefined && isContentTypeTag(tagName)) {
       contentType = tagValue.toString('utf8');
     }
 
-    if (isContentEncodingTag(tagName)) {
+    if (contentEncoding === undefined && isContentEncodingTag(tagName)) {
       contentEncoding = tagValue.toString('utf8');
     }
 
@@ -287,11 +287,11 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
     const tagValueHash = hashTagPart(tagValue);
     tagValues.push({ value: tagValue, hash: tagValueHash });
 
-    if (isContentTypeTag(tagName)) {
+    if (contentType === undefined && isContentTypeTag(tagName)) {
       contentType = tagValue.toString('utf8');
     }
 
-    if (isContentEncodingTag(tagName)) {
+    if (contentEncoding === undefined && isContentEncodingTag(tagName)) {
       contentEncoding = tagValue.toString('utf8');
     }
 

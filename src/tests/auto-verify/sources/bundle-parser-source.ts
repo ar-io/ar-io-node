@@ -152,7 +152,7 @@ export class BundleParserSource implements SourceAdapter {
             index: i,
           }));
 
-          // Extract content type from tags
+          // Extract content type from tags (first match wins)
           let contentType: string | null = null;
           for (const tag of di.tags) {
             if (tag.name.toLowerCase() === 'content-type') {
