@@ -51,6 +51,9 @@ GENERATE_ICEBERG=false
 ICEBERG_ROOT=""
 VERIFY_COUNT=false
 
+# Check required commands (python3 is used for JSON parsing in status polling)
+require_commands python3 || exit 1
+
 # Load environment configuration
 load_env
 load_admin_api_key

@@ -88,12 +88,12 @@ function compareItems<T extends { id: string; tags: CanonicalTag[] }>({
   entityType: 'data_item' | 'transaction' | 'block';
 }): Discrepancy[] {
   const discrepancies: Discrepancy[] = [];
-  const entityLabel =
-    entityType === 'data_item'
-      ? 'Data item'
-      : entityType === 'transaction'
-        ? 'Transaction'
-        : 'Block';
+  const ENTITY_LABELS: Record<string, string> = {
+    data_item: 'Data item',
+    transaction: 'Transaction',
+    block: 'Block',
+  };
+  const entityLabel = ENTITY_LABELS[entityType];
 
   const sourceData: SourceData<T>[] = sources.map((s) => ({
     name: s.name,
@@ -204,7 +204,7 @@ export function compareAllTransactions(
 ): Discrepancy[] {
   return compareItems({
     sources,
-    fields: [...TRANSACTION_FIELDS],
+    fields: TRANSACTION_FIELDS,
     entityType: 'transaction',
   });
 }
