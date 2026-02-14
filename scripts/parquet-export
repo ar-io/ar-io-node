@@ -107,7 +107,6 @@ while [[ $# -gt 0 ]]; do
       shift 1
       ;;
     --staging-job-dir)
-      # When staging-job-dir is provided, export directly there
       STAGING_JOB_DIR=$2
       shift 2
       ;;
@@ -142,8 +141,8 @@ if [[ -z "$START_HEIGHT" || -z "$END_HEIGHT" ]]; then
   exit 1
 fi
 
-# When staging-job-dir is provided, use it as the output directory so
-# callers (e.g. clickhouse-auto-import) find files there.
+# --staging-job-dir takes priority over --output-dir so callers
+# (e.g. clickhouse-auto-import) that pass both get files where expected.
 if [[ -n "$STAGING_JOB_DIR" ]]; then
   OUTPUT_DIR="$STAGING_JOB_DIR"
 elif [[ -z "$OUTPUT_DIR" ]]; then

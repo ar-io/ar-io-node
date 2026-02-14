@@ -255,7 +255,8 @@ export class ParquetExporter {
   }
 }
 
-const TEMP_SQLITE_SCHEMA = `
+if (!isMainThread) {
+  const TEMP_SQLITE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS blocks (
   indep_hash BLOB,
   height INTEGER NOT NULL,
@@ -306,8 +307,6 @@ CREATE TABLE IF NOT EXISTS tags (
   is_data_item INTEGER NOT NULL
 );
 `;
-
-if (!isMainThread) {
   const escapeSqlString = (s: string): string => s.replace(/'/g, "''");
 
   const logTiming = async <T>(
@@ -515,12 +514,12 @@ if (!isMainThread) {
 
     if (rowCount === 0) return;
 
-    const orderBy =
-      tableName === 'blocks'
-        ? 'ORDER BY height, indep_hash'
-        : tableName === 'transactions'
-          ? 'ORDER BY height, id'
-          : 'ORDER BY height, id, tag_index';
+    const ORDER_BY: Record<string, string> = {
+      blocks: 'ORDER BY height, indep_hash',
+      transactions: 'ORDER BY height, id',
+      tags: 'ORDER BY height, id, tag_index',
+    };
+    const orderBy = ORDER_BY[tableName];
 
     if (maxFileRows === undefined || rowCount <= maxFileRows) {
       const fileName = `${tableName}_${partitionStart}_${partitionEnd}_${runId}.parquet`;
@@ -563,6 +562,7 @@ if (!isMainThread) {
       coreDbPath,
     } = data;
 
+    // e.g. "20260214T120000_12345"
     const runId = `${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}_${process.pid}`;
 
     // Create temp directory for intermediate files

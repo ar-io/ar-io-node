@@ -15,12 +15,36 @@ import {
   SourceAdapter,
 } from '../types.js';
 
+function groupTagsById(tagRows: any[]): Map<string, CanonicalTag[]> {
+  const tagMap = new Map<string, CanonicalTag[]>();
+  for (const t of tagRows) {
+    const id = toB64Url(Buffer.from(t.id));
+    if (!tagMap.has(id)) {
+      tagMap.set(id, []);
+    }
+    tagMap.get(id)!.push({
+      name: Buffer.from(t.tag_name).toString('utf8'),
+      value: Buffer.from(t.tag_value).toString('utf8'),
+      index: t.tag_index,
+    });
+  }
+  return tagMap;
+}
+
 export class ParquetSource implements SourceAdapter {
   name = 'parquet';
   private stagingDir: string;
 
   constructor(stagingDir: string) {
     this.stagingDir = stagingDir;
+  }
+
+  private txGlob(): string {
+    return path.join(this.stagingDir, 'transactions', '**', '*.parquet');
+  }
+
+  private tagsGlob(): string {
+    return path.join(this.stagingDir, 'tags', '**', '*.parquet');
   }
 
   async getDataItems(
@@ -30,14 +54,6 @@ export class ParquetSource implements SourceAdapter {
     const db = await Database.create(':memory:');
 
     try {
-      const txGlob = path.join(
-        this.stagingDir,
-        'transactions',
-        '**',
-        '*.parquet',
-      );
-      const tagsGlob = path.join(this.stagingDir, 'tags', '**', '*.parquet');
-
       const rows = await db.all(
         `
         SELECT
@@ -59,7 +75,7 @@ export class ParquetSource implements SourceAdapter {
           root_parent_offset,
           content_type,
           signature_type
-        FROM read_parquet('${txGlob}', hive_partitioning=false)
+        FROM read_parquet('${this.txGlob()}', hive_partitioning=false)
         WHERE is_data_item = true
           AND height >= ${startHeight}
           AND height <= ${endHeight}
@@ -74,7 +90,7 @@ export class ParquetSource implements SourceAdapter {
           tag_index,
           tag_name,
           tag_value
-        FROM read_parquet('${tagsGlob}', hive_partitioning=false)
+        FROM read_parquet('${this.tagsGlob()}', hive_partitioning=false)
         WHERE is_data_item = true
           AND height >= ${startHeight}
           AND height <= ${endHeight}
@@ -82,19 +98,7 @@ export class ParquetSource implements SourceAdapter {
         `,
       );
 
-      // Group tags by data item id
-      const tagsByItemId = new Map<string, CanonicalTag[]>();
-      for (const t of tagRows) {
-        const itemId = toB64Url(Buffer.from(t.id));
-        if (!tagsByItemId.has(itemId)) {
-          tagsByItemId.set(itemId, []);
-        }
-        tagsByItemId.get(itemId)!.push({
-          name: Buffer.from(t.tag_name).toString('utf8'),
-          value: Buffer.from(t.tag_value).toString('utf8'),
-          index: t.tag_index,
-        });
-      }
+      const tagsById = groupTagsById(tagRows);
 
       return rows.map((row) => {
         const id = toB64Url(Buffer.from(row.id));
@@ -128,7 +132,7 @@ export class ParquetSource implements SourceAdapter {
           contentType: row.content_type ?? null,
           signatureType:
             row.signature_type != null ? Number(row.signature_type) : null,
-          tags: tagsByItemId.get(id) ?? [],
+          tags: tagsById.get(id) ?? [],
         };
       });
     } finally {
@@ -143,14 +147,6 @@ export class ParquetSource implements SourceAdapter {
     const db = await Database.create(':memory:');
 
     try {
-      const txGlob = path.join(
-        this.stagingDir,
-        'transactions',
-        '**',
-        '*.parquet',
-      );
-      const tagsGlob = path.join(this.stagingDir, 'tags', '**', '*.parquet');
-
       const rows = await db.all(
         `
         SELECT
@@ -167,7 +163,7 @@ export class ParquetSource implements SourceAdapter {
           owner_address,
           data_root,
           "offset"
-        FROM read_parquet('${txGlob}', hive_partitioning=false)
+        FROM read_parquet('${this.txGlob()}', hive_partitioning=false)
         WHERE is_data_item = false
           AND height >= ${startHeight}
           AND height <= ${endHeight}
@@ -182,7 +178,7 @@ export class ParquetSource implements SourceAdapter {
           tag_index,
           tag_name,
           tag_value
-        FROM read_parquet('${tagsGlob}', hive_partitioning=false)
+        FROM read_parquet('${this.tagsGlob()}', hive_partitioning=false)
         WHERE is_data_item = false
           AND height >= ${startHeight}
           AND height <= ${endHeight}
@@ -190,18 +186,7 @@ export class ParquetSource implements SourceAdapter {
         `,
       );
 
-      const tagsByTxId = new Map<string, CanonicalTag[]>();
-      for (const t of tagRows) {
-        const txId = toB64Url(Buffer.from(t.id));
-        if (!tagsByTxId.has(txId)) {
-          tagsByTxId.set(txId, []);
-        }
-        tagsByTxId.get(txId)!.push({
-          name: Buffer.from(t.tag_name).toString('utf8'),
-          value: Buffer.from(t.tag_value).toString('utf8'),
-          index: t.tag_index,
-        });
-      }
+      const tagsById = groupTagsById(tagRows);
 
       return rows.map((row) => {
         const id = toB64Url(Buffer.from(row.id));
@@ -221,7 +206,7 @@ export class ParquetSource implements SourceAdapter {
             : '',
           dataRoot: row.data_root ? toB64Url(Buffer.from(row.data_root)) : '',
           offset: row.offset != null ? Number(row.offset) : null,
-          tags: tagsByTxId.get(id) ?? [],
+          tags: tagsById.get(id) ?? [],
         };
       });
     } finally {
