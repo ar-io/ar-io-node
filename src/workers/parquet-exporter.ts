@@ -5,10 +5,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { Connection, Database } from 'duckdb-async';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import {
   isMainThread,
   parentPort,
@@ -486,6 +485,42 @@ CREATE TABLE IF NOT EXISTS tags (
     tempDb.exec('DETACH bundles');
   };
 
+  // Typed SELECT expressions that cast SQLite types to Parquet-appropriate types
+  const TYPED_SELECTS: Record<string, string> = {
+    blocks: `
+      SELECT indep_hash, height::UBIGINT AS height, previous_block, nonce, hash,
+             block_timestamp, tx_count, block_size::UBIGINT AS block_size
+      FROM staging.blocks`,
+    transactions: `
+      SELECT id, indexed_at::UBIGINT AS indexed_at,
+             block_transaction_index::USMALLINT AS block_transaction_index,
+             is_data_item::BOOLEAN AS is_data_item, target,
+             quantity::DECIMAL(20,0) AS quantity, reward::DECIMAL(20,0) AS reward,
+             anchor, data_size::UBIGINT AS data_size, content_type,
+             format::UTINYINT AS format, height::UBIGINT AS height, owner_address,
+             data_root, parent, "offset"::UBIGINT AS "offset",
+             size::UBIGINT AS size, data_offset::UBIGINT AS data_offset,
+             owner_offset::UBIGINT AS owner_offset,
+             owner_size::UINTEGER AS owner_size, owner,
+             signature_offset::UBIGINT AS signature_offset,
+             signature_size::UINTEGER AS signature_size,
+             signature_type::UINTEGER AS signature_type, root_transaction_id,
+             root_parent_offset::UINTEGER AS root_parent_offset
+      FROM staging.transactions`,
+    tags: `
+      SELECT height::UBIGINT AS height, id,
+             tag_index::USMALLINT AS tag_index,
+             indexed_at::UBIGINT AS indexed_at, tag_name, tag_value,
+             is_data_item::BOOLEAN AS is_data_item
+      FROM staging.tags`,
+  };
+
+  const ORDER_BY: Record<string, string> = {
+    blocks: 'ORDER BY height, indep_hash',
+    transactions: 'ORDER BY height, id',
+    tags: 'ORDER BY height, id, tag_index',
+  };
+
   const exportTableToParquet = async ({
     connection,
     tableName,
@@ -508,23 +543,19 @@ CREATE TABLE IF NOT EXISTS tags (
     mkdirSync(tableOutputDir, { recursive: true });
 
     const countResult = await connection.all(
-      `SELECT COUNT(*) AS cnt FROM ${tableName}`,
+      `SELECT COUNT(*) AS cnt FROM staging.${tableName}`,
     );
     const rowCount = Number(countResult[0].cnt);
 
     if (rowCount === 0) return;
 
-    const ORDER_BY: Record<string, string> = {
-      blocks: 'ORDER BY height, indep_hash',
-      transactions: 'ORDER BY height, id',
-      tags: 'ORDER BY height, id, tag_index',
-    };
+    const typedSelect = TYPED_SELECTS[tableName];
     const orderBy = ORDER_BY[tableName];
 
     if (maxFileRows === undefined || rowCount <= maxFileRows) {
       const fileName = `${tableName}_${partitionStart}_${partitionEnd}_${runId}.parquet`;
       await connection.exec(`
-        COPY (SELECT * FROM ${tableName} ${orderBy})
+        COPY (${typedSelect} ${orderBy})
         TO '${escapeSqlString(join(tableOutputDir, fileName))}'
         (FORMAT PARQUET, COMPRESSION 'zstd')
       `);
@@ -535,7 +566,7 @@ CREATE TABLE IF NOT EXISTS tags (
         const fileName = `${tableName}_${partitionStart}_${partitionEnd}_${fileNum}_${runId}.parquet`;
         await connection.exec(`
           COPY (
-            SELECT * FROM ${tableName} ${orderBy}
+            ${typedSelect} ${orderBy}
             LIMIT ${maxFileRows} OFFSET ${offset}
           )
           TO '${escapeSqlString(join(tableOutputDir, fileName))}'
@@ -567,7 +598,6 @@ CREATE TABLE IF NOT EXISTS tags (
 
     // Create temp directory for intermediate files
     let tempDir: string | null = null;
-    let db: Database | null = null;
     let connection: Connection | null = null;
     let tempDb: InstanceType<typeof Sqlite> | null = null;
     let exitCode = 1;
@@ -575,21 +605,12 @@ CREATE TABLE IF NOT EXISTS tags (
     try {
       tempDir = mkdtempSync(join(tmpdir(), 'parquet-export-'));
       const tempDbPath = join(tempDir, 'temp.db');
-      const duckDbPath = join(tempDir, 'export.duckdb');
 
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = dirname(__filename);
-
-      // Initialize DuckDB with schema
-      db = await Database.create(duckDbPath);
+      // Initialize in-memory DuckDB with SQLite extension
+      const db = await Database.create(':memory:');
       connection = await db.connect();
 
-      await logTiming('init-schema', async () => {
-        const duckDbSchema = readFileSync(
-          join(__dirname, '..', 'database', 'duckdb', 'schema.sql'),
-          'utf8',
-        );
-        await connection!.exec(duckDbSchema);
+      await logTiming('init-duckdb', async () => {
         await connection!.exec('INSTALL sqlite; LOAD sqlite;');
       });
 
@@ -626,24 +647,11 @@ CREATE TABLE IF NOT EXISTS tags (
             });
           });
 
-          // Step 2: Import from temp SQLite into DuckDB (proper types)
-          await logTiming(`duckdb-import-${partStart}-${partEnd}`, async () => {
-            await connection!.exec(
-              `ATTACH '${escapeSqlString(tempDbPath)}' AS staging (TYPE SQLITE, READONLY)`,
-            );
-            await connection!.exec(
-              'INSERT INTO blocks SELECT * FROM staging.blocks',
-            );
-            await connection!.exec(
-              'INSERT INTO transactions SELECT * FROM staging.transactions',
-            );
-            await connection!.exec(
-              'INSERT INTO tags SELECT * FROM staging.tags',
-            );
-            await connection!.exec('DETACH staging');
-          });
+          // Step 2: Attach temp SQLite and export directly to Parquet
+          await connection!.exec(
+            `ATTACH '${escapeSqlString(tempDbPath)}' AS staging (TYPE SQLITE, READONLY)`,
+          );
 
-          // Step 3: Export to Parquet files
           await logTiming(
             `export-parquet-${partStart}-${partEnd}`,
             async () => {
@@ -678,10 +686,9 @@ CREATE TABLE IF NOT EXISTS tags (
             },
           );
 
-          // Step 4: Clear tables for next partition
-          await connection!.exec(
-            'DELETE FROM blocks; DELETE FROM transactions; DELETE FROM tags;',
-          );
+          await connection!.exec('DETACH staging');
+
+          // Step 3: Clear temp SQLite tables for next partition
           tempDb!.exec(
             'DELETE FROM blocks; DELETE FROM transactions; DELETE FROM tags;',
           );
@@ -715,11 +722,6 @@ CREATE TABLE IF NOT EXISTS tags (
       }
       try {
         await connection?.close();
-      } catch {
-        // ignore cleanup errors
-      }
-      try {
-        await db?.close();
       } catch {
         // ignore cleanup errors
       }
