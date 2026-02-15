@@ -99,7 +99,7 @@ export class ParquetExporter {
     if (this.exportStatus.status === RUNNING) {
       const error = new Error('An export is already in progress');
       this.log.error(error.message);
-      return Promise.reject(error);
+      throw error;
     }
 
     this.exportStatus.status = RUNNING;
@@ -143,7 +143,7 @@ export class ParquetExporter {
           const endTime = new Date();
           const durationInSeconds = (endTime.getTime() - startTime) / 1000;
 
-          this.log.info(`Parquet export completed`, {
+          this.log.info('Parquet export completed', {
             outputDir,
             startHeight,
             endHeight,
@@ -192,16 +192,16 @@ export class ParquetExporter {
           this.log.debug(`Parquet export timing: ${message.timingKey}`, {
             exportStep: message.timingKey,
             startTime:
-              typeof message.startTime === 'number'
+              message.startTime != null
                 ? new Date(message.startTime).toISOString()
                 : undefined,
             endTime:
-              typeof message.endTime === 'number'
+              message.endTime != null
                 ? new Date(message.endTime).toISOString()
                 : undefined,
             durationMs: message.durationMs,
             durationSeconds:
-              typeof message.durationMs === 'number'
+              message.durationMs != null
                 ? message.durationMs / 1000
                 : undefined,
           });
@@ -237,7 +237,6 @@ export class ParquetExporter {
   }
 
   async stop(): Promise<void> {
-    const log = this.log.child({ method: 'stop' });
     const worker = this.worker;
 
     if (worker) {
@@ -250,7 +249,7 @@ export class ParquetExporter {
       });
     }
 
-    log.debug('Stopped successfully.');
+    this.log.debug('Stopped successfully.');
   }
 }
 
@@ -306,12 +305,14 @@ CREATE TABLE IF NOT EXISTS tags (
   is_data_item INTEGER NOT NULL
 );
 `;
-  const escapeSqlString = (s: string): string => s.replace(/'/g, "''");
+  function escapeSqlString(s: string): string {
+    return s.replace(/'/g, "''");
+  }
 
-  const logTiming = async <T>(
+  async function logTiming<T>(
     operation: string,
     fn: () => Promise<T>,
-  ): Promise<T> => {
+  ): Promise<T> {
     const startTime = Date.now();
     try {
       return await fn();
@@ -326,9 +327,9 @@ CREATE TABLE IF NOT EXISTS tags (
         durationMs,
       });
     }
-  };
+  }
 
-  const populateTempDb = ({
+  function populateTempDb({
     tempDb,
     coreDbPath,
     bundlesDbPath,
@@ -344,7 +345,7 @@ CREATE TABLE IF NOT EXISTS tags (
     endHeight: number;
     skipL1Transactions: boolean;
     skipL1Tags: boolean;
-  }) => {
+  }): void {
     // Attach core database and import blocks + L1 data
     tempDb.exec(`ATTACH DATABASE '${escapeSqlString(coreDbPath)}' AS core`);
 
@@ -483,7 +484,7 @@ CREATE TABLE IF NOT EXISTS tags (
     `);
 
     tempDb.exec('DETACH bundles');
-  };
+  }
 
   // Typed SELECT expressions that cast SQLite types to Parquet-appropriate types
   const TYPED_SELECTS: Record<string, string> = {
@@ -521,7 +522,7 @@ CREATE TABLE IF NOT EXISTS tags (
     tags: 'ORDER BY height, id, tag_index',
   };
 
-  const exportTableToParquet = async ({
+  async function exportTableToParquet({
     connection,
     tableName,
     outputDir,
@@ -537,7 +538,7 @@ CREATE TABLE IF NOT EXISTS tags (
     partitionEnd: number;
     runId: string;
     maxFileRows?: number;
-  }) => {
+  }): Promise<void> {
     const partitionDir = `height=${partitionStart}-${partitionEnd}`;
     const tableOutputDir = join(outputDir, tableName, 'data', partitionDir);
     mkdirSync(tableOutputDir, { recursive: true });
@@ -576,9 +577,9 @@ CREATE TABLE IF NOT EXISTS tags (
         fileNum++;
       }
     }
-  };
+  }
 
-  const runExport = async (data: any) => {
+  async function runExport(data: any): Promise<void> {
     const totalStartTime = Date.now();
 
     const {
@@ -628,10 +629,10 @@ CREATE TABLE IF NOT EXISTS tags (
         partStart <= endHeight;
         partStart += heightPartitionSize
       ) {
-        let partEnd = partStart + heightPartitionSize - 1;
-        if (partEnd > endHeight) {
-          partEnd = endHeight;
-        }
+        const partEnd = Math.min(
+          partStart + heightPartitionSize - 1,
+          endHeight,
+        );
 
         await logTiming(`partition-${partStart}-${partEnd}`, async () => {
           // Step 1: Populate temp SQLite from source DBs (uses SQLite indexes)
@@ -730,7 +731,7 @@ CREATE TABLE IF NOT EXISTS tags (
       }
       process.exit(exitCode);
     }
-  };
+  }
 
   parentPort?.on('message', (message: Message) => {
     if (message.eventName === START) {
