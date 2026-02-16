@@ -288,6 +288,265 @@ CREATE INDEX idx_usage_daily_org_date ON usage_daily(org_id, date);
 
 The thin proxy is a **small, focused service** deployed alongside each ar-io-node gateway. It's the only new codebase needed.
 
+### MVP Mode: Standalone Proxy (No Turbo Changes)
+
+For the first customer, the proxy can run **completely standalone** without any Turbo modifications:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     MVP: Standalone Proxy Architecture                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Config File / Env Vars          Redis              Proxy                  │
+│   ──────────────────────          ─────              ─────                  │
+│   API_KEYS=ario_xxx:...   →    Key cache    →    Validate + proxy          │
+│   RATE_LIMIT=100/s             Usage counters     Count bytes               │
+│   MONTHLY_QUOTA=10GB           Request logs       Rate limit                │
+│                                                                              │
+│   ✅ No Turbo integration needed for first customer!                        │
+│   ✅ Usage tracked locally in Redis                                         │
+│   ✅ Simple admin endpoint to view usage                                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### MVP Config File
+
+```typescript
+// config/keys.json - manually add customer keys
+{
+  "keys": [
+    {
+      "key": "ario_prod_customer1_xxxxxxxxxxxxxxxxxxxxxxxx",
+      "name": "Customer 1 Production",
+      "orgId": "customer-1",
+      "type": "server",
+      "scopes": ["*"],
+      "allowedOrigins": [],
+      "allowedIps": [],
+      "rateLimit": 100,
+      "monthlyRequestQuota": 1000000,
+      "monthlyBytesQuota": 107374182400,  // 100GB
+      "active": true
+    }
+  ]
+}
+```
+
+#### MVP Environment Variables
+
+```bash
+# Required
+GATEWAY_URL=http://localhost:3000    # ar-io-node
+REDIS_URL=redis://localhost:6379
+
+# MVP Mode (no Turbo)
+KEYS_FILE=/config/keys.json          # Load keys from file
+ADMIN_SECRET=<random-secret>         # For admin endpoints
+
+# Optional
+PORT=4000
+RATE_LIMIT_WINDOW=1000               # 1 second
+```
+
+#### MVP Admin Endpoints
+
+```typescript
+// Simple admin endpoints for first customer (protected by ADMIN_SECRET)
+
+// GET /admin/usage?key=ario_prod_customer1_xxx
+// Header: X-Admin-Secret: <ADMIN_SECRET>
+{
+  "key_prefix": "ario_prod_cust...",
+  "name": "Customer 1 Production",
+  "today": {
+    "requests": 45231,
+    "bytes": 2300000000
+  },
+  "this_month": {
+    "requests": 1234567,
+    "bytes": 45600000000
+  },
+  "quota": {
+    "monthly_requests": 1000000,
+    "monthly_bytes": 107374182400,
+    "requests_percent": 123.4,
+    "bytes_percent": 42.4
+  }
+}
+
+// GET /admin/usage/all - usage for all keys
+// GET /admin/keys - list all configured keys (no secrets)
+// POST /admin/keys/reload - reload keys from config file
+```
+
+#### MVP Redis Keys
+
+```
+# API key data (loaded from config file)
+key:{prefix}                         # JSON key config
+
+# Usage tracking (local, no Turbo sync)
+usage:{orgId}:requests:{YYYY-MM-DD}  # Daily request count
+usage:{orgId}:bytes:{YYYY-MM-DD}     # Daily bytes
+usage:{orgId}:requests:{YYYY-MM}     # Monthly request count
+usage:{orgId}:bytes:{YYYY-MM}        # Monthly bytes
+
+# Rate limiting
+ratelimit:{orgId}:count              # Sliding window counter
+ratelimit:{orgId}:reset              # Window reset time
+
+# Request logs (optional, for debugging)
+requests:{orgId}:recent              # Last 100 requests (list)
+```
+
+#### MVP Proxy Code (Simplified)
+
+```typescript
+// MVP mode - load keys from file, track usage locally
+
+import Fastify from 'fastify';
+import { createClient } from 'redis';
+import { request } from 'undici';
+import { readFileSync } from 'fs';
+
+const redis = createClient({ url: process.env.REDIS_URL });
+const GATEWAY_URL = process.env.GATEWAY_URL || 'http://localhost:3000';
+
+// Load keys from config file
+let API_KEYS: Map<string, KeyConfig>;
+
+function loadKeys() {
+  const config = JSON.parse(readFileSync(process.env.KEYS_FILE, 'utf-8'));
+  API_KEYS = new Map();
+  for (const key of config.keys) {
+    const prefix = key.key.slice(0, 20);  // ario_prod_customer1_
+    API_KEYS.set(prefix, key);
+    // Also cache full key hash for validation
+    API_KEYS.set(key.key, key);
+  }
+  console.log(`Loaded ${config.keys.length} API keys`);
+}
+
+loadKeys();
+
+// Key validation - just lookup in memory
+async function getKeyData(apiKey: string) {
+  // Check exact match first
+  let keyData = API_KEYS.get(apiKey);
+  if (keyData && keyData.active) return keyData;
+  return null;
+}
+
+// Usage tracking - store in Redis locally
+async function recordUsage(orgId: string, bytes: number) {
+  const today = new Date().toISOString().slice(0, 10);  // YYYY-MM-DD
+  const month = today.slice(0, 7);  // YYYY-MM
+
+  await Promise.all([
+    redis.incrBy(`usage:${orgId}:requests:${today}`, 1),
+    redis.incrBy(`usage:${orgId}:bytes:${today}`, bytes),
+    redis.incrBy(`usage:${orgId}:requests:${month}`, 1),
+    redis.incrBy(`usage:${orgId}:bytes:${month}`, bytes),
+  ]);
+}
+
+// Admin endpoint - get usage
+fastify.get('/admin/usage', async (req, res) => {
+  if (req.headers['x-admin-secret'] !== process.env.ADMIN_SECRET) {
+    return res.status(401).send({ error: 'Unauthorized' });
+  }
+
+  const keyPrefix = req.query.key;
+  const keyData = API_KEYS.get(keyPrefix);
+  if (!keyData) {
+    return res.status(404).send({ error: 'Key not found' });
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const month = today.slice(0, 7);
+  const orgId = keyData.orgId;
+
+  const [todayReqs, todayBytes, monthReqs, monthBytes] = await Promise.all([
+    redis.get(`usage:${orgId}:requests:${today}`),
+    redis.get(`usage:${orgId}:bytes:${today}`),
+    redis.get(`usage:${orgId}:requests:${month}`),
+    redis.get(`usage:${orgId}:bytes:${month}`),
+  ]);
+
+  return {
+    key_prefix: keyPrefix.slice(0, 16) + '...',
+    name: keyData.name,
+    today: {
+      requests: parseInt(todayReqs || '0'),
+      bytes: parseInt(todayBytes || '0'),
+    },
+    this_month: {
+      requests: parseInt(monthReqs || '0'),
+      bytes: parseInt(monthBytes || '0'),
+    },
+    quota: {
+      monthly_requests: keyData.monthlyRequestQuota,
+      monthly_bytes: keyData.monthlyBytesQuota,
+      requests_percent: (parseInt(monthReqs || '0') / keyData.monthlyRequestQuota) * 100,
+      bytes_percent: (parseInt(monthBytes || '0') / keyData.monthlyBytesQuota) * 100,
+    },
+  };
+});
+
+// Reload keys without restart
+fastify.post('/admin/keys/reload', async (req, res) => {
+  if (req.headers['x-admin-secret'] !== process.env.ADMIN_SECRET) {
+    return res.status(401).send({ error: 'Unauthorized' });
+  }
+  loadKeys();
+  return { status: 'ok', keys_loaded: API_KEYS.size / 2 };
+});
+```
+
+#### MVP Build Timeline
+
+| Day | Task |
+|-----|------|
+| 1 | Project setup, config loading, basic proxy |
+| 2 | Key validation, rate limiting |
+| 3 | Usage tracking in Redis |
+| 4 | Admin endpoints |
+| 5 | Docker setup, testing |
+
+**5 days to working MVP for first customer!**
+
+#### When to Add Turbo Integration
+
+Add Turbo integration when you need:
+- Self-service key creation (customer creates own keys via dashboard)
+- Multiple customers (manual key management becomes painful)
+- Billing integration (charge based on usage)
+- Console UI for key management
+
+For **one customer** with **manually provisioned keys**, standalone mode is enough.
+
+---
+
+### Full Mode: Turbo Integration (Later)
+
+When ready to integrate with Turbo, the proxy switches from config file to Turbo API:
+
+```typescript
+// Change key loading from:
+const keyData = API_KEYS.get(apiKey);
+
+// To:
+const keyData = await getKeyFromTurbo(apiKey);
+
+// And add usage sync:
+setInterval(() => syncUsageToTurbo(), 60_000);
+```
+
+The proxy code is designed to make this transition easy - just swap the key source and add usage sync.
+
+---
+
 ### What It Does (and Doesn't Do)
 
 | Does | Doesn't Do |
@@ -828,39 +1087,15 @@ JWT_EXPIRY=604800                  # 7 days
 
 ## What To Build (Ordered)
 
-Two parallel workstreams - can be done by different developers:
+### Phase 1: MVP Standalone Proxy (Week 1) - FIRST CUSTOMER
 
-### Workstream A: Turbo Extensions (AWS)
+Build the proxy in standalone mode - no Turbo changes required:
 
-#### Week 1: API Key Management
-
-- [ ] Database migrations (api_keys, origins, ips tables)
-- [ ] API key CRUD endpoints (`/v1/gateway/keys/*`)
-- [ ] Key generation with argon2 hashing
-- [ ] Origin/IP restriction endpoints
-- [ ] Route scopes on keys
-- [ ] Auto-create first key on new user (if no gateway keys exist)
-
-**Milestone**: Users can create/manage API keys via Turbo API
-
-#### Week 2: Usage & Sync
-
-- [ ] Internal key sync endpoint (`/internal/gateway/keys/sync`)
-- [ ] Internal key validation endpoint (`/internal/gateway/keys/validate`)
-- [ ] Usage ingestion endpoint (`/internal/gateway/usage/ingest`)
-- [ ] Usage aggregation (daily rollups)
-- [ ] Usage query endpoints for console (`/v1/gateway/usage/*`)
-- [ ] Request logs storage + query
-
-**Milestone**: Proxy can sync keys and report usage
-
-### Workstream B: Thin Proxy (New Repo)
-
-#### Week 1: Core Proxy
+#### Days 1-2: Core Proxy
 
 - [ ] Project setup (Fastify, TypeScript, minimal deps)
-- [ ] Key validation with Redis caching
-- [ ] Fetch keys from Turbo on cache miss
+- [ ] Config file loading (keys.json)
+- [ ] Key validation from config
 - [ ] Origin validation for browser keys
 - [ ] IP validation for server keys
 - [ ] Scope validation
@@ -869,27 +1104,54 @@ Two parallel workstreams - can be done by different developers:
 
 **Milestone**: Proxy validates keys and proxies to gateway
 
-#### Week 2: Usage & Polish
+#### Days 3-4: Usage & Admin
 
 - [ ] Byte counting on responses
-- [ ] Usage recording to Redis
-- [ ] Batch usage sync to Turbo (every 60s)
-- [ ] Docker compose setup
+- [ ] Usage recording to Redis (local)
+- [ ] Admin endpoints (GET /admin/usage, GET /admin/keys)
+- [ ] Key reload endpoint (POST /admin/keys/reload)
 - [ ] Health check endpoint
-- [ ] Prometheus metrics
-- [ ] Error handling polish
 
-**Milestone**: Full usage tracking, ready for deployment
+**Milestone**: Usage tracking works, can monitor via admin API
 
-### Week 3: Integration & Testing
+#### Day 5: Deploy & Test
 
-- [ ] Deploy proxy alongside test gateway
-- [ ] End-to-end testing (console → Turbo → proxy → gateway)
-- [ ] Console UI updates for gateway section
-- [ ] Documentation
-- [ ] Test with initial customer
+- [ ] Docker compose setup
+- [ ] Deploy alongside customer gateway
+- [ ] Generate API key, add to config
+- [ ] Test end-to-end
+- [ ] Hand off to customer
 
-**Milestone**: Ready for customer pilot
+**Milestone**: First customer live!
+
+---
+
+### Phase 2: Turbo Integration (When Needed)
+
+Add Turbo integration when you have multiple customers or need self-service:
+
+#### Turbo Extensions (AWS)
+
+- [ ] Database migrations (api_keys, origins, ips tables)
+- [ ] API key CRUD endpoints (`/v1/gateway/keys/*`)
+- [ ] Key generation with argon2 hashing
+- [ ] Internal key validation endpoint (`/internal/gateway/keys/validate`)
+- [ ] Usage ingestion endpoint (`/internal/gateway/usage/ingest`)
+- [ ] Usage query endpoints for console
+
+#### Proxy Updates
+
+- [ ] Switch key source from config file to Turbo API
+- [ ] Add usage sync to Turbo (every 60s)
+- [ ] Add Turbo key caching
+
+#### Console Updates
+
+- [ ] Add gateway dashboard section
+- [ ] API key management UI
+- [ ] Usage display
+
+**Milestone**: Self-service key management via console
 
 ---
 
@@ -1337,22 +1599,42 @@ CORS_CREDENTIALS=true
 
 ## Summary
 
-**Extend Turbo + Add Thin Proxy:**
+### Phase 1: MVP (First Customer) - 1 Week
 
-| Component | What | Where |
-|-----------|------|-------|
+| Component | What | Work |
+|-----------|------|------|
+| **Thin Proxy** | Standalone with config file | ~500 lines, 5 days |
+| **Turbo** | No changes | None |
+| **Console** | No changes | None |
+| **ar-io-node** | Unchanged | None |
+
+- Keys loaded from JSON config file
+- Usage tracked locally in Redis
+- Admin endpoints for monitoring
+- **Customer live in 1 week**
+
+### Phase 2: Scale (Multiple Customers) - Later
+
+| Component | What | Work |
+|-----------|------|------|
 | **Turbo Payment Services** | Add API key management, usage tracking | Extend existing (AWS) |
-| **Thin Proxy** | Key validation, rate limiting, proxying | New small repo (~500 lines) |
+| **Thin Proxy** | Switch from config file to Turbo API | Small update |
 | **ar.io Console** | Add gateway dashboard section | Extend existing |
-| **ar-io-node** | Unchanged | Existing |
+| **ar-io-node** | Unchanged | None |
 
-**Timeline**: 3 weeks to customer pilot (2 parallel workstreams)
+- Self-service key creation
+- Usage billing via Turbo credits
+- Console UI for management
 
-**New Code**: ~500 lines for thin proxy + Turbo extensions
+**MVP Timeline**: 5 days to first customer
 
-**Cost**: $0 additional (extends existing infrastructure)
+**Full Timeline**: 3 weeks to self-service (when needed)
 
-**Risk**: Very low - Turbo auth already proven, proxy is simple
+**New Code**: ~500 lines for proxy
+
+**Cost**: $0 additional
+
+**Risk**: Very low - proxy is simple, can add Turbo later
 
 ---
 
