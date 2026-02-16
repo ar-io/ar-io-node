@@ -36,6 +36,7 @@ import {
   Cdb64RootTxValue,
 } from '../../src/lib/cdb64-encoding.js';
 import { PartitionedRustCdb64Writer } from '../../src/lib/partitioned-rust-cdb64-writer.js';
+import { StreamingPartitionedCdb64Writer } from '../../src/lib/streaming-partitioned-cdb64-writer.js';
 
 import {
   Config,
@@ -57,7 +58,9 @@ async function generateIndex(config: Config): Promise<void> {
   console.log(`Input:  ${config.inputPath}`);
   console.log(`Output: ${config.outputPath}`);
   if (config.partitioned) {
-    console.log('Mode:   Partitioned (using Rust writer)');
+    console.log(
+      `Mode:   Partitioned (using ${config.lowMemory ? 'streaming low-memory' : 'Rust'} writer)`,
+    );
   }
   console.log('');
 
@@ -231,7 +234,13 @@ async function generatePartitionedIndex(config: Config): Promise<void> {
   if (!config.outputDir) {
     throw new Error('outputDir is required for partitioned index generation');
   }
-  const writer = new PartitionedRustCdb64Writer(config.outputDir);
+  const writer = config.lowMemory
+    ? new StreamingPartitionedCdb64Writer(config.outputDir, {
+        onBuildProgress: (_idx, prefix, phase) => {
+          if (phase === 'start') console.log(`Building partition ${prefix}...`);
+        },
+      })
+    : new PartitionedRustCdb64Writer(config.outputDir);
   await writer.open();
 
   const stats: ProcessingStats = createStats();

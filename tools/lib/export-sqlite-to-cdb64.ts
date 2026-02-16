@@ -26,6 +26,7 @@ import Sqlite, { Database } from 'better-sqlite3';
 
 import { Cdb64Writer } from '../../src/lib/cdb64.js';
 import { PartitionedCdb64Writer } from '../../src/lib/partitioned-cdb64-writer.js';
+import { StreamingPartitionedCdb64Writer } from '../../src/lib/streaming-partitioned-cdb64-writer.js';
 import { encodeCdb64Value } from '../../src/lib/cdb64-encoding.js';
 
 interface Config {
@@ -33,6 +34,7 @@ interface Config {
   outputPath: string;
   outputDir?: string;
   partitioned: boolean;
+  lowMemory: boolean;
 }
 
 interface DataRow {
@@ -59,6 +61,7 @@ Options:
   --output <path>      Output CDB64 file path (single file mode, required unless --partitioned)
   --partitioned        Enable partitioned output (splits by key prefix into 00.cdb-ff.cdb)
   --output-dir <path>  Output directory for partitioned index (required with --partitioned)
+  --low-memory         Use streaming two-phase writer for low memory usage (requires --partitioned)
   --help               Show this help message
 
 Example:
@@ -76,6 +79,7 @@ function parseArgs(): Config | null {
   let outputPath: string | undefined;
   let outputDir: string | undefined;
   let partitioned = false;
+  let lowMemory = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -101,6 +105,9 @@ function parseArgs(): Config | null {
       case '--partitioned':
         partitioned = true;
         break;
+      case '--low-memory':
+        lowMemory = true;
+        break;
       case '--help':
       case '-h':
         printUsage();
@@ -108,6 +115,10 @@ function parseArgs(): Config | null {
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
+  }
+
+  if (lowMemory && !partitioned) {
+    throw new Error('--low-memory requires --partitioned');
   }
 
   if (partitioned) {
@@ -121,7 +132,7 @@ function parseArgs(): Config | null {
     }
   }
 
-  return { dataDbPath, outputPath, outputDir, partitioned };
+  return { dataDbPath, outputPath, outputDir, partitioned, lowMemory };
 }
 
 async function exportToCdb64(config: Config): Promise<void> {
@@ -129,7 +140,9 @@ async function exportToCdb64(config: Config): Promise<void> {
   console.log(`Database: ${config.dataDbPath}`);
   console.log(`Output:   ${config.outputPath}`);
   if (config.partitioned) {
-    console.log('Mode:     Partitioned (prefix-based sharding)');
+    console.log(
+      `Mode:     Partitioned (${config.lowMemory ? 'streaming low-memory' : 'prefix-based sharding'})`,
+    );
   }
   console.log('');
 
@@ -166,12 +179,18 @@ async function exportToCdb64(config: Config): Promise<void> {
     }
 
     // Create appropriate writer
-    let writer: Cdb64Writer | PartitionedCdb64Writer;
+    let writer: Cdb64Writer | PartitionedCdb64Writer | StreamingPartitionedCdb64Writer;
     if (config.partitioned) {
       if (!config.outputDir) {
         throw new Error('outputDir is required when partitioned mode is enabled');
       }
-      writer = new PartitionedCdb64Writer(config.outputDir);
+      writer = config.lowMemory
+        ? new StreamingPartitionedCdb64Writer(config.outputDir, {
+            onBuildProgress: (_idx, prefix, phase) => {
+              if (phase === 'start') console.log(`Building partition ${prefix}...`);
+            },
+          })
+        : new PartitionedCdb64Writer(config.outputDir);
     } else {
       writer = new Cdb64Writer(config.outputPath);
     }

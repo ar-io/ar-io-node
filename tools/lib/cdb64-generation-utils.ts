@@ -24,6 +24,7 @@ export interface Config {
   outputPath: string;
   outputDir?: string;
   partitioned: boolean;
+  lowMemory: boolean;
   skipHeader: boolean;
   force: boolean;
 }
@@ -75,6 +76,7 @@ Options:
   --output, -o <path>   Output CDB64 file path (single file mode, required unless --partitioned)
   --partitioned         Enable partitioned output (splits by key prefix into 00.cdb-ff.cdb)
   --output-dir <path>   Output directory for partitioned index (required with --partitioned)
+  --low-memory          Use streaming two-phase writer for low memory usage (requires --partitioned)
   --skip-header         Skip the first line of the CSV (default: false)
   --force, -f           Overwrite output file/directory if it exists
   --help, -h            Show this help message
@@ -118,6 +120,7 @@ export function parseArgs(): Config | null {
   let outputPath: string | undefined;
   let outputDir: string | undefined;
   let partitioned = false;
+  let lowMemory = false;
   let skipHeader = false;
   let force = false;
 
@@ -146,6 +149,9 @@ export function parseArgs(): Config | null {
       case '--partitioned':
         partitioned = true;
         break;
+      case '--low-memory':
+        lowMemory = true;
+        break;
       case '--skip-header':
         skipHeader = true;
         break;
@@ -165,6 +171,10 @@ export function parseArgs(): Config | null {
     throw new Error('--input is required');
   }
 
+  if (lowMemory && !partitioned) {
+    throw new Error('--low-memory requires --partitioned');
+  }
+
   if (partitioned) {
     if (!outputDir) {
       throw new Error('--output-dir is required when using --partitioned');
@@ -177,7 +187,7 @@ export function parseArgs(): Config | null {
     }
   }
 
-  return { inputPath, outputPath, outputDir, partitioned, skipHeader, force };
+  return { inputPath, outputPath, outputDir, partitioned, lowMemory, skipHeader, force };
 }
 
 /**

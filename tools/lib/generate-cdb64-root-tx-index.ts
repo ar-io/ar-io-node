@@ -31,6 +31,7 @@ import { parse } from 'csv-parse';
 
 import { Cdb64Writer } from '../../src/lib/cdb64.js';
 import { PartitionedCdb64Writer } from '../../src/lib/partitioned-cdb64-writer.js';
+import { StreamingPartitionedCdb64Writer } from '../../src/lib/streaming-partitioned-cdb64-writer.js';
 import {
   encodeCdb64Value,
   Cdb64RootTxValue,
@@ -56,7 +57,9 @@ async function generateIndex(config: Config): Promise<void> {
   console.log(`Input:  ${config.inputPath}`);
   console.log(`Output: ${config.outputPath}`);
   if (config.partitioned) {
-    console.log('Mode:   Partitioned (prefix-based sharding)');
+    console.log(
+      `Mode:   Partitioned (${config.lowMemory ? 'streaming low-memory' : 'prefix-based sharding'})`,
+    );
   }
   console.log('');
 
@@ -73,12 +76,18 @@ async function generateIndex(config: Config): Promise<void> {
   }
 
   // Create appropriate writer
-  let writer: Cdb64Writer | PartitionedCdb64Writer;
+  let writer: Cdb64Writer | PartitionedCdb64Writer | StreamingPartitionedCdb64Writer;
   if (config.partitioned) {
     if (!config.outputDir) {
       throw new Error('outputDir is required when partitioned mode is enabled');
     }
-    writer = new PartitionedCdb64Writer(config.outputDir);
+    writer = config.lowMemory
+      ? new StreamingPartitionedCdb64Writer(config.outputDir, {
+          onBuildProgress: (_idx, prefix, phase) => {
+            if (phase === 'start') console.log(`Building partition ${prefix}...`);
+          },
+        })
+      : new PartitionedCdb64Writer(config.outputDir);
   } else {
     writer = new Cdb64Writer(config.outputPath);
   }
