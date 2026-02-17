@@ -123,7 +123,7 @@ class ArchitectureAnalyzer {
       'Arweave/AR.IO': ['@ar.io/', 'arweave', '@dha-team/arbundles', '@permaweb/'],
       'Database': ['better-sqlite3', 'duckdb-async', '@clickhouse/', 'postgres', 'lmdb'],
       'Web Framework': ['express', 'apollo-server', 'cors', 'swagger'],
-      'Testing': ['supertest', 'testcontainers', '@cucumber/', 'fast-check'],
+      'Testing': ['supertest', 'testcontainers', 'fast-check'],
       'Build/Dev': ['typescript', 'eslint', 'prettier', '@types/', 'nodemon'],
       'Observability': ['@opentelemetry/', 'winston', 'prom-client'],
       'Utilities': ['ramda', 'lru-cache', 'axios', 'yaml', 'fs-extra']
