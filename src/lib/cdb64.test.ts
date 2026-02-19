@@ -13,6 +13,15 @@ import * as os from 'node:os';
 
 import { cdb64Hash, Cdb64Writer, Cdb64Reader } from './cdb64.js';
 
+// CLI tools require the native cdb64 module - check availability for skip
+let hasNativeCdb64 = false;
+try {
+  await import('cdb64/node/index.js');
+  hasNativeCdb64 = true;
+} catch {
+  // Native cdb64 module not available - CLI tests will be skipped
+}
+
 describe('CDB64', () => {
   let tempDir: string;
 
@@ -517,7 +526,7 @@ describe('CDB64', () => {
     });
   });
 
-  describe('CLI round-trip', () => {
+  describe('CLI round-trip', { skip: !hasNativeCdb64 }, () => {
     const runTool = async (
       tool: string,
       args: string[],
