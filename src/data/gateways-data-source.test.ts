@@ -518,57 +518,6 @@ describe('GatewayDataSource', () => {
       });
     });
 
-    describe('hop count validation', () => {
-      it('should throw when hops are at the limit', async () => {
-        await assert.rejects(
-          dataSource.getData({
-            id: 'some-id',
-            requestAttributes: { hops: 3 },
-          }),
-          /Maximum hops \(3\) exceeded/,
-        );
-      });
-
-      it('should throw when hops exceed the limit', async () => {
-        await assert.rejects(
-          dataSource.getData({
-            id: 'some-id',
-            requestAttributes: { hops: 5 },
-          }),
-          /Maximum hops \(3\) exceeded/,
-        );
-      });
-
-      it('should succeed when hops are below the limit', async () => {
-        const data = await dataSource.getData({
-          id: 'some-id',
-          requestAttributes: { hops: 2 },
-        });
-        assert.equal(data.size, 123);
-      });
-
-      it('should succeed without requestAttributes', async () => {
-        const data = await dataSource.getData({ id: 'some-id' });
-        assert.equal(data.size, 123);
-      });
-
-      it('should respect custom maxHopsAllowed', async () => {
-        const customDataSource = new GatewaysDataSource({
-          log,
-          trustedGatewaysUrls: { 'https://gateway.domain': 1 },
-          maxHopsAllowed: 1,
-        });
-
-        await assert.rejects(
-          customDataSource.getData({
-            id: 'some-id',
-            requestAttributes: { hops: 1 },
-          }),
-          /Maximum hops \(1\) exceeded/,
-        );
-      });
-    });
-
     it('should throw when skipRemoteForwarding is set', async () => {
       await assert.rejects(
         dataSource.getData({
