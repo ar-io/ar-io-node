@@ -14,11 +14,13 @@ import { Cdb64Reader } from './cdb64.js';
 import { parseManifest, validateManifest } from './cdb64-manifest.js';
 
 // StreamingPartitionedCdb64Writer requires the native cdb64 module.
-// Skip all tests if it's not available.
+// Probe for the native module directly to avoid async rejection leaks from
+// transitive imports.
 let StreamingPartitionedCdb64Writer:
   | typeof import('./streaming-partitioned-cdb64-writer.js').StreamingPartitionedCdb64Writer
   | undefined;
 try {
+  await import('cdb64/node/index.js');
   ({ StreamingPartitionedCdb64Writer } = await import(
     './streaming-partitioned-cdb64-writer.js'
   ));
