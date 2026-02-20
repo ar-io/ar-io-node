@@ -57,6 +57,7 @@ export const createArNSResolver = ({
   resolutionOrder,
   registryCache,
   trustedGatewayUrl,
+  trustedArnsResolverHostHeader,
   networkProcess,
   overrides,
 }: {
@@ -65,6 +66,7 @@ export const createArNSResolver = ({
   resolutionOrder: (ArNSResolverType | string)[];
   registryCache: KvArNSRegistryStore;
   trustedGatewayUrl?: string;
+  trustedArnsResolverHostHeader?: string;
   networkProcess?: AoARIORead;
   overrides?: {
     ttlSeconds?: number;
@@ -79,6 +81,7 @@ export const createArNSResolver = ({
         ? new TrustedGatewayArNSResolver({
             log,
             trustedGatewayUrl,
+            hostHeader: trustedArnsResolverHostHeader,
           })
         : undefined,
   };

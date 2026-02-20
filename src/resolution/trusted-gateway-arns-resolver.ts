@@ -18,26 +18,35 @@ export const DEFAULT_ARNS_UNDERNAME_INDEX = 0;
 export class TrustedGatewayArNSResolver implements NameResolver {
   private log: winston.Logger;
   private trustedGatewayUrl: string;
+  private hostHeader?: string;
 
   constructor({
     log,
     trustedGatewayUrl,
+    hostHeader,
   }: {
     log: winston.Logger;
     trustedGatewayUrl: string;
+    hostHeader?: string;
   }) {
     this.log = log.child({ class: 'TrustedGatewayArNSResolver' });
     this.trustedGatewayUrl = trustedGatewayUrl;
+    this.hostHeader = hostHeader;
   }
 
   async resolve({ name }: { name: string }): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
     try {
       const nameUrl = this.trustedGatewayUrl.replace('__NAME__', name);
+      const headers: Record<string, string> = {};
+      if (this.hostHeader !== undefined) {
+        headers['Host'] = this.hostHeader.replace('__NAME__', name);
+      }
       const response = await axios({
         method: 'HEAD',
         url: '/',
         baseURL: nameUrl,
+        headers,
         validateStatus: (status) => [200, 404, 402].includes(status),
       });
       const resolvedId =
