@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { Readable } from 'node:stream';
+import pLimit, { LimitFunction } from 'p-limit';
 import winston from 'winston';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { streamRangeData } from '../lib/stream-tx-range.js';
@@ -27,19 +28,27 @@ export class TxChunksDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private chainSource: ChainSource;
   private chunkSource: ChunkDataByAnySource & ChunkByAnySource;
+  private concurrencyLimit: LimitFunction;
+  private firstDataTimeoutMs: number;
 
   constructor({
     log,
     chainSource,
     chunkSource,
+    concurrencyLimit,
+    firstDataTimeoutMs = 0,
   }: {
     log: winston.Logger;
     chainSource: ChainSource;
     chunkSource: ChunkDataByAnySource & ChunkByAnySource;
+    concurrencyLimit?: LimitFunction;
+    firstDataTimeoutMs?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.chainSource = chainSource;
     this.chunkSource = chunkSource;
+    this.concurrencyLimit = concurrencyLimit ?? pLimit(Infinity);
+    this.firstDataTimeoutMs = firstDataTimeoutMs;
   }
 
   async getData({
@@ -104,7 +113,8 @@ export class TxChunksDataSource implements ContiguousDataSource {
           absoluteOffset: number;
           dataRoot: string;
           relativeOffset: number;
-        }) => this.chunkSource.getChunkByAny(params);
+        }) =>
+          this.concurrencyLimit(() => this.chunkSource.getChunkByAny(params));
 
         // Use efficient range streaming that seeks directly to required chunks
         const rangeStartTime = Date.now();
@@ -120,7 +130,39 @@ export class TxChunksDataSource implements ContiguousDataSource {
           signal,
         });
 
-        const rangeStream = Readable.from(rangeResult.stream);
+        // Eagerly pull the first value to detect failures/timeouts early
+        const rangeIterator = rangeResult.stream[Symbol.asyncIterator]();
+        let firstResult: IteratorResult<Buffer>;
+        if (this.firstDataTimeoutMs > 0) {
+          let timeoutId: NodeJS.Timeout;
+          firstResult = await Promise.race([
+            rangeIterator.next().finally(() => clearTimeout(timeoutId)),
+            new Promise<never>((_resolve, reject) => {
+              timeoutId = setTimeout(() => {
+                metrics.chunkFirstDataTimeoutsTotal.inc({
+                  request_type: 'range',
+                });
+                reject(
+                  new Error(
+                    `First chunk data timeout after ${this.firstDataTimeoutMs}ms`,
+                  ),
+                );
+              }, this.firstDataTimeoutMs);
+            }),
+          ]);
+        } else {
+          firstResult = await rangeIterator.next();
+        }
+
+        // Prepend the first value back and continue with the rest
+        async function* prependFirst() {
+          if (!firstResult.done) {
+            yield firstResult.value;
+          }
+          yield* { [Symbol.asyncIterator]: () => rangeIterator };
+        }
+
+        const rangeStream = Readable.from(prependFirst());
 
         let firstChunkTime = 0;
 
@@ -223,12 +265,14 @@ export class TxChunksDataSource implements ContiguousDataSource {
         dataRoot: string,
         relativeOffset: number,
       ) =>
-        this.chunkSource.getChunkDataByAny({
-          txSize: size,
-          absoluteOffset,
-          dataRoot,
-          relativeOffset,
-        });
+        this.concurrencyLimit(() =>
+          this.chunkSource.getChunkDataByAny({
+            txSize: size,
+            absoluteOffset,
+            dataRoot,
+            relativeOffset,
+          }),
+        );
 
       let chunkDataPromise: Promise<ChunkData> | undefined = getChunkDataByAny(
         startOffset,
@@ -244,8 +288,27 @@ export class TxChunksDataSource implements ContiguousDataSource {
       });
 
       // await the first chunk promise so that it throws and returns 404 if no
-      // chunk data is found.
-      await chunkDataPromise;
+      // chunk data is found. Race against a timeout if configured.
+      if (this.firstDataTimeoutMs > 0) {
+        let timeoutId: NodeJS.Timeout;
+        await Promise.race([
+          chunkDataPromise!.finally(() => clearTimeout(timeoutId)),
+          new Promise<never>((_resolve, reject) => {
+            timeoutId = setTimeout(() => {
+              metrics.chunkFirstDataTimeoutsTotal.inc({
+                request_type: 'full',
+              });
+              reject(
+                new Error(
+                  `First chunk data timeout after ${this.firstDataTimeoutMs}ms`,
+                ),
+              );
+            }, this.firstDataTimeoutMs);
+          }),
+        ]);
+      } else {
+        await chunkDataPromise;
+      }
 
       const streamStartTime = Date.now();
 

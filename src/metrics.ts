@@ -353,6 +353,12 @@ export const dataRequestFirstChunkLatency = new promClient.Histogram({
   buckets: [50, 200, 1000, 5000],
 });
 
+export const chunkFirstDataTimeoutsTotal = new promClient.Counter({
+  name: 'chunk_first_data_timeouts_total',
+  help: 'Count of first-data timeouts in TxChunksDataSource',
+  labelNames: ['request_type'] as const,
+});
+
 //
 // Chunk source metrics
 //
