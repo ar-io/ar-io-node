@@ -55,14 +55,14 @@ describe('TrustedGatewayArNSResolver', () => {
     it('should not set Host header when hostHeader is not provided', async () => {
       const resolver = new TrustedGatewayArNSResolver({
         log,
-        trustedGatewayUrl: 'https://__NAME__.ar-io.net',
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
       });
 
       // Will fail due to interceptor, but we can inspect the config
       await resolver.resolve({ name: 'test' });
 
       assert.ok(capturedConfig !== undefined, 'request should have been made');
-      assert.equal(capturedConfig!.baseURL, 'https://test.ar-io.net');
+      assert.equal(capturedConfig!.baseURL, 'https://test.turbo-gateway.com');
       assert.equal(capturedConfig!.headers?.['Host'], undefined);
     });
 
