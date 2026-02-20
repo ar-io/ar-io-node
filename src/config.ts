@@ -1382,6 +1382,10 @@ export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
   'https://__NAME__.ar-io.net',
 );
 
+export const TRUSTED_ARNS_RESOLVER_HOST_HEADER = env.varOrUndefined(
+  'TRUSTED_ARNS_RESOLVER_HOST_HEADER',
+);
+
 //
 // Mempool watcher
 //

@@ -1252,6 +1252,7 @@ export const arnsRegistryCache = new KvArNSRegistryStore({
 export const nameResolver = createArNSResolver({
   log,
   trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
+  trustedArnsResolverHostHeader: config.TRUSTED_ARNS_RESOLVER_HOST_HEADER,
   resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
   networkProcess: networkProcess,
   resolutionCache: arnsResolutionCache,
