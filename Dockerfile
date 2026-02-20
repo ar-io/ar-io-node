@@ -28,6 +28,7 @@ COPY ./migrations /app/migrations
 COPY ./docker-entrypoint.sh /app/docker-entrypoint.sh
 COPY ./healthcheck.sh /app/healthcheck.sh
 COPY ./docs/openapi.yaml /app/docs/openapi.yaml
+COPY ./resources /app/resources
 
 VOLUME /app/data
 
