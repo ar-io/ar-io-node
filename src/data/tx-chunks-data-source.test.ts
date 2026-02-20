@@ -6,6 +6,7 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
+import pLimit from 'p-limit';
 
 import {
   ArweaveChainSourceStub,
@@ -307,6 +308,149 @@ describe('TxChunksDataSource', () => {
           .arguments[0].request_type,
         'full',
       );
+    });
+  });
+
+  describe('first-data timeout', () => {
+    it('should reject full request when first chunk exceeds timeout', async () => {
+      mock.method(metrics.chunkFirstDataTimeoutsTotal, 'inc');
+      mock.method(
+        chunkSource,
+        'getChunkDataByAny',
+        () => new Promise((resolve) => setTimeout(resolve, 200)),
+      );
+
+      const retriever = new TxChunksDataSource({
+        log,
+        chainSource,
+        chunkSource,
+        firstDataTimeoutMs: 50,
+      });
+
+      await assert.rejects(
+        () => retriever.getData({ id: TX_ID, requestAttributes }),
+        { message: /First chunk data timeout after 50ms/ },
+      );
+
+      assert.equal(
+        (metrics.chunkFirstDataTimeoutsTotal.inc as any).mock.callCount(),
+        1,
+      );
+      assert.equal(
+        (metrics.chunkFirstDataTimeoutsTotal.inc as any).mock.calls[0]
+          .arguments[0].request_type,
+        'full',
+      );
+    });
+
+    it('should reject range request when first chunk exceeds timeout', async () => {
+      mock.method(metrics.chunkFirstDataTimeoutsTotal, 'inc');
+      mock.method(
+        chunkSource,
+        'getChunkByAny',
+        () => new Promise((resolve) => setTimeout(resolve, 200)),
+      );
+
+      const retriever = new TxChunksDataSource({
+        log,
+        chainSource,
+        chunkSource,
+        firstDataTimeoutMs: 50,
+      });
+
+      await assert.rejects(
+        () =>
+          retriever.getData({
+            id: TX_ID,
+            requestAttributes,
+            region: { offset: 0, size: 10 },
+          }),
+        { message: /First chunk data timeout after 50ms/ },
+      );
+
+      assert.equal(
+        (metrics.chunkFirstDataTimeoutsTotal.inc as any).mock.callCount(),
+        1,
+      );
+      assert.equal(
+        (metrics.chunkFirstDataTimeoutsTotal.inc as any).mock.calls[0]
+          .arguments[0].request_type,
+        'range',
+      );
+    });
+
+    it('should complete when timeout is disabled (0) even with slow chunks', async () => {
+      // Use a slow but not too slow mock (completes within test timeout)
+      const originalGetChunkDataByAny =
+        chunkSource.getChunkDataByAny.bind(chunkSource);
+      mock.method(chunkSource, 'getChunkDataByAny', async (params: any) => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return originalGetChunkDataByAny(params);
+      });
+
+      const retriever = new TxChunksDataSource({
+        log,
+        chainSource,
+        chunkSource,
+        firstDataTimeoutMs: 0,
+      });
+
+      const data = await retriever.getData({ id: TX_ID, requestAttributes });
+      let bytes = 0;
+      for await (const chunk of data.stream) {
+        bytes += chunk.length;
+      }
+      assert.strictEqual(bytes, data.size);
+    });
+  });
+
+  describe('concurrency limiting', () => {
+    it('should respect pLimit concurrency of 1', async () => {
+      let activeCalls = 0;
+      let maxConcurrency = 0;
+
+      const originalGetChunkDataByAny =
+        chunkSource.getChunkDataByAny.bind(chunkSource);
+      mock.method(chunkSource, 'getChunkDataByAny', async (params: any) => {
+        activeCalls++;
+        if (activeCalls > maxConcurrency) {
+          maxConcurrency = activeCalls;
+        }
+        // Small delay to allow overlap detection
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        const result = await originalGetChunkDataByAny(params);
+        activeCalls--;
+        return result;
+      });
+
+      const retriever = new TxChunksDataSource({
+        log,
+        chainSource,
+        chunkSource,
+        concurrencyLimit: pLimit(1),
+      });
+
+      // Run two concurrent getData calls
+      const [data1, data2] = await Promise.all([
+        retriever.getData({ id: TX_ID, requestAttributes }),
+        retriever.getData({ id: TX_ID, requestAttributes }),
+      ]);
+
+      // Consume both streams concurrently
+      await Promise.all([
+        (async () => {
+          for await (const _chunk of data1.stream) {
+            /* consume */
+          }
+        })(),
+        (async () => {
+          for await (const _chunk of data2.stream) {
+            /* consume */
+          }
+        })(),
+      ]);
+
+      assert.equal(maxConcurrency, 1, 'Max concurrency should be 1');
     });
   });
 });

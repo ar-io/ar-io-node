@@ -8,6 +8,7 @@ import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
 import { AOProcess, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
+import pLimit from 'p-limit';
 import postgres from 'postgres';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
@@ -656,10 +657,13 @@ export const chunkRetrievalService = new ChunkRetrievalService({
 });
 
 // Create the base TX chunks data source
+const chunkRequestLimit = pLimit(config.CHUNK_REQUEST_CONCURRENCY);
 const baseTxChunksDataSource = new TxChunksDataSource({
   log,
   chainSource: arweaveClient,
   chunkSource,
+  concurrencyLimit: chunkRequestLimit,
+  firstDataTimeoutMs: config.CHUNK_FIRST_DATA_TIMEOUT_MS,
 });
 
 // ANS-104 offset source for parsing bundle headers from chunks

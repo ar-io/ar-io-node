@@ -673,6 +673,18 @@ export const CHUNK_METADATA_SOURCE_PARALLELISM = +env.varOrDefault(
   '1',
 );
 
+// Concurrency limit for chunk fetch requests across all concurrent HTTP requests
+export const CHUNK_REQUEST_CONCURRENCY = +env.varOrDefault(
+  'CHUNK_REQUEST_CONCURRENCY',
+  '50',
+);
+
+// Timeout in ms for receiving the first chunk data; 0 disables
+export const CHUNK_FIRST_DATA_TIMEOUT_MS = +env.varOrDefault(
+  'CHUNK_FIRST_DATA_TIMEOUT_MS',
+  '10000',
+);
+
 // Chain fallback for chunk offset requests
 export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =
   env.varOrDefault('CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED', 'true') === 'true';
