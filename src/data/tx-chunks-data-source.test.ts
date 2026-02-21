@@ -413,9 +413,7 @@ describe('TxChunksDataSource', () => {
         chunkSource.getChunkDataByAny.bind(chunkSource);
       mock.method(chunkSource, 'getChunkDataByAny', async (params: any) => {
         activeCalls++;
-        if (activeCalls > maxConcurrency) {
-          maxConcurrency = activeCalls;
-        }
+        maxConcurrency = Math.max(maxConcurrency, activeCalls);
         // Small delay to allow overlap detection
         await new Promise((resolve) => setTimeout(resolve, 10));
         const result = await originalGetChunkDataByAny(params);

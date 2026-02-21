@@ -51,6 +51,36 @@ export class TxChunksDataSource implements ContiguousDataSource {
     this.firstDataTimeoutMs = firstDataTimeoutMs;
   }
 
+  /**
+   * Await a promise with an optional first-data timeout. If the timeout fires,
+   * increments the chunkFirstDataTimeoutsTotal metric and rejects.
+   */
+  private awaitWithFirstDataTimeout<T>(
+    promise: Promise<T>,
+    requestType: string,
+  ): Promise<T> {
+    if (this.firstDataTimeoutMs <= 0) {
+      return promise;
+    }
+
+    let timeoutId: NodeJS.Timeout;
+    return Promise.race([
+      promise.finally(() => clearTimeout(timeoutId)),
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          metrics.chunkFirstDataTimeoutsTotal.inc({
+            request_type: requestType,
+          });
+          reject(
+            new Error(
+              `First chunk data timeout after ${this.firstDataTimeoutMs}ms`,
+            ),
+          );
+        }, this.firstDataTimeoutMs);
+      }),
+    ]);
+  }
+
   async getData({
     id,
     requestAttributes,
@@ -132,27 +162,10 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
         // Eagerly pull the first value to detect failures/timeouts early
         const rangeIterator = rangeResult.stream[Symbol.asyncIterator]();
-        let firstResult: IteratorResult<Buffer>;
-        if (this.firstDataTimeoutMs > 0) {
-          let timeoutId: NodeJS.Timeout;
-          firstResult = await Promise.race([
-            rangeIterator.next().finally(() => clearTimeout(timeoutId)),
-            new Promise<never>((_resolve, reject) => {
-              timeoutId = setTimeout(() => {
-                metrics.chunkFirstDataTimeoutsTotal.inc({
-                  request_type: 'range',
-                });
-                reject(
-                  new Error(
-                    `First chunk data timeout after ${this.firstDataTimeoutMs}ms`,
-                  ),
-                );
-              }, this.firstDataTimeoutMs);
-            }),
-          ]);
-        } else {
-          firstResult = await rangeIterator.next();
-        }
+        const firstResult = await this.awaitWithFirstDataTimeout(
+          rangeIterator.next(),
+          'range',
+        );
 
         // Prepend the first value back and continue with the rest
         async function* prependFirst() {
@@ -242,6 +255,8 @@ export class TxChunksDataSource implements ContiguousDataSource {
           }
         });
 
+        rangeStream.pause();
+
         return {
           stream: rangeStream,
           size: region.size,
@@ -289,26 +304,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
       // await the first chunk promise so that it throws and returns 404 if no
       // chunk data is found. Race against a timeout if configured.
-      if (this.firstDataTimeoutMs > 0) {
-        let timeoutId: NodeJS.Timeout;
-        await Promise.race([
-          chunkDataPromise!.finally(() => clearTimeout(timeoutId)),
-          new Promise<never>((_resolve, reject) => {
-            timeoutId = setTimeout(() => {
-              metrics.chunkFirstDataTimeoutsTotal.inc({
-                request_type: 'full',
-              });
-              reject(
-                new Error(
-                  `First chunk data timeout after ${this.firstDataTimeoutMs}ms`,
-                ),
-              );
-            }, this.firstDataTimeoutMs);
-          }),
-        ]);
-      } else {
-        await chunkDataPromise;
-      }
+      await this.awaitWithFirstDataTimeout(chunkDataPromise!, 'full');
 
       const streamStartTime = Date.now();
 
