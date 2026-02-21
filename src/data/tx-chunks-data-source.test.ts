@@ -317,7 +317,16 @@ describe('TxChunksDataSource', () => {
       mock.method(
         chunkSource,
         'getChunkDataByAny',
-        () => new Promise((resolve) => setTimeout(resolve, 200)),
+        (_params: any, signal?: AbortSignal) =>
+          new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(resolve, 200);
+            signal?.addEventListener('abort', () => {
+              clearTimeout(timeoutId);
+              reject(
+                new DOMException('The operation was aborted', 'AbortError'),
+              );
+            });
+          }),
       );
 
       const retriever = new TxChunksDataSource({
@@ -348,7 +357,16 @@ describe('TxChunksDataSource', () => {
       mock.method(
         chunkSource,
         'getChunkByAny',
-        () => new Promise((resolve) => setTimeout(resolve, 200)),
+        (_params: any, signal?: AbortSignal) =>
+          new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(resolve, 200);
+            signal?.addEventListener('abort', () => {
+              clearTimeout(timeoutId);
+              reject(
+                new DOMException('The operation was aborted', 'AbortError'),
+              );
+            });
+          }),
       );
 
       const retriever = new TxChunksDataSource({
@@ -401,6 +419,116 @@ describe('TxChunksDataSource', () => {
         bytes += chunk.length;
       }
       assert.strictEqual(bytes, data.size);
+    });
+  });
+
+  describe('signal threading', () => {
+    it('should pass abort signal to getChunkDataByAny for full requests', async () => {
+      const receivedSignals: (AbortSignal | undefined)[] = [];
+      const originalGetChunkDataByAny =
+        chunkSource.getChunkDataByAny.bind(chunkSource);
+      mock.method(
+        chunkSource,
+        'getChunkDataByAny',
+        async (params: any, signal?: AbortSignal) => {
+          receivedSignals.push(signal);
+          return originalGetChunkDataByAny(params);
+        },
+      );
+
+      const controller = new AbortController();
+      const data = await txChunkRetriever.getData({
+        id: TX_ID,
+        requestAttributes,
+        signal: controller.signal,
+      });
+
+      for await (const _chunk of data.stream) {
+        // consume
+      }
+
+      assert.ok(receivedSignals.length > 0, 'Expected at least one call');
+      for (const sig of receivedSignals) {
+        assert.ok(sig instanceof AbortSignal, 'Expected AbortSignal');
+      }
+    });
+
+    it('should pass abort signal to getChunkByAny for range requests', async () => {
+      const receivedSignals: (AbortSignal | undefined)[] = [];
+      const originalGetChunkByAny = chunkSource.getChunkByAny.bind(chunkSource);
+      mock.method(
+        chunkSource,
+        'getChunkByAny',
+        async (params: any, signal?: AbortSignal) => {
+          receivedSignals.push(signal);
+          // Use the range mock logic
+          const chunkStart = 51530681327863;
+          const chunkSize = 256000;
+          if (
+            params.absoluteOffset >= chunkStart &&
+            params.absoluteOffset < chunkStart + chunkSize
+          ) {
+            return originalGetChunkByAny({
+              ...params,
+              absoluteOffset: chunkStart,
+              relativeOffset: 0,
+            });
+          }
+          throw new Error(`Chunk at offset ${params.absoluteOffset} not found`);
+        },
+      );
+
+      const controller = new AbortController();
+      const data = await txChunkRetriever.getData({
+        id: TX_ID,
+        requestAttributes,
+        region: { offset: 0, size: 10 },
+        signal: controller.signal,
+      });
+
+      for await (const _chunk of data.stream) {
+        // consume
+      }
+
+      assert.ok(receivedSignals.length > 0, 'Expected at least one call');
+      for (const sig of receivedSignals) {
+        assert.ok(sig instanceof AbortSignal, 'Expected AbortSignal');
+      }
+    });
+
+    it('should abort in-flight chunk requests when timeout fires', async () => {
+      mock.method(metrics.chunkFirstDataTimeoutsTotal, 'inc');
+
+      let receivedSignal: AbortSignal | undefined;
+      mock.method(
+        chunkSource,
+        'getChunkDataByAny',
+        (_params: any, signal?: AbortSignal) => {
+          receivedSignal = signal;
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => {
+              reject(
+                new DOMException('The operation was aborted', 'AbortError'),
+              );
+            });
+          });
+        },
+      );
+
+      const retriever = new TxChunksDataSource({
+        log,
+        chainSource,
+        chunkSource,
+        firstDataTimeoutMs: 50,
+      });
+
+      await assert.rejects(
+        () => retriever.getData({ id: TX_ID, requestAttributes }),
+        { message: /First chunk data timeout after 50ms/ },
+      );
+
+      assert.ok(receivedSignal instanceof AbortSignal, 'Expected AbortSignal');
+      assert.ok(receivedSignal!.aborted, 'Expected signal to be aborted');
     });
   });
 

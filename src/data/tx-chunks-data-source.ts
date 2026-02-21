@@ -52,33 +52,29 @@ export class TxChunksDataSource implements ContiguousDataSource {
   }
 
   /**
-   * Await a promise with an optional first-data timeout. If the timeout fires,
-   * increments the chunkFirstDataTimeoutsTotal metric and rejects.
+   * Create an AbortController that fires after firstDataTimeoutMs, or null if
+   * the timeout is disabled. When the timeout fires, the metric is incremented
+   * and the controller is aborted. Callers must invoke cleanup() to clear the
+   * timer once the first data arrives (or the request fails).
    */
-  private awaitWithFirstDataTimeout<T>(
-    promise: Promise<T>,
-    requestType: string,
-  ): Promise<T> {
-    if (this.firstDataTimeoutMs <= 0) {
-      return promise;
-    }
+  private createFirstDataTimeoutController(requestType: string): {
+    signal: AbortSignal;
+    cleanup: () => void;
+  } | null {
+    if (this.firstDataTimeoutMs <= 0) return null;
 
-    let timeoutId: NodeJS.Timeout;
-    return Promise.race([
-      promise.finally(() => clearTimeout(timeoutId)),
-      new Promise<never>((_resolve, reject) => {
-        timeoutId = setTimeout(() => {
-          metrics.chunkFirstDataTimeoutsTotal.inc({
-            request_type: requestType,
-          });
-          reject(
-            new Error(
-              `First chunk data timeout after ${this.firstDataTimeoutMs}ms`,
-            ),
-          );
-        }, this.firstDataTimeoutMs);
-      }),
-    ]);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      metrics.chunkFirstDataTimeoutsTotal.inc({
+        request_type: requestType,
+      });
+      controller.abort();
+    }, this.firstDataTimeoutMs);
+
+    return {
+      signal: controller.signal,
+      cleanup: () => clearTimeout(timeoutId),
+    };
   }
 
   async getData({
@@ -125,6 +121,15 @@ export class TxChunksDataSource implements ContiguousDataSource {
       const startOffset = offset - size + 1;
       let bytes = 0;
 
+      // Combine caller signal and first-data timeout into a single signal
+      const requestType = region ? 'range' : 'full';
+      const timeout = this.createFirstDataTimeoutController(requestType);
+      const signals = [timeout?.signal, signal].filter(
+        (s): s is AbortSignal => s != null,
+      );
+      const effectiveSignal =
+        signals.length > 0 ? AbortSignal.any(signals) : undefined;
+
       span.setAttributes({
         'chunks.tx.data_root': txDataRoot,
         'chunks.tx.size': size,
@@ -144,7 +149,9 @@ export class TxChunksDataSource implements ContiguousDataSource {
           dataRoot: string;
           relativeOffset: number;
         }) =>
-          this.concurrencyLimit(() => this.chunkSource.getChunkByAny(params));
+          this.concurrencyLimit(() =>
+            this.chunkSource.getChunkByAny(params, effectiveSignal),
+          );
 
         // Use efficient range streaming that seeks directly to required chunks
         const rangeStartTime = Date.now();
@@ -157,15 +164,24 @@ export class TxChunksDataSource implements ContiguousDataSource {
           rangeEnd: region.offset + region.size,
           getChunkByAny,
           log: this.log,
-          signal,
+          signal: effectiveSignal,
         });
 
         // Eagerly pull the first value to detect failures/timeouts early
         const rangeIterator = rangeResult.stream[Symbol.asyncIterator]();
-        const firstResult = await this.awaitWithFirstDataTimeout(
-          rangeIterator.next(),
-          'range',
-        );
+        let firstResult: IteratorResult<Buffer>;
+        try {
+          firstResult = await rangeIterator.next();
+          timeout?.cleanup();
+        } catch (error: any) {
+          timeout?.cleanup();
+          if (timeout?.signal.aborted) {
+            throw new Error(
+              `First chunk data timeout after ${this.firstDataTimeoutMs}ms`,
+            );
+          }
+          throw error;
+        }
 
         // Prepend the first value back and continue with the rest
         async function* prependFirst() {
@@ -281,12 +297,15 @@ export class TxChunksDataSource implements ContiguousDataSource {
         relativeOffset: number,
       ) =>
         this.concurrencyLimit(() =>
-          this.chunkSource.getChunkDataByAny({
-            txSize: size,
-            absoluteOffset,
-            dataRoot,
-            relativeOffset,
-          }),
+          this.chunkSource.getChunkDataByAny(
+            {
+              txSize: size,
+              absoluteOffset,
+              dataRoot,
+              relativeOffset,
+            },
+            effectiveSignal,
+          ),
         );
 
       let chunkDataPromise: Promise<ChunkData> | undefined = getChunkDataByAny(
@@ -304,7 +323,18 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
       // await the first chunk promise so that it throws and returns 404 if no
       // chunk data is found. Race against a timeout if configured.
-      await this.awaitWithFirstDataTimeout(chunkDataPromise!, 'full');
+      try {
+        await chunkDataPromise!;
+        timeout?.cleanup();
+      } catch (error: any) {
+        timeout?.cleanup();
+        if (timeout?.signal.aborted) {
+          throw new Error(
+            `First chunk data timeout after ${this.firstDataTimeoutMs}ms`,
+          );
+        }
+        throw error;
+      }
 
       const streamStartTime = Date.now();
 
@@ -313,7 +343,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         read: async function () {
           try {
             // Check for abort before each chunk read
-            signal?.throwIfAborted();
+            effectiveSignal?.throwIfAborted();
 
             if (!chunkDataPromise) {
               this.push(null);
