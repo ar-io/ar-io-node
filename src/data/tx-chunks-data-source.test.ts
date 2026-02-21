@@ -19,6 +19,17 @@ import { createTestLogger } from '../../test/test-logger.js';
 
 const TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
 
+function createSlowAbortableMock(resolveDelayMs: number) {
+  return (_params: any, signal?: AbortSignal) =>
+    new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(resolve, resolveDelayMs);
+      signal?.addEventListener('abort', () => {
+        clearTimeout(timeoutId);
+        reject(new DOMException('The operation was aborted', 'AbortError'));
+      });
+    });
+}
+
 describe('TxChunksDataSource', () => {
   let log: ReturnType<typeof createTestLogger>;
   let chainSource: ArweaveChainSourceStub;
@@ -48,6 +59,29 @@ describe('TxChunksDataSource', () => {
   afterEach(() => {
     mock.restoreAll();
   });
+
+  // Helper function to mock getChunkByAny for range tests
+  const mockChunkByAnyForRange = () => {
+    const originalGetChunkByAny = chunkSource.getChunkByAny.bind(chunkSource);
+    mock.method(chunkSource, 'getChunkByAny', async (params: any) => {
+      // For our test TX, the chunk starts at 51530681327863
+      // If the requested offset is within this chunk, return it
+      const chunkStart = 51530681327863;
+      const chunkSize = 256000;
+      if (
+        params.absoluteOffset >= chunkStart &&
+        params.absoluteOffset < chunkStart + chunkSize
+      ) {
+        // Call the original method with the chunk's starting offset
+        return originalGetChunkByAny({
+          ...params,
+          absoluteOffset: chunkStart,
+          relativeOffset: 0,
+        });
+      }
+      throw new Error(`Chunk at offset ${params.absoluteOffset} not found`);
+    });
+  };
 
   describe('getContiguousData', () => {
     describe('an invalid transaction id', () => {
@@ -157,29 +191,6 @@ describe('TxChunksDataSource', () => {
   });
 
   describe('range requests', () => {
-    // Helper function to mock getChunkByAny for range tests
-    const mockChunkByAnyForRange = () => {
-      const originalGetChunkByAny = chunkSource.getChunkByAny.bind(chunkSource);
-      mock.method(chunkSource, 'getChunkByAny', async (params: any) => {
-        // For our test TX, the chunk starts at 51530681327863
-        // If the requested offset is within this chunk, return it
-        const chunkStart = 51530681327863;
-        const chunkSize = 256000;
-        if (
-          params.absoluteOffset >= chunkStart &&
-          params.absoluteOffset < chunkStart + chunkSize
-        ) {
-          // Call the original method with the chunk's starting offset
-          return originalGetChunkByAny({
-            ...params,
-            absoluteOffset: chunkStart,
-            relativeOffset: 0,
-          });
-        }
-        throw new Error(`Chunk at offset ${params.absoluteOffset} not found`);
-      });
-    };
-
     it('should stream a range within a single chunk', async () => {
       // Mock range-specific metrics
       mock.method(metrics.dataRequestChunksHistogram, 'observe');
@@ -317,16 +328,7 @@ describe('TxChunksDataSource', () => {
       mock.method(
         chunkSource,
         'getChunkDataByAny',
-        (_params: any, signal?: AbortSignal) =>
-          new Promise((resolve, reject) => {
-            const timeoutId = setTimeout(resolve, 200);
-            signal?.addEventListener('abort', () => {
-              clearTimeout(timeoutId);
-              reject(
-                new DOMException('The operation was aborted', 'AbortError'),
-              );
-            });
-          }),
+        createSlowAbortableMock(200),
       );
 
       const retriever = new TxChunksDataSource({
@@ -354,20 +356,7 @@ describe('TxChunksDataSource', () => {
 
     it('should reject range request when first chunk exceeds timeout', async () => {
       mock.method(metrics.chunkFirstDataTimeoutsTotal, 'inc');
-      mock.method(
-        chunkSource,
-        'getChunkByAny',
-        (_params: any, signal?: AbortSignal) =>
-          new Promise((resolve, reject) => {
-            const timeoutId = setTimeout(resolve, 200);
-            signal?.addEventListener('abort', () => {
-              clearTimeout(timeoutId);
-              reject(
-                new DOMException('The operation was aborted', 'AbortError'),
-              );
-            });
-          }),
-      );
+      mock.method(chunkSource, 'getChunkByAny', createSlowAbortableMock(200));
 
       const retriever = new TxChunksDataSource({
         log,
@@ -455,26 +444,15 @@ describe('TxChunksDataSource', () => {
 
     it('should pass abort signal to getChunkByAny for range requests', async () => {
       const receivedSignals: (AbortSignal | undefined)[] = [];
-      const originalGetChunkByAny = chunkSource.getChunkByAny.bind(chunkSource);
+      mockChunkByAnyForRange();
+      // Wrap the range mock to also capture signals
+      const rangeMock = chunkSource.getChunkByAny;
       mock.method(
         chunkSource,
         'getChunkByAny',
         async (params: any, signal?: AbortSignal) => {
           receivedSignals.push(signal);
-          // Use the range mock logic
-          const chunkStart = 51530681327863;
-          const chunkSize = 256000;
-          if (
-            params.absoluteOffset >= chunkStart &&
-            params.absoluteOffset < chunkStart + chunkSize
-          ) {
-            return originalGetChunkByAny({
-              ...params,
-              absoluteOffset: chunkStart,
-              relativeOffset: 0,
-            });
-          }
-          throw new Error(`Chunk at offset ${params.absoluteOffset} not found`);
+          return rangeMock(params, signal);
         },
       );
 
