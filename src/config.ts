@@ -674,9 +674,9 @@ export const CHUNK_METADATA_SOURCE_PARALLELISM = +env.varOrDefault(
 );
 
 // Concurrency limit for chunk fetch requests across all concurrent HTTP requests
-export const CHUNK_REQUEST_CONCURRENCY = +env.varOrDefault(
+export const CHUNK_REQUEST_CONCURRENCY = env.positiveIntOrDefault(
   'CHUNK_REQUEST_CONCURRENCY',
-  '50',
+  50,
 );
 
 // Timeout in ms for receiving the first chunk data; 0 disables
