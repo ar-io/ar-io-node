@@ -105,6 +105,9 @@ export class TxChunksDataSource implements ContiguousDataSource {
       parentSpan,
     );
 
+    let timeout: ReturnType<typeof this.createFirstDataTimeoutController> =
+      null;
+
     try {
       // Check for abort before starting
       signal?.throwIfAborted();
@@ -123,12 +126,13 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
       // Combine caller signal and first-data timeout into a single signal
       const requestType = region ? 'range' : 'full';
-      const timeout = this.createFirstDataTimeoutController(requestType);
-      const signals = [timeout?.signal, signal].filter(
-        (s): s is AbortSignal => s != null,
-      );
-      const effectiveSignal =
-        signals.length > 0 ? AbortSignal.any(signals) : undefined;
+      timeout = this.createFirstDataTimeoutController(requestType);
+      let effectiveSignal: AbortSignal | undefined;
+      if (timeout?.signal && signal) {
+        effectiveSignal = AbortSignal.any([timeout.signal, signal]);
+      } else {
+        effectiveSignal = timeout?.signal ?? signal;
+      }
 
       span.setAttributes({
         'chunks.tx.data_root': txDataRoot,
@@ -436,6 +440,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
       });
       throw error;
     } finally {
+      timeout?.cleanup();
       span.end();
     }
   }
