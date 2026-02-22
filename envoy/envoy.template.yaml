@@ -61,9 +61,16 @@ static_resources:
                       domains: ['*']
                       routes:
                         - match: { prefix: '/graphql' }
+                          #@ if data.values.GRAPHQL_HOST_HEADER != "":
+                          request_headers_to_add:
+                            - header:
+                                key: 'Host'
+                                value: #@ data.values.GRAPHQL_HOST_HEADER
+                              append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                          #@ end
                           route:
                             cluster: graphql_gateways
-                            #@ if data.values.GRAPHQL_PORT == "443":
+                            #@ if data.values.GRAPHQL_HOST_HEADER == "" and data.values.GRAPHQL_PORT == "443":
                             auto_host_rewrite: true
                             #@ end
                             retry_policy:
