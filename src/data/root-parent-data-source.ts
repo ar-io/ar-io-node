@@ -381,7 +381,6 @@ export class RootParentDataSource implements ContiguousDataSource {
             region: finalRegion,
             parentSpan: fetchSpan,
             signal,
-            fallbackToBasePath: true,
           });
 
           span.setAttributes({
@@ -551,7 +550,6 @@ export class RootParentDataSource implements ContiguousDataSource {
             region,
             parentSpan: span,
             signal,
-            fallbackToBasePath: true,
           });
         } catch (error: any) {
           span.recordException(error);
@@ -795,7 +793,6 @@ export class RootParentDataSource implements ContiguousDataSource {
           region: finalRegion,
           parentSpan: fetchSpan,
           signal,
-          fallbackToBasePath: true,
         });
 
         span.setAttributes({

@@ -531,6 +531,12 @@ const baseGatewaysDataSource = new GatewaysDataSource({
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
 });
 
+const rootBundleGatewaysDataSource = new GatewaysDataSource({
+  log,
+  trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+  fallbackToBasePath: true,
+});
+
 // Wrap with filtering for general gateway forwarding
 const gatewaysDataSource = new FilteredContiguousDataSource({
   log,
@@ -665,7 +671,7 @@ const ans104ChunksOffsetSource = new Ans104OffsetSource({
 // ANS-104 offset source for parsing bundle headers from trusted gateways
 const ans104GatewaysOffsetSource = new Ans104OffsetSource({
   log,
-  dataSource: baseGatewaysDataSource,
+  dataSource: rootBundleGatewaysDataSource,
 });
 
 // Create base data source for CDB64 remote fetching
@@ -802,7 +808,7 @@ export const rootTxIndex = new CompositeRootTxIndex({
 // Uses unfiltered base source to avoid blocking legitimate chunk retrieval
 const offsetAwareGatewaysDataSource = new RootParentDataSource({
   log,
-  dataSource: baseGatewaysDataSource,
+  dataSource: rootBundleGatewaysDataSource,
   dataAttributesStore,
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource: ans104GatewaysOffsetSource,

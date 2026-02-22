@@ -982,14 +982,12 @@ export interface ContiguousDataSource {
     region,
     parentSpan,
     signal,
-    fallbackToBasePath,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
     signal?: AbortSignal;
-    fallbackToBasePath?: boolean;
   }): Promise<ContiguousData>;
 }
 

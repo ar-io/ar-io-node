@@ -27,18 +27,22 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private trustedGateways: Map<number, string[]>;
   private readonly requestTimeoutMs: number;
+  private readonly fallbackToBasePath: boolean;
 
   constructor({
     log,
     trustedGatewaysUrls,
     requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
+    fallbackToBasePath = false,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, number>;
     requestTimeoutMs?: number;
+    fallbackToBasePath?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
+    this.fallbackToBasePath = fallbackToBasePath;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -60,14 +64,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
     region,
     parentSpan,
     signal,
-    fallbackToBasePath,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
     signal?: AbortSignal;
-    fallbackToBasePath?: boolean;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'GatewaysDataSource.getData',
@@ -95,7 +97,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
         throw new Error('Remote forwarding skipped for compute-origin request');
       }
 
-      const pathPrefixes = fallbackToBasePath ? ['/raw', ''] : ['/raw'];
+      const pathPrefixes = this.fallbackToBasePath ? ['/raw', ''] : ['/raw'];
       const requestAttributesHeaders =
         generateRequestAttributes(requestAttributes);
 
@@ -127,6 +129,49 @@ export class GatewaysDataSource implements ContiguousDataSource {
             // Check for abort before each gateway attempt
             signal?.throwIfAborted();
 
+            const gatewayAxios = axios.create({
+              baseURL: gatewayUrl,
+              headers: {
+                'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
+              },
+            });
+
+            gatewayAxios.interceptors.request.use((config) => {
+              this.log.debug('Axios request initiated', {
+                url: config.url,
+                method: config.method,
+                headers: config.headers,
+                params: config.params,
+                timeout: config.timeout,
+              });
+              return config;
+            });
+
+            gatewayAxios.interceptors.response.use(
+              (response) => {
+                this.log.debug('Axios response received', {
+                  url: response.config.url,
+                  status: response.status,
+                  headers: response.headers,
+                });
+                return response;
+              },
+              (error) => {
+                if (error.response) {
+                  this.log.error('Axios response error', {
+                    url: error.response.config.url,
+                    status: error.response.status,
+                    headers: error.response.headers,
+                  });
+                } else {
+                  this.log.error('Axios network error', {
+                    message: error.message,
+                  });
+                }
+                return Promise.reject(error);
+              },
+            );
+
             for (const pathPrefix of pathPrefixes) {
               const path = pathPrefix ? `${pathPrefix}/${id}` : `/${id}`;
 
@@ -136,50 +181,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
               ];
               if (signal) signals.push(signal);
               const combinedSignal = AbortSignal.any(signals);
-
-              const gatewayAxios = axios.create({
-                baseURL: gatewayUrl,
-                signal: combinedSignal,
-                headers: {
-                  'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
-                },
-              });
-
-              gatewayAxios.interceptors.request.use((config) => {
-                this.log.debug('Axios request initiated', {
-                  url: config.url,
-                  method: config.method,
-                  headers: config.headers,
-                  params: config.params,
-                  timeout: config.timeout,
-                });
-                return config;
-              });
-
-              gatewayAxios.interceptors.response.use(
-                (response) => {
-                  this.log.debug('Axios response received', {
-                    url: response.config.url,
-                    status: response.status,
-                    headers: response.headers,
-                  });
-                  return response;
-                },
-                (error) => {
-                  if (error.response) {
-                    this.log.error('Axios response error', {
-                      url: error.response.config.url,
-                      status: error.response.status,
-                      headers: error.response.headers,
-                    });
-                  } else {
-                    this.log.error('Axios network error', {
-                      message: error.message,
-                    });
-                  }
-                  return Promise.reject(error);
-                },
-              );
 
               this.log.debug(
                 'Attempting to fetch contiguous data from gateway',
@@ -202,6 +203,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
 
               try {
                 const response = await gatewayAxios.request({
+                  signal: combinedSignal,
                   method: 'GET',
                   headers: {
                     'Accept-Encoding': 'identity',

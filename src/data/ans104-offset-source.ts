@@ -376,7 +376,6 @@ export class Ans104OffsetSource {
       id: rootBundleId,
       region: { offset, size: 32 },
       signal,
-      fallbackToBasePath: true,
     });
     const itemCount = await this.parseItemCount(countData.stream);
 
@@ -393,7 +392,6 @@ export class Ans104OffsetSource {
       id: rootBundleId,
       region: { offset, size: headerSize },
       signal,
-      fallbackToBasePath: true,
     });
     const items = await this.parseHeaders(headerData.stream, itemCount);
 
@@ -445,7 +443,6 @@ export class Ans104OffsetSource {
         id: actualRootBundleId,
         region: { offset: currentOffset, size: 32 },
         signal,
-        fallbackToBasePath: true,
       });
 
       const itemCount = await this.parseItemCount(countData.stream);
@@ -466,7 +463,6 @@ export class Ans104OffsetSource {
         id: actualRootBundleId,
         region: { offset: currentOffset, size: headerSize },
         signal,
-        fallbackToBasePath: true,
       });
 
       const items = await this.parseHeaders(headerData.stream, itemCount);
@@ -664,7 +660,6 @@ export class Ans104OffsetSource {
         id: rootBundleId,
         region: { offset: cumulativeOffset, size: checkSize },
         signal,
-        fallbackToBasePath: true,
       });
 
       const reader = getReader(itemData.stream);
@@ -796,7 +791,6 @@ export class Ans104OffsetSource {
         id: bundleId,
         region: { offset: itemOffset, size: fetchSize },
         signal,
-        fallbackToBasePath: true,
       });
 
       const reader = getReader(headerData.stream);

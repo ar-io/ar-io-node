@@ -642,9 +642,14 @@ describe('GatewayDataSource', () => {
           };
         };
 
-        const data = await dataSource.getData({
-          id: 'test-id',
+        const fallbackDataSource = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: { 'https://gateway.domain': 1 },
           fallbackToBasePath: true,
+        });
+
+        const data = await fallbackDataSource.getData({
+          id: 'test-id',
         });
 
         assert.equal(requestPaths.length, 2);
@@ -664,9 +669,14 @@ describe('GatewayDataSource', () => {
           };
         };
 
-        await dataSource.getData({
-          id: 'test-id',
+        const fallbackDataSource = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: { 'https://gateway.domain': 1 },
           fallbackToBasePath: true,
+        });
+
+        await fallbackDataSource.getData({
+          id: 'test-id',
         });
 
         assert.equal(requestPaths.length, 1);
@@ -682,6 +692,7 @@ describe('GatewayDataSource', () => {
             'https://gateway1.com': 1,
             'https://gateway2.com': 2,
           },
+          fallbackToBasePath: true,
         });
 
         mock.method(axios, 'create', (config: any) => ({
@@ -704,7 +715,6 @@ describe('GatewayDataSource', () => {
 
         const data = await dataSourceMultiGateway.getData({
           id: 'test-id',
-          fallbackToBasePath: true,
         });
 
         // Gateway 1 should have both paths tried first
