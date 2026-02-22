@@ -680,9 +680,9 @@ export const CHUNK_REQUEST_CONCURRENCY = env.positiveIntOrDefault(
 );
 
 // Timeout in ms for receiving the first chunk data; 0 disables
-export const CHUNK_FIRST_DATA_TIMEOUT_MS = +env.varOrDefault(
+export const CHUNK_FIRST_DATA_TIMEOUT_MS = env.nonNegativeIntOrDefault(
   'CHUNK_FIRST_DATA_TIMEOUT_MS',
-  '10000',
+  10000,
 );
 
 // Chain fallback for chunk offset requests
