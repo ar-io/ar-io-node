@@ -7,7 +7,7 @@
 import winston from 'winston';
 import pTimeout from 'p-timeout';
 import pLimit from 'p-limit';
-import { anySignal } from 'any-signal';
+import { anySignal, ClearableSignal } from 'any-signal';
 import { context, trace, Span } from '@opentelemetry/api';
 import { NameResolution, NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
@@ -195,15 +195,18 @@ export class CompositeArNSResolver implements NameResolver {
 
     const limit = pLimit(this.maxConcurrentResolutions);
     const alreadyResolvedAbort = new AbortController();
+    const combinedSignals: ClearableSignal[] = [];
     const resolutionPromises = this.resolvers.map((resolver, index) => {
       const isLastResolver = index === this.resolvers.length - 1;
+      const combined = anySignal([signal, alreadyResolvedAbort.signal]);
+      combinedSignals.push(combined);
       return limit(async () => {
         const resolution = await this.resolveWithResolver({
           resolver,
           name,
           baseArNSRecordFn,
           isLastResolver,
-          signal: anySignal([signal, alreadyResolvedAbort.signal]),
+          signal: combined,
           parentSpan: span,
         });
 
@@ -236,6 +239,7 @@ export class CompositeArNSResolver implements NameResolver {
       span.recordException(error as Error);
       return undefined;
     } finally {
+      for (const s of combinedSignals) s.clear();
       // Ensure the pending resolution is cleaned up after resolution completes
       this.pendingResolutions[name] = undefined;
       span.end();
