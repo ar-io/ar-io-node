@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { Readable } from 'node:stream';
+import { anySignal } from 'any-signal';
 import pLimit, { LimitFunction } from 'p-limit';
 import winston from 'winston';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
@@ -129,7 +130,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
       timeout = this.createFirstDataTimeoutController(requestType);
       let effectiveSignal: AbortSignal | undefined;
       if (timeout?.signal && signal) {
-        effectiveSignal = AbortSignal.any([timeout.signal, signal]);
+        effectiveSignal = anySignal([timeout.signal, signal]);
       } else {
         effectiveSignal = timeout?.signal ?? signal;
       }

@@ -59,6 +59,20 @@ export function positiveIntOrUndefined(envVarName: string): number | undefined {
   return value;
 }
 
+export function nonNegativeIntOrDefault(
+  envVarName: string,
+  defaultValue: number,
+): number {
+  const raw = varOrDefault(envVarName, String(defaultValue));
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(
+      `${envVarName} must be a non-negative integer, got: ${raw}`,
+    );
+  }
+  return value;
+}
+
 export function enumOrDefault<T extends string>(
   envVarName: string,
   validValues: readonly T[],
