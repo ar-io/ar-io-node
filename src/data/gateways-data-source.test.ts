@@ -609,5 +609,114 @@ describe('GatewayDataSource', () => {
         assert.equal(requestLog.length, 2);
       });
     });
+
+    describe('fallbackToBasePath', () => {
+      it('should only try /raw/<id> when fallbackToBasePath is not set', async () => {
+        const requestPaths: string[] = [];
+        mockedAxiosInstance.request = async (params: any) => {
+          requestPaths.push(params.url);
+          return {
+            status: 200,
+            headers: { 'content-length': '123', 'content-type': 'text/plain' },
+            data: axiosStreamData,
+          };
+        };
+
+        await dataSource.getData({ id: 'test-id' });
+
+        assert.equal(requestPaths.length, 1);
+        assert.equal(requestPaths[0], '/raw/test-id');
+      });
+
+      it('should try both /raw/<id> and /<id> per gateway when fallbackToBasePath is true and /raw fails', async () => {
+        const requestPaths: string[] = [];
+        mockedAxiosInstance.request = async (params: any) => {
+          requestPaths.push(params.url);
+          if (params.url.startsWith('/raw/')) {
+            throw new Error('Not found');
+          }
+          return {
+            status: 200,
+            headers: { 'content-length': '123', 'content-type': 'text/plain' },
+            data: axiosStreamData,
+          };
+        };
+
+        const data = await dataSource.getData({
+          id: 'test-id',
+          fallbackToBasePath: true,
+        });
+
+        assert.equal(requestPaths.length, 2);
+        assert.equal(requestPaths[0], '/raw/test-id');
+        assert.equal(requestPaths[1], '/test-id');
+        assert.equal(data.size, 123);
+      });
+
+      it('should not try base path when /raw succeeds', async () => {
+        const requestPaths: string[] = [];
+        mockedAxiosInstance.request = async (params: any) => {
+          requestPaths.push(params.url);
+          return {
+            status: 200,
+            headers: { 'content-length': '123', 'content-type': 'text/plain' },
+            data: axiosStreamData,
+          };
+        };
+
+        await dataSource.getData({
+          id: 'test-id',
+          fallbackToBasePath: true,
+        });
+
+        assert.equal(requestPaths.length, 1);
+        assert.equal(requestPaths[0], '/raw/test-id');
+      });
+
+      it('should exhaust both paths on gateway N before moving to gateway N+1', async () => {
+        const requestLog: { url: string; path: string }[] = [];
+
+        const dataSourceMultiGateway = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway1.com': 1,
+            'https://gateway2.com': 2,
+          },
+        });
+
+        mock.method(axios, 'create', (config: any) => ({
+          request: async (params: any) => {
+            requestLog.push({ url: config.baseURL, path: params.url });
+            if (config.baseURL === 'https://gateway1.com') {
+              throw new Error('Gateway 1 down');
+            }
+            return {
+              status: 200,
+              headers: {
+                'content-length': '123',
+                'content-type': 'text/plain',
+              },
+              data: axiosStreamData,
+            };
+          },
+          ...axiosMockCommonParams(config),
+        }));
+
+        const data = await dataSourceMultiGateway.getData({
+          id: 'test-id',
+          fallbackToBasePath: true,
+        });
+
+        // Gateway 1 should have both paths tried first
+        assert.equal(requestLog[0].url, 'https://gateway1.com');
+        assert.equal(requestLog[0].path, '/raw/test-id');
+        assert.equal(requestLog[1].url, 'https://gateway1.com');
+        assert.equal(requestLog[1].path, '/test-id');
+        // Then gateway 2
+        assert.equal(requestLog[2].url, 'https://gateway2.com');
+        assert.equal(requestLog[2].path, '/raw/test-id');
+        assert.equal(data.size, 123);
+      });
+    });
   });
 });

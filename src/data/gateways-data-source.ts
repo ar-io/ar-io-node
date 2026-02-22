@@ -60,12 +60,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
     region,
     parentSpan,
     signal,
+    fallbackToBasePath,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
     signal?: AbortSignal;
+    fallbackToBasePath?: boolean;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'GatewaysDataSource.getData',
@@ -93,7 +95,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
         throw new Error('Remote forwarding skipped for compute-origin request');
       }
 
-      const path = `/raw/${id}`;
+      const pathPrefixes = fallbackToBasePath ? ['/raw', ''] : ['/raw'];
       const requestAttributesHeaders =
         generateRequestAttributes(requestAttributes);
 
@@ -125,226 +127,240 @@ export class GatewaysDataSource implements ContiguousDataSource {
             // Check for abort before each gateway attempt
             signal?.throwIfAborted();
 
-            // Combine timeout with client abort signal
-            const signals: AbortSignal[] = [
-              AbortSignal.timeout(this.requestTimeoutMs),
-            ];
-            if (signal) signals.push(signal);
-            const combinedSignal = AbortSignal.any(signals);
+            for (const pathPrefix of pathPrefixes) {
+              const path = pathPrefix ? `${pathPrefix}/${id}` : `/${id}`;
 
-            const gatewayAxios = axios.create({
-              baseURL: gatewayUrl,
-              signal: combinedSignal,
-              headers: {
-                'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
-              },
-            });
+              // Combine timeout with client abort signal
+              const signals: AbortSignal[] = [
+                AbortSignal.timeout(this.requestTimeoutMs),
+              ];
+              if (signal) signals.push(signal);
+              const combinedSignal = AbortSignal.any(signals);
 
-            gatewayAxios.interceptors.request.use((config) => {
-              this.log.debug('Axios request initiated', {
-                url: config.url,
-                method: config.method,
-                headers: config.headers,
-                params: config.params,
-                timeout: config.timeout,
-              });
-              return config;
-            });
-
-            gatewayAxios.interceptors.response.use(
-              (response) => {
-                this.log.debug('Axios response received', {
-                  url: response.config.url,
-                  status: response.status,
-                  headers: response.headers,
-                });
-                return response;
-              },
-              (error) => {
-                if (error.response) {
-                  this.log.error('Axios response error', {
-                    url: error.response.config.url,
-                    status: error.response.status,
-                    headers: error.response.headers,
-                  });
-                } else {
-                  this.log.error('Axios network error', {
-                    message: error.message,
-                  });
-                }
-                return Promise.reject(error);
-              },
-            );
-
-            this.log.debug('Attempting to fetch contiguous data from gateway', {
-              id,
-              gatewayUrl,
-              priority,
-              path,
-              region,
-            });
-
-            const gatewayRequestStart = Date.now();
-            span.addEvent('Attempting gateway request', {
-              'gateways.request.url': gatewayUrl,
-              'gateways.request.priority': priority,
-              'gateways.request.has_region': region !== undefined,
-            });
-
-            try {
-              const response = await gatewayAxios.request({
-                method: 'GET',
+              const gatewayAxios = axios.create({
+                baseURL: gatewayUrl,
+                signal: combinedSignal,
                 headers: {
-                  'Accept-Encoding': 'identity',
-                  ...requestAttributesHeaders?.headers,
-                  ...(region
-                    ? {
-                        Range: buildRangeHeader(
-                          region.offset,
-                          region.offset + region.size - 1,
-                        ),
-                      }
-                    : {}),
-                },
-                url: path,
-                responseType: 'stream',
-                params: {
-                  'ar-io-hops': requestAttributesHeaders?.attributes.hops,
-                  'ar-io-origin': requestAttributesHeaders?.attributes.origin,
-                  'ar-io-origin-release':
-                    requestAttributesHeaders?.attributes.originNodeRelease,
-                  'ar-io-arns-record':
-                    requestAttributesHeaders?.attributes.arnsRecord,
-                  'ar-io-arns-basename':
-                    requestAttributesHeaders?.attributes.arnsBasename,
-                  'ar-io-via':
-                    requestAttributesHeaders?.attributes.via?.join(', '),
+                  'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
                 },
               });
 
-              const gatewayRequestDuration = Date.now() - gatewayRequestStart;
+              gatewayAxios.interceptors.request.use((config) => {
+                this.log.debug('Axios request initiated', {
+                  url: config.url,
+                  method: config.method,
+                  headers: config.headers,
+                  params: config.params,
+                  timeout: config.timeout,
+                });
+                return config;
+              });
 
-              if (
-                (region !== undefined && response.status !== 206) ||
-                (region === undefined && response.status !== 200)
-              ) {
-                span.addEvent('Gateway returned unexpected status', {
+              gatewayAxios.interceptors.response.use(
+                (response) => {
+                  this.log.debug('Axios response received', {
+                    url: response.config.url,
+                    status: response.status,
+                    headers: response.headers,
+                  });
+                  return response;
+                },
+                (error) => {
+                  if (error.response) {
+                    this.log.error('Axios response error', {
+                      url: error.response.config.url,
+                      status: error.response.status,
+                      headers: error.response.headers,
+                    });
+                  } else {
+                    this.log.error('Axios network error', {
+                      message: error.message,
+                    });
+                  }
+                  return Promise.reject(error);
+                },
+              );
+
+              this.log.debug(
+                'Attempting to fetch contiguous data from gateway',
+                {
+                  id,
+                  gatewayUrl,
+                  priority,
+                  path,
+                  region,
+                },
+              );
+
+              const gatewayRequestStart = Date.now();
+              span.addEvent('Attempting gateway request', {
+                'gateways.request.url': gatewayUrl,
+                'gateways.request.priority': priority,
+                'gateways.request.path': path,
+                'gateways.request.has_region': region !== undefined,
+              });
+
+              try {
+                const response = await gatewayAxios.request({
+                  method: 'GET',
+                  headers: {
+                    'Accept-Encoding': 'identity',
+                    ...requestAttributesHeaders?.headers,
+                    ...(region
+                      ? {
+                          Range: buildRangeHeader(
+                            region.offset,
+                            region.offset + region.size - 1,
+                          ),
+                        }
+                      : {}),
+                  },
+                  url: path,
+                  responseType: 'stream',
+                  params: {
+                    'ar-io-hops': requestAttributesHeaders?.attributes.hops,
+                    'ar-io-origin': requestAttributesHeaders?.attributes.origin,
+                    'ar-io-origin-release':
+                      requestAttributesHeaders?.attributes.originNodeRelease,
+                    'ar-io-arns-record':
+                      requestAttributesHeaders?.attributes.arnsRecord,
+                    'ar-io-arns-basename':
+                      requestAttributesHeaders?.attributes.arnsBasename,
+                    'ar-io-via':
+                      requestAttributesHeaders?.attributes.via?.join(', '),
+                  },
+                });
+
+                const gatewayRequestDuration = Date.now() - gatewayRequestStart;
+
+                if (
+                  (region !== undefined && response.status !== 206) ||
+                  (region === undefined && response.status !== 200)
+                ) {
+                  span.addEvent('Gateway returned unexpected status', {
+                    'gateways.url': gatewayUrl,
+                    'gateways.tier.priority': priority,
+                    'gateways.request.path': path,
+                    'http.status_code': response.status,
+                    'http.expected_status': region !== undefined ? 206 : 200,
+                    'gateways.request.duration_ms': gatewayRequestDuration,
+                  });
+                  throw new Error(
+                    `Unexpected status code from gateway: ${response.status}. Expected ${
+                      region !== undefined ? '206' : '200'
+                    }.`,
+                  );
+                }
+
+                const stream = response.data;
+                const contentLength = parseContentLength(response.headers) ?? 0;
+
+                span.setAttributes({
+                  'gateway.successful_url': gatewayUrl,
+                  'gateway.successful_priority': priority,
+                  'gateway.successful_path': path,
+                  'gateway.request_duration_ms': gatewayRequestDuration,
+                  'gateway.response_status': response.status,
+                  'data.size': contentLength,
+                  'data.content_type': response.headers['content-type'],
+                });
+
+                span.addEvent('Gateway request successful', {
                   'gateways.url': gatewayUrl,
                   'gateways.tier.priority': priority,
+                  'gateways.request.path': path,
                   'http.status_code': response.status,
-                  'http.expected_status': region !== undefined ? 206 : 200,
+                  'http.content_length': contentLength,
                   'gateways.request.duration_ms': gatewayRequestDuration,
                 });
-                throw new Error(
-                  `Unexpected status code from gateway: ${response.status}. Expected ${
-                    region !== undefined ? '206' : '200'
-                  }.`,
-                );
-              }
 
-              const stream = response.data;
-              const contentLength = parseContentLength(response.headers) ?? 0;
+                const requestType = region ? 'range' : 'full';
 
-              span.setAttributes({
-                'gateway.successful_url': gatewayUrl,
-                'gateway.successful_priority': priority,
-                'gateway.request_duration_ms': gatewayRequestDuration,
-                'gateway.response_status': response.status,
-                'data.size': contentLength,
-                'data.content_type': response.headers['content-type'],
-              });
-
-              span.addEvent('Gateway request successful', {
-                'gateways.url': gatewayUrl,
-                'gateways.tier.priority': priority,
-                'http.status_code': response.status,
-                'http.content_length': contentLength,
-                'gateways.request.duration_ms': gatewayRequestDuration,
-              });
-
-              const requestType = region ? 'range' : 'full';
-
-              stream.on('error', () => {
-                metrics.getDataStreamErrorsTotal.inc({
-                  class: this.constructor.name,
-                  source: gatewayUrl,
-                  request_type: requestType,
-                });
-              });
-
-              stream.on('end', () => {
-                metrics.getDataStreamSuccessesTotal.inc({
-                  class: this.constructor.name,
-                  source: gatewayUrl,
-                  request_type: requestType,
-                });
-
-                // Track bytes streamed
-                metrics.getDataStreamBytesTotal.inc(
-                  {
+                stream.on('error', () => {
+                  metrics.getDataStreamErrorsTotal.inc({
                     class: this.constructor.name,
                     source: gatewayUrl,
                     request_type: requestType,
-                  },
-                  contentLength,
-                );
+                  });
+                });
 
-                metrics.getDataStreamSizeHistogram.observe(
-                  {
+                stream.on('end', () => {
+                  metrics.getDataStreamSuccessesTotal.inc({
                     class: this.constructor.name,
                     source: gatewayUrl,
                     request_type: requestType,
-                  },
-                  contentLength,
-                );
-              });
+                  });
 
-              return {
-                stream,
-                size: contentLength,
-                verified: false,
-                trusted: true,
-                sourceContentType: response.headers['content-type'],
-                cached: false,
-                requestAttributes: parseRequestAttributesHeaders({
-                  headers: response.headers as { [key: string]: string },
-                  currentHops: requestAttributesHeaders?.attributes.hops,
-                }),
-              };
-            } catch (error: any) {
-              // Handle AbortError - distinguish client disconnect from timeout
-              if (error.name === 'AbortError') {
-                const isClientDisconnect = signal?.aborted === true;
-                span.addEvent('Request aborted', {
+                  // Track bytes streamed
+                  metrics.getDataStreamBytesTotal.inc(
+                    {
+                      class: this.constructor.name,
+                      source: gatewayUrl,
+                      request_type: requestType,
+                    },
+                    contentLength,
+                  );
+
+                  metrics.getDataStreamSizeHistogram.observe(
+                    {
+                      class: this.constructor.name,
+                      source: gatewayUrl,
+                      request_type: requestType,
+                    },
+                    contentLength,
+                  );
+                });
+
+                return {
+                  stream,
+                  size: contentLength,
+                  verified: false,
+                  trusted: true,
+                  sourceContentType: response.headers['content-type'],
+                  cached: false,
+                  requestAttributes: parseRequestAttributesHeaders({
+                    headers: response.headers as { [key: string]: string },
+                    currentHops: requestAttributesHeaders?.attributes.hops,
+                  }),
+                };
+              } catch (error: any) {
+                // Handle AbortError - distinguish client disconnect from timeout
+                if (error.name === 'AbortError') {
+                  const isClientDisconnect = signal?.aborted === true;
+                  span.addEvent('Request aborted', {
+                    'gateways.url': gatewayUrl,
+                    'gateways.tier.priority': priority,
+                    'gateways.request.path': path,
+                    'data.retrieval.error': isClientDisconnect
+                      ? 'client_disconnected'
+                      : 'timeout',
+                  });
+                  // Only skip remaining gateways on client disconnect, not timeout
+                  if (isClientDisconnect) {
+                    throw error;
+                  }
+                  lastError = error;
+                  continue;
+                }
+
+                const gatewayRequestDuration = Date.now() - gatewayRequestStart;
+                lastError = error as Error;
+
+                span.addEvent('Gateway request failed', {
                   'gateways.url': gatewayUrl,
                   'gateways.tier.priority': priority,
-                  'data.retrieval.error': isClientDisconnect
-                    ? 'client_disconnected'
-                    : 'timeout',
+                  'gateways.request.path': path,
+                  'gateways.request.error': error.message,
+                  'gateways.request.duration_ms': gatewayRequestDuration,
                 });
-                // Only skip remaining gateways on client disconnect, not timeout
-                if (isClientDisconnect) {
-                  throw error;
-                }
-                lastError = error;
-                continue;
+
+                this.log.warn('Failed to fetch from gateway', {
+                  gatewayUrl,
+                  priority,
+                  path,
+                  error: error.message,
+                });
               }
-
-              const gatewayRequestDuration = Date.now() - gatewayRequestStart;
-              lastError = error as Error;
-
-              span.addEvent('Gateway request failed', {
-                'gateways.url': gatewayUrl,
-                'gateways.tier.priority': priority,
-                'gateways.request.error': error.message,
-                'gateways.request.duration_ms': gatewayRequestDuration,
-              });
-
-              this.log.warn('Failed to fetch from gateway', {
-                gatewayUrl,
-                priority,
-                error: error.message,
-              });
             }
           }
 
