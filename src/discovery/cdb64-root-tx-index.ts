@@ -622,8 +622,44 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
    * Rebuilds the readers array from the readerMap in sorted order.
    */
   private rebuildReaderList(): void {
-    const sortedKeys = [...this.readerMap.keys()].sort();
-    this.readers = sortedKeys.map((k) => this.readerMap.get(k)!);
+    // Preserve config order: iterate sources in their original order.
+    // Sources that map directly to a reader (partitioned dirs, remote, single
+    // files) use the sourceSpec as the map key. Non-partitioned directories
+    // expand into individual file readers whose keys are file paths — collect
+    // those by prefix so they stay grouped under their source.
+    const result: ReaderEntry[] = [];
+    const claimed = new Set<string>();
+
+    for (const sourceSpec of this.sources) {
+      if (this.readerMap.has(sourceSpec)) {
+        result.push(this.readerMap.get(sourceSpec)!);
+        claimed.add(sourceSpec);
+      } else {
+        // Non-partitioned directory: individual file keys start with sourceSpec.
+        // Sort alphabetically within the directory for deterministic ordering.
+        const matched: [string, ReaderEntry][] = [];
+        for (const [key, entry] of this.readerMap) {
+          if (!claimed.has(key) && key.startsWith(sourceSpec)) {
+            matched.push([key, entry]);
+            claimed.add(key);
+          }
+        }
+        matched.sort(([a], [b]) => a.localeCompare(b));
+        for (const [, entry] of matched) {
+          result.push(entry);
+        }
+      }
+    }
+
+    // Include any remaining readers not matched to a source (e.g. dynamically
+    // added via watcher after initialization)
+    for (const [key, entry] of this.readerMap) {
+      if (!claimed.has(key)) {
+        result.push(entry);
+      }
+    }
+
+    this.readers = result;
   }
 
   /**
