@@ -285,7 +285,7 @@ export const CDB64_ROOT_TX_INDEX_WATCH =
 export const CDB64_ROOT_TX_INDEX_SOURCES = env
   .varOrDefault(
     'CDB64_ROOT_TX_INDEX_SOURCES',
-    'resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000',
+    'resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000,resources/cdb64-root-tx-index-non-ao-non-redstone-without-content-type-to-height-1820000,resources/cdb64-root-tx-index-ao',
   )
   .split(',')
   .map((s) => s.trim())
