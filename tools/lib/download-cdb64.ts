@@ -42,6 +42,7 @@ interface Config {
   outputDir: string;
   gatewayUrl: string;
   concurrency: number;
+  retries: number;
   resume: boolean;
   verify: boolean;
   verbose: boolean;
@@ -49,6 +50,7 @@ interface Config {
 
 const DEFAULT_GATEWAY_URL = 'https://arweave.net';
 const DEFAULT_CONCURRENCY = 3;
+const DEFAULT_RETRIES = 5;
 
 function printUsage(): void {
   console.log(`
@@ -65,6 +67,7 @@ Options:
   --output, -o <path>      Output directory (required)
   --gateway-url, -g <url>  Gateway URL for Arweave downloads (default: ${DEFAULT_GATEWAY_URL})
   --concurrency, -c <n>    Parallel downloads (default: ${DEFAULT_CONCURRENCY})
+  --retries, -r <n>        Retry failed downloads per partition (default: ${DEFAULT_RETRIES})
   --resume                 Resume partial download (skip partitions already on disk with correct size)
   --verify                 Verify SHA-256 hashes after download (if present in manifest)
   --verbose                Show per-partition progress
@@ -97,6 +100,7 @@ function parseArgs(): Config | null {
   let outputDir: string | undefined;
   let gatewayUrl = DEFAULT_GATEWAY_URL;
   let concurrency = DEFAULT_CONCURRENCY;
+  let retries = DEFAULT_RETRIES;
   let resume = false;
   let verify = false;
   let verbose = false;
@@ -133,6 +137,15 @@ function parseArgs(): Config | null {
         }
         i++;
         break;
+      case '--retries':
+      case '-r':
+        if (!nextArg) throw new Error('--retries requires a number');
+        retries = parseInt(nextArg, 10);
+        if (isNaN(retries) || retries < 0) {
+          throw new Error('--retries must be a non-negative integer');
+        }
+        i++;
+        break;
       case '--resume':
         resume = true;
         break;
@@ -163,6 +176,7 @@ function parseArgs(): Config | null {
     outputDir,
     gatewayUrl,
     concurrency,
+    retries,
     resume,
     verify,
     verbose,
@@ -484,6 +498,7 @@ async function runDownload(config: Config): Promise<void> {
   console.log(`Output: ${config.outputDir}`);
   console.log(`Gateway: ${config.gatewayUrl}`);
   console.log(`Concurrency: ${config.concurrency}`);
+  console.log(`Retries: ${config.retries}`);
   if (config.resume) console.log('Resume: enabled');
   if (config.verify) console.log('Verify: enabled');
   console.log('');
@@ -602,16 +617,33 @@ async function runDownload(config: Config): Promise<void> {
       );
     }
 
-    try {
-      await downloadPartition(
-        url,
-        destPath,
-        partition.location,
-        partition.size,
-        partition.sha256,
-        config.verify,
-      );
+    let succeeded = false;
+    for (let attempt = 1; attempt <= config.retries + 1; attempt++) {
+      try {
+        await downloadPartition(
+          url,
+          destPath,
+          partition.location,
+          partition.size,
+          partition.sha256,
+          config.verify,
+        );
+        succeeded = true;
+        break;
+      } catch (error: any) {
+        if (attempt <= config.retries) {
+          console.warn(
+            `  Retry ${attempt}/${config.retries} for ${partition.prefix}.cdb - ${error.message}`,
+          );
+        } else {
+          console.error(
+            `  Failed: ${partition.prefix}.cdb - ${error.message}`,
+          );
+        }
+      }
+    }
 
+    if (succeeded) {
       // Update manifest to file location
       outputManifest.partitions[idx] = {
         ...partition,
@@ -633,11 +665,8 @@ async function runDownload(config: Config): Promise<void> {
             `(${formatBytes(downloadedBytes)}, ${elapsed.toFixed(1)}s)`,
         );
       }
-    } catch (error: any) {
+    } else {
       failedCount++;
-      console.error(
-        `  Failed: ${partition.prefix}.cdb - ${error.message}`,
-      );
     }
   });
 
