@@ -146,7 +146,7 @@ describe.skip('Post Chunk', () => {
     it('Verifying that chunk was uploaded successfully', async () => {
       compose = await composeUp({
         START_WRITERS: 'false',
-        SECONDARY_CHUNK_POST_URLS: 'https://arweave.net/chunk',
+        SECONDARY_CHUNK_POST_URLS: 'https://turbo-gateway.com/chunk',
       });
 
       const response = await axios.post('http://localhost:4000/chunk', chunk, {
@@ -169,7 +169,7 @@ describe.skip('Post Chunk', () => {
     it('Verifying that invalid chunk fail to upload', async () => {
       compose = await composeUp({
         START_WRITERS: 'false',
-        SECONDARY_CHUNK_POST_URLS: 'https://arweave.net/chunk',
+        SECONDARY_CHUNK_POST_URLS: 'https://turbo-gateway.com/chunk',
       });
 
       const invalidChunk = JSON.parse(chunk);
@@ -200,7 +200,7 @@ describe.skip('Post Chunk', () => {
       compose = await composeUp({
         START_WRITERS: 'false',
         CHUNK_POST_RESPONSE_TIMEOUT_MS: '1',
-        SECONDARY_CHUNK_POST_URLS: 'https://arweave.net/chunk',
+        SECONDARY_CHUNK_POST_URLS: 'https://turbo-gateway.com/chunk',
       });
 
       try {

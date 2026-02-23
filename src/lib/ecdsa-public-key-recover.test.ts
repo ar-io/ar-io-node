@@ -48,7 +48,7 @@ describe('secp256k1OwnerFromTx', () => {
   it('should recover the correct owner from a signed transaction', async () => {
     // Initialize an Arweave instance.
     const arweave = Arweave.init({
-      host: 'arweave.net',
+      host: 'turbo-gateway.com',
       port: 443,
       protocol: 'https',
     });

@@ -64,7 +64,7 @@ describe('resolveTxRecipient', () => {
     assert.equal(recipient, '6p817XK-yIX-hBCQ0qD5wbcP05WPQgPKFmwNYC2xtwM');
   });
 
-  // arweave.net compatibility
+  // turbo-gateway.com compatibility
   it('should return empty string if recipient is undefined', () => {
     const tx = { ...GQL_TX, recipient: undefined };
     const recipient = resolveTxRecipient(tx as unknown as GqlTransaction);

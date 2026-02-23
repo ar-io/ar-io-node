@@ -52,7 +52,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
     client = new ArweaveCompositeClient({
       log: mockLog,
       arweave: mockArweave,
-      trustedNodeUrl: 'https://arweave.net',
+      trustedNodeUrl: 'https://turbo-gateway.com',
       blockStore: mockBlockStore,
       txStore: mockTxStore,
       failureSimulator: mockFailureSimulator,

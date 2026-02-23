@@ -27,7 +27,7 @@ import { isTestFiltered } from '../utils.js';
 const projectRootPath = process.cwd();
 
 const getHashForIdFromChain = async (id: string): Promise<string> => {
-  const res = await axios.get(`https://arweave.net/raw/${id}`, {
+  const res = await axios.get(`https://turbo-gateway.com/raw/${id}`, {
     responseType: 'stream',
   });
   const stream = res.data;

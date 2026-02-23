@@ -375,8 +375,8 @@ describe('tx-path-parser', () => {
       assert(result.dataRoot.equals(dataRoot));
     });
 
-    it('should parse real tx_path from arweave.net chunk at offset 345449412246841', async () => {
-      // Real data from arweave.net for chunk at offset 345449412246841
+    it('should parse real tx_path from turbo-gateway.com chunk at offset 345449412246841', async () => {
+      // Real data from turbo-gateway.com for chunk at offset 345449412246841
       // Block 1700011 contains this transaction
       const txPathB64 =
         'sTUh0vO-WLCLcQBmJkiSaNN-MCr9MSudPr7rhTQ-hzuIIWuarkgoxV4-ZG7MzmUie_vPGyxodraOp6to0dH9NgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATgAxCjY5HaedJPJPmvGXXHnWwRIq2BosulRQvXHHeIiMBR5r2wV8qJ_S2-5b_p6hCiFW8W3UfISIaW4TMCO-XM5m4kQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYjJxDxTVQX0-XYx0t0NmC_tJRl6eF2lq1SCHIGcS8w1Ck9tWmpN30eCOs-iDpR91EbW0lrv3eH8KWdmSjRa3d5df7PwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAThTrsCmpaQ1sosO568-yWsS3gACQQ5TwiH__4tZ7A6CErLzsj6S5_HEi62u3PYqFDUJrS9mDRHGsfD9jIV6rp_2vazgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiAAAym3Ru53ltXtgk-N00MCQ1NR84NkafeheORYNYg58dLYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGIycQw';
