@@ -12,6 +12,135 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+## [Release 70] - 2026-02-24
+
+This is a **recommended release** that introduces **CDB64 download tooling** for
+fetching remote partitioned indexes with resume support, **chunk request
+concurrency limiting** and first-data timeouts for improved data retrieval
+reliability, and **expanded CDB64 root TX index coverage** with new AO and
+without-content-type index sources. It also includes critical fixes for event
+listener leaks, stream data loss, and request cancellation under high
+concurrency, along with **defense-in-depth loop protection** enhancements and a
+new **auto-verify indexing tool** for cross-source bundle data validation.
+
+### Added
+
+- **CDB64 Download Tool**: New CLI tool (`tools/download-cdb64`) for fetching
+  remote partitioned CDB64 indexes with production-grade reliability
+  - Downloads partition files from manifest sources (HTTP URLs, Arweave TX IDs,
+    byte-range specifications, local files)
+  - HTTP Range request resume for interrupted downloads — partial `.tmp` files
+    are preserved and downloads resume from where they left off
+  - Per-partition retry support with configurable retry count (`--retries/-r`,
+    default: 5)
+  - Concurrent downloads with configurable parallelism (`--concurrency/-c`,
+    default: 3)
+  - SHA-256 verification of downloaded partitions against manifest checksums
+  - Generates updated manifest with local file locations on completion
+
+- **Streaming Partitioned CDB64 Writer**: New low-memory CDB64 generation mode
+  for large indexes
+  - Reduces peak memory from O(total_records) to O(largest_partition) via
+    two-phase scatter/build approach
+  - Phase 1 writes records to per-partition temp files; Phase 2 builds CDB files
+    sequentially
+  - New `--low-memory` flag added to all CDB64 CLI tools (requires
+    `--partitioned`)
+  - Progress callbacks show partition-level build status
+
+- **AO and Without-Content-Type CDB64 Index Sources**: Expanded default CDB64
+  root TX index coverage
+  - New AO data items index (~1.6B records) covering AO-tagged data items up to
+    block height 1,820,000
+  - New without-content-type index (~1.2B records) covering data items lacking a
+    Content-Type tag up to block height 1,820,000
+  - Default `CDB64_ROOT_TX_INDEX_SOURCES` now includes all three indexes
+
+- **Chunk Request Concurrency Limiting and First-Data Timeout**: New controls for
+  chunk-based data retrieval under load
+  - `CHUNK_REQUEST_CONCURRENCY` (default: 50): Limits concurrent chunk fetch
+    requests to prevent overwhelming backends
+  - `CHUNK_FIRST_DATA_TIMEOUT_MS` (default: 10000): Timeout for receiving the
+    first chunk of data; if exceeded, request falls through to alternative data
+    sources. Set to 0 to disable.
+
+- **Root Bundle Gateway Fallback Path**: Added `/<id>` fallback path for root
+  bundle gateway requests when `/raw/<id>` fails
+  - Enables bundle retrieval from HyperBEAM endpoints that may not support the
+    `/raw/<id>` path
+  - Separate `rootBundleGatewaysDataSource` instance configured with fallback
+    enabled
+
+- **ArNS Resolver Host Override**: New `TRUSTED_ARNS_RESOLVER_HOST_HEADER`
+  environment variable decouples connection target from Host header in ArNS
+  resolver, with `__NAME__` placeholder substitution for dynamic values
+
+- **Defense-in-Depth Loop Protection Improvements** (PE-8947): Additional
+  safeguards against request forwarding loops between gateways
+  - Hop count validation added to `GatewaysDataSource` (MAX_DATA_HOPS = 3)
+  - Origin/IP blocking applied to peer forwarding path via
+    `FilteredContiguousDataSource`
+  - Startup warning when `TRUSTED_GATEWAYS_URLS` contains this gateway's own
+    `ARNS_ROOT_HOST`, indicating a self-forwarding loop
+
+- **Auto-Verify Indexing Tool**: New tool (`tools/auto-verify`) for cross-source
+  bundle data comparison and indexing consistency validation
+  - Indexes configurable block ranges, then compares data items across SQLite,
+    Parquet, GraphQL, and independently-parsed raw bundles
+  - Verifies field consistency: offset, size, ownerOffset, ownerSize,
+    signatureOffset, signatureSize, rootParentOffset
+  - Bundle indexing timeout (5 minutes) for graceful handling of slow indexing
+  - Cache preserved by default for faster iteration across runs
+  - Detailed discrepancy output shows data item ID, field name, and per-source
+    values
+
+- **Git Worktree Helper**: New development tool (`tools/wt`) for parallel
+  development using git worktrees
+  - Creates worktrees under `wt/<branch>` with symlinked `.env` and
+    `CLAUDE.local.md`
+  - Commands: `add`, `rm`, `ls` with `--existing` flag for checking out existing
+    branches
+  - Automatically runs `yarn install` with a clean `data/` directory per
+    worktree
+
+### Changed
+
+- Default ArNS gateway changed from `ar-io.net` to `turbo-gateway.com`
+- Default Arweave gateway in test suites changed from `arweave.net` to
+  `turbo-gateway.com`
+- Renamed AO CDB directory from `cdb64-root-tx-index-ao` to
+  `cdb64-root-tx-index-ao-to-height-1820000` for naming consistency
+- Removed unused Cucumber dependency
+
+### Fixed
+
+- **Stream Data Loss Prevention**: Fixed range stream being put into flowing mode
+  prematurely, causing data to be emitted and lost before the consumer could
+  attach
+- **HTTP Request Cancellation**: Threaded AbortController through chunk timeout
+  to properly cancel in-flight HTTP requests instead of only rejecting the
+  promise
+- **Timer Leaks**: Fixed timeout timer leaks in chunk request implementation by
+  hoisting timeout variable for proper cleanup in finally blocks
+- **Event Listener Leaks**: Replaced `AbortSignal.any()` with `anySignal()` from
+  the `any-signal` package and added proper `ClearableSignal.clear()` calls in
+  finally blocks across composite ArNS resolver and chunk request paths to
+  prevent listener accumulation under high concurrency
+- **CDB64 Config Order**: Fixed CDB64 root TX index source search order to
+  preserve configuration order instead of sorting alphabetically
+- **Data Item Tag Handling**: Content-Type and Content-Encoding tag processing
+  now uses first match instead of last match, aligning with legacy gateway
+  behavior
+- **Docker Build**: Multi-stage Dockerfile now copies `resources/` directory into
+  runtime stage so the default CDB64 manifest is accessible inside containers
+- **Cache Directory Cleanup**: `.gitkeep` files properly recreated after cleaning
+  cache directories
+- **CDB64 Test Reliability**: Conditional test skipping when native CDB64 module
+  is unavailable; direct module probing prevents async rejection leaks in CI
+- **Dependency Security**: Updated axios (DoS via `__proto__`), tar (symlink/
+  overwrite CVEs), qs (arrayLimit bypass DoS), fast-xml-parser (RangeError DoS),
+  and other transitive dependencies with known vulnerabilities
+
 ## [Release 69] - 2026-02-11
 
 This is a **recommended release** that introduces **DNS-based multi-peer
