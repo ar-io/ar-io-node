@@ -41,7 +41,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-c47df643a88759e71f7691654df60dc1b10eada7}
     build:
       context: .
     restart: unless-stopped
