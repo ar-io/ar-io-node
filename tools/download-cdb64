@@ -19,7 +19,7 @@
 #   --gateway-url, -g <url>  Gateway URL for Arweave downloads (default: https://arweave.net)
 #   --concurrency, -c <n>    Parallel downloads (default: 3)
 #   --retries, -r <n>        Retry failed downloads (default: 5)
-#   --resume                 Resume partial download (skip completed partitions)
+#   --resume                 Resume partial download (skip completed partitions, resume partial .tmp files)
 #   --verify                 Verify SHA-256 hashes after download
 #   --verbose                Show per-partition progress
 #   --help, -h               Show help
