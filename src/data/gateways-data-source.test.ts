@@ -518,6 +518,40 @@ describe('GatewayDataSource', () => {
       });
     });
 
+    describe('content-length validation', () => {
+      it('should throw when response has no content-length (chunked encoding)', async () => {
+        mockedAxiosInstance.request = async () => ({
+          status: 200,
+          data: Readable.from(['some html page']),
+          headers: {
+            'content-type': 'text/html',
+            'transfer-encoding': 'chunked',
+          },
+        });
+
+        await assert.rejects(
+          dataSource.getData({ id: 'missing-id', requestAttributes }),
+          /Gateway response has no content-length or zero content-length/,
+        );
+      });
+
+      it('should throw when response has content-length: 0', async () => {
+        mockedAxiosInstance.request = async () => ({
+          status: 200,
+          data: Readable.from([]),
+          headers: {
+            'content-length': '0',
+            'content-type': 'application/octet-stream',
+          },
+        });
+
+        await assert.rejects(
+          dataSource.getData({ id: 'empty-id', requestAttributes }),
+          /Gateway response has no content-length or zero content-length/,
+        );
+      });
+    });
+
     it('should throw when skipRemoteForwarding is set', async () => {
       await assert.rejects(
         dataSource.getData({

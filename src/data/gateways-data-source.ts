@@ -255,7 +255,13 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 }
 
                 const stream = response.data;
-                const contentLength = parseContentLength(response.headers) ?? 0;
+                const contentLength = parseContentLength(response.headers);
+
+                if (contentLength === undefined || contentLength === 0) {
+                  throw new Error(
+                    `Gateway response has no content-length or zero content-length for ${id}`,
+                  );
+                }
 
                 span.setAttributes({
                   'gateway.successful_url': gatewayUrl,
