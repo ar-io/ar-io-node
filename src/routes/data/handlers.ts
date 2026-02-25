@@ -875,13 +875,6 @@ export const createRawDataHandler = ({
           });
           span.addEvent('Data retrieval successful');
 
-          // Defense in depth: reject size-0 data (e.g., bogus upstream responses)
-          if (data.size === 0) {
-            data.stream.destroy();
-            sendNotFound(res);
-            return;
-          }
-
           // Re-fetch attributes to ensure we have any offsets discovered during getData()
           // This ensures offset headers are set on the first request, not just subsequent ones
           span.addEvent('Re-fetching data attributes after getData');
@@ -1392,13 +1385,6 @@ export const createDataHandler = ({
             'cache.status': data.cached ? 'HIT' : 'MISS',
           });
           span.addEvent('Data retrieval successful');
-
-          // Defense in depth: reject size-0 data (e.g., bogus upstream responses)
-          if (data.size === 0) {
-            data.stream.destroy();
-            sendNotFound(res);
-            return;
-          }
 
           // Re-fetch attributes to ensure we have any offsets discovered during getData()
           // This ensures offset headers are set on the first request, not just subsequent ones
