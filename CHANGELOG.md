@@ -12,6 +12,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
 ## [Release 70] - 2026-02-24
 
 This is a **recommended release** that introduces **CDB64 download tooling** for
