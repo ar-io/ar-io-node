@@ -12,13 +12,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-## [Unreleased]
+## [Release 71] - 2026-02-26
+
+This is a **recommended release** that adds **per-gateway trust configuration**
+for `TRUSTED_GATEWAYS_URLS`, enabling operators to mark individual gateways as
+trusted or untrusted for finer-grained data verification control. It also
+includes **peer URL tracking in chunk broadcast responses** for improved
+debuggability, and fixes for **upstream gateway content-length validation** to
+prevent serving bogus responses from gateways that return 200 instead of 404.
 
 ### Added
 
+- **Per-Gateway Trust Flag for `TRUSTED_GATEWAYS_URLS`**: Extended the
+  `TRUSTED_GATEWAYS_URLS` configuration format to support per-gateway trust
+  levels
+  - Untrusted gateways only cache data when the hash matches a known value,
+    providing defense-in-depth against serving incorrect data
+  - Default configuration now uses `turbo-gateway.com` (trusted) with
+    `arweave.net` as an untrusted fallback
+
+- **Peer URL in Chunk Broadcast Responses**: Chunk broadcast responses now
+  include the peer URL for better debuggability when troubleshooting chunk
+  propagation issues
+
 ### Changed
 
+- Default `TRUSTED_GATEWAYS_URLS` now uses `turbo-gateway.com` as the primary
+  trusted gateway with `arweave.net` as an untrusted fallback
+
 ### Fixed
+
+- **Upstream Gateway Content-Length Validation**: Added validation of
+  content-length in `GatewaysDataSource` to reject responses with missing or
+  zero content-length, preventing upstream gateways from serving bogus HTML
+  landing pages when they return 200 instead of 404.
 
 ## [Release 70] - 2026-02-24
 
