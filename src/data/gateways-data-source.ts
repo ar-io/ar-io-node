@@ -19,6 +19,7 @@ import {
 } from '../types.js';
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
+import { TrustedGatewayConfig } from '../config.js';
 import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
 import { buildRangeHeader, parseContentLength } from '../lib/http-utils.js';
@@ -26,6 +27,7 @@ import { buildRangeHeader, parseContentLength } from '../lib/http-utils.js';
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private trustedGateways: Map<number, string[]>;
+  private gatewayTrust: Map<string, boolean>;
   private readonly requestTimeoutMs: number;
   private readonly fallbackToBasePath: boolean;
 
@@ -36,7 +38,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     fallbackToBasePath = false,
   }: {
     log: winston.Logger;
-    trustedGatewaysUrls: Record<string, number>;
+    trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
     requestTimeoutMs?: number;
     fallbackToBasePath?: boolean;
   }) {
@@ -50,11 +52,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
 
     // lower number = higher priority
     this.trustedGateways = new Map();
-    for (const [url, priority] of Object.entries(trustedGatewaysUrls)) {
+    this.gatewayTrust = new Map();
+    for (const [url, gatewayConfig] of Object.entries(trustedGatewaysUrls)) {
+      const { priority, trusted } = gatewayConfig;
       if (!this.trustedGateways.has(priority)) {
         this.trustedGateways.set(priority, []);
       }
       this.trustedGateways.get(priority)?.push(url);
+      this.gatewayTrust.set(url, trusted);
     }
   }
 
@@ -263,9 +268,13 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   );
                 }
 
+                const gatewayTrusted =
+                  this.gatewayTrust.get(gatewayUrl) ?? true;
+
                 span.setAttributes({
                   'gateway.successful_url': gatewayUrl,
                   'gateway.successful_priority': priority,
+                  'gateway.successful_trusted': gatewayTrusted,
                   'gateway.successful_path': path,
                   'gateway.request_duration_ms': gatewayRequestDuration,
                   'gateway.response_status': response.status,
@@ -323,7 +332,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   stream,
                   size: contentLength,
                   verified: false,
-                  trusted: true,
+                  trusted: gatewayTrusted,
                   sourceContentType: response.headers['content-type'],
                   cached: false,
                   requestAttributes: parseRequestAttributesHeaders({

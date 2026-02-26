@@ -122,28 +122,41 @@ export const PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS =
 export const TRUSTED_GATEWAY_URL = env.varOrUndefined('TRUSTED_GATEWAY_URL');
 
 // Trusted gateway URLs (for retrieving contiguous data)
-export const TRUSTED_GATEWAYS_URLS = JSON.parse(
+export type TrustedGatewayConfig = { priority: number; trusted: boolean };
+
+const rawTrustedGatewaysUrls = JSON.parse(
   env.varOrDefault(
     'TRUSTED_GATEWAYS_URLS',
     TRUSTED_GATEWAY_URL !== undefined
       ? JSON.stringify({ [TRUSTED_GATEWAY_URL]: 1 })
-      : '{ "https://arweave.net": 1}',
+      : '{ "https://turbo-gateway.com": 1, "https://arweave.net": { "priority": 2, "trusted": false } }',
   ),
-) as Record<string, number>;
+) as Record<string, number | { priority: number; trusted?: boolean }>;
 
-// Validate URLs and weights
-Object.entries(TRUSTED_GATEWAYS_URLS).forEach(([url, weight]) => {
-  try {
-    new URL(url);
-  } catch (error) {
-    throw new Error(`Invalid URL in TRUSTED_GATEWAYS_URLS: ${url}`);
-  }
-  if (typeof weight !== 'number' || weight <= 0) {
-    throw new Error(
-      `Invalid weight in TRUSTED_GATEWAYS_URLS for ${url}: ${weight}`,
-    );
-  }
-});
+// Normalize to TrustedGatewayConfig and validate
+export const TRUSTED_GATEWAYS_URLS: Record<string, TrustedGatewayConfig> =
+  Object.fromEntries(
+    Object.entries(rawTrustedGatewaysUrls).map(([url, value]) => {
+      try {
+        new URL(url);
+      } catch (error) {
+        throw new Error(`Invalid URL in TRUSTED_GATEWAYS_URLS: ${url}`);
+      }
+
+      const config =
+        typeof value === 'number'
+          ? { priority: value, trusted: true }
+          : { priority: value.priority, trusted: value.trusted ?? true };
+
+      if (typeof config.priority !== 'number' || config.priority <= 0) {
+        throw new Error(
+          `Invalid priority in TRUSTED_GATEWAYS_URLS for ${url}: ${config.priority}`,
+        );
+      }
+
+      return [url, config];
+    }),
+  );
 
 // Trusted gateways blocked origins (origins to reject when forwarding)
 export const TRUSTED_GATEWAYS_BLOCKED_ORIGINS = env

@@ -53,7 +53,9 @@ beforeEach(async () => {
 
   dataSource = new GatewaysDataSource({
     log,
-    trustedGatewaysUrls: { 'https://gateway.domain': 1 },
+    trustedGatewaysUrls: {
+      'https://gateway.domain': { priority: 1, trusted: true },
+    },
   });
 
   requestAttributes = { origin: 'node-url', hops: 0 };
@@ -69,10 +71,10 @@ describe('GatewayDataSource', () => {
       const dataSource = new GatewaysDataSource({
         log,
         trustedGatewaysUrls: {
-          'https://gateway1.com': 1,
-          'https://gateway2.com': 1,
-          'https://gateway3.com': 2,
-          'https://gateway4.com': 3,
+          'https://gateway1.com': { priority: 1, trusted: true },
+          'https://gateway2.com': { priority: 1, trusted: true },
+          'https://gateway3.com': { priority: 2, trusted: true },
+          'https://gateway4.com': { priority: 3, trusted: true },
         },
       });
 
@@ -102,9 +104,9 @@ describe('GatewayDataSource', () => {
       const dataSource = new GatewaysDataSource({
         log,
         trustedGatewaysUrls: {
-          'https://gateway1.com': 1,
-          'https://gateway2.com': 2,
-          'https://gateway3.com': 3,
+          'https://gateway1.com': { priority: 1, trusted: true },
+          'https://gateway2.com': { priority: 2, trusted: true },
+          'https://gateway3.com': { priority: 3, trusted: true },
         },
       });
 
@@ -140,9 +142,9 @@ describe('GatewayDataSource', () => {
       const dataSource = new GatewaysDataSource({
         log,
         trustedGatewaysUrls: {
-          'https://gateway1.com': 1,
-          'https://gateway2.com': 1,
-          'https://gateway3.com': 2,
+          'https://gateway1.com': { priority: 1, trusted: true },
+          'https://gateway2.com': { priority: 1, trusted: true },
+          'https://gateway3.com': { priority: 2, trusted: true },
         },
       });
 
@@ -583,8 +585,8 @@ describe('GatewayDataSource', () => {
         const dataSourceMultiGateway = new GatewaysDataSource({
           log,
           trustedGatewaysUrls: {
-            'https://gateway1.com': 1,
-            'https://gateway2.com': 2,
+            'https://gateway1.com': { priority: 1, trusted: true },
+            'https://gateway2.com': { priority: 2, trusted: true },
           },
         });
 
@@ -618,8 +620,8 @@ describe('GatewayDataSource', () => {
         const dataSourceMultiGateway = new GatewaysDataSource({
           log,
           trustedGatewaysUrls: {
-            'https://gateway1.com': 1,
-            'https://gateway2.com': 2,
+            'https://gateway1.com': { priority: 1, trusted: true },
+            'https://gateway2.com': { priority: 2, trusted: true },
           },
         });
 
@@ -678,7 +680,9 @@ describe('GatewayDataSource', () => {
 
         const fallbackDataSource = new GatewaysDataSource({
           log,
-          trustedGatewaysUrls: { 'https://gateway.domain': 1 },
+          trustedGatewaysUrls: {
+            'https://gateway.domain': { priority: 1, trusted: true },
+          },
           fallbackToBasePath: true,
         });
 
@@ -705,7 +709,9 @@ describe('GatewayDataSource', () => {
 
         const fallbackDataSource = new GatewaysDataSource({
           log,
-          trustedGatewaysUrls: { 'https://gateway.domain': 1 },
+          trustedGatewaysUrls: {
+            'https://gateway.domain': { priority: 1, trusted: true },
+          },
           fallbackToBasePath: true,
         });
 
@@ -723,8 +729,8 @@ describe('GatewayDataSource', () => {
         const dataSourceMultiGateway = new GatewaysDataSource({
           log,
           trustedGatewaysUrls: {
-            'https://gateway1.com': 1,
-            'https://gateway2.com': 2,
+            'https://gateway1.com': { priority: 1, trusted: true },
+            'https://gateway2.com': { priority: 2, trusted: true },
           },
           fallbackToBasePath: true,
         });
@@ -760,6 +766,75 @@ describe('GatewayDataSource', () => {
         assert.equal(requestLog[2].url, 'https://gateway2.com');
         assert.equal(requestLog[2].path, '/raw/test-id');
         assert.equal(data.size, 123);
+      });
+    });
+
+    describe('per-gateway trust flag', () => {
+      it('should return trusted: true for a trusted gateway', async () => {
+        const trustedDataSource = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway.domain': { priority: 1, trusted: true },
+          },
+        });
+
+        const data = await trustedDataSource.getData({
+          id: 'test-id',
+          requestAttributes,
+        });
+
+        assert.equal(data.trusted, true);
+      });
+
+      it('should return trusted: false for an untrusted gateway', async () => {
+        const untrustedDataSource = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway.domain': { priority: 1, trusted: false },
+          },
+        });
+
+        const data = await untrustedDataSource.getData({
+          id: 'test-id',
+          requestAttributes,
+        });
+
+        assert.equal(data.trusted, false);
+      });
+
+      it('should propagate correct trust when falling back from trusted to untrusted gateway', async () => {
+        const mixedDataSource = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://trusted-gw.com': { priority: 1, trusted: true },
+            'https://untrusted-gw.com': { priority: 2, trusted: false },
+          },
+        });
+
+        mock.method(axios, 'create', (config: any) => ({
+          request: async () => {
+            if (config.baseURL === 'https://trusted-gw.com') {
+              throw new Error('Network Error');
+            }
+            return {
+              status: 200,
+              data: axiosStreamData,
+              headers: {
+                'content-length': '123',
+                'content-type': 'application/json',
+                'X-AR-IO-Origin': 'node-url',
+              },
+            };
+          },
+          ...axiosMockCommonParams(config),
+        }));
+
+        const data = await mixedDataSource.getData({
+          id: 'test-id',
+          requestAttributes,
+        });
+
+        assert.equal(data.trusted, false);
       });
     });
   });
