@@ -645,6 +645,7 @@ export interface ChunkDataByAnySource {
  * no meaningful response to report.
  */
 type BroadcastChunkResponses = {
+  peer: string;
   success: boolean;
   statusCode: number;
   canceled: boolean;

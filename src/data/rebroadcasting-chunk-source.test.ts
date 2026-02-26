@@ -95,7 +95,13 @@ class MockChunkBroadcaster implements ChunkBroadcaster {
     successCount: 1,
     failureCount: 0,
     results: [
-      { success: true, statusCode: 200, canceled: false, timedOut: false },
+      {
+        peer: 'http://mock-peer',
+        success: true,
+        statusCode: 200,
+        canceled: false,
+        timedOut: false,
+      },
     ],
   };
   private resolveNextBroadcast: (() => void) | null = null;
@@ -146,7 +152,13 @@ class MockChunkBroadcaster implements ChunkBroadcaster {
       successCount: 1,
       failureCount: 0,
       results: [
-        { success: true, statusCode: 200, canceled: false, timedOut: false },
+        {
+          peer: 'http://mock-peer',
+          success: true,
+          statusCode: 200,
+          canceled: false,
+          timedOut: false,
+        },
       ],
     };
   }
@@ -368,7 +380,13 @@ describe('RebroadcastingChunkSource', () => {
         successCount: 0,
         failureCount: 1,
         results: [
-          { success: false, statusCode: 500, canceled: false, timedOut: false },
+          {
+            peer: 'http://mock-peer',
+            success: false,
+            statusCode: 500,
+            canceled: false,
+            timedOut: false,
+          },
         ],
       };
 
@@ -389,7 +407,13 @@ describe('RebroadcastingChunkSource', () => {
         successCount: 1,
         failureCount: 0,
         results: [
-          { success: true, statusCode: 200, canceled: false, timedOut: false },
+          {
+            peer: 'http://mock-peer',
+            success: true,
+            statusCode: 200,
+            canceled: false,
+            timedOut: false,
+          },
         ],
       };
 
@@ -449,6 +473,7 @@ describe('RebroadcastingChunkSource', () => {
             failureCount: 0,
             results: [
               {
+                peer: 'http://mock-peer',
                 success: true,
                 statusCode: 200,
                 canceled: false,

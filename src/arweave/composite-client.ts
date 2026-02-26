@@ -1786,6 +1786,7 @@ export class ArweaveCompositeClient
               peer,
             });
             return {
+              peer,
               success: true,
               statusCode: 200,
               canceled: false,
@@ -1809,6 +1810,7 @@ export class ArweaveCompositeClient
               },
             );
             return {
+              peer,
               success: false,
               statusCode: 0,
               canceled: false,
@@ -1852,6 +1854,7 @@ export class ArweaveCompositeClient
             }
 
             return {
+              peer,
               success: result.success,
               statusCode,
               canceled: result.canceled ?? false,
@@ -1867,6 +1870,7 @@ export class ArweaveCompositeClient
             });
 
             return {
+              peer,
               success: false,
               statusCode: 0,
               canceled: false,

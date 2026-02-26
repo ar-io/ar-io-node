@@ -14,10 +14,50 @@ import {
   createChunkOffsetDataHandler,
   determineFailureStatusCode,
 } from './handlers.js';
+import { ChunkNotFoundError } from '../../data/chunk-retrieval-service.js';
 import log from '../../log.js';
-import * as merklePathParser from '../../lib/merkle-path-parser.js';
 
 const CHUNK_OFFSET_PATH = '/chunk/:offset(\\d+)';
+
+/**
+ * Creates a mock ChunkRetrievalService that returns a BoundaryFetchResult.
+ */
+function mockService(
+  chunkFields: Record<string, any>,
+  overrides?: Record<string, any>,
+): any {
+  return {
+    retrieveChunk: async () => ({
+      type: 'boundary_fetch',
+      chunk: {
+        chunk: Buffer.from('chunk data'),
+        data_path: Buffer.from('12345abc'),
+        source: 'cache',
+        ...chunkFields,
+      },
+      dataRoot: 'abc1234',
+      dataSize: 100,
+      weaveOffset: 99,
+      relativeOffset: 0,
+      contiguousDataStartDelimiter: 0,
+      ...overrides,
+    }),
+  };
+}
+
+/**
+ * Creates a mock ChunkRetrievalService that throws ChunkNotFoundError.
+ */
+function mockNotFoundService(
+  message = 'Not found',
+  errorType = 'not_found',
+): any {
+  return {
+    retrieveChunk: async () => {
+      throw new ChunkNotFoundError(message, errorType);
+    },
+  };
+}
 
 describe('Chunk routes', () => {
   let app: express.Express;
@@ -31,30 +71,11 @@ describe('Chunk routes', () => {
   });
 
   it('should return 200 for a valid chunk request', async () => {
-    const chunkSource: any = {
-      getChunkByAny: async () => ({
-        chunk: Buffer.from('chunk data'),
-        data_path: Buffer.from('12345abc'),
-        source: 'cache',
-      }),
-    };
-
-    const txOffsetSource: any = {
-      getTxByOffset: () => ({
-        data_root: 'abc1234',
-        data_size: 100,
-        offset: 0,
-        id: 'foobarbaz',
-      }),
-    };
+    const chunkRetrievalService = mockService({ source: 'cache' });
 
     app.get(
       CHUNK_OFFSET_PATH,
-      createChunkOffsetHandler({
-        chunkSource,
-        txOffsetSource,
-        log,
-      }),
+      createChunkOffsetHandler({ chunkRetrievalService, log }),
     );
 
     await request(app)
@@ -67,7 +88,7 @@ describe('Chunk routes', () => {
           'application/json; charset=utf-8',
         );
         assert.deepEqual(res.body, {
-          chunk: 'Y2h1bmsgZGF0YQ', // base64 of "chunk data"
+          chunk: 'Y2h1bmsgZGF0YQ', // base64url of "chunk data"
           data_path: 'MTIzNDVhYmM',
           packing: 'unpacked',
         });
@@ -75,31 +96,14 @@ describe('Chunk routes', () => {
   });
 
   it('should return 200 with tx_path when available', async () => {
-    const chunkSource: any = {
-      getChunkByAny: async () => ({
-        chunk: Buffer.from('chunk data'),
-        data_path: Buffer.from('12345abc'),
-        tx_path: Buffer.from('txpath123'),
-        source: 'arweave-network',
-      }),
-    };
-
-    const txOffsetSource: any = {
-      getTxByOffset: () => ({
-        data_root: 'abc1234',
-        data_size: 100,
-        offset: 0,
-        id: 'foobarbaz',
-      }),
-    };
+    const chunkRetrievalService = mockService({
+      tx_path: Buffer.from('txpath123'),
+      source: 'arweave-network',
+    });
 
     app.get(
       CHUNK_OFFSET_PATH,
-      createChunkOffsetHandler({
-        chunkSource,
-        txOffsetSource,
-        log,
-      }),
+      createChunkOffsetHandler({ chunkRetrievalService, log }),
     );
 
     await request(app)
@@ -112,22 +116,20 @@ describe('Chunk routes', () => {
           'application/json; charset=utf-8',
         );
         assert.deepEqual(res.body, {
-          chunk: 'Y2h1bmsgZGF0YQ', // base64 of "chunk data"
+          chunk: 'Y2h1bmsgZGF0YQ', // base64url of "chunk data"
           data_path: 'MTIzNDVhYmM',
-          tx_path: 'dHhwYXRoMTIz', // base64 of "txpath123"
+          tx_path: 'dHhwYXRoMTIz', // base64url of "txpath123"
           packing: 'unpacked',
         });
       });
   });
 
   it('should return 404 for an invalid (non-numeric) offset', async () => {
+    const chunkRetrievalService = mockService({});
+
     app.get(
       CHUNK_OFFSET_PATH,
-      createChunkOffsetHandler({
-        chunkSource: {} as any,
-        txOffsetSource: {} as any,
-        log,
-      }),
+      createChunkOffsetHandler({ chunkRetrievalService, log }),
     );
 
     await request(app)
@@ -138,23 +140,15 @@ describe('Chunk routes', () => {
       });
   });
 
-  it('should return 404 if DB returns undefined (transaction not found)', async () => {
-    const txOffsetSource: any = {
-      getTxByOffset: () => ({
-        data_root: undefined,
-        data_size: 100,
-        offset: 0,
-        id: 'foobarbaz',
-      }),
-    };
+  it('should return 404 if transaction not found', async () => {
+    const chunkRetrievalService = mockNotFoundService(
+      'No TX boundary found',
+      'boundary_not_found',
+    );
 
     app.get(
       CHUNK_OFFSET_PATH,
-      createChunkOffsetHandler({
-        chunkSource: {} as any,
-        txOffsetSource,
-        log,
-      }),
+      createChunkOffsetHandler({ chunkRetrievalService, log }),
     );
 
     await request(app)
@@ -166,60 +160,15 @@ describe('Chunk routes', () => {
       });
   });
 
-  it('should return 404 if chunk source throws an (ex. http) error', async () => {
-    const chunkSource: any = {
-      getChunkByAny: async () => {
-        throw new Error('Something went wrong');
-      },
-    };
-
-    const txOffsetSource: any = {
-      getTxByOffset: () => ({
-        data_root: 'abc1234',
-        data_size: 100,
-        offset: 0,
-        id: 'foobarbaz',
-      }),
-    };
-
-    app.get(
-      CHUNK_OFFSET_PATH,
-      createChunkOffsetHandler({
-        chunkSource,
-        txOffsetSource,
-        log,
-      }),
+  it('should return 404 if chunk fetch fails', async () => {
+    const chunkRetrievalService = mockNotFoundService(
+      'Chunk fetch failed',
+      'fetch_failed',
     );
 
-    await request(app)
-      .get('/chunk/1234')
-      .expect(404)
-      .then((res: any) => {
-        assert.strictEqual(res.status, 404);
-      });
-  });
-
-  it('should return 404 if chunk source returns undefined', async () => {
-    const chunkSource: any = {
-      getChunkByAny: async () => undefined,
-    };
-
-    const txOffsetSource: any = {
-      getTxByOffset: () => ({
-        data_root: 'abc1234',
-        data_size: 100,
-        offset: 0,
-        id: 'foobarbaz',
-      }),
-    };
-
     app.get(
       CHUNK_OFFSET_PATH,
-      createChunkOffsetHandler({
-        chunkSource,
-        txOffsetSource,
-        log,
-      }),
+      createChunkOffsetHandler({ chunkRetrievalService, log }),
     );
 
     await request(app)
@@ -234,29 +183,13 @@ describe('Chunk routes', () => {
     // This test artificially simulates a scenario where `chunk`
     // is not a Buffer. The typical code tries `Buffer.from(chunk).toString('base64')`,
     // which would fail if chunk is not a valid buffer/string.
-    const chunkSource: any = {
-      getChunkByAny: async () => ({
-        chunk: 1234, // Not a Buffer or string
-        data_path: Buffer.from('12345abc'),
-      }),
-    };
-
-    const txOffsetSource: any = {
-      getTxByOffset: () => ({
-        data_root: 'abc1234',
-        data_size: 100,
-        offset: 0,
-        id: 'foobarbaz',
-      }),
-    };
+    const chunkRetrievalService = mockService({
+      chunk: 1234, // Not a Buffer or string
+    });
 
     app.get(
       CHUNK_OFFSET_PATH,
-      createChunkOffsetHandler({
-        chunkSource,
-        txOffsetSource,
-        log,
-      }),
+      createChunkOffsetHandler({ chunkRetrievalService, log }),
     );
 
     await request(app)
@@ -270,31 +203,14 @@ describe('Chunk routes', () => {
 
   describe('HEAD requests', () => {
     it('should return 200 with headers but no body for HEAD request', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'cache',
-          hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({
+        source: 'cache',
+        hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
+      });
 
       app.head(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -315,13 +231,11 @@ describe('Chunk routes', () => {
     });
 
     it('should return 404 for HEAD request with invalid offset', async () => {
+      const chunkRetrievalService = mockService({});
+
       app.head(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource: {} as any,
-          txOffsetSource: {} as any,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -335,27 +249,13 @@ describe('Chunk routes', () => {
     });
 
     it('should return same headers for HEAD and GET requests', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'network',
-          sourceHost: 'example.com',
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({
+        source: 'network',
+        sourceHost: 'example.com',
+      });
 
       const handler = createChunkOffsetHandler({
-        chunkSource,
-        txOffsetSource,
+        chunkRetrievalService,
         log,
       });
 
@@ -390,31 +290,14 @@ describe('Chunk routes', () => {
 
   describe('ETag support', () => {
     it('should include ETag when chunk hash is available and cached', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'cache',
-          hash: Buffer.from('abc123def456', 'base64url'),
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({
+        source: 'cache',
+        hash: Buffer.from('abc123def456', 'base64url'),
+      });
 
       app.get(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -426,31 +309,14 @@ describe('Chunk routes', () => {
     });
 
     it('should include ETag for HEAD request regardless of cache status', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'network', // Not cached
-          hash: Buffer.from('abc123def456', 'base64url'),
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({
+        source: 'network', // Not cached
+        hash: Buffer.from('abc123def456', 'base64url'),
+      });
 
       app.head(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -463,31 +329,14 @@ describe('Chunk routes', () => {
     });
 
     it('should not include ETag when chunk hash is unavailable', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'network',
-          // No hash field
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({
+        source: 'network',
+        // No hash field
+      });
 
       app.get(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -500,31 +349,14 @@ describe('Chunk routes', () => {
     });
 
     it('should not include ETag for GET from network when hash available but not cached', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'network',
-          hash: Buffer.from('abc123def456', 'base64url'),
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({
+        source: 'network',
+        hash: Buffer.from('abc123def456', 'base64url'),
+      });
 
       app.get(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -540,31 +372,14 @@ describe('Chunk routes', () => {
 
   describe('If-None-Match conditional requests', () => {
     it('should return 304 when If-None-Match matches ETag for GET', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'cache',
-          hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({
+        source: 'cache',
+        hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
+      });
 
       app.get(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -580,31 +395,14 @@ describe('Chunk routes', () => {
     });
 
     it('should return 304 when If-None-Match matches ETag for HEAD', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'cache',
-          hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({
+        source: 'cache',
+        hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
+      });
 
       app.head(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -619,31 +417,14 @@ describe('Chunk routes', () => {
     });
 
     it('should return 200 when If-None-Match does not match ETag', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'cache',
-          hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({
+        source: 'cache',
+        hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
+      });
 
       app.get(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -658,31 +439,14 @@ describe('Chunk routes', () => {
     });
 
     it('should return 200 when If-None-Match is set but no ETag available', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'network',
-          // No hash, so no ETag
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({
+        source: 'network',
+        // No hash, so no ETag
+      });
 
       app.get(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -700,30 +464,11 @@ describe('Chunk routes', () => {
 
   describe('Cache status headers', () => {
     it('should set X-AR-IO-Cache-Status to HIT when cached', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'cache',
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({ source: 'cache' });
 
       app.get(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -735,30 +480,11 @@ describe('Chunk routes', () => {
     });
 
     it('should set X-AR-IO-Cache-Status to MISS when not cached', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => ({
-          chunk: Buffer.from('chunk data'),
-          data_path: Buffer.from('12345abc'),
-          source: 'network',
-        }),
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 100,
-          offset: 0,
-          id: 'foobarbaz',
-        }),
-      };
+      const chunkRetrievalService = mockService({ source: 'network' });
 
       app.get(
         CHUNK_OFFSET_PATH,
-        createChunkOffsetHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetHandler({ chunkRetrievalService, log }),
       );
 
       await request(app)
@@ -779,89 +505,53 @@ describe('Chunk routes', () => {
     // requires cryptographically valid test data.
 
     it('should return 400 for invalid (non-numeric) offset', async () => {
+      const chunkRetrievalService = mockService({});
+
       app.get(
         CHUNK_DATA_PATH,
-        createChunkOffsetDataHandler({
-          chunkSource: {} as any,
-          txOffsetSource: {} as any,
-          log,
-        }),
+        createChunkOffsetDataHandler({ chunkRetrievalService, log }),
       );
 
       await request(app).get('/chunk/invalid-offset/data').expect(404); // Express routing returns 404 for non-matching pattern
     });
 
     it('should return 404 if transaction not found', async () => {
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: undefined,
-          data_size: 100,
-          offset: 0,
-          id: 'test-tx-id',
-        }),
-      };
+      const chunkRetrievalService = mockNotFoundService(
+        'No TX boundary found',
+        'boundary_not_found',
+      );
 
       app.get(
         CHUNK_DATA_PATH,
-        createChunkOffsetDataHandler({
-          chunkSource: {} as any,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetDataHandler({ chunkRetrievalService, log }),
       );
 
       await request(app).get('/chunk/1234/data').expect(404);
     });
 
     it('should return 404 if chunk source throws error', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => {
-          throw new Error('Chunk not found');
-        },
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 262144,
-          offset: 524288,
-          id: 'test-tx-id',
-        }),
-      };
+      const chunkRetrievalService = mockNotFoundService(
+        'Chunk fetch failed',
+        'fetch_failed',
+      );
 
       app.get(
         CHUNK_DATA_PATH,
-        createChunkOffsetDataHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetDataHandler({ chunkRetrievalService, log }),
       );
 
       await request(app).get('/chunk/524288/data').expect(404);
     });
 
     it('should return 404 if chunk source returns undefined', async () => {
-      const chunkSource: any = {
-        getChunkByAny: async () => undefined,
-      };
-
-      const txOffsetSource: any = {
-        getTxByOffset: () => ({
-          data_root: 'abc1234',
-          data_size: 262144,
-          offset: 524288,
-          id: 'test-tx-id',
-        }),
-      };
+      const chunkRetrievalService = mockNotFoundService(
+        'Chunk fetch failed',
+        'fetch_failed',
+      );
 
       app.get(
         CHUNK_DATA_PATH,
-        createChunkOffsetDataHandler({
-          chunkSource,
-          txOffsetSource,
-          log,
-        }),
+        createChunkOffsetDataHandler({ chunkRetrievalService, log }),
       );
 
       await request(app).get('/chunk/524288/data').expect(404);
@@ -887,6 +577,7 @@ describe('determineFailureStatusCode', () => {
   it('should return 500 when all peers were skipped', () => {
     const results = [
       {
+        peer: 'http://peer1',
         success: false,
         statusCode: 0,
         canceled: false,
@@ -894,6 +585,7 @@ describe('determineFailureStatusCode', () => {
         skipped: true,
       },
       {
+        peer: 'http://peer2',
         success: false,
         statusCode: 0,
         canceled: false,
@@ -906,78 +598,217 @@ describe('determineFailureStatusCode', () => {
 
   it('should return 400 when all peers return 400', () => {
     const results = [
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer3',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
     ];
     assert.strictEqual(determineFailureStatusCode(results), 400);
   });
 
   it('should return 500 when all peers return 500', () => {
     const results = [
-      { success: false, statusCode: 500, canceled: false, timedOut: false },
-      { success: false, statusCode: 500, canceled: false, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 500,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: false,
+        statusCode: 500,
+        canceled: false,
+        timedOut: false,
+      },
     ];
     assert.strictEqual(determineFailureStatusCode(results), 500);
   });
 
   it('should return most common status code (400 over 500)', () => {
     const results = [
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 500, canceled: false, timedOut: false },
-      { success: false, statusCode: 500, canceled: false, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer3',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer4',
+        success: false,
+        statusCode: 500,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer5',
+        success: false,
+        statusCode: 500,
+        canceled: false,
+        timedOut: false,
+      },
     ];
     assert.strictEqual(determineFailureStatusCode(results), 400);
   });
 
   it('should prefer lowest 4xx when tied', () => {
     const results = [
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 429, canceled: false, timedOut: false },
-      { success: false, statusCode: 429, canceled: false, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer3',
+        success: false,
+        statusCode: 429,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer4',
+        success: false,
+        statusCode: 429,
+        canceled: false,
+        timedOut: false,
+      },
     ];
     assert.strictEqual(determineFailureStatusCode(results), 400);
   });
 
   it('should prefer 4xx over 5xx when tied', () => {
     const results = [
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 500, canceled: false, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: false,
+        statusCode: 500,
+        canceled: false,
+        timedOut: false,
+      },
     ];
     assert.strictEqual(determineFailureStatusCode(results), 400);
   });
 
   it('should return 504 when all peers timeout', () => {
     const results = [
-      { success: false, statusCode: 0, canceled: false, timedOut: true },
-      { success: false, statusCode: 0, canceled: false, timedOut: true },
+      {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 0,
+        canceled: false,
+        timedOut: true,
+      },
+      {
+        peer: 'http://peer2',
+        success: false,
+        statusCode: 0,
+        canceled: false,
+        timedOut: true,
+      },
     ];
     assert.strictEqual(determineFailureStatusCode(results), 504);
   });
 
   it('should return 502 when all peers have network errors', () => {
     const results = [
-      { success: false, statusCode: 0, canceled: false, timedOut: false },
-      { success: false, statusCode: 0, canceled: false, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 0,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: false,
+        statusCode: 0,
+        canceled: false,
+        timedOut: false,
+      },
     ];
     assert.strictEqual(determineFailureStatusCode(results), 502);
   });
 
   it('should return 499 when all peers are canceled', () => {
     const results = [
-      { success: false, statusCode: 0, canceled: true, timedOut: false },
-      { success: false, statusCode: 0, canceled: true, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 0,
+        canceled: true,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: false,
+        statusCode: 0,
+        canceled: true,
+        timedOut: false,
+      },
     ];
     assert.strictEqual(determineFailureStatusCode(results), 499);
   });
 
   it('should exclude skipped peers from calculation', () => {
     const results = [
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
       {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
         success: false,
         statusCode: 0,
         canceled: false,
@@ -985,6 +816,7 @@ describe('determineFailureStatusCode', () => {
         skipped: true,
       },
       {
+        peer: 'http://peer3',
         success: false,
         statusCode: 0,
         canceled: false,
@@ -997,10 +829,34 @@ describe('determineFailureStatusCode', () => {
 
   it('should handle mixed results correctly', () => {
     const results = [
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 0, canceled: false, timedOut: true }, // timeout -> 504
-      { success: false, statusCode: 500, canceled: false, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer3',
+        success: false,
+        statusCode: 0,
+        canceled: false,
+        timedOut: true,
+      }, // timeout -> 504
+      {
+        peer: 'http://peer4',
+        success: false,
+        statusCode: 500,
+        canceled: false,
+        timedOut: false,
+      },
     ];
     // 400 appears twice, others appear once
     assert.strictEqual(determineFailureStatusCode(results), 400);
@@ -1008,10 +864,34 @@ describe('determineFailureStatusCode', () => {
 
   it('should exclude successful peers from calculation', () => {
     const results = [
-      { success: true, statusCode: 200, canceled: false, timedOut: false },
-      { success: true, statusCode: 200, canceled: false, timedOut: false },
-      { success: false, statusCode: 400, canceled: false, timedOut: false },
-      { success: false, statusCode: 500, canceled: false, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: true,
+        statusCode: 200,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: true,
+        statusCode: 200,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer3',
+        success: false,
+        statusCode: 400,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer4',
+        success: false,
+        statusCode: 500,
+        canceled: false,
+        timedOut: false,
+      },
     ];
     // Even though 200 is most common, we only count failures
     // Between 400 and 500 (tied), 4xx is preferred
@@ -1020,8 +900,20 @@ describe('determineFailureStatusCode', () => {
 
   it('should return 500 when all contacted peers succeeded', () => {
     const results = [
-      { success: true, statusCode: 200, canceled: false, timedOut: false },
-      { success: true, statusCode: 200, canceled: false, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: true,
+        statusCode: 200,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: true,
+        statusCode: 200,
+        canceled: false,
+        timedOut: false,
+      },
     ];
     // No failed peers to aggregate, return default 500
     assert.strictEqual(determineFailureStatusCode(results), 500);
@@ -1029,10 +921,34 @@ describe('determineFailureStatusCode', () => {
 
   it('should prefer lowest 5xx when tied', () => {
     const results = [
-      { success: false, statusCode: 500, canceled: false, timedOut: false },
-      { success: false, statusCode: 500, canceled: false, timedOut: false },
-      { success: false, statusCode: 503, canceled: false, timedOut: false },
-      { success: false, statusCode: 503, canceled: false, timedOut: false },
+      {
+        peer: 'http://peer1',
+        success: false,
+        statusCode: 500,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer2',
+        success: false,
+        statusCode: 500,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer3',
+        success: false,
+        statusCode: 503,
+        canceled: false,
+        timedOut: false,
+      },
+      {
+        peer: 'http://peer4',
+        success: false,
+        statusCode: 503,
+        canceled: false,
+        timedOut: false,
+      },
     ];
     assert.strictEqual(determineFailureStatusCode(results), 500);
   });
