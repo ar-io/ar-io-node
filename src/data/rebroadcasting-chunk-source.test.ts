@@ -93,6 +93,7 @@ class MockChunkBroadcaster implements ChunkBroadcaster {
   public shouldFail = false;
   public result: BroadcastChunkResult = {
     successCount: 1,
+    preferredSuccessCount: 0,
     failureCount: 0,
     results: [
       {
@@ -470,6 +471,7 @@ describe('RebroadcastingChunkSource', () => {
           totalBroadcasts++;
           return {
             successCount: 1,
+            preferredSuccessCount: 0,
             failureCount: 0,
             results: [
               {

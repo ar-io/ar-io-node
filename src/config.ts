@@ -411,11 +411,13 @@ export const GATEWAY_PEERS_REQUEST_WINDOW_COUNT = +env.varOrDefault(
 export const ARWEAVE_NODE_IGNORE_URLS: string[] =
   env.varOrUndefined('ARWEAVE_NODE_IGNORE_URLS')?.split(',') ?? [];
 
-// Default preferred chunk POST nodes (tip-2 through tip-4.arweave.xyz)
+// Default preferred chunk POST nodes (tip-1 through tip-5.arweave.xyz)
 const DEFAULT_PREFERRED_CHUNK_POST_NODE_URLS = [
+  'http://tip-1.arweave.xyz:1984',
   'http://tip-2.arweave.xyz:1984',
   'http://tip-3.arweave.xyz:1984',
   'http://tip-4.arweave.xyz:1984',
+  'http://tip-5.arweave.xyz:1984',
 ];
 
 // Preferred chunk POST URLs (prioritized over discovered peers)
@@ -446,6 +448,12 @@ export const CHUNK_POST_QUEUE_DEPTH_THRESHOLD = +env.varOrDefault(
 export const CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
   'CHUNK_POST_MIN_SUCCESS_COUNT',
   '3',
+);
+
+// Minimum number of successful preferred peer chunk POST responses required
+export const CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT = +env.varOrDefault(
+  'CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT',
+  '2',
 );
 
 // Maximum number of peers to broadcast to in parallel

@@ -656,6 +656,7 @@ type BroadcastChunkResponses = {
 
 interface BroadcastChunkResult {
   successCount: number;
+  preferredSuccessCount: number;
   failureCount: number;
   results: BroadcastChunkResponses[];
 }
@@ -667,6 +668,7 @@ export interface ChunkBroadcaster {
     responseTimeout,
     originAndHopsHeaders,
     chunkPostMinSuccessCount,
+    chunkPostMinPreferredSuccessCount,
     parentSpan,
   }: {
     chunk: JsonChunkPost;
@@ -674,6 +676,7 @@ export interface ChunkBroadcaster {
     responseTimeout?: number;
     originAndHopsHeaders: Record<string, string | undefined>;
     chunkPostMinSuccessCount: number;
+    chunkPostMinPreferredSuccessCount?: number;
     parentSpan?: Span;
   }): Promise<BroadcastChunkResult>;
 }

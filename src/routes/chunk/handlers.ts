@@ -12,6 +12,7 @@ import {
   CHUNK_POST_ABORT_TIMEOUT_MS,
   CHUNK_POST_RESPONSE_TIMEOUT_MS,
   CHUNK_POST_MIN_SUCCESS_COUNT,
+  CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT,
   MAX_CHUNK_SIZE,
 } from '../../config.js';
 import { headerNames } from '../../constants.js';
@@ -635,16 +636,26 @@ export const createChunkPostHandler = ({
           abortTimeout: CHUNK_POST_ABORT_TIMEOUT_MS,
           responseTimeout: CHUNK_POST_RESPONSE_TIMEOUT_MS,
           chunkPostMinSuccessCount: CHUNK_POST_MIN_SUCCESS_COUNT,
+          chunkPostMinPreferredSuccessCount:
+            CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT,
           originAndHopsHeaders: headers,
           parentSpan: span,
         });
 
-        // Check if successCount meets the threshold
-        if (result.successCount >= CHUNK_POST_MIN_SUCCESS_COUNT) {
+        // Check if successCount meets both thresholds
+        const meetsSuccessThreshold =
+          result.successCount >= CHUNK_POST_MIN_SUCCESS_COUNT &&
+          result.preferredSuccessCount >=
+            CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT;
+        if (meetsSuccessThreshold) {
           span.setAttribute('chunk.broadcast.success', true);
           span.setAttribute(
             'chunk.broadcast.success_count',
             result.successCount,
+          );
+          span.setAttribute(
+            'chunk.broadcast.preferred_success_count',
+            result.preferredSuccessCount,
           );
           span.setAttribute(
             'chunk.broadcast.failure_count',
@@ -658,6 +669,10 @@ export const createChunkPostHandler = ({
           span.setAttribute(
             'chunk.broadcast.success_count',
             result.successCount,
+          );
+          span.setAttribute(
+            'chunk.broadcast.preferred_success_count',
+            result.preferredSuccessCount,
           );
           span.setAttribute(
             'chunk.broadcast.failure_count',

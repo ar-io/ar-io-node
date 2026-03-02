@@ -1694,6 +1694,7 @@ export class ArweaveCompositeClient
    * @param responseTimeout - Timeout for individual peer requests
    * @param originAndHopsHeaders - Headers to propagate for request tracing
    * @param chunkPostMinSuccessCount - Minimum successful posts to consider broadcast complete
+   * @param chunkPostMinPreferredSuccessCount - Minimum successful preferred peer posts required
    * @param parentSpan - Optional parent span for distributed tracing
    * @returns Results including success/failure counts and per-peer response details
    */
@@ -1703,6 +1704,7 @@ export class ArweaveCompositeClient
     responseTimeout = DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS,
     originAndHopsHeaders,
     chunkPostMinSuccessCount,
+    chunkPostMinPreferredSuccessCount = 0,
     parentSpan,
   }: {
     chunk: JsonChunkPost;
@@ -1710,6 +1712,7 @@ export class ArweaveCompositeClient
     responseTimeout?: number;
     originAndHopsHeaders: Record<string, string | undefined>;
     chunkPostMinSuccessCount: number;
+    chunkPostMinPreferredSuccessCount?: number;
     parentSpan?: Span;
   }): Promise<BroadcastChunkResult> {
     const span = tracer.startSpan(
@@ -1719,6 +1722,8 @@ export class ArweaveCompositeClient
           'chunk.data_root': chunk.data_root,
           'chunk.data_size': chunk.data_size,
           'chunk.min_success_count': chunkPostMinSuccessCount,
+          'chunk.min_preferred_success_count':
+            chunkPostMinPreferredSuccessCount,
         },
       },
       ...(parentSpan ? [trace.setSpan(context.active(), parentSpan)] : []),
@@ -1736,6 +1741,7 @@ export class ArweaveCompositeClient
         this.log.warn('No eligible peers available for chunk broadcasting');
         return {
           successCount: 0,
+          preferredSuccessCount: 0,
           failureCount: 0,
           results: [],
         };
@@ -1749,8 +1755,9 @@ export class ArweaveCompositeClient
       // Calculate preferred vs non-preferred peer counts for logging
       const preferredChunkPostUrls =
         this.peerManager.getPreferredChunkPostUrls();
+      const preferredChunkPostUrlSet = new Set(preferredChunkPostUrls);
       const preferredPeerCount = sortedPeers.filter((peer) =>
-        preferredChunkPostUrls.includes(peer),
+        preferredChunkPostUrlSet.has(peer),
       ).length;
       const nonPreferredPeerCount = sortedPeers.length - preferredPeerCount;
 
@@ -1763,6 +1770,7 @@ export class ArweaveCompositeClient
       // send a few extra requests before early termination kicks in. Logged and traced
       // counts may also be slightly inaccurate; use the results array for precise values.
       let successCount = 0;
+      let preferredSuccessCount = 0;
       let failureCount = 0;
       let consecutive4xxFailures = 0;
       let hasAnySuccess = false;
@@ -1774,14 +1782,18 @@ export class ArweaveCompositeClient
         preferredPeers: preferredPeerCount,
         nonPreferredPeers: nonPreferredPeerCount,
         minSuccessCount: chunkPostMinSuccessCount,
+        minPreferredSuccessCount: chunkPostMinPreferredSuccessCount,
         concurrency: config.CHUNK_POST_PEER_CONCURRENCY,
       });
 
       // Create promises for all peers
       const peerPromises = sortedPeers.map((peer) =>
         peerConcurrencyLimit(async () => {
-          // Skip if we already have enough successes
-          if (successCount >= chunkPostMinSuccessCount) {
+          // Skip if we already have enough successes (both overall and preferred)
+          if (
+            successCount >= chunkPostMinSuccessCount &&
+            preferredSuccessCount >= chunkPostMinPreferredSuccessCount
+          ) {
             this.log.debug('Skipping peer due to success threshold reached', {
               peer,
             });
@@ -1834,9 +1846,16 @@ export class ArweaveCompositeClient
 
             if (result.success) {
               successCount++;
+              if (preferredChunkPostUrlSet.has(peer)) {
+                preferredSuccessCount++;
+              }
               hasAnySuccess = true;
               consecutive4xxFailures = 0;
-              this.log.debug('Chunk POST succeeded', { peer, successCount });
+              this.log.debug('Chunk POST succeeded', {
+                peer,
+                successCount,
+                preferredSuccessCount,
+              });
             } else {
               failureCount++;
               // Only count 4xx responses toward consecutive failures
@@ -1894,10 +1913,16 @@ export class ArweaveCompositeClient
 
       span.setAttribute('chunk.broadcast.duration_ms', duration);
       span.setAttribute('chunk.broadcast.success_count', successCount);
+      span.setAttribute(
+        'chunk.broadcast.preferred_success_count',
+        preferredSuccessCount,
+      );
       span.setAttribute('chunk.broadcast.failure_count', failureCount);
       span.setAttribute('chunk.broadcast.total_results', results.length);
 
-      const succeeded = successCount >= chunkPostMinSuccessCount;
+      const succeeded =
+        successCount >= chunkPostMinSuccessCount &&
+        preferredSuccessCount >= chunkPostMinPreferredSuccessCount;
       span.setAttribute('chunk.broadcast.succeeded', succeeded);
 
       // Determine early termination reason
@@ -1928,6 +1953,7 @@ export class ArweaveCompositeClient
 
       this.log.debug('Chunk broadcast complete', {
         successCount,
+        preferredSuccessCount,
         failureCount,
         consecutive4xxFailures,
         totalPeers: sortedPeers.length,
@@ -1946,6 +1972,7 @@ export class ArweaveCompositeClient
 
       return {
         successCount,
+        preferredSuccessCount,
         failureCount,
         results,
       };
