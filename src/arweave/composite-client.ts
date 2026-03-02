@@ -10,6 +10,7 @@ import type { queueAsPromised } from 'fastq';
 import { default as fastq } from 'fastq';
 import { Readable } from 'node:stream';
 import * as rax from 'retry-axios';
+import { shuffleArray } from '../lib/random.js';
 import wait from '../lib/wait.js';
 import * as winston from 'winston';
 import pLimit from 'p-limit';
@@ -1761,6 +1762,15 @@ export class ArweaveCompositeClient
       ).length;
       const nonPreferredPeerCount = sortedPeers.length - preferredPeerCount;
 
+      // Shuffle preferred peers to distribute load across tip nodes
+      const preferred = sortedPeers.filter((p) =>
+        preferredChunkPostUrlSet.has(p),
+      );
+      const nonPreferred = sortedPeers.filter(
+        (p) => !preferredChunkPostUrlSet.has(p),
+      );
+      const shuffledPeers = [...shuffleArray(preferred), ...nonPreferred];
+
       // 3. Broadcast in parallel with concurrency limit
       const peerConcurrencyLimit = pLimit(config.CHUNK_POST_PEER_CONCURRENCY);
 
@@ -1787,7 +1797,7 @@ export class ArweaveCompositeClient
       });
 
       // Create promises for all peers
-      const peerPromises = sortedPeers.map((peer) =>
+      const peerPromises = shuffledPeers.map((peer) =>
         peerConcurrencyLimit(async () => {
           // Skip if we already have enough successes (both overall and preferred)
           if (
