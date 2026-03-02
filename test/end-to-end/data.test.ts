@@ -65,42 +65,46 @@ describe('Data', function () {
     await compose.down();
   });
 
-  it('Verifying that /raw/<id> returns expected response', { skip: 'x-ar-io-hops returns 2 instead of 1' }, async function () {
-    // expected headers:
-    // x-ar-io-hops: 1
-    // content-type: application/x.arweave-manifest+json
-    // content-length: 7424
-    // expected status code: 200
-    // expected content: ta_6L_z8TOmthittUmGpYjcAbvOzPRVhcw36m-oYsQ8
-    const hasher = crypto.createHash('sha256');
+  it(
+    'Verifying that /raw/<id> returns expected response',
+    { skip: 'x-ar-io-hops returns 2 instead of 1' },
+    async function () {
+      // expected headers:
+      // x-ar-io-hops: 1
+      // content-type: application/x.arweave-manifest+json
+      // content-length: 7424
+      // expected status code: 200
+      // expected content: ta_6L_z8TOmthittUmGpYjcAbvOzPRVhcw36m-oYsQ8
+      const hasher = crypto.createHash('sha256');
 
-    const res = await axios.get(`http://localhost:4000/raw/${tx1}`, {
-      responseType: 'stream',
-    });
+      const res = await axios.get(`http://localhost:4000/raw/${tx1}`, {
+        responseType: 'stream',
+      });
 
-    const stream = res.data;
+      const stream = res.data;
 
-    stream.on('data', (data: any) => {
-      hasher.update(data);
-    });
+      stream.on('data', (data: any) => {
+        hasher.update(data);
+      });
 
-    await new Promise<void>((resolve, reject) => {
-      stream.on('end', resolve);
-      stream.on('error', reject);
-    });
+      await new Promise<void>((resolve, reject) => {
+        stream.on('end', resolve);
+        stream.on('error', reject);
+      });
 
-    assert.equal(res.headers['x-ar-io-hops'], '1');
-    assert.equal(
-      res.headers['content-type'],
-      'application/x.arweave-manifest+json',
-    );
-    assert.equal(res.headers['content-length'], '7424');
-    assert.equal(res.status, 200);
-    assert.equal(
-      hasher.digest('base64url'),
-      'ta_6L_z8TOmthittUmGpYjcAbvOzPRVhcw36m-oYsQ8',
-    );
-  });
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(
+        res.headers['content-type'],
+        'application/x.arweave-manifest+json',
+      );
+      assert.equal(res.headers['content-length'], '7424');
+      assert.equal(res.status, 200);
+      assert.equal(
+        hasher.digest('base64url'),
+        'ta_6L_z8TOmthittUmGpYjcAbvOzPRVhcw36m-oYsQ8',
+      );
+    },
+  );
 
   it('Verifying that /<id> for a manifest with a missing index returns 404', async function () {
     const res = await axios.get(`http://localhost:4000/${tx1}`, {
@@ -222,17 +226,21 @@ describe('Data', function () {
     );
   });
 
-  it('Verifying that /<id>/<path> for a manifest path with a trailing slash returns expected response', { skip: 'x-ar-io-hops returns 2 instead of 1' }, async function () {
-    // expected headers:
-    // x-ar-io-hops: 1
-    // expected status code: 200
-    const res = await axios.get(
-      `http://localhost:4000/${tx4}/blog/a-fresh-start/`,
-    );
+  it(
+    'Verifying that /<id>/<path> for a manifest path with a trailing slash returns expected response',
+    { skip: 'x-ar-io-hops returns 2 instead of 1' },
+    async function () {
+      // expected headers:
+      // x-ar-io-hops: 1
+      // expected status code: 200
+      const res = await axios.get(
+        `http://localhost:4000/${tx4}/blog/a-fresh-start/`,
+      );
 
-    assert.equal(res.headers['x-ar-io-hops'], '1');
-    assert.equal(res.status, 200);
-  });
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(res.status, 200);
+    },
+  );
 
   it('Verifying that /<id>/<path> for a manifest path without a trailing slash returns expected response', async function () {
     // expected headers:
@@ -427,121 +435,128 @@ describe('ANS-104 Bundles', function () {
 });
 
 describe('X-AR-IO headers', function () {
-  describe('with ARNS_ROOT_HOST', { skip: 'x-ar-io-hops returns 2 instead of 1' }, function () {
-    let compose: StartedDockerComposeEnvironment;
-    let coreContainer: StartedGenericContainer;
+  describe(
+    'with ARNS_ROOT_HOST',
+    { skip: 'x-ar-io-hops returns 2 instead of 1' },
+    function () {
+      let compose: StartedDockerComposeEnvironment;
+      let coreContainer: StartedGenericContainer;
 
-    before(async function () {
-      await cleanDb();
-      compose = await composeUp({
-        START_WRITERS: 'false',
-        ARNS_ROOT_HOST: 'ar-io.localhost',
+      before(async function () {
+        await cleanDb();
+        compose = await composeUp({
+          START_WRITERS: 'false',
+          ARNS_ROOT_HOST: 'ar-io.localhost',
+        });
+
+        coreContainer = compose.getContainer('core-1');
       });
 
-      coreContainer = compose.getContainer('core-1');
-    });
-
-    after(async function () {
-      await compose.down();
-    });
-
-    it('Verifying that /raw/<id> returns expected response', async function () {
-      const res = await axios.get(`http://localhost:4000/raw/${tx3}`);
-
-      assert.equal(res.headers['x-ar-io-hops'], '1');
-
-      await waitForLogMessage({
-        container: coreContainer,
-        expectedMessage: 'Successfully cached data',
+      after(async function () {
+        await compose.down();
       });
 
-      const resWithHeaders = await axios.get(
-        `http://localhost:4000/raw/${tx3}`,
-        {
+      it('Verifying that /raw/<id> returns expected response', async function () {
+        const res = await axios.get(`http://localhost:4000/raw/${tx3}`);
+
+        assert.equal(res.headers['x-ar-io-hops'], '1');
+
+        await waitForLogMessage({
+          container: coreContainer,
+          expectedMessage: 'Successfully cached data',
+        });
+
+        const resWithHeaders = await axios.get(
+          `http://localhost:4000/raw/${tx3}`,
+          {
+            headers: {
+              'X-AR-IO-Hops': '5',
+              'X-AR-IO-Origin': 'another-host',
+              'X-AR-IO-Origin-Node-Release': 'v1.0.0',
+            },
+          },
+        );
+
+        assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
+        assert.equal(
+          resWithHeaders.headers['x-ar-io-digest'],
+          'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+        );
+        assert.equal(
+          resWithHeaders.headers['etag'],
+          '"gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA"',
+        );
+        assert.equal(resWithHeaders.headers['x-ar-io-stable'], 'false');
+        assert.equal(resWithHeaders.headers['x-ar-io-verified'], 'false');
+      });
+
+      it('Verifying that /<id> for a manifest with a missing index returns no hops', async function () {
+        const res = await axios.get(`http://localhost:4000/${tx1}`, {
+          validateStatus: () => true,
+          headers: {
+            Host: 'rxlroexuz2jequt4mtk4y5tyqdlhlhzxzlqmvwzmuk4sc2aoqm3a.ar-io.localhost',
+          },
+        });
+
+        assert.equal(res.headers['x-ar-io-hops'], undefined);
+      });
+
+      it('verifying that /<id> for a manifest with a valid index returns hops', async function () {
+        const res = await axios.get(`http://localhost:4000/${tx2}/`, {
+          headers: {
+            Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
+          },
+        });
+
+        assert.equal(res.headers['x-ar-io-hops'], '1');
+
+        await waitForLogMessage({
+          container: coreContainer,
+          expectedMessage: 'Successfully cached data',
+        });
+
+        const resWithHeaders = await axios.get(
+          `http://localhost:4000/${tx2}/`,
+          {
+            headers: {
+              Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
+              'X-AR-IO-Hops': '2',
+              'X-AR-IO-Origin': 'another-host',
+              'X-AR-IO-Origin-Node-Release': 'v2.0.0',
+            },
+          },
+        );
+
+        assert.equal(resWithHeaders.headers['x-ar-io-hops'], '3');
+      });
+
+      it('Verifying that /<id> for a non-manifest returns hops', async function () {
+        const res = await axios.get(`http://localhost:4000/${tx3}`, {
+          headers: {
+            Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
+          },
+        });
+
+        assert.equal(res.headers['x-ar-io-hops'], '1');
+
+        await waitForLogMessage({
+          container: coreContainer,
+          expectedMessage: 'Successfully cached data',
+        });
+
+        const resWithHeaders = await axios.get(`http://localhost:4000/${tx3}`, {
           headers: {
             'X-AR-IO-Hops': '5',
             'X-AR-IO-Origin': 'another-host',
-            'X-AR-IO-Origin-Node-Release': 'v1.0.0',
+            'X-AR-IO-Origin-Node-Release': 'v2.0.0',
+            Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
           },
-        },
-      );
+        });
 
-      assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
-      assert.equal(
-        resWithHeaders.headers['x-ar-io-digest'],
-        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
-      );
-      assert.equal(
-        resWithHeaders.headers['etag'],
-        '"gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA"',
-      );
-      assert.equal(resWithHeaders.headers['x-ar-io-stable'], 'false');
-      assert.equal(resWithHeaders.headers['x-ar-io-verified'], 'false');
-    });
-
-    it('Verifying that /<id> for a manifest with a missing index returns no hops', async function () {
-      const res = await axios.get(`http://localhost:4000/${tx1}`, {
-        validateStatus: () => true,
-        headers: {
-          Host: 'rxlroexuz2jequt4mtk4y5tyqdlhlhzxzlqmvwzmuk4sc2aoqm3a.ar-io.localhost',
-        },
+        assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
       });
-
-      assert.equal(res.headers['x-ar-io-hops'], undefined);
-    });
-
-    it('verifying that /<id> for a manifest with a valid index returns hops', async function () {
-      const res = await axios.get(`http://localhost:4000/${tx2}/`, {
-        headers: {
-          Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
-        },
-      });
-
-      assert.equal(res.headers['x-ar-io-hops'], '1');
-
-      await waitForLogMessage({
-        container: coreContainer,
-        expectedMessage: 'Successfully cached data',
-      });
-
-      const resWithHeaders = await axios.get(`http://localhost:4000/${tx2}/`, {
-        headers: {
-          Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
-          'X-AR-IO-Hops': '2',
-          'X-AR-IO-Origin': 'another-host',
-          'X-AR-IO-Origin-Node-Release': 'v2.0.0',
-        },
-      });
-
-      assert.equal(resWithHeaders.headers['x-ar-io-hops'], '3');
-    });
-
-    it('Verifying that /<id> for a non-manifest returns hops', async function () {
-      const res = await axios.get(`http://localhost:4000/${tx3}`, {
-        headers: {
-          Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
-        },
-      });
-
-      assert.equal(res.headers['x-ar-io-hops'], '1');
-
-      await waitForLogMessage({
-        container: coreContainer,
-        expectedMessage: 'Successfully cached data',
-      });
-
-      const resWithHeaders = await axios.get(`http://localhost:4000/${tx3}`, {
-        headers: {
-          'X-AR-IO-Hops': '5',
-          'X-AR-IO-Origin': 'another-host',
-          'X-AR-IO-Origin-Node-Release': 'v2.0.0',
-          Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
-        },
-      });
-
-      assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
-    });
-  });
+    },
+  );
 
   describe('without ARNS_ROOT_HOST', function () {
     let compose: StartedDockerComposeEnvironment;
