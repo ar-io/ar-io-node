@@ -642,42 +642,24 @@ export const createChunkPostHandler = ({
           parentSpan: span,
         });
 
-        // Check if successCount meets both thresholds
+        // Set common broadcast span attributes
         const meetsSuccessThreshold =
           result.successCount >= CHUNK_POST_MIN_SUCCESS_COUNT &&
           result.preferredSuccessCount >=
             CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT;
-        if (meetsSuccessThreshold) {
-          span.setAttribute('chunk.broadcast.success', true);
-          span.setAttribute(
-            'chunk.broadcast.success_count',
-            result.successCount,
-          );
-          span.setAttribute(
-            'chunk.broadcast.preferred_success_count',
+        span.setAttributes({
+          'chunk.broadcast.success': meetsSuccessThreshold,
+          'chunk.broadcast.success_count': result.successCount,
+          'chunk.broadcast.preferred_success_count':
             result.preferredSuccessCount,
-          );
-          span.setAttribute(
-            'chunk.broadcast.failure_count',
-            result.failureCount,
-          );
+          'chunk.broadcast.failure_count': result.failureCount,
+        });
+
+        if (meetsSuccessThreshold) {
           span.setAttribute('http.status_code', 200);
           res.status(200).send(result);
         } else {
           const failureStatusCode = determineFailureStatusCode(result.results);
-          span.setAttribute('chunk.broadcast.success', false);
-          span.setAttribute(
-            'chunk.broadcast.success_count',
-            result.successCount,
-          );
-          span.setAttribute(
-            'chunk.broadcast.preferred_success_count',
-            result.preferredSuccessCount,
-          );
-          span.setAttribute(
-            'chunk.broadcast.failure_count',
-            result.failureCount,
-          );
           span.setAttribute(
             'chunk.broadcast.failure_status_code',
             failureStatusCode,

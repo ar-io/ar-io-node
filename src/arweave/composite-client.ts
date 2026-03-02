@@ -1753,16 +1753,11 @@ export class ArweaveCompositeClient
 
       span.setAttribute('chunk.sorted_peers', sortedPeers.length);
 
-      // Calculate preferred vs non-preferred peer counts for logging
-      const preferredChunkPostUrls =
-        this.peerManager.getPreferredChunkPostUrls();
-      const preferredChunkPostUrlSet = new Set(preferredChunkPostUrls);
-      const preferredPeerCount = sortedPeers.filter((peer) =>
-        preferredChunkPostUrlSet.has(peer),
-      ).length;
-      const nonPreferredPeerCount = sortedPeers.length - preferredPeerCount;
-
-      // Shuffle preferred peers to distribute load across tip nodes
+      // Partition peers into preferred (tip nodes) and non-preferred,
+      // shuffling preferred peers to distribute load across tip nodes
+      const preferredChunkPostUrlSet = new Set(
+        this.peerManager.getPreferredChunkPostUrls(),
+      );
       const preferred = sortedPeers.filter((p) =>
         preferredChunkPostUrlSet.has(p),
       );
@@ -1789,8 +1784,8 @@ export class ArweaveCompositeClient
       this.log.debug('Starting chunk broadcast', {
         eligiblePeers: eligiblePeers.length,
         sortedPeers: sortedPeers.length,
-        preferredPeers: preferredPeerCount,
-        nonPreferredPeers: nonPreferredPeerCount,
+        preferredPeers: preferred.length,
+        nonPreferredPeers: nonPreferred.length,
         minSuccessCount: chunkPostMinSuccessCount,
         minPreferredSuccessCount: chunkPostMinPreferredSuccessCount,
         concurrency: config.CHUNK_POST_PEER_CONCURRENCY,
