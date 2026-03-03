@@ -242,17 +242,21 @@ describe('Data', function () {
     },
   );
 
-  it('Verifying that /<id>/<path> for a manifest path without a trailing slash returns expected response', { skip: 'x-ar-io-hops returns 2 instead of 1' }, async function () {
-    // expected headers:
-    // x-ar-io-hops: 1
-    // expected status code: 200
-    const res = await axios.get(
-      `http://localhost:4000/${tx4}/blog/a-fresh-start`,
-    );
+  it(
+    'Verifying that /<id>/<path> for a manifest path without a trailing slash returns expected response',
+    { skip: 'x-ar-io-hops returns 2 instead of 1' },
+    async function () {
+      // expected headers:
+      // x-ar-io-hops: 1
+      // expected status code: 200
+      const res = await axios.get(
+        `http://localhost:4000/${tx4}/blog/a-fresh-start`,
+      );
 
-    assert.equal(res.headers['x-ar-io-hops'], '1');
-    assert.equal(res.status, 200);
-  });
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(res.status, 200);
+    },
+  );
 });
 
 describe('X-Cache header', { skip: isTestFiltered(['flaky']) }, function () {
