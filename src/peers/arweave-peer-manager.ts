@@ -558,11 +558,9 @@ export class ArweavePeerManager {
 
     this.weightedGetChunkPeers = allChunkGetEntries;
 
-    // Update POST chunk peers (preserve preferred URLs)
+    // Update POST chunk peers (preserve resolved preferred URLs)
     const preferredChunkPostEntries = this.weightedPostChunkPeers.filter(
-      (peer) =>
-        this.preferredChunkPostUrls.includes(peer.id) ||
-        this.resolvedChunkPostUrls.includes(peer.id),
+      (peer) => this.resolvedChunkPostUrls.includes(peer.id),
     );
 
     // Add discovered peers for chunk POST
