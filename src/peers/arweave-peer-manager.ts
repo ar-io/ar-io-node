@@ -304,10 +304,10 @@ export class ArweavePeerManager {
   }
 
   /**
-   * Get preferred chunk POST URLs
+   * Check if a peer URL is a preferred peer for chunk POST operations
    */
-  getPreferredChunkPostUrls(): string[] {
-    return this.preferredChunkPostUrls;
+  isPreferredChunkPostPeer(peerUrl: string): boolean {
+    return this.resolvedChunkPostUrls.includes(peerUrl);
   }
 
   /**

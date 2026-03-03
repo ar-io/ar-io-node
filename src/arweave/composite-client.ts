@@ -1755,14 +1755,11 @@ export class ArweaveCompositeClient
 
       // Partition peers into preferred (tip nodes) and non-preferred,
       // shuffling preferred peers to distribute load across tip nodes
-      const preferredChunkPostUrlSet = new Set(
-        this.peerManager.getPreferredChunkPostUrls(),
-      );
       const preferred = sortedPeers.filter((p) =>
-        preferredChunkPostUrlSet.has(p),
+        this.peerManager.isPreferredChunkPostPeer(p),
       );
       const nonPreferred = sortedPeers.filter(
-        (p) => !preferredChunkPostUrlSet.has(p),
+        (p) => !this.peerManager.isPreferredChunkPostPeer(p),
       );
       const shuffledPeers = [...shuffleArray(preferred), ...nonPreferred];
 
@@ -1851,7 +1848,7 @@ export class ArweaveCompositeClient
 
             if (result.success) {
               successCount++;
-              if (preferredChunkPostUrlSet.has(peer)) {
+              if (this.peerManager.isPreferredChunkPostPeer(peer)) {
                 preferredSuccessCount++;
               }
               hasAnySuccess = true;
