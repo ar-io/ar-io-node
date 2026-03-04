@@ -21,7 +21,12 @@ import {
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-node';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
-import { resourceFromAttributes } from '@opentelemetry/resources';
+import {
+  resourceFromAttributes,
+  detectResources,
+  hostDetector,
+  processDetector,
+} from '@opentelemetry/resources';
 import fs from 'node:fs';
 import * as env from './lib/env.js';
 import * as version from './version.js';
@@ -88,12 +93,24 @@ if (rawAttrs !== undefined && rawAttrs !== '') {
   }
 }
 
+// Build the resource with auto-detected attributes as the base, then layer
+// OTEL_RESOURCE_ATTRIBUTES on top so operator-specified values take priority
+// over auto-detection (e.g., host.name). The SDK's default behavior merges
+// detectors over the explicit resource, which is the opposite of what we want.
+const detectedResource = detectResources({
+  detectors: [hostDetector, processDetector],
+});
+
 const sdk: NodeSDK = new NodeSDK({
-  resource: resourceFromAttributes({
-    ...envResourceAttributes,
-    [ATTR_SERVICE_NAME]: OTEL_SERVICE_NAME,
-    SampleRate: OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
-  }),
+  resource: detectedResource
+    .merge(
+      resourceFromAttributes({
+        ...envResourceAttributes,
+        [ATTR_SERVICE_NAME]: OTEL_SERVICE_NAME,
+        SampleRate: OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
+      }),
+    ),
+  resourceDetectors: [],
   traceExporter: new OTLPTraceExporter(),
   spanProcessors: spanProcessors.length > 0 ? spanProcessors : undefined,
   logRecordProcessor: new BatchLogRecordProcessor(new OTLPLogExporter(), {
