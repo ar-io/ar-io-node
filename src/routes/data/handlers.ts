@@ -46,6 +46,7 @@ import {
 } from '../../lib/http-utils.js';
 
 const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+const UNSTABLE_TRUSTED_MAX_AGE = 60 * 60 * 12; // 12 hours
 const UNSTABLE_MAX_AGE = 60 * 60 * 2; // 2 hours
 const NOT_FOUND_MAX_AGE = 60; // 1 minute
 
@@ -356,6 +357,11 @@ const setDataHeaders = ({
       res.header(
         'Cache-Control',
         `${cacheDirective}, max-age=${STABLE_MAX_AGE}, immutable`,
+      );
+    } else if (data.trusted) {
+      res.header(
+        'Cache-Control',
+        `${cacheDirective}, max-age=${UNSTABLE_TRUSTED_MAX_AGE}`,
       );
     } else {
       res.header(

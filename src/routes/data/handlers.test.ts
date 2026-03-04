@@ -2189,6 +2189,146 @@ st
       });
     });
 
+    describe('Cache-Control max-age tiers', () => {
+      it('should use 30-day max-age with immutable for stable data', async () => {
+        dataAttributesSource.getDataAttributes = () =>
+          Promise.resolve({
+            hash: 'test-hash',
+            size: 10,
+            contentType: 'application/octet-stream',
+            isManifest: false,
+            stable: true,
+            verified: true,
+            signature: null,
+          });
+
+        dataSource.getData = () =>
+          Promise.resolve({
+            stream: Readable.from(Buffer.from('testing...')),
+            size: 10,
+            verified: true,
+            trusted: true,
+            cached: true,
+            requestAttributes: {
+              origin: 'node-url',
+              hops: 0,
+              clientIps: [],
+            },
+          });
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              'public, max-age=2592000, immutable',
+            );
+          });
+      });
+
+      it('should use 12-hour max-age for unstable but trusted data', async () => {
+        dataAttributesSource.getDataAttributes = () =>
+          Promise.resolve({
+            hash: 'test-hash',
+            size: 10,
+            contentType: 'application/octet-stream',
+            isManifest: false,
+            stable: false,
+            verified: false,
+            signature: null,
+          });
+
+        dataSource.getData = () =>
+          Promise.resolve({
+            stream: Readable.from(Buffer.from('testing...')),
+            size: 10,
+            verified: false,
+            trusted: true,
+            cached: true,
+            requestAttributes: {
+              origin: 'node-url',
+              hops: 0,
+              clientIps: [],
+            },
+          });
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(res.headers['cache-control'], 'public, max-age=43200');
+          });
+      });
+
+      it('should use 2-hour max-age for unstable and untrusted data', async () => {
+        dataAttributesSource.getDataAttributes = () =>
+          Promise.resolve({
+            hash: 'test-hash',
+            size: 10,
+            contentType: 'application/octet-stream',
+            isManifest: false,
+            stable: false,
+            verified: false,
+            signature: null,
+          });
+
+        dataSource.getData = () =>
+          Promise.resolve({
+            stream: Readable.from(Buffer.from('testing...')),
+            size: 10,
+            verified: false,
+            trusted: false,
+            cached: true,
+            requestAttributes: {
+              origin: 'node-url',
+              hops: 0,
+              clientIps: [],
+            },
+          });
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(res.headers['cache-control'], 'public, max-age=7200');
+          });
+      });
+    });
+
     describe('Cache-Control private directive', () => {
       describe('matchContentTypePattern', () => {
         it('should match exact content types', () => {
