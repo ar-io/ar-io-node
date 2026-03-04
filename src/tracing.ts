@@ -102,14 +102,13 @@ const detectedResource = detectResources({
 });
 
 const sdk: NodeSDK = new NodeSDK({
-  resource: detectedResource
-    .merge(
-      resourceFromAttributes({
-        ...envResourceAttributes,
-        [ATTR_SERVICE_NAME]: OTEL_SERVICE_NAME,
-        SampleRate: OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
-      }),
-    ),
+  resource: detectedResource.merge(
+    resourceFromAttributes({
+      ...envResourceAttributes,
+      [ATTR_SERVICE_NAME]: OTEL_SERVICE_NAME,
+      SampleRate: OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
+    }),
+  ),
   resourceDetectors: [],
   traceExporter: new OTLPTraceExporter(),
   spanProcessors: spanProcessors.length > 0 ? spanProcessors : undefined,
