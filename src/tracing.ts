@@ -70,8 +70,27 @@ if (OTEL_FILE_EXPORT_ENABLED) {
   spanProcessors.push(new SimpleSpanProcessor(fileExporter));
 }
 
+// Parse OTEL_RESOURCE_ATTRIBUTES env var (format: key=value,key2=value2).
+// This is necessary because the SDK only auto-detects this env var when no
+// explicit `resource` is provided to the NodeSDK constructor. Since we set
+// custom attributes (service.name, SampleRate) via an explicit resource, we
+// need to manually parse and merge the env var.
+const envResourceAttributes: Record<string, string> = {};
+const rawAttrs = process.env.OTEL_RESOURCE_ATTRIBUTES;
+if (rawAttrs !== undefined && rawAttrs !== '') {
+  for (const pair of rawAttrs.split(',')) {
+    const idx = pair.indexOf('=');
+    if (idx > 0) {
+      envResourceAttributes[pair.substring(0, idx).trim()] = pair
+        .substring(idx + 1)
+        .trim();
+    }
+  }
+}
+
 const sdk: NodeSDK = new NodeSDK({
   resource: resourceFromAttributes({
+    ...envResourceAttributes,
     [ATTR_SERVICE_NAME]: OTEL_SERVICE_NAME,
     SampleRate: OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
   }),
