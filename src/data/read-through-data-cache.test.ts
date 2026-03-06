@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import { EventEmitter } from 'node:events';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { Readable, Writable } from 'node:stream';
 import {
@@ -992,6 +993,78 @@ describe('ReadThroughDataCache', function () {
       });
 
       assert.strictEqual(receivedSignal, controller.signal);
+    });
+  });
+
+  describe('DATA_CACHED event emission', () => {
+    it('should emit DATA_CACHED event when data is cached successfully', async function () {
+      const eventEmitter = new EventEmitter();
+      const eventPromise = new Promise<any>((resolve) => {
+        eventEmitter.on('data-cached', resolve);
+      });
+
+      const cacheWithEmitter = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore as any,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        eventEmitter,
+      });
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('test data');
+              this.push(null);
+            },
+          }),
+          size: 9,
+          sourceContentType: 'text/html',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      const result = await cacheWithEmitter.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      // Consume the stream to trigger the pipeline callback
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+      assert.equal(receivedData, 'test data');
+
+      // Wait for the pipeline callback which emits the event
+      const emittedEvent = await eventPromise;
+
+      assert.equal(emittedEvent.id, 'test-id');
+      assert.equal(emittedEvent.dataSize, 9);
+      assert.equal(emittedEvent.contentType, 'text/html');
+      assert.ok(emittedEvent.hash !== undefined, 'hash should be present');
+      assert.ok(
+        emittedEvent.cachedAt !== undefined,
+        'cachedAt should be present',
+      );
     });
   });
 });
