@@ -34,6 +34,7 @@ import {
 } from '../../types.js';
 import { RateLimiter } from '../../limiter/types.js';
 import { PaymentProcessor } from '../../payments/types.js';
+import { NegativeDataCache } from '../../data/negative-data-cache.js';
 import {
   checkPaymentAndRateLimits,
   adjustRateLimitTokens,
@@ -799,6 +800,7 @@ export const createRawDataHandler = ({
   dataBlockListValidator,
   rateLimiter,
   paymentProcessor,
+  negativeDataCache,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
@@ -806,6 +808,7 @@ export const createRawDataHandler = ({
   dataBlockListValidator: DataBlockListValidator;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
+  negativeDataCache?: NegativeDataCache;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req, res);
@@ -855,6 +858,15 @@ export const createRawDataHandler = ({
           // TODO return 500
         }
 
+        // Check negative data cache
+        if (negativeDataCache?.isNegativelyCached(id)) {
+          span.setAttribute('http.status_code', 404);
+          span.setAttribute('data.error', 'negative_cache_hit');
+          res.setHeader(headerNames.negativeCache, 'hit');
+          sendNotFound(res);
+          return;
+        }
+
         // Retrieve authoritative data attributes if they're available
         let dataAttributes: ContiguousDataAttributes | undefined;
         span.addEvent('Retrieving data attributes');
@@ -887,6 +899,7 @@ export const createRawDataHandler = ({
             message: error.message,
             stack: error.stack,
           });
+          negativeDataCache?.recordMiss(id);
           span.setAttribute('http.status_code', 404);
           sendNotFound(res);
           return;
@@ -933,6 +946,7 @@ export const createRawDataHandler = ({
             'cache.status': data.cached ? 'HIT' : 'MISS',
           });
           span.addEvent('Data retrieval successful');
+          negativeDataCache?.evict(id);
 
           // Re-fetch attributes to ensure we have any offsets discovered during getData()
           // This ensures offset headers are set on the first request, not just subsequent ones
@@ -1045,6 +1059,7 @@ export const createRawDataHandler = ({
             message: error.message,
             stack: error.stack,
           });
+          negativeDataCache?.recordMiss(id);
           sendNotFound(res);
           data?.stream.destroy();
           return;
@@ -1259,6 +1274,7 @@ export const createDataHandler = ({
   manifestPathResolver,
   rateLimiter,
   paymentProcessor,
+  negativeDataCache,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
@@ -1267,6 +1283,7 @@ export const createDataHandler = ({
   manifestPathResolver: ManifestPathResolver;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
+  negativeDataCache?: NegativeDataCache;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req, res);
@@ -1321,6 +1338,15 @@ export const createDataHandler = ({
           });
         }
 
+        // Check negative data cache
+        if (negativeDataCache?.isNegativelyCached(id)) {
+          span.setAttribute('http.status_code', 404);
+          span.setAttribute('data.error', 'negative_cache_hit');
+          res.setHeader(headerNames.negativeCache, 'hit');
+          sendNotFound(res);
+          return;
+        }
+
         let dataAttributes: ContiguousDataAttributes | undefined;
 
         // Retrieve authoritative data attributes if available
@@ -1355,6 +1381,7 @@ export const createDataHandler = ({
             message: error.message,
             stack: error.stack,
           });
+          negativeDataCache?.recordMiss(id);
           span.setAttribute('http.status_code', 404);
           sendNotFound(res);
           return;
@@ -1444,6 +1471,7 @@ export const createDataHandler = ({
             'cache.status': data.cached ? 'HIT' : 'MISS',
           });
           span.addEvent('Data retrieval successful');
+          negativeDataCache?.evict(id);
 
           // Re-fetch attributes to ensure we have any offsets discovered during getData()
           // This ensures offset headers are set on the first request, not just subsequent ones
@@ -1504,6 +1532,7 @@ export const createDataHandler = ({
             message: error.message,
             stack: error.stack,
           });
+          negativeDataCache?.recordMiss(id);
           sendNotFound(res);
           return;
         }
