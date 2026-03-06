@@ -62,7 +62,13 @@ export class NegativeDataCache {
       return false;
     }
 
-    if (this.negativeCache.has(id)) {
+    const sizeBefore = this.negativeCache.size;
+    const cached = this.negativeCache.get(id);
+    if (this.negativeCache.size !== sizeBefore) {
+      this.updateGauges();
+    }
+
+    if (cached) {
       metrics.negativeCacheHitsTotal.inc();
       return true;
     }
