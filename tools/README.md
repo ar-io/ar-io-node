@@ -4,6 +4,28 @@ This directory contains development and documentation tools for the AR.IO Node p
 
 ## Tools
 
+### `fetch-with-hint`
+Fetches a data item from the gateway using client-supplied root TX ID and nesting path hints. Resolves the root L1 transaction via GraphQL `bundledIn` traversal, then sends the request with `X-AR-IO-Root-Transaction-Id` and `X-AR-IO-Root-Path` headers so the gateway can skip server-side index lookups.
+
+**Usage:**
+```bash
+# Fetch a data item using hint headers (output to stdout)
+./tools/fetch-with-hint <data-item-id>
+
+# Specify gateway and save to file
+./tools/fetch-with-hint <data-item-id> --gateway http://localhost:4000 --output data.bin
+
+# Use a different GraphQL endpoint with verbose output
+./tools/fetch-with-hint <data-item-id> --graphql https://arweave.net/graphql --verbose
+```
+
+**Options:**
+- `--gateway <url>` - Gateway URL to fetch from (default: `http://localhost:4000`)
+- `--graphql <url>` - GraphQL endpoint for root path resolution (default: `https://arweave.net/graphql`)
+- `--output <file>` - Write output to file instead of stdout
+- `--verbose` - Show resolution details (root TX, path, response info)
+- `--help` - Show help message
+
 ### `generate-architecture-pdf`
 Analyzes the repository structure and generates a comprehensive architecture review document in both markdown and PDF formats. The analysis covers:
 - Directory structure and file organization

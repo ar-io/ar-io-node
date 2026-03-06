@@ -2028,6 +2028,71 @@ st
           assert.equal(attrs.skipRemoteForwarding, true);
         });
       });
+
+      describe('Root TX ID and path hint headers', () => {
+        const mockRes = { get: () => undefined } as any;
+
+        it('should populate rootTransactionIdHint with valid TX ID', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-root-transaction-id':
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.equal(
+            attrs.rootTransactionIdHint,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          );
+        });
+
+        it('should not populate rootTransactionIdHint with invalid TX ID', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-root-transaction-id': 'not-a-valid-id',
+            },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.equal(attrs.rootTransactionIdHint, undefined);
+        });
+
+        it('should populate rootPathHint with valid comma-separated TX IDs', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-root-path':
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.deepEqual(attrs.rootPathHint, [
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          ]);
+        });
+
+        it('should not populate rootPathHint when any TX ID is invalid', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-root-path':
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,invalid',
+            },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.equal(attrs.rootPathHint, undefined);
+        });
+
+        it('should not include hint fields when headers are absent', () => {
+          const mockReq = { headers: {} } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.equal(attrs.rootTransactionIdHint, undefined);
+          assert.equal(attrs.rootPathHint, undefined);
+        });
+      });
     });
 
     // Test stub for PaymentProcessor
