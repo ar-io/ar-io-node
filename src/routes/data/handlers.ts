@@ -22,6 +22,7 @@ import {
   parseViaHeader,
   detectLoopInViaChain,
 } from '../../lib/request-attributes.js';
+import { isValidTxId } from '../../lib/validation.js';
 import {
   DataBlockListValidator,
   ContiguousData,
@@ -506,6 +507,27 @@ export const getRequestAttributes = (
     via = incomingVia;
   }
 
+  // Parse client-supplied root TX ID hint
+  const rawRootTxIdHint = req.headers[
+    headerNames.rootTransactionId.toLowerCase()
+  ] as string | undefined;
+  const rootTransactionIdHint =
+    rawRootTxIdHint != null && isValidTxId(rawRootTxIdHint)
+      ? rawRootTxIdHint
+      : undefined;
+
+  // Parse client-supplied root path hint (comma-separated TX IDs)
+  const rawRootPathHint = req.headers[headerNames.rootPath.toLowerCase()] as
+    | string
+    | undefined;
+  let rootPathHint: string[] | undefined;
+  if (rawRootPathHint != null) {
+    const parts = rawRootPathHint.split(',').map((s) => s.trim());
+    if (parts.length > 0 && parts.every(isValidTxId)) {
+      rootPathHint = parts;
+    }
+  }
+
   return {
     hops,
     origin,
@@ -517,6 +539,8 @@ export const getRequestAttributes = (
     clientIps,
     ...(skipRemoteForwarding && { skipRemoteForwarding }),
     ...(via != null && via.length > 0 && { via }),
+    ...(rootTransactionIdHint != null && { rootTransactionIdHint }),
+    ...(rootPathHint != null && { rootPathHint }),
   };
 };
 

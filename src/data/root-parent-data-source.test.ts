@@ -1740,4 +1740,299 @@ describe('RootParentDataSource', () => {
       );
     });
   });
+
+  describe('hint-based resolution', () => {
+    it('should use hint with valid offset result and skip normal traversal', async () => {
+      const dataItemId = 'hint-data-item';
+      const hintRootTxId = 'hint-root-tx';
+      const dataStream = Readable.from([Buffer.from('hint data')]);
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      const result = await rootParentDataSource.getData({
+        id: dataItemId,
+        requestAttributes: {
+          rootTransactionIdHint: hintRootTxId,
+          clientIps: [],
+        },
+      });
+
+      assert.strictEqual(result.size, 500);
+      assert.strictEqual(result.sourceContentType, 'text/plain');
+
+      // Should have called getDataItemOffset with hint root TX
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        1,
+      );
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls[0]
+          .arguments[1],
+        hintRootTxId,
+      );
+
+      // Should have fetched data using hint root TX
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, hintRootTxId);
+      assert.deepStrictEqual(dataCall.region, { offset: 1000, size: 500 });
+
+      // Should NOT have called getRootTx (skipped normal traversal)
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        0,
+      );
+    });
+
+    it('should fall through to normal flow when hint offset returns null', async () => {
+      const dataItemId = 'hint-null-item';
+      const hintRootTxId = 'hint-root-tx';
+      const normalRootTxId = 'normal-root-tx';
+      const dataStream = Readable.from([Buffer.from('normal data')]);
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+
+      // First call (hint) returns null, second call (normal) returns offset
+      let offsetCallCount = 0;
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async (_id: string, rootTxId: string) => {
+          offsetCallCount++;
+          if (rootTxId === hintRootTxId) return null;
+          return {
+            itemOffset: 900,
+            dataOffset: 1000,
+            itemSize: 600,
+            dataSize: 500,
+            contentType: 'text/plain',
+          };
+        },
+      );
+
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId: normalRootTxId }),
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      const result = await rootParentDataSource.getData({
+        id: dataItemId,
+        requestAttributes: {
+          rootTransactionIdHint: hintRootTxId,
+          clientIps: [],
+        },
+      });
+
+      assert.strictEqual(result.size, 500);
+
+      // Should have fallen through to normal flow
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        1,
+      );
+    });
+
+    it('should fall through to normal flow when hint throws', async () => {
+      const dataItemId = 'hint-error-item';
+      const hintRootTxId = 'hint-root-tx';
+      const normalRootTxId = 'normal-root-tx';
+      const dataStream = Readable.from([Buffer.from('normal data')]);
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+
+      // First call (hint) throws, second call (normal) returns offset
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async (_id: string, rootTxId: string) => {
+          if (rootTxId === hintRootTxId) throw new Error('network error');
+          return {
+            itemOffset: 900,
+            dataOffset: 1000,
+            itemSize: 600,
+            dataSize: 500,
+            contentType: 'text/plain',
+          };
+        },
+      );
+
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId: normalRootTxId }),
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      const result = await rootParentDataSource.getData({
+        id: dataItemId,
+        requestAttributes: {
+          rootTransactionIdHint: hintRootTxId,
+          clientIps: [],
+        },
+      });
+
+      assert.strictEqual(result.size, 500);
+
+      // Should have fallen through to normal flow
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        1,
+      );
+    });
+
+    it('should use getDataItemOffsetWithPath when path hint is provided', async () => {
+      const dataItemId = 'path-hint-item';
+      const hintRootTxId = 'hint-root-tx';
+      const hintPath = ['hint-root-tx', 'intermediate-bundle'];
+      const dataStream = Readable.from([Buffer.from('path hint data')]);
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+
+      // Add getDataItemOffsetWithPath mock
+      (ans104OffsetSource as any).getDataItemOffsetWithPath = mock.fn(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'application/json',
+        }),
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      const result = await rootParentDataSource.getData({
+        id: dataItemId,
+        requestAttributes: {
+          rootTransactionIdHint: hintRootTxId,
+          rootPathHint: hintPath,
+          clientIps: [],
+        },
+      });
+
+      assert.strictEqual(result.size, 500);
+      assert.strictEqual(result.sourceContentType, 'application/json');
+
+      // Should have used path-guided method
+      assert.strictEqual(
+        (ans104OffsetSource as any).getDataItemOffsetWithPath.mock.calls.length,
+        1,
+      );
+      assert.deepStrictEqual(
+        (ans104OffsetSource as any).getDataItemOffsetWithPath.mock.calls[0]
+          .arguments[1],
+        hintPath,
+      );
+
+      // Should NOT have called linear search
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        0,
+      );
+    });
+
+    it('should cache offsets from hint resolution via setDataAttributes', async () => {
+      const dataItemId = 'cache-hint-item';
+      const hintRootTxId = 'hint-root-tx';
+      const dataStream = Readable.from([Buffer.from('cache data')]);
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/html',
+        }),
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      await rootParentDataSource.getData({
+        id: dataItemId,
+        requestAttributes: {
+          rootTransactionIdHint: hintRootTxId,
+          clientIps: [],
+        },
+      });
+
+      // Verify setDataAttributes was called with correct values
+      const setCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      assert.strictEqual(setCalls.length, 1);
+      assert.strictEqual(setCalls[0].arguments[0], dataItemId);
+      assert.deepStrictEqual(setCalls[0].arguments[1], {
+        rootTransactionId: hintRootTxId,
+        rootDataItemOffset: 900,
+        rootDataOffset: 1000,
+        itemSize: 600,
+        size: 500,
+        contentType: 'text/html',
+      });
+    });
+  });
 });

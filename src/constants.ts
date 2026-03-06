@@ -47,6 +47,7 @@ export const headerNames = {
   chunkTxId: 'X-Arweave-Chunk-Tx-Id',
   chunkTxStartOffset: 'X-Arweave-Chunk-Tx-Start-Offset',
   rootTransactionId: 'X-AR-IO-Root-Transaction-Id',
+  rootPath: 'X-AR-IO-Root-Path',
   dataItemDataOffset: 'X-AR-IO-Data-Item-Data-Offset',
   dataItemRootParentOffset: 'X-AR-IO-Data-Item-Root-Parent-Offset',
   dataItemOffset: 'X-AR-IO-Data-Item-Offset',

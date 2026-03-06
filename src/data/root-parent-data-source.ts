@@ -268,6 +268,140 @@ export class RootParentDataSource implements ContiguousDataSource {
         });
       }
 
+      // Step 0: Try client-supplied hint first (fast path)
+      const hintRootTxId = requestAttributes?.rootTransactionIdHint;
+      if (hintRootTxId != null) {
+        try {
+          span.addEvent('Attempting hint-based resolution', {
+            'hint.root_tx_id': hintRootTxId,
+            'hint.has_path': requestAttributes?.rootPathHint !== undefined,
+          });
+
+          const hintPath = requestAttributes?.rootPathHint;
+          let bundleParseResult: {
+            itemOffset: number;
+            dataOffset: number;
+            itemSize: number;
+            dataSize: number;
+            contentType?: string;
+          } | null = null;
+
+          if (hintPath && hintPath.length > 0) {
+            bundleParseResult =
+              await this.ans104OffsetSource.getDataItemOffsetWithPath(
+                id,
+                hintPath,
+                signal,
+              );
+          } else {
+            bundleParseResult = await this.ans104OffsetSource.getDataItemOffset(
+              id,
+              hintRootTxId,
+              signal,
+            );
+          }
+
+          if (bundleParseResult !== null) {
+            this.log.debug('Hint resolution found offset', {
+              id,
+              hintRootTxId,
+              dataOffset: bundleParseResult.dataOffset,
+              dataSize: bundleParseResult.dataSize,
+            });
+
+            // Cache discovered offsets
+            try {
+              const attributesToStore: {
+                rootTransactionId: string;
+                rootDataItemOffset: number;
+                rootDataOffset: number;
+                itemSize: number;
+                size: number;
+                contentType?: string;
+              } = {
+                rootTransactionId: hintRootTxId,
+                rootDataItemOffset: bundleParseResult.itemOffset,
+                rootDataOffset: bundleParseResult.dataOffset,
+                itemSize: bundleParseResult.itemSize,
+                size: bundleParseResult.dataSize,
+              };
+              if (bundleParseResult.contentType !== undefined) {
+                attributesToStore.contentType = bundleParseResult.contentType;
+              }
+              await this.dataAttributesStore.setDataAttributes(
+                id,
+                attributesToStore,
+              );
+            } catch (error: any) {
+              this.log.warn('Failed to store offsets from hint resolution', {
+                id,
+                error: error.message,
+              });
+            }
+
+            // Calculate final region
+            const offset = {
+              offset: bundleParseResult.dataOffset,
+              size: bundleParseResult.dataSize,
+            };
+            let finalRegion: Region;
+            if (region) {
+              finalRegion = {
+                offset: offset.offset + (region.offset || 0),
+                size: region.size || offset.size,
+              };
+              if (region.offset !== undefined && region.offset >= offset.size) {
+                throw new Error(
+                  `Requested region offset ${region.offset} exceeds data item size ${offset.size}`,
+                );
+              }
+              if (region.size !== undefined && region.offset !== undefined) {
+                const requestedEnd = region.offset + region.size;
+                if (requestedEnd > offset.size) {
+                  finalRegion.size = offset.size - region.offset;
+                }
+              }
+            } else {
+              finalRegion = { offset: offset.offset, size: offset.size };
+            }
+
+            span.setAttributes({
+              'traversal.method': 'hint',
+              'hint.root_tx_id': hintRootTxId,
+              'final.region.offset': finalRegion.offset,
+              'final.region.size': finalRegion.size,
+            });
+
+            const hintContentType =
+              bundleParseResult.contentType ?? originalContentType;
+
+            const data = await this.dataSource.getData({
+              id: hintRootTxId,
+              requestAttributes,
+              region: finalRegion,
+              parentSpan: span,
+              signal,
+            });
+
+            return {
+              ...data,
+              sourceContentType: hintContentType ?? data.sourceContentType,
+            };
+          }
+
+          this.log.debug(
+            'Hint resolution returned null, falling through to normal flow',
+            { id, hintRootTxId },
+          );
+        } catch (error: any) {
+          this.log.debug('Hint resolution failed, falling through', {
+            id,
+            hintRootTxId,
+            error: error.message,
+          });
+        }
+      }
+
       // Step 1: Try attributes-based traversal first
       span.addEvent('Attempting attributes-based traversal');
       const attributesTraversal = await this.traverseToRootUsingAttributes(id);

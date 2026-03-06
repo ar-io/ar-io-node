@@ -452,6 +452,10 @@ export interface RequestAttributes {
   skipRemoteForwarding?: boolean;
   /** Chain of gateway identities this request has traversed, for loop detection */
   via?: string[];
+  /** Client-supplied root transaction ID hint for fast-path resolution */
+  rootTransactionIdHint?: string;
+  /** Client-supplied nesting path hint (root TX first, then intermediate bundles) */
+  rootPathHint?: string[];
 }
 
 export interface GqlQueryable {
