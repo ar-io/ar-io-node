@@ -119,6 +119,7 @@ import { ContiguousDataAttributesStore } from './types.js';
 import { createRateLimiter } from './limiter/factory.js';
 import { createPaymentProcessor } from './payments/factory.js';
 import { Semaphore } from './lib/semaphore.js';
+import { NegativeDataCache } from './data/negative-data-cache.js';
 
 // Shutdown registry for managing cleanup handlers
 type CleanupHandler = {
@@ -219,6 +220,16 @@ metrics.registerQueueLengthGauge('arweaveClientRequests', {
 // Rate limiter and payment processor
 export const rateLimiter = createRateLimiter();
 export const paymentProcessor = createPaymentProcessor();
+
+// Negative data cache
+export const negativeDataCache = new NegativeDataCache({
+  log,
+  enabled: config.NEGATIVE_CACHE_ENABLED,
+  maxSize: config.NEGATIVE_CACHE_MAX_SIZE,
+  ttlMs: config.NEGATIVE_CACHE_TTL_MS,
+  missCountThreshold: config.NEGATIVE_CACHE_MISS_COUNT_THRESHOLD,
+  missDurationMs: config.NEGATIVE_CACHE_MISS_THRESHOLD_MS,
+});
 
 export const db = new StandaloneSqliteDatabase({
   log,

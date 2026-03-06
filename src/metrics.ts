@@ -360,6 +360,40 @@ export const chunkFirstDataTimeoutsTotal = new promClient.Counter({
 });
 
 //
+// Negative data cache metrics
+//
+
+export const negativeCacheHitsTotal = new promClient.Counter({
+  name: 'negative_cache_hits_total',
+  help: 'Count of negative cache hits (requests short-circuited)',
+});
+
+export const negativeCacheMissesTotal = new promClient.Counter({
+  name: 'negative_cache_misses_total',
+  help: 'Count of negative cache misses (requests not in negative cache)',
+});
+
+export const negativeCachePromotionsTotal = new promClient.Counter({
+  name: 'negative_cache_promotions_total',
+  help: 'Count of IDs promoted from miss tracker to negative cache',
+});
+
+export const negativeCacheEvictionsTotal = new promClient.Counter({
+  name: 'negative_cache_evictions_total',
+  help: 'Count of IDs evicted from negative cache (successful retrieval)',
+});
+
+export const negativeCacheSize = new promClient.Gauge({
+  name: 'negative_cache_size',
+  help: 'Current number of entries in the negative cache',
+});
+
+export const missTrackerSize = new promClient.Gauge({
+  name: 'miss_tracker_size',
+  help: 'Current number of entries in the miss tracker',
+});
+
+//
 // Chunk source metrics
 //
 

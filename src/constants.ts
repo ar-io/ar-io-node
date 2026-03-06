@@ -67,6 +67,7 @@ export const headerNames = {
   arnsLimit: 'X-ArNS-Undername-Limit',
   arnsIndex: 'X-ArNS-Record-Index',
   via: 'X-AR-IO-Via',
+  negativeCache: 'X-AR-IO-Negative-Cache',
 };
 
 export const verificationPriorities = {

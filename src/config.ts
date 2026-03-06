@@ -1520,6 +1520,29 @@ export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
 export const SKIP_DATA_CACHE =
   env.varOrDefault('SKIP_DATA_CACHE', 'false') === 'true';
 
+//
+// Negative data cache
+//
+
+export const NEGATIVE_CACHE_ENABLED =
+  env.varOrDefault('NEGATIVE_CACHE_ENABLED', 'true') === 'true';
+export const NEGATIVE_CACHE_MAX_SIZE = env.positiveIntOrDefault(
+  'NEGATIVE_CACHE_MAX_SIZE',
+  100_000,
+);
+export const NEGATIVE_CACHE_TTL_MS = env.positiveIntOrDefault(
+  'NEGATIVE_CACHE_TTL_MS',
+  7_200_000, // 2 hours
+);
+export const NEGATIVE_CACHE_MISS_THRESHOLD_MS = env.positiveIntOrDefault(
+  'NEGATIVE_CACHE_MISS_THRESHOLD_MS',
+  14_400_000, // 4 hours
+);
+export const NEGATIVE_CACHE_MISS_COUNT_THRESHOLD = env.positiveIntOrDefault(
+  'NEGATIVE_CACHE_MISS_COUNT_THRESHOLD',
+  10,
+);
+
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',

@@ -23,6 +23,7 @@ export const dataHandler = createDataHandler({
   manifestPathResolver: system.manifestPathResolver,
   rateLimiter: system.rateLimiter,
   paymentProcessor: system.paymentProcessor,
+  negativeDataCache: system.negativeDataCache,
 });
 
 export const dataRouter = Router();
@@ -37,6 +38,7 @@ dataRouter.get(
     dataBlockListValidator: system.dataBlockListValidator,
     rateLimiter: system.rateLimiter,
     paymentProcessor: system.paymentProcessor,
+    negativeDataCache: system.negativeDataCache,
   }),
 );
 dataRouter.get(FARCASTER_FRAME_DATA_PATH_REGEX, dataHandler);
