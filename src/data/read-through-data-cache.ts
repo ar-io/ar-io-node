@@ -5,9 +5,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import crypto from 'node:crypto';
+import * as EventEmitter from 'node:events';
 import { Readable, pipeline } from 'node:stream';
 import winston from 'winston';
 
+import * as events from '../events.js';
 import { currentUnixTimestamp } from '../lib/time.js';
 import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
@@ -63,6 +65,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private dataAttributesStore: ContiguousDataAttributesStore;
   private dataContentAttributeImporter: DataContentAttributeImporter;
   private skipCache: boolean;
+  private eventEmitter?: EventEmitter;
 
   constructor({
     log,
@@ -73,6 +76,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     dataAttributesStore,
     dataContentAttributeImporter,
     skipCache = false,
+    eventEmitter,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
@@ -82,6 +86,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     dataAttributesStore: ContiguousDataAttributesStore;
     dataContentAttributeImporter: DataContentAttributeImporter;
     skipCache?: boolean;
+    eventEmitter?: EventEmitter;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
@@ -91,6 +96,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.dataAttributesStore = dataAttributesStore;
     this.dataContentAttributeImporter = dataContentAttributeImporter;
     this.skipCache = skipCache;
+    this.eventEmitter = eventEmitter;
   }
 
   private calculateVerificationPriority(
@@ -499,6 +505,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   span.setAttribute('cache.operation.stored', true);
 
                   this.log.info('Successfully cached data', { id, hash });
+
+                  this.eventEmitter?.emit(events.DATA_CACHED, {
+                    id,
+                    hash,
+                    dataSize: data.size,
+                    contentType: data.sourceContentType,
+                    cachedAt: currentUnixTimestamp(),
+                  });
+
                   try {
                     const verificationPriority =
                       this.calculateVerificationPriority(requestAttributes);

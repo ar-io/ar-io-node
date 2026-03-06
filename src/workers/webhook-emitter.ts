@@ -20,10 +20,19 @@ import {
   PartialJsonTransaction,
 } from '../types.js';
 
+interface DataCachedEvent {
+  id: string;
+  hash: string;
+  dataSize: number;
+  contentType: string | undefined;
+  cachedAt: number;
+}
+
 type WebhookEmissionData =
   | NormalizedDataItem
   | PartialJsonTransaction
-  | PartialJsonBlock;
+  | PartialJsonBlock
+  | DataCachedEvent;
 
 interface WebhookEventWrapper {
   event: string;
@@ -60,6 +69,7 @@ export class WebhookEmitter {
     targetServersUrls,
     indexFilter,
     blockFilter,
+    emitDataCachedEvents = false,
     maxEmissionQueueSize = MAX_EMISSION_QUEUE_SIZE,
     emissionQueueConcurrency = EMISSION_QUEUE_CONCURRENCY,
   }: {
@@ -68,6 +78,7 @@ export class WebhookEmitter {
     targetServersUrls: string[];
     indexFilter: ItemFilter;
     blockFilter: ItemFilter;
+    emitDataCachedEvents?: boolean;
     maxEmissionQueueSize?: number;
     emissionQueueConcurrency?: number;
   }) {
@@ -89,6 +100,10 @@ export class WebhookEmitter {
       events.BLOCK_INDEXED,
     ];
 
+    if (emitDataCachedEvents) {
+      this.eventsToListenFor.push(events.DATA_CACHED);
+    }
+
     this.start();
   }
 
@@ -107,14 +122,24 @@ export class WebhookEmitter {
       return;
     }
 
-    if (
+    const filtersAreNeverMatch =
       this.indexFilter.constructor.name === NeverMatch.name &&
-      this.blockFilter.constructor.name === NeverMatch.name
+      this.blockFilter.constructor.name === NeverMatch.name;
+
+    if (
+      filtersAreNeverMatch &&
+      !this.eventsToListenFor.includes(events.DATA_CACHED)
     ) {
       this.log.info(
         'WebhookEmitter not initialized. Filters are set to NeverMatch.',
       );
       return;
+    }
+
+    if (filtersAreNeverMatch) {
+      this.log.info(
+        'WebhookEmitter filters are set to NeverMatch. Only DATA_CACHED events will be emitted.',
+      );
     }
 
     this.log.info('WebhookEmitter initialized.');
@@ -168,6 +193,9 @@ export class WebhookEmitter {
             filterMatch = await this.blockFilter.match(
               data as PartialJsonBlock,
             );
+            break;
+          case events.DATA_CACHED:
+            filterMatch = true;
             break;
           default:
             this.log.error('Unknown event:', event);

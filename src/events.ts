@@ -31,6 +31,13 @@ export const TX_FETCHED = 'tx-fetched';
 export const TX_INDEXED = 'tx-indexed';
 
 //==============================================================================
+// Data caching
+//==============================================================================
+
+/** Content was cached locally for the first time */
+export const DATA_CACHED = 'data-cached';
+
+//==============================================================================
 // ANS-104 bundle matching and unbundling
 //==============================================================================
 
