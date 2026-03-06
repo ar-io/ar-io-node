@@ -1043,6 +1043,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   dataAttributesStore,
   dataContentAttributeImporter,
   skipCache: config.SKIP_DATA_CACHE,
+  eventEmitter,
 });
 
 export const backgroundContiguousDataSource = new ReadThroughDataCache({
@@ -1057,6 +1058,7 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   dataAttributesStore,
   dataContentAttributeImporter,
   skipCache: config.SKIP_DATA_CACHE,
+  eventEmitter,
 });
 
 export const dataItemIndexer = new DataItemIndexer({
@@ -1295,6 +1297,7 @@ const webhookEmitter = new WebhookEmitter({
   targetServersUrls: config.WEBHOOK_TARGET_SERVERS,
   indexFilter: config.WEBHOOK_INDEX_FILTER,
   blockFilter: config.WEBHOOK_BLOCK_FILTER,
+  emitDataCachedEvents: config.WEBHOOK_EMIT_DATA_CACHED_EVENTS,
   log,
 });
 metrics.registerQueueLengthGauge('webhookEmitter', {

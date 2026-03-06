@@ -1275,6 +1275,10 @@ export const WEBHOOK_INDEX_FILTER = createFilter(
   logger,
 );
 
+// Emit DATA_CACHED events via webhook (opt-in for content moderation sidecars)
+export const WEBHOOK_EMIT_DATA_CACHED_EVENTS =
+  env.varOrDefault('WEBHOOK_EMIT_DATA_CACHED_EVENTS', 'false') === 'true';
+
 // Block filter to use for webhooks
 export const WEBHOOK_BLOCK_FILTER_STRING = canonicalize(
   JSON.parse(env.varOrDefault('WEBHOOK_BLOCK_FILTER', '{"never": true}')),

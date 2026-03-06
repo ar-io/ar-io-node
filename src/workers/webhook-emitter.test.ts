@@ -231,7 +231,11 @@ describe('WebhookEmitter', () => {
 
       await wait(1);
 
-      assert.equal(webhookEmitter.emissionQueue.length(), 6);
+      assert.equal(
+        webhookEmitter.emissionQueue.length(),
+        webhookEmitter.eventsToListenFor.length *
+          webhookEmitter.targetServersUrls.length,
+      );
 
       webhookEmitter.stop();
 
@@ -257,6 +261,112 @@ describe('WebhookEmitter', () => {
       for (const event of webhookEmitter.eventsToListenFor) {
         assert.equal(eventEmitter.listenerCount(event), 0);
       }
+    });
+  });
+
+  describe('dataCachedEvents', () => {
+    it('should not listen for DATA_CACHED when emitDataCachedEvents is false', async () => {
+      webhookEmitter = new WebhookEmitter({
+        eventEmitter,
+        targetServersUrls,
+        indexFilter: new AlwaysMatch(),
+        blockFilter: new AlwaysMatch(),
+        log,
+        emitDataCachedEvents: false,
+      });
+
+      assert.ok(
+        !webhookEmitter.eventsToListenFor.includes('data-cached'),
+        'DATA_CACHED should not be in eventsToListenFor',
+      );
+    });
+
+    it('should listen for DATA_CACHED when emitDataCachedEvents is true', async () => {
+      webhookEmitter = new WebhookEmitter({
+        eventEmitter,
+        targetServersUrls,
+        indexFilter: new AlwaysMatch(),
+        blockFilter: new AlwaysMatch(),
+        log,
+        emitDataCachedEvents: true,
+      });
+
+      assert.ok(
+        webhookEmitter.eventsToListenFor.includes('data-cached'),
+        'DATA_CACHED should be in eventsToListenFor',
+      );
+    });
+
+    it('should initialize with NeverMatch filters when emitDataCachedEvents is true', async () => {
+      mock.method(
+        WebhookEmitter.prototype,
+        'emitWebhookToTargetServer',
+        async () => Promise.resolve(),
+      );
+
+      webhookEmitter = new WebhookEmitter({
+        eventEmitter,
+        targetServersUrls,
+        indexFilter: new NeverMatch(),
+        blockFilter: new NeverMatch(),
+        log,
+        emitDataCachedEvents: true,
+      });
+
+      const dataCachedData = {
+        id: 'test-id',
+        hash: 'test-hash',
+        dataSize: 1024,
+        contentType: 'text/html',
+        cachedAt: 1234567890,
+      };
+
+      eventEmitter.emit('data-cached', dataCachedData);
+      await wait(0);
+
+      assert.equal(
+        (webhookEmitter.emitWebhookToTargetServer as any).mock.callCount(),
+        targetServersUrls.length,
+      );
+    });
+
+    it('should always match DATA_CACHED events without filters', async () => {
+      mock.method(
+        WebhookEmitter.prototype,
+        'emitWebhookToTargetServer',
+        async () => Promise.resolve(),
+      );
+
+      webhookEmitter = new WebhookEmitter({
+        eventEmitter,
+        targetServersUrls,
+        indexFilter: new NeverMatch(),
+        blockFilter: new NeverMatch(),
+        log,
+        emitDataCachedEvents: true,
+      });
+
+      // NeverMatch events should not emit
+      eventEmitter.emit('tx-indexed', eventData);
+      await wait(0);
+      assert.equal(
+        (webhookEmitter.emitWebhookToTargetServer as any).mock.callCount(),
+        0,
+      );
+
+      // DATA_CACHED should always emit
+      eventEmitter.emit('data-cached', {
+        id: 'test-id',
+        hash: 'test-hash',
+        dataSize: 512,
+        contentType: 'text/html',
+        cachedAt: 1234567890,
+      });
+      await wait(0);
+      assert.equal(
+        (webhookEmitter.emitWebhookToTargetServer as any).mock.callCount(),
+        targetServersUrls.length,
+      );
     });
   });
 });
