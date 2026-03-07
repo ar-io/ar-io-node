@@ -332,7 +332,10 @@ export class RootParentDataSource implements ContiguousDataSource {
       }
 
       // Step 0: Try client-supplied hint first (fast path)
-      const hintRootTxId = requestAttributes?.rootTransactionIdHint;
+      const hintRootTxId =
+        requestAttributes?.rootTransactionIdHint ??
+        requestAttributes?.rootPathHint?.[0] ??
+        null;
       if (hintRootTxId != null) {
         // Step 0a: Direct item offset hint — parse item header then fetch data
         const hintItemOffset = requestAttributes?.rootByteHint?.offset;
