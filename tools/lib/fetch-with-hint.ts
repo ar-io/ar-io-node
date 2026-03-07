@@ -70,7 +70,9 @@ async function resolveRootPath(
       return { rootTxId: currentId, path };
     }
 
-    chain.push(currentId);
+    if (depth > 0) {
+      chain.push(currentId);
+    }
     if (verbose) {
       console.error(`  ${currentId} bundled in ${bundleId}`);
     }
