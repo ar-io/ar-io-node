@@ -49,6 +49,9 @@ export class NegativeDataCache {
 
     this.missTracker = new LRUCache<string, MissTrackerEntry>({
       max: maxSize,
+      ttl: missDurationMs,
+      ttlResolution: 0,
+      perf: { now: this.now },
     });
 
     this.negativeCache = new LRUCache<string, true>({

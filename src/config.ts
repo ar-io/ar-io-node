@@ -1536,7 +1536,7 @@ export const NEGATIVE_CACHE_TTL_MS = env.positiveIntOrDefault(
 );
 export const NEGATIVE_CACHE_MISS_THRESHOLD_MS = env.positiveIntOrDefault(
   'NEGATIVE_CACHE_MISS_THRESHOLD_MS',
-  14_400_000, // 4 hours
+  28_800_000, // 8 hours
 );
 export const NEGATIVE_CACHE_MISS_COUNT_THRESHOLD = env.positiveIntOrDefault(
   'NEGATIVE_CACHE_MISS_COUNT_THRESHOLD',

@@ -139,6 +139,44 @@ describe('NegativeDataCache', () => {
     assert.equal(cache.isNegativelyCached('id1'), false);
   });
 
+  it('stale miss tracker entries expire and do not cause incorrect promotion', () => {
+    const cache = createCache({ missDurationMs: 10_000 });
+
+    // Record 2 misses (below count threshold of 3)
+    cache.recordMiss('id1');
+    currentTime = 5_000;
+    cache.recordMiss('id1');
+
+    // Advance well past the miss tracker TTL (10_000ms)
+    currentTime = 50_000;
+
+    // The old entry should have expired; this starts a fresh tracker entry
+    cache.recordMiss('id1');
+    currentTime = 55_000;
+    cache.recordMiss('id1');
+    currentTime = 61_000;
+    cache.recordMiss('id1');
+
+    // count=3 and duration=11_000ms from fresh start at 50_000 — should promote
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('single miss after stale expiry does not promote', () => {
+    const cache = createCache({ missDurationMs: 10_000 });
+
+    // Accumulate 2 misses (just below threshold)
+    cache.recordMiss('id1');
+    currentTime = 5_000;
+    cache.recordMiss('id1');
+
+    // Advance past TTL so old entry expires
+    currentTime = 50_000;
+
+    // A single new miss should NOT promote (count=1, not >= 3)
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), false);
+  });
+
   it('metrics increment correctly', async () => {
     const getValue = async (counter: { get(): Promise<any> }) => {
       const result = await counter.get();

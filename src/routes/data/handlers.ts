@@ -899,7 +899,9 @@ export const createRawDataHandler = ({
             message: error.message,
             stack: error.stack,
           });
-          negativeDataCache?.recordMiss(id);
+          // Don't record a negative cache miss here — getDataAttributes
+          // throwing indicates a transient infrastructure error, not that the
+          // data doesn't exist.
           span.setAttribute('http.status_code', 404);
           sendNotFound(res);
           return;
@@ -1381,7 +1383,9 @@ export const createDataHandler = ({
             message: error.message,
             stack: error.stack,
           });
-          negativeDataCache?.recordMiss(id);
+          // Don't record a negative cache miss here — getDataAttributes
+          // throwing indicates a transient infrastructure error, not that the
+          // data doesn't exist.
           span.setAttribute('http.status_code', 404);
           sendNotFound(res);
           return;
