@@ -2043,6 +2043,7 @@ describe('RootParentDataSource', () => {
       // parseDataItemHeader returns header info (50-byte header, 150 payload, with content type)
       (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
         async () => ({
+          id: dataItemId,
           headerSize: 50,
           payloadSize: 150,
           contentType: 'text/plain',
@@ -2116,6 +2117,7 @@ describe('RootParentDataSource', () => {
 
       (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
         async () => ({
+          id: dataItemId,
           headerSize: 50,
           payloadSize: 150,
         }),
@@ -2202,6 +2204,81 @@ describe('RootParentDataSource', () => {
         (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
         1,
       );
+    });
+
+    it('should fall through when direct offset hint ID does not match requested ID', async () => {
+      const dataItemId = 'direct-offset-mismatch-item';
+      const hintRootTxId = 'direct-offset-root';
+      const normalRootTxId = 'normal-root-tx';
+      const dataStream = Readable.from([Buffer.from('fallback data')]);
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => ({}),
+      );
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+
+      // parseDataItemHeader succeeds but returns a different ID
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => ({
+          id: 'wrong-data-item-id',
+          headerSize: 50,
+          payloadSize: 150,
+          contentType: 'text/plain',
+        }),
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 300,
+        verified: false,
+        cached: false,
+        trusted: true,
+        sourceContentType: 'application/octet-stream',
+      }));
+
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId: normalRootTxId }),
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 400,
+          dataSize: 300,
+        }),
+      );
+
+      const result = await rootParentDataSource.getData({
+        id: dataItemId,
+        requestAttributes: {
+          rootTransactionIdHint: hintRootTxId,
+          rootByteHint: { offset: 5000, size: 200 },
+          clientIps: [],
+        },
+      });
+
+      assert.strictEqual(result.size, 300);
+
+      // Should have fallen through to normal flow after ID mismatch
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        1,
+      );
+
+      // Should NOT have cached the mismatched offsets
+      const setCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      // Only the fallback path should have cached (not the hint path)
+      for (const call of setCalls) {
+        const attrs = call.arguments[1];
+        assert.notStrictEqual(
+          attrs.rootDataItemOffset,
+          5000,
+          'Should not cache offsets from mismatched hint',
+        );
+      }
     });
 
     it('should not use direct offset path when only offset is provided without size', async () => {

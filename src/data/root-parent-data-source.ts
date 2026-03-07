@@ -361,51 +361,58 @@ export class RootParentDataSource implements ContiguousDataSource {
           }
 
           if (headerInfo != null) {
-            const dataOffset = hintItemOffset + headerInfo.headerSize;
-            const dataSize = headerInfo.payloadSize;
-            const hintContentType = headerInfo.contentType;
+            if (headerInfo.id !== id) {
+              this.log.debug(
+                'Direct offset hint ID mismatch, falling through',
+                { id, hintId: headerInfo.id, hintRootTxId },
+              );
+            } else {
+              const dataOffset = hintItemOffset + headerInfo.headerSize;
+              const dataSize = headerInfo.payloadSize;
+              const hintContentType = headerInfo.contentType;
 
-            const finalRegion = this.calculateFinalRegion(
-              dataOffset,
-              dataSize,
-              region,
-            );
+              const finalRegion = this.calculateFinalRegion(
+                dataOffset,
+                dataSize,
+                region,
+              );
 
-            span.setAttributes({
-              'traversal.method': 'direct_offset_hint',
-              'hint.root_tx_id': hintRootTxId,
-              'final.region.offset': finalRegion.offset,
-              'final.region.size': finalRegion.size,
-            });
+              span.setAttributes({
+                'traversal.method': 'direct_offset_hint',
+                'hint.root_tx_id': hintRootTxId,
+                'final.region.offset': finalRegion.offset,
+                'final.region.size': finalRegion.size,
+              });
 
-            const data = await this.dataSource.getData({
-              id: hintRootTxId,
-              requestAttributes,
-              region: finalRegion,
-              parentSpan: span,
-              signal,
-            });
+              const data = await this.dataSource.getData({
+                id: hintRootTxId,
+                requestAttributes,
+                region: finalRegion,
+                parentSpan: span,
+                signal,
+              });
 
-            // Cache only after successful fetch to avoid poisoning from bad hints
-            await this.tryCacheAttributes(
-              id,
-              {
-                rootTransactionId: hintRootTxId,
-                rootDataItemOffset: hintItemOffset,
-                rootDataOffset: dataOffset,
-                itemSize: hintItemSize,
-                size: dataSize,
-              },
-              'direct offset hint',
-            );
+              // Cache only after successful fetch to avoid poisoning from bad hints
+              await this.tryCacheAttributes(
+                id,
+                {
+                  rootTransactionId: hintRootTxId,
+                  rootDataItemOffset: hintItemOffset,
+                  rootDataOffset: dataOffset,
+                  itemSize: hintItemSize,
+                  size: dataSize,
+                },
+                'direct offset hint',
+              );
 
-            return {
-              ...data,
-              sourceContentType:
-                hintContentType ??
-                originalContentType ??
-                data.sourceContentType,
-            };
+              return {
+                ...data,
+                sourceContentType:
+                  hintContentType ??
+                  originalContentType ??
+                  data.sourceContentType,
+              };
+            }
           }
         }
 

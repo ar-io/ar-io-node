@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import winston from 'winston';
 import {
@@ -767,6 +768,7 @@ export class Ans104OffsetSource {
     totalSize: number,
     signal?: AbortSignal,
   ): Promise<{
+    id: string;
     headerSize: number;
     payloadSize: number;
     contentType?: string;
@@ -805,8 +807,10 @@ export class Ans104OffsetSource {
 
       const { sigLength, pubLength } = getSignatureMeta(signatureType);
 
-      // Skip signature
+      // Read signature (used to compute data item ID)
       bytes = await readBytes(reader, bytes, sigLength);
+      const signature = bytes.subarray(0, sigLength);
+      const id = createHash('sha256').update(signature).digest('base64url');
       bytes = bytes.subarray(sigLength);
       headerOffset += sigLength;
 
@@ -875,7 +879,7 @@ export class Ans104OffsetSource {
         contentType,
       });
 
-      return { headerSize, payloadSize, contentType };
+      return { id, headerSize, payloadSize, contentType };
     } catch (error: any) {
       log.error('Error parsing data item header', {
         error: error.message,
