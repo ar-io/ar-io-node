@@ -393,15 +393,19 @@ export class RootParentDataSource implements ContiguousDataSource {
               });
 
               // Cache only after successful fetch to avoid poisoning from bad hints
+              const attributesToStore: Record<string, unknown> = {
+                rootTransactionId: hintRootTxId,
+                rootDataItemOffset: hintItemOffset,
+                rootDataOffset: dataOffset,
+                itemSize: hintItemSize,
+                size: dataSize,
+              };
+              if (hintContentType !== undefined) {
+                attributesToStore.contentType = hintContentType;
+              }
               await this.tryCacheAttributes(
                 id,
-                {
-                  rootTransactionId: hintRootTxId,
-                  rootDataItemOffset: hintItemOffset,
-                  rootDataOffset: dataOffset,
-                  itemSize: hintItemSize,
-                  size: dataSize,
-                },
+                attributesToStore,
                 'direct offset hint',
               );
 

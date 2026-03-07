@@ -2100,6 +2100,7 @@ describe('RootParentDataSource', () => {
         rootDataOffset: 5050,
         itemSize: 200,
         size: 150,
+        contentType: 'text/plain',
       });
     });
 
