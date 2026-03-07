@@ -29,7 +29,7 @@ describe('NegativeDataCache', () => {
     });
 
   beforeEach(() => {
-    currentTime = 0;
+    currentTime = 1000;
   });
 
   it('returns false for unknown ID', () => {
@@ -39,9 +39,8 @@ describe('NegativeDataCache', () => {
 
   it('does not promote below count threshold', () => {
     const cache = createCache();
-    currentTime = 0;
     cache.recordMiss('id1');
-    currentTime = 15_000;
+    currentTime = 16_000;
     cache.recordMiss('id1');
     // 2 misses < threshold of 3, even though duration is met
     assert.equal(cache.isNegativelyCached('id1'), false);
@@ -49,7 +48,7 @@ describe('NegativeDataCache', () => {
 
   it('does not promote below duration threshold even with enough count', () => {
     const cache = createCache();
-    // All misses happen at time 0 — duration threshold not met
+    // All misses happen at same time — duration threshold not met
     cache.recordMiss('id1');
     cache.recordMiss('id1');
     cache.recordMiss('id1');
@@ -58,22 +57,20 @@ describe('NegativeDataCache', () => {
 
   it('promotes when both thresholds met', () => {
     const cache = createCache();
-    currentTime = 0;
     cache.recordMiss('id1');
-    currentTime = 5_000;
+    currentTime = 6_000;
     cache.recordMiss('id1');
-    currentTime = 10_000;
+    currentTime = 11_000;
     cache.recordMiss('id1'); // count=3, duration=10000ms — both met
     assert.equal(cache.isNegativelyCached('id1'), true);
   });
 
   it('evict removes from negative cache', () => {
     const cache = createCache();
-    currentTime = 0;
     cache.recordMiss('id1');
-    currentTime = 5_000;
+    currentTime = 6_000;
     cache.recordMiss('id1');
-    currentTime = 10_000;
+    currentTime = 11_000;
     cache.recordMiss('id1');
     assert.equal(cache.isNegativelyCached('id1'), true);
 
@@ -83,9 +80,8 @@ describe('NegativeDataCache', () => {
 
   it('evict removes from miss tracker allowing fresh start', () => {
     const cache = createCache();
-    currentTime = 0;
     cache.recordMiss('id1');
-    currentTime = 5_000;
+    currentTime = 6_000;
     cache.recordMiss('id1');
     // 2 misses recorded, evict resets
     cache.evict('id1');
@@ -100,33 +96,24 @@ describe('NegativeDataCache', () => {
 
   it('TTL expiry removes entries', () => {
     const cache = createCache({ ttlMs: 100 });
-    currentTime = 0;
     cache.recordMiss('id1');
-    currentTime = 5_000;
+    currentTime = 6_000;
     cache.recordMiss('id1');
-    currentTime = 10_000;
+    currentTime = 11_000;
     cache.recordMiss('id1');
     assert.equal(cache.isNegativelyCached('id1'), true);
 
-    // Advance past TTL — lru-cache checks Date.now() internally so we
-    // can't fully control this, but with a 100ms TTL it should expire quickly.
-    // We verify by checking that a very short TTL eventually expires.
-    // Since lru-cache uses real time for TTL, we sleep briefly.
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        assert.equal(cache.isNegativelyCached('id1'), false);
-        resolve();
-      }, 200);
-    });
+    // Advance past TTL — the injected perf.now controls lru-cache's clock
+    currentTime = 11_200;
+    assert.equal(cache.isNegativelyCached('id1'), false);
   });
 
   it('disabled mode always returns false', () => {
     const cache = createCache({ enabled: false });
-    currentTime = 0;
     cache.recordMiss('id1');
-    currentTime = 5_000;
+    currentTime = 6_000;
     cache.recordMiss('id1');
-    currentTime = 10_000;
+    currentTime = 11_000;
     cache.recordMiss('id1');
     assert.equal(cache.isNegativelyCached('id1'), false);
   });
@@ -152,42 +139,49 @@ describe('NegativeDataCache', () => {
     assert.equal(cache.isNegativelyCached('id1'), false);
   });
 
-  it('metrics increment correctly', () => {
-    const hitsBefore =
-      (metrics.negativeCacheHitsTotal as any).hashMap[''].value ?? 0;
-    const missesBefore =
-      (metrics.negativeCacheMissesTotal as any).hashMap[''].value ?? 0;
-    const promotionsBefore =
-      (metrics.negativeCachePromotionsTotal as any).hashMap[''].value ?? 0;
-    const evictionsBefore =
-      (metrics.negativeCacheEvictionsTotal as any).hashMap[''].value ?? 0;
+  it('metrics increment correctly', async () => {
+    const getValue = async (counter: { get(): Promise<any> }) => {
+      const result = await counter.get();
+      return result.values[0]?.value ?? 0;
+    };
+
+    const hitsBefore = await getValue(metrics.negativeCacheHitsTotal);
+    const missesBefore = await getValue(metrics.negativeCacheMissesTotal);
+    const promotionsBefore = await getValue(
+      metrics.negativeCachePromotionsTotal,
+    );
+    const evictionsBefore = await getValue(metrics.negativeCacheEvictionsTotal);
 
     const cache = createCache({ missDurationMs: 0 });
 
     // Miss check (not cached)
     cache.isNegativelyCached('id1');
-    const missesAfterCheck =
-      (metrics.negativeCacheMissesTotal as any).hashMap[''].value ?? 0;
-    assert.equal(missesAfterCheck - missesBefore, 1);
+    assert.equal(
+      (await getValue(metrics.negativeCacheMissesTotal)) - missesBefore,
+      1,
+    );
 
     // Promote
     cache.recordMiss('id1');
     cache.recordMiss('id1');
     cache.recordMiss('id1');
-    const promotionsAfter =
-      (metrics.negativeCachePromotionsTotal as any).hashMap[''].value ?? 0;
-    assert.equal(promotionsAfter - promotionsBefore, 1);
+    assert.equal(
+      (await getValue(metrics.negativeCachePromotionsTotal)) - promotionsBefore,
+      1,
+    );
 
     // Hit check
     cache.isNegativelyCached('id1');
-    const hitsAfter =
-      (metrics.negativeCacheHitsTotal as any).hashMap[''].value ?? 0;
-    assert.equal(hitsAfter - hitsBefore, 1);
+    assert.equal(
+      (await getValue(metrics.negativeCacheHitsTotal)) - hitsBefore,
+      1,
+    );
 
     // Eviction
     cache.evict('id1');
-    const evictionsAfter =
-      (metrics.negativeCacheEvictionsTotal as any).hashMap[''].value ?? 0;
-    assert.equal(evictionsAfter - evictionsBefore, 1);
+    assert.equal(
+      (await getValue(metrics.negativeCacheEvictionsTotal)) - evictionsBefore,
+      1,
+    );
   });
 });
