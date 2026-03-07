@@ -54,6 +54,8 @@ export class NegativeDataCache {
     this.negativeCache = new LRUCache<string, true>({
       max: maxSize,
       ttl: ttlMs,
+      ttlResolution: 0,
+      perf: { now: this.now },
     });
   }
 
