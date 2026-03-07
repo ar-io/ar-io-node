@@ -1534,13 +1534,25 @@ export const NEGATIVE_CACHE_TTL_MS = env.positiveIntOrDefault(
   'NEGATIVE_CACHE_TTL_MS',
   7_200_000, // 2 hours
 );
-export const NEGATIVE_CACHE_MISS_THRESHOLD_MS = env.positiveIntOrDefault(
+export const NEGATIVE_CACHE_MISS_THRESHOLD_MS = env.nonNegativeIntOrDefault(
   'NEGATIVE_CACHE_MISS_THRESHOLD_MS',
-  28_800_000, // 8 hours
+  300_000, // 5 minutes
 );
 export const NEGATIVE_CACHE_MISS_COUNT_THRESHOLD = env.positiveIntOrDefault(
   'NEGATIVE_CACHE_MISS_COUNT_THRESHOLD',
   10,
+);
+export const NEGATIVE_CACHE_MISS_TRACKER_TTL_MS = env.positiveIntOrDefault(
+  'NEGATIVE_CACHE_MISS_TRACKER_TTL_MS',
+  3_600_000, // 1 hour
+);
+export const NEGATIVE_CACHE_MAX_TTL_MS = env.positiveIntOrDefault(
+  'NEGATIVE_CACHE_MAX_TTL_MS',
+  172_800_000, // 48 hours
+);
+export const NEGATIVE_CACHE_PROMOTION_HISTORY_TTL_MS = env.positiveIntOrDefault(
+  'NEGATIVE_CACHE_PROMOTION_HISTORY_TTL_MS',
+  604_800_000, // 7 days
 );
 
 // The rate (0 - 1) at which to simulate request failures

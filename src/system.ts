@@ -229,6 +229,9 @@ export const negativeDataCache = new NegativeDataCache({
   ttlMs: config.NEGATIVE_CACHE_TTL_MS,
   missCountThreshold: config.NEGATIVE_CACHE_MISS_COUNT_THRESHOLD,
   missDurationMs: config.NEGATIVE_CACHE_MISS_THRESHOLD_MS,
+  missTrackerTtlMs: config.NEGATIVE_CACHE_MISS_TRACKER_TTL_MS,
+  maxTtlMs: config.NEGATIVE_CACHE_MAX_TTL_MS,
+  promotionHistoryTtlMs: config.NEGATIVE_CACHE_PROMOTION_HISTORY_TTL_MS,
 });
 
 export const db = new StandaloneSqliteDatabase({

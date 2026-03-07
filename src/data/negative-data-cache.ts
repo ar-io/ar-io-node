@@ -19,8 +19,11 @@ export class NegativeDataCache {
   private enabled: boolean;
   private missTracker: LRUCache<string, MissTrackerEntry>;
   private negativeCache: LRUCache<string, true>;
+  private promotionHistory: LRUCache<string, number>;
   private missCountThreshold: number;
   private missDurationMs: number;
+  private baseTtlMs: number;
+  private maxTtlMs: number;
   private now: () => number;
 
   constructor({
@@ -30,6 +33,9 @@ export class NegativeDataCache {
     ttlMs,
     missCountThreshold,
     missDurationMs,
+    missTrackerTtlMs,
+    maxTtlMs,
+    promotionHistoryTtlMs,
     now = Date.now,
   }: {
     log: Logger;
@@ -38,17 +44,22 @@ export class NegativeDataCache {
     ttlMs: number;
     missCountThreshold: number;
     missDurationMs: number;
+    missTrackerTtlMs?: number;
+    maxTtlMs?: number;
+    promotionHistoryTtlMs?: number;
     now?: () => number;
   }) {
     this.log = log;
     this.enabled = enabled;
     this.missCountThreshold = missCountThreshold;
     this.missDurationMs = missDurationMs;
+    this.baseTtlMs = ttlMs;
+    this.maxTtlMs = maxTtlMs ?? ttlMs;
     this.now = now;
 
     this.missTracker = new LRUCache<string, MissTrackerEntry>({
       max: maxSize,
-      ttl: missDurationMs,
+      ttl: missTrackerTtlMs ?? missDurationMs,
       ttlResolution: 0,
       perf: { now: this.now },
     });
@@ -56,6 +67,13 @@ export class NegativeDataCache {
     this.negativeCache = new LRUCache<string, true>({
       max: maxSize,
       ttl: ttlMs,
+      ttlResolution: 0,
+      perf: { now: this.now },
+    });
+
+    this.promotionHistory = new LRUCache<string, number>({
+      max: maxSize,
+      ttl: promotionHistoryTtlMs ?? 604_800_000, // 7 days default
       ttlResolution: 0,
       perf: { now: this.now },
     });
@@ -100,14 +118,30 @@ export class NegativeDataCache {
     }
 
     const entry = this.missTracker.get(id)!;
+    const priorPromotions = this.promotionHistory.get(id) ?? 0;
+    const effectiveCount = priorPromotions > 0 ? 1 : this.missCountThreshold;
+    const effectiveDuration = priorPromotions > 0 ? 0 : this.missDurationMs;
+
     if (
-      entry.count >= this.missCountThreshold &&
-      now - entry.firstSeenAt >= this.missDurationMs
+      entry.count >= effectiveCount &&
+      now - entry.firstSeenAt >= effectiveDuration
     ) {
-      this.negativeCache.set(id, true);
+      const ttl = Math.min(
+        this.baseTtlMs * 2 ** Math.min(priorPromotions, 30),
+        this.maxTtlMs,
+      );
+      this.negativeCache.set(id, true, { ttl });
+      this.promotionHistory.set(id, priorPromotions + 1);
       this.missTracker.delete(id);
       metrics.negativeCachePromotionsTotal.inc();
-      this.log.info('ID promoted to negative cache', { id });
+      if (priorPromotions > 0) {
+        metrics.negativeCacheRePromotionsTotal.inc();
+      }
+      this.log.info('ID promoted to negative cache', {
+        id,
+        ttl,
+        promotionCount: priorPromotions + 1,
+      });
     }
 
     this.updateGauges();
@@ -119,11 +153,13 @@ export class NegativeDataCache {
       this.log.info('ID evicted from negative cache', { id });
     }
     this.missTracker.delete(id);
+    this.promotionHistory.delete(id);
     this.updateGauges();
   }
 
   private updateGauges(): void {
     metrics.negativeCacheSize.set(this.negativeCache.size);
     metrics.missTrackerSize.set(this.missTracker.size);
+    metrics.promotionHistorySize.set(this.promotionHistory.size);
   }
 }
