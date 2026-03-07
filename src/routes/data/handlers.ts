@@ -43,6 +43,7 @@ import {
   generateBoundary,
   calculateRangeResponseSize,
   handleIfNoneMatch,
+  parseNonNegativeInt,
   wouldReturn304,
 } from '../../lib/http-utils.js';
 
@@ -54,11 +55,6 @@ const NOT_FOUND_MAX_AGE = 60; // 1 minute
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
-
-function parseNonNegativeInt(value: string): number | undefined {
-  const n = parseInt(value, 10);
-  return Number.isFinite(n) && n >= 0 ? n : undefined;
-}
 
 /**
  * Handle rate limiting and x402 payment checks for data requests.
@@ -533,22 +529,24 @@ export const getRequestAttributes = (
     }
   }
 
-  // Parse client-supplied root data offset hint (byte offset within root TX)
-  const rawRootDataOffsetHint = req.headers[
-    headerNames.rootDataOffset.toLowerCase()
+  // Parse client-supplied root item offset and size hints (both required together)
+  const rawRootItemOffsetHint = req.headers[
+    headerNames.rootItemOffset.toLowerCase()
   ] as string | undefined;
-  const rootDataOffsetHint =
-    rawRootDataOffsetHint != null
-      ? parseNonNegativeInt(rawRootDataOffsetHint)
+  const rawRootItemSizeHint = req.headers[
+    headerNames.rootItemSize.toLowerCase()
+  ] as string | undefined;
+  const rootItemOffsetParsed =
+    rawRootItemOffsetHint != null
+      ? parseNonNegativeInt(rawRootItemOffsetHint)
       : undefined;
-
-  // Parse client-supplied root data size hint (byte size of data item payload)
-  const rawRootDataSizeHint = req.headers[
-    headerNames.rootDataSize.toLowerCase()
-  ] as string | undefined;
-  const rootDataSizeHint =
-    rawRootDataSizeHint != null
-      ? parseNonNegativeInt(rawRootDataSizeHint)
+  const rootItemSizeParsed =
+    rawRootItemSizeHint != null
+      ? parseNonNegativeInt(rawRootItemSizeHint)
+      : undefined;
+  const rootByteHint =
+    rootItemOffsetParsed != null && rootItemSizeParsed != null
+      ? { offset: rootItemOffsetParsed, size: rootItemSizeParsed }
       : undefined;
 
   return {
@@ -564,8 +562,7 @@ export const getRequestAttributes = (
     ...(via != null && via.length > 0 && { via }),
     ...(rootTransactionIdHint != null && { rootTransactionIdHint }),
     ...(rootPathHint != null && { rootPathHint }),
-    ...(rootDataOffsetHint != null && { rootDataOffsetHint }),
-    ...(rootDataSizeHint != null && { rootDataSizeHint }),
+    ...(rootByteHint != null && { rootByteHint }),
   };
 };
 

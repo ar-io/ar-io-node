@@ -761,7 +761,7 @@ export class Ans104OffsetSource {
     }
   }
 
-  private async parseDataItemHeader(
+  async parseDataItemHeader(
     bundleId: string,
     itemOffset: number,
     totalSize: number,

@@ -31,8 +31,8 @@ Options:
   --gateway <url>       Gateway URL (default: http://localhost:4000)
   --graphql <url>       GraphQL endpoint (default: https://arweave.net/graphql)
   --output <file>       Output file (default: stdout)
-  --offset <n>          Direct data offset hint (byte offset within root TX)
-  --size <n>            Direct data size hint (byte size of payload)
+  --offset <n>          Data item offset hint (byte offset of item start within root TX)
+  --size <n>            Data item size hint (total item size including headers)
   --root-tx-id <id>     Root TX ID (skips GraphQL resolution when used with --offset/--size)
   --verbose             Show resolution details
   --help                Show this help`);
@@ -148,8 +148,8 @@ async function main() {
       );
     }
     headers['X-AR-IO-Root-Transaction-Id'] = directRootTxId;
-    headers['X-AR-IO-Root-Data-Offset'] = String(directOffset);
-    headers['X-AR-IO-Root-Data-Size'] = String(directSize);
+    headers['X-AR-IO-Root-Item-Offset'] = String(directOffset);
+    headers['X-AR-IO-Root-Item-Size'] = String(directSize);
   } else {
     // GraphQL resolution mode
     if (verbose) {

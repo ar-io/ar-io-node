@@ -26,8 +26,8 @@ Fetches a data item from the gateway using client-supplied root TX ID and nestin
 - `--gateway <url>` - Gateway URL to fetch from (default: `http://localhost:4000`)
 - `--graphql <url>` - GraphQL endpoint for root path resolution (default: `https://arweave.net/graphql`)
 - `--output <file>` - Write output to file instead of stdout
-- `--offset <n>` - Direct data offset hint (byte offset of payload within root TX data)
-- `--size <n>` - Direct data size hint (byte size of data item payload)
+- `--offset <n>` - Data item offset hint (byte offset of item start within root TX)
+- `--size <n>` - Data item size hint (total item size including headers)
 - `--root-tx-id <id>` - Root TX ID (use with `--offset`/`--size` to skip GraphQL resolution)
 - `--verbose` - Show resolution details (root TX, path, response info)
 - `--help` - Show help message
