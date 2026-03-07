@@ -271,6 +271,84 @@ export class RootParentDataSource implements ContiguousDataSource {
       // Step 0: Try client-supplied hint first (fast path)
       const hintRootTxId = requestAttributes?.rootTransactionIdHint;
       if (hintRootTxId != null) {
+        // Step 0a: Direct offset hint — skip bundle parsing entirely
+        const hintDataOffset = requestAttributes?.rootDataOffsetHint;
+        const hintDataSize = requestAttributes?.rootDataSizeHint;
+        if (hintDataOffset != null && hintDataSize != null) {
+          try {
+            span.addEvent('Attempting direct offset hint resolution', {
+              'hint.root_tx_id': hintRootTxId,
+              'hint.data_offset': hintDataOffset,
+              'hint.data_size': hintDataSize,
+            });
+
+            // Cache the supplied offsets
+            try {
+              await this.dataAttributesStore.setDataAttributes(id, {
+                rootTransactionId: hintRootTxId,
+                rootDataItemOffset: hintDataOffset,
+                rootDataOffset: hintDataOffset,
+                size: hintDataSize,
+              });
+            } catch (error: any) {
+              this.log.warn('Failed to store offsets from direct offset hint', {
+                id,
+                error: error.message,
+              });
+            }
+
+            let finalRegion: Region;
+            if (region) {
+              finalRegion = {
+                offset: hintDataOffset + (region.offset || 0),
+                size: region.size || hintDataSize,
+              };
+              if (
+                region.offset !== undefined &&
+                region.offset >= hintDataSize
+              ) {
+                throw new Error(
+                  `Requested region offset ${region.offset} exceeds data item size ${hintDataSize}`,
+                );
+              }
+              if (region.size !== undefined && region.offset !== undefined) {
+                const requestedEnd = region.offset + region.size;
+                if (requestedEnd > hintDataSize) {
+                  finalRegion.size = hintDataSize - region.offset;
+                }
+              }
+            } else {
+              finalRegion = { offset: hintDataOffset, size: hintDataSize };
+            }
+
+            span.setAttributes({
+              'traversal.method': 'direct_offset_hint',
+              'hint.root_tx_id': hintRootTxId,
+              'final.region.offset': finalRegion.offset,
+              'final.region.size': finalRegion.size,
+            });
+
+            const data = await this.dataSource.getData({
+              id: hintRootTxId,
+              requestAttributes,
+              region: finalRegion,
+              parentSpan: span,
+              signal,
+            });
+
+            return {
+              ...data,
+              sourceContentType: originalContentType ?? data.sourceContentType,
+            };
+          } catch (error: any) {
+            this.log.debug(
+              'Direct offset hint resolution failed, falling through',
+              { id, hintRootTxId, error: error.message },
+            );
+          }
+        }
+
+        // Step 0b: Path or linear-search hint — parse bundle to find offset
         try {
           span.addEvent('Attempting hint-based resolution', {
             'hint.root_tx_id': hintRootTxId,

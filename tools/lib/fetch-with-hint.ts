@@ -28,11 +28,14 @@ Fetches a data item from the gateway using client-supplied root TX ID
 and nesting path hints resolved via GraphQL.
 
 Options:
-  --gateway <url>   Gateway URL (default: http://localhost:4000)
-  --graphql <url>   GraphQL endpoint (default: https://arweave.net/graphql)
-  --output <file>   Output file (default: stdout)
-  --verbose         Show resolution details
-  --help            Show this help`);
+  --gateway <url>       Gateway URL (default: http://localhost:4000)
+  --graphql <url>       GraphQL endpoint (default: https://arweave.net/graphql)
+  --output <file>       Output file (default: stdout)
+  --offset <n>          Direct data offset hint (byte offset within root TX)
+  --size <n>            Direct data size hint (byte size of payload)
+  --root-tx-id <id>     Root TX ID (skips GraphQL resolution when used with --offset/--size)
+  --verbose             Show resolution details
+  --help                Show this help`);
   process.exit(1);
 }
 
@@ -85,6 +88,9 @@ async function main() {
   let graphqlUrl = 'https://arweave.net/graphql';
   let outputFile: string | undefined;
   let verbose = false;
+  let directOffset: number | undefined;
+  let directSize: number | undefined;
+  let directRootTxId: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -97,6 +103,15 @@ async function main() {
         break;
       case '--output':
         outputFile = args[++i];
+        break;
+      case '--offset':
+        directOffset = parseInt(args[++i], 10);
+        break;
+      case '--size':
+        directSize = parseInt(args[++i], 10);
+        break;
+      case '--root-tx-id':
+        directRootTxId = args[++i];
         break;
       case '--verbose':
         verbose = true;
@@ -119,28 +134,48 @@ async function main() {
     return;
   }
 
-  if (verbose) {
-    console.error(`Resolving root path for ${dataItemId}...`);
+  const headers: Record<string, string> = {};
+
+  if (
+    directRootTxId != null &&
+    directOffset != null &&
+    directSize != null
+  ) {
+    // Direct offset mode — skip GraphQL resolution entirely
+    if (verbose) {
+      console.error(
+        `Using direct offset hints: root=${directRootTxId}, offset=${directOffset}, size=${directSize}`,
+      );
+    }
+    headers['X-AR-IO-Root-Transaction-Id'] = directRootTxId;
+    headers['X-AR-IO-Root-Data-Offset'] = String(directOffset);
+    headers['X-AR-IO-Root-Data-Size'] = String(directSize);
+  } else {
+    // GraphQL resolution mode
+    if (verbose) {
+      console.error(`Resolving root path for ${dataItemId}...`);
+    }
+
+    const { rootTxId, path } = await resolveRootPath(
+      graphqlUrl,
+      dataItemId,
+      verbose,
+    );
+
+    if (verbose) {
+      console.error(`Path: ${path.join(' -> ')}`);
+    }
+
+    headers['X-AR-IO-Root-Transaction-Id'] = rootTxId;
+    if (path.length > 0) {
+      headers['X-AR-IO-Root-Path'] = path.join(',');
+    }
   }
 
-  const { rootTxId, path } = await resolveRootPath(
-    graphqlUrl,
-    dataItemId,
-    verbose,
-  );
-
   if (verbose) {
-    console.error(`Path: ${path.join(' -> ')}`);
     console.error(
       `Fetching ${gateway}/raw/${dataItemId} with hint headers...`,
     );
-  }
-
-  const headers: Record<string, string> = {
-    'X-AR-IO-Root-Transaction-Id': rootTxId,
-  };
-  if (path.length > 0) {
-    headers['X-AR-IO-Root-Path'] = path.join(',');
   }
 
   const response = await axios.get(`${gateway}/raw/${dataItemId}`, {
