@@ -11,7 +11,6 @@ import * as metrics from '../metrics.js';
 
 interface MissTrackerEntry {
   firstSeenAt: number;
-  lastSeenAt: number;
   count: number;
 }
 
@@ -91,13 +90,11 @@ export class NegativeDataCache {
     const existing = this.missTracker.get(id);
 
     if (existing) {
-      existing.lastSeenAt = now;
       existing.count++;
       this.missTracker.set(id, existing);
     } else {
       this.missTracker.set(id, {
         firstSeenAt: now,
-        lastSeenAt: now,
         count: 1,
       });
     }
@@ -117,11 +114,10 @@ export class NegativeDataCache {
   }
 
   evict(id: string): void {
-    if (this.negativeCache.has(id)) {
+    if (this.negativeCache.delete(id)) {
       metrics.negativeCacheEvictionsTotal.inc();
       this.log.info('ID evicted from negative cache', { id });
     }
-    this.negativeCache.delete(id);
     this.missTracker.delete(id);
     this.updateGauges();
   }
