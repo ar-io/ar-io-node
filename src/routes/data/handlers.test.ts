@@ -2093,6 +2093,73 @@ st
           assert.equal(attrs.rootPathHint, undefined);
         });
       });
+
+      describe('Root data offset and size hint headers', () => {
+        const mockRes = { get: () => undefined } as any;
+
+        it('should populate rootDataOffsetHint with valid non-negative integer', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-root-data-offset': '12345',
+            },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.equal(attrs.rootDataOffsetHint, 12345);
+        });
+
+        it('should populate rootDataSizeHint with valid non-negative integer', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-root-data-size': '67890',
+            },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.equal(attrs.rootDataSizeHint, 67890);
+        });
+
+        it('should accept zero as a valid offset', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-root-data-offset': '0',
+            },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.equal(attrs.rootDataOffsetHint, 0);
+        });
+
+        it('should not populate rootDataOffsetHint with negative value', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-root-data-offset': '-1',
+            },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.equal(attrs.rootDataOffsetHint, undefined);
+        });
+
+        it('should not populate rootDataSizeHint with non-numeric value', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-root-data-size': 'abc',
+            },
+          } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.equal(attrs.rootDataSizeHint, undefined);
+        });
+
+        it('should not include offset/size hint fields when headers are absent', () => {
+          const mockReq = { headers: {} } as any;
+
+          const attrs = getRequestAttributes(mockReq, mockRes);
+          assert.equal(attrs.rootDataOffsetHint, undefined);
+          assert.equal(attrs.rootDataSizeHint, undefined);
+        });
+      });
     });
 
     // Test stub for PaymentProcessor

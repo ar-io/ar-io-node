@@ -5,7 +5,7 @@ This directory contains development and documentation tools for the AR.IO Node p
 ## Tools
 
 ### `fetch-with-hint`
-Fetches a data item from the gateway using client-supplied root TX ID and nesting path hints. Resolves the root L1 transaction via GraphQL `bundledIn` traversal, then sends the request with `X-AR-IO-Root-Transaction-Id` and `X-AR-IO-Root-Path` headers so the gateway can skip server-side index lookups.
+Fetches a data item from the gateway using client-supplied root TX ID and nesting path hints. Resolves the root L1 transaction via GraphQL `bundledIn` traversal, then sends the request with `X-AR-IO-Root-Transaction-Id` and `X-AR-IO-Root-Path` headers so the gateway can skip server-side index lookups. Alternatively, can supply pre-computed byte offsets to skip bundle parsing entirely.
 
 **Usage:**
 ```bash
@@ -17,12 +17,18 @@ Fetches a data item from the gateway using client-supplied root TX ID and nestin
 
 # Use a different GraphQL endpoint with verbose output
 ./tools/fetch-with-hint <data-item-id> --graphql https://arweave.net/graphql --verbose
+
+# Use direct offset hints (skips GraphQL resolution and bundle parsing)
+./tools/fetch-with-hint <data-item-id> --root-tx-id <root-tx> --offset 12345 --size 6789
 ```
 
 **Options:**
 - `--gateway <url>` - Gateway URL to fetch from (default: `http://localhost:4000`)
 - `--graphql <url>` - GraphQL endpoint for root path resolution (default: `https://arweave.net/graphql`)
 - `--output <file>` - Write output to file instead of stdout
+- `--offset <n>` - Direct data offset hint (byte offset of payload within root TX data)
+- `--size <n>` - Direct data size hint (byte size of data item payload)
+- `--root-tx-id <id>` - Root TX ID (use with `--offset`/`--size` to skip GraphQL resolution)
 - `--verbose` - Show resolution details (root TX, path, response info)
 - `--help` - Show help message
 
