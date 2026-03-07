@@ -393,6 +393,16 @@ export const missTrackerSize = new promClient.Gauge({
   help: 'Current number of entries in the miss tracker',
 });
 
+export const negativeCacheRePromotionsTotal = new promClient.Counter({
+  name: 'negative_cache_repromotions_total',
+  help: 'Count of IDs re-promoted to negative cache',
+});
+
+export const promotionHistorySize = new promClient.Gauge({
+  name: 'promotion_history_size',
+  help: 'Current number of entries in promotion history tracker',
+});
+
 //
 // Chunk source metrics
 //

@@ -24,6 +24,9 @@ describe('NegativeDataCache', () => {
       ttlMs: 60_000,
       missCountThreshold: 3,
       missDurationMs: 10_000,
+      missTrackerTtlMs: 60_000,
+      maxTtlMs: 120_000,
+      promotionHistoryTtlMs: 300_000,
       now,
       ...overrides,
     });
@@ -140,7 +143,7 @@ describe('NegativeDataCache', () => {
   });
 
   it('stale miss tracker entries expire and do not cause incorrect promotion', () => {
-    const cache = createCache({ missDurationMs: 10_000 });
+    const cache = createCache({ missTrackerTtlMs: 10_000 });
 
     // Record 2 misses (below count threshold of 3)
     cache.recordMiss('id1');
@@ -162,7 +165,7 @@ describe('NegativeDataCache', () => {
   });
 
   it('single miss after stale expiry does not promote', () => {
-    const cache = createCache({ missDurationMs: 10_000 });
+    const cache = createCache({ missTrackerTtlMs: 10_000 });
 
     // Accumulate 2 misses (just below threshold)
     cache.recordMiss('id1');
@@ -175,6 +178,232 @@ describe('NegativeDataCache', () => {
     // A single new miss should NOT promote (count=1, not >= 3)
     cache.recordMiss('id1');
     assert.equal(cache.isNegativelyCached('id1'), false);
+  });
+
+  it('re-promotes with single miss after TTL expiry', () => {
+    const cache = createCache({ ttlMs: 100, missDurationMs: 0 });
+
+    // Initial promotion (requires 3 misses)
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Advance past TTL
+    currentTime = 1_200;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // Single miss should re-promote
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('exponential backoff increases TTL', () => {
+    const cache = createCache({
+      ttlMs: 100,
+      maxTtlMs: 10_000,
+      missDurationMs: 0,
+    });
+
+    // First promotion: TTL = 100
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Expire first TTL (100ms)
+    currentTime = 1_200;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // Second promotion: TTL = 200
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Still cached at 199ms after promotion
+    currentTime = 1_399;
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Expired past 200ms after promotion
+    currentTime = 1_401;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // Third promotion: TTL = 400
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Still cached at 400ms after promotion
+    currentTime = 1_801;
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Expired past 400ms after promotion
+    currentTime = 1_802;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+  });
+
+  it('backoff capped at maxTtlMs', () => {
+    const cache = createCache({
+      ttlMs: 100,
+      maxTtlMs: 300,
+      missDurationMs: 0,
+    });
+
+    // First promotion: TTL = 100
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    currentTime = 1_200;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // Second promotion: TTL = 200
+    cache.recordMiss('id1');
+    currentTime = 1_501;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // Third promotion: TTL = min(400, 300) = 300
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Still cached at 300ms
+    currentTime = 1_801;
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Expired past 300ms
+    currentTime = 1_802;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // Fourth promotion: TTL still capped at 300
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+    currentTime = 2_102;
+    assert.equal(cache.isNegativelyCached('id1'), true);
+    currentTime = 2_103;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+  });
+
+  it('evict clears promotion history', () => {
+    const cache = createCache({ ttlMs: 100, missDurationMs: 0 });
+
+    // Promote and build history
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Evict clears everything including promotion history
+    cache.evict('id1');
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // Should require full threshold again (no fast re-promotion)
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), false);
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), false);
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('promotion history survives negative cache TTL expiry', () => {
+    const cache = createCache({
+      ttlMs: 100,
+      missDurationMs: 0,
+      promotionHistoryTtlMs: 300_000,
+    });
+
+    // Promote
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Expire TTL but not promotion history
+    currentTime = 1_200;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // Fast re-promotion works (history survived)
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('promotion history expires after its own TTL', () => {
+    const cache = createCache({
+      ttlMs: 100,
+      missDurationMs: 0,
+      promotionHistoryTtlMs: 500,
+    });
+
+    // Promote
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+
+    // Advance past both negative cache TTL and promotion history TTL
+    currentTime = 1_600;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // History has expired — needs full threshold again
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), false);
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), false);
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('miss tracker TTL independent of duration threshold', () => {
+    const cache = createCache({
+      missDurationMs: 0,
+      missTrackerTtlMs: 500,
+    });
+
+    // Record 2 misses (below count threshold)
+    cache.recordMiss('id1');
+    currentTime = 1_100;
+    cache.recordMiss('id1');
+
+    // Advance past missTrackerTtlMs — entry should expire
+    currentTime = 1_601;
+
+    // This is a fresh start; single miss won't promote
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // Need full 3 misses from fresh start
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('metrics: re-promotion counter increments', async () => {
+    const getValue = async (counter: { get(): Promise<any> }) => {
+      const result = await counter.get();
+      return result.values[0]?.value ?? 0;
+    };
+
+    const rePromotionsBefore = await getValue(
+      metrics.negativeCacheRePromotionsTotal,
+    );
+
+    const cache = createCache({ ttlMs: 100, missDurationMs: 0 });
+
+    // Initial promotion — should NOT increment re-promotion counter
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    assert.equal(
+      (await getValue(metrics.negativeCacheRePromotionsTotal)) -
+        rePromotionsBefore,
+      0,
+    );
+
+    // Expire and re-promote — should increment re-promotion counter
+    currentTime = 1_200;
+    cache.recordMiss('id1');
+    assert.equal(
+      (await getValue(metrics.negativeCacheRePromotionsTotal)) -
+        rePromotionsBefore,
+      1,
+    );
   });
 
   it('metrics increment correctly', async () => {
