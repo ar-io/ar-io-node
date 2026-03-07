@@ -40,6 +40,7 @@ describe('RootParentDataSource', () => {
     };
     ans104OffsetSource = {
       getDataItemOffset: mock.fn(),
+      parseDataItemHeader: mock.fn(),
     } as any;
     rootParentDataSource = new RootParentDataSource({
       log,
@@ -601,10 +602,10 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.size, 500);
       assert.strictEqual(result.stream, dataStream);
 
-      // Verify we called getDataAttributes for the original item + both items during traversal
+      // Verify we called getDataAttributes for the original item (reused by traversal) + parent
       assert.strictEqual(
         (dataAttributesStore.getDataAttributes as any).mock.calls.length,
-        3,
+        2,
       );
       assert.strictEqual(
         (dataAttributesStore.getDataAttributes as any).mock.calls[0]
@@ -613,11 +614,6 @@ describe('RootParentDataSource', () => {
       );
       assert.strictEqual(
         (dataAttributesStore.getDataAttributes as any).mock.calls[1]
-          .arguments[0],
-        dataItemId,
-      );
-      assert.strictEqual(
-        (dataAttributesStore.getDataAttributes as any).mock.calls[2]
           .arguments[0],
         parentId,
       );
@@ -773,12 +769,10 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.size, 500);
       assert.strictEqual(result.stream, dataStream);
 
-      // Should have called getDataAttributes twice:
-      // 1. getData for content type
-      // 2. traverseToRootUsingAttributes early check (finds pre-computed offsets)
+      // Should have called getDataAttributes once (reused by traversal for pre-computed check)
       assert.strictEqual(
         (dataAttributesStore.getDataAttributes as any).mock.calls.length,
-        2,
+        1,
       );
 
       // Should NOT have traversed parents (optimization worked!)
@@ -847,13 +841,12 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.size, 500);
 
       // Should have attempted attributes lookup:
-      // 1. getData for content type
-      // 2. traverseToRootUsingAttributes initial check
-      // 3. Traverse to itemB
-      // 4. Traverse back to itemA (cycle detected on next iteration)
+      // 1. getData for content type (reused by traversal for initial check)
+      // 2. Traverse to itemB (fetched at end of itemA iteration)
+      // 3. Prefetch itemA for next iteration (cycle detected before use)
       assert.strictEqual(
         (dataAttributesStore.getDataAttributes as any).mock.calls.length,
-        4,
+        3,
       );
 
       // Should have fallen back to legacy methods
@@ -2035,7 +2028,7 @@ describe('RootParentDataSource', () => {
       });
     });
 
-    it('should use direct offset hints and skip bundle parsing entirely', async () => {
+    it('should use direct offset hints, parse item header, and skip bundle search', async () => {
       const dataItemId = 'direct-offset-item';
       const hintRootTxId = 'direct-offset-root';
       const dataStream = Readable.from([Buffer.from('direct offset data')]);
@@ -2047,9 +2040,18 @@ describe('RootParentDataSource', () => {
         async () => {},
       );
 
+      // parseDataItemHeader returns header info (50-byte header, 150 payload, with content type)
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => ({
+          headerSize: 50,
+          payloadSize: 150,
+          contentType: 'text/plain',
+        }),
+      );
+
       (dataSource.getData as any).mock.mockImplementation(async () => ({
         stream: dataStream,
-        size: 200,
+        size: 150,
         verified: false,
         cached: false,
         trusted: true,
@@ -2060,35 +2062,43 @@ describe('RootParentDataSource', () => {
         id: dataItemId,
         requestAttributes: {
           rootTransactionIdHint: hintRootTxId,
-          rootDataOffsetHint: 5000,
-          rootDataSizeHint: 200,
+          rootByteHint: { offset: 5000, size: 200 },
           clientIps: [],
         },
       });
 
-      assert.strictEqual(result.sourceContentType, 'application/json');
-      assert.strictEqual(result.size, 200);
+      // Content type from parsed header takes priority
+      assert.strictEqual(result.sourceContentType, 'text/plain');
+      assert.strictEqual(result.size, 150);
 
-      // Should NOT have called ans104OffsetSource at all
+      // Should have parsed the item header at the hint offset
+      const parseCall = (ans104OffsetSource.parseDataItemHeader as any).mock
+        .calls[0].arguments;
+      assert.strictEqual(parseCall[0], hintRootTxId); // bundleId
+      assert.strictEqual(parseCall[1], 5000); // itemOffset
+      assert.strictEqual(parseCall[2], 200); // totalSize
+
+      // Should NOT have called getDataItemOffset (linear search)
       assert.strictEqual(
         (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
         0,
       );
 
-      // Should have fetched data using hint root TX and direct offsets
+      // Should have fetched data at computed data offset (item offset + header size)
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
       assert.strictEqual(dataCall.id, hintRootTxId);
-      assert.deepStrictEqual(dataCall.region, { offset: 5000, size: 200 });
+      assert.deepStrictEqual(dataCall.region, { offset: 5050, size: 150 });
 
-      // Should have cached the offsets
+      // Should have cached with correct item and data offsets
       const setCalls = (dataAttributesStore.setDataAttributes as any).mock
         .calls;
       assert.strictEqual(setCalls.length, 1);
       assert.deepStrictEqual(setCalls[0].arguments[1], {
         rootTransactionId: hintRootTxId,
         rootDataItemOffset: 5000,
-        rootDataOffset: 5000,
-        size: 200,
+        rootDataOffset: 5050,
+        itemSize: 200,
+        size: 150,
       });
     });
 
@@ -2104,6 +2114,13 @@ describe('RootParentDataSource', () => {
         async () => {},
       );
 
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => ({
+          headerSize: 50,
+          payloadSize: 150,
+        }),
+      );
+
       (dataSource.getData as any).mock.mockImplementation(async () => ({
         stream: dataStream,
         size: 50,
@@ -2117,18 +2134,18 @@ describe('RootParentDataSource', () => {
         id: dataItemId,
         requestAttributes: {
           rootTransactionIdHint: hintRootTxId,
-          rootDataOffsetHint: 5000,
-          rootDataSizeHint: 200,
+          rootByteHint: { offset: 5000, size: 200 },
           clientIps: [],
         },
         region: { offset: 10, size: 50 },
       });
 
+      // Region should be relative to data offset (5000 + 50 header = 5050 data start)
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
-      assert.deepStrictEqual(dataCall.region, { offset: 5010, size: 50 });
+      assert.deepStrictEqual(dataCall.region, { offset: 5060, size: 50 });
     });
 
-    it('should fall through when direct offset hint fetch fails', async () => {
+    it('should fall through when direct offset hint fails', async () => {
       const dataItemId = 'direct-offset-fail-item';
       const hintRootTxId = 'direct-offset-root';
       const normalRootTxId = 'normal-root-tx';
@@ -2141,24 +2158,21 @@ describe('RootParentDataSource', () => {
         async () => {},
       );
 
-      // First call (direct offset) throws, second call (normal) succeeds
-      let getDataCallCount = 0;
-      (dataSource.getData as any).mock.mockImplementation(
-        async ({ id }: { id: string }) => {
-          getDataCallCount++;
-          if (getDataCallCount === 1) {
-            throw new Error('data not found at offset');
-          }
-          return {
-            stream: dataStream,
-            size: 300,
-            verified: false,
-            cached: false,
-            trusted: true,
-            sourceContentType: 'application/octet-stream',
-          };
+      // parseDataItemHeader fails (bad offset)
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => {
+          throw new Error('invalid data item header');
         },
       );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 300,
+        verified: false,
+        cached: false,
+        trusted: true,
+        sourceContentType: 'application/octet-stream',
+      }));
 
       (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId: normalRootTxId }),
@@ -2176,16 +2190,18 @@ describe('RootParentDataSource', () => {
         id: dataItemId,
         requestAttributes: {
           rootTransactionIdHint: hintRootTxId,
-          rootDataOffsetHint: 9999,
-          rootDataSizeHint: 100,
+          rootByteHint: { offset: 9999, size: 100 },
           clientIps: [],
         },
       });
 
       assert.strictEqual(result.size, 300);
 
-      // Should have fallen through to normal flow
-      assert.strictEqual(getDataCallCount, 2);
+      // Should have fallen through to normal flow after header parse failure
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        1,
+      );
     });
 
     it('should not use direct offset path when only offset is provided without size', async () => {
@@ -2222,8 +2238,7 @@ describe('RootParentDataSource', () => {
         id: dataItemId,
         requestAttributes: {
           rootTransactionIdHint: hintRootTxId,
-          rootDataOffsetHint: 5000,
-          // rootDataSizeHint intentionally omitted
+          // rootByteHint intentionally omitted (offset without size)
           clientIps: [],
         },
       });

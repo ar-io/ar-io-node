@@ -456,10 +456,8 @@ export interface RequestAttributes {
   rootTransactionIdHint?: string;
   /** Client-supplied nesting path hint (root TX first, then intermediate bundles) */
   rootPathHint?: string[];
-  /** Client-supplied data offset hint (byte offset of data item payload within root TX data) */
-  rootDataOffsetHint?: number;
-  /** Client-supplied data size hint (byte size of data item payload) */
-  rootDataSizeHint?: number;
+  /** Client-supplied direct byte hint: offset and size of the full data item (including headers) within the root TX */
+  rootByteHint?: { offset: number; size: number };
 }
 
 export interface GqlQueryable {

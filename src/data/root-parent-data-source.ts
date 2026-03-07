@@ -70,14 +70,71 @@ export class RootParentDataSource implements ContiguousDataSource {
   }
 
   /**
+   * Calculates the final byte region within a root transaction for a data item,
+   * combining the discovered absolute offset with an optional client-requested sub-region.
+   */
+  private calculateFinalRegion(
+    dataOffset: number,
+    dataSize: number,
+    region?: Region,
+  ): Region {
+    if (!region) {
+      return { offset: dataOffset, size: dataSize };
+    }
+
+    const finalRegion: Region = {
+      offset: dataOffset + (region.offset || 0),
+      size: region.size || dataSize,
+    };
+
+    if (region.offset !== undefined && region.offset >= dataSize) {
+      throw new Error(
+        `Requested region offset ${region.offset} exceeds data item size ${dataSize}`,
+      );
+    }
+
+    if (region.size !== undefined && region.offset !== undefined) {
+      const requestedEnd = region.offset + region.size;
+      if (requestedEnd > dataSize) {
+        finalRegion.size = dataSize - region.offset;
+      }
+    }
+
+    return finalRegion;
+  }
+
+  /**
+   * Attempts to cache data attributes, logging a warning on failure.
+   * Never throws — storage failures should not block data retrieval.
+   */
+  private async tryCacheAttributes(
+    id: string,
+    attributes: Record<string, unknown>,
+    context: string,
+  ): Promise<void> {
+    try {
+      await this.dataAttributesStore.setDataAttributes(id, attributes);
+    } catch (error: any) {
+      this.log.warn(`Failed to store attributes (${context})`, {
+        id,
+        error: error.message,
+      });
+    }
+  }
+
+  /**
    * Traverses the parent chain using data attributes to find the root transaction.
    * Returns null if traversal is incomplete due to missing attributes.
    */
-  private async traverseToRootUsingAttributes(dataItemId: string): Promise<{
+  private async traverseToRootUsingAttributes(
+    dataItemId: string,
+    prefetchedAttributes?: ContiguousDataAttributes,
+  ): Promise<{
     rootTxId: string;
     totalOffset: number;
     rootDataOffset: number;
     size: number;
+    fromPreComputed: boolean;
   } | null> {
     const log = this.log.child({
       method: 'traverseToRootUsingAttributes',
@@ -86,9 +143,10 @@ export class RootParentDataSource implements ContiguousDataSource {
 
     log.debug('Starting parent traversal using attributes');
 
-    // First, check if we can get the initial attributes
+    // Use prefetched attributes if available, otherwise fetch
     const initialAttributes =
-      await this.dataAttributesStore.getDataAttributes(dataItemId);
+      prefetchedAttributes ??
+      (await this.dataAttributesStore.getDataAttributes(dataItemId));
 
     if (!initialAttributes) {
       log.debug('No attributes found for data item');
@@ -115,6 +173,7 @@ export class RootParentDataSource implements ContiguousDataSource {
         totalOffset: initialAttributes.rootDataItemOffset,
         rootDataOffset: initialAttributes.rootDataOffset,
         size: initialAttributes.size,
+        fromPreComputed: true,
       };
     }
 
@@ -158,6 +217,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           totalOffset: totalOffset + (originalItemOffset ?? 0),
           rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
           size: originalItemSize!,
+          fromPreComputed: false,
         };
       }
 
@@ -189,6 +249,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           totalOffset: totalOffset + (originalItemOffset ?? 0),
           rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
           size: originalItemSize!,
+          fromPreComputed: false,
         };
       }
 
@@ -255,10 +316,12 @@ export class RootParentDataSource implements ContiguousDataSource {
     try {
       this.log.debug('Getting data using root parent resolution', { id });
 
-      // Get the content type for the requested data item
+      // Get the content type and attributes for the requested data item
+      // (reused by traversal to avoid a duplicate lookup)
+      let originalAttributes: ContiguousDataAttributes | undefined;
       let originalContentType: string | undefined;
       try {
-        const originalAttributes =
+        originalAttributes =
           await this.dataAttributesStore.getDataAttributes(id);
         originalContentType = originalAttributes?.contentType;
       } catch (error) {
@@ -271,55 +334,35 @@ export class RootParentDataSource implements ContiguousDataSource {
       // Step 0: Try client-supplied hint first (fast path)
       const hintRootTxId = requestAttributes?.rootTransactionIdHint;
       if (hintRootTxId != null) {
-        // Step 0a: Direct offset hint — skip bundle parsing entirely
-        const hintDataOffset = requestAttributes?.rootDataOffsetHint;
-        const hintDataSize = requestAttributes?.rootDataSizeHint;
-        if (hintDataOffset != null && hintDataSize != null) {
+        // Step 0a: Direct item offset hint — parse item header then fetch data
+        const hintItemOffset = requestAttributes?.rootByteHint?.offset;
+        const hintItemSize = requestAttributes?.rootByteHint?.size;
+        if (hintItemOffset != null && hintItemSize != null) {
           try {
             span.addEvent('Attempting direct offset hint resolution', {
               'hint.root_tx_id': hintRootTxId,
-              'hint.data_offset': hintDataOffset,
-              'hint.data_size': hintDataSize,
+              'hint.item_offset': hintItemOffset,
+              'hint.item_size': hintItemSize,
             });
 
-            // Cache the supplied offsets
-            try {
-              await this.dataAttributesStore.setDataAttributes(id, {
-                rootTransactionId: hintRootTxId,
-                rootDataItemOffset: hintDataOffset,
-                rootDataOffset: hintDataOffset,
-                size: hintDataSize,
-              });
-            } catch (error: any) {
-              this.log.warn('Failed to store offsets from direct offset hint', {
-                id,
-                error: error.message,
-              });
-            }
+            // Parse the data item header to get content type and payload offset
+            const headerInfo =
+              await this.ans104OffsetSource.parseDataItemHeader(
+                hintRootTxId,
+                hintItemOffset,
+                hintItemSize,
+                signal,
+              );
 
-            let finalRegion: Region;
-            if (region) {
-              finalRegion = {
-                offset: hintDataOffset + (region.offset || 0),
-                size: region.size || hintDataSize,
-              };
-              if (
-                region.offset !== undefined &&
-                region.offset >= hintDataSize
-              ) {
-                throw new Error(
-                  `Requested region offset ${region.offset} exceeds data item size ${hintDataSize}`,
-                );
-              }
-              if (region.size !== undefined && region.offset !== undefined) {
-                const requestedEnd = region.offset + region.size;
-                if (requestedEnd > hintDataSize) {
-                  finalRegion.size = hintDataSize - region.offset;
-                }
-              }
-            } else {
-              finalRegion = { offset: hintDataOffset, size: hintDataSize };
-            }
+            const dataOffset = hintItemOffset + headerInfo.headerSize;
+            const dataSize = headerInfo.payloadSize;
+            const hintContentType = headerInfo.contentType;
+
+            const finalRegion = this.calculateFinalRegion(
+              dataOffset,
+              dataSize,
+              region,
+            );
 
             span.setAttributes({
               'traversal.method': 'direct_offset_hint',
@@ -336,9 +379,25 @@ export class RootParentDataSource implements ContiguousDataSource {
               signal,
             });
 
+            // Cache only after successful fetch to avoid poisoning from bad hints
+            await this.tryCacheAttributes(
+              id,
+              {
+                rootTransactionId: hintRootTxId,
+                rootDataItemOffset: hintItemOffset,
+                rootDataOffset: dataOffset,
+                itemSize: hintItemSize,
+                size: dataSize,
+              },
+              'direct offset hint',
+            );
+
             return {
               ...data,
-              sourceContentType: originalContentType ?? data.sourceContentType,
+              sourceContentType:
+                hintContentType ??
+                originalContentType ??
+                data.sourceContentType,
             };
           } catch (error: any) {
             this.log.debug(
@@ -387,61 +446,11 @@ export class RootParentDataSource implements ContiguousDataSource {
               dataSize: bundleParseResult.dataSize,
             });
 
-            // Cache discovered offsets
-            try {
-              const attributesToStore: {
-                rootTransactionId: string;
-                rootDataItemOffset: number;
-                rootDataOffset: number;
-                itemSize: number;
-                size: number;
-                contentType?: string;
-              } = {
-                rootTransactionId: hintRootTxId,
-                rootDataItemOffset: bundleParseResult.itemOffset,
-                rootDataOffset: bundleParseResult.dataOffset,
-                itemSize: bundleParseResult.itemSize,
-                size: bundleParseResult.dataSize,
-              };
-              if (bundleParseResult.contentType !== undefined) {
-                attributesToStore.contentType = bundleParseResult.contentType;
-              }
-              await this.dataAttributesStore.setDataAttributes(
-                id,
-                attributesToStore,
-              );
-            } catch (error: any) {
-              this.log.warn('Failed to store offsets from hint resolution', {
-                id,
-                error: error.message,
-              });
-            }
-
-            // Calculate final region
-            const offset = {
-              offset: bundleParseResult.dataOffset,
-              size: bundleParseResult.dataSize,
-            };
-            let finalRegion: Region;
-            if (region) {
-              finalRegion = {
-                offset: offset.offset + (region.offset || 0),
-                size: region.size || offset.size,
-              };
-              if (region.offset !== undefined && region.offset >= offset.size) {
-                throw new Error(
-                  `Requested region offset ${region.offset} exceeds data item size ${offset.size}`,
-                );
-              }
-              if (region.size !== undefined && region.offset !== undefined) {
-                const requestedEnd = region.offset + region.size;
-                if (requestedEnd > offset.size) {
-                  finalRegion.size = offset.size - region.offset;
-                }
-              }
-            } else {
-              finalRegion = { offset: offset.offset, size: offset.size };
-            }
+            const finalRegion = this.calculateFinalRegion(
+              bundleParseResult.dataOffset,
+              bundleParseResult.dataSize,
+              region,
+            );
 
             span.setAttributes({
               'traversal.method': 'hint',
@@ -460,6 +469,19 @@ export class RootParentDataSource implements ContiguousDataSource {
               parentSpan: span,
               signal,
             });
+
+            // Cache only after successful fetch to avoid poisoning from bad hints
+            const attributesToStore: Record<string, unknown> = {
+              rootTransactionId: hintRootTxId,
+              rootDataItemOffset: bundleParseResult.itemOffset,
+              rootDataOffset: bundleParseResult.dataOffset,
+              itemSize: bundleParseResult.itemSize,
+              size: bundleParseResult.dataSize,
+            };
+            if (bundleParseResult.contentType !== undefined) {
+              attributesToStore.contentType = bundleParseResult.contentType;
+            }
+            await this.tryCacheAttributes(id, attributesToStore, 'hint');
 
             return {
               ...data,
@@ -482,10 +504,13 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       // Step 1: Try attributes-based traversal first
       span.addEvent('Attempting attributes-based traversal');
-      const attributesTraversal = await this.traverseToRootUsingAttributes(id);
+      const attributesTraversal = await this.traverseToRootUsingAttributes(
+        id,
+        originalAttributes,
+      );
 
       if (attributesTraversal) {
-        const { rootTxId, totalOffset, rootDataOffset, size } =
+        const { rootTxId, totalOffset, rootDataOffset, size, fromPreComputed } =
           attributesTraversal;
 
         this.log.debug('Successfully traversed using attributes', {
@@ -503,69 +528,25 @@ export class RootParentDataSource implements ContiguousDataSource {
           'data.item.size': size,
         });
 
-        // Store the discovered offsets for future use
-        try {
-          await this.dataAttributesStore.setDataAttributes(id, {
-            rootTransactionId: rootTxId,
-            rootDataItemOffset: totalOffset,
-            rootDataOffset: rootDataOffset,
-            size: size,
-          });
-          this.log.debug('Stored root offsets from attributes traversal', {
+        // Only store if traversal actually computed new offsets
+        if (!fromPreComputed) {
+          await this.tryCacheAttributes(
             id,
-            rootTransactionId: rootTxId,
-            rootDataItemOffset: totalOffset,
-            rootDataOffset: rootDataOffset,
-            size: size,
-          });
-        } catch (error: any) {
-          this.log.warn(
-            'Failed to store root offsets from attributes traversal',
             {
-              id,
-              error: error.message,
+              rootTransactionId: rootTxId,
+              rootDataItemOffset: totalOffset,
+              rootDataOffset: rootDataOffset,
+              size: size,
             },
+            'attributes traversal',
           );
         }
 
-        // Calculate final region using discovered offset
-        let finalRegion: Region;
-        if (region) {
-          // If a region was requested, adjust it relative to the discovered offset
-          // Use rootDataOffset (payload start) not totalOffset (item start)
-          finalRegion = {
-            offset: rootDataOffset + (region.offset || 0),
-            size: region.size || size,
-          };
-
-          // Ensure we don't exceed the data item bounds
-          if (region.offset !== undefined && region.offset >= size) {
-            const error = new Error(
-              `Requested region offset ${region.offset} exceeds data item size ${size}`,
-            );
-            span.recordException(error);
-            throw error;
-          }
-
-          if (region.size !== undefined && region.offset !== undefined) {
-            const requestedEnd = region.offset + region.size;
-            if (requestedEnd > size) {
-              // Truncate to available size
-              finalRegion.size = size - region.offset;
-              this.log.debug('Truncated region to fit data item bounds', {
-                requestedSize: region.size,
-                truncatedSize: finalRegion.size,
-              });
-            }
-          }
-        } else {
-          // No region requested, use the full data item payload
-          // Use rootDataOffset (payload start) not totalOffset (item start)
-          finalRegion = {
-            offset: rootDataOffset,
-            size,
-          };
-        }
+        const finalRegion = this.calculateFinalRegion(
+          rootDataOffset,
+          size,
+          region,
+        );
 
         span.setAttributes({
           'final.region.offset': finalRegion.offset,
@@ -614,7 +595,6 @@ export class RootParentDataSource implements ContiguousDataSource {
             },
           );
 
-          // Preserve the original data item's content type if available
           return {
             ...data,
             sourceContentType: originalContentType ?? data.sourceContentType,
@@ -678,46 +658,18 @@ export class RootParentDataSource implements ContiguousDataSource {
           rootResult?.rootOffset !== undefined &&
           rootResult?.rootDataOffset !== undefined
         ) {
-          try {
-            const attributesToStore: {
-              rootTransactionId: string;
-              rootDataItemOffset: number;
-              rootDataOffset: number;
-              itemSize?: number;
-              size?: number;
-            } = {
-              rootTransactionId: rootTxId,
-              rootDataItemOffset: rootResult.rootOffset,
-              rootDataOffset: rootResult.rootDataOffset,
-            };
-
-            // Store both itemSize and size if available
-            if (rootResult.size !== undefined) {
-              attributesToStore.itemSize = rootResult.size;
-            }
-            if (rootResult.dataSize !== undefined) {
-              attributesToStore.size = rootResult.dataSize;
-            }
-
-            await this.dataAttributesStore.setDataAttributes(
-              id,
-              attributesToStore,
-            );
-
-            this.log.debug('Stored root offsets from root TX index', {
-              id,
-              rootTransactionId: rootTxId,
-              rootDataItemOffset: rootResult.rootOffset,
-              rootDataOffset: rootResult.rootDataOffset,
-              itemSize: rootResult.size,
-              size: rootResult.dataSize,
-            });
-          } catch (error: any) {
-            this.log.warn('Failed to store root offsets from root TX index', {
-              id,
-              error: error.message,
-            });
+          const attributesToStore: Record<string, unknown> = {
+            rootTransactionId: rootTxId,
+            rootDataItemOffset: rootResult.rootOffset,
+            rootDataOffset: rootResult.rootDataOffset,
+          };
+          if (rootResult.size !== undefined) {
+            attributesToStore.itemSize = rootResult.size;
           }
+          if (rootResult.dataSize !== undefined) {
+            attributesToStore.size = rootResult.dataSize;
+          }
+          await this.tryCacheAttributes(id, attributesToStore, 'root TX index');
         }
       } finally {
         rootTxLookupSpan.end();
@@ -871,47 +823,21 @@ export class RootParentDataSource implements ContiguousDataSource {
             }
 
             // Store discovered offsets for future use (avoid re-parsing)
-            try {
-              const attributesToStore: {
-                rootTransactionId: string;
-                rootDataItemOffset: number;
-                rootDataOffset: number;
-                itemSize: number;
-                size: number;
-                contentType?: string;
-              } = {
-                rootTransactionId: rootTxId,
-                rootDataItemOffset: bundleParseResult.itemOffset,
-                rootDataOffset: bundleParseResult.dataOffset,
-                itemSize: bundleParseResult.itemSize,
-                size: bundleParseResult.dataSize,
-              };
-
-              if (bundleParseResult.contentType !== undefined) {
-                attributesToStore.contentType = bundleParseResult.contentType;
-              }
-
-              await this.dataAttributesStore.setDataAttributes(
-                id,
-                attributesToStore,
-              );
-
-              this.log.debug('Stored offsets from bundle parsing', {
-                id,
-                rootTransactionId: rootTxId,
-                rootDataItemOffset: bundleParseResult.itemOffset,
-                rootDataOffset: bundleParseResult.dataOffset,
-                itemSize: bundleParseResult.itemSize,
-                size: bundleParseResult.dataSize,
-                contentType: bundleParseResult.contentType,
-              });
-            } catch (error: any) {
-              this.log.warn('Failed to store offsets from bundle parsing', {
-                id,
-                error: error.message,
-              });
-              // Don't fail the request if storage fails
+            const attributesToStore: Record<string, unknown> = {
+              rootTransactionId: rootTxId,
+              rootDataItemOffset: bundleParseResult.itemOffset,
+              rootDataOffset: bundleParseResult.dataOffset,
+              itemSize: bundleParseResult.itemSize,
+              size: bundleParseResult.dataSize,
+            };
+            if (bundleParseResult.contentType !== undefined) {
+              attributesToStore.contentType = bundleParseResult.contentType;
             }
+            await this.tryCacheAttributes(
+              id,
+              attributesToStore,
+              'bundle parsing',
+            );
           }
         } finally {
           offsetParseSpan.end();
@@ -943,41 +869,11 @@ export class RootParentDataSource implements ContiguousDataSource {
       }
 
       // Step 3: Calculate final region (combine discovered offset with requested region)
-      let finalRegion: Region;
-      if (region) {
-        // If a region was requested, adjust it relative to the discovered offset
-        finalRegion = {
-          offset: offset.offset + (region.offset || 0),
-          size: region.size || offset.size,
-        };
-
-        // Ensure we don't exceed the data item bounds
-        if (region.offset !== undefined && region.offset >= offset.size) {
-          const error = new Error(
-            `Requested region offset ${region.offset} exceeds data item size ${offset.size}`,
-          );
-          span.recordException(error);
-          throw error;
-        }
-
-        if (region.size !== undefined && region.offset !== undefined) {
-          const requestedEnd = region.offset + region.size;
-          if (requestedEnd > offset.size) {
-            // Truncate to available size
-            finalRegion.size = offset.size - region.offset;
-            this.log.debug('Truncated region to fit data item bounds', {
-              requestedSize: region.size,
-              truncatedSize: finalRegion.size,
-            });
-          }
-        }
-      } else {
-        // No region requested, use the full data item
-        finalRegion = {
-          offset: offset.offset,
-          size: offset.size,
-        };
-      }
+      const finalRegion = this.calculateFinalRegion(
+        offset.offset,
+        offset.size,
+        region,
+      );
 
       span.setAttributes({
         'final.region.offset': finalRegion.offset,
