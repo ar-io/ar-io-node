@@ -121,6 +121,12 @@ describe('NegativeDataCache', () => {
     assert.equal(cache.isNegativelyCached('id1'), false);
   });
 
+  it('disabled mode skips evict without errors', () => {
+    const cache = createCache({ enabled: false });
+    // Should be a no-op, not throw
+    cache.evict('nonexistent-id');
+  });
+
   it('LRU eviction when max size exceeded', () => {
     const cache = createCache({ maxSize: 2, missDurationMs: 0 });
 

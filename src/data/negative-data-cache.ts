@@ -148,6 +148,10 @@ export class NegativeDataCache {
   }
 
   evict(id: string): void {
+    if (!this.enabled) {
+      return;
+    }
+
     if (this.negativeCache.delete(id)) {
       metrics.negativeCacheEvictionsTotal.inc();
       this.log.info('ID evicted from negative cache', { id });
