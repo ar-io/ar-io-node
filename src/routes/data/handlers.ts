@@ -509,18 +509,21 @@ export const getRequestAttributes = (
   }
 
   // Parse client-supplied root TX ID hint
-  const rawRootTxIdHint = req.headers[
-    headerNames.rootTransactionId.toLowerCase()
-  ] as string | undefined;
+  const rawRootTxIdHintVal =
+    req.headers[headerNames.rootTransactionId.toLowerCase()];
+  const rawRootTxIdHint = Array.isArray(rawRootTxIdHintVal)
+    ? rawRootTxIdHintVal[0]
+    : rawRootTxIdHintVal;
   const rootTransactionIdHint =
     rawRootTxIdHint != null && isValidTxId(rawRootTxIdHint)
       ? rawRootTxIdHint
       : undefined;
 
   // Parse client-supplied root path hint (comma-separated TX IDs)
-  const rawRootPathHint = req.headers[headerNames.rootPath.toLowerCase()] as
-    | string
-    | undefined;
+  const rawRootPathHintVal = req.headers[headerNames.rootPath.toLowerCase()];
+  const rawRootPathHint = Array.isArray(rawRootPathHintVal)
+    ? rawRootPathHintVal[0]
+    : rawRootPathHintVal;
   let rootPathHint: string[] | undefined;
   if (rawRootPathHint != null) {
     const parts = rawRootPathHint.split(',').map((s) => s.trim());
@@ -530,12 +533,16 @@ export const getRequestAttributes = (
   }
 
   // Parse client-supplied root item offset and size hints (both required together)
-  const rawRootItemOffsetHint = req.headers[
-    headerNames.rootItemOffset.toLowerCase()
-  ] as string | undefined;
-  const rawRootItemSizeHint = req.headers[
-    headerNames.rootItemSize.toLowerCase()
-  ] as string | undefined;
+  const rawRootItemOffsetHintVal =
+    req.headers[headerNames.rootItemOffset.toLowerCase()];
+  const rawRootItemOffsetHint = Array.isArray(rawRootItemOffsetHintVal)
+    ? rawRootItemOffsetHintVal[0]
+    : rawRootItemOffsetHintVal;
+  const rawRootItemSizeHintVal =
+    req.headers[headerNames.rootItemSize.toLowerCase()];
+  const rawRootItemSizeHint = Array.isArray(rawRootItemSizeHintVal)
+    ? rawRootItemSizeHintVal[0]
+    : rawRootItemSizeHintVal;
   const rootItemOffsetParsed =
     rawRootItemOffsetHint != null
       ? parseNonNegativeInt(rawRootItemOffsetHint)

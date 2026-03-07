@@ -83,8 +83,8 @@ export class RootParentDataSource implements ContiguousDataSource {
     }
 
     const finalRegion: Region = {
-      offset: dataOffset + (region.offset || 0),
-      size: region.size || dataSize,
+      offset: dataOffset + (region.offset ?? 0),
+      size: region.size ?? dataSize,
     };
 
     if (region.offset !== undefined && region.offset >= dataSize) {
