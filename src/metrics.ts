@@ -715,6 +715,31 @@ export const ans104OffsetPathDepthHistogram = new promClient.Histogram({
 });
 
 //
+// Cache re-verification metrics
+//
+
+export const cacheRetryAttemptsTotal = new promClient.Counter({
+  name: 'cache_retry_attempts_total',
+  help: 'Stochastic cache re-verification attempts',
+  labelNames: ['trust_status'] as const,
+});
+
+export const cacheRetryMatchesTotal = new promClient.Counter({
+  name: 'cache_retry_matches_total',
+  help: 'Cache re-verification hash matches',
+});
+
+export const cacheRetryMismatchesTotal = new promClient.Counter({
+  name: 'cache_retry_mismatches_total',
+  help: 'Cache re-verification hash mismatches',
+});
+
+export const cacheEvictionsTotal = new promClient.Counter({
+  name: 'cache_evictions_total',
+  help: 'Cache evictions due to hash mismatch',
+});
+
+//
 // Sampling data source metrics
 //
 

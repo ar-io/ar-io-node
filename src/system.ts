@@ -1044,6 +1044,8 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   dataContentAttributeImporter,
   skipCache: config.SKIP_DATA_CACHE,
   eventEmitter,
+  untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
+  trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
 });
 
 export const backgroundContiguousDataSource = new ReadThroughDataCache({
@@ -1059,6 +1061,8 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   dataContentAttributeImporter,
   skipCache: config.SKIP_DATA_CACHE,
   eventEmitter,
+  untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
+  trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
 });
 
 export const dataItemIndexer = new DataItemIndexer({

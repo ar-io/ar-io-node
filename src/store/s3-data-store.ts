@@ -346,4 +346,8 @@ export class S3DataStore implements ContiguousDataStore {
       throw error;
     }
   }
+
+  async delete(_hash: string): Promise<void> {
+    // No-op: S3 data is managed externally
+  }
 }

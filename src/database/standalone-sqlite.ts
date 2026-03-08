@@ -1136,6 +1136,12 @@ export class StandaloneSqliteDatabaseWorker {
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: txOrItemRow?.stable === true,
       verified: dataRow?.verified === 1,
+      trusted:
+        dataRow?.trusted === 1
+          ? true
+          : dataRow?.trusted === 0
+          ? false
+          : undefined,
     };
   }
 
@@ -1303,6 +1309,7 @@ export class StandaloneSqliteDatabaseWorker {
     formatId,
     rootDataItemOffset,
     rootDataOffset,
+    trusted,
   }: {
     id: string;
     parentId?: string;
@@ -1321,6 +1328,7 @@ export class StandaloneSqliteDatabaseWorker {
     formatId?: number;
     rootDataItemOffset?: number;
     rootDataOffset?: number;
+    trusted?: boolean;
   }) {
     const hashBuffer = fromB64Url(hash);
     const currentTimestamp = currentUnixTimestamp();
@@ -1351,6 +1359,7 @@ export class StandaloneSqliteDatabaseWorker {
       format_id: formatId ?? null,
       root_data_item_offset: rootDataItemOffset ?? null,
       root_data_offset: rootDataOffset ?? null,
+      trusted: trusted === true ? 1 : trusted === false ? 0 : null,
     });
 
     if (dataRoot !== undefined) {
@@ -2714,6 +2723,12 @@ export class StandaloneSqliteDatabaseWorker {
     return;
   }
 
+  clearDataHash(id: string) {
+    this.stmts.data.clearDataHash.run({
+      id: fromB64Url(id),
+    });
+  }
+
   async saveVerificationStatus(id: string) {
     this.stmts.data.updateDataItemVerificationStatus.run({
       id: fromB64Url(id),
@@ -3363,6 +3378,7 @@ export class StandaloneSqliteDatabase
     formatId,
     rootDataItemOffset,
     rootDataOffset,
+    trusted,
   }: {
     id: string;
     parentId?: string;
@@ -3380,6 +3396,7 @@ export class StandaloneSqliteDatabase
     formatId?: number;
     rootDataItemOffset?: number;
     rootDataOffset?: number;
+    trusted?: boolean;
   }) {
     if (this.saveDataContentAttributesCache.get(id)) {
       metrics.sqliteMethodDuplicateCallsCounter.inc({
@@ -3408,6 +3425,7 @@ export class StandaloneSqliteDatabase
         formatId,
         rootDataItemOffset,
         rootDataOffset,
+        trusted,
       },
     ]);
   }
@@ -3600,6 +3618,10 @@ export class StandaloneSqliteDatabase
     }
     // Fall back to core and bundles
     return this.queueRead('core', 'getRootTxFromCoreAndBundles', [id]);
+  }
+
+  async clearDataHash(id: string) {
+    return this.queueWrite('data', 'clearDataHash', [id]);
   }
 
   async saveVerificationStatus(id: string) {
@@ -3847,6 +3869,10 @@ if (!isMainThread) {
         case 'getRootTxFromData':
           const rootTxFromData = worker.getRootTxFromData(args[0]);
           parentPort?.postMessage(rootTxFromData);
+          break;
+        case 'clearDataHash':
+          worker.clearDataHash(args[0]);
+          parentPort?.postMessage(null);
           break;
         case 'saveVerificationStatus':
           worker.saveVerificationStatus(args[0]);

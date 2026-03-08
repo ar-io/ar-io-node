@@ -1570,6 +1570,16 @@ export const NEGATIVE_CACHE_HEALTH_MIN_SAMPLE_SIZE = env.positiveIntOrDefault(
   10,
 );
 
+// Stochastic re-verification rates for cached data (0-1)
+export const UNTRUSTED_CACHE_RETRY_RATE = +env.varOrDefault(
+  'UNTRUSTED_CACHE_RETRY_RATE',
+  '0.1',
+);
+export const TRUSTED_CACHE_RETRY_RATE = +env.varOrDefault(
+  'TRUSTED_CACHE_RETRY_RATE',
+  '0.0',
+);
+
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',

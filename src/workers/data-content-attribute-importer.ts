@@ -30,6 +30,7 @@ export type DataContentAttributeProperties = {
   formatId?: number;
   rootDataItemOffset?: number;
   rootDataOffset?: number;
+  trusted?: boolean;
 };
 
 export class DataContentAttributeImporter {
