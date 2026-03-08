@@ -1775,7 +1775,10 @@ st
             (negativeDataCache.recordSuccess as any).mock.calls.length,
             1,
           );
-          assert.equal((negativeDataCache.recordMiss as any).mock.calls.length, 0);
+          assert.equal(
+            (negativeDataCache.recordMiss as any).mock.calls.length,
+            0,
+          );
         });
 
         it('should set X-AR-IO-Data-Id header with data ID for direct data access', async () => {
