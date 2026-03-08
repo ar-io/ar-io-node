@@ -134,17 +134,16 @@ export class NegativeDataCache {
     const now = this.now();
     const existing = this.missTracker.get(id);
 
+    let entry: MissTrackerEntry;
     if (existing) {
       existing.count++;
+      entry = existing;
       this.missTracker.set(id, existing);
     } else {
-      this.missTracker.set(id, {
-        firstSeenAt: now,
-        count: 1,
-      });
+      entry = { firstSeenAt: now, count: 1 };
+      this.missTracker.set(id, entry);
     }
 
-    const entry = this.missTracker.get(id)!;
     const priorPromotions = this.promotionHistory.get(id) ?? 0;
     const effectiveCount = priorPromotions > 0 ? 1 : this.missCountThreshold;
     const effectiveDuration = priorPromotions > 0 ? 0 : this.missDurationMs;
