@@ -1525,7 +1525,7 @@ export const SKIP_DATA_CACHE =
 //
 
 export const NEGATIVE_CACHE_ENABLED =
-  env.varOrDefault('NEGATIVE_CACHE_ENABLED', 'true') === 'true';
+  env.varOrDefault('NEGATIVE_CACHE_ENABLED', 'false') === 'true';
 export const NEGATIVE_CACHE_MAX_SIZE = env.positiveIntOrDefault(
   'NEGATIVE_CACHE_MAX_SIZE',
   100_000,
