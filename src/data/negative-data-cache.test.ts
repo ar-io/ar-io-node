@@ -380,6 +380,126 @@ describe('NegativeDataCache', () => {
     assert.equal(cache.isNegativelyCached('id1'), true);
   });
 
+  it('promotions proceed when healthy', () => {
+    const cache = createCache({
+      missDurationMs: 0,
+      healthWindowMs: 60_000,
+      unhealthyThreshold: 0.8,
+      minSampleSize: 4,
+    });
+
+    // Record enough successes to keep failure rate at 75% (below 80%)
+    cache.recordSuccess();
+
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    // Failure rate: 3/4 = 0.75 — not > 0.8 threshold, so promotion proceeds
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('promotions suppressed when unhealthy', () => {
+    const cache = createCache({
+      missDurationMs: 0,
+      healthWindowMs: 60_000,
+      unhealthyThreshold: 0.8,
+      minSampleSize: 4,
+    });
+
+    // Record many failures — system is unhealthy
+    cache.recordMiss('other1');
+    cache.recordMiss('other2');
+
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    // Failure rate: 5/5 = 1.0 > 0.8 — promotion suppressed
+    assert.equal(cache.isNegativelyCached('id1'), false);
+  });
+
+  it('window resets after healthWindowMs', () => {
+    const cache = createCache({
+      missDurationMs: 0,
+      healthWindowMs: 1_000,
+      unhealthyThreshold: 0.8,
+      minSampleSize: 4,
+    });
+
+    // Drive system unhealthy (100% failure rate)
+    cache.recordMiss('other1');
+    cache.recordMiss('other2');
+    cache.recordMiss('other3');
+    cache.recordMiss('other4');
+
+    // Advance past health window
+    currentTime = 2_001;
+
+    // Now record a success so failure rate is 75% in new window
+    cache.recordSuccess();
+
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    // New window: 3 failures, 1 success = 0.75 — not > 0.8 threshold
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('below minSampleSize always healthy', () => {
+    const cache = createCache({
+      missDurationMs: 0,
+      healthWindowMs: 60_000,
+      unhealthyThreshold: 0.8,
+      minSampleSize: 100, // Very high min sample
+    });
+
+    // All failures but below min sample size
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    // Only 3 samples < 100 min — treated as healthy
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('miss tracking continues during unhealthy, promotes after recovery', () => {
+    const cache = createCache({
+      missDurationMs: 0,
+      healthWindowMs: 1_000,
+      unhealthyThreshold: 0.8,
+      minSampleSize: 4,
+    });
+
+    // Drive system unhealthy (100% failure rate)
+    cache.recordMiss('other1');
+    cache.recordMiss('other2');
+    cache.recordMiss('other3');
+    cache.recordMiss('other4');
+
+    // Try to promote — suppressed due to unhealthy
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), false);
+
+    // Advance past health window — recovery
+    currentTime = 2_001;
+
+    // Record successes so new window is healthy
+    cache.recordSuccess();
+    cache.recordSuccess();
+    cache.recordSuccess();
+
+    // One more miss triggers promotion (accumulated misses still in tracker)
+    cache.recordMiss('id1');
+    // 1 failure, 3 successes in new window = 0.25 — healthy
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('recordSuccess is no-op when disabled', () => {
+    const cache = createCache({ enabled: false });
+    // Should not throw
+    cache.recordSuccess();
+  });
+
   it('metrics: re-promotion counter increments', async () => {
     const getValue = async (counter: { get(): Promise<any> }) => {
       const result = await counter.get();

@@ -403,6 +403,11 @@ export const promotionHistorySize = new promClient.Gauge({
   help: 'Current number of entries in promotion history tracker',
 });
 
+export const negativeCachePromotionsSuppressedTotal = new promClient.Counter({
+  name: 'negative_cache_promotions_suppressed_total',
+  help: 'Count of promotions suppressed due to unhealthy system state',
+});
+
 //
 // Chunk source metrics
 //
