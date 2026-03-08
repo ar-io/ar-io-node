@@ -1107,6 +1107,7 @@ const sendManifestResponse = async ({
   requestAttributes,
   rateLimiter,
   paymentProcessor,
+  negativeDataCache,
   parentSpan,
 }: {
   log: Logger;
@@ -1120,6 +1121,7 @@ const sendManifestResponse = async ({
   requestAttributes: RequestAttributes;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
+  negativeDataCache?: NegativeDataCache;
   parentSpan?: Span;
 }): Promise<boolean> => {
   let data: ContiguousData | undefined;
@@ -1156,6 +1158,8 @@ const sendManifestResponse = async ({
         parentSpan,
         signal: req.signal,
       });
+      negativeDataCache?.evict(resolvedId);
+      negativeDataCache?.recordSuccess();
     } catch (error: any) {
       // Re-throw AbortError to be handled by caller
       if (error.name === 'AbortError') {
@@ -1449,6 +1453,7 @@ export const createDataHandler = ({
               requestAttributes,
               rateLimiter,
               paymentProcessor,
+              negativeDataCache,
               parentSpan: span,
               ...manifestResolution,
             })
@@ -1580,6 +1585,7 @@ export const createDataHandler = ({
               requestAttributes,
               rateLimiter,
               paymentProcessor,
+              negativeDataCache,
               ...manifestResolution,
             }))
           ) {

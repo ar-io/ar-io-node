@@ -1689,6 +1689,95 @@ st
             });
         });
 
+        it('should evict resolvedId from negative cache when manifest-resolved data is served', async () => {
+          const manifestId = 'manifest-id';
+          const resolvedId = 'resolved-manifest-path-id';
+
+          const negativeDataCache = {
+            isNegativelyCached: mock.fn(() => false),
+            evict: mock.fn(() => undefined),
+            recordSuccess: mock.fn(() => undefined),
+            recordMiss: mock.fn(() => undefined),
+          } as any;
+
+          mock.method(
+            dataAttributesSource,
+            'getDataAttributes',
+            (id: string) => {
+              if (id === manifestId) {
+                return Promise.resolve({
+                  size: 100,
+                  contentType: 'application/x.arweave-manifest+json',
+                  isManifest: true,
+                  stable: true,
+                  verified: true,
+                  signature: null,
+                });
+              }
+              return Promise.resolve({
+                size: 9,
+                contentType: 'application/octet-stream',
+                isManifest: false,
+                stable: true,
+                verified: true,
+                signature: null,
+              });
+            },
+          );
+
+          mock.method(manifestPathResolver, 'resolveFromIndex', () =>
+            Promise.resolve({
+              id: manifestId,
+              resolvedId,
+              complete: true,
+            }),
+          );
+
+          mock.method(dataSource, 'getData', ({ id }: { id: string }) =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from(`data:${id}`)),
+              size: `data:${id}`.length,
+              verified: true,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            }),
+          );
+
+          app.get(
+            '/:id/*',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+              negativeDataCache,
+            }),
+          );
+
+          await request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .expect(200)
+            .expect((res: any) => {
+              assert.equal(res.headers['x-ar-io-data-id'], resolvedId);
+            });
+
+          assert.equal((negativeDataCache.evict as any).mock.calls.length, 1);
+          assert.equal(
+            (negativeDataCache.evict as any).mock.calls[0].arguments[0],
+            resolvedId,
+          );
+          assert.equal(
+            (negativeDataCache.recordSuccess as any).mock.calls.length,
+            1,
+          );
+          assert.equal((negativeDataCache.recordMiss as any).mock.calls.length, 0);
+        });
+
         it('should set X-AR-IO-Data-Id header with data ID for direct data access', async () => {
           mock.method(dataAttributesSource, 'getDataAttributes', () =>
             Promise.resolve({
