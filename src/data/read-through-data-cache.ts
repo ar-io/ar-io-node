@@ -666,12 +666,17 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     this.dataContentAttributeImporter.queueDataContentAttributes(
                       {
                         id,
+                        dataRoot: attributes?.dataRoot,
                         hash,
                         dataSize: data.size,
                         contentType: data.sourceContentType,
                         cachedAt: currentUnixTimestamp(),
                         verified: false,
                         verificationPriority,
+                        rootTransactionId: attributes?.rootTransactionId,
+                        rootDataItemOffset: attributes?.rootDataItemOffset,
+                        rootDataOffset: attributes?.rootDataOffset,
+                        dataItemSize: attributes?.itemSize,
                         trusted: false,
                       },
                     );

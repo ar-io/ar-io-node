@@ -3621,6 +3621,7 @@ export class StandaloneSqliteDatabase
   }
 
   async clearDataHash(id: string) {
+    this.saveDataContentAttributesCache.delete(id);
     return this.queueWrite('data', 'clearDataHash', [id]);
   }
 
