@@ -66,6 +66,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private dataContentAttributeImporter: DataContentAttributeImporter;
   private skipCache: boolean;
   private eventEmitter?: EventEmitter;
+  private untrustedCacheRetryRate: number;
+  private trustedCacheRetryRate: number;
+  private pendingRetries: Set<string> = new Set();
 
   constructor({
     log,
@@ -77,6 +80,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     dataContentAttributeImporter,
     skipCache = false,
     eventEmitter,
+    untrustedCacheRetryRate = 0,
+    trustedCacheRetryRate = 0,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
@@ -87,6 +92,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     dataContentAttributeImporter: DataContentAttributeImporter;
     skipCache?: boolean;
     eventEmitter?: EventEmitter;
+    untrustedCacheRetryRate?: number;
+    trustedCacheRetryRate?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
@@ -97,6 +104,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.dataContentAttributeImporter = dataContentAttributeImporter;
     this.skipCache = skipCache;
     this.eventEmitter = eventEmitter;
+    this.untrustedCacheRetryRate = untrustedCacheRetryRate;
+    this.trustedCacheRetryRate = trustedCacheRetryRate;
   }
 
   private calculateVerificationPriority(
@@ -179,6 +188,61 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     }
 
     this.metadataStore.set(hash, metadataToSet as ContiguousMetadata);
+  }
+
+  private triggerBackgroundReVerification(
+    id: string,
+    cachedHash: string,
+    trustStatus: 'trusted' | 'untrusted',
+  ): void {
+    this.pendingRetries.add(id);
+    metrics.cacheRetryAttemptsTotal.inc({ trust_status: trustStatus });
+
+    this.dataSource
+      .getData({ id })
+      .then(async (upstreamData) => {
+        const hasher = crypto.createHash('sha256');
+        const stream = upstreamData.stream;
+
+        await new Promise<void>((resolve, reject) => {
+          stream.on('data', (chunk: Buffer) => hasher.update(chunk));
+          stream.on('end', resolve);
+          stream.on('error', reject);
+        });
+
+        const upstreamHash = hasher.digest('base64url');
+
+        if (upstreamHash === cachedHash) {
+          metrics.cacheRetryMatchesTotal.inc();
+          this.log.debug('Cache re-verification hash match', {
+            id,
+            hash: cachedHash,
+          });
+        } else {
+          metrics.cacheRetryMismatchesTotal.inc();
+          metrics.cacheEvictionsTotal.inc();
+          this.log.warn('Cache re-verification hash mismatch, evicting', {
+            id,
+            cachedHash,
+            upstreamHash,
+          });
+
+          await this.dataStore.delete(cachedHash);
+          await this.contiguousDataIndex.clearDataHash(id);
+          await this.dataAttributesStore.setDataAttributes(id, {
+            hash: undefined,
+          });
+        }
+      })
+      .catch((error: any) => {
+        this.log.debug('Cache re-verification fetch failed', {
+          id,
+          message: error.message,
+        });
+      })
+      .finally(() => {
+        this.pendingRetries.delete(id);
+      });
   }
 
   async getCacheData(
@@ -383,6 +447,25 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           );
         });
 
+        // Stochastic re-verification
+        const retryRate =
+          attributes?.trusted === false
+            ? this.untrustedCacheRetryRate
+            : this.trustedCacheRetryRate;
+
+        if (
+          retryRate > 0 &&
+          Math.random() < retryRate &&
+          attributes?.hash !== undefined &&
+          !this.pendingRetries.has(id)
+        ) {
+          this.triggerBackgroundReVerification(
+            id,
+            attributes.hash,
+            attributes?.trusted === false ? 'untrusted' : 'trusted',
+          );
+        }
+
         const processedRequestAttributes =
           generateRequestAttributes(requestAttributes);
 
@@ -392,7 +475,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           size: region?.size ?? cacheData.size,
           sourceContentType: attributes?.contentType,
           verified: attributes?.verified ?? false,
-          trusted: true, // only trusted or verified data is cached in the first place
+          trusted: attributes?.trusted !== false,
           cached: true,
           requestAttributes: processedRequestAttributes?.attributes,
         };
@@ -431,17 +514,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
       data.stream.setMaxListeners(Infinity); // Suppress listener leak warnings
 
-      // Skip caching when data is untrusted and we don't have a local hash to
-      // compare against, when serving regions to avoid persisting data
-      // fragments and (more importantly) writing invalid ID to hash
-      // relationships in the DB, and when data size is zero to avoid unnecessary
-      // storage operations and indexing.
-      if (
-        !this.skipCache &&
-        (data.trusted === true || attributes?.hash !== undefined) &&
-        region === undefined &&
-        data.size > 0
-      ) {
+      // Skip caching when serving regions to avoid persisting data fragments
+      // and (more importantly) writing invalid ID to hash relationships in the
+      // DB, and when data size is zero to avoid unnecessary storage operations
+      // and indexing.
+      if (!this.skipCache && region === undefined && data.size > 0) {
         span.addEvent('Starting caching process');
         const cachingStart = Date.now();
         let bytesReceived = 0;
@@ -480,9 +557,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               const hash = hasher.digest('base64url');
 
               try {
-                // Only finalize (cache locally) when we trust the source or
-                // the computed hash matches an existing hash computed from a
-                // trusted source.
                 if (bytesReceived !== data.size) {
                   span.addEvent('Skipping cache storage - size mismatch', {
                     'data.expected_size': data.size,
@@ -495,7 +569,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     receivedSize: bytesReceived,
                   });
                   await this.dataStore.cleanup(cacheStream);
-                } else if (data.trusted === true || attributes?.hash === hash) {
+                } else if (data.trusted === true) {
+                  // Trusted source: finalize, save with trusted: true
                   await this.dataStore.finalize(cacheStream, hash);
                   span.addEvent('Data cached successfully', {
                     'cache.duration_ms': cachingDuration,
@@ -518,40 +593,95 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     const verificationPriority =
                       this.calculateVerificationPriority(requestAttributes);
 
-                    // Only update hashes when we trust the data source
-                    if (data.trusted === true) {
-                      // Fetch attributes again to get any updates (like root offsets)
-                      // that were set by the upstream data source during getData
-                      const updatedAttributes =
-                        await this.dataAttributesStore.getDataAttributes(id);
+                    // Fetch attributes again to get any updates (like root offsets)
+                    // that were set by the upstream data source during getData
+                    const updatedAttributes =
+                      await this.dataAttributesStore.getDataAttributes(id);
 
-                      this.dataContentAttributeImporter.queueDataContentAttributes(
-                        {
-                          id,
-                          dataRoot: updatedAttributes?.dataRoot,
-                          hash,
-                          dataSize: data.size,
-                          contentType: data.sourceContentType,
-                          cachedAt: currentUnixTimestamp(),
-                          verified: data.verified,
-                          verificationPriority,
-                          rootTransactionId:
-                            updatedAttributes?.rootTransactionId,
-                          rootDataItemOffset:
-                            updatedAttributes?.rootDataItemOffset,
-                          rootDataOffset: updatedAttributes?.rootDataOffset,
-                          dataItemSize: updatedAttributes?.itemSize,
-                        },
-                      );
-
-                      // Update the in-memory cache with the hash so subsequent requests can find it
-                      // This prevents cache misses due to stale cache entries with offsets but no hash
-                      await this.dataAttributesStore.setDataAttributes(id, {
+                    this.dataContentAttributeImporter.queueDataContentAttributes(
+                      {
+                        id,
+                        dataRoot: updatedAttributes?.dataRoot,
                         hash,
-                        size: data.size,
+                        dataSize: data.size,
                         contentType: data.sourceContentType,
-                      });
-                    }
+                        cachedAt: currentUnixTimestamp(),
+                        verified: data.verified,
+                        verificationPriority,
+                        rootTransactionId: updatedAttributes?.rootTransactionId,
+                        rootDataItemOffset:
+                          updatedAttributes?.rootDataItemOffset,
+                        rootDataOffset: updatedAttributes?.rootDataOffset,
+                        dataItemSize: updatedAttributes?.itemSize,
+                        trusted: true,
+                      },
+                    );
+
+                    // Update the in-memory cache with the hash so subsequent requests can find it
+                    // This prevents cache misses due to stale cache entries with offsets but no hash
+                    await this.dataAttributesStore.setDataAttributes(id, {
+                      hash,
+                      size: data.size,
+                      contentType: data.sourceContentType,
+                      trusted: true,
+                    });
+                  } catch (error: any) {
+                    this.log.error('Error saving data content attributes:', {
+                      id,
+                      message: error.message,
+                      stack: error.stack,
+                    });
+                  }
+                } else if (attributes?.hash === hash) {
+                  // Untrusted source, hash matches existing: finalize but
+                  // don't update trust status
+                  await this.dataStore.finalize(cacheStream, hash);
+                  span.addEvent('Data cached successfully', {
+                    'cache.duration_ms': cachingDuration,
+                    'data.computed_hash': hash,
+                    'data.trusted': data.trusted,
+                  });
+                  span.setAttribute('cache.operation.stored', true);
+                  this.log.info(
+                    'Successfully cached untrusted data matching local hash',
+                    { id, hash },
+                  );
+                } else if (attributes?.hash === undefined) {
+                  // Untrusted source, no local hash: optimistic cache
+                  await this.dataStore.finalize(cacheStream, hash);
+                  span.addEvent('Data cached optimistically (untrusted)', {
+                    'cache.duration_ms': cachingDuration,
+                    'data.computed_hash': hash,
+                  });
+                  span.setAttribute('cache.operation.stored', true);
+
+                  this.log.info('Optimistically cached untrusted data', {
+                    id,
+                    hash,
+                  });
+                  try {
+                    const verificationPriority =
+                      this.calculateVerificationPriority(requestAttributes);
+
+                    this.dataContentAttributeImporter.queueDataContentAttributes(
+                      {
+                        id,
+                        hash,
+                        dataSize: data.size,
+                        contentType: data.sourceContentType,
+                        cachedAt: currentUnixTimestamp(),
+                        verified: false,
+                        verificationPriority,
+                        trusted: false,
+                      },
+                    );
+
+                    await this.dataAttributesStore.setDataAttributes(id, {
+                      hash,
+                      size: data.size,
+                      contentType: data.sourceContentType,
+                      trusted: false,
+                    });
                   } catch (error: any) {
                     this.log.error('Error saving data content attributes:', {
                       id,
@@ -560,6 +690,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     });
                   }
                 } else {
+                  // Untrusted source, hash mismatch: don't cache
                   span.addEvent('Skipping cache storage - hash mismatch', {
                     'data.trusted_hash': attributes?.hash,
                     'data.computed_hash': hash,
@@ -597,9 +728,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         const reasons = [];
         if (this.skipCache) {
           reasons.push('SKIP_DATA_CACHE is set');
-        }
-        if (data.trusted !== true && attributes?.hash === undefined) {
-          reasons.push('untrusted data without local hash');
         }
         if (region !== undefined) {
           reasons.push('serving data region');

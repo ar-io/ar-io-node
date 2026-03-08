@@ -107,5 +107,11 @@ export class FsDataStore implements ContiguousDataStore {
     }
   }
 
-  // TODO del?
+  async delete(hash: string): Promise<void> {
+    try {
+      await fs.promises.unlink(this.dataPath(hash));
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
 }

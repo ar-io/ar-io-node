@@ -40,7 +40,8 @@ INSERT INTO contiguous_data_ids (
   data_item_size,
   format_id,
   root_data_item_offset,
-  root_data_offset
+  root_data_offset,
+  trusted
 )
 SELECT
   :id,
@@ -60,7 +61,8 @@ SELECT
   :data_item_size,
   :format_id,
   :root_data_item_offset,
-  :root_data_offset
+  :root_data_offset,
+  :trusted
 FROM ParentStatus
 WHERE
   NOT EXISTS (
@@ -82,7 +84,11 @@ ON CONFLICT(id) DO UPDATE SET
   data_item_size = excluded.data_item_size,
   format_id = excluded.format_id,
   root_data_item_offset = excluded.root_data_item_offset,
-  root_data_offset = excluded.root_data_offset
+  root_data_offset = excluded.root_data_offset,
+  trusted = CASE
+    WHEN contiguous_data_ids.trusted = 1 THEN 1
+    ELSE excluded.trusted
+  END
 WHERE contiguous_data_ids.verified != 1;
 
 -- insertDataRoot
@@ -108,6 +114,7 @@ FROM (
     cd.data_size,
     cd.original_source_content_type,
     cdi.verified,
+    cdi.trusted,
     cdi.root_transaction_id,
     cdi.root_parent_offset,
     cdi.data_offset,
@@ -130,6 +137,7 @@ FROM (
     cd.data_size,
     cd.original_source_content_type,
     cdi.verified,
+    cdi.trusted,
     cdi.root_transaction_id,
     cdi.root_parent_offset,
     cdi.data_offset,
@@ -158,6 +166,11 @@ JOIN contiguous_data_ids cdi ON cdip.parent_id = cdi.id
 LEFT JOIN contiguous_data cd ON cd.hash = cdi.contiguous_data_hash
 WHERE cdip.id = :id
 LIMIT 1
+
+-- clearDataHash
+UPDATE contiguous_data_ids
+SET contiguous_data_hash = NULL, trusted = NULL, verified = 0, verified_at = NULL
+WHERE id = :id
 
 -- selectRootTransactionId
 SELECT root_transaction_id, root_parent_offset, data_offset, data_size, data_item_size, data_item_offset, root_data_item_offset, root_data_offset

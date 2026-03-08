@@ -178,6 +178,7 @@ export interface ContiguousDataStore {
   createWriteStream(): Promise<Writable>;
   cleanup(stream: Writable): Promise<void>;
   finalize(stream: Writable, hash: string): Promise<void>;
+  delete(hash: string): Promise<void>;
 }
 
 export interface ChainSource {
@@ -853,6 +854,12 @@ export interface ContiguousDataAttributes {
 
   // Status flags
 
+  /**
+   * Trust status of cached data. true = from trusted source, false = from
+   * untrusted source (cached optimistically), undefined = legacy/unknown.
+   */
+  trusted?: boolean;
+
   /** True if this data has an ArFS manifest content type. */
   isManifest: boolean;
 
@@ -931,6 +938,7 @@ export interface ContiguousDataIndex {
     formatId,
     rootDataItemOffset,
     rootDataOffset,
+    trusted,
   }: {
     id: string;
     parentId?: string;
@@ -949,7 +957,9 @@ export interface ContiguousDataIndex {
     formatId?: number;
     rootDataItemOffset?: number;
     rootDataOffset?: number;
+    trusted?: boolean;
   }): Promise<void>;
+  clearDataHash(id: string): Promise<void>;
   getVerifiableDataIds(options?: {
     minVerificationPriority?: number;
   }): Promise<string[]>;
