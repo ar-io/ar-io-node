@@ -25,6 +25,12 @@ export class NegativeDataCache {
   private baseTtlMs: number;
   private maxTtlMs: number;
   private now: () => number;
+  private recentSuccesses: number = 0;
+  private recentFailures: number = 0;
+  private windowStartedAt: number;
+  private healthWindowMs: number;
+  private unhealthyThreshold: number;
+  private minSampleSize: number;
 
   constructor({
     log,
@@ -36,6 +42,9 @@ export class NegativeDataCache {
     missTrackerTtlMs,
     maxTtlMs,
     promotionHistoryTtlMs,
+    healthWindowMs = 60_000,
+    unhealthyThreshold = 0.8,
+    minSampleSize = 10,
     now = Date.now,
   }: {
     log: Logger;
@@ -47,6 +56,9 @@ export class NegativeDataCache {
     missTrackerTtlMs?: number;
     maxTtlMs?: number;
     promotionHistoryTtlMs?: number;
+    healthWindowMs?: number;
+    unhealthyThreshold?: number;
+    minSampleSize?: number;
     now?: () => number;
   }) {
     this.log = log;
@@ -56,6 +68,10 @@ export class NegativeDataCache {
     this.baseTtlMs = ttlMs;
     this.maxTtlMs = maxTtlMs ?? ttlMs;
     this.now = now;
+    this.healthWindowMs = healthWindowMs;
+    this.unhealthyThreshold = unhealthyThreshold;
+    this.minSampleSize = minSampleSize;
+    this.windowStartedAt = this.now();
 
     this.missTracker = new LRUCache<string, MissTrackerEntry>({
       max: maxSize,
@@ -99,10 +115,21 @@ export class NegativeDataCache {
     return false;
   }
 
+  recordSuccess(): void {
+    if (!this.enabled) {
+      return;
+    }
+    this.maybeResetWindow();
+    this.recentSuccesses++;
+  }
+
   recordMiss(id: string): void {
     if (!this.enabled) {
       return;
     }
+
+    this.maybeResetWindow();
+    this.recentFailures++;
 
     const now = this.now();
     const existing = this.missTracker.get(id);
@@ -126,6 +153,12 @@ export class NegativeDataCache {
       entry.count >= effectiveCount &&
       now - entry.firstSeenAt >= effectiveDuration
     ) {
+      if (this.isUnhealthy()) {
+        metrics.negativeCachePromotionsSuppressedTotal.inc();
+        this.updateGauges();
+        return;
+      }
+
       const ttl = Math.min(
         this.baseTtlMs * 2 ** Math.min(priorPromotions, 30),
         this.maxTtlMs,
@@ -159,6 +192,22 @@ export class NegativeDataCache {
     this.missTracker.delete(id);
     this.promotionHistory.delete(id);
     this.updateGauges();
+  }
+
+  private maybeResetWindow(): void {
+    if (this.now() - this.windowStartedAt >= this.healthWindowMs) {
+      this.recentSuccesses = 0;
+      this.recentFailures = 0;
+      this.windowStartedAt = this.now();
+    }
+  }
+
+  private isUnhealthy(): boolean {
+    const total = this.recentSuccesses + this.recentFailures;
+    return (
+      total >= this.minSampleSize &&
+      this.recentFailures / total > this.unhealthyThreshold
+    );
   }
 
   private updateGauges(): void {

@@ -1554,6 +1554,17 @@ export const NEGATIVE_CACHE_PROMOTION_HISTORY_TTL_MS = env.positiveIntOrDefault(
   'NEGATIVE_CACHE_PROMOTION_HISTORY_TTL_MS',
   604_800_000, // 7 days
 );
+export const NEGATIVE_CACHE_HEALTH_WINDOW_MS = env.positiveIntOrDefault(
+  'NEGATIVE_CACHE_HEALTH_WINDOW_MS',
+  60_000, // 1 minute
+);
+export const NEGATIVE_CACHE_UNHEALTHY_THRESHOLD = parseFloat(
+  env.varOrDefault('NEGATIVE_CACHE_UNHEALTHY_THRESHOLD', '0.8'),
+);
+export const NEGATIVE_CACHE_HEALTH_MIN_SAMPLE_SIZE = env.positiveIntOrDefault(
+  'NEGATIVE_CACHE_HEALTH_MIN_SAMPLE_SIZE',
+  10,
+);
 
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(

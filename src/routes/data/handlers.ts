@@ -949,6 +949,7 @@ export const createRawDataHandler = ({
           });
           span.addEvent('Data retrieval successful');
           negativeDataCache?.evict(id);
+          negativeDataCache?.recordSuccess();
 
           // Re-fetch attributes to ensure we have any offsets discovered during getData()
           // This ensures offset headers are set on the first request, not just subsequent ones
@@ -1061,7 +1062,9 @@ export const createRawDataHandler = ({
             message: error.message,
             stack: error.stack,
           });
-          negativeDataCache?.recordMiss(id);
+          if (dataAttributes === undefined) {
+            negativeDataCache?.recordMiss(id);
+          }
           sendNotFound(res);
           data?.stream.destroy();
           return;
@@ -1476,6 +1479,7 @@ export const createDataHandler = ({
           });
           span.addEvent('Data retrieval successful');
           negativeDataCache?.evict(id);
+          negativeDataCache?.recordSuccess();
 
           // Re-fetch attributes to ensure we have any offsets discovered during getData()
           // This ensures offset headers are set on the first request, not just subsequent ones
@@ -1536,7 +1540,9 @@ export const createDataHandler = ({
             message: error.message,
             stack: error.stack,
           });
-          negativeDataCache?.recordMiss(id);
+          if (dataAttributes === undefined) {
+            negativeDataCache?.recordMiss(id);
+          }
           sendNotFound(res);
           return;
         }
