@@ -675,6 +675,15 @@ const handleRangeRequest = async ({
       });
 
       rangeData.stream.pipe(res);
+      rangeData.stream.once('error', (error) => {
+        log.error('Stream error during data transfer:', {
+          dataId: id,
+          message: error.message,
+        });
+        if (!res.destroyed) {
+          res.destroy();
+        }
+      });
     } else {
       // Get boundary from request (stored by data-handler-utils) or generate new one
       const boundary = (req as any).multipartBoundary ?? generateBoundary();
@@ -1037,6 +1046,15 @@ export const createRawDataHandler = ({
             span.setAttribute('http.status_code', res.statusCode || 200);
             span.addEvent('Streaming data to client');
             data.stream.pipe(res);
+            data.stream.once('error', (error) => {
+              log.error('Stream error during data transfer:', {
+                dataId: id,
+                message: error.message,
+              });
+              if (!res.destroyed) {
+                res.destroy();
+              }
+            });
           }
         } catch (error: any) {
           // Handle client disconnect (AbortError) specially
@@ -1247,6 +1265,15 @@ const sendManifestResponse = async ({
         }
 
         data.stream.pipe(res);
+        data.stream.once('error', (error) => {
+          log.error('Stream error during data transfer:', {
+            dataId: resolvedId,
+            message: error.message,
+          });
+          if (!res.destroyed) {
+            res.destroy();
+          }
+        });
       }
     } catch (error: any) {
       log.error('Error retrieving data attributes:', {
@@ -1662,6 +1689,15 @@ export const createDataHandler = ({
           span.setAttribute('http.status_code', res.statusCode || 200);
           span.addEvent('Streaming data to client');
           data.stream.pipe(res);
+          data.stream.once('error', (error) => {
+            log.error('Stream error during data transfer:', {
+              dataId: id,
+              message: error.message,
+            });
+            if (!res.destroyed) {
+              res.destroy();
+            }
+          });
         }
       } catch (error: any) {
         // Handle client disconnect (AbortError) specially

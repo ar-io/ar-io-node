@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream';
+import { attachStallTimeout } from './stream.js';
 import { Worker, isMainThread, parentPort } from 'node:worker_threads';
 import * as winston from 'winston';
 import { computeDataRootFromReadable } from './data-root-streaming.js';
@@ -171,25 +172,16 @@ export class DataRootComputer {
         );
 
         // Setup timeout for stalled data streams
-        let timeout: NodeJS.Timeout;
-        const resetTimeout = () => {
-          if (timeout !== undefined) {
-            clearTimeout(timeout);
-          }
-          timeout = setTimeout(() => {
-            data?.stream.destroy(new Error('Timeout'));
-          }, this.streamTimeout);
-        };
-        data.stream.on('data', resetTimeout);
+        const cleanupStallTimeout = attachStallTimeout(
+          data.stream,
+          this.streamTimeout,
+        );
         data.stream.pause();
 
         // Write data stream to temp file
         const writeStream = fs.createWriteStream(dataPath);
         pipeline(data.stream, writeStream, async (error) => {
-          // 1) Clear the timer
-          clearTimeout(timeout);
-          // 2) Remove the listener on the 'data' event
-          data?.stream.off('data', resetTimeout);
+          cleanupStallTimeout();
 
           if (error !== undefined) {
             reject(error);

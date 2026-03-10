@@ -198,6 +198,11 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+export const STREAM_STALL_TIMEOUT_MS = +env.varOrDefault(
+  'STREAM_STALL_TIMEOUT_MS',
+  `${1000 * 30}`, // 30 seconds
+);
+
 // GraphQL root TX lookup gateways (separate from data retrieval gateways)
 export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(

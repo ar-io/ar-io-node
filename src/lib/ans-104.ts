@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream';
+import { attachStallTimeout } from './stream.js';
 import {
   Worker,
   isMainThread,
@@ -297,21 +298,16 @@ export class Ans104Parser {
         );
 
         // Setup timeout for stalled data streams
-        let timeout: NodeJS.Timeout;
-        const resetTimeout = () => {
-          if (timeout !== undefined) {
-            clearTimeout(timeout);
-          }
-          timeout = setTimeout(() => {
-            data?.stream.destroy(new Error('Timeout'));
-          }, this.streamTimeout);
-        };
-        data.stream.on('data', resetTimeout);
+        const cleanupStallTimeout = attachStallTimeout(
+          data.stream,
+          this.streamTimeout,
+        );
         data.stream.pause();
 
         // Write data stream to temp file
         const writeStream = fs.createWriteStream(bundlePath);
         pipeline(data.stream, writeStream, async (error) => {
+          cleanupStallTimeout();
           if (error !== undefined) {
             reject(error);
             log.error('Error writing ANS-104 bundle stream', error);
