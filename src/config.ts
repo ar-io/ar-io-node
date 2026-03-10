@@ -335,7 +335,7 @@ export const CDB64_REMOTE_SEMAPHORE_TIMEOUT_MS = env.positiveIntOrDefault(
 // Available sources: gateways, chunks, tx-data
 // Note: These are base sources without root TX resolution (to avoid circular deps)
 export const CDB64_REMOTE_RETRIEVAL_ORDER = env
-  .varOrDefault('CDB64_REMOTE_RETRIEVAL_ORDER', 'gateways,chunks')
+  .varOrDefault('CDB64_REMOTE_RETRIEVAL_ORDER', 'chunks')
   .split(',')
   .map((s) => s.trim().toLowerCase())
   .filter((s) => s.length > 0);
