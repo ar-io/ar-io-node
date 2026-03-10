@@ -18,9 +18,15 @@ export function attachStallTimeout(
   stream: Readable,
   stallTimeoutMs: number,
 ): () => void {
-  let timer: NodeJS.Timeout;
-  const resetTimeout = () => {
-    if (timer !== undefined) clearTimeout(timer);
+  let timer: NodeJS.Timeout | undefined;
+  const clearTimer = () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  const armTimer = () => {
+    clearTimer();
     timer = setTimeout(() => {
       stream.destroy(
         new Error(
@@ -29,17 +35,41 @@ export function attachStallTimeout(
       );
     }, stallTimeoutMs);
   };
-  // Start the initial timer (covers the gap before first data chunk)
-  resetTimeout();
-  stream.on('data', resetTimeout);
+  const onResume = () => {
+    armTimer();
+  };
+  const onPause = () => {
+    // Backpressure pauses should not count as upstream stalls.
+    clearTimer();
+  };
+  const onData = () => {
+    if (stream.readableFlowing === true) {
+      armTimer();
+    }
+  };
+
+  stream.on('resume', onResume);
+  stream.on('pause', onPause);
+  stream.on('data', onData);
+
+  // If stream is already flowing when attached, start monitoring immediately.
+  if (stream.readableFlowing === true) {
+    armTimer();
+  }
+
   // Re-pause the stream since adding a 'data' listener switches it to
   // flowing mode. Consumers control when the stream starts flowing via
   // pipe() or resume().
   stream.pause();
 
   const cleanup = () => {
-    clearTimeout(timer);
-    stream.off('data', resetTimeout);
+    clearTimer();
+    stream.off('resume', onResume);
+    stream.off('pause', onPause);
+    stream.off('data', onData);
+    stream.off('end', cleanup);
+    stream.off('error', cleanup);
+    stream.off('close', cleanup);
   };
   stream.once('end', cleanup);
   stream.once('error', cleanup);
