@@ -259,6 +259,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   (region !== undefined && response.status !== 206) ||
                   (region === undefined && response.status !== 200)
                 ) {
+                  response.data.destroy();
                   span.addEvent('Gateway returned unexpected status', {
                     'gateways.url': gatewayUrl,
                     'gateways.tier.priority': priority,

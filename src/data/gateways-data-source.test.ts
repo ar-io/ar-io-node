@@ -213,7 +213,10 @@ describe('GatewayDataSource', () => {
     });
 
     it('should throw an error for unexpected status code', async () => {
-      mockedAxiosInstance.request = async () => ({ status: 404 });
+      mockedAxiosInstance.request = async () => ({
+        status: 404,
+        data: { destroy: mock.fn() },
+      });
 
       try {
         await dataSource.getData({ id: 'bad-id', requestAttributes });
