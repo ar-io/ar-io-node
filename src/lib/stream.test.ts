@@ -169,7 +169,7 @@ describe('pipeStreamToResponse', () => {
   it('should pipe data to response', async () => {
     const stream = new PassThrough();
     const res = new PassThrough();
-    const log = { error: mock.fn() } as any;
+    const log = { error: mock.fn(), info: mock.fn() } as any;
 
     pipeStreamToResponse(stream, res as any, log, 'test-id');
 
@@ -186,7 +186,7 @@ describe('pipeStreamToResponse', () => {
   it('should log and destroy response on stream error', async () => {
     const stream = new PassThrough();
     const res = new PassThrough();
-    const log = { error: mock.fn() } as any;
+    const log = { error: mock.fn(), info: mock.fn() } as any;
 
     pipeStreamToResponse(stream, res as any, log, 'test-id');
 
@@ -207,7 +207,7 @@ describe('pipeStreamToResponse', () => {
   it('should skip destroy if response already destroyed', () => {
     const stream = new PassThrough();
     const res = new PassThrough();
-    const log = { error: mock.fn() } as any;
+    const log = { error: mock.fn(), info: mock.fn() } as any;
 
     pipeStreamToResponse(stream, res as any, log, 'test-id');
 
@@ -216,5 +216,47 @@ describe('pipeStreamToResponse', () => {
     stream.emit('error', new Error('late error'));
 
     assert.equal(log.error.mock.calls.length, 1);
+  });
+
+  it('should destroy upstream stream on premature client disconnect', async () => {
+    const stream = new PassThrough();
+    const res = new PassThrough();
+    // Simulate a response that has not finished writing
+    Object.defineProperty(res, 'writableFinished', { value: false });
+    const log = { info: mock.fn(), error: mock.fn() } as any;
+
+    pipeStreamToResponse(stream, res as any, log, 'test-id');
+
+    // Simulate client disconnect by destroying the response
+    res.destroy();
+
+    // Allow 'close' event to propagate
+    await sleep(10);
+
+    assert.equal(stream.destroyed, true);
+    assert.equal(log.info.mock.calls.length, 1);
+    assert.equal(
+      log.info.mock.calls[0].arguments[0],
+      'Client disconnected, destroying upstream stream',
+    );
+  });
+
+  it('should not destroy upstream stream when response finishes normally', async () => {
+    const stream = new PassThrough();
+    const res = new PassThrough();
+    const log = { info: mock.fn(), error: mock.fn() } as any;
+
+    pipeStreamToResponse(stream, res as any, log, 'test-id');
+
+    // Drain res so it can finish
+    res.resume();
+
+    stream.write('data');
+    stream.end();
+
+    // Wait for res to close after pipe finishes
+    await new Promise<void>((resolve) => res.once('close', resolve));
+
+    assert.equal(log.info.mock.calls.length, 0);
   });
 });
