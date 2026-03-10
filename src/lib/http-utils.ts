@@ -346,3 +346,18 @@ export function handleIfNoneMatch(req: Request, res: Response): boolean {
   }
   return false;
 }
+
+/**
+ * Normalizes Axios CanceledError to a standard AbortError. Axios wraps all
+ * AbortSignal-induced cancellations as CanceledError (code ERR_CANCELED),
+ * but the rest of the codebase checks error.name === 'AbortError'.
+ */
+export function normalizeAbortError(error: any): any {
+  if (error?.code === 'ERR_CANCELED') {
+    const abortError = new Error(error.message);
+    abortError.name = 'AbortError';
+    abortError.stack = error.stack;
+    return abortError;
+  }
+  return error;
+}

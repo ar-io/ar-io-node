@@ -26,6 +26,7 @@ import {
 import { headerNames } from '../constants.js';
 import { startChildSpan } from '../tracing.js';
 import { SpanStatusCode, Span } from '@opentelemetry/api';
+import { normalizeAbortError } from '../lib/http-utils.js';
 import { attachStallTimeout } from '../lib/stream.js';
 
 import * as metrics from '../metrics.js';
@@ -165,12 +166,12 @@ export class ArIODataSource implements ContiguousDataSource {
       attachStallTimeout(response.data, this.streamStallTimeoutMs);
 
       return response;
-    } catch (error) {
+    } catch (rawError) {
       clearTimeout(connectionTimer);
       if (signal) {
         signal.removeEventListener('abort', onClientAbort);
       }
-      throw error;
+      throw normalizeAbortError(rawError);
     }
   }
 
