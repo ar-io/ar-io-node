@@ -26,6 +26,7 @@ import {
 import { headerNames } from '../constants.js';
 import { startChildSpan } from '../tracing.js';
 import { SpanStatusCode, Span } from '@opentelemetry/api';
+import { attachStallTimeout } from '../lib/stream.js';
 
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
@@ -38,6 +39,7 @@ export class ArIODataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
+  private streamStallTimeoutMs: number;
   private peerManager: ArIOPeerManager;
   private dataAttributesStore: ContiguousDataAttributesStore;
   peers: Record<string, string> = {};
@@ -48,16 +50,19 @@ export class ArIODataSource implements ContiguousDataSource {
     dataAttributesStore,
     maxHopsAllowed = MAX_DATA_HOPS,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
   }: {
     log: winston.Logger;
     peerManager: ArIOPeerManager;
     dataAttributesStore: ContiguousDataAttributesStore;
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
+    streamStallTimeoutMs?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
+    this.streamStallTimeoutMs = streamStallTimeoutMs;
     this.peerManager = peerManager;
     this.dataAttributesStore = dataAttributesStore;
     this.peers = peerManager.getPeers();
@@ -112,36 +117,61 @@ export class ArIODataSource implements ContiguousDataSource {
   }): Promise<AxiosResponse> {
     const path = `/raw/${id}`;
 
-    // Combine timeout with client abort signal
-    const signals: AbortSignal[] = [AbortSignal.timeout(this.requestTimeoutMs)];
-    if (signal) signals.push(signal);
-    const combinedSignal = AbortSignal.any(signals);
-
-    const response = await axios.get(`${peerAddress}${path}`, {
-      headers: {
-        'Accept-Encoding': 'identity',
-        'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
-        ...headers,
-      },
-      responseType: 'stream',
-      signal: combinedSignal,
-      params: {
-        'ar-io-hops': requestAttributesHeaders?.attributes.hops,
-        'ar-io-origin': requestAttributesHeaders?.attributes.origin,
-        'ar-io-origin-release':
-          requestAttributesHeaders?.attributes.originNodeRelease,
-        'ar-io-arns-record': requestAttributesHeaders?.attributes.arnsRecord,
-        'ar-io-arns-basename':
-          requestAttributesHeaders?.attributes.arnsBasename,
-        'ar-io-via': requestAttributesHeaders?.attributes.via?.join(', '),
-      },
-    });
-
-    if (response.status !== 200) {
-      throw new Error(`Unexpected status code from peer: ${response.status}`);
+    // Connection phase: use AbortController with wall-clock timeout for
+    // establishing the connection, then switch to stall-based timeout once
+    // the stream starts flowing.
+    const controller = new AbortController();
+    const connectionTimer = setTimeout(
+      () => controller.abort(new Error('Connection timeout')),
+      this.requestTimeoutMs,
+    );
+    const onClientAbort = () => controller.abort(signal?.reason);
+    if (signal) {
+      signal.addEventListener('abort', onClientAbort, { once: true });
     }
 
-    return response;
+    try {
+      const response = await axios.get(`${peerAddress}${path}`, {
+        headers: {
+          'Accept-Encoding': 'identity',
+          'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
+          ...headers,
+        },
+        responseType: 'stream',
+        signal: controller.signal,
+        params: {
+          'ar-io-hops': requestAttributesHeaders?.attributes.hops,
+          'ar-io-origin': requestAttributesHeaders?.attributes.origin,
+          'ar-io-origin-release':
+            requestAttributesHeaders?.attributes.originNodeRelease,
+          'ar-io-arns-record': requestAttributesHeaders?.attributes.arnsRecord,
+          'ar-io-arns-basename':
+            requestAttributesHeaders?.attributes.arnsBasename,
+          'ar-io-via': requestAttributesHeaders?.attributes.via?.join(', '),
+        },
+      });
+
+      // Connection established - clear connection timeout and switch to
+      // stall-based timeout for the streaming phase
+      clearTimeout(connectionTimer);
+      if (signal) {
+        signal.removeEventListener('abort', onClientAbort);
+      }
+
+      if (response.status !== 200) {
+        throw new Error(`Unexpected status code from peer: ${response.status}`);
+      }
+
+      attachStallTimeout(response.data, this.streamStallTimeoutMs);
+
+      return response;
+    } catch (error) {
+      clearTimeout(connectionTimer);
+      if (signal) {
+        signal.removeEventListener('abort', onClientAbort);
+      }
+      throw error;
+    }
   }
 
   async getData({

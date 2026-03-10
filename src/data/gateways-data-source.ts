@@ -23,27 +23,32 @@ import { TrustedGatewayConfig } from '../config.js';
 import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
 import { buildRangeHeader, parseContentLength } from '../lib/http-utils.js';
+import { attachStallTimeout } from '../lib/stream.js';
 
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private trustedGateways: Map<number, string[]>;
   private gatewayTrust: Map<string, boolean>;
   private readonly requestTimeoutMs: number;
+  private readonly streamStallTimeoutMs: number;
   private readonly fallbackToBasePath: boolean;
 
   constructor({
     log,
     trustedGatewaysUrls,
     requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
+    streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
     fallbackToBasePath = false,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
     requestTimeoutMs?: number;
+    streamStallTimeoutMs?: number;
     fallbackToBasePath?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
+    this.streamStallTimeoutMs = streamStallTimeoutMs;
     this.fallbackToBasePath = fallbackToBasePath;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
@@ -180,12 +185,18 @@ export class GatewaysDataSource implements ContiguousDataSource {
             for (const pathPrefix of pathPrefixes) {
               const path = pathPrefix ? `${pathPrefix}/${id}` : `/${id}`;
 
-              // Combine timeout with client abort signal
-              const signals: AbortSignal[] = [
-                AbortSignal.timeout(this.requestTimeoutMs),
-              ];
-              if (signal) signals.push(signal);
-              const combinedSignal = AbortSignal.any(signals);
+              // Connection phase: use AbortController with wall-clock timeout
+              // for establishing the connection, then switch to stall-based
+              // timeout once the stream starts flowing.
+              const controller = new AbortController();
+              const connectionTimer = setTimeout(
+                () => controller.abort(new Error('Connection timeout')),
+                this.requestTimeoutMs,
+              );
+              const onClientAbort = () => controller.abort(signal?.reason);
+              if (signal) {
+                signal.addEventListener('abort', onClientAbort, { once: true });
+              }
 
               this.log.debug(
                 'Attempting to fetch contiguous data from gateway',
@@ -208,7 +219,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
 
               try {
                 const response = await gatewayAxios.request({
-                  signal: combinedSignal,
+                  signal: controller.signal,
                   method: 'GET',
                   headers: {
                     'Accept-Encoding': 'identity',
@@ -259,7 +270,15 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   );
                 }
 
+                // Connection established - clear connection timeout and
+                // switch to stall-based timeout for the streaming phase
+                clearTimeout(connectionTimer);
+                if (signal) {
+                  signal.removeEventListener('abort', onClientAbort);
+                }
+
                 const stream = response.data;
+                attachStallTimeout(stream, this.streamStallTimeoutMs);
                 const contentLength = parseContentLength(response.headers);
 
                 if (contentLength === undefined || contentLength === 0) {
@@ -341,6 +360,11 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   }),
                 };
               } catch (error: any) {
+                clearTimeout(connectionTimer);
+                if (signal) {
+                  signal.removeEventListener('abort', onClientAbort);
+                }
+
                 // Handle AbortError - distinguish client disconnect from timeout
                 if (error.name === 'AbortError') {
                   const isClientDisconnect = signal?.aborted === true;
