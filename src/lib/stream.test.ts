@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it, mock } from 'node:test';
+import { afterEach, describe, it, mock } from 'node:test';
 import { PassThrough, Readable } from 'node:stream';
 import {
   attachStallTimeout,
@@ -166,6 +166,10 @@ describe('attachStallTimeout', () => {
 });
 
 describe('pipeStreamToResponse', () => {
+  afterEach(() => {
+    mock.restoreAll();
+  });
+
   it('should pipe data to response', async () => {
     const stream = new PassThrough();
     const res = new PassThrough();
