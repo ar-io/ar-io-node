@@ -5,9 +5,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it } from 'node:test';
-import { Readable } from 'node:stream';
-import { ByteRangeTransform } from './stream.js';
+import { describe, it, mock } from 'node:test';
+import { PassThrough, Readable } from 'node:stream';
+import {
+  attachStallTimeout,
+  ByteRangeTransform,
+  pipeStreamToResponse,
+} from './stream.js';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe('ByteRangeTransform', () => {
   it('should transform a stream within the specified range', async () => {
@@ -69,5 +75,146 @@ describe('ByteRangeTransform', () => {
       result += chunk.toString();
     }
     assert.equal(result, '');
+  });
+});
+
+describe('attachStallTimeout', () => {
+  it('should destroy stream when no data arrives', async () => {
+    const stream = new PassThrough();
+    attachStallTimeout(stream, 50);
+    stream.resume();
+
+    await sleep(80);
+    assert.equal(stream.destroyed, true);
+  });
+
+  it('should reset timer on each chunk', async () => {
+    const stream = new PassThrough();
+    attachStallTimeout(stream, 50);
+    stream.resume();
+
+    // Write data before timeout expires
+    await sleep(30);
+    stream.write('chunk1');
+    await sleep(30);
+    assert.equal(stream.destroyed, false);
+
+    // Now let it stall
+    await sleep(80);
+    assert.equal(stream.destroyed, true);
+  });
+
+  it('should clear timer on pause', async () => {
+    const stream = new PassThrough();
+    attachStallTimeout(stream, 50);
+    stream.resume();
+    stream.pause();
+
+    await sleep(80);
+    assert.equal(stream.destroyed, false);
+
+    // Clean up
+    stream.destroy();
+  });
+
+  it('should re-arm timer on resume after pause', async () => {
+    const stream = new PassThrough();
+    attachStallTimeout(stream, 50);
+    // Stream starts paused, keep it paused
+    await sleep(80);
+    assert.equal(stream.destroyed, false);
+
+    // Now resume — timer should arm
+    stream.resume();
+    await sleep(80);
+    assert.equal(stream.destroyed, true);
+  });
+
+  it('should not fire after cleanup is called', async () => {
+    const stream = new PassThrough();
+    const cleanup = attachStallTimeout(stream, 50);
+    cleanup();
+    stream.resume();
+
+    await sleep(80);
+    assert.equal(stream.destroyed, false);
+
+    // Clean up
+    stream.destroy();
+  });
+
+  it('should auto-cleanup on stream end', async () => {
+    const stream = new PassThrough();
+    attachStallTimeout(stream, 50);
+
+    const listenersBefore = stream.listenerCount('data');
+    stream.end();
+    // 'end' fires cleanup, removing listeners
+    await sleep(10);
+    const listenersAfter = stream.listenerCount('data');
+    assert.equal(listenersAfter < listenersBefore, true);
+  });
+
+  it('should leave stream paused after attach', () => {
+    const stream = new PassThrough();
+    attachStallTimeout(stream, 50);
+    assert.equal(stream.isPaused(), true);
+
+    // Clean up
+    stream.destroy();
+  });
+});
+
+describe('pipeStreamToResponse', () => {
+  it('should pipe data to response', async () => {
+    const stream = new PassThrough();
+    const res = new PassThrough();
+    const log = { error: mock.fn() } as any;
+
+    pipeStreamToResponse(stream, res as any, log, 'test-id');
+
+    stream.write('hello');
+    stream.end();
+
+    let result = '';
+    for await (const chunk of res) {
+      result += chunk.toString();
+    }
+    assert.equal(result, 'hello');
+  });
+
+  it('should log and destroy response on stream error', async () => {
+    const stream = new PassThrough();
+    const res = new PassThrough();
+    const log = { error: mock.fn() } as any;
+
+    pipeStreamToResponse(stream, res as any, log, 'test-id');
+
+    stream.emit('error', new Error('upstream failure'));
+
+    assert.equal(log.error.mock.calls.length, 1);
+    assert.equal(
+      log.error.mock.calls[0].arguments[0],
+      'Stream error during data transfer:',
+    );
+    assert.deepEqual(log.error.mock.calls[0].arguments[1], {
+      dataId: 'test-id',
+      message: 'upstream failure',
+    });
+    assert.equal(res.destroyed, true);
+  });
+
+  it('should skip destroy if response already destroyed', () => {
+    const stream = new PassThrough();
+    const res = new PassThrough();
+    const log = { error: mock.fn() } as any;
+
+    pipeStreamToResponse(stream, res as any, log, 'test-id');
+
+    res.destroy();
+    // Should not throw
+    stream.emit('error', new Error('late error'));
+
+    assert.equal(log.error.mock.calls.length, 1);
   });
 });

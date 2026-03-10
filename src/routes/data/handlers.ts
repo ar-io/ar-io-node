@@ -10,6 +10,7 @@ import { Readable } from 'node:stream';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
 import { headerNames } from '../../constants.js';
+import { pipeStreamToResponse } from '../../lib/stream.js';
 import * as config from '../../config.js';
 import { release } from '../../version.js';
 import { tracer, context, trace } from '../../tracing.js';
@@ -674,16 +675,7 @@ const handleRangeRequest = async ({
         signal: req.signal,
       });
 
-      rangeData.stream.pipe(res);
-      rangeData.stream.once('error', (error) => {
-        log.error('Stream error during data transfer:', {
-          dataId: id,
-          message: error.message,
-        });
-        if (!res.destroyed) {
-          res.destroy();
-        }
-      });
+      pipeStreamToResponse(rangeData.stream, res, log, id);
     } else {
       // Get boundary from request (stored by data-handler-utils) or generate new one
       const boundary = (req as any).multipartBoundary ?? generateBoundary();
@@ -1045,16 +1037,7 @@ export const createRawDataHandler = ({
 
             span.setAttribute('http.status_code', res.statusCode || 200);
             span.addEvent('Streaming data to client');
-            data.stream.pipe(res);
-            data.stream.once('error', (error) => {
-              log.error('Stream error during data transfer:', {
-                dataId: id,
-                message: error.message,
-              });
-              if (!res.destroyed) {
-                res.destroy();
-              }
-            });
+            pipeStreamToResponse(data.stream, res, log, id);
           }
         } catch (error: any) {
           // Handle client disconnect (AbortError) specially
@@ -1264,16 +1247,7 @@ const sendManifestResponse = async ({
           return true;
         }
 
-        data.stream.pipe(res);
-        data.stream.once('error', (error) => {
-          log.error('Stream error during data transfer:', {
-            dataId: resolvedId,
-            message: error.message,
-          });
-          if (!res.destroyed) {
-            res.destroy();
-          }
-        });
+        pipeStreamToResponse(data.stream, res, log, resolvedId);
       }
     } catch (error: any) {
       log.error('Error retrieving data attributes:', {
@@ -1688,16 +1662,7 @@ export const createDataHandler = ({
 
           span.setAttribute('http.status_code', res.statusCode || 200);
           span.addEvent('Streaming data to client');
-          data.stream.pipe(res);
-          data.stream.once('error', (error) => {
-            log.error('Stream error during data transfer:', {
-              dataId: id,
-              message: error.message,
-            });
-            if (!res.destroyed) {
-              res.destroy();
-            }
-          });
+          pipeStreamToResponse(data.stream, res, log, id);
         }
       } catch (error: any) {
         // Handle client disconnect (AbortError) specially
