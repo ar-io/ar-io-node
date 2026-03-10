@@ -22,7 +22,11 @@ import * as config from '../config.js';
 import { TrustedGatewayConfig } from '../config.js';
 import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
-import { buildRangeHeader, parseContentLength } from '../lib/http-utils.js';
+import {
+  buildRangeHeader,
+  normalizeAbortError,
+  parseContentLength,
+} from '../lib/http-utils.js';
 import { attachStallTimeout } from '../lib/stream.js';
 
 export class GatewaysDataSource implements ContiguousDataSource {
@@ -278,14 +282,16 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 }
 
                 const stream = response.data;
-                attachStallTimeout(stream, this.streamStallTimeoutMs);
                 const contentLength = parseContentLength(response.headers);
 
                 if (contentLength === undefined || contentLength === 0) {
+                  stream.destroy();
                   throw new Error(
                     `Gateway response has no content-length or zero content-length for ${id}`,
                   );
                 }
+
+                attachStallTimeout(stream, this.streamStallTimeoutMs);
 
                 const gatewayTrusted =
                   this.gatewayTrust.get(gatewayUrl) ?? true;
@@ -359,11 +365,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
                     currentHops: requestAttributesHeaders?.attributes.hops,
                   }),
                 };
-              } catch (error: any) {
+              } catch (rawError: any) {
                 clearTimeout(connectionTimer);
                 if (signal) {
                   signal.removeEventListener('abort', onClientAbort);
                 }
+                const error = normalizeAbortError(rawError);
 
                 // Handle AbortError - distinguish client disconnect from timeout
                 if (error.name === 'AbortError') {
