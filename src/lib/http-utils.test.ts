@@ -13,6 +13,7 @@ import {
   calculateRangeResponseSize,
   generateBoundary,
   handleIfNoneMatch,
+  normalizeAbortError,
   parseContentLength,
   parseContentRange,
   parseNonNegativeInt,
@@ -696,6 +697,35 @@ describe('http-utils', () => {
     it('should handle leading zeros', () => {
       assert.equal(parseNonNegativeInt('00123'), 123);
       assert.equal(parseNonNegativeInt('0000'), 0);
+    });
+  });
+
+  describe('normalizeAbortError', () => {
+    it('should convert ERR_CANCELED to AbortError', () => {
+      const original = new Error('Request aborted');
+      (original as any).code = 'ERR_CANCELED';
+      const originalStack = original.stack;
+
+      const result = normalizeAbortError(original);
+
+      assert.equal(result.name, 'AbortError');
+      assert.equal(result.message, 'Request aborted');
+      assert.equal(result.stack, originalStack);
+      assert.notEqual(result, original);
+    });
+
+    it('should pass through non-canceled errors unchanged', () => {
+      const original = new Error('Some other error');
+      (original as any).code = 'ECONNREFUSED';
+
+      const result = normalizeAbortError(original);
+
+      assert.equal(result, original);
+    });
+
+    it('should pass through null and undefined', () => {
+      assert.equal(normalizeAbortError(null), null);
+      assert.equal(normalizeAbortError(undefined), undefined);
     });
   });
 });

@@ -5,12 +5,18 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { ServerResponse } from 'node:http';
 import { Readable, Transform, TransformCallback } from 'node:stream';
+import * as winston from 'winston';
 
 /**
  * Attaches a stall timeout to a readable stream. If no 'data' event fires
  * within `stallTimeoutMs`, the stream is destroyed with an error. The timer
  * resets on every chunk, so active transfers are never interrupted.
+ *
+ * **Side effect:** The stream is paused after attaching because adding a
+ * `'data'` listener switches it to flowing mode. Callers must call
+ * `stream.pipe()` or `stream.resume()` to start flowing.
  *
  * Returns a cleanup function that clears the timer and removes listeners.
  */
@@ -36,7 +42,9 @@ export function attachStallTimeout(
     }, stallTimeoutMs);
   };
   const onResume = () => {
-    armTimer();
+    if (stream.readableFlowing === true) {
+      armTimer();
+    }
   };
   const onPause = () => {
     // Backpressure pauses should not count as upstream stalls.
@@ -75,6 +83,28 @@ export function attachStallTimeout(
   stream.once('error', cleanup);
   stream.once('close', cleanup);
   return cleanup;
+}
+
+/**
+ * Pipes a readable stream to an HTTP response, logging and destroying
+ * the response on stream error.
+ */
+export function pipeStreamToResponse(
+  stream: Readable,
+  res: ServerResponse,
+  log: winston.Logger,
+  dataId: string,
+): void {
+  stream.pipe(res);
+  stream.once('error', (error) => {
+    log.error('Stream error during data transfer:', {
+      dataId,
+      message: error.message,
+    });
+    if (!res.destroyed) {
+      res.destroy();
+    }
+  });
 }
 
 export class ByteRangeTransform extends Transform {
