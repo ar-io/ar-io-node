@@ -4,13 +4,77 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 72] - 2026-03-11
 
 ### Added
 
+- **Negative Data Cache**: Two-phase cache that tracks data IDs consistently
+  missing across configurable thresholds and short-circuits future requests with
+  404 responses, reducing upstream load during outages and for permanently
+  unavailable data
+  - Includes exponential backoff with fast re-promotion, health gating to
+    prevent false positives during upstream outages, and TTL-based miss tracker
+    eviction
+  - Controlled via `NEGATIVE_CACHE_ENABLED` (default: true),
+    `NEGATIVE_CACHE_MAX_SIZE`, `NEGATIVE_CACHE_TTL_MS`,
+    `NEGATIVE_CACHE_MISS_THRESHOLD_MS`, and
+    `NEGATIVE_CACHE_MISS_COUNT_THRESHOLD`
+
+- **Direct Byte Offset Hints for Data Item Retrieval**: Clients can supply
+  `X-AR-IO-Root-Transaction-Id`, `X-AR-IO-Root-Path`,
+  `X-AR-IO-Root-Data-Offset`, and `X-AR-IO-Root-Data-Size` headers to bypass
+  server-side bundle lookups and resolve data items via direct byte offsets
+  - Includes `fetch-with-hint` CLI tool for resolving hints via GraphQL
+
+- **DATA_CACHED Webhook Event**: Emits a webhook when data is cached for the
+  first time, enabling external content moderation sidecars (e.g., phishing
+  scanners)
+  - Opt-in via `WEBHOOK_EMIT_DATA_CACHED_EVENTS=true` (default: false)
+
+- **Untrusted Data Caching with Stochastic Re-verification**: Caches all
+  upstream data optimistically instead of only when a hash exists locally, with
+  configurable background re-verification rates to ensure integrity
+  - Controlled via `UNTRUSTED_CACHE_RETRY_RATE` (default: 0.1) and
+    `TRUSTED_CACHE_RETRY_RATE` (default: 0.0)
+  - Evicts data on hash mismatch to maintain integrity
+
+- **12-Hour Cache-Control Tier**: New middle tier for data that is unstable but
+  from a trusted source (e.g., trusted bundlers), providing a three-tier system:
+  stable (30d, immutable) > unstable trusted (12h) > unstable (2h)
+
+- **Chunk Broadcast Improvements**: All 5 tip nodes (tip-1 through tip-5) are
+  now included in default preferred chunk POST nodes, with shuffled ordering and
+  a minimum success requirement
+  - Controlled via `CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT` (default: 2)
+
+- **OTEL Resource Attributes Passthrough**: Operators can set custom
+  OpenTelemetry resource attributes via the standard
+  `OTEL_RESOURCE_ATTRIBUTES` environment variable, with env var values
+  overriding auto-detected attributes
+
 ### Changed
 
+- Default `CDB64_REMOTE_RETRIEVAL_ORDER` changed to `'chunks'` only, removing
+  gateways from the default order since range requests aren't effectively cached
+  on gateways
+
 ### Fixed
+
+- **Stream Reliability Improvements**: Replaced wall-clock stream timeouts with
+  backpressure-aware stall-based timeouts (30s no-data threshold), preventing
+  false kills and truncated responses on large or slow transfers
+  - Extracted `pipeStreamToResponse` helper for consistent stream pipe and error
+    handling across routes
+
+- Fixed Axios `CanceledError` not being normalized to `AbortError`, causing
+  incorrect upstream disconnection handling
+
+- Fixed streams not being destroyed on unexpected HTTP status codes from peers,
+  preventing socket leaks
+
+- Added 206 Partial Content acceptance for ranged peer requests
+
+- Fixed upstream stream not being destroyed on premature client disconnect
 
 ## [Release 71] - 2026-02-26
 
