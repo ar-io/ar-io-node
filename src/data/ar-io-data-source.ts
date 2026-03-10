@@ -159,7 +159,8 @@ export class ArIODataSource implements ContiguousDataSource {
         signal.removeEventListener('abort', onClientAbort);
       }
 
-      if (response.status !== 200) {
+      if (response.status !== 200 && response.status !== 206) {
+        response.data.destroy();
         throw new Error(`Unexpected status code from peer: ${response.status}`);
       }
 
