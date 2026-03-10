@@ -105,6 +105,12 @@ export function pipeStreamToResponse(
       res.destroy();
     }
   });
+  res.once('close', () => {
+    if (!res.writableFinished && !stream.destroyed) {
+      log.info('Client disconnected, destroying upstream stream', { dataId });
+      stream.destroy();
+    }
+  });
 }
 
 export class ByteRangeTransform extends Transform {
