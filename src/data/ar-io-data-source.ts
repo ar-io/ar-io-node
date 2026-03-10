@@ -127,7 +127,9 @@ export class ArIODataSource implements ContiguousDataSource {
       this.requestTimeoutMs,
     );
     const onClientAbort = () => controller.abort(signal?.reason);
-    if (signal) {
+    if (signal?.aborted) {
+      onClientAbort();
+    } else if (signal) {
       signal.addEventListener('abort', onClientAbort, { once: true });
     }
 
