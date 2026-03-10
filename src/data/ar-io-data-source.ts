@@ -315,8 +315,9 @@ export class ArIODataSource implements ContiguousDataSource {
             region,
           });
         } catch (error: any) {
-          // Re-throw AbortError immediately - don't try next peer
-          if (error.name === 'AbortError') {
+          // Re-throw AbortError only for genuine client disconnects -
+          // connection timeouts also produce AbortError but should retry
+          if (error.name === 'AbortError' && signal?.aborted) {
             span.addEvent('Request aborted', {
               'ario.peer.url': currentPeer,
               'ario.peer.index': i,
