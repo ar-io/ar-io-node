@@ -9,6 +9,7 @@ import winston from 'winston';
 import {
   generateRequestAttributes,
   parseRequestAttributesHeaders,
+  validateHopCount,
 } from '../lib/request-attributes.js';
 import { shuffleArray } from '../lib/random.js';
 import {
@@ -29,6 +30,8 @@ import {
 } from '../lib/http-utils.js';
 import { attachStallTimeout } from '../lib/stream.js';
 
+const MAX_DATA_HOPS = 3;
+
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private trustedGateways: Map<number, string[]>;
@@ -36,6 +39,8 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private readonly requestTimeoutMs: number;
   private readonly streamStallTimeoutMs: number;
   private readonly fallbackToBasePath: boolean;
+  private readonly ownOrigin?: string;
+  private readonly maxHopsAllowed: number;
 
   constructor({
     log,
@@ -43,17 +48,23 @@ export class GatewaysDataSource implements ContiguousDataSource {
     requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
     streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
     fallbackToBasePath = false,
+    ownOrigin,
+    maxHopsAllowed = MAX_DATA_HOPS,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
     requestTimeoutMs?: number;
     streamStallTimeoutMs?: number;
     fallbackToBasePath?: boolean;
+    ownOrigin?: string;
+    maxHopsAllowed?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
     this.streamStallTimeoutMs = streamStallTimeoutMs;
     this.fallbackToBasePath = fallbackToBasePath;
+    this.ownOrigin = ownOrigin;
+    this.maxHopsAllowed = maxHopsAllowed;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -109,6 +120,20 @@ export class GatewaysDataSource implements ContiguousDataSource {
       // Skip remote forwarding for compute-origin requests to prevent loops
       if (requestAttributes?.skipRemoteForwarding) {
         throw new Error('Remote forwarding skipped for compute-origin request');
+      }
+
+      // Origin self-detection: reject if request originated from this node
+      if (
+        this.ownOrigin != null &&
+        requestAttributes?.origin != null &&
+        requestAttributes.origin.toLowerCase() === this.ownOrigin.toLowerCase()
+      ) {
+        throw new Error('Request originated from this gateway');
+      }
+
+      // Hop count validation
+      if (requestAttributes !== undefined) {
+        validateHopCount(requestAttributes.hops, this.maxHopsAllowed);
       }
 
       const pathPrefixes = this.fallbackToBasePath ? ['/raw', ''] : ['/raw'];
