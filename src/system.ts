@@ -547,13 +547,11 @@ export const bundleRepairWorker = new BundleRepairWorker({
 const baseGatewaysDataSource = new GatewaysDataSource({
   log,
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
-  ownOrigin: config.ARNS_ROOT_HOST,
 });
 
 const rootBundleGatewaysDataSource = new GatewaysDataSource({
   log,
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
-  ownOrigin: config.ARNS_ROOT_HOST,
   fallbackToBasePath: true,
 });
 

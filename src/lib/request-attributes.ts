@@ -24,7 +24,7 @@ export function detectLoopInViaChain(
   selfIdentity: string,
 ): boolean {
   const normalizedSelf = selfIdentity.toLowerCase();
-  return via.some((entry) => entry === normalizedSelf);
+  return via.some((entry) => entry.toLowerCase() === normalizedSelf);
 }
 
 export function validateHopCount(currentHops: number, maxHops: number): void {

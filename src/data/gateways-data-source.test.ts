@@ -772,67 +772,105 @@ describe('GatewayDataSource', () => {
       });
     });
 
-    describe('origin loop detection', () => {
-      it('should throw when requestAttributes.origin matches ownOrigin', async () => {
+    describe('via loop detection', () => {
+      it('should skip gateways already present in the via chain', async () => {
         const ds = new GatewaysDataSource({
           log,
           trustedGatewaysUrls: {
-            'https://gateway.domain': { priority: 1, trusted: true },
+            'https://gateway-a.example.com': { priority: 1, trusted: true },
+            'https://gateway-b.example.com': { priority: 2, trusted: true },
           },
-          ownOrigin: 'my-gateway.example.com',
         });
 
-        await assert.rejects(
-          ds.getData({
-            id: 'test-id',
-            requestAttributes: { hops: 0, origin: 'my-gateway.example.com' },
-          }),
-          /Request originated from this gateway/,
-        );
-      });
-
-      it('should throw with case-insensitive origin match', async () => {
-        const ds = new GatewaysDataSource({
-          log,
-          trustedGatewaysUrls: {
-            'https://gateway.domain': { priority: 1, trusted: true },
+        const requestLog: string[] = [];
+        mock.method(axios, 'create', (config: any) => ({
+          request: async () => {
+            requestLog.push(config.baseURL);
+            return {
+              status: 200,
+              data: axiosStreamData,
+              headers: {
+                'content-length': '123',
+                'content-type': 'application/json',
+                'X-AR-IO-Origin': 'node-url',
+              },
+            };
           },
-          ownOrigin: 'My-Gateway.Example.COM',
-        });
-
-        await assert.rejects(
-          ds.getData({
-            id: 'test-id',
-            requestAttributes: { hops: 0, origin: 'my-gateway.example.com' },
-          }),
-          /Request originated from this gateway/,
-        );
-      });
-
-      it('should allow requests with different origin', async () => {
-        const ds = new GatewaysDataSource({
-          log,
-          trustedGatewaysUrls: {
-            'https://gateway.domain': { priority: 1, trusted: true },
-          },
-          ownOrigin: 'my-gateway.example.com',
-        });
+          ...axiosMockCommonParams(config),
+        }));
 
         const data = await ds.getData({
           id: 'test-id',
-          requestAttributes: { hops: 0, origin: 'other-gateway.example.com' },
+          requestAttributes: { hops: 0, via: ['gateway-a.example.com'] },
+        });
+
+        assert.equal(data.size, 123);
+        assert.deepEqual(requestLog, ['https://gateway-b.example.com']);
+      });
+
+      it('should treat via matches case-insensitively', async () => {
+        const ds = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway-a.example.com': { priority: 1, trusted: true },
+            'https://gateway-b.example.com': { priority: 2, trusted: true },
+          },
+        });
+
+        const requestLog: string[] = [];
+        mock.method(axios, 'create', (config: any) => ({
+          request: async () => {
+            requestLog.push(config.baseURL);
+            return {
+              status: 200,
+              data: axiosStreamData,
+              headers: {
+                'content-length': '123',
+                'content-type': 'application/json',
+                'X-AR-IO-Origin': 'node-url',
+              },
+            };
+          },
+          ...axiosMockCommonParams(config),
+        }));
+
+        const data = await ds.getData({
+          id: 'test-id',
+          requestAttributes: { hops: 0, via: ['GATEWAY-A.EXAMPLE.COM'] },
+        });
+
+        assert.equal(data.size, 123);
+        assert.deepEqual(requestLog, ['https://gateway-b.example.com']);
+      });
+
+      it('should allow forwarding when the target gateway is not in the via chain', async () => {
+        const data = await dataSource.getData({
+          id: 'test-id',
+          requestAttributes: { hops: 0, via: ['other-gateway.example.com'] },
         });
 
         assert.equal(data.size, 123);
       });
 
-      it('should allow requests when ownOrigin is not configured', async () => {
-        const data = await dataSource.getData({
-          id: 'test-id',
-          requestAttributes: { hops: 0, origin: 'any-origin' },
+      it('should throw when all gateways are already present in the via chain', async () => {
+        const ds = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway-a.example.com': { priority: 1, trusted: true },
+            'https://gateway-b.example.com': { priority: 2, trusted: true },
+          },
         });
 
-        assert.equal(data.size, 123);
+        await assert.rejects(
+          ds.getData({
+            id: 'test-id',
+            requestAttributes: {
+              hops: 0,
+              via: ['gateway-a.example.com', 'gateway-b.example.com'],
+            },
+          }),
+          /All gateways failed to respond/,
+        );
       });
     });
 
