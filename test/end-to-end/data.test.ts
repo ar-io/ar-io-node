@@ -732,14 +732,14 @@ describe('X-AR-IO headers', function () {
         `http://localhost:${corePort}/raw/${tx3}`,
         {
           headers: {
-            'X-AR-IO-Hops': '5',
+            'X-AR-IO-Hops': '1',
             'X-AR-IO-Origin': 'another-host',
             'X-AR-IO-Origin-Node-Release': '20',
           },
         },
       );
 
-      assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '7');
+      assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '3');
     });
 
     it('Verifying that /<id> returns expected response', async function () {
@@ -755,14 +755,14 @@ describe('X-AR-IO headers', function () {
         {
           headers: {
             Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
-            'X-AR-IO-Hops': '10',
+            'X-AR-IO-Hops': '1',
             'X-AR-IO-Origin': 'another-host',
             'X-AR-IO-Origin-Node-Release': '20',
           },
         },
       );
 
-      assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '12');
+      assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '3');
     });
   });
 });
