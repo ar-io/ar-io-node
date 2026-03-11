@@ -52,6 +52,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `OTEL_RESOURCE_ATTRIBUTES` environment variable, with env var values
   overriding auto-detected attributes
 
+- **Gateway Loop Prevention**: Per-gateway via-chain detection skips individual
+  gateways already visited in the request path, with hop count validation
+  against `MAX_DATA_HOPS` (3) as defense-in-depth. Client IP, forwarded IPs,
+  and via header are now included as OTEL span attributes for observability.
+
 ### Changed
 
 - Default `CDB64_REMOTE_RETRIEVAL_ORDER` changed to `'chunks'` only, removing
@@ -75,6 +80,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added 206 Partial Content acceptance for ranged peer requests
 
 - Fixed upstream stream not being destroyed on premature client disconnect
+
+- Fixed `detectLoopInViaChain` to lowercase via entries for proper
+  case-insensitive matching
 
 ## [Release 71] - 2026-02-26
 
