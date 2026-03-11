@@ -822,6 +822,9 @@ export const createRawDataHandler = ({
         'data.request.id': id,
         'arns.name': requestAttributes?.arnsName,
         'arns.basename': requestAttributes?.arnsBasename,
+        'client.ip': requestAttributes?.clientIp ?? 'unknown',
+        'client.ips': requestAttributes?.clientIps?.join(','),
+        'request.via': requestAttributes?.via?.join(','),
       },
     });
 
@@ -1309,6 +1312,9 @@ export const createDataHandler = ({
         'data.request.manifest_path': manifestPath,
         'arns.name': requestAttributes?.arnsName,
         'arns.basename': requestAttributes?.arnsBasename,
+        'client.ip': requestAttributes?.clientIp ?? 'unknown',
+        'client.ips': requestAttributes?.clientIps?.join(','),
+        'request.via': requestAttributes?.via?.join(','),
       },
     });
 
