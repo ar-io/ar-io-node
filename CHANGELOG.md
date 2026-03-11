@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
 ## [Release 72] - 2026-03-11
 
 This is a **recommended release** focused on **data retrieval reliability** and **caching intelligence**. Key highlights include a **negative data cache** that reduces upstream load for consistently missing data, **direct byte offset hints** to help gateways locate data when internal lookup mechanisms fall short, **untrusted data caching with stochastic re-verification**, and significant **stream reliability improvements** that eliminate false timeouts on large transfers. It also adds **gateway loop prevention** via per-gateway via-chain detection.
