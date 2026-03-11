@@ -198,16 +198,19 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+/** Whether to disable aborting trusted-gateway requests when they exceed the timeout. */
 export const TRUSTED_GATEWAYS_DISABLE_REQUEST_TIMEOUT_ABORTS =
   env.varOrDefault(
     'TRUSTED_GATEWAYS_DISABLE_REQUEST_TIMEOUT_ABORTS',
     'false',
   ) === 'true';
 
+/** Whether to disable aborting trusted-gateway streams that stall beyond the stall timeout. */
 export const TRUSTED_GATEWAYS_DISABLE_STREAM_STALL_ABORTS =
   env.varOrDefault('TRUSTED_GATEWAYS_DISABLE_STREAM_STALL_ABORTS', 'false') ===
   'true';
 
+/** Whether to disable the per-request AbortSignal that fires on client disconnect. */
 export const DISABLE_REQUEST_ABORT_SIGNAL =
   env.varOrDefault('DISABLE_REQUEST_ABORT_SIGNAL', 'false') === 'true';
 

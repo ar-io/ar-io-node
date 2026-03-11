@@ -16,6 +16,8 @@ import { Handler, Request, Response } from 'express';
  *
  * This allows downstream operations to be cancelled when clients disconnect,
  * preventing wasted work on requests that will never be delivered.
+ *
+ * @param options.disableRequestAbortSignal When true, the signal is never aborted on client disconnect.
  */
 export function createAbortSignalMiddleware({
   disableRequestAbortSignal = false,

@@ -116,6 +116,25 @@ describe('Trusted gateway timeout config', () => {
     );
   });
 
+  it('should default stream stall abort disabling to false', async () => {
+    delete process.env.TRUSTED_GATEWAYS_DISABLE_STREAM_STALL_ABORTS;
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.strictEqual(
+      config.TRUSTED_GATEWAYS_DISABLE_STREAM_STALL_ABORTS,
+      false,
+    );
+  });
+
+  it('should default global request abort signal disabling to false', async () => {
+    delete process.env.DISABLE_REQUEST_ABORT_SIGNAL;
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.strictEqual(config.DISABLE_REQUEST_ABORT_SIGNAL, false);
+  });
+
   it('should parse stream stall abort disabling when enabled', async () => {
     process.env.TRUSTED_GATEWAYS_DISABLE_STREAM_STALL_ABORTS = 'true';
 
