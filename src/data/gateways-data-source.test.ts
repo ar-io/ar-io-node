@@ -772,6 +772,101 @@ describe('GatewayDataSource', () => {
       });
     });
 
+    describe('origin loop detection', () => {
+      it('should throw when requestAttributes.origin matches ownOrigin', async () => {
+        const ds = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway.domain': { priority: 1, trusted: true },
+          },
+          ownOrigin: 'my-gateway.example.com',
+        });
+
+        await assert.rejects(
+          ds.getData({
+            id: 'test-id',
+            requestAttributes: { hops: 0, origin: 'my-gateway.example.com' },
+          }),
+          /Request originated from this gateway/,
+        );
+      });
+
+      it('should throw with case-insensitive origin match', async () => {
+        const ds = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway.domain': { priority: 1, trusted: true },
+          },
+          ownOrigin: 'My-Gateway.Example.COM',
+        });
+
+        await assert.rejects(
+          ds.getData({
+            id: 'test-id',
+            requestAttributes: { hops: 0, origin: 'my-gateway.example.com' },
+          }),
+          /Request originated from this gateway/,
+        );
+      });
+
+      it('should allow requests with different origin', async () => {
+        const ds = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway.domain': { priority: 1, trusted: true },
+          },
+          ownOrigin: 'my-gateway.example.com',
+        });
+
+        const data = await ds.getData({
+          id: 'test-id',
+          requestAttributes: { hops: 0, origin: 'other-gateway.example.com' },
+        });
+
+        assert.equal(data.size, 123);
+      });
+
+      it('should allow requests when ownOrigin is not configured', async () => {
+        const data = await dataSource.getData({
+          id: 'test-id',
+          requestAttributes: { hops: 0, origin: 'any-origin' },
+        });
+
+        assert.equal(data.size, 123);
+      });
+    });
+
+    describe('hop count validation', () => {
+      it('should throw when hops exceeds max', async () => {
+        await assert.rejects(
+          dataSource.getData({
+            id: 'test-id',
+            requestAttributes: { hops: 10 },
+          }),
+          /Maximum hops \(3\) exceeded/,
+        );
+      });
+
+      it('should throw when hops equals max', async () => {
+        await assert.rejects(
+          dataSource.getData({
+            id: 'test-id',
+            requestAttributes: { hops: 3 },
+          }),
+          /Maximum hops \(3\) exceeded/,
+        );
+      });
+
+      it('should allow hops below max and increment hops in response', async () => {
+        const data = await dataSource.getData({
+          id: 'test-id',
+          requestAttributes: { hops: 2 },
+        });
+
+        assert.equal(data.requestAttributes?.hops, 3);
+      });
+    });
+
     describe('per-gateway trust flag', () => {
       it('should return trusted: true for a trusted gateway', async () => {
         const trustedDataSource = new GatewaysDataSource({
