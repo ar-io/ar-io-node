@@ -93,6 +93,49 @@ describe('Config auto-unbundling behavior', () => {
   });
 });
 
+describe('Trusted gateway timeout config', () => {
+  it('should default timeout abort disabling to false', async () => {
+    delete process.env.TRUSTED_GATEWAYS_DISABLE_REQUEST_TIMEOUT_ABORTS;
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.strictEqual(
+      config.TRUSTED_GATEWAYS_DISABLE_REQUEST_TIMEOUT_ABORTS,
+      false,
+    );
+  });
+
+  it('should parse timeout abort disabling when enabled', async () => {
+    process.env.TRUSTED_GATEWAYS_DISABLE_REQUEST_TIMEOUT_ABORTS = 'true';
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.strictEqual(
+      config.TRUSTED_GATEWAYS_DISABLE_REQUEST_TIMEOUT_ABORTS,
+      true,
+    );
+  });
+
+  it('should parse stream stall abort disabling when enabled', async () => {
+    process.env.TRUSTED_GATEWAYS_DISABLE_STREAM_STALL_ABORTS = 'true';
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.strictEqual(
+      config.TRUSTED_GATEWAYS_DISABLE_STREAM_STALL_ABORTS,
+      true,
+    );
+  });
+
+  it('should parse global request abort signal disabling when enabled', async () => {
+    process.env.DISABLE_REQUEST_ABORT_SIGNAL = 'true';
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.strictEqual(config.DISABLE_REQUEST_ABORT_SIGNAL, true);
+  });
+});
+
 describe('Rate limiter ArNS allowlist configuration', () => {
   it('should return empty array when no allowlist is set', async () => {
     delete process.env.RATE_LIMITER_ARNS_ALLOWLIST;

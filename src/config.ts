@@ -198,6 +198,19 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+export const TRUSTED_GATEWAYS_DISABLE_REQUEST_TIMEOUT_ABORTS =
+  env.varOrDefault(
+    'TRUSTED_GATEWAYS_DISABLE_REQUEST_TIMEOUT_ABORTS',
+    'false',
+  ) === 'true';
+
+export const TRUSTED_GATEWAYS_DISABLE_STREAM_STALL_ABORTS =
+  env.varOrDefault('TRUSTED_GATEWAYS_DISABLE_STREAM_STALL_ABORTS', 'false') ===
+  'true';
+
+export const DISABLE_REQUEST_ABORT_SIGNAL =
+  env.varOrDefault('DISABLE_REQUEST_ABORT_SIGNAL', 'false') === 'true';
+
 export const STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
   'STREAM_STALL_TIMEOUT_MS',
   1000 * 30, // 30 seconds

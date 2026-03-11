@@ -17,16 +17,22 @@ import { Handler, Request, Response } from 'express';
  * This allows downstream operations to be cancelled when clients disconnect,
  * preventing wasted work on requests that will never be delivered.
  */
-export function createAbortSignalMiddleware(): Handler {
+export function createAbortSignalMiddleware({
+  disableRequestAbortSignal = false,
+}: {
+  disableRequestAbortSignal?: boolean;
+} = {}): Handler {
   return (req: Request, res: Response, next) => {
     const controller = new AbortController();
 
-    // Abort when client disconnects before response completes
-    req.on('close', () => {
-      if (!res.writableEnded) {
-        controller.abort();
-      }
-    });
+    if (!disableRequestAbortSignal) {
+      // Abort when client disconnects before response completes
+      req.on('close', () => {
+        if (!res.writableEnded) {
+          controller.abort();
+        }
+      });
+    }
 
     // Attach signal to request for use by handlers
     req.signal = controller.signal;

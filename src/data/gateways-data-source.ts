@@ -38,6 +38,8 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private trustedGateways: Map<number, string[]>;
   private gatewayTrust: Map<string, boolean>;
   private readonly requestTimeoutMs: number;
+  private readonly disableRequestTimeoutAborts: boolean;
+  private readonly disableStreamStallAborts: boolean;
   private readonly streamStallTimeoutMs: number;
   private readonly fallbackToBasePath: boolean;
   private readonly maxHopsAllowed: number;
@@ -46,6 +48,8 @@ export class GatewaysDataSource implements ContiguousDataSource {
     log,
     trustedGatewaysUrls,
     requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
+    disableRequestTimeoutAborts = config.TRUSTED_GATEWAYS_DISABLE_REQUEST_TIMEOUT_ABORTS,
+    disableStreamStallAborts = config.TRUSTED_GATEWAYS_DISABLE_STREAM_STALL_ABORTS,
     streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
     fallbackToBasePath = false,
     maxHopsAllowed = MAX_DATA_HOPS,
@@ -53,12 +57,16 @@ export class GatewaysDataSource implements ContiguousDataSource {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
     requestTimeoutMs?: number;
+    disableRequestTimeoutAborts?: boolean;
+    disableStreamStallAborts?: boolean;
     streamStallTimeoutMs?: number;
     fallbackToBasePath?: boolean;
     maxHopsAllowed?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
+    this.disableRequestTimeoutAborts = disableRequestTimeoutAborts;
+    this.disableStreamStallAborts = disableStreamStallAborts;
     this.streamStallTimeoutMs = streamStallTimeoutMs;
     this.fallbackToBasePath = fallbackToBasePath;
     this.maxHopsAllowed = maxHopsAllowed;
@@ -105,6 +113,10 @@ export class GatewaysDataSource implements ContiguousDataSource {
           'arns.basename': requestAttributes?.arnsBasename,
           'gateways.config.priority_tiers': this.trustedGateways.size,
           'gateways.config.request_timeout_ms': this.requestTimeoutMs,
+          'gateways.config.disable_request_timeout_aborts':
+            this.disableRequestTimeoutAborts,
+          'gateways.config.disable_stream_stall_aborts':
+            this.disableStreamStallAborts,
         },
       },
       parentSpan,
@@ -218,10 +230,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
               // for establishing the connection, then switch to stall-based
               // timeout once the stream starts flowing.
               const controller = new AbortController();
-              const connectionTimer = setTimeout(
-                () => controller.abort(new Error('Connection timeout')),
-                this.requestTimeoutMs,
-              );
+              const connectionTimer = this.disableRequestTimeoutAborts
+                ? undefined
+                : setTimeout(
+                    () => controller.abort(new Error('Connection timeout')),
+                    this.requestTimeoutMs,
+                  );
               const onClientAbort = () => controller.abort(signal?.reason);
               if (signal?.aborted) {
                 onClientAbort();
@@ -304,7 +318,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
 
                 // Connection established - clear connection timeout and
                 // switch to stall-based timeout for the streaming phase
-                clearTimeout(connectionTimer);
+                if (connectionTimer !== undefined) {
+                  clearTimeout(connectionTimer);
+                }
                 if (signal) {
                   signal.removeEventListener('abort', onClientAbort);
                 }
@@ -319,7 +335,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   );
                 }
 
-                attachStallTimeout(stream, this.streamStallTimeoutMs);
+                if (!this.disableStreamStallAborts) {
+                  attachStallTimeout(stream, this.streamStallTimeoutMs);
+                }
 
                 const gatewayTrusted =
                   this.gatewayTrust.get(gatewayUrl) ?? true;
@@ -394,7 +412,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   }),
                 };
               } catch (rawError: any) {
-                clearTimeout(connectionTimer);
+                if (connectionTimer !== undefined) {
+                  clearTimeout(connectionTimer);
+                }
                 if (signal) {
                   signal.removeEventListener('abort', onClientAbort);
                 }

@@ -71,7 +71,11 @@ app.use(
 );
 
 // Attach AbortSignal to all requests for client disconnect handling
-app.use(createAbortSignalMiddleware());
+app.use(
+  createAbortSignalMiddleware({
+    disableRequestAbortSignal: config.DISABLE_REQUEST_ABORT_SIGNAL,
+  }),
+);
 
 app.use(
   createX402Router({
