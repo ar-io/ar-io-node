@@ -7,6 +7,7 @@
 import { default as axios } from 'axios';
 import winston from 'winston';
 import {
+  detectLoopInViaChain,
   generateRequestAttributes,
   parseRequestAttributesHeaders,
   validateHopCount,
@@ -39,7 +40,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private readonly requestTimeoutMs: number;
   private readonly streamStallTimeoutMs: number;
   private readonly fallbackToBasePath: boolean;
-  private readonly ownOrigin?: string;
   private readonly maxHopsAllowed: number;
 
   constructor({
@@ -48,7 +48,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
     requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
     streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
     fallbackToBasePath = false,
-    ownOrigin,
     maxHopsAllowed = MAX_DATA_HOPS,
   }: {
     log: winston.Logger;
@@ -56,14 +55,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
     requestTimeoutMs?: number;
     streamStallTimeoutMs?: number;
     fallbackToBasePath?: boolean;
-    ownOrigin?: string;
     maxHopsAllowed?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
     this.streamStallTimeoutMs = streamStallTimeoutMs;
     this.fallbackToBasePath = fallbackToBasePath;
-    this.ownOrigin = ownOrigin;
     this.maxHopsAllowed = maxHopsAllowed;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
@@ -122,15 +119,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
         throw new Error('Remote forwarding skipped for compute-origin request');
       }
 
-      // Origin self-detection: reject if request originated from this node
-      if (
-        this.ownOrigin != null &&
-        requestAttributes?.origin != null &&
-        requestAttributes.origin.toLowerCase() === this.ownOrigin.toLowerCase()
-      ) {
-        throw new Error('Request originated from this gateway');
-      }
-
       // Hop count validation
       if (requestAttributes !== undefined) {
         validateHopCount(requestAttributes.hops, this.maxHopsAllowed);
@@ -167,6 +155,18 @@ export class GatewaysDataSource implements ContiguousDataSource {
           for (const gatewayUrl of shuffledGateways) {
             // Check for abort before each gateway attempt
             signal?.throwIfAborted();
+
+            const gatewayHostname = new URL(gatewayUrl).hostname.toLowerCase();
+            if (
+              requestAttributes?.via != null &&
+              detectLoopInViaChain(requestAttributes.via, gatewayHostname)
+            ) {
+              this.log.debug('Skipping gateway already present in via chain', {
+                gatewayUrl,
+                via: requestAttributes.via,
+              });
+              continue;
+            }
 
             const gatewayAxios = axios.create({
               baseURL: gatewayUrl,
