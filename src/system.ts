@@ -1033,9 +1033,13 @@ const contiguousDataStore = new FsDataStore({
 
 export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,
-  dataSource: new SequentialDataSource({
+  dataSource: new FilteredContiguousDataSource({
     log,
-    dataSources: onDemandDataSources,
+    dataSource: new SequentialDataSource({
+      log,
+      dataSources: onDemandDataSources,
+    }),
+    blockedIpsAndCidrs: config.CACHE_ONLY_CLIENT_IPS_AND_CIDRS,
   }),
   metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
