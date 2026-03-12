@@ -193,6 +193,17 @@ TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS.forEach((cidr) => {
   // CIDRs must include /prefix
 });
 
+// Client IPs/CIDRs that should only be served from local cache. Requests from
+// these IPs skip all upstream data source fetching on cache miss, returning a
+// fast failure so the caller can do its own downstream searches. Useful for HA
+// peer setups where each node shares its cache but shouldn't do redundant
+// upstream work on behalf of its peer.
+export const CACHE_ONLY_CLIENT_IPS_AND_CIDRS = env
+  .varOrDefault('CACHE_ONLY_CLIENT_IPS_AND_CIDRS', '')
+  .split(',')
+  .map((cidr) => cidr.trim())
+  .filter((cidr) => cidr.length > 0);
+
 export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   'TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS',
   '10000',
