@@ -305,6 +305,15 @@ export const arnsResolutionResolverCount = new promClient.Counter({
 });
 
 //
+// Stream metrics
+//
+
+export const clientDisconnectsTotal = new promClient.Counter({
+  name: 'client_disconnects_total',
+  help: 'Count of client disconnects during data streaming',
+});
+
+//
 // Data source metrics
 //
 

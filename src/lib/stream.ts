@@ -9,6 +9,8 @@ import { ServerResponse } from 'node:http';
 import { Readable, Transform, TransformCallback } from 'node:stream';
 import * as winston from 'winston';
 
+import * as metrics from '../metrics.js';
+
 /**
  * Attaches a stall timeout to a readable stream. If no 'data' event fires
  * within `stallTimeoutMs`, the stream is destroyed with an error. The timer
@@ -108,6 +110,7 @@ export function pipeStreamToResponse(
   res.once('close', () => {
     if (!res.writableFinished && !stream.destroyed) {
       log.info('Client disconnected, destroying upstream stream', { dataId });
+      metrics.clientDisconnectsTotal.inc();
       stream.destroy();
     }
   });
