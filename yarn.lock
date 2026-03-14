@@ -6717,6 +6717,11 @@
   dependencies:
     testcontainers "^11.11.0"
 
+"@tony.ganchev/eslint-plugin-header@^3.3.0":
+  version "3.3.0"
+  resolved "https://registry.yarnpkg.com/@tony.ganchev/eslint-plugin-header/-/eslint-plugin-header-3.3.0.tgz#723ce34b15d8f19f822fdee23ead299c4339b2d8"
+  integrity sha512-yWP5n7GXWU2NdOJuQtGSKiRm4i+YwqSjNqHMCOscnzHiv9rI7PIap7DiHz4E4ajWa0MdQICxnwKrk5isvZFcjw==
+
 "@tootallnate/once@2":
   version "2.0.0"
   resolved "https://registry.yarnpkg.com/@tootallnate/once/-/once-2.0.0.tgz#f544a148d3ab35801c1f633a7441fd87c2e484bf"
@@ -9796,11 +9801,6 @@ eslint-config-prettier@^10.1.8:
   version "10.1.8"
   resolved "https://registry.yarnpkg.com/eslint-config-prettier/-/eslint-config-prettier-10.1.8.tgz#15734ce4af8c2778cc32f0b01b37b0b5cd1ecb97"
   integrity sha512-82GZUjRS0p/jganf6q1rEO25VSoHH0hKPCTrgillPjdI/3bgBhAE1QzHrHTizjpRvy6pGAvKjDJtk2pF9NDq8w==
-
-eslint-plugin-header@^3.1.1:
-  version "3.1.1"
-  resolved "https://registry.yarnpkg.com/eslint-plugin-header/-/eslint-plugin-header-3.1.1.tgz#6ce512432d57675265fac47292b50d1eff11acd6"
-  integrity sha512-9vlKxuJ4qf793CmeeSrZUvVClw6amtpghq3CuWcB5cUNnWHQhgcqy5eF8oVKFk1G3Y/CbchGfEaw3wiIJaNmVg==
 
 eslint-plugin-jest-formatting@^3.1.0:
   version "3.1.0"
