@@ -14,7 +14,12 @@ import { Handler, Request, Response } from 'express';
 export function createDefaultCacheControlMiddleware(maxAge: number): Handler {
   const defaultValue = `public, max-age=${maxAge}`;
 
-  return (_req: Request, res: Response, next) => {
+  return (req: Request, res: Response, next) => {
+    // Only apply default caching to cacheable request methods
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return next();
+    }
+
     const originalWriteHead = res.writeHead;
 
     // writeHead has multiple overload signatures; cast to a general callable
