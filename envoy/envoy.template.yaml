@@ -269,6 +269,22 @@ static_resources:
                               max_internal_redirects: 10
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
+                        - match: { prefix: '/tx_anchor' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=120'
+                              append: false
+                          route:
+                            cluster: trusted_arweave_nodes
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/tx' }
                           response_headers_to_add:
                             - header:
@@ -323,22 +339,6 @@ static_resources:
                             - header:
                                 key: 'Cache-Control'
                                 value: 'public, max-age=30'
-                              append: false
-                          route:
-                            cluster: trusted_arweave_nodes
-                            retry_policy:
-                              retry_on: '5xx,reset,retriable-status-codes'
-                              num_retries: 5
-                            auto_host_rewrite: true
-                            internal_redirect_policy:
-                              max_internal_redirects: 10
-                              allow_cross_scheme_redirect: true
-                              redirect_response_codes: [301, 302, 303]
-                        - match: { prefix: '/tx_anchor' }
-                          response_headers_to_add:
-                            - header:
-                                key: 'Cache-Control'
-                                value: 'public, max-age=120'
                               append: false
                           route:
                             cluster: trusted_arweave_nodes

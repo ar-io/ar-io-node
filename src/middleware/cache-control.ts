@@ -17,12 +17,16 @@ function shouldApplyDefaultCacheControl(req: Request, res: Response): boolean {
     return false;
   }
 
-  if (SKIP_CACHE_CONTROL_PREFIXES.some((prefix) => req.path.startsWith(prefix))) {
+  if (
+    SKIP_CACHE_CONTROL_PREFIXES.some((prefix) => req.path.startsWith(prefix))
+  ) {
     return false;
   }
 
   // Limit the fallback to successful responses that are typically safe to cache.
-  return res.statusCode === 200 || res.statusCode === 203 || res.statusCode === 206;
+  return (
+    res.statusCode === 200 || res.statusCode === 203 || res.statusCode === 206
+  );
 }
 
 /**
