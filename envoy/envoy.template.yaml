@@ -28,9 +28,7 @@ static_resources:
                       domains:
                         -  #@ "*." + data.values.ARNS_ROOT_HOST
                       routes:
-                        #! Dry-run mode: Route POST /tx and /chunk to core service for simulated responses.
-                        #! When disabled, these routes are not added and POST requests fall through to
-                        #! trusted_arweave_nodes for real Arweave network submission.
+                        #! Dry-run mode: Route POST /tx to core service for simulated responses.
                         #@ if data.values.ARWEAVE_POST_DRY_RUN == "true":
                         - match:
                             prefix: '/tx'
@@ -45,6 +43,7 @@ static_resources:
                           route:
                             cluster: ario_gateways
                             timeout: 0s
+                        #@ end
                         - match:
                             prefix: '/chunk'
                             headers:
@@ -58,7 +57,6 @@ static_resources:
                           route:
                             cluster: ario_gateways
                             timeout: 0s
-                        #@ end
                         - match: { prefix: '/' }
                           route:
                             cluster: ario_gateways
@@ -190,9 +188,7 @@ static_resources:
                               max_internal_redirects: 10
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
-                        #! Dry-run mode: Route POST /tx and /chunk to core service for simulated responses.
-                        #! When disabled, these routes are not added and POST requests fall through to
-                        #! trusted_arweave_nodes for real Arweave network submission.
+                        #! Dry-run mode: Route POST /tx to core service for simulated responses.
                         #@ if data.values.ARWEAVE_POST_DRY_RUN == "true":
                         - match:
                             prefix: '/tx'
@@ -207,6 +203,7 @@ static_resources:
                           route:
                             cluster: ario_gateways
                             timeout: 0s
+                        #@ end
                         - match:
                             prefix: '/chunk'
                             headers:
@@ -220,9 +217,7 @@ static_resources:
                           route:
                             cluster: ario_gateways
                             timeout: 0s
-                        #@ end
-                        #! POST /tx and /chunk always get no-store (non-dry-run
-                        #! POSTs fall through to trusted_arweave_nodes).
+                        #! POST /tx gets no-store and falls through to trusted_arweave_nodes in non-dry-run mode.
                         - match:
                             prefix: '/tx'
                             headers:
@@ -243,6 +238,7 @@ static_resources:
                               max_internal_redirects: 10
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
+                        #! POST /chunk always goes to ario_gateways for local broadcast handling.
                         - match:
                             prefix: '/chunk'
                             headers:
@@ -254,15 +250,8 @@ static_resources:
                                 value: 'no-store'
                               append: false
                           route:
-                            cluster: trusted_arweave_nodes
-                            retry_policy:
-                              retry_on: '5xx,reset,retriable-status-codes'
-                              num_retries: 5
-                            auto_host_rewrite: true
-                            internal_redirect_policy:
-                              max_internal_redirects: 10
-                              allow_cross_scheme_redirect: true
-                              redirect_response_codes: [301, 302, 303]
+                            cluster: ario_gateways
+                            timeout: 0s
                         - match: { prefix: '/tx/' }
                           response_headers_to_add:
                             - header:
