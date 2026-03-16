@@ -35,6 +35,17 @@ describe('createDefaultCacheControlMiddleware', () => {
     assert.equal(res.headers['cache-control'], 'private, max-age=3600');
   });
 
+  it('does not apply default Cache-Control to POST requests', async () => {
+    const app = express();
+    app.use(createDefaultCacheControlMiddleware(30));
+    app.post('/test', (_req, res) => {
+      res.send('ok');
+    });
+
+    const res = await request(app).post('/test');
+    assert.equal(res.headers['cache-control'], undefined);
+  });
+
   it('respects configurable max-age value', async () => {
     const app = express();
     app.use(createDefaultCacheControlMiddleware(120));
