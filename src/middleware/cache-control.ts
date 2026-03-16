@@ -12,18 +12,22 @@ import { Handler, Request, Response } from 'express';
  * at response-send time, after all handlers have run.
  */
 export function createDefaultCacheControlMiddleware(maxAge: number): Handler {
-  return (_req: Request, res: Response, next) => {
-    const originalWriteHead = res.writeHead.bind(res);
+  const defaultValue = `public, max-age=${maxAge}`;
 
-    res.writeHead = function (
-      this: Response,
-      ...args: Parameters<Response['writeHead']>
-    ): Response {
+  return (_req: Request, res: Response, next) => {
+    const originalWriteHead = res.writeHead;
+
+    // writeHead has multiple overload signatures; cast to a general callable
+    // so we can wrap it without fighting the overload types.
+
+    res.writeHead = function (this: Response, ...args: any[]) {
       if (!this.hasHeader('Cache-Control')) {
-        this.setHeader('Cache-Control', `public, max-age=${maxAge}`);
+        this.setHeader('Cache-Control', defaultValue);
       }
-      return originalWriteHead(...args);
-    };
+      return (
+        originalWriteHead as unknown as (...a: unknown[]) => Response
+      ).apply(this, args);
+    } as typeof res.writeHead;
 
     next();
   };
