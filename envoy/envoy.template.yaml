@@ -37,6 +37,11 @@ static_resources:
                             headers:
                               - name: ':method'
                                 exact_match: 'POST'
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'no-store'
+                              append: false
                           route:
                             cluster: ario_gateways
                             timeout: 0s
@@ -45,6 +50,11 @@ static_resources:
                             headers:
                               - name: ':method'
                                 exact_match: 'POST'
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'no-store'
+                              append: false
                           route:
                             cluster: ario_gateways
                             timeout: 0s
@@ -117,6 +127,11 @@ static_resources:
                               retry_on: '5xx,reset'
                               num_retries: 5
                         - match: { prefix: '/info' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=120'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -128,6 +143,11 @@ static_resources:
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/current_block' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=30'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -139,6 +159,11 @@ static_resources:
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/height' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=20'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -150,6 +175,11 @@ static_resources:
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/peers' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=30'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -169,6 +199,11 @@ static_resources:
                             headers:
                               - name: ':method'
                                 exact_match: 'POST'
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'no-store'
+                              append: false
                           route:
                             cluster: ario_gateways
                             timeout: 0s
@@ -177,11 +212,21 @@ static_resources:
                             headers:
                               - name: ':method'
                                 exact_match: 'POST'
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'no-store'
+                              append: false
                           route:
                             cluster: ario_gateways
                             timeout: 0s
                         #@ end
                         - match: { prefix: '/tx/' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=30'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -194,6 +239,11 @@ static_resources:
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/tx' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=30'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -205,6 +255,11 @@ static_resources:
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/unconfirmed_tx/' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=20'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -216,6 +271,11 @@ static_resources:
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/block/' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=30'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -228,6 +288,11 @@ static_resources:
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/price/' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=30'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -239,6 +304,11 @@ static_resources:
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/tx_anchor' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=120'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -250,6 +320,11 @@ static_resources:
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/wallet/' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=30'
+                              append: false
                           route:
                             cluster: trusted_arweave_nodes
                             retry_policy:
@@ -268,10 +343,6 @@ static_resources:
                               retry_on: '5xx,reset'
                               num_retries: 5
                         - match: { prefix: '/' }
-                          response_headers_to_add:
-                            - header:
-                                key: 'Cache-Control'
-                                value: 'public, max-age=30'
                           route:
                             cluster: ario_gateways
                             retry_policy:

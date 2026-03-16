@@ -810,6 +810,33 @@ export const CACHE_PRIVATE_CONTENT_TYPES = env
   .map((type) => type.trim().toLowerCase())
   .filter((type) => type.length > 0);
 
+// Cache duration defaults (in seconds) for Cache-Control max-age headers.
+// Default applied by middleware when no handler sets Cache-Control.
+export const CACHE_DEFAULT_MAX_AGE = env.positiveIntOrDefault(
+  'CACHE_DEFAULT_MAX_AGE',
+  30,
+);
+// Stable (deeply confirmed) data — 30 days.
+export const CACHE_STABLE_MAX_AGE = env.positiveIntOrDefault(
+  'CACHE_STABLE_MAX_AGE',
+  2592000,
+);
+// Unstable data from a trusted source — 12 hours.
+export const CACHE_UNSTABLE_TRUSTED_MAX_AGE = env.positiveIntOrDefault(
+  'CACHE_UNSTABLE_TRUSTED_MAX_AGE',
+  43200,
+);
+// Unstable data from an untrusted source — 2 hours.
+export const CACHE_UNSTABLE_MAX_AGE = env.positiveIntOrDefault(
+  'CACHE_UNSTABLE_MAX_AGE',
+  7200,
+);
+// Not-found responses — 1 minute.
+export const CACHE_NOT_FOUND_MAX_AGE = env.positiveIntOrDefault(
+  'CACHE_NOT_FOUND_MAX_AGE',
+  60,
+);
+
 //
 // Indexing
 //

@@ -49,11 +49,6 @@ import {
   wouldReturn304,
 } from '../../lib/http-utils.js';
 
-const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
-const UNSTABLE_TRUSTED_MAX_AGE = 60 * 60 * 12; // 12 hours
-const UNSTABLE_MAX_AGE = 60 * 60 * 2; // 2 hours
-const NOT_FOUND_MAX_AGE = 60; // 1 minute
-
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
@@ -360,17 +355,17 @@ const setDataHeaders = ({
     if (dataAttributes?.stable) {
       res.header(
         'Cache-Control',
-        `${cacheDirective}, max-age=${STABLE_MAX_AGE}, immutable`,
+        `${cacheDirective}, max-age=${config.CACHE_STABLE_MAX_AGE}, immutable`,
       );
     } else if (data.trusted) {
       res.header(
         'Cache-Control',
-        `${cacheDirective}, max-age=${UNSTABLE_TRUSTED_MAX_AGE}`,
+        `${cacheDirective}, max-age=${config.CACHE_UNSTABLE_TRUSTED_MAX_AGE}`,
       );
     } else {
       res.header(
         'Cache-Control',
-        `${cacheDirective}, max-age=${UNSTABLE_MAX_AGE}`,
+        `${cacheDirective}, max-age=${config.CACHE_UNSTABLE_MAX_AGE}`,
       );
     }
   }
@@ -780,7 +775,7 @@ export const sendInvalidId = (res: Response, id: string) => {
 export const sendNotFound = (res: Response) => {
   res.header(
     'Cache-Control',
-    `public, max-age=${NOT_FOUND_MAX_AGE}, immutable`,
+    `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, immutable`,
   );
   res.status(404).send('Not found');
 };
