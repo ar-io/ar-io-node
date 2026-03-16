@@ -20,6 +20,10 @@ export interface X402RouterConfig {
   paymentProcessor?: PaymentProcessor;
 }
 
+function setNoStore(res: Response): void {
+  res.setHeader('Cache-Control', 'no-store');
+}
+
 const facilitatorConfig = createFacilitatorConfigFromCredentials(
   config.X_402_CDP_CLIENT_KEY,
   config.X_402_CDP_CLIENT_SECRET,
@@ -38,6 +42,7 @@ export function createX402Router({
   // Shared handler for redirect endpoints
   const redirectHandler = asyncHandler(async (req: Request, res: Response) => {
     try {
+      setNoStore(res);
       // Decode the original URL from base64url
       const encoded = req.params.encoded;
       let decodedUrl: string;
@@ -134,6 +139,7 @@ export function createX402Router({
   }
 
   x402Router.get('/ar-io/x402/test', (_req, res) => {
+    setNoStore(res);
     res.header('Content-Type', 'text/html');
     res.send('<h1>x402 is working!</h1>');
   });
@@ -203,6 +209,7 @@ function sendRedirectHtml(res: Response, targetUrl: string): void {
 </body>
 </html>`;
 
+  setNoStore(res);
   res.setHeader('Content-Type', 'text/html');
   res.status(200).send(html);
 }
@@ -261,6 +268,7 @@ function sendPaymentErrorHtml(res: Response, errorMessage: string): void {
 </body>
 </html>`;
 
+  setNoStore(res);
   res.setHeader('Content-Type', 'text/html');
   res.status(402).send(html);
 }

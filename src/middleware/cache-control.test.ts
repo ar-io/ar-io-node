@@ -46,6 +46,28 @@ describe('createDefaultCacheControlMiddleware', () => {
     assert.equal(res.headers['cache-control'], undefined);
   });
 
+  it('does not apply default Cache-Control to non-success responses', async () => {
+    const app = express();
+    app.use(createDefaultCacheControlMiddleware(30));
+    app.get('/test', (_req, res) => {
+      res.status(404).send('missing');
+    });
+
+    const res = await request(app).get('/test');
+    assert.equal(res.headers['cache-control'], undefined);
+  });
+
+  it('does not apply default Cache-Control to excluded control-plane routes', async () => {
+    const app = express();
+    app.use(createDefaultCacheControlMiddleware(30));
+    app.get('/ar-io/admin/test', (_req, res) => {
+      res.send('ok');
+    });
+
+    const res = await request(app).get('/ar-io/admin/test');
+    assert.equal(res.headers['cache-control'], undefined);
+  });
+
   it('respects configurable max-age value', async () => {
     const app = express();
     app.use(createDefaultCacheControlMiddleware(120));

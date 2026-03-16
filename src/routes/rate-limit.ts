@@ -20,6 +20,10 @@ export interface RateLimitRouterConfig {
   paymentProcessor?: PaymentProcessor;
 }
 
+function setNoStore(res: Response): void {
+  res.setHeader('Cache-Control', 'no-store');
+}
+
 export function createRateLimitRouter({
   log,
   rateLimiter,
@@ -35,6 +39,7 @@ export function createRateLimitRouter({
     '/ar-io/rate-limit/ip/:ip',
     asyncHandler(async (req: Request, res: Response) => {
       try {
+        setNoStore(res);
         const { ip } = req.params;
 
         // Validate IP format
@@ -79,6 +84,7 @@ export function createRateLimitRouter({
     '/ar-io/rate-limit/resource',
     asyncHandler(async (req: Request, res: Response) => {
       try {
+        setNoStore(res);
         const path = req.query.path as string | undefined;
         const method = (req.query.method as string | undefined) ?? 'GET';
         const host = (req.query.host as string | undefined) ?? req.headers.host;

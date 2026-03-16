@@ -22,6 +22,10 @@ import { buildArIoInfo } from './ar-io-info-builder.js';
 export const arIoRouter = Router();
 export let parquetExporter: ParquetExporter | null = null;
 
+function setNoStore(res: Response): void {
+  res.setHeader('Cache-Control', 'no-store');
+}
+
 const getParquetExporter = () => {
   if (parquetExporter === null) {
     parquetExporter = new ParquetExporter({
@@ -250,6 +254,7 @@ function getGatewayPeers() {
 
 // Only allow access to admin routes if the bearer token matches the admin api key
 arIoRouter.use('/ar-io/admin', (req, res, next) => {
+  setNoStore(res);
   if (req.headers.authorization === `Bearer ${config.ADMIN_API_KEY}`) {
     next();
   } else {
