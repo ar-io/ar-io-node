@@ -6,12 +6,14 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
+import { PassThrough } from 'node:stream';
 import axios from 'axios';
 import { AoARIORead, ARIO } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
 import { RequestAttributes, ContiguousDataAttributesStore } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
 import { ArIOPeerManager } from '../peers/ar-io-peer-manager.js';
+import { PeerRequestLimiter } from './peer-request-limiter.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 import { headerNames } from '../constants.js';
@@ -951,6 +953,98 @@ describe('ArIODataSource', () => {
         assert.equal(params['ar-io-origin'], 'original-node');
         assert.equal(params['ar-io-origin-release'], 'v1.0.0');
       }
+    });
+
+    describe('peerRequestLimiter slot accounting', () => {
+      it('should release both slots when two concurrent streams for the same peer close independently', async () => {
+        const limiter = new PeerRequestLimiter(2);
+
+        // Single-peer manager so both concurrent getData calls go to the same peer
+        const singlePeerManager = new ArIOPeerManager({
+          log,
+          networkProcess: ARIO.init(),
+          nodeWallet: 'localNode',
+          initialPeers: { peer1: 'http://peer1.com' },
+          initialCategories: ['data'],
+        });
+
+        const singlePeerDataSource = new ArIODataSource({
+          log,
+          peerManager: singlePeerManager,
+          dataAttributesStore: mockDataAttributesStore,
+          peerRequestLimiter: limiter,
+        });
+
+        const stream1 = new PassThrough();
+        const stream2 = new PassThrough();
+        let callCount = 0;
+
+        mock.method(axios, 'get', async () => {
+          callCount++;
+          const stream = callCount === 1 ? stream1 : stream2;
+          return {
+            status: 200,
+            data: stream,
+            headers: {
+              'content-length': '10',
+              'content-type': 'application/octet-stream',
+              [headerNames.verified.toLowerCase()]: 'true',
+              [headerNames.trusted.toLowerCase()]: 'false',
+            },
+          };
+        });
+
+        // Launch two concurrent getData calls — both target the single peer
+        await Promise.all([
+          singlePeerDataSource.getData({ id: 'id1' }),
+          singlePeerDataSource.getData({ id: 'id2' }),
+        ]);
+
+        // Both stream-backed slots are held; limiter should show 2 active
+        assert.equal(limiter.getActiveCount('http://peer1.com'), 2);
+
+        // Close first stream — one slot released, one still held
+        stream1.destroy();
+        await new Promise<void>((resolve) => stream1.once('close', resolve));
+        assert.equal(limiter.getActiveCount('http://peer1.com'), 1);
+
+        // Close second stream — final slot released
+        stream2.destroy();
+        await new Promise<void>((resolve) => stream2.once('close', resolve));
+        assert.equal(limiter.getActiveCount('http://peer1.com'), 0);
+
+        singlePeerManager.stopUpdatingPeers();
+      });
+
+      it('should release the slot via onRelease when execute throws', async () => {
+        const limiter = new PeerRequestLimiter(2);
+
+        const singlePeerManager = new ArIOPeerManager({
+          log,
+          networkProcess: ARIO.init(),
+          nodeWallet: 'localNode',
+          initialPeers: { peer1: 'http://peer1.com' },
+          initialCategories: ['data'],
+        });
+
+        const singlePeerDataSource = new ArIODataSource({
+          log,
+          peerManager: singlePeerManager,
+          dataAttributesStore: mockDataAttributesStore,
+          peerRequestLimiter: limiter,
+        });
+
+        mock.method(axios, 'get', async () => {
+          throw new Error('network error');
+        });
+
+        await assert.rejects(singlePeerDataSource.getData({ id: 'id1' }));
+
+        // Slot must be fully released after a failed request
+        assert.equal(limiter.getActiveCount('http://peer1.com'), 0);
+
+        singlePeerManager.stopUpdatingPeers();
+      });
     });
 
     it('should throw when skipRemoteForwarding is set', async () => {
