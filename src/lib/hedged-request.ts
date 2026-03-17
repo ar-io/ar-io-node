@@ -9,7 +9,7 @@ export interface HedgedRequestOptions<T> {
   candidates: string[];
   execute: (candidate: string, signal: AbortSignal) => Promise<T>;
   canAttempt?: (candidate: string) => boolean;
-  onAcquire?: (candidate: string) => void;
+  acquire?: (candidate: string) => boolean;
   onRelease?: (candidate: string) => void;
   hedgeDelayMs: number;
   maxConcurrent: number;
@@ -23,7 +23,7 @@ export async function executeHedgedRequest<T>(
     candidates,
     execute,
     canAttempt,
-    onAcquire,
+    acquire,
     onRelease,
     hedgeDelayMs,
     maxConcurrent,
@@ -39,6 +39,7 @@ export async function executeHedgedRequest<T>(
   let resolved = false;
   let inFlight = 0;
   let candidateIndex = 0;
+  let saturated = false;
 
   // Build the combined signal for each attempt
   function makeAttemptSignal(): AbortSignal {
@@ -85,18 +86,25 @@ export async function executeHedgedRequest<T>(
         const candidate = candidates[candidateIndex];
         candidateIndex++;
 
+        // Capacity check first — don't run acquire if we have no room
+        if (inFlight >= maxConcurrent) {
+          candidateIndex--; // put it back
+          saturated = true;
+          return false;
+        }
+
+        // Pure filter (no side effects)
         if (canAttempt && !canAttempt(candidate)) {
           continue;
         }
 
-        if (inFlight >= maxConcurrent) {
-          // We'll try again when an in-flight request completes
-          candidateIndex--; // put it back
-          return false;
+        // Atomic check-and-acquire
+        if (acquire && !acquire(candidate)) {
+          continue;
         }
 
+        saturated = false;
         inFlight++;
-        onAcquire?.(candidate);
 
         const attemptSignal = makeAttemptSignal();
         const promise = execute(candidate, attemptSignal)
@@ -115,6 +123,14 @@ export async function executeHedgedRequest<T>(
             inFlight--;
             onRelease?.(candidate);
             activePromises.delete(promise);
+
+            // Resume hedge chain if it was paused by saturation
+            if (saturated && !resolved) {
+              if (launchNext()) {
+                scheduleNextHedge();
+              }
+            }
+
             checkDone();
           });
 
@@ -165,8 +181,11 @@ export async function executeHedgedRequest<T>(
 
       const timer = setTimeout(() => {
         if (resolved) return;
-        launchNext();
-        scheduleNextHedge();
+        // Only continue the chain if a candidate was actually launched;
+        // if saturated, .finally() will resume when a slot frees
+        if (launchNext()) {
+          scheduleNextHedge();
+        }
       }, hedgeDelayMs);
 
       // Clean up timer if we resolve before it fires

@@ -352,11 +352,7 @@ export class ArIODataSource implements ContiguousDataSource {
             throw error;
           }
         },
-        canAttempt: (peer) =>
-          this.peerRequestLimiter?.isAvailable(peer) ?? true,
-        onAcquire: (peer) => {
-          this.peerRequestLimiter?.tryAcquire(peer);
-        },
+        acquire: (peer) => this.peerRequestLimiter?.tryAcquire(peer) ?? true,
         onRelease: (peer) => {
           // Skip release if stream took ownership of the slot
           if (!streamPeers.has(peer)) {
