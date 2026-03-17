@@ -552,13 +552,11 @@ const peerRequestLimiter = new PeerRequestLimiter(
 const baseGatewaysDataSource = new GatewaysDataSource({
   log,
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
-  peerRequestLimiter,
 });
 
 const rootBundleGatewaysDataSource = new GatewaysDataSource({
   log,
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
-  peerRequestLimiter,
   fallbackToBasePath: true,
 });
 
