@@ -69,6 +69,9 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
   }
 
   private isOriginBlocked(origin?: string): boolean {
+    if (this.blockedOrigins.size === 0) {
+      return false;
+    }
     if (origin === undefined || origin === '') {
       return false;
     }
@@ -76,6 +79,10 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
   }
 
   private isCidrBlocked(clientIp?: string, clientIps?: string[]): boolean {
+    if (this.blockedCidrs.length === 0) {
+      return false;
+    }
+
     const ipsToCheck: string[] = [];
 
     // Add legacy clientIp for backwards compatibility
