@@ -7,6 +7,7 @@
 import { createLogger, format, transports } from 'winston';
 import * as env from './lib/env.js';
 import { createObjectFilter } from './filters.js';
+import { requestContextStorage } from './request-context.js';
 
 const LOG_LEVEL = env.varOrDefault('LOG_LEVEL', 'info').toLowerCase();
 const LOG_FORMAT = env.varOrDefault('LOG_FORMAT', 'simple');
@@ -41,6 +42,14 @@ const filterFormat = format((info) => {
   return isMatching ? info : false; // Return `false` to discard
 });
 
+const injectRequestId = format((info) => {
+  const ctx = requestContextStorage.getStore();
+  if (ctx !== undefined) {
+    info.requestId = ctx.requestId;
+  }
+  return info;
+});
+
 // Detect test environment
 const isTestEnvironment = process.env.NODE_TEST_CONTEXT !== undefined;
 
@@ -58,6 +67,7 @@ const logger = createLogger({
   level: LOG_LEVEL,
   defaultMeta: { instanceId: INSTANCE_ID },
   format: format.combine(
+    injectRequestId(),
     filterStackTraces(),
     filterFormat(),
     format.errors(),

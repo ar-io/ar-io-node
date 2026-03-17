@@ -11,6 +11,7 @@ import * as config from './config.js';
 import { headerNames } from './constants.js';
 import log from './log.js';
 import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
+import { createRequestIdMiddleware } from './middleware/request-id.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
@@ -70,6 +71,9 @@ app.use(
     ],
   }),
 );
+
+// Assign a unique request ID to every request (independent of OTEL)
+app.use(createRequestIdMiddleware());
 
 // Attach AbortSignal to all requests for client disconnect handling
 app.use(createAbortSignalMiddleware());
