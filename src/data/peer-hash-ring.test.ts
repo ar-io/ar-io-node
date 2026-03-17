@@ -32,17 +32,20 @@ describe('PeerHashRing', () => {
     ]);
     const set1 = ring.getHomeSet('key-1', 2);
     const set2 = ring.getHomeSet('key-2', 2);
-    // At least check they're valid
     assert.equal(set1.length, 2);
     assert.equal(set2.length, 2);
-    // Allow this test to pass even if order matches — the key property is determinism
+    assert.notDeepEqual(
+      set1,
+      set2,
+      'Different keys should map to different home sets',
+    );
   });
 
   it('should distribute peers reasonably evenly', () => {
     const peers = Array.from({ length: 10 }, (_, i) => `http://peer-${i}.com`);
     ring.rebuild(peers);
 
-    const counts = new Map<string, number>();
+    const counts = new Map<string, number>(peers.map((p) => [p, 0]));
     const totalKeys = 10000;
 
     for (let i = 0; i < totalKeys; i++) {
@@ -50,6 +53,13 @@ describe('PeerHashRing', () => {
       const peer = homeSet[0];
       counts.set(peer, (counts.get(peer) ?? 0) + 1);
     }
+
+    // Every peer must have received at least some keys
+    assert.equal(
+      counts.size,
+      peers.length,
+      'All peers should appear in the distribution',
+    );
 
     // Each peer should get roughly 10% of keys
     // Allow 5-15% range (generous tolerance)
