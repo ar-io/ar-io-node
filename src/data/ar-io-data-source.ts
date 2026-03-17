@@ -258,9 +258,11 @@ export class ArIODataSource implements ContiguousDataSource {
       const dataAttributes =
         await this.dataAttributesStore.getDataAttributes(id);
 
-      // Track peers whose limiter slot is held by a live stream rather than
-      // the request promise, so onRelease can skip them.
-      const streamPeers = new Set<string>();
+      // Track how many limiter slots per peer are held by live streams rather
+      // than the request promise, so onRelease can skip them. A count (not a
+      // Set) is required because concurrent hedged requests to the same peer
+      // each hold an independent slot.
+      const streamPeerCounts = new Map<string, number>();
 
       const result = await executeHedgedRequest<ContiguousData>({
         candidates: randomPeers,
@@ -322,11 +324,15 @@ export class ArIODataSource implements ContiguousDataSource {
 
             // Defer limiter release until the stream is fully consumed so the
             // slot accurately reflects active outbound transfers.
-            streamPeers.add(peer);
+            streamPeerCounts.set(peer, (streamPeerCounts.get(peer) ?? 0) + 1);
             contiguousData.stream.once('close', () => {
-              if (streamPeers.delete(peer)) {
-                this.peerRequestLimiter?.release(peer);
+              const count = streamPeerCounts.get(peer) ?? 1;
+              if (count <= 1) {
+                streamPeerCounts.delete(peer);
+              } else {
+                streamPeerCounts.set(peer, count - 1);
               }
+              this.peerRequestLimiter?.release(peer);
             });
 
             return contiguousData;
@@ -356,7 +362,7 @@ export class ArIODataSource implements ContiguousDataSource {
         acquire: (peer) => this.peerRequestLimiter?.tryAcquire(peer) ?? true,
         onRelease: (peer) => {
           // Skip release if stream took ownership of the slot
-          if (!streamPeers.has(peer)) {
+          if (!streamPeerCounts.has(peer)) {
             this.peerRequestLimiter?.release(peer);
           }
         },
