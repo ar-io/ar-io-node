@@ -310,7 +310,7 @@ describe('executeHedgedRequest', () => {
         hedgeDelayMs: 10,
         maxConcurrent: 3,
       }),
-      /No eligible candidates available|All hedged request candidates failed/,
+      /No eligible candidates available/,
     );
   });
 });
