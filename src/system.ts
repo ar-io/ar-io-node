@@ -98,6 +98,7 @@ import { EnvoyEndpointHealthWorker } from './workers/envoy-endpoint-health-worke
 import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { DataVerificationWorker } from './workers/data-verification.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
+import { PeerRequestLimiter } from './data/peer-request-limiter.js';
 import { ArIOChunkSource } from './data/ar-io-chunk-source.js';
 import { ArIOPeerManager } from './peers/ar-io-peer-manager.js';
 import { S3DataSource } from './data/s3-data-source.js';
@@ -544,14 +545,20 @@ export const bundleRepairWorker = new BundleRepairWorker({
   filtersChanged: config.FILTER_CHANGE_REPROCESS,
 });
 
+const peerRequestLimiter = new PeerRequestLimiter(
+  config.PEER_MAX_CONCURRENT_OUTBOUND,
+);
+
 const baseGatewaysDataSource = new GatewaysDataSource({
   log,
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+  peerRequestLimiter,
 });
 
 const rootBundleGatewaysDataSource = new GatewaysDataSource({
   log,
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+  peerRequestLimiter,
   fallbackToBasePath: true,
 });
 
@@ -573,6 +580,7 @@ const baseArIODataSource = new ArIODataSource({
   log,
   peerManager: arIOPeerManager,
   dataAttributesStore,
+  peerRequestLimiter,
 });
 
 // Wrap with filtering for peer forwarding (same blocked lists as gateway forwarding)
