@@ -401,37 +401,37 @@ export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
 );
 
 // Per-peer concurrency limiter
-export const PEER_MAX_CONCURRENT_OUTBOUND = +env.varOrDefault(
+export const PEER_MAX_CONCURRENT_OUTBOUND = env.positiveIntOrDefault(
   'PEER_MAX_CONCURRENT_OUTBOUND',
-  '10',
+  10,
 );
 
 // Number of candidate peers selected for data retrieval
-export const PEER_CANDIDATE_COUNT = +env.varOrDefault(
+export const PEER_CANDIDATE_COUNT = env.positiveIntOrDefault(
   'PEER_CANDIDATE_COUNT',
-  '5',
+  5,
 );
 
 // Hedged request configuration
-export const PEER_HEDGE_DELAY_MS = +env.varOrDefault(
+export const PEER_HEDGE_DELAY_MS = env.nonNegativeIntOrDefault(
   'PEER_HEDGE_DELAY_MS',
-  '500',
+  500,
 );
 
-export const PEER_MAX_HEDGED_REQUESTS = +env.varOrDefault(
+export const PEER_MAX_HEDGED_REQUESTS = env.positiveIntOrDefault(
   'PEER_MAX_HEDGED_REQUESTS',
-  '3',
+  3,
 );
 
 // Consistent hash ring configuration
-export const PEER_HASH_RING_VIRTUAL_NODES = +env.varOrDefault(
+export const PEER_HASH_RING_VIRTUAL_NODES = env.positiveIntOrDefault(
   'PEER_HASH_RING_VIRTUAL_NODES',
-  '150',
+  150,
 );
 
-export const PEER_HASH_RING_HOME_SET_SIZE = +env.varOrDefault(
+export const PEER_HASH_RING_HOME_SET_SIZE = env.positiveIntOrDefault(
   'PEER_HASH_RING_HOME_SET_SIZE',
-  '3',
+  3,
 );
 
 export const GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS = +env.varOrDefault(
