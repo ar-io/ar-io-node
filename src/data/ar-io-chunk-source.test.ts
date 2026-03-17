@@ -119,9 +119,6 @@ describe('ArIOChunkSource', () => {
         controller1.signal,
       );
 
-      // Wait a tick for the promise to be cached
-      await new Promise((resolve) => setTimeout(resolve, 5));
-
       // Start second request (cache hit - reuses promise via withAbortSignal)
       const promise2 = arIOChunkSource.getChunkByAny(
         testChunkParams,
@@ -213,9 +210,6 @@ describe('ArIOChunkSource', () => {
         controller3.signal,
       ); // cache hit
       const promise4 = arIOChunkSource.getChunkByAny(testChunkParams); // cache hit, no signal
-
-      // Wait for promises to be set up
-      await new Promise((resolve) => setTimeout(resolve, 5));
 
       // Abort only the cache-hit callers (2 and 3)
       controller2.abort();

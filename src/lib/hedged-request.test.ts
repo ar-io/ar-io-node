@@ -39,7 +39,7 @@ describe('executeHedgedRequest', () => {
       execute: async (candidate) => {
         callOrder.push(candidate);
         if (candidate === 'slow') {
-          await delay(500);
+          await delay(100);
           return 'slow-result';
         }
         return 'fast-result';
@@ -98,29 +98,42 @@ describe('executeHedgedRequest', () => {
 
   it('should abort on client signal', async () => {
     const controller = new AbortController();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((r) => {
+      resolveStarted = r;
+    });
 
-    setTimeout(() => controller.abort(), 50);
-
-    await assert.rejects(
-      executeHedgedRequest({
-        candidates: ['a', 'b', 'c'],
-        execute: async (_candidate, signal) => {
-          await delay(5000);
-          signal.throwIfAborted();
-          return 'should-not-reach';
-        },
-        hedgeDelayMs: 10,
-        maxConcurrent: 3,
-        signal: controller.signal,
-      }),
-      (err: any) => {
-        assert.ok(
-          err.name === 'AbortError' || err instanceof DOMException,
-          `Expected AbortError, got ${err.name}: ${err.message}`,
-        );
-        return true;
+    const requestPromise = executeHedgedRequest({
+      candidates: ['a', 'b', 'c'],
+      execute: async (_candidate, signal) => {
+        resolveStarted();
+        await new Promise<void>((_, reject) => {
+          signal.addEventListener(
+            'abort',
+            () =>
+              reject(
+                signal.reason ?? new DOMException('Aborted', 'AbortError'),
+              ),
+            { once: true },
+          );
+        });
+        return 'should-not-reach';
       },
-    );
+      hedgeDelayMs: 10,
+      maxConcurrent: 3,
+      signal: controller.signal,
+    });
+
+    await started;
+    controller.abort();
+
+    await assert.rejects(requestPromise, (err: any) => {
+      assert.ok(
+        err.name === 'AbortError' || err instanceof DOMException,
+        `Expected AbortError, got ${err.name}: ${err.message}`,
+      );
+      return true;
+    });
   });
 
   it('should skip candidates when canAttempt returns false', async () => {
@@ -184,6 +197,11 @@ describe('executeHedgedRequest', () => {
   it('should call acquire and onRelease for each attempt', async () => {
     const acquired: string[] = [];
     const released: string[] = [];
+    let releaseCount = 0;
+    let resolveAllReleased!: () => void;
+    const allReleased = new Promise<void>((r) => {
+      resolveAllReleased = r;
+    });
 
     await executeHedgedRequest({
       candidates: ['a', 'b'],
@@ -195,13 +213,15 @@ describe('executeHedgedRequest', () => {
         acquired.push(c);
         return true;
       },
-      onRelease: (c) => released.push(c),
+      onRelease: (c) => {
+        released.push(c);
+        if (++releaseCount === 2) resolveAllReleased();
+      },
       hedgeDelayMs: 0,
       maxConcurrent: 3,
     });
 
-    // Allow microtasks to complete (finally blocks may still be pending)
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await allReleased;
 
     assert.deepEqual(acquired, ['a', 'b']);
     assert.deepEqual(released, ['a', 'b']);
@@ -254,6 +274,10 @@ describe('executeHedgedRequest', () => {
   it('should skip candidate and not call onRelease when acquire returns false', async () => {
     const attempted: string[] = [];
     const released: string[] = [];
+    let resolveReleased!: () => void;
+    const releaseBarrier = new Promise<void>((r) => {
+      resolveReleased = r;
+    });
 
     const result = await executeHedgedRequest({
       candidates: ['blocked', 'allowed'],
@@ -262,12 +286,15 @@ describe('executeHedgedRequest', () => {
         return `ok-${candidate}`;
       },
       acquire: (candidate) => candidate !== 'blocked',
-      onRelease: (c) => released.push(c),
+      onRelease: (c) => {
+        released.push(c);
+        resolveReleased();
+      },
       hedgeDelayMs: 0,
       maxConcurrent: 3,
     });
 
-    await delay(10);
+    await releaseBarrier;
 
     assert.equal(result, 'ok-allowed');
     assert.deepEqual(attempted, ['allowed']);
