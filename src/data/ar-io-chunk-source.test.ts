@@ -15,6 +15,7 @@ let log: ReturnType<typeof createTestLogger>;
 let arIOChunkSource: ArIOChunkSource;
 let mockPeerManager: {
   selectPeers: ReturnType<typeof mock.fn>;
+  selectPeersForKey: ReturnType<typeof mock.fn>;
   reportSuccess: ReturnType<typeof mock.fn>;
   reportFailure: ReturnType<typeof mock.fn>;
   getPeerUrls: ReturnType<typeof mock.fn>;
@@ -37,6 +38,7 @@ before(async () => {
 beforeEach(async () => {
   mockPeerManager = {
     selectPeers: mock.fn(() => ['http://peer1.example.com']),
+    selectPeersForKey: mock.fn(() => ['http://peer1.example.com']),
     reportSuccess: mock.fn(),
     reportFailure: mock.fn(),
     getPeerUrls: mock.fn(() => ['http://peer1.example.com']),
@@ -65,7 +67,7 @@ describe('ArIOChunkSource', () => {
       );
 
       // Verify no peers were selected
-      assert.equal(mockPeerManager.selectPeers.mock.callCount(), 0);
+      assert.equal(mockPeerManager.selectPeersForKey.mock.callCount(), 0);
     });
 
     it('should throw when skipRemoteForwarding is set on getUnvalidatedChunk', async () => {
@@ -78,7 +80,7 @@ describe('ArIOChunkSource', () => {
       );
 
       // Verify no peers were selected
-      assert.equal(mockPeerManager.selectPeers.mock.callCount(), 0);
+      assert.equal(mockPeerManager.selectPeersForKey.mock.callCount(), 0);
     });
   });
 
@@ -93,7 +95,7 @@ describe('ArIOChunkSource', () => {
       );
 
       // Verify no peers were selected (request aborted before network call)
-      assert.equal(mockPeerManager.selectPeers.mock.callCount(), 0);
+      assert.equal(mockPeerManager.selectPeersForKey.mock.callCount(), 0);
     });
 
     it('should allow cache-hit caller to abort while first continues waiting', async () => {
