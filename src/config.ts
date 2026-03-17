@@ -411,6 +411,40 @@ export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
   '2',
 );
 
+// Per-peer concurrency limiter
+export const PEER_MAX_CONCURRENT_OUTBOUND = +env.varOrDefault(
+  'PEER_MAX_CONCURRENT_OUTBOUND',
+  '10',
+);
+
+// Number of candidate peers selected for data retrieval
+export const PEER_CANDIDATE_COUNT = +env.varOrDefault(
+  'PEER_CANDIDATE_COUNT',
+  '5',
+);
+
+// Hedged request configuration
+export const PEER_HEDGE_DELAY_MS = +env.varOrDefault(
+  'PEER_HEDGE_DELAY_MS',
+  '500',
+);
+
+export const PEER_MAX_HEDGED_REQUESTS = +env.varOrDefault(
+  'PEER_MAX_HEDGED_REQUESTS',
+  '3',
+);
+
+// Consistent hash ring configuration
+export const PEER_HASH_RING_VIRTUAL_NODES = +env.varOrDefault(
+  'PEER_HASH_RING_VIRTUAL_NODES',
+  '150',
+);
+
+export const PEER_HASH_RING_HOME_SET_SIZE = +env.varOrDefault(
+  'PEER_HASH_RING_HOME_SET_SIZE',
+  '3',
+);
+
 export const GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS = +env.varOrDefault(
   'GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS',
   `${5 * 1000}`, // 5 seconds

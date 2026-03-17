@@ -16,6 +16,7 @@ import {
   randomWeightedChoices,
 } from '../lib/random-weighted-choices.js';
 import { shuffleArray } from '../lib/random.js';
+import { PeerHashRing } from '../data/peer-hash-ring.js';
 
 const DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS = 3_600_000; // 1 hour
 const DEFAULT_WEIGHT = 50; // Neutral starting weight
@@ -70,6 +71,10 @@ export class ArIOPeerManager implements WithFormattedPeers {
     }
   > = new Map();
 
+  // Consistent hash ring for cache-locality peer selection
+  private hashRing: PeerHashRing;
+  private hashRingHomeSetSize: number;
+
   // Cached peer selections per category
   private selectPeersCache: ReturnType<typeof memoize>;
 
@@ -85,6 +90,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
     nodeWallet,
     initialPeers,
     initialCategories,
+    hashRingVirtualNodes = config.PEER_HASH_RING_VIRTUAL_NODES,
+    hashRingHomeSetSize = config.PEER_HASH_RING_HOME_SET_SIZE,
     updatePeersRefreshIntervalMs = DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS,
     circuitBreakerOptions = {
       timeout: config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS,
@@ -101,6 +108,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
     nodeWallet?: string;
     initialPeers?: Record<string, string>;
     initialCategories?: WeightCategory[];
+    hashRingVirtualNodes?: number;
+    hashRingHomeSetSize?: number;
     updatePeersRefreshIntervalMs?: number;
     circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
@@ -108,6 +117,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
     this.nodeWallet = nodeWallet;
     this.updatePeersRefreshIntervalMs = updatePeersRefreshIntervalMs;
     this.networkProcess = networkProcess;
+    this.hashRing = new PeerHashRing(hashRingVirtualNodes);
+    this.hashRingHomeSetSize = hashRingHomeSetSize;
 
     this.arioGatewaysCircuitBreaker = new CircuitBreaker(
       this.networkProcess.getGateways.bind(this.networkProcess),
@@ -137,6 +148,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
     // Initialize with provided peers or start fetching from network
     if (initialPeers) {
       this.peers = initialPeers;
+      this.hashRing.rebuild(Object.values(initialPeers));
       // Initialize provided categories with the provided peers
       if (initialCategories) {
         for (const category of initialCategories) {
@@ -234,6 +246,47 @@ export class ArIOPeerManager implements WithFormattedPeers {
     });
 
     return shuffleArray(selected);
+  }
+
+  /**
+   * Select peers using hash ring home set + weighted fallback.
+   * The home set provides cache locality; fallback fills remaining slots.
+   */
+  selectPeersForKey(
+    category: WeightCategory,
+    key: string,
+    count: number,
+  ): string[] {
+    // Ensure category exists
+    if (!this.peerWeights.has(category)) {
+      this.registerCategory(category);
+    }
+
+    const categoryWeights = this.peerWeights.get(category);
+
+    // Get home set from hash ring
+    const homeSet = this.hashRing.getHomeSet(key, this.hashRingHomeSetSize);
+
+    // Sort home set by weight (highest first)
+    const rankedHomeSet = homeSet.sort((a, b) => {
+      const weightA = categoryWeights?.get(a) ?? DEFAULT_WEIGHT;
+      const weightB = categoryWeights?.get(b) ?? DEFAULT_WEIGHT;
+      return weightB - weightA;
+    });
+
+    // Fill remaining slots with general weighted selection (exclude home set)
+    const homeSetUrls = new Set(rankedHomeSet);
+    const remaining = count - rankedHomeSet.length;
+
+    if (remaining <= 0) {
+      return rankedHomeSet.slice(0, count);
+    }
+
+    const fallback = this.selectPeers(category, count).filter(
+      (p) => !homeSetUrls.has(p),
+    );
+
+    return [...rankedHomeSet, ...fallback].slice(0, count);
   }
 
   /**
@@ -483,6 +536,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
 
     const oldPeers = this.peers;
     this.peers = peers;
+    this.hashRing.rebuild(Object.values(peers));
 
     // Update weights for all categories
     const newPeerUrls = new Set(Object.values(peers));

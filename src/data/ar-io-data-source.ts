@@ -28,6 +28,8 @@ import { startChildSpan } from '../tracing.js';
 import { SpanStatusCode, Span } from '@opentelemetry/api';
 import { normalizeAbortError } from '../lib/http-utils.js';
 import { attachStallTimeout } from '../lib/stream.js';
+import { PeerRequestLimiter } from './peer-request-limiter.js';
+import { executeHedgedRequest } from '../lib/hedged-request.js';
 
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
@@ -43,12 +45,14 @@ export class ArIODataSource implements ContiguousDataSource {
   private streamStallTimeoutMs: number;
   private peerManager: ArIOPeerManager;
   private dataAttributesStore: ContiguousDataAttributesStore;
+  private peerRequestLimiter?: PeerRequestLimiter;
   peers: Record<string, string> = {};
 
   constructor({
     log,
     peerManager,
     dataAttributesStore,
+    peerRequestLimiter,
     maxHopsAllowed = MAX_DATA_HOPS,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
@@ -56,6 +60,7 @@ export class ArIODataSource implements ContiguousDataSource {
     log: winston.Logger;
     peerManager: ArIOPeerManager;
     dataAttributesStore: ContiguousDataAttributesStore;
+    peerRequestLimiter?: PeerRequestLimiter;
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
     streamStallTimeoutMs?: number;
@@ -66,6 +71,7 @@ export class ArIODataSource implements ContiguousDataSource {
     this.streamStallTimeoutMs = streamStallTimeoutMs;
     this.peerManager = peerManager;
     this.dataAttributesStore = dataAttributesStore;
+    this.peerRequestLimiter = peerRequestLimiter;
     this.peers = peerManager.getPeers();
   }
 
@@ -220,22 +226,17 @@ export class ArIODataSource implements ContiguousDataSource {
       }
 
       const log = this.log.child({ method: 'getData' });
-      const totalRetryCount =
-        retryCount ??
-        Math.min(
-          Math.max(Object.keys(this.peerManager.getPeers()).length, 1),
-          3,
-        );
+      const candidateCount = retryCount ?? config.PEER_CANDIDATE_COUNT;
 
       span.setAttributes({
-        'ario.request.retry_count': totalRetryCount,
+        'ario.request.candidate_count': candidateCount,
         'ario.peers.available_count': Object.keys(this.peerManager.getPeers())
           .length,
       });
 
       log.debug('Fetching contiguous data from ArIO peer', {
         id,
-        totalRetryCount,
+        candidateCount,
       });
 
       if (requestAttributes !== undefined) {
@@ -243,7 +244,11 @@ export class ArIODataSource implements ContiguousDataSource {
         span.setAttribute('ario.request.hops', requestAttributes.hops);
       }
 
-      const randomPeers = this.selectPeers(totalRetryCount);
+      const randomPeers = this.peerManager.selectPeersForKey(
+        DATA_CATEGORY,
+        id,
+        candidateCount,
+      );
       span.addEvent('Selected peers for request');
 
       const requestAttributesHeaders =
@@ -253,105 +258,109 @@ export class ArIODataSource implements ContiguousDataSource {
       const dataAttributes =
         await this.dataAttributesStore.getDataAttributes(id);
 
-      for (let i = 0; i < randomPeers.length; i++) {
-        // Check for abort before each peer attempt
-        signal?.throwIfAborted();
-
-        const currentPeer = randomPeers[i];
-        const peerRequestStart = Date.now();
-
-        span.addEvent('Attempting peer request', {
-          'ario.peer.url': currentPeer,
-          'ario.peer.index': i,
-        });
-
-        try {
+      const result = await executeHedgedRequest<ContiguousData>({
+        candidates: randomPeers,
+        execute: async (peer, hedgeSignal) => {
           const requestStartTime = Date.now();
-          const response = await this.request({
-            peerAddress: currentPeer,
-            id,
-            headers: {
-              ...(requestAttributesHeaders?.headers || {}),
-              ...(dataAttributes?.hash !== undefined
-                ? {
-                    [headerNames.expectedDigest]: dataAttributes.hash,
-                  }
-                : {}),
-              ...(region
-                ? {
-                    Range: `bytes=${region.offset}-${region.offset + region.size - 1}`,
-                  }
-                : {}),
-            },
-            requestAttributesHeaders,
-            signal,
-          });
-          const ttfb = Date.now() - requestStartTime;
-          const peerRequestDuration = Date.now() - peerRequestStart;
 
-          span.setAttributes({
-            'ario.peer.successful_url': currentPeer,
-            'ario.peer.successful_index': i,
-            'ario.request.duration_ms': peerRequestDuration,
-            'ario.request.ttfb_ms': ttfb,
-            'http.status_code': response.status,
+          span.addEvent('Attempting peer request', {
+            'ario.peer.url': peer,
           });
 
-          span.addEvent('Peer request successful', {
-            'ario.peer.url': currentPeer,
-            'ario.peer.index': i,
-          });
+          try {
+            const response = await this.request({
+              peerAddress: peer,
+              id,
+              headers: {
+                ...(requestAttributesHeaders?.headers || {}),
+                ...(dataAttributes?.hash !== undefined
+                  ? {
+                      [headerNames.expectedDigest]: dataAttributes.hash,
+                    }
+                  : {}),
+                ...(region
+                  ? {
+                      Range: `bytes=${region.offset}-${region.offset + region.size - 1}`,
+                    }
+                  : {}),
+              },
+              requestAttributesHeaders,
+              signal: hedgeSignal,
+            });
+            const ttfb = Date.now() - requestStartTime;
+            const peerRequestDuration = Date.now() - requestStartTime;
 
-          const parsedRequestAttributes = parseRequestAttributesHeaders({
-            headers: response.headers as { [key: string]: string },
-            currentHops: requestAttributesHeaders?.attributes.hops,
-          });
+            span.setAttributes({
+              'ario.peer.successful_url': peer,
+              'ario.request.duration_ms': peerRequestDuration,
+              'ario.request.ttfb_ms': ttfb,
+              'http.status_code': response.status,
+            });
 
-          return this.parseResponse({
-            response,
-            requestAttributes: parsedRequestAttributes,
-            requestStartTime,
-            peer: currentPeer,
-            ttfb,
-            expectedHash: dataAttributes?.hash,
-            region,
-          });
-        } catch (error: any) {
-          // Re-throw AbortError only for genuine client disconnects -
-          // connection timeouts also produce AbortError but should retry
-          if (error.name === 'AbortError' && signal?.aborted) {
-            span.addEvent('Request aborted', {
-              'ario.peer.url': currentPeer,
-              'ario.peer.index': i,
-              'data.retrieval.error': 'client_disconnected',
+            span.addEvent('Peer request successful', {
+              'ario.peer.url': peer,
+            });
+
+            const parsedRequestAttributes = parseRequestAttributesHeaders({
+              headers: response.headers as { [key: string]: string },
+              currentHops: requestAttributesHeaders?.attributes.hops,
+            });
+
+            return this.parseResponse({
+              response,
+              requestAttributes: parsedRequestAttributes,
+              requestStartTime,
+              peer,
+              ttfb,
+              expectedHash: dataAttributes?.hash,
+              region,
+            });
+          } catch (error: any) {
+            span.addEvent('Peer request failed', {
+              'ario.peer.url': peer,
+              'ario.request.error': error.message,
+            });
+
+            metrics.getDataErrorsTotal.inc({
+              class: this.constructor.name,
+              source: peer,
+            });
+            log.error('Failed to fetch contiguous data from ArIO peer', {
+              currentPeer: peer,
+              message: error.message,
+              stack: error.stack,
             });
             throw error;
           }
+        },
+        canAttempt: (peer) =>
+          this.peerRequestLimiter?.isAvailable(peer) ?? true,
+        onAcquire: (peer) => {
+          this.peerRequestLimiter?.tryAcquire(peer);
+        },
+        onRelease: (peer) => {
+          this.peerRequestLimiter?.release(peer);
+        },
+        hedgeDelayMs: config.PEER_HEDGE_DELAY_MS,
+        maxConcurrent: config.PEER_MAX_HEDGED_REQUESTS,
+        signal,
+      });
 
-          span.addEvent('Peer request failed', {
-            'ario.peer.url': currentPeer,
-            'ario.peer.index': i,
-            'ario.request.error': error.message,
-          });
-
-          metrics.getDataErrorsTotal.inc({
-            class: this.constructor.name,
-            source: currentPeer,
-          });
-          log.error('Failed to fetch contiguous data from ArIO peer', {
-            currentPeer,
-            message: error.message,
-            stack: error.stack,
-          });
-        }
-      }
-
-      throw new Error('Failed to fetch contiguous data from ArIO peers');
+      return result;
     } catch (error: any) {
       // Don't record AbortError as exception
       if (error.name !== 'AbortError') {
-        span.recordException(error);
-        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+        // Wrap AggregateError from hedged requests with a clearer message
+        const wrappedError =
+          error instanceof AggregateError
+            ? new Error('Failed to fetch contiguous data from ArIO peers')
+            : error;
+        span.recordException(wrappedError);
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: wrappedError.message,
+        });
+        throw wrappedError;
       }
       throw error;
     } finally {
@@ -408,8 +417,11 @@ export class ArIODataSource implements ContiguousDataSource {
       parseInt(response.headers['content-length'] ?? '0') || 0;
     const requestType = region ? 'range' : 'full';
 
-    stream.on('error', () => {
-      this.handlePeerFailure(peer, requestType);
+    stream.on('error', (err: any) => {
+      // Don't penalize peers that were canceled by hedging
+      if (err?.name !== 'AbortError') {
+        this.handlePeerFailure(peer, requestType);
+      }
     });
 
     stream.on('end', () => {
