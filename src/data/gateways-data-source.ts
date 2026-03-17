@@ -30,7 +30,6 @@ import {
   parseContentLength,
 } from '../lib/http-utils.js';
 import { attachStallTimeout } from '../lib/stream.js';
-import { PeerRequestLimiter } from './peer-request-limiter.js';
 
 const MAX_DATA_HOPS = 3;
 
@@ -42,12 +41,10 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private readonly streamStallTimeoutMs: number;
   private readonly fallbackToBasePath: boolean;
   private readonly maxHopsAllowed: number;
-  private peerRequestLimiter?: PeerRequestLimiter;
 
   constructor({
     log,
     trustedGatewaysUrls,
-    peerRequestLimiter,
     requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
     streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
     fallbackToBasePath = false,
@@ -55,7 +52,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
-    peerRequestLimiter?: PeerRequestLimiter;
     requestTimeoutMs?: number;
     streamStallTimeoutMs?: number;
     fallbackToBasePath?: boolean;
@@ -66,7 +62,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
     this.streamStallTimeoutMs = streamStallTimeoutMs;
     this.fallbackToBasePath = fallbackToBasePath;
     this.maxHopsAllowed = maxHopsAllowed;
-    this.peerRequestLimiter = peerRequestLimiter;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -161,15 +156,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
             // Check for abort before each gateway attempt
             signal?.throwIfAborted();
 
-            // Skip saturated gateways
-            if (
-              this.peerRequestLimiter &&
-              !this.peerRequestLimiter.isAvailable(gatewayUrl)
-            ) {
-              this.log.debug('Skipping saturated gateway', { gatewayUrl });
-              continue;
-            }
-
             const gatewayHostname = new URL(gatewayUrl).hostname.toLowerCase();
             if (
               requestAttributes?.via != null &&
@@ -225,263 +211,233 @@ export class GatewaysDataSource implements ContiguousDataSource {
               },
             );
 
-            // Acquire concurrency slot for this gateway
-            if (
-              this.peerRequestLimiter &&
-              !this.peerRequestLimiter.tryAcquire(gatewayUrl)
-            ) {
-              this.log.debug('Could not acquire slot for gateway', {
-                gatewayUrl,
+            for (const pathPrefix of pathPrefixes) {
+              const path = pathPrefix ? `${pathPrefix}/${id}` : `/${id}`;
+
+              // Connection phase: use AbortController with wall-clock timeout
+              // for establishing the connection, then switch to stall-based
+              // timeout once the stream starts flowing.
+              const controller = new AbortController();
+              const connectionTimer = setTimeout(
+                () => controller.abort(new Error('Connection timeout')),
+                this.requestTimeoutMs,
+              );
+              const onClientAbort = () => controller.abort(signal?.reason);
+              if (signal?.aborted) {
+                onClientAbort();
+              } else if (signal) {
+                signal.addEventListener('abort', onClientAbort, {
+                  once: true,
+                });
+              }
+
+              this.log.debug(
+                'Attempting to fetch contiguous data from gateway',
+                {
+                  id,
+                  gatewayUrl,
+                  priority,
+                  path,
+                  region,
+                },
+              );
+
+              const gatewayRequestStart = Date.now();
+              span.addEvent('Attempting gateway request', {
+                'gateways.request.url': gatewayUrl,
+                'gateways.request.priority': priority,
+                'gateways.request.path': path,
+                'gateways.request.has_region': region !== undefined,
               });
-              continue;
-            }
 
-            let gatewayStreamReturned = false;
-            try {
-              for (const pathPrefix of pathPrefixes) {
-                const path = pathPrefix ? `${pathPrefix}/${id}` : `/${id}`;
-
-                // Connection phase: use AbortController with wall-clock timeout
-                // for establishing the connection, then switch to stall-based
-                // timeout once the stream starts flowing.
-                const controller = new AbortController();
-                const connectionTimer = setTimeout(
-                  () => controller.abort(new Error('Connection timeout')),
-                  this.requestTimeoutMs,
-                );
-                const onClientAbort = () => controller.abort(signal?.reason);
-                if (signal?.aborted) {
-                  onClientAbort();
-                } else if (signal) {
-                  signal.addEventListener('abort', onClientAbort, {
-                    once: true,
-                  });
-                }
-
-                this.log.debug(
-                  'Attempting to fetch contiguous data from gateway',
-                  {
-                    id,
-                    gatewayUrl,
-                    priority,
-                    path,
-                    region,
+              try {
+                const response = await gatewayAxios.request({
+                  signal: controller.signal,
+                  method: 'GET',
+                  headers: {
+                    'Accept-Encoding': 'identity',
+                    ...requestAttributesHeaders?.headers,
+                    ...(region
+                      ? {
+                          Range: buildRangeHeader(
+                            region.offset,
+                            region.offset + region.size - 1,
+                          ),
+                        }
+                      : {}),
                   },
-                );
-
-                const gatewayRequestStart = Date.now();
-                span.addEvent('Attempting gateway request', {
-                  'gateways.request.url': gatewayUrl,
-                  'gateways.request.priority': priority,
-                  'gateways.request.path': path,
-                  'gateways.request.has_region': region !== undefined,
+                  url: path,
+                  responseType: 'stream',
+                  params: {
+                    'ar-io-hops': requestAttributesHeaders?.attributes.hops,
+                    'ar-io-origin': requestAttributesHeaders?.attributes.origin,
+                    'ar-io-origin-release':
+                      requestAttributesHeaders?.attributes.originNodeRelease,
+                    'ar-io-arns-record':
+                      requestAttributesHeaders?.attributes.arnsRecord,
+                    'ar-io-arns-basename':
+                      requestAttributesHeaders?.attributes.arnsBasename,
+                    'ar-io-via':
+                      requestAttributesHeaders?.attributes.via?.join(', '),
+                  },
                 });
 
-                try {
-                  const response = await gatewayAxios.request({
-                    signal: controller.signal,
-                    method: 'GET',
-                    headers: {
-                      'Accept-Encoding': 'identity',
-                      ...requestAttributesHeaders?.headers,
-                      ...(region
-                        ? {
-                            Range: buildRangeHeader(
-                              region.offset,
-                              region.offset + region.size - 1,
-                            ),
-                          }
-                        : {}),
-                    },
-                    url: path,
-                    responseType: 'stream',
-                    params: {
-                      'ar-io-hops': requestAttributesHeaders?.attributes.hops,
-                      'ar-io-origin':
-                        requestAttributesHeaders?.attributes.origin,
-                      'ar-io-origin-release':
-                        requestAttributesHeaders?.attributes.originNodeRelease,
-                      'ar-io-arns-record':
-                        requestAttributesHeaders?.attributes.arnsRecord,
-                      'ar-io-arns-basename':
-                        requestAttributesHeaders?.attributes.arnsBasename,
-                      'ar-io-via':
-                        requestAttributesHeaders?.attributes.via?.join(', '),
-                    },
-                  });
+                const gatewayRequestDuration = Date.now() - gatewayRequestStart;
 
-                  const gatewayRequestDuration =
-                    Date.now() - gatewayRequestStart;
-
-                  if (
-                    (region !== undefined && response.status !== 206) ||
-                    (region === undefined && response.status !== 200)
-                  ) {
-                    response.data.destroy();
-                    span.addEvent('Gateway returned unexpected status', {
-                      'gateways.url': gatewayUrl,
-                      'gateways.tier.priority': priority,
-                      'gateways.request.path': path,
-                      'http.status_code': response.status,
-                      'http.expected_status': region !== undefined ? 206 : 200,
-                      'gateways.request.duration_ms': gatewayRequestDuration,
-                    });
-                    throw new Error(
-                      `Unexpected status code from gateway: ${response.status}. Expected ${
-                        region !== undefined ? '206' : '200'
-                      }.`,
-                    );
-                  }
-
-                  // Connection established - clear connection timeout and
-                  // switch to stall-based timeout for the streaming phase
-                  clearTimeout(connectionTimer);
-                  if (signal) {
-                    signal.removeEventListener('abort', onClientAbort);
-                  }
-
-                  const stream = response.data;
-                  const contentLength = parseContentLength(response.headers);
-
-                  if (contentLength === undefined || contentLength === 0) {
-                    stream.destroy();
-                    throw new Error(
-                      `Gateway response has no content-length or zero content-length for ${id}`,
-                    );
-                  }
-
-                  attachStallTimeout(stream, this.streamStallTimeoutMs);
-
-                  const gatewayTrusted =
-                    this.gatewayTrust.get(gatewayUrl) ?? true;
-
-                  span.setAttributes({
-                    'gateway.successful_url': gatewayUrl,
-                    'gateway.successful_priority': priority,
-                    'gateway.successful_trusted': gatewayTrusted,
-                    'gateway.successful_path': path,
-                    'gateway.request_duration_ms': gatewayRequestDuration,
-                    'gateway.response_status': response.status,
-                    'data.size': contentLength,
-                    'data.content_type': response.headers['content-type'],
-                  });
-
-                  span.addEvent('Gateway request successful', {
+                if (
+                  (region !== undefined && response.status !== 206) ||
+                  (region === undefined && response.status !== 200)
+                ) {
+                  response.data.destroy();
+                  span.addEvent('Gateway returned unexpected status', {
                     'gateways.url': gatewayUrl,
                     'gateways.tier.priority': priority,
                     'gateways.request.path': path,
                     'http.status_code': response.status,
-                    'http.content_length': contentLength,
+                    'http.expected_status': region !== undefined ? 206 : 200,
                     'gateways.request.duration_ms': gatewayRequestDuration,
                   });
+                  throw new Error(
+                    `Unexpected status code from gateway: ${response.status}. Expected ${
+                      region !== undefined ? '206' : '200'
+                    }.`,
+                  );
+                }
 
-                  const requestType = region ? 'range' : 'full';
+                // Connection established - clear connection timeout and
+                // switch to stall-based timeout for the streaming phase
+                clearTimeout(connectionTimer);
+                if (signal) {
+                  signal.removeEventListener('abort', onClientAbort);
+                }
 
-                  stream.on('error', () => {
-                    metrics.getDataStreamErrorsTotal.inc({
+                const stream = response.data;
+                const contentLength = parseContentLength(response.headers);
+
+                if (contentLength === undefined || contentLength === 0) {
+                  stream.destroy();
+                  throw new Error(
+                    `Gateway response has no content-length or zero content-length for ${id}`,
+                  );
+                }
+
+                attachStallTimeout(stream, this.streamStallTimeoutMs);
+
+                const gatewayTrusted =
+                  this.gatewayTrust.get(gatewayUrl) ?? true;
+
+                span.setAttributes({
+                  'gateway.successful_url': gatewayUrl,
+                  'gateway.successful_priority': priority,
+                  'gateway.successful_trusted': gatewayTrusted,
+                  'gateway.successful_path': path,
+                  'gateway.request_duration_ms': gatewayRequestDuration,
+                  'gateway.response_status': response.status,
+                  'data.size': contentLength,
+                  'data.content_type': response.headers['content-type'],
+                });
+
+                span.addEvent('Gateway request successful', {
+                  'gateways.url': gatewayUrl,
+                  'gateways.tier.priority': priority,
+                  'gateways.request.path': path,
+                  'http.status_code': response.status,
+                  'http.content_length': contentLength,
+                  'gateways.request.duration_ms': gatewayRequestDuration,
+                });
+
+                const requestType = region ? 'range' : 'full';
+
+                stream.on('error', () => {
+                  metrics.getDataStreamErrorsTotal.inc({
+                    class: this.constructor.name,
+                    source: gatewayUrl,
+                    request_type: requestType,
+                  });
+                });
+
+                stream.on('end', () => {
+                  metrics.getDataStreamSuccessesTotal.inc({
+                    class: this.constructor.name,
+                    source: gatewayUrl,
+                    request_type: requestType,
+                  });
+
+                  // Track bytes streamed
+                  metrics.getDataStreamBytesTotal.inc(
+                    {
                       class: this.constructor.name,
                       source: gatewayUrl,
                       request_type: requestType,
-                    });
-                  });
+                    },
+                    contentLength,
+                  );
 
-                  stream.on('end', () => {
-                    metrics.getDataStreamSuccessesTotal.inc({
+                  metrics.getDataStreamSizeHistogram.observe(
+                    {
                       class: this.constructor.name,
                       source: gatewayUrl,
                       request_type: requestType,
-                    });
+                    },
+                    contentLength,
+                  );
+                });
 
-                    // Track bytes streamed
-                    metrics.getDataStreamBytesTotal.inc(
-                      {
-                        class: this.constructor.name,
-                        source: gatewayUrl,
-                        request_type: requestType,
-                      },
-                      contentLength,
-                    );
+                return {
+                  stream,
+                  size: contentLength,
+                  verified: false,
+                  trusted: gatewayTrusted,
+                  sourceContentType: response.headers['content-type'],
+                  cached: false,
+                  requestAttributes: parseRequestAttributesHeaders({
+                    headers: response.headers as { [key: string]: string },
+                    currentHops: requestAttributesHeaders?.attributes.hops,
+                  }),
+                };
+              } catch (rawError: any) {
+                clearTimeout(connectionTimer);
+                if (signal) {
+                  signal.removeEventListener('abort', onClientAbort);
+                }
+                const error = normalizeAbortError(rawError);
 
-                    metrics.getDataStreamSizeHistogram.observe(
-                      {
-                        class: this.constructor.name,
-                        source: gatewayUrl,
-                        request_type: requestType,
-                      },
-                      contentLength,
-                    );
-                  });
-
-                  // Defer limiter release until the stream is fully consumed
-                  // so the slot accurately reflects active outbound transfers.
-                  gatewayStreamReturned = true;
-                  stream.once('close', () => {
-                    this.peerRequestLimiter?.release(gatewayUrl);
-                  });
-
-                  return {
-                    stream,
-                    size: contentLength,
-                    verified: false,
-                    trusted: gatewayTrusted,
-                    sourceContentType: response.headers['content-type'],
-                    cached: false,
-                    requestAttributes: parseRequestAttributesHeaders({
-                      headers: response.headers as { [key: string]: string },
-                      currentHops: requestAttributesHeaders?.attributes.hops,
-                    }),
-                  };
-                } catch (rawError: any) {
-                  clearTimeout(connectionTimer);
-                  if (signal) {
-                    signal.removeEventListener('abort', onClientAbort);
-                  }
-                  const error = normalizeAbortError(rawError);
-
-                  // Handle AbortError - distinguish client disconnect from timeout
-                  if (error.name === 'AbortError') {
-                    const isClientDisconnect = signal?.aborted === true;
-                    span.addEvent('Request aborted', {
-                      'gateways.url': gatewayUrl,
-                      'gateways.tier.priority': priority,
-                      'gateways.request.path': path,
-                      'data.retrieval.error': isClientDisconnect
-                        ? 'client_disconnected'
-                        : 'timeout',
-                    });
-                    // Only skip remaining gateways on client disconnect, not timeout
-                    if (isClientDisconnect) {
-                      throw error;
-                    }
-                    lastError = error;
-                    continue;
-                  }
-
-                  const gatewayRequestDuration =
-                    Date.now() - gatewayRequestStart;
-                  lastError = error as Error;
-
-                  span.addEvent('Gateway request failed', {
+                // Handle AbortError - distinguish client disconnect from timeout
+                if (error.name === 'AbortError') {
+                  const isClientDisconnect = signal?.aborted === true;
+                  span.addEvent('Request aborted', {
                     'gateways.url': gatewayUrl,
                     'gateways.tier.priority': priority,
                     'gateways.request.path': path,
-                    'gateways.request.error': error.message,
-                    'gateways.request.duration_ms': gatewayRequestDuration,
+                    'data.retrieval.error': isClientDisconnect
+                      ? 'client_disconnected'
+                      : 'timeout',
                   });
-
-                  this.log.warn('Failed to fetch from gateway', {
-                    gatewayUrl,
-                    priority,
-                    path,
-                    error: error.message,
-                  });
+                  // Only skip remaining gateways on client disconnect, not timeout
+                  if (isClientDisconnect) {
+                    throw error;
+                  }
+                  lastError = error;
+                  continue;
                 }
-              }
-            } finally {
-              // Only release here on failure; successful streams release via
-              // stream 'close' event to hold the slot for the full transfer.
-              if (!gatewayStreamReturned) {
-                this.peerRequestLimiter?.release(gatewayUrl);
+
+                const gatewayRequestDuration = Date.now() - gatewayRequestStart;
+                lastError = error as Error;
+
+                span.addEvent('Gateway request failed', {
+                  'gateways.url': gatewayUrl,
+                  'gateways.tier.priority': priority,
+                  'gateways.request.path': path,
+                  'gateways.request.error': error.message,
+                  'gateways.request.duration_ms': gatewayRequestDuration,
+                });
+
+                this.log.warn('Failed to fetch from gateway', {
+                  gatewayUrl,
+                  priority,
+                  path,
+                  error: error.message,
+                });
               }
             }
           }
