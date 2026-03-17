@@ -181,7 +181,7 @@ describe('executeHedgedRequest', () => {
     assert.deepEqual(callOrder, ['fail1', 'fail2', 'succeed']);
   });
 
-  it('should call onAcquire and onRelease for each attempt', async () => {
+  it('should call acquire and onRelease for each attempt', async () => {
     const acquired: string[] = [];
     const released: string[] = [];
 
@@ -191,7 +191,10 @@ describe('executeHedgedRequest', () => {
         if (candidate === 'a') throw new Error('fail');
         return 'ok';
       },
-      onAcquire: (c) => acquired.push(c),
+      acquire: (c) => {
+        acquired.push(c);
+        return true;
+      },
       onRelease: (c) => released.push(c),
       hedgeDelayMs: 0,
       maxConcurrent: 3,
@@ -202,6 +205,73 @@ describe('executeHedgedRequest', () => {
 
     assert.deepEqual(acquired, ['a', 'b']);
     assert.deepEqual(released, ['a', 'b']);
+  });
+
+  it('should not launch second candidate while saturated, then resume when slot frees', async () => {
+    const events: string[] = [];
+    let resolveFirst!: () => void;
+    const firstBarrier = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+
+    const resultPromise = executeHedgedRequest({
+      candidates: ['a', 'b'],
+      execute: async (candidate) => {
+        events.push(`start:${candidate}`);
+        if (candidate === 'a') {
+          await firstBarrier;
+          events.push(`end:a`);
+          throw new Error('a failed');
+        }
+        events.push(`end:b`);
+        return 'ok-b';
+      },
+      hedgeDelayMs: 20,
+      maxConcurrent: 1,
+    });
+
+    // Wait well past the hedge delay — 'b' must NOT have launched yet (saturated)
+    await delay(60);
+    assert.ok(
+      !events.includes('start:b'),
+      'b should not launch while slot is saturated',
+    );
+
+    // Release the first slot — 'b' should now launch via .finally() resume
+    resolveFirst();
+
+    const result = await resultPromise;
+    assert.equal(result, 'ok-b');
+
+    const startBIdx = events.indexOf('start:b');
+    const endAIdx = events.indexOf('end:a');
+    assert.ok(
+      startBIdx > endAIdx,
+      `b (index ${startBIdx}) should start after a ends (index ${endAIdx})`,
+    );
+  });
+
+  it('should skip candidate and not call onRelease when acquire returns false', async () => {
+    const attempted: string[] = [];
+    const released: string[] = [];
+
+    const result = await executeHedgedRequest({
+      candidates: ['blocked', 'allowed'],
+      execute: async (candidate) => {
+        attempted.push(candidate);
+        return `ok-${candidate}`;
+      },
+      acquire: (candidate) => candidate !== 'blocked',
+      onRelease: (c) => released.push(c),
+      hedgeDelayMs: 0,
+      maxConcurrent: 3,
+    });
+
+    await delay(10);
+
+    assert.equal(result, 'ok-allowed');
+    assert.deepEqual(attempted, ['allowed']);
+    assert.deepEqual(released, ['allowed']);
   });
 
   it('should throw when no eligible candidates are available', async () => {
