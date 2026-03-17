@@ -122,8 +122,8 @@ export class ArIOChunkSource
     });
   }
 
-  private selectChunkPeers(peerCount: number): string[] {
-    return this.peerManager.selectPeers(CHUNK_CATEGORY, peerCount);
+  private selectChunkPeers(key: string, peerCount: number): string[] {
+    return this.peerManager.selectPeersForKey(CHUNK_CATEGORY, key, peerCount);
   }
 
   private handleChunkPeerSuccess(peer: string, responseTimeMs: number): void {
@@ -242,12 +242,16 @@ export class ArIOChunkSource
 
       const headers = requestAttributesHeaders?.headers || {};
 
-      // Select all peers upfront to ensure different peers are used for each attempt
-      // (peer selection is cached, so selecting per-attempt would return the same peers)
+      // Select all peers upfront: home-set peers (hash ring) fill the first slice,
+      // weighted fallback peers fill subsequent slices, ensuring each retry attempt
+      // uses a distinct set of peers.
       const totalPeersNeeded = peerSelectionCount * retryCount;
       let allSelectedPeers: string[];
       try {
-        allSelectedPeers = this.selectChunkPeers(totalPeersNeeded);
+        allSelectedPeers = this.selectChunkPeers(
+          absoluteOffset.toString(),
+          totalPeersNeeded,
+        );
       } catch (error: any) {
         span.recordException(error);
         throw new Error(
