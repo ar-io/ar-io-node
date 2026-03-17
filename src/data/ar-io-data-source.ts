@@ -348,6 +348,7 @@ export class ArIODataSource implements ContiguousDataSource {
                 message: error.message,
                 stack: error.stack,
               });
+              this.handlePeerFailure(peer, region ? 'range' : 'full');
             }
             throw error;
           }

@@ -165,11 +165,8 @@ export async function executeHedgedRequest<T>(
     if (!launchNext()) {
       // No eligible candidates at all
       if (!resolved) {
-        checkDone();
-        if (!resolved) {
-          resolved = true;
-          reject(new Error('No eligible candidates available'));
-        }
+        resolved = true;
+        reject(new Error('No eligible candidates available'));
       }
       return;
     }
