@@ -40,6 +40,7 @@ export async function executeHedgedRequest<T>(
   let inFlight = 0;
   let candidateIndex = 0;
   let saturated = false;
+  let pendingHedgeTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Build the combined signal for each attempt
   function makeAttemptSignal(): AbortSignal {
@@ -115,8 +116,12 @@ export async function executeHedgedRequest<T>(
             if (!resolved) {
               errors.push(err instanceof Error ? err : new Error(String(err)));
               // On immediate failure, try to launch next candidate right away
-              // (don't wait for hedge delay)
-              launchNext();
+              // (don't wait for hedge delay); re-arm the timer from this new
+              // launch so subsequent candidates maintain proper hedgeDelayMs
+              // spacing rather than bursting close together
+              if (launchNext()) {
+                scheduleNextHedge();
+              }
             }
           })
           .finally(() => {
@@ -177,9 +182,18 @@ export async function executeHedgedRequest<T>(
     // Schedule hedge launches
     function scheduleNextHedge() {
       if (resolved) return;
+      if (hedgeDelayMs === 0) return;
       if (candidateIndex >= candidates.length) return;
 
+      // Cancel any existing timer so we re-arm from the most recent launch,
+      // preventing burst when a candidate fails just before the timer fires
+      if (pendingHedgeTimer !== null) {
+        clearTimeout(pendingHedgeTimer);
+        pendingHedgeTimer = null;
+      }
+
       const timer = setTimeout(() => {
+        pendingHedgeTimer = null;
         if (resolved) return;
         // Only continue the chain if a candidate was actually launched;
         // if saturated, .finally() will resume when a slot frees
@@ -187,6 +201,8 @@ export async function executeHedgedRequest<T>(
           scheduleNextHedge();
         }
       }, hedgeDelayMs);
+
+      pendingHedgeTimer = timer;
 
       // Clean up timer if we resolve before it fires
       const cleanup = () => clearTimeout(timer);
