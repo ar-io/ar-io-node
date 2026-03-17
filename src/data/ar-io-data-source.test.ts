@@ -349,10 +349,12 @@ describe('ArIODataSource', () => {
         /Failed to fetch contiguous data from ArIO peers/,
       );
 
-      // With hedged requests, each candidate peer that fails increments the metric
-      assert.ok(
-        (metrics.getDataErrorsTotal.inc as any).mock.callCount() >= 1,
-        'Expected at least one error metric increment',
+      // With hedged requests, both candidate peers fail so the metric
+      // should be incremented once per candidate
+      assert.equal(
+        (metrics.getDataErrorsTotal.inc as any).mock.callCount(),
+        2,
+        'Expected error metric increment for each candidate peer',
       );
     });
 
