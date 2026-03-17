@@ -222,7 +222,10 @@ export class ArIODataSource implements ContiguousDataSource {
       }
 
       const log = this.log.child({ method: 'getData' });
-      const candidateCount = Math.max(1, retryCount ?? config.PEER_CANDIDATE_COUNT);
+      const candidateCount = Math.max(
+        1,
+        retryCount ?? config.PEER_CANDIDATE_COUNT,
+      );
 
       span.setAttributes({
         'ario.request.candidate_count': candidateCount,
