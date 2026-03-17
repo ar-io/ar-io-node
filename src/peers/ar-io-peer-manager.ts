@@ -282,9 +282,11 @@ export class ArIOPeerManager implements WithFormattedPeers {
       return rankedHomeSet.slice(0, count);
     }
 
-    const fallback = this.selectPeers(category, count).filter(
-      (p) => !homeSetUrls.has(p),
-    );
+    // Oversample to account for home set members that will be filtered out
+    const fallback = this.selectPeers(
+      category,
+      remaining + homeSetUrls.size,
+    ).filter((p) => !homeSetUrls.has(p));
 
     return [...rankedHomeSet, ...fallback].slice(0, count);
   }

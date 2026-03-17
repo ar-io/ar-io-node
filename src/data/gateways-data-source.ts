@@ -236,6 +236,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
               continue;
             }
 
+            let gatewayStreamReturned = false;
             try {
               for (const pathPrefix of pathPrefixes) {
                 const path = pathPrefix ? `${pathPrefix}/${id}` : `/${id}`;
@@ -411,6 +412,13 @@ export class GatewaysDataSource implements ContiguousDataSource {
                     );
                   });
 
+                  // Defer limiter release until the stream is fully consumed
+                  // so the slot accurately reflects active outbound transfers.
+                  gatewayStreamReturned = true;
+                  stream.once('close', () => {
+                    this.peerRequestLimiter?.release(gatewayUrl);
+                  });
+
                   return {
                     stream,
                     size: contentLength,
@@ -470,7 +478,11 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 }
               }
             } finally {
-              this.peerRequestLimiter?.release(gatewayUrl);
+              // Only release here on failure; successful streams release via
+              // stream 'close' event to hold the slot for the full transfer.
+              if (!gatewayStreamReturned) {
+                this.peerRequestLimiter?.release(gatewayUrl);
+              }
             }
           }
 
