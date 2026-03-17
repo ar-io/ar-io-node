@@ -1033,14 +1033,20 @@ const contiguousDataStore = new FsDataStore({
 
 export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,
-  dataSource: new FilteredContiguousDataSource({
-    log,
-    dataSource: new SequentialDataSource({
-      log,
-      dataSources: onDemandDataSources,
-    }),
-    blockedIpsAndCidrs: config.CACHE_ONLY_CLIENT_IPS_AND_CIDRS,
-  }),
+  dataSource:
+    config.CACHE_ONLY_CLIENT_IPS_AND_CIDRS.length > 0
+      ? new FilteredContiguousDataSource({
+          log,
+          dataSource: new SequentialDataSource({
+            log,
+            dataSources: onDemandDataSources,
+          }),
+          blockedIpsAndCidrs: config.CACHE_ONLY_CLIENT_IPS_AND_CIDRS,
+        })
+      : new SequentialDataSource({
+          log,
+          dataSources: onDemandDataSources,
+        }),
   metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
