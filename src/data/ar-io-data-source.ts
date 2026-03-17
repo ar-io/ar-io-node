@@ -258,6 +258,10 @@ export class ArIODataSource implements ContiguousDataSource {
       const dataAttributes =
         await this.dataAttributesStore.getDataAttributes(id);
 
+      // Track peers whose limiter slot is held by a live stream rather than
+      // the request promise, so onRelease can skip them.
+      const streamPeers = new Set<string>();
+
       const result = await executeHedgedRequest<ContiguousData>({
         candidates: randomPeers,
         execute: async (peer, hedgeSignal) => {
@@ -306,7 +310,7 @@ export class ArIODataSource implements ContiguousDataSource {
               currentHops: requestAttributesHeaders?.attributes.hops,
             });
 
-            return this.parseResponse({
+            const contiguousData = this.parseResponse({
               response,
               requestAttributes: parsedRequestAttributes,
               requestStartTime,
@@ -315,21 +319,36 @@ export class ArIODataSource implements ContiguousDataSource {
               expectedHash: dataAttributes?.hash,
               region,
             });
+
+            // Defer limiter release until the stream is fully consumed so the
+            // slot accurately reflects active outbound transfers.
+            streamPeers.add(peer);
+            contiguousData.stream.once('close', () => {
+              if (streamPeers.delete(peer)) {
+                this.peerRequestLimiter?.release(peer);
+              }
+            });
+
+            return contiguousData;
           } catch (error: any) {
             span.addEvent('Peer request failed', {
               'ario.peer.url': peer,
               'ario.request.error': error.message,
             });
 
-            metrics.getDataErrorsTotal.inc({
-              class: this.constructor.name,
-              source: peer,
-            });
-            log.error('Failed to fetch contiguous data from ArIO peer', {
-              currentPeer: peer,
-              message: error.message,
-              stack: error.stack,
-            });
+            // AbortErrors from hedging cancellations (loser requests) are
+            // expected — don't inflate metrics or log as errors
+            if (error.name !== 'AbortError') {
+              metrics.getDataErrorsTotal.inc({
+                class: this.constructor.name,
+                source: peer,
+              });
+              log.error('Failed to fetch contiguous data from ArIO peer', {
+                currentPeer: peer,
+                message: error.message,
+                stack: error.stack,
+              });
+            }
             throw error;
           }
         },
@@ -339,7 +358,10 @@ export class ArIODataSource implements ContiguousDataSource {
           this.peerRequestLimiter?.tryAcquire(peer);
         },
         onRelease: (peer) => {
-          this.peerRequestLimiter?.release(peer);
+          // Skip release if stream took ownership of the slot
+          if (!streamPeers.has(peer)) {
+            this.peerRequestLimiter?.release(peer);
+          }
         },
         hedgeDelayMs: config.PEER_HEDGE_DELAY_MS,
         maxConcurrent: config.PEER_MAX_HEDGED_REQUESTS,

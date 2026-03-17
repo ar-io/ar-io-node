@@ -32,9 +32,6 @@ describe('PeerHashRing', () => {
     ]);
     const set1 = ring.getHomeSet('key-1', 2);
     const set2 = ring.getHomeSet('key-2', 2);
-    // With 5 peers, different keys should usually map to different peers
-    // (not guaranteed for every pair, but extremely likely for these seeds)
-    const sameOrder = set1[0] === set2[0] && set1[1] === set2[1];
     // At least check they're valid
     assert.equal(set1.length, 2);
     assert.equal(set2.length, 2);
