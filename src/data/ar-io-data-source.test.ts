@@ -994,26 +994,28 @@ describe('ArIODataSource', () => {
           };
         });
 
-        // Launch two concurrent getData calls — both target the single peer
-        await Promise.all([
-          singlePeerDataSource.getData({ id: 'id1' }),
-          singlePeerDataSource.getData({ id: 'id2' }),
-        ]);
+        try {
+          // Launch two concurrent getData calls — both target the single peer
+          await Promise.all([
+            singlePeerDataSource.getData({ id: 'id1' }),
+            singlePeerDataSource.getData({ id: 'id2' }),
+          ]);
 
-        // Both stream-backed slots are held; limiter should show 2 active
-        assert.equal(limiter.getActiveCount('http://peer1.com'), 2);
+          // Both stream-backed slots are held; limiter should show 2 active
+          assert.equal(limiter.getActiveCount('http://peer1.com'), 2);
 
-        // Close first stream — one slot released, one still held
-        stream1.destroy();
-        await new Promise<void>((resolve) => stream1.once('close', resolve));
-        assert.equal(limiter.getActiveCount('http://peer1.com'), 1);
+          // Close first stream — one slot released, one still held
+          stream1.destroy();
+          await new Promise<void>((resolve) => stream1.once('close', resolve));
+          assert.equal(limiter.getActiveCount('http://peer1.com'), 1);
 
-        // Close second stream — final slot released
-        stream2.destroy();
-        await new Promise<void>((resolve) => stream2.once('close', resolve));
-        assert.equal(limiter.getActiveCount('http://peer1.com'), 0);
-
-        singlePeerManager.stopUpdatingPeers();
+          // Close second stream — final slot released
+          stream2.destroy();
+          await new Promise<void>((resolve) => stream2.once('close', resolve));
+          assert.equal(limiter.getActiveCount('http://peer1.com'), 0);
+        } finally {
+          singlePeerManager.stopUpdatingPeers();
+        }
       });
 
       it('should release the slot via onRelease when execute throws', async () => {
@@ -1038,12 +1040,14 @@ describe('ArIODataSource', () => {
           throw new Error('network error');
         });
 
-        await assert.rejects(singlePeerDataSource.getData({ id: 'id1' }));
+        try {
+          await assert.rejects(singlePeerDataSource.getData({ id: 'id1' }));
 
-        // Slot must be fully released after a failed request
-        assert.equal(limiter.getActiveCount('http://peer1.com'), 0);
-
-        singlePeerManager.stopUpdatingPeers();
+          // Slot must be fully released after a failed request
+          assert.equal(limiter.getActiveCount('http://peer1.com'), 0);
+        } finally {
+          singlePeerManager.stopUpdatingPeers();
+        }
       });
     });
 
