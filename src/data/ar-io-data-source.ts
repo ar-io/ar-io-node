@@ -75,10 +75,6 @@ export class ArIODataSource implements ContiguousDataSource {
     this.peers = peerManager.getPeers();
   }
 
-  selectPeers(peerCount: number): string[] {
-    return this.peerManager.selectPeers(DATA_CATEGORY, peerCount);
-  }
-
   handlePeerSuccess(
     peer: string,
     kbps: number,
