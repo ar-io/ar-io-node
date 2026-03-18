@@ -121,7 +121,7 @@ export const composeUp = async ({
   ANS104_INDEX_FILTER = '{"always": true}',
   ADMIN_API_KEY = 'secret',
   TRUSTED_NODE_URL = 'https://arweave.net',
-  TRUSTED_GATEWAYS_URLS = '{"https://arweave.net": 1, "https://ar-io.dev": 2}',
+  TRUSTED_GATEWAYS_URLS = '{"https://arweave.net": 1, "https://turbo-gateway.com": 2}',
   BACKGROUND_RETRIEVAL_ORDER = 'trusted-gateways',
   AO_CU_URL = 'https://cu.ardrive.io', // TODO: replace with local ao-cu
   ...ENVIRONMENT

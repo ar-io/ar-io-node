@@ -75,7 +75,7 @@ describe('WebhookEmitter', { skip: isTestFiltered(['flaky']) }, () => {
         WEBHOOK_TARGET_SERVERS: 'http://host.testcontainers.internal:4001',
         WEBHOOK_BLOCK_FILTER: '{"always": true}',
         TRUSTED_GATEWAYS_URLS:
-          '{"https://turbo-gateway.com": 1, "https://ar-io.dev": 2}',
+          '{"https://arweave.net": 1, "https://turbo-gateway.com": 2}',
         BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
       })
       .withExposedPorts(4000)
