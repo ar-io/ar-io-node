@@ -131,4 +131,22 @@ describe('matchArnsRootHost with explicit hosts', () => {
       subdomainLength: 2,
     });
   });
+
+  it('ArNS subdomain on longer host returns that host (not the shorter one)', () => {
+    // Middleware uses `req.hostname === matchedEntry.host` to detect root vs ArNS
+    const result = matchArnsRootHost('myname.foo.example.com', hosts);
+    assert.notEqual(result, undefined);
+    // Must match foo.example.com so middleware sees this as an ArNS subdomain
+    assert.equal(result!.host, 'foo.example.com');
+    // hostname !== matchedEntry.host, confirming it's not a root host hit
+    assert.notEqual('myname.foo.example.com', result!.host);
+  });
+
+  it('single-host list: subdomainLength 0 means one subdomain triggers ArNS', () => {
+    // Middleware checks req.subdomains.length > matched.subdomainLength
+    const single = [{ host: 'example.com', subdomainLength: 0 }];
+    const result = matchArnsRootHost('arns.example.com', single);
+    assert.equal(result!.subdomainLength, 0);
+    // 1 subdomain > 0 subdomainLength → middleware treats as ArNS/sandbox
+  });
 });
