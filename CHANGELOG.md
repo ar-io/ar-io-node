@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 73] - 2026-03-18
 
+This is a **recommended release** focused on **operator configurability** and **P2P retrieval performance**. Key highlights include **unified Cache-Control headers** with operator-configurable durations, **hedged peer requests with consistent hash routing** to reduce tail latency and improve cache efficiency, **request trace IDs** for end-to-end correlation, and a **cache-only mode** for protecting upstream bandwidth from high-volume clients. It also fixes HTTP 452 responses for blocked content, corrects client disconnect detection, and addresses security audit vulnerabilities.
+
 ### Added
 
 - **Unified Cache-Control Headers**: Move default Cache-Control from Envoy's
