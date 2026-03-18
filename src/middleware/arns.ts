@@ -32,8 +32,8 @@ export const createArnsMiddleware = ({
   nameResolver: NameResolver;
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
-    // Skip all ArNS processing if the root ArNS host is not set.
-    if (config.ARNS_ROOT_HOST === undefined || config.ARNS_ROOT_HOST === '') {
+    // Skip all ArNS processing if no root ArNS hosts are configured.
+    if (config.ARNS_ROOT_HOSTS.length === 0) {
       next();
       return;
     }
@@ -51,8 +51,16 @@ export const createArnsMiddleware = ({
       }
     }
 
+    const matchedEntry = config.matchArnsRootHost(req.hostname);
+    if (matchedEntry === undefined) {
+      next();
+      return;
+    }
+
+    req.matchedArnsRootHost = matchedEntry.host;
+
     let arnsSubdomain: string | undefined;
-    const hostNameIsArNSRoot = req.hostname === config.ARNS_ROOT_HOST;
+    const hostNameIsArNSRoot = req.hostname === matchedEntry.host;
     if (
       hostNameIsArNSRoot &&
       (config.APEX_TX_ID !== undefined || config.APEX_ARNS_NAME !== undefined)
@@ -90,14 +98,13 @@ export const createArnsMiddleware = ({
         arnsSubdomain = config.APEX_ARNS_NAME;
       }
     } else if (
-      // Ignore requests that do not end with the ArNS root hostname.
-      !req.hostname.endsWith('.' + config.ARNS_ROOT_HOST) ||
+      hostNameIsArNSRoot ||
       // Ignore requests that do not include subdomains since ArNS always
       // requires a subdomain.
       !Array.isArray(req.subdomains) ||
       // Ignore subdomains that are part of the ArNS root hostname or are
       // shorter than it (e.g., localhost).
-      req.subdomains.length <= config.ROOT_HOST_SUBDOMAIN_LENGTH
+      req.subdomains.length <= matchedEntry.subdomainLength
     ) {
       next();
       return;

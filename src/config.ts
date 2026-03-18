@@ -1198,19 +1198,40 @@ export const MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS =
 // ArNS and sandboxing
 //
 
-// The root host name to use for ArNS
-export const ARNS_ROOT_HOST = env.varOrUndefined('ARNS_ROOT_HOST');
-export const ROOT_HOST_SUBDOMAIN_LENGTH =
-  ARNS_ROOT_HOST !== undefined ? ARNS_ROOT_HOST.split('.').length - 2 : 0;
+// The root host name(s) to use for ArNS (comma-separated)
+export const ARNS_ROOT_HOSTS: { host: string; subdomainLength: number }[] = (
+  env.varOrUndefined('ARNS_ROOT_HOST') ?? ''
+)
+  .split(',')
+  .map((h) => h.trim())
+  .filter((h) => h !== '')
+  .map((host) => ({
+    host,
+    subdomainLength: host.split('.').length - 2,
+  }));
 
-// Warn if TRUSTED_GATEWAYS_URLS contains this gateway's own hostname
-if (ARNS_ROOT_HOST !== undefined) {
+// Primary root host (first in list) for backward compatibility and gateway identity
+export const ARNS_ROOT_HOST = ARNS_ROOT_HOSTS[0]?.host;
+
+export function matchArnsRootHost(
+  hostname: string,
+): { host: string; subdomainLength: number } | undefined {
+  for (const entry of ARNS_ROOT_HOSTS) {
+    if (hostname === entry.host || hostname.endsWith('.' + entry.host)) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+// Warn if TRUSTED_GATEWAYS_URLS contains any of this gateway's ArNS root hosts
+for (const rootHostEntry of ARNS_ROOT_HOSTS) {
   for (const url of Object.keys(TRUSTED_GATEWAYS_URLS)) {
     try {
       const hostname = new URL(url).hostname;
-      if (hostname === ARNS_ROOT_HOST) {
+      if (hostname === rootHostEntry.host) {
         logger.warn(
-          `TRUSTED_GATEWAYS_URLS contains this gateway's own ARNS_ROOT_HOST (${ARNS_ROOT_HOST}). ` +
+          `TRUSTED_GATEWAYS_URLS contains this gateway's own ARNS_ROOT_HOST (${rootHostEntry.host}). ` +
             'This creates a self-forwarding loop. Remove it from TRUSTED_GATEWAYS_URLS.',
         );
       }

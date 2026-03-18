@@ -10,6 +10,7 @@ declare global {
     interface Request {
       dataId?: string; // The data ID to serve
       manifestPath?: string; // Path within manifest (if applicable)
+      matchedArnsRootHost?: string; // The ArNS root host that matched this request
       arns?: {
         // Only present for successful ArNS resolution
         name: string;
