@@ -301,6 +301,39 @@ describe('executeHedgedRequest', () => {
     assert.deepEqual(released, ['allowed']);
   });
 
+  it('should call onLoserResult for non-winning results when two candidates both succeed', async () => {
+    const loserResults: string[] = [];
+    let resolveBarrier!: () => void;
+    const barrier = new Promise<void>((r) => {
+      resolveBarrier = r;
+    });
+
+    const result = await executeHedgedRequest({
+      candidates: ['a', 'b'],
+      execute: async (candidate) => {
+        if (candidate === 'a') {
+          // Slow — gives 'b' time to win
+          await barrier;
+          return 'result-a';
+        }
+        return 'result-b';
+      },
+      onLoserResult: (value) => {
+        loserResults.push(value);
+      },
+      hedgeDelayMs: 10,
+      maxConcurrent: 2,
+    });
+
+    // 'b' wins; unblock 'a' so it resolves as a loser
+    resolveBarrier();
+    // Give the loser's .then() time to fire
+    await delay(20);
+
+    assert.equal(result, 'result-b');
+    assert.deepEqual(loserResults, ['result-a']);
+  });
+
   it('should throw when no eligible candidates are available', async () => {
     await assert.rejects(
       executeHedgedRequest({

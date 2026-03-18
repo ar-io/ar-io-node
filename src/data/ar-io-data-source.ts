@@ -365,6 +365,11 @@ export class ArIODataSource implements ContiguousDataSource {
             this.peerRequestLimiter?.release(peer);
           }
         },
+        onLoserResult: (data) => {
+          // Destroy the losing stream so it doesn't hold an open connection
+          // and limiter slot indefinitely.
+          data.stream.destroy();
+        },
         hedgeDelayMs: config.PEER_HEDGE_DELAY_MS,
         maxConcurrent: config.PEER_MAX_HEDGED_REQUESTS,
         signal,
