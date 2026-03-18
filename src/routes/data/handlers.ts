@@ -1050,8 +1050,10 @@ export const createRawDataHandler = ({
             pipeStreamToResponse(data.stream, res, log, id);
           }
         } catch (error: any) {
-          // Handle client disconnect (AbortError) specially
-          if (error.name === 'AbortError') {
+          // Handle client disconnect (AbortError) specially — only when the
+          // client's own signal was aborted. Internal timeouts also throw
+          // AbortError but should fall through to the retrieval-failed path.
+          if (error.name === 'AbortError' && req.signal?.aborted) {
             span.setAttribute('http.status_code', 499);
             span.setAttribute('data.retrieval.error', 'client_disconnected');
             data?.stream.destroy();
@@ -1081,8 +1083,9 @@ export const createRawDataHandler = ({
           return;
         }
       } catch (error: any) {
-        // Handle client disconnect (AbortError) specially
-        if (error.name === 'AbortError') {
+        // Handle client disconnect (AbortError) specially — only when the
+        // client's own signal was aborted.
+        if (error.name === 'AbortError' && req.signal?.aborted) {
           span.setAttribute('http.status_code', 499);
           span.setAttribute('data.retrieval.error', 'client_disconnected');
           if (!res.headersSent) {
@@ -1536,8 +1539,10 @@ export const createDataHandler = ({
             return;
           }
         } catch (error: any) {
-          // Handle client disconnect (AbortError) specially
-          if (error.name === 'AbortError') {
+          // Handle client disconnect (AbortError) specially — only when the
+          // client's own signal was aborted. Internal timeouts also throw
+          // AbortError but should fall through to the retrieval-failed path.
+          if (error.name === 'AbortError' && req.signal?.aborted) {
             span.setAttribute('http.status_code', 499);
             span.setAttribute('data.retrieval.error', 'client_disconnected');
             data?.stream.destroy();
@@ -1678,8 +1683,10 @@ export const createDataHandler = ({
           pipeStreamToResponse(data.stream, res, log, id);
         }
       } catch (error: any) {
-        // Handle client disconnect (AbortError) specially
-        if (error.name === 'AbortError') {
+        // Handle client disconnect (AbortError) specially — only when the
+        // client's own signal was aborted. Internal timeouts also throw
+        // AbortError but should fall through to the retrieval-failed path.
+        if (error.name === 'AbortError' && req.signal?.aborted) {
           span.setAttribute('http.status_code', 499);
           span.setAttribute('data.retrieval.error', 'client_disconnected');
           data?.stream.destroy();

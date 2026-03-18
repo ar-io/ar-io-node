@@ -136,7 +136,7 @@ export const createChunkOffsetHandler = ({
             request.signal,
           );
         } catch (error: any) {
-          if (error.name === 'AbortError') {
+          if (error.name === 'AbortError' && request.signal?.aborted) {
             span.setAttribute('http.status_code', 499);
             span.setAttribute('chunk.retrieval.error', 'client_disconnected');
             if (!response.headersSent) {
@@ -374,7 +374,7 @@ export const createChunkOffsetDataHandler = ({
             request.signal,
           );
         } catch (error: any) {
-          if (error.name === 'AbortError') {
+          if (error.name === 'AbortError' && request.signal?.aborted) {
             span.setAttribute('http.status_code', 499);
             span.setAttribute('chunk.retrieval.error', 'client_disconnected');
             if (!response.headersSent) {
