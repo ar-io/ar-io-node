@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [Release 73] - 2026-03-18
+
 ### Added
 
 - **Unified Cache-Control Headers**: Move default Cache-Control from Envoy's
