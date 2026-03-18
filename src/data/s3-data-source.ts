@@ -149,6 +149,7 @@ export class S3DataSource implements ContiguousDataSource {
         return {
           stream: Readable.from([]), // Return an empty stream for zero-byte items
           size: 0,
+          totalSize: 0,
           verified: false,
           trusted: true,
           sourceContentType: payloadContentType,
@@ -241,6 +242,7 @@ export class S3DataSource implements ContiguousDataSource {
       return {
         stream,
         size: finalSize,
+        totalSize: (head.ContentLength ?? 0) - +(payloadDataStart ?? 0),
         verified: false,
         trusted: true, // we only cache trusted data
         sourceContentType,

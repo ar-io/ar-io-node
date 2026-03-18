@@ -693,6 +693,7 @@ export interface ContiguousData {
   hash?: string;
   stream: Readable;
   size: number;
+  totalSize?: number; // Full item size (when known). For range requests, size is the slice; totalSize is the complete item.
   verified: boolean;
   trusted: boolean;
   sourceContentType?: string;

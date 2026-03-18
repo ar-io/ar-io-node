@@ -266,6 +266,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
         return {
           stream: nestedDataItemDataStream.stream,
           size: region?.size ?? payloadLength,
+          totalSize: payloadLength,
           sourceContentType: payloadContentType,
           verified: false,
           trusted: true,
@@ -459,6 +460,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
       stream,
       sourceContentType: payloadContentType,
       size: region?.size ?? rawDataItemBuffer.byteLength - payloadStartOffset,
+      totalSize: rawDataItemBuffer.byteLength - payloadStartOffset,
       cached: false,
       trusted: true,
       verified: false,
