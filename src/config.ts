@@ -1213,10 +1213,19 @@ export const ARNS_ROOT_HOSTS: { host: string; subdomainLength: number }[] = (
 // Primary root host (first in list) for backward compatibility and gateway identity
 export const ARNS_ROOT_HOST = ARNS_ROOT_HOSTS[0]?.host;
 
+// Sorted by descending host length for longest-suffix matching
+const ARNS_ROOT_HOSTS_BY_LENGTH = [...ARNS_ROOT_HOSTS].sort(
+  (a, b) => b.host.length - a.host.length,
+);
+
 export function matchArnsRootHost(
   hostname: string,
+  hosts: {
+    host: string;
+    subdomainLength: number;
+  }[] = ARNS_ROOT_HOSTS_BY_LENGTH,
 ): { host: string; subdomainLength: number } | undefined {
-  for (const entry of ARNS_ROOT_HOSTS) {
+  for (const entry of hosts) {
     if (hostname === entry.host || hostname.endsWith('.' + entry.host)) {
       return entry;
     }

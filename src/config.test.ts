@@ -73,3 +73,62 @@ describe('matchArnsRootHost', () => {
     }
   });
 });
+
+describe('matchArnsRootHost with explicit hosts', () => {
+  // Sorted by descending host length (longest first) to match production behavior
+  const hosts = [
+    { host: 'foo.example.com', subdomainLength: 1 },
+    { host: 'example.com', subdomainLength: 0 },
+  ];
+
+  it('matches the most specific (longest) host first', () => {
+    const result = matchArnsRootHost('foo.example.com', hosts);
+    assert.deepStrictEqual(result, {
+      host: 'foo.example.com',
+      subdomainLength: 1,
+    });
+  });
+
+  it('falls back to shorter host when longer does not match', () => {
+    const result = matchArnsRootHost('bar.example.com', hosts);
+    assert.deepStrictEqual(result, {
+      host: 'example.com',
+      subdomainLength: 0,
+    });
+  });
+
+  it('matches subdomain of the longer host', () => {
+    const result = matchArnsRootHost('bar.foo.example.com', hosts);
+    assert.deepStrictEqual(result, {
+      host: 'foo.example.com',
+      subdomainLength: 1,
+    });
+  });
+
+  it('returns undefined when no host matches', () => {
+    const result = matchArnsRootHost('other.net', hosts);
+    assert.equal(result, undefined);
+  });
+
+  it('matches exact root host', () => {
+    const result = matchArnsRootHost('example.com', hosts);
+    assert.deepStrictEqual(result, {
+      host: 'example.com',
+      subdomainLength: 0,
+    });
+  });
+
+  it('does not match partial hostname without dot separator', () => {
+    const result = matchArnsRootHost('notexample.com', hosts);
+    assert.equal(result, undefined);
+  });
+
+  it('computes correct subdomainLength', () => {
+    const threeLevel = [{ host: 'a.b.example.com', subdomainLength: 2 }];
+    const result = matchArnsRootHost('test.a.b.example.com', threeLevel);
+    assert.deepStrictEqual(result, {
+      host: 'a.b.example.com',
+      subdomainLength: 2,
+    });
+  });
+});
