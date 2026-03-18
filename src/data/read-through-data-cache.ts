@@ -72,7 +72,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private pendingRetries: Set<string> = new Set();
   private pendingBackgroundCaches: Set<string> = new Set();
   private backgroundCacheRangeMaxSize: number;
-  private backgroundCacheSemaphore: Semaphore | undefined;
+  private backgroundCacheSemaphore: Semaphore;
 
   constructor({
     log,
@@ -114,12 +114,27 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.eventEmitter = eventEmitter;
     this.untrustedCacheRetryRate = untrustedCacheRetryRate;
     this.trustedCacheRetryRate = trustedCacheRetryRate;
-    this.backgroundCacheRangeMaxSize = backgroundCacheRangeMaxSize;
-    if (backgroundCacheRangeMaxSize > 0) {
-      this.backgroundCacheSemaphore = new Semaphore(
-        backgroundCacheRangeConcurrency,
+    if (
+      !Number.isFinite(backgroundCacheRangeMaxSize) ||
+      backgroundCacheRangeMaxSize < 0
+    ) {
+      throw new Error(
+        'backgroundCacheRangeMaxSize must be a non-negative finite number',
       );
     }
+    if (
+      !Number.isFinite(backgroundCacheRangeConcurrency) ||
+      backgroundCacheRangeConcurrency < 1
+    ) {
+      throw new Error(
+        'backgroundCacheRangeConcurrency must be a positive finite number',
+      );
+    }
+
+    this.backgroundCacheRangeMaxSize = backgroundCacheRangeMaxSize;
+    this.backgroundCacheSemaphore = new Semaphore(
+      backgroundCacheRangeConcurrency,
+    );
   }
 
   private calculateVerificationPriority(
@@ -276,7 +291,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       return;
     }
 
-    if (dataSize === undefined) {
+    if (dataSize === undefined || !Number.isFinite(dataSize) || dataSize < 0) {
       metrics.backgroundRangeCacheSkippedTotal.inc({
         reason: 'unknown_size',
       });
@@ -297,7 +312,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       return;
     }
 
-    if (this.backgroundCacheSemaphore!.availablePermits() === 0) {
+    if (!this.backgroundCacheSemaphore.tryAcquire()) {
       metrics.backgroundRangeCacheSkippedTotal.inc({ reason: 'at_capacity' });
       return;
     }
@@ -306,32 +321,29 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     metrics.backgroundRangeCacheTriggeredTotal.inc();
     this.log.debug('Triggered background range cache fetch', { id, dataSize });
 
-    this.backgroundCacheSemaphore!.acquire().then(() => {
-      this.getData({ id, requestAttributes })
-        .then((result) => {
-          return new Promise<void>((resolve, reject) => {
-            result.stream.on('data', () => {});
-            result.stream.on('end', () => {
-              this.log.debug('Completed background range cache fetch', { id });
-              metrics.backgroundRangeCacheCompletedTotal.inc();
-              resolve();
-            });
-            result.stream.on('error', reject);
-            result.stream.resume();
+    this.getData({ id, requestAttributes })
+      .then((result) => {
+        return new Promise<void>((resolve, reject) => {
+          result.stream.on('end', () => {
+            this.log.debug('Completed background range cache fetch', { id });
+            metrics.backgroundRangeCacheCompletedTotal.inc();
+            resolve();
           });
-        })
-        .catch((error: any) => {
-          this.log.debug('Background range cache fetch failed', {
-            id,
-            message: error.message,
-          });
-          metrics.backgroundRangeCacheFailedTotal.inc();
-        })
-        .finally(() => {
-          this.pendingBackgroundCaches.delete(id);
-          this.backgroundCacheSemaphore!.release();
+          result.stream.on('error', reject);
+          result.stream.resume();
         });
-    });
+      })
+      .catch((error: any) => {
+        this.log.debug('Background range cache fetch failed', {
+          id,
+          message: error.message,
+        });
+        metrics.backgroundRangeCacheFailedTotal.inc();
+      })
+      .finally(() => {
+        this.pendingBackgroundCaches.delete(id);
+        this.backgroundCacheSemaphore.release();
+      });
   }
 
   async getCacheData(
