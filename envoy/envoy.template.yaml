@@ -27,7 +27,9 @@ static_resources:
                     - name: arns_resolution_service
                       domains:
                         #@ for host in data.values.ARNS_ROOT_HOST.split(","):
+                        #@ if host.strip() != "":
                         - #@ "*." + host.strip()
+                        #@ end
                         #@ end
                       routes:
                         #! Dry-run mode: Route POST /tx to core service for simulated responses.
