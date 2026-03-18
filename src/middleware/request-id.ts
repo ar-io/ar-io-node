@@ -4,7 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { Handler, Request, Response } from 'express';
 import { requestContextStorage } from '../request-context.js';
 
@@ -12,7 +12,7 @@ import { requestContextStorage } from '../request-context.js';
  * Middleware that assigns a unique request ID to every incoming request.
  *
  * - Reads `X-Request-Id` from the incoming request headers; falls back to a
- *   randomly generated UUID.
+ *   randomly generated base64url ID.
  * - Sets `req.id` on the request object.
  * - Sets the `X-Request-Id` response header so clients can correlate responses.
  * - Runs downstream handlers inside an `AsyncLocalStorage` context so that all
@@ -38,7 +38,8 @@ function sanitizeRequestId(raw: string | undefined): string | undefined {
 export function createRequestIdMiddleware(): Handler {
   return (req: Request, res: Response, next) => {
     const requestId =
-      sanitizeRequestId(req.get('X-Request-Id')) ?? randomUUID();
+      sanitizeRequestId(req.get('X-Request-Id')) ??
+      randomBytes(16).toString('base64url');
     req.id = requestId;
     res.setHeader('X-Request-Id', requestId);
     requestContextStorage.run({ requestId }, next);
