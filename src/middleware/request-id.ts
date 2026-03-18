@@ -19,10 +19,26 @@ import { requestContextStorage } from '../request-context.js';
  *   async code (including Winston log calls) can read the request ID without
  *   explicit propagation.
  */
+const VALID_REQUEST_ID_RE = /^[A-Za-z0-9._:-]+$/;
+const MAX_REQUEST_ID_LENGTH = 128;
+
+function sanitizeRequestId(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (
+    trimmed.length >= 1 &&
+    trimmed.length <= MAX_REQUEST_ID_LENGTH &&
+    VALID_REQUEST_ID_RE.test(trimmed)
+  ) {
+    return trimmed;
+  }
+  return undefined;
+}
+
 export function createRequestIdMiddleware(): Handler {
   return (req: Request, res: Response, next) => {
     const requestId =
-      (req.headers['x-request-id'] as string | undefined) ?? randomUUID();
+      sanitizeRequestId(req.get('X-Request-Id')) ?? randomUUID();
     req.id = requestId;
     res.setHeader('X-Request-Id', requestId);
     requestContextStorage.run({ requestId }, next);
