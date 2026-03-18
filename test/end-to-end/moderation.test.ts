@@ -79,7 +79,7 @@ describe('Moderation', function () {
         validateStatus: () => true,
       });
 
-      assert.strictEqual(res.status, 452);
+      assert.strictEqual(res.status, 404);
     });
 
     it('Should return unauthorized if the api key is incorrect for /ar-io/admin/unblock-name', async function () {
@@ -175,7 +175,7 @@ describe('Moderation', function () {
         },
         validateStatus: () => true,
       });
-      assert.strictEqual(res.status, 452);
+      assert.strictEqual(res.status, 404);
     });
   });
 });
