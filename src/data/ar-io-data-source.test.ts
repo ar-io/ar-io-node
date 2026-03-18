@@ -125,6 +125,7 @@ describe('ArIODataSource', () => {
       assert.deepEqual(data, {
         stream: axiosStreamData,
         size: 123,
+        totalSize: undefined,
         verified: false,
         trusted: false,
         sourceContentType: 'application/octet-stream',
@@ -182,6 +183,7 @@ describe('ArIODataSource', () => {
       assert.deepEqual(data, {
         stream: secondPeerStreamData,
         size: 10,
+        totalSize: undefined,
         verified: false,
         trusted: false,
         sourceContentType: 'application/octet-stream',
@@ -263,6 +265,7 @@ describe('ArIODataSource', () => {
       assert.deepEqual(data, {
         stream: axiosStreamData,
         size: 123,
+        totalSize: undefined,
         verified: false,
         trusted: false,
         sourceContentType: 'application/octet-stream',
@@ -521,6 +524,7 @@ describe('ArIODataSource', () => {
         assert.deepEqual(data, {
           stream: streamData,
           size: 10,
+          totalSize: undefined,
           verified: false,
           trusted: false,
           sourceContentType: 'application/octet-stream',

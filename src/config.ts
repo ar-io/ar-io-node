@@ -1688,9 +1688,9 @@ export const TRUSTED_CACHE_RETRY_RATE = +env.varOrDefault(
 );
 
 // Background caching for range request cache misses
-export const BACKGROUND_CACHE_RANGE_MAX_SIZE = +env.varOrDefault(
+export const BACKGROUND_CACHE_RANGE_MAX_SIZE = env.nonNegativeIntOrDefault(
   'BACKGROUND_CACHE_RANGE_MAX_SIZE',
-  '0',
+  0,
 );
 
 export const BACKGROUND_CACHE_RANGE_CONCURRENCY = env.positiveIntOrDefault(

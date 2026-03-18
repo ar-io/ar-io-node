@@ -282,6 +282,7 @@ describe('ReadThroughDataCache', function () {
         hash: 'test-hash',
         stream: result.stream,
         size: 100,
+        totalSize: 100,
         sourceContentType: 'plain/text',
         verified: true,
         trusted: true,
@@ -519,6 +520,7 @@ describe('ReadThroughDataCache', function () {
         hash: 'test-hash',
         stream: result.stream,
         size: 50,
+        totalSize: 100,
         sourceContentType: 'plain/text',
         verified: true,
         trusted: true,
@@ -1158,6 +1160,96 @@ describe('ReadThroughDataCache', function () {
       );
     });
 
+    it('should use upstream totalSize when attributes size is unknown', async () => {
+      const region = { offset: 10, size: 50 };
+      let getDataCallCount = 0;
+
+      // No attributes available (unindexed item)
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
+        return Promise.resolve(undefined);
+      });
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+
+      mock.method(mockContiguousDataSource, 'getData', (params: any) => {
+        getDataCallCount++;
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('test data');
+              this.push(null);
+            },
+          }),
+          size: params.region ? 50 : 200,
+          totalSize: 200, // Upstream knows the full size
+          sourceContentType: 'application/octet-stream',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheTriggeredTotal, 'inc');
+      mock.method(metrics.backgroundRangeCacheCompletedTotal, 'inc');
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      const bgCache = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        backgroundCacheRangeMaxSize: 1000,
+        backgroundCacheRangeConcurrency: 2,
+      });
+
+      const result = await bgCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+
+      // Consume the stream
+      for await (const chunk of result.stream) {
+        // drain
+      }
+
+      // Wait for background fetch to complete
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Upstream should be called twice: once with region, once without (background cache)
+      assert.equal(getDataCallCount, 2);
+
+      // Background cache should have been triggered (not skipped with unknown_size)
+      assert.equal(
+        (
+          metrics.backgroundRangeCacheTriggeredTotal.inc as any
+        ).mock.callCount(),
+        1,
+      );
+
+      // Should not have been skipped with unknown_size reason
+      const skipCalls = (metrics.backgroundRangeCacheSkippedTotal.inc as any)
+        .mock.calls;
+      const unknownSizeSkips = skipCalls.filter(
+        (c: any) => c.arguments[0]?.reason === 'unknown_size',
+      );
+      assert.equal(unknownSizeSkips.length, 0);
+    });
+
     it('should skip when disabled (default max size 0)', async () => {
       const region = { offset: 10, size: 50 };
 
@@ -1193,9 +1285,8 @@ describe('ReadThroughDataCache', function () {
         // drain
       }
 
-      const skipCalls = (
-        metrics.backgroundRangeCacheSkippedTotal.inc as any
-      ).mock.calls;
+      const skipCalls = (metrics.backgroundRangeCacheSkippedTotal.inc as any)
+        .mock.calls;
       const disabledSkips = skipCalls.filter(
         (c: any) => c.arguments[0]?.reason === 'disabled',
       );
@@ -1257,9 +1348,8 @@ describe('ReadThroughDataCache', function () {
         // drain
       }
 
-      const skipCalls = (
-        metrics.backgroundRangeCacheSkippedTotal.inc as any
-      ).mock.calls;
+      const skipCalls = (metrics.backgroundRangeCacheSkippedTotal.inc as any)
+        .mock.calls;
       const exceedsSkips = skipCalls.filter(
         (c: any) => c.arguments[0]?.reason === 'exceeds_max_size',
       );
@@ -1366,9 +1456,8 @@ describe('ReadThroughDataCache', function () {
         1,
       );
 
-      const skipCalls = (
-        metrics.backgroundRangeCacheSkippedTotal.inc as any
-      ).mock.calls;
+      const skipCalls = (metrics.backgroundRangeCacheSkippedTotal.inc as any)
+        .mock.calls;
       const alreadyPendingSkips = skipCalls.filter(
         (c: any) => c.arguments[0]?.reason === 'already_pending',
       );
@@ -1475,9 +1564,8 @@ describe('ReadThroughDataCache', function () {
         1,
       );
 
-      const skipCalls = (
-        metrics.backgroundRangeCacheSkippedTotal.inc as any
-      ).mock.calls;
+      const skipCalls = (metrics.backgroundRangeCacheSkippedTotal.inc as any)
+        .mock.calls;
       const capacitySkips = skipCalls.filter(
         (c: any) => c.arguments[0]?.reason === 'at_capacity',
       );
@@ -1605,9 +1693,8 @@ describe('ReadThroughDataCache', function () {
         // drain
       }
 
-      const skipCalls = (
-        metrics.backgroundRangeCacheSkippedTotal.inc as any
-      ).mock.calls;
+      const skipCalls = (metrics.backgroundRangeCacheSkippedTotal.inc as any)
+        .mock.calls;
       const skipCacheSkips = skipCalls.filter(
         (c: any) => c.arguments[0]?.reason === 'skip_cache_set',
       );
@@ -1680,6 +1767,79 @@ describe('ReadThroughDataCache', function () {
         ).mock.callCount(),
         0,
       );
+    });
+
+    it('should skip when full item size is unknown', async () => {
+      const region = { offset: 10, size: 50 };
+
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
+        return Promise.resolve(undefined);
+      });
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+
+      let getDataCallCount = 0;
+      mock.method(mockContiguousDataSource, 'getData', (params: any) => {
+        getDataCallCount++;
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('data');
+              this.push(null);
+            },
+          }),
+          size: 50,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheTriggeredTotal, 'inc');
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      const bgCache = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        backgroundCacheRangeMaxSize: 1000,
+        backgroundCacheRangeConcurrency: 2,
+      });
+
+      const result = await bgCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+
+      for await (const chunk of result.stream) {
+        // drain
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // No background fetch should have been triggered
+      assert.equal(getDataCallCount, 1);
+      assert.equal(
+        (
+          metrics.backgroundRangeCacheTriggeredTotal.inc as any
+        ).mock.callCount(),
+        0,
+      );
+
+      const skipCalls = (metrics.backgroundRangeCacheSkippedTotal.inc as any)
+        .mock.calls;
+      const unknownSizeSkips = skipCalls.filter(
+        (c: any) => c.arguments[0]?.reason === 'unknown_size',
+      );
+      assert.ok(unknownSizeSkips.length > 0);
     });
   });
 });

@@ -261,7 +261,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
   private triggerBackgroundCacheForRange(
     id: string,
-    dataSize: number,
+    dataSize: number | undefined,
     requestAttributes?: RequestAttributes,
   ): void {
     if (this.backgroundCacheRangeMaxSize <= 0) {
@@ -272,6 +272,13 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     if (this.skipCache) {
       metrics.backgroundRangeCacheSkippedTotal.inc({
         reason: 'skip_cache_set',
+      });
+      return;
+    }
+
+    if (dataSize === undefined) {
+      metrics.backgroundRangeCacheSkippedTotal.inc({
+        reason: 'unknown_size',
       });
       return;
     }
@@ -297,6 +304,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
     this.pendingBackgroundCaches.add(id);
     metrics.backgroundRangeCacheTriggeredTotal.inc();
+    this.log.debug('Triggered background range cache fetch', { id, dataSize });
 
     this.backgroundCacheSemaphore!.acquire().then(() => {
       this.getData({ id, requestAttributes })
@@ -304,6 +312,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           return new Promise<void>((resolve, reject) => {
             result.stream.on('data', () => {});
             result.stream.on('end', () => {
+              this.log.debug('Completed background range cache fetch', { id });
               metrics.backgroundRangeCacheCompletedTotal.inc();
               resolve();
             });
@@ -553,6 +562,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           hash: attributes?.hash,
           stream: cacheData.stream,
           size: region?.size ?? cacheData.size,
+          totalSize: attributes?.size,
           sourceContentType: attributes?.contentType,
           verified: attributes?.verified ?? false,
           trusted: attributes?.trusted !== false,
@@ -835,7 +845,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         if (region !== undefined && data.size > 0) {
           this.triggerBackgroundCacheForRange(
             id,
-            attributes?.size ?? data.size,
+            attributes?.size ?? data.totalSize,
             requestAttributes,
           );
         }

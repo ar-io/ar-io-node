@@ -283,6 +283,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         return {
           stream: rangeStream,
           size: region.size,
+          totalSize: size,
           verified: true,
           trusted: true,
           cached: false,
@@ -419,6 +420,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
       return {
         stream,
         size,
+        totalSize: size,
         verified: true,
         trusted: true,
         cached: false,

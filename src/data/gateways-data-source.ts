@@ -28,6 +28,7 @@ import {
   buildRangeHeader,
   normalizeAbortError,
   parseContentLength,
+  parseContentRange,
 } from '../lib/http-utils.js';
 import { attachStallTimeout } from '../lib/stream.js';
 
@@ -386,6 +387,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 return {
                   stream,
                   size: contentLength,
+                  totalSize: parseContentRange(
+                    response.headers['content-range'],
+                  )?.total,
                   verified: false,
                   trusted: gatewayTrusted,
                   sourceContentType: response.headers['content-type'],

@@ -26,7 +26,7 @@ import {
 import { headerNames } from '../constants.js';
 import { startChildSpan } from '../tracing.js';
 import { SpanStatusCode, Span } from '@opentelemetry/api';
-import { normalizeAbortError } from '../lib/http-utils.js';
+import { normalizeAbortError, parseContentRange } from '../lib/http-utils.js';
 import { attachStallTimeout } from '../lib/stream.js';
 import { PeerRequestLimiter } from './peer-request-limiter.js';
 import { executeHedgedRequest } from '../lib/hedged-request.js';
@@ -481,6 +481,7 @@ export class ArIODataSource implements ContiguousDataSource {
     return {
       stream,
       size: contentLength,
+      totalSize: parseContentRange(response.headers['content-range'])?.total,
       verified: false,
       trusted: false,
       sourceContentType: response.headers['content-type'],
