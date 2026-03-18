@@ -11,6 +11,7 @@ export interface HedgedRequestOptions<T> {
   canAttempt?: (candidate: string) => boolean;
   acquire?: (candidate: string) => boolean;
   onRelease?: (candidate: string) => void;
+  onLoserResult?: (result: T) => void;
   hedgeDelayMs: number;
   maxConcurrent: number;
   signal?: AbortSignal;
@@ -25,6 +26,7 @@ export async function executeHedgedRequest<T>(
     canAttempt,
     acquire,
     onRelease,
+    onLoserResult,
     hedgeDelayMs,
     maxConcurrent,
     signal,
@@ -52,7 +54,11 @@ export async function executeHedgedRequest<T>(
 
   return new Promise<T>((resolve, reject) => {
     function tryResolve(value: T) {
-      if (resolved) return;
+      if (resolved) {
+        // Another candidate already won — clean up this loser's result
+        onLoserResult?.(value);
+        return;
+      }
       resolved = true;
       loserController.abort();
       resolve(value);
