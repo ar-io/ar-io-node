@@ -780,6 +780,18 @@ export const sendNotFound = (res: Response) => {
   res.status(404).send('Not found');
 };
 
+export const sendBlocked = (res: Response, id: string | undefined) => {
+  res.header(
+    'Cache-Control',
+    `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, immutable`,
+  );
+  res
+    .status(452)
+    .send(
+      `Requested content blocked by this node's content policy. Blocked ID: ${id}`,
+    );
+};
+
 export const sendPaymentRequired = (
   res: Response,
   text = 'Payment required',
@@ -838,13 +850,13 @@ export const createRawDataHandler = ({
           return;
         }
 
-        // Return 404 if the data is blocked by ID
+        // Return 452 if the data is blocked by ID
         span.addEvent('Checking blocklist for ID');
         try {
           if (await dataBlockListValidator.isIdBlocked(id)) {
-            span.setAttribute('http.status_code', 404);
+            span.setAttribute('http.status_code', 452);
             span.setAttribute('data.error', 'id_blocked');
-            sendNotFound(res);
+            sendBlocked(res, id);
             return;
           }
         } catch (error: any) {
@@ -906,16 +918,16 @@ export const createRawDataHandler = ({
           return;
         }
 
-        // Return 404 if the data is blocked by hash
+        // Return 452 if the data is blocked by hash
         if (dataAttributes?.hash !== undefined) {
           span.addEvent('Checking blocklist for hash');
           try {
             if (
               await dataBlockListValidator.isHashBlocked(dataAttributes.hash)
             ) {
-              span.setAttribute('http.status_code', 404);
+              span.setAttribute('http.status_code', 452);
               span.setAttribute('data.error', 'hash_blocked');
-              sendNotFound(res);
+              sendBlocked(res, id);
               return;
             }
           } catch (error: any) {
@@ -1331,13 +1343,13 @@ export const createDataHandler = ({
           return;
         }
 
-        // Return 404 if the data is blocked by ID
+        // Return 452 if the data is blocked by ID
         span.addEvent('Checking blocklist for ID');
         try {
           if (await dataBlockListValidator.isIdBlocked(id)) {
-            span.setAttribute('http.status_code', 404);
+            span.setAttribute('http.status_code', 452);
             span.setAttribute('data.error', 'id_blocked');
-            sendNotFound(res);
+            sendBlocked(res, id);
             return;
           }
         } catch (error: any) {
@@ -1400,16 +1412,16 @@ export const createDataHandler = ({
           return;
         }
 
-        // Return 404 if the data is blocked by hash
+        // Return 452 if the data is blocked by hash
         if (dataAttributes?.hash !== undefined) {
           span.addEvent('Checking blocklist for hash');
           try {
             if (
               await dataBlockListValidator.isHashBlocked(dataAttributes.hash)
             ) {
-              span.setAttribute('http.status_code', 404);
+              span.setAttribute('http.status_code', 452);
               span.setAttribute('data.error', 'hash_blocked');
-              sendNotFound(res);
+              sendBlocked(res, id);
               return;
             }
           } catch (error: any) {

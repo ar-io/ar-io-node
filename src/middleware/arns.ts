@@ -10,7 +10,11 @@ import { URL } from 'node:url';
 
 import * as config from '../config.js';
 import { headerNames } from '../constants.js';
-import { sendNotFound, sendPaymentRequired } from '../routes/data/handlers.js';
+import {
+  sendBlocked,
+  sendNotFound,
+  sendPaymentRequired,
+} from '../routes/data/handlers.js';
 import { RAW_DATA_PATH_REGEX, DATA_PATH_REGEX } from '../constants.js';
 import { NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
@@ -131,8 +135,8 @@ export const createArnsMiddleware = ({
       try {
         if (system.blockedNamesCache.isBlocked(arnsSubdomain)) {
           span.setAttribute('arns.blocked', true);
-          span.setAttribute('http.status_code', 404);
-          sendNotFound(res);
+          span.setAttribute('http.status_code', 452);
+          sendBlocked(res, arnsSubdomain);
           return;
         }
 
