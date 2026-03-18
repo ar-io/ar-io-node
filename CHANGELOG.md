@@ -8,9 +8,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Unified Cache-Control Headers**: Move default Cache-Control from Envoy's
+  catch-all route into Express middleware, eliminating duplicate headers and
+  making data handler cache durations operator-configurable via
+  `DEFAULT_CACHE_CONTROL_MAX_AGE_SECONDS`, `STABLE_CACHE_CONTROL_MAX_AGE_DAYS`,
+  and related env vars (PE-9002)
+
+- **Cache-Only Client IPs/CIDRs**: New `CACHE_ONLY_CLIENT_IPS_AND_CIDRS` env
+  var to short-circuit data retrieval requests with a 404 if the data is not
+  already cached locally, useful for protecting upstream bandwidth from specific
+  high-volume clients
+
+- **Client Disconnect Prometheus Metric**: New `client_disconnect_total` counter
+  metric tracks when clients abort requests before the response completes
+  (PE-9000)
+
+- **P2P Contiguous Data Retrieval Improvements**: Major overhaul of peer data
+  retrieval to reduce tail latency and improve cache efficiency (PE-9007)
+  - **Hedged requests**: Fires a second request to the next candidate peer after
+    a configurable delay (`PEER_HEDGE_DELAY_MS`) if no response yet; first
+    success cancels all others, capped at `PEER_MAX_HEDGED_REQUESTS`
+  - **Per-peer concurrency limiter**: Fail-fast counter that skips saturated
+    peers instead of queuing, configurable via `PEER_MAX_CONCURRENT_OUTBOUND`
+  - **Consistent hash ring**: Routes each data ID to the same small set of
+    "home" peers for cache locality, with weighted fallback for remaining slots;
+    configured via `PEER_HASH_RING_VIRTUAL_NODES` and
+    `PEER_HASH_RING_HOME_SET_SIZE`
+  - **Decoupled candidate pool**: `PEER_CANDIDATE_COUNT` replaces the old
+    `min(peerCount, 3)` logic, giving hedging a deeper bench to draw from
+  - **Chunk peer selection via hash ring**: Chunk requests are also routed
+    through the hash ring by absolute offset for improved peer cache utilization
+
+- **Request Trace IDs**: Every HTTP request gets a unique `requestId` in Winston
+  log entries via AsyncLocalStorage, independent of OTEL. Reads or generates
+  `X-Request-Id` headers and echoes them in responses for end-to-end request
+  correlation (PE-8977)
+
 ### Changed
 
+- **HTTP 452 for Blocked Content**: Blocked content now returns HTTP 452 with a
+  descriptive message identifying the blocked ID and the node's content policy,
+  instead of a generic 404 Not Found
+
 ### Fixed
+
+- **HTTP 499 Only for Actual Client Disconnects**: Internal data retrieval
+  timeouts (e.g., upstream gateway timeouts) were being misidentified as client
+  disconnects. Now checks `req.signal.aborted` to confirm the client actually
+  disconnected before returning 499
+
+- **`/tx_anchor` Route Shadowing**: Move `/tx_anchor` route before `/tx` in
+  Envoy config to prevent prefix-match shadowing that caused `/tx_anchor`
+  requests to be handled by the `/tx` route
+
+- **Security Audit Vulnerabilities**: Bump `simple-git` to fix critical RCE via
+  `blockUnsafeOperationsPlugin` bypass; add `multer` resolution to fix high
+  severity DoS vulnerabilities in `express-openapi-validator`
 
 ## [Release 72] - 2026-03-11
 
