@@ -66,6 +66,8 @@ app.use(
       // x402 headers
       'X-Payment',
       'X-Payment-Response',
+      // request tracing
+      'X-Request-Id',
       // ar-io custom headers
       ...Object.values(headerNames),
     ],
