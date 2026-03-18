@@ -374,7 +374,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-4512361f3d6bdc0d8a44dd83eb796fd88804a384}
     profiles:
       - clickhouse
     build:
@@ -460,7 +460,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
     build:
       context: litestream/
       dockerfile: Dockerfile
