@@ -399,7 +399,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
         return {
           stream: nestedDataItemDataStream.stream,
           size: nestedDataItemDataStream.size,
-          totalSize: nestedDataItemDataStream.totalSize,
+          totalSize: payloadLength,
           sourceContentType: payloadContentType,
           verified: false,
           trusted: true,
