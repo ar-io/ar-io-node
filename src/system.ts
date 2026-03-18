@@ -1062,6 +1062,8 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   eventEmitter,
   untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
   trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
+  backgroundCacheRangeMaxSize: config.BACKGROUND_CACHE_RANGE_MAX_SIZE,
+  backgroundCacheRangeConcurrency: config.BACKGROUND_CACHE_RANGE_CONCURRENCY,
 });
 
 export const backgroundContiguousDataSource = new ReadThroughDataCache({
