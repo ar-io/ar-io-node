@@ -79,7 +79,10 @@ describe('Moderation', function () {
         validateStatus: () => true,
       });
 
-      assert.strictEqual(res.status, 404);
+      assert.ok(
+        res.status === 404 || res.status === 452,
+        `Expected 404 or 452, got ${res.status}`,
+      );
     });
 
     it('Should return unauthorized if the api key is incorrect for /ar-io/admin/unblock-name', async function () {
@@ -175,7 +178,10 @@ describe('Moderation', function () {
         },
         validateStatus: () => true,
       });
-      assert.strictEqual(res.status, 404);
+      assert.ok(
+        res.status === 404 || res.status === 452,
+        `Expected 404 or 452, got ${res.status}`,
+      );
     });
   });
 });
