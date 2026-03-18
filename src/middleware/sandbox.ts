@@ -12,7 +12,11 @@ import * as config from '../config.js';
 import { fromB64Url } from '../lib/encoding.js';
 
 function getRequestSandbox(req: Request): string | undefined {
-  if (req.subdomains.length > config.ROOT_HOST_SUBDOMAIN_LENGTH) {
+  const matched = config.matchArnsRootHost(req.hostname);
+  if (
+    matched !== undefined &&
+    req.subdomains.length > matched.subdomainLength
+  ) {
     return req.subdomains[req.subdomains.length - 1];
   }
   return undefined;
@@ -32,7 +36,7 @@ export function createSandboxMiddleware({
   sandboxProtocol?: string;
 }): Handler {
   return (req, res, next) => {
-    if (config.ARNS_ROOT_HOST === undefined) {
+    if (config.ARNS_ROOT_HOSTS.length === 0) {
       next();
       return;
     }
@@ -51,7 +55,7 @@ export function createSandboxMiddleware({
       const protocol = sandboxProtocol ?? 'https';
       return res.redirect(
         302,
-        `${protocol}://${idSandbox}.${config.ARNS_ROOT_HOST}${path}?${queryString}`,
+        `${protocol}://${idSandbox}.${req.matchedArnsRootHost ?? config.ARNS_ROOT_HOST}${path}?${queryString}`,
       );
     }
 

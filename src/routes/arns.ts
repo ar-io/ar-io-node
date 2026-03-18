@@ -22,7 +22,7 @@ export const arnsMiddleware = createArnsMiddleware({
   nameResolver: system.nameResolver,
 });
 
-if (config.ARNS_ROOT_HOST !== undefined) {
+if (config.ARNS_ROOT_HOSTS.length > 0) {
   arnsRouter.use(arnsMiddleware);
 
   arnsRouter.use(
