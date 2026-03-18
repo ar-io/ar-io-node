@@ -1841,5 +1841,152 @@ describe('ReadThroughDataCache', function () {
       );
       assert.ok(unknownSizeSkips.length > 0);
     });
+
+    it('should skip when dataSize is NaN', async () => {
+      const region = { offset: 10, size: 50 };
+
+      // Return attributes with NaN size
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
+        return Promise.resolve({
+          size: NaN,
+          contentType: 'text/plain',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('data');
+              this.push(null);
+            },
+          }),
+          size: 50,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheTriggeredTotal, 'inc');
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      const bgCache = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        backgroundCacheRangeMaxSize: 1000,
+        backgroundCacheRangeConcurrency: 2,
+      });
+
+      const result = await bgCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+
+      for await (const chunk of result.stream) {
+        // drain
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      assert.equal(
+        (
+          metrics.backgroundRangeCacheTriggeredTotal.inc as any
+        ).mock.callCount(),
+        0,
+      );
+
+      const skipCalls = (metrics.backgroundRangeCacheSkippedTotal.inc as any)
+        .mock.calls;
+      const unknownSizeSkips = skipCalls.filter(
+        (c: any) => c.arguments[0]?.reason === 'unknown_size',
+      );
+      assert.ok(unknownSizeSkips.length > 0);
+    });
+  });
+
+  describe('constructor validation', () => {
+    it('should reject NaN backgroundCacheRangeMaxSize', () => {
+      assert.throws(
+        () =>
+          new ReadThroughDataCache({
+            log,
+            dataSource: mockContiguousDataSource,
+            dataStore: mockContiguousDataStore,
+            metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+            contiguousDataIndex: mockContiguousDataIndex,
+            dataAttributesStore: mockDataAttributesStore,
+            dataContentAttributeImporter: mockDataContentAttributeImporter,
+            backgroundCacheRangeMaxSize: NaN,
+          }),
+        /backgroundCacheRangeMaxSize must be a non-negative finite number/,
+      );
+    });
+
+    it('should reject negative backgroundCacheRangeMaxSize', () => {
+      assert.throws(
+        () =>
+          new ReadThroughDataCache({
+            log,
+            dataSource: mockContiguousDataSource,
+            dataStore: mockContiguousDataStore,
+            metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+            contiguousDataIndex: mockContiguousDataIndex,
+            dataAttributesStore: mockDataAttributesStore,
+            dataContentAttributeImporter: mockDataContentAttributeImporter,
+            backgroundCacheRangeMaxSize: -1,
+          }),
+        /backgroundCacheRangeMaxSize must be a non-negative finite number/,
+      );
+    });
+
+    it('should reject NaN backgroundCacheRangeConcurrency', () => {
+      assert.throws(
+        () =>
+          new ReadThroughDataCache({
+            log,
+            dataSource: mockContiguousDataSource,
+            dataStore: mockContiguousDataStore,
+            metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+            contiguousDataIndex: mockContiguousDataIndex,
+            dataAttributesStore: mockDataAttributesStore,
+            dataContentAttributeImporter: mockDataContentAttributeImporter,
+            backgroundCacheRangeMaxSize: 1000,
+            backgroundCacheRangeConcurrency: NaN,
+          }),
+        /backgroundCacheRangeConcurrency must be a positive finite number/,
+      );
+    });
+
+    it('should reject zero backgroundCacheRangeConcurrency', () => {
+      assert.throws(
+        () =>
+          new ReadThroughDataCache({
+            log,
+            dataSource: mockContiguousDataSource,
+            dataStore: mockContiguousDataStore,
+            metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+            contiguousDataIndex: mockContiguousDataIndex,
+            dataAttributesStore: mockDataAttributesStore,
+            dataContentAttributeImporter: mockDataContentAttributeImporter,
+            backgroundCacheRangeMaxSize: 1000,
+            backgroundCacheRangeConcurrency: 0,
+          }),
+        /backgroundCacheRangeConcurrency must be a positive finite number/,
+      );
+    });
   });
 });

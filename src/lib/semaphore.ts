@@ -79,6 +79,18 @@ export class Semaphore {
   }
 
   /**
+   * Try to acquire a permit without waiting.
+   * Returns true if a permit was acquired, false if none are available.
+   */
+  tryAcquire(): boolean {
+    if (this.permits > 0) {
+      this.permits--;
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Returns the number of available permits.
    */
   availablePermits(): number {
