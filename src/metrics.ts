@@ -749,6 +749,31 @@ export const cacheEvictionsTotal = new promClient.Counter({
 });
 
 //
+// Background range cache metrics
+//
+
+export const backgroundRangeCacheTriggeredTotal = new promClient.Counter({
+  name: 'background_range_cache_triggered_total',
+  help: 'Background full-item cache fetches triggered after range cache misses',
+});
+
+export const backgroundRangeCacheCompletedTotal = new promClient.Counter({
+  name: 'background_range_cache_completed_total',
+  help: 'Background full-item cache fetches completed successfully',
+});
+
+export const backgroundRangeCacheFailedTotal = new promClient.Counter({
+  name: 'background_range_cache_failed_total',
+  help: 'Background full-item cache fetches that failed',
+});
+
+export const backgroundRangeCacheSkippedTotal = new promClient.Counter({
+  name: 'background_range_cache_skipped_total',
+  help: 'Background full-item cache fetches skipped',
+  labelNames: ['reason'] as const,
+});
+
+//
 // Sampling data source metrics
 //
 

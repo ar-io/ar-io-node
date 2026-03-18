@@ -11,6 +11,7 @@ import winston from 'winston';
 
 import * as events from '../events.js';
 import { currentUnixTimestamp } from '../lib/time.js';
+import { Semaphore } from '../lib/semaphore.js';
 import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
@@ -69,6 +70,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private untrustedCacheRetryRate: number;
   private trustedCacheRetryRate: number;
   private pendingRetries: Set<string> = new Set();
+  private pendingBackgroundCaches: Set<string> = new Set();
+  private backgroundCacheRangeMaxSize: number;
+  private backgroundCacheSemaphore: Semaphore | undefined;
 
   constructor({
     log,
@@ -82,6 +86,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     eventEmitter,
     untrustedCacheRetryRate = 0,
     trustedCacheRetryRate = 0,
+    backgroundCacheRangeMaxSize = 0,
+    backgroundCacheRangeConcurrency = 1,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
@@ -94,6 +100,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     eventEmitter?: EventEmitter;
     untrustedCacheRetryRate?: number;
     trustedCacheRetryRate?: number;
+    backgroundCacheRangeMaxSize?: number;
+    backgroundCacheRangeConcurrency?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
@@ -106,6 +114,12 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.eventEmitter = eventEmitter;
     this.untrustedCacheRetryRate = untrustedCacheRetryRate;
     this.trustedCacheRetryRate = trustedCacheRetryRate;
+    this.backgroundCacheRangeMaxSize = backgroundCacheRangeMaxSize;
+    if (backgroundCacheRangeMaxSize > 0) {
+      this.backgroundCacheSemaphore = new Semaphore(
+        backgroundCacheRangeConcurrency,
+      );
+    }
   }
 
   private calculateVerificationPriority(
@@ -243,6 +257,72 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       .finally(() => {
         this.pendingRetries.delete(id);
       });
+  }
+
+  private triggerBackgroundCacheForRange(
+    id: string,
+    dataSize: number,
+    requestAttributes?: RequestAttributes,
+  ): void {
+    if (this.backgroundCacheRangeMaxSize <= 0) {
+      metrics.backgroundRangeCacheSkippedTotal.inc({ reason: 'disabled' });
+      return;
+    }
+
+    if (this.skipCache) {
+      metrics.backgroundRangeCacheSkippedTotal.inc({
+        reason: 'skip_cache_set',
+      });
+      return;
+    }
+
+    if (this.pendingBackgroundCaches.has(id)) {
+      metrics.backgroundRangeCacheSkippedTotal.inc({
+        reason: 'already_pending',
+      });
+      return;
+    }
+
+    if (dataSize > this.backgroundCacheRangeMaxSize) {
+      metrics.backgroundRangeCacheSkippedTotal.inc({
+        reason: 'exceeds_max_size',
+      });
+      return;
+    }
+
+    if (this.backgroundCacheSemaphore!.availablePermits() === 0) {
+      metrics.backgroundRangeCacheSkippedTotal.inc({ reason: 'at_capacity' });
+      return;
+    }
+
+    this.pendingBackgroundCaches.add(id);
+    metrics.backgroundRangeCacheTriggeredTotal.inc();
+
+    this.backgroundCacheSemaphore!.acquire().then(() => {
+      this.getData({ id, requestAttributes })
+        .then((result) => {
+          return new Promise<void>((resolve, reject) => {
+            result.stream.on('data', () => {});
+            result.stream.on('end', () => {
+              metrics.backgroundRangeCacheCompletedTotal.inc();
+              resolve();
+            });
+            result.stream.on('error', reject);
+            result.stream.resume();
+          });
+        })
+        .catch((error: any) => {
+          this.log.debug('Background range cache fetch failed', {
+            id,
+            message: error.message,
+          });
+          metrics.backgroundRangeCacheFailedTotal.inc();
+        })
+        .finally(() => {
+          this.pendingBackgroundCaches.delete(id);
+          this.backgroundCacheSemaphore!.release();
+        });
+    });
   }
 
   async getCacheData(
@@ -750,6 +830,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             hasLocalHash: attributes?.hash !== undefined,
             hasRegion: region !== undefined,
           });
+        }
+
+        if (region !== undefined && data.size > 0) {
+          this.triggerBackgroundCacheForRange(
+            id,
+            attributes?.size ?? data.size,
+            requestAttributes,
+          );
         }
       }
 

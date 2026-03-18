@@ -1687,6 +1687,17 @@ export const TRUSTED_CACHE_RETRY_RATE = +env.varOrDefault(
   '0.0',
 );
 
+// Background caching for range request cache misses
+export const BACKGROUND_CACHE_RANGE_MAX_SIZE = +env.varOrDefault(
+  'BACKGROUND_CACHE_RANGE_MAX_SIZE',
+  '0',
+);
+
+export const BACKGROUND_CACHE_RANGE_CONCURRENCY = env.positiveIntOrDefault(
+  'BACKGROUND_CACHE_RANGE_CONCURRENCY',
+  1,
+);
+
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',

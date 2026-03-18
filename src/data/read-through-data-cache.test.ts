@@ -1067,4 +1067,619 @@ describe('ReadThroughDataCache', function () {
       );
     });
   });
+
+  describe('background range caching', () => {
+    it('should trigger background cache on range cache miss', async () => {
+      const region = { offset: 10, size: 50 };
+      let getDataCallCount = 0;
+      const getDataCalls: any[] = [];
+
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
+        return Promise.resolve({
+          size: 200,
+          contentType: 'application/octet-stream',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+
+      mock.method(mockContiguousDataSource, 'getData', (params: any) => {
+        getDataCallCount++;
+        getDataCalls.push({ ...params });
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('test data');
+              this.push(null);
+            },
+          }),
+          size: params.region ? 50 : 200,
+          sourceContentType: 'application/octet-stream',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheTriggeredTotal, 'inc');
+      mock.method(metrics.backgroundRangeCacheCompletedTotal, 'inc');
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      const bgCache = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        backgroundCacheRangeMaxSize: 1000,
+        backgroundCacheRangeConcurrency: 2,
+      });
+
+      const result = await bgCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+
+      // Consume the stream
+      for await (const chunk of result.stream) {
+        // drain
+      }
+
+      // Wait for background fetch to complete
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Upstream should be called twice: once with region, once without
+      assert.equal(getDataCallCount, 2);
+      assert.deepEqual(getDataCalls[0].region, region);
+      assert.equal(getDataCalls[1].region, undefined);
+
+      assert.equal(
+        (
+          metrics.backgroundRangeCacheTriggeredTotal.inc as any
+        ).mock.callCount(),
+        1,
+      );
+    });
+
+    it('should skip when disabled (default max size 0)', async () => {
+      const region = { offset: 10, size: 50 };
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('data');
+              this.push(null);
+            },
+          }),
+          size: 50,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      // Default instance has backgroundCacheRangeMaxSize = 0
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+
+      for await (const chunk of result.stream) {
+        // drain
+      }
+
+      const skipCalls = (
+        metrics.backgroundRangeCacheSkippedTotal.inc as any
+      ).mock.calls;
+      const disabledSkips = skipCalls.filter(
+        (c: any) => c.arguments[0]?.reason === 'disabled',
+      );
+      assert.ok(disabledSkips.length > 0);
+    });
+
+    it('should skip when item exceeds max size', async () => {
+      const region = { offset: 0, size: 50 };
+
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
+        return Promise.resolve({
+          size: 5000,
+          contentType: 'text/plain',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('data');
+              this.push(null);
+            },
+          }),
+          size: 50,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      const bgCache = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        backgroundCacheRangeMaxSize: 1000,
+      });
+
+      const result = await bgCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+
+      for await (const chunk of result.stream) {
+        // drain
+      }
+
+      const skipCalls = (
+        metrics.backgroundRangeCacheSkippedTotal.inc as any
+      ).mock.calls;
+      const exceedsSkips = skipCalls.filter(
+        (c: any) => c.arguments[0]?.reason === 'exceeds_max_size',
+      );
+      assert.ok(exceedsSkips.length > 0);
+    });
+
+    it('should deduplicate when already pending', async () => {
+      const region = { offset: 0, size: 50 };
+      let getDataCallCount = 0;
+
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
+        return Promise.resolve({
+          size: 200,
+          contentType: 'text/plain',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+
+      // Use a slow stream for the background fetch so it stays pending
+      mock.method(mockContiguousDataSource, 'getData', (params: any) => {
+        getDataCallCount++;
+        const stream = new Readable({
+          read() {
+            if (params.region) {
+              this.push('range data');
+              this.push(null);
+            } else {
+              // Slow stream for background fetch
+              setTimeout(() => {
+                this.push('full data');
+                this.push(null);
+              }, 200);
+            }
+          },
+        });
+        return Promise.resolve({
+          stream,
+          size: params.region ? 50 : 200,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheTriggeredTotal, 'inc');
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      const bgCache = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        backgroundCacheRangeMaxSize: 1000,
+        backgroundCacheRangeConcurrency: 2,
+      });
+
+      // First request triggers background cache
+      const result1 = await bgCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+      for await (const chunk of result1.stream) {
+        // drain
+      }
+
+      // Second request for same ID should be deduplicated
+      const result2 = await bgCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+      for await (const chunk of result2.stream) {
+        // drain
+      }
+
+      // Wait for background to complete
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Only one background fetch should have been triggered
+      assert.equal(
+        (
+          metrics.backgroundRangeCacheTriggeredTotal.inc as any
+        ).mock.callCount(),
+        1,
+      );
+
+      const skipCalls = (
+        metrics.backgroundRangeCacheSkippedTotal.inc as any
+      ).mock.calls;
+      const alreadyPendingSkips = skipCalls.filter(
+        (c: any) => c.arguments[0]?.reason === 'already_pending',
+      );
+      assert.ok(alreadyPendingSkips.length > 0);
+    });
+
+    it('should drop at concurrency capacity', async () => {
+      const region = { offset: 0, size: 50 };
+
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
+        return Promise.resolve({
+          size: 200,
+          contentType: 'text/plain',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+
+      // Slow stream to keep the semaphore acquired
+      mock.method(mockContiguousDataSource, 'getData', (params: any) => {
+        const stream = new Readable({
+          read() {
+            if (params.region) {
+              this.push('range');
+              this.push(null);
+            } else {
+              setTimeout(() => {
+                this.push('full');
+                this.push(null);
+              }, 500);
+            }
+          },
+        });
+        return Promise.resolve({
+          stream,
+          size: params.region ? 50 : 200,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheTriggeredTotal, 'inc');
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      // Concurrency of 1
+      const bgCache = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        backgroundCacheRangeMaxSize: 1000,
+        backgroundCacheRangeConcurrency: 1,
+      });
+
+      // First request takes the semaphore
+      const result1 = await bgCache.getData({
+        id: 'test-id-1',
+        requestAttributes,
+        region,
+      });
+      for await (const chunk of result1.stream) {
+        // drain
+      }
+
+      // Give microtask a chance to acquire semaphore
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Second request should be dropped (at capacity)
+      const result2 = await bgCache.getData({
+        id: 'test-id-2',
+        requestAttributes,
+        region,
+      });
+      for await (const chunk of result2.stream) {
+        // drain
+      }
+
+      // Wait for everything to complete
+      await new Promise((resolve) => setTimeout(resolve, 600));
+
+      assert.equal(
+        (
+          metrics.backgroundRangeCacheTriggeredTotal.inc as any
+        ).mock.callCount(),
+        1,
+      );
+
+      const skipCalls = (
+        metrics.backgroundRangeCacheSkippedTotal.inc as any
+      ).mock.calls;
+      const capacitySkips = skipCalls.filter(
+        (c: any) => c.arguments[0]?.reason === 'at_capacity',
+      );
+      assert.ok(capacitySkips.length > 0);
+    });
+
+    it('should not affect client when background fetch fails', async () => {
+      const region = { offset: 0, size: 50 };
+      let callCount = 0;
+
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
+        return Promise.resolve({
+          size: 200,
+          contentType: 'text/plain',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+
+      mock.method(mockContiguousDataSource, 'getData', (params: any) => {
+        callCount++;
+        if (!params.region) {
+          // Background fetch fails
+          return Promise.reject(new Error('upstream failure'));
+        }
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('range data');
+              this.push(null);
+            },
+          }),
+          size: 50,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheFailedTotal, 'inc');
+
+      const bgCache = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        backgroundCacheRangeMaxSize: 1000,
+      });
+
+      const result = await bgCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+
+      // Client still gets their data
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+      assert.equal(receivedData, 'range data');
+      assert.equal(result.size, 50);
+
+      // Wait for background to fail
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      assert.equal(
+        (metrics.backgroundRangeCacheFailedTotal.inc as any).mock.callCount(),
+        1,
+      );
+    });
+
+    it('should skip when skipCache is true', async () => {
+      const region = { offset: 0, size: 50 };
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('data');
+              this.push(null);
+            },
+          }),
+          size: 50,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      const bgCache = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        skipCache: true,
+        backgroundCacheRangeMaxSize: 1000,
+      });
+
+      const result = await bgCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+
+      for await (const chunk of result.stream) {
+        // drain
+      }
+
+      const skipCalls = (
+        metrics.backgroundRangeCacheSkippedTotal.inc as any
+      ).mock.calls;
+      const skipCacheSkips = skipCalls.filter(
+        (c: any) => c.arguments[0]?.reason === 'skip_cache_set',
+      );
+      assert.ok(skipCacheSkips.length > 0);
+    });
+
+    it('should not trigger on full (non-range) cache miss', async () => {
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+
+      let getDataCallCount = 0;
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        getDataCallCount++;
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('data');
+              this.push(null);
+            },
+          }),
+          size: 100,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      mock.method(metrics.backgroundRangeCacheTriggeredTotal, 'inc');
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      const bgCache = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        backgroundCacheRangeMaxSize: 1000,
+      });
+
+      // Full request (no region)
+      const result = await bgCache.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      for await (const chunk of result.stream) {
+        // drain
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Only the original getData call, no background fetch
+      assert.equal(getDataCallCount, 1);
+      assert.equal(
+        (
+          metrics.backgroundRangeCacheTriggeredTotal.inc as any
+        ).mock.callCount(),
+        0,
+      );
+    });
+  });
 });
