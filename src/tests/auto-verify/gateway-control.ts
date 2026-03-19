@@ -4,7 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import Sqlite from 'better-sqlite3';
@@ -540,15 +540,20 @@ export function importToClickHouse(
   console.log('Importing Parquet data to ClickHouse...');
 
   const args = [
-    `--input-dir "${stagingDir}"`,
+    '--input-dir',
+    stagingDir,
     '--all-partitions',
-    `--clickhouse-host "${config.clickhouseHost}"`,
-    `--clickhouse-port "${config.clickhousePort}"`,
-    `--clickhouse-user "${config.clickhouseUser}"`,
-    `--clickhouse-password "${config.clickhousePassword}"`,
-  ].join(' ');
+    '--clickhouse-host',
+    config.clickhouseHost ?? '',
+    '--clickhouse-port',
+    config.clickhousePort ?? '',
+    '--clickhouse-user',
+    config.clickhouseUser ?? '',
+    '--clickhouse-password',
+    config.clickhousePassword ?? '',
+  ];
 
-  execSync(`scripts/clickhouse-import ${args}`, {
+  execFileSync('scripts/clickhouse-import', args, {
     cwd: process.cwd(),
     stdio: 'inherit',
   });
