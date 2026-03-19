@@ -24,13 +24,14 @@ Options:
   --api-host HOST              Admin API host (default: localhost)
   --api-port PORT              Admin API port (default: 4000)
   --poll-interval N            Status poll interval in seconds (default: 5)
+  --staging-job-dir DIR        Override output dir with staging job directory
 
   Iceberg Metadata:
   --generate-iceberg           Generate Apache Iceberg metadata after export
   --iceberg-root URI           Warehouse root URI for Iceberg metadata
 
   Verification:
-  --verify-count               Verify row counts via DuckDB after export (requires duckdb CLI)
+  --verify-count               Verify row counts after export (requires duckdb and sqlite3 CLIs)
 
   -h, --help                   Show this help message
 USAGE
@@ -226,6 +227,10 @@ while true; do
       echo "Output directory: $OUTPUT_DIR"
       break
       ;;
+    not_started)
+      echo "Error: Export status reset to 'not_started' after submission. The core process may have restarted." >&2
+      exit 1
+      ;;
     errored)
       ERROR_MSG=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error','unknown'))" 2>/dev/null || echo "unknown")
       echo "Error: Export failed: $ERROR_MSG" >&2
@@ -276,13 +281,13 @@ if $GENERATE_ICEBERG; then
   echo "Generating Apache Iceberg metadata..."
   if command -v python3 >/dev/null 2>&1; then
     if python3 -c "import pyiceberg" 2>/dev/null; then
-      ICEBERG_CMD="python3 \"$SCRIPT_DIR/generate-iceberg-metadata\" --datasets-dir \"$OUTPUT_DIR\""
+      ICEBERG_CMD=(python3 "$SCRIPT_DIR/generate-iceberg-metadata" --datasets-dir "$OUTPUT_DIR")
       if [ -n "$ICEBERG_ROOT" ]; then
-        ICEBERG_CMD="$ICEBERG_CMD --datasets-root \"$ICEBERG_ROOT\""
+        ICEBERG_CMD+=(--datasets-root "$ICEBERG_ROOT")
         echo "  Using datasets root: $ICEBERG_ROOT"
       fi
 
-      if eval $ICEBERG_CMD; then
+      if "${ICEBERG_CMD[@]}"; then
         echo "  Iceberg metadata generated successfully"
       else
         echo "  Warning: Iceberg metadata generation failed, but export data is intact" >&2
