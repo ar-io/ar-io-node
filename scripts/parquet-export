@@ -185,14 +185,14 @@ echo "  Heights: $START_HEIGHT - $END_HEIGHT"
 echo "  Partition size: $HEIGHT_PARTITION_SIZE"
 echo "  Output dir: $OUTPUT_DIR"
 
-RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+BODY_FILE=$(mktemp)
+HTTP_CODE=$(curl -s -w "%{http_code}" -o "$BODY_FILE" -X POST \
   "${API_BASE}/ar-io/admin/export-parquet" \
   -H "Authorization: Bearer ${ADMIN_API_KEY}" \
   -H "Content-Type: application/json" \
   -d "$JSON_BODY")
-
-HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-BODY=$(echo "$RESPONSE" | head -n -1)
+BODY=$(cat "$BODY_FILE")
+rm -f "$BODY_FILE"
 
 if [[ "$HTTP_CODE" != "200" ]]; then
   echo "Error: Failed to start export (HTTP $HTTP_CODE): $BODY" >&2
@@ -205,12 +205,12 @@ echo "Export started. Polling for completion..."
 while true; do
   sleep "$POLL_INTERVAL"
 
-  RESPONSE=$(curl -s -w "\n%{http_code}" \
+  BODY_FILE=$(mktemp)
+  HTTP_CODE=$(curl -s -w "%{http_code}" -o "$BODY_FILE" \
     "${API_BASE}/ar-io/admin/export-parquet/status" \
     -H "Authorization: Bearer ${ADMIN_API_KEY}")
-
-  HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-  BODY=$(echo "$RESPONSE" | head -n -1)
+  BODY=$(cat "$BODY_FILE")
+  rm -f "$BODY_FILE"
 
   if [[ "$HTTP_CODE" != "200" ]]; then
     echo "Error: Failed to get export status (HTTP $HTTP_CODE): $BODY" >&2
@@ -242,7 +242,7 @@ done
 
 # Post-processing: verify counts
 if $VERIFY_COUNT; then
-  require_commands duckdb || exit 1
+  require_commands duckdb sqlite3 || exit 1
 
   echo "Verifying exported data counts..."
   CORE_DB="${CORE_DB_PATH:-data/sqlite/core.db}"
