@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Background Caching for Range Request Cache Misses**: When a range request
+  (e.g., byte-range for video seeking) misses the local cache, the gateway now
+  optionally fetches and caches the full item in the background so subsequent
+  requests (range or full) are served locally. Controlled by
+  `BACKGROUND_CACHE_RANGE_MAX_SIZE` (default: 0 / disabled) and
+  `BACKGROUND_CACHE_RANGE_CONCURRENCY`. Includes deduplication, capacity-based
+  drop semantics, and Prometheus metrics for monitoring cache activity (PE-9010)
+
+- **Multiple ArNS Root Hosts**: Operators can now serve ArNS names across
+  multiple domains from a single gateway instance by providing a comma-separated
+  list in `ARNS_ROOT_HOST` (e.g., `ARNS_ROOT_HOST=arweave.dev,g8way.io`). The
+  first host is used as the "primary" for gateway identity headers. ArNS
+  resolution, apex content, and sandbox redirects work per-matched host with
+  longest-suffix matching (#621)
+
 - **ClickHouse Verification in Auto-Verify**: Optional ClickHouse source for
   verifying exported data against ClickHouse in addition to SQLite and Parquet
 
