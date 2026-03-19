@@ -8,9 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **ClickHouse Verification in Auto-Verify**: Optional ClickHouse source for
+  verifying exported data against ClickHouse in addition to SQLite and Parquet
+
+- **Block Verification in Auto-Verify**: Verify block data alongside
+  transactions and data items
+
+- **Bundle Data Prefetch**: Prefetch bundle data from local gateway before
+  shutdown to ensure data availability for export
+
 ### Changed
 
+- **Parquet Export Pipeline Simplification**: Eliminated DuckDB intermediate
+  tables from the export pipeline. All core export logic moved from the bash
+  script into `src/workers/parquet-exporter.ts`, with the CLI script becoming a
+  thin wrapper around the admin API. The CLI now uses `--api-host`/`--api-port`
+  instead of `--core-db`/`--bundles-db`.
+
+- **Removed Legacy Auto-Verify CLI Options**: Cleaned up deprecated verification
+  flags
+
 ### Fixed
+
+- **ClickHouse ETL Height Range**: Fixed off-by-one errors in height range
+  calculations in `clickhouse-auto-import`
+
+- **ClickHouse ETL Exit Code Capture**: Fixed `$?` capturing the exit code of a
+  variable assignment instead of the `curl` command
 
 ## [Release 73] - 2026-03-18
 
