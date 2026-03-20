@@ -26,11 +26,9 @@ Options:
   --poll-interval N            Status poll interval in seconds (default: 5)
   --staging-job-dir DIR        Override output dir with staging job directory
 
-  Iceberg Metadata:
+  Post-Processing (requires running on the same host as the gateway):
   --generate-iceberg           Generate Apache Iceberg metadata after export
   --iceberg-root URI           Warehouse root URI for Iceberg metadata
-
-  Verification:
   --verify-count               Verify row counts after export (requires duckdb and sqlite3 CLIs)
 
   -h, --help                   Show this help message
