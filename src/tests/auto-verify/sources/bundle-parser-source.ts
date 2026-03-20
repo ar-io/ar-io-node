@@ -42,7 +42,6 @@ export class BundleParserSource implements SourceAdapter {
           FROM bundles b
           JOIN new_data_items ndi ON b.id = ndi.parent_id OR b.id = ndi.root_transaction_id
           WHERE ndi.height BETWEEN ? AND ?
-            AND b.last_fully_indexed_at IS NOT NULL
           `,
         )
         .all(startHeight, endHeight) as any[];

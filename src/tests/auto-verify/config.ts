@@ -37,7 +37,11 @@ export function loadConfig(): AutoVerifyConfig {
     coreDbPath: `${cwd}/data/sqlite/core.db`,
     bundlesDbPath: `${cwd}/data/sqlite/bundles.db`,
     sqliteDir: `${cwd}/data/sqlite`,
-    clickhouseUrl: process.env.AUTO_VERIFY_CLICKHOUSE_URL ?? null,
+    clickhouseUrl:
+      process.env.AUTO_VERIFY_CLICKHOUSE_URL != null &&
+      process.env.AUTO_VERIFY_CLICKHOUSE_URL !== ''
+        ? process.env.AUTO_VERIFY_CLICKHOUSE_URL
+        : null,
     clickhouseHost: process.env.CLICKHOUSE_HOST ?? 'localhost',
     clickhousePort: process.env.CLICKHOUSE_PORT ?? '9000',
     clickhouseUser: process.env.CLICKHOUSE_USER ?? 'default',
