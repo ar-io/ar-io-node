@@ -50,8 +50,8 @@ GENERATE_ICEBERG=false
 ICEBERG_ROOT=""
 VERIFY_COUNT=false
 
-# Check required commands (python3 is used for JSON parsing in status polling)
-require_commands python3 || exit 1
+# Check required commands (curl for admin API calls, python3 for JSON parsing)
+require_commands curl python3 || exit 1
 
 # Load environment configuration
 load_env
@@ -246,6 +246,7 @@ done
 # Post-processing: verify counts
 if $VERIFY_COUNT; then
   require_commands duckdb sqlite3 || exit 1
+  VERIFICATION_FAILED=0
 
   echo "Verifying exported data counts..."
   CORE_DB="${CORE_DB_PATH:-data/sqlite/core.db}"
@@ -257,6 +258,7 @@ if $VERIFY_COUNT; then
 
   if [[ "$SQLITE_BLOCKS" != "$PARQUET_BLOCKS" ]]; then
     echo "  ERROR: Block count mismatch! SQLite: $SQLITE_BLOCKS, Parquet: $PARQUET_BLOCKS" >&2
+    VERIFICATION_FAILED=1
   else
     echo "  Blocks: $PARQUET_BLOCKS (matches SQLite)"
   fi
@@ -267,11 +269,15 @@ if $VERIFY_COUNT; then
 
   if [[ "$SQLITE_L2" != "$PARQUET_L2" ]]; then
     echo "  ERROR: L2 transaction count mismatch! SQLite: $SQLITE_L2, Parquet: $PARQUET_L2" >&2
+    VERIFICATION_FAILED=1
   else
     echo "  L2 Transactions: $PARQUET_L2 (matches SQLite)"
   fi
 
   echo "Verification complete."
+  if [[ $VERIFICATION_FAILED -ne 0 ]]; then
+    exit 1
+  fi
 fi
 
 # Post-processing: generate Iceberg metadata
