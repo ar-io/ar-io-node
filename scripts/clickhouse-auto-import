@@ -166,36 +166,38 @@ while true; do
                 log_timing "Move staging to dataset" "$move_start_time" "$move_complete_time"
                 
                 # Step 3.5: Update Iceberg metadata for new partitions (disabled by default)
-                if [ "${ENABLE_ICEBERG_GENERATION:-false}" = "true" ] && command -v python3 >/dev/null 2>&1 && [ -f ./scripts/generate-iceberg-metadata ]; then
-                    echo "Updating Iceberg metadata..."
-                    iceberg_start_time=$(date +%s)
-                    
-                    # Build datasets root based on ARNS_ROOT_HOST if configured
-                    iceberg_args=(
-                        "--datasets-dir" "$dataset_dir"
-                    )
-                    
-                    # Add ARNS datasets root if configured
-                    if [ -n "${ARNS_ROOT_HOST:-}" ]; then
-                        datasets_root="https://${ARNS_ROOT_HOST}/local/datasets/default"
-                        iceberg_args+=("--datasets-root" "$datasets_root")
-                        echo "  Using ARNS datasets root: $datasets_root"
-                    fi
-                    
-                    # Run the metadata generation
-                    python3 ./scripts/generate-iceberg-metadata "${iceberg_args[@]}"
-                    iceberg_status=$?
-                    iceberg_complete_time=$(date +%s)
-
-                    if [ $iceberg_status -eq 0 ]; then
-                        echo "Iceberg metadata updated successfully."
-                        log_timing "Iceberg metadata generation" "$iceberg_start_time" "$iceberg_complete_time"
+                if [ "${ENABLE_ICEBERG_GENERATION:-false}" = "true" ]; then
+                    if ! command -v python3 >/dev/null 2>&1 || [ ! -f ./scripts/generate-iceberg-metadata ]; then
+                        echo "Warning: Iceberg generation enabled but Python3 or script not available"
                     else
-                        echo "Warning: Iceberg metadata generation failed (non-critical, continuing)"
-                        log_timing "Iceberg metadata generation (failed)" "$iceberg_start_time" "$iceberg_complete_time"
+                        echo "Updating Iceberg metadata..."
+                        iceberg_start_time=$(date +%s)
+
+                        # Build datasets root based on ARNS_ROOT_HOST if configured
+                        iceberg_args=(
+                            "--datasets-dir" "$dataset_dir"
+                        )
+
+                        # Add ARNS datasets root if configured
+                        if [ -n "${ARNS_ROOT_HOST:-}" ]; then
+                            datasets_root="https://${ARNS_ROOT_HOST}/local/datasets/default"
+                            iceberg_args+=("--datasets-root" "$datasets_root")
+                            echo "  Using ARNS datasets root: $datasets_root"
+                        fi
+
+                        # Run the metadata generation
+                        python3 ./scripts/generate-iceberg-metadata "${iceberg_args[@]}"
+                        iceberg_status=$?
+                        iceberg_complete_time=$(date +%s)
+
+                        if [ $iceberg_status -eq 0 ]; then
+                            echo "Iceberg metadata updated successfully."
+                            log_timing "Iceberg metadata generation" "$iceberg_start_time" "$iceberg_complete_time"
+                        else
+                            echo "Warning: Iceberg metadata generation failed (non-critical, continuing)"
+                            log_timing "Iceberg metadata generation (failed)" "$iceberg_start_time" "$iceberg_complete_time"
+                        fi
                     fi
-                else
-                    echo "Skipping Iceberg metadata update (Python3 or script not available)"
                 fi
                 
                 # Clean up staging directory after successful move
