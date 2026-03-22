@@ -57,6 +57,7 @@ services:
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
       - ${DATASETS_PATH:-./data/datasets}:/app/data/datasets
+      - ${ETL_STAGING_PATH:-./data/etl/staging}:/app/data/etl/staging
       - ${CDB64_ROOT_TX_INDEX_DATA_PATH:-./data/cdb64-root-tx-index}:/app/data/cdb64-root-tx-index
       - ${SECRETS_PATH:-./secrets}:/app/secrets:ro
       - envoy-eds-data:/app/data/envoy-eds

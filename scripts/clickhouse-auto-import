@@ -111,7 +111,9 @@ while true; do
             --height-partition-size "$height_interval" \
             --staging-job-dir "$job_staging_dir" \
             --output-dir "$dataset_dir" \
-            --max-file-rows "$max_rows_per_file"
+            --max-file-rows "$max_rows_per_file" \
+            --api-host "$ar_io_host" \
+            --api-port "$ar_io_port"
         
         export_status=$?
         export_complete_time=$(date +%s)
