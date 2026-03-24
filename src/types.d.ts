@@ -1154,6 +1154,18 @@ export interface OwnerSource {
   getTransactionOwner({ id }: { id: string }): Promise<string | undefined>;
 }
 
+export interface IndexCleanupFilter {
+  owners?: string[]; // base64url owner addresses
+  tags?: { name: string; values: string[] }[]; // tag name + allowed values
+  minHeight?: number;
+  maxHeight?: number;
+  maxIndexedAt?: number; // unix timestamp - delete items indexed before this
+}
+
+export interface ClickHouseIndexCleanup {
+  deleteDataItemsByIds(ids: string[]): Promise<void>;
+}
+
 export interface WithPeers<T> {
   getPeers(): Record<string, T>;
 }

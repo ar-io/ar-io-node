@@ -14,8 +14,13 @@ import { release } from '../version.js';
 import { db, signatureStore, ownerStore } from '../system.js';
 import log from '../log.js';
 import { ParquetExporter } from '../workers/parquet-exporter.js';
-import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
+import {
+  NormalizedDataItem,
+  PartialJsonTransaction,
+  IndexCleanupFilter,
+} from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
+import { toB64Url } from '../lib/encoding.js';
 import { isEmptyString } from '../lib/string.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
 
@@ -613,6 +618,143 @@ arIoRouter.post(
       });
       res.json({ message: 'Stable data items pruned successfully' });
     } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
+
+// Index cleanup - delete L2 data items by filter criteria
+arIoRouter.post(
+  '/ar-io/admin/index-cleanup',
+  express.json(),
+  async (req, res) => {
+    try {
+      const {
+        owners,
+        tags,
+        minHeight,
+        maxHeight,
+        maxIndexedAt,
+        dryRun = true,
+        batchSize = 1000,
+      } = req.body;
+
+      if (
+        (!owners || owners.length === 0) &&
+        (!tags || tags.length === 0) &&
+        minHeight === undefined &&
+        maxHeight === undefined &&
+        maxIndexedAt === undefined
+      ) {
+        res.status(400).send('At least one filter criterion must be specified');
+        return;
+      }
+
+      if (owners !== undefined && !Array.isArray(owners)) {
+        res.status(400).send('owners must be an array of base64url strings');
+        return;
+      }
+      if (tags !== undefined && !Array.isArray(tags)) {
+        res.status(400).send('tags must be an array of {name, values} objects');
+        return;
+      }
+      if (
+        minHeight !== undefined &&
+        (!Number.isInteger(minHeight) || minHeight < 0)
+      ) {
+        res.status(400).send('minHeight must be a non-negative integer');
+        return;
+      }
+      if (
+        maxHeight !== undefined &&
+        (!Number.isInteger(maxHeight) || maxHeight < 0)
+      ) {
+        res.status(400).send('maxHeight must be a non-negative integer');
+        return;
+      }
+      if (
+        maxIndexedAt !== undefined &&
+        (!Number.isInteger(maxIndexedAt) || maxIndexedAt < 0)
+      ) {
+        res.status(400).send('maxIndexedAt must be a non-negative integer');
+        return;
+      }
+
+      const filter: IndexCleanupFilter = {
+        owners,
+        tags,
+        minHeight,
+        maxHeight,
+        maxIndexedAt,
+      };
+
+      log.info('Index cleanup requested via admin API', {
+        dryRun,
+        filter,
+        batchSize,
+      });
+
+      if (dryRun) {
+        const count = await db.countIndexCleanupCandidates(filter);
+        log.info('Index cleanup dry run result', {
+          candidateCount: count,
+        });
+        res.json({
+          dryRun: true,
+          candidateCount: count,
+          message: `Would delete ${count} data items. Set dryRun: false to execute.`,
+        });
+        return;
+      }
+
+      let totalDeleted = 0;
+      let afterId: Buffer | undefined;
+      let hasMore = true;
+
+      while (hasMore) {
+        const result = await db.getIndexCleanupCandidateIds({
+          filter,
+          limit: batchSize,
+          afterId,
+        });
+
+        if (result.ids.length === 0) break;
+
+        const bundlesResult = await db.deleteIndexCleanupBundlesBatch(
+          result.ids,
+        );
+        await db.deleteIndexCleanupDataBatch(result.ids);
+
+        const batchDeleted =
+          bundlesResult.stableDataItemsDeleted +
+          bundlesResult.newDataItemsDeleted;
+        totalDeleted += batchDeleted;
+
+        log.info('Index cleanup batch completed', {
+          batchSize: result.ids.length,
+          batchDeleted,
+          totalDeleted,
+        });
+
+        if (system.clickHouseCleanup) {
+          const b64Ids = result.ids.map((id) => toB64Url(id));
+          await system.clickHouseCleanup.deleteDataItemsByIds(b64Ids);
+        }
+
+        afterId = result.ids[result.ids.length - 1];
+        hasMore = result.hasMore;
+      }
+
+      log.info('Index cleanup completed via admin API', {
+        totalDeleted,
+      });
+      res.json({
+        dryRun: false,
+        deletedCount: totalDeleted,
+        message: `Deleted ${totalDeleted} data items.`,
+      });
+    } catch (error: any) {
+      log.error('Index cleanup error', { error: error?.message });
       res.status(500).send(error?.message);
     }
   },
