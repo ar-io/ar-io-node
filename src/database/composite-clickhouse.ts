@@ -527,6 +527,8 @@ export class CompositeClickHouseDatabase
     ];
 
     const SUB_BATCH_SIZE = 500;
+    const failures: { table: string; error: string }[] = [];
+
     for (let i = 0; i < ids.length; i += SUB_BATCH_SIZE) {
       const batch = ids.slice(i, i + SUB_BATCH_SIZE);
       const idList = batch.map((id) => `unhex('${b64UrlToHex(id)}')`).join(',');
@@ -542,8 +544,15 @@ export class CompositeClickHouseDatabase
             batchSize: batch.length,
             error: error?.message,
           });
+          failures.push({ table, error: error?.message });
         }
       }
+    }
+
+    if (failures.length > 0) {
+      throw new Error(
+        `ClickHouse index cleanup failed for ${failures.length} table(s): ${failures.map((f) => `${f.table}: ${f.error}`).join('; ')}`,
+      );
     }
 
     this.log.info('ClickHouse index cleanup mutations submitted', {

@@ -679,6 +679,13 @@ arIoRouter.post(
         res.status(400).send('maxIndexedAt must be a non-negative integer');
         return;
       }
+      if (
+        batchSize !== undefined &&
+        (!Number.isInteger(batchSize) || batchSize <= 0)
+      ) {
+        res.status(400).send('batchSize must be a positive integer');
+        return;
+      }
 
       const filter: IndexCleanupFilter = {
         owners,

@@ -4139,26 +4139,30 @@ if (!isMainThread) {
           worker.saveVerificationPriority(args[0], args[1]);
           parentPort?.postMessage(null);
           break;
-        case 'getIndexCleanupCandidateIds':
+        case 'getIndexCleanupCandidateIds': {
           const cleanupCandidates =
             worker.getIndexCleanupCandidateIds(args[0]);
           parentPort?.postMessage(cleanupCandidates);
           break;
-        case 'countIndexCleanupCandidates':
+        }
+        case 'countIndexCleanupCandidates': {
           const cleanupCount =
             worker.countIndexCleanupCandidates(args[0]);
           parentPort?.postMessage(cleanupCount);
           break;
-        case 'deleteIndexCleanupBundlesBatch':
+        }
+        case 'deleteIndexCleanupBundlesBatch': {
           const bundlesCleanupResult =
             worker.deleteIndexCleanupBundlesBatch(args[0]);
           parentPort?.postMessage(bundlesCleanupResult);
           break;
-        case 'deleteIndexCleanupDataBatch':
+        }
+        case 'deleteIndexCleanupDataBatch': {
           const dataCleanupResult =
             worker.deleteIndexCleanupDataBatch(args[0]);
           parentPort?.postMessage(dataCleanupResult);
           break;
+        }
         case 'pruneStableDataItems':
           worker.pruneStableDataItems(args[0]);
           parentPort?.postMessage(null);

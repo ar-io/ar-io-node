@@ -1399,18 +1399,31 @@ if (dataVerificationWorker !== undefined) {
   dataVerificationWorker.start();
 }
 
-const indexCleanupWorker = config.ENABLE_INDEX_CLEANUP_WORKER
-  ? new IndexCleanupWorker({
-      log,
-      db,
-      clickHouseCleanup,
-      filter: JSON.parse(config.INDEX_CLEANUP_FILTER),
-      intervalMs: config.INDEX_CLEANUP_INTERVAL_SECONDS * 1000,
-      batchSize: config.INDEX_CLEANUP_BATCH_SIZE,
-      dryRun: config.INDEX_CLEANUP_DRY_RUN,
-      minAgeSeconds: config.INDEX_CLEANUP_MIN_AGE_SECONDS,
-    })
-  : undefined;
+const indexCleanupWorker = (() => {
+  if (!config.ENABLE_INDEX_CLEANUP_WORKER) return undefined;
+
+  let parsedFilter;
+  try {
+    parsedFilter = JSON.parse(config.INDEX_CLEANUP_FILTER);
+  } catch (error: any) {
+    log.error('Invalid INDEX_CLEANUP_FILTER JSON, worker not started', {
+      filter: config.INDEX_CLEANUP_FILTER,
+      error: error?.message,
+    });
+    return undefined;
+  }
+
+  return new IndexCleanupWorker({
+    log,
+    db,
+    clickHouseCleanup,
+    filter: parsedFilter,
+    intervalMs: config.INDEX_CLEANUP_INTERVAL_SECONDS * 1000,
+    batchSize: config.INDEX_CLEANUP_BATCH_SIZE,
+    dryRun: config.INDEX_CLEANUP_DRY_RUN,
+    minAgeSeconds: config.INDEX_CLEANUP_MIN_AGE_SECONDS,
+  });
+})();
 
 if (indexCleanupWorker !== undefined) {
   indexCleanupWorker.start();

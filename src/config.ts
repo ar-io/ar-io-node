@@ -1369,15 +1369,15 @@ export const ENABLE_INDEX_CLEANUP_WORKER =
   env.varOrDefault('ENABLE_INDEX_CLEANUP_WORKER', 'false') === 'true';
 
 // Interval in seconds between cleanup cycles (default: 24 hours)
-export const INDEX_CLEANUP_INTERVAL_SECONDS = +env.varOrDefault(
+export const INDEX_CLEANUP_INTERVAL_SECONDS = env.positiveIntOrDefault(
   'INDEX_CLEANUP_INTERVAL_SECONDS',
-  `${60 * 60 * 24}`,
+  60 * 60 * 24,
 );
 
 // Number of data items to process per batch
-export const INDEX_CLEANUP_BATCH_SIZE = +env.varOrDefault(
+export const INDEX_CLEANUP_BATCH_SIZE = env.positiveIntOrDefault(
   'INDEX_CLEANUP_BATCH_SIZE',
-  '1000',
+  1000,
 );
 
 // Filter determining which data items to clean up (flat JSON format)
@@ -1389,9 +1389,9 @@ export const INDEX_CLEANUP_FILTER = env.varOrDefault(
 
 // How old data items must be (in seconds) before they are eligible for cleanup
 // Default: 30 days
-export const INDEX_CLEANUP_MIN_AGE_SECONDS = +env.varOrDefault(
+export const INDEX_CLEANUP_MIN_AGE_SECONDS = env.positiveIntOrDefault(
   'INDEX_CLEANUP_MIN_AGE_SECONDS',
-  `${60 * 60 * 24 * 30}`,
+  60 * 60 * 24 * 30,
 );
 
 // When true, only logs what would be deleted without deleting

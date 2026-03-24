@@ -10,26 +10,28 @@ import { toB64Url } from '../lib/encoding.js';
 import { currentUnixTimestamp } from '../lib/time.js';
 import { ClickHouseIndexCleanup, IndexCleanupFilter } from '../types.js';
 
+export interface IndexCleanupDb {
+  getIndexCleanupCandidateIds(params: {
+    filter: IndexCleanupFilter;
+    limit: number;
+    afterId?: Buffer;
+  }): Promise<{ ids: Buffer[]; hasMore: boolean }>;
+  countIndexCleanupCandidates(filter: IndexCleanupFilter): Promise<number>;
+  deleteIndexCleanupBundlesBatch(ids: Buffer[]): Promise<{
+    stableDataItemTagsDeleted: number;
+    stableDataItemsDeleted: number;
+    newDataItemTagsDeleted: number;
+    newDataItemsDeleted: number;
+  }>;
+  deleteIndexCleanupDataBatch(ids: Buffer[]): Promise<{
+    contiguousDataIdParentsDeleted: number;
+    contiguousDataIdsDeleted: number;
+  }>;
+}
+
 export class IndexCleanupWorker {
   private log: winston.Logger;
-  private db: {
-    getIndexCleanupCandidateIds(params: {
-      filter: IndexCleanupFilter;
-      limit: number;
-      afterId?: Buffer;
-    }): Promise<{ ids: Buffer[]; hasMore: boolean }>;
-    countIndexCleanupCandidates(filter: IndexCleanupFilter): Promise<number>;
-    deleteIndexCleanupBundlesBatch(ids: Buffer[]): Promise<{
-      stableDataItemTagsDeleted: number;
-      stableDataItemsDeleted: number;
-      newDataItemTagsDeleted: number;
-      newDataItemsDeleted: number;
-    }>;
-    deleteIndexCleanupDataBatch(ids: Buffer[]): Promise<{
-      contiguousDataIdParentsDeleted: number;
-      contiguousDataIdsDeleted: number;
-    }>;
-  };
+  private db: IndexCleanupDb;
   private clickHouseCleanup?: ClickHouseIndexCleanup;
   private filter: IndexCleanupFilter;
   private intervalMs: number;
@@ -50,24 +52,7 @@ export class IndexCleanupWorker {
     minAgeSeconds,
   }: {
     log: winston.Logger;
-    db: {
-      getIndexCleanupCandidateIds(params: {
-        filter: IndexCleanupFilter;
-        limit: number;
-        afterId?: Buffer;
-      }): Promise<{ ids: Buffer[]; hasMore: boolean }>;
-      countIndexCleanupCandidates(filter: IndexCleanupFilter): Promise<number>;
-      deleteIndexCleanupBundlesBatch(ids: Buffer[]): Promise<{
-        stableDataItemTagsDeleted: number;
-        stableDataItemsDeleted: number;
-        newDataItemTagsDeleted: number;
-        newDataItemsDeleted: number;
-      }>;
-      deleteIndexCleanupDataBatch(ids: Buffer[]): Promise<{
-        contiguousDataIdParentsDeleted: number;
-        contiguousDataIdsDeleted: number;
-      }>;
-    };
+    db: IndexCleanupDb;
     clickHouseCleanup?: ClickHouseIndexCleanup;
     filter: IndexCleanupFilter;
     intervalMs: number;
@@ -86,6 +71,8 @@ export class IndexCleanupWorker {
   }
 
   start(): void {
+    // Run initial cleanup immediately, then on interval
+    this.cleanup();
     this.intervalId = setInterval(() => this.cleanup(), this.intervalMs);
     this.log.info('Started index cleanup worker', {
       intervalMs: this.intervalMs,

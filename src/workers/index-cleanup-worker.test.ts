@@ -8,6 +8,7 @@ import { strict as assert } from 'node:assert';
 import { afterEach, describe, it, mock } from 'node:test';
 
 import { IndexCleanupWorker } from './index-cleanup-worker.js';
+import { toB64Url } from '../lib/encoding.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 const testLog = createTestLogger({ suite: 'IndexCleanupWorker' });
@@ -58,25 +59,32 @@ describe('IndexCleanupWorker', () => {
     assert.equal(mockDb.deleteIndexCleanupBundlesBatch.mock.callCount(), 0);
   });
 
-  it('should iterate batches and delete in non-dry-run mode', async () => {
+  it('should iterate multiple batches and delete in non-dry-run mode', async () => {
     const mockDb = createMockDb();
     const id1 = Buffer.from('id1');
     const id2 = Buffer.from('id2');
+    const id3 = Buffer.from('id3');
     let callCount = 0;
 
+    // Return two non-empty batches then empty to verify multi-batch iteration
     mockDb.getIndexCleanupCandidateIds.mock.mockImplementation(async () => {
       callCount++;
       if (callCount === 1) {
         return { ids: [id1, id2], hasMore: true };
       }
+      if (callCount === 2) {
+        return { ids: [id3], hasMore: false };
+      }
       return { ids: [], hasMore: false };
     });
-    mockDb.deleteIndexCleanupBundlesBatch.mock.mockImplementation(async () => ({
-      stableDataItemTagsDeleted: 2,
-      stableDataItemsDeleted: 2,
-      newDataItemTagsDeleted: 0,
-      newDataItemsDeleted: 0,
-    }));
+    mockDb.deleteIndexCleanupBundlesBatch.mock.mockImplementation(
+      async (ids: Buffer[]) => ({
+        stableDataItemTagsDeleted: ids.length,
+        stableDataItemsDeleted: ids.length,
+        newDataItemTagsDeleted: 0,
+        newDataItemsDeleted: 0,
+      }),
+    );
 
     const worker = new IndexCleanupWorker({
       log: testLog,
@@ -90,9 +98,11 @@ describe('IndexCleanupWorker', () => {
 
     await worker.cleanup();
 
+    // Two non-empty batches fetched, plus one empty to end the loop
     assert.equal(mockDb.getIndexCleanupCandidateIds.mock.callCount(), 2);
-    assert.equal(mockDb.deleteIndexCleanupBundlesBatch.mock.callCount(), 1);
-    assert.equal(mockDb.deleteIndexCleanupDataBatch.mock.callCount(), 1);
+    // Delete called once per non-empty batch
+    assert.equal(mockDb.deleteIndexCleanupBundlesBatch.mock.callCount(), 2);
+    assert.equal(mockDb.deleteIndexCleanupDataBatch.mock.callCount(), 2);
   });
 
   it('should compute maxIndexedAt from minAgeSeconds', async () => {
@@ -190,6 +200,10 @@ describe('IndexCleanupWorker', () => {
     await worker.cleanup();
 
     assert.equal(mockClickHouse.deleteDataItemsByIds.mock.callCount(), 1);
+    const passedIds =
+      mockClickHouse.deleteDataItemsByIds.mock.calls[0].arguments[0];
+    assert.equal(passedIds.length, 1);
+    assert.equal(passedIds[0], toB64Url(id1));
   });
 
   it('should handle errors without crashing', async () => {

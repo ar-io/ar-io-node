@@ -18,7 +18,9 @@ import {
   dataDbPath,
   moderationDbPath,
 } from '../../test/sqlite-helpers.js';
-import log from '../log.js';
+import { createTestLogger } from '../../test/test-logger.js';
+
+const log = createTestLogger({ suite: 'IndexCleanup' });
 
 let dbWorker: StandaloneSqliteDatabaseWorker;
 
