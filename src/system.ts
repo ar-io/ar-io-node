@@ -64,6 +64,7 @@ import {
   DataBlockListValidator,
   NameBlockListValidator,
   BundleIndex,
+  ClickHouseIndexCleanup,
   DataItemRootIndex,
   ChainIndex,
   ChainOffsetIndex,
@@ -97,6 +98,7 @@ import {
 import { EnvoyEndpointHealthWorker } from './workers/envoy-endpoint-health-worker.js';
 import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { DataVerificationWorker } from './workers/data-verification.js';
+import { IndexCleanupWorker } from './workers/index-cleanup-worker.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
 import { PeerRequestLimiter } from './data/peer-request-limiter.js';
 import { ArIOChunkSource } from './data/ar-io-chunk-source.js';
@@ -281,19 +283,25 @@ export const dataBlockListValidator: DataBlockListValidator = db;
 export const nameBlockListValidator: NameBlockListValidator = db;
 export const nestedDataIndexWriter: NestedDataIndexWriter = db;
 export const dataItemIndexWriter: DataItemIndexWriter = db;
+let clickHouseDb: CompositeClickHouseDatabase | undefined;
+
 export const gqlQueryable: GqlQueryable = (() => {
   if (config.CLICKHOUSE_URL !== undefined) {
-    return new CompositeClickHouseDatabase({
+    clickHouseDb = new CompositeClickHouseDatabase({
       log,
       gqlQueryable: db,
       url: config.CLICKHOUSE_URL,
       username: config.CLICKHOUSE_USER,
       password: config.CLICKHOUSE_PASSWORD,
     });
+    return clickHouseDb;
   }
 
   return db;
 })();
+
+export const clickHouseCleanup: ClickHouseIndexCleanup | undefined =
+  clickHouseDb;
 
 export type PostgreSQL = postgres.Sql;
 
@@ -1389,6 +1397,39 @@ const dataVerificationWorker = config.ENABLE_BACKGROUND_DATA_VERIFICATION
 
 if (dataVerificationWorker !== undefined) {
   dataVerificationWorker.start();
+}
+
+const indexCleanupWorker = (() => {
+  if (!config.ENABLE_INDEX_CLEANUP_WORKER) return undefined;
+
+  let parsedFilter;
+  try {
+    parsedFilter = JSON.parse(config.INDEX_CLEANUP_FILTER);
+  } catch (error: any) {
+    log.error('Invalid INDEX_CLEANUP_FILTER JSON, worker not started', {
+      filter: config.INDEX_CLEANUP_FILTER,
+      error: error?.message,
+    });
+    return undefined;
+  }
+
+  return new IndexCleanupWorker({
+    log,
+    db,
+    clickHouseCleanup,
+    filter: parsedFilter,
+    intervalMs: config.INDEX_CLEANUP_INTERVAL_SECONDS * 1000,
+    batchSize: config.INDEX_CLEANUP_BATCH_SIZE,
+    dryRun: config.INDEX_CLEANUP_DRY_RUN,
+    minAgeSeconds: config.INDEX_CLEANUP_MIN_AGE_SECONDS,
+  });
+})();
+
+if (indexCleanupWorker !== undefined) {
+  indexCleanupWorker.start();
+  registerCleanupHandler('index-cleanup-worker', async () => {
+    indexCleanupWorker.stop();
+  });
 }
 
 export const blockedNamesCache = new BlockedNamesCache({

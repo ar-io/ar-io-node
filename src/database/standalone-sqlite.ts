@@ -52,6 +52,7 @@ import {
   DataItemAttributes,
   GqlQueryable,
   GqlTransaction,
+  IndexCleanupFilter,
   NestedDataIndexWriter,
   NormalizedDataItem,
   PartialJsonBlock,
@@ -435,6 +436,8 @@ export class StandaloneSqliteDatabaseWorker {
   deleteCoreStaleNewDataFn: Sqlite.Transaction;
   deleteBundlesStaleNewDataFn: Sqlite.Transaction;
   deleteStableDataItemsWithHeightAndIndexedAtFn: Sqlite.Transaction;
+  deleteIndexCleanupBundlesBatchFn: Sqlite.Transaction;
+  deleteIndexCleanupDataBatchFn: Sqlite.Transaction;
 
   constructor({
     log,
@@ -812,6 +815,78 @@ export class StandaloneSqliteDatabaseWorker {
           });
         },
       );
+
+    this.deleteIndexCleanupBundlesBatchFn = this.dbs.bundles.transaction(
+      (ids: Buffer[]) => {
+        const SUB_BATCH_SIZE = 500;
+        let stableDataItemTagsDeleted = 0;
+        let stableDataItemsDeleted = 0;
+        let newDataItemTagsDeleted = 0;
+        let newDataItemsDeleted = 0;
+
+        for (let i = 0; i < ids.length; i += SUB_BATCH_SIZE) {
+          const batch = ids.slice(i, i + SUB_BATCH_SIZE);
+          const placeholders = batch.map(() => '?').join(',');
+
+          stableDataItemTagsDeleted += this.dbs.bundles
+            .prepare(
+              `DELETE FROM stable_data_item_tags WHERE data_item_id IN (${placeholders})`,
+            )
+            .run(...batch).changes;
+          stableDataItemsDeleted += this.dbs.bundles
+            .prepare(
+              `DELETE FROM stable_data_items WHERE id IN (${placeholders})`,
+            )
+            .run(...batch).changes;
+          newDataItemTagsDeleted += this.dbs.bundles
+            .prepare(
+              `DELETE FROM new_data_item_tags WHERE data_item_id IN (${placeholders})`,
+            )
+            .run(...batch).changes;
+          newDataItemsDeleted += this.dbs.bundles
+            .prepare(
+              `DELETE FROM new_data_items WHERE id IN (${placeholders})`,
+            )
+            .run(...batch).changes;
+        }
+
+        return {
+          stableDataItemTagsDeleted,
+          stableDataItemsDeleted,
+          newDataItemTagsDeleted,
+          newDataItemsDeleted,
+        };
+      },
+    );
+
+    this.deleteIndexCleanupDataBatchFn = this.dbs.data.transaction(
+      (ids: Buffer[]) => {
+        const SUB_BATCH_SIZE = 500;
+        let contiguousDataIdParentsDeleted = 0;
+        let contiguousDataIdsDeleted = 0;
+
+        for (let i = 0; i < ids.length; i += SUB_BATCH_SIZE) {
+          const batch = ids.slice(i, i + SUB_BATCH_SIZE);
+          const placeholders = batch.map(() => '?').join(',');
+
+          contiguousDataIdParentsDeleted += this.dbs.data
+            .prepare(
+              `DELETE FROM contiguous_data_id_parents WHERE id IN (${placeholders})`,
+            )
+            .run(...batch).changes;
+          contiguousDataIdsDeleted += this.dbs.data
+            .prepare(
+              `DELETE FROM contiguous_data_ids WHERE id IN (${placeholders})`,
+            )
+            .run(...batch).changes;
+        }
+
+        return {
+          contiguousDataIdParentsDeleted,
+          contiguousDataIdsDeleted,
+        };
+      },
+    );
 
     this.insertDataHashCache = new LRUCache<string, boolean>({
       max: DEDUPE_CACHE_MAX_SIZE,
@@ -2756,6 +2831,153 @@ export class StandaloneSqliteDatabaseWorker {
     return walCheckpoint[0];
   }
 
+  private buildCleanupCandidateQuery(
+    filter: IndexCleanupFilter,
+    selectClause: string,
+  ): sql.SelectStatement {
+    const hasOwners = filter.owners && filter.owners.length > 0;
+    const hasTags = filter.tags && filter.tags.length > 0;
+    const hasHeightRange =
+      filter.minHeight !== undefined || filter.maxHeight !== undefined;
+    const hasIndexedAt = filter.maxIndexedAt !== undefined;
+
+    if (!hasOwners && !hasTags && !hasHeightRange && !hasIndexedAt) {
+      throw new Error(
+        'Index cleanup filter must specify at least one criterion',
+      );
+    }
+
+    const query = sql.select(selectClause).from('stable_data_items sdi');
+
+    if (hasOwners && filter.owners) {
+      query.where(
+        sql.in(
+          'sdi.owner_address',
+          filter.owners.map((o) => fromB64Url(o)),
+        ),
+      );
+    }
+
+    if (filter.tags && filter.tags.length > 0) {
+      filter.tags.forEach((tag, index) => {
+        const tagAlias = `ict${index}`;
+        if (index === 0) {
+          query.join(`stable_data_item_tags AS ${tagAlias}`, {
+            'sdi.id': `${tagAlias}.data_item_id`,
+          });
+        } else {
+          const prevAlias = `ict${index - 1}`;
+          query.join(`stable_data_item_tags AS ${tagAlias}`, {
+            [`${prevAlias}.data_item_id`]: `${tagAlias}.data_item_id`,
+          });
+        }
+
+        const nameHash = crypto
+          .createHash('sha1')
+          .update(Buffer.from(tag.name, 'utf8'))
+          .digest();
+        query.where({ [`${tagAlias}.tag_name_hash`]: nameHash });
+
+        query.where(
+          sql.in(
+            `${tagAlias}.tag_value_hash`,
+            tag.values.map((v) =>
+              crypto
+                .createHash('sha1')
+                .update(Buffer.from(v, 'utf8'))
+                .digest(),
+            ),
+          ),
+        );
+      });
+    }
+
+    if (filter.minHeight !== undefined) {
+      query.where(sql.gte('sdi.height', filter.minHeight));
+    }
+    if (filter.maxHeight !== undefined) {
+      query.where(sql.lte('sdi.height', filter.maxHeight));
+    }
+    if (filter.maxIndexedAt !== undefined) {
+      query.where(sql.lt('sdi.indexed_at', filter.maxIndexedAt));
+    }
+
+    return query;
+  }
+
+  getIndexCleanupCandidateIds({
+    filter,
+    limit,
+    afterId,
+  }: {
+    filter: IndexCleanupFilter;
+    limit: number;
+    afterId?: Buffer;
+  }): { ids: Buffer[]; hasMore: boolean } {
+    const query = this.buildCleanupCandidateQuery(filter, 'sdi.id');
+
+    if (afterId) {
+      query.where(sql.gt('sdi.id', afterId));
+    }
+
+    query.orderBy('sdi.id ASC');
+
+    const sqlBricksResult = query.toParams();
+    const finalSql = `${sqlBricksResult.text} LIMIT ${limit + 1}`;
+    const rows = this.dbs.bundles
+      .prepare(finalSql)
+      .all(toSqliteParams(sqlBricksResult));
+
+    const hasMore = rows.length > limit;
+    const ids = rows.slice(0, limit).map((r: any) => r.id as Buffer);
+
+    return { ids, hasMore };
+  }
+
+  countIndexCleanupCandidates(filter: IndexCleanupFilter): number {
+    const query = this.buildCleanupCandidateQuery(
+      filter,
+      'COUNT(DISTINCT sdi.id) AS count',
+    );
+
+    const sqlBricksResult = query.toParams();
+    const row = this.dbs.bundles
+      .prepare(sqlBricksResult.text)
+      .get(toSqliteParams(sqlBricksResult)) as any;
+
+    return row?.count ?? 0;
+  }
+
+  deleteIndexCleanupBundlesBatch(ids: Buffer[]): {
+    stableDataItemTagsDeleted: number;
+    stableDataItemsDeleted: number;
+    newDataItemTagsDeleted: number;
+    newDataItemsDeleted: number;
+  } {
+    if (ids.length === 0) {
+      return {
+        stableDataItemTagsDeleted: 0,
+        stableDataItemsDeleted: 0,
+        newDataItemTagsDeleted: 0,
+        newDataItemsDeleted: 0,
+      };
+    }
+    return this.deleteIndexCleanupBundlesBatchFn(ids);
+  }
+
+  deleteIndexCleanupDataBatch(ids: Buffer[]): {
+    contiguousDataIdParentsDeleted: number;
+    contiguousDataIdsDeleted: number;
+  } {
+    if (ids.length === 0) {
+      return {
+        contiguousDataIdParentsDeleted: 0,
+        contiguousDataIdsDeleted: 0,
+      };
+    }
+    return this.deleteIndexCleanupDataBatchFn(ids);
+  }
+
   pruneStableDataItems({
     indexedAtThreshold,
     startHeight,
@@ -3637,6 +3859,36 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'saveVerificationPriority', [id, priority]);
   }
 
+  async getIndexCleanupCandidateIds(params: {
+    filter: IndexCleanupFilter;
+    limit: number;
+    afterId?: Buffer;
+  }): Promise<{ ids: Buffer[]; hasMore: boolean }> {
+    return this.queueRead('bundles', 'getIndexCleanupCandidateIds', [params]);
+  }
+
+  async countIndexCleanupCandidates(
+    filter: IndexCleanupFilter,
+  ): Promise<number> {
+    return this.queueRead('bundles', 'countIndexCleanupCandidates', [filter]);
+  }
+
+  async deleteIndexCleanupBundlesBatch(ids: Buffer[]): Promise<{
+    stableDataItemTagsDeleted: number;
+    stableDataItemsDeleted: number;
+    newDataItemTagsDeleted: number;
+    newDataItemsDeleted: number;
+  }> {
+    return this.queueWrite('bundles', 'deleteIndexCleanupBundlesBatch', [ids]);
+  }
+
+  async deleteIndexCleanupDataBatch(ids: Buffer[]): Promise<{
+    contiguousDataIdParentsDeleted: number;
+    contiguousDataIdsDeleted: number;
+  }> {
+    return this.queueWrite('data', 'deleteIndexCleanupDataBatch', [ids]);
+  }
+
   async pruneStableDataItems(params: {
     indexedAtThreshold: number;
     startHeight: number;
@@ -3887,6 +4139,30 @@ if (!isMainThread) {
           worker.saveVerificationPriority(args[0], args[1]);
           parentPort?.postMessage(null);
           break;
+        case 'getIndexCleanupCandidateIds': {
+          const cleanupCandidates =
+            worker.getIndexCleanupCandidateIds(args[0]);
+          parentPort?.postMessage(cleanupCandidates);
+          break;
+        }
+        case 'countIndexCleanupCandidates': {
+          const cleanupCount =
+            worker.countIndexCleanupCandidates(args[0]);
+          parentPort?.postMessage(cleanupCount);
+          break;
+        }
+        case 'deleteIndexCleanupBundlesBatch': {
+          const bundlesCleanupResult =
+            worker.deleteIndexCleanupBundlesBatch(args[0]);
+          parentPort?.postMessage(bundlesCleanupResult);
+          break;
+        }
+        case 'deleteIndexCleanupDataBatch': {
+          const dataCleanupResult =
+            worker.deleteIndexCleanupDataBatch(args[0]);
+          parentPort?.postMessage(dataCleanupResult);
+          break;
+        }
         case 'pruneStableDataItems':
           worker.pruneStableDataItems(args[0]);
           parentPort?.postMessage(null);
