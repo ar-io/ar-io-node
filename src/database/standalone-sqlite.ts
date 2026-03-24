@@ -2849,7 +2849,7 @@ export class StandaloneSqliteDatabaseWorker {
 
     const query = sql.select(selectClause).from('stable_data_items sdi');
 
-    if (hasOwners) {
+    if (hasOwners && filter.owners) {
       query.where(
         sql.in(
           'sdi.owner_address',
