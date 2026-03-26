@@ -647,6 +647,77 @@ describe('GatewayDataSource', () => {
         // Both gateways should be tried on timeout
         assert.equal(requestLog.length, 2);
       });
+
+      it('should disable trusted gateway timeout aborts when configured', async () => {
+        const dataSourceNoTimeoutAbort = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway1.com': { priority: 1, trusted: true },
+          },
+          disableRequestTimeoutAborts: true,
+          requestTimeoutMs: 1,
+        });
+
+        let receivedSignal: AbortSignal | undefined;
+
+        mock.method(axios, 'create', (config: any) => ({
+          request: async (params: any) => {
+            receivedSignal = params.signal;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            return {
+              status: 200,
+              headers: {
+                'content-length': '123',
+                'content-type': 'text/plain',
+              },
+              data: axiosStreamData,
+            };
+          },
+          ...axiosMockCommonParams(config),
+        }));
+
+        const data = await dataSourceNoTimeoutAbort.getData({ id: 'test-id' });
+
+        assert.equal(data.size, 123);
+        assert.equal(receivedSignal?.aborted, false);
+      });
+
+      it('should disable trusted gateway stream stall aborts when configured', async () => {
+        const dataSourceNoStallAbort = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway1.com': { priority: 1, trusted: true },
+          },
+          disableStreamStallAborts: true,
+          streamStallTimeoutMs: 1,
+        });
+
+        mock.method(axios, 'create', (config: any) => ({
+          request: async () => ({
+            status: 200,
+            headers: {
+              'content-length': '4',
+              'content-type': 'text/plain',
+            },
+            data: Readable.from(
+              (async function* () {
+                await new Promise((resolve) => setTimeout(resolve, 10));
+                yield 'test';
+              })(),
+            ),
+          }),
+          ...axiosMockCommonParams(config),
+        }));
+
+        const data = await dataSourceNoStallAbort.getData({ id: 'test-id' });
+        let received = '';
+        for await (const chunk of data.stream) {
+          received += chunk;
+        }
+
+        assert.equal(data.size, 4);
+        assert.equal(received, 'test');
+      });
     });
 
     describe('fallbackToBasePath', () => {
