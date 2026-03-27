@@ -60,21 +60,10 @@ const app = express();
 
 app.use(
   cors({
-    exposedHeaders: [
-      // these are not exposed by default and must be added manually to be used on browsers
-      'content-length',
-      'content-encoding',
-      // x402 headers
-      'X-Payment',
-      'X-Payment-Response',
-      // request tracing
-      'X-Request-Id',
-      // ar-io custom headers
-      ...Object.values(headerNames),
-      // arweave tag headers (Phase 2: tags as response headers)
-      'X-Arweave-Tag-Count',
-      'X-Arweave-Tags-Truncated',
-    ],
+    // Wildcard exposes all response headers to browsers (valid for non-credentialed
+    // requests, which is all we have with Access-Control-Allow-Origin: *).
+    // This covers ar-io headers, x402, tracing, and dynamic X-Arweave-Tag-* names.
+    exposedHeaders: '*',
   }),
 );
 
