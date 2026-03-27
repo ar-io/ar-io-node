@@ -12,11 +12,8 @@ import {
   DataItemMetaResolver,
   ResolvedDataItemMeta,
 } from '../data/data-item-meta-resolver.js';
-import {
-  ChainSource,
-  PartialJsonTransactionStore,
-  PartialJsonTransaction,
-} from '../types.js';
+import { ChainSource, PartialJsonTransactionStore } from '../types.js';
+import * as config from '../config.js';
 
 const BASE64URL_REGEX = /^[a-zA-Z0-9_-]{43}$/;
 
@@ -79,8 +76,26 @@ export function createTxRouter({
         return;
       }
 
-      // Tier 2: L2 data item via resolver (DB or on-demand)
-      const meta = await dataItemMetaResolver.resolve(id);
+      // Tier 2 (L2 data item) and Tier 3 (Arweave node) in parallel.
+      // The resolver can be slow for un-indexed items (circuit breaker
+      // timeouts), so we race both and use whichever returns first.
+      const resolverPromise = Promise.race([
+        dataItemMetaResolver.resolve(id).catch(() => undefined),
+        new Promise<undefined>((resolve) => {
+          const timer = setTimeout(
+            () => resolve(undefined),
+            config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
+          );
+          timer.unref();
+        }),
+      ]);
+
+      const arweavePromise = arweaveClient
+        .getTx({ txId: id })
+        .catch(() => undefined);
+
+      // Wait for the resolver first (fast path for indexed L2 items)
+      const meta = await resolverPromise;
       if (meta !== undefined) {
         const cacheControl = meta.isStable
           ? 'public, max-age=31536000, immutable'
@@ -90,20 +105,12 @@ export function createTxRouter({
         return;
       }
 
-      // Tier 3: Fallback — fetch directly from Arweave nodes
-      // Uses ArweaveCompositeClient which talks to Arweave nodes directly,
-      // bypassing Envoy to avoid routing loops.
-      try {
-        const arTx: PartialJsonTransaction = await arweaveClient.getTx({
-          txId: id,
-        });
-        if (arTx !== undefined) {
-          res.setHeader('Cache-Control', 'public, max-age=30');
-          res.json(arTx);
-          return;
-        }
-      } catch {
-        // Not found on Arweave either
+      // Resolver timed out or returned nothing — wait for Arweave fallback
+      const arTx = await arweavePromise;
+      if (arTx !== undefined) {
+        res.setHeader('Cache-Control', 'public, max-age=30');
+        res.json(arTx);
+        return;
       }
 
       res.status(404).send('Not found');
