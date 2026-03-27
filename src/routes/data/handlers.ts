@@ -1091,6 +1091,17 @@ export const createRawDataHandler = ({
           const tags =
             resolvedTags.length > 0 ? resolvedTags : (data.upstreamTags ?? []);
 
+          // If we fell back to upstream tags, trigger background indexing so
+          // the item is locally indexed for future requests
+          if (
+            resolvedTags.length === 0 &&
+            data.upstreamTags != null &&
+            data.upstreamTags.length > 0 &&
+            dataItemMetaResolver != null
+          ) {
+            dataItemMetaResolver.resolve(id).catch(() => {});
+          }
+
           // Check if the request includes a Range header
           const rangeHeader = req.headers.range;
           if (rangeHeader !== undefined) {
@@ -1730,6 +1741,17 @@ export const createDataHandler = ({
         const resolvedTags = await tagsPromise;
         const tags =
           resolvedTags.length > 0 ? resolvedTags : (data?.upstreamTags ?? []);
+
+        // If we fell back to upstream tags, trigger background indexing so
+        // the item is locally indexed for future requests
+        if (
+          resolvedTags.length === 0 &&
+          data?.upstreamTags != null &&
+          data.upstreamTags.length > 0 &&
+          dataItemMetaResolver != null
+        ) {
+          dataItemMetaResolver.resolve(id).catch(() => {});
+        }
 
         // Check if the request includes a Range header
         const rangeHeader = req.headers.range;
