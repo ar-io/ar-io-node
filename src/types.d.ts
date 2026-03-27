@@ -699,6 +699,7 @@ export interface ContiguousData {
   sourceContentType?: string;
   cached: boolean;
   requestAttributes?: RequestAttributes;
+  upstreamTags?: { name: string; value: string }[];
 }
 
 interface ContiguousMetadata {

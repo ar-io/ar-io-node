@@ -12,6 +12,7 @@ import {
   detectLoopInViaChain,
   generateRequestAttributes,
   parseRequestAttributesHeaders,
+  parseUpstreamTagHeaders,
   parseViaHeader,
   validateHopCount,
 } from './request-attributes.js';
@@ -345,6 +346,73 @@ describe('Request attributes functions', () => {
         headers: generated.headers,
       });
       assert.deepStrictEqual(parsed.via, input.via);
+    });
+  });
+
+  describe('parseUpstreamTagHeaders', () => {
+    it('should parse X-Arweave-Tag-* headers into tag pairs', () => {
+      const headers = {
+        'X-Arweave-Tag-Content-Type': 'image/png',
+        'X-Arweave-Tag-App-Name': 'ArDrive-App',
+      };
+      const result = parseUpstreamTagHeaders(headers);
+      assert.deepStrictEqual(result, [
+        { name: 'Content-Type', value: 'image/png' },
+        { name: 'App-Name', value: 'ArDrive-App' },
+      ]);
+    });
+
+    it('should be case-insensitive on the prefix', () => {
+      const headers = {
+        'x-arweave-tag-content-type': 'image/png',
+        'X-ARWEAVE-TAG-App-Name': 'MyApp',
+      };
+      const result = parseUpstreamTagHeaders(headers);
+      assert.ok(result !== undefined);
+      assert.strictEqual(result!.length, 2);
+    });
+
+    it('should exclude X-Arweave-Tag-Count and X-Arweave-Tags-Truncated', () => {
+      const headers = {
+        'X-Arweave-Tag-Count': '5',
+        'X-Arweave-Tags-Truncated': 'true',
+        'X-Arweave-Tag-App-Name': 'ArDrive',
+      };
+      const result = parseUpstreamTagHeaders(headers);
+      assert.deepStrictEqual(result, [{ name: 'App-Name', value: 'ArDrive' }]);
+    });
+
+    it('should return undefined when no tag headers are present', () => {
+      const headers = {
+        'Content-Type': 'text/html',
+        'X-AR-IO-Hops': '2',
+      };
+      const result = parseUpstreamTagHeaders(headers);
+      assert.strictEqual(result, undefined);
+    });
+
+    it('should return undefined for empty headers', () => {
+      const result = parseUpstreamTagHeaders({});
+      assert.strictEqual(result, undefined);
+    });
+
+    it('should handle array values (multiple headers with same name)', () => {
+      const headers: Record<string, string | string[]> = {
+        'X-Arweave-Tag-Topic': ['topic1', 'topic2'],
+      };
+      const result = parseUpstreamTagHeaders(headers);
+      assert.deepStrictEqual(result, [
+        { name: 'Topic', value: 'topic1' },
+        { name: 'Topic', value: 'topic2' },
+      ]);
+    });
+
+    it('should preserve original tag name casing after prefix', () => {
+      const headers = {
+        'X-Arweave-Tag-Content-Type': 'text/html',
+      };
+      const result = parseUpstreamTagHeaders(headers);
+      assert.strictEqual(result![0].name, 'Content-Type');
     });
   });
 
