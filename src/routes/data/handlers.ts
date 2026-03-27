@@ -362,6 +362,40 @@ export const resolveTagsForId = async (
   return meta?.tags ?? [];
 };
 
+/** Resolve tags with a timeout. Returns [] if resolution exceeds the deadline. */
+export const resolveTagsWithTimeout = (
+  id: string,
+  txStore: PartialJsonTransactionStore,
+  dataItemMetaResolver: DataItemMetaResolver,
+  timeoutMs: number,
+): Promise<{ name: string; value: string }[]> => {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve([]);
+      }
+    }, timeoutMs);
+
+    resolveTagsForId(id, txStore, dataItemMetaResolver)
+      .then((tags) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(tags);
+        }
+      })
+      .catch(() => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve([]);
+        }
+      });
+  });
+};
+
 const setDataHeaders = ({
   req,
   res,
@@ -1001,17 +1035,12 @@ export const createRawDataHandler = ({
           config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
           txStore != null &&
           dataItemMetaResolver != null
-            ? Promise.race([
-                resolveTagsForId(id, txStore, dataItemMetaResolver).catch(
-                  () => [],
-                ),
-                new Promise<{ name: string; value: string }[]>((resolve) =>
-                  setTimeout(
-                    () => resolve([]),
-                    config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
-                  ),
-                ),
-              ])
+            ? resolveTagsWithTimeout(
+                id,
+                txStore,
+                dataItemMetaResolver,
+                config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
+              )
             : Promise.resolve([] as { name: string; value: string }[]);
 
         // Return 452 if the data is blocked by hash
@@ -1538,17 +1567,12 @@ export const createDataHandler = ({
           config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
           txStore != null &&
           dataItemMetaResolver != null
-            ? Promise.race([
-                resolveTagsForId(id, txStore, dataItemMetaResolver).catch(
-                  () => [],
-                ),
-                new Promise<{ name: string; value: string }[]>((resolve) =>
-                  setTimeout(
-                    () => resolve([]),
-                    config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
-                  ),
-                ),
-              ])
+            ? resolveTagsWithTimeout(
+                id,
+                txStore,
+                dataItemMetaResolver,
+                config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
+              )
             : Promise.resolve([] as { name: string; value: string }[]);
 
         // Return 452 if the data is blocked by hash
