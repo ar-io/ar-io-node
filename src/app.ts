@@ -8,7 +8,6 @@ import { default as cors } from 'cors';
 import express from 'express';
 import { Server } from 'node:http';
 import * as config from './config.js';
-import { headerNames } from './constants.js';
 import log from './log.js';
 import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
 import { createRequestIdMiddleware } from './middleware/request-id.js';
