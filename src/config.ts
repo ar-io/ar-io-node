@@ -887,6 +887,15 @@ export const CACHE_BLOCKED_MAX_AGE = env.positiveIntOrDefault(
   2592000,
 );
 
+// Tag response headers
+export const ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED =
+  env.varOrDefault('ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED', 'true') === 'true';
+
+export const ARWEAVE_TAG_RESPONSE_HEADERS_MAX = env.positiveIntOrDefault(
+  'ARWEAVE_TAG_RESPONSE_HEADERS_MAX',
+  100,
+);
+
 //
 // Indexing
 //

@@ -1,0 +1,120 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+import { Router, Request, Response } from 'express';
+import winston from 'winston';
+
+import { utf8ToB64Url } from '../lib/encoding.js';
+import {
+  DataItemMetaResolver,
+  ResolvedDataItemMeta,
+} from '../data/data-item-meta-resolver.js';
+import {
+  ChainSource,
+  PartialJsonTransactionStore,
+  PartialJsonTransaction,
+} from '../types.js';
+
+const BASE64URL_REGEX = /^[a-zA-Z0-9_-]{43}$/;
+
+function isValidBase64UrlId(id: string): boolean {
+  return BASE64URL_REGEX.test(id);
+}
+
+function dataItemMetaToTxJson(meta: ResolvedDataItemMeta): Record<string, any> {
+  return {
+    format: 1,
+    id: meta.id,
+    last_tx: meta.anchor,
+    owner: meta.ownerAddress,
+    tags: meta.tags.map((t) => ({
+      name: utf8ToB64Url(t.name),
+      value: utf8ToB64Url(t.value),
+    })),
+    target: meta.target,
+    quantity: '0',
+    data_size: String(meta.dataSize),
+    data_root: '',
+    reward: '0',
+    signature: meta.signature,
+    // Extra fields for data items
+    signature_type: meta.signatureType,
+    parent_id: meta.parentId ?? null,
+    root_transaction_id: meta.rootTransactionId ?? null,
+    content_type: meta.contentType ?? null,
+  };
+}
+
+export function createTxRouter({
+  log,
+  txStore,
+  dataItemMetaResolver,
+  arweaveClient,
+}: {
+  log: winston.Logger;
+  txStore: PartialJsonTransactionStore;
+  dataItemMetaResolver: DataItemMetaResolver;
+  arweaveClient: ChainSource;
+}): Router {
+  const router = Router();
+
+  // GET /tx/:id — L1 from txStore, L2 from resolver, fallback to Arweave node
+  router.get('/tx/:id', async (req: Request, res: Response) => {
+    const { id } = req.params;
+
+    if (!isValidBase64UrlId(id)) {
+      res.status(400).send('Invalid transaction ID');
+      return;
+    }
+
+    try {
+      // Tier 1: L1 transaction from header store (LMDB)
+      const tx = await txStore.get(id);
+      if (tx !== undefined) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.json(tx);
+        return;
+      }
+
+      // Tier 2: L2 data item via resolver (DB or on-demand)
+      const meta = await dataItemMetaResolver.resolve(id);
+      if (meta !== undefined) {
+        const cacheControl = meta.isStable
+          ? 'public, max-age=31536000, immutable'
+          : 'public, max-age=30';
+        res.setHeader('Cache-Control', cacheControl);
+        res.json(dataItemMetaToTxJson(meta));
+        return;
+      }
+
+      // Tier 3: Fallback — fetch directly from Arweave nodes
+      // Uses ArweaveCompositeClient which talks to Arweave nodes directly,
+      // bypassing Envoy to avoid routing loops.
+      try {
+        const arTx: PartialJsonTransaction = await arweaveClient.getTx({
+          txId: id,
+        });
+        if (arTx !== undefined) {
+          res.setHeader('Cache-Control', 'public, max-age=30');
+          res.json(arTx);
+          return;
+        }
+      } catch {
+        // Not found on Arweave either
+      }
+
+      res.status(404).send('Not found');
+    } catch (error: any) {
+      log.error('Error handling GET /tx/:id', {
+        id,
+        error: error.message,
+      });
+      res.status(502).send('Failed to fetch transaction');
+    }
+  });
+
+  return router;
+}

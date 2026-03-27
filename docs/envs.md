@@ -285,3 +285,12 @@ These settings control chunk offset verification observations, which validate th
 | OFFSET_OBSERVATION_SAMPLE_RATE                   | Number               | 0.10                                          | Sample rate (0.0-1.0) for offset observations. Higher values test more chunks but increase load on observed gateways                                                |
 | OFFSET_OBSERVATION_ENABLED                       | Boolean              | true                                          | If true, enables offset observation checks. When false, offset observations are skipped entirely                                                                    |
 | OFFSET_OBSERVATION_ENFORCEMENT_ENABLED           | Boolean              | false                                         | If true, offset observation failures affect gateway pass/fail status. When false, failures are logged but don't impact scoring                                      |
+
+## Tag Response Headers
+
+These settings control whether Arweave transaction/data item tags are included as HTTP response headers when serving data.
+
+| ENV_NAME                                         | TYPE                 | DEFAULT_VALUE                                 | DESCRIPTION                                                                                                                                                          |
+| ------------------------------------------------ | -------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED             | Boolean              | true                                          | If true, includes transaction/data item tags as `X-Arweave-Tag-*` HTTP response headers when serving data via `/raw/:id` and `/:id` endpoints                       |
+| ARWEAVE_TAG_RESPONSE_HEADERS_MAX                 | Number               | 100                                           | Maximum number of tag headers to include per response. If a transaction has more tags, an `X-Arweave-Tags-Truncated: true` header is added                          |

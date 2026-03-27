@@ -24,6 +24,8 @@ export const dataHandler = createDataHandler({
   rateLimiter: system.rateLimiter,
   paymentProcessor: system.paymentProcessor,
   negativeDataCache: system.negativeDataCache,
+  txStore: system.txStore,
+  dataItemMetaResolver: system.dataItemMetaResolver,
 });
 
 export const dataRouter = Router();
@@ -39,6 +41,8 @@ dataRouter.get(
     rateLimiter: system.rateLimiter,
     paymentProcessor: system.paymentProcessor,
     negativeDataCache: system.negativeDataCache,
+    txStore: system.txStore,
+    dataItemMetaResolver: system.dataItemMetaResolver,
   }),
 );
 dataRouter.get(FARCASTER_FRAME_DATA_PATH_REGEX, dataHandler);
