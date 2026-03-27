@@ -14,6 +14,7 @@ import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
 import { createRequestIdMiddleware } from './middleware/request-id.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
 import { rootRouter } from './routes/root.js';
+import { createTxRouter } from './routes/arweave-tx.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
 import { chunkRouter } from './routes/chunk/index.js';
@@ -70,6 +71,9 @@ app.use(
       'X-Request-Id',
       // ar-io custom headers
       ...Object.values(headerNames),
+      // arweave tag headers (Phase 2: tags as response headers)
+      'X-Arweave-Tag-Count',
+      'X-Arweave-Tags-Truncated',
     ],
   }),
 );
@@ -99,6 +103,14 @@ if (system.rateLimiter !== undefined) {
     }),
   );
 }
+app.use(
+  createTxRouter({
+    log,
+    txStore: system.txStore,
+    dataItemMetaResolver: system.dataItemMetaResolver,
+    arweaveClient: system.arweaveClient,
+  }),
+);
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);

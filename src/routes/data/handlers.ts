@@ -24,6 +24,8 @@ import {
   detectLoopInViaChain,
 } from '../../lib/request-attributes.js';
 import { isValidTxId } from '../../lib/validation.js';
+import { fromB64Url } from '../../lib/encoding.js';
+import { DataItemMetaResolver } from '../../data/data-item-meta-resolver.js';
 import {
   DataBlockListValidator,
   ContiguousData,
@@ -31,6 +33,7 @@ import {
   ContiguousDataSource,
   DataAttributesSource,
   ManifestPathResolver,
+  PartialJsonTransactionStore,
   RequestAttributes,
 } from '../../types.js';
 import { RateLimiter } from '../../limiter/types.js';
@@ -315,18 +318,64 @@ export const shouldUsePrivateCacheControl = (
   return false;
 };
 
+// --- Tag response header helpers ---
+
+/** Sanitize a tag name for use as an HTTP header name suffix. */
+export const sanitizeTagHeaderName = (name: string): string => {
+  return name
+    .replace(/[^A-Za-z0-9\-_]/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 128);
+};
+
+/** Sanitize a tag value for use as an HTTP header value. */
+export const sanitizeTagHeaderValue = (value: string): string => {
+  // Remove control characters (0x00-0x1F except tab 0x09) and DEL (0x7F)
+  let result = '';
+  for (let i = 0; i < value.length && result.length < 4096; i++) {
+    const code = value.charCodeAt(i);
+    if (code === 0x09 || (code >= 0x20 && code !== 0x7f)) {
+      result += value[i];
+    }
+  }
+  return result;
+};
+
+/** Resolve tags for a given ID from L1 tx store or L2 data item resolver. */
+export const resolveTagsForId = async (
+  id: string,
+  txStore: PartialJsonTransactionStore,
+  dataItemMetaResolver: DataItemMetaResolver,
+): Promise<{ name: string; value: string }[]> => {
+  // Tier 1: L1 transaction from LMDB header store
+  const tx = await txStore.get(id);
+  if (tx?.tags != null && tx.tags.length > 0) {
+    return tx.tags.map((t) => ({
+      name: fromB64Url(t.name).toString('utf8'),
+      value: fromB64Url(t.value).toString('utf8'),
+    }));
+  }
+
+  // Tier 2: L2 data item (indexed DB → on-demand → LRU cache)
+  const meta = await dataItemMetaResolver.resolve(id);
+  return meta?.tags ?? [];
+};
+
 const setDataHeaders = ({
   req,
   res,
   dataAttributes,
   data,
   id,
+  tags,
 }: {
   req: Request;
   res: Response;
   dataAttributes: ContiguousDataAttributes | undefined;
   data: ContiguousData;
   id: string;
+  tags?: { name: string; value: string }[];
 }) => {
   // TODO: cached header for zero length data (maybe...)
 
@@ -424,6 +473,30 @@ const setDataHeaders = ({
         headerNames.dataItemDataOffset,
         dataAttributes.dataOffset.toString(),
       );
+    }
+  }
+
+  // Set Arweave tag response headers
+  if (
+    config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
+    tags != null &&
+    tags.length > 0
+  ) {
+    const max = config.ARWEAVE_TAG_RESPONSE_HEADERS_MAX;
+    const truncated = tags.length > max;
+    const tagsToEmit = truncated ? tags.slice(0, max) : tags;
+
+    res.header(headerNames.arweaveTagCount, tags.length.toString());
+    if (truncated) {
+      res.header(headerNames.arweaveTagsTruncated, 'true');
+    }
+
+    for (const tag of tagsToEmit) {
+      const safeName = sanitizeTagHeaderName(tag.name);
+      const safeValue = sanitizeTagHeaderValue(tag.value);
+      if (safeName.length > 0) {
+        res.append(`X-Arweave-Tag-${safeName}`, safeValue);
+      }
     }
   }
 
@@ -809,6 +882,8 @@ export const createRawDataHandler = ({
   rateLimiter,
   paymentProcessor,
   negativeDataCache,
+  txStore,
+  dataItemMetaResolver,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
@@ -817,6 +892,8 @@ export const createRawDataHandler = ({
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
   negativeDataCache?: NegativeDataCache;
+  txStore?: PartialJsonTransactionStore;
+  dataItemMetaResolver?: DataItemMetaResolver;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req, res);
@@ -918,6 +995,16 @@ export const createRawDataHandler = ({
           return;
         }
 
+        // Fire tag resolution in parallel with data retrieval
+        const tagsPromise =
+          config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
+          txStore != null &&
+          dataItemMetaResolver != null
+            ? resolveTagsForId(id, txStore, dataItemMetaResolver).catch(
+                () => [],
+              )
+            : Promise.resolve([] as { name: string; value: string }[]);
+
         // Return 452 if the data is blocked by hash
         if (dataAttributes?.hash !== undefined) {
           span.addEvent('Checking blocklist for hash');
@@ -998,6 +1085,9 @@ export const createRawDataHandler = ({
             return;
           }
 
+          // Await tag resolution (fired in parallel earlier)
+          const tags = await tagsPromise;
+
           // Check if the request includes a Range header
           const rangeHeader = req.headers.range;
           if (rangeHeader !== undefined) {
@@ -1006,7 +1096,7 @@ export const createRawDataHandler = ({
             // Range requests create new streams so the original is no longer
             // needed
             data.stream.destroy();
-            setDataHeaders({ req, res, dataAttributes, data, id });
+            setDataHeaders({ req, res, dataAttributes, data, id, tags });
 
             await handleRangeRequest({
               log,
@@ -1023,7 +1113,7 @@ export const createRawDataHandler = ({
             span.setAttribute('http.status_code', res.statusCode);
           } else {
             // Set headers and stream data
-            setDataHeaders({ req, res, dataAttributes, data, id });
+            setDataHeaders({ req, res, dataAttributes, data, id, tags });
             if (data.size > 0) {
               res.header('Content-Length', data.size.toString());
             }
@@ -1298,6 +1388,8 @@ export const createDataHandler = ({
   rateLimiter,
   paymentProcessor,
   negativeDataCache,
+  txStore,
+  dataItemMetaResolver,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
@@ -1307,6 +1399,8 @@ export const createDataHandler = ({
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
   negativeDataCache?: NegativeDataCache;
+  txStore?: PartialJsonTransactionStore;
+  dataItemMetaResolver?: DataItemMetaResolver;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req, res);
@@ -1414,6 +1508,16 @@ export const createDataHandler = ({
           sendNotFound(res);
           return;
         }
+
+        // Fire tag resolution in parallel with data retrieval
+        const tagsPromise =
+          config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
+          txStore != null &&
+          dataItemMetaResolver != null
+            ? resolveTagsForId(id, txStore, dataItemMetaResolver).catch(
+                () => [],
+              )
+            : Promise.resolve([] as { name: string; value: string }[]);
 
         // Return 452 if the data is blocked by hash
         if (dataAttributes?.hash !== undefined) {
@@ -1618,6 +1722,9 @@ export const createDataHandler = ({
           return;
         }
 
+        // Await tag resolution (fired in parallel earlier)
+        const tags = await tagsPromise;
+
         // Check if the request includes a Range header
         const rangeHeader = req.headers.range;
         if (rangeHeader !== undefined && data !== undefined) {
@@ -1633,6 +1740,7 @@ export const createDataHandler = ({
             dataAttributes,
             data,
             id,
+            tags,
           });
 
           await handleRangeRequest({
@@ -1656,6 +1764,7 @@ export const createDataHandler = ({
             dataAttributes,
             data,
             id,
+            tags,
           });
           if (data.size > 0) {
             res.header('Content-Length', data.size.toString());

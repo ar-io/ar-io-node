@@ -16,7 +16,26 @@ import {
 
 import { ContiguousDataSource } from '../types.js';
 import { readBytes, getReader, getSignatureMeta } from '../lib/bundles.js';
+import { toB64Url } from '../lib/encoding.js';
 import * as metrics from '../metrics.js';
+
+export interface DataItemMeta {
+  id: string;
+  signatureType: number;
+  signature: string;
+  signatureOffset: number;
+  signatureSize: number;
+  owner: string;
+  ownerAddress: string;
+  ownerOffset: number;
+  ownerSize: number;
+  target: string;
+  anchor: string;
+  tags: { name: string; value: string }[];
+  headerSize: number;
+  payloadSize: number;
+  contentType?: string;
+}
 
 // Maximum ANS-104 data item header size calculation:
 // - Signature type: 2 bytes
@@ -882,6 +901,155 @@ export class Ans104OffsetSource {
       return { id, headerSize, payloadSize, contentType };
     } catch (error: any) {
       log.error('Error parsing data item header', {
+        error: error.message,
+        bundleId,
+        itemOffset,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Extracts full metadata from a data item header via byte-range fetch.
+   * Unlike parseDataItemHeader (which only returns id, sizes, contentType),
+   * this captures all header fields: signature, owner, target, anchor, tags.
+   *
+   * Used for on-demand data item metadata resolution when the item is not
+   * yet indexed in the database.
+   */
+  async extractDataItemMeta(
+    bundleId: string,
+    itemOffset: number,
+    totalSize: number,
+    signal?: AbortSignal,
+  ): Promise<DataItemMeta> {
+    const log = this.log.child({
+      method: 'extractDataItemMeta',
+      bundleId,
+      itemOffset,
+      totalSize,
+    });
+
+    try {
+      signal?.throwIfAborted();
+
+      const fetchSize = Math.min(totalSize, MAX_DATA_ITEM_HEADER_SIZE);
+
+      const headerData = await this.dataSource.getData({
+        id: bundleId,
+        region: { offset: itemOffset, size: fetchSize },
+        signal,
+      });
+
+      const reader = getReader(headerData.stream);
+      let bytes = (await reader.next()).value;
+      let headerOffset = 0;
+
+      // Parse signature type (2 bytes)
+      bytes = await readBytes(reader, bytes, 2);
+      const signatureType = byteArrayToLong(bytes.subarray(0, 2));
+      bytes = bytes.subarray(2);
+      headerOffset += 2;
+
+      const { sigLength, pubLength } = getSignatureMeta(signatureType);
+
+      // Read signature
+      bytes = await readBytes(reader, bytes, sigLength);
+      const signatureBytes = bytes.subarray(0, sigLength);
+      const id = createHash('sha256')
+        .update(signatureBytes)
+        .digest('base64url');
+      const signature = toB64Url(Buffer.from(signatureBytes));
+      bytes = bytes.subarray(sigLength);
+      headerOffset += sigLength;
+
+      // Read owner (full public key)
+      bytes = await readBytes(reader, bytes, pubLength);
+      const ownerBytes = bytes.subarray(0, pubLength);
+      const owner = toB64Url(Buffer.from(ownerBytes));
+      const ownerAddress = createHash('sha256')
+        .update(ownerBytes)
+        .digest('base64url');
+      bytes = bytes.subarray(pubLength);
+      headerOffset += pubLength;
+
+      // Read target (1 byte flag + optional 32 bytes)
+      bytes = await readBytes(reader, bytes, 1);
+      const hasTarget = bytes[0] === 1;
+      bytes = bytes.subarray(1);
+      headerOffset += 1;
+      let target = '';
+      if (hasTarget) {
+        bytes = await readBytes(reader, bytes, 32);
+        target = toB64Url(Buffer.from(bytes.subarray(0, 32)));
+        bytes = bytes.subarray(32);
+        headerOffset += 32;
+      }
+
+      // Read anchor (1 byte flag + optional 32 bytes)
+      bytes = await readBytes(reader, bytes, 1);
+      const hasAnchor = bytes[0] === 1;
+      bytes = bytes.subarray(1);
+      headerOffset += 1;
+      let anchor = '';
+      if (hasAnchor) {
+        bytes = await readBytes(reader, bytes, 32);
+        anchor = toB64Url(Buffer.from(bytes.subarray(0, 32)));
+        bytes = bytes.subarray(32);
+        headerOffset += 32;
+      }
+
+      // Read tags
+      bytes = await readBytes(reader, bytes, 16);
+      const tagsCount = byteArrayToLong(bytes.subarray(0, 8));
+      const tagsBytesLength = byteArrayToLong(bytes.subarray(8, 16));
+      bytes = bytes.subarray(16);
+      headerOffset += 16;
+
+      let tags: { name: string; value: string }[] = [];
+      let contentType: string | undefined;
+      if (tagsBytesLength > 0 && tagsCount > 0) {
+        bytes = await readBytes(reader, bytes, tagsBytesLength);
+        const tagsBytes = bytes.subarray(0, tagsBytesLength);
+        tags = deserializeTags(Buffer.from(tagsBytes));
+        const contentTypeTag = tags.find(
+          (tag) => tag.name.toLowerCase() === 'content-type',
+        );
+        contentType = contentTypeTag?.value;
+        headerOffset += tagsBytesLength;
+      }
+
+      const headerSize = headerOffset;
+      const payloadSize = totalSize - headerOffset;
+
+      log.debug('Extracted full data item metadata', {
+        id,
+        signatureType,
+        headerSize,
+        payloadSize,
+        tagCount: tags.length,
+        contentType,
+      });
+
+      return {
+        id,
+        signatureType,
+        signature,
+        signatureOffset: 2,
+        signatureSize: sigLength,
+        owner,
+        ownerAddress,
+        ownerOffset: 2 + sigLength,
+        ownerSize: pubLength,
+        target,
+        anchor,
+        tags,
+        headerSize,
+        payloadSize,
+        contentType,
+      };
+    } catch (error: any) {
+      log.error('Error extracting data item metadata', {
         error: error.message,
         bundleId,
         itemOffset,

@@ -1094,4 +1094,141 @@ describe('Ans104OffsetSource', () => {
       }
     });
   });
+
+  describe('extractDataItemMeta', () => {
+    it('should extract all metadata fields from data item header', async () => {
+      const bundleId = 'test-bundle-id';
+      const itemOffset = 0;
+
+      // Build a complete data item header
+      const sigType = Buffer.alloc(2);
+      sigType.writeUInt16LE(1); // Arweave signature type
+
+      const signature = Buffer.alloc(512);
+      signature.fill(0xab); // Fill with recognizable pattern
+
+      const owner = Buffer.alloc(512);
+      owner.fill(0xcd); // Fill with recognizable pattern
+
+      const targetFlag = Buffer.from([1]); // Has target
+      const target = Buffer.alloc(32);
+      target.fill(0xef);
+
+      const anchorFlag = Buffer.from([1]); // Has anchor
+      const anchor = Buffer.alloc(32);
+      anchor.fill(0x12);
+
+      // Create tags
+      const tags = [
+        { name: 'Content-Type', value: 'application/json' },
+        { name: 'App-Name', value: 'TestApp' },
+      ];
+      const tagsData = Buffer.from(serializeTags(tags));
+      const tagsCount = Buffer.alloc(8);
+      tagsCount.writeBigInt64LE(BigInt(tags.length), 0);
+      const tagsBytesLength = Buffer.alloc(8);
+      tagsBytesLength.writeBigInt64LE(BigInt(tagsData.length), 0);
+
+      const headerBytes = Buffer.concat([
+        sigType,
+        signature,
+        owner,
+        targetFlag,
+        target,
+        anchorFlag,
+        anchor,
+        tagsCount,
+        tagsBytesLength,
+        tagsData,
+      ]);
+
+      // Total item = header + some payload
+      const payloadSize = 100;
+      const totalSize = headerBytes.length + payloadSize;
+      const fullItem = Buffer.concat([headerBytes, Buffer.alloc(payloadSize)]);
+
+      getDataMock.mock.mockImplementation(async () => ({
+        stream: Readable.from([fullItem]),
+        size: fullItem.length,
+        verified: false,
+        trusted: false,
+        cached: false,
+      }));
+
+      const result = await ans104OffsetSource.extractDataItemMeta(
+        bundleId,
+        itemOffset,
+        totalSize,
+      );
+
+      // Check all fields are present and correct
+      assert.strictEqual(typeof result.id, 'string');
+      assert.strictEqual(result.id.length, 43); // base64url of sha256
+      assert.strictEqual(result.signatureType, 1);
+      assert.strictEqual(typeof result.signature, 'string');
+      assert.ok(result.signature.length > 0);
+      assert.strictEqual(typeof result.owner, 'string');
+      assert.ok(result.owner.length > 0);
+      assert.strictEqual(typeof result.ownerAddress, 'string');
+      assert.strictEqual(result.ownerAddress.length, 43); // base64url of sha256
+      assert.strictEqual(typeof result.target, 'string');
+      assert.ok(result.target.length > 0);
+      assert.strictEqual(typeof result.anchor, 'string');
+      assert.ok(result.anchor.length > 0);
+      assert.strictEqual(result.tags.length, 2);
+      assert.strictEqual(result.tags[0].name, 'Content-Type');
+      assert.strictEqual(result.tags[0].value, 'application/json');
+      assert.strictEqual(result.tags[1].name, 'App-Name');
+      assert.strictEqual(result.tags[1].value, 'TestApp');
+      assert.strictEqual(result.contentType, 'application/json');
+      assert.strictEqual(result.headerSize, headerBytes.length);
+      assert.strictEqual(result.payloadSize, payloadSize);
+    });
+
+    it('should handle data item with no target or anchor', async () => {
+      const bundleId = 'test-bundle-id';
+
+      const sigType = Buffer.alloc(2);
+      sigType.writeUInt16LE(1);
+      const signature = Buffer.alloc(512);
+      const owner = Buffer.alloc(512);
+      const targetFlag = Buffer.from([0]); // No target
+      const anchorFlag = Buffer.from([0]); // No anchor
+      const tagsCount = Buffer.alloc(8); // 0 tags
+      const tagsBytesLength = Buffer.alloc(8); // 0 tag bytes
+
+      const headerBytes = Buffer.concat([
+        sigType,
+        signature,
+        owner,
+        targetFlag,
+        anchorFlag,
+        tagsCount,
+        tagsBytesLength,
+      ]);
+
+      const totalSize = headerBytes.length + 50;
+      const fullItem = Buffer.concat([headerBytes, Buffer.alloc(50)]);
+
+      getDataMock.mock.mockImplementation(async () => ({
+        stream: Readable.from([fullItem]),
+        size: fullItem.length,
+        verified: false,
+        trusted: false,
+        cached: false,
+      }));
+
+      const result = await ans104OffsetSource.extractDataItemMeta(
+        bundleId,
+        0,
+        totalSize,
+      );
+
+      assert.strictEqual(result.target, '');
+      assert.strictEqual(result.anchor, '');
+      assert.strictEqual(result.tags.length, 0);
+      assert.strictEqual(result.contentType, undefined);
+      assert.strictEqual(result.payloadSize, 50);
+    });
+  });
 });

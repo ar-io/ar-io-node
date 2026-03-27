@@ -23,6 +23,7 @@ import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { RootParentDataSource } from './data/root-parent-data-source.js';
 import { Ans104OffsetSource } from './data/ans104-offset-source.js';
+import { DataItemMetaResolver } from './data/data-item-meta-resolver.js';
 import { CompositeTxBoundarySource } from './data/composite-tx-boundary-source.js';
 import { DatabaseTxBoundarySource } from './data/database-tx-boundary-source.js';
 import { ChainTxBoundarySource } from './data/chain-tx-boundary-source.js';
@@ -195,6 +196,11 @@ const blockOffsetMapping = new BlockOffsetMapping({
     .pathname,
 });
 
+export const txStore = makeTxStore({
+  log,
+  type: config.CHAIN_CACHE_TYPE,
+});
+
 export const arweaveClient = new ArweaveCompositeClient({
   log,
   arweave,
@@ -205,10 +211,7 @@ export const arweaveClient = new ArweaveCompositeClient({
     log,
     type: config.CHAIN_CACHE_TYPE,
   }),
-  txStore: makeTxStore({
-    log,
-    type: config.CHAIN_CACHE_TYPE,
-  }),
+  txStore,
   failureSimulator: new UniformFailureSimulator({
     failureRate: config.SIMULATED_REQUEST_FAILURE_RATE,
   }),
@@ -829,6 +832,16 @@ if (rootTxIndexes.length === 0) {
 export const rootTxIndex = new CompositeRootTxIndex({
   log,
   indexes: rootTxIndexes,
+});
+
+// Resolver for data item metadata (used by /tx/:id and tag headers)
+// Tries gateways first (faster), then falls back to Arweave nodes via chunks
+export const dataItemMetaResolver = new DataItemMetaResolver({
+  log,
+  gqlQueryable,
+  rootTxIndex,
+  ans104OffsetSources: [ans104GatewaysOffsetSource, ans104ChunksOffsetSource],
+  dataItemIndexWriter: db,
 });
 
 // Offset-aware version of gateways data source that uses cached upstream offsets

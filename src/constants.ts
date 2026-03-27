@@ -68,6 +68,8 @@ export const headerNames = {
   arnsIndex: 'X-ArNS-Record-Index',
   via: 'X-AR-IO-Via',
   negativeCache: 'X-AR-IO-Negative-Cache',
+  arweaveTagCount: 'X-Arweave-Tag-Count',
+  arweaveTagsTruncated: 'X-Arweave-Tags-Truncated',
 };
 
 export const verificationPriorities = {
