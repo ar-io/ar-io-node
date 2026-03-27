@@ -1085,8 +1085,11 @@ export const createRawDataHandler = ({
             return;
           }
 
-          // Await tag resolution (fired in parallel earlier)
-          const tags = await tagsPromise;
+          // Await tag resolution (fired in parallel earlier), fall back to
+          // tags propagated from upstream gateway response headers
+          const resolvedTags = await tagsPromise;
+          const tags =
+            resolvedTags.length > 0 ? resolvedTags : (data.upstreamTags ?? []);
 
           // Check if the request includes a Range header
           const rangeHeader = req.headers.range;
@@ -1722,8 +1725,11 @@ export const createDataHandler = ({
           return;
         }
 
-        // Await tag resolution (fired in parallel earlier)
-        const tags = await tagsPromise;
+        // Await tag resolution (fired in parallel earlier), fall back to
+        // tags propagated from upstream gateway response headers
+        const resolvedTags = await tagsPromise;
+        const tags =
+          resolvedTags.length > 0 ? resolvedTags : (data?.upstreamTags ?? []);
 
         // Check if the request includes a Range header
         const rangeHeader = req.headers.range;
