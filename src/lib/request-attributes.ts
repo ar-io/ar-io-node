@@ -88,6 +88,35 @@ export const generateRequestAttributes = (
   return { headers, attributes };
 };
 
+const TAG_HEADER_PREFIX = 'x-arweave-tag-';
+const TAG_HEADER_COUNT = 'x-arweave-tag-count';
+const TAG_HEADER_TRUNCATED = 'x-arweave-tags-truncated';
+
+/** Parse X-Arweave-Tag-* headers from an upstream response into tag pairs. */
+export const parseUpstreamTagHeaders = (
+  headers: Record<string, string | string[]>,
+): { name: string; value: string }[] | undefined => {
+  const tags: { name: string; value: string }[] = [];
+
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (
+      lower.startsWith(TAG_HEADER_PREFIX) &&
+      lower !== TAG_HEADER_COUNT &&
+      lower !== TAG_HEADER_TRUNCATED
+    ) {
+      const tagName = key.slice(TAG_HEADER_PREFIX.length);
+      // Headers may be string or string[] (multiple values with same name)
+      const values = Array.isArray(value) ? value : [value];
+      for (const v of values) {
+        tags.push({ name: tagName, value: v });
+      }
+    }
+  }
+
+  return tags.length > 0 ? tags : undefined;
+};
+
 export const parseRequestAttributesHeaders = ({
   headers,
   currentHops,

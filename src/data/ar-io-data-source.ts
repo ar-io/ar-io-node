@@ -21,6 +21,7 @@ import {
 import {
   generateRequestAttributes,
   parseRequestAttributesHeaders,
+  parseUpstreamTagHeaders,
   validateHopCount,
 } from '../lib/request-attributes.js';
 import { headerNames } from '../constants.js';
@@ -487,6 +488,9 @@ export class ArIODataSource implements ContiguousDataSource {
       sourceContentType: response.headers['content-type'],
       cached: false,
       requestAttributes,
+      upstreamTags: parseUpstreamTagHeaders(
+        response.headers as Record<string, string | string[]>,
+      ),
     };
   }
 }

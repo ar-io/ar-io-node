@@ -10,6 +10,7 @@ import {
   detectLoopInViaChain,
   generateRequestAttributes,
   parseRequestAttributesHeaders,
+  parseUpstreamTagHeaders,
   validateHopCount,
 } from '../lib/request-attributes.js';
 import { shuffleArray } from '../lib/random.js';
@@ -398,6 +399,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
                     headers: response.headers as { [key: string]: string },
                     currentHops: requestAttributesHeaders?.attributes.hops,
                   }),
+                  upstreamTags: parseUpstreamTagHeaders(
+                    response.headers as Record<string, string | string[]>,
+                  ),
                 };
               } catch (rawError: any) {
                 clearTimeout(connectionTimer);
