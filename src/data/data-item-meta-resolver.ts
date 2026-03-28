@@ -195,8 +195,11 @@ export class DataItemMetaResolver {
       // Persist to database for future lookups (GraphQL, other gateways, etc.)
       if (this.dataItemIndexWriter != null && resolved._meta != null) {
         this.saveToIndex(resolved, rootTxId, log).catch((error) => {
-          log.debug('Failed to persist on-demand data item to index', {
+          log.error('Failed to persist on-demand data item to index', {
+            id,
+            rootTxId,
             error: error.message,
+            stack: error.stack,
           });
         });
       }
