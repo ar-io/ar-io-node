@@ -136,6 +136,7 @@ describe('ArIODataSource', () => {
           originNodeRelease: undefined,
           clientIps: [],
         },
+        upstreamTags: undefined,
       });
 
       // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -194,6 +195,7 @@ describe('ArIODataSource', () => {
           originNodeRelease: undefined,
           clientIps: [],
         },
+        upstreamTags: undefined,
       });
 
       let receivedData = '';
@@ -276,6 +278,7 @@ describe('ArIODataSource', () => {
           originNodeRelease: undefined,
           clientIps: [],
         },
+        upstreamTags: undefined,
       });
     });
 
@@ -535,6 +538,7 @@ describe('ArIODataSource', () => {
             originNodeRelease: undefined,
             clientIps: [],
           },
+          upstreamTags: undefined,
         });
       });
 
