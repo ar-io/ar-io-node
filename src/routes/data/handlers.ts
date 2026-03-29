@@ -989,6 +989,20 @@ export const createRawDataHandler = ({
           return;
         }
 
+        // Fire tag resolution early — runs in parallel with getDataAttributes
+        // and getData, giving the resolver maximum time before the timeout
+        const tagsPromise =
+          config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
+          txStore != null &&
+          dataItemMetaResolver != null
+            ? resolveTagsWithTimeout(
+                id,
+                txStore,
+                dataItemMetaResolver,
+                config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
+              )
+            : Promise.resolve([] as { name: string; value: string }[]);
+
         // Retrieve authoritative data attributes if they're available
         let dataAttributes: ContiguousDataAttributes | undefined;
         span.addEvent('Retrieving data attributes');
@@ -1028,20 +1042,6 @@ export const createRawDataHandler = ({
           sendNotFound(res);
           return;
         }
-
-        // Fire tag resolution in parallel with data retrieval (with timeout
-        // to avoid blocking the response if the resolver is slow)
-        const tagsPromise =
-          config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
-          txStore != null &&
-          dataItemMetaResolver != null
-            ? resolveTagsWithTimeout(
-                id,
-                txStore,
-                dataItemMetaResolver,
-                config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
-              )
-            : Promise.resolve([] as { name: string; value: string }[]);
 
         // Return 452 if the data is blocked by hash
         if (dataAttributes?.hash !== undefined) {
@@ -1129,14 +1129,9 @@ export const createRawDataHandler = ({
           const tags =
             resolvedTags.length > 0 ? resolvedTags : (data.upstreamTags ?? []);
 
-          // If we fell back to upstream tags, trigger background indexing so
-          // the item is locally indexed for future requests
-          if (
-            resolvedTags.length === 0 &&
-            data.upstreamTags != null &&
-            data.upstreamTags.length > 0 &&
-            dataItemMetaResolver != null
-          ) {
+          // If local tag resolution failed (timeout or miss), trigger
+          // background indexing so the item is indexed for future requests
+          if (resolvedTags.length === 0 && dataItemMetaResolver != null) {
             dataItemMetaResolver.resolve(id).catch(() => {});
           }
 
@@ -1519,6 +1514,20 @@ export const createDataHandler = ({
           return;
         }
 
+        // Fire tag resolution early — runs in parallel with getDataAttributes
+        // and getData, giving the resolver maximum time before the timeout
+        const tagsPromise =
+          config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
+          txStore != null &&
+          dataItemMetaResolver != null
+            ? resolveTagsWithTimeout(
+                id,
+                txStore,
+                dataItemMetaResolver,
+                config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
+              )
+            : Promise.resolve([] as { name: string; value: string }[]);
+
         let dataAttributes: ContiguousDataAttributes | undefined;
 
         // Retrieve authoritative data attributes if available
@@ -1560,20 +1569,6 @@ export const createDataHandler = ({
           sendNotFound(res);
           return;
         }
-
-        // Fire tag resolution in parallel with data retrieval (with timeout
-        // to avoid blocking the response if the resolver is slow)
-        const tagsPromise =
-          config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
-          txStore != null &&
-          dataItemMetaResolver != null
-            ? resolveTagsWithTimeout(
-                id,
-                txStore,
-                dataItemMetaResolver,
-                config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
-              )
-            : Promise.resolve([] as { name: string; value: string }[]);
 
         // Return 452 if the data is blocked by hash
         if (dataAttributes?.hash !== undefined) {
@@ -1784,14 +1779,9 @@ export const createDataHandler = ({
         const tags =
           resolvedTags.length > 0 ? resolvedTags : (data?.upstreamTags ?? []);
 
-        // If we fell back to upstream tags, trigger background indexing so
-        // the item is locally indexed for future requests
-        if (
-          resolvedTags.length === 0 &&
-          data?.upstreamTags != null &&
-          data.upstreamTags.length > 0 &&
-          dataItemMetaResolver != null
-        ) {
+        // If local tag resolution failed (timeout or miss), trigger
+        // background indexing so the item is indexed for future requests
+        if (resolvedTags.length === 0 && dataItemMetaResolver != null) {
           dataItemMetaResolver.resolve(id).catch(() => {});
         }
 
