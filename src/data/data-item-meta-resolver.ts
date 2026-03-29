@@ -250,6 +250,7 @@ export class DataItemMetaResolver {
       parent_index: 0,
       root_tx_id: rootTxId,
       root_parent_offset: 0,
+      filter: '{"always": true}',
     };
 
     await this.dataItemIndexWriter.saveDataItem(item);
