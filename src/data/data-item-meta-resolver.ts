@@ -97,17 +97,13 @@ export class DataItemMetaResolver {
       return cached;
     }
 
-    // Tier 1: Check indexed data in DB
+    // Tier 1: Check indexed data in DB (both L1 transactions and L2 data items)
     try {
       const gqlTx = await this.gqlQueryable.getGqlTransaction({ id });
       if (gqlTx !== null && gqlTx !== undefined) {
-        if (gqlTx.isDataItem) {
-          const resolved = this.fromGqlTransaction(gqlTx);
-          this.cache.set(id, resolved);
-          return resolved;
-        }
-        // It's an L1 transaction, not a data item
-        return undefined;
+        const resolved = this.fromGqlTransaction(gqlTx);
+        this.cache.set(id, resolved);
+        return resolved;
       }
     } catch (error: any) {
       log.debug('GQL transaction lookup failed', { error: error.message });

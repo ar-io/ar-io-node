@@ -106,9 +106,15 @@ export class CompositeDataAttributesSource
   ): Promise<void> {
     this.log.debug('Setting data attributes in cache', { id });
     const existingAttributes = this.cache.get(id);
-    const mergedAttributes = existingAttributes
-      ? { ...existingAttributes, ...attributes }
-      : attributes;
-    this.cache.set(id, mergedAttributes as ContiguousDataAttributes);
+    if (existingAttributes != null) {
+      // Merge into existing complete entry — preserves DB-sourced fields
+      // like isManifest and contentType that partials may not include
+      this.cache.set(id, { ...existingAttributes, ...attributes });
+    }
+    // When no existing entry, skip caching the partial. The next
+    // getDataAttributes call will fetch the complete entry from the DB,
+    // which includes isManifest and the correct contentType from tags.
+    // Caching partials here caused manifests to be served as raw bytes
+    // because the stream's Content-Type header is application/octet-stream.
   }
 }
