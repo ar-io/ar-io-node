@@ -142,7 +142,7 @@ export const createArnsMiddleware = ({
       try {
         if (system.blockedNamesCache.isBlocked(arnsSubdomain)) {
           span.setAttribute('arns.blocked', true);
-          span.setAttribute('http.status_code', 452);
+          span.setAttribute('http.status_code', 451);
           sendBlocked(res, arnsSubdomain);
           return;
         }

@@ -80,8 +80,8 @@ describe('Moderation', function () {
       });
 
       assert.ok(
-        res.status === 404 || res.status === 452,
-        `Expected 404 or 452, got ${res.status}`,
+        res.status === 404 || res.status === 451,
+        `Expected 404 or 451, got ${res.status}`,
       );
     });
 
@@ -179,8 +179,8 @@ describe('Moderation', function () {
         validateStatus: () => true,
       });
       assert.ok(
-        res.status === 404 || res.status === 452,
-        `Expected 404 or 452, got ${res.status}`,
+        res.status === 404 || res.status === 451,
+        `Expected 404 or 451, got ${res.status}`,
       );
     });
   });

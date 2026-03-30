@@ -580,7 +580,7 @@ st
       await head;
     });
 
-    it('should return 452 given a blocked ID', async () => {
+    it('should return 451 given a blocked ID', async () => {
       app.get(
         '/:id',
         createDataHandler({
@@ -598,14 +598,14 @@ st
 
       const get = request(app)
         .get('/not-a-real-id')
-        .expect(452)
+        .expect(451)
         .then((res: any) => {
           assert.match(
             res.text,
             /Requested content blocked by this node's content policy/,
           );
         });
-      const head = request(app).head('/not-a-real-id').expect(452);
+      const head = request(app).head('/not-a-real-id').expect(451);
       await Promise.all([get, head]);
     });
 

@@ -786,7 +786,7 @@ export const sendBlocked = (res: Response, id: string | undefined) => {
     `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, immutable`,
   );
   res
-    .status(452)
+    .status(451)
     .send(
       `Requested content blocked by this node's content policy. Blocked ID: ${id}`,
     );
@@ -850,11 +850,11 @@ export const createRawDataHandler = ({
           return;
         }
 
-        // Return 452 if the data is blocked by ID
+        // Return 451 if the data is blocked by ID
         span.addEvent('Checking blocklist for ID');
         try {
           if (await dataBlockListValidator.isIdBlocked(id)) {
-            span.setAttribute('http.status_code', 452);
+            span.setAttribute('http.status_code', 451);
             span.setAttribute('data.error', 'id_blocked');
             sendBlocked(res, id);
             return;
@@ -918,14 +918,14 @@ export const createRawDataHandler = ({
           return;
         }
 
-        // Return 452 if the data is blocked by hash
+        // Return 451 if the data is blocked by hash
         if (dataAttributes?.hash !== undefined) {
           span.addEvent('Checking blocklist for hash');
           try {
             if (
               await dataBlockListValidator.isHashBlocked(dataAttributes.hash)
             ) {
-              span.setAttribute('http.status_code', 452);
+              span.setAttribute('http.status_code', 451);
               span.setAttribute('data.error', 'hash_blocked');
               sendBlocked(res, id);
               return;
@@ -1346,11 +1346,11 @@ export const createDataHandler = ({
           return;
         }
 
-        // Return 452 if the data is blocked by ID
+        // Return 451 if the data is blocked by ID
         span.addEvent('Checking blocklist for ID');
         try {
           if (await dataBlockListValidator.isIdBlocked(id)) {
-            span.setAttribute('http.status_code', 452);
+            span.setAttribute('http.status_code', 451);
             span.setAttribute('data.error', 'id_blocked');
             sendBlocked(res, id);
             return;
@@ -1415,14 +1415,14 @@ export const createDataHandler = ({
           return;
         }
 
-        // Return 452 if the data is blocked by hash
+        // Return 451 if the data is blocked by hash
         if (dataAttributes?.hash !== undefined) {
           span.addEvent('Checking blocklist for hash');
           try {
             if (
               await dataBlockListValidator.isHashBlocked(dataAttributes.hash)
             ) {
-              span.setAttribute('http.status_code', 452);
+              span.setAttribute('http.status_code', 451);
               span.setAttribute('data.error', 'hash_blocked');
               sendBlocked(res, id);
               return;
