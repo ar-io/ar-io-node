@@ -508,7 +508,13 @@ export const contiguousDataCacheHitTotal = new promClient.Counter({
 
 export const contiguousDataCacheMissTotal = new promClient.Counter({
   name: 'contiguous_data_cache_miss_total',
-  help: 'Count of contiguous data cache misses in ReadThroughDataCache',
+  help: 'Count of contiguous data cache misses where data was found upstream',
+  labelNames: ['request_type'] as const,
+});
+
+export const contiguousDataCacheNotFoundTotal = new promClient.Counter({
+  name: 'contiguous_data_cache_not_found_total',
+  help: 'Count of contiguous data cache misses where data was not found in any source',
   labelNames: ['request_type'] as const,
 });
 
