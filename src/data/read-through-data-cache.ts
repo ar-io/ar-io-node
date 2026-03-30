@@ -512,6 +512,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
         const requestType = region ? 'range' : 'full';
 
+        metrics.contiguousDataCacheHitTotal.inc({ request_type: requestType });
+
         cacheData.stream.once('error', () => {
           metrics.getDataStreamErrorsTotal.inc({
             class: this.constructor.name,
@@ -584,6 +586,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       }
 
       // Cache miss - fetch from upstream
+      const missRequestType = region ? 'range' : 'full';
+      metrics.contiguousDataCacheMissTotal.inc({ request_type: missRequestType });
+
       span.setAttributes({
         'cache.operation.hit': false,
         'cache.operation.miss': true,

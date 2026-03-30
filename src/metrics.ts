@@ -497,6 +497,22 @@ export const filesCleanedTotal = new promClient.Counter({
 });
 
 //
+// Contiguous data cache metrics
+//
+
+export const contiguousDataCacheHitTotal = new promClient.Counter({
+  name: 'contiguous_data_cache_hit_total',
+  help: 'Count of contiguous data cache hits in ReadThroughDataCache',
+  labelNames: ['request_type'] as const,
+});
+
+export const contiguousDataCacheMissTotal = new promClient.Counter({
+  name: 'contiguous_data_cache_miss_total',
+  help: 'Count of contiguous data cache misses in ReadThroughDataCache',
+  labelNames: ['request_type'] as const,
+});
+
+//
 // Cache storage metrics
 //
 
