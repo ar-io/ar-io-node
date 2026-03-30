@@ -881,6 +881,11 @@ export const CACHE_NOT_FOUND_MAX_AGE = env.positiveIntOrDefault(
   'CACHE_NOT_FOUND_MAX_AGE',
   60,
 );
+// Blocked (451) responses — same as stable data by default (30 days).
+export const CACHE_BLOCKED_MAX_AGE = env.positiveIntOrDefault(
+  'CACHE_BLOCKED_MAX_AGE',
+  2592000,
+);
 
 //
 // Indexing

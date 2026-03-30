@@ -783,7 +783,7 @@ export const sendNotFound = (res: Response) => {
 export const sendBlocked = (res: Response, id: string | undefined) => {
   res.header(
     'Cache-Control',
-    `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, immutable`,
+    `public, max-age=${config.CACHE_BLOCKED_MAX_AGE}, immutable`,
   );
   res
     .status(451)
