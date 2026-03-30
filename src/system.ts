@@ -562,6 +562,7 @@ const rootBundleGatewaysDataSource = new GatewaysDataSource({
 
 // Wrap with filtering for general gateway forwarding
 const gatewaysDataSource = new FilteredContiguousDataSource({
+  name: 'gateway',
   log,
   dataSource: baseGatewaysDataSource,
   blockedOrigins: config.TRUSTED_GATEWAYS_BLOCKED_ORIGINS,
@@ -583,6 +584,7 @@ const baseArIODataSource = new ArIODataSource({
 
 // Wrap with filtering for peer forwarding (same blocked lists as gateway forwarding)
 export const arIODataSource = new FilteredContiguousDataSource({
+  name: 'arIO',
   log,
   dataSource: baseArIODataSource,
   blockedOrigins: config.TRUSTED_GATEWAYS_BLOCKED_ORIGINS,
@@ -1042,6 +1044,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   dataSource:
     config.CACHE_ONLY_CLIENT_IPS_AND_CIDRS.length > 0
       ? new FilteredContiguousDataSource({
+          name: 'cacheOnly',
           log,
           dataSource: new SequentialDataSource({
             log,

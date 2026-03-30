@@ -46,18 +46,20 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
    *   - CIDR ranges: '192.168.1.0/24', '10.0.0.0/8' (IPv4 only)
    */
   constructor({
+    name,
     log,
     dataSource,
     blockedOrigins = [],
     blockedIpsAndCidrs = [],
   }: {
+    name: string;
     log: winston.Logger;
     dataSource: ContiguousDataSource;
     blockedOrigins?: string[];
     /** Array of IP addresses and CIDR ranges to block. Individual IPs (IPv4/IPv6) and IPv4 CIDR ranges are supported. */
     blockedIpsAndCidrs?: string[];
   }) {
-    this.log = log.child({ class: this.constructor.name });
+    this.log = log.child({ class: this.constructor.name, name });
     this.innerDataSource = dataSource;
     this.blockedOrigins = new Set(blockedOrigins);
     this.blockedCidrs = blockedIpsAndCidrs;

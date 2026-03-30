@@ -39,6 +39,7 @@ beforeEach(async () => {
   };
 
   filteredDataSource = new FilteredContiguousDataSource({
+    name: 'test',
     log,
     dataSource: mockDataSource,
     blockedOrigins: ['blocked-origin.com', 'evil.gateway.net'],
@@ -224,6 +225,7 @@ describe('FilteredContiguousDataSource', () => {
     it('should handle invalid CIDR gracefully', async () => {
       const filteredDataSourceWithInvalidCidr =
         new FilteredContiguousDataSource({
+          name: 'test',
           log,
           dataSource: mockDataSource,
           blockedOrigins: [],
@@ -251,6 +253,7 @@ describe('FilteredContiguousDataSource', () => {
   describe('Configuration', () => {
     it('should work with empty blocking lists', async () => {
       const unrestrictedDataSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -304,6 +307,7 @@ describe('FilteredContiguousDataSource', () => {
   describe('Multiple Client IPs', () => {
     beforeEach(() => {
       filteredDataSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -427,6 +431,7 @@ describe('FilteredContiguousDataSource', () => {
   describe('Edge cases and security tests', () => {
     it('should handle IPv6 exact matching', async () => {
       const ipv6FilteredSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -451,6 +456,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should handle IPv4-mapped IPv6 normalization', async () => {
       const mappedFilteredSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -475,6 +481,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should reject invalid CIDR prefix (/33)', async () => {
       const invalidPrefixSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -497,6 +504,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should reject invalid CIDR prefix (/-1)', async () => {
       const negativeSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -519,6 +527,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should reject invalid IPv4 format (999.999.999.999)', async () => {
       const invalidIpSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -541,6 +550,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should support bare IP as /32 CIDR', async () => {
       const bareIpSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -565,6 +575,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should handle /0 mask edge case (blocks everything)', async () => {
       const wildcardSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -589,6 +600,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should handle /32 mask edge case (exact match only)', async () => {
       const exactSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -627,6 +639,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should handle multiple IPs with mixed formats', async () => {
       const mixedSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -651,6 +664,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should handle case insensitive IPv6 matching', async () => {
       const ipv6Source = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -673,6 +687,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should handle empty and whitespace values', async () => {
       const cleanSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
@@ -694,6 +709,7 @@ describe('FilteredContiguousDataSource', () => {
 
     it('should reject IPs with leading zeros (prevents octal interpretation)', async () => {
       const octalSource = new FilteredContiguousDataSource({
+        name: 'test',
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
