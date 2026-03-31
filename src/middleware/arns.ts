@@ -159,6 +159,14 @@ export const createArnsMiddleware = ({
         end();
         const resolutionDuration = Date.now() - resolutionStart;
         span.setAttribute('arns.resolution_duration_ms', resolutionDuration);
+
+        if (resolution.statusCode === 451) {
+          span.setAttribute('arns.blocked', true);
+          span.setAttribute('http.status_code', 451);
+          sendBlocked(res, arnsSubdomain);
+          return;
+        }
+
         if (resolvedId !== undefined && resolution.statusCode !== 404) {
           // Successful ArNS resolution
           span.setAttribute('arns.resolved', true);

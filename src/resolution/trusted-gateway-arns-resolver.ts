@@ -47,8 +47,23 @@ export class TrustedGatewayArNSResolver implements NameResolver {
         url: '/',
         baseURL: nameUrl,
         headers,
-        validateStatus: (status) => [200, 404, 402].includes(status),
+        validateStatus: (status) => [200, 404, 402, 451].includes(status),
       });
+
+      if (response.status === 451) {
+        this.log.info('Name blocked by trusted gateway', { name, nameUrl });
+        return {
+          name,
+          statusCode: 451,
+          resolvedId: undefined,
+          resolvedAt: Date.now(),
+          ttl: DEFAULT_ARNS_TTL_SECONDS,
+          processId: undefined,
+          limit: undefined,
+          index: undefined,
+        };
+      }
+
       const resolvedId =
         response.headers[headerNames.arnsResolvedId.toLowerCase()];
       const processId =

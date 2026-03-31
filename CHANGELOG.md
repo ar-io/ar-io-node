@@ -78,6 +78,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   from 452 (non-standard) to 451 ("Unavailable For Legal Reasons"), the
   IANA-registered standard for content blocked due to legal or policy reasons.
 
+- **Trusted Gateway ArNS 451 Handling**: The `TrustedGatewayArNSResolver` now
+  accepts HTTP 451 responses from trusted gateways instead of treating them as
+  errors. When a trusted gateway indicates a name is blocked, the local gateway
+  respects that moderation signal and returns 451 to the client rather than
+  falling through to the on-demand resolver.
+
 - **Serving Cached Data with Undefined or Zero Content-Length**: The read path
   of `ReadThroughDataCache` now skips cache entries with a missing or zero
   `dataSize`, preventing responses without a `Content-Length` header. The write
