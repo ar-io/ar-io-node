@@ -143,10 +143,13 @@ describe('sanitizeTagHeaderValue', () => {
     assert.strictEqual(sanitizeTagHeaderValue('\x00\x01\x02\x03'), '');
   });
 
-  it('should preserve unicode characters above 0x7F (except 0x7F itself)', () => {
-    // Unicode chars have charCode > 0x7F and should be preserved
-    assert.strictEqual(sanitizeTagHeaderValue('\u00e9'), '\u00e9'); // e-acute
-    assert.strictEqual(sanitizeTagHeaderValue('\u4f60\u597d'), '\u4f60\u597d'); // Chinese
+  it('should preserve Latin-1 characters (0x80-0xFF) and strip non-Latin-1', () => {
+    // Latin-1 extended chars (0x80-0xFF) are valid in HTTP headers
+    assert.strictEqual(sanitizeTagHeaderValue('\u00e9'), '\u00e9'); // e-acute (0xE9)
+    assert.strictEqual(sanitizeTagHeaderValue('\u00ff'), '\u00ff'); // y-diaeresis (0xFF)
+    // Non-Latin-1 chars (> 0xFF) are stripped to avoid ERR_INVALID_CHAR
+    assert.strictEqual(sanitizeTagHeaderValue('\u4f60\u597d'), ''); // Chinese stripped
+    assert.strictEqual(sanitizeTagHeaderValue('hello\u4f60'), 'hello'); // mixed
   });
 
   it('should handle mixed control and valid characters', () => {
@@ -156,7 +159,8 @@ describe('sanitizeTagHeaderValue', () => {
 
 describe('resolveItemHeaders', () => {
   let txStoreGetMock: ReturnType<typeof mock.fn>;
-  let resolverResolveMock: ReturnType<typeof mock.fn>;
+  let resolveFromLocalMock: ReturnType<typeof mock.fn>;
+  let resolveMock: ReturnType<typeof mock.fn>;
   let txStore: any;
   let dataItemMetaResolver: any;
 
@@ -164,7 +168,8 @@ describe('resolveItemHeaders', () => {
 
   beforeEach(() => {
     txStoreGetMock = mock.fn(() => Promise.resolve(undefined));
-    resolverResolveMock = mock.fn(() => Promise.resolve(undefined));
+    resolveFromLocalMock = mock.fn(() => Promise.resolve(undefined));
+    resolveMock = mock.fn(() => Promise.resolve(undefined));
 
     txStore = {
       get: txStoreGetMock,
@@ -174,8 +179,8 @@ describe('resolveItemHeaders', () => {
     };
 
     dataItemMetaResolver = {
-      resolve: resolverResolveMock,
-      resolveFromLocal: resolverResolveMock,
+      resolve: resolveMock,
+      resolveFromLocal: resolveFromLocalMock,
     };
   });
 
@@ -204,7 +209,7 @@ describe('resolveItemHeaders', () => {
       { name: 'Content-Type', value: 'application/json' },
     ]);
     // Should not call the resolver when L1 has tags
-    assert.strictEqual(resolverResolveMock.mock.calls.length, 0);
+    assert.strictEqual(resolveFromLocalMock.mock.calls.length, 0);
   });
 
   it('should return multiple decoded tags from L1 txStore', async () => {
@@ -255,7 +260,7 @@ describe('resolveItemHeaders', () => {
       { name: 'Content-Type', value: 'image/png' },
       { name: 'Bundle-Version', value: '2.0.0' },
     ];
-    resolverResolveMock.mock.mockImplementation(() =>
+    resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve({ id: TEST_ID, tags: l2Tags }),
     );
 
@@ -267,17 +272,12 @@ describe('resolveItemHeaders', () => {
 
     assert.deepStrictEqual(result.tags, l2Tags);
     assert.strictEqual(txStoreGetMock.mock.calls.length, 1);
-    assert.strictEqual(resolverResolveMock.mock.calls.length, 1);
+    assert.strictEqual(resolveFromLocalMock.mock.calls.length, 1);
   });
 
-  it('should fall back to L2 resolver when txStore returns tx with empty tags', async () => {
+  it('should return L1 tx with empty tags without falling through to L2', async () => {
     txStoreGetMock.mock.mockImplementation(() =>
-      Promise.resolve({ id: TEST_ID, tags: [] }),
-    );
-
-    const l2Tags = [{ name: 'App-Name', value: 'TestApp' }];
-    resolverResolveMock.mock.mockImplementation(() =>
-      Promise.resolve({ id: TEST_ID, tags: l2Tags }),
+      Promise.resolve({ id: TEST_ID, tags: [], owner: 'some-key', target: '' }),
     );
 
     const result = await resolveItemHeaders(
@@ -286,18 +286,19 @@ describe('resolveItemHeaders', () => {
       dataItemMetaResolver,
     );
 
-    assert.deepStrictEqual(result.tags, l2Tags);
-    assert.strictEqual(resolverResolveMock.mock.calls.length, 1);
+    assert.deepStrictEqual(result.tags, []);
+    // Should NOT call the L2 resolver — L1 tx is a valid hit even with no tags
+    assert.strictEqual(resolveFromLocalMock.mock.calls.length, 0);
   });
 
-  it('should fall back to L2 resolver when txStore returns tx with null tags', async () => {
+  it('should return L1 tx with null tags as empty array', async () => {
     txStoreGetMock.mock.mockImplementation(() =>
-      Promise.resolve({ id: TEST_ID, tags: null }),
-    );
-
-    const l2Tags = [{ name: 'Protocol', value: 'ao' }];
-    resolverResolveMock.mock.mockImplementation(() =>
-      Promise.resolve({ id: TEST_ID, tags: l2Tags }),
+      Promise.resolve({
+        id: TEST_ID,
+        tags: null,
+        owner: 'some-key',
+        target: '',
+      }),
     );
 
     const result = await resolveItemHeaders(
@@ -306,12 +307,13 @@ describe('resolveItemHeaders', () => {
       dataItemMetaResolver,
     );
 
-    assert.deepStrictEqual(result.tags, l2Tags);
+    assert.deepStrictEqual(result.tags, []);
+    assert.strictEqual(resolveFromLocalMock.mock.calls.length, 0);
   });
 
   it('should return empty array when both L1 and L2 return nothing', async () => {
     txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
-    resolverResolveMock.mock.mockImplementation(() =>
+    resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve(undefined),
     );
 
@@ -326,7 +328,7 @@ describe('resolveItemHeaders', () => {
 
   it('should return empty array when L2 resolver returns meta without tags', async () => {
     txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
-    resolverResolveMock.mock.mockImplementation(() =>
+    resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve({ id: TEST_ID, tags: undefined }),
     );
 
@@ -347,7 +349,7 @@ describe('resolveItemHeaders', () => {
       { name: 'Content-Type', value: 'application/json' },
       { name: 'Custom-Tag', value: 'some value with spaces' },
     ];
-    resolverResolveMock.mock.mockImplementation(() =>
+    resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve({ id: TEST_ID, tags: l2Tags }),
     );
 
@@ -398,7 +400,7 @@ describe('resolveItemHeaders', () => {
     txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
 
     const resolverError = new Error('Resolver failed');
-    resolverResolveMock.mock.mockImplementation(() =>
+    resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.reject(resolverError),
     );
 
@@ -439,7 +441,7 @@ describe('resolveItemHeaders', () => {
   it('should return verification fields from L2 resolver', async () => {
     txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
 
-    resolverResolveMock.mock.mockImplementation(() =>
+    resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve({
         id: TEST_ID,
         signature: 'l2-sig',
@@ -467,10 +469,10 @@ describe('resolveItemHeaders', () => {
     assert.strictEqual(result.signatureType, 1);
   });
 
-  it('should omit signature and owner when DB lacks them', async () => {
+  it('should return empty signature and owner when DB lacks them', async () => {
     txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
 
-    resolverResolveMock.mock.mockImplementation(() =>
+    resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve({
         id: TEST_ID,
         signature: '',

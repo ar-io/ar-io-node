@@ -129,8 +129,10 @@ describe('ArweaveTxRoute', () => {
       assert.strictEqual(res.body.reward, '0');
       assert.strictEqual(res.body.data_root, '');
       assert.strictEqual(res.body.data_size, '5678');
+      // owner should be the full public key when available
+      assert.strictEqual(res.body.owner, 'owner-full-pubkey');
       assert.strictEqual(
-        res.body.owner,
+        res.body.owner_address,
         '6p817XK-yIX-hBCQ0qD5wbcP05WPQgPKFmwNYC2xtwM',
       );
       assert.strictEqual(res.body.parent_id, 'parent-bundle-id');

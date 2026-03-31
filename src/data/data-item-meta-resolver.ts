@@ -35,7 +35,7 @@ interface RootTxIndex {
 export interface ResolvedDataItemMeta {
   id: string;
   signature: string;
-  signatureType: number;
+  signatureType?: number;
   ownerAddress: string;
   owner: string;
   target: string;
@@ -267,7 +267,7 @@ export class DataItemMetaResolver {
     return {
       id: gqlTx.id,
       signature: gqlTx.signature ?? '',
-      signatureType: 1, // Default to Arweave signature type
+      signatureType: undefined, // Not available from GQL; set by binary extraction
       ownerAddress: gqlTx.ownerAddress,
       owner: gqlTx.ownerKey ?? '',
       target: gqlTx.recipient ?? '',
