@@ -32,6 +32,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Bundle Data Prefetch**: Prefetch bundle data from local gateway before
   shutdown to ensure data availability for export
 
+- **Contiguous Data Cache Hit/Miss Metrics**: New
+  `contiguous_data_cache_hits_total` and `contiguous_data_cache_misses_total`
+  Prometheus counters in `ReadThroughDataCache`, labeled by `request_type`
+  (`range` vs `full`). Enables operators to monitor cache performance per
+  request type.
+
+- **Accurate Cache Miss vs Not-Found Metrics**: Cache miss counter now fires
+  only after a successful upstream fetch (data exists but wasn't cached locally).
+  A new `contiguous_data_not_found_total` counter tracks requests where data is
+  unavailable in any source, preventing not-found requests from inflating the
+  miss count and skewing the cache hit rate.
+
+- **Configurable Cache Control for Blocked (451) Responses**: New
+  `CACHE_BLOCKED_MAX_AGE` env var (default: 30 days, matching stable data TTL)
+  controls the `Cache-Control` max-age sent with 451 responses. Previously,
+  blocked responses used the short not-found TTL, causing CDNs and proxies to
+  re-request blocked content too frequently.
+
+- **Parent Bundle ID in Missing Data Item Errors**: Auto-verify `compareItems`
+  now includes the parent bundle ID in `missing_in_source` discrepancy messages
+  for data items, making it easier to identify which bundle a missing item
+  belongs to when debugging bundle-parser failures.
+
 ### Changed
 
 - **Parquet Export Pipeline Simplification**: Eliminated DuckDB intermediate
@@ -50,6 +73,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **ClickHouse ETL Exit Code Capture**: Fixed `$?` capturing the exit code of a
   variable assignment instead of the `curl` command
+
+- **HTTP 451 for Blocked Content**: Corrects r73's blocked-content status code
+  from 452 (non-standard) to 451 ("Unavailable For Legal Reasons"), the
+  IANA-registered standard for content blocked due to legal or policy reasons.
+
+- **Serving Cached Data with Undefined or Zero Content-Length**: The read path
+  of `ReadThroughDataCache` now skips cache entries with a missing or zero
+  `dataSize`, preventing responses without a `Content-Length` header. The write
+  path already rejected zero-size entries; this closes the corresponding
+  read-side gap.
+
+- **Parquet Export and ClickHouse Import Robustness**: Parquet-export script now
+  uses `curl -o` with temp files instead of `head`/`tail` parsing to handle
+  multiline JSON API responses correctly. Auto-verify's `importToClickHouse`
+  switches to `execFileSync` with an args array, preventing shell injection in
+  ClickHouse import invocations.
+
+- **Parquet Export Verify-Count Non-Zero Exit**: `parquet-export --verify-count`
+  now exits non-zero when row counts don't match, making it useful in CI and
+  automation pipelines. Also validates `curl` availability at startup alongside
+  `python3`.
+
+- **JSON Data Files Missing from Production Build**: `offset-block-mapping.json`
+  was excluded from `dist/` because the build copy step only matched `.graphql`,
+  `.sql`, and `.lua` files. This caused a startup warning and fallback to slower
+  full-range block searches in containers. `.json` files are now included in the
+  copy step.
+
+- **Auto-Verify Prefetch Timing and Empty ClickHouse URL**: Removed the
+  `last_fully_indexed_at` filter from the bundle prefetch query — this flag is
+  set asynchronously by `BundleRepairWorker`, causing prefetch to find 0 bundles
+  even when indexing was complete. Also handles `AUTO_VERIFY_CLICKHOUSE_URL=""`
+  (empty string) explicitly to prevent a crash when the variable is set but
+  empty in `.env`.
 
 ## [Release 73] - 2026-03-18
 
