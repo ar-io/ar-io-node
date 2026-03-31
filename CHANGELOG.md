@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   requests (range or full) are served locally. Controlled by
   `BACKGROUND_CACHE_RANGE_MAX_SIZE` (default: 0 / disabled) and
   `BACKGROUND_CACHE_RANGE_CONCURRENCY`. Includes deduplication, capacity-based
-  drop semantics, and Prometheus metrics for monitoring cache activity (PE-9010)
+  drop semantics, and Prometheus metrics for monitoring cache activity
 
 - **Multiple ArNS Root Hosts**: Operators can now serve ArNS names across
   multiple domains from a single gateway instance by providing a comma-separated
@@ -118,7 +118,7 @@ This is a **recommended release** focused on **operator configurability** and **
   catch-all route into Express middleware, eliminating duplicate headers and
   making data handler cache durations operator-configurable via
   `DEFAULT_CACHE_CONTROL_MAX_AGE_SECONDS`, `STABLE_CACHE_CONTROL_MAX_AGE_DAYS`,
-  and related env vars (PE-9002)
+  and related env vars
 
 - **Cache-Only Client IPs/CIDRs**: New `CACHE_ONLY_CLIENT_IPS_AND_CIDRS` env
   var to short-circuit data retrieval requests with a 404 if the data is not
@@ -127,10 +127,9 @@ This is a **recommended release** focused on **operator configurability** and **
 
 - **Client Disconnect Prometheus Metric**: New `client_disconnect_total` counter
   metric tracks when clients abort requests before the response completes
-  (PE-9000)
 
 - **P2P Contiguous Data Retrieval Improvements**: Major overhaul of peer data
-  retrieval to reduce tail latency and improve cache efficiency (PE-9007)
+  retrieval to reduce tail latency and improve cache efficiency
   - **Hedged requests**: Fires a second request to the next candidate peer after
     a configurable delay (`PEER_HEDGE_DELAY_MS`) if no response yet; first
     success cancels all others, capped at `PEER_MAX_HEDGED_REQUESTS`
@@ -148,7 +147,7 @@ This is a **recommended release** focused on **operator configurability** and **
 - **Request Trace IDs**: Every HTTP request gets a unique `requestId` in Winston
   log entries via AsyncLocalStorage, independent of OTEL. Reads or generates
   `X-Request-Id` headers and echoes them in responses for end-to-end request
-  correlation (PE-8977)
+  correlation
 
 ### Changed
 
@@ -351,7 +350,7 @@ new **auto-verify indexing tool** for cross-source bundle data validation.
   environment variable decouples connection target from Host header in ArNS
   resolver, with `__NAME__` placeholder substitution for dynamic values
 
-- **Defense-in-Depth Loop Protection Improvements** (PE-8947): Additional
+- **Defense-in-Depth Loop Protection Improvements**: Additional
   safeguards against request forwarding loops between gateways
   - Hop count validation added to `GatewaysDataSource` (MAX_DATA_HOPS = 3)
   - Origin/IP blocking applied to peer forwarding path via
@@ -500,7 +499,7 @@ validation options for easier gateway comparison testing.
 ### Added
 
 - **SamplingContiguousDataSource for A/B Testing**: New data source wrapper that
-  probabilistically routes requests through an experimental source (PE-8900)
+  probabilistically routes requests through an experimental source
   - Enables safe A/B testing of new retrieval strategies with controlled traffic
     exposure
   - Two sampling strategies: `random` (per-request) or `deterministic`
@@ -630,7 +629,7 @@ disconnect.
 ### Added
 
 - **Nested Bundle Path Support**: CDB64 root TX indexes now support path-based
-  formats for efficient retrieval of deeply nested data items (PE-8838)
+  formats for efficient retrieval of deeply nested data items
   - New value formats: path-only `{p}` and path-complete `{p, i, d}` store the
     bundle hierarchy from root to parent
   - Enables O(n) navigation through nested bundles instead of O(n*m) linear
@@ -662,7 +661,7 @@ disconnect.
 ### Changed
 
 - **Abort Signal Propagation to Data Requests**: Extended abort signal handling
-  to contiguous data sources (PE-8863)
+  to contiguous data sources
   - Client disconnections now abort all in-flight data requests, not just chunk
     requests
   - Prevents wasted bandwidth and resources on abandoned data transfers
@@ -683,7 +682,7 @@ disconnect.
 
 - **Abort Signal Race Condition in Cached Chunk Requests**: Fixed a race
   condition in `ArIOChunkSource` where subsequent callers could not abort their
-  requests when sharing a cached promise (PE-8867)
+  requests when sharing a cached promise
   - Added `withAbortSignal()` helper that races a promise against the caller's
     abort signal
   - Each caller now respects their own abort signal independently when using
