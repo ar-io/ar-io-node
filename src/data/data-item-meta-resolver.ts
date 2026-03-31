@@ -159,6 +159,17 @@ export class DataItemMetaResolver {
             offsetResult.itemSize,
           );
 
+          // Check if the root L1 transaction is stable (has a block height)
+          let isStable = false;
+          try {
+            const rootTx = await this.gqlQueryable.getGqlTransaction({
+              id: rootTxId,
+            });
+            isStable = rootTx?.height != null;
+          } catch {
+            // If we can't check, assume unstable
+          }
+
           resolved = {
             id: meta.id,
             signature: meta.signature,
@@ -171,7 +182,7 @@ export class DataItemMetaResolver {
             dataSize: meta.payloadSize,
             contentType: meta.contentType,
             rootTransactionId: rootTxId,
-            isStable: false,
+            isStable,
             _meta: {
               ...meta,
               itemOffset: offsetResult.itemOffset,
