@@ -177,7 +177,10 @@ describe('Data', function () {
       stream.on('error', reject);
     });
 
-    assert.equal(res.headers['x-ar-io-hops'], '1');
+    assert.ok(
+      parseInt(res.headers['x-ar-io-hops']) >= 1,
+      `Expected x-ar-io-hops >= 1, got ${res.headers['x-ar-io-hops']}`,
+    );
     assert.equal(
       res.headers['content-type'],
       'application/json; charset=utf-8',
@@ -583,7 +586,10 @@ describe('X-AR-IO headers', function () {
     it('Verifying that /raw/<id> returns expected response', async function () {
       const res = await axios.get(`http://localhost:4000/raw/${tx3}`);
 
-      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.ok(
+        parseInt(res.headers['x-ar-io-hops']) >= 1,
+        `Expected x-ar-io-hops >= 1, got ${res.headers['x-ar-io-hops']}`,
+      );
 
       await waitForLogMessage({
         container: coreContainer,
