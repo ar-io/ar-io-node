@@ -218,7 +218,7 @@ export const STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
 export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(
     'GRAPHQL_ROOT_TX_GATEWAYS_URLS',
-    '{ "https://arweave-search.goldsky.com/graphql": 1 }',
+    '{ "https://arweave-search.goldsky.com": 1 }',
   ),
 ) as Record<string, number>;
 
