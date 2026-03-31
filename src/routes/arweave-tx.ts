@@ -25,7 +25,7 @@ function dataItemMetaToTxJson(meta: ResolvedDataItemMeta): Record<string, any> {
     format: 1,
     id: meta.id,
     last_tx: meta.anchor,
-    owner: meta.ownerAddress,
+    owner: meta.owner.length > 0 ? meta.owner : meta.ownerAddress,
     tags: meta.tags.map((t) => ({
       name: utf8ToB64Url(t.name),
       value: utf8ToB64Url(t.value),
@@ -37,6 +37,7 @@ function dataItemMetaToTxJson(meta: ResolvedDataItemMeta): Record<string, any> {
     reward: '0',
     signature: meta.signature,
     // Extra fields for data items
+    owner_address: meta.ownerAddress,
     signature_type: meta.signatureType,
     parent_id: meta.parentId ?? null,
     root_transaction_id: meta.rootTransactionId ?? null,
@@ -87,9 +88,14 @@ export function createTxRouter({
       }
 
       // Tier 3: Arweave node fallback (L1 transactions only)
-      const arTx = await arweaveClient
-        .getTx({ txId: id })
-        .catch(() => undefined);
+      const arTx = await arweaveClient.getTx({ txId: id }).catch((err: any) => {
+        // Collapse genuine not-found into undefined; rethrow other errors
+        // (timeouts, 5xx) so they reach the outer 502 handler.
+        const status = err?.response?.status ?? err?.status;
+        if (status === 404 || status === 410) return undefined;
+        if (/not found|failed/i.test(err?.message ?? '')) return undefined;
+        throw err;
+      });
       if (arTx !== undefined) {
         res.setHeader('Cache-Control', 'public, max-age=30');
         res.json(arTx);

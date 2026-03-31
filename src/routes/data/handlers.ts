@@ -329,13 +329,15 @@ export const sanitizeTagHeaderName = (name: string): string => {
     .slice(0, 128);
 };
 
-/** Sanitize a tag value for use as an HTTP header value. */
+/** Sanitize a tag value for use as an HTTP header value.
+ *  Strips control characters and non-Latin-1 code points (> 0xFF)
+ *  which would cause Node.js ERR_INVALID_CHAR. */
 export const sanitizeTagHeaderValue = (value: string): string => {
-  // Remove control characters (0x00-0x1F except tab 0x09) and DEL (0x7F)
   let result = '';
   for (let i = 0; i < value.length && result.length < 4096; i++) {
     const code = value.charCodeAt(i);
-    if (code === 0x09 || (code >= 0x20 && code !== 0x7f)) {
+    // Allow tab (0x09) and visible Latin-1 (0x20-0x7E, 0x80-0xFF)
+    if (code === 0x09 || (code >= 0x20 && code <= 0xff && code !== 0x7f)) {
       result += value[i];
     }
   }
@@ -367,9 +369,9 @@ export const resolveItemHeaders = async (
 ): Promise<ResolvedItemHeaders> => {
   // Tier 1: L1 transaction from LMDB header store
   const tx = await txStore.get(id);
-  if (tx?.tags != null && tx.tags.length > 0) {
+  if (tx != null) {
     return {
-      tags: tx.tags.map((t) => ({
+      tags: (tx.tags ?? []).map((t) => ({
         name: fromB64Url(t.name).toString('utf8'),
         value: fromB64Url(t.value).toString('utf8'),
       })),
@@ -1030,7 +1032,9 @@ export const createRawDataHandler = ({
           config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
           txStore != null &&
           dataItemMetaResolver != null
-            ? resolveItemHeaders(id, txStore, dataItemMetaResolver)
+            ? resolveItemHeaders(id, txStore, dataItemMetaResolver).catch(
+                () => EMPTY_RESOLVED,
+              )
             : Promise.resolve(EMPTY_RESOLVED);
 
         // Retrieve authoritative data attributes if they're available
@@ -1568,7 +1572,9 @@ export const createDataHandler = ({
           config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
           txStore != null &&
           dataItemMetaResolver != null
-            ? resolveItemHeaders(id, txStore, dataItemMetaResolver)
+            ? resolveItemHeaders(id, txStore, dataItemMetaResolver).catch(
+                () => EMPTY_RESOLVED,
+              )
             : Promise.resolve(EMPTY_RESOLVED);
 
         let dataAttributes: ContiguousDataAttributes | undefined;
