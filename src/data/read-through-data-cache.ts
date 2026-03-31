@@ -385,8 +385,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           this.log.debug('Found data in cache', { id, hash, ...region });
           // It should be impossible for dataSize to be undefined if hash is
           // set, but TypeScript doesn't know that.
-          if (dataSize === undefined) {
-            throw new Error('Missing data size');
+          if (dataSize === undefined || dataSize <= 0) {
+            this.log.warn('Skipping cache serve due to invalid data size', {
+              id,
+              hash,
+              dataSize,
+            });
+            cacheStream.destroy();
+            return undefined;
           }
           return {
             stream: cacheStream,

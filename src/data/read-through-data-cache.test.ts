@@ -190,6 +190,39 @@ describe('ReadThroughDataCache', function () {
       assert.deepEqual(result?.size, 123);
     });
 
+    it('should return undefined when dataSize is undefined', async () => {
+      const mockStream = new Readable();
+      mockStream.push('cached data');
+      mockStream.push(null);
+      mock.method(mockContiguousDataStore, 'get', () => {
+        return Promise.resolve(mockStream);
+      });
+
+      const result = await readThroughDataCache.getCacheData(
+        'test-id',
+        'test-hash',
+        undefined,
+      );
+
+      assert.deepEqual(result, undefined);
+    });
+
+    it('should return undefined when dataSize is zero', async () => {
+      const mockStream = new Readable();
+      mockStream.push(null);
+      mock.method(mockContiguousDataStore, 'get', () => {
+        return Promise.resolve(mockStream);
+      });
+
+      const result = await readThroughDataCache.getCacheData(
+        'test-id',
+        'test-hash',
+        0,
+      );
+
+      assert.deepEqual(result, undefined);
+    });
+
     it('should return undefined when data is not found in cache', async function () {
       let calledWithArgument: string;
       mock.method(mockContiguousDataStore, 'get', (hash: string) => {
