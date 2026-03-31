@@ -288,10 +288,9 @@ These settings control chunk offset verification observations, which validate th
 
 ## Tag Response Headers
 
-These settings control whether Arweave transaction/data item tags are included as HTTP response headers when serving data.
+These settings control whether Arweave transaction/data item tags and verification metadata are included as HTTP response headers when serving data. Note: for L2 data item signature and owner key headers, `WRITE_ANS104_DATA_ITEM_DB_SIGNATURES` must also be `true`.
 
 | ENV_NAME                                         | TYPE                 | DEFAULT_VALUE                                 | DESCRIPTION                                                                                                                                                          |
 | ------------------------------------------------ | -------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED             | Boolean              | true                                          | If true, includes transaction/data item tags as `X-Arweave-Tag-*` HTTP response headers when serving data via `/raw/:id` and `/:id` endpoints                       |
+| ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED             | Boolean              | false                                         | If true, includes transaction/data item tags as `X-Arweave-Tag-*` and verification headers (`X-Arweave-Signature`, `X-Arweave-Owner`, etc.) on `/raw/:id` and `/:id` responses |
 | ARWEAVE_TAG_RESPONSE_HEADERS_MAX                 | Number               | 100                                           | Maximum number of tag headers to include per response. If a transaction has more tags, an `X-Arweave-Tags-Truncated: true` header is added                          |
-| ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS          | Number               | 5000                                          | Maximum time in milliseconds to wait for tag resolution before falling back to upstream gateway tags. Also used as the timeout for the `/tx/:id` L2 data item resolver |

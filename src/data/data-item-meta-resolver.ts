@@ -82,22 +82,20 @@ export class DataItemMetaResolver {
   }
 
   /**
-   * Resolves data item metadata by ID. Tries indexed DB first, then on-demand
-   * binary extraction from parent bundle.
-   *
-   * Returns undefined if the ID is not a data item or cannot be resolved.
+   * Fast local-only resolution from LRU cache and GQL DB.
+   * Does not attempt remote resolution. Returns undefined if not locally
+   * available — the caller can trigger background indexing separately.
    */
-  async resolve(id: string): Promise<ResolvedDataItemMeta | undefined> {
-    const log = this.log.child({ method: 'resolve', id });
-
+  async resolveFromLocal(
+    id: string,
+  ): Promise<ResolvedDataItemMeta | undefined> {
     // Check LRU cache
     const cached = this.cache.get(id);
     if (cached !== undefined) {
-      log.debug('Data item meta cache hit');
       return cached;
     }
 
-    // Tier 1: Check indexed data in DB (both L1 transactions and L2 data items)
+    // Check local GQL DB
     try {
       const gqlTx = await this.gqlQueryable.getGqlTransaction({ id });
       if (gqlTx !== null && gqlTx !== undefined) {
@@ -105,8 +103,20 @@ export class DataItemMetaResolver {
         this.cache.set(id, resolved);
         return resolved;
       }
-    } catch (error: any) {
-      log.debug('GQL transaction lookup failed', { error: error.message });
+    } catch {
+      // DB lookup failed — not available locally
+    }
+
+    return undefined;
+  }
+
+  async resolve(id: string): Promise<ResolvedDataItemMeta | undefined> {
+    const log = this.log.child({ method: 'resolve', id });
+
+    // Check LRU cache and local DB first (fast path)
+    const local = await this.resolveFromLocal(id);
+    if (local !== undefined) {
+      return local;
     }
 
     // Tier 2: On-demand extraction via root tx index + binary parse
@@ -259,7 +269,7 @@ export class DataItemMetaResolver {
       signature: gqlTx.signature ?? '',
       signatureType: 1, // Default to Arweave signature type
       ownerAddress: gqlTx.ownerAddress,
-      owner: gqlTx.ownerKey ?? gqlTx.ownerAddress,
+      owner: gqlTx.ownerKey ?? '',
       target: gqlTx.recipient ?? '',
       anchor: gqlTx.anchor ?? '',
       tags: gqlTx.tags.map((t) => ({

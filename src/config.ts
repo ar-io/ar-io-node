@@ -896,11 +896,6 @@ export const ARWEAVE_TAG_RESPONSE_HEADERS_MAX = env.positiveIntOrDefault(
   100,
 );
 
-export const ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS = env.positiveIntOrDefault(
-  'ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS',
-  5000,
-);
-
 //
 // Indexing
 //

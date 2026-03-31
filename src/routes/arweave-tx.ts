@@ -13,7 +13,6 @@ import {
   ResolvedDataItemMeta,
 } from '../data/data-item-meta-resolver.js';
 import { ChainSource, PartialJsonTransactionStore } from '../types.js';
-import * as config from '../config.js';
 
 const BASE64URL_REGEX = /^[a-zA-Z0-9_-]{43}$/;
 
@@ -76,26 +75,8 @@ export function createTxRouter({
         return;
       }
 
-      // Tier 2 (L2 data item) and Tier 3 (Arweave node) in parallel.
-      // The resolver can be slow for un-indexed items (circuit breaker
-      // timeouts), so we race both and use whichever returns first.
-      const resolverPromise = Promise.race([
-        dataItemMetaResolver.resolve(id).catch(() => undefined),
-        new Promise<undefined>((resolve) => {
-          const timer = setTimeout(
-            () => resolve(undefined),
-            config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
-          );
-          timer.unref();
-        }),
-      ]);
-
-      const arweavePromise = arweaveClient
-        .getTx({ txId: id })
-        .catch(() => undefined);
-
-      // Wait for the resolver first (fast path for indexed L2 items)
-      const meta = await resolverPromise;
+      // Tier 2: Fast local check (LRU cache + GQL DB) — sub-millisecond
+      const meta = await dataItemMetaResolver.resolveFromLocal(id);
       if (meta !== undefined) {
         const cacheControl = meta.isStable
           ? 'public, max-age=31536000, immutable'
@@ -105,14 +86,19 @@ export function createTxRouter({
         return;
       }
 
-      // Resolver timed out or returned nothing — wait for Arweave fallback
-      const arTx = await arweavePromise;
+      // Tier 3: Arweave node fallback (L1 transactions only)
+      const arTx = await arweaveClient
+        .getTx({ txId: id })
+        .catch(() => undefined);
       if (arTx !== undefined) {
         res.setHeader('Cache-Control', 'public, max-age=30');
         res.json(arTx);
         return;
       }
 
+      // Not found locally or on L1 — trigger background indexing for
+      // L2 data items so the next request will succeed.
+      dataItemMetaResolver.resolve(id).catch(() => {});
       res.status(404).send('Not found');
     } catch (error: any) {
       log.error('Error handling GET /tx/:id', {
