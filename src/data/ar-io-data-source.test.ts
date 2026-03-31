@@ -159,6 +159,37 @@ describe('ArIODataSource', () => {
       );
     });
 
+    it('should parse upstream tag headers when present', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: Readable.from(['tagged data']),
+        headers: {
+          'content-length': '11',
+          'content-type': 'image/png',
+          [headerNames.verified.toLowerCase()]: 'true',
+          [headerNames.trusted.toLowerCase()]: 'false',
+          'x-arweave-tag-content-type': 'image/png',
+          'x-arweave-tag-app-name': 'TestApp',
+          'x-arweave-tag-count': '2',
+        },
+      }));
+
+      const data = await dataSource.getData({ id: 'taggedId' });
+
+      assert.ok(data.upstreamTags != null);
+      assert.strictEqual(data.upstreamTags.length, 2);
+      // Header names are lowercased by Node.js HTTP parsing, so the
+      // tag name extracted from x-arweave-tag-content-type is lowercase
+      assert.deepStrictEqual(data.upstreamTags[0], {
+        name: 'content-type',
+        value: 'image/png',
+      });
+      assert.deepStrictEqual(data.upstreamTags[1], {
+        name: 'app-name',
+        value: 'TestApp',
+      });
+    });
+
     it('should retry with a different peer if the first one fails', async () => {
       let firstPeer = true;
       const secondPeerStreamData = Readable.from(['secondPeerData']);

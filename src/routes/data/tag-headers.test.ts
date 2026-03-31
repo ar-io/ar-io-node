@@ -7,14 +7,11 @@
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 
-import { createTestLogger } from '../../../test/test-logger.js';
 import {
   sanitizeTagHeaderName,
   sanitizeTagHeaderValue,
   resolveItemHeaders,
 } from './handlers.js';
-
-const log = createTestLogger({ suite: 'TagHeaderHelpers' });
 
 describe('sanitizeTagHeaderName', () => {
   it('should pass through simple alphanumeric names', () => {

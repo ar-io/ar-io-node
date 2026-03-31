@@ -1008,15 +1008,17 @@ export class Ans104OffsetSource {
 
       let tags: { name: string; value: string }[] = [];
       let contentType: string | undefined;
-      if (tagsBytesLength > 0 && tagsCount > 0) {
+      if (tagsBytesLength > 0) {
         bytes = await readBytes(reader, bytes, tagsBytesLength);
-        const tagsBytes = bytes.subarray(0, tagsBytesLength);
-        tags = deserializeTags(Buffer.from(tagsBytes));
-        const contentTypeTag = tags.find(
-          (tag) => tag.name.toLowerCase() === 'content-type',
-        );
-        contentType = contentTypeTag?.value;
         headerOffset += tagsBytesLength;
+        if (tagsCount > 0) {
+          const tagsBytes = bytes.subarray(0, tagsBytesLength);
+          tags = deserializeTags(Buffer.from(tagsBytes));
+          const contentTypeTag = tags.find(
+            (tag) => tag.name.toLowerCase() === 'content-type',
+          );
+          contentType = contentTypeTag?.value;
+        }
       }
 
       const headerSize = headerOffset;

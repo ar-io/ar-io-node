@@ -699,6 +699,12 @@ export interface ContiguousData {
   sourceContentType?: string;
   cached: boolean;
   requestAttributes?: RequestAttributes;
+  /**
+   * Tag name/value pairs parsed from upstream X-Arweave-Tag-* response
+   * headers. Used as a fallback for tag header emission when local tag
+   * resolution misses. Order matches the upstream header order; may not
+   * reflect canonical on-chain tag ordering.
+   */
   upstreamTags?: { name: string; value: string }[];
 }
 

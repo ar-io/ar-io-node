@@ -100,6 +100,12 @@ export class CompositeDataAttributesSource
     }
   }
 
+  /**
+   * Merge partial attributes into an existing cached entry. Authoritative
+   * fields (contentType, isManifest) are shielded from overwrite when already
+   * set. When no cached entry exists the partial is skipped so the next
+   * getDataAttributes call fetches the complete DB record.
+   */
   async setDataAttributes(
     id: string,
     attributes: Partial<ContiguousDataAttributes>,
@@ -107,9 +113,17 @@ export class CompositeDataAttributesSource
     this.log.debug('Setting data attributes in cache', { id });
     const existingAttributes = this.cache.get(id);
     if (existingAttributes != null) {
-      // Merge into existing complete entry — preserves DB-sourced fields
-      // like isManifest and contentType that partials may not include
-      this.cache.set(id, { ...existingAttributes, ...attributes });
+      // Merge into existing complete entry, shielding authoritative fields
+      // that were set by the DB (contentType, isManifest) from being
+      // overwritten by partial producers (e.g., stream Content-Type).
+      const safeIncoming = { ...attributes };
+      if (existingAttributes.contentType != null) {
+        delete safeIncoming.contentType;
+      }
+      if (existingAttributes.isManifest === true) {
+        delete safeIncoming.isManifest;
+      }
+      this.cache.set(id, { ...existingAttributes, ...safeIncoming });
     }
     // When no existing entry, skip caching the partial. The next
     // getDataAttributes call will fetch the complete entry from the DB,
