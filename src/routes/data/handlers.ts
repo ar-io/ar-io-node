@@ -24,7 +24,7 @@ import {
   detectLoopInViaChain,
 } from '../../lib/request-attributes.js';
 import { isValidTxId } from '../../lib/validation.js';
-import { fromB64Url } from '../../lib/encoding.js';
+import { fromB64Url, sha256B64Url } from '../../lib/encoding.js';
 import { DataItemMetaResolver } from '../../data/data-item-meta-resolver.js';
 import {
   DataBlockListValidator,
@@ -342,58 +342,65 @@ export const sanitizeTagHeaderValue = (value: string): string => {
   return result;
 };
 
-/** Resolve tags for a given ID from L1 tx store or L2 data item resolver. */
-export const resolveTagsForId = async (
+/** Resolved metadata for setting response headers. */
+export interface ResolvedItemHeaders {
+  tags: { name: string; value: string }[];
+  signature?: string;
+  owner?: string;
+  ownerAddress?: string;
+  target?: string;
+  anchor?: string;
+  signatureType?: number;
+}
+
+const EMPTY_RESOLVED: ResolvedItemHeaders = { tags: [] };
+
+/**
+ * Resolve metadata for a given ID from local stores only (fast path).
+ * Checks LMDB txStore and local GQL DB — both are sub-millisecond.
+ * Does NOT trigger remote resolution (root TX index, binary extraction).
+ */
+export const resolveItemHeaders = async (
   id: string,
   txStore: PartialJsonTransactionStore,
   dataItemMetaResolver: DataItemMetaResolver,
-): Promise<{ name: string; value: string }[]> => {
+): Promise<ResolvedItemHeaders> => {
   // Tier 1: L1 transaction from LMDB header store
   const tx = await txStore.get(id);
   if (tx?.tags != null && tx.tags.length > 0) {
-    return tx.tags.map((t) => ({
-      name: fromB64Url(t.name).toString('utf8'),
-      value: fromB64Url(t.value).toString('utf8'),
-    }));
+    return {
+      tags: tx.tags.map((t) => ({
+        name: fromB64Url(t.name).toString('utf8'),
+        value: fromB64Url(t.value).toString('utf8'),
+      })),
+      signature: tx.signature ?? undefined,
+      owner: tx.owner,
+      ownerAddress:
+        tx.owner != null && tx.owner.length > 0
+          ? sha256B64Url(fromB64Url(tx.owner))
+          : undefined,
+      target: tx.target,
+      anchor: tx.last_tx,
+    };
   }
 
-  // Tier 2: L2 data item (indexed DB → on-demand → LRU cache)
-  const meta = await dataItemMetaResolver.resolve(id);
-  return meta?.tags ?? [];
-};
-
-/** Resolve tags with a timeout. Returns [] if resolution exceeds the deadline. */
-export const resolveTagsWithTimeout = (
-  id: string,
-  txStore: PartialJsonTransactionStore,
-  dataItemMetaResolver: DataItemMetaResolver,
-  timeoutMs: number,
-): Promise<{ name: string; value: string }[]> => {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        resolve([]);
-      }
-    }, timeoutMs);
-
-    resolveTagsForId(id, txStore, dataItemMetaResolver)
-      .then((tags) => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          resolve(tags);
-        }
-      })
-      .catch(() => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          resolve([]);
-        }
-      });
-  });
+  // Tier 2: Local GQL DB + LRU cache (fast) — the resolver checks
+  // the GQL DB and LRU cache first before attempting remote resolution,
+  // but remote resolution can take 10-60s. We only want the fast path
+  // here, so we check the cache and DB directly.
+  const meta = await dataItemMetaResolver.resolveFromLocal(id);
+  if (meta != null) {
+    return {
+      tags: meta.tags ?? [],
+      signature: meta.signature,
+      owner: meta.owner,
+      ownerAddress: meta.ownerAddress,
+      target: meta.target,
+      anchor: meta.anchor,
+      signatureType: meta.signatureType,
+    };
+  }
+  return EMPTY_RESOLVED;
 };
 
 const setDataHeaders = ({
@@ -402,14 +409,14 @@ const setDataHeaders = ({
   dataAttributes,
   data,
   id,
-  tags,
+  itemHeaders,
 }: {
   req: Request;
   res: Response;
   dataAttributes: ContiguousDataAttributes | undefined;
   data: ContiguousData;
   id: string;
-  tags?: { name: string; value: string }[];
+  itemHeaders?: ResolvedItemHeaders;
 }) => {
   // TODO: cached header for zero length data (maybe...)
 
@@ -510,27 +517,55 @@ const setDataHeaders = ({
     }
   }
 
-  // Set Arweave tag response headers
-  if (
-    config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
-    tags != null &&
-    tags.length > 0
-  ) {
-    const max = config.ARWEAVE_TAG_RESPONSE_HEADERS_MAX;
-    const truncated = tags.length > max;
-    const tagsToEmit = truncated ? tags.slice(0, max) : tags;
+  // Set Arweave tag and verification response headers
+  if (config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED && itemHeaders != null) {
+    const { tags } = itemHeaders;
 
-    res.header(headerNames.arweaveTagCount, tags.length.toString());
-    if (truncated) {
-      res.header(headerNames.arweaveTagsTruncated, 'true');
+    if (tags.length > 0) {
+      const max = config.ARWEAVE_TAG_RESPONSE_HEADERS_MAX;
+      const truncated = tags.length > max;
+      const tagsToEmit = truncated ? tags.slice(0, max) : tags;
+
+      res.header(headerNames.arweaveTagCount, tags.length.toString());
+      if (truncated) {
+        res.header(headerNames.arweaveTagsTruncated, 'true');
+      }
+
+      for (const tag of tagsToEmit) {
+        const safeName = sanitizeTagHeaderName(tag.name);
+        const safeValue = sanitizeTagHeaderValue(tag.value);
+        if (safeName.length > 0) {
+          res.append(`X-Arweave-Tag-${safeName}`, safeValue);
+        }
+      }
     }
 
-    for (const tag of tagsToEmit) {
-      const safeName = sanitizeTagHeaderName(tag.name);
-      const safeValue = sanitizeTagHeaderValue(tag.value);
-      if (safeName.length > 0) {
-        res.append(`X-Arweave-Tag-${safeName}`, safeValue);
-      }
+    // Verification headers — allow clients to verify the data item
+    // without a separate /tx/:id request. Only emit when the full
+    // value is available (skip empty strings from missing DB fields).
+    if (itemHeaders.signature != null && itemHeaders.signature.length > 0) {
+      res.header('X-Arweave-Signature', itemHeaders.signature);
+    }
+    if (itemHeaders.owner != null && itemHeaders.owner.length > 0) {
+      res.header('X-Arweave-Owner', itemHeaders.owner);
+    }
+    if (
+      itemHeaders.ownerAddress != null &&
+      itemHeaders.ownerAddress.length > 0
+    ) {
+      res.header('X-Arweave-Owner-Address', itemHeaders.ownerAddress);
+    }
+    if (itemHeaders.target != null && itemHeaders.target.length > 0) {
+      res.header('X-Arweave-Target', itemHeaders.target);
+    }
+    if (itemHeaders.anchor != null && itemHeaders.anchor.length > 0) {
+      res.header('X-Arweave-Anchor', itemHeaders.anchor);
+    }
+    if (itemHeaders.signatureType != null) {
+      res.header(
+        'X-Arweave-Signature-Type',
+        itemHeaders.signatureType.toString(),
+      );
     }
   }
 
@@ -995,13 +1030,8 @@ export const createRawDataHandler = ({
           config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
           txStore != null &&
           dataItemMetaResolver != null
-            ? resolveTagsWithTimeout(
-                id,
-                txStore,
-                dataItemMetaResolver,
-                config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
-              )
-            : Promise.resolve([] as { name: string; value: string }[]);
+            ? resolveItemHeaders(id, txStore, dataItemMetaResolver)
+            : Promise.resolve(EMPTY_RESOLVED);
 
         // Retrieve authoritative data attributes if they're available
         let dataAttributes: ContiguousDataAttributes | undefined;
@@ -1137,15 +1167,19 @@ export const createRawDataHandler = ({
             return;
           }
 
-          // Await tag resolution (fired in parallel earlier), fall back to
-          // tags propagated from upstream gateway response headers
-          const resolvedTags = await tagsPromise;
-          const tags =
-            resolvedTags.length > 0 ? resolvedTags : (data.upstreamTags ?? []);
+          // Await item header resolution (fired in parallel earlier), fall
+          // back to tags propagated from upstream gateway response headers
+          const resolved = await tagsPromise;
+          const itemHeaders =
+            resolved.tags.length > 0
+              ? resolved
+              : data.upstreamTags != null && data.upstreamTags.length > 0
+                ? { tags: data.upstreamTags }
+                : resolved;
 
           // If local tag resolution failed (timeout or miss), trigger
           // background indexing so the item is indexed for future requests
-          if (resolvedTags.length === 0 && dataItemMetaResolver != null) {
+          if (resolved.tags.length === 0 && dataItemMetaResolver != null) {
             dataItemMetaResolver.resolve(id).catch(() => {});
           }
 
@@ -1157,7 +1191,7 @@ export const createRawDataHandler = ({
             // Range requests create new streams so the original is no longer
             // needed
             data.stream.destroy();
-            setDataHeaders({ req, res, dataAttributes, data, id, tags });
+            setDataHeaders({ req, res, dataAttributes, data, id, itemHeaders });
 
             await handleRangeRequest({
               log,
@@ -1174,7 +1208,7 @@ export const createRawDataHandler = ({
             span.setAttribute('http.status_code', res.statusCode);
           } else {
             // Set headers and stream data
-            setDataHeaders({ req, res, dataAttributes, data, id, tags });
+            setDataHeaders({ req, res, dataAttributes, data, id, itemHeaders });
             if (data.size > 0) {
               res.header('Content-Length', data.size.toString());
             }
@@ -1534,13 +1568,8 @@ export const createDataHandler = ({
           config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
           txStore != null &&
           dataItemMetaResolver != null
-            ? resolveTagsWithTimeout(
-                id,
-                txStore,
-                dataItemMetaResolver,
-                config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
-              )
-            : Promise.resolve([] as { name: string; value: string }[]);
+            ? resolveItemHeaders(id, txStore, dataItemMetaResolver)
+            : Promise.resolve(EMPTY_RESOLVED);
 
         let dataAttributes: ContiguousDataAttributes | undefined;
 
@@ -1801,15 +1830,19 @@ export const createDataHandler = ({
           return;
         }
 
-        // Await tag resolution (fired in parallel earlier), fall back to
-        // tags propagated from upstream gateway response headers
-        const resolvedTags = await tagsPromise;
-        const tags =
-          resolvedTags.length > 0 ? resolvedTags : (data?.upstreamTags ?? []);
+        // Await item header resolution (fired in parallel earlier), fall
+        // back to tags propagated from upstream gateway response headers
+        const resolved = await tagsPromise;
+        const itemHeaders =
+          resolved.tags.length > 0
+            ? resolved
+            : data?.upstreamTags != null && data.upstreamTags.length > 0
+              ? { tags: data.upstreamTags }
+              : resolved;
 
         // If local tag resolution failed (timeout or miss), trigger
         // background indexing so the item is indexed for future requests
-        if (resolvedTags.length === 0 && dataItemMetaResolver != null) {
+        if (resolved.tags.length === 0 && dataItemMetaResolver != null) {
           dataItemMetaResolver.resolve(id).catch(() => {});
         }
 
@@ -1828,7 +1861,7 @@ export const createDataHandler = ({
             dataAttributes,
             data,
             id,
-            tags,
+            itemHeaders,
           });
 
           await handleRangeRequest({
@@ -1852,7 +1885,7 @@ export const createDataHandler = ({
             dataAttributes,
             data,
             id,
-            tags,
+            itemHeaders,
           });
           if (data.size > 0) {
             res.header('Content-Length', data.size.toString());

@@ -73,6 +73,7 @@ describe('ArweaveTxRoute', () => {
 
     dataItemMetaResolver = {
       resolve: resolverResolveMock,
+      resolveFromLocal: resolverResolveMock,
     };
 
     arweaveClient = {
@@ -176,9 +177,11 @@ describe('ArweaveTxRoute', () => {
       assert.strictEqual(res.body.format, 2);
     });
 
-    it('should return 404 when not found anywhere', async () => {
+    it('should return 404 and trigger background indexing when not found anywhere', async () => {
       const res = await request(app).get(`/tx/${VALID_TX_ID}`);
       assert.strictEqual(res.status, 404);
+      // resolveFromLocal (miss) + resolve (background indexing)
+      assert.strictEqual(resolverResolveMock.mock.calls.length, 2);
     });
   });
 });
