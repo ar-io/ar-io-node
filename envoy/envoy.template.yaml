@@ -264,6 +264,12 @@ static_resources:
                               google_re2:
                                 max_program_size: 200
                               regex: '^/tx/[A-Za-z0-9_-]{43}$'
+                            headers:
+                              - name: ':method'
+                                string_match:
+                                  safe_regex:
+                                    google_re2: {}
+                                    regex: '^(GET|HEAD)$'
                           route:
                             cluster: ario_gateways
                             timeout: 0s

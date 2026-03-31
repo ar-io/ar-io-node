@@ -68,8 +68,12 @@ export const headerNames = {
   arnsIndex: 'X-ArNS-Record-Index',
   via: 'X-AR-IO-Via',
   negativeCache: 'X-AR-IO-Negative-Cache',
+  /** Total number of tags on the transaction/data item. */
   arweaveTagCount: 'X-Arweave-Tag-Count',
+  /** Set to 'true' when tag count exceeds ARWEAVE_TAG_RESPONSE_HEADERS_MAX. */
   arweaveTagsTruncated: 'X-Arweave-Tags-Truncated',
+  // Per-tag headers are emitted dynamically as X-Arweave-Tag-{Name}
+  // by setDataHeaders in src/routes/data/handlers.ts.
 };
 
 export const verificationPriorities = {

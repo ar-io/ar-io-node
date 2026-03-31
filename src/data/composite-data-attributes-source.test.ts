@@ -309,5 +309,31 @@ describe('CompositeDataAttributesSource', () => {
       assert.strictEqual(result2?.size, TEST_DATA_ATTRIBUTES.size); // Preserved
       assert.strictEqual(source.callCount, 1); // No additional source calls
     });
+
+    it('should not allow partial updates to overwrite authoritative contentType', async () => {
+      const source = new MockDataAttributesSource('source1');
+      source.setData('test-id', {
+        ...TEST_DATA_ATTRIBUTES,
+        contentType: 'application/x.arweave-manifest+json',
+        isManifest: true,
+      });
+      const composite = new CompositeDataAttributesSource({ log, source });
+
+      // Populate cache
+      await composite.getDataAttributes('test-id');
+
+      // Attempt to overwrite contentType via partial update
+      await composite.setDataAttributes('test-id', {
+        contentType: 'application/octet-stream',
+        isManifest: false,
+      });
+
+      const result = await composite.getDataAttributes('test-id');
+      assert.strictEqual(
+        result?.contentType,
+        'application/x.arweave-manifest+json',
+      );
+      assert.strictEqual(result?.isManifest, true);
+    });
   });
 });

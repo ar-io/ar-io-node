@@ -92,24 +92,46 @@ const TAG_HEADER_PREFIX = 'x-arweave-tag-';
 const TAG_HEADER_COUNT = 'x-arweave-tag-count';
 const TAG_HEADER_TRUNCATED = 'x-arweave-tags-truncated';
 
-/** Parse X-Arweave-Tag-* headers from an upstream response into tag pairs. */
+/**
+ * Parse X-Arweave-Tag-* headers from an upstream response into tag pairs.
+ * Accepts an optional rawHeaders array (alternating name/value pairs from
+ * Node.js http.IncomingMessage) to preserve duplicate headers that would
+ * otherwise be collapsed into comma-separated strings.
+ */
 export const parseUpstreamTagHeaders = (
   headers: Record<string, string | string[]>,
+  rawHeaders?: string[],
 ): { name: string; value: string }[] | undefined => {
   const tags: { name: string; value: string }[] = [];
 
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    if (
-      lower.startsWith(TAG_HEADER_PREFIX) &&
-      lower !== TAG_HEADER_COUNT &&
-      lower !== TAG_HEADER_TRUNCATED
-    ) {
-      const tagName = key.slice(TAG_HEADER_PREFIX.length);
-      // Headers may be string or string[] (multiple values with same name)
-      const values = Array.isArray(value) ? value : [value];
-      for (const v of values) {
-        tags.push({ name: tagName, value: v });
+  // Prefer raw headers to preserve duplicate tag headers
+  if (rawHeaders != null && rawHeaders.length > 1) {
+    for (let i = 0; i < rawHeaders.length - 1; i += 2) {
+      const key = rawHeaders[i];
+      const value = rawHeaders[i + 1];
+      const lower = key.toLowerCase();
+      if (
+        lower.startsWith(TAG_HEADER_PREFIX) &&
+        lower !== TAG_HEADER_COUNT &&
+        lower !== TAG_HEADER_TRUNCATED
+      ) {
+        const tagName = key.slice(TAG_HEADER_PREFIX.length);
+        tags.push({ name: tagName, value });
+      }
+    }
+  } else {
+    for (const [key, value] of Object.entries(headers)) {
+      const lower = key.toLowerCase();
+      if (
+        lower.startsWith(TAG_HEADER_PREFIX) &&
+        lower !== TAG_HEADER_COUNT &&
+        lower !== TAG_HEADER_TRUNCATED
+      ) {
+        const tagName = key.slice(TAG_HEADER_PREFIX.length);
+        const values = Array.isArray(value) ? value : [value];
+        for (const v of values) {
+          tags.push({ name: tagName, value: v });
+        }
       }
     }
   }
