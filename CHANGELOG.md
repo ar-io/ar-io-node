@@ -12,6 +12,20 @@ This is a **recommended release** focused on **cache performance**, **multi-doma
 
 ### Added
 
+- **Tag and Verification Response Headers**: Data responses on `/raw/:id` and
+  `/:id` now include `X-Arweave-Tag-*` headers with transaction/data item tags,
+  plus verification headers (`X-Arweave-Signature`, `X-Arweave-Owner`,
+  `X-Arweave-Owner-Address`, `X-Arweave-Target`, `X-Arweave-Anchor`,
+  `X-Arweave-Signature-Type`). This enables CDN/edge consumers, browser
+  extensions, and HTTP-native tooling to inspect Arweave metadata without
+  parsing transaction bodies or calling GraphQL. Opt-in via
+  `ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED=true` (default: `false`). Includes a
+  configurable byte budget (`ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES`, default
+  8KB) to prevent exceeding intermediary header size limits. Verification
+  headers are prioritized over tag headers within the budget. For L2 data item
+  signatures and owner keys, `WRITE_ANS104_DATA_ITEM_DB_SIGNATURES=true` is
+  also required.
+
 - **Background Caching for Range Request Cache Misses**: When a range request
   (e.g., byte-range for video seeking) misses the local cache, the gateway now
   optionally fetches and caches the full item in the background so subsequent
