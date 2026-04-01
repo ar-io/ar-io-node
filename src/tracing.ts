@@ -101,54 +101,59 @@ const detectedResource = detectResources({
   detectors: [hostDetector, processDetector],
 });
 
-const sdk: NodeSDK = new NodeSDK({
-  resource: detectedResource.merge(
-    resourceFromAttributes({
-      ...envResourceAttributes,
-      [ATTR_SERVICE_NAME]: OTEL_SERVICE_NAME,
-      SampleRate: OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
-    }),
-  ),
-  resourceDetectors: [],
-  traceExporter: new OTLPTraceExporter(),
-  spanProcessors: spanProcessors.length > 0 ? spanProcessors : undefined,
-  logRecordProcessor: new BatchLogRecordProcessor(new OTLPLogExporter(), {
-    scheduledDelayMillis: OTEL_BATCH_LOG_PROCESSOR_SCHEDULED_DELAY_MS,
-    maxExportBatchSize: OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE,
-  }),
-  // TODO: decide what auto instrumentation to enable
-  instrumentations: [
-    //getNodeAutoInstrumentations({
-    //  // Disable fs automatic instrumentation because it can be noisy and
-    //  // expensive during startup (recommended by Honeycomb)
-    //  '@opentelemetry/instrumentation-fs': {
-    //    enabled: false,
-    //  },
-    //}),
-    new WinstonInstrumentation({
-      disableLogSending: true, // Don't send logs to OTEL pipeline
-      disableLogCorrelation: false, // Inject trace_id/span_id (default)
-    }),
-  ],
-  sampler: new TraceIdRatioBasedSampler(
-    1 / OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
-  ),
-});
-
-if (
-  process.env.OTEL_EXPORTER_OTLP_ENDPOINT !== undefined &&
-  process.env.OTEL_EXPORTER_OTLP_ENDPOINT !== ''
-) {
-  sdk.start();
-} else if (OTEL_FILE_EXPORT_ENABLED) {
-  // Start SDK if file export is enabled, even without OTLP endpoint
-  sdk.start();
-}
-
-// Create a no-op tracer for test environments to prevent hanging
+// Detect test environment early to skip SDK construction entirely. External
+// tools (e.g., Claude Code) may set OTEL env vars that conflict with the SDK's
+// configuration and cause errors during construction.
 const isTestEnvironment =
   process.env.NODE_ENV === 'test' ||
-  process.argv.some((arg) => arg.includes('--test'));
+  process.argv.some((arg) => arg.includes('--test')) ||
+  process.execArgv.some((arg) => arg.includes('--test'));
+
+if (!isTestEnvironment) {
+  const sdk: NodeSDK = new NodeSDK({
+    resource: detectedResource.merge(
+      resourceFromAttributes({
+        ...envResourceAttributes,
+        [ATTR_SERVICE_NAME]: OTEL_SERVICE_NAME,
+        SampleRate: OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
+      }),
+    ),
+    resourceDetectors: [],
+    traceExporter: new OTLPTraceExporter(),
+    spanProcessors: spanProcessors.length > 0 ? spanProcessors : undefined,
+    logRecordProcessor: new BatchLogRecordProcessor(new OTLPLogExporter(), {
+      scheduledDelayMillis: OTEL_BATCH_LOG_PROCESSOR_SCHEDULED_DELAY_MS,
+      maxExportBatchSize: OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE,
+    }),
+    // TODO: decide what auto instrumentation to enable
+    instrumentations: [
+      //getNodeAutoInstrumentations({
+      //  // Disable fs automatic instrumentation because it can be noisy and
+      //  // expensive during startup (recommended by Honeycomb)
+      //  '@opentelemetry/instrumentation-fs': {
+      //    enabled: false,
+      //  },
+      //}),
+      new WinstonInstrumentation({
+        disableLogSending: true, // Don't send logs to OTEL pipeline
+        disableLogCorrelation: false, // Inject trace_id/span_id (default)
+      }),
+    ],
+    sampler: new TraceIdRatioBasedSampler(
+      1 / OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
+    ),
+  });
+
+  if (
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT !== undefined &&
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT !== ''
+  ) {
+    sdk.start();
+  } else if (OTEL_FILE_EXPORT_ENABLED) {
+    // Start SDK if file export is enabled, even without OTLP endpoint
+    sdk.start();
+  }
+}
 
 export const tracer = isTestEnvironment
   ? trace.getTracer('no-op') // No-op tracer that doesn't interfere with tests
