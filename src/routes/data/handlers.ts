@@ -1127,20 +1127,6 @@ export const createRawDataHandler = ({
           return;
         }
 
-        // Fire tag resolution in parallel with data retrieval (with timeout
-        // to avoid blocking the response if the resolver is slow)
-        const tagsPromise =
-          config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
-          txStore != null &&
-          dataItemMetaResolver != null
-            ? resolveTagsWithTimeout(
-                id,
-                txStore,
-                dataItemMetaResolver,
-                config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
-              )
-            : Promise.resolve([] as { name: string; value: string }[]);
-
         // Return 451 if the data is blocked by hash
         if (dataAttributes?.hash !== undefined) {
           span.addEvent('Checking blocklist for hash');
@@ -1649,20 +1635,6 @@ export const createDataHandler = ({
           sendNotFound(res);
           return;
         }
-
-        // Fire tag resolution in parallel with data retrieval (with timeout
-        // to avoid blocking the response if the resolver is slow)
-        const tagsPromise =
-          config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
-          txStore != null &&
-          dataItemMetaResolver != null
-            ? resolveTagsWithTimeout(
-                id,
-                txStore,
-                dataItemMetaResolver,
-                config.ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS,
-              )
-            : Promise.resolve([] as { name: string; value: string }[]);
 
         // Return 451 if the data is blocked by hash
         if (dataAttributes?.hash !== undefined) {
