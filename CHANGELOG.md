@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [Release 74] - 2026-04-01
+
+This is a **recommended release** focused on **cache performance**, **multi-domain ArNS support**, and **content moderation correctness**. Key highlights include **background caching for range request cache misses** to improve video/media streaming performance, **multiple ArNS root hosts** for serving ArNS names across multiple domains from a single gateway, **contiguous data cache hit/miss Prometheus metrics** for improved observability, and **configurable cache control for blocked responses**. It also corrects HTTP 451 handling for blocked content, simplifies the parquet export pipeline, and adds ClickHouse and block verification to auto-verify.
+
 ### Added
 
 - **Background Caching for Range Request Cache Misses**: When a range request
@@ -32,8 +36,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Block Verification in Auto-Verify**: Verify block data alongside
   transactions and data items
 
-- **Bundle Data Prefetch**: Prefetch bundle data from local gateway before
-  shutdown to ensure data availability for export
+- **Bundle Data Prefetch in Auto-Verify**: During auto-verify runs, raw bundle
+  bytes are now fetched from the local gateway while it is still running, then
+  parsed after shutdown. Previously the bundle-parser source had to fetch from
+  arweave.net after the gateway was stopped, which was significantly slower.
 
 - **Contiguous Data Cache Hit/Miss Metrics**: New
   `contiguous_data_cache_hits_total` and `contiguous_data_cache_misses_total`
