@@ -317,7 +317,7 @@ export interface NormalizedBundleDataItem {
   anchor: string;
   content_encoding?: string;
   content_type?: string;
-  data_hash: string;
+  data_hash: string | null;
   data_offset: number;
   data_size: number;
   filter?: string;

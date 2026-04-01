@@ -101,10 +101,10 @@ export class CompositeDataAttributesSource
   }
 
   /**
-   * Merge partial attributes into an existing cached entry. Authoritative
-   * fields (contentType, isManifest) are shielded from overwrite when already
-   * set. When no cached entry exists the partial is skipped so the next
-   * getDataAttributes call fetches the complete DB record.
+   * Merge partial attributes into the cache. When an existing entry is
+   * present, incoming values are applied on top, but DB-authoritative
+   * fields (contentType, isManifest) are preserved via reverse splat
+   * so partial producers cannot overwrite them.
    */
   async setDataAttributes(
     id: string,
@@ -113,22 +113,25 @@ export class CompositeDataAttributesSource
     this.log.debug('Setting data attributes in cache', { id });
     const existingAttributes = this.cache.get(id);
     if (existingAttributes != null) {
-      // Merge into existing complete entry, shielding authoritative fields
-      // that were set by the DB (contentType, isManifest) from being
-      // overwritten by partial producers (e.g., stream Content-Type).
-      const safeIncoming = { ...attributes };
+      // Preserve DB-authoritative fields from the existing entry
+      const authoritative: Partial<ContiguousDataAttributes> = {};
       if (existingAttributes.contentType != null) {
-        delete safeIncoming.contentType;
+        authoritative.contentType = existingAttributes.contentType;
       }
-      if (existingAttributes.isManifest === true) {
-        delete safeIncoming.isManifest;
+      if (existingAttributes.isManifest != null) {
+        authoritative.isManifest = existingAttributes.isManifest;
       }
-      this.cache.set(id, { ...existingAttributes, ...safeIncoming });
+      this.cache.set(id, {
+        ...existingAttributes,
+        ...attributes,
+        ...authoritative,
+      });
+    } else {
+      // Seed cache with partial attributes. Callers like
+      // ReadThroughDataCache rely on this to populate hash/size/contentType
+      // after data retrieval. The next getDataAttributes call will fetch
+      // the complete DB record and merge on top via fetchAndCache.
+      this.cache.set(id, attributes as ContiguousDataAttributes);
     }
-    // When no existing entry, skip caching the partial. The next
-    // getDataAttributes call will fetch the complete entry from the DB,
-    // which includes isManifest and the correct contentType from tags.
-    // Caching partials here caused manifests to be served as raw bytes
-    // because the stream's Content-Type header is application/octet-stream.
   }
 }
