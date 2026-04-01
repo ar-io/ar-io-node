@@ -105,7 +105,7 @@
     "testcontainers/**/minimatch": "9.0.7",
     "@testcontainers/localstack/**/minimatch": "9.0.7",
     "madge/**/minimatch": "9.0.7",
-    "c8/**/minimatch": "9.0.7",
+    "c8/**/minimatch": "3.1.5",
     "duckdb-async/**/minimatch": "9.0.7",
     "rimraf/glob/minimatch": "10.2.3"
   },

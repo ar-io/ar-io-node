@@ -11890,19 +11890,19 @@ minimatch@3.1.4:
   dependencies:
     brace-expansion "^1.1.7"
 
-minimatch@9.0.7, minimatch@^3.0.4, minimatch@^3.1.1, minimatch@^5.0.1, minimatch@^5.1.0, minimatch@^9.0.4:
-  version "9.0.7"
-  resolved "https://registry.yarnpkg.com/minimatch/-/minimatch-9.0.7.tgz#d76c4d0b3b527877016d6cc1b9922fc8e0ffe7b0"
-  integrity sha512-MOwgjc8tfrpn5QQEvjijjmDVtMw2oL88ugTevzxQnzRLm6l3fVEF2gzU0kYeYYKD8C66+IdGX6peJ4MyUlUnPg==
-  dependencies:
-    brace-expansion "^5.0.2"
-
-minimatch@^3.0.3, minimatch@^3.1.2:
+minimatch@3.1.5, minimatch@^3.0.3, minimatch@^3.0.4, minimatch@^3.1.2:
   version "3.1.5"
   resolved "https://registry.yarnpkg.com/minimatch/-/minimatch-3.1.5.tgz#580c88f8d5445f2bd6aa8f3cadefa0de79fbd69e"
   integrity sha512-VgjWUsnnT6n+NUk6eZq77zeFdpW2LWDzP6zFGrCbHXiYNul5Dzqk2HHQ5uFH2DNW5Xbp8+jVzaeNt94ssEEl4w==
   dependencies:
     brace-expansion "^1.1.7"
+
+minimatch@9.0.7, minimatch@^3.1.1, minimatch@^5.0.1, minimatch@^5.1.0, minimatch@^9.0.4:
+  version "9.0.7"
+  resolved "https://registry.yarnpkg.com/minimatch/-/minimatch-9.0.7.tgz#d76c4d0b3b527877016d6cc1b9922fc8e0ffe7b0"
+  integrity sha512-MOwgjc8tfrpn5QQEvjijjmDVtMw2oL88ugTevzxQnzRLm6l3fVEF2gzU0kYeYYKD8C66+IdGX6peJ4MyUlUnPg==
+  dependencies:
+    brace-expansion "^5.0.2"
 
 minimist@^1.2.0, minimist@^1.2.3, minimist@^1.2.5, minimist@^1.2.6:
   version "1.2.8"
