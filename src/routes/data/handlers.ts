@@ -24,7 +24,6 @@ import {
   detectLoopInViaChain,
 } from '../../lib/request-attributes.js';
 import { isValidTxId } from '../../lib/validation.js';
-import { fromB64Url, sha256B64Url } from '../../lib/encoding.js';
 import { DataItemMetaResolver } from '../../data/data-item-meta-resolver.js';
 import {
   DataBlockListValidator,
@@ -33,7 +32,6 @@ import {
   ContiguousDataSource,
   DataAttributesSource,
   ManifestPathResolver,
-  PartialJsonTransactionStore,
   RequestAttributes,
 } from '../../types.js';
 import { RateLimiter } from '../../limiter/types.js';
@@ -366,43 +364,14 @@ export interface ResolvedItemHeaders {
 }
 
 /**
- * Resolve metadata for a given ID from local stores only (fast path).
- * Checks LMDB txStore and local GQL DB — both are sub-millisecond.
- * Does NOT trigger remote resolution (root TX index, binary extraction).
- *
- * Returns undefined when the item is not found locally. Returns a
- * ResolvedItemHeaders (possibly with an empty tags array) when found.
- * This distinction prevents background indexing from firing repeatedly
- * for valid items that genuinely have zero tags.
+ * Resolve metadata for a given ID via the resolver's fast local path
+ * (LMDB txStore → LRU cache → GQL DB). Returns undefined when not
+ * found locally, ResolvedItemHeaders when found (even with empty tags).
  */
 export const resolveItemHeaders = async (
   id: string,
-  txStore: PartialJsonTransactionStore,
   dataItemMetaResolver: DataItemMetaResolver,
 ): Promise<ResolvedItemHeaders | undefined> => {
-  // Tier 1: L1 transaction from LMDB header store
-  const tx = await txStore.get(id);
-  if (tx != null) {
-    return {
-      tags: (tx.tags ?? []).map((t) => ({
-        name: fromB64Url(t.name).toString('utf8'),
-        value: fromB64Url(t.value).toString('utf8'),
-      })),
-      signature: tx.signature ?? undefined,
-      owner: tx.owner ?? undefined,
-      ownerAddress:
-        tx.owner != null && tx.owner.length > 0
-          ? sha256B64Url(fromB64Url(tx.owner))
-          : undefined,
-      target: tx.target,
-      anchor: tx.last_tx,
-    };
-  }
-
-  // Tier 2: Local GQL DB + LRU cache (fast) — the resolver checks
-  // the GQL DB and LRU cache first before attempting remote resolution,
-  // but remote resolution can take 10-60s. We only want the fast path
-  // here, so we check the cache and DB directly.
   const meta = await dataItemMetaResolver.resolveFromLocal(id);
   if (meta != null) {
     return {
@@ -421,19 +390,15 @@ export const resolveItemHeaders = async (
 /** Fire item header resolution early to run in parallel with data retrieval. */
 const fireItemHeaderResolution = (
   id: string,
-  txStore: PartialJsonTransactionStore | undefined,
   dataItemMetaResolver: DataItemMetaResolver | undefined,
 ): Promise<ResolvedItemHeaders | undefined> => {
   if (
     !config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED ||
-    txStore == null ||
     dataItemMetaResolver == null
   ) {
     return Promise.resolve(undefined);
   }
-  return resolveItemHeaders(id, txStore, dataItemMetaResolver).catch(
-    () => undefined,
-  );
+  return resolveItemHeaders(id, dataItemMetaResolver).catch(() => undefined);
 };
 
 /**
@@ -1048,7 +1013,6 @@ export const createRawDataHandler = ({
   rateLimiter,
   paymentProcessor,
   negativeDataCache,
-  txStore,
   dataItemMetaResolver,
 }: {
   log: Logger;
@@ -1058,7 +1022,6 @@ export const createRawDataHandler = ({
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
   negativeDataCache?: NegativeDataCache;
-  txStore?: PartialJsonTransactionStore;
   dataItemMetaResolver?: DataItemMetaResolver;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
@@ -1122,11 +1085,7 @@ export const createRawDataHandler = ({
         }
 
         // Fire tag resolution early — runs in parallel with data retrieval
-        const tagsPromise = fireItemHeaderResolution(
-          id,
-          txStore,
-          dataItemMetaResolver,
-        );
+        const tagsPromise = fireItemHeaderResolution(id, dataItemMetaResolver);
 
         // Retrieve authoritative data attributes if they're available
         let dataAttributes: ContiguousDataAttributes | undefined;
@@ -1569,7 +1528,6 @@ export const createDataHandler = ({
   rateLimiter,
   paymentProcessor,
   negativeDataCache,
-  txStore,
   dataItemMetaResolver,
 }: {
   log: Logger;
@@ -1580,7 +1538,6 @@ export const createDataHandler = ({
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
   negativeDataCache?: NegativeDataCache;
-  txStore?: PartialJsonTransactionStore;
   dataItemMetaResolver?: DataItemMetaResolver;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
@@ -1649,11 +1606,7 @@ export const createDataHandler = ({
         }
 
         // Fire tag resolution early — runs in parallel with data retrieval
-        const tagsPromise = fireItemHeaderResolution(
-          id,
-          txStore,
-          dataItemMetaResolver,
-        );
+        const tagsPromise = fireItemHeaderResolution(id, dataItemMetaResolver);
 
         let dataAttributes: ContiguousDataAttributes | undefined;
 

@@ -840,6 +840,7 @@ export const rootTxIndex = new CompositeRootTxIndex({
 // Tries gateways first (faster), then falls back to Arweave nodes via chunks
 export const dataItemMetaResolver = new DataItemMetaResolver({
   log,
+  txStore,
   gqlQueryable,
   rootTxIndex,
   ans104OffsetSources: [ans104GatewaysOffsetSource, ans104ChunksOffsetSource],
