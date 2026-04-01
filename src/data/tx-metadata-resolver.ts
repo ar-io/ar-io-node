@@ -65,6 +65,7 @@ export class TxMetadataResolver {
   private ans104OffsetSources: Ans104OffsetSource[];
   private dataItemIndexWriter?: DataItemIndexWriter;
   private cache: LRUCache<string, ResolvedTxMetadata>;
+  private pendingPromises: Map<string, Promise<ResolvedTxMetadata | undefined>>;
 
   constructor({
     log,
@@ -90,6 +91,7 @@ export class TxMetadataResolver {
     this.ans104OffsetSources = ans104OffsetSources;
     this.dataItemIndexWriter = dataItemIndexWriter;
     this.cache = new LRUCache({ max: cacheSize });
+    this.pendingPromises = new Map();
   }
 
   /**
@@ -150,6 +152,25 @@ export class TxMetadataResolver {
   }
 
   async resolve(id: string): Promise<ResolvedTxMetadata | undefined> {
+    // Coalesce concurrent requests for the same ID
+    const existingPromise = this.pendingPromises.get(id);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const promise = this.resolveInner(id);
+    this.pendingPromises.set(id, promise);
+
+    try {
+      return await promise;
+    } finally {
+      this.pendingPromises.delete(id);
+    }
+  }
+
+  private async resolveInner(
+    id: string,
+  ): Promise<ResolvedTxMetadata | undefined> {
     const log = this.log.child({ method: 'resolve', id });
 
     // Check LRU cache and local DB first (fast path)
