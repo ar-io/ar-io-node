@@ -61,6 +61,8 @@ app.use(
     // Wildcard exposes all response headers to browsers (valid for non-credentialed
     // requests, which is all we have with Access-Control-Allow-Origin: *).
     // This covers ar-io headers, x402, tracing, and dynamic X-Arweave-Tag-* names.
+    // NOTE: If credentialed CORS is ever added, wildcard exposedHeaders is
+    // silently ignored by browsers per the spec — switch back to an explicit list.
     exposedHeaders: '*',
   }),
 );
