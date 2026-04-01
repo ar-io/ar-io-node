@@ -320,7 +320,17 @@ export const shouldUsePrivateCacheControl = (
 
 // --- Tag response header helpers ---
 
-/** Sanitize a tag name for use as an HTTP header name suffix. */
+/**
+ * Sanitize a tag name for use as an HTTP header name suffix.
+ * Non-alphanumeric characters are replaced with dashes, which means
+ * differently-named tags may collide (e.g., "Content.Type" and
+ * "Content Type" both become "Content-Type"). This is an acceptable
+ * limitation — tag headers are for display/CDN use, not canonical data.
+ *
+ * Upstream tag names from HTTP headers are always lowercase due to
+ * Node.js header normalization. This does not affect verification,
+ * which uses the original base64url-encoded tag bytes from the DB.
+ */
 export const sanitizeTagHeaderName = (name: string): string => {
   return name
     .replace(/[^A-Za-z0-9\-_]/g, '-')
@@ -355,18 +365,21 @@ export interface ResolvedItemHeaders {
   signatureType?: number;
 }
 
-const EMPTY_RESOLVED: ResolvedItemHeaders = { tags: [] };
-
 /**
  * Resolve metadata for a given ID from local stores only (fast path).
  * Checks LMDB txStore and local GQL DB — both are sub-millisecond.
  * Does NOT trigger remote resolution (root TX index, binary extraction).
+ *
+ * Returns undefined when the item is not found locally. Returns a
+ * ResolvedItemHeaders (possibly with an empty tags array) when found.
+ * This distinction prevents background indexing from firing repeatedly
+ * for valid items that genuinely have zero tags.
  */
 export const resolveItemHeaders = async (
   id: string,
   txStore: PartialJsonTransactionStore,
   dataItemMetaResolver: DataItemMetaResolver,
-): Promise<ResolvedItemHeaders> => {
+): Promise<ResolvedItemHeaders | undefined> => {
   // Tier 1: L1 transaction from LMDB header store
   const tx = await txStore.get(id);
   if (tx != null) {
@@ -376,7 +389,7 @@ export const resolveItemHeaders = async (
         value: fromB64Url(t.value).toString('utf8'),
       })),
       signature: tx.signature ?? undefined,
-      owner: tx.owner,
+      owner: tx.owner ?? undefined,
       ownerAddress:
         tx.owner != null && tx.owner.length > 0
           ? sha256B64Url(fromB64Url(tx.owner))
@@ -402,7 +415,54 @@ export const resolveItemHeaders = async (
       signatureType: meta.signatureType,
     };
   }
-  return EMPTY_RESOLVED;
+  return undefined;
+};
+
+/** Fire item header resolution early to run in parallel with data retrieval. */
+const fireItemHeaderResolution = (
+  id: string,
+  txStore: PartialJsonTransactionStore | undefined,
+  dataItemMetaResolver: DataItemMetaResolver | undefined,
+): Promise<ResolvedItemHeaders | undefined> => {
+  if (
+    !config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED ||
+    txStore == null ||
+    dataItemMetaResolver == null
+  ) {
+    return Promise.resolve(undefined);
+  }
+  return resolveItemHeaders(id, txStore, dataItemMetaResolver).catch(
+    () => undefined,
+  );
+};
+
+/**
+ * Await a previously-fired item header resolution promise, falling back to
+ * upstream tags when local resolution missed. Triggers background indexing
+ * for items not found locally.
+ */
+const awaitItemHeaders = async (
+  tagsPromise: Promise<ResolvedItemHeaders | undefined>,
+  upstreamTags: { name: string; value: string }[] | undefined,
+  id: string,
+  dataItemMetaResolver: DataItemMetaResolver | undefined,
+): Promise<ResolvedItemHeaders | undefined> => {
+  const resolved = await tagsPromise;
+  const itemHeaders: ResolvedItemHeaders | undefined =
+    resolved != null
+      ? resolved
+      : upstreamTags != null && upstreamTags.length > 0
+        ? { tags: upstreamTags }
+        : undefined;
+
+  // If not found locally, trigger background indexing so the
+  // item is indexed for future requests. Items found with zero
+  // tags are NOT re-indexed (resolved !== undefined).
+  if (resolved == null && dataItemMetaResolver != null) {
+    dataItemMetaResolver.resolve(id).catch(() => {});
+  }
+
+  return itemHeaders;
 };
 
 const setDataHeaders = ({
@@ -519,55 +579,90 @@ const setDataHeaders = ({
     }
   }
 
-  // Set Arweave tag and verification response headers
+  // Set Arweave tag and verification response headers, tracking a byte
+  // budget to avoid exceeding intermediary header size limits (nginx
+  // default 8KB, Cloudflare 32KB).
   if (config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED && itemHeaders != null) {
-    const { tags } = itemHeaders;
+    const maxBytes = config.ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES;
+    let bytesUsed = 0;
+    let truncated = false;
 
-    if (tags.length > 0) {
-      const max = config.ARWEAVE_TAG_RESPONSE_HEADERS_MAX;
-      const truncated = tags.length > max;
-      const tagsToEmit = truncated ? tags.slice(0, max) : tags;
-
-      res.header(headerNames.arweaveTagCount, tags.length.toString());
-      if (truncated) {
-        res.header(headerNames.arweaveTagsTruncated, 'true');
+    /** Add a header if it fits within the byte budget. */
+    const addHeader = (name: string, value: string): boolean => {
+      // Approximate wire size: "Name: value\r\n"
+      const size = name.length + 2 + value.length + 2;
+      if (bytesUsed + size > maxBytes) {
+        truncated = true;
+        return false;
       }
+      bytesUsed += size;
+      res.header(name, value);
+      return true;
+    };
 
-      for (const tag of tagsToEmit) {
-        const safeName = sanitizeTagHeaderName(tag.name);
-        const safeValue = sanitizeTagHeaderValue(tag.value);
-        if (safeName.length > 0) {
-          res.append(`X-Arweave-Tag-${safeName}`, safeValue);
-        }
+    /** Append a header (allows duplicates) if it fits. */
+    const appendHeader = (name: string, value: string): boolean => {
+      const size = name.length + 2 + value.length + 2;
+      if (bytesUsed + size > maxBytes) {
+        truncated = true;
+        return false;
       }
-    }
+      bytesUsed += size;
+      res.append(name, value);
+      return true;
+    };
 
-    // Verification headers — allow clients to verify the data item
-    // without a separate /tx/:id request. Only emit when the full
-    // value is available (skip empty strings from missing DB fields).
+    // Verification headers first — these are more important for clients
+    // than individual tags and should get priority in the byte budget.
     if (itemHeaders.signature != null && itemHeaders.signature.length > 0) {
-      res.header('X-Arweave-Signature', itemHeaders.signature);
+      addHeader('X-Arweave-Signature', itemHeaders.signature);
     }
     if (itemHeaders.owner != null && itemHeaders.owner.length > 0) {
-      res.header('X-Arweave-Owner', itemHeaders.owner);
+      addHeader('X-Arweave-Owner', itemHeaders.owner);
     }
     if (
       itemHeaders.ownerAddress != null &&
       itemHeaders.ownerAddress.length > 0
     ) {
-      res.header('X-Arweave-Owner-Address', itemHeaders.ownerAddress);
+      addHeader('X-Arweave-Owner-Address', itemHeaders.ownerAddress);
     }
     if (itemHeaders.target != null && itemHeaders.target.length > 0) {
-      res.header('X-Arweave-Target', itemHeaders.target);
+      addHeader('X-Arweave-Target', itemHeaders.target);
     }
     if (itemHeaders.anchor != null && itemHeaders.anchor.length > 0) {
-      res.header('X-Arweave-Anchor', itemHeaders.anchor);
+      addHeader('X-Arweave-Anchor', itemHeaders.anchor);
     }
     if (itemHeaders.signatureType != null) {
-      res.header(
+      addHeader(
         'X-Arweave-Signature-Type',
         itemHeaders.signatureType.toString(),
       );
+    }
+
+    // Tag headers — emitted after verification headers
+    const { tags } = itemHeaders;
+    if (tags.length > 0) {
+      const max = config.ARWEAVE_TAG_RESPONSE_HEADERS_MAX;
+      if (tags.length > max) {
+        truncated = true;
+      }
+      const tagsToEmit = tags.length > max ? tags.slice(0, max) : tags;
+
+      addHeader(headerNames.arweaveTagCount, tags.length.toString());
+
+      for (const tag of tagsToEmit) {
+        const safeName = sanitizeTagHeaderName(tag.name);
+        const safeValue = sanitizeTagHeaderValue(tag.value);
+        if (safeName.length > 0) {
+          if (!appendHeader(`X-Arweave-Tag-${safeName}`, safeValue)) {
+            break; // Byte budget exhausted
+          }
+        }
+      }
+    }
+
+    if (truncated) {
+      res.header(headerNames.arweaveTagsTruncated, 'true');
     }
   }
 
@@ -1026,16 +1121,12 @@ export const createRawDataHandler = ({
           return;
         }
 
-        // Fire tag resolution early — runs in parallel with getDataAttributes
-        // and getData, giving the resolver maximum time before the timeout
-        const tagsPromise =
-          config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
-          txStore != null &&
-          dataItemMetaResolver != null
-            ? resolveItemHeaders(id, txStore, dataItemMetaResolver).catch(
-                () => EMPTY_RESOLVED,
-              )
-            : Promise.resolve(EMPTY_RESOLVED);
+        // Fire tag resolution early — runs in parallel with data retrieval
+        const tagsPromise = fireItemHeaderResolution(
+          id,
+          txStore,
+          dataItemMetaResolver,
+        );
 
         // Retrieve authoritative data attributes if they're available
         let dataAttributes: ContiguousDataAttributes | undefined;
@@ -1171,21 +1262,12 @@ export const createRawDataHandler = ({
             return;
           }
 
-          // Await item header resolution (fired in parallel earlier), fall
-          // back to tags propagated from upstream gateway response headers
-          const resolved = await tagsPromise;
-          const itemHeaders =
-            resolved.tags.length > 0
-              ? resolved
-              : data.upstreamTags != null && data.upstreamTags.length > 0
-                ? { tags: data.upstreamTags }
-                : resolved;
-
-          // If local tag resolution failed (timeout or miss), trigger
-          // background indexing so the item is indexed for future requests
-          if (resolved.tags.length === 0 && dataItemMetaResolver != null) {
-            dataItemMetaResolver.resolve(id).catch(() => {});
-          }
+          const itemHeaders = await awaitItemHeaders(
+            tagsPromise,
+            data.upstreamTags,
+            id,
+            dataItemMetaResolver,
+          );
 
           // Check if the request includes a Range header
           const rangeHeader = req.headers.range;
@@ -1566,16 +1648,12 @@ export const createDataHandler = ({
           return;
         }
 
-        // Fire tag resolution early — runs in parallel with getDataAttributes
-        // and getData, giving the resolver maximum time before the timeout
-        const tagsPromise =
-          config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED &&
-          txStore != null &&
-          dataItemMetaResolver != null
-            ? resolveItemHeaders(id, txStore, dataItemMetaResolver).catch(
-                () => EMPTY_RESOLVED,
-              )
-            : Promise.resolve(EMPTY_RESOLVED);
+        // Fire tag resolution early — runs in parallel with data retrieval
+        const tagsPromise = fireItemHeaderResolution(
+          id,
+          txStore,
+          dataItemMetaResolver,
+        );
 
         let dataAttributes: ContiguousDataAttributes | undefined;
 
@@ -1836,21 +1914,12 @@ export const createDataHandler = ({
           return;
         }
 
-        // Await item header resolution (fired in parallel earlier), fall
-        // back to tags propagated from upstream gateway response headers
-        const resolved = await tagsPromise;
-        const itemHeaders =
-          resolved.tags.length > 0
-            ? resolved
-            : data?.upstreamTags != null && data.upstreamTags.length > 0
-              ? { tags: data.upstreamTags }
-              : resolved;
-
-        // If local tag resolution failed (timeout or miss), trigger
-        // background indexing so the item is indexed for future requests
-        if (resolved.tags.length === 0 && dataItemMetaResolver != null) {
-          dataItemMetaResolver.resolve(id).catch(() => {});
-        }
+        const itemHeaders = await awaitItemHeaders(
+          tagsPromise,
+          data?.upstreamTags,
+          id,
+          dataItemMetaResolver,
+        );
 
         // Check if the request includes a Range header
         const rangeHeader = req.headers.range;

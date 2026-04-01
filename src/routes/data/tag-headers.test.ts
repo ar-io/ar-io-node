@@ -311,7 +311,7 @@ describe('resolveItemHeaders', () => {
     assert.strictEqual(resolveFromLocalMock.mock.calls.length, 0);
   });
 
-  it('should return empty array when both L1 and L2 return nothing', async () => {
+  it('should return undefined when both L1 and L2 return nothing', async () => {
     txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
     resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve(undefined),
@@ -323,7 +323,7 @@ describe('resolveItemHeaders', () => {
       dataItemMetaResolver,
     );
 
-    assert.deepStrictEqual(result.tags, []);
+    assert.strictEqual(result, undefined);
   });
 
   it('should return empty array when L2 resolver returns meta without tags', async () => {
@@ -431,9 +431,9 @@ describe('resolveItemHeaders', () => {
       dataItemMetaResolver,
     );
 
-    assert.strictEqual(result.signature, 'l1-sig-base64url');
-    assert.strictEqual(result.owner, 'l1-owner-pubkey-base64url');
-    assert.ok(result.ownerAddress != null && result.ownerAddress.length > 0);
+    assert.strictEqual(result?.signature, 'l1-sig-base64url');
+    assert.strictEqual(result?.owner, 'l1-owner-pubkey-base64url');
+    assert.ok(result?.ownerAddress != null && result.ownerAddress.length > 0);
     assert.strictEqual(result.target, 'some-target');
     assert.strictEqual(result.anchor, 'some-anchor');
   });

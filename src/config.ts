@@ -896,6 +896,11 @@ export const ARWEAVE_TAG_RESPONSE_HEADERS_MAX = env.positiveIntOrDefault(
   100,
 );
 
+export const ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES = env.positiveIntOrDefault(
+  'ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES',
+  8192,
+);
+
 //
 // Indexing
 //

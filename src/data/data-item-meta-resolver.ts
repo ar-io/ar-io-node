@@ -255,7 +255,7 @@ export class DataItemMetaResolver {
       content_type: m.contentType,
       data_size: m.payloadSize,
       data_offset: m.itemOffset + m.headerSize,
-      data_hash: '', // Not available without reading the full payload
+      data_hash: null, // Not available without reading the full payload
       tags: m.tags.map((t) => ({
         name: utf8ToB64Url(t.name),
         value: utf8ToB64Url(t.value),

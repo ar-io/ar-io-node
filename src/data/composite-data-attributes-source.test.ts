@@ -234,23 +234,23 @@ describe('CompositeDataAttributesSource', () => {
   });
 
   describe('setDataAttributes', () => {
-    it('should not cache partial attributes without existing entry', async () => {
+    it('should seed cache with partial attributes when no entry exists', async () => {
       const source = new MockDataAttributesSource('source1');
       source.setData('test-id', TEST_DATA_ATTRIBUTES);
       const composite = new CompositeDataAttributesSource({ log, source });
 
-      // Set attributes without existing cache entry — should be skipped
+      // Set attributes without existing cache entry — seeds cache
       await composite.setDataAttributes('test-id', {
         hash: 'partial-hash',
         size: 1024,
       });
 
-      // Get should hit the source since partial was not cached
+      // Get should return the seeded partial from cache
       const result = await composite.getDataAttributes('test-id');
 
-      assert.strictEqual(source.callCount, 1); // Had to hit source
-      // Hash should be from source (with source name prefix), not from the partial
-      assert.strictEqual(result?.hash, 'source1-test-hash');
+      assert.strictEqual(source.callCount, 0); // Cache hit, no source call
+      assert.strictEqual(result?.hash, 'partial-hash');
+      assert.strictEqual(result?.size, 1024);
     });
 
     it('should merge with existing cached attributes', async () => {
