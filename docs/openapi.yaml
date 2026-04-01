@@ -997,6 +997,41 @@ paths:
                 type: integer
               description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
               example: 2092
+            X-Arweave-Tag-Count:
+              schema:
+                type: integer
+              description: Total number of tags (opt-in via ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED)
+              example: 5
+            X-Arweave-Tags-Truncated:
+              schema:
+                type: string
+                enum: ['true']
+              description: Present when tags exceed count or byte budget limit
+            X-Arweave-Signature:
+              schema:
+                type: string
+              description: Data item signature (base64url)
+            X-Arweave-Owner:
+              schema:
+                type: string
+              description: Full public key of the signer (base64url)
+            X-Arweave-Owner-Address:
+              schema:
+                $ref: '#/components/schemas/Base64Url43'
+              description: SHA-256 of owner public key (base64url)
+            X-Arweave-Target:
+              schema:
+                type: string
+              description: Transfer target (base64url, empty if none)
+            X-Arweave-Anchor:
+              schema:
+                type: string
+              description: Transaction anchor / nonce (base64url)
+            X-Arweave-Signature-Type:
+              schema:
+                type: integer
+              description: Signature algorithm (1 = RSA-4096/Arweave)
+              example: 1
         '206':
           description: Partial content for range requests
           headers:
@@ -1297,6 +1332,41 @@ paths:
                 type: integer
               description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
               example: 2092
+            X-Arweave-Tag-Count:
+              schema:
+                type: integer
+              description: Total number of tags (opt-in via ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED)
+              example: 5
+            X-Arweave-Tags-Truncated:
+              schema:
+                type: string
+                enum: ['true']
+              description: Present when tags exceed count or byte budget limit
+            X-Arweave-Signature:
+              schema:
+                type: string
+              description: Data item signature (base64url)
+            X-Arweave-Owner:
+              schema:
+                type: string
+              description: Full public key of the signer (base64url)
+            X-Arweave-Owner-Address:
+              schema:
+                $ref: '#/components/schemas/Base64Url43'
+              description: SHA-256 of owner public key (base64url)
+            X-Arweave-Target:
+              schema:
+                type: string
+              description: Transfer target (base64url, empty if none)
+            X-Arweave-Anchor:
+              schema:
+                type: string
+              description: Transaction anchor / nonce (base64url)
+            X-Arweave-Signature-Type:
+              schema:
+                type: integer
+              description: Signature algorithm (1 = RSA-4096/Arweave)
+              example: 1
         '206':
           description: Partial content for range requests
           headers:
