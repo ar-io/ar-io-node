@@ -110,6 +110,13 @@ This is a **recommended release** focused on **cache performance**, **multi-doma
   automation pipelines. Also validates `curl` availability at startup alongside
   `python3`.
 
+- **High-Severity Dependency Vulnerabilities**: Resolved known vulnerabilities in
+  transitive production dependencies via yarn resolutions: `path-to-regexp`
+  (ReDoS, via express/express-openapi-validator), `h3` (request smuggling),
+  `picomatch` (glob injection), `preact` (VNode injection), `socket.io-parser`
+  (unbounded binary attachments), `undici` (multiple HTTP smuggling/memory
+  issues), and bumped `fast-xml-parser` from 5.3.6 to 5.5.9.
+
 - **JSON Data Files Missing from Production Build**: `offset-block-mapping.json`
   was excluded from `dist/` because the build copy step only matched `.graphql`,
   `.sql`, and `.lua` files. This caused a startup warning and fallback to slower
