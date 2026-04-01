@@ -23,8 +23,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   resolution, apex content, and sandbox redirects work per-matched host with
   longest-suffix matching (#621)
 
-- **ClickHouse Verification in Auto-Verify**: Optional ClickHouse source for
-  verifying exported data against ClickHouse in addition to SQLite and Parquet
+- **ClickHouse Verification in Auto-Verify**: Auto-verify is a data validation
+  tool that checks consistency of indexed blockchain data (blocks, transactions,
+  data items) across multiple backends (SQLite, Parquet, ClickHouse). This adds
+  an optional ClickHouse source for verification in addition to the existing
+  SQLite and Parquet sources.
 
 - **Block Verification in Auto-Verify**: Verify block data alongside
   transactions and data items
