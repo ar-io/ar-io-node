@@ -158,25 +158,15 @@ describe('sanitizeTagHeaderValue', () => {
 });
 
 describe('resolveItemHeaders', () => {
-  let txStoreGetMock: ReturnType<typeof mock.fn>;
   let resolveFromLocalMock: ReturnType<typeof mock.fn>;
   let resolveMock: ReturnType<typeof mock.fn>;
-  let txStore: any;
   let dataItemMetaResolver: any;
 
   const TEST_ID = 'LXCrfCRLHB7YyLGAeQoio00qb7LwT3UO3a-2TSDli8Q';
 
   beforeEach(() => {
-    txStoreGetMock = mock.fn(() => Promise.resolve(undefined));
     resolveFromLocalMock = mock.fn(() => Promise.resolve(undefined));
     resolveMock = mock.fn(() => Promise.resolve(undefined));
-
-    txStore = {
-      get: txStoreGetMock,
-      has: mock.fn(),
-      set: mock.fn(),
-      del: mock.fn(),
-    };
 
     dataItemMetaResolver = {
       resolve: resolveMock,
@@ -188,295 +178,77 @@ describe('resolveItemHeaders', () => {
     mock.restoreAll();
   });
 
-  it('should return decoded tags from L1 txStore when tags are present', async () => {
-    const b64Name = Buffer.from('Content-Type').toString('base64url');
-    const b64Value = Buffer.from('application/json').toString('base64url');
-
-    txStoreGetMock.mock.mockImplementation(() =>
-      Promise.resolve({
-        id: TEST_ID,
-        tags: [{ name: b64Name, value: b64Value }],
-      }),
-    );
-
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
-
-    assert.deepStrictEqual(result.tags, [
-      { name: 'Content-Type', value: 'application/json' },
-    ]);
-    // Should not call the resolver when L1 has tags
-    assert.strictEqual(resolveFromLocalMock.mock.calls.length, 0);
-  });
-
-  it('should return multiple decoded tags from L1 txStore', async () => {
+  it('should return tags from resolver', async () => {
     const tags = [
-      {
-        name: Buffer.from('Content-Type').toString('base64url'),
-        value: Buffer.from('text/html').toString('base64url'),
-      },
-      {
-        name: Buffer.from('App-Name').toString('base64url'),
-        value: Buffer.from('MyApp').toString('base64url'),
-      },
-      {
-        name: Buffer.from('App-Version').toString('base64url'),
-        value: Buffer.from('1.0.0').toString('base64url'),
-      },
+      { name: 'Content-Type', value: 'application/json' },
+      { name: 'App-Name', value: 'MyApp' },
     ];
-
-    txStoreGetMock.mock.mockImplementation(() =>
+    resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve({ id: TEST_ID, tags }),
     );
 
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
+    const result = await resolveItemHeaders(TEST_ID, dataItemMetaResolver);
 
-    assert.strictEqual(result.tags.length, 3);
-    assert.deepStrictEqual(result.tags[0], {
-      name: 'Content-Type',
-      value: 'text/html',
-    });
-    assert.deepStrictEqual(result.tags[1], {
-      name: 'App-Name',
-      value: 'MyApp',
-    });
-    assert.deepStrictEqual(result.tags[2], {
-      name: 'App-Version',
-      value: '1.0.0',
-    });
-  });
-
-  it('should fall back to L2 resolver when txStore returns undefined', async () => {
-    txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
-
-    const l2Tags = [
-      { name: 'Content-Type', value: 'image/png' },
-      { name: 'Bundle-Version', value: '2.0.0' },
-    ];
-    resolveFromLocalMock.mock.mockImplementation(() =>
-      Promise.resolve({ id: TEST_ID, tags: l2Tags }),
-    );
-
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
-
-    assert.deepStrictEqual(result.tags, l2Tags);
-    assert.strictEqual(txStoreGetMock.mock.calls.length, 1);
+    assert.deepStrictEqual(result?.tags, tags);
     assert.strictEqual(resolveFromLocalMock.mock.calls.length, 1);
   });
 
-  it('should return L1 tx with empty tags without falling through to L2', async () => {
-    txStoreGetMock.mock.mockImplementation(() =>
-      Promise.resolve({ id: TEST_ID, tags: [], owner: 'some-key', target: '' }),
-    );
-
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
-
-    assert.deepStrictEqual(result.tags, []);
-    // Should NOT call the L2 resolver — L1 tx is a valid hit even with no tags
-    assert.strictEqual(resolveFromLocalMock.mock.calls.length, 0);
-  });
-
-  it('should return L1 tx with null tags as empty array', async () => {
-    txStoreGetMock.mock.mockImplementation(() =>
-      Promise.resolve({
-        id: TEST_ID,
-        tags: null,
-        owner: 'some-key',
-        target: '',
-      }),
-    );
-
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
-
-    assert.deepStrictEqual(result.tags, []);
-    assert.strictEqual(resolveFromLocalMock.mock.calls.length, 0);
-  });
-
-  it('should return undefined when both L1 and L2 return nothing', async () => {
-    txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
-    resolveFromLocalMock.mock.mockImplementation(() =>
-      Promise.resolve(undefined),
-    );
-
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
-
+  it('should return undefined when resolver returns nothing', async () => {
+    const result = await resolveItemHeaders(TEST_ID, dataItemMetaResolver);
     assert.strictEqual(result, undefined);
   });
 
-  it('should return empty array when L2 resolver returns meta without tags', async () => {
-    txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
+  it('should return empty tags array when resolver returns meta without tags', async () => {
     resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve({ id: TEST_ID, tags: undefined }),
     );
 
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
-
-    assert.deepStrictEqual(result.tags, []);
+    const result = await resolveItemHeaders(TEST_ID, dataItemMetaResolver);
+    assert.deepStrictEqual(result?.tags, []);
   });
 
-  it('should return L2 tags (already UTF-8, not base64url encoded)', async () => {
-    // L2 tags come from the data item resolver and are already decoded strings
-    txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
-
-    const l2Tags = [
-      { name: 'Content-Type', value: 'application/json' },
-      { name: 'Custom-Tag', value: 'some value with spaces' },
-    ];
-    resolveFromLocalMock.mock.mockImplementation(() =>
-      Promise.resolve({ id: TEST_ID, tags: l2Tags }),
-    );
-
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
-
-    // L2 tags should be returned as-is (not double-decoded)
-    assert.deepStrictEqual(result.tags, l2Tags);
-  });
-
-  it('should handle L1 tags with unicode values encoded in base64url', async () => {
-    const unicodeValue = '\u4f60\u597d'; // Chinese characters
-    const b64Name = Buffer.from('Greeting').toString('base64url');
-    const b64Value = Buffer.from(unicodeValue, 'utf8').toString('base64url');
-
-    txStoreGetMock.mock.mockImplementation(() =>
-      Promise.resolve({
-        id: TEST_ID,
-        tags: [{ name: b64Name, value: b64Value }],
-      }),
-    );
-
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
-
-    assert.deepStrictEqual(result.tags, [
-      { name: 'Greeting', value: unicodeValue },
-    ]);
-  });
-
-  it('should propagate errors from txStore.get', async () => {
-    const storeError = new Error('Store connection failed');
-    txStoreGetMock.mock.mockImplementation(() => Promise.reject(storeError));
-
-    await assert.rejects(
-      () => resolveItemHeaders(TEST_ID, txStore, dataItemMetaResolver),
-      storeError,
-    );
-  });
-
-  it('should propagate errors from resolver when txStore misses', async () => {
-    txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
-
+  it('should propagate errors from resolver', async () => {
     const resolverError = new Error('Resolver failed');
     resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.reject(resolverError),
     );
 
     await assert.rejects(
-      () => resolveItemHeaders(TEST_ID, txStore, dataItemMetaResolver),
+      () => resolveItemHeaders(TEST_ID, dataItemMetaResolver),
       resolverError,
     );
   });
 
-  it('should return verification fields from L1 txStore', async () => {
-    const b64Name = Buffer.from('Content-Type').toString('base64url');
-    const b64Value = Buffer.from('text/plain').toString('base64url');
-
-    txStoreGetMock.mock.mockImplementation(() =>
-      Promise.resolve({
-        id: TEST_ID,
-        signature: 'l1-sig-base64url',
-        owner: 'l1-owner-pubkey-base64url',
-        target: 'some-target',
-        last_tx: 'some-anchor',
-        tags: [{ name: b64Name, value: b64Value }],
-      }),
-    );
-
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
-
-    assert.strictEqual(result?.signature, 'l1-sig-base64url');
-    assert.strictEqual(result?.owner, 'l1-owner-pubkey-base64url');
-    assert.ok(result?.ownerAddress != null && result.ownerAddress.length > 0);
-    assert.strictEqual(result.target, 'some-target');
-    assert.strictEqual(result.anchor, 'some-anchor');
-  });
-
-  it('should return verification fields from L2 resolver', async () => {
-    txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
-
+  it('should return all verification fields from resolver', async () => {
     resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve({
         id: TEST_ID,
-        signature: 'l2-sig',
+        signature: 'test-sig',
         signatureType: 1,
-        owner: 'l2-owner-key',
-        ownerAddress: 'l2-owner-address',
-        target: 'l2-target',
-        anchor: 'l2-anchor',
+        owner: 'test-owner-key',
+        ownerAddress: 'test-owner-address',
+        target: 'test-target',
+        anchor: 'test-anchor',
         tags: [{ name: 'App-Name', value: 'TestApp' }],
         dataSize: 100,
       }),
     );
 
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
+    const result = await resolveItemHeaders(TEST_ID, dataItemMetaResolver);
 
-    assert.strictEqual(result.signature, 'l2-sig');
-    assert.strictEqual(result.owner, 'l2-owner-key');
-    assert.strictEqual(result.ownerAddress, 'l2-owner-address');
-    assert.strictEqual(result.target, 'l2-target');
-    assert.strictEqual(result.anchor, 'l2-anchor');
-    assert.strictEqual(result.signatureType, 1);
+    assert.strictEqual(result?.signature, 'test-sig');
+    assert.strictEqual(result?.owner, 'test-owner-key');
+    assert.strictEqual(result?.ownerAddress, 'test-owner-address');
+    assert.strictEqual(result?.target, 'test-target');
+    assert.strictEqual(result?.anchor, 'test-anchor');
+    assert.strictEqual(result?.signatureType, 1);
   });
 
   it('should return empty signature and owner when DB lacks them', async () => {
-    txStoreGetMock.mock.mockImplementation(() => Promise.resolve(undefined));
-
     resolveFromLocalMock.mock.mockImplementation(() =>
       Promise.resolve({
         id: TEST_ID,
         signature: '',
-        signatureType: 1,
         owner: '',
         ownerAddress: 'some-address',
         target: '',
@@ -486,15 +258,11 @@ describe('resolveItemHeaders', () => {
       }),
     );
 
-    const result = await resolveItemHeaders(
-      TEST_ID,
-      txStore,
-      dataItemMetaResolver,
-    );
+    const result = await resolveItemHeaders(TEST_ID, dataItemMetaResolver);
 
-    assert.strictEqual(result.signature, '');
-    assert.strictEqual(result.owner, '');
-    assert.deepStrictEqual(result.tags, [
+    assert.strictEqual(result?.signature, '');
+    assert.strictEqual(result?.owner, '');
+    assert.deepStrictEqual(result?.tags, [
       { name: 'Content-Type', value: 'image/png' },
     ]);
   });

@@ -8,12 +8,13 @@ import { LRUCache } from 'lru-cache';
 import winston from 'winston';
 
 import { Ans104OffsetSource, DataItemMeta } from './ans104-offset-source.js';
-import { utf8ToB64Url } from '../lib/encoding.js';
+import { fromB64Url, sha256B64Url, utf8ToB64Url } from '../lib/encoding.js';
 import {
   DataItemIndexWriter,
   GqlQueryable,
   GqlTransaction,
   NormalizedBundleDataItem,
+  PartialJsonTransactionStore,
 } from '../types.js';
 
 interface RootTxIndex {
@@ -52,6 +53,7 @@ export interface ResolvedDataItemMeta {
 
 export class DataItemMetaResolver {
   private log: winston.Logger;
+  private txStore?: PartialJsonTransactionStore;
   private gqlQueryable: GqlQueryable;
   private rootTxIndex: RootTxIndex;
   private ans104OffsetSources: Ans104OffsetSource[];
@@ -60,6 +62,7 @@ export class DataItemMetaResolver {
 
   constructor({
     log,
+    txStore,
     gqlQueryable,
     rootTxIndex,
     ans104OffsetSources,
@@ -67,6 +70,7 @@ export class DataItemMetaResolver {
     cacheSize = 10_000,
   }: {
     log: winston.Logger;
+    txStore?: PartialJsonTransactionStore;
     gqlQueryable: GqlQueryable;
     rootTxIndex: RootTxIndex;
     ans104OffsetSources: Ans104OffsetSource[];
@@ -74,6 +78,7 @@ export class DataItemMetaResolver {
     cacheSize?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
+    this.txStore = txStore;
     this.gqlQueryable = gqlQueryable;
     this.rootTxIndex = rootTxIndex;
     this.ans104OffsetSources = ans104OffsetSources;
@@ -82,7 +87,7 @@ export class DataItemMetaResolver {
   }
 
   /**
-   * Fast local-only resolution from LRU cache and GQL DB.
+   * Fast local-only resolution from LMDB txStore, LRU cache, and GQL DB.
    * Does not attempt remote resolution. Returns undefined if not locally
    * available — the caller can trigger background indexing separately.
    */
@@ -93,6 +98,36 @@ export class DataItemMetaResolver {
     const cached = this.cache.get(id);
     if (cached !== undefined) {
       return cached;
+    }
+
+    // Check L1 LMDB header store (base64url-encoded tags need decoding)
+    if (this.txStore != null) {
+      try {
+        const tx = await this.txStore.get(id);
+        if (tx != null) {
+          const resolved: ResolvedDataItemMeta = {
+            id,
+            signature: tx.signature ?? '',
+            ownerAddress:
+              tx.owner != null && tx.owner.length > 0
+                ? sha256B64Url(fromB64Url(tx.owner))
+                : '',
+            owner: tx.owner ?? '',
+            target: tx.target ?? '',
+            anchor: tx.last_tx ?? '',
+            tags: (tx.tags ?? []).map((t) => ({
+              name: fromB64Url(t.name).toString('utf8'),
+              value: fromB64Url(t.value).toString('utf8'),
+            })),
+            dataSize: parseInt(tx.data_size, 10) || 0,
+            contentType: undefined,
+          };
+          this.cache.set(id, resolved);
+          return resolved;
+        }
+      } catch {
+        // LMDB lookup failed — continue to GQL
+      }
     }
 
     // Check local GQL DB

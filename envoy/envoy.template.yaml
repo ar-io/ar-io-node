@@ -256,26 +256,6 @@ static_resources:
                           route:
                             cluster: ario_gateways
                             timeout: 0s
-                        #! GET /tx/{id} routes to core for L1+L2 metadata.
-                        #! Only matches /tx/{43-char-base64url-id} exactly.
-                        #! Sub-routes like /tx/{id}/offset go to trusted_arweave_nodes below.
-                        - match:
-                            safe_regex:
-                              google_re2:
-                                max_program_size: 200
-                              regex: '^/tx/[A-Za-z0-9_-]{43}$'
-                            headers:
-                              - name: ':method'
-                                string_match:
-                                  safe_regex:
-                                    google_re2: {}
-                                    regex: '^(GET|HEAD)$'
-                          route:
-                            cluster: ario_gateways
-                            timeout: 0s
-                            retry_policy:
-                              retry_on: '5xx,reset,retriable-status-codes'
-                              num_retries: 3
                         - match: { prefix: '/tx/' }
                           response_headers_to_add:
                             - header:
@@ -289,6 +269,10 @@ static_resources:
                               retriable_status_codes: 404
                               num_retries: 5
                             auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/tx_anchor' }
                           response_headers_to_add:
                             - header:
