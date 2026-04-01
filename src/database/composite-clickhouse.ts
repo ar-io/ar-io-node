@@ -157,6 +157,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         'tags',
         'signature_size',
         'signature_offset',
+        'signature_type',
       )
       .from(`${tableName} t`);
   }
@@ -391,6 +392,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       signature: null,
       signatureSize: tx.signature_size as string,
       signatureOffset: tx.signature_offset as string,
+      signatureType: (tx.signature_type as number) ?? null,
       recipient: tx.target ? hexToB64Url(tx.target) : null,
       ownerAddress: hexToB64Url(tx.owner_address),
       ownerKey: null,

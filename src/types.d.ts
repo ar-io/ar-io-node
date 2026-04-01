@@ -381,6 +381,7 @@ interface GqlTransaction {
   id: string;
   anchor: string | null;
   signature: string | null;
+  signatureType: number | null;
   signatureSize: string | null;
   signatureOffset: string | null;
   recipient: string | null;

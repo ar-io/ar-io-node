@@ -323,7 +323,7 @@ export class TxMetadataResolver {
     return {
       id: gqlTx.id,
       signature: gqlTx.signature ?? '',
-      signatureType: undefined, // Not available from GQL; set by binary extraction
+      signatureType: gqlTx.signatureType ?? undefined,
       ownerAddress: gqlTx.ownerAddress,
       owner: gqlTx.ownerKey ?? '',
       target: gqlTx.recipient ?? '',
