@@ -24,7 +24,7 @@ import {
   detectLoopInViaChain,
 } from '../../lib/request-attributes.js';
 import { isValidTxId } from '../../lib/validation.js';
-import { DataItemMetaResolver } from '../../data/data-item-meta-resolver.js';
+import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
 import {
   DataBlockListValidator,
   ContiguousData,
@@ -370,7 +370,7 @@ export interface ResolvedItemHeaders {
  */
 export const resolveItemHeaders = async (
   id: string,
-  dataItemMetaResolver: DataItemMetaResolver,
+  dataItemMetaResolver: TxMetadataResolver,
 ): Promise<ResolvedItemHeaders | undefined> => {
   const meta = await dataItemMetaResolver.resolveFromLocal(id);
   if (meta != null) {
@@ -390,7 +390,7 @@ export const resolveItemHeaders = async (
 /** Fire item header resolution early to run in parallel with data retrieval. */
 const fireItemHeaderResolution = (
   id: string,
-  dataItemMetaResolver: DataItemMetaResolver | undefined,
+  dataItemMetaResolver: TxMetadataResolver | undefined,
 ): Promise<ResolvedItemHeaders | undefined> => {
   if (
     !config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED ||
@@ -410,7 +410,7 @@ const awaitItemHeaders = async (
   tagsPromise: Promise<ResolvedItemHeaders | undefined>,
   upstreamTags: { name: string; value: string }[] | undefined,
   id: string,
-  dataItemMetaResolver: DataItemMetaResolver | undefined,
+  dataItemMetaResolver: TxMetadataResolver | undefined,
 ): Promise<ResolvedItemHeaders | undefined> => {
   const resolved = await tagsPromise;
   const itemHeaders: ResolvedItemHeaders | undefined =
@@ -1022,7 +1022,7 @@ export const createRawDataHandler = ({
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
   negativeDataCache?: NegativeDataCache;
-  dataItemMetaResolver?: DataItemMetaResolver;
+  dataItemMetaResolver?: TxMetadataResolver;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req, res);
@@ -1538,7 +1538,7 @@ export const createDataHandler = ({
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
   negativeDataCache?: NegativeDataCache;
-  dataItemMetaResolver?: DataItemMetaResolver;
+  dataItemMetaResolver?: TxMetadataResolver;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req, res);

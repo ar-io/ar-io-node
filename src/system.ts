@@ -23,7 +23,7 @@ import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { RootParentDataSource } from './data/root-parent-data-source.js';
 import { Ans104OffsetSource } from './data/ans104-offset-source.js';
-import { DataItemMetaResolver } from './data/data-item-meta-resolver.js';
+import { TxMetadataResolver } from './data/tx-metadata-resolver.js';
 import { CompositeTxBoundarySource } from './data/composite-tx-boundary-source.js';
 import { DatabaseTxBoundarySource } from './data/database-tx-boundary-source.js';
 import { ChainTxBoundarySource } from './data/chain-tx-boundary-source.js';
@@ -838,7 +838,7 @@ export const rootTxIndex = new CompositeRootTxIndex({
 
 // Resolver for data item metadata (used by /tx/:id and tag headers)
 // Tries gateways first (faster), then falls back to Arweave nodes via chunks
-export const dataItemMetaResolver = new DataItemMetaResolver({
+export const dataItemMetaResolver = new TxMetadataResolver({
   log,
   txStore,
   gqlQueryable,
