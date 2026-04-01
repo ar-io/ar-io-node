@@ -87,8 +87,15 @@
     "qs": "6.15.0",
     "cookie": "0.7.0",
     "axios": "1.13.5",
-    "fast-xml-parser": "5.3.6",
-    "multer": "2.1.1"
+    "fast-xml-parser": "5.5.9",
+    "multer": "2.1.1",
+    "express/path-to-regexp": "0.1.13",
+    "express-openapi-validator/path-to-regexp": "8.4.1",
+    "h3": "1.15.10",
+    "picomatch": "2.3.2",
+    "preact": "10.27.3",
+    "socket.io-parser": "4.2.6",
+    "undici": "7.24.7"
   },
   "devDependencies": {
     "@ardrive/turbo-sdk": "^1.40.2",
