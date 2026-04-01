@@ -273,7 +273,7 @@ export class TxMetadataResolver {
 
       // Persist to database for future lookups (GraphQL, other gateways, etc.)
       if (this.dataItemIndexWriter != null && resolved.itemOffset != null) {
-        this.saveToIndex(resolved, rootTxId, log).catch((error) => {
+        this.saveToIndex(resolved, rootTxId, path, log).catch((error) => {
           log.error('Failed to persist on-demand data item to index', {
             id,
             rootTxId,
@@ -295,6 +295,7 @@ export class TxMetadataResolver {
   private async saveToIndex(
     resolved: ResolvedTxMetadata,
     rootTxId: string,
+    path: string[] | undefined,
     log: winston.Logger,
   ): Promise<void> {
     if (
@@ -329,7 +330,10 @@ export class TxMetadataResolver {
       offset: resolved.itemOffset,
       size: resolved.itemSize,
       index: 0,
-      parent_id: rootTxId,
+      parent_id:
+        path != null && path.length > 1
+          ? path[path.length - 1] // Immediate parent for nested bundles
+          : rootTxId,
       parent_index: 0,
       root_tx_id: rootTxId,
       root_parent_offset: 0,
