@@ -7,7 +7,7 @@
 import { LRUCache } from 'lru-cache';
 import winston from 'winston';
 
-import { Ans104OffsetSource, DataItemMeta } from './ans104-offset-source.js';
+import { Ans104OffsetSource } from './ans104-offset-source.js';
 import { fromB64Url, sha256B64Url, utf8ToB64Url } from '../lib/encoding.js';
 import {
   DataItemIndexWriter,
@@ -32,8 +32,8 @@ interface RootTxIndex {
   >;
 }
 
-/** Normalized data item metadata suitable for building /tx/{id} responses. */
-export interface ResolvedDataItemMeta {
+/** Normalized transaction/data item metadata. */
+export interface ResolvedTxMetadata {
   id: string;
   signature: string;
   signatureType?: number;
@@ -47,18 +47,24 @@ export interface ResolvedDataItemMeta {
   parentId?: string;
   rootTransactionId?: string;
   isStable?: boolean;
-  /** Internal: raw extraction data for persistence. Not used externally. */
-  _meta?: DataItemMeta & { itemOffset: number; itemSize: number };
+  // Offset fields from binary extraction (used for persistence)
+  signatureOffset?: number;
+  signatureSize?: number;
+  ownerOffset?: number;
+  ownerSize?: number;
+  headerSize?: number;
+  itemOffset?: number;
+  itemSize?: number;
 }
 
-export class DataItemMetaResolver {
+export class TxMetadataResolver {
   private log: winston.Logger;
   private txStore?: PartialJsonTransactionStore;
   private gqlQueryable: GqlQueryable;
   private rootTxIndex: RootTxIndex;
   private ans104OffsetSources: Ans104OffsetSource[];
   private dataItemIndexWriter?: DataItemIndexWriter;
-  private cache: LRUCache<string, ResolvedDataItemMeta>;
+  private cache: LRUCache<string, ResolvedTxMetadata>;
 
   constructor({
     log,
@@ -91,9 +97,7 @@ export class DataItemMetaResolver {
    * Does not attempt remote resolution. Returns undefined if not locally
    * available — the caller can trigger background indexing separately.
    */
-  async resolveFromLocal(
-    id: string,
-  ): Promise<ResolvedDataItemMeta | undefined> {
+  async resolveFromLocal(id: string): Promise<ResolvedTxMetadata | undefined> {
     // Check LRU cache
     const cached = this.cache.get(id);
     if (cached !== undefined) {
@@ -105,7 +109,7 @@ export class DataItemMetaResolver {
       try {
         const tx = await this.txStore.get(id);
         if (tx != null) {
-          const resolved: ResolvedDataItemMeta = {
+          const resolved: ResolvedTxMetadata = {
             id,
             signature: tx.signature ?? '',
             ownerAddress:
@@ -145,7 +149,7 @@ export class DataItemMetaResolver {
     return undefined;
   }
 
-  async resolve(id: string): Promise<ResolvedDataItemMeta | undefined> {
+  async resolve(id: string): Promise<ResolvedTxMetadata | undefined> {
     const log = this.log.child({ method: 'resolve', id });
 
     // Check LRU cache and local DB first (fast path)
@@ -166,7 +170,7 @@ export class DataItemMetaResolver {
       log.debug('Found root transaction', { rootTxId, hasPath: !!path });
 
       // Try each offset source in sequence (gateways, then chunks/Arweave nodes)
-      let resolved: ResolvedDataItemMeta | undefined;
+      let resolved: ResolvedTxMetadata | undefined;
       for (const offsetSource of this.ans104OffsetSources) {
         try {
           // Find offset within the bundle
@@ -218,11 +222,13 @@ export class DataItemMetaResolver {
             contentType: meta.contentType,
             rootTransactionId: rootTxId,
             isStable,
-            _meta: {
-              ...meta,
-              itemOffset: offsetResult.itemOffset,
-              itemSize: offsetResult.itemSize,
-            },
+            signatureOffset: meta.signatureOffset,
+            signatureSize: meta.signatureSize,
+            ownerOffset: meta.ownerOffset,
+            ownerSize: meta.ownerSize,
+            headerSize: meta.headerSize,
+            itemOffset: offsetResult.itemOffset,
+            itemSize: offsetResult.itemSize,
           };
           break;
         } catch (sourceError: any) {
@@ -245,7 +251,7 @@ export class DataItemMetaResolver {
       });
 
       // Persist to database for future lookups (GraphQL, other gateways, etc.)
-      if (this.dataItemIndexWriter != null && resolved._meta != null) {
+      if (this.dataItemIndexWriter != null && resolved.itemOffset != null) {
         this.saveToIndex(resolved, rootTxId, log).catch((error) => {
           log.error('Failed to persist on-demand data item to index', {
             id,
@@ -266,37 +272,41 @@ export class DataItemMetaResolver {
   }
 
   private async saveToIndex(
-    resolved: ResolvedDataItemMeta,
+    resolved: ResolvedTxMetadata,
     rootTxId: string,
     log: winston.Logger,
   ): Promise<void> {
-    if (this.dataItemIndexWriter == null || resolved._meta == null) {
+    if (
+      this.dataItemIndexWriter == null ||
+      resolved.itemOffset == null ||
+      resolved.itemSize == null ||
+      resolved.headerSize == null
+    ) {
       return;
     }
 
-    const m = resolved._meta;
     const item: NormalizedBundleDataItem = {
-      id: m.id,
-      anchor: m.anchor,
-      signature: m.signature,
-      signature_type: m.signatureType,
-      signature_offset: m.signatureOffset,
-      signature_size: m.signatureSize,
-      owner: m.owner,
-      owner_address: m.ownerAddress,
-      owner_offset: m.ownerOffset,
-      owner_size: m.ownerSize,
-      target: m.target,
-      content_type: m.contentType,
-      data_size: m.payloadSize,
-      data_offset: m.itemOffset + m.headerSize,
+      id: resolved.id,
+      anchor: resolved.anchor,
+      signature: resolved.signature,
+      signature_type: resolved.signatureType ?? 1,
+      signature_offset: resolved.signatureOffset ?? 0,
+      signature_size: resolved.signatureSize ?? 0,
+      owner: resolved.owner,
+      owner_address: resolved.ownerAddress,
+      owner_offset: resolved.ownerOffset ?? 0,
+      owner_size: resolved.ownerSize ?? 0,
+      target: resolved.target,
+      content_type: resolved.contentType,
+      data_size: resolved.dataSize,
+      data_offset: resolved.itemOffset + resolved.headerSize,
       data_hash: null, // Not available without reading the full payload
-      tags: m.tags.map((t) => ({
+      tags: resolved.tags.map((t) => ({
         name: utf8ToB64Url(t.name),
         value: utf8ToB64Url(t.value),
       })),
-      offset: m.itemOffset,
-      size: m.itemSize,
+      offset: resolved.itemOffset,
+      size: resolved.itemSize,
       index: 0,
       parent_id: rootTxId,
       parent_index: 0,
@@ -306,10 +316,10 @@ export class DataItemMetaResolver {
     };
 
     await this.dataItemIndexWriter.saveDataItem(item);
-    log.debug('Persisted on-demand data item to index', { id: m.id });
+    log.debug('Persisted on-demand data item to index', { id: resolved.id });
   }
 
-  private fromGqlTransaction(gqlTx: GqlTransaction): ResolvedDataItemMeta {
+  private fromGqlTransaction(gqlTx: GqlTransaction): ResolvedTxMetadata {
     return {
       id: gqlTx.id,
       signature: gqlTx.signature ?? '',
