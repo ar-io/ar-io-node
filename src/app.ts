@@ -71,7 +71,11 @@ app.use(
 app.use(createRequestIdMiddleware());
 
 // Attach AbortSignal to all requests for client disconnect handling
-app.use(createAbortSignalMiddleware());
+app.use(
+  createAbortSignalMiddleware({
+    disableRequestAbortSignal: config.DISABLE_REQUEST_ABORT_SIGNAL,
+  }),
+);
 
 // Set default Cache-Control when no handler sets one
 app.use(createDefaultCacheControlMiddleware(config.CACHE_DEFAULT_MAX_AGE));
