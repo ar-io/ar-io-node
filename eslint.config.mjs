@@ -1,5 +1,5 @@
 import typescriptEslint from '@typescript-eslint/eslint-plugin';
-import header from 'eslint-plugin-header';
+import header from '@tony.ganchev/eslint-plugin-header';
 import jestFormatting from 'eslint-plugin-jest-formatting';
 import prettier from 'eslint-plugin-prettier';
 import unicorn from 'eslint-plugin-unicorn';
@@ -12,8 +12,6 @@ import { FlatCompat } from '@eslint/eslintrc';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// workaround: https://github.com/Stuk/eslint-plugin-header/issues/57#issuecomment-2378485611
-header.rules.header.meta.schema = false;
 const compat = new FlatCompat({
   baseDirectory: __dirname,
   recommendedConfig: js.configs.recommended,
