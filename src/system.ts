@@ -51,6 +51,8 @@ import {
   TurboRootTxIndex,
   CachedTurboOffsets,
   Cdb64RootTxIndex,
+  HyperBeamRootTxIndex,
+  CachedHyperBeamOffsets,
 } from './discovery/index.js';
 import { LRUCache } from 'lru-cache';
 import { makeContiguousMetadataStore } from './init/metadata-store.js';
@@ -277,6 +279,12 @@ const turboOffsetsCache = new LRUCache<string, CachedTurboOffsets>({
 
 // Create separate cache for gateway offsets
 const gatewayOffsetsCache = new LRUCache<string, CachedGatewayOffsets>({
+  max: config.ROOT_TX_CACHE_MAX_SIZE,
+  ttl: config.ROOT_TX_CACHE_TTL_MS,
+});
+
+// Create separate cache for HyperBEAM offsets
+const hyperbeamOffsetsCache = new LRUCache<string, CachedHyperBeamOffsets>({
   max: config.ROOT_TX_CACHE_MAX_SIZE,
   ttl: config.ROOT_TX_CACHE_TTL_MS,
 });
@@ -796,6 +804,23 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
         );
       } else {
         log.warn('GraphQL source configured but no GraphQL gateways defined');
+      }
+      break;
+
+    case 'hyperbeam':
+      if (config.HYPERBEAM_ENDPOINT !== undefined) {
+        rootTxIndexes.push(
+          new HyperBeamRootTxIndex({
+            log,
+            hyperbeamEndpoint: config.HYPERBEAM_ENDPOINT,
+            txBoundarySource: dbBoundarySource,
+            contiguousDataSource: baseTxChunksDataSource,
+            dataAttributesStore,
+            cache: hyperbeamOffsetsCache,
+          }),
+        );
+      } else {
+        log.warn('HyperBEAM source configured but no endpoint defined');
       }
       break;
 
