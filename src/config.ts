@@ -610,6 +610,30 @@ export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
   '3',
 );
 
+// The maximum number of peers to attempt when fetching a chunk via GET
+export const ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT = +env.varOrDefault(
+  'ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT',
+  '5',
+);
+
+// How many candidate peers to select from each pool for chunk GET requests
+export const ARWEAVE_PEER_CHUNK_GET_PEER_SELECTION_COUNT = +env.varOrDefault(
+  'ARWEAVE_PEER_CHUNK_GET_PEER_SELECTION_COUNT',
+  '10',
+);
+
+// Timeout for TX geometry resolution requests (getTxOffset/getTxField)
+export const ARWEAVE_CHUNK_GET_GEOMETRY_TIMEOUT_MS = +env.varOrDefault(
+  'ARWEAVE_CHUNK_GET_GEOMETRY_TIMEOUT_MS',
+  '5000',
+);
+
+// Retry count for TX geometry resolution requests (getTxOffset/getTxField)
+export const ARWEAVE_CHUNK_GET_GEOMETRY_RETRY_COUNT = +env.varOrDefault(
+  'ARWEAVE_CHUNK_GET_GEOMETRY_RETRY_COUNT',
+  '2',
+);
+
 //
 // DNS-based peer discovery and Envoy EDS
 //
