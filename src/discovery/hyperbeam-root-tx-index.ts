@@ -8,25 +8,15 @@ import { default as axios, AxiosInstance } from 'axios';
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
-import {
-  byteArrayToLong,
-  deserializeTags,
-  MAX_TAG_BYTES,
-} from '@dha-team/arbundles';
 
 import {
   ContiguousDataAttributesStore,
-  ContiguousDataSource,
   DataItemRootIndex,
   TxBoundarySource,
 } from '../types.js';
-import { getSignatureMeta, isValidSignatureConfig } from '../lib/bundles.js';
+import { Ans104OffsetSource } from '../data/ans104-offset-source.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
-
-// Maximum ANS-104 data item header size (same formula as ans104-offset-source.ts)
-const MAX_DATA_ITEM_HEADER_SIZE =
-  2 + 2052 + 1025 + 33 + 33 + 16 + MAX_TAG_BYTES + 1024;
 
 export type CachedHyperBeamOffsets = {
   rootTxId: string;
@@ -43,8 +33,9 @@ export type CachedHyperBeamOffsets = {
  * weave byte offset which is converted to a root TX ID via the local database.
  *
  * Enrichment strategy (two tiers):
- * 1. Backward-scan header parsing: fetch chunk data before the data offset,
- *    scan for the ANS-104 header to extract rootOffset and contentType.
+ * 1. Offset-guided bundle parsing: recursively parse the root bundle's index
+ *    using the offset as a hint to navigate to the target data item, yielding
+ *    all metadata fields with ID verification.
  * 2. Local DB attributes: fall back to cached metadata from the data store.
  */
 export class HyperBeamRootTxIndex implements DataItemRootIndex {
@@ -54,7 +45,7 @@ export class HyperBeamRootTxIndex implements DataItemRootIndex {
   private readonly cache?: LRUCache<string, CachedHyperBeamOffsets>;
   private readonly limiter: TokenBucket;
   private readonly txBoundarySource: TxBoundarySource;
-  private readonly contiguousDataSource?: ContiguousDataSource;
+  private readonly ans104OffsetSource?: Ans104OffsetSource;
   private readonly dataAttributesStore?: ContiguousDataAttributesStore;
 
   constructor({
@@ -65,7 +56,7 @@ export class HyperBeamRootTxIndex implements DataItemRootIndex {
     rateLimitTokensPerInterval = config.HYPERBEAM_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
     rateLimitInterval = config.HYPERBEAM_ROOT_TX_RATE_LIMIT_INTERVAL,
     txBoundarySource,
-    contiguousDataSource,
+    ans104OffsetSource,
     dataAttributesStore,
     cache,
   }: {
@@ -76,14 +67,14 @@ export class HyperBeamRootTxIndex implements DataItemRootIndex {
     rateLimitTokensPerInterval?: number;
     rateLimitInterval?: 'second' | 'minute' | 'hour' | 'day';
     txBoundarySource: TxBoundarySource;
-    contiguousDataSource?: ContiguousDataSource;
+    ans104OffsetSource?: Ans104OffsetSource;
     dataAttributesStore?: ContiguousDataAttributesStore;
     cache?: LRUCache<string, CachedHyperBeamOffsets>;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.hyperbeamEndpoint = hyperbeamEndpoint;
     this.txBoundarySource = txBoundarySource;
-    this.contiguousDataSource = contiguousDataSource;
+    this.ans104OffsetSource = ans104OffsetSource;
     this.dataAttributesStore = dataAttributesStore;
     this.cache = cache;
 
@@ -189,30 +180,37 @@ export class HyperBeamRootTxIndex implements DataItemRootIndex {
         rootDataOffset: relativeDataOffset,
       };
 
-      // Tier 1: Backward-scan header parsing
-      const scanResult = await this.enrichFromBackwardScan(
-        rootTxId,
-        relativeDataOffset,
-        log,
-      );
+      // Tier 1: Offset-guided bundle parsing
+      if (this.ans104OffsetSource !== undefined) {
+        try {
+          const parseResult = await this.ans104OffsetSource.getDataItemByOffset(
+            id,
+            rootTxId,
+            relativeDataOffset,
+          );
 
-      if (scanResult !== undefined) {
-        result.rootOffset = scanResult.rootOffset;
-        result.contentType = scanResult.contentType;
+          if (parseResult !== null) {
+            result.rootOffset = parseResult.itemOffset;
+            result.rootDataOffset = parseResult.dataOffset;
+            result.contentType = parseResult.contentType;
+            result.size = parseResult.itemSize;
+            result.dataSize = parseResult.dataSize;
+          }
+        } catch (error: any) {
+          log.debug('Offset-guided bundle parsing failed', {
+            error: error.message,
+          });
+        }
       }
 
-      // Tier 2: DB attribute enrichment (fills gaps from backward-scan)
+      // Tier 2: DB attribute enrichment (fills gaps if parsing failed)
       if (
         result.rootOffset === undefined ||
         result.size === undefined ||
         result.dataSize === undefined ||
         result.contentType === undefined
       ) {
-        const dbResult = await this.enrichFromDataAttributes(
-          id,
-          relativeDataOffset,
-          log,
-        );
+        const dbResult = await this.enrichFromDataAttributes(id, log);
 
         if (dbResult !== undefined) {
           result.rootOffset ??= dbResult.rootOffset;
@@ -256,207 +254,10 @@ export class HyperBeamRootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Scans backwards from the data offset to find and parse the ANS-104
-   * data item header. Returns rootOffset and contentType if a structurally
-   * valid header is found.
-   */
-  private async enrichFromBackwardScan(
-    rootTxId: string,
-    relativeDataOffset: number,
-    log: winston.Logger,
-  ): Promise<{ rootOffset: number; contentType?: string } | undefined> {
-    if (this.contiguousDataSource === undefined) {
-      return undefined;
-    }
-
-    if (relativeDataOffset <= 0) {
-      return undefined;
-    }
-
-    try {
-      const fetchStart = Math.max(
-        0,
-        relativeDataOffset - MAX_DATA_ITEM_HEADER_SIZE,
-      );
-      const fetchSize = relativeDataOffset - fetchStart;
-
-      if (fetchSize <= 0) {
-        return undefined;
-      }
-
-      log.debug('Fetching chunk data for backward-scan', {
-        rootTxId,
-        fetchStart,
-        fetchSize,
-      });
-
-      const data = await this.contiguousDataSource.getData({
-        id: rootTxId,
-        region: { offset: fetchStart, size: fetchSize },
-      });
-
-      // Collect stream into buffer
-      const chunks: Buffer[] = [];
-      for await (const chunk of data.stream) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const buffer = Buffer.concat(chunks);
-
-      return this.parseHeaderFromBuffer(buffer, fetchStart, log);
-    } catch (error: any) {
-      log.debug('Backward-scan enrichment failed', {
-        rootTxId,
-        error: error.message,
-      });
-      return undefined;
-    }
-  }
-
-  /**
-   * Scans a buffer backwards for a valid ANS-104 data item header.
-   * The buffer represents data ending at the known data offset within the
-   * root TX. A valid header must parse structurally and end exactly at
-   * the end of the buffer.
-   */
-  private parseHeaderFromBuffer(
-    buffer: Buffer,
-    fetchStart: number,
-    log: winston.Logger,
-  ): { rootOffset: number; contentType?: string } | undefined {
-    // Scan backwards for signature type candidates
-    // Signature type is a 2-byte little-endian uint16 with values 1-7
-    for (let i = buffer.length - 4; i >= 0; i--) {
-      const sigTypeByte = buffer[i];
-      const sigTypeHighByte = buffer[i + 1];
-
-      // Check for valid signature type: low byte 1-7, high byte 0
-      if (
-        sigTypeByte < 1 ||
-        sigTypeByte > 7 ||
-        sigTypeHighByte !== 0 ||
-        !isValidSignatureConfig(sigTypeByte)
-      ) {
-        continue;
-      }
-
-      const result = this.tryParseHeaderAt(buffer, i, log);
-      if (result !== undefined) {
-        return {
-          rootOffset: fetchStart + i,
-          contentType: result.contentType,
-        };
-      }
-    }
-
-    log.debug('No valid ANS-104 header found in backward-scan');
-    return undefined;
-  }
-
-  /**
-   * Attempts to parse an ANS-104 data item header starting at the given
-   * position in the buffer. Returns metadata if the parsed header ends
-   * exactly at the buffer boundary (the known data offset).
-   */
-  private tryParseHeaderAt(
-    buffer: Buffer,
-    startPos: number,
-    log: winston.Logger,
-  ): { contentType?: string } | undefined {
-    try {
-      let offset = startPos;
-      const bufLen = buffer.length;
-
-      // Signature type (2 bytes)
-      if (offset + 2 > bufLen) return undefined;
-      const signatureType = buffer[offset] | (buffer[offset + 1] << 8);
-      offset += 2;
-
-      const { sigLength, pubLength } = getSignatureMeta(signatureType);
-
-      // Skip signature
-      offset += sigLength;
-      if (offset > bufLen) return undefined;
-
-      // Skip owner/public key
-      offset += pubLength;
-      if (offset > bufLen) return undefined;
-
-      // Target flag (1 byte, must be 0 or 1)
-      if (offset + 1 > bufLen) return undefined;
-      const targetFlag = buffer[offset];
-      if (targetFlag !== 0 && targetFlag !== 1) return undefined;
-      offset += 1;
-      if (targetFlag === 1) {
-        offset += 32;
-        if (offset > bufLen) return undefined;
-      }
-
-      // Anchor flag (1 byte, must be 0 or 1)
-      if (offset + 1 > bufLen) return undefined;
-      const anchorFlag = buffer[offset];
-      if (anchorFlag !== 0 && anchorFlag !== 1) return undefined;
-      offset += 1;
-      if (anchorFlag === 1) {
-        offset += 32;
-        if (offset > bufLen) return undefined;
-      }
-
-      // Tags metadata: 8-byte count + 8-byte bytes length
-      if (offset + 16 > bufLen) return undefined;
-      const tagCount = byteArrayToLong(buffer.subarray(offset, offset + 8));
-      const tagBytesLength = byteArrayToLong(
-        buffer.subarray(offset + 8, offset + 16),
-      );
-      offset += 16;
-
-      // Validate tag values are reasonable
-      if (tagCount < 0 || tagCount > 4096) return undefined;
-      if (tagBytesLength < 0 || tagBytesLength > MAX_TAG_BYTES)
-        return undefined;
-
-      // Parse tags if present
-      let contentType: string | undefined;
-      if (tagBytesLength > 0) {
-        if (offset + tagBytesLength > bufLen) return undefined;
-        const tagsBytes = buffer.subarray(offset, offset + tagBytesLength);
-
-        if (tagCount > 0) {
-          try {
-            const tags = deserializeTags(Buffer.from(tagsBytes));
-            const contentTypeTag = tags.find(
-              (tag) => tag.name.toLowerCase() === 'content-type',
-            );
-            contentType = contentTypeTag?.value;
-          } catch {
-            // Tag deserialization failed — not a valid header
-            return undefined;
-          }
-        }
-
-        offset += tagBytesLength;
-      }
-
-      // Key validation: parsed header must end exactly at buffer boundary
-      if (offset !== bufLen) return undefined;
-
-      log.debug('Backward-scan found valid ANS-104 header', {
-        signatureType,
-        headerSize: bufLen - startPos,
-        contentType,
-      });
-
-      return { contentType };
-    } catch {
-      return undefined;
-    }
-  }
-
-  /**
    * Enriches the result with metadata from the local data attributes store.
    */
   private async enrichFromDataAttributes(
     id: string,
-    _relativeDataOffset: number,
     log: winston.Logger,
   ): Promise<
     | {

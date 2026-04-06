@@ -160,6 +160,100 @@ export class Ans104OffsetSource {
   }
 
   /**
+   * Finds a data item by navigating the bundle hierarchy using a known byte
+   * offset as a hint. Instead of searching all items by ID, uses the offset
+   * to identify exactly which item at each level contains the target, then
+   * recurses into nested bundles as needed.
+   *
+   * This is used when the global weave offset is known (e.g., from HyperBEAM)
+   * but the item's position within the bundle hierarchy is not.
+   *
+   * @param dataItemId - Expected data item ID (verified at the leaf)
+   * @param rootBundleId - The root L1 transaction ID
+   * @param targetDataOffset - Byte offset of the data item's payload within the root TX
+   * @param signal - Optional abort signal
+   * @returns Object with offsets, sizes, and content type if found, null otherwise
+   */
+  async getDataItemByOffset(
+    dataItemId: string,
+    rootBundleId: string,
+    targetDataOffset: number,
+    signal?: AbortSignal,
+  ): Promise<{
+    itemOffset: number;
+    dataOffset: number;
+    itemSize: number;
+    dataSize: number;
+    contentType?: string;
+  } | null> {
+    const log = this.log.child({
+      method: 'getDataItemByOffset',
+      dataItemId,
+      rootBundleId,
+      targetDataOffset,
+    });
+    const startTime = Date.now();
+
+    signal?.throwIfAborted();
+
+    log.debug('Searching for data item by offset hint');
+
+    try {
+      const result = await this.findByOffset(
+        dataItemId,
+        rootBundleId,
+        0,
+        targetDataOffset,
+        new Set<number>(),
+        signal,
+      );
+
+      const duration = Date.now() - startTime;
+      metrics.ans104OffsetLookupDurationSummary.observe(
+        { method: 'offset_guided' },
+        duration,
+      );
+
+      if (result) {
+        metrics.ans104OffsetLookupTotal.inc({
+          method: 'offset_guided',
+          status: 'found',
+        });
+        log.debug('Found data item by offset', {
+          itemOffset: result.itemOffset,
+          dataOffset: result.dataOffset,
+          itemSize: result.itemSize,
+          dataSize: result.dataSize,
+          contentType: result.contentType,
+        });
+      } else {
+        metrics.ans104OffsetLookupTotal.inc({
+          method: 'offset_guided',
+          status: 'not_found',
+        });
+        log.debug('Data item not found at offset');
+      }
+
+      return result;
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      metrics.ans104OffsetLookupDurationSummary.observe(
+        { method: 'offset_guided' },
+        duration,
+      );
+      metrics.ans104OffsetLookupTotal.inc({
+        method: 'offset_guided',
+        status: 'error',
+      });
+      log.error('Error searching for data item by offset', {
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Finds the offset and size of a data item using a known traversal path.
    * Much faster than linear search when the path is available.
    *
@@ -558,6 +652,135 @@ export class Ans104OffsetSource {
       log.error('Error processing bundle', {
         error: error.message,
         bundleId,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Recursively navigates the bundle hierarchy using a known byte offset
+   * to find the containing data item at each level.
+   */
+  private async findByOffset(
+    dataItemId: string,
+    rootBundleId: string,
+    bundleContentOffset: number,
+    targetDataOffset: number,
+    visited: Set<number>,
+    signal?: AbortSignal,
+  ): Promise<{
+    itemOffset: number;
+    dataOffset: number;
+    itemSize: number;
+    dataSize: number;
+    contentType?: string;
+  } | null> {
+    signal?.throwIfAborted();
+
+    // Cycle detection using offset (handles circular bundle references)
+    if (visited.has(bundleContentOffset)) {
+      return null;
+    }
+    visited.add(bundleContentOffset);
+
+    const log = this.log.child({
+      method: 'findByOffset',
+      rootBundleId,
+      bundleContentOffset,
+      targetDataOffset,
+    });
+
+    try {
+      // Parse bundle index
+      const countData = await this.dataSource.getData({
+        id: rootBundleId,
+        region: { offset: bundleContentOffset, size: 32 },
+        signal,
+      });
+      const itemCount = await this.parseItemCount(countData.stream);
+
+      if (itemCount === 0) {
+        log.debug('Bundle has no items');
+        return null;
+      }
+
+      signal?.throwIfAborted();
+
+      const headerSize = 32 + 64 * itemCount;
+      const headerData = await this.dataSource.getData({
+        id: rootBundleId,
+        region: { offset: bundleContentOffset, size: headerSize },
+        signal,
+      });
+      const items = await this.parseHeaders(headerData.stream, itemCount);
+
+      // Find which item contains the target offset
+      for (const item of items) {
+        const absoluteItemStart = bundleContentOffset + item.offset;
+        const absoluteItemEnd = absoluteItemStart + item.size;
+
+        if (targetDataOffset < absoluteItemStart) continue;
+        if (targetDataOffset >= absoluteItemEnd) continue;
+
+        // This item contains our target offset — parse its header
+        signal?.throwIfAborted();
+
+        const headerInfo = await this.parseDataItemHeader(
+          rootBundleId,
+          absoluteItemStart,
+          item.size,
+          signal,
+        );
+        const absoluteDataStart = absoluteItemStart + headerInfo.headerSize;
+
+        // If target is in the payload region and item is a nested bundle, recurse
+        if (targetDataOffset >= absoluteDataStart) {
+          const isBundleResult = await this.isBundle(
+            rootBundleId,
+            absoluteItemStart,
+            item,
+            signal,
+          );
+          if (isBundleResult) {
+            log.debug('Target offset is inside nested bundle', {
+              nestedId: item.id,
+              nestedDataStart: absoluteDataStart,
+            });
+            return this.findByOffset(
+              dataItemId,
+              rootBundleId,
+              absoluteDataStart,
+              targetDataOffset,
+              visited,
+              signal,
+            );
+          }
+        }
+
+        // Leaf item — verify ID
+        if (headerInfo.id !== dataItemId) {
+          log.debug('ID mismatch at target offset', {
+            expectedId: dataItemId,
+            foundId: headerInfo.id,
+          });
+          return null;
+        }
+
+        return {
+          itemOffset: absoluteItemStart,
+          dataOffset: absoluteDataStart,
+          itemSize: item.size,
+          dataSize: headerInfo.payloadSize,
+          contentType: headerInfo.contentType,
+        };
+      }
+
+      log.debug('Target offset not found in any item');
+      return null;
+    } catch (error: any) {
+      log.error('Error in offset-guided search', {
+        error: error.message,
+        bundleContentOffset,
       });
       throw error;
     }

@@ -814,7 +814,7 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
             log,
             hyperbeamEndpoint: config.HYPERBEAM_ENDPOINT,
             txBoundarySource: dbBoundarySource,
-            contiguousDataSource: baseTxChunksDataSource,
+            ans104OffsetSource: ans104ChunksOffsetSource,
             dataAttributesStore,
             cache: hyperbeamOffsetsCache,
           }),
