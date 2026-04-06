@@ -5,73 +5,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { Readable } from 'node:stream';
 import { afterEach, describe, it, mock } from 'node:test';
 import { LRUCache } from 'lru-cache';
 import axios from 'axios';
-import { serializeTags } from '@dha-team/arbundles';
 import { HyperBeamRootTxIndex } from './hyperbeam-root-tx-index.js';
-import { getSignatureMeta } from '../lib/bundles.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'HyperBeamRootTxIndex' });
-
-/**
- * Builds a valid ANS-104 data item header buffer for testing backward-scan.
- */
-function buildDataItemHeader({
-  signatureType = 1,
-  hasTarget = false,
-  hasAnchor = false,
-  tags = [] as { name: string; value: string }[],
-}: {
-  signatureType?: number;
-  hasTarget?: boolean;
-  hasAnchor?: boolean;
-  tags?: { name: string; value: string }[];
-} = {}): Buffer {
-  const { sigLength, pubLength } = getSignatureMeta(signatureType);
-
-  const parts: Buffer[] = [];
-
-  // Signature type (2 bytes, little-endian)
-  const sigTypeBuf = Buffer.alloc(2);
-  sigTypeBuf.writeUInt16LE(signatureType, 0);
-  parts.push(sigTypeBuf);
-
-  // Signature (filled with 0xAA)
-  parts.push(Buffer.alloc(sigLength, 0xaa));
-
-  // Owner/public key (filled with 0xBB)
-  parts.push(Buffer.alloc(pubLength, 0xbb));
-
-  // Target flag + optional target
-  parts.push(Buffer.from([hasTarget ? 1 : 0]));
-  if (hasTarget) {
-    parts.push(Buffer.alloc(32, 0xcc));
-  }
-
-  // Anchor flag + optional anchor
-  parts.push(Buffer.from([hasAnchor ? 1 : 0]));
-  if (hasAnchor) {
-    parts.push(Buffer.alloc(32, 0xdd));
-  }
-
-  // Tags metadata + serialized tags
-  const serializedTags =
-    tags.length > 0 ? serializeTags(tags) : Buffer.alloc(0);
-  const tagCountBuf = Buffer.alloc(8);
-  tagCountBuf.writeBigUInt64LE(BigInt(tags.length), 0);
-  const tagBytesBuf = Buffer.alloc(8);
-  tagBytesBuf.writeBigUInt64LE(BigInt(serializedTags.length), 0);
-  parts.push(tagCountBuf);
-  parts.push(tagBytesBuf);
-  if (serializedTags.length > 0) {
-    parts.push(serializedTags);
-  }
-
-  return Buffer.concat(parts);
-}
 
 function createMockAxiosInstance(responseOrFn: any) {
   const getInstance =
@@ -92,17 +32,9 @@ function createMockBoundarySource(result: any) {
   };
 }
 
-function createMockDataSource(buffer: Buffer) {
+function createMockOffsetSource(result: any) {
   return {
-    getData: mock.fn(() =>
-      Promise.resolve({
-        stream: Readable.from([buffer]),
-        size: buffer.length,
-        verified: false,
-        trusted: false,
-        cached: false,
-      }),
-    ),
+    getDataItemByOffset: mock.fn(() => Promise.resolve(result)),
   };
 }
 
@@ -153,14 +85,12 @@ describe('HyperBeamRootTxIndex', () => {
       const txBoundarySource = createMockBoundarySource(boundary);
 
       const index = createIndex({ txBoundarySource });
-      // Prefill rate limiter
       (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
 
       const result = await index.getRootTx('test-data-item');
 
       assert(result !== undefined);
       assert.equal(result.rootTxId, 'root-tx-abc');
-      // relativeDataOffset = 355950809045177 - (355950810045176 - 1000000 + 1)
       assert.equal(
         result.rootDataOffset,
         355950809045177 - (355950810045176 - 1000000 + 1),
@@ -189,7 +119,6 @@ describe('HyperBeamRootTxIndex', () => {
 
       assert(result !== undefined);
       assert.equal(result.rootTxId, 'root-tx-abc');
-      // relativeDataOffset = 12345 - (13344 - 1000 + 1) = 12345 - 12345 = 0
       assert.equal(result.rootDataOffset, 0);
     });
 
@@ -214,7 +143,6 @@ describe('HyperBeamRootTxIndex', () => {
 
       assert(result !== undefined);
       assert.equal(result.rootTxId, 'root-tx-abc');
-      // relativeDataOffset = 12345 - (12444 - 100 + 1) = 12345 - 12345 = 0
       assert.equal(result.rootDataOffset, 0);
     });
 
@@ -320,7 +248,6 @@ describe('HyperBeamRootTxIndex', () => {
       const result = await index.getRootTx('cached-item');
 
       assert.deepEqual(result, cachedResult);
-      // Should not have made any HTTP request
       assert.equal(mockAxios.get.mock.calls.length, 0);
     });
 
@@ -332,13 +259,11 @@ describe('HyperBeamRootTxIndex', () => {
 
       const index = createIndex();
 
-      // Set rate limiter to 0 tokens — should immediately return undefined
       (index as any)['limiter'].content = 0;
 
       const result = await index.getRootTx('rate-limited-item');
 
       assert.equal(result, undefined);
-      // No HTTP calls should have been made
       assert.equal(mockAxios.get.mock.calls.length, 0);
     });
 
@@ -364,207 +289,61 @@ describe('HyperBeamRootTxIndex', () => {
       const index = createIndex({ txBoundarySource, cache });
       (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
 
-      // First call populates cache
       await index.getRootTx('test-item');
 
-      // Second call uses cache
       const result = await index.getRootTx('test-item');
 
       assert(result !== undefined);
       assert.equal(result.rootTxId, 'root-tx-abc');
-      // Only 1 HTTP call
       assert.equal(mockAxios.get.mock.calls.length, 1);
     });
   });
 
-  describe('backward-scan enrichment', () => {
-    // Maximum header size constant (same as in hyperbeam-root-tx-index.ts)
-    const MAX_DATA_ITEM_HEADER_SIZE =
-      2 + 2052 + 1025 + 33 + 33 + 16 + 4096 + 1024;
-
-    /**
-     * Helper to set up a test with backward-scan.
-     * Builds a properly sized buffer with padding + header at the end,
-     * matching what the scan expects (fetchSize bytes ending at relativeDataOffset).
-     */
-    function setupBackwardScanTest({
-      headerBuffer,
-      globalOffset = 50000,
-      weaveOffset = 100000,
-      txDataSize = 60000,
-    }: {
-      headerBuffer: Buffer;
-      globalOffset?: number;
-      weaveOffset?: number;
-      txDataSize?: number;
-    }) {
-      const relativeDataOffset = globalOffset - (weaveOffset - txDataSize + 1);
-      const fetchStart = Math.max(
-        0,
-        relativeDataOffset - MAX_DATA_ITEM_HEADER_SIZE,
-      );
-      const fetchSize = relativeDataOffset - fetchStart;
-
-      // Build buffer: padding + header at end, total = fetchSize
-      const paddingSize = fetchSize - headerBuffer.length;
-      const fullBuffer =
-        paddingSize > 0
-          ? Buffer.concat([Buffer.alloc(paddingSize, 0xff), headerBuffer])
-          : headerBuffer;
-
-      const mockAxios = createMockAxiosInstance(
-        Promise.resolve({ data: String(globalOffset) }),
-      );
-      mock.method(axios, 'create', () => mockAxios);
-
-      const boundary = {
-        id: 'root-tx-scan',
-        dataRoot: 'dr',
-        dataSize: txDataSize,
-        weaveOffset,
-      };
-      const txBoundarySource = createMockBoundarySource(boundary);
-      const contiguousDataSource = createMockDataSource(fullBuffer);
-
-      return { mockAxios, txBoundarySource, contiguousDataSource };
-    }
-
-    it('should extract rootOffset and contentType from backward-scan', async () => {
-      const header = buildDataItemHeader({
-        signatureType: 1,
-        tags: [{ name: 'Content-Type', value: 'application/json' }],
-      });
-
-      // Global offset = 50000, weaveOffset = 100000, txDataSize = 60000
-      // TX data starts at: 100000 - 60000 + 1 = 40001
-      // relativeDataOffset = 50000 - 40001 = 9999
-      // fetchStart = max(0, 9999 - MAX_HEADER_SIZE) = 1718
-      // fetchSize = 9999 - 1718 = 8281
-      // The mock returns a buffer with padding + header at the end.
-      // The scan should find the header at (buffer.length - header.length)
-      // rootOffset = fetchStart + (buffer.length - header.length)
-
-      const fetchStart = 1718; // pre-calculated
-      const fetchSize = 9999 - fetchStart;
-
-      // Build buffer: padding + header, total = fetchSize
-      const padding = Buffer.alloc(fetchSize - header.length, 0xff);
-      const fullBuffer = Buffer.concat([padding, header]);
-
+  describe('offset-guided bundle parsing enrichment', () => {
+    it('should enrich with complete result from offset source', async () => {
       const mockAxios = createMockAxiosInstance(
         Promise.resolve({ data: '50000' }),
       );
       mock.method(axios, 'create', () => mockAxios);
 
       const boundary = {
-        id: 'root-tx-scan',
+        id: 'root-tx-bundle',
         dataRoot: 'dr',
         dataSize: 60000,
         weaveOffset: 100000,
       };
       const txBoundarySource = createMockBoundarySource(boundary);
-      const contiguousDataSource = createMockDataSource(fullBuffer);
 
-      const index = createIndex({ txBoundarySource, contiguousDataSource });
+      const ans104OffsetSource = createMockOffsetSource({
+        itemOffset: 9500,
+        dataOffset: 9999,
+        itemSize: 2000,
+        dataSize: 1501,
+        contentType: 'application/json',
+      });
+
+      const index = createIndex({ txBoundarySource, ans104OffsetSource });
       (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
 
-      const result = await index.getRootTx('test-scan-item');
+      const result = await index.getRootTx('test-bundle-item');
 
       assert(result !== undefined);
-      assert.equal(result.rootTxId, 'root-tx-scan');
+      assert.equal(result.rootTxId, 'root-tx-bundle');
+      assert.equal(result.rootOffset, 9500);
+      assert.equal(result.rootDataOffset, 9999);
+      assert.equal(result.size, 2000);
+      assert.equal(result.dataSize, 1501);
       assert.equal(result.contentType, 'application/json');
-      assert(result.rootOffset !== undefined);
-      // rootOffset = fetchStart + (fullBuffer.length - header.length)
-      const expectedRootOffset =
-        fetchStart + (fullBuffer.length - header.length);
-      assert.equal(result.rootOffset, expectedRootOffset);
-      // Which should equal relativeDataOffset - header.length
-      assert.equal(result.rootOffset, 9999 - header.length);
+
+      // Verify offset source was called with correct args
+      const call = ans104OffsetSource.getDataItemByOffset.mock.calls[0];
+      assert.equal(call.arguments[0], 'test-bundle-item');
+      assert.equal(call.arguments[1], 'root-tx-bundle');
+      // relativeDataOffset = 50000 - (100000 - 60000 + 1) = 9999
+      assert.equal(call.arguments[2], 9999);
     });
 
-    it('should parse Ed25519 (type 2) headers', async () => {
-      const header = buildDataItemHeader({
-        signatureType: 2,
-        tags: [{ name: 'Content-Type', value: 'text/plain' }],
-      });
-
-      const { txBoundarySource, contiguousDataSource } = setupBackwardScanTest({
-        headerBuffer: header,
-      });
-
-      const index = createIndex({ txBoundarySource, contiguousDataSource });
-      (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
-
-      const result = await index.getRootTx('test-ed25519');
-
-      assert(result !== undefined);
-      assert.equal(result.contentType, 'text/plain');
-      assert(result.rootOffset !== undefined);
-    });
-
-    it('should parse Ethereum (type 3) headers', async () => {
-      const header = buildDataItemHeader({
-        signatureType: 3,
-        tags: [{ name: 'Content-Type', value: 'image/png' }],
-      });
-
-      const { txBoundarySource, contiguousDataSource } = setupBackwardScanTest({
-        headerBuffer: header,
-      });
-
-      const index = createIndex({ txBoundarySource, contiguousDataSource });
-      (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
-
-      const result = await index.getRootTx('test-ethereum');
-
-      assert(result !== undefined);
-      assert.equal(result.contentType, 'image/png');
-      assert(result.rootOffset !== undefined);
-    });
-
-    it('should parse headers with target and anchor', async () => {
-      const header = buildDataItemHeader({
-        signatureType: 2,
-        hasTarget: true,
-        hasAnchor: true,
-        tags: [{ name: 'Content-Type', value: 'text/html' }],
-      });
-
-      const { txBoundarySource, contiguousDataSource } = setupBackwardScanTest({
-        headerBuffer: header,
-      });
-
-      const index = createIndex({ txBoundarySource, contiguousDataSource });
-      (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
-
-      const result = await index.getRootTx('test-target-anchor');
-
-      assert(result !== undefined);
-      assert.equal(result.contentType, 'text/html');
-      assert(result.rootOffset !== undefined);
-    });
-
-    it('should parse headers without tags', async () => {
-      const header = buildDataItemHeader({
-        signatureType: 2,
-        tags: [],
-      });
-
-      const { txBoundarySource, contiguousDataSource } = setupBackwardScanTest({
-        headerBuffer: header,
-      });
-
-      const index = createIndex({ txBoundarySource, contiguousDataSource });
-      (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
-
-      const result = await index.getRootTx('test-no-tags');
-
-      assert(result !== undefined);
-      assert.equal(result.contentType, undefined);
-      assert(result.rootOffset !== undefined);
-    });
-
-    it('should fall back to DB enrichment when backward-scan fails', async () => {
+    it('should fall back to DB attrs when offset source returns null', async () => {
       const mockAxios = createMockAxiosInstance(
         Promise.resolve({ data: '50000' }),
       );
@@ -577,11 +356,7 @@ describe('HyperBeamRootTxIndex', () => {
         weaveOffset: 100000,
       };
       const txBoundarySource = createMockBoundarySource(boundary);
-
-      // Data source that fails
-      const contiguousDataSource = {
-        getData: mock.fn(() => Promise.reject(new Error('chunk unavailable'))),
-      };
+      const ans104OffsetSource = createMockOffsetSource(null);
 
       const dataAttributesStore = createMockDataAttributesStore({
         rootDataItemOffset: 9000,
@@ -592,7 +367,7 @@ describe('HyperBeamRootTxIndex', () => {
 
       const index = createIndex({
         txBoundarySource,
-        contiguousDataSource,
+        ans104OffsetSource,
         dataAttributesStore,
       });
       (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
@@ -605,6 +380,82 @@ describe('HyperBeamRootTxIndex', () => {
       assert.equal(result.contentType, 'application/octet-stream');
       assert.equal(result.dataSize, 500);
       assert.equal(result.size, 600);
+    });
+
+    it('should fall back to DB attrs when offset source throws', async () => {
+      const mockAxios = createMockAxiosInstance(
+        Promise.resolve({ data: '50000' }),
+      );
+      mock.method(axios, 'create', () => mockAxios);
+
+      const boundary = {
+        id: 'root-tx-error',
+        dataRoot: 'dr',
+        dataSize: 60000,
+        weaveOffset: 100000,
+      };
+      const txBoundarySource = createMockBoundarySource(boundary);
+
+      const ans104OffsetSource = {
+        getDataItemByOffset: mock.fn(() =>
+          Promise.reject(new Error('chunk unavailable')),
+        ),
+      };
+
+      const dataAttributesStore = createMockDataAttributesStore({
+        rootDataItemOffset: 9000,
+        contentType: 'text/plain',
+        size: 500,
+        itemSize: 600,
+      });
+
+      const index = createIndex({
+        txBoundarySource,
+        ans104OffsetSource,
+        dataAttributesStore,
+      });
+      (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
+
+      const result = await index.getRootTx('test-error');
+
+      assert(result !== undefined);
+      assert.equal(result.rootOffset, 9000);
+      assert.equal(result.contentType, 'text/plain');
+    });
+
+    it('should use DB attrs only when offset source not provided', async () => {
+      const mockAxios = createMockAxiosInstance(
+        Promise.resolve({ data: '50000' }),
+      );
+      mock.method(axios, 'create', () => mockAxios);
+
+      const boundary = {
+        id: 'root-tx-nosource',
+        dataRoot: 'dr',
+        dataSize: 60000,
+        weaveOffset: 100000,
+      };
+      const txBoundarySource = createMockBoundarySource(boundary);
+
+      const dataAttributesStore = createMockDataAttributesStore({
+        rootDataItemOffset: 9000,
+        contentType: 'text/plain',
+        size: 500,
+        itemSize: 600,
+      });
+
+      const index = createIndex({
+        txBoundarySource,
+        ans104OffsetSource: undefined,
+        dataAttributesStore,
+      });
+      (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
+
+      const result = await index.getRootTx('test-nosource');
+
+      assert(result !== undefined);
+      assert.equal(result.rootOffset, 9000);
+      assert.equal(result.contentType, 'text/plain');
     });
 
     it('should return incomplete result when both enrichments fail', async () => {
@@ -629,77 +480,10 @@ describe('HyperBeamRootTxIndex', () => {
       assert(result !== undefined);
       assert.equal(result.rootTxId, 'root-tx-incomplete');
       assert.equal(result.rootDataOffset, 50000 - (100000 - 60000 + 1));
-      // No enrichment data
       assert.equal(result.rootOffset, undefined);
       assert.equal(result.contentType, undefined);
       assert.equal(result.size, undefined);
       assert.equal(result.dataSize, undefined);
-    });
-
-    it('should skip backward-scan when contiguousDataSource is not provided', async () => {
-      const mockAxios = createMockAxiosInstance(
-        Promise.resolve({ data: '50000' }),
-      );
-      mock.method(axios, 'create', () => mockAxios);
-
-      const boundary = {
-        id: 'root-tx-noscan',
-        dataRoot: 'dr',
-        dataSize: 60000,
-        weaveOffset: 100000,
-      };
-      const txBoundarySource = createMockBoundarySource(boundary);
-
-      const dataAttributesStore = createMockDataAttributesStore({
-        rootDataItemOffset: 9000,
-        contentType: 'text/plain',
-        size: 500,
-        itemSize: 600,
-      });
-
-      // No contiguousDataSource provided
-      const index = createIndex({
-        txBoundarySource,
-        contiguousDataSource: undefined,
-        dataAttributesStore,
-      });
-      (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
-
-      const result = await index.getRootTx('test-noscan');
-
-      assert(result !== undefined);
-      // Should still get DB enrichment
-      assert.equal(result.rootOffset, 9000);
-      assert.equal(result.contentType, 'text/plain');
-    });
-
-    it('should reject false positive signature type patterns', async () => {
-      // Buffer with bytes 01 00 that don't form a valid header
-      // because the structural parse won't end at the buffer boundary
-      const fakeBuffer = Buffer.alloc(200, 0x00);
-      fakeBuffer[10] = 0x01; // Looks like sig type 1
-      fakeBuffer[11] = 0x00;
-      // But the rest is all zeros, so target/anchor flags are 0, tags are 0
-      // The structural parse will end much earlier than the buffer length
-
-      const { txBoundarySource, contiguousDataSource } = setupBackwardScanTest({
-        headerBuffer: fakeBuffer,
-      });
-
-      const dataAttributesStore = createMockDataAttributesStore(undefined);
-
-      const index = createIndex({
-        txBoundarySource,
-        contiguousDataSource,
-        dataAttributesStore,
-      });
-      (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
-
-      const result = await index.getRootTx('test-false-positive');
-
-      assert(result !== undefined);
-      // Should not have found a valid header
-      assert.equal(result.rootOffset, undefined);
     });
   });
 
