@@ -216,6 +216,11 @@ export const arweaveClient = new ArweaveCompositeClient({
     failureRate: config.SIMULATED_REQUEST_FAILURE_RATE,
   }),
   blockOffsetMapping,
+  chunkGetRetryCount: config.ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT,
+  chunkGetPeerSelectionCount:
+    config.ARWEAVE_PEER_CHUNK_GET_PEER_SELECTION_COUNT,
+  chunkGeometryTimeoutMs: config.ARWEAVE_CHUNK_GET_GEOMETRY_TIMEOUT_MS,
+  chunkGeometryRetryCount: config.ARWEAVE_CHUNK_GET_GEOMETRY_RETRY_COUNT,
 });
 metrics.registerQueueLengthGauge('arweaveClientRequests', {
   length: () => arweaveClient.queueDepth(),

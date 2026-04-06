@@ -148,6 +148,14 @@ export class ArweaveCompositeClient
   // Static offset-to-block mapping for optimizing binary search
   private blockOffsetMapping?: BlockOffsetMapping;
 
+  // Chunk GET retry settings
+  private chunkGetRetryCount: number;
+  private chunkGetPeerSelectionCount: number;
+
+  // TX geometry resolution settings
+  private chunkGeometryTimeoutMs: number;
+  private chunkGeometryRetryCount: number;
+
   // New peer-based chunk POST system
   private peerChunkQueues: Map<string, PeerChunkQueue> = new Map();
   private getSortedChunkPostPeers: (eligiblePeers: string[]) => string[];
@@ -195,6 +203,10 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
     skipCache = false,
     blockOffsetMapping,
+    chunkGetRetryCount = 50,
+    chunkGetPeerSelectionCount = 10,
+    chunkGeometryTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    chunkGeometryRetryCount = DEFAULT_REQUEST_RETRY_COUNT,
   }: {
     log: winston.Logger;
     arweave: Arweave;
@@ -212,12 +224,20 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
     blockOffsetMapping?: BlockOffsetMapping;
+    chunkGetRetryCount?: number;
+    chunkGetPeerSelectionCount?: number;
+    chunkGeometryTimeoutMs?: number;
+    chunkGeometryRetryCount?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.peerManager = peerManager;
     this.blockOffsetMapping = blockOffsetMapping;
+    this.chunkGetRetryCount = chunkGetRetryCount;
+    this.chunkGetPeerSelectionCount = chunkGetPeerSelectionCount;
+    this.chunkGeometryTimeoutMs = chunkGeometryTimeoutMs;
+    this.chunkGeometryRetryCount = chunkGeometryRetryCount;
 
     // Initialize memoized sorting function for chunk POST peers
     this.getSortedChunkPostPeers = memoize(
@@ -271,6 +291,8 @@ export class ArweaveCompositeClient
             txSize: params.txSize,
             dataRoot: params.dataRoot,
             relativeOffset: params.relativeOffset,
+            retryCount: this.chunkGetRetryCount,
+            peerSelectionCount: this.chunkGetPeerSelectionCount,
           });
 
           metrics.getChunkTotal.inc({
@@ -939,6 +961,8 @@ export class ArweaveCompositeClient
       await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/tx/${txId}/offset`,
+        timeout: this.chunkGeometryTimeoutMs,
+        raxConfig: { retry: this.chunkGeometryRetryCount },
       })
     ).data;
 
@@ -965,6 +989,8 @@ export class ArweaveCompositeClient
       await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/tx/${txId}/${field}`,
+        timeout: this.chunkGeometryTimeoutMs,
+        raxConfig: { retry: this.chunkGeometryRetryCount },
       })
     ).data;
   }
