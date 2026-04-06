@@ -295,7 +295,7 @@ export const GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
 
 // Root TX index lookup order configuration
 export const ROOT_TX_LOOKUP_ORDER = env
-  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,cdb,graphql')
+  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,hyperbeam,cdb,graphql')
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
@@ -386,6 +386,26 @@ export const TURBO_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL = +env.varOrDefault(
 );
 export const TURBO_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'TURBO_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
+
+// HyperBEAM root TX lookup configuration
+export const HYPERBEAM_ENDPOINT = env.varOrUndefined('HYPERBEAM_ENDPOINT');
+export const HYPERBEAM_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+  'HYPERBEAM_REQUEST_TIMEOUT_MS',
+  '10000',
+);
+export const HYPERBEAM_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'HYPERBEAM_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '5',
+);
+export const HYPERBEAM_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL =
+  +env.varOrDefault(
+    'HYPERBEAM_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+    '6', // 6 per minute = 1 per 10 seconds
+  );
+export const HYPERBEAM_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'HYPERBEAM_ROOT_TX_RATE_LIMIT_INTERVAL',
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
 

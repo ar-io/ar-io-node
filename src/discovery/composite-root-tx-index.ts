@@ -37,6 +37,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
     GraphQLRootTxIndex: 'graphql',
     StandaloneSqlite: 'db',
     Cdb64RootTxIndex: 'cdb64',
+    HyperBeamRootTxIndex: 'hyperbeam',
   };
 
   private getSourceName(className: string): string {
