@@ -8,11 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Tag and Verification Response Headers**: Data responses on `/raw/:id` and
+  `/:id` now include `X-Arweave-Tag-*` headers with transaction/data item tags,
+  plus verification headers (`X-Arweave-Signature`, `X-Arweave-Owner`,
+  `X-Arweave-Owner-Address`, `X-Arweave-Target`, `X-Arweave-Anchor`,
+  `X-Arweave-Signature-Type`). Enabled by default
+  (`ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED=true`). Uses a fast local-only
+  resolution path (LMDB txStore -> LRU cache -> GQL DB) with background indexing
+  for uncached items. Includes a configurable byte budget
+  (`ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES`, default 8KB) and tag count cap
+  (`ARWEAVE_TAG_RESPONSE_HEADERS_MAX`, default 100). For L2 data item signatures
+  and owner keys, `WRITE_ANS104_DATA_ITEM_DB_SIGNATURES=true` is also required.
+
+- **On-Demand Data Item Metadata Resolution**: Data items not yet indexed locally
+  are resolved on-demand by discovering the root bundle, parsing the binary
+  header, and extracting signature/owner/tags. Results are cached in an LRU cache
+  and persisted to the database for future requests. Background resolution is
+  capped at 5 concurrent operations (configurable via
+  `TX_METADATA_RESOLVE_CONCURRENCY`) with fail-fast semantics.
+
 - **HyperBEAM Root TX Offset Source (PE-9043)**: HyperBEAM can now be used as a
   root transaction offset source for on-demand data item resolution. Uses
   offset-guided recursive bundle index navigation to extract complete data item
-  metadata (signature, owner, tags) without downloading full bundles. Controlled
-  by `HYPERBEAM_ROOT_TX_ENABLED` and `HYPERBEAM_ENDPOINT` (default:
+  metadata without downloading full bundles. Controlled by
+  `HYPERBEAM_ROOT_TX_ENABLED` and `HYPERBEAM_ENDPOINT` (default:
   `arweave.net`).
 
 - **Configurable Chunk GET Retry Behavior (PE-9042)**: Arweave chunk retrieval
@@ -24,23 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **SignatureType in GraphQL**: The `signatureType` field is now surfaced in
   GraphQL transaction responses for data items.
 
-- **TxMetadataResolver Concurrency Limiting**: Background data item metadata
-  resolution is now capped at 5 concurrent operations (configurable via
-  `TX_METADATA_RESOLVE_CONCURRENCY`). Uses fail-fast semantics to skip excess
-  requests rather than queue them, preventing resource exhaustion under high
-  traffic with many uncached items.
-
 ### Changed
-
-- **Tag Response Headers Enabled by Default**: `ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED`
-  now defaults to `true`. Data responses on `/raw/:id` and `/:id` include
-  `X-Arweave-Tag-*` and verification headers without explicit opt-in.
-
-- **Fast Local-Only Tag Resolution**: Tag and verification header resolution now
-  uses a sub-millisecond local-only path (LMDB txStore -> LRU cache -> GQL DB)
-  instead of the previous timeout-based approach. Items not found locally trigger
-  background indexing for future requests. `ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS`
-  is no longer used.
 
 - **Root TX Lookup Order**: `ROOT_TX_LOOKUP_ORDER` reordered to prefer GraphQL
   over HyperBEAM and CDB for faster local resolution.
@@ -50,23 +53,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 74] - 2026-04-01
 
-This is a **recommended release** focused on **cache performance**, **multi-domain ArNS support**, and **content moderation correctness**. Key highlights include **background caching for range request cache misses** to improve video/media streaming performance, **multiple ArNS root hosts** for serving ArNS names across multiple domains from a single gateway, **contiguous data cache hit/miss Prometheus metrics** for improved observability, and **configurable cache control for blocked responses**. It also corrects HTTP 451 handling for blocked content, simplifies the parquet export pipeline, and adds ClickHouse and block verification to auto-verify.
+This is a **recommended release** focused on **cache performance**,
+**multi-domain ArNS support**, and **content moderation correctness**. Key
+highlights include **background caching for range request cache misses** to
+improve video/media streaming performance, **multiple ArNS root hosts** for
+serving ArNS names across multiple domains from a single gateway, **contiguous
+data cache hit/miss Prometheus metrics** for improved observability, and
+**configurable cache control for blocked responses**. It also corrects HTTP 451
+handling for blocked content, simplifies the parquet export pipeline, and adds
+ClickHouse and block verification to auto-verify.
 
 ### Added
-
-- **Tag and Verification Response Headers**: Data responses on `/raw/:id` and
-  `/:id` now include `X-Arweave-Tag-*` headers with transaction/data item tags,
-  plus verification headers (`X-Arweave-Signature`, `X-Arweave-Owner`,
-  `X-Arweave-Owner-Address`, `X-Arweave-Target`, `X-Arweave-Anchor`,
-  `X-Arweave-Signature-Type`). This enables CDN/edge consumers, browser
-  extensions, and HTTP-native tooling to inspect Arweave metadata without
-  parsing transaction bodies or calling GraphQL. Opt-in via
-  `ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED=true` (default: `false`). Includes a
-  configurable byte budget (`ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES`, default
-  8KB) to prevent exceeding intermediary header size limits. Verification
-  headers are prioritized over tag headers within the budget. For L2 data item
-  signatures and owner keys, `WRITE_ANS104_DATA_ITEM_DB_SIGNATURES=true` is
-  also required.
 
 - **Background Caching for Range Request Cache Misses**: When a range request
   (e.g., byte-range for video seeking) misses the local cache, the gateway now
