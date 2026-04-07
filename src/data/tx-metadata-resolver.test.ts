@@ -149,16 +149,19 @@ describe('TxMetadataResolver', () => {
         return Promise.resolve(null);
       });
 
-      // Make remote resolution slow to hold the semaphore
-      rootTxIndex.getRootTx = mock.fn(
-        () =>
-          new Promise((resolve) =>
-            setTimeout(
-              () => resolve({ rootTxId: ROOT_TX_ID, path: undefined }),
-              200,
-            ),
-          ),
-      );
+      let enterRemote!: () => void;
+      const remoteEntered = new Promise<void>((resolve) => {
+        enterRemote = resolve;
+      });
+      let releaseRemote!: () => void;
+      const remoteBlocked = new Promise<void>((resolve) => {
+        releaseRemote = resolve;
+      });
+      rootTxIndex.getRootTx = mock.fn(async () => {
+        enterRemote();
+        await remoteBlocked;
+        return { rootTxId: ROOT_TX_ID, path: undefined };
+      });
 
       const resolver = new TxMetadataResolver({
         log,
@@ -170,9 +173,7 @@ describe('TxMetadataResolver', () => {
 
       // Start a slow remote resolve for TEST_ID (takes the semaphore)
       const slowPromise = resolver.resolve(TEST_ID);
-
-      // Give it a tick to acquire the semaphore
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await remoteEntered;
 
       // TEST_ID_2 is locally available — should still resolve
       const localResult = await resolver.resolve(TEST_ID_2);
@@ -180,20 +181,24 @@ describe('TxMetadataResolver', () => {
       assert.equal(localResult!.id, TEST_ID_2);
 
       // Let slow resolve finish
+      releaseRemote();
       await slowPromise;
     });
 
     it('should return undefined for remote IDs when semaphore is exhausted', async () => {
-      // Make remote resolution slow
-      rootTxIndex.getRootTx = mock.fn(
-        () =>
-          new Promise((resolve) =>
-            setTimeout(
-              () => resolve({ rootTxId: ROOT_TX_ID, path: undefined }),
-              200,
-            ),
-          ),
-      );
+      let enterRemote!: () => void;
+      const remoteEntered = new Promise<void>((resolve) => {
+        enterRemote = resolve;
+      });
+      let releaseRemote!: () => void;
+      const remoteBlocked = new Promise<void>((resolve) => {
+        releaseRemote = resolve;
+      });
+      rootTxIndex.getRootTx = mock.fn(async () => {
+        enterRemote();
+        await remoteBlocked;
+        return { rootTxId: ROOT_TX_ID, path: undefined };
+      });
 
       const resolver = new TxMetadataResolver({
         log,
@@ -205,12 +210,13 @@ describe('TxMetadataResolver', () => {
 
       // Start a slow remote resolve (takes the semaphore)
       const slowPromise = resolver.resolve(TEST_ID);
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await remoteEntered;
 
       // Second remote resolve should be rejected
       const result = await resolver.resolve(TEST_ID_2);
       assert.equal(result, undefined);
 
+      releaseRemote();
       await slowPromise;
     });
   });
