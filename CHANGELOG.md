@@ -6,6 +6,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **HyperBEAM Root TX Offset Source (PE-9043)**: HyperBEAM can now be used as a
+  root transaction offset source for on-demand data item resolution. Uses
+  offset-guided recursive bundle index navigation to extract complete data item
+  metadata (signature, owner, tags) without downloading full bundles. Controlled
+  by `HYPERBEAM_ROOT_TX_ENABLED` and `HYPERBEAM_ENDPOINT` (default:
+  `arweave.net`).
+
+- **Configurable Chunk GET Retry Behavior (PE-9042)**: Arweave chunk retrieval
+  retry count and geometry timeout are now configurable, reducing worst-case
+  chunk retrieval time from ~115s to ~15s. New env vars:
+  `ARWEAVE_CHUNK_RETRY_COUNT` (default: 5), `ARWEAVE_TX_GEOMETRY_TIMEOUT_MS`
+  (default: 5000), `ARWEAVE_TX_GEOMETRY_TIMEOUT_RETRIES` (default: 2).
+
+- **SignatureType in GraphQL**: The `signatureType` field is now surfaced in
+  GraphQL transaction responses for data items.
+
+- **TxMetadataResolver Concurrency Limiting**: Background data item metadata
+  resolution is now capped at 5 concurrent operations (configurable via
+  `TX_METADATA_RESOLVE_CONCURRENCY`). Uses fail-fast semantics to skip excess
+  requests rather than queue them, preventing resource exhaustion under high
+  traffic with many uncached items.
+
+### Changed
+
+- **Tag Response Headers Enabled by Default**: `ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED`
+  now defaults to `true`. Data responses on `/raw/:id` and `/:id` include
+  `X-Arweave-Tag-*` and verification headers without explicit opt-in.
+
+- **Fast Local-Only Tag Resolution**: Tag and verification header resolution now
+  uses a sub-millisecond local-only path (LMDB txStore -> LRU cache -> GQL DB)
+  instead of the previous timeout-based approach. Items not found locally trigger
+  background indexing for future requests. `ARWEAVE_TAG_RESPONSE_HEADERS_TIMEOUT_MS`
+  is no longer used.
+
+- **Root TX Lookup Order**: `ROOT_TX_LOOKUP_ORDER` reordered to prefer GraphQL
+  over HyperBEAM and CDB for faster local resolution.
+
+- **HyperBEAM Request Timeout**: Default HyperBEAM request timeout lowered to
+  500ms.
+
+### Fixed
+
+- **ArNS Manifest Cache Poisoning**: Prevented partial data attributes with
+  incorrect contentType from overwriting cached entries, which broke ArNS
+  manifest resolution.
+
+- **Nested Bundle Parent ID**: On-demand indexed data items in nested bundles now
+  correctly use the immediate parent bundle ID rather than the root transaction
+  ID.
+
+- **HyperBEAM Partial Result Caching (PE-9043)**: Prevented caching of
+  incomplete HyperBEAM enrichment results that could become sticky when ANS-104
+  parsing or DB enrichment was unavailable.
+
+- **HyperBEAM Circuit Breaker Metrics (PE-9043)**: Fixed camelCase-to-kebab
+  conversion producing mismatched metric labels for HyperBEAM circuit breaker.
+
+- **Root TX Stability Detection**: On-demand resolved data items now check if the
+  root L1 transaction has a block height to determine stability, instead of
+  defaulting to unstable.
+
+- **GraphQL Root TX Gateway URL**: Fixed default `GRAPHQL_ROOT_TX_GATEWAYS_URLS`
+  that had a `/graphql` suffix causing double-pathed requests.
+
+- **Chunk GET Config Parsing**: Replaced unsafe unary-plus parsing with typed
+  env helpers for chunk GET config vars to prevent NaN/negative/float values.
+
 ## [Release 74] - 2026-04-01
 
 This is a **recommended release** focused on **cache performance**, **multi-domain ArNS support**, and **content moderation correctness**. Key highlights include **background caching for range request cache misses** to improve video/media streaming performance, **multiple ArNS root hosts** for serving ArNS names across multiple domains from a single gateway, **contiguous data cache hit/miss Prometheus metrics** for improved observability, and **configurable cache control for blocked responses**. It also corrects HTTP 451 handling for blocked content, simplifies the parquet export pipeline, and adds ClickHouse and block verification to auto-verify.
