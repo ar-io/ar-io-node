@@ -163,14 +163,7 @@ export class TxMetadataResolver {
       return existingPromise;
     }
 
-    if (!this.resolveSemaphore.tryAcquire()) {
-      this.log.debug('Skipping resolve, at concurrency limit', { id });
-      return undefined;
-    }
-
-    const promise = this.resolveInner(id).finally(() => {
-      this.resolveSemaphore.release();
-    });
+    const promise = this.resolveInner(id);
     this.pendingPromises.set(id, promise);
 
     try {
@@ -192,6 +185,11 @@ export class TxMetadataResolver {
     }
 
     // Tier 2: On-demand extraction via root tx index + binary parse
+    if (!this.resolveSemaphore.tryAcquire()) {
+      log.debug('Skipping remote resolve, at concurrency limit', { id });
+      return undefined;
+    }
+
     try {
       const rootTxResult = await this.rootTxIndex.getRootTx(id);
       if (rootTxResult === undefined) {
@@ -285,14 +283,16 @@ export class TxMetadataResolver {
 
       // Persist to database for future lookups (GraphQL, other gateways, etc.)
       if (this.dataItemIndexWriter != null && resolved.itemOffset != null) {
-        this.saveToIndex(resolved, rootTxId, path, log).catch((error) => {
+        try {
+          await this.saveToIndex(resolved, rootTxId, path, log);
+        } catch (error: any) {
           log.error('Failed to persist on-demand data item to index', {
             id,
             rootTxId,
             error: error.message,
             stack: error.stack,
           });
-        });
+        }
       }
 
       return resolved;
@@ -301,6 +301,8 @@ export class TxMetadataResolver {
         error: error.message,
       });
       return undefined;
+    } finally {
+      this.resolveSemaphore.release();
     }
   }
 
