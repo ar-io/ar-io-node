@@ -48,33 +48,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **HyperBEAM Request Timeout**: Default HyperBEAM request timeout lowered to
   500ms.
 
-### Fixed
-
-- **ArNS Manifest Cache Poisoning**: Prevented partial data attributes with
-  incorrect contentType from overwriting cached entries, which broke ArNS
-  manifest resolution.
-
-- **Nested Bundle Parent ID**: On-demand indexed data items in nested bundles now
-  correctly use the immediate parent bundle ID rather than the root transaction
-  ID.
-
-- **HyperBEAM Partial Result Caching (PE-9043)**: Prevented caching of
-  incomplete HyperBEAM enrichment results that could become sticky when ANS-104
-  parsing or DB enrichment was unavailable.
-
-- **HyperBEAM Circuit Breaker Metrics (PE-9043)**: Fixed camelCase-to-kebab
-  conversion producing mismatched metric labels for HyperBEAM circuit breaker.
-
-- **Root TX Stability Detection**: On-demand resolved data items now check if the
-  root L1 transaction has a block height to determine stability, instead of
-  defaulting to unstable.
-
-- **GraphQL Root TX Gateway URL**: Fixed default `GRAPHQL_ROOT_TX_GATEWAYS_URLS`
-  that had a `/graphql` suffix causing double-pathed requests.
-
-- **Chunk GET Config Parsing**: Replaced unsafe unary-plus parsing with typed
-  env helpers for chunk GET config vars to prevent NaN/negative/float values.
-
 ## [Release 74] - 2026-04-01
 
 This is a **recommended release** focused on **cache performance**, **multi-domain ArNS support**, and **content moderation correctness**. Key highlights include **background caching for range request cache misses** to improve video/media streaming performance, **multiple ArNS root hosts** for serving ArNS names across multiple domains from a single gateway, **contiguous data cache hit/miss Prometheus metrics** for improved observability, and **configurable cache control for blocked responses**. It also corrects HTTP 451 handling for blocked content, simplifies the parquet export pipeline, and adds ClickHouse and block verification to auto-verify.
