@@ -102,7 +102,7 @@ export class HyperBeamRootTxIndex implements DataItemRootIndex {
   > {
     const log = this.log.child({ method: 'getRootTx', id });
 
-    // Check cache first
+    // Check cache first (only fully-enriched entries are cached)
     const cached = this.cache?.get(id);
     if (cached !== undefined) {
       log.debug('Cache hit for HyperBEAM offsets lookup', { id });
@@ -217,8 +217,16 @@ export class HyperBeamRootTxIndex implements DataItemRootIndex {
         }
       }
 
-      // Cache the result
-      if (this.cache) {
+      // Only cache fully-enriched results to avoid making partial entries
+      // sticky (e.g. when ANS-104 parsing or DB enrichment is temporarily
+      // unavailable).
+      const isFullyEnriched =
+        result.rootOffset !== undefined &&
+        result.contentType !== undefined &&
+        result.size !== undefined &&
+        result.dataSize !== undefined;
+
+      if (this.cache && isFullyEnriched) {
         this.cache.set(id, result);
         log.debug('Cached HyperBEAM offsets result', { id, result });
       }
