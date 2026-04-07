@@ -6,11 +6,18 @@
  */
 import { IResolvers } from '@graphql-tools/utils';
 
+import * as config from '../../config.js';
+import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
 import { winstonToAr } from '../../lib/encoding.js';
+import { Semaphore } from '../../lib/semaphore.js';
 import log from '../../log.js';
 import { ownerFetcher, signatureFetcher } from '../../system.js';
 import { GqlTransaction } from '../../types.js';
 import { isEmptyString } from '../../lib/string.js';
+
+const onDemandSemaphore = new Semaphore(
+  config.GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT,
+);
 
 export const DEFAULT_PAGE_SIZE = 10;
 export const MAX_PAGE_SIZE = 1000;
@@ -134,15 +141,64 @@ export async function resolveTxSignature(tx: GqlTransaction) {
 
 export const resolvers: IResolvers = {
   Query: {
-    transaction: async (_, queryParams, { db }) => {
+    transaction: async (
+      _,
+      queryParams,
+      {
+        db,
+        txMetadataResolver,
+      }: { db: any; txMetadataResolver?: TxMetadataResolver },
+    ) => {
       log.info('GraphQL transaction query', {
         resolver: 'transaction',
         queryParams,
       });
 
-      return db.getGqlTransaction({
-        id: queryParams.id,
-      });
+      const result = await db.getGqlTransaction({ id: queryParams.id });
+      if (result != null) {
+        return result;
+      }
+
+      if (
+        !config.GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED ||
+        txMetadataResolver == null
+      ) {
+        return null;
+      }
+
+      if (!onDemandSemaphore.tryAcquire()) {
+        log.debug(
+          'GraphQL on-demand resolution skipped, at concurrency limit',
+          {
+            id: queryParams.id,
+          },
+        );
+        return null;
+      }
+
+      try {
+        const timeoutPromise = new Promise<undefined>((resolve) =>
+          setTimeout(resolve, config.GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS),
+        );
+        const resolved = await Promise.race([
+          txMetadataResolver.resolve(queryParams.id),
+          timeoutPromise,
+        ]);
+
+        if (resolved == null) {
+          return null;
+        }
+
+        return db.getGqlTransaction({ id: queryParams.id });
+      } catch (error: any) {
+        log.warn('GraphQL on-demand resolution failed', {
+          id: queryParams.id,
+          error: error.message,
+        });
+        return null;
+      } finally {
+        onDemandSemaphore.release();
+      }
     },
     transactions: async (_, queryParams, { db }) => {
       log.info('GraphQL transactions query', {

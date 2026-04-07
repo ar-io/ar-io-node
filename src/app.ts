@@ -101,10 +101,14 @@ app.use(rootRouter);
 app.use(dataRouter);
 
 // GraphQL
-const apolloServerInstanceGql = apolloServer(system.gqlQueryable, {
-  introspection: true,
-  persistedQueries: false,
-});
+const apolloServerInstanceGql = apolloServer(
+  system.gqlQueryable,
+  {
+    introspection: true,
+    persistedQueries: false,
+  },
+  system.dataItemMetaResolver,
+);
 
 let server: Server;
 apolloServerInstanceGql.start().then(() => {

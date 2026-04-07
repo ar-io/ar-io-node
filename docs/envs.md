@@ -305,3 +305,13 @@ These settings control whether Arweave transaction/data item tags and verificati
 | ARWEAVE_TAG_RESPONSE_HEADERS_MAX                 | Number               | 100                                           | Maximum number of tag headers to include per response. If a transaction has more tags, an `X-Arweave-Tags-Truncated: true` header is added                          |
 | ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES           | Number               | 8192                                          | Maximum total bytes for all emitted tag and verification headers. Prevents exceeding intermediary header size limits (nginx default 8KB). Verification headers are prioritized over tags |
 | TX_METADATA_RESOLVE_CONCURRENCY                  | Number               | 5                                             | Maximum number of concurrent background data item metadata resolutions. Limits resource pressure from remote fetches and DB writes when many uncached items are requested simultaneously |
+
+### GraphQL On-Demand Resolution
+
+When enabled, the `transaction(id)` GraphQL query can resolve unindexed data items on-demand by extracting metadata directly from ANS-104 bundle binaries. Only applies to single-ID lookups; the plural `transactions(...)` query is unaffected.
+
+| ENV_NAME                                         | TYPE                 | DEFAULT_VALUE                                 | DESCRIPTION                                                                                                                                                          |
+| ------------------------------------------------ | -------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED             | Boolean              | false                                         | If true, enables on-demand data item resolution as a fallback when `transaction(id)` returns null from the local database                                           |
+| GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS          | Number               | 5000                                          | Maximum time in milliseconds to wait for on-demand resolution before returning null. Background resolution continues and persists for future queries                 |
+| GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT      | Number               | 1                                             | Maximum number of concurrent on-demand resolution operations. When at capacity, requests return null immediately                                                     |

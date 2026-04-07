@@ -15,6 +15,7 @@ import {
 } from 'apollo-server-express';
 import { readFileSync } from 'node:fs';
 
+import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
 import { GqlQueryable } from '../../types.js';
 import { resolvers } from './resolvers.js';
 
@@ -24,6 +25,7 @@ const typeDefs = gql(readFileSync(typeDefsUrl, 'utf8'));
 const apolloServer = (
   db: GqlQueryable,
   opts: ApolloServerExpressConfig = {},
+  txMetadataResolver?: TxMetadataResolver,
 ) => {
   return new ApolloServer({
     typeDefs,
@@ -34,7 +36,7 @@ const apolloServer = (
       ApolloServerPluginLandingPageGraphQLPlayground(),
     ],
     context: () => {
-      return { db };
+      return { db, txMetadataResolver };
     },
     ...opts,
   });

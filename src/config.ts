@@ -236,6 +236,18 @@ Object.entries(GRAPHQL_ROOT_TX_GATEWAYS_URLS).forEach(([url, weight]) => {
   }
 });
 
+// GraphQL on-demand resolution
+export const GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED =
+  env.varOrDefault('GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED', 'false') === 'true';
+
+export const GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS = env.positiveIntOrDefault(
+  'GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS',
+  5000,
+);
+
+export const GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT =
+  env.positiveIntOrDefault('GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT', 1);
+
 // GraphQL root TX lookup rate limiting
 export const GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
   'GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE',

@@ -40,6 +40,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `ARWEAVE_CHUNK_RETRY_COUNT` (default: 5), `ARWEAVE_TX_GEOMETRY_TIMEOUT_MS`
   (default: 5000), `ARWEAVE_TX_GEOMETRY_TIMEOUT_RETRIES` (default: 2).
 
+- **GraphQL On-Demand Transaction Resolution**: The `transaction(id)` GraphQL
+  query can now resolve unindexed data items on-demand by extracting metadata
+  from ANS-104 bundle binaries. Opt-in via
+  `GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED=true` (default: `false`). Includes a
+  configurable timeout (`GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS`, default 5s)
+  and concurrency limit (`GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT`, default
+  1). Only applies to single-ID lookups; the plural `transactions(...)` query is
+  unaffected.
+
 - **SignatureType in GraphQL**: The `signatureType` field is now surfaced in
   GraphQL transaction responses for data items.
 
