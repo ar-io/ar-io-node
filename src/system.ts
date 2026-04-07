@@ -875,6 +875,7 @@ export const dataItemMetaResolver = new TxMetadataResolver({
   rootTxIndex,
   ans104OffsetSources: [ans104GatewaysOffsetSource, ans104ChunksOffsetSource],
   dataItemIndexWriter: db,
+  resolveConcurrency: config.TX_METADATA_RESOLVE_CONCURRENCY,
 });
 
 // Offset-aware version of gateways data source that uses cached upstream offsets

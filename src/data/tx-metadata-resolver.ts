@@ -7,6 +7,7 @@
 import { LRUCache } from 'lru-cache';
 import winston from 'winston';
 
+import { Semaphore } from '../lib/semaphore.js';
 import { Ans104OffsetSource } from './ans104-offset-source.js';
 import { fromB64Url, sha256B64Url, utf8ToB64Url } from '../lib/encoding.js';
 import {
@@ -66,6 +67,7 @@ export class TxMetadataResolver {
   private dataItemIndexWriter?: DataItemIndexWriter;
   private cache: LRUCache<string, ResolvedTxMetadata>;
   private pendingPromises: Map<string, Promise<ResolvedTxMetadata | undefined>>;
+  private resolveSemaphore: Semaphore;
 
   constructor({
     log,
@@ -75,6 +77,7 @@ export class TxMetadataResolver {
     ans104OffsetSources,
     dataItemIndexWriter,
     cacheSize = 10_000,
+    resolveConcurrency = 5,
   }: {
     log: winston.Logger;
     txStore?: PartialJsonTransactionStore;
@@ -83,6 +86,7 @@ export class TxMetadataResolver {
     ans104OffsetSources: Ans104OffsetSource[];
     dataItemIndexWriter?: DataItemIndexWriter;
     cacheSize?: number;
+    resolveConcurrency?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.txStore = txStore;
@@ -92,6 +96,7 @@ export class TxMetadataResolver {
     this.dataItemIndexWriter = dataItemIndexWriter;
     this.cache = new LRUCache({ max: cacheSize });
     this.pendingPromises = new Map();
+    this.resolveSemaphore = new Semaphore(resolveConcurrency);
   }
 
   /**
@@ -158,7 +163,14 @@ export class TxMetadataResolver {
       return existingPromise;
     }
 
-    const promise = this.resolveInner(id);
+    if (!this.resolveSemaphore.tryAcquire()) {
+      this.log.debug('Skipping resolve, at concurrency limit', { id });
+      return undefined;
+    }
+
+    const promise = this.resolveInner(id).finally(() => {
+      this.resolveSemaphore.release();
+    });
     this.pendingPromises.set(id, promise);
 
     try {

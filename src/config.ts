@@ -930,7 +930,7 @@ export const CACHE_BLOCKED_MAX_AGE = env.positiveIntOrDefault(
 
 // Tag response headers
 export const ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED =
-  env.varOrDefault('ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED', 'false') === 'true';
+  env.varOrDefault('ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED', 'true') === 'true';
 
 export const ARWEAVE_TAG_RESPONSE_HEADERS_MAX = env.positiveIntOrDefault(
   'ARWEAVE_TAG_RESPONSE_HEADERS_MAX',
@@ -940,6 +940,11 @@ export const ARWEAVE_TAG_RESPONSE_HEADERS_MAX = env.positiveIntOrDefault(
 export const ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES = env.positiveIntOrDefault(
   'ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES',
   8192,
+);
+
+export const TX_METADATA_RESOLVE_CONCURRENCY = env.positiveIntOrDefault(
+  'TX_METADATA_RESOLVE_CONCURRENCY',
+  5,
 );
 
 //
