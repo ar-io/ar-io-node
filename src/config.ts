@@ -396,7 +396,7 @@ export const HYPERBEAM_ENDPOINT = env.varOrDefault(
 );
 export const HYPERBEAM_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   'HYPERBEAM_REQUEST_TIMEOUT_MS',
-  '10000',
+  '500',
 );
 export const HYPERBEAM_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
   'HYPERBEAM_ROOT_TX_RATE_LIMIT_BURST_SIZE',
