@@ -79,6 +79,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
       const breakerSourceName = name
         .replace('RootTxIndex', '')
         .replace('GraphQL', 'Graphql')
+        .replace('HyperBeam', 'Hyperbeam')
         .replace(/([A-Z])/g, '-$1')
         .toLowerCase()
         .replace(/^-/, '')
