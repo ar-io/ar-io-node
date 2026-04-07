@@ -390,7 +390,10 @@ export const TURBO_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
 ) as 'second' | 'minute' | 'hour' | 'day';
 
 // HyperBEAM root TX lookup configuration
-export const HYPERBEAM_ENDPOINT = env.varOrUndefined('HYPERBEAM_ENDPOINT');
+export const HYPERBEAM_ENDPOINT = env.varOrDefault(
+  'HYPERBEAM_ENDPOINT',
+  'https://arweave.net',
+);
 export const HYPERBEAM_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   'HYPERBEAM_REQUEST_TIMEOUT_MS',
   '10000',
