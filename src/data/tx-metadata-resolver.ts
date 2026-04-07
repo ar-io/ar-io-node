@@ -77,7 +77,7 @@ export class TxMetadataResolver {
     ans104OffsetSources,
     dataItemIndexWriter,
     cacheSize = 10_000,
-    resolveConcurrency = 5,
+    resolveConcurrency = 1,
   }: {
     log: winston.Logger;
     txStore?: PartialJsonTransactionStore;

@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   are resolved on-demand by discovering the root bundle, parsing the binary
   header, and extracting signature/owner/tags. Results are cached in an LRU cache
   and persisted to the database for future requests. Background resolution is
-  capped at 5 concurrent operations (configurable via
+  capped at 1 concurrent operation (configurable via
   `TX_METADATA_RESOLVE_CONCURRENCY`) with fail-fast semantics.
 
 - **HyperBEAM Root TX Offset Source (PE-9043)**: HyperBEAM can now be used as a
@@ -42,8 +42,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **GraphQL On-Demand Transaction Resolution**: The `transaction(id)` GraphQL
   query can now resolve unindexed data items on-demand by extracting metadata
-  from ANS-104 bundle binaries. Opt-in via
-  `GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED=true` (default: `false`). Includes a
+  from ANS-104 bundle binaries. Enabled by default
+  (`GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED=true`). Includes a
   configurable timeout (`GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS`, default 5s)
   and concurrency limit (`GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT`, default
   1). Only applies to single-ID lookups; the plural `transactions(...)` query is

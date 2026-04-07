@@ -238,7 +238,7 @@ Object.entries(GRAPHQL_ROOT_TX_GATEWAYS_URLS).forEach(([url, weight]) => {
 
 // GraphQL on-demand resolution
 export const GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED =
-  env.varOrDefault('GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED', 'false') === 'true';
+  env.varOrDefault('GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED', 'true') === 'true';
 
 export const GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS = env.positiveIntOrDefault(
   'GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS',
@@ -956,7 +956,7 @@ export const ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES = env.positiveIntOrDefault(
 
 export const TX_METADATA_RESOLVE_CONCURRENCY = env.positiveIntOrDefault(
   'TX_METADATA_RESOLVE_CONCURRENCY',
-  5,
+  1,
 );
 
 //
