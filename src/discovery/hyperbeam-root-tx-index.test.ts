@@ -267,7 +267,7 @@ describe('HyperBeamRootTxIndex', () => {
       assert.equal(mockAxios.get.mock.calls.length, 0);
     });
 
-    it('should cache results after successful resolution', async () => {
+    it('should cache fully-enriched results after successful resolution', async () => {
       const cache = new LRUCache<string, any>({
         max: 100,
         ttl: 1000 * 60 * 5,
@@ -286,7 +286,19 @@ describe('HyperBeamRootTxIndex', () => {
       };
       const txBoundarySource = createMockBoundarySource(boundary);
 
-      const index = createIndex({ txBoundarySource, cache });
+      const ans104OffsetSource = createMockOffsetSource({
+        itemOffset: 100,
+        dataOffset: 200,
+        itemSize: 500,
+        dataSize: 400,
+        contentType: 'application/json',
+      });
+
+      const index = createIndex({
+        txBoundarySource,
+        ans104OffsetSource,
+        cache,
+      });
       (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
 
       await index.getRootTx('test-item');
@@ -295,7 +307,37 @@ describe('HyperBeamRootTxIndex', () => {
 
       assert(result !== undefined);
       assert.equal(result.rootTxId, 'root-tx-abc');
+      // Second call should be served from cache (no additional HTTP request)
       assert.equal(mockAxios.get.mock.calls.length, 1);
+    });
+
+    it('should not cache partial results', async () => {
+      const cache = new LRUCache<string, any>({
+        max: 100,
+        ttl: 1000 * 60 * 5,
+      });
+
+      const mockAxios = createMockAxiosInstance(
+        Promise.resolve({ data: '12345' }),
+      );
+      mock.method(axios, 'create', () => mockAxios);
+
+      const boundary = {
+        id: 'root-tx-abc',
+        dataRoot: 'dr',
+        dataSize: 100,
+        weaveOffset: 12444,
+      };
+      const txBoundarySource = createMockBoundarySource(boundary);
+
+      // No enrichment sources — result will be partial
+      const index = createIndex({ txBoundarySource, cache });
+      (index as any)['limiter'].content = (index as any)['limiter'].bucketSize;
+
+      await index.getRootTx('test-item');
+
+      // Cache should remain empty for partial results
+      assert.equal(cache.has('test-item'), false);
     });
   });
 
