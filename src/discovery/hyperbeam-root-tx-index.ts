@@ -86,9 +86,6 @@ export class HyperBeamRootTxIndex implements DataItemRootIndex {
 
     this.axiosInstance = axios.create({
       timeout: requestTimeoutMs,
-      headers: {
-        'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
-      },
     });
   }
 
