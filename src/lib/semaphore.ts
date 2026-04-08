@@ -62,7 +62,11 @@ export class Semaphore {
           const index = this.waiting.indexOf(waiter);
           if (index !== -1) {
             this.waiting.splice(index, 1);
-            this.onTimeout?.();
+            try {
+              this.onTimeout?.();
+            } catch {
+              // Don't let callback failures prevent timeout rejection
+            }
             reject(new Error(`Semaphore acquire timeout after ${timeoutMs}ms`));
           }
         }, timeoutMs);

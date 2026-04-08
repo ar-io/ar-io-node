@@ -96,6 +96,40 @@ describe('Semaphore', () => {
     });
   });
 
+  describe('onTimeout callback', () => {
+    it('should invoke onTimeout when acquire times out', async () => {
+      let timeoutCount = 0;
+      const sem = new Semaphore(1, { onTimeout: () => timeoutCount++ });
+
+      await sem.acquire(); // exhaust permits
+
+      await assert.rejects(() => sem.acquire(10), /Semaphore acquire timeout/);
+      assert.strictEqual(timeoutCount, 1);
+    });
+
+    it('should not invoke onTimeout when acquire succeeds', async () => {
+      let timeoutCount = 0;
+      const sem = new Semaphore(1, { onTimeout: () => timeoutCount++ });
+
+      await sem.acquire();
+      sem.release();
+
+      assert.strictEqual(timeoutCount, 0);
+    });
+
+    it('should still reject when onTimeout throws', async () => {
+      const sem = new Semaphore(1, {
+        onTimeout: () => {
+          throw new Error('callback error');
+        },
+      });
+
+      await sem.acquire(); // exhaust permits
+
+      await assert.rejects(() => sem.acquire(10), /Semaphore acquire timeout/);
+    });
+  });
+
   describe('concurrency limiting', () => {
     it('should limit concurrent operations', async () => {
       const sem = new Semaphore(2);
