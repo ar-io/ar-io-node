@@ -315,3 +315,18 @@ When enabled, the `transaction(id)` GraphQL query can resolve unindexed data ite
 | GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED             | Boolean              | true                                          | If true, enables on-demand data item resolution as a fallback when `transaction(id)` returns null from the local database                                           |
 | GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS          | Number               | 5000                                          | Maximum time in milliseconds to wait for on-demand resolution before returning null. Background resolution continues and persists for future queries                 |
 | GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT      | Number               | 1                                             | Maximum number of concurrent on-demand resolution operations. When at capacity, requests return null immediately                                                     |
+
+## HTTPSIG Response Signing
+
+Signs gateway responses with an Ed25519 key per [RFC 9421](https://www.rfc-editor.org/rfc/rfc9421) (HTTP Message Signatures). Every qualifying response gets `Signature` and `Signature-Input` headers that cryptographically bind the gateway's trust claims (verification status, ArNS resolution, data item tags) to a staked on-chain identity.
+
+When `OBSERVER_WALLET` is set, the gateway also creates an RSA attestation linking the Ed25519 signing key to the observer wallet (which is registered to the gateway on-chain), and uploads it permanently to Arweave.
+
+| ENV_NAME                    | TYPE    | DEFAULT_VALUE          | DESCRIPTION                                                                                                          |
+| --------------------------- | ------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| HTTPSIG_ENABLED             | Boolean | false                  | Enable RFC 9421 HTTP Message Signature signing on gateway responses                                                  |
+| HTTPSIG_KEY_FILE            | String  | data/keys/httpsig.pem  | Path to Ed25519 private key PEM file. Auto-generated on first startup if missing                                     |
+| HTTPSIG_BIND_REQUEST        | Boolean | true                   | Include `@method;req` and `@path;req` in signatures, binding each response to the specific request that triggered it |
+| HTTPSIG_UPLOAD_ATTESTATION  | Boolean | true                   | Upload the attestation to Arweave at startup (requires `OBSERVER_WALLET`). Set to false to skip upload               |
+| OBSERVER_WALLET             | String  | -                      | Arweave wallet address for attestation signing. Key file must exist at `<WALLETS_PATH>/<OBSERVER_WALLET>.json`       |
+| WALLETS_PATH                | String  | wallets                | Directory containing wallet JWK files                                                                                |

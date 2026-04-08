@@ -87,6 +87,26 @@ export interface X402Info {
 }
 
 /**
+ * HTTPSIG response signing configuration exposed in the info endpoint.
+ */
+export interface HttpsigAttestationInfo {
+  txId?: string;
+  observerAddress: string;
+  payload: string;
+  signature: string;
+  rsaPublicKey: string;
+}
+
+export interface HttpsigInfo {
+  enabled: true;
+  algorithm: string;
+  publicKey: string;
+  keyId: string;
+  solanaAddress?: string;
+  attestation?: HttpsigAttestationInfo;
+}
+
+/**
  * Complete AR.IO info endpoint response structure.
  */
 export interface ArIoInfoResponse {
@@ -99,6 +119,7 @@ export interface ArIoInfoResponse {
   services: ServicesInfo;
   rateLimiter?: RateLimiterInfo;
   x402?: X402Info;
+  httpsig?: HttpsigInfo;
 }
 
 /**
@@ -127,6 +148,20 @@ export interface ArIoInfoConfig {
     minPrice: number;
     maxPrice: number;
     capacityMultiplier: number;
+  };
+  httpsig?: {
+    enabled: boolean;
+    algorithm: string;
+    publicKey: string;
+    keyId: string;
+    solanaAddress?: string;
+    attestation?: {
+      txId?: string;
+      observerAddress: string;
+      payload: string;
+      signature: string;
+      rsaPublicKey: string;
+    };
   };
 }
 
@@ -253,6 +288,18 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
         },
         rateLimiterCapacityMultiplier: capacityMultiplier,
       },
+    };
+  }
+
+  // Add HTTPSIG signing info if enabled
+  if (config.httpsig?.enabled) {
+    response.httpsig = {
+      enabled: true,
+      algorithm: config.httpsig.algorithm,
+      publicKey: config.httpsig.publicKey,
+      keyId: config.httpsig.keyId,
+      solanaAddress: config.httpsig.solanaAddress,
+      attestation: config.httpsig.attestation,
     };
   }
 

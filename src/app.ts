@@ -12,6 +12,8 @@ import log from './log.js';
 import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
 import { createRequestIdMiddleware } from './middleware/request-id.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
+import { createHttpSigMiddleware } from './middleware/httpsig.js';
+import { uploadAttestation } from './lib/httpsig-upload.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
@@ -44,6 +46,33 @@ system.contiguousDataFsCacheCleanupWorker?.start();
 
 system.chunkDataFsCacheCleanupWorker?.start();
 
+// Upload HTTPSIG attestation to Arweave (non-blocking, non-fatal)
+if (
+  config.HTTPSIG_ENABLED &&
+  config.HTTPSIG_ATTESTATION !== undefined &&
+  config.HTTPSIG_OBSERVER_JWK !== undefined &&
+  config.HTTPSIG_UPLOAD_ATTESTATION &&
+  !config.HTTPSIG_ATTESTATION_CACHED
+) {
+  uploadAttestation({
+    jwk: config.HTTPSIG_OBSERVER_JWK,
+    attestation: config.HTTPSIG_ATTESTATION,
+    gatewayAddress: config.AR_IO_WALLET,
+    observerAddress: config.HTTPSIG_OBSERVER_ADDRESS!,
+    ed25519PublicKey: config.HTTPSIG_PUBLIC_KEY_B64URL!,
+    keyId: config.HTTPSIG_KEY_ID!,
+    log,
+  })
+    .then((txId) => {
+      config.setHttpSigAttestationTxId(txId);
+    })
+    .catch((error: any) => {
+      log.warn('HTTPSIG attestation upload failed', {
+        error: error?.message,
+      });
+    });
+}
+
 // Allow starting without writers to support SQLite replication
 if (config.START_WRITERS) {
   system.blockImporter.start();
@@ -72,6 +101,18 @@ app.use(createRequestIdMiddleware());
 
 // Attach AbortSignal to all requests for client disconnect handling
 app.use(createAbortSignalMiddleware());
+
+// HTTPSIG response signing — must be before cache-control so the writeHead
+// LIFO order ensures signing runs AFTER cache-control has set default headers.
+if (config.HTTPSIG_ENABLED && config.HTTPSIG_PRIVATE_KEY !== undefined) {
+  app.use(
+    createHttpSigMiddleware({
+      privateKey: config.HTTPSIG_PRIVATE_KEY,
+      keyId: config.HTTPSIG_KEY_ID!,
+      bindRequest: config.HTTPSIG_BIND_REQUEST,
+    }),
+  );
+}
 
 // Set default Cache-Control when no handler sets one
 app.use(createDefaultCacheControlMiddleware(config.CACHE_DEFAULT_MAX_AGE));
