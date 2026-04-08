@@ -63,7 +63,7 @@ export async function resolveTransactionQuery(
     return null;
   }
 
-  let timeoutId: NodeJS.Timeout | undefined;
+  let timeoutId: NodeJS.Timeout | number | undefined;
 
   try {
     const timeoutPromise = new Promise<undefined>((resolve) => {
