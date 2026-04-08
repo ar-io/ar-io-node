@@ -48,6 +48,7 @@ test-results.xml
 # Development tools
 /.direnv
 .aider*
+.codex
 
 # Editor directories and settings
 /.vscode
