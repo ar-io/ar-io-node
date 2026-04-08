@@ -548,6 +548,7 @@ paths:
         - Bundler service URLs for data upload service discovery
         - Rate limiter configuration (if enabled)
         - x402 payment protocol configuration (if enabled)
+        - HTTPSIG response signing configuration (if enabled)
       responses:
         '200':
           description: Gateway information response
@@ -755,6 +756,62 @@ paths:
                       - walletAddress
                       - facilitatorUrl
                       - dataEgress
+                  httpsig:
+                    type: object
+                    description: RFC 9421 HTTP Message Signature configuration (only present when HTTPSIG is enabled)
+                    properties:
+                      enabled:
+                        type: boolean
+                        description: Whether HTTPSIG response signing is enabled
+                        example: true
+                      algorithm:
+                        type: string
+                        description: Signature algorithm
+                        enum: ['ed25519']
+                        example: 'ed25519'
+                      publicKey:
+                        type: string
+                        description: Base64url-encoded 32-byte Ed25519 public key
+                        example: '1Jw2EpGba2umSMoCNEQh-QKaYA_GztxaoWTpcsyfyxk'
+                      keyId:
+                        type: string
+                        description: Self-contained key identifier (ed25519:<base64url-pubkey>)
+                        example: 'ed25519:1Jw2EpGba2umSMoCNEQh-QKaYA_GztxaoWTpcsyfyxk'
+                      solanaAddress:
+                        type: string
+                        description: Solana address derived from the Ed25519 public key
+                        example: 'FJwaz3DWJ2TuDRDaBRsE7t29LDm1wB8txPHcBNoCDwkt'
+                      attestation:
+                        type: object
+                        description: RSA-signed attestation linking the Ed25519 key to the on-chain gateway identity
+                        properties:
+                          txId:
+                            type: string
+                            description: Arweave transaction ID where attestation is permanently stored
+                            example: '4w-39da6R7eklq9d3sMhEx7tc-t4p4PZD6cTZIG3f3c'
+                          observerAddress:
+                            type: string
+                            description: Arweave address of the observer wallet that signed the attestation
+                            example: '7p90oVDWv8euAJsHHuz8tVw9OBrQdIB8qrOn5YEjiVc'
+                          payload:
+                            type: string
+                            description: Canonical JSON attestation payload
+                          signature:
+                            type: string
+                            description: RSA-PSS-SHA256 signature over the payload (base64url)
+                          rsaPublicKey:
+                            type: string
+                            description: RSA public key in SPKI DER format (base64url)
+                        required:
+                          - observerAddress
+                          - payload
+                          - signature
+                          - rsaPublicKey
+                    required:
+                      - enabled
+                      - algorithm
+                      - publicKey
+                      - keyId
                 required:
                   - processId
                   - supportedManifestVersions
@@ -1032,6 +1089,16 @@ paths:
                 type: integer
               description: Signature algorithm (1 = RSA-4096/Arweave)
               example: 1
+            Signature:
+              schema:
+                type: string
+              description: RFC 9421 HTTP Message Signature (opt-in via HTTPSIG_ENABLED)
+              example: 'sig1=:oU151iAt3RBEvThMpQvCiJzjkFhXDVpDFSUg43vxZsIoTFSqkSDyLbshT2tBWAcWIq1mc3AAXLhEdUqN+ifbBw==:'
+            Signature-Input:
+              schema:
+                type: string
+              description: RFC 9421 Signature-Input listing signed components, algorithm, and key ID (opt-in via HTTPSIG_ENABLED)
+              example: 'sig1=("@status" "content-type" "x-ar-io-data-id" "x-ar-io-verified");created=1712505600;keyid="ed25519:...";alg="ed25519"'
         '206':
           description: Partial content for range requests
           headers:
@@ -1367,6 +1434,16 @@ paths:
                 type: integer
               description: Signature algorithm (1 = RSA-4096/Arweave)
               example: 1
+            Signature:
+              schema:
+                type: string
+              description: RFC 9421 HTTP Message Signature (opt-in via HTTPSIG_ENABLED)
+              example: 'sig1=:oU151iAt3RBEvThMpQvCiJzjkFhXDVpDFSUg43vxZsIoTFSqkSDyLbshT2tBWAcWIq1mc3AAXLhEdUqN+ifbBw==:'
+            Signature-Input:
+              schema:
+                type: string
+              description: RFC 9421 Signature-Input listing signed components, algorithm, and key ID (opt-in via HTTPSIG_ENABLED)
+              example: 'sig1=("@status" "content-type" "x-ar-io-data-id" "x-ar-io-verified");created=1712505600;keyid="ed25519:...";alg="ed25519"'
         '206':
           description: Partial content for range requests
           headers:
