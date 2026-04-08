@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import {
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -80,9 +81,10 @@ export function loadOrGenerateKey(keyFile: string): crypto.KeyObject {
 
   mkdirSync(dirname(keyFile), { recursive: true });
 
-  // Write to temp file then rename for atomicity — prevents partial PEM on
-  // crash. O_CREAT|O_EXCL on the temp file prevents collisions; EEXIST on
-  // the final rename means another process won the race.
+  // Write to temp file then hard-link into place for atomicity. linkSync
+  // fails with EEXIST if another process already installed the key file,
+  // preventing overwrites. This is safer than renameSync which silently
+  // replaces the target.
   const tmpFile = `${keyFile}.tmp.${process.pid}`;
   try {
     const fd = openSync(
@@ -95,19 +97,20 @@ export function loadOrGenerateKey(keyFile: string): crypto.KeyObject {
     } finally {
       closeSync(fd);
     }
-    renameSync(tmpFile, keyFile);
+    linkSync(tmpFile, keyFile);
   } catch (err: any) {
-    // Clean up temp file on any failure
+    if (err.code === 'EEXIST' && existsSync(keyFile)) {
+      // Another process won the race — load their key
+      return crypto.createPrivateKey(readFileSync(keyFile, 'utf8'));
+    }
+    throw err;
+  } finally {
+    // Always clean up temp file
     try {
       unlinkSync(tmpFile);
     } catch {
       // Ignore
     }
-    // Another process may have created the key file — try loading it
-    if (existsSync(keyFile)) {
-      return crypto.createPrivateKey(readFileSync(keyFile, 'utf8'));
-    }
-    throw err;
   }
 
   return privateKey;
