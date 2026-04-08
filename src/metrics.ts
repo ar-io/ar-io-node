@@ -14,6 +14,7 @@ import CircuitBreaker from 'opossum';
 import winston from 'winston';
 
 import { AR_IO_NODE_RELEASE } from './config.js';
+import { Semaphore } from './lib/semaphore.js';
 
 // Set default labels for all metrics
 promClient.register.setDefaultLabels({
@@ -722,6 +723,46 @@ export const compositeRootTxLookupTotal = new promClient.Counter({
 export const compositeRootTxLookupDurationSummary = new promClient.Summary({
   name: 'composite_root_tx_lookup_duration_ms',
   help: 'Total duration of composite root TX lookups',
+});
+
+//
+// Root TX Semaphore metrics
+//
+
+const semaphores: { [key: string]: Semaphore } = {};
+export function registerSemaphoreMetrics(
+  name: string,
+  semaphore: Semaphore,
+) {
+  semaphores[name] = semaphore;
+}
+
+export const rootTxSemaphoreAvailablePermits = new Gauge({
+  name: 'root_tx_semaphore_available_permits',
+  help: 'Available permits in root TX semaphores',
+  labelNames: ['name'],
+  collect() {
+    Object.entries(semaphores).forEach(([name, semaphore]) => {
+      this.set({ name }, semaphore.availablePermits());
+    });
+  },
+});
+
+export const rootTxSemaphoreQueueLength = new Gauge({
+  name: 'root_tx_semaphore_queue_length',
+  help: 'Number of waiters queued for root TX semaphore permits',
+  labelNames: ['name'],
+  collect() {
+    Object.entries(semaphores).forEach(([name, semaphore]) => {
+      this.set({ name }, semaphore.queueLength());
+    });
+  },
+});
+
+export const rootTxSemaphoreTimeoutTotal = new promClient.Counter({
+  name: 'root_tx_semaphore_timeout_total',
+  help: 'Total semaphore acquire timeouts in root TX lookups',
+  labelNames: ['name'] as const,
 });
 
 //

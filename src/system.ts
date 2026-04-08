@@ -756,6 +756,8 @@ const cdb64HttpSemaphore = new Semaphore(
   config.CDB64_REMOTE_MAX_CONCURRENT_REQUESTS,
 );
 
+metrics.registerSemaphoreMetrics('cdb64_remote', cdb64HttpSemaphore);
+
 // Build root TX indexes based on configuration
 let cdb64RootTxIndex: Cdb64RootTxIndex | undefined;
 const rootTxIndexes: DataItemRootIndex[] = [];
