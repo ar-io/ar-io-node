@@ -16,7 +16,7 @@ import {
   writeFileSync,
   constants as fsConstants,
 } from 'node:fs';
-import { dirname, join, normalize, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 // @ts-expect-error bs58 v4 has no type declarations
 import bs58 from 'bs58';
@@ -80,12 +80,13 @@ export function loadOrGenerateKey(keyFile: string): crypto.KeyObject {
 
   mkdirSync(dirname(keyFile), { recursive: true });
 
-  // Use O_CREAT|O_EXCL for atomic creation — if another process created the
-  // file between our existsSync check and now, openSync throws EEXIST and we
-  // load their key instead of overwriting it.
+  // Write to temp file then rename for atomicity — prevents partial PEM on
+  // crash. O_CREAT|O_EXCL on the temp file prevents collisions; EEXIST on
+  // the final rename means another process won the race.
+  const tmpFile = `${keyFile}.tmp.${process.pid}`;
   try {
     const fd = openSync(
-      keyFile,
+      tmpFile,
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
       0o600,
     );
@@ -94,8 +95,16 @@ export function loadOrGenerateKey(keyFile: string): crypto.KeyObject {
     } finally {
       closeSync(fd);
     }
+    renameSync(tmpFile, keyFile);
   } catch (err: any) {
-    if (err.code === 'EEXIST') {
+    // Clean up temp file on any failure
+    try {
+      unlinkSync(tmpFile);
+    } catch {
+      // Ignore
+    }
+    // Another process may have created the key file — try loading it
+    if (existsSync(keyFile)) {
       return crypto.createPrivateKey(readFileSync(keyFile, 'utf8'));
     }
     throw err;
@@ -240,7 +249,10 @@ export function resolveWalletPath(
 ): string {
   const resolved = resolve(walletsPath, `${observerWallet}.json`);
   const normalizedBase = resolve(walletsPath);
-  if (!normalize(resolved).startsWith(normalizedBase)) {
+  // Use path.relative to check containment — startsWith can be fooled by
+  // sibling directories (e.g., "wallets-evil" starts with "wallets").
+  const rel = relative(normalizedBase, resolved);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
     throw new Error(
       `OBSERVER_WALLET contains path traversal: ${observerWallet}`,
     );
@@ -261,26 +273,45 @@ export function jwkToArweaveAddress(jwk: crypto.JsonWebKey): string {
   return crypto.createHash('sha256').update(nBuffer).digest('base64url');
 }
 
+/**
+ * Canonical attestation payload fields. Serialized via json-canonicalize
+ * before signing. `gatewayAddress` is undefined when the operator has not
+ * set `AR_IO_WALLET`.
+ */
 export interface AttestationPayload {
   type: 'ar-io-gateway-key-attestation';
   version: 1;
+  /** Base64url Arweave address of the observer wallet. */
   observerAddress: string;
+  /** Base64url Arweave address of the staked gateway wallet (may be undefined). */
   gatewayAddress: string | undefined;
+  /** Base64url 32-byte Ed25519 public key. */
   ed25519PublicKey: string;
+  /** Base58 Solana address derived from the Ed25519 key. */
   solanaAddress: string;
+  /** Self-contained key ID: `ed25519:<base64url-pubkey>`. */
   keyId: string;
   purpose: 'http-response-signing';
+  /** ISO 8601 timestamp of attestation creation. */
   issuedAt: string;
 }
 
+/**
+ * Signed attestation ready for publication. `payload` is the canonical JSON
+ * string, `signature` is the RSA-PSS-SHA256 signature (base64url), and
+ * `rsaPublicKey` is the signer's public key in SPKI DER format (base64url).
+ */
 export interface Attestation {
   payload: string;
   signature: string;
   rsaPublicKey: string;
 }
 
+/** Disk-persisted attestation with identity fields for cache invalidation. */
 export interface CachedAttestation extends Attestation {
   ed25519PublicKey: string;
+  observerAddress?: string;
+  gatewayAddress?: string;
   txId?: string;
 }
 
@@ -352,14 +383,19 @@ export function loadOrCreateAttestation(opts: {
   const { keysDir, observerJwk, ed25519PublicKey, gatewayAddress } = opts;
   const cachePath = join(keysDir, ATTESTATION_CACHE_FILE);
   const currentPubKey = getPublicKeyBase64Url(ed25519PublicKey);
+  const currentObserverAddr = jwkToArweaveAddress(observerJwk);
 
-  // Try to load cached attestation
+  // Try to load cached attestation — validate all identity fields
   if (existsSync(cachePath)) {
     try {
       const cached: CachedAttestation = JSON.parse(
         readFileSync(cachePath, 'utf8'),
       );
-      if (cached.ed25519PublicKey === currentPubKey) {
+      if (
+        cached.ed25519PublicKey === currentPubKey &&
+        cached.observerAddress === currentObserverAddr &&
+        cached.gatewayAddress === gatewayAddress
+      ) {
         return {
           payload: cached.payload,
           signature: cached.signature,
@@ -389,6 +425,8 @@ export function loadOrCreateAttestation(opts: {
   const cacheData: CachedAttestation = {
     ...attestation,
     ed25519PublicKey: currentPubKey,
+    observerAddress: currentObserverAddr,
+    gatewayAddress,
   };
   mkdirSync(keysDir, { recursive: true });
   const tmpPath = `${cachePath}.tmp`;

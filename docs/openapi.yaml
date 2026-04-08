@@ -1545,6 +1545,14 @@ paths:
                 type: integer
               description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
               example: 2092
+            Signature:
+              schema:
+                type: string
+              description: RFC 9421 HTTP Message Signature (opt-in via HTTPSIG_ENABLED)
+            Signature-Input:
+              schema:
+                type: string
+              description: RFC 9421 Signature-Input listing signed components, algorithm, and key ID (opt-in via HTTPSIG_ENABLED)
         '404':
           description: Data not found or blocked
         '416':
@@ -1667,6 +1675,14 @@ paths:
                 type: integer
               description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
               example: 2092
+            Signature:
+              schema:
+                type: string
+              description: RFC 9421 HTTP Message Signature (opt-in via HTTPSIG_ENABLED)
+            Signature-Input:
+              schema:
+                type: string
+              description: RFC 9421 Signature-Input listing signed components, algorithm, and key ID (opt-in via HTTPSIG_ENABLED)
         '404':
           description: Data not found or blocked
         '416':
