@@ -4,8 +4,6 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
-
 ## [Release 75] - 2026-04-08
 
 This is a **recommended release** focused on **on-demand data item resolution**
@@ -40,14 +38,14 @@ observability**.
   capped at 1 concurrent operation (configurable via
   `TX_METADATA_RESOLVE_CONCURRENCY`) with fail-fast semantics.
 
-- **HyperBEAM Root TX Offset Source (PE-9043)**: HyperBEAM can now be used as a
+- **HyperBEAM Root TX Offset Source**: HyperBEAM can now be used as a
   root transaction offset source for on-demand data item resolution. Uses
   offset-guided recursive bundle index navigation to extract complete data item
   metadata without downloading full bundles. Controlled by
   `HYPERBEAM_ROOT_TX_ENABLED` and `HYPERBEAM_ENDPOINT` (default:
   `arweave.net`).
 
-- **Configurable Chunk GET Retry Behavior (PE-9042)**: Arweave chunk retrieval
+- **Configurable Chunk GET Retry Behavior**: Arweave chunk retrieval
   retry count and geometry timeout are now configurable, reducing worst-case
   chunk retrieval time from ~115s to ~15s. New env vars:
   `ARWEAVE_CHUNK_RETRY_COUNT` (default: 5), `ARWEAVE_TX_GEOMETRY_TIMEOUT_MS`
