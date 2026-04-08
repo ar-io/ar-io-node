@@ -74,6 +74,10 @@ export const headerNames = {
   arweaveTagsTruncated: 'X-Arweave-Tags-Truncated',
   // Per-tag headers are emitted dynamically as X-Arweave-Tag-{Name}
   // by setDataHeaders in src/routes/data/handlers.ts.
+
+  // RFC 9421 HTTP Message Signatures
+  signature: 'Signature',
+  signatureInput: 'Signature-Input',
 };
 
 export const verificationPriorities = {

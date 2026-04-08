@@ -909,3 +909,23 @@ export const envoyEdsFileWritesTotal = new promClient.Counter({
   help: 'Total number of EDS file writes',
   labelNames: ['cluster'] as const,
 });
+
+//
+// HTTPSIG response signing
+//
+
+export const httpSigResponsesSignedTotal = new promClient.Counter({
+  name: 'httpsig_responses_signed_total',
+  help: 'Total HTTP responses signed with HTTPSIG',
+});
+
+export const httpSigSigningDuration = new promClient.Histogram({
+  name: 'httpsig_signing_duration_seconds',
+  help: 'Time to sign HTTP responses',
+  buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001],
+});
+
+export const httpSigErrorsTotal = new promClient.Counter({
+  name: 'httpsig_errors_total',
+  help: 'Total HTTPSIG signing errors',
+});

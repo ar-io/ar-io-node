@@ -34,6 +34,7 @@
     "arweave": "^2.0.0-ec.0",
     "axios": "^1.15.0",
     "better-sqlite3": "^9.4.5",
+    "bs58": "^4.0.1",
     "change-case": "^5.4.4",
     "chokidar": "^5.0.0",
     "cors": "^2.8.5",
