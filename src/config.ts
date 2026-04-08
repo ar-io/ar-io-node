@@ -6,6 +6,7 @@
  */
 import { canonicalize } from 'json-canonicalize';
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { isMainThread } from 'node:worker_threads';
 import { existsSync, readFileSync } from 'node:fs';
 
@@ -18,6 +19,7 @@ import {
   getSolanaAddress,
   loadWalletJwk,
   loadOrCreateAttestation,
+  saveAttestationTxId,
   jwkToArweaveAddress,
   resolveWalletPath,
 } from './lib/httpsig.js';
@@ -999,6 +1001,7 @@ let _httpSigPublicKeyB64Url: string | undefined;
 let _httpSigSolanaAddress: string | undefined;
 let _httpSigAttestation: Attestation | undefined;
 let _httpSigAttestationCached = false;
+let _httpSigAttestationTxId: string | undefined;
 let _httpSigObserverAddress: string | undefined;
 let _httpSigObserverJwk: crypto.JsonWebKey | undefined;
 
@@ -1024,9 +1027,7 @@ if (isMainThread && HTTPSIG_ENABLED) {
       _httpSigObserverJwk = loadWalletJwk(walletPath);
       _httpSigObserverAddress = jwkToArweaveAddress(_httpSigObserverJwk);
 
-      const keysDir =
-        HTTPSIG_KEY_FILE.substring(0, HTTPSIG_KEY_FILE.lastIndexOf('/')) ||
-        'data/keys';
+      const keysDir = path.dirname(HTTPSIG_KEY_FILE) || 'data/keys';
 
       const result = loadOrCreateAttestation({
         keysDir,
@@ -1041,6 +1042,7 @@ if (isMainThread && HTTPSIG_ENABLED) {
         rsaPublicKey: result.rsaPublicKey,
       };
       _httpSigAttestationCached = result.cached;
+      _httpSigAttestationTxId = result.txId;
 
       logger.info('HTTPSIG attestation ready', {
         observerAddress: _httpSigObserverAddress,
@@ -1064,13 +1066,15 @@ export const HTTPSIG_ATTESTATION_CACHED = _httpSigAttestationCached;
 export const HTTPSIG_OBSERVER_ADDRESS = _httpSigObserverAddress;
 export const HTTPSIG_OBSERVER_JWK = _httpSigObserverJwk;
 
-// Set by app.ts after async upload completes
-let _httpSigAttestationTxId: string | undefined;
+export const HTTPSIG_KEYS_DIR = path.dirname(HTTPSIG_KEY_FILE) || 'data/keys';
+
 export function getHttpSigAttestationTxId(): string | undefined {
   return _httpSigAttestationTxId;
 }
 export function setHttpSigAttestationTxId(txId: string): void {
   _httpSigAttestationTxId = txId;
+  // Persist txId to cache file so it survives restarts
+  saveAttestationTxId(HTTPSIG_KEYS_DIR, txId);
 }
 
 //

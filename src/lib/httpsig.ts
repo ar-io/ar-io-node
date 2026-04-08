@@ -11,6 +11,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
   constants as fsConstants,
@@ -280,6 +281,7 @@ export interface Attestation {
 
 export interface CachedAttestation extends Attestation {
   ed25519PublicKey: string;
+  txId?: string;
 }
 
 /**
@@ -346,7 +348,7 @@ export function loadOrCreateAttestation(opts: {
   observerJwk: crypto.JsonWebKey;
   ed25519PublicKey: crypto.KeyObject;
   gatewayAddress: string | undefined;
-}): Attestation & { cached: boolean } {
+}): Attestation & { cached: boolean; txId?: string } {
   const { keysDir, observerJwk, ed25519PublicKey, gatewayAddress } = opts;
   const cachePath = join(keysDir, ATTESTATION_CACHE_FILE);
   const currentPubKey = getPublicKeyBase64Url(ed25519PublicKey);
@@ -362,6 +364,7 @@ export function loadOrCreateAttestation(opts: {
           payload: cached.payload,
           signature: cached.signature,
           rsaPublicKey: cached.rsaPublicKey,
+          txId: cached.txId,
           cached: true,
         };
       }
@@ -382,13 +385,36 @@ export function loadOrCreateAttestation(opts: {
     gatewayAddress,
   });
 
-  // Cache to disk
+  // Cache to disk atomically (write to temp, then rename)
   const cacheData: CachedAttestation = {
     ...attestation,
     ed25519PublicKey: currentPubKey,
   };
   mkdirSync(keysDir, { recursive: true });
-  writeFileSync(cachePath, JSON.stringify(cacheData, null, 2));
+  const tmpPath = `${cachePath}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(cacheData, null, 2));
+  renameSync(tmpPath, cachePath);
 
   return { ...attestation, cached: false };
+}
+
+/**
+ * Persist the Arweave TX ID of a successfully uploaded attestation into the
+ * cache file so it survives restarts.
+ */
+export function saveAttestationTxId(keysDir: string, txId: string): void {
+  const cachePath = join(keysDir, ATTESTATION_CACHE_FILE);
+  if (!existsSync(cachePath)) return;
+
+  try {
+    const cached: CachedAttestation = JSON.parse(
+      readFileSync(cachePath, 'utf8'),
+    );
+    cached.txId = txId;
+    const tmpPath = `${cachePath}.tmp`;
+    writeFileSync(tmpPath, JSON.stringify(cached, null, 2));
+    renameSync(tmpPath, cachePath);
+  } catch {
+    // Non-fatal — txId will be re-uploaded next restart
+  }
 }

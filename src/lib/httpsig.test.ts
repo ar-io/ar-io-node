@@ -24,6 +24,7 @@ import {
   loadWalletJwk,
   createAttestation,
   loadOrCreateAttestation,
+  saveAttestationTxId,
   jwkToArweaveAddress,
 } from './httpsig.js';
 
@@ -569,6 +570,34 @@ describe('httpsig lib', () => {
       assert.equal(first.cached, false);
       assert.equal(second.cached, false);
       assert.notEqual(first.signature, second.signature);
+    });
+
+    it('returns persisted txId from cache', () => {
+      const dir = makeTmpDir();
+      const observerJwk = generateTestRsaJwk();
+      const { publicKey } = crypto.generateKeyPairSync('ed25519');
+
+      // Create attestation
+      loadOrCreateAttestation({
+        keysDir: dir,
+        observerJwk,
+        ed25519PublicKey: publicKey,
+        gatewayAddress: undefined,
+      });
+
+      // Persist txId
+      saveAttestationTxId(dir, 'arweave-tx-123');
+
+      // Reload — should return the txId
+      const result = loadOrCreateAttestation({
+        keysDir: dir,
+        observerJwk,
+        ed25519PublicKey: publicKey,
+        gatewayAddress: undefined,
+      });
+
+      assert.equal(result.cached, true);
+      assert.equal(result.txId, 'arweave-tx-123');
     });
   });
 });

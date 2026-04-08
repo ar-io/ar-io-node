@@ -393,7 +393,7 @@ services:
       - HTTPSIG_BIND_REQUEST=${HTTPSIG_BIND_REQUEST:-}
       - HTTPSIG_UPLOAD_ATTESTATION=${HTTPSIG_UPLOAD_ATTESTATION:-}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-}
-      - WALLETS_PATH=${WALLETS_PATH:-}
+      - WALLETS_PATH=/app/wallets
     ulimits:
       nofile:
         soft: 65536
