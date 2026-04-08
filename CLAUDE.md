@@ -314,6 +314,10 @@ const log = createTestLogger({
   relevant documentation in the same PR. Check `docs/envs.md` for env var
   changes, feature-specific guides for behavior changes, and `docs/INDEX.md` to
   find the right doc to update.
+- **Keep docker-compose.yaml in sync with env vars**: When adding or removing
+  environment variables, ensure they are also added to or removed from
+  `docker-compose.yaml` so operators using Docker get access to the new
+  configuration.
 - The project includes a comprehensive glossary at `docs/glossary.md`
 - When adding new concepts, features, or technical terms, update the glossary
 - Keep glossary definitions concise and focused on concepts rather than
