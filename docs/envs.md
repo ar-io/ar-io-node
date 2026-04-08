@@ -326,6 +326,7 @@ When `OBSERVER_WALLET` is set, the gateway also creates an RSA attestation linki
 | --------------------------- | ------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | HTTPSIG_ENABLED             | Boolean | false                  | Enable RFC 9421 HTTP Message Signature signing on gateway responses                                                  |
 | HTTPSIG_KEY_FILE            | String  | data/keys/httpsig.pem  | Path to Ed25519 private key PEM file. Auto-generated on first startup if missing                                     |
+| KEYS_DATA_PATH              | String  | ./data/keys            | Host path for the keys volume mount (docker-compose only). Maps to `/app/data/keys` inside the container             |
 | HTTPSIG_BIND_REQUEST        | Boolean | true                   | Include `@method;req` and `@path;req` in signatures, binding each response to the specific request that triggered it |
 | HTTPSIG_UPLOAD_ATTESTATION  | Boolean | true                   | Upload the attestation to Arweave at startup (requires `OBSERVER_WALLET`). Set to false to skip upload               |
 | OBSERVER_WALLET             | String  | -                      | Arweave wallet address for attestation signing. Key file must exist at `<WALLETS_PATH>/<OBSERVER_WALLET>.json`       |

@@ -89,14 +89,28 @@ export interface X402Info {
 /**
  * HTTPSIG response signing configuration exposed in the info endpoint.
  */
+/**
+ * RSA-signed attestation linking an Ed25519 signing key to an Arweave
+ * observer wallet identity. Enables verifiers to establish the trust chain
+ * from HTTP signatures back to the on-chain gateway registration.
+ */
 export interface HttpsigAttestationInfo {
+  /** Arweave transaction ID where attestation is permanently stored. */
   txId?: string;
+  /** Base64url Arweave address of the observer wallet that signed the attestation. */
   observerAddress: string;
+  /** Canonical JSON attestation payload. */
   payload: string;
+  /** RSA-PSS-SHA256 signature over the payload (base64url). */
   signature: string;
+  /** RSA public key in SPKI DER format (base64url). */
   rsaPublicKey: string;
 }
 
+/**
+ * HTTPSIG response signing configuration exposed in the info endpoint.
+ * When enabled, qualifying responses include RFC 9421 Message Signatures.
+ */
 export interface HttpsigInfo {
   enabled: true;
   algorithm: string;

@@ -7,6 +7,8 @@
 import crypto from 'node:crypto';
 import { Handler, Request, Response } from 'express';
 
+import { headerNames } from '../constants.js';
+import log from '../log.js';
 import * as metrics from '../metrics.js';
 import { trace } from '../tracing.js';
 import {
@@ -45,8 +47,8 @@ export function createHttpSigMiddleware(opts: {
 
     res.writeHead = function (this: Response, ...args: any[]) {
       // Strip upstream signature headers (gateway-to-gateway forwarding)
-      this.removeHeader('Signature');
-      this.removeHeader('Signature-Input');
+      this.removeHeader(headerNames.signature);
+      this.removeHeader(headerNames.signatureInput);
 
       // Collect signable headers that are actually present on this response
       const presentHeaders = Object.keys(this.getHeaders());
@@ -106,9 +108,10 @@ export function createHttpSigMiddleware(opts: {
             'httpsig.components_count': coveredHeaders.length,
           });
         }
-      } catch {
+      } catch (error: any) {
         // Signing failure must not break the response — fall through unsigned.
         metrics.httpSigErrorsTotal.inc();
+        log.debug('HTTPSIG signing failed', { error: error?.message });
       }
 
       return (

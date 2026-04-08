@@ -46,13 +46,14 @@ system.contiguousDataFsCacheCleanupWorker?.start();
 
 system.chunkDataFsCacheCleanupWorker?.start();
 
-// Upload HTTPSIG attestation to Arweave (non-blocking, non-fatal)
+// Upload HTTPSIG attestation to Arweave (non-blocking, non-fatal).
+// Skip if the txId is already persisted from a prior successful upload.
 if (
   config.HTTPSIG_ENABLED &&
   config.HTTPSIG_ATTESTATION !== undefined &&
   config.HTTPSIG_OBSERVER_JWK !== undefined &&
   config.HTTPSIG_UPLOAD_ATTESTATION &&
-  !config.HTTPSIG_ATTESTATION_CACHED
+  config.getHttpSigAttestationTxId() === undefined
 ) {
   uploadAttestation({
     jwk: config.HTTPSIG_OBSERVER_JWK,
