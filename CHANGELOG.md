@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [Release 75] - 2026-04-08
+
+This is a **recommended release** focused on **on-demand data item resolution**
+and **response header enrichment**. Key highlights include **tag and verification
+response headers** that expose transaction tags and cryptographic metadata
+directly in HTTP responses, **on-demand data item metadata resolution** that
+resolves unindexed data items by parsing ANS-104 bundle binaries on the fly,
+**HyperBEAM as a root TX offset source** for efficient bundle navigation without
+full downloads, and **GraphQL on-demand transaction resolution** for querying
+unindexed data items. It also adds **configurable chunk GET retry behavior** to
+reduce worst-case retrieval times and **Prometheus metrics for root TX semaphore
+observability**.
+
 ### Added
 
 - **Tag and Verification Response Headers**: Data responses on `/raw/:id` and
@@ -51,6 +64,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **SignatureType in GraphQL**: The `signatureType` field is now surfaced in
   GraphQL transaction responses for data items.
+
+- **Root TX Semaphore Prometheus Metrics**: New Prometheus metrics for root TX
+  resolution semaphore observability, including acquire/release/timeout counters
+  and queue depth gauge.
 
 ### Changed
 
