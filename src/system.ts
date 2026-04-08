@@ -754,6 +754,11 @@ const cdb64BaseDataSource =
 // Global semaphore for limiting concurrent CDB64 HTTP requests
 const cdb64HttpSemaphore = new Semaphore(
   config.CDB64_REMOTE_MAX_CONCURRENT_REQUESTS,
+  {
+    onTimeout: () => {
+      metrics.rootTxSemaphoreTimeoutTotal.inc({ name: 'cdb64_remote' });
+    },
+  },
 );
 
 metrics.registerSemaphoreMetrics('cdb64_remote', cdb64HttpSemaphore);

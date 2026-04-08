@@ -45,7 +45,6 @@ import {
   getPath,
 } from '../lib/cdb64-encoding.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
-import * as metrics from '../metrics.js';
 import { PartitionedCdb64Reader } from '../lib/partitioned-cdb64-reader.js';
 import { Cdb64Manifest, parseManifest } from '../lib/cdb64-manifest.js';
 
@@ -1120,9 +1119,6 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        if (message.startsWith('Semaphore acquire timeout')) {
-          metrics.rootTxSemaphoreTimeoutTotal.inc({ name: 'cdb64_remote' });
-        }
         this.log.debug('Error reading from CDB64 source, trying next', {
           id,
           source: entry.sourceSpec,

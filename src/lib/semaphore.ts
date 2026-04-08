@@ -26,15 +26,18 @@ export class Semaphore {
     resolve: () => void;
     reject: (err: Error) => void;
   }> = [];
+  private onTimeout?: () => void;
 
   /**
    * @param permits Maximum number of concurrent acquisitions allowed
+   * @param options.onTimeout Optional callback invoked on every acquire timeout
    */
-  constructor(permits: number) {
+  constructor(permits: number, options?: { onTimeout?: () => void }) {
     if (permits < 1) {
       throw new Error('Semaphore permits must be at least 1');
     }
     this.permits = permits;
+    this.onTimeout = options?.onTimeout;
   }
 
   /**
@@ -59,6 +62,7 @@ export class Semaphore {
           const index = this.waiting.indexOf(waiter);
           if (index !== -1) {
             this.waiting.splice(index, 1);
+            this.onTimeout?.();
             reject(new Error(`Semaphore acquire timeout after ${timeoutMs}ms`));
           }
         }, timeoutMs);
