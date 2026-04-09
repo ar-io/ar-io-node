@@ -599,5 +599,82 @@ describe('httpsig lib', () => {
       assert.equal(result.cached, true);
       assert.equal(result.txId, 'arweave-tx-123');
     });
+
+    it('recreates attestation when observer wallet changes', () => {
+      const dir = makeTmpDir();
+      const observerJwk1 = generateTestRsaJwk();
+      const observerJwk2 = generateTestRsaJwk();
+      const { publicKey } = crypto.generateKeyPairSync('ed25519');
+
+      const first = loadOrCreateAttestation({
+        keysDir: dir,
+        observerJwk: observerJwk1,
+        ed25519PublicKey: publicKey,
+        gatewayAddress: undefined,
+      });
+
+      const second = loadOrCreateAttestation({
+        keysDir: dir,
+        observerJwk: observerJwk2,
+        ed25519PublicKey: publicKey,
+        gatewayAddress: undefined,
+      });
+
+      assert.equal(first.cached, false);
+      assert.equal(second.cached, false);
+      assert.notEqual(first.signature, second.signature);
+    });
+
+    it('recreates attestation when gateway address changes', () => {
+      const dir = makeTmpDir();
+      const observerJwk = generateTestRsaJwk();
+      const { publicKey } = crypto.generateKeyPairSync('ed25519');
+
+      const first = loadOrCreateAttestation({
+        keysDir: dir,
+        observerJwk,
+        ed25519PublicKey: publicKey,
+        gatewayAddress: 'gateway-1',
+      });
+
+      const second = loadOrCreateAttestation({
+        keysDir: dir,
+        observerJwk,
+        ed25519PublicKey: publicKey,
+        gatewayAddress: 'gateway-2',
+      });
+
+      assert.equal(first.cached, false);
+      assert.equal(second.cached, false);
+    });
+
+    it('handles corrupt cache file gracefully', () => {
+      const dir = makeTmpDir();
+      const observerJwk = generateTestRsaJwk();
+      const { publicKey } = crypto.generateKeyPairSync('ed25519');
+
+      // Write corrupt cache
+      fs.writeFileSync(
+        path.join(dir, 'httpsig-attestation.json'),
+        'not valid json{{{',
+      );
+
+      // Should recreate without throwing
+      const result = loadOrCreateAttestation({
+        keysDir: dir,
+        observerJwk,
+        ed25519PublicKey: publicKey,
+        gatewayAddress: undefined,
+      });
+
+      assert.equal(result.cached, false);
+      assert.ok(result.payload.length > 0);
+    });
+
+    it('saveAttestationTxId is no-op when cache file missing', () => {
+      const dir = makeTmpDir();
+      // Should not throw
+      saveAttestationTxId(dir, 'some-tx-id');
+    });
   });
 });

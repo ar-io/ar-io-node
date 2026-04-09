@@ -57,9 +57,28 @@ describe('httpsig-upload', () => {
 
       const names = tags.map((t) => t.name);
       assert.ok(!names.includes('Gateway-Address'));
-      // Other required tags still present
       assert.ok(names.includes('App-Name'));
       assert.ok(names.includes('Observer-Address'));
+    });
+
+    it('returns correct number of tags with gateway address', () => {
+      const tags = buildAttestationTags({
+        gatewayAddress: 'gw',
+        observerAddress: 'obs',
+        ed25519PublicKey: 'pk',
+        keyId: 'kid',
+      });
+      assert.equal(tags.length, 7);
+    });
+
+    it('returns correct number of tags without gateway address', () => {
+      const tags = buildAttestationTags({
+        gatewayAddress: undefined,
+        observerAddress: 'obs',
+        ed25519PublicKey: 'pk',
+        keyId: 'kid',
+      });
+      assert.equal(tags.length, 6);
     });
   });
 });
