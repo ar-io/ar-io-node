@@ -229,4 +229,29 @@ describe('createHttpSigMiddleware', () => {
     assert.equal(res.headers['signature'], undefined);
     assert.equal(res.headers['signature-input'], undefined);
   });
+
+  it('falls through unsigned when signing fails (invalid key)', async () => {
+    // Pass a public key (not private) to trigger a signing error
+    const { publicKey } = crypto.generateKeyPairSync('ed25519');
+    const { keyId } = generateTestKeyPair();
+
+    const app = express();
+    app.use(
+      createHttpSigMiddleware({
+        privateKey: publicKey as any,
+        keyId,
+        bindRequest: false,
+      }),
+    );
+    app.get('/test', (_req, res) => {
+      res.header('X-AR-IO-Data-Id', 'abc123');
+      res.send('ok');
+    });
+
+    // Should still return 200 — signing error caught, response sent unsigned
+    const res = await request(app).get('/test');
+    assert.equal(res.status, 200);
+    assert.equal(res.headers['signature'], undefined);
+    assert.equal(res.headers['signature-input'], undefined);
+  });
 });
