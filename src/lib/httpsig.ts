@@ -432,7 +432,7 @@ export function loadOrCreateAttestation(opts: {
     gatewayAddress,
   };
   mkdirSync(keysDir, { recursive: true });
-  const tmpPath = `${cachePath}.tmp`;
+  const tmpPath = `${cachePath}.tmp.${process.pid}`;
   writeFileSync(tmpPath, JSON.stringify(cacheData, null, 2));
   renameSync(tmpPath, cachePath);
 
@@ -452,7 +452,7 @@ export function saveAttestationTxId(keysDir: string, txId: string): void {
       readFileSync(cachePath, 'utf8'),
     );
     cached.txId = txId;
-    const tmpPath = `${cachePath}.tmp`;
+    const tmpPath = `${cachePath}.tmp.${process.pid}`;
     writeFileSync(tmpPath, JSON.stringify(cached, null, 2));
     renameSync(tmpPath, cachePath);
   } catch {
