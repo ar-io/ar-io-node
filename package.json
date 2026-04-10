@@ -32,7 +32,7 @@
     "any-signal": "^4.1.1",
     "apollo-server-express": "^3.13.0",
     "arweave": "^2.0.0-ec.0",
-    "axios": "^1.13.5",
+    "axios": "^1.15.0",
     "better-sqlite3": "^9.4.5",
     "change-case": "^5.4.4",
     "chokidar": "^5.0.0",
@@ -86,7 +86,7 @@
     "tar": "7.5.13",
     "qs": "6.15.0",
     "cookie": "0.7.0",
-    "axios": "1.13.5",
+    "axios": "1.15.0",
     "fast-xml-parser": "5.5.9",
     "multer": "2.1.1",
     "express/path-to-regexp": "0.1.13",
@@ -107,7 +107,11 @@
     "madge/**/minimatch": "9.0.7",
     "c8/**/minimatch": "3.1.5",
     "duckdb-async/**/minimatch": "9.0.7",
-    "rimraf/glob/minimatch": "10.2.3"
+    "rimraf/glob/minimatch": "10.2.3",
+    "hono": "4.12.12",
+    "defu": "6.1.7",
+    "bn.js": "5.2.3",
+    "yaml": "2.8.3"
   },
   "devDependencies": {
     "@ardrive/turbo-sdk": "^1.40.2",
