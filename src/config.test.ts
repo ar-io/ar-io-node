@@ -150,3 +150,56 @@ describe('matchArnsRootHost with explicit hosts', () => {
     // 1 subdomain > 0 subdomainLength → middleware treats as ArNS/sandbox
   });
 });
+
+describe('matchArnsRootHost with apexName', () => {
+  it('returns per-host apexName from matched entry', () => {
+    const hosts = [
+      { host: 'turbo-gateway.com', subdomainLength: 0, apexName: 'turbo' },
+      { host: 'ar.io', subdomainLength: 0, apexName: 'ar-io' },
+    ];
+    const sorted = [...hosts].sort((a, b) => b.host.length - a.host.length);
+
+    const result1 = matchArnsRootHost('turbo-gateway.com', sorted);
+    assert.equal(result1?.apexName, 'turbo');
+
+    const result2 = matchArnsRootHost('ar.io', sorted);
+    assert.equal(result2?.apexName, 'ar-io');
+  });
+
+  it('returns undefined apexName when not set on entry', () => {
+    const hosts = [{ host: 'example.com', subdomainLength: 0 }];
+    const result = matchArnsRootHost('example.com', hosts);
+    assert.equal(result?.apexName, undefined);
+  });
+
+  it('subdomain request inherits apexName from matched root host', () => {
+    const hosts = [
+      { host: 'turbo-gateway.com', subdomainLength: 0, apexName: 'turbo' },
+    ];
+    const result = matchArnsRootHost('myname.turbo-gateway.com', hosts);
+    assert.equal(result?.apexName, 'turbo');
+  });
+
+  it('single apex name applies to all hosts (backward compat simulation)', () => {
+    // When APEX_ARNS_NAME has one value, config.ts applies it to all hosts
+    const hosts = [
+      { host: 'host1.com', subdomainLength: 0, apexName: 'shared' },
+      { host: 'host2.com', subdomainLength: 0, apexName: 'shared' },
+    ];
+    const sorted = [...hosts].sort((a, b) => b.host.length - a.host.length);
+
+    assert.equal(matchArnsRootHost('host1.com', sorted)?.apexName, 'shared');
+    assert.equal(matchArnsRootHost('host2.com', sorted)?.apexName, 'shared');
+  });
+
+  it('host without apex does not match apexName from other hosts', () => {
+    const hosts = [
+      { host: 'has-apex.com', subdomainLength: 0, apexName: 'myname' },
+      { host: 'no-apex.com', subdomainLength: 0 },
+    ];
+    const sorted = [...hosts].sort((a, b) => b.host.length - a.host.length);
+
+    assert.equal(matchArnsRootHost('has-apex.com', sorted)?.apexName, 'myname');
+    assert.equal(matchArnsRootHost('no-apex.com', sorted)?.apexName, undefined);
+  });
+});

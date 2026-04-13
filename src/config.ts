@@ -1235,17 +1235,35 @@ export const MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS =
 // ArNS and sandboxing
 //
 
+// Parse comma-separated apex ArNS names (positionally matched to root hosts)
+const APEX_ARNS_NAMES_RAW = env.varOrUndefined('APEX_ARNS_NAME');
+const APEX_ARNS_NAMES: string[] = (APEX_ARNS_NAMES_RAW ?? '')
+  .split(',')
+  .map((s) => s.trim());
+
 // The root host name(s) to use for ArNS (comma-separated)
-export const ARNS_ROOT_HOSTS: { host: string; subdomainLength: number }[] = (
-  env.varOrUndefined('ARNS_ROOT_HOST') ?? ''
-)
+export const ARNS_ROOT_HOSTS: {
+  host: string;
+  subdomainLength: number;
+  apexName?: string;
+}[] = (env.varOrUndefined('ARNS_ROOT_HOST') ?? '')
   .split(',')
   .map((h) => h.trim())
   .filter((h) => h !== '')
-  .map((host) => ({
-    host,
-    subdomainLength: host.split('.').length - 2,
-  }));
+  .map((host, i) => {
+    // Single apex name → apply to all hosts (backward compat).
+    // Multiple → positional match. Empty string → no apex for that host.
+    const positionalApex =
+      APEX_ARNS_NAMES.length === 1 ? APEX_ARNS_NAMES[0] : APEX_ARNS_NAMES[i];
+    return {
+      host,
+      subdomainLength: host.split('.').length - 2,
+      apexName:
+        positionalApex !== undefined && positionalApex !== ''
+          ? positionalApex
+          : undefined,
+    };
+  });
 
 // Primary root host (first in list) for backward compatibility and gateway identity
 export const ARNS_ROOT_HOST = ARNS_ROOT_HOSTS[0]?.host;
@@ -1260,8 +1278,9 @@ export function matchArnsRootHost(
   hosts: {
     host: string;
     subdomainLength: number;
+    apexName?: string;
   }[] = ARNS_ROOT_HOSTS_BY_LENGTH,
-): { host: string; subdomainLength: number } | undefined {
+): { host: string; subdomainLength: number; apexName?: string } | undefined {
   for (const entry of hosts) {
     if (hostname === entry.host || hostname.endsWith('.' + entry.host)) {
       return entry;
@@ -1313,7 +1332,7 @@ export const AR_IO_NODE_RELEASE = env.varOrDefault(
 
 export const APEX_TX_ID = env.varOrUndefined('APEX_TX_ID');
 
-export const APEX_ARNS_NAME = env.varOrUndefined('APEX_ARNS_NAME');
+export const APEX_ARNS_NAME = APEX_ARNS_NAMES_RAW;
 if (APEX_TX_ID !== undefined && APEX_ARNS_NAME !== undefined) {
   throw new Error(
     'APEX_TX_ID and APEX_ARNS_NAME are mutually exclusive but both are set.',
