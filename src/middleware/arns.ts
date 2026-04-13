@@ -63,7 +63,7 @@ export const createArnsMiddleware = ({
     const hostNameIsArNSRoot = req.hostname === matchedEntry.host;
     if (
       hostNameIsArNSRoot &&
-      (config.APEX_TX_ID !== undefined || config.APEX_ARNS_NAME !== undefined)
+      (config.APEX_TX_ID !== undefined || matchedEntry.apexName !== undefined)
     ) {
       // Ensure certain paths pass through even if an apex ID or ArNS name is
       // set.
@@ -92,10 +92,9 @@ export const createArnsMiddleware = ({
         return;
       }
 
-      // If apex ArNS name is set and hostname matches root use the apex ArNS
-      // name as the ArNS subdomain.
-      if (config.APEX_ARNS_NAME !== undefined) {
-        arnsSubdomain = config.APEX_ARNS_NAME;
+      // If apex ArNS name is set for this host, use it as the ArNS subdomain.
+      if (matchedEntry.apexName !== undefined) {
+        arnsSubdomain = matchedEntry.apexName;
       }
     } else if (
       hostNameIsArNSRoot ||
