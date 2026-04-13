@@ -1281,16 +1281,35 @@ const APEX_ARNS_NAMES: string[] = (APEX_ARNS_NAMES_RAW ?? '')
   .split(',')
   .map((s) => s.trim());
 
-// The root host name(s) to use for ArNS (comma-separated)
+/**
+ * Root host entries for ArNS resolution, parsed from the comma-separated
+ * `ARNS_ROOT_HOST` env var. Each entry includes:
+ * - `host` — the root domain (e.g., "arweave.dev")
+ * - `subdomainLength` — extra subdomain components in the host itself
+ * - `apexName` — optional ArNS name to resolve at the root path, from
+ *   `APEX_ARNS_NAME`. A single value applies to all hosts; comma-separated
+ *   values are mapped positionally. An empty positional slot means no apex.
+ */
 export const ARNS_ROOT_HOSTS: {
   host: string;
   subdomainLength: number;
   apexName?: string;
-}[] = (env.varOrUndefined('ARNS_ROOT_HOST') ?? '')
-  .split(',')
-  .map((h) => h.trim())
-  .filter((h) => h !== '')
-  .map((host, i) => {
+}[] = (() => {
+  const hosts = (env.varOrUndefined('ARNS_ROOT_HOST') ?? '')
+    .split(',')
+    .map((h) => h.trim())
+    .filter((h) => h !== '');
+
+  // Fail fast if more apex names than hosts — likely a misconfiguration
+  if (APEX_ARNS_NAMES.length > 1 && APEX_ARNS_NAMES.length > hosts.length) {
+    throw new Error(
+      `APEX_ARNS_NAME has ${APEX_ARNS_NAMES.length} entries but ` +
+        `ARNS_ROOT_HOST has only ${hosts.length}. ` +
+        'Each apex name must map to a root host.',
+    );
+  }
+
+  return hosts.map((host, i) => {
     // Single apex name → apply to all hosts (backward compat).
     // Multiple → positional match. Empty string → no apex for that host.
     const positionalApex =
@@ -1304,15 +1323,21 @@ export const ARNS_ROOT_HOSTS: {
           : undefined,
     };
   });
+})();
 
-// Primary root host (first in list) for backward compatibility and gateway identity
+/** Primary root host (first in list) for backward compatibility and identity. */
 export const ARNS_ROOT_HOST = ARNS_ROOT_HOSTS[0]?.host;
 
-// Sorted by descending host length for longest-suffix matching
+/** Sorted by descending host length for longest-suffix matching. */
 const ARNS_ROOT_HOSTS_BY_LENGTH = [...ARNS_ROOT_HOSTS].sort(
   (a, b) => b.host.length - a.host.length,
 );
 
+/**
+ * Find the root host entry matching a request hostname. Uses longest-suffix
+ * matching to correctly distinguish hosts like "foo.example.com" from
+ * "example.com". Returns the matched entry (including `apexName`) or undefined.
+ */
 export function matchArnsRootHost(
   hostname: string,
   hosts: {
