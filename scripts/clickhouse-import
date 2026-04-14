@@ -218,11 +218,21 @@ initialize_clickhouse_schema() {
     exit 1
   fi
   
-  clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+  local schema_stderr rc
+  schema_stderr=$(clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
     --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-    --multiquery < src/database/clickhouse/schema.sql 2>/dev/null || {
-    echo "Warning: Schema initialization may have failed (this is normal if schema already exists)" >&2
-  }
+    --multiquery < src/database/clickhouse/schema.sql 2>&1)
+  rc=$?
+
+  if [[ $rc -ne 0 ]]; then
+    if grep -qiE 'already exists' <<<"$schema_stderr"; then
+      echo "  Schema already exists, continuing"
+    else
+      echo "Error: Schema initialization failed (exit $rc):" >&2
+      echo "$schema_stderr" >&2
+      exit 1
+    fi
+  fi
 }
 
 
