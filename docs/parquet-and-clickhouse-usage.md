@@ -56,7 +56,7 @@ curl -L https://arweave.net/JVmsuD2EmFkhitzWN71oi9woADE4WUfvrbBYgremCBM -o 2025-
 tar -xzf 2025-04-23-ardrive-ans104-parquet.tar.gz
 mv 2025-04-23-ardrive-ans104-parquet/* data/parquet
 docker compose --profile clickhouse up clickhouse -d
-./scripts/clickhouse-import
+./scripts/clickhouse-import --input-dir data/parquet --all-partitions
 docker compose --profile clickhouse down
 ```
 
@@ -133,9 +133,8 @@ includes:
 - `PROJECTION owner_projection` sorted by
   `(owner_address, height, block_transaction_index, is_data_item, id)`
   for owner-filtered queries.
-- `PROJECTION target_projection` sorted by
-  `(target, height, block_transaction_index, is_data_item, id)` for
-  recipient-filtered queries.
+- A `bloom_filter` skip index on `target` for fast recipient-filter
+  queries.
 - `Delta + ZSTD(1)` codecs on monotonic timestamp columns and
   `LowCardinality` on `content_type` / `signature_type` for reduced
   storage.
