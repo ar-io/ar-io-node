@@ -218,11 +218,11 @@ initialize_clickhouse_schema() {
     exit 1
   fi
   
-  local schema_stderr rc
+  local schema_stderr
+  local rc=0
   schema_stderr=$(clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
     --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-    --multiquery < src/database/clickhouse/schema.sql 2>&1)
-  rc=$?
+    --multiquery < src/database/clickhouse/schema.sql 2>&1) || rc=$?
 
   if [[ $rc -ne 0 ]]; then
     if grep -qiE 'already exists' <<<"$schema_stderr"; then
