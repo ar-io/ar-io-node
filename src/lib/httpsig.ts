@@ -326,11 +326,20 @@ export interface Attestation {
   rsaPublicKey: string;
 }
 
-/** Disk-persisted attestation with identity fields for cache invalidation. */
+/**
+ * Disk-persisted attestation with identity fields for cache invalidation.
+ * All three identity fields (`ed25519PublicKey`, `observerAddress`,
+ * `gatewayAddress`) must match current runtime values for the cache to be
+ * considered valid — any change recreates the attestation.
+ */
 export interface CachedAttestation extends Attestation {
+  /** Base64url 32-byte Ed25519 public key (gateway's signing key). */
   ed25519PublicKey: string;
+  /** Base64url Arweave address of observer wallet that signed. */
   observerAddress?: string;
+  /** Base64url Arweave address of staked gateway wallet (may be undefined). */
   gatewayAddress?: string;
+  /** Arweave TX ID from successful upload (undefined until upload completes). */
   txId?: string;
 }
 
