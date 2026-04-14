@@ -210,6 +210,38 @@ test_clickhouse_connection() {
   echo "  ✓ Connection successful"
 }
 
+# Fail fast if an existing `transactions` table predates the PE-9059 schema.
+# CREATE TABLE IF NOT EXISTS would otherwise silently accept a stale table and
+# INSERTs would fail much later with confusing column-mismatch errors.
+validate_transactions_schema() {
+  local expected_sorting_key='height, block_transaction_index, is_data_item, id'
+  local query="SELECT sorting_key FROM system.tables WHERE database = currentDatabase() AND name = 'transactions'"
+  local actual rc=0
+  actual=$(clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+    --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+    --query "$query" 2>&1) || rc=$?
+
+  if [[ $rc -ne 0 ]]; then
+    echo "Error: Failed to inspect existing transactions table (exit $rc):" >&2
+    echo "$actual" >&2
+    exit 1
+  fi
+
+  if [[ -z "$actual" ]]; then
+    return 0
+  fi
+
+  if [[ "$actual" != "$expected_sorting_key" ]]; then
+    echo "Error: Existing 'transactions' table has incompatible schema (PE-9059 breaking change)." >&2
+    echo "  Expected sorting key: $expected_sorting_key" >&2
+    echo "  Actual sorting key:   $actual" >&2
+    echo "" >&2
+    echo "Drop the old table and re-import:" >&2
+    echo "  clickhouse client --query 'DROP TABLE transactions'" >&2
+    exit 1
+  fi
+}
+
 # Initialize ClickHouse schema if needed
 initialize_clickhouse_schema() {
   echo "Initializing ClickHouse schema..."
@@ -217,7 +249,9 @@ initialize_clickhouse_schema() {
     echo "Error: ClickHouse schema file not found at src/database/clickhouse/schema.sql" >&2
     exit 1
   fi
-  
+
+  validate_transactions_schema
+
   local schema_stderr
   local rc=0
   schema_stderr=$(clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
