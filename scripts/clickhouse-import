@@ -478,7 +478,11 @@ import_partition() {
   fi
   
   local partition_start=$(date +%s%N)
-  
+
+  # Pre-clean staging so retries and failed previous partitions can't leak
+  # residual rows into this partition's GROUP BY aggregation.
+  cleanup_staging_tables
+
   # Import partition files to staging tables
   if $FLAT_DIR; then
     if ! import_flat_partition_files "$INPUT_DIR" "$partition_name"; then
@@ -491,15 +495,12 @@ import_partition() {
       return 1
     fi
   fi
-  
+
   # Move data from staging to final tables
   if ! migrate_staging_to_final "$partition_name"; then
     echo "  Error: Failed to migrate data for partition: $partition_name" >&2
     return 1
   fi
-  
-  # Clean up staging tables
-  cleanup_staging_tables
   
   
   local partition_end=$(date +%s%N)
