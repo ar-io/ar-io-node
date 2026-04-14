@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS staging_transactions (
   owner BLOB,
   signature_offset UInt64,
   signature_size UInt64,
-  signature_type UInt32,
+  signature_type UInt8,
   root_transaction_id BLOB,
   root_parent_offset UInt64,
   inserted_at DateTime DEFAULT now(),
