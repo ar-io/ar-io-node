@@ -192,7 +192,14 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         const pairs = hexValues
           .map((hexValue) => `(unhex('${hexName}'), unhex('${hexValue}'))`)
           .join(', ');
+        const valueList = hexValues
+          .map((hexValue) => `unhex('${hexValue}')`)
+          .join(', ');
         query.where(sql(`hasAny(t.tags, [${pairs}])`));
+        query.where(
+          sql(`has(arrayMap(x -> x.1, t.tags), unhex('${hexName}'))`),
+        );
+        query.where(sql(`hasAny(arrayMap(x -> x.2, t.tags), [${valueList}])`));
       });
     }
 

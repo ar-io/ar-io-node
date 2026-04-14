@@ -91,8 +91,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   tags Array(Tuple(BLOB, BLOB)),
   tags_count UInt32,
   INDEX id_bloom (id) TYPE bloom_filter(0.01) GRANULARITY 1,
-  INDEX tag_names_bloom arrayMap(t -> t.1, tags) TYPE bloom_filter(0.01) GRANULARITY 4,
-  INDEX tag_values_bloom arrayMap(t -> t.2, tags) TYPE bloom_filter(0.01) GRANULARITY 4,
+  INDEX tag_names_bloom arrayMap(x -> x.1, tags) TYPE bloom_filter(0.01) GRANULARITY 4,
+  INDEX tag_values_bloom arrayMap(x -> x.2, tags) TYPE bloom_filter(0.01) GRANULARITY 4,
   PROJECTION owner_projection (
     SELECT *
     ORDER BY (owner_address, height, block_transaction_index, is_data_item, id)
