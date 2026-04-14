@@ -90,9 +90,15 @@ CREATE TABLE IF NOT EXISTS transactions (
   root_parent_offset UInt64,
   tags Array(Tuple(BLOB, BLOB)),
   tags_count UInt32,
+  -- Materialized columns for tag bloom filter indexing. Bloom filter skip
+  -- indexes match reliably against column references but not against lambda
+  -- expressions like arrayMap(x -> x.1, tags), so we project the names and
+  -- values into their own columns and index those directly.
+  tag_names Array(BLOB) MATERIALIZED arrayMap(x -> x.1, tags),
+  tag_values Array(BLOB) MATERIALIZED arrayMap(x -> x.2, tags),
   INDEX id_bloom (id) TYPE bloom_filter(0.01) GRANULARITY 1,
-  INDEX tag_names_bloom arrayMap(x -> x.1, tags) TYPE bloom_filter(0.01) GRANULARITY 4,
-  INDEX tag_values_bloom arrayMap(x -> x.2, tags) TYPE bloom_filter(0.01) GRANULARITY 4,
+  INDEX tag_names_bloom tag_names TYPE bloom_filter(0.01) GRANULARITY 4,
+  INDEX tag_values_bloom tag_values TYPE bloom_filter(0.01) GRANULARITY 4,
   PROJECTION owner_projection (
     SELECT *
     ORDER BY (owner_address, height, block_transaction_index, is_data_item, id)
