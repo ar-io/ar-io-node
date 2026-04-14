@@ -15,7 +15,7 @@ form of Parquet files.
 > [!IMPORTANT]
 > ClickHouse **24.8 or later** is required (projections on
 > `ReplacingMergeTree` are production-safe from 24.8). The
-> `docker-compose.yaml` default image (`clickhouse-server:25.4`) satisfies
+> `docker-compose.yaml` default image (`clickhouse-server:26.3`) satisfies
 > this. Operators upgrading from an earlier release of ar-io-node must drop
 > the previous `transactions`, `id_transactions`, `owner_transactions`, and
 > `target_transactions` tables and re-import from Parquet — the schema was

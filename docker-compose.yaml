@@ -449,7 +449,7 @@ services:
       - ar-io-network
 
   clickhouse:
-    image: clickhouse/clickhouse-server:${CLICKHOUSE_IMAGE_TAG:-25.4}
+    image: clickhouse/clickhouse-server:${CLICKHOUSE_IMAGE_TAG:-26.3}
     profiles:
       - clickhouse
     ports:
