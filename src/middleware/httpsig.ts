@@ -26,9 +26,10 @@ import {
  * bytes are flushed to the wire. This pattern is the same as the cache-control
  * middleware in this codebase.
  *
- * Only responses with trust-relevant headers (data, ArNS, chunk, tag headers)
- * are signed. Endpoints that set no signable headers (admin, GraphQL, health)
- * are automatically skipped.
+ * Only responses carrying a trust-trigger header (e.g., `x-ar-io-data-id`,
+ * `x-arns-resolved-id`, `x-arweave-chunk-data-root`) are signed. Endpoints
+ * that emit only operational headers (admin, `/ar-io/info`, GraphQL, health
+ * checks, generic errors with just Content-Type) are automatically skipped.
  *
  * Upstream `Signature`/`Signature-Input` headers from gateway-to-gateway
  * forwarding are stripped before the local gateway signs its own assessment.
