@@ -103,4 +103,5 @@ CREATE TABLE IF NOT EXISTS transactions (
   PRIMARY KEY (height, block_transaction_index, is_data_item, id)
 ) Engine = ReplacingMergeTree(inserted_at)
 PARTITION BY intDiv(height, 100000)
-ORDER BY (height, block_transaction_index, is_data_item, id);
+ORDER BY (height, block_transaction_index, is_data_item, id)
+SETTINGS deduplicate_merge_projection_mode = 'rebuild';
