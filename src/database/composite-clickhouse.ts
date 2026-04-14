@@ -226,6 +226,9 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         if (cursorHeight != null) {
           const cursorIdHex = b64UrlToHex(cursorId ?? '');
           const cursorIsDataItemInt = cursorIsDataItem ? 1 : 0;
+          // Standalone height predicate enables partition pruning on
+          // intDiv(height, 100000); the tuple comparison alone is not
+          // decomposed by the ClickHouse partition pruner.
           query.where(
             sql.lte('t.height', cursorHeight),
             sql(
@@ -249,6 +252,9 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         if (cursorHeight != null) {
           const cursorIdHex = b64UrlToHex(cursorId ?? '');
           const cursorIsDataItemInt = cursorIsDataItem ? 1 : 0;
+          // Standalone height predicate enables partition pruning on
+          // intDiv(height, 100000); the tuple comparison alone is not
+          // decomposed by the ClickHouse partition pruner.
           query.where(
             sql.gte('t.height', cursorHeight),
             sql(

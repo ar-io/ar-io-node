@@ -38,6 +38,8 @@ echo "  Partition size: $PARTITION_SIZE"
 echo "  ClickHouse: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT"
 echo
 
+STATUS=0
+
 # Clean up previous test
 echo "Cleaning up previous test data..."
 rm -rf "$TEST_DIR"
@@ -155,12 +157,14 @@ if command -v clickhouse >/dev/null 2>&1; then
         echo "✓ No duplicate rows"
     elif [ "$DUPES" = "-1" ]; then
         echo "⚠ Could not verify dedup (ClickHouse query failed)"
+        STATUS=1
     else
         echo "✗ Found $DUPES duplicate rows — dedup invariant broken"
         exit 1
     fi
 else
     echo "⚠ ClickHouse client not installed, skipping dedup verification"
+    STATUS=1
 fi
 
 echo
@@ -178,6 +182,7 @@ if command -v clickhouse >/dev/null 2>&1; then
         echo "✓ id_bloom skip index referenced"
     else
         echo "⚠ id_bloom not referenced in EXPLAIN (may be small dataset)"
+        STATUS=1
     fi
 
     # tags_bloom skip index
@@ -194,6 +199,7 @@ if command -v clickhouse >/dev/null 2>&1; then
         echo "✓ tags_bloom skip index referenced"
     else
         echo "⚠ tags_bloom not referenced in EXPLAIN (may be small dataset)"
+        STATUS=1
     fi
 
     # owner_projection
@@ -212,36 +218,46 @@ if command -v clickhouse >/dev/null 2>&1; then
         echo "✓ owner_projection referenced"
     else
         echo "⚠ owner_projection not referenced in EXPLAIN"
+        STATUS=1
     fi
 
-    # target_projection
+    # target_bloom skip index
     TARGET_EXPLAIN=$(clickhouse client \
         --host "$CLICKHOUSE_HOST" \
         --port "$CLICKHOUSE_PORT" \
         --user "$CLICKHOUSE_USER" \
         --password "$CLICKHOUSE_PASSWORD" \
-        --query "EXPLAIN projections=1 SELECT * FROM transactions
-                 WHERE target = unhex('00')
-                 ORDER BY target DESC, height DESC,
-                          block_transaction_index DESC, is_data_item DESC, id DESC
-                 LIMIT 10" 2>/dev/null || echo "")
+        --query "EXPLAIN indexes=1 SELECT id FROM transactions WHERE target = unhex('00')" 2>/dev/null || echo "")
 
-    if echo "$TARGET_EXPLAIN" | grep -q "target_projection"; then
-        echo "✓ target_projection referenced"
+    if echo "$TARGET_EXPLAIN" | grep -q "target_bloom"; then
+        echo "✓ target_bloom skip index referenced"
     else
-        echo "⚠ target_projection not referenced in EXPLAIN"
+        echo "⚠ target_bloom not referenced in EXPLAIN (may be small dataset)"
+        STATUS=1
     fi
 else
     echo "⚠ ClickHouse client not installed, skipping plan verification"
+    STATUS=1
 fi
 
 echo
-echo "All tests completed!"
+if [ "$STATUS" -eq 0 ]; then
+    echo "All tests completed!"
+else
+    echo "Tests completed with warnings — some verifications were skipped or inconclusive."
+fi
 echo
 echo "Summary:"
 echo "  - Parquet export with ClickHouse integration: ✓"
 echo "  - Iceberg-compatible directory structure: ✓"
 echo "  - Data verification: ✓"
 echo "  - Resume capability: ✓"
-echo "  - Dedup invariant: ✓"
-echo "  - Query plan verification: ✓"
+if [ "$STATUS" -eq 0 ]; then
+    echo "  - Dedup invariant: ✓"
+    echo "  - Query plan verification: ✓"
+else
+    echo "  - Dedup invariant: ⚠ (see warnings above)"
+    echo "  - Query plan verification: ⚠ (see warnings above)"
+fi
+
+exit "$STATUS"
