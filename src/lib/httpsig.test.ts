@@ -398,10 +398,10 @@ describe('httpsig lib', () => {
         keyId,
       );
 
-      const sig = crypto.sign(null, Buffer.from(base, 'ascii'), privateKey);
+      const sig = crypto.sign(null, Buffer.from(base, 'latin1'), privateKey);
       const valid = crypto.verify(
         null,
-        Buffer.from(base, 'ascii'),
+        Buffer.from(base, 'latin1'),
         publicKey,
         sig,
       );
