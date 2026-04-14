@@ -14,7 +14,6 @@ import path from 'node:path';
 import {
   TRIGGER_HEADERS,
   CO_SIGNABLE_HEADERS,
-  SIGNABLE_PREFIXES,
   isSignableHeader,
   isTriggerHeader,
   loadOrGenerateKey,
@@ -79,7 +78,6 @@ describe('httpsig lib', () => {
     it('has consistent sets', () => {
       assert.ok(TRIGGER_HEADERS.size > 0);
       assert.ok(CO_SIGNABLE_HEADERS.size > 0);
-      assert.ok(SIGNABLE_PREFIXES.length > 0);
     });
   });
 
@@ -231,9 +229,9 @@ describe('httpsig lib', () => {
         'x-ar-io-data-id': 'abc123',
       };
 
-      const base = buildSignatureBase(
+      const { base } = buildSignatureBase(
         200,
-        (name) => headers[name.toLowerCase()],
+        (name) => headers[name],
         ['content-type', 'x-ar-io-data-id'],
         'GET',
         '/raw/abc123',
@@ -250,7 +248,7 @@ describe('httpsig lib', () => {
     });
 
     it('includes request-bound components when bindRequest is true', () => {
-      const base = buildSignatureBase(
+      const { base } = buildSignatureBase(
         200,
         () => 'value',
         ['content-type'],
@@ -266,7 +264,7 @@ describe('httpsig lib', () => {
     });
 
     it('omits request-bound components when bindRequest is false', () => {
-      const base = buildSignatureBase(
+      const { base } = buildSignatureBase(
         200,
         () => 'value',
         ['content-type'],
@@ -286,9 +284,9 @@ describe('httpsig lib', () => {
         'x-ar-io-data-id': 'abc',
       };
 
-      const base = buildSignatureBase(
+      const { base } = buildSignatureBase(
         200,
-        (name) => headers[name.toLowerCase()],
+        (name) => headers[name],
         ['x-ar-io-data-id'],
         'GET',
         '/',
@@ -308,9 +306,9 @@ describe('httpsig lib', () => {
         'x-ar-io-data-id': 'abc',
       };
 
-      const base = buildSignatureBase(
+      const { base } = buildSignatureBase(
         200,
-        (name) => headers[name.toLowerCase()],
+        (name) => headers[name],
         ['x-arweave-tag-content-type', 'x-ar-io-data-id'],
         'GET',
         '/',
@@ -325,7 +323,7 @@ describe('httpsig lib', () => {
     });
 
     it('has no trailing newline', () => {
-      const base = buildSignatureBase(
+      const { base } = buildSignatureBase(
         200,
         () => 'v',
         ['content-type'],
@@ -339,6 +337,47 @@ describe('httpsig lib', () => {
       assert.ok(!base.endsWith('\n'));
     });
 
+    it('returns paramStr matching formatSignatureInput output', () => {
+      const { paramStr } = buildSignatureBase(
+        200,
+        () => 'v',
+        ['content-type'],
+        'GET',
+        '/',
+        false,
+        1712505600,
+        'k1',
+      );
+
+      assert.equal(
+        paramStr,
+        formatSignatureInput(['content-type'], 1712505600, 'k1', false),
+      );
+    });
+
+    it('canonicalizes covered header names to lowercase', () => {
+      const headers: Record<string, string> = {
+        'content-type': 'application/octet-stream',
+        'x-ar-io-data-id': 'abc123',
+      };
+
+      const { base, paramStr } = buildSignatureBase(
+        200,
+        (name) => headers[name.toLowerCase()],
+        ['Content-Type', 'X-AR-IO-Data-Id'],
+        'GET',
+        '/raw/abc123',
+        false,
+        1712505600,
+        'testkey1',
+      );
+
+      assert.ok(base.includes('"content-type": application/octet-stream'));
+      assert.ok(base.includes('"x-ar-io-data-id": abc123'));
+      assert.ok(paramStr.includes('"content-type"'));
+      assert.ok(paramStr.includes('"x-ar-io-data-id"'));
+    });
+
     it('produces a signable base that can be verified end-to-end', () => {
       const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
       const keyId = deriveKeyId(publicKey);
@@ -348,9 +387,9 @@ describe('httpsig lib', () => {
         'x-ar-io-verified': 'true',
       };
 
-      const base = buildSignatureBase(
+      const { base } = buildSignatureBase(
         200,
-        (name) => headers[name.toLowerCase()],
+        (name) => headers[name],
         ['content-type', 'x-ar-io-verified'],
         'GET',
         '/test',

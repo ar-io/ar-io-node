@@ -23,6 +23,8 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import bs58 from 'bs58';
 import { canonicalize } from 'json-canonicalize';
 
+import { fromB64Url, sha256B64Url } from './encoding.js';
+
 /**
  * Trust-triggering headers (lowercase). Presence of at least one of these on
  * a response indicates the response is trust-relevant and should be signed.
@@ -53,11 +55,9 @@ export const TRIGGER_HEADERS = new Set([
  */
 export const CO_SIGNABLE_HEADERS = new Set(['content-type', 'content-digest']);
 
-/**
- * Prefix patterns for dynamic headers that should be signed when a trigger
- * header is present. Data item tags (`x-arweave-tag-*`) are co-signable.
- */
-export const SIGNABLE_PREFIXES = ['x-arweave-tag-'];
+// Header predicates normalize case defensively, but callers should pass
+// lowercase where possible. Express's `res.getHeaders()` keys are already
+// lowercase, so the hot-path middleware avoids redundant work.
 
 /**
  * Returns true if the given header name should be included in the signature
@@ -68,7 +68,7 @@ export function isSignableHeader(name: string): boolean {
   return (
     TRIGGER_HEADERS.has(lower) ||
     CO_SIGNABLE_HEADERS.has(lower) ||
-    SIGNABLE_PREFIXES.some((p) => lower.startsWith(p))
+    lower.startsWith('x-arweave-tag-')
   );
 }
 
@@ -159,7 +159,7 @@ export function getPublicKeyBase64Url(publicKey: crypto.KeyObject): string {
 
 /**
  * Build the covered components list and the Signature-Input structured field
- * value per RFC 9421.
+ * value per RFC 9421. `coveredHeaders` names are normalized to lowercase.
  *
  * @returns The Signature-Input value (without the "sig1=" prefix).
  */
@@ -186,10 +186,15 @@ export function formatSignatureInput(
 
 /**
  * Construct the signature base string per RFC 9421 Section 2.5.
+ * `coveredHeaders` names are normalized to lowercase.
  *
  * Each covered component becomes a line: `"component": value`
  * The final line is: `"@signature-params": <params>`
  * Lines are joined by a single newline (0x0A) with no trailing newline.
+ *
+ * @returns `{ base, paramStr }` — `paramStr` is the Signature-Input value
+ *   (without the "sig1=" prefix), reused by the middleware to avoid a second
+ *   call to `formatSignatureInput`.
  */
 export function buildSignatureBase(
   statusCode: number,
@@ -200,7 +205,7 @@ export function buildSignatureBase(
   bindRequest: boolean,
   created: number,
   keyId: string,
-): string {
+): { base: string; paramStr: string } {
   const paramStr = formatSignatureInput(
     coveredHeaders,
     created,
@@ -222,7 +227,7 @@ export function buildSignatureBase(
   }
   lines.push(`"@signature-params": ${paramStr}`);
 
-  return lines.join('\n');
+  return { base: lines.join('\n'), paramStr };
 }
 
 // --- Attestation utilities (Phase 2) ---
@@ -241,10 +246,15 @@ export function getSolanaAddress(publicKey: crypto.KeyObject): string {
  * Load and validate an Arweave wallet JWK from a file path.
  */
 export function loadWalletJwk(walletFile: string): crypto.JsonWebKey {
-  if (!existsSync(walletFile)) {
-    throw new Error(`Wallet file not found: ${walletFile}`);
+  let raw: string;
+  try {
+    raw = readFileSync(walletFile, 'utf8');
+  } catch (err: any) {
+    if (err.code === 'ENOENT') {
+      throw new Error(`Wallet file not found: ${walletFile}`);
+    }
+    throw err;
   }
-  const raw = readFileSync(walletFile, 'utf8');
   let jwk: Record<string, unknown>;
   try {
     jwk = JSON.parse(raw);
@@ -288,8 +298,7 @@ export function jwkToArweaveAddress(jwk: crypto.JsonWebKey): string {
   if (jwk.n === undefined) {
     throw new Error('JWK missing RSA modulus (n) field');
   }
-  const nBuffer = Buffer.from(jwk.n, 'base64url');
-  return crypto.createHash('sha256').update(nBuffer).digest('base64url');
+  return sha256B64Url(fromB64Url(jwk.n));
 }
 
 /**
@@ -371,7 +380,6 @@ export function createAttestation(opts: {
     issuedAt: new Date().toISOString(),
   };
 
-  // Canonicalize for deterministic signing/verification
   const payload = canonicalize(attestationObj) as string;
 
   // Sign with RSA-PSS-SHA256 (salt length 0 for broadest Arweave compat)
@@ -387,13 +395,23 @@ export function createAttestation(opts: {
     })
     .toString('base64url');
 
-  // Export RSA public key as base64url DER for verifiers
   const rsaPublicKey = crypto
     .createPublicKey(rsaPrivateKey)
     .export({ type: 'spki', format: 'der' })
     .toString('base64url');
 
   return { payload, signature, rsaPublicKey };
+}
+
+/**
+ * Write JSON to `path` atomically: write to a pid-suffixed temp file, then
+ * renameSync over the destination. A unique suffix prevents startup-race
+ * ENOENT failures when two processes write the same cache concurrently.
+ */
+function writeJsonAtomic(path: string, data: unknown): void {
+  const tmpPath = `${path}.tmp.${process.pid}`;
+  writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+  renameSync(tmpPath, path);
 }
 
 const ATTESTATION_CACHE_FILE = 'httpsig-attestation.json';
@@ -414,11 +432,15 @@ export function loadOrCreateAttestation(opts: {
   const currentObserverAddr = jwkToArweaveAddress(observerJwk);
 
   // Try to load cached attestation — validate all identity fields
-  if (existsSync(cachePath)) {
+  let raw: string | undefined;
+  try {
+    raw = readFileSync(cachePath, 'utf8');
+  } catch (err: any) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  if (raw !== undefined) {
     try {
-      const cached: CachedAttestation = JSON.parse(
-        readFileSync(cachePath, 'utf8'),
-      );
+      const cached: CachedAttestation = JSON.parse(raw);
       if (
         cached.ed25519PublicKey === currentPubKey &&
         cached.observerAddress === currentObserverAddr &&
@@ -436,20 +458,18 @@ export function loadOrCreateAttestation(opts: {
       // Corrupt cache — delete before recreating
       try {
         unlinkSync(cachePath);
-      } catch {
-        // Ignore delete failure
+      } catch (err: any) {
+        if (err.code !== 'ENOENT') throw err;
       }
     }
   }
 
-  // Create new attestation
   const attestation = createAttestation({
     observerJwk,
     ed25519PublicKey,
     gatewayAddress,
   });
 
-  // Cache to disk atomically (write to temp, then rename)
   const cacheData: CachedAttestation = {
     ...attestation,
     ed25519PublicKey: currentPubKey,
@@ -457,9 +477,7 @@ export function loadOrCreateAttestation(opts: {
     gatewayAddress,
   };
   mkdirSync(keysDir, { recursive: true });
-  const tmpPath = `${cachePath}.tmp.${process.pid}`;
-  writeFileSync(tmpPath, JSON.stringify(cacheData, null, 2));
-  renameSync(tmpPath, cachePath);
+  writeJsonAtomic(cachePath, cacheData);
 
   return { ...attestation, cached: false };
 }
@@ -470,17 +488,125 @@ export function loadOrCreateAttestation(opts: {
  */
 export function saveAttestationTxId(keysDir: string, txId: string): void {
   const cachePath = join(keysDir, ATTESTATION_CACHE_FILE);
-  if (!existsSync(cachePath)) return;
-
   try {
     const cached: CachedAttestation = JSON.parse(
       readFileSync(cachePath, 'utf8'),
     );
     cached.txId = txId;
-    const tmpPath = `${cachePath}.tmp.${process.pid}`;
-    writeFileSync(tmpPath, JSON.stringify(cached, null, 2));
-    renameSync(tmpPath, cachePath);
+    writeJsonAtomic(cachePath, cached);
   } catch {
     // Non-fatal — txId will be re-uploaded next restart
+  }
+}
+
+// --- Startup init (called from config.ts) ---
+
+/**
+ * Ed25519 signing-side state. Always populated together when HTTPSIG is
+ * enabled, so consumers can narrow through a single `if (signer)` check.
+ */
+export interface HttpSigSignerContext {
+  privateKey: crypto.KeyObject;
+  keyId: string;
+  publicKeyB64Url: string;
+  solanaAddress: string;
+}
+
+/**
+ * Observer-wallet-side state. Populated only when `OBSERVER_WALLET` is set
+ * and the attestation loaded/created successfully. `attestationTxId` is the
+ * one mutable field — updated after a successful Arweave upload.
+ */
+export interface HttpSigObserverContext {
+  jwk: crypto.JsonWebKey;
+  address: string;
+  attestation: Attestation;
+  attestationTxId: string | undefined;
+  keysDir: string;
+}
+
+/**
+ * Initialize HTTPSIG signing state from resolved configuration. Returns the
+ * signer and (optionally) observer context to be exported by config. Logs
+ * at info/warn levels via the supplied logger.
+ */
+export function initHttpSig(opts: {
+  keyFile: string;
+  bindRequest: boolean;
+  observerWallet: string | undefined;
+  walletsPath: string;
+  gatewayAddress: string | undefined;
+  log: {
+    info: (msg: string, meta?: Record<string, unknown>) => void;
+    warn: (msg: string, meta?: Record<string, unknown>) => void;
+  };
+}): { signer: HttpSigSignerContext; observer?: HttpSigObserverContext } {
+  const {
+    keyFile,
+    bindRequest,
+    observerWallet,
+    walletsPath,
+    gatewayAddress,
+    log,
+  } = opts;
+
+  const privateKey = loadOrGenerateKey(keyFile);
+  const publicKey = crypto.createPublicKey(privateKey);
+  const signer: HttpSigSignerContext = {
+    privateKey,
+    keyId: deriveKeyId(publicKey),
+    publicKeyB64Url: getPublicKeyBase64Url(publicKey),
+    solanaAddress: getSolanaAddress(publicKey),
+  };
+
+  log.info('HTTPSIG response signing enabled', {
+    keyId: signer.keyId,
+    publicKey: signer.publicKeyB64Url,
+    solanaAddress: signer.solanaAddress,
+    keyFile,
+    bindRequest,
+  });
+
+  if (observerWallet === undefined) {
+    return { signer };
+  }
+
+  try {
+    const walletPath = resolveWalletPath(walletsPath, observerWallet);
+    const jwk = loadWalletJwk(walletPath);
+    const address = jwkToArweaveAddress(jwk);
+    const keysDir = dirname(keyFile);
+
+    const result = loadOrCreateAttestation({
+      keysDir,
+      observerJwk: jwk,
+      ed25519PublicKey: publicKey,
+      gatewayAddress,
+    });
+
+    log.info('HTTPSIG attestation ready', {
+      observerAddress: address,
+      cached: result.cached,
+    });
+
+    return {
+      signer,
+      observer: {
+        jwk,
+        address,
+        attestation: {
+          payload: result.payload,
+          signature: result.signature,
+          rsaPublicKey: result.rsaPublicKey,
+        },
+        attestationTxId: result.txId,
+        keysDir,
+      },
+    };
+  } catch (error: any) {
+    log.warn('HTTPSIG attestation creation failed', {
+      error: error?.message,
+    });
+    return { signer };
   }
 }

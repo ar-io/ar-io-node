@@ -5,25 +5,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { canonicalize } from 'json-canonicalize';
-import crypto from 'node:crypto';
-import path from 'node:path';
 import { isMainThread } from 'node:worker_threads';
 import { existsSync, readFileSync } from 'node:fs';
 
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
-import {
-  loadOrGenerateKey,
-  deriveKeyId,
-  getPublicKeyBase64Url,
-  getSolanaAddress,
-  loadWalletJwk,
-  loadOrCreateAttestation,
-  saveAttestationTxId,
-  jwkToArweaveAddress,
-  resolveWalletPath,
+import { initHttpSig, saveAttestationTxId } from './lib/httpsig.js';
+import type {
+  HttpSigObserverContext,
+  HttpSigSignerContext,
 } from './lib/httpsig.js';
-import type { Attestation } from './lib/httpsig.js';
 import { release } from './version.js';
 import logger from './log.js';
 import { verificationPriorities } from './constants.js';
@@ -994,84 +985,34 @@ export const WALLETS_PATH = env.varOrDefault('WALLETS_PATH', 'wallets');
 export const HTTPSIG_UPLOAD_ATTESTATION =
   env.varOrDefault('HTTPSIG_UPLOAD_ATTESTATION', 'true') === 'true';
 
-let _httpSigPrivateKey: crypto.KeyObject | undefined;
-let _httpSigPublicKey: crypto.KeyObject | undefined;
-let _httpSigKeyId: string | undefined;
-let _httpSigPublicKeyB64Url: string | undefined;
-let _httpSigSolanaAddress: string | undefined;
-let _httpSigAttestation: Attestation | undefined;
-let _httpSigAttestationTxId: string | undefined;
-let _httpSigObserverAddress: string | undefined;
-let _httpSigObserverJwk: crypto.JsonWebKey | undefined;
+let _httpSigSigner: HttpSigSignerContext | undefined;
+let _httpSigObserver: HttpSigObserverContext | undefined;
 
 if (isMainThread && HTTPSIG_ENABLED) {
-  _httpSigPrivateKey = loadOrGenerateKey(HTTPSIG_KEY_FILE);
-  _httpSigPublicKey = crypto.createPublicKey(_httpSigPrivateKey);
-  _httpSigKeyId = deriveKeyId(_httpSigPublicKey);
-  _httpSigPublicKeyB64Url = getPublicKeyBase64Url(_httpSigPublicKey);
-  _httpSigSolanaAddress = getSolanaAddress(_httpSigPublicKey);
-
-  logger.info('HTTPSIG response signing enabled', {
-    keyId: _httpSigKeyId,
-    publicKey: _httpSigPublicKeyB64Url,
-    solanaAddress: _httpSigSolanaAddress,
+  const result = initHttpSig({
     keyFile: HTTPSIG_KEY_FILE,
     bindRequest: HTTPSIG_BIND_REQUEST,
+    observerWallet: OBSERVER_WALLET,
+    walletsPath: WALLETS_PATH,
+    gatewayAddress: env.varOrUndefined('AR_IO_WALLET'),
+    log: logger,
   });
-
-  // Create attestation if observer wallet is available
-  if (OBSERVER_WALLET !== undefined) {
-    try {
-      const walletPath = resolveWalletPath(WALLETS_PATH, OBSERVER_WALLET);
-      _httpSigObserverJwk = loadWalletJwk(walletPath);
-      _httpSigObserverAddress = jwkToArweaveAddress(_httpSigObserverJwk);
-
-      const keysDir = path.dirname(HTTPSIG_KEY_FILE) || 'data/keys';
-
-      const result = loadOrCreateAttestation({
-        keysDir,
-        observerJwk: _httpSigObserverJwk,
-        ed25519PublicKey: _httpSigPublicKey,
-        gatewayAddress: env.varOrUndefined('AR_IO_WALLET'),
-      });
-
-      _httpSigAttestation = {
-        payload: result.payload,
-        signature: result.signature,
-        rsaPublicKey: result.rsaPublicKey,
-      };
-      _httpSigAttestationTxId = result.txId;
-
-      logger.info('HTTPSIG attestation ready', {
-        observerAddress: _httpSigObserverAddress,
-        cached: result.cached,
-      });
-    } catch (error: any) {
-      logger.warn('HTTPSIG attestation creation failed', {
-        error: error?.message,
-      });
-    }
-  }
+  _httpSigSigner = result.signer;
+  _httpSigObserver = result.observer;
 }
 
-export const HTTPSIG_PRIVATE_KEY = _httpSigPrivateKey;
-export const HTTPSIG_PUBLIC_KEY = _httpSigPublicKey;
-export const HTTPSIG_KEY_ID = _httpSigKeyId;
-export const HTTPSIG_PUBLIC_KEY_B64URL = _httpSigPublicKeyB64Url;
-export const HTTPSIG_SOLANA_ADDRESS = _httpSigSolanaAddress;
-export const HTTPSIG_ATTESTATION = _httpSigAttestation;
-export const HTTPSIG_OBSERVER_ADDRESS = _httpSigObserverAddress;
-export const HTTPSIG_OBSERVER_JWK = _httpSigObserverJwk;
+export const HTTPSIG_SIGNER = _httpSigSigner;
+export const HTTPSIG_OBSERVER = _httpSigObserver;
 
-export const HTTPSIG_KEYS_DIR = path.dirname(HTTPSIG_KEY_FILE) || 'data/keys';
-
-export function getHttpSigAttestationTxId(): string | undefined {
-  return _httpSigAttestationTxId;
-}
+/**
+ * Record the Arweave TX ID of a successfully uploaded attestation. Mutates
+ * `HTTPSIG_OBSERVER.attestationTxId` and persists it to the cache file so
+ * subsequent restarts skip re-uploading.
+ */
 export function setHttpSigAttestationTxId(txId: string): void {
-  _httpSigAttestationTxId = txId;
-  // Persist txId to cache file so it survives restarts
-  saveAttestationTxId(HTTPSIG_KEYS_DIR, txId);
+  if (_httpSigObserver === undefined) return;
+  _httpSigObserver.attestationTxId = txId;
+  saveAttestationTxId(_httpSigObserver.keysDir, txId);
 }
 
 //

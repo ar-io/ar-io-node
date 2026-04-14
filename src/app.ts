@@ -50,18 +50,20 @@ system.chunkDataFsCacheCleanupWorker?.start();
 // Skip if the txId is already persisted from a prior successful upload.
 if (
   config.HTTPSIG_ENABLED &&
-  config.HTTPSIG_ATTESTATION !== undefined &&
-  config.HTTPSIG_OBSERVER_JWK !== undefined &&
   config.HTTPSIG_UPLOAD_ATTESTATION &&
-  config.getHttpSigAttestationTxId() === undefined
+  config.HTTPSIG_SIGNER !== undefined &&
+  config.HTTPSIG_OBSERVER !== undefined &&
+  config.HTTPSIG_OBSERVER.attestationTxId === undefined
 ) {
+  const signer = config.HTTPSIG_SIGNER;
+  const observer = config.HTTPSIG_OBSERVER;
   uploadAttestation({
-    jwk: config.HTTPSIG_OBSERVER_JWK,
-    attestation: config.HTTPSIG_ATTESTATION,
+    jwk: observer.jwk,
+    attestation: observer.attestation,
     gatewayAddress: config.AR_IO_WALLET,
-    observerAddress: config.HTTPSIG_OBSERVER_ADDRESS!,
-    ed25519PublicKey: config.HTTPSIG_PUBLIC_KEY_B64URL!,
-    keyId: config.HTTPSIG_KEY_ID!,
+    observerAddress: observer.address,
+    ed25519PublicKey: signer.publicKeyB64Url,
+    keyId: signer.keyId,
     log,
   })
     .then((txId) => {
@@ -105,11 +107,11 @@ app.use(createAbortSignalMiddleware());
 
 // HTTPSIG response signing — must be before cache-control so the writeHead
 // LIFO order ensures signing runs AFTER cache-control has set default headers.
-if (config.HTTPSIG_ENABLED && config.HTTPSIG_PRIVATE_KEY !== undefined) {
+if (config.HTTPSIG_ENABLED && config.HTTPSIG_SIGNER !== undefined) {
   app.use(
     createHttpSigMiddleware({
-      privateKey: config.HTTPSIG_PRIVATE_KEY,
-      keyId: config.HTTPSIG_KEY_ID!,
+      privateKey: config.HTTPSIG_SIGNER.privateKey,
+      keyId: config.HTTPSIG_SIGNER.keyId,
       bindRequest: config.HTTPSIG_BIND_REQUEST,
     }),
   );

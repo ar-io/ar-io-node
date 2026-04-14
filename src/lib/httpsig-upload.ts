@@ -72,7 +72,6 @@ async function tryTurboUpload(
     throw err;
   }
 
-  // SDK is available — upload failures propagate to the caller
   const signer = new ArweaveSigner(jwk);
   const turbo = TurboFactory.authenticated({ signer });
 
@@ -113,7 +112,6 @@ export async function uploadAttestation(
 
   const attestationJson = JSON.stringify(attestation);
 
-  // Try Turbo SDK first (subsidized bundled upload)
   const turboId = await tryTurboUpload(jwk, attestationJson, tags);
   if (turboId !== undefined) {
     log.info('HTTPSIG attestation uploaded via Turbo', { txId: turboId });
@@ -122,7 +120,6 @@ export async function uploadAttestation(
 
   log.info('Turbo SDK not available, uploading attestation via L1');
 
-  // Fallback: direct L1 transaction via arweave.js
   const arweave = Arweave.init({
     host: 'arweave.net',
     port: 443,
