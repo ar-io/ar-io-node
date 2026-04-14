@@ -317,16 +317,25 @@ import_flat_partition_files() {
   local min_height=${height_range%-*}
   local max_height=${height_range#*-}
 
-  local table staging_table parquet_file
+  local table staging_table parquet_file matched_count
   for table in blocks transactions tags; do
     staging_table="staging_${table}"
+    matched_count=0
     for parquet_file in "$input_dir"/"${table}"-minHeight:"${min_height}"-maxHeight:"${max_height}"-rowCount:*.parquet; do
       if [[ -f "$parquet_file" ]]; then
+        matched_count=$((matched_count + 1))
         if ! import_parquet_file "$parquet_file" "$staging_table"; then
           success=false
         fi
       fi
     done
+    # blocks and transactions are required for the migrate step to produce
+    # meaningful data; tags may legitimately be empty for a partition.
+    if [[ $matched_count -eq 0 && "$table" != "tags" ]]; then
+      echo "    Error: No $table Parquet file found for partition $partition_name" >&2
+      echo "    Expected: $input_dir/${table}-minHeight:${min_height}-maxHeight:${max_height}-rowCount:*.parquet" >&2
+      success=false
+    fi
   done
 
   local import_end=$(date +%s%N)
