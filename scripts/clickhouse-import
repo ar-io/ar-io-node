@@ -395,9 +395,9 @@ migrate_staging_to_final() {
   local min_height=${height_range%-*}
   local max_height=${height_range#*-}
   
-  # Move staging data to the final transactions table. Projections
-  # (owner_projection, target_projection) and skip indexes (id_bloom, tags_bloom)
-  # are maintained automatically on insert.
+  # Move staging data to the final transactions table. Projections, skip
+  # indexes, and materialized tag_names/tag_values columns are maintained
+  # automatically on insert.
   echo "    Migrating data to transactions table..."
 
   clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
