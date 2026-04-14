@@ -15,7 +15,6 @@ import {
   isSignableHeader,
   isTriggerHeader,
   buildSignatureBase,
-  formatSignatureInput,
 } from '../lib/httpsig.js';
 
 /**
@@ -31,8 +30,9 @@ import {
  * that emit only operational headers (admin, `/ar-io/info`, GraphQL, health
  * checks, generic errors with just Content-Type) are automatically skipped.
  *
- * Upstream `Signature`/`Signature-Input` headers from gateway-to-gateway
- * forwarding are stripped before the local gateway signs its own assessment.
+ * Upstream `Signature`/`Signature-Input` headers are stripped unconditionally —
+ * including on responses the gateway does not sign — so upstream signatures
+ * never leak to clients.
  */
 export function createHttpSigMiddleware(opts: {
   privateKey: crypto.KeyObject;
@@ -52,27 +52,32 @@ export function createHttpSigMiddleware(opts: {
       this.removeHeader(headerNames.signature);
       this.removeHeader(headerNames.signatureInput);
 
-      // Skip signing unless at least one trust-trigger header is present.
-      // This excludes admin endpoints, /ar-io/info, GraphQL, health checks,
-      // and generic error responses — they carry Content-Type but no
-      // trust claims worth signing.
-      const presentHeaders = Object.keys(this.getHeaders());
-      const hasTrigger = presentHeaders.some((h) => isTriggerHeader(h));
+      // Single-pass over response headers: build coveredHeaders and track
+      // whether any trust-trigger is present. Skip signing if none — excludes
+      // admin endpoints, /ar-io/info, GraphQL, health checks, and generic
+      // error responses that carry only operational headers.
+      let hasTrigger = false;
+      const coveredHeaders: string[] = [];
+      for (const h of Object.keys(this.getHeaders())) {
+        if (isTriggerHeader(h)) {
+          hasTrigger = true;
+          coveredHeaders.push(h);
+        } else if (isSignableHeader(h)) {
+          coveredHeaders.push(h);
+        }
+      }
       if (!hasTrigger) {
         return (
           originalWriteHead as unknown as (...a: unknown[]) => Response
         ).apply(this, args);
       }
 
-      // Collect all signable headers (trigger + co-signable + tag prefix)
-      const coveredHeaders = presentHeaders.filter((h) => isSignableHeader(h));
-
       try {
         const end = metrics.httpSigSigningDuration.startTimer();
 
         const created = Math.floor(Date.now() / 1000);
 
-        const signatureBase = buildSignatureBase(
+        const { base, paramStr } = buildSignatureBase(
           this.statusCode,
           (name) => this.getHeader(name),
           coveredHeaders,
@@ -83,23 +88,15 @@ export function createHttpSigMiddleware(opts: {
           keyId,
         );
 
-        const inputValue = formatSignatureInput(
-          coveredHeaders,
-          created,
-          keyId,
-          bindRequest,
-        );
-
         // Ed25519 signing is synchronous and takes ~33us — faster than worker
         // thread IPC overhead.
-        const sig = crypto.sign(
-          null,
-          Buffer.from(signatureBase, 'ascii'),
-          privateKey,
-        );
+        const sig = crypto.sign(null, Buffer.from(base, 'ascii'), privateKey);
 
-        this.setHeader('Signature-Input', `sig1=${inputValue}`);
-        this.setHeader('Signature', `sig1=:${sig.toString('base64')}:`);
+        this.setHeader(headerNames.signatureInput, `sig1=${paramStr}`);
+        this.setHeader(
+          headerNames.signature,
+          `sig1=:${sig.toString('base64')}:`,
+        );
 
         end();
         metrics.httpSigResponsesSignedTotal.inc();

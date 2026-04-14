@@ -112,6 +112,26 @@ describe('createHttpSigMiddleware', () => {
     assert.ok(!input.includes('upstream'));
   });
 
+  it('strips upstream Signature/Signature-Input even when not signing', async () => {
+    const { privateKey, keyId } = generateTestKeyPair();
+
+    const app = express();
+    app.use(createHttpSigMiddleware({ privateKey, keyId, bindRequest: false }));
+    app.get('/info', (_req, res) => {
+      // Simulate an upstream gateway's signature headers on a response that
+      // has no trust-trigger header. Our middleware must still strip them so
+      // they don't leak to the client as if signed by us.
+      res.header('Signature', 'sig1=:upstreamsig:');
+      res.header('Signature-Input', 'sig1=("@status");keyid="upstream"');
+      res.setHeader('Content-Type', 'application/json');
+      res.send('{"ok":true}');
+    });
+
+    const res = await request(app).get('/info');
+    assert.equal(res.headers['signature'], undefined);
+    assert.equal(res.headers['signature-input'], undefined);
+  });
+
   it('signs x-arweave-tag-* headers via prefix match', async () => {
     const { privateKey, keyId } = generateTestKeyPair();
 
@@ -211,9 +231,9 @@ describe('createHttpSigMiddleware', () => {
     );
 
     // Rebuild the signature base
-    const signatureBase = buildSignatureBase(
+    const { base } = buildSignatureBase(
       res.status,
-      (name) => res.headers[name.toLowerCase()] as string,
+      (name) => res.headers[name] as string,
       coveredHeaders,
       'GET',
       '/raw/testid',
@@ -225,7 +245,7 @@ describe('createHttpSigMiddleware', () => {
     // Verify the signature
     const valid = crypto.verify(
       null,
-      Buffer.from(signatureBase, 'ascii'),
+      Buffer.from(base, 'ascii'),
       publicKey,
       sigBytes,
     );

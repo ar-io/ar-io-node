@@ -87,9 +87,6 @@ export interface X402Info {
 }
 
 /**
- * HTTPSIG response signing configuration exposed in the info endpoint.
- */
-/**
  * RSA-signed attestation linking an Ed25519 signing key to an Arweave
  * observer wallet identity. Enables verifiers to establish the trust chain
  * from HTTP signatures back to the on-chain gateway registration.
@@ -221,7 +218,6 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
     },
   };
 
-  // Add rate limiter info if enabled
   if (config.rateLimiter?.enabled) {
     const { resourceCapacity, resourceRefillRate, ipCapacity, ipRefillRate } =
       config.rateLimiter;
@@ -247,7 +243,6 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
     };
   }
 
-  // Add x402 payment info if enabled
   if (config.x402?.enabled) {
     const {
       network,
@@ -305,7 +300,6 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
     };
   }
 
-  // Add HTTPSIG signing info if enabled
   if (config.httpsig?.enabled) {
     response.httpsig = {
       enabled: true,
