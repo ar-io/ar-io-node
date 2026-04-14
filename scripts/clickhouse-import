@@ -440,9 +440,9 @@ SELECT
     )
   ) AS tags,
   length(tags) AS tags_count
-FROM staging_transactions FINAL txs
-LEFT JOIN staging_tags FINAL tags ON txs.height = tags.height AND txs.id = tags.id
-JOIN staging_blocks FINAL blocks ON txs.height = blocks.height
+FROM staging_transactions FINAL AS txs
+LEFT JOIN staging_tags FINAL AS tags ON txs.height = tags.height AND txs.id = tags.id
+JOIN staging_blocks FINAL AS blocks ON txs.height = blocks.height
 WHERE txs.height >= ${min_height} AND txs.height <= ${max_height}
 GROUP BY
   txs.height,
