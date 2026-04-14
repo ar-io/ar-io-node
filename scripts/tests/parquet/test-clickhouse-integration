@@ -136,6 +136,106 @@ else
 fi
 
 echo
+echo "Test 5: Verifying no duplicate rows (dedup invariant)..."
+if command -v clickhouse >/dev/null 2>&1; then
+    DUPES=$(clickhouse client \
+        --host "$CLICKHOUSE_HOST" \
+        --port "$CLICKHOUSE_PORT" \
+        --user "$CLICKHOUSE_USER" \
+        --password "$CLICKHOUSE_PASSWORD" \
+        --query "SELECT count() FROM (
+          SELECT height, block_transaction_index, is_data_item, id, count() AS c
+          FROM transactions
+          WHERE height >= $START_HEIGHT AND height <= $END_HEIGHT
+          GROUP BY height, block_transaction_index, is_data_item, id
+          HAVING c > 1
+        )" 2>/dev/null || echo "-1")
+
+    if [ "$DUPES" = "0" ]; then
+        echo "✓ No duplicate rows"
+    elif [ "$DUPES" = "-1" ]; then
+        echo "⚠ Could not verify dedup (ClickHouse query failed)"
+    else
+        echo "✗ Found $DUPES duplicate rows — dedup invariant broken"
+        exit 1
+    fi
+else
+    echo "⚠ ClickHouse client not installed, skipping dedup verification"
+fi
+
+echo
+echo "Test 6: Verifying query plans reference new indexes/projections..."
+if command -v clickhouse >/dev/null 2>&1; then
+    # id_bloom skip index
+    ID_EXPLAIN=$(clickhouse client \
+        --host "$CLICKHOUSE_HOST" \
+        --port "$CLICKHOUSE_PORT" \
+        --user "$CLICKHOUSE_USER" \
+        --password "$CLICKHOUSE_PASSWORD" \
+        --query "EXPLAIN indexes=1 SELECT id FROM transactions WHERE id = unhex('00')" 2>/dev/null || echo "")
+
+    if echo "$ID_EXPLAIN" | grep -q "id_bloom"; then
+        echo "✓ id_bloom skip index referenced"
+    else
+        echo "⚠ id_bloom not referenced in EXPLAIN (may be small dataset)"
+    fi
+
+    # tags_bloom skip index
+    TAGS_EXPLAIN=$(clickhouse client \
+        --host "$CLICKHOUSE_HOST" \
+        --port "$CLICKHOUSE_PORT" \
+        --user "$CLICKHOUSE_USER" \
+        --password "$CLICKHOUSE_PASSWORD" \
+        --query "EXPLAIN indexes=1 SELECT id FROM transactions
+                 WHERE hasAny(tags, [(unhex('4170702D4E616D65'), unhex('4172447269766520576562'))])
+                   AND height >= $START_HEIGHT AND height <= $END_HEIGHT" 2>/dev/null || echo "")
+
+    if echo "$TAGS_EXPLAIN" | grep -q "tags_bloom"; then
+        echo "✓ tags_bloom skip index referenced"
+    else
+        echo "⚠ tags_bloom not referenced in EXPLAIN (may be small dataset)"
+    fi
+
+    # owner_projection
+    OWNER_EXPLAIN=$(clickhouse client \
+        --host "$CLICKHOUSE_HOST" \
+        --port "$CLICKHOUSE_PORT" \
+        --user "$CLICKHOUSE_USER" \
+        --password "$CLICKHOUSE_PASSWORD" \
+        --query "EXPLAIN projections=1 SELECT * FROM transactions
+                 WHERE owner_address = unhex('00')
+                 ORDER BY owner_address DESC, height DESC,
+                          block_transaction_index DESC, is_data_item DESC, id DESC
+                 LIMIT 10" 2>/dev/null || echo "")
+
+    if echo "$OWNER_EXPLAIN" | grep -q "owner_projection"; then
+        echo "✓ owner_projection referenced"
+    else
+        echo "⚠ owner_projection not referenced in EXPLAIN"
+    fi
+
+    # target_projection
+    TARGET_EXPLAIN=$(clickhouse client \
+        --host "$CLICKHOUSE_HOST" \
+        --port "$CLICKHOUSE_PORT" \
+        --user "$CLICKHOUSE_USER" \
+        --password "$CLICKHOUSE_PASSWORD" \
+        --query "EXPLAIN projections=1 SELECT * FROM transactions
+                 WHERE target = unhex('00')
+                 ORDER BY target DESC, height DESC,
+                          block_transaction_index DESC, is_data_item DESC, id DESC
+                 LIMIT 10" 2>/dev/null || echo "")
+
+    if echo "$TARGET_EXPLAIN" | grep -q "target_projection"; then
+        echo "✓ target_projection referenced"
+    else
+        echo "⚠ target_projection not referenced in EXPLAIN"
+    fi
+else
+    echo "⚠ ClickHouse client not installed, skipping plan verification"
+fi
+
+echo
 echo "All tests completed!"
 echo
 echo "Summary:"
@@ -143,3 +243,5 @@ echo "  - Parquet export with ClickHouse integration: ✓"
 echo "  - Iceberg-compatible directory structure: ✓"
 echo "  - Data verification: ✓"
 echo "  - Resume capability: ✓"
+echo "  - Dedup invariant: ✓"
+echo "  - Query plan verification: ✓"

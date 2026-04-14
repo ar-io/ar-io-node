@@ -116,31 +116,14 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     this.gqlQueryable = gqlQueryable;
   }
 
-  getGqlTransactionsBaseSql({
-    ids = [],
-    recipients = [],
-    owners = [],
-  }: {
-    ids?: string[];
-    recipients?: string[];
-    owners?: string[];
-  }) {
-    let tableName = 'transactions';
-    if (ids?.length > 0) {
-      tableName = 'id_transactions';
-    } else if (recipients.length === 1) {
-      tableName = 'target_transactions';
-    } else if (owners.length === 1) {
-      tableName = 'owner_transactions';
-    }
-
+  getGqlTransactionsBaseSql() {
     return sql
-      .select()
-      .distinct(
+      .select(
         'height AS height',
         'block_transaction_index',
         'hex(block_indep_hash) AS block_indep_hash',
         'block_timestamp',
+        'hex(block_previous_block) AS block_previous_block',
         'is_data_item',
         'hex(id) AS id',
         'hex(anchor)',
@@ -155,11 +138,12 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         'hex(parent_id) AS parent_id',
         'tags_count',
         'tags',
+        'indexed_at',
         'signature_size',
         'signature_offset',
         'signature_type',
       )
-      .from(`${tableName} t`);
+      .from('transactions t');
   }
 
   addGqlTransactionFilters({
@@ -205,10 +189,10 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         const hexValues = tag.values.map((value) =>
           Buffer.from(value).toString('hex'),
         );
-        const wheres = hexValues.map((hexValue) =>
-          sql(`has(t.tags, (unhex('${hexName}'), unhex('${hexValue}')))`),
-        );
-        query.where(sql.or.apply(null, wheres));
+        const pairs = hexValues
+          .map((hexValue) => `(unhex('${hexName}'), unhex('${hexValue}'))`)
+          .join(', ');
+        query.where(sql(`hasAny(t.tags, [${pairs}])`));
       });
     }
 
@@ -235,37 +219,13 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     if (ids?.length === 0) {
       if (sortOrder === 'HEIGHT_DESC') {
         if (cursorHeight != null) {
+          const cursorIdHex = b64UrlToHex(cursorId ?? '');
+          const cursorIsDataItemInt = cursorIsDataItem ? 1 : 0;
           query.where(
             sql.lte('t.height', cursorHeight),
-            sql.or(
-              sql.lt('t.height', cursorHeight),
-              sql.and(
-                sql.eq('t.height', cursorHeight),
-                sql.lt(
-                  't.block_transaction_index',
-                  cursorBlockTransactionIndex,
-                ),
-              ),
-              sql.and(
-                sql.eq('t.height', cursorHeight),
-                sql.eq(
-                  't.block_transaction_index',
-                  cursorBlockTransactionIndex,
-                ),
-                sql.lt('t.is_data_item', cursorIsDataItem),
-              ),
-              sql.and(
-                sql.eq('t.height', cursorHeight),
-                sql.eq(
-                  't.block_transaction_index',
-                  cursorBlockTransactionIndex,
-                ),
-                sql.eq('t.is_data_item', cursorIsDataItem),
-                sql.lt(
-                  't.id',
-                  sql(`unhex('${sql(b64UrlToHex(cursorId ?? ''))}')`),
-                ),
-              ),
+            sql(
+              `(t.height, t.block_transaction_index, t.is_data_item, t.id) < ` +
+                `(${cursorHeight}, ${cursorBlockTransactionIndex}, ${cursorIsDataItemInt}, unhex('${cursorIdHex}'))`,
             ),
           );
         }
@@ -282,37 +242,13 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         orderBy += 't.id DESC';
       } else {
         if (cursorHeight != null) {
+          const cursorIdHex = b64UrlToHex(cursorId ?? '');
+          const cursorIsDataItemInt = cursorIsDataItem ? 1 : 0;
           query.where(
             sql.gte('t.height', cursorHeight),
-            sql.or(
-              sql.gt('t.height', cursorHeight),
-              sql.and(
-                sql.eq('t.height', cursorHeight),
-                sql.gt(
-                  't.block_transaction_index',
-                  cursorBlockTransactionIndex,
-                ),
-              ),
-              sql.and(
-                sql.eq('t.height', cursorHeight),
-                sql.eq(
-                  't.block_transaction_index',
-                  cursorBlockTransactionIndex,
-                ),
-                sql.gt('t.is_data_item', cursorIsDataItem),
-              ),
-              sql.and(
-                sql.eq('t.height', cursorHeight),
-                sql.eq(
-                  't.block_transaction_index',
-                  cursorBlockTransactionIndex,
-                ),
-                sql.eq('t.is_data_item', cursorIsDataItem),
-                sql.gt(
-                  't.id',
-                  sql(`unhex('${sql(b64UrlToHex(cursorId ?? ''))}')`),
-                ),
-              ),
+            sql(
+              `(t.height, t.block_transaction_index, t.is_data_item, t.id) > ` +
+                `(${cursorHeight}, ${cursorBlockTransactionIndex}, ${cursorIsDataItemInt}, unhex('${cursorIdHex}'))`,
             ),
           );
         }
@@ -355,11 +291,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }): Promise<GqlTransactionsResult> {
-    const txsQuery = this.getGqlTransactionsBaseSql({
-      ids,
-      recipients,
-      owners,
-    });
+    const txsQuery = this.getGqlTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
       query: txsQuery,

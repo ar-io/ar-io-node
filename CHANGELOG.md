@@ -10,7 +10,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **ClickHouse schema consolidation**: The ClickHouse GQL backend now uses
+  a single `transactions` table with partitioning by height, bloom filter
+  skip indexes on `id` and `tags`, and native projections for owner and
+  recipient queries, replacing the previous four-table design
+  (`transactions`, `id_transactions`, `owner_transactions`,
+  `target_transactions`). Column codecs (Delta + ZSTD) and
+  `LowCardinality` on `content_type` / `signature_type` reduce storage.
+  The GQL query layer uses `hasAny` for multi-value tag filters and
+  tuple-comparison cursor pagination. Requires ClickHouse 24.8 or later
+  and a one-time full re-import from Parquet — see
+  `docs/parquet-and-clickhouse-usage.md`.
+
 ### Fixed
+
+- **ClickHouse GQL `indexedAt` and `blockPreviousBlock` fields**: These
+  fields were previously always returned as `undefined` because the base
+  SELECT omitted the corresponding columns. They are now populated.
 
 ## [Release 75] - 2026-04-08
 

@@ -12,6 +12,16 @@ form of Parquet files.
 > container orchestration tools can be made to work as well, but are not
 > covered in this document.
 
+> [!IMPORTANT]
+> ClickHouse **24.8 or later** is required (projections on
+> `ReplacingMergeTree` are production-safe from 24.8). The
+> `docker-compose.yaml` default image (`clickhouse-server:25.4`) satisfies
+> this. Operators upgrading from an earlier release of ar-io-node must drop
+> the previous `transactions`, `id_transactions`, `owner_transactions`, and
+> `target_transactions` tables and re-import from Parquet — the schema was
+> consolidated into a single `transactions` table with skip indexes and
+> projections.
+
 # Usage
 
 Below is an example of how to configure your gateway to serve a complete
@@ -107,5 +117,50 @@ curl -g -X POST \
 
 # Expected output:
 # {"data":{"transactions":{"edges":[{"node":{"block":{"height":1461918},"bundledIn":{"id":"ylhb0PqDtG5HwBg00_RYztUl0x2RuKvbNzT6YiNR2JA"}}}]}}}
+```
+
+## Schema layout
+
+The ClickHouse schema consists of three staging tables
+(`staging_blocks`, `staging_transactions`, `staging_tags`) used during
+Parquet import, and a single final `transactions` table. The final table
+includes:
+
+- Partitioning by `intDiv(height, 100000)` for partition pruning on
+  height-bounded queries.
+- A `bloom_filter` skip index on `id` for fast point lookups.
+- A `bloom_filter` skip index on `tags` for fast tag-filter queries.
+- `PROJECTION owner_projection` sorted by
+  `(owner_address, height, block_transaction_index, is_data_item, id)`
+  for owner-filtered queries.
+- `PROJECTION target_projection` sorted by
+  `(target, height, block_transaction_index, is_data_item, id)` for
+  recipient-filtered queries.
+- `Delta + ZSTD(1)` codecs on monotonic timestamp columns and
+  `LowCardinality` on `content_type` / `signature_type` for reduced
+  storage.
+
+See `src/database/clickhouse/schema.sql` for the full definition.
+
+## Rollback
+
+If a re-import using the consolidated schema causes problems, revert as
+follows:
+
+```sh
+# Stop the gateway
+docker compose --profile clickhouse down
+
+# Drop the consolidated table
+clickhouse client --password <your-password> -q 'DROP TABLE IF EXISTS transactions'
+
+# Check out the prior schema and import script
+git checkout <pre-PE-9059-tag> -- \
+  src/database/clickhouse/schema.sql \
+  scripts/clickhouse-import
+
+# Re-import from the Parquet snapshot (unchanged source of truth)
+docker compose --profile clickhouse up clickhouse -d
+./scripts/clickhouse-import --input-dir data/parquet --all-partitions
 ```
 

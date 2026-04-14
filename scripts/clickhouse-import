@@ -291,13 +291,14 @@ migrate_staging_to_final() {
   local min_height=${height_range%-*}
   local max_height=${height_range#*-}
   
-  # Move staging data to final tables (using JOIN logic from original implementation)
-  for prefix in "" "id_" "owner_" "target_"; do
-    echo "    Migrating data to ${prefix}transactions table..."
-    
-    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-      --query "INSERT INTO ${prefix}transactions
+  # Move staging data to the final transactions table. Projections
+  # (owner_projection, target_projection) and skip indexes (id_bloom, tags_bloom)
+  # are maintained automatically on insert.
+  echo "    Migrating data to transactions table..."
+
+  clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+    --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+    --query "INSERT INTO transactions
 SELECT
   txs.height,
   txs.block_transaction_index,
@@ -329,7 +330,7 @@ SELECT
   txs.signature_type,
   txs.root_transaction_id,
   txs.root_parent_offset,
-  arrayMap(x -> (x.1, x.2), 
+  arrayMap(x -> (x.1, x.2),
     arraySort(x -> x.3,
       groupArrayIf((tag_name, tag_value, tag_index), tag_name != '')
     )
@@ -339,7 +340,7 @@ FROM staging_transactions txs
 LEFT JOIN staging_tags tags ON txs.height = tags.height AND txs.id = tags.id
 JOIN staging_blocks blocks ON txs.height = blocks.height
 WHERE txs.height >= ${min_height} AND txs.height <= ${max_height}
-GROUP BY 
+GROUP BY
   txs.height,
   txs.block_transaction_index,
   txs.is_data_item,
@@ -369,10 +370,9 @@ GROUP BY
   txs.signature_type,
   txs.root_transaction_id,
   txs.root_parent_offset;" || {
-      echo "    Warning: Failed to migrate data to ${prefix}transactions table" >&2
-      return 1
-    }
-  done
+    echo "    Warning: Failed to migrate data to transactions table" >&2
+    return 1
+  }
   
   local migrate_end=$(date +%s%N)
   log_timing "Migrate staging to final for $partition_name" "$migrate_start" "$migrate_end"
