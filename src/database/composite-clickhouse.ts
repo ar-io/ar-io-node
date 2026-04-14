@@ -16,7 +16,11 @@ import {
   hexToB64Url,
   utf8ToB64Url,
 } from '../lib/encoding.js';
-import { GqlTransactionsResult, GqlQueryable } from '../types.js';
+import {
+  GqlTransactionsResult,
+  GqlQueryable,
+  ClickHouseIndexCleanup,
+} from '../types.js';
 
 export function encodeTransactionGqlCursor({
   height,
@@ -87,7 +91,9 @@ function inB64UrlStrings(xs: string[]) {
   return sql(xs.map((x) => `unhex('${b64UrlToHex(x)}')`).join(', '));
 }
 
-export class CompositeClickHouseDatabase implements GqlQueryable {
+export class CompositeClickHouseDatabase
+  implements GqlQueryable, ClickHouseIndexCleanup
+{
   private log: winston.Logger;
   private clickhouseClient: ClickHouseClient;
   private gqlQueryable: GqlQueryable;
@@ -510,5 +516,49 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     maxHeight?: number;
   }) {
     return this.gqlQueryable.getGqlBlocks(args);
+  }
+
+  async deleteDataItemsByIds(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+
+    const tables = [
+      'transactions',
+      'id_transactions',
+      'owner_transactions',
+      'target_transactions',
+    ];
+
+    const SUB_BATCH_SIZE = 500;
+    const failures: { table: string; error: string }[] = [];
+
+    for (let i = 0; i < ids.length; i += SUB_BATCH_SIZE) {
+      const batch = ids.slice(i, i + SUB_BATCH_SIZE);
+      const idList = batch.map((id) => `unhex('${b64UrlToHex(id)}')`).join(',');
+
+      for (const table of tables) {
+        try {
+          await this.clickhouseClient.command({
+            query: `ALTER TABLE ${table} DELETE WHERE is_data_item = true AND id IN (${idList})`,
+          });
+        } catch (error: any) {
+          this.log.error('ClickHouse index cleanup error', {
+            table,
+            batchSize: batch.length,
+            error: error?.message,
+          });
+          failures.push({ table, error: error?.message });
+        }
+      }
+    }
+
+    if (failures.length > 0) {
+      throw new Error(
+        `ClickHouse index cleanup failed for ${failures.length} table(s): ${failures.map((f) => `${f.table}: ${f.error}`).join('; ')}`,
+      );
+    }
+
+    this.log.info('ClickHouse index cleanup mutations submitted', {
+      totalIds: ids.length,
+    });
   }
 }
