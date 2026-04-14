@@ -402,10 +402,10 @@ SELECT
   txs.root_parent_offset,
   arrayMap(x -> (x.1, x.2),
     arraySort(x -> x.3,
-      groupArrayIf((tag_name, tag_value, tag_index), tag_name != '')
+      groupUniqArrayIf((tag_name, tag_value, tag_index), tag_name != '')
     )
   ) AS tags,
-  COUNT(CASE WHEN tags.tag_name != '' THEN 1 END) AS tags_count
+  length(tags) AS tags_count
 FROM staging_transactions txs
 LEFT JOIN staging_tags tags ON txs.height = tags.height AND txs.id = tags.id
 JOIN staging_blocks blocks ON txs.height = blocks.height
