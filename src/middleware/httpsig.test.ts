@@ -245,7 +245,7 @@ describe('createHttpSigMiddleware', () => {
     // Verify the signature
     const valid = crypto.verify(
       null,
-      Buffer.from(base, 'ascii'),
+      Buffer.from(base, 'latin1'),
       publicKey,
       sigBytes,
     );

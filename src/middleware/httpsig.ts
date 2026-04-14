@@ -90,7 +90,11 @@ export function createHttpSigMiddleware(opts: {
 
         // Ed25519 signing is synchronous and takes ~33us — faster than worker
         // thread IPC overhead.
-        const sig = crypto.sign(null, Buffer.from(base, 'ascii'), privateKey);
+        // latin1 matches Node's HTTP header byte representation — ASCII
+        // would strip the high bit on 0x80-0xFF header bytes (legal in
+        // latin1-range headers like Arweave tag values), producing a base
+        // that doesn't match what goes on the wire.
+        const sig = crypto.sign(null, Buffer.from(base, 'latin1'), privateKey);
 
         this.setHeader(headerNames.signatureInput, `sig1=${paramStr}`);
         this.setHeader(
