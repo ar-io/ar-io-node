@@ -49,33 +49,40 @@ export function buildAttestationTags(opts: {
 /**
  * Try to upload via Turbo SDK. Returns the data item ID on success, or
  * undefined if the SDK is not installed (production builds strip devDeps).
+ *
+ * Any error other than "module not found" is rethrown — we don't want a
+ * transient Turbo failure (auth, network, etc.) to silently fall through to
+ * an L1 post that burns AR tokens.
  */
 async function tryTurboUpload(
   jwk: crypto.JsonWebKey,
   attestationJson: string,
   tags: { name: string; value: string }[],
 ): Promise<string | undefined> {
+  // Load SDK lazily — devDependency may not be present in production builds
+  let TurboFactory: any;
+  let ArweaveSigner: any;
   try {
-    // turbo-sdk is a devDependency — may not be present in production.
-    // Use createRequire to load via CJS (same pattern as
-    // tools/lib/upload-cdb64-to-arweave.ts).
     const require = createRequire(import.meta.url);
-    const { TurboFactory, ArweaveSigner } = require('@ardrive/turbo-sdk');
-
-    const signer = new ArweaveSigner(jwk);
-    const turbo = TurboFactory.authenticated({ signer });
-
-    const result = await turbo.uploadFile({
-      fileStreamFactory: () => Readable.from(Buffer.from(attestationJson)),
-      fileSizeFactory: () => Buffer.byteLength(attestationJson),
-      dataItemOpts: { tags },
-    });
-
-    return result.id;
-  } catch {
-    // SDK not available or upload failed — caller will fall back to L1
-    return undefined;
+    ({ TurboFactory, ArweaveSigner } = require('@ardrive/turbo-sdk'));
+  } catch (err: any) {
+    if (err?.code === 'MODULE_NOT_FOUND') {
+      return undefined;
+    }
+    throw err;
   }
+
+  // SDK is available — upload failures propagate to the caller
+  const signer = new ArweaveSigner(jwk);
+  const turbo = TurboFactory.authenticated({ signer });
+
+  const result = await turbo.uploadFile({
+    fileStreamFactory: () => Readable.from(Buffer.from(attestationJson)),
+    fileSizeFactory: () => Buffer.byteLength(attestationJson),
+    dataItemOpts: { tags },
+  });
+
+  return result.id;
 }
 
 /**

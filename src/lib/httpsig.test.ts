@@ -12,9 +12,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
-  SIGNABLE_HEADERS,
+  TRIGGER_HEADERS,
+  CO_SIGNABLE_HEADERS,
   SIGNABLE_PREFIXES,
   isSignableHeader,
+  isTriggerHeader,
   loadOrGenerateKey,
   deriveKeyId,
   getPublicKeyBase64Url,
@@ -44,13 +46,16 @@ describe('httpsig lib', () => {
   }
 
   describe('isSignableHeader', () => {
-    it('matches exact headers in SIGNABLE_HEADERS', () => {
+    it('matches trigger headers', () => {
       assert.equal(isSignableHeader('x-ar-io-data-id'), true);
       assert.equal(isSignableHeader('x-ar-io-verified'), true);
-      assert.equal(isSignableHeader('content-type'), true);
-      assert.equal(isSignableHeader('content-digest'), true);
       assert.equal(isSignableHeader('x-arns-name'), true);
       assert.equal(isSignableHeader('x-arweave-chunk-data-root'), true);
+    });
+
+    it('matches co-signable headers', () => {
+      assert.equal(isSignableHeader('content-type'), true);
+      assert.equal(isSignableHeader('content-digest'), true);
     });
 
     it('matches x-arweave-tag-* prefix', () => {
@@ -72,8 +77,35 @@ describe('httpsig lib', () => {
     });
 
     it('has consistent sets', () => {
-      assert.ok(SIGNABLE_HEADERS.size > 0);
+      assert.ok(TRIGGER_HEADERS.size > 0);
+      assert.ok(CO_SIGNABLE_HEADERS.size > 0);
       assert.ok(SIGNABLE_PREFIXES.length > 0);
+    });
+  });
+
+  describe('isTriggerHeader', () => {
+    it('returns true for trust-relevant headers', () => {
+      assert.equal(isTriggerHeader('x-ar-io-data-id'), true);
+      assert.equal(isTriggerHeader('x-arns-name'), true);
+      assert.equal(isTriggerHeader('x-arweave-chunk-data-root'), true);
+    });
+
+    it('returns false for content-type (not a trigger, only co-signable)', () => {
+      assert.equal(isTriggerHeader('content-type'), false);
+      assert.equal(isTriggerHeader('content-digest'), false);
+    });
+
+    it('returns false for operational headers', () => {
+      assert.equal(isTriggerHeader('cache-control'), false);
+      assert.equal(isTriggerHeader('x-request-id'), false);
+    });
+
+    it('returns false for tag headers (co-signable via prefix, not trigger)', () => {
+      assert.equal(isTriggerHeader('x-arweave-tag-content-type'), false);
+    });
+
+    it('is case-insensitive', () => {
+      assert.equal(isTriggerHeader('X-AR-IO-Data-Id'), true);
     });
   });
 

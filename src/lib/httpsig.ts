@@ -24,12 +24,12 @@ import bs58 from 'bs58';
 import { canonicalize } from 'json-canonicalize';
 
 /**
- * Exact-match header names (lowercase) that are trust-relevant and should be
- * included in HTTP message signatures when present on a response.
+ * Trust-triggering headers (lowercase). Presence of at least one of these on
+ * a response indicates the response is trust-relevant and should be signed.
+ * Endpoints that emit none of these (admin, /ar-io/info, GraphQL, health
+ * checks, generic errors) are auto-excluded from signing.
  */
-export const SIGNABLE_HEADERS = new Set([
-  'content-type',
-  'content-digest',
+export const TRIGGER_HEADERS = new Set([
   'x-ar-io-data-id',
   'x-ar-io-verified',
   'x-ar-io-stable',
@@ -47,21 +47,37 @@ export const SIGNABLE_HEADERS = new Set([
 ]);
 
 /**
- * Prefix patterns for dynamic headers that should be signed. Any header whose
- * lowercase name starts with one of these prefixes is signable.
+ * Co-signable headers (lowercase). These are included in the signature ONLY
+ * when at least one TRIGGER_HEADER is also present. Signing them alone is too
+ * broad — nearly every response has a Content-Type.
+ */
+export const CO_SIGNABLE_HEADERS = new Set(['content-type', 'content-digest']);
+
+/**
+ * Prefix patterns for dynamic headers that should be signed when a trigger
+ * header is present. Data item tags (`x-arweave-tag-*`) are co-signable.
  */
 export const SIGNABLE_PREFIXES = ['x-arweave-tag-'];
 
 /**
- * Returns true if the given header name (lowercase) should be included in an
- * HTTP message signature.
+ * Returns true if the given header name should be included in the signature
+ * base when a trigger header is already known to be present on the response.
  */
 export function isSignableHeader(name: string): boolean {
   const lower = name.toLowerCase();
   return (
-    SIGNABLE_HEADERS.has(lower) ||
+    TRIGGER_HEADERS.has(lower) ||
+    CO_SIGNABLE_HEADERS.has(lower) ||
     SIGNABLE_PREFIXES.some((p) => lower.startsWith(p))
   );
+}
+
+/**
+ * Returns true if the header is a trust-trigger — its presence means the
+ * response is trust-relevant and should be signed.
+ */
+export function isTriggerHeader(name: string): boolean {
+  return TRIGGER_HEADERS.has(name.toLowerCase());
 }
 
 // Ed25519 SPKI DER has a fixed 12-byte prefix before the raw 32-byte public key.
