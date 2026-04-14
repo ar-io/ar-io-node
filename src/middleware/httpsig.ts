@@ -13,6 +13,7 @@ import * as metrics from '../metrics.js';
 import { trace } from '../tracing.js';
 import {
   isSignableHeader,
+  isTriggerHeader,
   buildSignatureBase,
   formatSignatureInput,
 } from '../lib/httpsig.js';
@@ -50,17 +51,20 @@ export function createHttpSigMiddleware(opts: {
       this.removeHeader(headerNames.signature);
       this.removeHeader(headerNames.signatureInput);
 
-      // Collect signable headers that are actually present on this response
+      // Skip signing unless at least one trust-trigger header is present.
+      // This excludes admin endpoints, /ar-io/info, GraphQL, health checks,
+      // and generic error responses — they carry Content-Type but no
+      // trust claims worth signing.
       const presentHeaders = Object.keys(this.getHeaders());
-      const coveredHeaders = presentHeaders.filter((h) => isSignableHeader(h));
-
-      // Skip signing if no trust-relevant headers are present (admin,
-      // GraphQL, health checks, error responses without data headers, etc.)
-      if (coveredHeaders.length === 0) {
+      const hasTrigger = presentHeaders.some((h) => isTriggerHeader(h));
+      if (!hasTrigger) {
         return (
           originalWriteHead as unknown as (...a: unknown[]) => Response
         ).apply(this, args);
       }
+
+      // Collect all signable headers (trigger + co-signable + tag prefix)
+      const coveredHeaders = presentHeaders.filter((h) => isSignableHeader(h));
 
       try {
         const end = metrics.httpSigSigningDuration.startTimer();

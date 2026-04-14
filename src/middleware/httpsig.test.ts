@@ -59,20 +59,35 @@ describe('createHttpSigMiddleware', () => {
     assert.ok(input.includes('alg="ed25519"'));
   });
 
-  it('skips signing when no signable headers are present', async () => {
+  it('skips signing when no trigger headers are present', async () => {
     const { privateKey, keyId } = generateTestKeyPair();
 
     const app = express();
     app.use(createHttpSigMiddleware({ privateKey, keyId, bindRequest: false }));
     app.get('/test', (_req, res) => {
-      // Send raw bytes without setting any AR.IO/ArNS/chunk headers.
-      // Express sets content-type automatically via res.json/res.send, and
-      // content-type IS signable, so use writeHead + end directly.
-      res.writeHead(200);
-      res.end();
+      // No AR.IO/ArNS/chunk headers set. Express auto-sets content-type,
+      // but content-type alone is not a trigger.
+      res.json({ status: 'ok' });
     });
 
     const res = await request(app).get('/test');
+    assert.equal(res.headers['signature'], undefined);
+    assert.equal(res.headers['signature-input'], undefined);
+  });
+
+  it('skips signing when only content-type is present (e.g., /ar-io/info)', async () => {
+    const { privateKey, keyId } = generateTestKeyPair();
+
+    const app = express();
+    app.use(createHttpSigMiddleware({ privateKey, keyId, bindRequest: false }));
+    app.get('/info', (_req, res) => {
+      // Simulates /ar-io/info: JSON response with Content-Type but no
+      // trust-relevant AR.IO headers.
+      res.setHeader('Content-Type', 'application/json');
+      res.send('{"release":"test"}');
+    });
+
+    const res = await request(app).get('/info');
     assert.equal(res.headers['signature'], undefined);
     assert.equal(res.headers['signature-input'], undefined);
   });
