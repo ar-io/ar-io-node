@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`clickhouse-import --flat-dir` mode**: `scripts/clickhouse-import`
+  accepts a flat directory of Parquet files named
+  `<table>-minHeight:<min>-maxHeight:<max>-rowCount:<n>.parquet`
+  (blocks / transactions / tags all in the same directory), as an
+  alternative to the default `<table>/data/height=<min>-<max>/*.parquet`
+  Hive layout.
+
 ### Changed
 
 - **ClickHouse schema consolidation**: The ClickHouse GQL backend now uses

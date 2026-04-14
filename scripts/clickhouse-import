@@ -35,11 +35,14 @@ ClickHouse Options:
 
 Additional Options:
   --table NAME              Table name for single file import (required with --parquet-file)
+  --flat-dir                Expect a flat directory with files named
+                            <table>-minHeight:<min>-maxHeight:<max>-rowCount:<n>.parquet
+                            (default: Hive layout <table>/data/height=<min>-<max>/*.parquet)
   --dry-run                 Show what would be imported without actually doing it
   --show-timing             Show detailed timing information
 
 Examples:
-  # Import single partition
+  # Import single partition (Hive layout)
   $0 --input-dir ./data/datasets/default --partition height=1000-1999
 
   # Import multiple partitions
@@ -47,6 +50,9 @@ Examples:
 
   # Import all partitions
   $0 --input-dir ./data/datasets/default --all-partitions
+
+  # Import all partitions from a flat directory
+  $0 --input-dir ./data/parquet-flat --flat-dir --all-partitions
 
   # Import single file
   $0 --parquet-file ./blocks.parquet --table staging_blocks
@@ -61,6 +67,7 @@ PARTITIONS=""
 ALL_PARTITIONS=false
 PARQUET_FILE=""
 TABLE=""
+FLAT_DIR=false
 DRY_RUN=false
 SHOW_TIMING=false
 
@@ -94,6 +101,10 @@ while [[ $# -gt 0 ]]; do
     --table)
       TABLE=$2
       shift 2
+      ;;
+    --flat-dir)
+      FLAT_DIR=true
+      shift 1
       ;;
     --clickhouse-host)
       CLICKHOUSE_HOST=$2
@@ -236,11 +247,11 @@ import_parquet_file() {
 import_partition_files() {
   local partition_base_dir=$1
   local partition_name=$2
-  
+
   echo "  Importing partition files for: $partition_name"
   local import_start=$(date +%s%N)
   local success=true
-  
+
   # Import blocks
   for parquet_file in "$partition_base_dir"/blocks/data/"$partition_name"/*.parquet; do
     if [[ -f "$parquet_file" ]]; then
@@ -249,7 +260,7 @@ import_partition_files() {
       fi
     fi
   done
-  
+
   # Import transactions
   for parquet_file in "$partition_base_dir"/transactions/data/"$partition_name"/*.parquet; do
     if [[ -f "$parquet_file" ]]; then
@@ -258,7 +269,7 @@ import_partition_files() {
       fi
     fi
   done
-  
+
   # Import tags
   for parquet_file in "$partition_base_dir"/tags/data/"$partition_name"/*.parquet; do
     if [[ -f "$parquet_file" ]]; then
@@ -267,15 +278,55 @@ import_partition_files() {
       fi
     fi
   done
-  
+
   local import_end=$(date +%s%N)
   log_timing "Import partition files for $partition_name" "$import_start" "$import_end"
-  
+
   if ! $success; then
     echo "    Warning: Some files failed to import for partition: $partition_name" >&2
     return 1
   fi
-  
+
+  return 0
+}
+
+# Import all Parquet files for a partition from a flat directory layout.
+# Expects filenames of the form:
+#   <table>-minHeight:<min>-maxHeight:<max>-rowCount:<n>.parquet
+# where <table> is blocks, transactions, or tags. All three tables live in the
+# same --input-dir.
+import_flat_partition_files() {
+  local input_dir=$1
+  local partition_name=$2
+
+  echo "  Importing flat partition files for: $partition_name"
+  local import_start=$(date +%s%N)
+  local success=true
+
+  local height_range=${partition_name#height=}
+  local min_height=${height_range%-*}
+  local max_height=${height_range#*-}
+
+  local table staging_table parquet_file
+  for table in blocks transactions tags; do
+    staging_table="staging_${table}"
+    for parquet_file in "$input_dir"/"${table}"-minHeight:"${min_height}"-maxHeight:"${max_height}"-rowCount:*.parquet; do
+      if [[ -f "$parquet_file" ]]; then
+        if ! import_parquet_file "$parquet_file" "$staging_table"; then
+          success=false
+        fi
+      fi
+    done
+  done
+
+  local import_end=$(date +%s%N)
+  log_timing "Import flat partition files for $partition_name" "$import_start" "$import_end"
+
+  if ! $success; then
+    echo "    Warning: Some files failed to import for partition: $partition_name" >&2
+    return 1
+  fi
+
   return 0
 }
 
@@ -419,9 +470,16 @@ import_partition() {
   local partition_start=$(date +%s%N)
   
   # Import partition files to staging tables
-  if ! import_partition_files "$INPUT_DIR" "$partition_name"; then
-    echo "  Error: Failed to import files for partition: $partition_name" >&2
-    return 1
+  if $FLAT_DIR; then
+    if ! import_flat_partition_files "$INPUT_DIR" "$partition_name"; then
+      echo "  Error: Failed to import files for partition: $partition_name" >&2
+      return 1
+    fi
+  else
+    if ! import_partition_files "$INPUT_DIR" "$partition_name"; then
+      echo "  Error: Failed to import files for partition: $partition_name" >&2
+      return 1
+    fi
   fi
   
   # Move data from staging to final tables
@@ -480,6 +538,33 @@ find_partitions() {
   fi
 }
 
+# Find all partitions in a flat directory layout by parsing
+# <table>-minHeight:<min>-maxHeight:<max>-rowCount:<n>.parquet filenames.
+find_flat_partitions() {
+  local input_dir=$1
+  local partitions=()
+  local parquet_file basename partition_name
+
+  for parquet_file in "$input_dir"/*.parquet; do
+    [[ -f "$parquet_file" ]] || continue
+    basename=$(basename "$parquet_file")
+    if [[ $basename =~ ^(blocks|transactions|tags)-minHeight:([0-9]+)-maxHeight:([0-9]+)-rowCount:[0-9]+\.parquet$ ]]; then
+      partition_name="height=${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
+      if [[ ! " ${partitions[*]} " =~ " ${partition_name} " ]]; then
+        partitions+=("$partition_name")
+      fi
+    fi
+  done
+
+  if [[ ${#partitions[@]} -eq 0 ]]; then
+    echo "Error: No flat-layout Parquet files found in $input_dir." >&2
+    echo "Expected filenames: <table>-minHeight:<min>-maxHeight:<max>-rowCount:<n>.parquet" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "${partitions[@]}" | sort
+}
+
 # Main execution
 main() {
   test_clickhouse_connection
@@ -507,7 +592,11 @@ main() {
     elif [[ -n "$PARTITIONS" ]]; then
       IFS=',' read -ra partitions_to_import <<< "$PARTITIONS"
     elif [[ "$ALL_PARTITIONS" == "true" ]]; then
-      readarray -t partitions_to_import < <(find_partitions "$INPUT_DIR")
+      if $FLAT_DIR; then
+        readarray -t partitions_to_import < <(find_flat_partitions "$INPUT_DIR")
+      else
+        readarray -t partitions_to_import < <(find_partitions "$INPUT_DIR")
+      fi
     fi
     
     if [[ ${#partitions_to_import[@]} -eq 0 ]]; then
