@@ -1000,7 +1000,6 @@ let _httpSigKeyId: string | undefined;
 let _httpSigPublicKeyB64Url: string | undefined;
 let _httpSigSolanaAddress: string | undefined;
 let _httpSigAttestation: Attestation | undefined;
-let _httpSigAttestationCached = false;
 let _httpSigAttestationTxId: string | undefined;
 let _httpSigObserverAddress: string | undefined;
 let _httpSigObserverJwk: crypto.JsonWebKey | undefined;
@@ -1041,7 +1040,6 @@ if (isMainThread && HTTPSIG_ENABLED) {
         signature: result.signature,
         rsaPublicKey: result.rsaPublicKey,
       };
-      _httpSigAttestationCached = result.cached;
       _httpSigAttestationTxId = result.txId;
 
       logger.info('HTTPSIG attestation ready', {
@@ -1062,7 +1060,6 @@ export const HTTPSIG_KEY_ID = _httpSigKeyId;
 export const HTTPSIG_PUBLIC_KEY_B64URL = _httpSigPublicKeyB64Url;
 export const HTTPSIG_SOLANA_ADDRESS = _httpSigSolanaAddress;
 export const HTTPSIG_ATTESTATION = _httpSigAttestation;
-export const HTTPSIG_ATTESTATION_CACHED = _httpSigAttestationCached;
 export const HTTPSIG_OBSERVER_ADDRESS = _httpSigObserverAddress;
 export const HTTPSIG_OBSERVER_JWK = _httpSigObserverJwk;
 
