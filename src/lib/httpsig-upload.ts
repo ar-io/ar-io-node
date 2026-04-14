@@ -48,7 +48,7 @@ export function buildAttestationTags(opts: {
 
 /**
  * Try to upload via Turbo SDK. Returns the data item ID on success, or
- * undefined if the SDK is not installed (production builds strip devDeps).
+ * undefined if the SDK module cannot be resolved.
  *
  * Any error other than "module not found" is rethrown — we don't want a
  * transient Turbo failure (auth, network, etc.) to silently fall through to
@@ -59,7 +59,6 @@ async function tryTurboUpload(
   attestationJson: string,
   tags: { name: string; value: string }[],
 ): Promise<string | undefined> {
-  // Load SDK lazily — devDependency may not be present in production builds
   let TurboFactory: any;
   let ArweaveSigner: any;
   try {
