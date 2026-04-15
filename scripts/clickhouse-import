@@ -242,6 +242,27 @@ validate_transactions_schema() {
   fi
 }
 
+# Refresh operator TTL rules so migrate_staging_to_final computes expires_at
+# from the latest ttl_settings and dictionaries. The loader exits 0 for
+# missing/malformed files (leaving previously loaded rules untouched) and
+# non-zero on ClickHouse write failure; in either case, proceed with the
+# import since partial TTL state is better than aborting a manual run.
+refresh_ttl_rules() {
+  if [[ -z "${CLICKHOUSE_TTL_RULES_PATH:-}" ]]; then
+    echo "  No CLICKHOUSE_TTL_RULES_PATH set; skipping TTL rules refresh."
+    return 0
+  fi
+  if [[ ! -f "$CLICKHOUSE_TTL_RULES_PATH" ]]; then
+    echo "  No TTL rules file at $CLICKHOUSE_TTL_RULES_PATH; skipping TTL rules refresh."
+    return 0
+  fi
+
+  echo "Loading TTL rules from $CLICKHOUSE_TTL_RULES_PATH..."
+  if ! python3 "$SCRIPT_DIR/clickhouse-load-ttl-rules.py" "$CLICKHOUSE_TTL_RULES_PATH"; then
+    echo "Warning: TTL rules load failed; TTL state may be partially stale for this import (see loader output above)." >&2
+  fi
+}
+
 # Initialize ClickHouse schema if needed
 initialize_clickhouse_schema() {
   echo "Initializing ClickHouse schema..."
@@ -758,7 +779,14 @@ find_flat_partitions() {
 main() {
   test_clickhouse_connection
   initialize_clickhouse_schema
-  
+
+  # Refresh TTL rules before any migrate_staging_to_final runs (partition mode
+  # only — single-file imports write straight to staging and don't compute
+  # expires_at). Skipped in dry-run because no migrate executes.
+  if [[ -z "$PARQUET_FILE" ]] && ! $DRY_RUN; then
+    refresh_ttl_rules
+  fi
+
   if [[ -n "$PARQUET_FILE" ]]; then
     # Single file import mode
     echo "Importing single file: $PARQUET_FILE -> $TABLE"

@@ -57,6 +57,7 @@ OWNER_B64URL="abcDEF0123456789_-xyzABCDEF0123456789_-xyzAB"
 OWNER_PREFIX="abcDEF"
 
 cat >"$TMP_RULES" <<YAML
+default_ttl_seconds: 3600
 rules:
   - tag_name: App-Name
     tag_value: ephemeral-chat
@@ -72,6 +73,9 @@ rules:
     tag_value: image/gif
     match: prefix
     ttl_seconds: 120
+  - tag_name: App-Name
+    tag_value: persistent
+    never_expire: true
   - field: owner_address
     value: $OWNER_B64URL
     ttl_seconds: 90
@@ -89,12 +93,12 @@ PREFIX_TAGS=$(ch_query "SELECT count() FROM ttl_tag_prefix_rules" | tr -d '[:spa
 EXACT_OWNERS=$(ch_query "SELECT count() FROM ttl_owner_rules_src" | tr -d '[:space:]')
 PREFIX_OWNERS=$(ch_query "SELECT count() FROM ttl_owner_prefix_rules" | tr -d '[:space:]')
 
-echo "  ttl_tag_rules_src:       $EXACT_TAGS (expected 2)"
+echo "  ttl_tag_rules_src:       $EXACT_TAGS (expected 3)"
 echo "  ttl_tag_prefix_rules:    $PREFIX_TAGS (expected 2)"
 echo "  ttl_owner_rules_src:     $EXACT_OWNERS (expected 1)"
 echo "  ttl_owner_prefix_rules:  $PREFIX_OWNERS (expected 1)"
 
-if [ "$EXACT_TAGS" = "2" ] && [ "$PREFIX_TAGS" = "2" ] && [ "$EXACT_OWNERS" = "1" ] && [ "$PREFIX_OWNERS" = "1" ]; then
+if [ "$EXACT_TAGS" = "3" ] && [ "$PREFIX_TAGS" = "2" ] && [ "$EXACT_OWNERS" = "1" ] && [ "$PREFIX_OWNERS" = "1" ]; then
     echo "✓ Rule counts match"
 else
     echo "✗ Rule counts mismatch"
@@ -167,7 +171,34 @@ else
 fi
 echo
 
-echo "Test 7: Empty rules file clears the tables"
+echo "Test 7: default_ttl_seconds populates ttl_settings"
+DEFAULT_TTL=$(ch_query "SELECT default_ttl_seconds FROM ttl_settings FINAL LIMIT 1" | tr -d '[:space:]')
+if [ "$DEFAULT_TTL" = "3600" ]; then
+    echo "✓ ttl_settings.default_ttl_seconds = 3600"
+else
+    echo "✗ Expected default_ttl_seconds=3600, got '$DEFAULT_TTL'"
+    exit 1
+fi
+echo
+
+echo "Test 8: never_expire rule stores ttl_seconds=0 with never_expire=1"
+NEVER_ROW=$(ch_query "SELECT count() FROM ttl_tag_rules_src WHERE tag_name = 'app-name' AND tag_value = 'persistent' AND ttl_seconds = 0 AND never_expire = 1" | tr -d '[:space:]')
+if [ "$NEVER_ROW" = "1" ]; then
+    echo "✓ never_expire rule stored with ttl_seconds=0 and never_expire=1"
+else
+    echo "✗ Expected never_expire row for ('app-name','persistent') not found"
+    exit 1
+fi
+NEVER_DICT=$(ch_query "SELECT dictGetOrNull('ttl_tag_rules', 'never_expire', ('app-name', 'persistent'))" | tr -d '[:space:]')
+if [ "$NEVER_DICT" = "1" ]; then
+    echo "✓ ttl_tag_rules dictionary returns never_expire=1"
+else
+    echo "✗ Expected never_expire=1 from dictionary, got '$NEVER_DICT'"
+    exit 1
+fi
+echo
+
+echo "Test 9: Empty rules file clears the tables"
 cat >"$EMPTY_RULES" <<YAML
 rules: []
 YAML
