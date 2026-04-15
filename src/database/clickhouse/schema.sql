@@ -111,11 +111,11 @@ CREATE TABLE IF NOT EXISTS transactions (
 ) Engine = ReplacingMergeTree(inserted_at)
 PARTITION BY intDiv(height, 100000)
 ORDER BY (height, block_transaction_index, is_data_item, id)
-TTL expires_at DELETE WHERE expires_at IS NOT NULL
+TTL ifNull(expires_at, toDateTime(0)) DELETE WHERE expires_at IS NOT NULL
 SETTINGS deduplicate_merge_projection_mode = 'rebuild';
 
 -- Idempotent upgrade path for nodes that already have a transactions table
 -- from before tag-based TTL rules were introduced. Safe to re-run; a no-op
 -- once applied.
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS expires_at Nullable(DateTime);
-ALTER TABLE transactions MODIFY TTL expires_at DELETE WHERE expires_at IS NOT NULL;
+ALTER TABLE transactions MODIFY TTL ifNull(expires_at, toDateTime(0)) DELETE WHERE expires_at IS NOT NULL;
