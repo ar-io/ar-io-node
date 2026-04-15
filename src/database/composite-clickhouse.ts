@@ -143,7 +143,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         'signature_offset',
         'signature_type',
       )
-      .from('transactions t');
+      .from('transactions AS t FINAL');
   }
 
   addGqlTransactionFilters({
