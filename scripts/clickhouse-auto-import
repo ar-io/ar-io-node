@@ -43,17 +43,28 @@ if [ ! -x "./scripts/parquet-export" ]; then
 fi
 
 # Create directories
-processed_dir="$dataset_dir/.processed"
-mkdir -p "$dataset_dir" "$processed_dir"
+mkdir -p "$dataset_dir"
 
 # ------------------------------------------------------------------------------
 # SWITCH OFF 'exit on error' so the script doesn't die in the main loop
 # ------------------------------------------------------------------------------
 set +e
 
+# Tracked across cycles for replay detection.
+prev_cycle_first_bucket=""
+
 while true; do
     loop_start_time=$(date +%s)
     echo "Starting new import cycle at $(date)"
+
+    # Per-cycle batch outcome counters (emitted at cycle end).
+    cycle_batches=0
+    cycle_ok=0
+    cycle_export_failed=0
+    cycle_import_failed=0
+    cycle_prune_failed=0
+    cycle_prune_unverified=0
+    cycle_debug_failed=0
 
     # Refresh operator TTL rules before importing new partitions. The loader
     # exits 0 for missing/malformed files and leaves any previously loaded
@@ -105,6 +116,13 @@ while true; do
     # Align to intervals of 10,000
     current_height=$(((min_height / height_interval) * height_interval))
 
+    # Replay detection: same starting bucket as previous cycle means prune
+    # isn't advancing minStableDataItem past the first bucket.
+    if [ -n "$prev_cycle_first_bucket" ] && [ "$current_height" -eq "$prev_cycle_first_bucket" ]; then
+        echo "METRIC cycle_replay bucket=$current_height"
+    fi
+    prev_cycle_first_bucket="$current_height"
+
     # Inner loop for heights
     height_process_start_time=$(date +%s)
     while [ "$current_height" -le "$max_height" ]; do
@@ -114,6 +132,46 @@ while true; do
         end_height=$((current_height + height_interval - 1))
 
         echo "Processing heights $current_height to $end_height..."
+
+        # Per-batch stage outcomes (for the METRIC batch_result line).
+        export_stage="skipped"
+        import_stage="skipped"
+        prune_stage="skipped"
+        post_prune_min_stable=""
+        batch_result="unknown"
+
+        # Step 0: Refresh debug info for this batch so the prune threshold
+        # is taken *before* this batch's export runs. The export will see
+        # at least every item with indexed_at <= batch_max_indexed_at, so
+        # using that same value for the subsequent prune call guarantees
+        # prune can never remove un-exported items.
+        batch_debug_start_time=$(date +%s)
+        batch_debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
+        batch_debug_status=$?
+        log_timing "Fetch per-batch debug info" "$batch_debug_start_time" "$(date +%s)"
+
+        if [ $batch_debug_status -ne 0 ] || [ -z "$batch_debug_info" ]; then
+            echo "Warning: Per-batch debug fetch failed; skipping batch $current_height-$end_height."
+            batch_result="debug_failed"
+            cycle_batches=$((cycle_batches + 1))
+            cycle_debug_failed=$((cycle_debug_failed + 1))
+            echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=debug_failed duration_s=$(( $(date +%s) - batch_start_time ))"
+            current_height=$((end_height + 1))
+            continue
+        fi
+
+        batch_max_indexed_at="$(echo "$batch_debug_info" | jq -r '.db.timestamps.maxStableDataItemIndexedAt' 2>/dev/null)"
+        pre_prune_min_stable="$(echo "$batch_debug_info" | jq -r '.db.heights.minStableDataItem' 2>/dev/null)"
+
+        if [ -z "$batch_max_indexed_at" ] || [ "$batch_max_indexed_at" = "null" ] || [ -z "$pre_prune_min_stable" ] || [ "$pre_prune_min_stable" = "null" ]; then
+            echo "Warning: Per-batch debug info missing fields; skipping batch $current_height-$end_height."
+            batch_result="debug_failed"
+            cycle_batches=$((cycle_batches + 1))
+            cycle_debug_failed=$((cycle_debug_failed + 1))
+            echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=debug_failed duration_s=$(( $(date +%s) - batch_start_time ))"
+            current_height=$((end_height + 1))
+            continue
+        fi
 
         # Generate job staging directory for this batch
         job_id="$(date +%Y%m%d_%H%M%S)_$$"
@@ -142,10 +200,12 @@ while true; do
             echo "Parquet export completed successfully."
             log_timing "Export to parquet" "$export_start_time" "$export_complete_time"
             export_success=true
+            export_stage="ok"
         else
             echo "Warning: Parquet export failed with status $export_status"
             log_timing "Export to parquet (failed)" "$export_start_time" "$export_complete_time"
             export_success=false
+            export_stage="failed"
         fi
 
         # Step 2: Import to ClickHouse from staging if export succeeded
@@ -170,6 +230,7 @@ while true; do
                 echo "ClickHouse import completed successfully."
                 log_timing "ClickHouse import" "$import_start_time" "$import_complete_time"
                 import_success=true
+                import_stage="ok"
                 
                 # Step 3: Move from staging to dataset directory after successful import
                 echo "Moving files from staging to dataset directory..."
@@ -229,23 +290,24 @@ while true; do
                 echo "Staging files preserved at: $job_staging_dir"
                 log_timing "ClickHouse import (failed)" "$import_start_time" "$import_complete_time"
                 import_success=false
+                import_stage="failed"
             fi
         else
             echo "Skipping ClickHouse import because Parquet export failed."
             import_success=false
         fi
 
-        # Step 4: Mark as processed and prune stable data items
+        # Step 4: Prune stable data items (only if import succeeded).
+        # Uses $batch_max_indexed_at captured BEFORE this batch's export, so
+        # the prune threshold is never newer than what the export snapshot saw.
         if [ "$import_success" = true ]; then
-            touch "$processed_dir/heights_${current_height}_${end_height}.done"
-
             echo "Pruning stable data items from height $current_height to $end_height..."
             prune_start_time=$(date +%s)
             curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
                 -H "Authorization: Bearer $ADMIN_API_KEY" \
                 -H "Content-Type: application/json" \
                 -d "{
-                    \"indexedAtThreshold\": $max_indexed_at,
+                    \"indexedAtThreshold\": $batch_max_indexed_at,
                     \"startHeight\": $current_height,
                     \"endHeight\": $end_height
                 }"
@@ -254,16 +316,68 @@ while true; do
             if [ $prune_status -ne 0 ]; then
                 log_timing "Prune stable data items (failed)" "$prune_start_time" "$prune_end_time"
                 echo "Warning: Prune request failed. Continuing to next batch."
+                prune_stage="failed"
             else
                 log_timing "Prune stable data items" "$prune_start_time" "$prune_end_time"
+
+                # Post-prune verification: re-fetch debug and compare
+                # minStableDataItem against this batch's end_height and the
+                # pre-prune value. Purely observational.
+                verify_debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
+                verify_status=$?
+                if [ $verify_status -ne 0 ] || [ -z "$verify_debug_info" ]; then
+                    echo "Warning: Post-prune debug fetch failed; cannot verify prune for $current_height-$end_height."
+                    prune_stage="unverified"
+                else
+                    post_prune_min_stable="$(echo "$verify_debug_info" | jq -r '.db.heights.minStableDataItem' 2>/dev/null)"
+                    if [ -z "$post_prune_min_stable" ] || [ "$post_prune_min_stable" = "null" ]; then
+                        echo "Warning: Post-prune debug missing minStableDataItem; cannot verify."
+                        prune_stage="unverified"
+                        post_prune_min_stable=""
+                    elif [ "$pre_prune_min_stable" -gt "$end_height" ]; then
+                        prune_stage="already_drained"
+                    elif [ "$post_prune_min_stable" -gt "$end_height" ]; then
+                        prune_stage="ok"
+                    elif [ "$post_prune_min_stable" -gt "$pre_prune_min_stable" ]; then
+                        echo "Warning: Prune partial for $current_height-$end_height: minStableDataItem advanced $pre_prune_min_stable -> $post_prune_min_stable but still <= $end_height."
+                        prune_stage="partial"
+                    else
+                        echo "Warning: Prune appears to be a no-op for $current_height-$end_height: minStableDataItem unchanged at $post_prune_min_stable."
+                        prune_stage="noop"
+                    fi
+                fi
             fi
         else
             echo "Skipping pruning because import failed."
         fi
 
-        # Log batch timing
+        # Compute batch_result from stage outcomes.
+        if [ "$export_stage" = "failed" ]; then
+            batch_result="export_failed"
+        elif [ "$import_stage" = "failed" ]; then
+            batch_result="import_failed"
+        elif [ "$prune_stage" = "failed" ]; then
+            batch_result="prune_failed"
+        elif [ "$prune_stage" = "unverified" ] || [ "$prune_stage" = "noop" ]; then
+            batch_result="prune_unverified"
+        else
+            batch_result="ok"
+        fi
+
+        # Update cycle counters.
+        cycle_batches=$((cycle_batches + 1))
+        case "$batch_result" in
+            ok)                cycle_ok=$((cycle_ok + 1)) ;;
+            export_failed)     cycle_export_failed=$((cycle_export_failed + 1)) ;;
+            import_failed)     cycle_import_failed=$((cycle_import_failed + 1)) ;;
+            prune_failed)      cycle_prune_failed=$((cycle_prune_failed + 1)) ;;
+            prune_unverified)  cycle_prune_unverified=$((cycle_prune_unverified + 1)) ;;
+        esac
+
+        # Log batch timing + structured outcome.
         batch_end_time=$(date +%s)
         log_timing "Batch processing (heights $current_height to $end_height)" "$batch_start_time" "$batch_end_time"
+        echo "METRIC batch_result range=${current_height}-${end_height} export=${export_stage} import=${import_stage} prune=${prune_stage} post_prune_min_stable=${post_prune_min_stable} result=${batch_result} duration_s=$((batch_end_time - batch_start_time))"
 
         # Bump current_height
         current_height=$((end_height + 1))
@@ -276,6 +390,8 @@ while true; do
     # Log timing for the entire cycle
     loop_end_time=$(date +%s)
     log_timing "Complete import cycle" "$loop_start_time" "$loop_end_time"
+
+    echo "METRIC cycle_summary batches=${cycle_batches} ok=${cycle_ok} export_failed=${cycle_export_failed} import_failed=${cycle_import_failed} prune_failed=${cycle_prune_failed} prune_unverified=${cycle_prune_unverified} debug_failed=${cycle_debug_failed} duration_s=$((loop_end_time - loop_start_time))"
 
     echo "Sleeping for $sleep_interval seconds..."
     sleep "$sleep_interval"
