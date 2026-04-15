@@ -1,0 +1,50 @@
+# ClickHouse TTL rules (tag-based + owner-based) — EXAMPLE TEMPLATE.
+#
+# To activate retention rules, copy this file to
+#   config/clickhouse-ttl-rules.yaml
+# (the real filename is gitignored so operator rules aren't committed) and
+# uncomment/edit the entries below. clickhouse-auto-import mounts that file
+# into the container and loads it at the top of every import cycle.
+#
+# Rules apply only to rows imported after they are loaded (no retroactive
+# backfill in v1). If multiple rules match a row, the shortest TTL wins. If
+# no rules match, expires_at is NULL and the row is kept indefinitely.
+#
+# Normalization:
+#   - tag_name is lower-cased + trimmed on both sides of the lookup.
+#   - tag_value is trimmed but case-preserving.
+#   - owner `value` is base64url (as operators see on Arweave); decoded to raw
+#     bytes at load time so it matches the stored owner_address BLOB.
+#
+# Match modes:
+#   - exact (default): O(1) dictionary lookup.
+#   - prefix: linear scan of a small prefix table via startsWith().
+#
+# To catch Content-Type values with parameters (e.g. "image/gif; charset=..."),
+# use `match: prefix` with just the media type/subtype.
+#
+# See docs/parquet-and-clickhouse-usage.md for the full reference.
+
+rules: []
+#  - tag_name: App-Name
+#    tag_value: ephemeral-chat
+#    ttl_seconds: 86400        # 1 day
+#
+#  - tag_name: App-Name
+#    tag_value: test-
+#    match: prefix
+#    ttl_seconds: 3600         # 1 hour
+#
+#  - tag_name: Content-Type
+#    tag_value: image/gif
+#    match: prefix
+#    ttl_seconds: 2592000      # 30 days (catches "image/gif; charset=...")
+#
+#  - field: owner_address
+#    value: abcDEF0123...xyz   # base64url owner address
+#    ttl_seconds: 604800       # 7 days
+#
+#  - field: owner_address
+#    value: test-uploader-
+#    match: prefix
+#    ttl_seconds: 3600

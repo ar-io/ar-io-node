@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Integration test for tag-based TTL rules (PE-9058).
+# Exercises scripts/clickhouse-load-ttl-rules.py end to end:
+#   1. Writes a known rules YAML to a temp path.
+#   2. Runs the loader.
+#   3. Verifies the four rule tables are populated correctly.
+#   4. Forces a dictionary refresh and checks dictGetOrNull answers.
+#   5. Reloads with an empty rules file and verifies tables are cleared.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../lib/common.sh"
+
+echo "Testing ClickHouse TTL rules loader"
+echo "===================================="
+echo
+
+load_env
+load_clickhouse_config
+
+if ! command -v clickhouse >/dev/null 2>&1; then
+    echo "✗ clickhouse client not installed; cannot run this test"
+    exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "✗ python3 not installed; cannot run this test"
+    exit 1
+fi
+
+ch_query() {
+    clickhouse client \
+        --host "$CLICKHOUSE_HOST" \
+        --port "$CLICKHOUSE_PORT" \
+        --user "$CLICKHOUSE_USER" \
+        --password "$CLICKHOUSE_PASSWORD" \
+        --query "$1"
+}
+
+TMP_RULES=$(mktemp --suffix=.yaml)
+EMPTY_RULES=$(mktemp --suffix=.yaml)
+trap 'rm -f "$TMP_RULES" "$EMPTY_RULES"' EXIT
+
+# Ensure schema (including rule tables and dictionaries) exists. Safe to re-run.
+./scripts/clickhouse-import --input-dir /tmp --all-partitions --dry-run >/dev/null 2>&1 || true
+ch_query "SELECT 1 FROM ttl_tag_rules_src LIMIT 0" >/dev/null 2>&1 || {
+    echo "✗ Expected TTL rule tables not found. Apply src/database/clickhouse/schema.sql first." >&2
+    exit 1
+}
+
+# A known base64url owner address (43 chars, typical Arweave address form).
+OWNER_B64URL="abcDEF0123456789_-xyzABCDEF0123456789_-xyz"
+
+cat >"$TMP_RULES" <<YAML
+rules:
+  - tag_name: App-Name
+    tag_value: ephemeral-chat
+    ttl_seconds: 60
+  - tag_name: Content-Type
+    tag_value: image/gif
+    ttl_seconds: 30
+  - tag_name: App-Name
+    tag_value: test-
+    match: prefix
+    ttl_seconds: 45
+  - tag_name: Content-Type
+    tag_value: image/gif
+    match: prefix
+    ttl_seconds: 120
+  - field: owner_address
+    value: $OWNER_B64URL
+    ttl_seconds: 90
+  - field: owner_address
+    value: $OWNER_B64URL
+    match: prefix
+    ttl_seconds: 75
+YAML
+
+echo "Test 1: Load rules and verify row counts"
+python3 ./scripts/clickhouse-load-ttl-rules.py "$TMP_RULES"
+
+EXACT_TAGS=$(ch_query "SELECT count() FROM ttl_tag_rules_src" | tr -d '[:space:]')
+PREFIX_TAGS=$(ch_query "SELECT count() FROM ttl_tag_prefix_rules" | tr -d '[:space:]')
+EXACT_OWNERS=$(ch_query "SELECT count() FROM ttl_owner_rules_src" | tr -d '[:space:]')
+PREFIX_OWNERS=$(ch_query "SELECT count() FROM ttl_owner_prefix_rules" | tr -d '[:space:]')
+
+echo "  ttl_tag_rules_src:       $EXACT_TAGS (expected 2)"
+echo "  ttl_tag_prefix_rules:    $PREFIX_TAGS (expected 2)"
+echo "  ttl_owner_rules_src:     $EXACT_OWNERS (expected 1)"
+echo "  ttl_owner_prefix_rules:  $PREFIX_OWNERS (expected 1)"
+
+if [ "$EXACT_TAGS" = "2" ] && [ "$PREFIX_TAGS" = "2" ] && [ "$EXACT_OWNERS" = "1" ] && [ "$PREFIX_OWNERS" = "1" ]; then
+    echo "✓ Rule counts match"
+else
+    echo "✗ Rule counts mismatch"
+    exit 1
+fi
+echo
+
+echo "Test 2: tag_name is normalized to lowercase on load"
+LOWER_ROWS=$(ch_query "SELECT count() FROM ttl_tag_rules_src WHERE tag_name = 'app-name' AND tag_value = 'ephemeral-chat' AND ttl_seconds = 60" | tr -d '[:space:]')
+if [ "$LOWER_ROWS" = "1" ]; then
+    echo "✓ 'App-Name' stored as 'app-name'"
+else
+    echo "✗ Expected lowercase 'app-name' row not found"
+    exit 1
+fi
+echo
+
+echo "Test 3: Force dictionary reload and query dictGetOrNull"
+ch_query "SYSTEM RELOAD DICTIONARY ttl_tag_rules"
+ch_query "SYSTEM RELOAD DICTIONARY ttl_owner_rules"
+
+TAG_DICT=$(ch_query "SELECT dictGetOrNull('ttl_tag_rules', 'ttl_seconds', ('app-name', 'ephemeral-chat'))" | tr -d '[:space:]')
+if [ "$TAG_DICT" = "60" ]; then
+    echo "✓ ttl_tag_rules dict returns 60 for ('app-name','ephemeral-chat')"
+else
+    echo "✗ Expected 60, got '$TAG_DICT'"
+    exit 1
+fi
+
+# Owner dictionary uses raw bytes; verify by decoding the same base64url in SQL.
+OWNER_DICT=$(ch_query "SELECT dictGetOrNull('ttl_owner_rules', 'ttl_seconds', tuple(base64URLDecode('$OWNER_B64URL')))" | tr -d '[:space:]')
+if [ "$OWNER_DICT" = "90" ]; then
+    echo "✓ ttl_owner_rules dict returns 90 for the decoded owner address"
+else
+    echo "✗ Expected 90, got '$OWNER_DICT'"
+    exit 1
+fi
+echo
+
+echo "Test 4: Unknown key returns NULL"
+UNKNOWN=$(ch_query "SELECT dictGetOrNull('ttl_tag_rules', 'ttl_seconds', ('app-name', 'does-not-exist'))")
+if [ -z "$(echo "$UNKNOWN" | tr -d '[:space:]')" ] || [ "$(echo "$UNKNOWN" | tr -d '[:space:]')" = "\\N" ]; then
+    echo "✓ Unknown key returns NULL"
+else
+    echo "✗ Expected NULL, got '$UNKNOWN'"
+    exit 1
+fi
+echo
+
+echo "Test 5: Empty rules file clears the tables"
+cat >"$EMPTY_RULES" <<YAML
+rules: []
+YAML
+python3 ./scripts/clickhouse-load-ttl-rules.py "$EMPTY_RULES"
+
+TOTAL=$(ch_query "SELECT (SELECT count() FROM ttl_tag_rules_src)
+                       + (SELECT count() FROM ttl_tag_prefix_rules)
+                       + (SELECT count() FROM ttl_owner_rules_src)
+                       + (SELECT count() FROM ttl_owner_prefix_rules)" | tr -d '[:space:]')
+if [ "$TOTAL" = "0" ]; then
+    echo "✓ All rule tables are empty after loading an empty rules file"
+else
+    echo "✗ Expected 0 total rows, got $TOTAL"
+    exit 1
+fi
+echo
+
+echo "All TTL rule tests passed."

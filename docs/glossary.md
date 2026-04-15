@@ -166,6 +166,14 @@ verification status, and retry attempts.
 **Moderation Database** - SQLite database managing content blocking and
 filtering rules.
 
+<a id="ttl-rules"></a> **TTL Rules (ClickHouse)** - Operator-defined retention
+policies that expire rows in the ClickHouse `transactions` table. Matches on
+[tags](#tags) (`tag_name` + `tag_value`, exact or prefix) or owner address
+(base64url, exact or prefix) and assigns a `ttl_seconds`. Rules live in a
+YAML file loaded at the top of every import cycle; when multiple rules match
+a row the shortest TTL wins. Unmatched rows are retained indefinitely. See
+[Parquet and ClickHouse usage](./parquet-and-clickhouse-usage.md#tag-based-ttl-rules).
+
 ## CDB64 Indexing
 
 **CDB64** — Constant database format with 64-bit file offset support, used for

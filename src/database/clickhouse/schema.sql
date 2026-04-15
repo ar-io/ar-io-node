@@ -90,6 +90,9 @@ CREATE TABLE IF NOT EXISTS transactions (
   root_parent_offset UInt64,
   tags Array(Tuple(BLOB, BLOB)),
   tags_count UInt32,
+  -- Set by migrate_staging_to_final when an operator TTL rule matches this row.
+  -- NULL means "retain indefinitely".
+  expires_at Nullable(DateTime),
   -- Materialized columns for tag bloom filter indexing. Bloom filter skip
   -- indexes match reliably against column references but not against lambda
   -- expressions like arrayMap(x -> x.1, tags), so we project the names and
@@ -108,4 +111,71 @@ CREATE TABLE IF NOT EXISTS transactions (
 ) Engine = ReplacingMergeTree(inserted_at)
 PARTITION BY intDiv(height, 100000)
 ORDER BY (height, block_transaction_index, is_data_item, id)
+TTL expires_at DELETE WHERE expires_at IS NOT NULL
 SETTINGS deduplicate_merge_projection_mode = 'rebuild';
+
+-- Idempotent upgrade path for nodes that already have a transactions table
+-- from before tag-based TTL rules were introduced. Safe to re-run; a no-op
+-- once applied.
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS expires_at Nullable(DateTime);
+ALTER TABLE transactions MODIFY TTL expires_at DELETE WHERE expires_at IS NOT NULL;
+
+-- Tag-based TTL rules. Operators populate the `_src` / prefix tables via
+-- scripts/clickhouse-load-ttl-rules.py (run by clickhouse-auto-import once per
+-- import cycle). The dictionaries layered over the exact-match source tables
+-- refresh on their LIFETIME without external orchestration.
+--
+-- Schema contract:
+--   - tag_name is stored lower-cased (normalization happens in the loader);
+--     the migrate query lower-casts the row's tag_name BLOB to String before
+--     dictionary / prefix lookup.
+--   - tag_value is stored trimmed but case-preserving.
+--   - owner_address is stored as the raw bytes decoded from the base64url
+--     form used in the rules file; matches the transactions.owner_address
+--     BLOB byte-for-byte once CAST(... AS String).
+--   - Prefix rules are scanned by startsWith() in correlated subqueries;
+--     exact rules go through dictGetOrNull() for O(1) lookup.
+CREATE TABLE IF NOT EXISTS ttl_tag_rules_src (
+  tag_name String,
+  tag_value String,
+  ttl_seconds UInt32
+) Engine = ReplacingMergeTree()
+ORDER BY (tag_name, tag_value);
+
+CREATE TABLE IF NOT EXISTS ttl_tag_prefix_rules (
+  tag_name String,
+  tag_value String,
+  ttl_seconds UInt32
+) Engine = ReplacingMergeTree()
+ORDER BY (tag_name, tag_value);
+
+CREATE TABLE IF NOT EXISTS ttl_owner_rules_src (
+  owner_address String,
+  ttl_seconds UInt32
+) Engine = ReplacingMergeTree()
+ORDER BY owner_address;
+
+CREATE TABLE IF NOT EXISTS ttl_owner_prefix_rules (
+  owner_address String,
+  ttl_seconds UInt32
+) Engine = ReplacingMergeTree()
+ORDER BY owner_address;
+
+CREATE DICTIONARY IF NOT EXISTS ttl_tag_rules (
+  tag_name String,
+  tag_value String,
+  ttl_seconds UInt32
+)
+PRIMARY KEY tag_name, tag_value
+SOURCE(CLICKHOUSE(TABLE 'ttl_tag_rules_src'))
+LAYOUT(COMPLEX_KEY_HASHED())
+LIFETIME(MIN 60 MAX 300);
+
+CREATE DICTIONARY IF NOT EXISTS ttl_owner_rules (
+  owner_address String,
+  ttl_seconds UInt32
+)
+PRIMARY KEY owner_address
+SOURCE(CLICKHOUSE(TABLE 'ttl_owner_rules_src'))
+LAYOUT(COMPLEX_KEY_HASHED())
+LIFETIME(MIN 60 MAX 300);

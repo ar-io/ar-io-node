@@ -404,76 +404,154 @@ migrate_staging_to_final() {
     --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
     --query "INSERT INTO transactions
 SELECT
-  txs.height,
-  txs.block_transaction_index,
-  txs.is_data_item,
-  txs.id,
-  txs.anchor,
-  txs.owner_address,
-  txs.target,
-  txs.quantity,
-  txs.reward,
-  txs.data_size,
-  txs.content_type,
-  txs.format,
-  txs.data_root,
-  txs.parent AS parent_id,
-  blocks.indep_hash AS block_indep_hash,
-  blocks.block_timestamp,
-  blocks.previous_block AS block_previous_block,
-  txs.indexed_at,
-  now() AS inserted_at,
-  txs.offset,
-  txs.size,
-  txs.data_offset,
-  txs.owner_offset,
-  txs.owner_size,
-  txs.owner,
-  txs.signature_offset,
-  txs.signature_size,
-  txs.signature_type,
-  txs.root_transaction_id,
-  txs.root_parent_offset,
-  arrayMap(x -> (x.1, x.2),
-    arraySort(x -> x.3,
-      groupUniqArrayIf((tag_name, tag_value, tag_index), tag_name != '')
-    )
-  ) AS tags,
-  length(tags) AS tags_count
-FROM staging_transactions AS txs FINAL
-LEFT JOIN staging_tags AS tags FINAL ON txs.height = tags.height AND txs.id = tags.id
-JOIN staging_blocks AS blocks FINAL ON txs.height = blocks.height
-WHERE txs.height >= ${min_height} AND txs.height <= ${max_height}
-GROUP BY
-  txs.height,
-  txs.block_transaction_index,
-  txs.is_data_item,
-  txs.id,
-  txs.anchor,
-  txs.owner_address,
-  txs.target,
-  txs.quantity,
-  txs.reward,
-  txs.data_size,
-  txs.content_type,
-  txs.format,
-  txs.data_root,
-  txs.parent,
-  blocks.indep_hash,
-  blocks.block_timestamp,
-  blocks.previous_block,
-  txs.indexed_at,
-  txs.offset,
-  txs.size,
-  txs.data_offset,
-  txs.owner_offset,
-  txs.owner_size,
-  txs.owner,
-  txs.signature_offset,
-  txs.signature_size,
-  txs.signature_type,
-  txs.root_transaction_id,
-  txs.root_parent_offset;" || {
+  height,
+  block_transaction_index,
+  is_data_item,
+  id,
+  anchor,
+  owner_address,
+  target,
+  quantity,
+  reward,
+  data_size,
+  content_type,
+  format,
+  data_root,
+  parent_id,
+  block_indep_hash,
+  block_timestamp,
+  block_previous_block,
+  indexed_at,
+  inserted_at,
+  tx_offset,
+  tx_size,
+  data_offset,
+  owner_offset,
+  owner_size,
+  owner,
+  signature_offset,
+  signature_size,
+  signature_type,
+  root_transaction_id,
+  root_parent_offset,
+  tags,
+  tags_count,
+  -- TTL subcomponents are NULL when a branch had no match; the UInt32 max
+  -- sentinel in least() keeps unmatched branches from dominating the min.
+  if(
+    tag_exact_ttl IS NULL AND tag_prefix_ttl IS NULL
+      AND owner_exact_ttl IS NULL AND owner_prefix_ttl IS NULL,
+    NULL,
+    now() + toIntervalSecond(least(
+      coalesce(tag_exact_ttl,    toUInt32(4294967295)),
+      coalesce(tag_prefix_ttl,   toUInt32(4294967295)),
+      coalesce(owner_exact_ttl,  toUInt32(4294967295)),
+      coalesce(owner_prefix_ttl, toUInt32(4294967295))
+    ))
+  ) AS expires_at
+FROM
+(
+  SELECT
+    txs.height AS height,
+    txs.block_transaction_index AS block_transaction_index,
+    txs.is_data_item AS is_data_item,
+    txs.id AS id,
+    txs.anchor AS anchor,
+    txs.owner_address AS owner_address,
+    txs.target AS target,
+    txs.quantity AS quantity,
+    txs.reward AS reward,
+    txs.data_size AS data_size,
+    txs.content_type AS content_type,
+    txs.format AS format,
+    txs.data_root AS data_root,
+    txs.parent AS parent_id,
+    blocks.indep_hash AS block_indep_hash,
+    blocks.block_timestamp AS block_timestamp,
+    blocks.previous_block AS block_previous_block,
+    txs.indexed_at AS indexed_at,
+    now() AS inserted_at,
+    txs.offset AS tx_offset,
+    txs.size AS tx_size,
+    txs.data_offset AS data_offset,
+    txs.owner_offset AS owner_offset,
+    txs.owner_size AS owner_size,
+    txs.owner AS owner,
+    txs.signature_offset AS signature_offset,
+    txs.signature_size AS signature_size,
+    txs.signature_type AS signature_type,
+    txs.root_transaction_id AS root_transaction_id,
+    txs.root_parent_offset AS root_parent_offset,
+    arrayMap(x -> (x.1, x.2),
+      arraySort(x -> x.3,
+        groupUniqArrayIf((tag_name, tag_value, tag_index), tag_name != '')
+      )
+    ) AS tags,
+    length(tags) AS tags_count,
+    minOrNull(if(
+      tag_name != '',
+      dictGetOrNull('ttl_tag_rules', 'ttl_seconds',
+        (lower(trim(CAST(tag_name AS String))), CAST(tag_value AS String))
+      ),
+      NULL
+    )) AS tag_exact_ttl,
+    minOrNull(if(
+      tag_name != '',
+      arrayReduce('minOrNull',
+        arrayMap(
+          p -> if(p.1 = lower(trim(CAST(tag_name AS String)))
+                  AND startsWith(CAST(tag_value AS String), p.2),
+                  p.3,
+                  NULL),
+          (SELECT groupArray(tuple(tag_name, tag_value, ttl_seconds)) FROM ttl_tag_prefix_rules)
+        )
+      ),
+      NULL
+    )) AS tag_prefix_ttl,
+    any(dictGetOrNull('ttl_owner_rules', 'ttl_seconds',
+      tuple(CAST(txs.owner_address AS String))
+    )) AS owner_exact_ttl,
+    any(arrayReduce('minOrNull',
+      arrayMap(
+        p -> if(startsWith(CAST(txs.owner_address AS String), p.1), p.2, NULL),
+        (SELECT groupArray(tuple(owner_address, ttl_seconds)) FROM ttl_owner_prefix_rules)
+      )
+    )) AS owner_prefix_ttl
+  FROM staging_transactions AS txs FINAL
+  LEFT JOIN staging_tags AS tags FINAL ON txs.height = tags.height AND txs.id = tags.id
+  JOIN staging_blocks AS blocks FINAL ON txs.height = blocks.height
+  WHERE txs.height >= ${min_height} AND txs.height <= ${max_height}
+  GROUP BY
+    txs.height,
+    txs.block_transaction_index,
+    txs.is_data_item,
+    txs.id,
+    txs.anchor,
+    txs.owner_address,
+    txs.target,
+    txs.quantity,
+    txs.reward,
+    txs.data_size,
+    txs.content_type,
+    txs.format,
+    txs.data_root,
+    txs.parent,
+    blocks.indep_hash,
+    blocks.block_timestamp,
+    blocks.previous_block,
+    txs.indexed_at,
+    txs.offset,
+    txs.size,
+    txs.data_offset,
+    txs.owner_offset,
+    txs.owner_size,
+    txs.owner,
+    txs.signature_offset,
+    txs.signature_size,
+    txs.signature_type,
+    txs.root_transaction_id,
+    txs.root_parent_offset
+);" || {
     echo "    Warning: Failed to migrate data to transactions table" >&2
     return 1
   }

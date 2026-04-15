@@ -331,3 +331,14 @@ When `OBSERVER_WALLET` is set, the gateway also creates an RSA attestation linki
 | HTTPSIG_UPLOAD_ATTESTATION  | Boolean | true                   | Upload the attestation to Arweave at startup (requires `OBSERVER_WALLET`). Set to false to skip upload               |
 | OBSERVER_WALLET             | String  | -                      | Arweave wallet address for attestation signing. Key file must exist at `<WALLETS_PATH>/<OBSERVER_WALLET>.json`       |
 | WALLETS_PATH                | String  | wallets                | Directory containing wallet JWK files                                                                                |
+
+## ClickHouse TTL Rules
+
+Operator-defined TTL rules for data in ClickHouse. Reloaded from disk by
+`clickhouse-auto-import` at the top of every import cycle. See
+[Parquet and ClickHouse usage](./parquet-and-clickhouse-usage.md#tag-based-ttl-rules)
+for the rules-file format and behavior.
+
+| ENV_NAME                    | TYPE    | DEFAULT_VALUE                        | DESCRIPTION                                                                                                  |
+| --------------------------- | ------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| CLICKHOUSE_TTL_RULES_PATH   | String  | ./config/clickhouse-ttl-rules.yaml   | Path to the YAML file of tag- and owner-based TTL rules loaded into ClickHouse before each import cycle       |

@@ -141,6 +141,108 @@ includes:
 
 See `src/database/clickhouse/schema.sql` for the full definition.
 
+## Tag-based TTL Rules
+
+ClickHouse retains imported transactions indefinitely unless an operator
+defines a matching TTL rule. Rules let you expire rows by tag content or
+by uploader owner address — useful for short-lived app data (ephemeral
+chat, test uploads, specific content types) or for data from a
+short-retention uploader.
+
+Rules live in a YAML file at `config/clickhouse-ttl-rules.yaml`
+(override the host path with `CLICKHOUSE_TTL_RULES_PATH`). The repo ships a
+committed template at `config/clickhouse-ttl-rules.example.yaml` — copy it
+to activate rules:
+
+```sh
+cp config/clickhouse-ttl-rules.example.yaml config/clickhouse-ttl-rules.yaml
+# then edit config/clickhouse-ttl-rules.yaml
+```
+
+The real filename is gitignored so operator policies aren't committed.
+`clickhouse-auto-import` mounts the file into the container and loads it at
+the top of every import cycle via `scripts/clickhouse-load-ttl-rules.py`.
+Normalized rules are written to four source tables; two dictionaries
+(`ttl_tag_rules`, `ttl_owner_rules`) layered over the exact-match tables
+refresh on a 60–300 s `LIFETIME` and are used by
+`migrate_staging_to_final` to compute `transactions.expires_at` on every
+staging→final insert. If the file doesn't exist at import time the loader
+logs a warning and proceeds; rule tables stay empty and all rows get
+`expires_at = NULL`.
+
+### Rules file format
+
+```yaml
+rules:
+  # Tag rules (field defaults to "tag")
+  - tag_name: App-Name
+    tag_value: ephemeral-chat
+    ttl_seconds: 86400          # 1 day
+
+  - tag_name: App-Name
+    tag_value: test-
+    match: prefix
+    ttl_seconds: 3600           # 1 hour
+
+  - tag_name: Content-Type      # use match: prefix to catch parameterized
+    tag_value: image/gif        # forms like "image/gif; charset=utf-8"
+    match: prefix
+    ttl_seconds: 2592000
+
+  # Owner rules (value is base64url, as operators see on Arweave)
+  - field: owner_address
+    value: abcDEF0123...xyz
+    ttl_seconds: 604800
+
+  - field: owner_address
+    value: test-uploader-
+    match: prefix
+    ttl_seconds: 3600
+```
+
+Defaults: `field` is `tag`, `match` is `exact`.
+
+### Behavior
+
+- **Shortest TTL wins.** If multiple rules match a row (e.g. both a tag rule
+  and an owner rule), `expires_at` is computed from the smallest `ttl_seconds`.
+- **No match → `NULL` `expires_at` → kept indefinitely.**
+- **Normalization.** `tag_name` is lower-cased + trimmed on both sides;
+  `tag_value` is trimmed but case-preserving; the loader base64url-decodes
+  owner `value` into raw bytes so matching happens against the stored
+  `owner_address` BLOB directly.
+- **Content-Type parameters.** There is no special handling for Content-Type.
+  To match `image/gif; charset=utf-8` use `match: prefix` with
+  `tag_value: image/gif`.
+- **No backfill in v1.** Rules apply only to rows imported after the rules
+  are loaded; previously-imported rows keep their existing `expires_at`
+  (or `NULL`).
+- **Fail-open.** A missing or malformed rules file logs a warning and exits
+  cleanly; existing rules remain in place and the import proceeds.
+
+### Inspecting loaded rules
+
+```sh
+clickhouse client --password <your-password> -q 'SELECT * FROM ttl_tag_rules_src'
+clickhouse client --password <your-password> -q 'SELECT * FROM ttl_tag_prefix_rules'
+clickhouse client --password <your-password> -q 'SELECT * FROM ttl_owner_rules_src'
+clickhouse client --password <your-password> -q 'SELECT * FROM ttl_owner_prefix_rules'
+```
+
+### Backfilling existing rows (optional)
+
+Rules don't apply retroactively. To compute `expires_at` for previously
+imported rows, operators can run a mutation against `transactions` using
+the same lookup logic as `migrate_staging_to_final`:
+
+```sql
+ALTER TABLE transactions
+UPDATE expires_at = <same expression used at import time>
+WHERE 1;
+```
+
+This is a heavy mutation and should be scheduled off-peak.
+
 ## Rollback
 
 If a re-import using the consolidated schema causes problems, revert as

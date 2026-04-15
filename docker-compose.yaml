@@ -482,6 +482,7 @@ services:
       - ./data/sqlite:/app/data/sqlite:ro
       - ${LOCAL_DATASETS_PATH:-./data/datasets}:/app/data/datasets
       - ${ETL_STAGING_PATH:-./data/etl/staging}:/app/data/etl/staging
+      - ${CLICKHOUSE_TTL_RULES_PATH:-./config/clickhouse-ttl-rules.yaml}:/app/config/clickhouse-ttl-rules.yaml:ro
     environment:
       - DEBUG=${CLICKHOUSE_DEBUG:-}
       - AR_IO_HOST=core
@@ -497,6 +498,7 @@ services:
       - CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-}
       - CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-}
       - CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-}
+      - CLICKHOUSE_TTL_RULES_PATH=/app/config/clickhouse-ttl-rules.yaml
     networks:
       - ar-io-network
     depends_on:
