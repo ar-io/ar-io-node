@@ -21,10 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         arm64) ARCH_SUFFIX=arm64 ;; \
         *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac \
-    && curl -LO https://github.com/ClickHouse/ClickHouse/releases/download/v24.11.1.2557-stable/clickhouse-common-static-24.11.1.2557-${ARCH_SUFFIX}.tgz \
-    && tar -xzf clickhouse-common-static-24.11.1.2557-${ARCH_SUFFIX}.tgz \
-    && mv ./clickhouse-common-static-24.11.1.2557/usr/bin/clickhouse usr/local/bin/ \
-    && rm -r clickhouse-common-static-24.11.1.2557-${ARCH_SUFFIX}.tgz ./clickhouse-common-static-24.11.1.2557
+    && curl -LO https://github.com/ClickHouse/ClickHouse/releases/download/v26.3.9.8-lts/clickhouse-common-static-26.3.9.8-${ARCH_SUFFIX}.tgz \
+    && tar -xzf clickhouse-common-static-26.3.9.8-${ARCH_SUFFIX}.tgz \
+    && mv ./clickhouse-common-static-26.3.9.8/usr/bin/clickhouse usr/local/bin/ \
+    && rm -r clickhouse-common-static-26.3.9.8-${ARCH_SUFFIX}.tgz ./clickhouse-common-static-26.3.9.8
 
 # Install DuckDB
 RUN case ${TARGETARCH} in \
