@@ -55,6 +55,23 @@ while true; do
     loop_start_time=$(date +%s)
     echo "Starting new import cycle at $(date)"
 
+    # Refresh operator TTL rules before importing new partitions. The loader is
+    # idempotent; if the rules file is missing or malformed, it logs a warning
+    # and exits 0 so the import can proceed with whatever rules are already in
+    # ClickHouse (fails open).
+    if [ -n "${CLICKHOUSE_TTL_RULES_PATH:-}" ] && [ -f "$CLICKHOUSE_TTL_RULES_PATH" ]; then
+        echo "Loading TTL rules from $CLICKHOUSE_TTL_RULES_PATH..."
+        ttl_load_start=$(date +%s)
+        if python3 "$SCRIPT_DIR/clickhouse-load-ttl-rules.py" "$CLICKHOUSE_TTL_RULES_PATH"; then
+            log_timing "Load TTL rules" "$ttl_load_start" "$(date +%s)"
+        else
+            echo "Warning: TTL rules load failed; continuing with existing rules."
+            log_timing "Load TTL rules (failed)" "$ttl_load_start" "$(date +%s)"
+        fi
+    else
+        echo "No TTL rules file at ${CLICKHOUSE_TTL_RULES_PATH:-<unset>}; skipping TTL load."
+    fi
+
     echo "Attempting to fetch debug info from admin endpoint..."
     fetch_debug_start_time=$(date +%s)
     debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
