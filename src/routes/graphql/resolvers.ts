@@ -57,11 +57,28 @@ export function resolveTxFee(tx: GqlTransaction) {
   };
 }
 
-export function resolveTxOwnerAddress(tx: GqlTransaction) {
-  return tx.ownerAddress;
+export type OwnerParent = {
+  tx: GqlTransaction;
+  keyPromise?: Promise<string | undefined>;
+};
+
+export function resolveTxOwnerAddress(parent: OwnerParent) {
+  return parent.tx.ownerAddress;
 }
 
-export async function resolveTxOwnerKey(tx: GqlTransaction) {
+export function resolveTxOwnerKey(parent: OwnerParent) {
+  // Memoize on the parent so repeated aliased selections of `key` on the same
+  // owner (e.g. owner { a: key b: key }) share a single fetch — matching the
+  // pre-split resolver's single-fetch-per-parent semantics.
+  if (parent.keyPromise === undefined) {
+    parent.keyPromise = fetchTxOwnerKey(parent.tx);
+  }
+  return parent.keyPromise;
+}
+
+async function fetchTxOwnerKey(
+  tx: GqlTransaction,
+): Promise<string | undefined> {
   if (tx.ownerKey !== null) {
     return tx.ownerKey;
   }
@@ -208,7 +225,7 @@ export const resolvers: IResolvers = {
     data: resolveTxData,
     quantity: resolveTxQuantity,
     fee: resolveTxFee,
-    owner: (tx: GqlTransaction) => tx,
+    owner: (tx: GqlTransaction): OwnerParent => ({ tx }),
     parent: resolveTxParent,
     bundledIn: resolveTxBundledIn,
     signature: resolveTxSignature,

@@ -97,19 +97,35 @@ describe('resolveTxFee', () => {
 });
 
 describe('resolveTxOwnerAddress', () => {
-  it('should return the owner address', () => {
-    const address = resolveTxOwnerAddress(GQL_TX as unknown as GqlTransaction);
+  it('should return the owner address from the parent tx', () => {
+    const address = resolveTxOwnerAddress({
+      tx: GQL_TX as unknown as GqlTransaction,
+    });
     assert.equal(address, 'k3hNqeW_8_WDBz6hwUAsu6DQ47sGXZUP5Q8MJP8BdsE');
   });
 });
 
 describe('resolveTxOwnerKey', () => {
   it('should return the inline owner key when present', async () => {
-    const key = await resolveTxOwnerKey(GQL_TX as unknown as GqlTransaction);
+    const key = await resolveTxOwnerKey({
+      tx: GQL_TX as unknown as GqlTransaction,
+    });
     assert.equal(
       key,
       '0BUYi-XqwHu9NwKi7uvURVTcJgschq1MAliInZDXLXw300bN4usI6eUP-9RVLsocfcoXjNjyz6Xj603oD9iM7K8YxjTPfbLHzZ0MhphYD-1cn8fXta7PCXItjG9XIZZbkq7DCOgmljF1tjgtimQgUrjGZr3f9ddzIXDHdSzbLhrakxkeqFidXQctgIJyCInbMHenAfJyAfzLeGUO107vWmzEFDzO_-0FUYuLTQfNLhZw9WPSNKp3D8wSM2Z8BnQmuot827zrthR0vX7JAQQoTuAGREtalD4f1ysh2mcJJi9tmlN_9FCqZvhhQqrK2dJrtf11QXCQyCkKHiP47TyK2dAYnWl2mrQc9ntpMMC2Fqsa8Qb5z5zaaxGiM3mw-mLKpmTtywSVFYsn3kQtxG7_e04NIns6bL6PNLS5_7IX-6BNq8y1nHBARane4iHgQdHSBXCUkeagGTy6HjHc9g8zmRzi-VwWS8CD37bCadoVwZjA1oUB0vwvZ6pPeRQROS-iIQPuZgEQinGiuNbSbs3ezRPow1z7GbpbrYEy3Rgv3ozHZcGXwkHyohD5i0ST7H6VHZn27ieFiu48Hub0oA3XMJZRYJhBEopW8jjAQ_nPaQz-bioI2Jd_svwwlAcaIYfzUImoxYyQwzgnstkhIFk9tIFG4VratxdVH0HwOQY0jhE',
     );
+  });
+
+  it('should memoize the key promise on the parent across repeated calls', async () => {
+    const parent = { tx: GQL_TX as unknown as GqlTransaction };
+    const first = resolveTxOwnerKey(parent);
+    const second = resolveTxOwnerKey(parent);
+    assert.strictEqual(
+      first,
+      second,
+      'repeated resolveTxOwnerKey calls on the same parent must share a Promise',
+    );
+    await first;
   });
 });
 
