@@ -14,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
-    python3-yaml \
     && rm -rf /var/lib/apt/lists/* \
     && case ${TARGETARCH} in \
         amd64) ARCH_SUFFIX=amd64 ;; \
@@ -47,7 +46,8 @@ RUN python3 -m venv /app/venv && \
         psycopg2-binary \
         pandas \
         fsspec[http] \
-        fastavro
+        fastavro \
+        pyyaml
 
 # Create necessary directories
 WORKDIR /app
