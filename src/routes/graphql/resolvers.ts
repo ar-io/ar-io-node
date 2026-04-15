@@ -57,42 +57,29 @@ export function resolveTxFee(tx: GqlTransaction) {
   };
 }
 
-export async function resolveTxOwner(tx: GqlTransaction) {
-  const address = tx.ownerAddress;
+export function resolveTxOwnerAddress(tx: GqlTransaction) {
+  return tx.ownerAddress;
+}
 
+export async function resolveTxOwnerKey(tx: GqlTransaction) {
   if (tx.ownerKey !== null) {
-    return {
-      address,
-      key: tx.ownerKey,
-    };
+    return tx.ownerKey;
   }
 
   if (tx.parentId !== null) {
-    let ownerKey: string | undefined;
-
     if (tx.ownerSize !== null && tx.ownerOffset !== null) {
-      ownerKey = await ownerFetcher.getDataItemOwner({
+      return ownerFetcher.getDataItemOwner({
         id: tx.id,
         parentId: tx.parentId,
         ownerSize: parseInt(tx.ownerSize),
         ownerOffset: parseInt(tx.ownerOffset),
       });
-    } else {
-      ownerKey = NOT_FOUND;
     }
-
-    return {
-      address,
-      key: ownerKey,
-    };
+    return NOT_FOUND;
   }
 
   const ownerKey = await ownerFetcher.getTransactionOwner({ id: tx.id });
-
-  return {
-    address,
-    key: ownerKey !== undefined ? ownerKey : NOT_FOUND,
-  };
+  return ownerKey !== undefined ? ownerKey : NOT_FOUND;
 }
 
 export function resolveTxParent(tx: GqlTransaction) {
@@ -221,9 +208,13 @@ export const resolvers: IResolvers = {
     data: resolveTxData,
     quantity: resolveTxQuantity,
     fee: resolveTxFee,
-    owner: resolveTxOwner,
+    owner: (tx: GqlTransaction) => tx,
     parent: resolveTxParent,
     bundledIn: resolveTxBundledIn,
     signature: resolveTxSignature,
+  },
+  Owner: {
+    address: resolveTxOwnerAddress,
+    key: resolveTxOwnerKey,
   },
 };
