@@ -78,6 +78,22 @@ def clickhouse_args() -> list[str]:
     return args
 
 
+def sql_string_literal(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def render_ttl_schema_sql(schema_sql: str) -> str:
+    return (
+        schema_sql.replace(
+            "{{CLICKHOUSE_DICT_USER}}",
+            sql_string_literal(os.environ.get("CLICKHOUSE_USER", "default")),
+        ).replace(
+            "{{CLICKHOUSE_DICT_PASSWORD}}",
+            sql_string_literal(os.environ.get("CLICKHOUSE_PASSWORD", "")),
+        )
+    )
+
+
 def run_query(query: str) -> None:
     subprocess.run(
         clickhouse_args() + ["--query", query],
@@ -104,7 +120,7 @@ def ensure_ttl_schema() -> None:
         ) from exc
     subprocess.run(
         clickhouse_args() + ["--multiquery"],
-        input=schema_sql,
+        input=render_ttl_schema_sql(schema_sql),
         text=True,
         check=True,
     )

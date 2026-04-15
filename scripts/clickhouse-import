@@ -196,6 +196,23 @@ echo "ClickHouse Import Configuration:"
 echo "  Host: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT"
 echo "  User: $CLICKHOUSE_USER"
 
+sql_escape_literal() {
+  local value="$1"
+  value=${value//\\/\\\\}
+  value=${value//\'/\\\'}
+  printf '%s' "$value"
+}
+
+render_schema_sql() {
+  local schema_file="$1"
+  local schema_sql
+
+  schema_sql=$(<"$schema_file")
+  schema_sql=${schema_sql//'{{CLICKHOUSE_DICT_USER}}'/$(sql_escape_literal "$CLICKHOUSE_USER")}
+  schema_sql=${schema_sql//'{{CLICKHOUSE_DICT_PASSWORD}}'/$(sql_escape_literal "$CLICKHOUSE_PASSWORD")}
+  printf '%s' "$schema_sql"
+}
+
 # Test ClickHouse connection
 test_clickhouse_connection() {
   echo "  Testing ClickHouse connection..." >&2
@@ -283,9 +300,9 @@ initialize_clickhouse_schema() {
       exit 1
     fi
 
-    schema_stderr=$(clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+    schema_stderr=$(render_schema_sql "$schema_file" | clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
       --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-      --multiquery < "$schema_file" 2>&1) || rc=$?
+      --multiquery 2>&1) || rc=$?
 
     if [[ $rc -ne 0 ]]; then
       if grep -qiE 'already exists' <<<"$schema_stderr"; then

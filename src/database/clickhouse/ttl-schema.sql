@@ -51,24 +51,34 @@ CREATE TABLE IF NOT EXISTS ttl_owner_prefix_rules (
 ) Engine = ReplacingMergeTree()
 ORDER BY owner_address;
 
-CREATE DICTIONARY IF NOT EXISTS ttl_tag_rules (
+CREATE OR REPLACE DICTIONARY ttl_tag_rules (
   tag_name String,
   tag_value String,
   ttl_seconds UInt32,
   never_expire UInt8 DEFAULT 0
 )
 PRIMARY KEY tag_name, tag_value
-SOURCE(CLICKHOUSE(TABLE 'ttl_tag_rules_src'))
+SOURCE(CLICKHOUSE(
+  USER '{{CLICKHOUSE_DICT_USER}}'
+  PASSWORD '{{CLICKHOUSE_DICT_PASSWORD}}'
+  DB 'default'
+  TABLE 'ttl_tag_rules_src'
+))
 LAYOUT(COMPLEX_KEY_HASHED())
 LIFETIME(MIN 60 MAX 300);
 
-CREATE DICTIONARY IF NOT EXISTS ttl_owner_rules (
+CREATE OR REPLACE DICTIONARY ttl_owner_rules (
   owner_address String,
   ttl_seconds UInt32,
   never_expire UInt8 DEFAULT 0
 )
 PRIMARY KEY owner_address
-SOURCE(CLICKHOUSE(TABLE 'ttl_owner_rules_src'))
+SOURCE(CLICKHOUSE(
+  USER '{{CLICKHOUSE_DICT_USER}}'
+  PASSWORD '{{CLICKHOUSE_DICT_PASSWORD}}'
+  DB 'default'
+  TABLE 'ttl_owner_rules_src'
+))
 LAYOUT(COMPLEX_KEY_HASHED())
 LIFETIME(MIN 60 MAX 300);
 
