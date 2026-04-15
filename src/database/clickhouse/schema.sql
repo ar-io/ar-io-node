@@ -122,19 +122,23 @@ ALTER TABLE transactions MODIFY TTL expires_at DELETE WHERE expires_at IS NOT NU
 
 -- Tag-based TTL rules. Operators populate the `_src` / prefix tables via
 -- scripts/clickhouse-load-ttl-rules.py (run by clickhouse-auto-import once per
--- import cycle). The dictionaries layered over the exact-match source tables
--- refresh on their LIFETIME without external orchestration.
+-- import cycle). The loader force-reloads the exact-match dictionaries after
+-- every load so new rules are visible to the next migrate query without
+-- waiting for LIFETIME to expire.
 --
 -- Schema contract:
 --   - tag_name is stored lower-cased (normalization happens in the loader);
 --     the migrate query lower-casts the row's tag_name BLOB to String before
 --     dictionary / prefix lookup.
 --   - tag_value is stored trimmed but case-preserving.
---   - owner_address is stored as the raw bytes decoded from the base64url
---     form used in the rules file; matches the transactions.owner_address
---     BLOB byte-for-byte once CAST(... AS String).
---   - Prefix rules are scanned by startsWith() in correlated subqueries;
---     exact rules go through dictGetOrNull() for O(1) lookup.
+--   - owner_address is stored as the operator-supplied base64url string
+--     verbatim (no decode). The migrate query compares
+--     base64URLEncode(transactions.owner_address) against it so a prefix
+--     like "test-uploader-" matches textually — raw-byte prefixes wouldn't
+--     correspond to any clean base64url cut.
+--   - Prefix rules are scanned by startsWith() over small arrays materialised
+--     from these tables; exact rules go through dictGetOrNull() for O(1)
+--     lookup.
 CREATE TABLE IF NOT EXISTS ttl_tag_rules_src (
   tag_name String,
   tag_value String,

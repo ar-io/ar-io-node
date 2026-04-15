@@ -55,17 +55,18 @@ while true; do
     loop_start_time=$(date +%s)
     echo "Starting new import cycle at $(date)"
 
-    # Refresh operator TTL rules before importing new partitions. The loader is
-    # idempotent; if the rules file is missing or malformed, it logs a warning
-    # and exits 0 so the import can proceed with whatever rules are already in
-    # ClickHouse (fails open).
+    # Refresh operator TTL rules before importing new partitions. The loader
+    # exits 0 (no-op) if the rules file is missing/malformed — existing rules
+    # stay in place. A non-zero exit means ClickHouse rejected a write mid-load
+    # and the loader truncated all rule tables to avoid a partial set, so this
+    # cycle's imports will run with no enforced TTLs.
     if [ -n "${CLICKHOUSE_TTL_RULES_PATH:-}" ] && [ -f "$CLICKHOUSE_TTL_RULES_PATH" ]; then
         echo "Loading TTL rules from $CLICKHOUSE_TTL_RULES_PATH..."
         ttl_load_start=$(date +%s)
         if python3 "$SCRIPT_DIR/clickhouse-load-ttl-rules.py" "$CLICKHOUSE_TTL_RULES_PATH"; then
             log_timing "Load TTL rules" "$ttl_load_start" "$(date +%s)"
         else
-            echo "Warning: TTL rules load failed; continuing with existing rules."
+            echo "Warning: TTL rules load failed; rule tables cleared. Imports this cycle will not apply TTLs."
             log_timing "Load TTL rules (failed)" "$ttl_load_start" "$(date +%s)"
         fi
     else

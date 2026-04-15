@@ -208,9 +208,10 @@ Defaults: `field` is `tag`, `match` is `exact`.
   and an owner rule), `expires_at` is computed from the smallest `ttl_seconds`.
 - **No match → `NULL` `expires_at` → kept indefinitely.**
 - **Normalization.** `tag_name` is lower-cased + trimmed on both sides;
-  `tag_value` is trimmed but case-preserving; the loader base64url-decodes
-  owner `value` into raw bytes so matching happens against the stored
-  `owner_address` BLOB directly.
+  `tag_value` is trimmed but case-preserving. Owner `value` is stored as
+  the operator-supplied base64url string and compared against
+  `base64URLEncode(owner_address)` at query time — so prefix rules match
+  textually (e.g. a 6-character base64url prefix works), not on raw bytes.
 - **Content-Type parameters.** There is no special handling for Content-Type.
   To match `image/gif; charset=utf-8` use `match: prefix` with
   `tag_value: image/gif`.
@@ -218,7 +219,11 @@ Defaults: `field` is `tag`, `match` is `exact`.
   are loaded; previously-imported rows keep their existing `expires_at`
   (or `NULL`).
 - **Fail-open.** A missing or malformed rules file logs a warning and exits
-  cleanly; existing rules remain in place and the import proceeds.
+  cleanly; existing rules remain in place and the import proceeds. If
+  ClickHouse rejects a write mid-load, the loader best-effort truncates all
+  four rule tables so the next import runs with no TTL rules rather than a
+  partial rule set, and returns a non-zero exit so the auto-import loop logs
+  the failure.
 
 ### Inspecting loaded rules
 

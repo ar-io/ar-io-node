@@ -6,8 +6,11 @@ set -euo pipefail
 #   1. Writes a known rules YAML to a temp path.
 #   2. Runs the loader.
 #   3. Verifies the four rule tables are populated correctly.
-#   4. Forces a dictionary refresh and checks dictGetOrNull answers.
-#   5. Reloads with an empty rules file and verifies tables are cleared.
+#   4. Confirms dictGetOrNull answers without a manual SYSTEM RELOAD (the
+#      loader is expected to force a reload).
+#   5. Checks the owner-prefix semantics: startsWith against
+#      base64URLEncode(owner_address), not against raw bytes.
+#   6. Reloads with an empty rules file and verifies tables are cleared.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
@@ -49,8 +52,9 @@ ch_query "SELECT 1 FROM ttl_tag_rules_src LIMIT 0" >/dev/null 2>&1 || {
     exit 1
 }
 
-# A known base64url owner address (43 chars, typical Arweave address form).
-OWNER_B64URL="abcDEF0123456789_-xyzABCDEF0123456789_-xyz"
+# A full 43-character base64url owner address and a textual prefix of it.
+OWNER_B64URL="abcDEF0123456789_-xyzABCDEF0123456789_-xyzAB"
+OWNER_PREFIX="abcDEF"
 
 cat >"$TMP_RULES" <<YAML
 rules:
@@ -72,7 +76,7 @@ rules:
     value: $OWNER_B64URL
     ttl_seconds: 90
   - field: owner_address
-    value: $OWNER_B64URL
+    value: $OWNER_PREFIX
     match: prefix
     ttl_seconds: 75
 YAML
@@ -108,29 +112,52 @@ else
 fi
 echo
 
-echo "Test 3: Force dictionary reload and query dictGetOrNull"
-ch_query "SYSTEM RELOAD DICTIONARY ttl_tag_rules"
-ch_query "SYSTEM RELOAD DICTIONARY ttl_owner_rules"
+echo "Test 3: Owner values are stored verbatim as base64url strings"
+OWNER_ROW_COUNT=$(ch_query "SELECT count() FROM ttl_owner_rules_src WHERE owner_address = '$OWNER_B64URL' AND ttl_seconds = 90" | tr -d '[:space:]')
+OWNER_PREFIX_COUNT=$(ch_query "SELECT count() FROM ttl_owner_prefix_rules WHERE owner_address = '$OWNER_PREFIX' AND ttl_seconds = 75" | tr -d '[:space:]')
+if [ "$OWNER_ROW_COUNT" = "1" ] && [ "$OWNER_PREFIX_COUNT" = "1" ]; then
+    echo "✓ Owner rules stored as base64url text on both tables"
+else
+    echo "✗ Expected owner rows not found (exact=$OWNER_ROW_COUNT, prefix=$OWNER_PREFIX_COUNT)"
+    exit 1
+fi
+echo
 
+echo "Test 4: Dictionaries are auto-reloaded (no manual SYSTEM RELOAD required)"
 TAG_DICT=$(ch_query "SELECT dictGetOrNull('ttl_tag_rules', 'ttl_seconds', ('app-name', 'ephemeral-chat'))" | tr -d '[:space:]')
 if [ "$TAG_DICT" = "60" ]; then
-    echo "✓ ttl_tag_rules dict returns 60 for ('app-name','ephemeral-chat')"
+    echo "✓ ttl_tag_rules returns 60 for ('app-name','ephemeral-chat')"
 else
     echo "✗ Expected 60, got '$TAG_DICT'"
     exit 1
 fi
 
-# Owner dictionary uses raw bytes; verify by decoding the same base64url in SQL.
-OWNER_DICT=$(ch_query "SELECT dictGetOrNull('ttl_owner_rules', 'ttl_seconds', tuple(base64URLDecode('$OWNER_B64URL')))" | tr -d '[:space:]')
+OWNER_DICT=$(ch_query "SELECT dictGetOrNull('ttl_owner_rules', 'ttl_seconds', tuple('$OWNER_B64URL'))" | tr -d '[:space:]')
 if [ "$OWNER_DICT" = "90" ]; then
-    echo "✓ ttl_owner_rules dict returns 90 for the decoded owner address"
+    echo "✓ ttl_owner_rules returns 90 for the base64url owner"
 else
     echo "✗ Expected 90, got '$OWNER_DICT'"
     exit 1
 fi
 echo
 
-echo "Test 4: Unknown key returns NULL"
+echo "Test 5: Owner prefix semantics — startsWith against base64URLEncode"
+# Decode the full owner to raw bytes, then re-encode and verify the prefix
+# rule's owner_address matches startsWith of that re-encoding. This mirrors
+# what the migrate query does against transactions.owner_address.
+PREFIX_MATCH=$(ch_query "
+  SELECT count() FROM ttl_owner_prefix_rules
+  WHERE startsWith(base64URLEncode(base64URLDecode('$OWNER_B64URL')), owner_address)
+" | tr -d '[:space:]')
+if [ "$PREFIX_MATCH" = "1" ]; then
+    echo "✓ Prefix rule matches base64URLEncode of the decoded owner"
+else
+    echo "✗ Expected 1 matching prefix rule, got $PREFIX_MATCH"
+    exit 1
+fi
+echo
+
+echo "Test 6: Unknown key returns NULL"
 UNKNOWN=$(ch_query "SELECT dictGetOrNull('ttl_tag_rules', 'ttl_seconds', ('app-name', 'does-not-exist'))")
 if [ -z "$(echo "$UNKNOWN" | tr -d '[:space:]')" ] || [ "$(echo "$UNKNOWN" | tr -d '[:space:]')" = "\\N" ]; then
     echo "✓ Unknown key returns NULL"
@@ -140,7 +167,7 @@ else
 fi
 echo
 
-echo "Test 5: Empty rules file clears the tables"
+echo "Test 7: Empty rules file clears the tables"
 cat >"$EMPTY_RULES" <<YAML
 rules: []
 YAML
