@@ -143,11 +143,13 @@ See `src/database/clickhouse/schema.sql` for the full definition.
 
 ## Tag-based TTL Rules
 
-ClickHouse retains imported transactions indefinitely unless an operator
-defines a matching TTL rule. Rules let you expire rows by tag content or
-by uploader owner address — useful for short-lived app data (ephemeral
-chat, test uploads, specific content types) or for data from a
-short-retention uploader.
+By default ClickHouse retains imported transactions indefinitely. Operators
+can define TTL rules that expire rows by tag content or by uploader owner
+address — useful for short-lived app data (ephemeral chat, test uploads,
+specific content types) or for data from a short-retention uploader. A
+top-level `default_ttl_seconds` can apply a fallback TTL to every row that
+no rule matched, and individual rules can opt rows out of expiry entirely
+with `never_expire: true`.
 
 Rules live in a YAML file at `config/clickhouse-ttl-rules.yaml`
 (override the host path with `CLICKHOUSE_TTL_RULES_PATH`). The repo ships a
@@ -174,6 +176,10 @@ remain active, and if no rules have ever been loaded rows get
 ### Rules file format
 
 ```yaml
+# Optional: applied when no rule matches a row. Omit to keep unmatched rows
+# indefinitely (the prior default).
+default_ttl_seconds: 2592000    # 30 days
+
 rules:
   # Tag rules (field defaults to "tag")
   - tag_name: App-Name
@@ -190,6 +196,14 @@ rules:
     match: prefix
     ttl_seconds: 2592000
 
+  # Exempt rule: use `never_expire: true` in place of `ttl_seconds` to opt
+  # matching rows out of expiry entirely (overrides default_ttl_seconds
+  # and any other TTL rule that might also match).
+  - tag_name: App-Name
+    tag_value: ArDrive
+    match: prefix
+    never_expire: true
+
   # Owner rules (value is base64url, as operators see on Arweave)
   - field: owner_address
     value: abcDEF0123...xyz
@@ -201,13 +215,16 @@ rules:
     ttl_seconds: 3600
 ```
 
-Defaults: `field` is `tag`, `match` is `exact`.
+Defaults: `field` is `tag`, `match` is `exact`. A rule must set exactly one
+of `ttl_seconds` (positive integer) or `never_expire: true`.
 
 ### Behavior
 
-- **Shortest TTL wins.** If multiple rules match a row (e.g. both a tag rule
-  and an owner rule), `expires_at` is computed from the smallest `ttl_seconds`.
-- **No match → `NULL` `expires_at` → kept indefinitely.**
+- **Precedence** (first applicable branch wins):
+  1. Any matching rule with `never_expire: true` → `expires_at = NULL`.
+  2. One or more matching TTL rules → shortest `ttl_seconds` wins.
+  3. `default_ttl_seconds` set at the top level → that value is applied.
+  4. Otherwise → `expires_at` is `NULL` and the row is kept indefinitely.
 - **Normalization.** `tag_name` is lower-cased + trimmed on both sides;
   `tag_value` is trimmed but case-preserving. Owner `value` is stored as
   the operator-supplied base64url string and compared against
@@ -236,6 +253,7 @@ clickhouse client --password <your-password> -q 'SELECT * FROM ttl_tag_rules_src
 clickhouse client --password <your-password> -q 'SELECT * FROM ttl_tag_prefix_rules'
 clickhouse client --password <your-password> -q 'SELECT * FROM ttl_owner_rules_src'
 clickhouse client --password <your-password> -q 'SELECT * FROM ttl_owner_prefix_rules'
+clickhouse client --password <your-password> -q 'SELECT * FROM ttl_settings FINAL'
 ```
 
 ### Backfilling existing rows (optional)
