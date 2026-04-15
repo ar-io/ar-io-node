@@ -167,7 +167,8 @@ Normalized rules are written to four source tables; two dictionaries
 refresh on a 60–300 s `LIFETIME` and are used by
 `migrate_staging_to_final` to compute `transactions.expires_at` on every
 staging→final insert. If the file doesn't exist at import time the loader
-logs a warning and proceeds; rule tables stay empty and all rows get
+logs a warning and skips the reload step; any previously loaded rules
+remain active, and if no rules have ever been loaded rows get
 `expires_at = NULL`.
 
 ### Rules file format
