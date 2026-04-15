@@ -1789,6 +1789,104 @@ st
           );
         });
 
+        it('should resolve item headers for the INNER data item on manifest-resolved responses', async () => {
+          // Regression: sendManifestResponse previously called setDataHeaders
+          // without itemHeaders, so X-Arweave-Tag-*, X-Arweave-Owner-Address,
+          // etc. were missing on ArNS apex/manifest-served responses. This
+          // test asserts that dataItemMetaResolver.resolveFromLocal is invoked
+          // with the INNER resolved data item ID (not the manifest TX ID) so
+          // tags for the served content are available to setDataHeaders.
+          const manifestId = 'manifest-id';
+          const resolvedId = 'resolved-inner-data-item-id';
+
+          mock.method(
+            dataAttributesSource,
+            'getDataAttributes',
+            (id: string) => {
+              if (id === manifestId) {
+                return Promise.resolve({
+                  size: 100,
+                  contentType: 'application/x.arweave-manifest+json',
+                  isManifest: true,
+                  stable: true,
+                  verified: true,
+                  signature: null,
+                });
+              }
+              return Promise.resolve({
+                size: 9,
+                contentType: 'text/html',
+                isManifest: false,
+                stable: true,
+                verified: true,
+                signature: null,
+              });
+            },
+          );
+
+          mock.method(manifestPathResolver, 'resolveFromIndex', () =>
+            Promise.resolve({
+              id: manifestId,
+              resolvedId,
+              complete: true,
+            }),
+          );
+
+          mock.method(dataSource, 'getData', () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('<html></html>')),
+              size: 13,
+              verified: true,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            }),
+          );
+
+          const resolveFromLocalMock = mock.fn((_id: string) =>
+            Promise.resolve(undefined),
+          );
+          const dataItemMetaResolver = {
+            resolveFromLocal: resolveFromLocalMock,
+            resolve: mock.fn(() => Promise.resolve(undefined)),
+          } as any;
+
+          app.get(
+            '/:id/*',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+              dataItemMetaResolver,
+            }),
+          );
+
+          await request(app)
+            .get('/manifest-id/index.html')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-data-id'], resolvedId);
+            });
+
+          // resolveFromLocal only gets called when ARWEAVE_TAG_RESPONSE_HEADERS
+          // is enabled. When enabled, it MUST be called with the inner data
+          // item ID (resolvedId), never only with the manifest TX ID.
+          const callArgs = resolveFromLocalMock.mock.calls.map(
+            (c) => c.arguments[0],
+          );
+          if (config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED) {
+            assert.ok(
+              callArgs.includes(resolvedId),
+              `resolveFromLocal must be called with inner data item ID (${resolvedId}); got: [${callArgs.join(', ')}]`,
+            );
+          }
+        });
+
         it('should set X-AR-IO-Data-Id header with data ID for direct data access', async () => {
           mock.method(dataAttributesSource, 'getDataAttributes', () =>
             Promise.resolve({

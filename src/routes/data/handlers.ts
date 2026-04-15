@@ -1331,6 +1331,7 @@ const sendManifestResponse = async ({
   res,
   dataSource,
   dataAttributesSource,
+  dataItemMetaResolver,
   id,
   resolvedId,
   complete,
@@ -1345,6 +1346,7 @@ const sendManifestResponse = async ({
   res: Response;
   dataSource: ContiguousDataSource;
   dataAttributesSource: DataAttributesSource;
+  dataItemMetaResolver?: TxMetadataResolver;
   id: string;
   resolvedId: string | undefined;
   complete: boolean;
@@ -1422,6 +1424,16 @@ const sendManifestResponse = async ({
       return true; // Response was sent (402 or 429)
     }
 
+    // Resolve item headers for the inner data item so X-Arweave-Tag-*
+    // and owner/signature headers appear on manifest-resolved responses
+    // (e.g. ArNS apex/subdomain serving a manifest).
+    const itemHeaders = await awaitItemHeaders(
+      fireItemHeaderResolution(resolvedId, dataItemMetaResolver),
+      data?.upstreamTags,
+      resolvedId,
+      dataItemMetaResolver,
+    );
+
     // Set headers and stream data
     try {
       // Check if the request includes a Range header
@@ -1437,6 +1449,7 @@ const sendManifestResponse = async ({
           dataAttributes,
           data,
           id: resolvedId,
+          itemHeaders,
         });
         await handleRangeRequest({
           log,
@@ -1458,6 +1471,7 @@ const sendManifestResponse = async ({
           dataAttributes,
           data,
           id: resolvedId,
+          itemHeaders,
         });
         if (data.size > 0) {
           res.header('Content-Length', data.size.toString());
@@ -1688,6 +1702,7 @@ export const createDataHandler = ({
               res,
               dataAttributesSource,
               dataSource,
+              dataItemMetaResolver,
               requestAttributes,
               rateLimiter,
               paymentProcessor,
@@ -1822,6 +1837,7 @@ export const createDataHandler = ({
               res,
               dataAttributesSource,
               dataSource,
+              dataItemMetaResolver,
               requestAttributes,
               rateLimiter,
               paymentProcessor,
