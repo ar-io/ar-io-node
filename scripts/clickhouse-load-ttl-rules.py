@@ -54,6 +54,8 @@ EXACT_DICTIONARIES = (
 
 BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
+UINT32_MAX = 2**32 - 1
+
 
 def clickhouse_args() -> list[str]:
     args = ["clickhouse", "client"]
@@ -139,9 +141,15 @@ def bucket_rules(rules: Iterable[dict[str, Any]]) -> dict[str, list[tuple]]:
                 continue
             ttl_value = 0
         else:
-            if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl <= 0:
+            if (
+                not isinstance(ttl, int)
+                or isinstance(ttl, bool)
+                or ttl <= 0
+                or ttl > UINT32_MAX
+            ):
                 print(
-                    f"warning: rule #{idx} has non-positive ttl_seconds {ttl!r}; skipping",
+                    f"warning: rule #{idx} has invalid ttl_seconds {ttl!r}"
+                    f" (must be a positive integer <= {UINT32_MAX}); skipping",
                     file=sys.stderr,
                 )
                 continue
@@ -268,8 +276,9 @@ def load_rules_file(path: str) -> tuple[list[Any], int | None] | None:
     empty list if the file is missing rules or is empty-but-well-formed;
     default_ttl_seconds is the top-level `default_ttl_seconds` value or None
     if unset/invalid. Returns None if the caller should skip the load
-    entirely (file missing/unreadable/malformed). All failure modes here log
-    a warning but never raise.
+    entirely (file missing/unreadable/malformed, or structurally invalid —
+    root not a mapping, `rules` not a list). All failure modes here log a
+    warning but never raise.
     """
     if not os.path.isfile(path):
         print(
@@ -299,20 +308,22 @@ def load_rules_file(path: str) -> tuple[list[Any], int | None] | None:
 
     if not isinstance(doc, dict):
         print(
-            f"warning: {path} root is {type(doc).__name__}, expected mapping; treating as no rules",
+            f"warning: {path} root is {type(doc).__name__}, expected mapping;"
+            " skipping load (previously loaded rules, if any, are retained)",
             file=sys.stderr,
         )
-        return ([], None)
+        return None
 
     default_ttl = doc.get("default_ttl_seconds")
     if default_ttl is not None and (
         not isinstance(default_ttl, int)
         or isinstance(default_ttl, bool)
         or default_ttl <= 0
+        or default_ttl > UINT32_MAX
     ):
         print(
             f"warning: {path} default_ttl_seconds {default_ttl!r} is not a positive"
-            " integer; ignoring",
+            f" integer <= {UINT32_MAX}; ignoring",
             file=sys.stderr,
         )
         default_ttl = None
@@ -323,10 +334,11 @@ def load_rules_file(path: str) -> tuple[list[Any], int | None] | None:
 
     if not isinstance(rules, list):
         print(
-            f"warning: {path} 'rules' key is {type(rules).__name__}, expected list; treating as empty",
+            f"warning: {path} 'rules' key is {type(rules).__name__}, expected list;"
+            " skipping load (previously loaded rules, if any, are retained)",
             file=sys.stderr,
         )
-        return ([], default_ttl)
+        return None
 
     return (rules, default_ttl)
 
