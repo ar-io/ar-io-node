@@ -86,10 +86,19 @@ LIFETIME(MIN 60 MAX 300);
 -- from the YAML (TRUNCATE + INSERT) so there is always at most one row;
 -- `updated_at` + ReplacingMergeTree(updated_at) ensures FINAL yields the
 -- latest write. default_ttl_seconds applies when no rule matches a row and
--- no exempt rule fires.
+-- no exempt rule fires. l1_never_expires, when 1, exempts all L1 rows
+-- (is_data_item = 0) from expiry regardless of default_ttl_seconds or
+-- matched rules — useful when an operator sets a default TTL but wants to
+-- retain the L1 layer indefinitely.
 CREATE TABLE IF NOT EXISTS ttl_settings (
   singleton UInt8 DEFAULT 1,
   default_ttl_seconds Nullable(UInt32),
+  l1_never_expires UInt8 DEFAULT 0,
   updated_at DateTime DEFAULT now()
 ) Engine = ReplacingMergeTree(updated_at)
 ORDER BY singleton;
+
+-- Idempotent upgrade path for installs predating the l1_never_expires knob.
+-- Safe to re-run; a no-op once applied. The loader TRUNCATE+INSERTs on
+-- every cycle, so any existing row is replaced with a fully-specified one.
+ALTER TABLE ttl_settings ADD COLUMN IF NOT EXISTS l1_never_expires UInt8 DEFAULT 0;

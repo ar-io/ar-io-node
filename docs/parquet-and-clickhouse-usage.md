@@ -150,7 +150,9 @@ address — useful for short-lived app data (ephemeral chat, test uploads,
 specific content types) or for data from a short-retention uploader. A
 top-level `default_ttl_seconds` can apply a fallback TTL to every row that
 no rule matched, and individual rules can opt rows out of expiry entirely
-with `never_expire: true`.
+with `never_expire: true`. A top-level `l1_never_expires: true` keeps all
+L1 transactions (`is_data_item = 0`) indefinitely regardless of
+`default_ttl_seconds` or matching rules.
 
 Rules live in a YAML file at `config/clickhouse-ttl-rules.yaml`
 (override the host path with `CLICKHOUSE_TTL_RULES_PATH`). The repo ships a
@@ -180,6 +182,11 @@ remain active, and if no rules have ever been loaded rows get
 # Optional: applied when no rule matches a row. Omit to keep unmatched rows
 # indefinitely (the prior default).
 default_ttl_seconds: 2592000    # 30 days
+
+# Optional: keep all L1 transactions (is_data_item = 0) forever, regardless
+# of default_ttl_seconds or matching rules. Pair with default_ttl_seconds
+# to expire bundled data items while retaining the L1 layer.
+l1_never_expires: true
 
 rules:
   # Tag rules (field defaults to "tag")
@@ -222,10 +229,12 @@ of `ttl_seconds` (positive integer) or `never_expire: true`.
 ### Behavior
 
 - **Precedence** (first applicable branch wins):
-  1. Any matching rule with `never_expire: true` → `expires_at = NULL`.
-  2. One or more matching TTL rules → shortest `ttl_seconds` wins.
-  3. `default_ttl_seconds` set at the top level → that value is applied.
-  4. Otherwise → `expires_at` is `NULL` and the row is kept indefinitely.
+  1. `l1_never_expires: true` AND row is L1 (`is_data_item = 0`) →
+     `expires_at = NULL`.
+  2. Any matching rule with `never_expire: true` → `expires_at = NULL`.
+  3. One or more matching TTL rules → shortest `ttl_seconds` wins.
+  4. `default_ttl_seconds` set at the top level → that value is applied.
+  5. Otherwise → `expires_at` is `NULL` and the row is kept indefinitely.
 - **Normalization.** `tag_name` is lower-cased + trimmed on both sides;
   `tag_value` is trimmed but case-preserving. Owner `value` is stored as
   the operator-supplied base64url string and compared against

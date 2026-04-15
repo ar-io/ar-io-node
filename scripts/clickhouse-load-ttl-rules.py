@@ -260,12 +260,14 @@ def load_owner_bucket(table: str, rows: list[tuple]) -> None:
     )
 
 
-def load_settings(default_ttl_seconds: int | None) -> None:
+def load_settings(default_ttl_seconds: int | None, l1_never_expires: bool) -> None:
     run_query(f"TRUNCATE TABLE {SETTINGS_TABLE}")
-    value = "NULL" if default_ttl_seconds is None else str(default_ttl_seconds)
+    default_value = "NULL" if default_ttl_seconds is None else str(default_ttl_seconds)
+    l1_value = 1 if l1_never_expires else 0
     run_query(
-        f"INSERT INTO {SETTINGS_TABLE} (singleton, default_ttl_seconds)"
-        f" VALUES (1, {value})"
+        f"INSERT INTO {SETTINGS_TABLE}"
+        f" (singleton, default_ttl_seconds, l1_never_expires)"
+        f" VALUES (1, {default_value}, {l1_value})"
     )
 
 
@@ -304,16 +306,17 @@ def truncate_all_rule_tables() -> None:
     try_truncate(SETTINGS_TABLE)
 
 
-def load_rules_file(path: str) -> tuple[list[Any], int | None] | None:
+def load_rules_file(path: str) -> tuple[list[Any], int | None, bool] | None:
     """Read and parse the rules YAML.
 
-    Returns a (rules, default_ttl_seconds) tuple on success — rules is an
-    empty list if the file is missing rules or is empty-but-well-formed;
-    default_ttl_seconds is the top-level `default_ttl_seconds` value or None
-    if unset/invalid. Returns None if the caller should skip the load
-    entirely (file missing/unreadable/malformed, or structurally invalid —
-    root not a mapping, `rules` not a list). All failure modes here log a
-    warning but never raise.
+    Returns a (rules, default_ttl_seconds, l1_never_expires) tuple on
+    success — rules is an empty list if the file is missing rules or is
+    empty-but-well-formed; default_ttl_seconds is the top-level
+    `default_ttl_seconds` value or None if unset/invalid; l1_never_expires
+    is the top-level boolean flag (defaults to False). Returns None if the
+    caller should skip the load entirely (file missing/unreadable/malformed,
+    or structurally invalid — root not a mapping, `rules` not a list). All
+    failure modes here log a warning but never raise.
     """
     if not os.path.isfile(path):
         print(
@@ -339,7 +342,7 @@ def load_rules_file(path: str) -> tuple[list[Any], int | None] | None:
         return None
 
     if doc is None:
-        return ([], None)
+        return ([], None, False)
 
     if not isinstance(doc, dict):
         print(
@@ -363,9 +366,18 @@ def load_rules_file(path: str) -> tuple[list[Any], int | None] | None:
         )
         default_ttl = None
 
+    l1_never_expires = doc.get("l1_never_expires", False)
+    if not isinstance(l1_never_expires, bool):
+        print(
+            f"warning: {path} l1_never_expires {l1_never_expires!r} is not a"
+            " boolean; ignoring",
+            file=sys.stderr,
+        )
+        l1_never_expires = False
+
     rules = doc.get("rules")
     if rules is None:
-        return ([], default_ttl)
+        return ([], default_ttl, l1_never_expires)
 
     if not isinstance(rules, list):
         print(
@@ -375,7 +387,7 @@ def load_rules_file(path: str) -> tuple[list[Any], int | None] | None:
         )
         return None
 
-    return (rules, default_ttl)
+    return (rules, default_ttl, l1_never_expires)
 
 
 def main() -> int:
@@ -402,7 +414,7 @@ def main() -> int:
         # is already in ClickHouse.
         return 0
 
-    rules, default_ttl = parsed
+    rules, default_ttl, l1_never_expires = parsed
     buckets = bucket_rules(rules)
 
     try:
@@ -411,7 +423,7 @@ def main() -> int:
         load_tag_bucket("ttl_tag_prefix_rules", buckets["tag_prefix"])
         load_owner_bucket("ttl_owner_rules_src", buckets["owner_exact"])
         load_owner_bucket("ttl_owner_prefix_rules", buckets["owner_prefix"])
-        load_settings(default_ttl)
+        load_settings(default_ttl, l1_never_expires)
         if not reload_dictionaries_with_retry():
             raise subprocess.CalledProcessError(1, "SYSTEM RELOAD DICTIONARY")
     except RuntimeError as exc:
@@ -442,13 +454,14 @@ def main() -> int:
     print(
         "TTL rules loaded from {path}: "
         "tag_exact={te} tag_prefix={tp} owner_exact={oe} owner_prefix={op}"
-        " default_ttl_seconds={dt}".format(
+        " default_ttl_seconds={dt} l1_never_expires={l1}".format(
             path=args.path,
             te=len(buckets["tag_exact"]),
             tp=len(buckets["tag_prefix"]),
             oe=len(buckets["owner_exact"]),
             op=len(buckets["owner_prefix"]),
             dt="none" if default_ttl is None else default_ttl,
+            l1="true" if l1_never_expires else "false",
         )
     )
     return 0

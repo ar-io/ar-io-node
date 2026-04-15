@@ -51,6 +51,7 @@ OWNER_PREFIX="abcDEF"
 
 cat >"$TMP_RULES" <<YAML
 default_ttl_seconds: 3600
+l1_never_expires: true
 rules:
   - tag_name: App-Name
     tag_value: ephemeral-chat
@@ -183,6 +184,16 @@ else
 fi
 echo
 
+echo "Test 7b: l1_never_expires populates ttl_settings"
+L1_FLAG=$(ch_query "SELECT l1_never_expires FROM ttl_settings FINAL LIMIT 1" | tr -d '[:space:]')
+if [ "$L1_FLAG" = "1" ]; then
+    echo "✓ ttl_settings.l1_never_expires = 1"
+else
+    echo "✗ Expected l1_never_expires=1, got '$L1_FLAG'"
+    exit 1
+fi
+echo
+
 echo "Test 8: never_expire rule stores ttl_seconds=0 with never_expire=1"
 NEVER_ROW=$(ch_query "SELECT count() FROM ttl_tag_rules_src WHERE tag_name = 'app-name' AND tag_value = 'persistent' AND ttl_seconds = 0 AND never_expire = 1" | tr -d '[:space:]')
 if [ "$NEVER_ROW" = "1" ]; then
@@ -198,6 +209,60 @@ else
     echo "✗ Expected never_expire=1 from dictionary, got '$NEVER_DICT'"
     exit 1
 fi
+echo
+
+echo "Test 8c: End-to-end — migrate_staging_to_final honors l1_never_expires"
+# Runs the real INSERT from scripts/clickhouse-import against synthetic L1 and
+# L2 staging rows in a far-future height partition, then asserts expires_at
+# semantics on the resulting transactions rows. Partition 9000 covers heights
+# 900000000–900099999 — well beyond any real Arweave height — so we can drop
+# it at the end without touching real data.
+
+TEST_L1_HEIGHT=900000000
+TEST_L2_HEIGHT=900000001
+TEST_PARTITION="9000"
+TEST_PARTITION_NAME="height=${TEST_L1_HEIGHT}-${TEST_L2_HEIGHT}"
+
+cleanup_e2e() {
+    ch_query "ALTER TABLE transactions DROP PARTITION ${TEST_PARTITION}" >/dev/null 2>&1 || true
+    ch_query "DELETE FROM staging_transactions WHERE height IN (${TEST_L1_HEIGHT}, ${TEST_L2_HEIGHT})" >/dev/null 2>&1 || true
+    ch_query "DELETE FROM staging_blocks       WHERE height IN (${TEST_L1_HEIGHT}, ${TEST_L2_HEIGHT})" >/dev/null 2>&1 || true
+    ch_query "DELETE FROM staging_tags         WHERE height IN (${TEST_L1_HEIGHT}, ${TEST_L2_HEIGHT})" >/dev/null 2>&1 || true
+}
+trap 'rm -f "$TMP_RULES" "$EMPTY_RULES"; cleanup_e2e' EXIT
+cleanup_e2e
+
+ch_query "INSERT INTO staging_blocks (indep_hash, height, previous_block, nonce, hash, block_timestamp, tx_count) VALUES ('','${TEST_L1_HEIGHT}','','','',0,1), ('','${TEST_L2_HEIGHT}','','','',0,1)"
+ch_query "INSERT INTO staging_transactions (id, indexed_at, block_transaction_index, is_data_item, target, quantity, reward, anchor, data_size, content_type, format, height, owner_address, data_root, parent, \"offset\", \"size\", data_offset, owner_offset, owner_size, owner, signature_offset, signature_size, signature_type, root_transaction_id, root_parent_offset) VALUES ('l1id',0,0,false,'',0,0,'',0,'',1,${TEST_L1_HEIGHT},'','','',0,0,0,0,0,'',0,0,1,'',0), ('l2id',0,0,true,'',0,0,'',0,'',1,${TEST_L2_HEIGHT},'','','',0,0,0,0,0,'',0,0,1,'',0)"
+
+# Source the import script to get access to migrate_staging_to_final without
+# running its CLI argument parsing or main(). See the sourceable-guard in
+# scripts/clickhouse-import.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/../../clickhouse-import" >/dev/null
+
+# migrate_staging_to_final reads CLICKHOUSE_* from env (already loaded).
+SHOW_TIMING=${SHOW_TIMING:-false}
+migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
+
+L1_EXPIRES=$(ch_query "SELECT isNull(expires_at) FROM transactions WHERE height = ${TEST_L1_HEIGHT} FINAL" | tr -d '[:space:]')
+L2_EXPIRES_NOT_NULL=$(ch_query "SELECT isNotNull(expires_at) FROM transactions WHERE height = ${TEST_L2_HEIGHT} FINAL" | tr -d '[:space:]')
+
+if [ "$L1_EXPIRES" = "1" ]; then
+    echo "✓ L1 row (is_data_item=false) has expires_at IS NULL"
+else
+    echo "✗ Expected L1 expires_at IS NULL, got isNull(expires_at)='$L1_EXPIRES'"
+    exit 1
+fi
+
+if [ "$L2_EXPIRES_NOT_NULL" = "1" ]; then
+    echo "✓ L2 row (is_data_item=true) has expires_at set from default_ttl_seconds"
+else
+    echo "✗ Expected L2 expires_at IS NOT NULL, got isNotNull(expires_at)='$L2_EXPIRES_NOT_NULL'"
+    exit 1
+fi
+
+cleanup_e2e
 echo
 
 echo "Test 9: Empty rules file clears the tables"

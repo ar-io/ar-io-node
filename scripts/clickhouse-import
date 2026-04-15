@@ -75,6 +75,13 @@ SHOW_TIMING=false
 load_env
 load_clickhouse_config
 
+# When sourced (e.g. by tests that need access to migrate_staging_to_final),
+# skip argument parsing, validation, and the top-level main() invocation —
+# callers supply their own inputs and invoke functions directly.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  return 0
+fi
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -453,7 +460,9 @@ migrate_staging_to_final() {
   clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
     --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
     --query "INSERT INTO transactions
-WITH (SELECT default_ttl_seconds FROM ttl_settings FINAL LIMIT 1) AS default_ttl
+WITH
+  (SELECT default_ttl_seconds FROM ttl_settings FINAL LIMIT 1) AS default_ttl,
+  (SELECT l1_never_expires FROM ttl_settings FINAL LIMIT 1) AS l1_never_expires_flag
 SELECT
   height,
   block_transaction_index,
@@ -487,13 +496,16 @@ SELECT
   root_parent_offset,
   tags,
   tags_count,
-  -- Precedence: any matching exempt rule (never_expire=1) wins and forces
+  -- Precedence: L1 rows (is_data_item = 0) are exempted when
+  -- l1_never_expires_flag is set, overriding everything else. Otherwise,
+  -- any matching exempt rule (never_expire=1) wins and forces
   -- expires_at = NULL, beating TTL matches and the default. If no exempt
   -- fires and at least one branch produced a TTL, the shortest wins via
   -- least() with UInt32-max sentinels masking unmatched branches. If
   -- nothing matched at all, fall back to default_ttl (NULL → keep forever).
   multiIf(
-    coalesce(tag_exact_exempt, 0) = 1
+    (is_data_item = 0 AND coalesce(l1_never_expires_flag, 0) = 1)
+      OR coalesce(tag_exact_exempt, 0) = 1
       OR coalesce(tag_prefix_exempt, 0) = 1
       OR coalesce(owner_exact_exempt, 0) = 1
       OR coalesce(owner_prefix_exempt, 0) = 1,

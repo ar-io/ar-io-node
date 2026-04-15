@@ -10,11 +10,13 @@
 # backfill in v1).
 #
 # Precedence for a row (first applicable branch wins):
-#   1. Any matching rule with `never_expire: true` → expires_at = NULL
+#   1. l1_never_expires: true AND row is L1 (is_data_item = 0)
+#      → expires_at = NULL.
+#   2. Any matching rule with `never_expire: true` → expires_at = NULL
 #      (row is kept indefinitely, overriding default_ttl_seconds).
-#   2. One or more matching TTL rules → shortest ttl_seconds wins.
-#   3. default_ttl_seconds set (top-level) → that value is applied.
-#   4. Otherwise → expires_at is NULL.
+#   3. One or more matching TTL rules → shortest ttl_seconds wins.
+#   4. default_ttl_seconds set (top-level) → that value is applied.
+#   5. Otherwise → expires_at is NULL.
 #
 # Normalization:
 #   - tag_name is lower-cased + trimmed on both sides of the lookup.
@@ -36,6 +38,12 @@
 # Optional: applied to rows no rule matched. Omit (or leave commented) to
 # keep unmatched rows indefinitely.
 # default_ttl_seconds: 2592000   # 30 days
+
+# Optional: when true, L1 transactions (is_data_item = 0) are kept
+# indefinitely regardless of default_ttl_seconds or matching rules. Pair
+# with default_ttl_seconds to expire bundled data items while retaining the
+# L1 layer.
+# l1_never_expires: true
 
 rules: []
 #  - tag_name: App-Name
