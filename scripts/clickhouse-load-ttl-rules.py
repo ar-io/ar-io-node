@@ -14,14 +14,16 @@ string. That lets operators write textual prefixes like "test-uploader-"
 rather than raw-byte prefixes which wouldn't correspond to any clean base64url
 cut.
 
-Fail-open semantics:
-  * Missing, unreadable, or malformed rules file → log a warning and exit 0.
-    The _src / prefix tables keep their previous contents.
-  * ClickHouse rejecting any of the TRUNCATE/INSERT/RELOAD statements → make
-    a best-effort pass to truncate every rule table to leave a consistent
-    empty state (no TTL rules applied rather than a partial mix), then exit 1.
-    The calling auto-import loop treats this as "imports proceed without
-    enforced TTLs until the next successful load".
+Exit codes:
+  * 0 — load succeeded, or the rules file was missing/unreadable/malformed
+    and existing rules were left untouched. Callers can proceed normally.
+  * 1 — ClickHouse rejected a write or a dictionary reload while loading a
+    parsed rules document. The loader makes a best-effort pass to leave the
+    rule state as empty as possible (TRUNCATE all four source tables, retry
+    the dictionary reload). When reload succeeds, the import cycle sees no
+    TTL rules; when it doesn't, prefix rules are cleared but exact-match
+    dictionaries may briefly serve stale entries until the next successful
+    load.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from typing import Any, Iterable
 
 import yaml
@@ -191,9 +194,88 @@ def reload_dictionaries() -> None:
         run_query(f"SYSTEM RELOAD DICTIONARY {dict_name}")
 
 
+def reload_dictionaries_with_retry(attempts: int = 3, delay_seconds: float = 0.5) -> bool:
+    """Reload exact-match dictionaries, retrying on transient failures.
+
+    Returns True on success, False if all attempts failed. Each retry waits
+    `delay_seconds * 2**attempt` before trying again (short backoff bounded
+    by attempts).
+    """
+    last_exit = 0
+    for attempt in range(attempts):
+        try:
+            reload_dictionaries()
+            return True
+        except subprocess.CalledProcessError as exc:
+            last_exit = exc.returncode
+            if attempt < attempts - 1:
+                time.sleep(delay_seconds * (2 ** attempt))
+    print(
+        f"warning: SYSTEM RELOAD DICTIONARY failed after {attempts} attempts"
+        f" (last exit {last_exit})",
+        file=sys.stderr,
+    )
+    return False
+
+
 def truncate_all_rule_tables() -> None:
     for table in ALL_RULE_TABLES:
         try_truncate(table)
+
+
+def load_rules_file(path: str) -> list[Any] | None:
+    """Read and parse the rules YAML.
+
+    Returns a list of rule mappings, an empty list if the file is missing /
+    empty / structurally doesn't contain rules, or None if the caller should
+    skip the load entirely (unreadable / malformed). All failure modes here
+    log a warning but never raise.
+    """
+    if not os.path.isfile(path):
+        print(
+            f"warning: rules file not found at {path}; skipping load",
+            file=sys.stderr,
+        )
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            doc = yaml.safe_load(f)
+    except OSError as exc:
+        print(
+            f"warning: could not read {path} ({exc}); skipping load",
+            file=sys.stderr,
+        )
+        return None
+    except yaml.YAMLError as exc:
+        print(
+            f"warning: failed to parse {path} as YAML ({exc}); skipping load",
+            file=sys.stderr,
+        )
+        return None
+
+    if doc is None:
+        return []
+
+    if not isinstance(doc, dict):
+        print(
+            f"warning: {path} root is {type(doc).__name__}, expected mapping; treating as no rules",
+            file=sys.stderr,
+        )
+        return []
+
+    rules = doc.get("rules")
+    if rules is None:
+        return []
+
+    if not isinstance(rules, list):
+        print(
+            f"warning: {path} 'rules' key is {type(rules).__name__}, expected list; treating as empty",
+            file=sys.stderr,
+        )
+        return []
+
+    return rules
 
 
 def main() -> int:
@@ -213,30 +295,12 @@ def main() -> int:
         )
         return 0
 
-    if not os.path.isfile(args.path):
-        print(
-            f"warning: rules file not found at {args.path}; skipping load",
-            file=sys.stderr,
-        )
+    rules = load_rules_file(args.path)
+    if rules is None:
+        # File missing / unreadable / malformed. Leave previously loaded rules
+        # in place; the auto-import loop continues with whatever is already
+        # in ClickHouse.
         return 0
-
-    try:
-        with open(args.path, "r", encoding="utf-8") as f:
-            doc = yaml.safe_load(f)
-    except yaml.YAMLError as exc:
-        print(
-            f"warning: failed to parse {args.path} as YAML ({exc}); skipping load",
-            file=sys.stderr,
-        )
-        return 0
-
-    rules = (doc or {}).get("rules") or []
-    if not isinstance(rules, list):
-        print(
-            f"warning: {args.path} 'rules' key is not a list; treating as empty",
-            file=sys.stderr,
-        )
-        rules = []
 
     buckets = bucket_rules(rules)
 
@@ -245,7 +309,8 @@ def main() -> int:
         load_tag_bucket("ttl_tag_prefix_rules", buckets["tag_prefix"])
         load_owner_bucket("ttl_owner_rules_src", buckets["owner_exact"])
         load_owner_bucket("ttl_owner_prefix_rules", buckets["owner_prefix"])
-        reload_dictionaries()
+        if not reload_dictionaries_with_retry():
+            raise subprocess.CalledProcessError(1, "SYSTEM RELOAD DICTIONARY")
     except subprocess.CalledProcessError as exc:
         print(
             f"error: clickhouse client failed during TTL rules load (exit {exc.returncode});"
@@ -253,15 +318,17 @@ def main() -> int:
             file=sys.stderr,
         )
         truncate_all_rule_tables()
-        # Try once more to reload the dictionaries so they pick up the empty
-        # source tables; if this fails too, we've still made the migrate query
-        # fail open (dict lookups return NULL).
-        try:
-            reload_dictionaries()
-        except subprocess.CalledProcessError:
+        if reload_dictionaries_with_retry():
             print(
-                "warning: dictionary reload after truncate also failed;"
-                " rules may remain stale until the next successful load",
+                "info: after-failure cleanup cleared rule tables and reloaded"
+                " dictionaries; exact-match lookups will return NULL this cycle",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "warning: after-failure dictionary reload did not succeed; prefix"
+                " rules are cleared but exact-match dictionaries may serve stale"
+                " entries until the next successful load",
                 file=sys.stderr,
             )
         return 1

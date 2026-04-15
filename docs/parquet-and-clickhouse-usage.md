@@ -219,12 +219,15 @@ Defaults: `field` is `tag`, `match` is `exact`.
 - **No backfill in v1.** Rules apply only to rows imported after the rules
   are loaded; previously-imported rows keep their existing `expires_at`
   (or `NULL`).
-- **Fail-open.** A missing or malformed rules file logs a warning and exits
-  cleanly; existing rules remain in place and the import proceeds. If
-  ClickHouse rejects a write mid-load, the loader best-effort truncates all
-  four rule tables so the next import runs with no TTL rules rather than a
-  partial rule set, and returns a non-zero exit so the auto-import loop logs
-  the failure.
+- **Fail-open.** A missing, unreadable, or malformed rules file logs a
+  warning and exits 0; previously loaded rules remain active and imports
+  proceed normally. If ClickHouse rejects a write mid-load, the loader
+  best-effort truncates the four rule tables and retries the dictionary
+  reload with a short backoff. On the happy recovery path the cycle sees
+  no TTL rules; if the retries still can't reload the dictionaries, prefix
+  rules are cleared but exact-match dictionaries may briefly serve stale
+  entries until the next successful load. The loader's stderr identifies
+  which case fired.
 
 ### Inspecting loaded rules
 
