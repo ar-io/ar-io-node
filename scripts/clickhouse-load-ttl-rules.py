@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -55,6 +56,9 @@ EXACT_DICTIONARIES = (
 BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 UINT32_MAX = 2**32 - 1
+TTL_SCHEMA_PATH = (
+    Path(__file__).resolve().parent.parent / "src" / "database" / "clickhouse" / "ttl-schema.sql"
+)
 
 
 def clickhouse_args() -> list[str]:
@@ -89,6 +93,21 @@ def try_truncate(table: str) -> None:
             f"warning: best-effort truncate of {table} failed (exit {exc.returncode})",
             file=sys.stderr,
         )
+
+
+def ensure_ttl_schema() -> None:
+    try:
+        schema_sql = TTL_SCHEMA_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(
+            f"TTL schema file not found or unreadable at {TTL_SCHEMA_PATH}: {exc}"
+        ) from exc
+    subprocess.run(
+        clickhouse_args() + ["--multiquery"],
+        input=schema_sql,
+        text=True,
+        check=True,
+    )
 
 
 def escape_str(s: str) -> str:
@@ -371,6 +390,7 @@ def main() -> int:
     buckets = bucket_rules(rules)
 
     try:
+        ensure_ttl_schema()
         load_tag_bucket("ttl_tag_rules_src", buckets["tag_exact"])
         load_tag_bucket("ttl_tag_prefix_rules", buckets["tag_prefix"])
         load_owner_bucket("ttl_owner_rules_src", buckets["owner_exact"])
@@ -378,6 +398,9 @@ def main() -> int:
         load_settings(default_ttl)
         if not reload_dictionaries_with_retry():
             raise subprocess.CalledProcessError(1, "SYSTEM RELOAD DICTIONARY")
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except subprocess.CalledProcessError as exc:
         print(
             f"error: clickhouse client failed during TTL rules load (exit {exc.returncode});"

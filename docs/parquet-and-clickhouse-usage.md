@@ -139,7 +139,8 @@ includes:
   `LowCardinality` on `content_type` / `signature_type` for reduced
   storage.
 
-See `src/database/clickhouse/schema.sql` for the full definition.
+See `src/database/clickhouse/schema.sql` and
+`src/database/clickhouse/ttl-schema.sql` for the full definition.
 
 ## Tag-based TTL Rules
 
@@ -285,10 +286,10 @@ clickhouse client --password <your-password> -q 'DROP TABLE IF EXISTS transactio
 # Check out the prior schema and import script
 git checkout <pre-PE-9059-tag> -- \
   src/database/clickhouse/schema.sql \
+  src/database/clickhouse/ttl-schema.sql \
   scripts/clickhouse-import
 
 # Re-import from the Parquet snapshot (unchanged source of truth)
 docker compose --profile clickhouse up clickhouse -d
 ./scripts/clickhouse-import --input-dir data/parquet --all-partitions
 ```
-

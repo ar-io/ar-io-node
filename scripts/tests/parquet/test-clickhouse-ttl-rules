@@ -45,13 +45,6 @@ TMP_RULES=$(mktemp --suffix=.yaml)
 EMPTY_RULES=$(mktemp --suffix=.yaml)
 trap 'rm -f "$TMP_RULES" "$EMPTY_RULES"' EXIT
 
-# Ensure schema (including rule tables and dictionaries) exists. Safe to re-run.
-./scripts/clickhouse-import --input-dir /tmp --all-partitions --dry-run >/dev/null 2>&1 || true
-ch_query "SELECT 1 FROM ttl_tag_rules_src LIMIT 0" >/dev/null 2>&1 || {
-    echo "✗ Expected TTL rule tables not found. Apply src/database/clickhouse/schema.sql first." >&2
-    exit 1
-}
-
 # A full 43-character base64url owner address and a textual prefix of it.
 OWNER_B64URL="abcDEF0123456789_-xyzABCDEF0123456789_-xyzAB"
 OWNER_PREFIX="abcDEF"
@@ -87,6 +80,15 @@ YAML
 
 echo "Test 1: Load rules and verify row counts"
 python3 ./scripts/clickhouse-load-ttl-rules.py "$TMP_RULES"
+
+ch_query "SELECT 1 FROM ttl_tag_rules_src LIMIT 0" >/dev/null 2>&1 || {
+    echo "✗ TTL rule source table was not auto-created by the loader" >&2
+    exit 1
+}
+ch_query "SELECT dictGetOrNull('ttl_tag_rules', 'ttl_seconds', ('missing', 'missing'))" >/dev/null 2>&1 || {
+    echo "✗ ttl_tag_rules dictionary was not auto-created by the loader" >&2
+    exit 1
+}
 
 EXACT_TAGS=$(ch_query "SELECT count() FROM ttl_tag_rules_src" | tr -d '[:space:]')
 PREFIX_TAGS=$(ch_query "SELECT count() FROM ttl_tag_prefix_rules" | tr -d '[:space:]')

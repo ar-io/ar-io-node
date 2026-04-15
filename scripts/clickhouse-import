@@ -266,28 +266,39 @@ refresh_ttl_rules() {
 # Initialize ClickHouse schema if needed
 initialize_clickhouse_schema() {
   echo "Initializing ClickHouse schema..."
-  if [[ ! -f "src/database/clickhouse/schema.sql" ]]; then
-    echo "Error: ClickHouse schema file not found at src/database/clickhouse/schema.sql" >&2
-    exit 1
-  fi
 
   validate_transactions_schema
 
+  local schema_files=(
+    "src/database/clickhouse/schema.sql"
+    "src/database/clickhouse/ttl-schema.sql"
+  )
+  local schema_file
   local schema_stderr
   local rc=0
-  schema_stderr=$(clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-    --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-    --multiquery < src/database/clickhouse/schema.sql 2>&1) || rc=$?
 
-  if [[ $rc -ne 0 ]]; then
-    if grep -qiE 'already exists' <<<"$schema_stderr"; then
-      echo "  Schema already exists, continuing"
-    else
-      echo "Error: Schema initialization failed (exit $rc):" >&2
-      echo "$schema_stderr" >&2
+  for schema_file in "${schema_files[@]}"; do
+    if [[ ! -f "$schema_file" ]]; then
+      echo "Error: ClickHouse schema file not found at $schema_file" >&2
       exit 1
     fi
-  fi
+
+    schema_stderr=$(clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+      --multiquery < "$schema_file" 2>&1) || rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+      if grep -qiE 'already exists' <<<"$schema_stderr"; then
+        echo "  Schema already exists for $schema_file, continuing"
+      else
+        echo "Error: Schema initialization failed while applying $schema_file (exit $rc):" >&2
+        echo "$schema_stderr" >&2
+        exit 1
+      fi
+    fi
+
+    rc=0
+  done
 }
 
 
