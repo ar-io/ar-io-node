@@ -13,8 +13,10 @@
 # Normalization:
 #   - tag_name is lower-cased + trimmed on both sides of the lookup.
 #   - tag_value is trimmed but case-preserving.
-#   - owner `value` is base64url (as operators see on Arweave); decoded to raw
-#     bytes at load time so it matches the stored owner_address BLOB.
+#   - owner `value` is base64url (as operators see on Arweave) and is stored
+#     verbatim; the migrate query compares base64URLEncode(owner_address)
+#     against it, so prefix rules match the base64url text directly
+#     (e.g. "abcDEF" catches every address whose base64url starts with that).
 #
 # Match modes:
 #   - exact (default): O(1) dictionary lookup.

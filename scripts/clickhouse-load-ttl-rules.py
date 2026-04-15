@@ -3,32 +3,51 @@
 """Load operator-defined TTL rules from a YAML file into ClickHouse.
 
 Populates the four rule-source tables (ttl_tag_rules_src, ttl_tag_prefix_rules,
-ttl_owner_rules_src, ttl_owner_prefix_rules). The two dictionaries layered on
-top of the exact-match source tables (ttl_tag_rules, ttl_owner_rules) refresh
-independently on their LIFETIME clauses; this script does not reload them
-directly.
+ttl_owner_rules_src, ttl_owner_prefix_rules) and force-reloads the two
+dictionaries (ttl_tag_rules, ttl_owner_rules) so the new rules are visible to
+the next migrate_staging_to_final invocation without waiting for the
+dictionaries' LIFETIME to expire.
 
-Fails open: a missing or malformed rules file logs a warning and exits 0 so
-imports continue against whatever rules are already in the source tables. On
-success, each run is a TRUNCATE+INSERT per bucket so removed YAML entries
-disappear on the next load.
+Owner values stay in their base64url form (never decoded) on both sides: the
+migrate query compares base64URLEncode(owner_address) against the stored
+string. That lets operators write textual prefixes like "test-uploader-"
+rather than raw-byte prefixes which wouldn't correspond to any clean base64url
+cut.
+
+Fail-open semantics:
+  * Missing, unreadable, or malformed rules file → log a warning and exit 0.
+    The _src / prefix tables keep their previous contents.
+  * ClickHouse rejecting any of the TRUNCATE/INSERT/RELOAD statements → make
+    a best-effort pass to truncate every rule table to leave a consistent
+    empty state (no TTL rules applied rather than a partial mix), then exit 1.
+    The calling auto-import loop treats this as "imports proceed without
+    enforced TTLs until the next successful load".
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import os
+import re
 import subprocess
 import sys
 from typing import Any, Iterable
 
 import yaml
 
+ALL_RULE_TABLES = (
+    "ttl_tag_rules_src",
+    "ttl_tag_prefix_rules",
+    "ttl_owner_rules_src",
+    "ttl_owner_prefix_rules",
+)
 
-def b64url_decode(value: str) -> bytes:
-    padded = value + "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(padded)
+EXACT_DICTIONARIES = (
+    "ttl_tag_rules",
+    "ttl_owner_rules",
+)
+
+BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def clickhouse_args() -> list[str]:
@@ -53,6 +72,16 @@ def run_query(query: str) -> None:
         clickhouse_args() + ["--query", query],
         check=True,
     )
+
+
+def try_truncate(table: str) -> None:
+    try:
+        run_query(f"TRUNCATE TABLE {table}")
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"warning: best-effort truncate of {table} failed (exit {exc.returncode})",
+            file=sys.stderr,
+        )
 
 
 def escape_str(s: str) -> str:
@@ -122,16 +151,16 @@ def bucket_rules(rules: Iterable[dict[str, Any]]) -> dict[str, list[tuple]]:
                     file=sys.stderr,
                 )
                 continue
-            try:
-                decoded = b64url_decode(raw_value.strip())
-            except (ValueError, base64.binascii.Error) as exc:
+            normalized_value = raw_value.strip()
+            if not BASE64URL_RE.match(normalized_value):
                 print(
-                    f"warning: rule #{idx} value is not valid base64url ({exc}); skipping",
+                    f"warning: rule #{idx} value {normalized_value!r} is not base64url"
+                    " ([A-Za-z0-9_-]+); skipping",
                     file=sys.stderr,
                 )
                 continue
             key = "owner_exact" if match == "exact" else "owner_prefix"
-            buckets[key].append((decoded.hex(), ttl))
+            buckets[key].append((normalized_value, ttl))
 
     return buckets
 
@@ -152,9 +181,19 @@ def load_owner_bucket(table: str, rows: list[tuple]) -> None:
     if not rows:
         return
     values = ",".join(
-        f"(unhex('{hex_bytes}'), {ttl})" for (hex_bytes, ttl) in rows
+        f"({escape_str(owner)}, {ttl})" for (owner, ttl) in rows
     )
     run_query(f"INSERT INTO {table} (owner_address, ttl_seconds) VALUES {values}")
+
+
+def reload_dictionaries() -> None:
+    for dict_name in EXACT_DICTIONARIES:
+        run_query(f"SYSTEM RELOAD DICTIONARY {dict_name}")
+
+
+def truncate_all_rule_tables() -> None:
+    for table in ALL_RULE_TABLES:
+        try_truncate(table)
 
 
 def main() -> int:
@@ -206,11 +245,25 @@ def main() -> int:
         load_tag_bucket("ttl_tag_prefix_rules", buckets["tag_prefix"])
         load_owner_bucket("ttl_owner_rules_src", buckets["owner_exact"])
         load_owner_bucket("ttl_owner_prefix_rules", buckets["owner_prefix"])
+        reload_dictionaries()
     except subprocess.CalledProcessError as exc:
         print(
-            f"error: clickhouse client failed during TTL rules load (exit {exc.returncode})",
+            f"error: clickhouse client failed during TTL rules load (exit {exc.returncode});"
+            " truncating all rule tables to avoid a partial rule set",
             file=sys.stderr,
         )
+        truncate_all_rule_tables()
+        # Try once more to reload the dictionaries so they pick up the empty
+        # source tables; if this fails too, we've still made the migrate query
+        # fail open (dict lookups return NULL).
+        try:
+            reload_dictionaries()
+        except subprocess.CalledProcessError:
+            print(
+                "warning: dictionary reload after truncate also failed;"
+                " rules may remain stale until the next successful load",
+                file=sys.stderr,
+            )
         return 1
 
     print(

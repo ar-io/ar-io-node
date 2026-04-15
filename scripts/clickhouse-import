@@ -509,11 +509,11 @@ FROM
       NULL
     )) AS tag_prefix_ttl,
     any(dictGetOrNull('ttl_owner_rules', 'ttl_seconds',
-      tuple(CAST(txs.owner_address AS String))
+      tuple(base64URLEncode(txs.owner_address))
     )) AS owner_exact_ttl,
     any(arrayReduce('minOrNull',
       arrayMap(
-        p -> if(startsWith(CAST(txs.owner_address AS String), p.1), p.2, NULL),
+        p -> if(startsWith(base64URLEncode(txs.owner_address), p.1), p.2, NULL),
         (SELECT groupArray(tuple(owner_address, ttl_seconds)) FROM ttl_owner_prefix_rules)
       )
     )) AS owner_prefix_ttl
