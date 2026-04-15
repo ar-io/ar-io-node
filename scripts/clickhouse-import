@@ -403,6 +403,7 @@ migrate_staging_to_final() {
   clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
     --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
     --query "INSERT INTO transactions
+WITH (SELECT default_ttl_seconds FROM ttl_settings FINAL LIMIT 1) AS default_ttl
 SELECT
   height,
   block_transaction_index,
@@ -436,18 +437,28 @@ SELECT
   root_parent_offset,
   tags,
   tags_count,
-  -- TTL subcomponents are NULL when a branch had no match; the UInt32 max
-  -- sentinel in least() keeps unmatched branches from dominating the min.
-  if(
-    tag_exact_ttl IS NULL AND tag_prefix_ttl IS NULL
-      AND owner_exact_ttl IS NULL AND owner_prefix_ttl IS NULL,
+  -- Precedence: any matching exempt rule (never_expire=1) wins and forces
+  -- expires_at = NULL, beating TTL matches and the default. If no exempt
+  -- fires and at least one branch produced a TTL, the shortest wins via
+  -- least() with UInt32-max sentinels masking unmatched branches. If
+  -- nothing matched at all, fall back to default_ttl (NULL → keep forever).
+  multiIf(
+    coalesce(tag_exact_exempt, 0) = 1
+      OR coalesce(tag_prefix_exempt, 0) = 1
+      OR coalesce(owner_exact_exempt, 0) = 1
+      OR coalesce(owner_prefix_exempt, 0) = 1,
     NULL,
+    tag_exact_ttl IS NOT NULL OR tag_prefix_ttl IS NOT NULL
+      OR owner_exact_ttl IS NOT NULL OR owner_prefix_ttl IS NOT NULL,
     now() + toIntervalSecond(least(
       coalesce(tag_exact_ttl,    toUInt32(4294967295)),
       coalesce(tag_prefix_ttl,   toUInt32(4294967295)),
       coalesce(owner_exact_ttl,  toUInt32(4294967295)),
       coalesce(owner_prefix_ttl, toUInt32(4294967295))
-    ))
+    )),
+    default_ttl IS NOT NULL,
+    now() + toIntervalSecond(default_ttl),
+    NULL
   ) AS expires_at
 FROM
 (
@@ -488,35 +499,81 @@ FROM
       )
     ) AS tags,
     length(tags) AS tags_count,
+    -- Exact tag TTL: only contributes to the shortest-TTL race when the
+    -- matched rule is not exempt. never_expire=1 entries keep ttl_seconds=0
+    -- and are filtered out here; they surface via tag_exact_exempt instead.
     minOrNull(if(
-      tag_name != '',
+      tag_name != ''
+        AND dictGetOrNull('ttl_tag_rules', 'never_expire',
+          (lower(trim(CAST(tag_name AS String))), CAST(tag_value AS String))
+        ) = 0,
       dictGetOrNull('ttl_tag_rules', 'ttl_seconds',
         (lower(trim(CAST(tag_name AS String))), CAST(tag_value AS String))
       ),
       NULL
     )) AS tag_exact_ttl,
+    maxOrNull(if(
+      tag_name != '',
+      dictGetOrNull('ttl_tag_rules', 'never_expire',
+        (lower(trim(CAST(tag_name AS String))), CAST(tag_value AS String))
+      ),
+      NULL
+    )) AS tag_exact_exempt,
     minOrNull(if(
       tag_name != '',
       arrayReduce('minOrNull',
         arrayMap(
           p -> if(p.1 = lower(trim(CAST(tag_name AS String)))
-                  AND startsWith(CAST(tag_value AS String), p.2),
+                  AND startsWith(CAST(tag_value AS String), p.2)
+                  AND p.4 = 0,
                   p.3,
                   NULL),
-          (SELECT groupArray(tuple(tag_name, tag_value, ttl_seconds)) FROM ttl_tag_prefix_rules)
+          (SELECT groupArray(tuple(tag_name, tag_value, ttl_seconds, never_expire)) FROM ttl_tag_prefix_rules)
         )
       ),
       NULL
     )) AS tag_prefix_ttl,
-    any(dictGetOrNull('ttl_owner_rules', 'ttl_seconds',
-      tuple(base64URLEncode(txs.owner_address))
+    maxOrNull(if(
+      tag_name != '',
+      arrayReduce('maxOrNull',
+        arrayMap(
+          p -> if(p.1 = lower(trim(CAST(tag_name AS String)))
+                  AND startsWith(CAST(tag_value AS String), p.2),
+                  p.4,
+                  NULL),
+          (SELECT groupArray(tuple(tag_name, tag_value, ttl_seconds, never_expire)) FROM ttl_tag_prefix_rules)
+        )
+      ),
+      NULL
+    )) AS tag_prefix_exempt,
+    any(if(
+      dictGetOrNull('ttl_owner_rules', 'never_expire',
+        tuple(base64URLEncode(txs.owner_address))
+      ) = 0,
+      dictGetOrNull('ttl_owner_rules', 'ttl_seconds',
+        tuple(base64URLEncode(txs.owner_address))
+      ),
+      NULL
     )) AS owner_exact_ttl,
+    any(dictGetOrNull('ttl_owner_rules', 'never_expire',
+      tuple(base64URLEncode(txs.owner_address))
+    )) AS owner_exact_exempt,
     any(arrayReduce('minOrNull',
       arrayMap(
-        p -> if(startsWith(base64URLEncode(txs.owner_address), p.1), p.2, NULL),
-        (SELECT groupArray(tuple(owner_address, ttl_seconds)) FROM ttl_owner_prefix_rules)
+        p -> if(startsWith(base64URLEncode(txs.owner_address), p.1) AND p.3 = 0,
+                p.2,
+                NULL),
+        (SELECT groupArray(tuple(owner_address, ttl_seconds, never_expire)) FROM ttl_owner_prefix_rules)
       )
-    )) AS owner_prefix_ttl
+    )) AS owner_prefix_ttl,
+    any(arrayReduce('maxOrNull',
+      arrayMap(
+        p -> if(startsWith(base64URLEncode(txs.owner_address), p.1),
+                p.3,
+                NULL),
+        (SELECT groupArray(tuple(owner_address, ttl_seconds, never_expire)) FROM ttl_owner_prefix_rules)
+      )
+    )) AS owner_prefix_exempt
   FROM staging_transactions AS txs FINAL
   LEFT JOIN staging_tags AS tags FINAL ON txs.height = tags.height AND txs.id = tags.id
   JOIN staging_blocks AS blocks FINAL ON txs.height = blocks.height

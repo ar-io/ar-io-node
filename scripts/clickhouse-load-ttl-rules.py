@@ -45,6 +45,8 @@ ALL_RULE_TABLES = (
     "ttl_owner_prefix_rules",
 )
 
+SETTINGS_TABLE = "ttl_settings"
+
 EXACT_DICTIONARIES = (
     "ttl_tag_rules",
     "ttl_owner_rules",
@@ -107,6 +109,7 @@ def bucket_rules(rules: Iterable[dict[str, Any]]) -> dict[str, list[tuple]]:
         field = raw.get("field", "tag")
         match = raw.get("match", "exact")
         ttl = raw.get("ttl_seconds")
+        never_expire = raw.get("never_expire", False)
 
         if field not in ("tag", "owner_address"):
             print(
@@ -120,12 +123,31 @@ def bucket_rules(rules: Iterable[dict[str, Any]]) -> dict[str, list[tuple]]:
                 file=sys.stderr,
             )
             continue
-        if not isinstance(ttl, int) or ttl <= 0:
+        if not isinstance(never_expire, bool):
             print(
-                f"warning: rule #{idx} has non-positive ttl_seconds {ttl!r}; skipping",
+                f"warning: rule #{idx} has non-boolean never_expire {never_expire!r}; skipping",
                 file=sys.stderr,
             )
             continue
+        if never_expire:
+            if ttl is not None:
+                print(
+                    f"warning: rule #{idx} sets both never_expire and ttl_seconds;"
+                    " skipping (use one or the other)",
+                    file=sys.stderr,
+                )
+                continue
+            ttl_value = 0
+        else:
+            if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl <= 0:
+                print(
+                    f"warning: rule #{idx} has non-positive ttl_seconds {ttl!r}; skipping",
+                    file=sys.stderr,
+                )
+                continue
+            ttl_value = ttl
+
+        never_flag = 1 if never_expire else 0
 
         if field == "tag":
             tag_name = raw.get("tag_name")
@@ -145,7 +167,7 @@ def bucket_rules(rules: Iterable[dict[str, Any]]) -> dict[str, list[tuple]]:
             normalized_name = tag_name.strip().lower()
             normalized_value = tag_value.strip()
             key = "tag_exact" if match == "exact" else "tag_prefix"
-            buckets[key].append((normalized_name, normalized_value, ttl))
+            buckets[key].append((normalized_name, normalized_value, ttl_value, never_flag))
         else:
             raw_value = raw.get("value")
             if not isinstance(raw_value, str) or not raw_value.strip():
@@ -163,7 +185,7 @@ def bucket_rules(rules: Iterable[dict[str, Any]]) -> dict[str, list[tuple]]:
                 )
                 continue
             key = "owner_exact" if match == "exact" else "owner_prefix"
-            buckets[key].append((normalized_value, ttl))
+            buckets[key].append((normalized_value, ttl_value, never_flag))
 
     return buckets
 
@@ -173,10 +195,13 @@ def load_tag_bucket(table: str, rows: list[tuple]) -> None:
     if not rows:
         return
     values = ",".join(
-        f"({escape_str(name)}, {escape_str(value)}, {ttl})"
-        for (name, value, ttl) in rows
+        f"({escape_str(name)}, {escape_str(value)}, {ttl}, {never})"
+        for (name, value, ttl, never) in rows
     )
-    run_query(f"INSERT INTO {table} (tag_name, tag_value, ttl_seconds) VALUES {values}")
+    run_query(
+        f"INSERT INTO {table} (tag_name, tag_value, ttl_seconds, never_expire)"
+        f" VALUES {values}"
+    )
 
 
 def load_owner_bucket(table: str, rows: list[tuple]) -> None:
@@ -184,9 +209,21 @@ def load_owner_bucket(table: str, rows: list[tuple]) -> None:
     if not rows:
         return
     values = ",".join(
-        f"({escape_str(owner)}, {ttl})" for (owner, ttl) in rows
+        f"({escape_str(owner)}, {ttl}, {never})" for (owner, ttl, never) in rows
     )
-    run_query(f"INSERT INTO {table} (owner_address, ttl_seconds) VALUES {values}")
+    run_query(
+        f"INSERT INTO {table} (owner_address, ttl_seconds, never_expire)"
+        f" VALUES {values}"
+    )
+
+
+def load_settings(default_ttl_seconds: int | None) -> None:
+    run_query(f"TRUNCATE TABLE {SETTINGS_TABLE}")
+    value = "NULL" if default_ttl_seconds is None else str(default_ttl_seconds)
+    run_query(
+        f"INSERT INTO {SETTINGS_TABLE} (singleton, default_ttl_seconds)"
+        f" VALUES (1, {value})"
+    )
 
 
 def reload_dictionaries() -> None:
@@ -221,15 +258,18 @@ def reload_dictionaries_with_retry(attempts: int = 3, delay_seconds: float = 0.5
 def truncate_all_rule_tables() -> None:
     for table in ALL_RULE_TABLES:
         try_truncate(table)
+    try_truncate(SETTINGS_TABLE)
 
 
-def load_rules_file(path: str) -> list[Any] | None:
+def load_rules_file(path: str) -> tuple[list[Any], int | None] | None:
     """Read and parse the rules YAML.
 
-    Returns a list of rule mappings, an empty list if the file is missing /
-    empty / structurally doesn't contain rules, or None if the caller should
-    skip the load entirely (unreadable / malformed). All failure modes here
-    log a warning but never raise.
+    Returns a (rules, default_ttl_seconds) tuple on success — rules is an
+    empty list if the file is missing rules or is empty-but-well-formed;
+    default_ttl_seconds is the top-level `default_ttl_seconds` value or None
+    if unset/invalid. Returns None if the caller should skip the load
+    entirely (file missing/unreadable/malformed). All failure modes here log
+    a warning but never raise.
     """
     if not os.path.isfile(path):
         print(
@@ -255,27 +295,40 @@ def load_rules_file(path: str) -> list[Any] | None:
         return None
 
     if doc is None:
-        return []
+        return ([], None)
 
     if not isinstance(doc, dict):
         print(
             f"warning: {path} root is {type(doc).__name__}, expected mapping; treating as no rules",
             file=sys.stderr,
         )
-        return []
+        return ([], None)
+
+    default_ttl = doc.get("default_ttl_seconds")
+    if default_ttl is not None and (
+        not isinstance(default_ttl, int)
+        or isinstance(default_ttl, bool)
+        or default_ttl <= 0
+    ):
+        print(
+            f"warning: {path} default_ttl_seconds {default_ttl!r} is not a positive"
+            " integer; ignoring",
+            file=sys.stderr,
+        )
+        default_ttl = None
 
     rules = doc.get("rules")
     if rules is None:
-        return []
+        return ([], default_ttl)
 
     if not isinstance(rules, list):
         print(
             f"warning: {path} 'rules' key is {type(rules).__name__}, expected list; treating as empty",
             file=sys.stderr,
         )
-        return []
+        return ([], default_ttl)
 
-    return rules
+    return (rules, default_ttl)
 
 
 def main() -> int:
@@ -295,13 +348,14 @@ def main() -> int:
         )
         return 0
 
-    rules = load_rules_file(args.path)
-    if rules is None:
+    parsed = load_rules_file(args.path)
+    if parsed is None:
         # File missing / unreadable / malformed. Leave previously loaded rules
-        # in place; the auto-import loop continues with whatever is already
-        # in ClickHouse.
+        # and settings in place; the auto-import loop continues with whatever
+        # is already in ClickHouse.
         return 0
 
+    rules, default_ttl = parsed
     buckets = bucket_rules(rules)
 
     try:
@@ -309,6 +363,7 @@ def main() -> int:
         load_tag_bucket("ttl_tag_prefix_rules", buckets["tag_prefix"])
         load_owner_bucket("ttl_owner_rules_src", buckets["owner_exact"])
         load_owner_bucket("ttl_owner_prefix_rules", buckets["owner_prefix"])
+        load_settings(default_ttl)
         if not reload_dictionaries_with_retry():
             raise subprocess.CalledProcessError(1, "SYSTEM RELOAD DICTIONARY")
     except subprocess.CalledProcessError as exc:
@@ -335,12 +390,14 @@ def main() -> int:
 
     print(
         "TTL rules loaded from {path}: "
-        "tag_exact={te} tag_prefix={tp} owner_exact={oe} owner_prefix={op}".format(
+        "tag_exact={te} tag_prefix={tp} owner_exact={oe} owner_prefix={op}"
+        " default_ttl_seconds={dt}".format(
             path=args.path,
             te=len(buckets["tag_exact"]),
             tp=len(buckets["tag_prefix"]),
             oe=len(buckets["owner_exact"]),
             op=len(buckets["owner_prefix"]),
+            dt="none" if default_ttl is None else default_ttl,
         )
     )
     return 0
