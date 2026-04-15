@@ -328,7 +328,7 @@ import_parquet_file() {
   
   if ! clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
        --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-       --query="INSERT INTO $table FROM INFILE '$parquet_file' FORMAT Parquet;"; then
+       --query="INSERT INTO $table FROM INFILE '$parquet_file' FORMAT Parquet SETTINGS use_hive_partitioning = 0;"; then
     echo "    Error: Failed to import file: $parquet_file" >&2
     return 1
   fi
