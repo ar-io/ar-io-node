@@ -1873,18 +1873,15 @@ st
               assert.equal(res.headers['x-ar-io-data-id'], resolvedId);
             });
 
-          // resolveFromLocal only gets called when ARWEAVE_TAG_RESPONSE_HEADERS
-          // is enabled. When enabled, it MUST be called with the inner data
-          // item ID (resolvedId), never only with the manifest TX ID.
+          // resolveFromLocal MUST be called with the inner data item ID
+          // (resolvedId), never only with the manifest TX ID.
           const callArgs = resolveFromLocalMock.mock.calls.map(
             (c) => c.arguments[0],
           );
-          if (config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED) {
-            assert.ok(
-              callArgs.includes(resolvedId),
-              `resolveFromLocal must be called with inner data item ID (${resolvedId}); got: [${callArgs.join(', ')}]`,
-            );
-          }
+          assert.ok(
+            callArgs.includes(resolvedId),
+            `resolveFromLocal must be called with inner data item ID (${resolvedId}); got: [${callArgs.join(', ')}]`,
+          );
         });
 
         it('should set X-AR-IO-Data-Id header with data ID for direct data access', async () => {
