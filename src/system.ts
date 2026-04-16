@@ -885,6 +885,13 @@ export const dataItemMetaResolver = new TxMetadataResolver({
   resolveConcurrency: config.TX_METADATA_RESOLVE_CONCURRENCY,
 });
 
+// Resolver passed to data handlers for tag response headers. When the feature
+// is disabled the handlers receive undefined and skip header resolution.
+export const dataItemTagHeaderResolver =
+  config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED
+    ? dataItemMetaResolver
+    : undefined;
+
 // Offset-aware version of gateways data source that uses cached upstream offsets
 // Uses unfiltered base source to avoid blocking legitimate chunk retrieval
 const offsetAwareGatewaysDataSource = new RootParentDataSource({
