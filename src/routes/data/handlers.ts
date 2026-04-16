@@ -392,10 +392,7 @@ const fireItemHeaderResolution = (
   id: string,
   dataItemMetaResolver: TxMetadataResolver | undefined,
 ): Promise<ResolvedItemHeaders | undefined> => {
-  if (
-    !config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED ||
-    dataItemMetaResolver == null
-  ) {
+  if (dataItemMetaResolver == null) {
     return Promise.resolve(undefined);
   }
   return resolveItemHeaders(id, dataItemMetaResolver).catch(() => undefined);
@@ -547,7 +544,7 @@ const setDataHeaders = ({
   // Set Arweave tag and verification response headers, tracking a byte
   // budget to avoid exceeding intermediary header size limits (nginx
   // default 8KB, Cloudflare 32KB).
-  if (config.ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED && itemHeaders != null) {
+  if (itemHeaders != null) {
     const maxBytes = config.ARWEAVE_TAG_RESPONSE_HEADERS_MAX_BYTES;
     let bytesUsed = 0;
     let truncated = false;
