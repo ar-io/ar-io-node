@@ -1,423 +1,92 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with
-code in this repository.
+AR.IO Node — Arweave gateway for accessing and indexing blockchain data, with
+caching, ANS-104 bundle unbundling, and multi-source data retrieval.
 
-## Overview
+## Discovery points
 
-AR.IO Node is a gateway for accessing and indexing Arweave blockchain data. It
-acts as a "Permaweb CDN" providing fast, verified access to Arweave data through
-intelligent caching, ANS-104 bundle unbundling, and multi-source data retrieval.
+- Commands — `package.json` scripts (dev, build, service, test, lint,
+  migrations, duplicate/deps checks)
+- Documentation index — `docs/INDEX.md`
+- Env vars — `docs/envs.md` (keep this and `docker-compose.yaml` in sync when
+  adding or removing env vars)
+- Architecture diagrams — `docs/diagrams/`
+- Release & worktree tooling — `tools/README.md`
+- Reference repos (arweave, ao, HyperBEAM, etc.) — `.mrconfig`; run
+  `mr update` to clone/update
+- OpenAPI — `docs/openapi.yaml`
 
-## Development
+## Architecture load-bearing facts
 
-- Install dependencies: `yarn install`
-- Start development server: `yarn start`
-- Watch mode with auto-restart: `yarn watch`
-- Build for production: `yarn build`
-- Run production build: `yarn start:prod`
+- `src/system.ts` is the central DI wiring — all services, workers, data
+  sources, resolvers, and lifecycle cleanup handlers are constructed here.
+- `src/data/` uses composite sources with fallback chains
+  (cache → S3 → AR.IO peers → trusted gateways → Arweave nodes). Retrieval
+  order is configurable via `ON_DEMAND_RETRIEVAL_ORDER` and
+  `BACKGROUND_RETRIEVAL_ORDER`.
+- Database access runs in a worker thread (`StandaloneSqlite`). The main
+  process queues operations via message passing — never call SQLite
+  synchronously from the main thread.
+- Filters (`ANS104_UNBUNDLE_FILTER`, `ANS104_INDEX_FILTER`,
+  `WEBHOOK_INDEX_FILTER`) share a composable JSON filter system — see
+  `docs/filters.md`.
+- Responses include trust headers indicating verification status.
 
-### Service Control
-
-- Start service: `yarn service:start`
-- Stop service: `yarn service:stop`
-- View logs: `yarn service:logs`
-- Service logs are in `logs/service.log` (JSONL format - one JSON object per
-  line)
-- OTEL spans are in `logs/otel-spans.jsonl`
-- When testing changes: stop service, clear logs
-  (`rm logs/service.log && touch logs/service.log`), then restart
-
-### Dry-Run Mode for Upload Testing
-
-The gateway supports a dry-run mode for testing transaction and chunk uploads
-without posting to the Arweave network:
-
-```bash
-# Enable dry-run mode
-ARWEAVE_POST_DRY_RUN=true yarn start
-```
-
-**Important**: When dry-run mode is enabled:
-
-- Works on both **port 3000** (Envoy) and **port 4000** (direct to Node.js app)
-- Both `POST /tx` (transaction headers) and `POST /chunk` requests are simulated
-- Returns 200 OK success responses to clients as if transactions were posted
-- Perfect for testing apps like ArDrive and large uploads without burning AR
-  tokens
-- By default, transactions are validated (signature verification) and chunks are
-  validated (merkle proof verification) before returning success
-- Set `ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION=true` to skip validation for faster
-  testing
-- Only the final network broadcast is skipped
-
-**Routing behavior:**
-
-- When enabled: Envoy routes `POST /tx` and `POST /chunk` to core for simulated
-  responses
-- When disabled: Envoy routes `POST /tx` and `POST /chunk` to trusted Arweave
-  nodes
-- `GET /tx` requests are always proxied by Envoy to the trusted Arweave node
+## Gotchas
 
 ### Worktrees
 
-Git worktrees enable parallel development without switching branches. Worktrees
-live under `wt/<branch-name>` with `.env` and `CLAUDE.local.md` symlinked from
-the main checkout.
+`./tools/wt add <branch>` symlinks `.env` and `CLAUDE.local.md` from the main
+checkout into the worktree but gives each worktree its own clean `data/`
+directory (not shared).
 
-- Add a worktree: `./tools/wt add <branch>` (creates new branch off develop)
-- Add from existing branch: `./tools/wt add <branch> --existing`
-- Remove a worktree: `./tools/wt rm <branch>`
-- List worktrees: `./tools/wt ls`
-- Each worktree runs its own `yarn install` automatically on creation
-- Each worktree gets a clean `data/` directory (not shared with main checkout)
+### Testing a running service
 
-## Architecture
+When iterating against the local service: stop it, clear
+`logs/service.log` (`rm logs/service.log && touch logs/service.log`), then
+restart. Service logs are JSONL; OTEL spans are in `logs/otel-spans.jsonl`.
 
-### High-Level Structure
+### Test logger
 
-The codebase follows a layered architecture:
+Always use `createTestLogger()` from `test/test-logger.ts` in test files —
+never `winston.createLogger({ silent: true })`. Test output is written to
+`logs/test.log` (overwritten each run), not the console.
 
-1. **Routes Layer** (`src/routes/`) - Express.js HTTP endpoints for data,
-   chunks, GraphQL, ArNS, etc.
-2. **System Layer** (`src/system.ts`) - Central initialization of all services,
-   workers, databases, and data sources
-3. **Workers Layer** (`src/workers/`) - Background processes for data import,
-   unbundling, verification, and repair
-4. **Data Layer** (`src/data/`) - Composite data sources implementing fallback
-   chains for data retrieval
-5. **Database Layer** (`src/database/`) - SQLite databases (core, data, bundles,
-   moderation) with worker-based queuing
-6. **Store Layer** (`src/store/`) - KV stores (LMDB, Redis, filesystem) for
-   caching headers and data
+### Adding a database method
 
-### Key Architectural Patterns
+Five coordinated edits are required:
 
-#### Composite Pattern for Data Sources
+1. SQL statement in `src/database/sql/<schema>/` (named via `-- statementName`
+   comment)
+2. Worker implementation in `StandaloneSqlite`
+3. Queue wrapper in the main database class
+4. Case handler in the worker message handler
+5. Interface signature in `types.d.ts`
 
-Data retrieval uses composite sources that try multiple backends in order:
+### SQLite migration rules
 
-- `CompositeChunkDataSource` - tries local cache, S3, AR.IO peers, trusted
-  gateways, Arweave nodes
-- `CompositeDataAttributesSource` - aggregates transaction/data item metadata
-- Components implement common interfaces (`ChunkDataSource`,
-  `ContiguousDataSource`, etc.)
+- One `ALTER TABLE` per column (no comma-separated columns)
+- Drop indexes before dropping their columns
+- Avoid `DEFAULT` in `ALTER TABLE ADD COLUMN` — it rewrites the entire table
+- Prefer `NULLS FIRST`/`NULLS LAST` over `COALESCE` in `ORDER BY` to preserve
+  index usage
+- Run `./test/dump-test-schemas` after applying migrations so the test SQL
+  files stay current. Down migrations go in `migrations/down/` with the same
+  filename.
 
-#### Read-Through Caching
+### Upload dry-run
 
-- `ReadThroughDataCache` wraps upstream sources and caches results to filesystem
-- Configurable retrieval order via `ON_DEMAND_RETRIEVAL_ORDER` and
-  `BACKGROUND_RETRIEVAL_ORDER`
-- Cache locations: `data/contiguous/`, `data/lmdb/`, `data/headers/`
+For testing uploads without broadcasting to Arweave, see
+`ARWEAVE_POST_DRY_RUN` and `ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION` in
+`docs/envs.md`.
 
-#### Worker-Based Database Access
+### Git staging
 
-- Main process queues database operations via message passing
-- Worker thread (`StandaloneSqlite`) executes queries to avoid blocking
-- Pattern: queue method in main class → worker handler → worker implementation
+Stage specific files. Do not use `git add .` or `git commit -A`.
 
-#### Filter System
+## Documentation hygiene
 
-Filters control which transactions/bundles are unbundled and indexed:
-
-- Declarative JSON syntax supporting tags, attributes, logical operators
-  (and/or/not)
-- Implemented as composable filter classes (`MatchAll`, `MatchAny`, `MatchTags`,
-  etc.)
-- Environment variables: `ANS104_UNBUNDLE_FILTER`, `ANS104_INDEX_FILTER`,
-  `WEBHOOK_INDEX_FILTER`
-- Same filter system used for webhooks and log filtering
-
-#### Dependency Injection via system.ts
-
-`src/system.ts` is the central initialization point that wires all dependencies:
-
-- Creates all data sources, databases, workers, resolvers, clients
-- Manages lifecycle (startup/shutdown) via cleanup handlers
-- Workers and routes receive dependencies as constructor parameters
-
-### Data Flow
-
-#### Reading Data (GET requests)
-
-1. Request arrives at route handler (e.g., `/raw/:id`)
-2. ArNS resolution if needed (via `CompositeArNSResolver`)
-3. Lookup transaction/data item metadata in databases
-4. Retrieve data via `ContiguousDataSource` (tries cache → S3 → peers →
-   gateways)
-5. Return with trust headers indicating verification status
-
-#### Writing Data (Chunk uploads)
-
-1. POST to `/chunk` endpoint validates chunk format
-2. Broadcasts chunk to configured Arweave nodes and peers
-3. Gateway acts as relay only - doesn't create transactions
-
-#### Background Indexing
-
-1. `BlockImporter` polls for new blocks from trusted Arweave node
-2. `TransactionImporter` processes transactions from blocks
-3. `Ans104Unbundler` downloads bundles matching `ANS104_UNBUNDLE_FILTER`
-4. `Ans104DataIndexer` indexes data items matching `ANS104_INDEX_FILTER`
-5. `DataVerificationWorker` verifies data integrity using Merkle roots
-
-## Database
-
-### Schemas
-
-- Main schemas: `core` (blocks/transactions), `data` (contiguous data),
-  `bundles` (ANS-104), `moderation`
-- Schema dumps are in `test/` directory (e.g., `test/data-schema.sql`)
-- Bundles schema shows good patterns for retry tracking with timestamps
-- Use `currentUnixTimestamp()` helper for timestamp fields
-- When implementing similar features, check existing patterns (e.g., bundles
-  retry system for verification retries)
-
-### Migrations
-
-- Create new migrations with:
-  `yarn db:migrate create --folder migrations --name <schema>.description.sql`
-- Apply migrations with: `yarn db:migrate up`
-- Apply specific migration: `yarn db:migrate up --name <migration-filename>`
-- Revert migrations with: `yarn db:migrate down --step N` or
-  `yarn db:migrate down --name <migration-filename>`
-- Check migration status: Query `migrations` table in `data/sqlite/core.db`
-- After applying migrations, update test schemas with:
-  `./test/dump-test-schemas`
-- Down migrations go in `migrations/down/` with the same filename
-
-#### SQLite Migration Notes
-
-- SQLite requires separate `ALTER TABLE` statements for each column
-  addition/removal (no comma-separated columns)
-- When dropping columns with associated indexes, drop the indexes first
-- Use `DROP INDEX IF EXISTS` to avoid errors if index doesn't exist
-- When consolidating multiple migrations, ensure old migration files are removed
-  to avoid duplicate execution
-- Avoid DEFAULT values in ALTER TABLE ADD COLUMN as they require rewriting the
-  entire table
-- Use NULLS FIRST/LAST in ORDER BY instead of COALESCE to preserve index usage
-
-### SQL Statement Organization
-
-- SQL statements are organized in `src/database/sql/<schema>/` directories
-- Each SQL file contains named statements as comments (e.g., `-- statementName`)
-- Statements are automatically loaded and prepared by the database module
-- SQL statement names should be descriptive about the operation (e.g.,
-  `updateVerificationPriority` for UPDATE)
-- Method names at the interface level should hide implementation details (e.g.,
-  `saveVerificationPriority` for insert/update/upsert)
-- Exception: When the operation itself is the interface (e.g.,
-  `incrementVerificationRetryCount`), use the same name at both levels
-
-### Adding Database Methods
-
-When adding a new database method:
-
-1. Add the SQL statement to the appropriate file in `src/database/sql/<schema>/`
-2. Add the method implementation in the worker class (e.g., in
-   `StandaloneSqlite`)
-3. Add the queue wrapper method in the main database class
-4. Add the case handler in the worker message handler
-5. Add the method signature to the appropriate interface in `types.d.ts`
-
-### Database Management
-
-- Database files are in `data/sqlite/` directory
-- To reset databases: `rm data/sqlite/*.db && yarn db:migrate up`
-- Always stop the service before manually deleting database files
-- Query databases with: `sqlite3 data/sqlite/<schema>.db "<SQL>"`
-
-## Testing
-
-- Run all tests with: `yarn test`
-- Run individual test files with: `yarn test:file src/path/to/test.ts`
-- Run individual test files with coverage:
-  `yarn test:file:coverage src/path/to/test.ts`
-- Run tests with coverage: `yarn test:coverage`
-- Run e2e tests: `yarn test:e2e`
-- Mock functions in tests use: `mock.fn()` and reset with `mock.restoreAll()` in
-  afterEach
-- Database schemas in tests come from `test/*.sql` files
-
-### Test Logging
-
-- All test output is automatically logged to `logs/test.log` instead of the
-  console
-- Test log file is overwritten on each test run for a clean slate
-- Use `createTestLogger()` from `test/test-logger.ts` in all test files
-- Logger automatically includes test context (suite name, test case name) in log
-  entries
-- Never use `winston.createLogger({ silent: true })` - always use the test
-  logger helper
-
-#### Creating Test Loggers
-
-```typescript
-import { createTestLogger } from '../../test/test-logger.js';
-
-// Basic usage with suite name
-const log = createTestLogger({ suite: 'ArIOChunkSource' });
-
-// With suite and test name
-const log = createTestLogger({
-  suite: 'ArIOChunkSource',
-  test: 'should fetch chunk data',
-});
-
-// With additional metadata
-const log = createTestLogger({
-  suite: 'DataIndex',
-  metadata: { database: 'test.db' },
-});
-```
-
-#### Viewing Test Logs
-
-- Check `logs/test.log` after running tests to debug failures
-- Log format matches production format (JSON or simple based on LOG_FORMAT)
-- Test context included in each log entry (testSuite, testCase fields)
-
-## Code Quality
-
-### Git Workflow
-
-- Never use `git commit -A` or `git add .`. Add the individual files you want
-  instead.
-
-### Linting
-
-- After making changes be sure to run `yarn lint:check`.
-- If lint issues are found, run `yarn lint:fix` to fix them.
-
-### Duplicate Detection
-
-- Check for code duplication: `yarn duplicate:check`
-- Generate HTML report: `yarn duplicate:report`
-- CI duplicate check: `yarn duplicate:ci`
-
-### Dependency Analysis
-
-- Check for circular dependencies: `yarn deps:check`
-- Generate dependency graph: `yarn deps:graph`
-- Find orphan modules: `yarn deps:orphans`
-- Find leaf modules: `yarn deps:leaves`
-- Show dependency summary: `yarn deps:summary`
-- CI dependency check: `yarn deps:ci`
-
-## Documentation
-
-- Documentation index is at `docs/INDEX.md` - start here for an overview of all
-  available documentation
-- **Keep docs in sync with code**: When making changes that affect documented
-  behavior (environment variables, configuration, APIs, CLI tools), update the
-  relevant documentation in the same PR. Check `docs/envs.md` for env var
-  changes, feature-specific guides for behavior changes, and `docs/INDEX.md` to
-  find the right doc to update.
-- **Keep docker-compose.yaml in sync with env vars**: When adding or removing
-  environment variables, ensure they are also added to or removed from
-  `docker-compose.yaml` so operators using Docker get access to the new
-  configuration.
-- The project includes a comprehensive glossary at `docs/glossary.md`
-- When adding new concepts, features, or technical terms, update the glossary
-- Keep glossary definitions concise and focused on concepts rather than
-  implementation details
-- Organize new terms into the appropriate existing sections
-- When modifying code, add or improve TSDoc comments where possible to enhance
-  documentation
-- Process documentation is located in `docs/processes/`
-- The release process is documented at `docs/processes/release.md`
-
-### Rate Limiter and x402 Documentation
-
-- Comprehensive operator guide at `docs/x402-and-rate-limiting.md`
-- When modifying rate limiting functionality, update the guide:
-  - If adding/removing rate limited endpoints: update "Rate Limited Endpoints"
-    section
-  - If changing environment variables: update both the guide and `docs/envs.md`
-  - If changing payment flow or token consumption: update "How They Work
-    Together" section
-  - If changing configuration options: update configuration reference tables
-- When adding rate limiter or x402 related terms, add them to the "Rate Limiter
-  & x402 Payment Protocol" section in the glossary
-
-## Scratch Directory
-
-- The `/scratch` directory is for work-in-progress files that should not be
-  committed to git
-- Use it for:
-  - Draft design documents and analysis notes
-  - Work-in-progress ticket descriptions and issue summaries
-  - Investigation notes and debugging artifacts
-  - Temporary markdown files during development
-- All files are automatically ignored by git; the directory is tracked via
-  `.gitkeep`
-
-## Releases
-
-- Releases are tagged with rN in git where N is a monotonically increasing
-  integer value.
-- Release automation scripts are in `tools/`:
-  - `release-status` - Check if repo is ready for release
-  - `prepare-release` - Automate version updates and changelog
-  - `finalize-release` - Update docker images with commit SHAs after builds
-  - `test-release` - Test all docker compose profiles
-  - `post-release` - Cleanup and prepare for next development cycle
-  - See `tools/README.md` for detailed documentation of each script
-
-## Data Management
-
-### Cache Management
-
-- Contiguous data cache is in `data/contiguous/data/` and `data/contiguous/tmp/`
-- Cached files are organized by hash in subdirectories (e.g.,
-  `IX/zl/IXzlt26pAoko02PrP8Zith9UiJWidZLxxHEDfGK91jg`)
-- Cache files may require sudo to delete due to service ownership
-- To clear cache without full reset: stop service, delete cache files, restart
-  service
-- Data caching is controlled by `SKIP_DATA_CACHE` environment variable (default:
-  false)
-
-## Reference Repositories
-
-The project includes reference repositories managed by `mr` (myrepos) in the
-`repos/` directory. These can be used for understanding Arweave internals and
-related protocols:
-
-- **repos/arweave** - Core Arweave node implementation (Erlang)
-  - Source: https://github.com/ArweaveTeam/arweave
-  - Reference for: Block structure, transaction formats, mining protocols,
-    network protocols
-
-- **repos/arweave-js** - JavaScript/TypeScript client library for Arweave
-  - Source: https://github.com/ArweaveTeam/arweave-js
-  - Reference for: Transaction creation, signing, API interactions, data
-    formatting
-
-- **repos/HyperBEAM** - Erlang BEAM VM running in WebAssembly
-  - Source: https://github.com/permaweb/HyperBEAM
-  - Reference for: AO process execution, WASM integration
-
-- **repos/ao** - The AO computer - Actor Oriented smart contracts on Arweave
-  - Source: https://github.com/permaweb/ao
-  - Reference for: AO protocol, message passing, process scheduling, compute
-    units
-
-- **repos/ar-io-observer** - AR.IO network observer and monitoring tools
-  - Source: https://github.com/ar-io/ar-io-observer
-  - Reference for: Network monitoring, gateway health checks, observation
-    protocols
-
-- **repos/cdb64-rs** - Rust implementation of CDB (constant database) with
-  64-bit support
-  - Source: https://github.com/ever0de/cdb64-rs
-  - Reference for: CDB file format, fast O(1) key-value lookups, Node.js
-    bindings via napi-rs
-
-- **repos/private-gateway-legacy** - ArweaveTeam's original gateway
-  implementation (symlink, not managed by mr)
-  - Source: https://github.com/ar-io/private-gateway-legacy
-  - Reference for: Legacy gateway patterns, historical implementation details
-
-Use `mr update` to clone/update the mr-managed repositories. They are excluded from git
-tracking via `.gitignore`.
+When changing behavior that affects documented contracts (env vars, APIs,
+CLI tools), update the relevant file in `docs/` in the same PR. Use
+`docs/INDEX.md` to find the right doc. Add new terms and concepts to
+`docs/glossary.md`. Add or improve TSDoc comments on code you touch.
