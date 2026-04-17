@@ -8,6 +8,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **RFC 9421 HTTP Message Signatures for Gateway Responses**: The gateway
+  can now sign responses using RFC 9421 HTTP Message Signatures, allowing
+  clients to cryptographically verify response integrity and origin.
+  Controlled by `HTTPSIG_ENABLED` (default: false) with an Ed25519 key
+  auto-generated at `HTTPSIG_KEY_FILE` (default:
+  `data/keys/httpsig.pem`). `HTTPSIG_BIND_REQUEST` (default: true) binds
+  each response to the triggering request via `@method;req` and
+  `@path;req`. An attestation linking the key to the operator wallet is
+  uploaded to Arweave on startup when `HTTPSIG_UPLOAD_ATTESTATION=true`
+  and `OBSERVER_WALLET` is set. HTTPSIG response metadata is documented
+  in OpenAPI for `/ar-io/info` and data endpoints.
+
+- **Tag-Based TTL Rules for ClickHouse-Exported Data**: Operators can now
+  expire rows in the ClickHouse `transactions` table by tag content or
+  uploader owner address. Rules are declared in
+  `config/clickhouse-ttl-rules.yaml` (copy from the committed
+  `.example.yaml` template) and loaded at the top of every
+  `clickhouse-auto-import` cycle into four source tables, with exact-match
+  lookups going through refreshing `COMPLEX_KEY_HASHED` dictionaries and
+  prefix matches falling back to scanned tables. Native TTL enforcement
+  deletes rows when `expires_at` elapses. Supports a top-level
+  `default_ttl_seconds` fallback and per-rule `never_expire: true`
+  exemptions (precedence: exempt > shortest TTL match > default > NULL).
+  v1 applies only to rows imported after rules are loaded; no backfill.
+  The loader fails open on missing/malformed rules to avoid blocking
+  imports.
+
+- **Per-Host `APEX_ARNS_NAME` Mapping**: `APEX_ARNS_NAME` now accepts a
+  comma-separated list of values positionally mapped to `ARNS_ROOT_HOST`
+  entries (e.g., `APEX_ARNS_NAME=turbo,ar-io` with
+  `ARNS_ROOT_HOST=arweave.dev,g8way.io`). A single value still applies to
+  all hosts.
+
+- **Parquet Export Partition Progress in Status API**: The admin status
+  endpoint and the `parquet-export` CLI poll loop now surface the
+  current partition range and completed/total partition counts while a
+  Parquet export is in progress.
+
 - **`clickhouse-import --flat-dir` mode**: `scripts/clickhouse-import`
   accepts a flat directory of Parquet files named
   `<table>-minHeight:<min>-maxHeight:<max>-rowCount:<n>.parquet`
@@ -29,11 +67,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and a one-time full re-import from Parquet — see
   `docs/parquet-and-clickhouse-usage.md`.
 
+- **Skip SQLite for Heights Covered by ClickHouse in GraphQL**: Opt-in
+  optimization in `CompositeClickHouseDatabase` raises the SQLite
+  fallback's `minHeight` to `(clickhouseMax - buffer + 1)` and skips the
+  SQLite call entirely when the adjusted range is empty. Controlled by
+  `CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED` (default: false), with a
+  configurable safety buffer (default: 10 heights) and a cached
+  ClickHouse max-height lookup (default TTL: 60s). Degrades to prior
+  behavior on lookup failure.
+
+- **GraphQL `owner.key` Fetch Skipped When Only `owner.address` Requested**:
+  Splitting the `Transaction.owner` resolver into field-level
+  `Owner.address` and `Owner.key` resolvers lets GraphQL skip the per-row
+  owner key fetch unless `key` is explicitly selected. Memoization on the
+  `Owner` parent still fetches the key only once when multiple aliased
+  selections or overlapping fragments request it in the same query.
+
+- **Default ClickHouse Image Bumped to 26.3**: The default ClickHouse
+  container image used by `clickhouse-auto-import` is now 26.3.
+
+- **Observer Image Updated**: `OBSERVER_IMAGE_TAG` bumped to include
+  epoch source fixes.
+
 ### Fixed
 
 - **ClickHouse GQL `indexedAt` and `blockPreviousBlock` fields**: These
   fields were previously always returned as `undefined` because the base
   SELECT omitted the corresponding columns. They are now populated.
+
+- **Duplicate GraphQL Transaction Results from ClickHouse**: The
+  `transactions` table uses `ReplacingMergeTree(inserted_at)`, which only
+  deduplicates during background merges. Queries now use `FINAL` so
+  GraphQL returns a single edge per id instead of every un-merged
+  version.
+
+- **Tag Headers on Manifest-Resolved Responses**: When a manifest path
+  resolves to an inner data item, `X-Arweave-Tag-*` headers are now
+  populated from the resolved inner item rather than the manifest
+  transaction.
+
+- **Turbo Fallback Narrowed to Module-Not-Found**: The optional Turbo
+  upload path now falls back only on module-not-found (instead of
+  swallowing unrelated errors) and requires an explicit trigger header
+  before signing.
 
 ## [Release 75] - 2026-04-08
 
