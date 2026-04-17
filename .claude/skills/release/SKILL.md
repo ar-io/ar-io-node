@@ -42,6 +42,41 @@ From `release-info` output, verify:
   LITESTREAM) are `"latest"`
 - `OBSERVER_IMAGE_TAG` is a pinned 40-char SHA (not `"latest"`)
 
+### Changelog coverage check
+
+`changelogUnreleasedHasContent` only confirms the `[Unreleased]` section is
+non-empty. Before proceeding, also verify that user-visible changes merged
+since the last release are actually reflected in that section.
+
+1. Identify the previous release tag (e.g., `r75`):
+
+   ```bash
+   git describe --tags --abbrev=0 --match 'r*'
+   ```
+
+2. List commits merged to `develop` since that tag:
+
+   ```bash
+   git log --no-merges --pretty='%h %s' r<N-1>..develop
+   ```
+
+3. Read the `[Unreleased]` section of `CHANGELOG.md` and compare. Flag any
+   commit that looks user-visible (feat, fix affecting users, behavior
+   change, new/changed env var, API change, perf) but is **not** represented
+   by an entry.
+
+**Do not flag:**
+
+- Commits that fix or revise something *also introduced in this release
+  cycle* (e.g., a `feat:` and a follow-up `fix:` for the same feature
+  within `r<N-1>..develop`). The net user-visible change is one entry for
+  the feature; intermediate fixes are implementation churn.
+- Pure `chore:`, `refactor:`, `test:`, `docs:`, CI/tooling, or dependency
+  bumps with no user-visible effect.
+
+Report any gaps to the user and pause for them to either add entries or
+confirm the omission is intentional before continuing.
+
 The release number to use is `version.replace('-pre', '')`. Confirm with the
 user before proceeding.
 
@@ -54,6 +89,16 @@ Mutations (run in order):
 ./tools/set-version <N>
 ./tools/set-ar-io-node-release <N>
 ```
+
+### Summary blurb
+
+`changelog-release` renames the section heading but does **not** add a summary
+paragraph. Immediately under the new `## [Release N] - <date>` heading, write
+a 1-paragraph summary in the style of prior releases (see `[Release 74]` and
+`[Release 75]`): open with "This is a **recommended release** focused on
+**<2–3 themes>**." and then enumerate "Key highlights include…" across the
+most impactful entries in Added/Changed/Fixed. Verify the paragraph is
+present before committing.
 
 Find the Jira ticket for the release (search Jira or recent git log for a
 `PE-####` referencing "Release N"). If none is found, ask the user.
@@ -163,13 +208,57 @@ git push origin r<N>
 ```
 
 Draft release notes from the `[Release N]` section of `CHANGELOG.md` plus the
-image SHA list from `release-info`. Then:
+image SHA list from `release-info`. **Unwrap the hard-wrapped lines** before
+publishing — the CHANGELOG hard-wraps at ~70 chars, which GitHub Markdown
+renders as visual line breaks in the release UI's narrow column. Join lines
+within each block (paragraph or bullet) into a single logical line; preserve
+blank lines between blocks and heading lines as-is.
+
+**Link each image SHA** to its GHCR package version page so readers can
+inspect the exact image. Resolve the HTML URL via:
+
+```bash
+gh api "/orgs/ar-io/packages/container/<image>/versions" \
+  --jq '.[] | select(.metadata.container.tags[] | contains("<sha>")) | .html_url' | head -1
+```
+
+Then format the entry as:
+
+```markdown
+- `CORE_IMAGE_TAG`: [`<sha>`](https://github.com/orgs/ar-io/packages/container/ar-io-core/<version-id>)
+```
+
+Include `OBSERVER_IMAGE_TAG` (resolve via the `ar-io-observer` package) even
+though it's not release-managed — operators still want the link.
+
+Example reformatter (run against the extracted Release N section):
+
+```python
+import re, sys
+text = sys.stdin.read()
+blocks = re.split(r'\n[ \t]*\n', text.rstrip())
+for b in blocks:
+    lines = b.splitlines()
+    if lines and lines[0].lstrip().startswith('#'):
+        print('\n'.join(lines))
+    else:
+        print(' '.join(l.strip() for l in lines if l.strip()))
+    print()
+```
+
+Then:
 
 ```bash
 gh release create r<N> \
   --title "Release <N>" \
   --notes-file <path-to-notes>
 ```
+
+Pushing the `r<N>` tag triggers another round of image builds that publish
+the `r<N>`-tagged container images. **Wait for those builds to finish**
+before moving to Phase 6 — operators pulling `r<N>` need the tagged images
+available. Poll with the same `gh api .../actions/runs` query as Phase 3 at
+~2 minute intervals.
 
 ## Phase 6 — Merge to main
 
