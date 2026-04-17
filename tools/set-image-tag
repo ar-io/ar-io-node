@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Set the default for a single *_IMAGE_TAG env var in docker-compose.yaml.
+#
+# Usage:
+#   ./tools/set-image-tag <ENV_VAR_NAME> <value>
+#   ./tools/set-image-tag CORE_IMAGE_TAG latest
+#   ./tools/set-image-tag CORE_IMAGE_TAG abc1234...  # 40-char git SHA
+#
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+exec node --import ./register.js tools/lib/release/set-image-tag.ts "$@"

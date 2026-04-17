@@ -1,55 +1,149 @@
 # Release Process
 
-## Release
+The preferred way to cut a release is via the `release` skill
+(`.claude/skills/release/SKILL.md`) — tell Claude "prepare release N" and it
+drives the phases below using the small tools under `tools/`. The manual
+checklist remains authoritative.
 
-1. Run security audit: `yarn audit` to check for vulnerabilities before release.
-2. Ensure all relevant changes are merged into `develop`.
-3. Find the relevant release ticket in JIRA with the AR.IO component (e.g., search for "Release N" in project PE).
-4. Review `CHANGELOG.md` and ensure all changes have been documented.
-5. Add the release date and release number to `CHANGELOG.md`.
-6. Remove the "-pre" suffix from the `release` constant in `src/version.ts`.
-7. Set AR_IO_NODE_RELEASE environment variable in `docker-compose.yaml` to the
-   same value used in `src/version.ts`.
-8. Commit the version change with the JIRA ticket reference and push to `develop`.
-9. Once image builds are complete, update the image tags in `docker-compose.yaml`
-   to use the git commit SHA from the release commit (not the release number).
-   Update clickhouse-auto-import, core, envoy, and litestream image tags.
-10. AO CU and observer images should remain pinned and are not updated during
-   normal releases unless explicitly needed for compatibility or bug fixes.
-11. Test the release by starting docker compose with each profile to verify
-   containers start and produce logs:
-   - `docker compose up -d` (default profile)
-     - Core containers (envoy, core, redis, observer) must stay running
-   - `docker compose --profile clickhouse --profile litestream --profile otel down && docker compose --profile clickhouse up -d`
-     - Adds clickhouse and clickhouse-auto-import containers
-   - `docker compose --profile clickhouse --profile litestream --profile otel down && docker compose --profile litestream up -d`
-     - Litestream may exit if S3 not configured (expected behavior)
-   - `docker compose --profile clickhouse --profile litestream --profile otel down && docker compose --profile otel up -d`
-     - OTEL collector may exit if endpoint not configured (expected behavior)
-   - `docker compose --profile clickhouse --profile litestream --profile otel down && docker compose up -d && docker compose -f docker-compose.yaml -f docker-compose.ao.yaml up -d`
-     - AO CU may restart if not configured (expected behavior)
-   - Verify core containers stay running: `docker ps | grep -E "envoy|core|redis|observer"`
-   - After testing, stop all: `docker compose -f docker-compose.yaml -f docker-compose.ao.yaml --profile clickhouse --profile litestream --profile otel down`
-12. Tag the release in git: `git tag r47` (replace with appropriate release number)
-13. Push the tag: `git push origin r47`
-14. Create GitHub release using the tag:
-    ```bash
-    gh release create r[N] \
-      --title "Release [N]" \
-      --notes "Release notes from CHANGELOG with docker image SHAs"
-    ```
-    - Include the release summary from CHANGELOG
-    - List all docker images with their specific SHAs
-15. Merge to `main`.
+## Tools
 
-## Post Release
+All mutations below are performed by narrow, idempotent tools:
 
-1. Switch back to the `develop` branch.
-2. Bump the release number and add a "-pre" suffix to `release` constant in
-   `src/version.ts`.
-3. Set AR_IO_NODE_RELEASE environment variable in `docker-compose.yaml` to the
-   same value used in `src/version.ts`.
-4. Set clickhouse-auto-import, core, envoy, and litestream image tags back to
-   `latest` in `docker-compose.yaml`. AO CU and observer images should remain
-   pinned.
-5. Create a new `[Unreleased]` entry in `CHANGELOG.md`.
+| Tool                              | What it does                                                            |
+| --------------------------------- | ----------------------------------------------------------------------- |
+| `./tools/release-info [--json]`   | Reports version, `AR_IO_NODE_RELEASE`, changelog state, image tag defaults |
+| `./tools/set-version <value>`     | Updates `release` in `src/version.ts`                                   |
+| `./tools/set-ar-io-node-release <value>` | Updates `AR_IO_NODE_RELEASE` default in `docker-compose.yaml`     |
+| `./tools/set-image-tag <VAR> <value>`    | Updates one `*_IMAGE_TAG` default                                |
+| `./tools/changelog-release <N>`   | `## [Unreleased]` → `## [Release N] - <date>`                           |
+| `./tools/changelog-add-unreleased` | Adds a fresh `## [Unreleased]` section                                 |
+
+See `tools/README.md` for usage details.
+
+## Release-managed images
+
+These image env vars are flipped to a SHA at finalize and back to `latest` at
+post-release:
+
+- `ENVOY_IMAGE_TAG`
+- `CORE_IMAGE_TAG`
+- `CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG`
+- `LITESTREAM_IMAGE_TAG`
+
+`OBSERVER_IMAGE_TAG` and the AO CU image (`docker-compose.ao.yaml`) stay
+pinned across releases and are only bumped intentionally.
+
+## Phases
+
+### 1. Preflight
+
+1. `./tools/release-info` — confirm:
+   - `versionIsPre === true` (e.g., `53-pre`)
+   - `arIoNodeRelease` matches `version`
+   - `changelogUnreleasedHasContent === true`
+   - All release-managed image tags are `latest`
+2. `git status` — working tree clean, on `develop`
+3. `yarn audit` — review; bail on high-severity vulnerabilities
+4. Find the Jira release ticket (search for "Release N" in project PE)
+5. Review `CHANGELOG.md` — ensure all changes are documented
+
+### 2. Prepare
+
+```bash
+./tools/changelog-release <N>
+./tools/set-version <N>
+./tools/set-ar-io-node-release <N>
+
+git add CHANGELOG.md src/version.ts docker-compose.yaml
+git commit -m "chore: prepare release <N> (PE-####)"
+git push origin develop
+```
+
+The push triggers image builds on GitHub Actions.
+
+### 3. Finalize (after image builds)
+
+Wait for GitHub Actions to finish:
+
+```bash
+gh api repos/ar-io/ar-io-node/actions/runs \
+  --jq '.workflow_runs[] | select(.status == "in_progress" or .status == "queued") | .id' \
+  | wc -l
+```
+
+Fetch the git-SHA tag for each release-managed image from ghcr.io:
+
+```bash
+for image in ar-io-envoy ar-io-core ar-io-clickhouse-auto-import ar-io-litestream; do
+  sha=$(gh api "/orgs/ar-io/packages/container/${image}/versions" \
+    --jq '.[0].metadata.container.tags[] | select(. != "latest")' | head -1)
+  echo "${image}: ${sha}"
+  git rev-parse --verify "$sha"  # must exist in git history
+done
+```
+
+Apply each SHA with `set-image-tag` (see mapping in skill doc), then commit:
+
+```bash
+git add docker-compose.yaml
+git commit -m "chore: finalize release <N> with image SHAs (PE-####)"
+git push origin develop
+```
+
+### 4. Test docker compose profiles
+
+Core containers expected to stay running across every profile: `envoy`,
+`core`, `redis`, `observer`. Check with `docker ps --format '{{.Names}}'`.
+
+Between profiles, cleanup:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.ao.yaml \
+  --profile clickhouse --profile litestream --profile otel down
+```
+
+| Profile    | Up command                                                          | Expected                                                           |
+| ---------- | ------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| default    | `docker compose up -d`                                              | core stable after 30s + 15s recheck                                |
+| clickhouse | `docker compose --profile clickhouse up -d`                         | core + `clickhouse`, `clickhouse-auto-import`                      |
+| litestream | `docker compose --profile litestream up -d`                         | core; `litestream` may exit without S3 (expected)                  |
+| otel       | `docker compose --profile otel up -d`                               | core; `otel-collector` may exit without endpoint (expected)        |
+| ao         | `docker compose up -d && docker compose -f docker-compose.yaml -f docker-compose.ao.yaml up -d` | core; `ao-cu` may restart if unconfigured (expected) |
+
+After testing, run the cleanup command again.
+
+### 5. Tag & publish
+
+```bash
+git tag r<N>
+git push origin r<N>
+
+gh release create r<N> \
+  --title "Release <N>" \
+  --notes "<release notes from CHANGELOG + image SHAs from release-info>"
+```
+
+### 6. Merge to main
+
+```bash
+git checkout main
+git pull
+git merge --ff-only develop
+git push origin main
+git checkout develop
+```
+
+### 7. Post-release
+
+```bash
+./tools/set-version <N+1>-pre
+./tools/set-ar-io-node-release <N+1>-pre
+for var in ENVOY_IMAGE_TAG CORE_IMAGE_TAG CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG LITESTREAM_IMAGE_TAG; do
+  ./tools/set-image-tag "$var" latest
+done
+./tools/changelog-add-unreleased
+
+git add src/version.ts docker-compose.yaml CHANGELOG.md
+git commit -m "chore: begin development of release <N+1> (PE-####)"
+git push origin develop
+```

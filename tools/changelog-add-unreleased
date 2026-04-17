@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Insert a fresh [Unreleased] section before the most recent [Release N].
+#
+# Usage:
+#   ./tools/changelog-add-unreleased
+#
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+exec node --import ./register.js tools/lib/release/changelog-add-unreleased.ts "$@"

@@ -193,179 +193,82 @@ Converts Arweave storage partition files to height ranges for data analysis and 
 - Support migration and data management operations
 - Enable height-based analytics on partitioned data
 
-### `release-status`
-Checks the current state of the repository and determines if it's ready for a release. This tool provides a comprehensive overview of version status, git branch, working tree cleanliness, changelog content, and docker image configurations.
+## Release tools
+
+Small, composable primitives used by the release workflow. Each tool does one
+thing — reads state, or applies one narrow mutation. All tools are idempotent
+where sensible. Orchestration (preflight checks, commits, GitHub Actions
+polling, docker profile testing, tagging) is handled by the `release` skill
+under `.claude/skills/release/`. See also `docs/processes/release.md`.
+
+### `release-info`
+Prints release-related state from the working tree.
 
 **Usage:**
 ```bash
-./tools/release-status
+./tools/release-info          # human-readable
+./tools/release-info --json   # JSON output
 ```
 
-**Output Example:**
+**Output (JSON mode):**
+```json
+{
+  "version": "52-pre",
+  "versionIsPre": true,
+  "arIoNodeRelease": "52-pre",
+  "changelogUnreleasedHasContent": true,
+  "imageTags": {
+    "ENVOY_IMAGE_TAG": "latest",
+    "CORE_IMAGE_TAG": "latest",
+    "CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG": "latest",
+    "LITESTREAM_IMAGE_TAG": "latest",
+    "OBSERVER_IMAGE_TAG": "21098d2ab630348d56339a745f020374a699d378"
+  }
+}
 ```
-📊 AR.IO Node Release Status
-============================
-Current Version: 52-pre (development)
-Branch: develop ✅
-Working Tree: clean ✅
-Changelog: Has unreleased entries ✅
-Docker Images: Using 'latest' tags ✅
-AR_IO_NODE_RELEASE: 52-pre ✅
 
-Ready for Release: ✅ YES
-Suggested Release Number: 52
-```
+### `set-version`
+Updates the `release` constant in `src/version.ts`.
 
-**Use Cases:**
-- Verify repository is ready for release preparation
-- Check current development state and version
-- Identify issues that need to be resolved before release
-- Get suggested next release number
-
-### `prepare-release`
-Automates the initial steps of preparing a new release by updating version files, changelog dates, and docker configurations. This tool ensures consistent release preparation while validating preconditions.
-
-**Usage:**
 ```bash
-./tools/prepare-release <release-number> [--dry-run]
-
-# Preview changes without applying them
-./tools/prepare-release 52 --dry-run
-
-# Actually prepare release 52
-./tools/prepare-release 52
+./tools/set-version 52       # release
+./tools/set-version 53-pre   # pre-release
 ```
 
-**Actions Performed:**
-1. Validates preconditions (on develop branch, clean working tree)
-2. Updates CHANGELOG.md to set release date for [Unreleased] section
-3. Removes "-pre" suffix from version in `src/version.ts`
-4. Updates `AR_IO_NODE_RELEASE` in `docker-compose.yaml`
-5. Commits all changes with standard message format
+### `set-ar-io-node-release`
+Updates the default for `AR_IO_NODE_RELEASE` in `docker-compose.yaml`.
 
-**Safety Features:**
-- Dry-run mode for testing changes
-- Automatic rollback on errors
-- Comprehensive validation before modifications
-- Clear error messages with recovery instructions
-
-**Use Cases:**
-- Automate repetitive release preparation steps
-- Ensure consistent release process across all releases
-- Reduce manual errors in version and configuration updates
-- Preview release changes before committing
-
-### `finalize-release`
-Finalizes a release by updating docker-compose.yaml with specific image SHAs from the container registry. This tool waits for any pending GitHub Actions to complete, fetches the latest image tags, validates they exist in git history, and commits the finalized configuration.
-
-**Usage:**
 ```bash
-./tools/finalize-release <release-number>
-
-# Finalize release 52
-./tools/finalize-release 52
+./tools/set-ar-io-node-release 52
+./tools/set-ar-io-node-release 53-pre
 ```
 
-**Actions Performed:**
-1. Validates preconditions (on develop branch, clean working tree, correct version)
-2. Waits for any running GitHub Actions to complete
-3. Fetches current image tags from ghcr.io for core services
-4. Validates that all image SHAs exist in git history
-5. Updates docker-compose.yaml to use specific SHAs instead of "latest"
-6. Commits all changes with auto-detected JIRA ticket reference
+### `set-image-tag`
+Updates the default for a single `*_IMAGE_TAG` env var in
+`docker-compose.yaml`. Value must be `latest` or a 40-character git SHA.
 
-**Safety Features:**
-- Comprehensive validation before modifications
-- Automatic detection of JIRA ticket from recent commits
-- Clear error messages with recovery instructions
-- Skips observer and AO CU images (they remain pinned)
-
-**Use Cases:**
-- Complete the release preparation after image builds finish
-- Ensure consistent, reproducible docker image versions
-- Validate all release artifacts are properly available
-
-### `test-release`
-Tests a release by verifying all docker compose profiles work correctly with the finalized image SHAs. This tool automates the comprehensive testing steps required before final release tagging and deployment.
-
-**Usage:**
 ```bash
-./tools/test-release <release-number> [options]
-
-# Test all profiles for release 52
-./tools/test-release 52
-
-# Keep containers running for debugging
-./tools/test-release 52 --no-cleanup
-
-# Test specific profile only
-./tools/test-release 52 --profile clickhouse
+./tools/set-image-tag CORE_IMAGE_TAG latest
+./tools/set-image-tag CORE_IMAGE_TAG 21098d2ab630348d56339a745f020374a699d378
 ```
 
-**Test Profiles:**
-1. **Default Profile**: Core services (envoy, core, redis, observer) - must remain stable
-2. **Clickhouse Profile**: Adds clickhouse and clickhouse-auto-import containers
-3. **Litestream Profile**: Adds litestream container (may exit if S3 not configured - expected)
-4. **AO Integration**: Adds AO CU container (may restart if not configured - expected)
+### `changelog-release`
+Replaces the `## [Unreleased]` heading in `CHANGELOG.md` with
+`## [Release N] - DATE`. Date defaults to today (UTC).
 
-**Validation Features:**
-- Verifies docker-compose.yaml uses specific image SHAs (not "latest")
-- Checks container startup and stability over time
-- Validates core containers remain running across all profiles
-- Handles expected behaviors (litestream/AO exits due to configuration)
-- Comprehensive test summary with pass/fail status
-
-**Safety Features:**
-- Prerequisites validation (branch, version, Docker availability)
-- Automatic cleanup after tests (unless --no-cleanup specified)
-- Clear error messages for debugging
-- Exit code indicates overall test success/failure
-
-**Use Cases:**
-- Verify release configuration before final tagging
-- Validate all docker compose profiles work with specific image SHAs
-- Catch container startup or stability issues early
-- Ensure consistent behavior across different deployment scenarios
-
-### `post-release`
-Performs post-release cleanup to prepare the development branch for the next release cycle. This tool automates the tedious manual steps required after a release is published, ensuring the repository is properly configured for continued development.
-
-**Usage:**
 ```bash
-./tools/post-release [options]
-
-# Preview changes without applying them
-./tools/post-release --dry-run
-
-# Perform post-release cleanup
-./tools/post-release
+./tools/changelog-release 52
+./tools/changelog-release 52 --date 2026-04-17
 ```
 
-**Actions Performed:**
-1. Auto-detects current release and calculates next release number
-2. Updates `src/version.ts` to next pre-release version (e.g., `52` → `53-pre`)
-3. Updates `AR_IO_NODE_RELEASE` environment variable to match new version
-4. Resets core docker image tags from specific SHAs back to `latest`
-5. Adds new `[Unreleased]` section to `CHANGELOG.md` with standard headers
-6. Commits all changes with comprehensive message and JIRA ticket reference
+### `changelog-add-unreleased`
+Inserts a fresh `## [Unreleased]` section (with empty Added/Changed/Fixed
+subheadings) before the most recent `## [Release N]` heading. Idempotent if
+an `[Unreleased]` section already exists.
 
-**Smart Behavior:**
-- Observer and AO CU images remain pinned (not reset to latest)
-- Auto-detection prevents running post-release multiple times
-- Only resets image tags that were actually changed from SHAs
-- Preserves pinned images as intended by release process
-
-**Safety Features:**
-- Prerequisites validation (branch, working tree, version format)
-- Dry-run mode for previewing changes
-- Automatic rollback on errors
-- Clear progress indicators and status messages
-
-**Use Cases:**
-- Complete the release cycle after publishing
-- Prepare development branch for next release
-- Ensure consistent post-release state across all releases
-- Automate repetitive cleanup tasks
+```bash
+./tools/changelog-add-unreleased
+```
 
 ### `wt`
 Git worktree helper for parallel development. Creates worktrees under `wt/<branch>` with `.env` and `CLAUDE.local.md` symlinked from the main checkout.
