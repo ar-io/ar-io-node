@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 76] - 2026-04-17
 
+This is a **recommended release** focused on **response signing**,
+**ClickHouse data lifecycle management**, and **query-path efficiency**. Key
+highlights include **RFC 9421 HTTP Message Signatures** for cryptographically
+verifiable gateway responses, **tag-based TTL rules for ClickHouse-exported
+data** so operators can expire indexed rows by tag or uploader, and a major
+**ClickHouse schema consolidation** into a single partitioned `transactions`
+table with bloom filter skip indexes and native projections. It also adds
+**per-host `APEX_ARNS_NAME` mapping**, **Parquet export partition progress**
+in the status API, and a **`clickhouse-import --flat-dir` mode**. GraphQL
+gets two performance improvements — **skipping SQLite for heights already
+covered by ClickHouse** and **skipping the `owner.key` fetch when only
+`owner.address` is selected** — plus a fix for duplicate transaction results
+from ClickHouse and correctly-populated `indexedAt` / `blockPreviousBlock`
+fields.
+
 ### Added
 
 - **RFC 9421 HTTP Message Signatures for Gateway Responses**: The gateway
