@@ -235,7 +235,21 @@ while true; do
       exit 1
       ;;
     running)
-      echo "  Still running..."
+      PROGRESS=$(echo "$BODY" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cs = d.get('currentPartitionStart')
+ce = d.get('currentPartitionEnd')
+cp = d.get('completedPartitions')
+tp = d.get('totalPartitions')
+if cs is not None and ce is not None and cp is not None and tp is not None:
+    print(f'partition {cs}-{ce} ({cp}/{tp} completed)')
+" 2>/dev/null || echo "")
+      if [[ -n "$PROGRESS" ]]; then
+        echo "  Still running: $PROGRESS"
+      else
+        echo "  Still running..."
+      fi
       ;;
     *)
       echo "  Status: $STATUS"

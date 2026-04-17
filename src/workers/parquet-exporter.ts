@@ -17,10 +17,16 @@ import {
 import Sqlite from 'better-sqlite3';
 import * as winston from 'winston';
 
-type EventName = 'export-complete' | 'export-error' | 'start' | 'timing-log';
+type EventName =
+  | 'export-complete'
+  | 'export-error'
+  | 'export-progress'
+  | 'start'
+  | 'timing-log';
 
 const EXPORT_COMPLETE: EventName = 'export-complete';
 const EXPORT_ERROR: EventName = 'export-error';
+const EXPORT_PROGRESS: EventName = 'export-progress';
 const START: EventName = 'start';
 const TIMING_LOG: EventName = 'timing-log';
 
@@ -32,6 +38,10 @@ type Message = {
   startTime?: number;
   endTime?: number;
   durationMs?: number;
+  currentPartitionStart?: number;
+  currentPartitionEnd?: number;
+  completedPartitions?: number;
+  totalPartitions?: number;
 };
 
 type ExportStatus = 'not_started' | 'running' | 'completed' | 'errored';
@@ -54,6 +64,10 @@ type ExportData = {
   endTime?: string;
   endTimestamp?: number;
   error?: string;
+  currentPartitionStart?: number;
+  currentPartitionEnd?: number;
+  completedPartitions?: number;
+  totalPartitions?: number;
 };
 
 export class ParquetExporter {
@@ -102,7 +116,22 @@ export class ParquetExporter {
       throw error;
     }
 
-    this.exportStatus.status = RUNNING;
+    const totalPartitions = Math.ceil(
+      (endHeight - startHeight + 1) / heightPartitionSize,
+    );
+
+    this.exportStatus = {
+      status: RUNNING,
+      outputDir,
+      startHeight,
+      endHeight,
+      maxFileRows,
+      heightPartitionSize,
+      skipL1Transactions,
+      skipL1Tags,
+      completedPartitions: 0,
+      totalPartitions,
+    };
 
     return new Promise((resolve, reject) => {
       const workerUrl = new URL('./parquet-exporter.js', import.meta.url);
@@ -155,6 +184,7 @@ export class ParquetExporter {
           });
 
           this.exportStatus = {
+            ...this.exportStatus,
             status: COMPLETED,
             outputDir,
             startHeight,
@@ -188,6 +218,14 @@ export class ParquetExporter {
           });
 
           reject(new Error(message.error));
+        } else if (message.eventName === EXPORT_PROGRESS) {
+          this.exportStatus = {
+            ...this.exportStatus,
+            currentPartitionStart: message.currentPartitionStart,
+            currentPartitionEnd: message.currentPartitionEnd,
+            completedPartitions: message.completedPartitions,
+            totalPartitions: message.totalPartitions,
+          };
         } else if (message.eventName === TIMING_LOG) {
           this.log.debug(`Parquet export timing: ${message.timingKey}`, {
             exportStep: message.timingKey,
@@ -624,6 +662,11 @@ CREATE TABLE IF NOT EXISTS tags (
       mkdirSync(outputDir, { recursive: true });
 
       // Process partitions
+      const totalPartitions = Math.ceil(
+        (endHeight - startHeight + 1) / heightPartitionSize,
+      );
+      let completedPartitions = 0;
+
       for (
         let partStart = startHeight;
         partStart <= endHeight;
@@ -633,6 +676,14 @@ CREATE TABLE IF NOT EXISTS tags (
           partStart + heightPartitionSize - 1,
           endHeight,
         );
+
+        parentPort?.postMessage({
+          eventName: EXPORT_PROGRESS,
+          currentPartitionStart: partStart,
+          currentPartitionEnd: partEnd,
+          completedPartitions,
+          totalPartitions,
+        });
 
         await logTiming(`partition-${partStart}-${partEnd}`, async () => {
           // Step 1: Populate temp SQLite from source DBs (uses SQLite indexes)
@@ -693,6 +744,15 @@ CREATE TABLE IF NOT EXISTS tags (
           tempDb!.exec(
             'DELETE FROM blocks; DELETE FROM transactions; DELETE FROM tags;',
           );
+        });
+
+        completedPartitions++;
+        parentPort?.postMessage({
+          eventName: EXPORT_PROGRESS,
+          currentPartitionStart: partStart,
+          currentPartitionEnd: partEnd,
+          completedPartitions,
+          totalPartitions,
         });
       }
 
