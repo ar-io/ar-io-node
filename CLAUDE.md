@@ -84,6 +84,11 @@ For testing uploads without broadcasting to Arweave, see
 
 Stage specific files. Do not use `git add .` or `git commit -A`.
 
+### Commit messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) format
+(`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`, `test:`, etc.).
+
 ## Documentation hygiene
 
 When changing behavior that affects documented contracts (env vars, APIs,
