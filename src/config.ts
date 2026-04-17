@@ -1315,6 +1315,26 @@ export const CLICKHOUSE_URL = env.varOrUndefined('CLICKHOUSE_URL');
 export const CLICKHOUSE_USER = env.varOrUndefined('CLICKHOUSE_USER');
 export const CLICKHOUSE_PASSWORD = env.varOrUndefined('CLICKHOUSE_PASSWORD');
 
+// When true, GraphQL queries restrict the SQLite fallback to heights above
+// ClickHouse's max indexed height (minus a safety buffer) so the two stores
+// don't both scan the same range. Disabled by default.
+export const CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED =
+  env.varOrDefault('CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED', 'false') === 'true';
+
+// Heights below (clickhouseMax - buffer) are considered safely covered by
+// ClickHouse. The buffer guards against partially ingested recent blocks.
+export const CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER = +env.varOrDefault(
+  'CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER',
+  '10',
+);
+
+// TTL for the cached ClickHouse max-height lookup used by the boundary
+// optimization above.
+export const CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS = +env.varOrDefault(
+  'CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS',
+  '60',
+);
+
 //
 // Healthchecks
 //

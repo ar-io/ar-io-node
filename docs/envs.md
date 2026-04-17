@@ -343,3 +343,17 @@ for the rules-file format and behavior.
 | ENV_NAME                    | TYPE    | DEFAULT_VALUE                        | DESCRIPTION                                                                                                  |
 | --------------------------- | ------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
 | CLICKHOUSE_TTL_RULES_PATH   | String  | ./config/clickhouse-ttl-rules.yaml   | Path to the YAML file of tag- and owner-based TTL rules loaded into ClickHouse before each import cycle       |
+
+## ClickHouse / SQLite GraphQL Boundary
+
+When ClickHouse is configured alongside SQLite, GraphQL transaction queries
+hit both stores and merge the results. These settings let the composite
+backend skip SQLite for heights already covered by ClickHouse, avoiding
+duplicate scans. The buffer reserves recent heights (where ClickHouse
+ingestion may be partial) for SQLite.
+
+| ENV_NAME                                  | TYPE    | DEFAULT_VALUE | DESCRIPTION                                                                                                              |
+| ----------------------------------------- | ------- | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED      | Boolean | false         | When true, restrict the SQLite fallback to heights above (ClickHouse max height - buffer)                                |
+| CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER       | Number  | 10            | Heights reserved for SQLite near the ClickHouse tip, to guard against partially ingested recent blocks                   |
+| CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS   | Number  | 60            | TTL for the cached ClickHouse max-height lookup used by the boundary optimization                                        |

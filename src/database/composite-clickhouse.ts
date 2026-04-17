@@ -91,6 +91,11 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
   private log: winston.Logger;
   private clickhouseClient: ClickHouseClient;
   private gqlQueryable: GqlQueryable;
+  private sqliteMinHeightEnabled: boolean;
+  private sqliteMinHeightBuffer: number;
+  private maxHeightCacheTtlMs: number;
+  private maxHeightCache: { value: number; fetchedAt: number } | null = null;
+  private maxHeightInFlight: Promise<number | null> | null = null;
 
   constructor({
     log,
@@ -98,12 +103,18 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     url,
     username,
     password,
+    sqliteMinHeightEnabled = false,
+    sqliteMinHeightBuffer = 10,
+    maxHeightCacheTtlSeconds = 60,
   }: {
     log: winston.Logger;
     gqlQueryable: GqlQueryable;
     url: string;
     username?: string;
     password?: string;
+    sqliteMinHeightEnabled?: boolean;
+    sqliteMinHeightBuffer?: number;
+    maxHeightCacheTtlSeconds?: number;
   }) {
     this.log = log;
 
@@ -114,6 +125,53 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     });
 
     this.gqlQueryable = gqlQueryable;
+    this.sqliteMinHeightEnabled = sqliteMinHeightEnabled;
+    this.sqliteMinHeightBuffer = sqliteMinHeightBuffer;
+    this.maxHeightCacheTtlMs = maxHeightCacheTtlSeconds * 1000;
+  }
+
+  private async getClickHouseMaxHeight(): Promise<number | null> {
+    const now = Date.now();
+    if (
+      this.maxHeightCache !== null &&
+      now - this.maxHeightCache.fetchedAt < this.maxHeightCacheTtlMs
+    ) {
+      return this.maxHeightCache.value;
+    }
+
+    if (this.maxHeightInFlight !== null) {
+      return this.maxHeightInFlight;
+    }
+
+    this.maxHeightInFlight = (async () => {
+      try {
+        const row = await this.clickhouseClient.query({
+          query: 'SELECT max(height) AS max_height FROM transactions',
+        });
+        const jsonRow = await row.json<{
+          max_height: number | string | null;
+        }>();
+        const raw = jsonRow.data[0]?.max_height;
+        const value = raw == null ? null : Number(raw);
+        if (value === null || !Number.isFinite(value)) {
+          return null;
+        }
+        this.maxHeightCache = { value, fetchedAt: Date.now() };
+        return value;
+      } catch (error: any) {
+        this.log.warn(
+          'Failed to read ClickHouse max height; skipping boundary optimization',
+          {
+            message: error?.message,
+          },
+        );
+        return null;
+      } finally {
+        this.maxHeightInFlight = null;
+      }
+    })();
+
+    return this.maxHeightInFlight;
   }
 
   getGqlTransactionsBaseSql() {
@@ -364,17 +422,35 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       parentId: tx.parent_id ? hexToB64Url(tx.parent_id) : null,
     }));
 
-    const gqlQueryableResults = await this.gqlQueryable.getGqlTransactions({
-      pageSize,
-      cursor,
-      sortOrder,
-      ids,
-      recipients,
-      owners,
-      minHeight,
-      maxHeight,
-      tags,
-    });
+    let sqliteMinHeight = minHeight;
+    let skipSqlite = false;
+    if (this.sqliteMinHeightEnabled) {
+      const clickhouseMaxHeight = await this.getClickHouseMaxHeight();
+      if (clickhouseMaxHeight !== null) {
+        const boundary = clickhouseMaxHeight - this.sqliteMinHeightBuffer;
+        const candidate = boundary + 1;
+        if (candidate > sqliteMinHeight) {
+          sqliteMinHeight = candidate;
+        }
+        if (maxHeight >= 0 && sqliteMinHeight > maxHeight) {
+          skipSqlite = true;
+        }
+      }
+    }
+
+    const gqlQueryableResults = skipSqlite
+      ? { pageInfo: { hasNextPage: false }, edges: [] }
+      : await this.gqlQueryable.getGqlTransactions({
+          pageSize,
+          cursor,
+          sortOrder,
+          ids,
+          recipients,
+          owners,
+          minHeight: sqliteMinHeight,
+          maxHeight,
+          tags,
+        });
 
     // Filter out edges that already exist in the ClickHouse results
     const gqlQueryableEdges = gqlQueryableResults.edges.filter(

@@ -305,6 +305,9 @@ export const gqlQueryable: GqlQueryable = (() => {
       url: config.CLICKHOUSE_URL,
       username: config.CLICKHOUSE_USER,
       password: config.CLICKHOUSE_PASSWORD,
+      sqliteMinHeightEnabled: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED,
+      sqliteMinHeightBuffer: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER,
+      maxHeightCacheTtlSeconds: config.CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS,
     });
   }
 
