@@ -15,6 +15,7 @@ import {
   GqlTransaction,
   GqlTransactionsResult,
 } from '../types.js';
+import { fromB64Url } from '../lib/encoding.js';
 import {
   encodeBlockGqlCursor,
   encodeTransactionGqlCursor,
@@ -104,21 +105,23 @@ class FakeQueryable implements GqlQueryable {
   }): Promise<GqlTransactionsResult> {
     if (this.data.throws) throw this.data.throws;
     const all = this.data.transactions ?? [];
-    // Sort exactly like SQL: (height, bti, dataItemId, indexedAt, id), all in
-    // the same direction. This matches the upstream contract.
+    // Sort exactly like SQL/ClickHouse: (height, bti, data_item_id,
+    // indexed_at, id), all in the same direction. id and data_item_id are
+    // sorted as raw bytes (BLOB), so decode before comparing.
     const sorted = [...all].sort((a, b) => {
       const sign = args.sortOrder === 'HEIGHT_ASC' ? 1 : -1;
-      const cmp = (x: number | string, y: number | string): number =>
-        x < y ? -1 : x > y ? 1 : 0;
-      const hDiff = cmp(a.height ?? 0, b.height ?? 0);
-      if (hDiff) return sign * hDiff;
-      const btiDiff = cmp(a.blockTransactionIndex, b.blockTransactionIndex);
-      if (btiDiff) return sign * btiDiff;
-      const diDiff = cmp(a.dataItemId ?? '', b.dataItemId ?? '');
-      if (diDiff) return sign * diDiff;
-      const iaDiff = cmp(a.indexedAt, b.indexedAt);
-      if (iaDiff) return sign * iaDiff;
-      return sign * cmp(a.id, b.id);
+      const hDiff = (a.height ?? 0) - (b.height ?? 0);
+      if (hDiff) return sign * Math.sign(hDiff);
+      const btiDiff = a.blockTransactionIndex - b.blockTransactionIndex;
+      if (btiDiff) return sign * Math.sign(btiDiff);
+      const diCmp = Buffer.compare(
+        fromB64Url(a.dataItemId ?? ''),
+        fromB64Url(b.dataItemId ?? ''),
+      );
+      if (diCmp) return sign * diCmp;
+      const iaDiff = a.indexedAt - b.indexedAt;
+      if (iaDiff) return sign * Math.sign(iaDiff);
+      return sign * Buffer.compare(fromB64Url(a.id), fromB64Url(b.id));
     });
     const page = sorted.slice(0, args.pageSize);
     return {
@@ -377,6 +380,71 @@ describe('GatewaysGqlQueryable', () => {
         result.edges.map((e) => e.node.id),
         ['local-1', 'remote-1'],
       );
+    });
+
+    it('orders ids by binary bytes, not base64url ASCII', async () => {
+      // Two ids whose binary and base64url ASCII orderings disagree:
+      //   aAAA... (binary first byte 0x68) vs -AAA... (binary first byte 0xF8)
+      // Binary: 0x68 < 0xF8, so 'a...' comes first in ASC.
+      // String: '-' (45) < 'a' (97), so '-...' would come first if we used
+      // ASCII — wrong, and desynced from SQLite/ClickHouse BLOB sort.
+      const ID_A = `a${'A'.repeat(42)}`;
+      const ID_B = `-${'A'.repeat(42)}`;
+      const txA = txAt({ id: ID_A, height: 100, blockTransactionIndex: 0 });
+      const txB = txAt({ id: ID_B, height: 100, blockTransactionIndex: 0 });
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: [txA] }),
+        new FakeQueryable({ transactions: [txB] }),
+      ]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_ASC',
+        tags: [],
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        [ID_A, ID_B],
+      );
+    });
+
+    it('reports hasNextPage=false when all remaining are cross-source dupes', async () => {
+      // Shared tx x. pageSize=1. Both upstreams return [x]. After emitting x,
+      // the remaining buffered x on the second upstream is a dupe — nothing
+      // real is left to page into.
+      const shared = txAt({ id: 'x', height: 100 });
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: [shared] }),
+        new FakeQueryable({ transactions: [shared] }),
+      ]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 1,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        ['x'],
+      );
+      assert.equal(result.pageInfo.hasNextPage, false);
+    });
+
+    it('reports hasNextPage=true when a real distinct item remains', async () => {
+      const shared = txAt({ id: 'x', height: 100 });
+      const more = txAt({ id: 'y', height: 99 });
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: [shared, more] }),
+        new FakeQueryable({ transactions: [shared] }),
+      ]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 1,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        ['x'],
+      );
+      assert.equal(result.pageInfo.hasNextPage, true);
     });
   });
 
