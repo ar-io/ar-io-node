@@ -139,7 +139,6 @@ class RemoteGqlQueryable implements GqlQueryable {
   constructor(
     private readonly url: string,
     private readonly axiosInstance: AxiosInstance,
-    private readonly log: winston.Logger,
   ) {}
 
   private async post<T>(
@@ -463,9 +462,7 @@ export class GatewaysGqlQueryable implements GqlQueryable {
       axiosInstance ??
       createRetryingAxios(requestTimeoutMs, requestRetryCount, this.log);
 
-    const remoteSources = urls.map(
-      (url) => new RemoteGqlQueryable(url, http, this.log),
-    );
+    const remoteSources = urls.map((url) => new RemoteGqlQueryable(url, http));
     const labels = urls.slice();
 
     if (localGqlQueryable !== undefined) {
@@ -640,6 +637,7 @@ export class GatewaysGqlQueryable implements GqlQueryable {
     for (const f of failures) {
       this.log.warn('Upstream source failed', {
         method,
+        args,
         source: f.label,
         error: f.r.reason?.message ?? String(f.r.reason),
       });
