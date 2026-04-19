@@ -253,6 +253,61 @@ export const GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS = env.positiveIntOrDefault(
 export const GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT =
   env.positiveIntOrDefault('GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT', 1);
 
+// Fan-out GraphQL upstreams (empty disables the GatewaysGqlQueryable layer).
+// Format: JSON array of URLs, e.g. '["https://arweave.net","https://ar-io.dev"]'.
+export const GATEWAYS_GQL_URLS: string[] = (() => {
+  const raw = env.varOrDefault('GATEWAYS_GQL_URLS', '[]');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`GATEWAYS_GQL_URLS must be a JSON array of URLs: ${raw}`);
+  }
+  if (!Array.isArray(parsed) || !parsed.every((v) => typeof v === 'string')) {
+    throw new Error(`GATEWAYS_GQL_URLS must be a JSON array of URLs: ${raw}`);
+  }
+  for (const url of parsed as string[]) {
+    try {
+      new URL(url);
+    } catch (error) {
+      throw new Error(`Invalid URL in GATEWAYS_GQL_URLS: ${url}`);
+    }
+  }
+  return parsed as string[];
+})();
+
+// When GATEWAYS_GQL_URLS is set, also include the local GqlQueryable in the
+// merge. Defaults to true so a gateway with its own index contributes its data
+// alongside remote upstreams.
+export const GATEWAYS_GQL_INCLUDE_LOCAL =
+  env.varOrDefault('GATEWAYS_GQL_INCLUDE_LOCAL', 'true') === 'true';
+
+// Partial-failure policy for the fan-out merge:
+// - best-effort: return results from upstreams that succeeded, log failures
+// - strict: fail the whole request if any upstream fails
+export const GATEWAYS_GQL_MERGE_POLICY = env.varOrDefault(
+  'GATEWAYS_GQL_MERGE_POLICY',
+  'best-effort',
+) as 'best-effort' | 'strict';
+if (
+  GATEWAYS_GQL_MERGE_POLICY !== 'best-effort' &&
+  GATEWAYS_GQL_MERGE_POLICY !== 'strict'
+) {
+  throw new Error(
+    `GATEWAYS_GQL_MERGE_POLICY must be "best-effort" or "strict", got: ${GATEWAYS_GQL_MERGE_POLICY}`,
+  );
+}
+
+export const GATEWAYS_GQL_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
+  'GATEWAYS_GQL_REQUEST_TIMEOUT_MS',
+  10_000,
+);
+
+export const GATEWAYS_GQL_REQUEST_RETRY_COUNT = env.nonNegativeIntOrDefault(
+  'GATEWAYS_GQL_REQUEST_RETRY_COUNT',
+  2,
+);
+
 // GraphQL root TX lookup rate limiting
 export const GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
   'GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE',

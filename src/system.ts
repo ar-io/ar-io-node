@@ -30,6 +30,7 @@ import { ChainTxBoundarySource } from './data/chain-tx-boundary-source.js';
 import { TxPathValidationSource } from './data/tx-path-validation-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
+import { GatewaysGqlQueryable } from './database/gateways-gql-queryable.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
 import { MatchTags, TagMatch } from './filters.js';
@@ -298,20 +299,32 @@ export const nameBlockListValidator: NameBlockListValidator = db;
 export const nestedDataIndexWriter: NestedDataIndexWriter = db;
 export const dataItemIndexWriter: DataItemIndexWriter = db;
 export const gqlQueryable: GqlQueryable = (() => {
-  if (config.CLICKHOUSE_URL !== undefined) {
-    return new CompositeClickHouseDatabase({
+  const localGql: GqlQueryable =
+    config.CLICKHOUSE_URL !== undefined
+      ? new CompositeClickHouseDatabase({
+          log,
+          gqlQueryable: db,
+          url: config.CLICKHOUSE_URL,
+          username: config.CLICKHOUSE_USER,
+          password: config.CLICKHOUSE_PASSWORD,
+          sqliteMinHeightEnabled: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED,
+          sqliteMinHeightBuffer: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER,
+          maxHeightCacheTtlSeconds:
+            config.CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS,
+        })
+      : db;
+
+  if (config.GATEWAYS_GQL_URLS.length > 0) {
+    return new GatewaysGqlQueryable({
       log,
-      gqlQueryable: db,
-      url: config.CLICKHOUSE_URL,
-      username: config.CLICKHOUSE_USER,
-      password: config.CLICKHOUSE_PASSWORD,
-      sqliteMinHeightEnabled: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED,
-      sqliteMinHeightBuffer: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER,
-      maxHeightCacheTtlSeconds: config.CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS,
+      urls: config.GATEWAYS_GQL_URLS,
+      localGqlQueryable: config.GATEWAYS_GQL_INCLUDE_LOCAL
+        ? localGql
+        : undefined,
     });
   }
 
-  return db;
+  return localGql;
 })();
 
 export type PostgreSQL = postgres.Sql;
