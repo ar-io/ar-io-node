@@ -315,13 +315,21 @@ export const gqlQueryable: GqlQueryable = (() => {
       : db;
 
   if (config.GATEWAYS_GQL_URLS.length > 0) {
-    return new GatewaysGqlQueryable({
+    const merger = new GatewaysGqlQueryable({
       log,
       urls: config.GATEWAYS_GQL_URLS,
       localGqlQueryable: config.GATEWAYS_GQL_INCLUDE_LOCAL
         ? localGql
         : undefined,
     });
+    // Background cursor-format probe. Do not block startup — log on
+    // misconfiguration so operators notice before silently corrupted merges.
+    void merger.probe().catch((err) => {
+      log.warn('GatewaysGqlQueryable probe failed', {
+        error: err?.message ?? String(err),
+      });
+    });
+    return merger;
   }
 
   return localGql;

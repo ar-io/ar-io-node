@@ -9,6 +9,7 @@ import * as rax from 'retry-axios';
 import winston from 'winston';
 
 import * as config from '../config.js';
+import { fromB64Url } from '../lib/encoding.js';
 import {
   GqlBlock,
   GqlBlocksResult,
@@ -332,11 +333,13 @@ function mapRemoteTransaction(
  * Returns negative if a sorts before b (for ASC), positive if after, 0 if
  * equivalent. Callers flip the sign for DESC.
  *
- * Tuple: (height, blockTransactionIndex, isDataItem→dataItemId, id).
- * indexed_at is per-node and therefore excluded from the comparator; it does
- * not affect the relative ordering of distinct items because
- * (height, blockTransactionIndex, dataItemId) plus id is already unique per
- * logical item.
+ * Tuple matches the SQL/ClickHouse ORDER BY on
+ * (height, blockTransactionIndex, data_item_id, indexed_at, id). Both
+ * backends sort the id and data_item_id columns as raw bytes (BLOB), so
+ * this comparator decodes the base64url values back to Buffers before
+ * comparison — ASCII ordering over base64url does not match binary byte
+ * ordering in general and would desynchronize the merge from either
+ * upstream's own ordering.
  */
 function compareTxCursorsAsc(aCursor: string, bCursor: string): number {
   const a = decodeTransactionGqlCursor(aCursor);
@@ -345,7 +348,7 @@ function compareTxCursorsAsc(aCursor: string, bCursor: string): number {
   const ah = a.height;
   const bh = b.height;
   if (ah !== bh) {
-    // Nulls (pending) sort last in ASC.
+    // Nulls (pending) sort last in ASC, matching the SQLite query behavior.
     if (ah == null) return 1;
     if (bh == null) return -1;
     return ah - bh;
@@ -355,15 +358,21 @@ function compareTxCursorsAsc(aCursor: string, bCursor: string): number {
   const bbti = b.blockTransactionIndex ?? 0;
   if (abti !== bbti) return abti - bbti;
 
-  const adi = a.dataItemId ?? '';
-  const bdi = b.dataItemId ?? '';
-  if (adi !== bdi) return adi < bdi ? -1 : 1;
+  const diCmp = compareIdBytes(a.dataItemId, b.dataItemId);
+  if (diCmp !== 0) return diCmp;
 
-  const aid = a.id ?? '';
-  const bid = b.id ?? '';
-  if (aid !== bid) return aid < bid ? -1 : 1;
+  const aia = a.indexedAt ?? 0;
+  const bia = b.indexedAt ?? 0;
+  if (aia !== bia) return aia - bia;
 
-  return 0;
+  return compareIdBytes(a.id, b.id);
+}
+
+function compareIdBytes(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a == null) return -1;
+  if (b == null) return 1;
+  return Buffer.compare(fromB64Url(a), fromB64Url(b));
 }
 
 function compareBlockCursorsAsc(aCursor: string, bCursor: string): number {
@@ -395,8 +404,9 @@ function mergeEdges<T extends { cursor: string; node: { id: string } }>(
   const sign = sortOrder === 'HEIGHT_ASC' ? 1 : -1;
   const emitted: T[] = [];
   const emittedIds = new Set<string>();
+  let hasUnconsumed = false;
 
-  while (emitted.length < pageSize) {
+  const pickNext = (): T | undefined => {
     let bestStream = -1;
     for (let i = 0; i < streams.length; i++) {
       if (cursors[i] >= streams[i].length) continue;
@@ -412,17 +422,33 @@ function mergeEdges<T extends { cursor: string; node: { id: string } }>(
         );
       if (cmp < 0) bestStream = i;
     }
-    if (bestStream === -1) break;
-
+    if (bestStream === -1) return undefined;
     const edge = streams[bestStream][cursors[bestStream]];
     cursors[bestStream]++;
+    return edge;
+  };
 
+  while (emitted.length < pageSize) {
+    const edge = pickNext();
+    if (edge === undefined) break;
     if (emittedIds.has(edge.node.id)) continue;
     emittedIds.add(edge.node.id);
     emitted.push(edge);
   }
 
-  const hasUnconsumed = streams.some((s, i) => cursors[i] < s.length);
+  // We have to keep peeking past pageSize until we either find the next
+  // distinct (not-yet-emitted) id or exhaust every stream. Otherwise
+  // cross-source duplicates inflate hasNextPage and send clients to an
+  // empty next page.
+  while (true) {
+    const edge = pickNext();
+    if (edge === undefined) break;
+    if (!emittedIds.has(edge.node.id)) {
+      hasUnconsumed = true;
+      break;
+    }
+  }
+
   return { edges: emitted, hasUnconsumed };
 }
 
