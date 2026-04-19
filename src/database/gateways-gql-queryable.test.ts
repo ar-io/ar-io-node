@@ -17,6 +17,7 @@ import {
 } from '../types.js';
 import { fromB64Url } from '../lib/encoding.js';
 import {
+  decodeTransactionGqlCursor,
   encodeBlockGqlCursor,
   encodeTransactionGqlCursor,
 } from './standalone-sqlite.js';
@@ -101,15 +102,31 @@ class FakeQueryable implements GqlQueryable {
 
   async getGqlTransactions(args: {
     pageSize: number;
+    cursor?: string;
     sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
   }): Promise<GqlTransactionsResult> {
     if (this.data.throws) throw this.data.throws;
     const all = this.data.transactions ?? [];
+    const sign = args.sortOrder === 'HEIGHT_ASC' ? 1 : -1;
     // Sort exactly like SQL/ClickHouse: (height, bti, data_item_id,
     // indexed_at, id), all in the same direction. id and data_item_id are
     // sorted as raw bytes (BLOB), so decode before comparing.
-    const sorted = [...all].sort((a, b) => {
-      const sign = args.sortOrder === 'HEIGHT_ASC' ? 1 : -1;
+    const compareBySortKey = (
+      a: {
+        height: number | null;
+        blockTransactionIndex: number;
+        dataItemId: string | null;
+        indexedAt: number;
+        id: string;
+      },
+      b: {
+        height: number | null;
+        blockTransactionIndex: number;
+        dataItemId: string | null;
+        indexedAt: number;
+        id: string;
+      },
+    ): number => {
       const hDiff = (a.height ?? 0) - (b.height ?? 0);
       if (hDiff) return sign * Math.sign(hDiff);
       const btiDiff = a.blockTransactionIndex - b.blockTransactionIndex;
@@ -122,10 +139,28 @@ class FakeQueryable implements GqlQueryable {
       const iaDiff = a.indexedAt - b.indexedAt;
       if (iaDiff) return sign * Math.sign(iaDiff);
       return sign * Buffer.compare(fromB64Url(a.id), fromB64Url(b.id));
-    });
-    const page = sorted.slice(0, args.pageSize);
+    };
+    const sorted = [...all].sort(compareBySortKey);
+    let startIndex = 0;
+    if (args.cursor !== undefined) {
+      // The cursor is a full sort-key tuple, not just an id. Skip all rows
+      // whose sort key is <= the cursor, matching SQL's lex compare.
+      const decoded = decodeTransactionGqlCursor(args.cursor);
+      const cursorKey = {
+        height: decoded.height,
+        blockTransactionIndex: decoded.blockTransactionIndex ?? 0,
+        dataItemId: decoded.dataItemId ?? 'AA',
+        indexedAt: decoded.indexedAt ?? 0,
+        id: decoded.id ?? '',
+      };
+      startIndex = sorted.findIndex((t) => compareBySortKey(t, cursorKey) > 0);
+      if (startIndex < 0) startIndex = sorted.length;
+    }
+    const page = sorted.slice(startIndex, startIndex + args.pageSize);
     return {
-      pageInfo: { hasNextPage: sorted.length > args.pageSize },
+      pageInfo: {
+        hasNextPage: sorted.length > startIndex + args.pageSize,
+      },
       edges: page.map((tx) => ({ cursor: cursorFor(tx), node: tx })),
     };
   }
@@ -325,6 +360,44 @@ describe('GatewaysGqlQueryable', () => {
         ['a1', 'a2'],
       );
       assert.equal(result.pageInfo.hasNextPage, true);
+    });
+
+    it('forwards cursors so pagination round-trips across upstreams', async () => {
+      const aTxs = [
+        txAt({ id: 'a1', height: 100, blockTransactionIndex: 0 }),
+        txAt({ id: 'a2', height: 98, blockTransactionIndex: 0 }),
+      ];
+      const bTxs = [
+        txAt({ id: 'b1', height: 99, blockTransactionIndex: 0 }),
+        txAt({ id: 'b2', height: 97, blockTransactionIndex: 0 }),
+      ];
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: aTxs }),
+        new FakeQueryable({ transactions: bTxs }),
+      ]);
+
+      const page1 = await merger.getGqlTransactions({
+        pageSize: 2,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.deepEqual(
+        page1.edges.map((e) => e.node.id),
+        ['a1', 'b1'],
+      );
+      assert.equal(page1.pageInfo.hasNextPage, true);
+
+      const page2 = await merger.getGqlTransactions({
+        pageSize: 2,
+        cursor: page1.edges[page1.edges.length - 1].cursor,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.deepEqual(
+        page2.edges.map((e) => e.node.id),
+        ['a2', 'b2'],
+      );
+      assert.equal(page2.pageInfo.hasNextPage, false);
     });
 
     it('best-effort returns partial results when one source fails', async () => {

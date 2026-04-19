@@ -297,7 +297,11 @@ function mapRemoteTransaction(
   cursor: string | undefined,
 ): GqlTransaction {
   const decoded = decodeTransactionGqlCursor(cursor);
-  const isDataItem = decoded.dataItemId !== null && decoded.dataItemId !== 'AA';
+  // Single-record transaction(id) responses have no cursor. Infer data-item
+  // status from bundledIn so the shape matches cursor-derived results.
+  const dataItemId =
+    decoded.dataItemId ?? (node.bundledIn != null ? node.id : 'AA');
+  const isDataItem = dataItemId !== 'AA';
   return {
     id: node.id,
     anchor: node.anchor ?? null,
@@ -320,7 +324,7 @@ function mapRemoteTransaction(
     blockPreviousBlock: node.block?.previous ?? null,
     parentId: node.bundledIn?.id ?? null,
     blockTransactionIndex: decoded.blockTransactionIndex ?? 0,
-    dataItemId: decoded.dataItemId,
+    dataItemId,
     tags: node.tags ?? [],
     indexedAt: decoded.indexedAt ?? 0,
     isDataItem,
@@ -563,25 +567,38 @@ export class GatewaysGqlQueryable implements GqlQueryable {
   }: {
     id: string;
   }): Promise<GqlTransaction | null> {
-    const results = await Promise.allSettled(
-      this.sources.map((source) => source.getGqlTransaction({ id })),
+    const promises = this.sources.map((source) =>
+      source.getGqlTransaction({ id }),
     );
-    this.enforceMergePolicy(results, 'getGqlTransaction', { id });
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value != null) return r.value;
+
+    if (this.mergePolicy === 'strict') {
+      const results = await Promise.allSettled(promises);
+      this.enforceMergePolicy(results, 'getGqlTransaction', { id });
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value != null) return r.value;
+      }
+      return null;
     }
-    return null;
+
+    return (
+      (await this.raceFirstNonNull(promises, 'getGqlTransaction', { id })) ??
+      null
+    );
   }
 
   async getGqlBlock({ id }: { id: string }): Promise<GqlBlock | undefined> {
-    const results = await Promise.allSettled(
-      this.sources.map((source) => source.getGqlBlock({ id })),
-    );
-    this.enforceMergePolicy(results, 'getGqlBlock', { id });
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value != null) return r.value;
+    const promises = this.sources.map((source) => source.getGqlBlock({ id }));
+
+    if (this.mergePolicy === 'strict') {
+      const results = await Promise.allSettled(promises);
+      this.enforceMergePolicy(results, 'getGqlBlock', { id });
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value != null) return r.value;
+      }
+      return undefined;
     }
-    return undefined;
+
+    return this.raceFirstNonNull(promises, 'getGqlBlock', { id });
   }
 
   async getGqlTransactions(
@@ -644,6 +661,58 @@ export class GatewaysGqlQueryable implements GqlQueryable {
       pageInfo: { hasNextPage: anyUpstreamHasMore || hasUnconsumed },
       edges,
     };
+  }
+
+  /**
+   * Best-effort single-record fan-out: resolves as soon as any source
+   * returns a non-null value. Failing sources are logged but do not block
+   * a faster peer's response. Throws only when every source rejects.
+   */
+  private raceFirstNonNull<T>(
+    promises: Promise<T | null | undefined>[],
+    method: string,
+    args: unknown,
+  ): Promise<T | undefined> {
+    return new Promise((resolve, reject) => {
+      let remaining = promises.length;
+      let rejectedCount = 0;
+      let firstError: unknown;
+
+      const maybeFinish = () => {
+        if (--remaining > 0) return;
+        if (rejectedCount === promises.length) {
+          const msg =
+            (firstError as Error)?.message ?? String(firstError ?? 'unknown');
+          reject(
+            new Error(
+              `All ${promises.length} GatewaysGqlQueryable source(s) failed for ${method}: ${msg}`,
+            ),
+          );
+        } else {
+          resolve(undefined);
+        }
+      };
+
+      promises.forEach((p, i) => {
+        p.then((value) => {
+          if (value != null) {
+            resolve(value);
+          } else {
+            maybeFinish();
+          }
+        }).catch((err) => {
+          this.log.warn('Upstream source failed', {
+            method,
+            args,
+            source: this.sourceLabels[i],
+            error: err?.message ?? String(err),
+          });
+          rejectedCount++;
+          if (firstError === undefined) firstError = err;
+          maybeFinish();
+        });
+      });
+    });
   }
 
   private enforceMergePolicy(
