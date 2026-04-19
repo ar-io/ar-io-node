@@ -1,0 +1,441 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+import { strict as assert } from 'node:assert';
+import { describe, it } from 'node:test';
+
+import { createTestLogger } from '../../test/test-logger.js';
+import {
+  GqlBlock,
+  GqlBlocksResult,
+  GqlQueryable,
+  GqlTransaction,
+  GqlTransactionsResult,
+} from '../types.js';
+import {
+  encodeBlockGqlCursor,
+  encodeTransactionGqlCursor,
+} from './standalone-sqlite.js';
+import { GatewaysGqlQueryable } from './gateways-gql-queryable.js';
+
+const log = createTestLogger({ suite: 'GatewaysGqlQueryable' });
+
+function txAt(params: {
+  id: string;
+  height: number;
+  blockTransactionIndex?: number;
+  isDataItem?: boolean;
+  indexedAt?: number;
+}): GqlTransaction {
+  const {
+    id,
+    height,
+    blockTransactionIndex = 0,
+    isDataItem = false,
+    indexedAt = 0,
+  } = params;
+  return {
+    id,
+    anchor: null,
+    signature: null,
+    signatureType: null,
+    signatureSize: null,
+    signatureOffset: null,
+    recipient: null,
+    ownerAddress: '',
+    ownerKey: null,
+    ownerSize: null,
+    ownerOffset: null,
+    fee: '0',
+    quantity: '0',
+    dataSize: '0',
+    contentType: null,
+    blockIndepHash: null,
+    blockTimestamp: null,
+    height,
+    blockPreviousBlock: null,
+    parentId: null,
+    blockTransactionIndex,
+    dataItemId: isDataItem ? id : 'AA',
+    tags: [],
+    indexedAt,
+    isDataItem,
+  };
+}
+
+function cursorFor(tx: GqlTransaction): string {
+  return encodeTransactionGqlCursor({
+    height: tx.height,
+    blockTransactionIndex: tx.blockTransactionIndex,
+    dataItemId: tx.dataItemId,
+    id: tx.id,
+    indexedAt: tx.indexedAt,
+  });
+}
+
+function blockCursorFor(b: GqlBlock): string {
+  return encodeBlockGqlCursor({ height: b.height });
+}
+
+class FakeQueryable implements GqlQueryable {
+  constructor(
+    private readonly data: {
+      transactions?: GqlTransaction[];
+      blocks?: GqlBlock[];
+      throws?: Error;
+    },
+  ) {}
+
+  async getGqlTransaction({
+    id,
+  }: {
+    id: string;
+  }): Promise<GqlTransaction | null> {
+    if (this.data.throws) throw this.data.throws;
+    return this.data.transactions?.find((t) => t.id === id) ?? null;
+  }
+
+  async getGqlTransactions(args: {
+    pageSize: number;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+  }): Promise<GqlTransactionsResult> {
+    if (this.data.throws) throw this.data.throws;
+    const all = this.data.transactions ?? [];
+    // Sort exactly like SQL: (height, bti, dataItemId, indexedAt, id), all in
+    // the same direction. This matches the upstream contract.
+    const sorted = [...all].sort((a, b) => {
+      const sign = args.sortOrder === 'HEIGHT_ASC' ? 1 : -1;
+      const cmp = (x: number | string, y: number | string): number =>
+        x < y ? -1 : x > y ? 1 : 0;
+      const hDiff = cmp(a.height ?? 0, b.height ?? 0);
+      if (hDiff) return sign * hDiff;
+      const btiDiff = cmp(a.blockTransactionIndex, b.blockTransactionIndex);
+      if (btiDiff) return sign * btiDiff;
+      const diDiff = cmp(a.dataItemId ?? '', b.dataItemId ?? '');
+      if (diDiff) return sign * diDiff;
+      const iaDiff = cmp(a.indexedAt, b.indexedAt);
+      if (iaDiff) return sign * iaDiff;
+      return sign * cmp(a.id, b.id);
+    });
+    const page = sorted.slice(0, args.pageSize);
+    return {
+      pageInfo: { hasNextPage: sorted.length > args.pageSize },
+      edges: page.map((tx) => ({ cursor: cursorFor(tx), node: tx })),
+    };
+  }
+
+  async getGqlBlock({ id }: { id: string }): Promise<GqlBlock | undefined> {
+    if (this.data.throws) throw this.data.throws;
+    return this.data.blocks?.find((b) => b.id === id);
+  }
+
+  async getGqlBlocks(args: {
+    pageSize: number;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+  }): Promise<GqlBlocksResult> {
+    if (this.data.throws) throw this.data.throws;
+    const all = this.data.blocks ?? [];
+    const sorted = [...all].sort((a, b) =>
+      args.sortOrder === 'HEIGHT_ASC'
+        ? a.height - b.height
+        : b.height - a.height,
+    );
+    const page = sorted.slice(0, args.pageSize);
+    return {
+      pageInfo: { hasNextPage: sorted.length > args.pageSize },
+      edges: page.map((b) => ({ cursor: blockCursorFor(b), node: b })),
+    };
+  }
+}
+
+function makeMerger(
+  sources: GqlQueryable[],
+  mergePolicy: 'best-effort' | 'strict' = 'best-effort',
+): GatewaysGqlQueryable {
+  return GatewaysGqlQueryable.forTesting({ log, sources, mergePolicy });
+}
+
+describe('GatewaysGqlQueryable', () => {
+  describe('constructor', () => {
+    it('throws when no urls and no localGqlQueryable', () => {
+      assert.throws(() => new GatewaysGqlQueryable({ log, urls: [] }));
+    });
+
+    it('accepts only a local source', () => {
+      const merger = new GatewaysGqlQueryable({
+        log,
+        urls: [],
+        localGqlQueryable: new FakeQueryable({}),
+      });
+      assert.equal(merger instanceof GatewaysGqlQueryable, true);
+    });
+  });
+
+  describe('getGqlTransaction (single record)', () => {
+    it('returns the first non-null result', async () => {
+      const tx = txAt({ id: 'a', height: 10 });
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: [] }),
+        new FakeQueryable({ transactions: [tx] }),
+      ]);
+      const result = await merger.getGqlTransaction({ id: 'a' });
+      assert.equal(result?.id, 'a');
+    });
+
+    it('returns null when no source has the transaction', async () => {
+      const merger = makeMerger([new FakeQueryable({}), new FakeQueryable({})]);
+      assert.equal(await merger.getGqlTransaction({ id: 'x' }), null);
+    });
+
+    it('best-effort tolerates a failing source', async () => {
+      const tx = txAt({ id: 'a', height: 10 });
+      const merger = makeMerger([
+        new FakeQueryable({ throws: new Error('boom') }),
+        new FakeQueryable({ transactions: [tx] }),
+      ]);
+      assert.equal((await merger.getGqlTransaction({ id: 'a' }))?.id, 'a');
+    });
+
+    it('strict fails when any source fails', async () => {
+      const tx = txAt({ id: 'a', height: 10 });
+      const merger = makeMerger(
+        [
+          new FakeQueryable({ throws: new Error('boom') }),
+          new FakeQueryable({ transactions: [tx] }),
+        ],
+        'strict',
+      );
+      await assert.rejects(() => merger.getGqlTransaction({ id: 'a' }));
+    });
+
+    it('fails when every source fails', async () => {
+      const merger = makeMerger([
+        new FakeQueryable({ throws: new Error('a') }),
+        new FakeQueryable({ throws: new Error('b') }),
+      ]);
+      await assert.rejects(() => merger.getGqlTransaction({ id: 'a' }));
+    });
+  });
+
+  describe('getGqlTransactions (connection merge)', () => {
+    it('merges disjoint ranges in HEIGHT_DESC order', async () => {
+      const aTxs = [
+        txAt({ id: 'a1', height: 100, blockTransactionIndex: 0 }),
+        txAt({ id: 'a2', height: 99, blockTransactionIndex: 0 }),
+      ];
+      const bTxs = [
+        txAt({ id: 'b1', height: 50, blockTransactionIndex: 0 }),
+        txAt({ id: 'b2', height: 49, blockTransactionIndex: 0 }),
+      ];
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: aTxs }),
+        new FakeQueryable({ transactions: bTxs }),
+      ]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        ['a1', 'a2', 'b1', 'b2'],
+      );
+      assert.equal(result.pageInfo.hasNextPage, false);
+    });
+
+    it('merges overlapping ranges and dedupes by id', async () => {
+      // Same logical tx x at height 100 on both sources (different indexedAt
+      // on each source — simulates indexed_at skew).
+      const shared = txAt({
+        id: 'x',
+        height: 100,
+        blockTransactionIndex: 1,
+      });
+      const aShared = { ...shared, indexedAt: 100 };
+      const bShared = { ...shared, indexedAt: 500 };
+      const aOnly = txAt({ id: 'a', height: 100, blockTransactionIndex: 0 });
+      const bOnly = txAt({ id: 'b', height: 100, blockTransactionIndex: 2 });
+
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: [aOnly, aShared] }),
+        new FakeQueryable({ transactions: [bShared, bOnly] }),
+      ]);
+
+      const result = await merger.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      // HEIGHT_DESC applies to every tuple position, so higher
+      // blockTransactionIndex comes first at the same height.
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        ['b', 'x', 'a'],
+      );
+    });
+
+    it('honors HEIGHT_ASC', async () => {
+      const aTxs = [
+        txAt({ id: 'a1', height: 1, blockTransactionIndex: 0 }),
+        txAt({ id: 'a2', height: 3, blockTransactionIndex: 0 }),
+      ];
+      const bTxs = [
+        txAt({ id: 'b1', height: 2, blockTransactionIndex: 0 }),
+        txAt({ id: 'b2', height: 4, blockTransactionIndex: 0 }),
+      ];
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: aTxs }),
+        new FakeQueryable({ transactions: bTxs }),
+      ]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_ASC',
+        tags: [],
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        ['a1', 'b1', 'a2', 'b2'],
+      );
+    });
+
+    it('respects pageSize and reports hasNextPage', async () => {
+      const aTxs = [
+        txAt({ id: 'a1', height: 100, blockTransactionIndex: 0 }),
+        txAt({ id: 'a2', height: 99, blockTransactionIndex: 0 }),
+        txAt({ id: 'a3', height: 98, blockTransactionIndex: 0 }),
+      ];
+      const bTxs = [txAt({ id: 'b1', height: 97, blockTransactionIndex: 0 })];
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: aTxs }),
+        new FakeQueryable({ transactions: bTxs }),
+      ]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 2,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        ['a1', 'a2'],
+      );
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
+
+    it('best-effort returns partial results when one source fails', async () => {
+      const aTxs = [txAt({ id: 'a1', height: 100 })];
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: aTxs }),
+        new FakeQueryable({ throws: new Error('boom') }),
+      ]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        ['a1'],
+      );
+    });
+
+    it('strict rejects when one source fails', async () => {
+      const merger = makeMerger(
+        [
+          new FakeQueryable({
+            transactions: [txAt({ id: 'a1', height: 100 })],
+          }),
+          new FakeQueryable({ throws: new Error('boom') }),
+        ],
+        'strict',
+      );
+      await assert.rejects(() =>
+        merger.getGqlTransactions({
+          pageSize: 10,
+          sortOrder: 'HEIGHT_DESC',
+          tags: [],
+        }),
+      );
+    });
+
+    it('includes the local queryable when provided', async () => {
+      const local = new FakeQueryable({
+        transactions: [txAt({ id: 'local-1', height: 100 })],
+      });
+      const remote = new FakeQueryable({
+        transactions: [txAt({ id: 'remote-1', height: 99 })],
+      });
+      const merger = makeMerger([local, remote]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        ['local-1', 'remote-1'],
+      );
+    });
+  });
+
+  describe('getGqlBlocks', () => {
+    it('merges block results in HEIGHT_DESC order', async () => {
+      const aBlocks: GqlBlock[] = [
+        { id: 'a100', height: 100, timestamp: 0, previous: '' },
+        { id: 'a99', height: 99, timestamp: 0, previous: '' },
+      ];
+      const bBlocks: GqlBlock[] = [
+        { id: 'b98', height: 98, timestamp: 0, previous: '' },
+        { id: 'b97', height: 97, timestamp: 0, previous: '' },
+      ];
+      const merger = makeMerger([
+        new FakeQueryable({ blocks: aBlocks }),
+        new FakeQueryable({ blocks: bBlocks }),
+      ]);
+      const result = await merger.getGqlBlocks({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_DESC',
+      });
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        ['a100', 'a99', 'b98', 'b97'],
+      );
+    });
+
+    it('dedupes blocks by id (same block across upstreams)', async () => {
+      const shared: GqlBlock = {
+        id: 'h100',
+        height: 100,
+        timestamp: 0,
+        previous: '',
+      };
+      const merger = makeMerger([
+        new FakeQueryable({ blocks: [shared] }),
+        new FakeQueryable({ blocks: [shared] }),
+      ]);
+      const result = await merger.getGqlBlocks({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_DESC',
+      });
+      assert.equal(result.edges.length, 1);
+    });
+  });
+
+  describe('getGqlBlock (single record)', () => {
+    it('returns first non-null', async () => {
+      const block: GqlBlock = {
+        id: 'b1',
+        height: 1,
+        timestamp: 0,
+        previous: '',
+      };
+      const merger = makeMerger([
+        new FakeQueryable({}),
+        new FakeQueryable({ blocks: [block] }),
+      ]);
+      assert.equal((await merger.getGqlBlock({ id: 'b1' }))?.id, 'b1');
+    });
+  });
+});
