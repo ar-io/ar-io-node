@@ -29,9 +29,9 @@ import {
 
 function nodeSelection(query: string): SelectionSetNode {
   const doc = parse(query);
-  const op = doc.definitions.find(
-    (d) => d.kind === 'OperationDefinition',
-  ) as OperationDefinitionNode | undefined;
+  const op = doc.definitions.find((d) => d.kind === 'OperationDefinition') as
+    | OperationDefinitionNode
+    | undefined;
   if (op === undefined) throw new Error('no operation definition in query');
   const field = op.selectionSet.selections.find(
     (s) => s.kind === 'Field' && s.name.value === 'transactions',
@@ -243,10 +243,7 @@ describe('renderTransactionNodeSelection', () => {
     );
     // Nested types like Owner have no `id` field; injecting one would cause a
     // schema validation 400 at the upstream.
-    assert.equal(
-      canon(render(sel)),
-      'id block { height } owner { address }',
-    );
+    assert.equal(canon(render(sel)), 'id block { height } owner { address }');
   });
 
   it('dedupes repeated top-level selections of the same field', () => {

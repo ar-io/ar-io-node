@@ -65,7 +65,9 @@ export interface SelectionAwareGqlQueryable {
     nodeSelection?: SelectionSetNode;
   }): Promise<GqlTransaction | null>;
 
-  getGqlTransactions(args: TransactionQueryArgs): Promise<GqlTransactionsResult>;
+  getGqlTransactions(
+    args: TransactionQueryArgs,
+  ): Promise<GqlTransactionsResult>;
 }
 
 export function isSelectionAwareGqlQueryable(
@@ -144,7 +146,9 @@ function renderTransactionNodeSelection(
   return hasTopLevelId ? rendered : `id ${rendered}`.trim();
 }
 
-function resolveNodeFields(nodeSelection: SelectionSetNode | undefined): string {
+function resolveNodeFields(
+  nodeSelection: SelectionSetNode | undefined,
+): string {
   if (nodeSelection === undefined) return DEFAULT_TRANSACTION_NODE_FIELDS;
   const rendered = renderTransactionNodeSelection(nodeSelection);
   return rendered ?? DEFAULT_TRANSACTION_NODE_FIELDS;
