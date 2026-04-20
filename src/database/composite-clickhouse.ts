@@ -201,7 +201,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         'signature_offset',
         'signature_type',
       )
-      .from('transactions AS t FINAL');
+      .from('transactions AS t');
   }
 
   addGqlTransactionFilters({
@@ -376,7 +376,13 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     });
 
     const txsSql = txsQuery.toString();
-    const sql = `${txsSql} LIMIT ${pageSize + 1}`;
+    // Replaces FINAL: dedupes unmerged ReplacingMergeTree versions by PK.
+    // FINAL would disable owner_projection selection and force a
+    // PrimaryKeyExpand over skip-index results; LIMIT BY is a post-sort
+    // filter that leaves projection planning intact.
+    const dedupByPk =
+      'LIMIT 1 BY t.height, t.block_transaction_index, t.is_data_item, t.id';
+    const sql = `${txsSql} ${dedupByPk} LIMIT ${pageSize + 1}`;
 
     this.log.debug('Querying ClickHouse transactions...', { sql });
 

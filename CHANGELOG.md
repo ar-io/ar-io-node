@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **ClickHouse GraphQL query no longer uses `FINAL`**: The composite
+  ClickHouse backend previously issued `FROM transactions AS t FINAL` to
+  deduplicate unmerged `ReplacingMergeTree` versions at read time. `FINAL`
+  prevented `owner_projection` from being selected and forced a
+  `PrimaryKeyExpand` that widened the skip-index-pruned granule set by
+  ~4×. It is replaced with a `LIMIT 1 BY height, block_transaction_index,
+  is_data_item, id` clause that dedupes in-engine as a post-sort filter
+  without disabling projection planning or PREWHERE push-down. Safe
+  because Arweave transaction data is immutable: all versions of a given
+  primary key are byte-identical by construction.
+
 ### Fixed
 
 - **ClickHouse `owner_projection` now usable for tag-filtered owner queries**:
