@@ -99,8 +99,8 @@ export class ParquetExporter {
     endHeight,
     maxFileRows,
     heightPartitionSize = 1000,
-    skipL1Transactions = true,
-    skipL1Tags = true,
+    skipL1Transactions = false,
+    skipL1Tags = false,
   }: {
     outputDir: string;
     startHeight: number;
