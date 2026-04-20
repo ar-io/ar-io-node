@@ -52,11 +52,14 @@ interface TransactionQueryArgs {
 
 /**
  * Capability interface implemented by fan-out GqlQueryable instances that can
- * narrow upstream requests to the caller's selection set. Implementations that
- * always read the full row (SQLite, ClickHouse) do NOT implement this — keeping
- * the shared GqlQueryable interface lean.
+ * narrow upstream requests to the caller's selection set. Carries a nominal
+ * brand so TypeScript's structural narrowing can distinguish it from plain
+ * GqlQueryable — without the brand, `Exclude<GqlQueryable, ...>` collapses to
+ * `never` in the else branch of the type guard.
  */
-export interface SelectionAwareGqlQueryable extends GqlQueryable {
+export interface SelectionAwareGqlQueryable {
+  readonly __selectionAware: true;
+
   getGqlTransaction(args: {
     id: string;
     nodeSelection?: SelectionSetNode;
@@ -67,8 +70,8 @@ export interface SelectionAwareGqlQueryable extends GqlQueryable {
 
 export function isSelectionAwareGqlQueryable(
   db: GqlQueryable,
-): db is SelectionAwareGqlQueryable {
-  return db instanceof GatewaysGqlQueryable;
+): db is GqlQueryable & SelectionAwareGqlQueryable {
+  return (db as Partial<SelectionAwareGqlQueryable>).__selectionAware === true;
 }
 
 interface BlockQueryArgs {
@@ -558,7 +561,10 @@ function mergeEdges<T extends { cursor: string; node: { id: string } }>(
   return { edges: emitted, hasUnconsumed };
 }
 
-export class GatewaysGqlQueryable implements GqlQueryable {
+export class GatewaysGqlQueryable
+  implements GqlQueryable, SelectionAwareGqlQueryable
+{
+  readonly __selectionAware = true as const;
   private readonly log: winston.Logger;
   private readonly sources: GqlQueryable[];
   private readonly sourceLabels: string[];
