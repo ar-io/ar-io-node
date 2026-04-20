@@ -103,8 +103,11 @@ CREATE TABLE IF NOT EXISTS transactions (
   INDEX target_bloom (target) TYPE bloom_filter(0.01) GRANULARITY 1,
   INDEX tag_names_bloom tag_names TYPE bloom_filter(0.01) GRANULARITY 4,
   INDEX tag_values_bloom tag_values TYPE bloom_filter(0.01) GRANULARITY 4,
+  -- tag_names/tag_values are MATERIALIZED, so SELECT * excludes them. They
+  -- must be listed explicitly or the optimizer cannot serve queries with
+  -- tag_names/tag_values predicates from the projection.
   PROJECTION owner_projection (
-    SELECT *
+    SELECT *, tag_names, tag_values
     ORDER BY (owner_address, height, block_transaction_index, is_data_item, id)
   ),
   PRIMARY KEY (height, block_transaction_index, is_data_item, id)
@@ -119,3 +122,21 @@ SETTINGS deduplicate_merge_projection_mode = 'rebuild';
 -- once applied.
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS expires_at Nullable(DateTime);
 ALTER TABLE transactions MODIFY TTL ifNull(expires_at, toDateTime(0)) DELETE WHERE expires_at IS NOT NULL;
+
+-- One-time manual migration for nodes whose owner_projection was created with
+-- the old `SELECT *` body (which excluded tag_names/tag_values, preventing
+-- the optimizer from using the projection for tag-filtered queries). Not
+-- run automatically because MATERIALIZE PROJECTION rewrites every part and
+-- would re-trigger on each clickhouse-import cycle. Run once, per partition,
+-- against an existing node:
+--
+--   ALTER TABLE transactions DROP PROJECTION IF EXISTS owner_projection;
+--   ALTER TABLE transactions ADD PROJECTION owner_projection (
+--     SELECT *, tag_names, tag_values
+--     ORDER BY (owner_address, height, block_transaction_index, is_data_item, id)
+--   );
+--   ALTER TABLE transactions MATERIALIZE PROJECTION owner_projection;
+--
+-- Track progress via `SELECT * FROM system.mutations WHERE table='transactions'
+-- AND NOT is_done`. Fresh deployments get the correct body from the CREATE
+-- TABLE above and do not need this migration.

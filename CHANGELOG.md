@@ -12,6 +12,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **ClickHouse `owner_projection` now usable for tag-filtered owner queries**:
+  The projection was previously defined with `SELECT *`, which in ClickHouse
+  excludes `MATERIALIZED` columns — so `tag_names` and `tag_values` were
+  absent from the projection and the optimizer rejected it for any query
+  with predicates on those columns (which includes all tag-filtered GraphQL
+  queries). The projection body is now `SELECT *, tag_names, tag_values`, so
+  the optimizer picks `owner_projection` for owner-scoped queries and reads
+  orders of magnitude fewer granules. Existing deployments need a one-time
+  manual migration (`DROP PROJECTION` / `ADD PROJECTION` / `MATERIALIZE
+  PROJECTION`) — see the inline comment in
+  `src/database/clickhouse/schema.sql`. Fresh deployments get the corrected
+  projection from the `CREATE TABLE` body with no operator action required.
+
 ## [Release 76] - 2026-04-17
 
 This is a **recommended release** focused on **response signing**,
