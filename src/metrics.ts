@@ -929,3 +929,41 @@ export const httpSigErrorsTotal = new promClient.Counter({
   name: 'httpsig_errors_total',
   help: 'Total HTTPSIG signing errors',
 });
+
+//
+// IPFS metrics
+//
+
+export const ipfsRequestsTotal = new promClient.Counter({
+  name: 'ipfs_requests_total',
+  help: 'Total IPFS content requests',
+  labelNames: ['route_type', 'status'] as const,
+});
+
+export const ipfsCacheHitTotal = new promClient.Counter({
+  name: 'ipfs_cache_hit_total',
+  help: 'IPFS content cache hits',
+});
+
+export const ipfsCacheMissTotal = new promClient.Counter({
+  name: 'ipfs_cache_miss_total',
+  help: 'IPFS content cache misses',
+});
+
+export const ipfsContentSizeHistogram = new promClient.Histogram({
+  name: 'ipfs_content_size_bytes',
+  help: 'Distribution of IPFS content sizes',
+  buckets: [1024, 102400, 1048576, 10485760, 104857600],
+});
+
+export const ipfsRequestDurationHistogram = new promClient.Histogram({
+  name: 'ipfs_request_duration_seconds',
+  help: 'Duration of IPFS content requests',
+  labelNames: ['route_type', 'cache_status'] as const,
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+export const ipfsBlockedTotal = new promClient.Counter({
+  name: 'ipfs_blocked_total',
+  help: 'IPFS requests blocked by CID blocklist',
+});

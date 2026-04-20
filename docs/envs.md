@@ -357,3 +357,26 @@ ingestion may be partial) for SQLite.
 | CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED      | Boolean | false         | When true, restrict the SQLite fallback to heights above (ClickHouse max height - buffer)                                |
 | CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER       | Number  | 10            | Heights reserved for SQLite near the ClickHouse tip, to guard against partially ingested recent blocks                   |
 | CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS   | Number  | 60            | TTL for the cached ClickHouse max-height lookup used by the boundary optimization                                        |
+
+## IPFS
+
+When enabled, the gateway can serve IPFS content via `/ipfs/{CID}` path routes
+and `{CID}.{root_host}` subdomain routes (same level as ArNS, works with
+standard `*.{host}` wildcard TLS certs). Requires a Kubo IPFS node (available
+as a Docker Compose sidecar via the `ipfs` profile).
+
+| ENV_NAME                                  | TYPE    | DEFAULT_VALUE       | DESCRIPTION                                                         |
+| ----------------------------------------- | ------- | ------------------- | ------------------------------------------------------------------- |
+| IPFS_ENABLED                              | Boolean | false               | Enable IPFS content serving                                         |
+| IPFS_KUBO_URL                             | String  | http://kubo:8080    | Kubo HTTP gateway URL                                               |
+| IPFS_KUBO_REQUEST_TIMEOUT_MS              | Number  | 30000               | Connection timeout for Kubo requests (ms)                           |
+| IPFS_STREAM_STALL_TIMEOUT_MS              | Number  | 30000               | Stall timeout — max time with no data before aborting stream (ms)   |
+| IPFS_CACHE_PATH                           | String  | data/ipfs-cache     | Directory for cached IPFS content                                   |
+| IPFS_CACHE_MAX_SIZE_BYTES                 | Number  | 10737418240 (10 GB) | Maximum cache size before LRU eviction                              |
+| IPFS_CACHE_CLEANUP_THRESHOLD              | Number  | 3600                | Age in seconds before cached files become eviction candidates       |
+| IPFS_BLOCKLIST_PATH                       | String  | data/ipfs-blocklist.txt | Path to CID blocklist file (one CID per line, hot-reloaded)     |
+| IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET    | Number  | 50000               | IPFS rate limiter: max tokens per IP bucket                         |
+| IPFS_RATE_LIMITER_IP_REFILL_PER_SEC       | Number  | 5                   | IPFS rate limiter: token refill rate per second (IP bucket)         |
+| IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET | Number | 200000            | IPFS rate limiter: max tokens per resource bucket                   |
+| IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC | Number  | 20                  | IPFS rate limiter: token refill rate per second (resource bucket)   |
+| IPFS_MAX_RESPONSE_SIZE_BYTES              | Number  | 1073741824 (1 GB)   | Maximum IPFS content size the gateway will serve                    |
