@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { default as axios, AxiosInstance } from 'axios';
+import { FieldNode, SelectionSetNode, print } from 'graphql';
 import * as rax from 'retry-axios';
 import winston from 'winston';
 
@@ -39,6 +40,35 @@ interface TransactionQueryArgs {
   maxHeight?: number;
   bundledIn?: string[] | null;
   tags: TagFilter[];
+  /**
+   * Caller-provided GraphQL sub-selection for the Transaction node. When set,
+   * it narrows what we ask upstreams for — avoiding both correctness bugs on
+   * unrequested fields and unnecessary upstream cost. Parsed AST rather than a
+   * string so the rendering logic (id injection for dedup, alias stripping,
+   * fragment bail-out) stays in one place.
+   */
+  nodeSelection?: SelectionSetNode;
+}
+
+/**
+ * Capability interface implemented by fan-out GqlQueryable instances that can
+ * narrow upstream requests to the caller's selection set. Implementations that
+ * always read the full row (SQLite, ClickHouse) do NOT implement this — keeping
+ * the shared GqlQueryable interface lean.
+ */
+export interface SelectionAwareGqlQueryable extends GqlQueryable {
+  getGqlTransaction(args: {
+    id: string;
+    nodeSelection?: SelectionSetNode;
+  }): Promise<GqlTransaction | null>;
+
+  getGqlTransactions(args: TransactionQueryArgs): Promise<GqlTransactionsResult>;
+}
+
+export function isSelectionAwareGqlQueryable(
+  db: GqlQueryable,
+): db is SelectionAwareGqlQueryable {
+  return db instanceof GatewaysGqlQueryable;
 }
 
 interface BlockQueryArgs {
@@ -50,7 +80,7 @@ interface BlockQueryArgs {
   maxHeight?: number;
 }
 
-const TRANSACTION_NODE_FIELDS = `
+const DEFAULT_TRANSACTION_NODE_FIELDS = `
   id
   anchor
   signature
@@ -65,43 +95,106 @@ const TRANSACTION_NODE_FIELDS = `
   bundledIn { id }
 `;
 
-const TRANSACTIONS_QUERY = `
-  query TransactionsQuery(
-    $ids: [ID!]
-    $owners: [String!]
-    $recipients: [String!]
-    $tags: [TagFilter!]
-    $bundledIn: [ID!]
-    $block: BlockFilter
-    $first: Int
-    $after: String
-    $sort: SortOrder
-  ) {
-    transactions(
-      ids: $ids
-      owners: $owners
-      recipients: $recipients
-      tags: $tags
-      bundledIn: $bundledIn
-      block: $block
-      first: $first
-      after: $after
-      sort: $sort
-    ) {
-      pageInfo { hasNextPage }
-      edges {
-        cursor
-        node {${TRANSACTION_NODE_FIELDS}}
+/**
+ * Render a GraphQL selection set as a plain fragment body (no surrounding
+ * braces). Aliases are stripped and selections are deduped by canonical name,
+ * because the mapper reads canonical keys like `node.anchor`. Non-field
+ * selections (fragment spreads, inline fragments) cause a bail-out — the caller
+ * falls back to the default field set.
+ */
+function renderSelectionSet(
+  selectionSet: SelectionSetNode,
+): string | undefined {
+  const byName = new Map<string, string>();
+  for (const sel of selectionSet.selections) {
+    if (sel.kind !== 'Field') return undefined;
+    const field = sel as FieldNode;
+    const name = field.name.value;
+    if (byName.has(name)) continue;
+    if (field.selectionSet !== undefined) {
+      const nested = renderSelectionSet(field.selectionSet);
+      if (nested === undefined) {
+        byName.set(name, print(field));
+        continue;
       }
+      byName.set(name, `${name} { ${nested} }`);
+    } else {
+      byName.set(name, name);
     }
   }
-`;
+  return Array.from(byName.values()).join(' ');
+}
 
-const TRANSACTION_QUERY = `
-  query TransactionQuery($id: ID!) {
-    transaction(id: $id) {${TRANSACTION_NODE_FIELDS}}
-  }
-`;
+/**
+ * Render the Transaction-node sub-selection, ensuring `id` is present at the
+ * top level so mergeEdges can deduplicate across sources. `id` is only injected
+ * at this outer level — nested object types like Owner have no `id` field.
+ */
+function renderTransactionNodeSelection(
+  selectionSet: SelectionSetNode,
+): string | undefined {
+  const rendered = renderSelectionSet(selectionSet);
+  if (rendered === undefined) return undefined;
+  const hasTopLevelId = selectionSet.selections.some(
+    (s) => s.kind === 'Field' && s.name.value === 'id' && s.alias === undefined,
+  );
+  return hasTopLevelId ? rendered : `id ${rendered}`.trim();
+}
+
+function resolveNodeFields(nodeSelection: SelectionSetNode | undefined): string {
+  if (nodeSelection === undefined) return DEFAULT_TRANSACTION_NODE_FIELDS;
+  const rendered = renderTransactionNodeSelection(nodeSelection);
+  return rendered ?? DEFAULT_TRANSACTION_NODE_FIELDS;
+}
+
+// Exposed for tests. Do not use outside this module.
+export const __test = {
+  renderTransactionNodeSelection,
+  resolveNodeFields,
+  DEFAULT_TRANSACTION_NODE_FIELDS,
+};
+
+function buildTransactionsQuery(nodeFields: string): string {
+  return `
+    query TransactionsQuery(
+      $ids: [ID!]
+      $owners: [String!]
+      $recipients: [String!]
+      $tags: [TagFilter!]
+      $bundledIn: [ID!]
+      $block: BlockFilter
+      $first: Int
+      $after: String
+      $sort: SortOrder
+    ) {
+      transactions(
+        ids: $ids
+        owners: $owners
+        recipients: $recipients
+        tags: $tags
+        bundledIn: $bundledIn
+        block: $block
+        first: $first
+        after: $after
+        sort: $sort
+      ) {
+        pageInfo { hasNextPage }
+        edges {
+          cursor
+          node {${nodeFields}}
+        }
+      }
+    }
+  `;
+}
+
+function buildTransactionQuery(nodeFields: string): string {
+  return `
+    query TransactionQuery($id: ID!) {
+      transaction(id: $id) {${nodeFields}}
+    }
+  `;
+}
 
 const BLOCKS_QUERY = `
   query BlocksQuery(
@@ -164,11 +257,14 @@ class RemoteGqlQueryable implements GqlQueryable {
 
   async getGqlTransaction({
     id,
+    nodeSelection,
   }: {
     id: string;
+    nodeSelection?: SelectionSetNode;
   }): Promise<GqlTransaction | null> {
+    const nodeFields = resolveNodeFields(nodeSelection);
     const data = await this.post<{ transaction: RemoteTxNode | null }>(
-      TRANSACTION_QUERY,
+      buildTransactionQuery(nodeFields),
       { id },
     );
     if (data.transaction == null) return null;
@@ -209,12 +305,13 @@ class RemoteGqlQueryable implements GqlQueryable {
       sort: args.sortOrder ?? 'HEIGHT_DESC',
     };
 
+    const nodeFields = resolveNodeFields(args.nodeSelection);
     const data = await this.post<{
       transactions: {
         pageInfo: { hasNextPage: boolean };
         edges: { cursor: string; node: RemoteTxNode }[];
       };
-    }>(TRANSACTIONS_QUERY, variables);
+    }>(buildTransactionsQuery(nodeFields), variables);
 
     return {
       pageInfo: { hasNextPage: data.transactions.pageInfo.hasNextPage },
@@ -269,22 +366,24 @@ class RemoteGqlQueryable implements GqlQueryable {
 
 interface RemoteTxNode {
   id: string;
-  anchor: string;
-  signature: string | null;
-  signatureType: number | null;
-  recipient: string;
-  owner: { address: string; key: string | null };
-  fee: { winston: string };
-  quantity: { winston: string };
-  data: { size: string; type: string | null };
-  tags: { name: string; value: string }[];
-  block: {
-    id: string;
-    timestamp: number;
-    height: number;
-    previous: string;
+  // All other fields are optional: the caller may have pruned the sub-selection
+  // via `nodeFieldSelection`, so the upstream response can omit them entirely.
+  anchor?: string | null;
+  signature?: string | null;
+  signatureType?: number | null;
+  recipient?: string;
+  owner?: { address?: string; key?: string | null };
+  fee?: { winston?: string };
+  quantity?: { winston?: string };
+  data?: { size?: string; type?: string | null };
+  tags?: { name: string; value: string }[];
+  block?: {
+    id?: string;
+    timestamp?: number;
+    height?: number;
+    previous?: string;
   } | null;
-  bundledIn: { id: string } | null;
+  bundledIn?: { id: string } | null;
 }
 
 /**
@@ -309,7 +408,10 @@ function mapRemoteTransaction(
     signatureType: node.signatureType ?? null,
     signatureSize: null,
     signatureOffset: null,
-    recipient: node.recipient === '' ? null : node.recipient,
+    recipient:
+      node.recipient === '' || node.recipient === undefined
+        ? null
+        : node.recipient,
     ownerAddress: node.owner?.address ?? '',
     ownerKey: node.owner?.key ?? null,
     ownerSize: null,

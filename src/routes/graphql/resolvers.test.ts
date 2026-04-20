@@ -6,10 +6,13 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
+import { GraphQLResolveInfo, OperationDefinitionNode, parse } from 'graphql';
 
 import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
+  extractTransactionNodeSelection,
+  extractTransactionsNodeSelection,
   getPageSize,
   resolveTxData,
   resolveTxFee,
@@ -126,6 +129,78 @@ describe('resolveTxOwnerKey', () => {
       'repeated resolveTxOwnerKey calls on the same parent must share a Promise',
     );
     await first;
+  });
+});
+
+function infoForTopLevelField(
+  query: string,
+  topLevelFieldName: string,
+): GraphQLResolveInfo {
+  const doc = parse(query);
+  const op = doc.definitions[0] as OperationDefinitionNode;
+  const field = op.selectionSet.selections.find(
+    (s) => s.kind === 'Field' && s.name.value === topLevelFieldName,
+  );
+  if (field === undefined) {
+    throw new Error(`missing top-level field ${topLevelFieldName}`);
+  }
+  return { fieldNodes: [field] } as unknown as GraphQLResolveInfo;
+}
+
+function topLevelFieldNames(info: GraphQLResolveInfo | undefined): string[] {
+  const names: string[] = [];
+  for (const sel of info?.fieldNodes[0]?.selectionSet?.selections ?? []) {
+    if (sel.kind === 'Field') names.push(sel.name.value);
+  }
+  return names;
+}
+
+describe('extractTransactionsNodeSelection', () => {
+  it('returns the node sub-selection from a transactions query', () => {
+    const info = infoForTopLevelField(
+      `{ transactions { edges { node { id anchor } } } }`,
+      'transactions',
+    );
+    const node = extractTransactionsNodeSelection(info);
+    assert.notEqual(node, undefined);
+    const names = (node?.selections ?? [])
+      .filter((s) => s.kind === 'Field')
+      .map((s) => (s as { name: { value: string } }).name.value);
+    assert.deepEqual(names, ['id', 'anchor']);
+  });
+
+  it('returns undefined when node selection is absent', () => {
+    const info = infoForTopLevelField(
+      `{ transactions { pageInfo { hasNextPage } } }`,
+      'transactions',
+    );
+    assert.equal(extractTransactionsNodeSelection(info), undefined);
+  });
+});
+
+describe('extractTransactionNodeSelection', () => {
+  it('returns the top-level selection for transaction(id: ...)', () => {
+    const info = infoForTopLevelField(
+      `{ transaction(id: "x") { id anchor } }`,
+      'transaction',
+    );
+    const sel = extractTransactionNodeSelection(info);
+    assert.notEqual(sel, undefined);
+    const names = (sel?.selections ?? [])
+      .filter((s) => s.kind === 'Field')
+      .map((s) => (s as { name: { value: string } }).name.value);
+    assert.deepEqual(names, ['id', 'anchor']);
+  });
+});
+
+// Smoke test for the helper itself so tests above don't drift silently.
+describe('topLevelFieldNames helper', () => {
+  it('extracts names from a synthetic GraphQLResolveInfo', () => {
+    const info = infoForTopLevelField(
+      `{ transaction(id: "x") { id anchor } }`,
+      'transaction',
+    );
+    assert.deepEqual(topLevelFieldNames(info), ['id', 'anchor']);
   });
 });
 

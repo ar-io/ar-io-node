@@ -6,6 +6,7 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
+import { OperationDefinitionNode, SelectionSetNode, parse } from 'graphql';
 
 import { createTestLogger } from '../../test/test-logger.js';
 import {
@@ -21,7 +22,32 @@ import {
   encodeBlockGqlCursor,
   encodeTransactionGqlCursor,
 } from './standalone-sqlite.js';
-import { GatewaysGqlQueryable } from './gateways-gql-queryable.js';
+import {
+  GatewaysGqlQueryable,
+  __test as fanoutInternals,
+} from './gateways-gql-queryable.js';
+
+function nodeSelection(query: string): SelectionSetNode {
+  const doc = parse(query);
+  const op = doc.definitions.find(
+    (d) => d.kind === 'OperationDefinition',
+  ) as OperationDefinitionNode | undefined;
+  if (op === undefined) throw new Error('no operation definition in query');
+  const field = op.selectionSet.selections.find(
+    (s) => s.kind === 'Field' && s.name.value === 'transactions',
+  ) as { selectionSet: SelectionSetNode };
+  const edges = field.selectionSet.selections.find(
+    (s) => s.kind === 'Field' && s.name.value === 'edges',
+  ) as { selectionSet: SelectionSetNode };
+  const node = edges.selectionSet.selections.find(
+    (s) => s.kind === 'Field' && s.name.value === 'node',
+  ) as { selectionSet: SelectionSetNode };
+  return node.selectionSet;
+}
+
+function canon(s: string | undefined): string | undefined {
+  return s?.replace(/\s+/g, ' ').trim();
+}
 
 const log = createTestLogger({ suite: 'GatewaysGqlQueryable' });
 
@@ -195,6 +221,69 @@ function makeMerger(
 ): GatewaysGqlQueryable {
   return GatewaysGqlQueryable.forTesting({ log, sources, mergePolicy });
 }
+
+describe('renderTransactionNodeSelection', () => {
+  const render = fanoutInternals.renderTransactionNodeSelection;
+
+  it('renders a minimal selection unchanged', () => {
+    const sel = nodeSelection(`{ transactions { edges { node { id } } } }`);
+    assert.equal(canon(render(sel)), 'id');
+  });
+
+  it('injects id at the top level when absent', () => {
+    const sel = nodeSelection(
+      `{ transactions { edges { node { anchor signature } } } }`,
+    );
+    assert.equal(canon(render(sel)), 'id anchor signature');
+  });
+
+  it('preserves nested sub-selections without injecting id inside them', () => {
+    const sel = nodeSelection(
+      `{ transactions { edges { node { id block { height } owner { address } } } } }`,
+    );
+    // Nested types like Owner have no `id` field; injecting one would cause a
+    // schema validation 400 at the upstream.
+    assert.equal(
+      canon(render(sel)),
+      'id block { height } owner { address }',
+    );
+  });
+
+  it('dedupes repeated top-level selections of the same field', () => {
+    const sel = nodeSelection(
+      `{ transactions { edges { node { id anchor anchor } } } }`,
+    );
+    assert.equal(canon(render(sel)), 'id anchor');
+  });
+
+  it('falls back to undefined when encountering fragment spreads', () => {
+    const sel = nodeSelection(
+      `fragment F on Transaction { id }
+       { transactions { edges { node { ...F } } } }`,
+    );
+    assert.equal(render(sel), undefined);
+  });
+});
+
+describe('resolveNodeFields', () => {
+  it('returns the default field list when no selection is provided', () => {
+    assert.equal(
+      fanoutInternals.resolveNodeFields(undefined),
+      fanoutInternals.DEFAULT_TRANSACTION_NODE_FIELDS,
+    );
+  });
+
+  it('falls back to default when rendering bails out', () => {
+    const sel = nodeSelection(
+      `fragment F on Transaction { id }
+       { transactions { edges { node { ...F } } } }`,
+    );
+    assert.equal(
+      fanoutInternals.resolveNodeFields(sel),
+      fanoutInternals.DEFAULT_TRANSACTION_NODE_FIELDS,
+    );
+  });
+});
 
 describe('GatewaysGqlQueryable', () => {
   describe('constructor', () => {

@@ -210,7 +210,7 @@ type PageInfo {
 type Transaction {
   id: ID!
 
-  anchor: String!
+  anchor: String
   signature: String!
   signatureType: Int
   recipient: String!

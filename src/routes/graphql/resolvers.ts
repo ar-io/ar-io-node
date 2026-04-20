@@ -5,9 +5,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { IResolvers } from '@graphql-tools/utils';
+import { GraphQLResolveInfo, SelectionSetNode } from 'graphql';
 
 import * as config from '../../config.js';
 import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
+import { isSelectionAwareGqlQueryable } from '../../database/gateways-gql-queryable.js';
 import { winstonToAr } from '../../lib/encoding.js';
 import { Semaphore } from '../../lib/semaphore.js';
 import log from '../../log.js';
@@ -26,6 +28,38 @@ const NOT_FOUND = '<not-found>';
 
 export function getPageSize({ first }: { first?: number }) {
   return Math.min(first ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+}
+
+function findFieldSelection(
+  selectionSet: SelectionSetNode | undefined,
+  fieldName: string,
+): SelectionSetNode | undefined {
+  if (selectionSet === undefined) return undefined;
+  for (const sel of selectionSet.selections) {
+    if (sel.kind === 'Field' && sel.name.value === fieldName) {
+      return sel.selectionSet;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extract the `node { ... }` sub-selection from a `transactions` query. The
+ * fan-out layer uses this to narrow upstream requests. Returns the raw AST so
+ * rendering (alias stripping, id injection for dedup) stays with the consumer.
+ */
+export function extractTransactionsNodeSelection(
+  info: GraphQLResolveInfo,
+): SelectionSetNode | undefined {
+  const root = info.fieldNodes[0]?.selectionSet;
+  const edges = findFieldSelection(root, 'edges');
+  return findFieldSelection(edges, 'node');
+}
+
+export function extractTransactionNodeSelection(
+  info: GraphQLResolveInfo,
+): SelectionSetNode | undefined {
+  return info.fieldNodes[0]?.selectionSet;
 }
 
 export function resolveTxRecipient(tx: GqlTransaction) {
@@ -153,6 +187,7 @@ export const resolvers: IResolvers = {
         db,
         txMetadataResolver,
       }: { db: any; txMetadataResolver?: TxMetadataResolver },
+      info,
     ) =>
       resolveTransactionQuery(queryParams, {
         db,
@@ -162,14 +197,15 @@ export const resolvers: IResolvers = {
           config.GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS,
         onDemandSemaphore,
         log,
+        nodeSelection: extractTransactionNodeSelection(info),
       }),
-    transactions: async (_, queryParams, { db }) => {
+    transactions: async (_, queryParams, { db }, info) => {
       log.info('GraphQL transactions query', {
         resolver: 'transactions',
         queryParams,
       });
 
-      return db.getGqlTransactions({
+      const args = {
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
         cursor: isEmptyString(queryParams.after)
@@ -185,7 +221,15 @@ export const resolvers: IResolvers = {
             ? queryParams.bundledIn
             : queryParams.parent,
         tags: queryParams.tags || [],
-      });
+      };
+
+      if (isSelectionAwareGqlQueryable(db)) {
+        return db.getGqlTransactions({
+          ...args,
+          nodeSelection: extractTransactionsNodeSelection(info),
+        });
+      }
+      return db.getGqlTransactions(args);
     },
     block: async (_, queryParams, { db }) => {
       log.info('GraphQL block query', { resolver: 'block', queryParams });

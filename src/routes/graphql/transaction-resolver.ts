@@ -4,10 +4,10 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import type { SelectionSetNode } from 'graphql';
 
-interface TransactionLookup {
-  getGqlTransaction(args: { id: string }): Promise<unknown | null>;
-}
+import { isSelectionAwareGqlQueryable } from '../../database/gateways-gql-queryable.js';
+import { GqlQueryable } from '../../types.js';
 
 interface MetadataResolver {
   resolve(id: string): Promise<unknown | undefined>;
@@ -24,6 +24,17 @@ interface LoggerLike {
   warn(message: string, meta?: Record<string, unknown>): void;
 }
 
+function fetchTransaction(
+  db: GqlQueryable,
+  id: string,
+  nodeSelection: SelectionSetNode | undefined,
+) {
+  if (isSelectionAwareGqlQueryable(db)) {
+    return db.getGqlTransaction({ id, nodeSelection });
+  }
+  return db.getGqlTransaction({ id });
+}
+
 export async function resolveTransactionQuery(
   queryParams: { id: string },
   {
@@ -33,13 +44,15 @@ export async function resolveTransactionQuery(
     onDemandResolutionTimeoutMs,
     onDemandSemaphore,
     log,
+    nodeSelection,
   }: {
-    db: TransactionLookup;
+    db: GqlQueryable;
     txMetadataResolver?: MetadataResolver;
     onDemandResolutionEnabled: boolean;
     onDemandResolutionTimeoutMs: number;
     onDemandSemaphore: SemaphoreLike;
     log: LoggerLike;
+    nodeSelection?: SelectionSetNode;
   },
 ): Promise<unknown | null> {
   log.info('GraphQL transaction query', {
@@ -47,7 +60,7 @@ export async function resolveTransactionQuery(
     queryParams,
   });
 
-  const result = await db.getGqlTransaction({ id: queryParams.id });
+  const result = await fetchTransaction(db, queryParams.id, nodeSelection);
   if (result != null) {
     return result;
   }
@@ -78,7 +91,7 @@ export async function resolveTransactionQuery(
       return null;
     }
 
-    return db.getGqlTransaction({ id: queryParams.id });
+    return fetchTransaction(db, queryParams.id, nodeSelection);
   } catch (error: any) {
     log.warn('GraphQL on-demand resolution failed', {
       id: queryParams.id,
