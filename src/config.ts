@@ -1415,14 +1415,22 @@ export const CLICKHOUSE_GQL_MAX_ROWS_TO_READ = env.positiveIntOrDefault(
 );
 
 // Multiplier applied to `pageSize + 1` to size the inner LIMIT in the
-// GQL transactions query. The inner SELECT enables ClickHouse's read-in-
-// order early termination (a plain `ORDER BY pk LIMIT N` is what the
-// planner can short-circuit; an intervening `LIMIT 1 BY` blocks it).
-// The outer `LIMIT 1 BY` then dedupes unmerged ReplacingMergeTree
-// versions. The multiplier must be large enough that, after dedupe, we
-// still have `pageSize + 1` unique rows. Typical merged tables have 1-2
-// versions per PK; 4 leaves comfortable headroom. Raise if paging ever
-// returns short pages on a table with many unmerged parts.
+// GQL transactions query. The inner SELECT enables ClickHouse's read-
+// in-order early termination (a plain `ORDER BY pk LIMIT N` is what
+// the planner can short-circuit; an intervening `LIMIT 1 BY` blocks
+// it). The outer `LIMIT 1 BY` then dedupes unmerged
+// ReplacingMergeTree versions.
+//
+// Pagination correctness caveat: this multiplier must be at least as
+// large as the table's effective duplicate factor. If a region of the
+// table has more unmerged versions per PK than this headroom covers,
+// the deduped inner window can yield fewer than `pageSize + 1` unique
+// rows even when more unique matches exist further on — the result
+// will be a short page with `hasNextPage: false` and rows past the
+// window will be silently skipped. Regular background merges keep
+// the duplicate factor at 1-2 in practice, so 4 leaves comfortable
+// headroom; raise this if operators observe short pages (e.g. during
+// a heavy ingest that produces many unmerged parts).
 export const CLICKHOUSE_GQL_DEDUPE_HEADROOM = env.positiveIntOrDefault(
   'CLICKHOUSE_GQL_DEDUPE_HEADROOM',
   4,
