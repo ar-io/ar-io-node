@@ -8,8 +8,10 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import winston from 'winston';
+import { Span } from '@opentelemetry/api';
 
 import { cidToV1Base32 } from '../lib/ipfs-cid.js';
+import { startChildSpan } from '../tracing.js';
 import { IpfsFsCache } from './ipfs-cache.js';
 import { IpfsBlocklist } from './ipfs-blocklist.js';
 import {
@@ -53,60 +55,107 @@ export class IpfsService {
     cidString,
     path,
     signal,
+    parentSpan,
   }: {
     cidString: string;
     path?: string;
     signal?: AbortSignal;
+    parentSpan?: Span;
   }): Promise<IpfsGetContentResult> {
-    // Normalize CID to v1 base32 for consistent caching
-    const normalizedCid = cidToV1Base32(cidString);
+    const span = startChildSpan(
+      'IpfsService.getContent',
+      {
+        attributes: {
+          'ipfs.cid': cidString,
+          'ipfs.path': path ?? '',
+        },
+      },
+      parentSpan,
+    );
 
-    // Check blocklist
-    if (this.blocklist.isBlocked(normalizedCid)) {
-      metrics.ipfsBlockedTotal.inc();
-      throw new IpfsBlockedError(`CID is blocked: ${normalizedCid}`);
-    }
+    try {
+      // Normalize CID to v1 base32 for consistent caching
+      const normalizedCid = cidToV1Base32(cidString);
+      span.setAttribute('ipfs.cid_normalized', normalizedCid);
 
-    // Reject path traversal attempts
-    if (
-      path !== undefined &&
-      (path.includes('..') || path.startsWith('/'))
-    ) {
-      throw new IpfsNotFoundError('Invalid IPFS path');
-    }
+      // Check blocklist
+      if (this.blocklist.isBlocked(normalizedCid)) {
+        metrics.ipfsBlockedTotal.inc();
+        span.setAttribute('ipfs.blocked', true);
+        throw new IpfsBlockedError(`CID is blocked: ${normalizedCid}`);
+      }
 
-    // Check cache
-    const cached = await this.cache.get(normalizedCid, path);
-    if (cached) {
-      this.log.debug('IPFS cache hit', { cid: normalizedCid, path });
-      metrics.ipfsCacheHitTotal.inc();
+      // Reject path traversal attempts
+      if (
+        path !== undefined &&
+        (path.includes('..') || path.startsWith('/'))
+      ) {
+        throw new IpfsNotFoundError('Invalid IPFS path');
+      }
+
+      // Check cache
+      const cached = await this.cache.get(normalizedCid, path);
+      if (cached) {
+        this.log.debug('IPFS cache hit', { cid: normalizedCid, path });
+        metrics.ipfsCacheHitTotal.inc();
+        span.setAttributes({
+          'ipfs.cache': 'hit',
+          'ipfs.size': cached.size,
+        });
+        span.end();
+        return {
+          stream: cached.stream,
+          size: cached.size,
+          contentType: cached.contentType,
+          cached: true,
+        };
+      }
+
+      metrics.ipfsCacheMissTotal.inc();
+      span.setAttribute('ipfs.cache', 'miss');
+
+      // Fetch from Kubo
+      const result = await this.dataSource.getContent({
+        cidString: normalizedCid,
+        path,
+        signal,
+        parentSpan: span,
+      });
+
+      span.setAttributes({
+        'ipfs.size': result.size,
+        'ipfs.content_type': result.contentType,
+      });
+
+      // Stream directly to the client while writing to a temp file on disk
+      // for caching. No memory buffering — handles files of any size.
+      this.streamToCache(
+        normalizedCid,
+        path,
+        result.stream,
+        result.contentType,
+      );
+
+      // End span when stream completes
+      result.stream.on('end', () => span.end());
+      result.stream.on('error', (err) => {
+        span.recordException(err);
+        span.end();
+      });
+
       return {
-        stream: cached.stream,
-        size: cached.size,
-        contentType: cached.contentType,
-        cached: true,
+        stream: result.stream,
+        size: result.size,
+        contentType: result.contentType,
+        cached: false,
       };
+    } catch (error: any) {
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
+      span.end();
+      throw error;
     }
-
-    metrics.ipfsCacheMissTotal.inc();
-
-    // Fetch from Kubo
-    const result = await this.dataSource.getContent({
-      cidString: normalizedCid,
-      path,
-      signal,
-    });
-
-    // Stream directly to the client while writing to a temp file on disk
-    // for caching. No memory buffering — handles files of any size.
-    this.streamToCache(normalizedCid, path, result.stream, result.contentType);
-
-    return {
-      stream: result.stream,
-      size: result.size,
-      contentType: result.contentType,
-      cached: false,
-    };
   }
 
   /**

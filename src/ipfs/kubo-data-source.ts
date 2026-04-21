@@ -45,16 +45,30 @@ export class KuboDataSource {
     cidString,
     path,
     signal,
+    parentSpan,
   }: {
     cidString: string;
     path?: string;
     signal?: AbortSignal;
+    parentSpan?: Span;
   }): Promise<IpfsContentResult> {
     signal?.throwIfAborted();
 
     const ipfsPath =
       path !== undefined && path !== '' ? `${cidString}/${path}` : cidString;
     const url = `${this.kuboUrl}/ipfs/${ipfsPath}`;
+
+    const span = startChildSpan(
+      'KuboDataSource.getContent',
+      {
+        attributes: {
+          'ipfs.cid': cidString,
+          'ipfs.path': path ?? '',
+          'ipfs.url': url,
+        },
+      },
+      parentSpan,
+    );
 
     this.log.debug('Fetching IPFS content from Kubo', {
       cidString,
@@ -122,11 +136,24 @@ export class KuboDataSource {
       // Switch from connection timeout to stall timeout
       attachStallTimeout(stream, this.streamStallTimeoutMs);
 
+      span.setAttributes({
+        'ipfs.content_length': contentLength,
+        'ipfs.content_type': contentType,
+      });
+      span.addEvent('Kubo fetch successful');
+
       this.log.debug('Kubo fetch successful', {
         cidString,
         path,
         contentLength,
         contentType,
+      });
+
+      // End span when stream finishes or errors
+      stream.on('end', () => span.end());
+      stream.on('error', (err) => {
+        span.recordException(err);
+        span.end();
       });
 
       return {
@@ -137,6 +164,11 @@ export class KuboDataSource {
     } catch (error: any) {
       clearTimeout(connectionTimer);
       signal?.removeEventListener('abort', onClientAbort);
+
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
+      span.end();
 
       if (error instanceof IpfsNotFoundError) throw error;
       if (error instanceof IpfsTimeoutError) throw error;
