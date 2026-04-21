@@ -49,6 +49,29 @@ flowchart LR
   Composite --> GQL
 ```
 
+### Why Parquet as an intermediate format?
+
+Going SQLite → ClickHouse directly would be more efficient as a pure
+ingest path — Parquet adds an extra serialize/deserialize step and
+consumes disk for the intermediate files. The pipeline keeps Parquet
+in the middle on purpose, because the Parquet output is valuable in
+its own right:
+
+- **Data-lake workloads.** The Parquet files are directly queryable
+  by DuckDB, Spark, and any other Parquet-aware tool — no ClickHouse
+  required. The optional Iceberg metadata
+  (`scripts/generate-iceberg-metadata`) exists for exactly this
+  audience.
+- **Shared bootstrapping.** A gateway's Parquet warehouse is
+  portable. Operators can publish their exports (e.g. the ArDrive
+  snapshot linked from the operator guide) so other gateways can skip
+  the multi-hour indexing process on startup. See
+  [Dataset sharing](#dataset-sharing) below.
+
+In other words, the Parquet step isn't just a staging area for
+ClickHouse — it's a first-class deliverable. ClickHouse consumes the
+same files a downstream analytics user would.
+
 ## Pipeline stages
 
 ### 1. Primary ingest (SQLite)
