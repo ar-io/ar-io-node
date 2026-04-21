@@ -1483,6 +1483,7 @@ if (config.IPFS_ENABLED) {
     log,
     basePath: config.IPFS_CACHE_PATH,
     maxSizeBytes: config.IPFS_CACHE_MAX_SIZE_BYTES,
+    eventEmitter,
   });
 
   ipfsService = new IpfsService({

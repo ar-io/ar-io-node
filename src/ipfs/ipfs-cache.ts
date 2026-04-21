@@ -5,11 +5,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import crypto from 'node:crypto';
+import EventEmitter from 'node:events';
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
+
+import * as events from '../events.js';
+import { currentUnixTimestamp } from '../lib/time.js';
 
 interface CacheEntry {
   size: number;
@@ -20,18 +24,22 @@ export class IpfsFsCache {
   private log: winston.Logger;
   private baseDir: string;
   private index: LRUCache<string, CacheEntry>;
+  private eventEmitter?: EventEmitter;
 
   constructor({
     log,
     basePath,
     maxSizeBytes,
+    eventEmitter,
   }: {
     log: winston.Logger;
     basePath: string;
     maxSizeBytes: number;
+    eventEmitter?: EventEmitter;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.baseDir = basePath;
+    this.eventEmitter = eventEmitter;
     this.index = new LRUCache<string, CacheEntry>({
       maxSize: maxSizeBytes,
       sizeCalculation: (entry) => entry.size,
@@ -211,6 +219,14 @@ export class IpfsFsCache {
         path,
         key,
         size,
+      });
+
+      this.eventEmitter?.emit(events.DATA_CACHED, {
+        id: cidString,
+        hash: key,
+        dataSize: size,
+        contentType,
+        cachedAt: currentUnixTimestamp(),
       });
     } catch (error: any) {
       this.log.error('Failed to finalize cached IPFS content', {
