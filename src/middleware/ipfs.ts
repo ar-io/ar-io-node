@@ -84,7 +84,7 @@ export function createIpfsSubdomainMiddleware({
           const pathSuffix = remainder !== undefined ? `/${remainder}` : '/';
           res.redirect(
             302,
-            `${req.protocol}://${targetCid}.${rootHost}${pathSuffix}`,
+            `${config.SANDBOX_PROTOCOL ?? req.protocol}://${targetCid}.${rootHost}${pathSuffix}`,
           );
           return;
         } catch {

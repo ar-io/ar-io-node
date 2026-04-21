@@ -54,8 +54,16 @@ export class KuboDataSource {
   }): Promise<IpfsContentResult> {
     signal?.throwIfAborted();
 
+    // URL-encode path segments to prevent breaking the upstream request
+    const encodedPath =
+      path !== undefined && path !== ''
+        ? path
+            .split('/')
+            .map((seg) => encodeURIComponent(seg))
+            .join('/')
+        : undefined;
     const ipfsPath =
-      path !== undefined && path !== '' ? `${cidString}/${path}` : cidString;
+      encodedPath !== undefined ? `${cidString}/${encodedPath}` : cidString;
     const url = `${this.kuboUrl}/ipfs/${ipfsPath}`;
 
     const span = startChildSpan(
@@ -128,10 +136,13 @@ export class KuboDataSource {
       }
 
       const stream = response.data as Readable;
-      const contentLength = parseInt(
+      const rawContentLength = parseInt(
         response.headers['content-length'] ?? '0',
         10,
       );
+      const contentLength = Number.isFinite(rawContentLength)
+        ? rawContentLength
+        : 0;
       const contentType =
         response.headers['content-type'] ?? 'application/octet-stream';
 

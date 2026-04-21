@@ -373,7 +373,7 @@ as a Docker Compose sidecar via the `ipfs` profile).
 | IPFS_STREAM_STALL_TIMEOUT_MS              | Number  | 30000               | Stall timeout — max time with no data before aborting stream (ms)   |
 | IPFS_CACHE_PATH                           | String  | data/ipfs-cache     | Directory for cached IPFS content                                   |
 | IPFS_CACHE_MAX_SIZE_BYTES                 | Number  | 10737418240 (10 GB) | Maximum cache size before LRU eviction                              |
-| IPFS_CACHE_CLEANUP_THRESHOLD              | Number  | 3600                | Age in seconds before cached files become eviction candidates       |
+| IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS      | Number  | 3600                | Age in seconds before cached files become eviction candidates       |
 | IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET    | Number  | 100000              | IPFS rate limiter: max tokens per IP bucket                         |
 | IPFS_RATE_LIMITER_IP_REFILL_PER_SEC       | Number  | 20                  | IPFS rate limiter: token refill rate per second (IP bucket)         |
 | IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET | Number | 1000000           | IPFS rate limiter: max tokens per resource bucket                   |

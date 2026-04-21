@@ -18,7 +18,7 @@
       "id": 2,
       "title": "IPFS Cache Hit Rate",
       "type": "stat",
-      "targets": [{ "expr": "sum(rate(ipfs_cache_hit_total[5m])) / (sum(rate(ipfs_cache_hit_total[5m])) + sum(rate(ipfs_cache_miss_total[5m])))", "legendFormat": "hit rate" }]
+      "targets": [{ "expr": "sum(rate(ipfs_cache_hit_total[5m])) / clamp_min(sum(rate(ipfs_cache_hit_total[5m])) + sum(rate(ipfs_cache_miss_total[5m])), 1)", "legendFormat": "hit rate" }]
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },

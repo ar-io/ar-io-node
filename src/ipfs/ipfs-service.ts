@@ -230,6 +230,23 @@ export class IpfsService {
     stream.on('data', (chunk: Buffer) => {
       if (failed) return;
       bytesWritten += chunk.length;
+
+      // Enforce size limit during streaming (catches chunked responses
+      // that lack Content-Length)
+      if (
+        this.maxResponseSizeBytes > 0 &&
+        bytesWritten > this.maxResponseSizeBytes
+      ) {
+        failed = true;
+        stream.destroy(
+          new IpfsSizeLimitError(
+            `IPFS content exceeds limit during streaming: ${bytesWritten} > ${this.maxResponseSizeBytes}`,
+          ),
+        );
+        cleanup();
+        return;
+      }
+
       if (writeStream) {
         writeStream.write(chunk);
       } else {
@@ -241,6 +258,7 @@ export class IpfsService {
     stream.on('end', () => {
       if (failed || !writeStream) {
         // If writeStream never became ready, discard
+        failed = true;
         cleanup();
         return;
       }

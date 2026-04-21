@@ -117,7 +117,7 @@ function createIpfsPathHandler({
       const pathSuffix = path !== undefined ? `/${path}` : '';
       res.redirect(
         302,
-        `${req.protocol}://${v1Base32}.${rootHost}${pathSuffix}`,
+        `${config.SANDBOX_PROTOCOL ?? req.protocol}://${v1Base32}.${rootHost}${pathSuffix}`,
       );
       return;
     }
@@ -170,8 +170,10 @@ async function handleIpfsRequest({
     });
 
     // Check payment and rate limits (x402 + rate limiting in one call).
-    // Content size is needed for token calculation and payment pricing.
-    const contentSize = result.size > 0 ? result.size : 1024; // min 1KB for pricing
+    // When Content-Length is unknown (chunked), use a conservative estimate
+    // that gets corrected in the token adjustment after streaming.
+    const contentSize =
+      result.size > 0 ? result.size : config.IPFS_MAX_RESPONSE_SIZE_BYTES;
     const limitCheck = await checkPaymentAndRateLimits({
       req,
       res,
@@ -216,6 +218,11 @@ async function handleIpfsRequest({
     // Track metrics
     const cacheStatus = result.cached ? 'hit' : 'miss';
     metrics.ipfsRequestsTotal.inc({ route_type: routeType, status: 'success' });
+    if (result.cached) {
+      metrics.ipfsCacheHitTotal.inc();
+    } else {
+      metrics.ipfsCacheMissTotal.inc();
+    }
     if (result.size > 0) {
       metrics.ipfsContentSizeHistogram.observe(result.size);
     }
