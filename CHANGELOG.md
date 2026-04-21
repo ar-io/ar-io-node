@@ -10,6 +10,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Observer Update to `ddd3a9c`**: Bundles two upstream PRs on top of
+  the previous `21098d2` pin.
+  - **Reference-gateway chunk-header offset validation**: The observer
+    now HEADs the reference gateway's `/chunk/{offset}/data` and anchors
+    the advertised `x-arweave-chunk-*` headers (tx id, boundaries, data
+    root) to the chain via `/tx/{id}/offset` and `/tx/{id}`, replacing
+    the block-and-tx binary search as the default offset-validation
+    path. Typical cost drops from ~20–30 node lookups per offset to one
+    HEAD plus two O(1) lookups per unique tx, with a per-tx LRU cache
+    for repeated offsets. Any header/chain mismatch or missing header
+    falls back to the legacy chain search, so older gateways keep
+    working. New metric `observer_chunk_metadata_anchor_total{result}`
+    (hit / cache_hit / metadata_missing / mismatch / error / fallback)
+    tracks the rollout. Gateways that return an HTTP error on the new
+    probe are no longer blacklisted from the shared pool — only
+    transport failures do.
+  - **Continuous observer reliability hardening**: The per-gateway
+    schedule map is replaced with a flat list of `ScheduledObservation`
+    events so duplicates, restart catch-up, and overdue retries are
+    deterministic (legacy state auto-migrates on load). An explicit
+    submission deadline (`windowEnd + submissionBufferMs`) now bounds
+    the epoch — once exceeded, the scheduler clears pending work,
+    marks the epoch `expired`, and stops issuing observations instead
+    of spinning on stale state. Finalization is gated on both the
+    window being complete and the pending queue being empty, and only
+    flips `reportSubmitted` on a successful submit so transient
+    submit failures retry. Unsubmitted prior epochs are discarded on
+    epoch transition rather than force-finalized into the wrong epoch.
+  - **Report telemetry**: Reports now record each gateway's `release`
+    field from `/ar-io/info`, a `yarn summarize` script prints
+    pass/fail counts grouped by release, and offset rendering now
+    shows `<failures>/<observed> (<pct>)` so the denominator reflects
+    the sampled subset.
+
 - **ClickHouse GraphQL query no longer uses `FINAL`**: The composite
   ClickHouse backend previously issued `FROM transactions AS t FINAL` to
   deduplicate unmerged `ReplacingMergeTree` versions at read time. `FINAL`
