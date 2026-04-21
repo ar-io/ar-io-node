@@ -2186,22 +2186,22 @@ export const IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS = +env.varOrDefault(
 
 export const IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET = +env.varOrDefault(
   'IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET',
-  '50000',
+  '100000',
 );
 
 export const IPFS_RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
   'IPFS_RATE_LIMITER_IP_REFILL_PER_SEC',
-  '5',
+  '20',
 );
 
 export const IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET = +env.varOrDefault(
   'IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET',
-  '200000',
+  '1000000',
 );
 
 export const IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC = +env.varOrDefault(
   'IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC',
-  '20',
+  '100',
 );
 
 export const IPFS_MAX_RESPONSE_SIZE_BYTES = +env.varOrDefault(
