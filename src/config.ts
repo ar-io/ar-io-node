@@ -1414,6 +1414,20 @@ export const CLICKHOUSE_GQL_MAX_ROWS_TO_READ = env.positiveIntOrDefault(
   10_000_000,
 );
 
+// Multiplier applied to `pageSize + 1` to size the inner LIMIT in the
+// GQL transactions query. The inner SELECT enables ClickHouse's read-in-
+// order early termination (a plain `ORDER BY pk LIMIT N` is what the
+// planner can short-circuit; an intervening `LIMIT 1 BY` blocks it).
+// The outer `LIMIT 1 BY` then dedupes unmerged ReplacingMergeTree
+// versions. The multiplier must be large enough that, after dedupe, we
+// still have `pageSize + 1` unique rows. Typical merged tables have 1-2
+// versions per PK; 4 leaves comfortable headroom. Raise if paging ever
+// returns short pages on a table with many unmerged parts.
+export const CLICKHOUSE_GQL_DEDUPE_HEADROOM = env.positiveIntOrDefault(
+  'CLICKHOUSE_GQL_DEDUPE_HEADROOM',
+  4,
+);
+
 //
 // Healthchecks
 //
