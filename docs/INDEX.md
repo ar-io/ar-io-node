@@ -40,7 +40,6 @@ Fast, offline lookups for data item to root transaction mappings.
 | Document | Description |
 |----------|-------------|
 | [Parquet and ClickHouse](parquet-and-clickhouse-usage.md) | Exporting data to Parquet format |
-| [Parquet Export with Iceberg](parquet-export-iceberg.md) | Apache Iceberg integration |
 
 ## Reference
 
