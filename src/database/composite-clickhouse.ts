@@ -106,6 +106,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     sqliteMinHeightEnabled = false,
     sqliteMinHeightBuffer = 10,
     maxHeightCacheTtlSeconds = 60,
+    queryTimeoutSeconds = 3,
   }: {
     log: winston.Logger;
     gqlQueryable: GqlQueryable;
@@ -115,6 +116,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     sqliteMinHeightEnabled?: boolean;
     sqliteMinHeightBuffer?: number;
     maxHeightCacheTtlSeconds?: number;
+    queryTimeoutSeconds?: number;
   }) {
     this.log = log;
 
@@ -122,6 +124,13 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       url,
       username,
       password,
+      // Give the HTTP layer a small grace window past the server-side
+      // timeout so the server's error response can surface before the
+      // client aborts the request.
+      request_timeout: queryTimeoutSeconds * 1000 + 2000,
+      clickhouse_settings: {
+        max_execution_time: queryTimeoutSeconds,
+      },
     });
 
     this.gqlQueryable = gqlQueryable;

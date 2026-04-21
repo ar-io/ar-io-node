@@ -311,6 +311,7 @@ export const gqlQueryable: GqlQueryable = (() => {
           sqliteMinHeightBuffer: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER,
           maxHeightCacheTtlSeconds:
             config.CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS,
+          queryTimeoutSeconds: config.CLICKHOUSE_QUERY_TIMEOUT_SECONDS,
         })
       : db;
 

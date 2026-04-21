@@ -362,3 +362,4 @@ ingestion may be partial) for SQLite.
 | CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED      | Boolean | false         | When true, restrict the SQLite fallback to heights above (ClickHouse max height - buffer)                                |
 | CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER       | Number  | 10            | Heights reserved for SQLite near the ClickHouse tip, to guard against partially ingested recent blocks                   |
 | CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS   | Number  | 60            | TTL for the cached ClickHouse max-height lookup used by the boundary optimization                                        |
+| CLICKHOUSE_QUERY_TIMEOUT_SECONDS          | Number  | 3             | Timeout for ClickHouse queries, applied both as server-side `max_execution_time` and client-side HTTP `request_timeout`  |

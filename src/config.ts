@@ -1390,6 +1390,15 @@ export const CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS = +env.varOrDefault(
   '60',
 );
 
+// Timeout for ClickHouse queries. Applied both as the server-side
+// max_execution_time and as the client-side HTTP request_timeout (with a
+// small buffer so the server's timeout error surfaces before the client
+// aborts).
+export const CLICKHOUSE_QUERY_TIMEOUT_SECONDS = +env.varOrDefault(
+  'CLICKHOUSE_QUERY_TIMEOUT_SECONDS',
+  '3',
+);
+
 //
 // Healthchecks
 //
