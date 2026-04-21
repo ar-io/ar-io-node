@@ -215,11 +215,8 @@ class FakeQueryable implements GqlQueryable {
   }
 }
 
-function makeMerger(
-  sources: GqlQueryable[],
-  mergePolicy: 'best-effort' | 'strict' = 'best-effort',
-): GatewaysGqlQueryable {
-  return GatewaysGqlQueryable.forTesting({ log, sources, mergePolicy });
+function makeMerger(sources: GqlQueryable[]): GatewaysGqlQueryable {
+  return GatewaysGqlQueryable.forTesting({ log, sources });
 }
 
 describe('renderTransactionNodeSelection', () => {
@@ -314,25 +311,13 @@ describe('GatewaysGqlQueryable', () => {
       assert.equal(await merger.getGqlTransaction({ id: 'x' }), null);
     });
 
-    it('best-effort tolerates a failing source', async () => {
+    it('tolerates a failing source', async () => {
       const tx = txAt({ id: 'a', height: 10 });
       const merger = makeMerger([
         new FakeQueryable({ throws: new Error('boom') }),
         new FakeQueryable({ transactions: [tx] }),
       ]);
       assert.equal((await merger.getGqlTransaction({ id: 'a' }))?.id, 'a');
-    });
-
-    it('strict fails when any source fails', async () => {
-      const tx = txAt({ id: 'a', height: 10 });
-      const merger = makeMerger(
-        [
-          new FakeQueryable({ throws: new Error('boom') }),
-          new FakeQueryable({ transactions: [tx] }),
-        ],
-        'strict',
-      );
-      await assert.rejects(() => merger.getGqlTransaction({ id: 'a' }));
     });
 
     it('fails when every source fails', async () => {
@@ -486,7 +471,7 @@ describe('GatewaysGqlQueryable', () => {
       assert.equal(page2.pageInfo.hasNextPage, false);
     });
 
-    it('best-effort returns partial results when one source fails', async () => {
+    it('returns partial results when one source fails', async () => {
       const aTxs = [txAt({ id: 'a1', height: 100 })];
       const merger = makeMerger([
         new FakeQueryable({ transactions: aTxs }),
@@ -500,25 +485,6 @@ describe('GatewaysGqlQueryable', () => {
       assert.deepEqual(
         result.edges.map((e) => e.node.id),
         ['a1'],
-      );
-    });
-
-    it('strict rejects when one source fails', async () => {
-      const merger = makeMerger(
-        [
-          new FakeQueryable({
-            transactions: [txAt({ id: 'a1', height: 100 })],
-          }),
-          new FakeQueryable({ throws: new Error('boom') }),
-        ],
-        'strict',
-      );
-      await assert.rejects(() =>
-        merger.getGqlTransactions({
-          pageSize: 10,
-          sortOrder: 'HEIGHT_DESC',
-          tags: [],
-        }),
       );
     });
 

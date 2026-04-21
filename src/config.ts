@@ -282,22 +282,6 @@ export const GATEWAYS_GQL_URLS: string[] = (() => {
 export const GATEWAYS_GQL_INCLUDE_LOCAL =
   env.varOrDefault('GATEWAYS_GQL_INCLUDE_LOCAL', 'true') === 'true';
 
-// Partial-failure policy for the fan-out merge:
-// - best-effort: return results from upstreams that succeeded, log failures
-// - strict: fail the whole request if any upstream fails
-export const GATEWAYS_GQL_MERGE_POLICY = env.varOrDefault(
-  'GATEWAYS_GQL_MERGE_POLICY',
-  'best-effort',
-) as 'best-effort' | 'strict';
-if (
-  GATEWAYS_GQL_MERGE_POLICY !== 'best-effort' &&
-  GATEWAYS_GQL_MERGE_POLICY !== 'strict'
-) {
-  throw new Error(
-    `GATEWAYS_GQL_MERGE_POLICY must be "best-effort" or "strict", got: ${GATEWAYS_GQL_MERGE_POLICY}`,
-  );
-}
-
 export const GATEWAYS_GQL_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
   'GATEWAYS_GQL_REQUEST_TIMEOUT_MS',
   10_000,

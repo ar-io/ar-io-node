@@ -25,7 +25,6 @@ import {
 } from './standalone-sqlite.js';
 
 type SortOrder = 'HEIGHT_DESC' | 'HEIGHT_ASC';
-type MergePolicy = 'best-effort' | 'strict';
 
 type TagFilter = { name: string; values: string[] };
 
@@ -572,13 +571,11 @@ export class GatewaysGqlQueryable
   private readonly log: winston.Logger;
   private readonly sources: GqlQueryable[];
   private readonly sourceLabels: string[];
-  private readonly mergePolicy: MergePolicy;
 
   constructor({
     log,
     urls,
     localGqlQueryable,
-    mergePolicy = config.GATEWAYS_GQL_MERGE_POLICY,
     requestTimeoutMs = config.GATEWAYS_GQL_REQUEST_TIMEOUT_MS,
     requestRetryCount = config.GATEWAYS_GQL_REQUEST_RETRY_COUNT,
     axiosInstance,
@@ -586,13 +583,11 @@ export class GatewaysGqlQueryable
     log: winston.Logger;
     urls: string[];
     localGqlQueryable?: GqlQueryable;
-    mergePolicy?: MergePolicy;
     requestTimeoutMs?: number;
     requestRetryCount?: number;
     axiosInstance?: AxiosInstance;
   }) {
     this.log = log.child({ class: 'GatewaysGqlQueryable' });
-    this.mergePolicy = mergePolicy;
 
     if (urls.length === 0 && localGqlQueryable === undefined) {
       throw new Error(
@@ -624,7 +619,6 @@ export class GatewaysGqlQueryable
     log: winston.Logger;
     sources: GqlQueryable[];
     labels?: string[];
-    mergePolicy?: MergePolicy;
   }): GatewaysGqlQueryable {
     if (params.sources.length === 0) {
       throw new Error('forTesting requires at least one source');
@@ -633,7 +627,6 @@ export class GatewaysGqlQueryable
       log: params.log,
       urls: [],
       localGqlQueryable: params.sources[0],
-      mergePolicy: params.mergePolicy,
     });
 
     (merger as any).sources = params.sources;
@@ -683,15 +676,6 @@ export class GatewaysGqlQueryable
       source.getGqlTransaction({ id }),
     );
 
-    if (this.mergePolicy === 'strict') {
-      const results = await Promise.allSettled(promises);
-      this.enforceMergePolicy(results, 'getGqlTransaction', { id });
-      for (const r of results) {
-        if (r.status === 'fulfilled' && r.value != null) return r.value;
-      }
-      return null;
-    }
-
     return (
       (await this.raceFirstNonNull(promises, 'getGqlTransaction', { id })) ??
       null
@@ -700,15 +684,6 @@ export class GatewaysGqlQueryable
 
   async getGqlBlock({ id }: { id: string }): Promise<GqlBlock | undefined> {
     const promises = this.sources.map((source) => source.getGqlBlock({ id }));
-
-    if (this.mergePolicy === 'strict') {
-      const results = await Promise.allSettled(promises);
-      this.enforceMergePolicy(results, 'getGqlBlock', { id });
-      for (const r of results) {
-        if (r.status === 'fulfilled' && r.value != null) return r.value;
-      }
-      return undefined;
-    }
 
     return this.raceFirstNonNull(promises, 'getGqlBlock', { id });
   }
@@ -720,7 +695,7 @@ export class GatewaysGqlQueryable
     const results = await Promise.allSettled(
       this.sources.map((source) => source.getGqlTransactions(args)),
     );
-    this.enforceMergePolicy(results, 'getGqlTransactions', args);
+    this.handleSourceFailures(results, 'getGqlTransactions', args);
 
     const streams: GqlTransactionEdge[][] = [];
     let anyUpstreamHasMore = false;
@@ -749,7 +724,7 @@ export class GatewaysGqlQueryable
     const results = await Promise.allSettled(
       this.sources.map((source) => source.getGqlBlocks(args)),
     );
-    this.enforceMergePolicy(results, 'getGqlBlocks', args);
+    this.handleSourceFailures(results, 'getGqlBlocks', args);
 
     const streams: { cursor: string; node: GqlBlock }[][] = [];
     let anyUpstreamHasMore = false;
@@ -827,7 +802,7 @@ export class GatewaysGqlQueryable
     });
   }
 
-  private enforceMergePolicy(
+  private handleSourceFailures(
     results: PromiseSettledResult<unknown>[],
     method: string,
     args: unknown,
@@ -848,13 +823,6 @@ export class GatewaysGqlQueryable
         source: f.label,
         error: f.r.reason?.message ?? String(f.r.reason),
       });
-    }
-
-    if (this.mergePolicy === 'strict') {
-      const sample = failures[0];
-      throw new Error(
-        `GatewaysGqlQueryable strict policy: ${failures.length}/${results.length} source(s) failed for ${method}. First failure (${sample.label}): ${sample.r.reason?.message ?? sample.r.reason}`,
-      );
     }
 
     if (failures.length === results.length) {
