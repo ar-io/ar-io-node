@@ -325,22 +325,21 @@ and IPFS storage budgets.
 
 ## Security and Moderation
 
-### CID Blocklist
+### Content Moderation
 
-The blocklist file (`IPFS_BLOCKLIST_PATH`, default `data/ipfs-blocklist.txt`)
-allows operators to block specific content:
+IPFS content moderation uses the same admin API as Arweave data moderation.
+Block a CID using the existing endpoint:
 
+```bash
+curl -X PUT http://localhost:4000/ar-io/admin/block-data \
+  -H "Authorization: Bearer <ADMIN_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"id": "bafkreigbk3hjz6oyiywqf7eknthwc2osvt5xi6b6igwljn2qrxkthqgrp4", "source": "manual", "notes": "Reason for block"}'
 ```
-# Blocked content - one CID per line
-QmBlockedContent1...
-bafybeiblockedcontent2...
-# Comments start with #
-```
 
-- CIDs are normalized before matching, so blocking a CIDv0 also blocks its
-  CIDv1 equivalent and vice versa.
-- The file is watched for changes and reloaded automatically.
-- Blocked requests return HTTP 451.
+- Pass the CIDv1 base32 string as the `id` field (same field used for Arweave TX IDs).
+- Blocked requests return HTTP 451 (Unavailable for Legal Reasons).
+- One unified moderation system for all content (Arweave and IPFS).
 
 ### Rate Limiting
 
