@@ -391,7 +391,15 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     // filter that leaves projection planning intact.
     const dedupByPk =
       'LIMIT 1 BY t.height, t.block_transaction_index, t.is_data_item, t.id';
-    const sql = `${txsSql} ${dedupByPk} LIMIT ${pageSize + 1}`;
+    // ClickHouse's projection cost estimator compares projection marks vs.
+    // main-table marks BEFORE applying skip indexes. For id lookups the
+    // main table's id_bloom would narrow to a handful of granules, but the
+    // estimator sees the full-scan cost and picks owner_projection (which
+    // has no bloom on id), producing a full-table scan. Force the main
+    // table for id lookups so the bloom filter gets consulted.
+    const settingsClause =
+      ids?.length > 0 ? ' SETTINGS optimize_use_projections = 0' : '';
+    const sql = `${txsSql} ${dedupByPk} LIMIT ${pageSize + 1}${settingsClause}`;
 
     this.log.debug('Querying ClickHouse transactions...', { sql });
 
