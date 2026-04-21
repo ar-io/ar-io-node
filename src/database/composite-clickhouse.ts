@@ -214,6 +214,41 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       .from('transactions AS t');
   }
 
+  // Builds the ORDER BY column list for a GQL transactions query. `qualified`
+  // = true produces `t.height ...` for the inner SELECT; false produces bare
+  // names (`height ...`) for the outer wrapper that reads from a subquery.
+  // Returns an empty string when no ORDER BY should be emitted (id lookups).
+  private buildTransactionOrderBy({
+    sortOrder,
+    recipients,
+    owners,
+    ids,
+    qualified,
+  }: {
+    sortOrder: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    recipients: string[];
+    owners: string[];
+    ids: string[];
+    qualified: boolean;
+  }): string {
+    if (ids.length > 0) return '';
+    const prefix = qualified ? 't.' : '';
+    const dir = sortOrder === 'HEIGHT_DESC' ? 'DESC' : 'ASC';
+    const parts: string[] = [];
+    if (recipients.length === 1) {
+      parts.push(`${prefix}target ${dir}`);
+    } else if (owners.length === 1) {
+      parts.push(`${prefix}owner_address ${dir}`);
+    }
+    parts.push(
+      `${prefix}height ${dir}`,
+      `${prefix}block_transaction_index ${dir}`,
+      `${prefix}is_data_item ${dir}`,
+      `${prefix}id ${dir}`,
+    );
+    return parts.join(', ');
+  }
+
   addGqlTransactionFilters({
     query,
     cursor,
@@ -288,61 +323,39 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       id: cursorId,
     } = decodeTransactionGqlCursor(cursor);
 
-    let orderBy = '';
-    if (ids?.length === 0) {
+    if (ids?.length === 0 && cursorHeight != null) {
+      const cursorIdHex = b64UrlToHex(cursorId ?? '');
+      const cursorIsDataItemInt = cursorIsDataItem ? 1 : 0;
+      // Standalone height predicate enables partition pruning on
+      // intDiv(height, 100000); the tuple comparison alone is not
+      // decomposed by the ClickHouse partition pruner.
       if (sortOrder === 'HEIGHT_DESC') {
-        if (cursorHeight != null) {
-          const cursorIdHex = b64UrlToHex(cursorId ?? '');
-          const cursorIsDataItemInt = cursorIsDataItem ? 1 : 0;
-          // Standalone height predicate enables partition pruning on
-          // intDiv(height, 100000); the tuple comparison alone is not
-          // decomposed by the ClickHouse partition pruner.
-          query.where(
-            sql.lte('t.height', cursorHeight),
-            sql(
-              `(t.height, t.block_transaction_index, t.is_data_item, t.id) < ` +
-                `(${cursorHeight}, ${cursorBlockTransactionIndex}, ${cursorIsDataItemInt}, unhex('${cursorIdHex}'))`,
-            ),
-          );
-        }
-
-        orderBy = '';
-        if (recipients?.length === 1) {
-          orderBy += 't.target DESC, ';
-        } else if (owners?.length === 1) {
-          orderBy += 't.owner_address DESC, ';
-        }
-        orderBy += 't.height DESC, ';
-        orderBy += 't.block_transaction_index DESC, ';
-        orderBy += 't.is_data_item DESC, ';
-        orderBy += 't.id DESC';
+        query.where(
+          sql.lte('t.height', cursorHeight),
+          sql(
+            `(t.height, t.block_transaction_index, t.is_data_item, t.id) < ` +
+              `(${cursorHeight}, ${cursorBlockTransactionIndex}, ${cursorIsDataItemInt}, unhex('${cursorIdHex}'))`,
+          ),
+        );
       } else {
-        if (cursorHeight != null) {
-          const cursorIdHex = b64UrlToHex(cursorId ?? '');
-          const cursorIsDataItemInt = cursorIsDataItem ? 1 : 0;
-          // Standalone height predicate enables partition pruning on
-          // intDiv(height, 100000); the tuple comparison alone is not
-          // decomposed by the ClickHouse partition pruner.
-          query.where(
-            sql.gte('t.height', cursorHeight),
-            sql(
-              `(t.height, t.block_transaction_index, t.is_data_item, t.id) > ` +
-                `(${cursorHeight}, ${cursorBlockTransactionIndex}, ${cursorIsDataItemInt}, unhex('${cursorIdHex}'))`,
-            ),
-          );
-        }
-
-        orderBy = '';
-        if (recipients?.length === 1) {
-          orderBy += 't.target ASC, ';
-        } else if (owners?.length === 1) {
-          orderBy += 't.owner_address ASC, ';
-        }
-        orderBy += 't.height ASC, ';
-        orderBy += 't.block_transaction_index ASC, ';
-        orderBy += 't.is_data_item ASC, ';
-        orderBy += 't.id ASC';
+        query.where(
+          sql.gte('t.height', cursorHeight),
+          sql(
+            `(t.height, t.block_transaction_index, t.is_data_item, t.id) > ` +
+              `(${cursorHeight}, ${cursorBlockTransactionIndex}, ${cursorIsDataItemInt}, unhex('${cursorIdHex}'))`,
+          ),
+        );
       }
+    }
+
+    const orderBy = this.buildTransactionOrderBy({
+      sortOrder,
+      recipients,
+      owners,
+      ids,
+      qualified: true,
+    });
+    if (orderBy) {
       query.orderBy(orderBy);
     }
   }
@@ -385,13 +398,28 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       tags,
     });
 
-    const txsSql = txsQuery.toString();
-    // Replaces FINAL: dedupes unmerged ReplacingMergeTree versions by PK.
-    // FINAL would disable owner_projection selection and force a
-    // PrimaryKeyExpand over skip-index results; LIMIT BY is a post-sort
-    // filter that leaves projection planning intact.
+    const innerSql = txsQuery.toString();
+    // Wrapping the filtered select as a subquery with its own `LIMIT N`
+    // unlocks ClickHouse's read-in-order early termination: a plain
+    // `ORDER BY pk LIMIT N` is what the planner short-circuits, whereas
+    // an intervening `LIMIT 1 BY` blocks pushdown and forces the full
+    // scan to complete before dedupe. The outer `LIMIT 1 BY` then
+    // collapses unmerged ReplacingMergeTree versions; its companion
+    // `ORDER BY` pins a deterministic ordering through the subquery
+    // boundary. The inner SELECT / FROM / WHERE is unchanged, so
+    // owner_projection selection still kicks in for owner-filtered
+    // queries.
+    const innerLimit = (pageSize + 1) * config.CLICKHOUSE_GQL_DEDUPE_HEADROOM;
+    const outerOrderBy = this.buildTransactionOrderBy({
+      sortOrder,
+      recipients,
+      owners,
+      ids,
+      qualified: false,
+    });
+    const outerOrderByClause = outerOrderBy ? ` ORDER BY ${outerOrderBy}` : '';
     const dedupByPk =
-      'LIMIT 1 BY t.height, t.block_transaction_index, t.is_data_item, t.id';
+      'LIMIT 1 BY height, block_transaction_index, is_data_item, id';
     // Per-query settings:
     // - `optimize_use_projections = 0` for id lookups: the projection cost
     //   estimator compares projection marks vs. main-table marks BEFORE
@@ -409,7 +437,10 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       settings.push('optimize_use_projections = 0');
     }
     const settingsClause = ` SETTINGS ${settings.join(', ')}`;
-    const sql = `${txsSql} ${dedupByPk} LIMIT ${pageSize + 1}${settingsClause}`;
+    const sql =
+      `SELECT * FROM (${innerSql} LIMIT ${innerLimit})` +
+      `${outerOrderByClause} ${dedupByPk} LIMIT ${pageSize + 1}` +
+      settingsClause;
 
     this.log.debug('Querying ClickHouse transactions...', { sql });
 
