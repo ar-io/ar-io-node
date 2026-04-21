@@ -9,6 +9,7 @@ import sql from 'sql-bricks';
 import { ClickHouseClient, createClient } from '@clickhouse/client';
 import { ValidationError } from 'apollo-server-express';
 
+import * as config from '../config.js';
 import {
   b64UrlToHex,
   b64UrlToUtf8,
@@ -391,14 +392,23 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     // filter that leaves projection planning intact.
     const dedupByPk =
       'LIMIT 1 BY t.height, t.block_transaction_index, t.is_data_item, t.id';
-    // ClickHouse's projection cost estimator compares projection marks vs.
-    // main-table marks BEFORE applying skip indexes. For id lookups the
-    // main table's id_bloom would narrow to a handful of granules, but the
-    // estimator sees the full-scan cost and picks owner_projection (which
-    // has no bloom on id), producing a full-table scan. Force the main
-    // table for id lookups so the bloom filter gets consulted.
-    const settingsClause =
-      ids?.length > 0 ? ' SETTINGS optimize_use_projections = 0' : '';
+    // Per-query settings:
+    // - `optimize_use_projections = 0` for id lookups: the projection cost
+    //   estimator compares projection marks vs. main-table marks BEFORE
+    //   applying skip indexes, so owner_projection (no bloom on id) wins
+    //   over the main table and forces a full scan. Disabling it for id
+    //   lookups lets id_bloom narrow ~6000 granules to a handful.
+    // - `max_rows_to_read` as a hard guardrail: any GQL query that ends up
+    //   scanning more than the configured threshold throws Code: 158
+    //   instead of grinding through the whole table. Catches future
+    //   regressions where a skip index is silently bypassed.
+    const settings: string[] = [
+      `max_rows_to_read = ${config.CLICKHOUSE_GQL_MAX_ROWS_TO_READ}`,
+    ];
+    if (ids?.length > 0) {
+      settings.push('optimize_use_projections = 0');
+    }
+    const settingsClause = ` SETTINGS ${settings.join(', ')}`;
     const sql = `${txsSql} ${dedupByPk} LIMIT ${pageSize + 1}${settingsClause}`;
 
     this.log.debug('Querying ClickHouse transactions...', { sql });

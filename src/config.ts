@@ -1403,6 +1403,17 @@ export const CLICKHOUSE_QUERY_TIMEOUT_SECONDS = +env.varOrDefault(
   '3',
 );
 
+// Per-query `max_rows_to_read` applied to GraphQL queries against the
+// ClickHouse `transactions` table. Acts as a hard guardrail against
+// unintended full scans: if the planner falls back to a full-table scan
+// (e.g., a skip index regressed, a projection shadows the main table, or
+// a query is written without an indexable predicate), ClickHouse throws
+// `Code: 158` instead of burning through the whole table.
+export const CLICKHOUSE_GQL_MAX_ROWS_TO_READ = env.positiveIntOrDefault(
+  'CLICKHOUSE_GQL_MAX_ROWS_TO_READ',
+  10_000_000,
+);
+
 //
 // Healthchecks
 //
