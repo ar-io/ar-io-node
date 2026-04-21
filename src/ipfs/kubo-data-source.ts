@@ -106,12 +106,14 @@ export class KuboDataSource {
       signal?.removeEventListener('abort', onClientAbort);
 
       if (response.status === 404) {
+        (response.data as Readable).destroy();
         throw new IpfsNotFoundError(
           `IPFS content not found: /ipfs/${ipfsPath}`,
         );
       }
 
       if (response.status === 408 || response.status === 504) {
+        (response.data as Readable).destroy();
         throw new IpfsTimeoutError(
           `Kubo timed out resolving: /ipfs/${ipfsPath}`,
         );

@@ -1490,6 +1490,7 @@ if (config.IPFS_ENABLED) {
     dataSource: kuboDataSource,
     cache: ipfsCache,
     blockListValidator: dataBlockListValidator,
+    maxResponseSizeBytes: config.IPFS_MAX_RESPONSE_SIZE_BYTES,
   });
 
   ipfsRateLimiter = createIpfsRateLimiter();

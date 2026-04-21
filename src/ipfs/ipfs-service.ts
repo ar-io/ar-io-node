@@ -18,6 +18,7 @@ import {
   KuboDataSource,
   IpfsBlockedError,
   IpfsNotFoundError,
+  IpfsSizeLimitError,
 } from './kubo-data-source.js';
 import * as metrics from '../metrics.js';
 
@@ -33,22 +34,26 @@ export class IpfsService {
   private dataSource: KuboDataSource;
   private cache: IpfsFsCache;
   private blockListValidator: DataBlockListValidator;
+  private maxResponseSizeBytes: number;
 
   constructor({
     log,
     dataSource,
     cache,
     blockListValidator,
+    maxResponseSizeBytes,
   }: {
     log: winston.Logger;
     dataSource: KuboDataSource;
     cache: IpfsFsCache;
     blockListValidator: DataBlockListValidator;
+    maxResponseSizeBytes: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
     this.cache = cache;
     this.blockListValidator = blockListValidator;
+    this.maxResponseSizeBytes = maxResponseSizeBytes;
   }
 
   async getContent({
@@ -123,6 +128,18 @@ export class IpfsService {
         'ipfs.size': result.size,
         'ipfs.content_type': result.contentType,
       });
+
+      // Enforce size limit when Content-Length is known
+      if (
+        this.maxResponseSizeBytes > 0 &&
+        result.size > 0 &&
+        result.size > this.maxResponseSizeBytes
+      ) {
+        result.stream.destroy();
+        throw new IpfsSizeLimitError(
+          `IPFS content size ${result.size} exceeds limit ${this.maxResponseSizeBytes}`,
+        );
+      }
 
       // Stream directly to the client while writing to a temp file on disk
       // for caching. No memory buffering — handles files of any size.

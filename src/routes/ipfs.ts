@@ -20,6 +20,7 @@ import { IpfsService } from '../ipfs/ipfs-service.js';
 import {
   IpfsBlockedError,
   IpfsNotFoundError,
+  IpfsSizeLimitError,
   IpfsTimeoutError,
   IpfsUnavailableError,
 } from '../ipfs/kubo-data-source.js';
@@ -292,6 +293,15 @@ async function handleIpfsRequest({
         status: 'unavailable',
       });
       res.status(502).json({ error: 'IPFS service unavailable' });
+      return;
+    }
+
+    if (error instanceof IpfsSizeLimitError) {
+      metrics.ipfsRequestsTotal.inc({
+        route_type: routeType,
+        status: 'size_exceeded',
+      });
+      res.status(413).json({ error: 'Content exceeds size limit' });
       return;
     }
 
