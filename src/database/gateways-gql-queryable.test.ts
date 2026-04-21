@@ -6,6 +6,7 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
+import axios from 'axios';
 import { OperationDefinitionNode, SelectionSetNode, parse } from 'graphql';
 
 import { createTestLogger } from '../../test/test-logger.js';
@@ -217,6 +218,35 @@ class FakeQueryable implements GqlQueryable {
 
 function makeMerger(sources: GqlQueryable[]): GatewaysGqlQueryable {
   return GatewaysGqlQueryable.forTesting({ log, sources });
+}
+
+// Axios adapter that lets a test control the next response or error and
+// count how many requests actually reached the transport.
+function makeControlledAxios() {
+  let callCount = 0;
+  let mode: 'ok' | 'error' = 'error';
+  let okPayload: unknown = { data: {} };
+  const instance = axios.create({
+    adapter: async (cfg) => {
+      callCount++;
+      if (mode === 'error') throw new Error('boom');
+      return {
+        data: okPayload,
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: cfg,
+      } as any;
+    },
+  });
+  return {
+    instance,
+    getCallCount: () => callCount,
+    setMode: (m: 'ok' | 'error', payload?: unknown) => {
+      mode = m;
+      if (payload !== undefined) okPayload = payload;
+    },
+  };
 }
 
 describe('renderTransactionNodeSelection', () => {
@@ -630,5 +660,76 @@ describe('GatewaysGqlQueryable', () => {
       ]);
       assert.equal((await merger.getGqlBlock({ id: 'b1' }))?.id, 'b1');
     });
+  });
+});
+
+describe('RemoteGqlQueryable circuit breaker', () => {
+  const { RemoteGqlQueryable } = fanoutInternals;
+
+  // Tight options so the breaker opens deterministically within the test.
+  const breakerOptions = {
+    timeout: 500,
+    errorThresholdPercentage: 1,
+    rollingCountTimeout: 10_000,
+    resetTimeout: 10_000,
+    volumeThreshold: 2,
+  };
+
+  it('opens after repeated failures and short-circuits further calls', async () => {
+    const http = makeControlledAxios();
+    const remote = new RemoteGqlQueryable(
+      'http://unreachable.example',
+      http.instance,
+      breakerOptions,
+      log,
+    );
+
+    for (let i = 0; i < 3; i++) {
+      await assert.rejects(() => remote.getGqlBlock({ id: 'x' }));
+    }
+    const callsAfterOpen = http.getCallCount();
+
+    await assert.rejects(
+      () => remote.getGqlBlock({ id: 'x' }),
+      (err: any) => err?.code === 'EOPENBREAKER',
+    );
+    assert.equal(
+      http.getCallCount(),
+      callsAfterOpen,
+      'open breaker must not reach axios',
+    );
+  });
+
+  it("fan-out returns partial results when one peer's breaker is open", async () => {
+    const failing = makeControlledAxios();
+    const failingRemote = new RemoteGqlQueryable(
+      'http://unreachable.example',
+      failing.instance,
+      breakerOptions,
+      log,
+    );
+    // Trip the breaker.
+    for (let i = 0; i < 3; i++) {
+      await assert.rejects(() => failingRemote.getGqlBlock({ id: 'x' }));
+    }
+
+    const healthy = new FakeQueryable({
+      transactions: [txAt({ id: 'a1', height: 100 })],
+    });
+    const merger = GatewaysGqlQueryable.forTesting({
+      log,
+      sources: [healthy, failingRemote],
+      labels: ['<local>', 'http://unreachable.example'],
+    });
+
+    const result = await merger.getGqlTransactions({
+      pageSize: 10,
+      sortOrder: 'HEIGHT_DESC',
+      tags: [],
+    });
+    assert.deepEqual(
+      result.edges.map((e) => e.node.id),
+      ['a1'],
+    );
   });
 });

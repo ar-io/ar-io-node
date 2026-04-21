@@ -6,11 +6,12 @@
  */
 import { default as axios, AxiosInstance } from 'axios';
 import { FieldNode, SelectionSetNode, print } from 'graphql';
-import * as rax from 'retry-axios';
+import CircuitBreaker from 'opossum';
 import winston from 'winston';
 
 import * as config from '../config.js';
 import { fromB64Url } from '../lib/encoding.js';
+import * as metrics from '../metrics.js';
 import {
   GqlBlock,
   GqlBlocksResult,
@@ -158,6 +159,9 @@ export const __test = {
   renderTransactionNodeSelection,
   resolveNodeFields,
   DEFAULT_TRANSACTION_NODE_FIELDS,
+  get RemoteGqlQueryable() {
+    return RemoteGqlQueryable;
+  },
 };
 
 function buildTransactionsQuery(nodeFields: string): string {
@@ -234,14 +238,36 @@ const BLOCK_QUERY = `
 
 /**
  * Adapts a single remote GraphQL endpoint to the GqlQueryable interface.
+ * The outbound POST is wrapped in a per-endpoint circuit breaker so a
+ * consistently unhealthy upstream fails fast and is skipped by the fan-out
+ * instead of dragging down every query behind a full timeout.
  */
 class RemoteGqlQueryable implements GqlQueryable {
+  private readonly breaker: CircuitBreaker<
+    [string, Record<string, unknown>],
+    unknown
+  >;
+
   constructor(
     private readonly url: string,
     private readonly axiosInstance: AxiosInstance,
-  ) {}
+    breakerOptions: CircuitBreaker.Options,
+    log: winston.Logger,
+  ) {
+    this.breaker = new CircuitBreaker(
+      (query: string, variables: Record<string, unknown>) =>
+        this.fetch(query, variables),
+      { ...breakerOptions, name: 'gateways-gql' },
+    );
+    metrics.setUpEndpointCircuitBreakerListenerMetrics(
+      'gateways-gql',
+      url,
+      this.breaker,
+      log,
+    );
+  }
 
-  private async post<T>(
+  private async fetch<T>(
     query: string,
     variables: Record<string, unknown>,
   ): Promise<T> {
@@ -259,6 +285,13 @@ class RemoteGqlQueryable implements GqlQueryable {
       throw new Error(`Missing data in GraphQL response from ${this.url}`);
     }
     return body.data as T;
+  }
+
+  private async post<T>(
+    query: string,
+    variables: Record<string, unknown>,
+  ): Promise<T> {
+    return (await this.breaker.fire(query, variables)) as T;
   }
 
   async getGqlTransaction({
@@ -577,14 +610,21 @@ export class GatewaysGqlQueryable
     urls,
     localGqlQueryable,
     requestTimeoutMs = config.GATEWAYS_GQL_REQUEST_TIMEOUT_MS,
-    requestRetryCount = config.GATEWAYS_GQL_REQUEST_RETRY_COUNT,
+    circuitBreakerOptions = {
+      timeout: config.GATEWAYS_GQL_CIRCUIT_BREAKER_TIMEOUT_MS,
+      errorThresholdPercentage:
+        config.GATEWAYS_GQL_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+      rollingCountTimeout:
+        config.GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
+      resetTimeout: config.GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
+    },
     axiosInstance,
   }: {
     log: winston.Logger;
     urls: string[];
     localGqlQueryable?: GqlQueryable;
     requestTimeoutMs?: number;
-    requestRetryCount?: number;
+    circuitBreakerOptions?: CircuitBreaker.Options;
     axiosInstance?: AxiosInstance;
   }) {
     this.log = log.child({ class: 'GatewaysGqlQueryable' });
@@ -595,11 +635,12 @@ export class GatewaysGqlQueryable
       );
     }
 
-    const http =
-      axiosInstance ??
-      createRetryingAxios(requestTimeoutMs, requestRetryCount, this.log);
+    const http = axiosInstance ?? createHttpClient(requestTimeoutMs);
 
-    const remoteSources = urls.map((url) => new RemoteGqlQueryable(url, http));
+    const remoteSources = urls.map(
+      (url) =>
+        new RemoteGqlQueryable(url, http, circuitBreakerOptions, this.log),
+    );
     const labels = urls.slice();
 
     if (localGqlQueryable !== undefined) {
@@ -788,7 +829,8 @@ export class GatewaysGqlQueryable
             maybeFinish();
           }
         }).catch((err) => {
-          this.log.warn('Upstream source failed', {
+          const level = err?.code === 'EOPENBREAKER' ? 'debug' : 'warn';
+          this.log[level]('Upstream source failed', {
             method,
             args,
             source: this.sourceLabels[i],
@@ -817,7 +859,8 @@ export class GatewaysGqlQueryable
     if (failures.length === 0) return;
 
     for (const f of failures) {
-      this.log.warn('Upstream source failed', {
+      const level = f.r.reason?.code === 'EOPENBREAKER' ? 'debug' : 'warn';
+      this.log[level]('Upstream source failed', {
         method,
         args,
         source: f.label,
@@ -833,37 +876,12 @@ export class GatewaysGqlQueryable
   }
 }
 
-function createRetryingAxios(
-  timeoutMs: number,
-  retryCount: number,
-  log: winston.Logger,
-): AxiosInstance {
-  const instance = axios.create({
+function createHttpClient(timeoutMs: number): AxiosInstance {
+  return axios.create({
     timeout: timeoutMs,
     headers: {
       'Content-Type': 'application/json',
       'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
     },
   });
-  instance.defaults.raxConfig = {
-    retry: retryCount,
-    instance,
-    statusCodesToRetry: [
-      [100, 199],
-      [429, 429],
-      [500, 599],
-    ],
-    onRetryAttempt: (error: any) => {
-      const cfg = rax.getConfig(error);
-      const attempt = cfg?.currentRetryAttempt ?? 1;
-      log.debug('Retrying upstream GraphQL request', {
-        attempt,
-        maxRetries: retryCount,
-        status: error?.response?.status,
-        url: error?.config?.url,
-      });
-    },
-  };
-  rax.attach(instance);
-  return instance;
 }

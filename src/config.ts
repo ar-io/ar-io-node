@@ -282,15 +282,35 @@ export const GATEWAYS_GQL_URLS: string[] = (() => {
 export const GATEWAYS_GQL_INCLUDE_LOCAL =
   env.varOrDefault('GATEWAYS_GQL_INCLUDE_LOCAL', 'true') === 'true';
 
+// Axios request timeout. Should be slightly less than the circuit breaker
+// timeout so axios aborts with a real error before the breaker fires its
+// own timeout error.
 export const GATEWAYS_GQL_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
   'GATEWAYS_GQL_REQUEST_TIMEOUT_MS',
-  10_000,
+  6_500,
 );
 
-export const GATEWAYS_GQL_REQUEST_RETRY_COUNT = env.nonNegativeIntOrDefault(
-  'GATEWAYS_GQL_REQUEST_RETRY_COUNT',
-  2,
+// Per-upstream circuit breaker around the GraphQL HTTP call. An open breaker
+// causes the fan-out to skip that upstream and continue with the rest.
+export const GATEWAYS_GQL_CIRCUIT_BREAKER_TIMEOUT_MS = env.positiveIntOrDefault(
+  'GATEWAYS_GQL_CIRCUIT_BREAKER_TIMEOUT_MS',
+  7_000,
 );
+export const GATEWAYS_GQL_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
+  env.positiveIntOrDefault(
+    'GATEWAYS_GQL_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
+    30,
+  );
+export const GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
+    10 * 60 * 1_000,
+  );
+export const GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
+    20 * 60 * 1_000,
+  );
 
 // GraphQL root TX lookup rate limiting
 export const GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(

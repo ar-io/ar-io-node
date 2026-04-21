@@ -555,6 +555,13 @@ const breakerSourceNames = [
 export type BreakerSource = (typeof breakerSourceNames)[number];
 const breakerSources: BreakerSource[] = [...breakerSourceNames];
 
+// Breakers where cardinality is dimensioned by an endpoint URL as well as
+// the breaker name. Kept separate from BreakerSource so the zero-init logic
+// for label-only breaker metrics doesn't create empty always-zero series.
+const endpointBreakerSourceNames = ['gateways-gql'] as const;
+export type EndpointBreakerSource =
+  (typeof endpointBreakerSourceNames)[number];
+
 export const circuitBreakerOpenCount = createCounter({
   name: 'circuit_breaker_open_count',
   help: 'Count of occasions when a circuit breaker has opened',
@@ -571,6 +578,18 @@ export const circuitBreakerState = createGauge({
   expectedLabelNames: {
     breaker: breakerSources,
   },
+});
+
+export const circuitBreakerEndpointOpenCount = new promClient.Counter({
+  name: 'circuit_breaker_endpoint_open_count',
+  help: 'Count of occasions when a per-endpoint circuit breaker has opened',
+  labelNames: ['breaker', 'endpoint'],
+});
+
+export const circuitBreakerEndpointState = new Gauge({
+  name: 'circuit_breaker_endpoint_state',
+  help: 'State of the per-endpoint circuit breaker (1 is open, 0 is closed, 0.5 is half open)',
+  labelNames: ['breaker', 'endpoint'],
 });
 
 //
@@ -655,6 +674,31 @@ export function setUpCircuitBreakerListenerMetrics(
       0.5,
     );
     logger?.info(`${breakerName} circuit breaker half-open`);
+  });
+}
+
+export function setUpEndpointCircuitBreakerListenerMetrics(
+  breakerName: EndpointBreakerSource,
+  endpoint: string,
+  breaker: CircuitBreaker,
+  logger?: winston.Logger | undefined,
+) {
+  const labels = { breaker: breakerName, endpoint };
+  circuitBreakerEndpointState.set(labels, 0);
+  circuitBreakerEndpointOpenCount.inc(labels, 0);
+
+  breaker.on('open', () => {
+    circuitBreakerEndpointOpenCount.inc(labels);
+    circuitBreakerEndpointState.set(labels, 1);
+    logger?.error(`${breakerName} circuit breaker opened`, { endpoint });
+  });
+  breaker.on('close', () => {
+    circuitBreakerEndpointState.set(labels, 0);
+    logger?.info(`${breakerName} circuit breaker closed`, { endpoint });
+  });
+  breaker.on('halfOpen', () => {
+    circuitBreakerEndpointState.set(labels, 0.5);
+    logger?.info(`${breakerName} circuit breaker half-open`, { endpoint });
   });
 }
 
