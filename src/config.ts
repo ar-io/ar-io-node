@@ -287,14 +287,14 @@ export const GATEWAYS_GQL_INCLUDE_LOCAL =
 // own timeout error.
 export const GATEWAYS_GQL_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
   'GATEWAYS_GQL_REQUEST_TIMEOUT_MS',
-  6_500,
+  9_500,
 );
 
 // Per-upstream circuit breaker around the GraphQL HTTP call. An open breaker
 // causes the fan-out to skip that upstream and continue with the rest.
 export const GATEWAYS_GQL_CIRCUIT_BREAKER_TIMEOUT_MS = env.positiveIntOrDefault(
   'GATEWAYS_GQL_CIRCUIT_BREAKER_TIMEOUT_MS',
-  7_000,
+  10_000,
 );
 export const GATEWAYS_GQL_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
   env.positiveIntOrDefault(
@@ -304,12 +304,12 @@ export const GATEWAYS_GQL_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
 export const GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
   env.positiveIntOrDefault(
     'GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
-    10 * 60 * 1_000,
+    60 * 1_000,
   );
 export const GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
   env.positiveIntOrDefault(
     'GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
-    60 * 1_000,
+    30 * 1_000,
   );
 
 // GraphQL root TX lookup rate limiting
