@@ -322,7 +322,7 @@ When enabled, the `transaction(id)` GraphQL query can resolve unindexed data ite
 | GATEWAYS_GQL_CIRCUIT_BREAKER_TIMEOUT_MS          | Number               | 7000                                          | Per-upstream circuit breaker call timeout. An open breaker causes the fan-out to skip that upstream and continue with the rest                                        |
 | GATEWAYS_GQL_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE | Number        | 30                                            | Error rate (0–100) within the rolling window that trips the breaker open                                                                                              |
 | GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS | Number           | 600000                                        | Rolling window in milliseconds over which error rate is measured                                                                                                      |
-| GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS    | Number               | 1200000                                       | How long an open breaker stays open before transitioning to half-open for a trial request                                                                             |
+| GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS    | Number               | 60000                                         | How long an open breaker stays open before transitioning to half-open for a trial request                                                                             |
 
 ## HTTPSIG Response Signing
 

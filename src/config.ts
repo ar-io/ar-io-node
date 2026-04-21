@@ -309,7 +309,7 @@ export const GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
 export const GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
   env.positiveIntOrDefault(
     'GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
-    20 * 60 * 1_000,
+    60 * 1_000,
   );
 
 // GraphQL root TX lookup rate limiting
