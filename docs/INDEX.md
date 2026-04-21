@@ -40,6 +40,7 @@ Fast, offline lookups for data item to root transaction mappings.
 | Document | Description |
 |----------|-------------|
 | [Parquet and ClickHouse](parquet-and-clickhouse-usage.md) | Exporting data to Parquet format |
+| [ClickHouse Pipeline Architecture](clickhouse-pipeline.md) | SQLite → Parquet → ClickHouse pipeline and GraphQL routing |
 
 ## Reference
 

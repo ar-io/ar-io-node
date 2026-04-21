@@ -184,6 +184,45 @@ logs a warning and skips the reload step; any previously loaded rules
 remain active, and if no rules have ever been loaded rows get
 `expires_at = NULL`.
 
+```mermaid
+flowchart LR
+  YAML["config/<br/>clickhouse-ttl-rules.yaml"]
+  Loader["clickhouse-load-<br/>ttl-rules.py<br/>(each import cycle)"]
+
+  subgraph Src["source tables"]
+    direction TB
+    TS["ttl_tag_rules_src"]
+    TP["ttl_tag_prefix_rules"]
+    OS["ttl_owner_rules_src"]
+    OP["ttl_owner_prefix_rules"]
+    Settings["ttl_settings<br/>default_ttl_seconds<br/>l1_never_expires"]
+  end
+
+  subgraph Dicts["dictionaries<br/>(60–300s LIFETIME)"]
+    direction TB
+    DT["ttl_tag_rules"]
+    DO["ttl_owner_rules"]
+  end
+
+  Migrate["migrate_staging_to_final<br/>(per partition)"]
+  Final["transactions.expires_at"]
+
+  YAML --> Loader
+  Loader --> TS
+  Loader --> TP
+  Loader --> OS
+  Loader --> OP
+  Loader --> Settings
+  TS --> DT
+  OS --> DO
+  DT --> Migrate
+  TP --> Migrate
+  DO --> Migrate
+  OP --> Migrate
+  Settings --> Migrate
+  Migrate --> Final
+```
+
 ### Rules file format
 
 ```yaml
@@ -243,6 +282,29 @@ of `ttl_seconds` (positive integer) or `never_expire: true`.
   3. One or more matching TTL rules → shortest `ttl_seconds` wins.
   4. `default_ttl_seconds` set at the top level → that value is applied.
   5. Otherwise → `expires_at` is `NULL` and the row is kept indefinitely.
+
+```mermaid
+flowchart TD
+  Start([row ready for<br/>migrate_staging_to_final])
+  L1{"l1_never_expires<br/>AND is_data_item = 0?"}
+  Exempt{"any matching rule<br/>with never_expire?"}
+  TTL{"any matching<br/>TTL rule?"}
+  Default{"default_ttl_seconds<br/>set?"}
+
+  KeepNull["expires_at = NULL<br/>(indefinite retention)"]
+  ShortestTTL["expires_at = now() +<br/>shortest matching<br/>ttl_seconds"]
+  DefaultTTL["expires_at = now() +<br/>default_ttl_seconds"]
+
+  Start --> L1
+  L1 -->|yes| KeepNull
+  L1 -->|no| Exempt
+  Exempt -->|yes| KeepNull
+  Exempt -->|no| TTL
+  TTL -->|yes| ShortestTTL
+  TTL -->|no| Default
+  Default -->|yes| DefaultTTL
+  Default -->|no| KeepNull
+```
 - **Normalization.** `tag_name` is lower-cased + trimmed on both sides;
   `tag_value` is trimmed but case-preserving. Owner `value` is stored as
   the operator-supplied base64url string and compared against
