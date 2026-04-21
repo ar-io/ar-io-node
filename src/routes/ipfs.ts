@@ -272,7 +272,11 @@ async function handleIpfsRequest({
         'Cache-Control',
         `public, max-age=${config.CACHE_BLOCKED_MAX_AGE}, immutable`,
       );
-      res.status(451).json({ error: 'Content blocked' });
+      res
+        .status(451)
+        .send(
+          `Requested content blocked by this node's content policy. Blocked ID: ${cidString}`,
+        );
       return;
     }
 
