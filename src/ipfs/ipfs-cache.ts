@@ -47,7 +47,8 @@ export class IpfsFsCache {
   }
 
   private cacheKey(cidString: string, path?: string): string {
-    const raw = path ? `${cidString}/${path}` : cidString;
+    const raw =
+      path !== undefined && path !== '' ? `${cidString}/${path}` : cidString;
     return crypto.createHash('sha256').update(raw).digest('hex');
   }
 
@@ -95,7 +96,9 @@ export class IpfsFsCache {
   async get(
     cidString: string,
     path?: string,
-  ): Promise<{ stream: Readable; size: number; contentType: string } | undefined> {
+  ): Promise<
+    { stream: Readable; size: number; contentType: string } | undefined
+  > {
     const key = this.cacheKey(cidString, path);
     let entry = this.index.get(key);
 

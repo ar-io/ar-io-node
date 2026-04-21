@@ -7,8 +7,10 @@
 import { default as axios } from 'axios';
 import { Readable } from 'node:stream';
 import winston from 'winston';
+import { Span } from '@opentelemetry/api';
 
 import { attachStallTimeout } from '../lib/stream.js';
+import { startChildSpan } from '../tracing.js';
 
 export interface IpfsContentResult {
   stream: Readable;
@@ -50,7 +52,8 @@ export class KuboDataSource {
   }): Promise<IpfsContentResult> {
     signal?.throwIfAborted();
 
-    const ipfsPath = path ? `${cidString}/${path}` : cidString;
+    const ipfsPath =
+      path !== undefined && path !== '' ? `${cidString}/${path}` : cidString;
     const url = `${this.kuboUrl}/ipfs/${ipfsPath}`;
 
     this.log.debug('Fetching IPFS content from Kubo', {

@@ -64,24 +64,30 @@ export function createIpfsSubdomainMiddleware({
 
     // Handle /ipfs/ paths on subdomain requests.
     // Kubo's directory listings generate absolute links like /ipfs/{CID}/file.
-    let reqPath = req.path === '/' ? undefined : req.path.slice(1);
-    if (reqPath && reqPath.startsWith('ipfs/')) {
+    let reqPath: string | undefined =
+      req.path === '/' ? undefined : req.path.slice(1);
+    if (reqPath !== undefined && reqPath.startsWith('ipfs/')) {
       const afterIpfs = reqPath.slice(5); // strip 'ipfs/'
       const slashIdx = afterIpfs.indexOf('/');
-      const pathCid = slashIdx >= 0 ? afterIpfs.slice(0, slashIdx) : afterIpfs;
-      const remainder = slashIdx >= 0 ? afterIpfs.slice(slashIdx + 1) : undefined;
+      const pathCid =
+        slashIdx >= 0 ? afterIpfs.slice(0, slashIdx) : afterIpfs;
+      const remainder =
+        slashIdx >= 0 ? afterIpfs.slice(slashIdx + 1) : undefined;
 
       if (pathCid === cidLabel) {
         // Same CID — strip the redundant prefix
-        reqPath = remainder || undefined;
+        reqPath = remainder !== undefined ? remainder : undefined;
       } else if (isValidCid(pathCid)) {
         // Different CID — redirect to that CID's subdomain
         try {
           const targetCid = cidToV1Base32(pathCid);
           const rootHost = matchedEntry.host;
-          const pathSuffix = remainder ? `/${remainder}` : '/';
-          const protocol = req.protocol;
-          res.redirect(302, `${protocol}://${targetCid}.${rootHost}${pathSuffix}`);
+          const pathSuffix =
+            remainder !== undefined ? `/${remainder}` : '/';
+          res.redirect(
+            302,
+            `${req.protocol}://${targetCid}.${rootHost}${pathSuffix}`,
+          );
           return;
         } catch {
           // CID conversion failed — fall through to handler

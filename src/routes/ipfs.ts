@@ -110,15 +110,11 @@ function createIpfsPathHandler({
     // since CIDv1 base32 is always >51 chars (won't collide with ArNS names)
     // and works with standard *.{host} wildcard TLS certificates.
     const cid = parseCid(cidString);
-    if (cid && isCidV0(cid) && config.ARNS_ROOT_HOSTS.length > 0) {
+    if (cid !== null && isCidV0(cid) && config.ARNS_ROOT_HOSTS.length > 0) {
       const v1Base32 = cidToV1Base32(cidString);
       const rootHost = config.ARNS_ROOT_HOSTS[0].host;
-      const pathSuffix = path ? `/${path}` : '';
-      const protocol = req.protocol;
-      res.redirect(
-        302,
-        `${protocol}://${v1Base32}.${rootHost}${pathSuffix}`,
-      );
+      const pathSuffix = path !== undefined ? `/${path}` : '';
+      res.redirect(302, `${req.protocol}://${v1Base32}.${rootHost}${pathSuffix}`);
       return;
     }
 
@@ -158,7 +154,8 @@ async function handleIpfsRequest({
   routeType: 'path' | 'subdomain';
 }): Promise<void> {
   const startTime = Date.now();
-  const ipfsPath = path ? `${cidString}/${path}` : cidString;
+  const ipfsPath =
+    path !== undefined ? `${cidString}/${path}` : cidString;
 
   parentLog.debug('Handling IPFS request', { cidString, path, routeType });
 
@@ -178,7 +175,10 @@ async function handleIpfsRequest({
       id: cidToV1Base32(cidString),
       contentSize,
       contentType: result.contentType,
-      requestAttributes: { hops: 0, clientIps: extractAllClientIPs(req).clientIps },
+      requestAttributes: {
+        hops: 0,
+        clientIps: extractAllClientIPs(req).clientIps,
+      },
       rateLimiter,
       paymentProcessor,
     });
