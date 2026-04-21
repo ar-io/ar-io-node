@@ -86,10 +86,7 @@ export class IpfsService {
       }
 
       // Reject path traversal attempts
-      if (
-        path !== undefined &&
-        (path.includes('..') || path.startsWith('/'))
-      ) {
+      if (path !== undefined && (path.includes('..') || path.startsWith('/'))) {
         throw new IpfsNotFoundError('Invalid IPFS path');
       }
 

@@ -114,7 +114,10 @@ function createIpfsPathHandler({
       const v1Base32 = cidToV1Base32(cidString);
       const rootHost = config.ARNS_ROOT_HOSTS[0].host;
       const pathSuffix = path !== undefined ? `/${path}` : '';
-      res.redirect(302, `${req.protocol}://${v1Base32}.${rootHost}${pathSuffix}`);
+      res.redirect(
+        302,
+        `${req.protocol}://${v1Base32}.${rootHost}${pathSuffix}`,
+      );
       return;
     }
 
@@ -154,8 +157,7 @@ async function handleIpfsRequest({
   routeType: 'path' | 'subdomain';
 }): Promise<void> {
   const startTime = Date.now();
-  const ipfsPath =
-    path !== undefined ? `${cidString}/${path}` : cidString;
+  const ipfsPath = path !== undefined ? `${cidString}/${path}` : cidString;
 
   parentLog.debug('Handling IPFS request', { cidString, path, routeType });
 

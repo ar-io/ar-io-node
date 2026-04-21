@@ -69,8 +69,7 @@ export function createIpfsSubdomainMiddleware({
     if (reqPath !== undefined && reqPath.startsWith('ipfs/')) {
       const afterIpfs = reqPath.slice(5); // strip 'ipfs/'
       const slashIdx = afterIpfs.indexOf('/');
-      const pathCid =
-        slashIdx >= 0 ? afterIpfs.slice(0, slashIdx) : afterIpfs;
+      const pathCid = slashIdx >= 0 ? afterIpfs.slice(0, slashIdx) : afterIpfs;
       const remainder =
         slashIdx >= 0 ? afterIpfs.slice(slashIdx + 1) : undefined;
 
@@ -82,8 +81,7 @@ export function createIpfsSubdomainMiddleware({
         try {
           const targetCid = cidToV1Base32(pathCid);
           const rootHost = matchedEntry.host;
-          const pathSuffix =
-            remainder !== undefined ? `/${remainder}` : '/';
+          const pathSuffix = remainder !== undefined ? `/${remainder}` : '/';
           res.redirect(
             302,
             `${req.protocol}://${targetCid}.${rootHost}${pathSuffix}`,

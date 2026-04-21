@@ -217,6 +217,7 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
                 : undefined,
           }
         : undefined,
+    ipfs: config.IPFS_ENABLED ? { enabled: true } : undefined,
   });
 
   res.status(200).send(response);
