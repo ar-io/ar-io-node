@@ -13,7 +13,7 @@ import { Span } from '@opentelemetry/api';
 import { cidToV1Base32 } from '../lib/ipfs-cid.js';
 import { startChildSpan } from '../tracing.js';
 import { IpfsFsCache } from './ipfs-cache.js';
-import { IpfsBlocklist } from './ipfs-blocklist.js';
+import { DataBlockListValidator } from '../types.js';
 import {
   KuboDataSource,
   IpfsBlockedError,
@@ -32,23 +32,23 @@ export class IpfsService {
   private log: winston.Logger;
   private dataSource: KuboDataSource;
   private cache: IpfsFsCache;
-  private blocklist: IpfsBlocklist;
+  private blockListValidator: DataBlockListValidator;
 
   constructor({
     log,
     dataSource,
     cache,
-    blocklist,
+    blockListValidator,
   }: {
     log: winston.Logger;
     dataSource: KuboDataSource;
     cache: IpfsFsCache;
-    blocklist: IpfsBlocklist;
+    blockListValidator: DataBlockListValidator;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
     this.cache = cache;
-    this.blocklist = blocklist;
+    this.blockListValidator = blockListValidator;
   }
 
   async getContent({
@@ -78,8 +78,8 @@ export class IpfsService {
       const normalizedCid = cidToV1Base32(cidString);
       span.setAttribute('ipfs.cid_normalized', normalizedCid);
 
-      // Check blocklist
-      if (this.blocklist.isBlocked(normalizedCid)) {
+      // Check blocklist (uses the same admin API as Arweave data moderation)
+      if (await this.blockListValidator.isIdBlocked(normalizedCid)) {
         metrics.ipfsBlockedTotal.inc();
         span.setAttribute('ipfs.blocked', true);
         throw new IpfsBlockedError(`CID is blocked: ${normalizedCid}`);

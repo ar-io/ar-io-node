@@ -2184,11 +2184,6 @@ export const IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS = +env.varOrDefault(
   '3600',
 );
 
-export const IPFS_BLOCKLIST_PATH = env.varOrDefault(
-  'IPFS_BLOCKLIST_PATH',
-  'data/ipfs-blocklist.txt',
-);
-
 export const IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET = +env.varOrDefault(
   'IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET',
   '50000',

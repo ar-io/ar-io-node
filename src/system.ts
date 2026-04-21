@@ -1462,14 +1462,12 @@ if (dataVerificationWorker !== undefined) {
 
 import { KuboDataSource } from './ipfs/kubo-data-source.js';
 import { IpfsFsCache } from './ipfs/ipfs-cache.js';
-import { IpfsBlocklist } from './ipfs/ipfs-blocklist.js';
 import { IpfsService } from './ipfs/ipfs-service.js';
 import { createIpfsRateLimiter } from './ipfs/ipfs-rate-limiter.js';
 import { RateLimiter } from './limiter/types.js';
 
 export let ipfsService: IpfsService | undefined;
 export let ipfsRateLimiter: RateLimiter | undefined;
-export let ipfsBlocklist: IpfsBlocklist | undefined;
 
 if (config.IPFS_ENABLED) {
   log.info('IPFS subsystem enabled, initializing...');
@@ -1487,18 +1485,11 @@ if (config.IPFS_ENABLED) {
     maxSizeBytes: config.IPFS_CACHE_MAX_SIZE_BYTES,
   });
 
-  ipfsBlocklist = new IpfsBlocklist({
-    log,
-    filePath: config.IPFS_BLOCKLIST_PATH,
-  });
-  await ipfsBlocklist.load();
-  ipfsBlocklist.startWatching();
-
   ipfsService = new IpfsService({
     log,
     dataSource: kuboDataSource,
     cache: ipfsCache,
-    blocklist: ipfsBlocklist,
+    blockListValidator: dataBlockListValidator,
   });
 
   ipfsRateLimiter = createIpfsRateLimiter();
@@ -1541,7 +1532,6 @@ export const shutdown = async (exitCode = 0) => {
     }
 
     // Clean up system components
-    ipfsBlocklist?.stop();
     eventEmitter.removeAllListeners();
     arIOPeerManager.stopUpdatingPeers();
     dataSqliteWalCleanupWorker?.stop();
