@@ -562,6 +562,17 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
           tags,
         });
 
+    // Convert sqlitePromise to a settled-shape promise eagerly. This both
+    // absorbs rejections (preventing unhandled-rejection noise if CH fails
+    // first and we bail before awaiting SQLite) and lets us await it without
+    // another try/catch below.
+    const sqliteSettledPromise: Promise<
+      PromiseSettledResult<GqlTransactionsResult>
+    > = sqlitePromise.then(
+      (value) => ({ status: 'fulfilled', value }) as const,
+      (reason) => ({ status: 'rejected', reason }) as const,
+    );
+
     // Keep the boundary-optimization cache warm for future calls without
     // blocking this one. Cache hits short-circuit; misses dedupe via
     // maxHeightInFlight.
@@ -569,17 +580,11 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       void this.getClickHouseMaxHeight();
     }
 
-    const [chSettled, sqliteSettled] = await Promise.allSettled([
-      chPromise,
-      sqlitePromise,
-    ]);
-
-    // ClickHouse errors (timeout, max_rows_to_read, etc.) propagate to the
-    // caller — slow/bad queries should surface to whoever authored them.
-    if (chSettled.status === 'rejected') {
-      throw chSettled.reason;
-    }
-    const txs = chSettled.value;
+    // Await ClickHouse first and fail fast on rejection — slow/bad queries
+    // should surface to whoever authored them without being gated on the
+    // SQLite leg's breaker timeout. SQLite keeps running in the background
+    // in that case; its rejection is already absorbed above.
+    const txs = await chPromise;
 
     // SQLite rejections (breaker open, breaker timeout, underlying error)
     // degrade to ClickHouse-only results. A warning is attached to the
@@ -587,6 +592,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     // via GraphQL `extensions` — callers must not receive silent partials
     // (SQLite is the sole source for tip-of-chain rows when the boundary
     // optimization is enabled).
+    const sqliteSettled = await sqliteSettledPromise;
     let sqliteEdges: GqlTransactionsResult['edges'] = [];
     const warnings: GqlWarning[] = [];
     if (sqliteSettled.status === 'fulfilled') {
