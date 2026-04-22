@@ -5,12 +5,14 @@ indexing and GraphQL query serving beyond a single gateway. It focuses on
 **what's composable with the existing knobs** — no topology below requires
 code changes. The wiring is driven by a handful of env vars:
 
-- `START_WRITERS` — disables block/transaction/bundle indexing workers
-  (useful for a pure data-access or pure proxy role).
 - `ANS104_UNBUNDLE_FILTER` / `ANS104_INDEX_FILTER` — narrow what each
   indexer writes. Supports a `hashPartition` operator (see
   [Filters](filters.md#hash-partition-filter)) for deterministic splits
   by TX ID, owner, etc.
+- `START_WRITERS=false` — disables block/transaction/bundle indexing
+  workers. Appropriate for read-replica roles that consume a shared
+  ClickHouse cluster and accept having no local speed layer above the
+  composite boundary.
 - `CLICKHOUSE_URL` — when set, wraps the SQLite GraphQL queryable with
   `CompositeClickHouseDatabase` (see [ClickHouse Pipeline](clickhouse-pipeline.md)).
   The gateway only knows a single endpoint; replication or sharding is
@@ -38,7 +40,7 @@ flowchart LR
   Client((Client))
 
   subgraph Edge["Data-access gateway"]
-    DA["ar-io-node<br/>START_WRITERS=false<br/>GATEWAYS_GQL_INCLUDE_LOCAL=false<br/>GATEWAYS_GQL_URLS=[I1, I2]"]
+    DA["ar-io-node<br/>GATEWAYS_GQL_INCLUDE_LOCAL=false<br/>GATEWAYS_GQL_URLS=[I1, I2]"]
   end
 
   subgraph Indexers["Indexer pool"]
@@ -57,8 +59,6 @@ horizontally-scalable edge tier and keep indexing costs isolated on
 dedicated hosts.
 
 **Notes.**
-- `START_WRITERS=false` keeps the edge node from running block import
-  and bundle unbundling. It still performs on-demand data retrieval.
 - The indexers must expose the ar-io-node cursor format
   (`GATEWAYS_GQL_URLS` assumes this; do not mix with arweave.net-style
   cursors).
@@ -114,11 +114,12 @@ Readers scale horizontally without re-indexing.
   cluster to avoid redundant imports. The staging/final migration is
   per-partition idempotent, so a duplicate run is recoverable but
   wasteful.
-- Readers still maintain their own SQLite for the speed layer (recent
-  heights above the composite boundary). That local SQLite can be
-  minimal — set `START_WRITERS=false` and let readers rely on the
-  cluster for stable heights, accepting no local speed layer, or keep
-  writers local to retain recent-height coverage.
+- Readers with `START_WRITERS=false` have no local speed layer, so
+  heights above the composite boundary are not served at all — there
+  is a gap between the ClickHouse tip and the chain tip bounded by
+  the auto-import sleep interval. Operators who need recent-height
+  coverage on readers should leave writers enabled and accept the
+  duplicated ingest work locally.
 
 ---
 
