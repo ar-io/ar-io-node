@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { randomUUID } from 'node:crypto';
 import { Connection, Database } from 'duckdb-async';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -53,6 +54,7 @@ const ERRORED: ExportStatus = 'errored';
 
 type ExportData = {
   status: ExportStatus;
+  jobId?: string;
   outputDir?: string;
   startHeight?: number;
   endHeight?: number;
@@ -70,6 +72,11 @@ type ExportData = {
   totalPartitions?: number;
 };
 
+// Per-job history size. Sized to comfortably cover the auto-import loop's
+// in-flight batch plus recent completions that a slow poller might still
+// be reading. Oldest entries fall off first (insertion-ordered Map).
+const MAX_JOB_HISTORY = 32;
+
 export class ParquetExporter {
   private log: winston.Logger;
   private worker: Worker | null = null;
@@ -78,6 +85,7 @@ export class ParquetExporter {
   private exportStatus: ExportData = {
     status: NOT_STARTED,
   };
+  private jobs = new Map<string, ExportData>();
 
   constructor({
     log,
@@ -91,6 +99,22 @@ export class ParquetExporter {
     this.log = log.child({ class: 'ParquetExporter' });
     this.bundlesDbPath = bundlesDbPath;
     this.coreDbPath = coreDbPath;
+  }
+
+  // Single mutation point for exportStatus so the per-job map stays in sync
+  // with the "latest" singleton view. Every ERRORED/COMPLETED path must
+  // carry the running jobId forward so history lookups continue to work
+  // after the singleton flips to the next job.
+  private setStatus(next: ExportData): void {
+    this.exportStatus = next;
+    if (next.jobId !== undefined) {
+      this.jobs.set(next.jobId, next);
+      while (this.jobs.size > MAX_JOB_HISTORY) {
+        const oldestKey = this.jobs.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.jobs.delete(oldestKey);
+      }
+    }
   }
 
   async export({
@@ -120,8 +144,13 @@ export class ParquetExporter {
       (endHeight - startHeight + 1) / heightPartitionSize,
     );
 
-    this.exportStatus = {
+    // jobId is assigned synchronously and captured in exportStatus before
+    // this function yields, so the POST handler can read exporter.status()
+    // .jobId right after calling export() and return it to the client.
+    const jobId = randomUUID();
+    this.setStatus({
       status: RUNNING,
+      jobId,
       outputDir,
       startHeight,
       endHeight,
@@ -131,7 +160,7 @@ export class ParquetExporter {
       skipL1Tags,
       completedPartitions: 0,
       totalPartitions,
-    };
+    });
 
     return new Promise((resolve, reject) => {
       const workerUrl = new URL('./parquet-exporter.js', import.meta.url);
@@ -183,7 +212,7 @@ export class ParquetExporter {
             durationInSeconds,
           });
 
-          this.exportStatus = {
+          this.setStatus({
             ...this.exportStatus,
             status: COMPLETED,
             outputDir,
@@ -196,20 +225,21 @@ export class ParquetExporter {
             endTime: endTime.toISOString(),
             endTimestamp: endTime.getTime(),
             durationInSeconds,
-          };
+          });
 
           resolve();
         } else if (message.eventName === EXPORT_ERROR) {
           const endTime = new Date();
           const durationInSeconds = (endTime.getTime() - startTime) / 1000;
 
-          this.exportStatus = {
+          this.setStatus({
+            ...this.exportStatus,
             status: ERRORED,
             error: message.error,
             endTime: endTime.toISOString(),
             endTimestamp: endTime.getTime(),
             durationInSeconds,
-          };
+          });
 
           this.log.error('Parquet export error', {
             error: message.error,
@@ -219,13 +249,13 @@ export class ParquetExporter {
 
           reject(new Error(message.error));
         } else if (message.eventName === EXPORT_PROGRESS) {
-          this.exportStatus = {
+          this.setStatus({
             ...this.exportStatus,
             currentPartitionStart: message.currentPartitionStart,
             currentPartitionEnd: message.currentPartitionEnd,
             completedPartitions: message.completedPartitions,
             totalPartitions: message.totalPartitions,
-          };
+          });
         } else if (message.eventName === TIMING_LOG) {
           this.log.debug(`Parquet export timing: ${message.timingKey}`, {
             exportStep: message.timingKey,
@@ -247,10 +277,11 @@ export class ParquetExporter {
       });
 
       this.worker.on('error', (error) => {
-        this.exportStatus = {
+        this.setStatus({
+          ...this.exportStatus,
           status: ERRORED,
           error: error.message,
-        };
+        });
 
         this.log.error('Worker error', error);
 
@@ -259,10 +290,11 @@ export class ParquetExporter {
 
       this.worker.on('exit', (code) => {
         if (code !== 0) {
-          this.exportStatus = {
+          this.setStatus({
+            ...this.exportStatus,
             status: ERRORED,
             error: `Worker stopped with exit code ${code}`,
-          };
+          });
 
           reject(new Error(`Worker stopped with exit code ${code}`));
         }
@@ -272,6 +304,10 @@ export class ParquetExporter {
 
   status(): ExportData {
     return this.exportStatus;
+  }
+
+  statusByJobId(jobId: string): ExportData | undefined {
+    return this.jobs.get(jobId);
   }
 
   async stop(): Promise<void> {

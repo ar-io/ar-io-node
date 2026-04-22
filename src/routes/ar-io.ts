@@ -600,7 +600,13 @@ arIoRouter.post(
           });
         });
 
-      res.json({ message: 'Parquet export started' });
+      // exporter.export() is async but has no awaits before its Promise
+      // constructor runs, so the RUNNING status (and jobId) are assigned
+      // synchronously by the time we read status() here. Clients track
+      // their own job by this jobId rather than racing the shared
+      // /status singleton, which can be overwritten by any other caller.
+      const { jobId } = exporter.status();
+      res.json({ message: 'Parquet export started', jobId });
     } catch (error: any) {
       res.status(500).send(error?.message);
     }
@@ -614,6 +620,22 @@ arIoRouter.get('/ar-io/admin/export-parquet/status', async (_, res) => {
     res.status(500).send(error?.message);
   }
 });
+
+arIoRouter.get(
+  '/ar-io/admin/export-parquet/status/:jobId',
+  async (req, res) => {
+    try {
+      const status = getParquetExporter().statusByJobId(req.params.jobId);
+      if (status === undefined) {
+        res.status(404).json({ error: 'Unknown or expired jobId' });
+        return;
+      }
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
 
 // Prune stable data items before a given timestamp and within a height range
 arIoRouter.post(

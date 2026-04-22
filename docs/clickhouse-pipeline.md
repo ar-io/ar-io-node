@@ -97,8 +97,11 @@ Exports are pull-driven via the admin API, with the bash wrapper
 `scripts/parquet-export` orchestrating the admin API calls end-to-end.
 
 - Route: `POST /ar-io/admin/export-parquet` at
-  `src/routes/ar-io.ts`. Status is polled via
-  `GET /ar-io/admin/export-parquet/status`.
+  `src/routes/ar-io.ts`. The response includes a `jobId`; clients should
+  poll `GET /ar-io/admin/export-parquet/status/:jobId` to track their
+  own export. The shared `GET /ar-io/admin/export-parquet/status`
+  endpoint still exists for legacy pollers but reflects the
+  most-recently-updated job and can be overwritten by any other caller.
 - Worker: `src/workers/parquet-exporter.ts` runs the export in a Node
   worker thread. It reads from the stable tables
   (`core.stable_blocks`, `core.stable_transactions`,
@@ -175,9 +178,10 @@ sequenceDiagram
 
   loop per height batch
     Auto->>Core: POST /ar-io/admin/export-parquet<br/>(start/end, staging-job-dir)
+    Core-->>Auto: jobId
     Core->>Core: parquet-exporter worker<br/>reads stable_* tables from SQLite
     Core->>Shared: write Parquet to<br/>etl/staging/job-*
-    Auto->>Core: GET /ar-io/admin/export-parquet/status<br/>(poll until done)
+    Auto->>Core: GET /ar-io/admin/export-parquet/status/{jobId}<br/>(poll until done)
     Core-->>Auto: export complete
 
     Auto->>Shared: read staged Parquet
