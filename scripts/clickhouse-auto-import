@@ -30,6 +30,8 @@ sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hou
 height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
 max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
 idle_wait_timeout_s=${CLICKHOUSE_AUTO_IMPORT_IDLE_WAIT_TIMEOUT_S:-600}
+export_retry_max=${CLICKHOUSE_AUTO_IMPORT_EXPORT_MAX_RETRIES:-3}
+export_retry_delay_s=${CLICKHOUSE_AUTO_IMPORT_EXPORT_RETRY_DELAY_S:-5}
 core_db_path="${CORE_DB_PATH:-data/sqlite/core.db}"
 bundles_db_path="${BUNDLES_DB_PATH:-data/sqlite/bundles.db}"
 
@@ -290,34 +292,66 @@ while true; do
             continue
         fi
 
-        # Generate job staging directory for this batch
-        job_id="$(date +%Y%m%d_%H%M%S)_$$"
-        job_staging_dir="$staging_dir/job-${current_height}-${end_height}-${job_id}"
-
-        # Block until the server is idle. Without this, if the previous
-        # batch's parquet-export script exited early (stale outputDir,
-        # not_started, etc.) while the server-side worker kept running,
-        # every subsequent batch would just 409 until that worker
-        # finished — a self-sustaining pile-up.
-        wait_for_export_idle "$idle_wait_timeout_s"
-
-        # Step 1: Export to Parquet format in staging
-        echo "Starting Parquet export..."
+        # Step 1: Export to Parquet format in staging.
+        #
+        # Exit code 2 from parquet-export means a retryable race: 409 from a
+        # concurrent caller winning between our wait_for_export_idle and POST,
+        # status-singleton drift, or a mid-submission gateway restart. We burn
+        # a few attempts here before giving up so one transient race doesn't
+        # cost a whole 10k-height batch to the next cycle.
+        #
+        # Each attempt gets a fresh job_staging_dir so a partial tree from a
+        # previous attempt can't confuse the importer. wait_for_export_idle is
+        # called before each attempt because it's exactly the "server is
+        # running someone else's job" state we're trying to out-wait.
         export_start_time=$(date +%s)
-        
-        # Run parquet-export script with staging-based workflow
-        # Note: L2 transactions (data items) are included by default, only L1 needs explicit inclusion
-        ./scripts/parquet-export \
-            --start-height "$current_height" \
-            --end-height "$end_height" \
-            --height-partition-size "$height_interval" \
-            --staging-job-dir "$job_staging_dir" \
-            --output-dir "$dataset_dir" \
-            --max-file-rows "$max_rows_per_file" \
-            --api-host "$ar_io_host" \
-            --api-port "$ar_io_port"
-        
-        export_status=$?
+        export_attempt=1
+        export_status=2
+        job_staging_dir=""
+        while [ "$export_attempt" -le $((export_retry_max + 1)) ]; do
+            # On retries only, drop the previous attempt's (likely empty or
+            # partial) staging dir so the importer sees a clean tree. First
+            # attempt has nothing to clean; previous batches' dirs are
+            # managed by their own success/failure paths below.
+            if [ -n "$job_staging_dir" ]; then
+                rm -rf "$job_staging_dir" 2>/dev/null || true
+            fi
+            job_id="$(date +%Y%m%d_%H%M%S)_$$_${export_attempt}"
+            job_staging_dir="$staging_dir/job-${current_height}-${end_height}-${job_id}"
+
+            wait_for_export_idle "$idle_wait_timeout_s"
+
+            if [ "$export_attempt" -eq 1 ]; then
+                echo "Starting Parquet export..."
+            else
+                echo "Starting Parquet export (retry ${export_attempt}/$((export_retry_max + 1)))..."
+            fi
+
+            # Note: L2 transactions (data items) are included by default, only L1 needs explicit inclusion
+            ./scripts/parquet-export \
+                --start-height "$current_height" \
+                --end-height "$end_height" \
+                --height-partition-size "$height_interval" \
+                --staging-job-dir "$job_staging_dir" \
+                --output-dir "$dataset_dir" \
+                --max-file-rows "$max_rows_per_file" \
+                --api-host "$ar_io_host" \
+                --api-port "$ar_io_port"
+            export_status=$?
+
+            if [ $export_status -ne 2 ]; then
+                break
+            fi
+
+            if [ "$export_attempt" -ge $((export_retry_max + 1)) ]; then
+                echo "Warning: Parquet export still contending after ${export_retry_max} retries for range $current_height-$end_height"
+                break
+            fi
+
+            echo "Export contention detected; retrying in ${export_retry_delay_s}s..."
+            sleep "$export_retry_delay_s"
+            export_attempt=$((export_attempt + 1))
+        done
         export_complete_time=$(date +%s)
         
         if [ $export_status -eq 0 ]; then

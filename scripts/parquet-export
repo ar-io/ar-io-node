@@ -197,7 +197,9 @@ if [[ "$HTTP_CODE" == "409" ]]; then
   echo "Error: A Parquet export is already in progress on the server (HTTP 409)." >&2
   echo "       The gateway only runs one export at a time; wait for the current job to finish." >&2
   echo "       Server response: $BODY" >&2
-  exit 1
+  # Exit 2 signals a retryable contention — wait_for_export_idle plus a
+  # concurrent POST can still race into a 409 between idle check and submit.
+  exit 2
 fi
 
 if [[ "$HTTP_CODE" != "200" ]]; then
@@ -241,7 +243,11 @@ while true; do
     fi
     echo "Error: Export status is tracking a different outputDir ('$REPORTED_OUTPUT' status=${STATUS}) vs our '$OUTPUT_DIR'." >&2
     echo "       Our export was either displaced by another POST or is still pending on the server." >&2
-    exit 1
+    # Exit 2 signals a retryable race: caller can wait_for_export_idle and
+    # resubmit. If the displacing job was legitimately ours and eventually
+    # produces our dir, the next attempt will short-circuit via the empty-
+    # range skip or succeed outright.
+    exit 2
   fi
 
   case "$STATUS" in
@@ -258,7 +264,8 @@ while true; do
       ;;
     not_started)
       echo "Error: Export status reset to 'not_started' after submission. The core process may have restarted." >&2
-      exit 1
+      # Retryable: if the gateway is back up, resubmitting will succeed.
+      exit 2
       ;;
     errored)
       ERROR_MSG=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error','unknown'))" 2>/dev/null || echo "unknown")
