@@ -29,6 +29,7 @@ staging_dir="${ETL_STAGING_PATH:-./data/etl/staging}"
 sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hour by default
 height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
 max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
+idle_wait_timeout_s=${CLICKHOUSE_AUTO_IMPORT_IDLE_WAIT_TIMEOUT_S:-600}
 core_db_path="${CORE_DB_PATH:-data/sqlite/core.db}"
 bundles_db_path="${BUNDLES_DB_PATH:-data/sqlite/bundles.db}"
 
@@ -88,6 +89,46 @@ batch_has_data() {
     [ "$found" = "1" ] && return 0
 
     return 1
+}
+
+# Block until the gateway's parquet-export singleton is no longer 'running',
+# so a new POST doesn't immediately 409. This guards against: (a) the
+# prior batch's script bailing out early while the server-side worker
+# keeps churning, (b) the gateway restart / not_started race where the
+# singleton is mid-export for a different job than we think, and
+# (c) external callers racing the orchestrator. Returns 0 when idle,
+# 1 if the timeout expires.
+wait_for_export_idle() {
+    local timeout_s=${1:-600}
+    local start elapsed
+    local status_body status_val reported_output
+    start=$(date +%s)
+
+    while true; do
+        status_body="$(curl -s --fail --show-error \
+            -H "Authorization: Bearer $ADMIN_API_KEY" \
+            "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet/status" 2>/dev/null)"
+
+        if [ -n "$status_body" ]; then
+            status_val="$(echo "$status_body" | jq -r '.status // ""' 2>/dev/null)"
+            if [ "$status_val" != "running" ]; then
+                return 0
+            fi
+            reported_output="$(echo "$status_body" | jq -r '.outputDir // ""' 2>/dev/null)"
+            elapsed=$(( $(date +%s) - start ))
+            echo "Waiting for prior export to finish (outputDir=$reported_output, elapsed=${elapsed}s/${timeout_s}s)..."
+        else
+            elapsed=$(( $(date +%s) - start ))
+            echo "Warning: status endpoint unreachable while waiting for idle (elapsed=${elapsed}s)." >&2
+        fi
+
+        elapsed=$(( $(date +%s) - start ))
+        if [ "$elapsed" -ge "$timeout_s" ]; then
+            echo "Warning: Gave up waiting for server idle after ${timeout_s}s; proceeding anyway." >&2
+            return 1
+        fi
+        sleep 5
+    done
 }
 
 # Check critical preconditions
@@ -252,7 +293,14 @@ while true; do
         # Generate job staging directory for this batch
         job_id="$(date +%Y%m%d_%H%M%S)_$$"
         job_staging_dir="$staging_dir/job-${current_height}-${end_height}-${job_id}"
-        
+
+        # Block until the server is idle. Without this, if the previous
+        # batch's parquet-export script exited early (stale outputDir,
+        # not_started, etc.) while the server-side worker kept running,
+        # every subsequent batch would just 409 until that worker
+        # finished — a self-sustaining pile-up.
+        wait_for_export_idle "$idle_wait_timeout_s"
+
         # Step 1: Export to Parquet format in staging
         echo "Starting Parquet export..."
         export_start_time=$(date +%s)

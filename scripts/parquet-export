@@ -226,19 +226,21 @@ while true; do
   STATUS=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
   REPORTED_OUTPUT=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('outputDir',''))" 2>/dev/null || echo "")
 
-  # If the singleton's outputDir has drifted to a different job, the only
-  # way to reason about our own export is to check its directory on disk:
-  # if it exists, we assume our export completed and the status has been
-  # overwritten by a subsequent client; otherwise the stale status is
-  # masking a failure and we should bail out clearly.
+  # If the singleton's outputDir has drifted to a different job, we have
+  # to reason about our own export indirectly. Only treat this as success
+  # when (a) the singleton reports completed for another outputDir (which
+  # means a later POST finished after overwriting ours) AND (b) our own
+  # output directory exists on disk. status='running' with a different
+  # outputDir means the server is actively doing someone else's work,
+  # which tells us nothing about ours — bail out instead of guessing.
   if [[ -n "$REPORTED_OUTPUT" && "$REPORTED_OUTPUT" != "$OUTPUT_DIR" ]]; then
-    if [[ -d "$OUTPUT_DIR" ]]; then
+    if [[ "$STATUS" == "completed" && -d "$OUTPUT_DIR" ]]; then
       echo "Export completed (status singleton has since moved to another job at '$REPORTED_OUTPUT')."
       echo "Output directory: $OUTPUT_DIR"
       break
     fi
-    echo "Error: Export status is tracking a different outputDir ('$REPORTED_OUTPUT' vs our '$OUTPUT_DIR') and our output directory does not exist." >&2
-    echo "       Our export either never ran or was overwritten before producing output." >&2
+    echo "Error: Export status is tracking a different outputDir ('$REPORTED_OUTPUT' status=${STATUS}) vs our '$OUTPUT_DIR'." >&2
+    echo "       Our export was either displaced by another POST or is still pending on the server." >&2
     exit 1
   fi
 
