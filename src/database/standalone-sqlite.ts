@@ -1767,7 +1767,13 @@ export class StandaloneSqliteDatabaseWorker {
       });
     }
 
-    if (minHeight != null && minHeight > 0) {
+    // Skip minHeight on new tables: pending rows have NULL height and would
+    // be silently dropped by `height >= :minHeight`. The ClickHouse height
+    // optimization raises minHeight to route historical queries away from
+    // SQLite, but new tables only hold unstable/recent data that ClickHouse
+    // never covers, so there is nothing to skip here.
+    const applyMinHeight = source !== 'new_txs' && source !== 'new_items';
+    if (applyMinHeight && minHeight != null && minHeight > 0) {
       query.where(sql.gte(`${heightSortTableAlias}.height`, minHeight));
     }
 

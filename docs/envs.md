@@ -359,6 +359,12 @@ backend skip SQLite for heights already covered by ClickHouse, avoiding
 duplicate scans. The buffer reserves recent heights (where ClickHouse
 ingestion may be partial) for SQLite.
 
+The boundary only applies to SQLite's stable tables (`stable_transactions`,
+`stable_data_items`). The new tables (`new_transactions`, `new_data_items`)
+hold unstable and unconfirmed data — including pending rows with `NULL`
+height that would be silently dropped by a `height >= :minHeight` predicate
+— and are never covered by ClickHouse, so the floor is not applied to them.
+
 | ENV_NAME                                  | TYPE    | DEFAULT_VALUE | DESCRIPTION                                                                                                              |
 | ----------------------------------------- | ------- | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED      | Boolean | false         | When true, restrict the SQLite fallback to heights above (ClickHouse max height - buffer)                                |
