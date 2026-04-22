@@ -152,6 +152,60 @@ compose profile is active.
 - TTL rules are reloaded at the top of every cycle, so edits to
   `clickhouse-ttl-rules.yaml` take effect on the next cycle.
 
+#### Container interactions
+
+Three containers coordinate during each cycle: `core` (the AR.IO
+gateway), `clickhouse-auto-import` (the daemon), and `clickhouse` (the
+server). They communicate via the gateway's admin HTTP API, the
+ClickHouse native protocol, and a set of bind-mounted volumes shared
+between `core` and `clickhouse-auto-import` (see `docker-compose.yaml`
+under the `clickhouse` profile).
+
+```mermaid
+sequenceDiagram
+  participant Auto as clickhouse-auto-import<br/>(bash daemon)
+  participant Core as core<br/>(AR.IO gateway :4000)
+  participant Shared as Shared volumes<br/>parquet / datasets /<br/>etl/staging / ttl-rules
+  participant CH as clickhouse<br/>(server :9000)
+
+  Note over Auto: cycle start
+  Auto->>CH: load TTL rules<br/>(clickhouse-load-ttl-rules.py)
+  Auto->>Core: GET /ar-io/admin/debug
+  Core-->>Auto: min/max stable height
+
+  loop per height batch
+    Auto->>Core: POST /ar-io/admin/export-parquet<br/>(start/end, staging-job-dir)
+    Core->>Core: parquet-exporter worker<br/>reads stable_* tables from SQLite
+    Core->>Shared: write Parquet to<br/>etl/staging/job-*
+    Auto->>Core: GET /ar-io/admin/export-parquet/status<br/>(poll until done)
+    Core-->>Auto: export complete
+
+    Auto->>Shared: read staged Parquet
+    Auto->>CH: clickhouse client: COPY Parquet →<br/>staging_* tables
+    Auto->>CH: migrate_staging_to_final<br/>per partition (joins TTL dicts)
+    Auto->>Shared: mv staging → datasets/default
+
+    Auto->>Core: POST /ar-io/admin/prune-stable-data-items<br/>(indexedAtThreshold)
+    Auto->>Core: GET /ar-io/admin/debug<br/>(verify minStableDataItem advanced)
+  end
+
+  Note over Auto: sleep CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL
+```
+
+Notes:
+
+- `core` owns the only writer to SQLite — the daemon never reads SQLite
+  directly. All data egress from SQLite goes through the
+  `parquet-exporter` worker triggered by the admin API.
+- The staging directory (`data/etl/staging/job-*`) is the handoff
+  point. Parquet lives there until ClickHouse import succeeds; on
+  failure the staging files are preserved for inspection, on success
+  they're moved into `data/datasets/default` so they're retained as
+  part of the shareable Parquet warehouse.
+- The auto-import container mounts SQLite read-only but currently uses
+  it only for operator tooling — the export path itself is admin-API
+  driven.
+
 ### 5. Final-table lifecycle
 
 The final `transactions` table is a `ReplacingMergeTree(inserted_at)`
