@@ -567,15 +567,38 @@ arIoRouter.post(
 
       const exporter = getParquetExporter();
 
-      exporter.export({
-        outputDir,
-        startHeight,
-        endHeight,
-        maxFileRows,
-        heightPartitionSize,
-        skipL1Transactions,
-        skipL1Tags,
-      });
+      // Reject concurrent exports explicitly. Previously a fire-and-forget
+      // call would let exporter.export() throw into an unhandled rejection
+      // while this handler still returned 200; callers polling /status then
+      // saw the *prior* job's "completed" state and mistakenly believed
+      // their own export had run, leaving the requested outputDir missing.
+      const currentStatus = exporter.status();
+      if (currentStatus.status === 'running') {
+        res.status(409).json({
+          error: 'An export is already in progress',
+          currentStatus,
+        });
+        return;
+      }
+
+      exporter
+        .export({
+          outputDir,
+          startHeight,
+          endHeight,
+          maxFileRows,
+          heightPartitionSize,
+          skipL1Transactions,
+          skipL1Tags,
+        })
+        .catch((error: any) => {
+          log.error('Parquet export failed', {
+            outputDir,
+            startHeight,
+            endHeight,
+            message: error?.message,
+          });
+        });
 
       res.json({ message: 'Parquet export started' });
     } catch (error: any) {
