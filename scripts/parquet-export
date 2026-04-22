@@ -224,19 +224,27 @@ while true; do
   fi
 
   STATUS=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
+  REPORTED_OUTPUT=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('outputDir',''))" 2>/dev/null || echo "")
+
+  # If the singleton's outputDir has drifted to a different job, the only
+  # way to reason about our own export is to check its directory on disk:
+  # if it exists, we assume our export completed and the status has been
+  # overwritten by a subsequent client; otherwise the stale status is
+  # masking a failure and we should bail out clearly.
+  if [[ -n "$REPORTED_OUTPUT" && "$REPORTED_OUTPUT" != "$OUTPUT_DIR" ]]; then
+    if [[ -d "$OUTPUT_DIR" ]]; then
+      echo "Export completed (status singleton has since moved to another job at '$REPORTED_OUTPUT')."
+      echo "Output directory: $OUTPUT_DIR"
+      break
+    fi
+    echo "Error: Export status is tracking a different outputDir ('$REPORTED_OUTPUT' vs our '$OUTPUT_DIR') and our output directory does not exist." >&2
+    echo "       Our export either never ran or was overwritten before producing output." >&2
+    exit 1
+  fi
 
   case "$STATUS" in
     completed)
       DURATION=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('durationInSeconds','?'))" 2>/dev/null || echo "?")
-      REPORTED_OUTPUT=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('outputDir',''))" 2>/dev/null || echo "")
-      # Guard against the singleton status reporting "completed" from a
-      # prior job whose outputDir differs from ours — if that happens the
-      # caller would otherwise continue thinking our export ran.
-      if [[ -n "$REPORTED_OUTPUT" && "$REPORTED_OUTPUT" != "$OUTPUT_DIR" ]]; then
-        echo "Error: Export status reports outputDir='$REPORTED_OUTPUT' but we requested '$OUTPUT_DIR'." >&2
-        echo "       The server's status singleton appears stale from a previous export." >&2
-        exit 1
-      fi
       if [[ ! -d "$OUTPUT_DIR" ]]; then
         echo "Error: Export reported completed but output directory does not exist: $OUTPUT_DIR" >&2
         echo "       The export worker may have failed before creating output files." >&2
