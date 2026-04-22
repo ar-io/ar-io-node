@@ -496,7 +496,7 @@ services:
     restart: unless-stopped
     volumes:
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
-      - ./data/sqlite:/app/data/sqlite:ro
+      - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite:ro
       - ${LOCAL_DATASETS_PATH:-./data/datasets}:/app/data/datasets
       - ${ETL_STAGING_PATH:-./data/etl/staging}:/app/data/etl/staging
       - ${CLICKHOUSE_TTL_RULES_PATH:-./config/clickhouse-ttl-rules.yaml}:/app/config/clickhouse-ttl-rules.yaml:ro
