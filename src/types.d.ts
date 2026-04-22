@@ -410,9 +410,16 @@ interface GqlTransactionEdge {
   node: GqlTransaction;
 }
 
+export interface GqlWarning {
+  code: string;
+  message: string;
+  source?: string;
+}
+
 interface GqlTransactionsResult {
   pageInfo: GqlPageInfo;
   edges: GqlTransactionEdge[];
+  warnings?: GqlWarning[];
 }
 
 interface GqlBlock {
@@ -430,6 +437,7 @@ interface GqlBlockEdge {
 interface GqlBlocksResult {
   pageInfo: GqlPageInfo;
   edges: GqlBlockEdge[];
+  warnings?: GqlWarning[];
 }
 
 export interface RequestAttributes {
@@ -463,7 +471,16 @@ export interface RequestAttributes {
 }
 
 export interface GqlQueryable {
-  getGqlTransaction(args: { id: string }): Promise<GqlTransaction | null>;
+  getGqlTransaction(args: {
+    id: string;
+    /**
+     * Caller-provided sink for warnings surfaced by the DB layer (e.g.
+     * composite SQLite degrade, partial fan-out failure). Implementations
+     * push into the array when present; the single-record return type is
+     * unchanged so non-GraphQL callers can ignore this argument.
+     */
+    warnings?: GqlWarning[];
+  }): Promise<GqlTransaction | null>;
 
   getGqlTransactions(args: {
     pageSize: number;

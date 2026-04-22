@@ -1436,6 +1436,33 @@ export const CLICKHOUSE_GQL_DEDUPE_HEADROOM = env.positiveIntOrDefault(
   4,
 );
 
+// Circuit breaker around the SQLite leg of the composite GQL transactions
+// query. ClickHouse and SQLite run in parallel; an open breaker degrades
+// responses to ClickHouse-only results instead of dragging the caller down
+// with a slow or unhealthy SQLite. The ClickHouse leg is governed by its
+// own `max_execution_time` and `max_rows_to_read` and propagates errors
+// to the caller — the breaker only covers SQLite.
+export const CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS',
+    5_000,
+  );
+export const CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
+    80,
+  );
+export const CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
+    60 * 1_000,
+  );
+export const CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
+    30 * 1_000,
+  );
+
 //
 // Healthchecks
 //

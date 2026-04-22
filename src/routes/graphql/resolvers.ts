@@ -8,13 +8,12 @@ import { IResolvers } from '@graphql-tools/utils';
 import { GraphQLResolveInfo, SelectionSetNode } from 'graphql';
 
 import * as config from '../../config.js';
-import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
 import { isSelectionAwareGqlQueryable } from '../../database/gateways-gql-queryable.js';
 import { winstonToAr } from '../../lib/encoding.js';
 import { Semaphore } from '../../lib/semaphore.js';
 import log from '../../log.js';
 import { ownerFetcher, signatureFetcher } from '../../system.js';
-import { GqlTransaction } from '../../types.js';
+import { GqlTransaction, GqlWarning } from '../../types.js';
 import { isEmptyString } from '../../lib/string.js';
 import { resolveTransactionQuery } from './transaction-resolver.js';
 
@@ -60,6 +59,17 @@ export function extractTransactionNodeSelection(
   info: GraphQLResolveInfo,
 ): SelectionSetNode | undefined {
   return info.fieldNodes[0]?.selectionSet;
+}
+
+// Appends DB-layer warnings to the Apollo request context so the
+// willSendResponse plugin can emit them under `extensions.warnings`.
+function collectWarnings(
+  ctx: { warnings?: GqlWarning[] },
+  warnings: GqlWarning[] | undefined,
+): void {
+  if (warnings === undefined || warnings.length === 0) return;
+  if (ctx.warnings === undefined) ctx.warnings = [];
+  ctx.warnings.push(...warnings);
 }
 
 export function resolveTxRecipient(tx: GqlTransaction) {
@@ -180,26 +190,23 @@ export async function resolveTxSignature(tx: GqlTransaction) {
 
 export const resolvers: IResolvers = {
   Query: {
-    transaction: async (
-      _,
-      queryParams,
-      {
-        db,
-        txMetadataResolver,
-      }: { db: any; txMetadataResolver?: TxMetadataResolver },
-      info,
-    ) =>
-      resolveTransactionQuery(queryParams, {
-        db,
-        txMetadataResolver,
+    transaction: async (_, queryParams, ctx, info) => {
+      const warnings: GqlWarning[] = [];
+      const result = await resolveTransactionQuery(queryParams, {
+        db: ctx.db,
+        txMetadataResolver: ctx.txMetadataResolver,
         onDemandResolutionEnabled: config.GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED,
         onDemandResolutionTimeoutMs:
           config.GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS,
         onDemandSemaphore,
         log,
         nodeSelection: extractTransactionNodeSelection(info),
-      }),
-    transactions: async (_, queryParams, { db }, info) => {
+        warnings,
+      });
+      collectWarnings(ctx, warnings);
+      return result;
+    },
+    transactions: async (_, queryParams, ctx, info) => {
       log.info('GraphQL transactions query', {
         resolver: 'transactions',
         queryParams,
@@ -223,13 +230,14 @@ export const resolvers: IResolvers = {
         tags: queryParams.tags || [],
       };
 
-      if (isSelectionAwareGqlQueryable(db)) {
-        return db.getGqlTransactions({
-          ...args,
-          nodeSelection: extractTransactionsNodeSelection(info),
-        });
-      }
-      return db.getGqlTransactions(args);
+      const result = isSelectionAwareGqlQueryable(ctx.db)
+        ? await ctx.db.getGqlTransactions({
+            ...args,
+            nodeSelection: extractTransactionsNodeSelection(info),
+          })
+        : await ctx.db.getGqlTransactions(args);
+      collectWarnings(ctx, result.warnings);
+      return result;
     },
     block: async (_, queryParams, { db }) => {
       log.info('GraphQL block query', { resolver: 'block', queryParams });
@@ -238,10 +246,10 @@ export const resolvers: IResolvers = {
         id: queryParams.id,
       });
     },
-    blocks: (_, queryParams, { db }) => {
+    blocks: async (_, queryParams, ctx) => {
       log.info('GraphQL blocks query', { resolver: 'blocks', queryParams });
 
-      return db.getGqlBlocks({
+      const result = await ctx.db.getGqlBlocks({
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
         cursor: isEmptyString(queryParams.after)
@@ -251,6 +259,8 @@ export const resolvers: IResolvers = {
         minHeight: queryParams.height?.min,
         maxHeight: queryParams.height?.max,
       });
+      collectWarnings(ctx, result.warnings);
+      return result;
     },
   },
   Transaction: {

@@ -8,6 +8,7 @@ import * as winston from 'winston';
 import sql from 'sql-bricks';
 import { ClickHouseClient, createClient } from '@clickhouse/client';
 import { ValidationError } from 'apollo-server-express';
+import CircuitBreaker from 'opossum';
 
 import * as config from '../config.js';
 import {
@@ -17,7 +18,8 @@ import {
   hexToB64Url,
   utf8ToB64Url,
 } from '../lib/encoding.js';
-import { GqlTransactionsResult, GqlQueryable } from '../types.js';
+import * as metrics from '../metrics.js';
+import { GqlTransactionsResult, GqlQueryable, GqlWarning } from '../types.js';
 
 export function encodeTransactionGqlCursor({
   height,
@@ -88,6 +90,8 @@ function inB64UrlStrings(xs: string[]) {
   return sql(xs.map((x) => `unhex('${b64UrlToHex(x)}')`).join(', '));
 }
 
+type SqliteGqlArgs = Parameters<GqlQueryable['getGqlTransactions']>[0];
+
 export class CompositeClickHouseDatabase implements GqlQueryable {
   private log: winston.Logger;
   private clickhouseClient: ClickHouseClient;
@@ -97,6 +101,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
   private maxHeightCacheTtlMs: number;
   private maxHeightCache: { value: number; fetchedAt: number } | null = null;
   private maxHeightInFlight: Promise<number | null> | null = null;
+  private sqliteBreaker: CircuitBreaker<[SqliteGqlArgs], GqlTransactionsResult>;
 
   constructor({
     log,
@@ -108,6 +113,14 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     sqliteMinHeightBuffer = 10,
     maxHeightCacheTtlSeconds = 60,
     queryTimeoutSeconds = 3,
+    sqliteCircuitBreakerOptions = {
+      timeout: config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS,
+      errorThresholdPercentage:
+        config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+      rollingCountTimeout:
+        config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
+      resetTimeout: config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
+    },
   }: {
     log: winston.Logger;
     gqlQueryable: GqlQueryable;
@@ -118,6 +131,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     sqliteMinHeightBuffer?: number;
     maxHeightCacheTtlSeconds?: number;
     queryTimeoutSeconds?: number;
+    sqliteCircuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log;
 
@@ -138,6 +152,32 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     this.sqliteMinHeightEnabled = sqliteMinHeightEnabled;
     this.sqliteMinHeightBuffer = sqliteMinHeightBuffer;
     this.maxHeightCacheTtlMs = maxHeightCacheTtlSeconds * 1000;
+
+    this.sqliteBreaker = new CircuitBreaker(
+      (args: SqliteGqlArgs) => this.gqlQueryable.getGqlTransactions(args),
+      { ...sqliteCircuitBreakerOptions, name: 'composite-sqlite-gql' },
+    );
+    metrics.setUpCircuitBreakerListenerMetrics(
+      'composite-sqlite-gql',
+      this.sqliteBreaker,
+      this.log,
+    );
+  }
+
+  // Non-blocking view of the cached ClickHouse max height. Used on the
+  // request path so the SQLite leg can be dispatched in parallel with
+  // ClickHouse without an extra roundtrip. A cold cache falls back to
+  // "no optimization" — SQLite scans the caller's full height range and
+  // merge-time dedupe absorbs the overlap.
+  private getCachedClickHouseMaxHeight(): number | null {
+    if (this.maxHeightCache === null) return null;
+    if (
+      Date.now() - this.maxHeightCache.fetchedAt >=
+      this.maxHeightCacheTtlMs
+    ) {
+      return null;
+    }
+    return this.maxHeightCache.value;
   }
 
   private async getClickHouseMaxHeight(): Promise<number | null> {
@@ -444,54 +484,16 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
 
     this.log.debug('Querying ClickHouse transactions...', { sql });
 
-    const row = await this.clickhouseClient.query({ query: sql });
-    const jsonRow = await row.json();
-    const txs = jsonRow.data.map((tx: any) => ({
-      height: tx.height as number,
-      blockTransactionIndex: tx.block_transaction_index as number,
-      isDataItem: tx.is_data_item as boolean,
-      id: hexToB64Url(tx.id),
-      dataItemId: tx.is_data_item ? hexToB64Url(tx.id) : null,
-      indexedAt: tx.indexed_at as number,
-      anchor: tx.anchor ? hexToB64Url(tx.anchor) : null,
-      signature: null,
-      signatureSize: tx.signature_size as string,
-      signatureOffset: tx.signature_offset as string,
-      signatureType: (tx.signature_type as number) ?? null,
-      recipient: tx.target ? hexToB64Url(tx.target) : null,
-      ownerAddress: hexToB64Url(tx.owner_address),
-      ownerKey: null,
-      ownerSize: tx.owner_size as string,
-      ownerOffset: tx.owner_offset as string,
-      fee: tx.reward as string,
-      quantity: tx.quantity as string,
-      dataSize: tx.data_size as string,
-      tags:
-        tx.tags_count > 0
-          ? tx.tags.map((tag: any) => ({
-              name: tag[0] as string,
-              value: tag[1] as string,
-            }))
-          : [],
-      contentType: tx.content_type as string,
-      blockIndepHash: tx.block_indep_hash
-        ? hexToB64Url(tx.block_indep_hash)
-        : null,
-      blockTimestamp: tx.block_timestamp
-        ? (tx.block_timestamp as number)
-        : null,
-      blockPreviousBlock: tx.block_previous_block
-        ? hexToB64Url(tx.block_previous_block)
-        : null,
-      parentId: tx.parent_id ? hexToB64Url(tx.parent_id) : null,
-    }));
-
+    // Resolve the SQLite boundary from the *cached* ClickHouse max height
+    // only, so we can launch both legs in parallel without a blocking
+    // roundtrip. Cold cache → skip the optimization and let merge-time
+    // dedupe absorb overlap.
     let sqliteMinHeight = minHeight;
     let skipSqlite = false;
     if (this.sqliteMinHeightEnabled) {
-      const clickhouseMaxHeight = await this.getClickHouseMaxHeight();
-      if (clickhouseMaxHeight !== null) {
-        const boundary = clickhouseMaxHeight - this.sqliteMinHeightBuffer;
+      const cachedMax = this.getCachedClickHouseMaxHeight();
+      if (cachedMax !== null) {
+        const boundary = cachedMax - this.sqliteMinHeightBuffer;
         const candidate = boundary + 1;
         if (candidate > sqliteMinHeight) {
           sqliteMinHeight = candidate;
@@ -502,9 +504,53 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       }
     }
 
-    const gqlQueryableResults = skipSqlite
-      ? { pageInfo: { hasNextPage: false }, edges: [] }
-      : await this.gqlQueryable.getGqlTransactions({
+    const chPromise = (async () => {
+      const row = await this.clickhouseClient.query({ query: sql });
+      const jsonRow = await row.json();
+      return jsonRow.data.map((tx: any) => ({
+        height: tx.height as number,
+        blockTransactionIndex: tx.block_transaction_index as number,
+        isDataItem: tx.is_data_item as boolean,
+        id: hexToB64Url(tx.id),
+        dataItemId: tx.is_data_item ? hexToB64Url(tx.id) : null,
+        indexedAt: tx.indexed_at as number,
+        anchor: tx.anchor ? hexToB64Url(tx.anchor) : null,
+        signature: null,
+        signatureSize: tx.signature_size as string,
+        signatureOffset: tx.signature_offset as string,
+        signatureType: (tx.signature_type as number) ?? null,
+        recipient: tx.target ? hexToB64Url(tx.target) : null,
+        ownerAddress: hexToB64Url(tx.owner_address),
+        ownerKey: null,
+        ownerSize: tx.owner_size as string,
+        ownerOffset: tx.owner_offset as string,
+        fee: tx.reward as string,
+        quantity: tx.quantity as string,
+        dataSize: tx.data_size as string,
+        tags:
+          tx.tags_count > 0
+            ? tx.tags.map((tag: any) => ({
+                name: tag[0] as string,
+                value: tag[1] as string,
+              }))
+            : [],
+        contentType: tx.content_type as string,
+        blockIndepHash: tx.block_indep_hash
+          ? hexToB64Url(tx.block_indep_hash)
+          : null,
+        blockTimestamp: tx.block_timestamp
+          ? (tx.block_timestamp as number)
+          : null,
+        blockPreviousBlock: tx.block_previous_block
+          ? hexToB64Url(tx.block_previous_block)
+          : null,
+        parentId: tx.parent_id ? hexToB64Url(tx.parent_id) : null,
+      }));
+    })();
+
+    const sqlitePromise: Promise<GqlTransactionsResult> = skipSqlite
+      ? Promise.resolve({ pageInfo: { hasNextPage: false }, edges: [] })
+      : this.sqliteBreaker.fire({
           pageSize,
           cursor,
           sortOrder,
@@ -516,18 +562,68 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
           tags,
         });
 
-    // Filter out edges that already exist in the ClickHouse results
-    const gqlQueryableEdges = gqlQueryableResults.edges.filter(
-      (edge) => !txs.some((tx) => tx.id === edge.node.id),
-    );
+    // Keep the boundary-optimization cache warm for future calls without
+    // blocking this one. Cache hits short-circuit; misses dedupe via
+    // maxHeightInFlight.
+    if (this.sqliteMinHeightEnabled) {
+      void this.getClickHouseMaxHeight();
+    }
 
-    // Combine the ClickHouse results with the gqlQueryable results
+    const [chSettled, sqliteSettled] = await Promise.allSettled([
+      chPromise,
+      sqlitePromise,
+    ]);
+
+    // ClickHouse errors (timeout, max_rows_to_read, etc.) propagate to the
+    // caller — slow/bad queries should surface to whoever authored them.
+    if (chSettled.status === 'rejected') {
+      throw chSettled.reason;
+    }
+    const txs = chSettled.value;
+
+    // SQLite rejections (breaker open, breaker timeout, underlying error)
+    // degrade to ClickHouse-only results. A warning is attached to the
+    // returned result so the resolver layer can surface it to the caller
+    // via GraphQL `extensions` — callers must not receive silent partials
+    // (SQLite is the sole source for tip-of-chain rows when the boundary
+    // optimization is enabled).
+    let sqliteEdges: GqlTransactionsResult['edges'] = [];
+    const warnings: GqlWarning[] = [];
+    if (sqliteSettled.status === 'fulfilled') {
+      sqliteEdges = sqliteSettled.value.edges.filter(
+        (edge) => !txs.some((tx) => tx.id === edge.node.id),
+      );
+      if (
+        sqliteSettled.value.warnings !== undefined &&
+        sqliteSettled.value.warnings.length > 0
+      ) {
+        warnings.push(...sqliteSettled.value.warnings);
+      }
+    } else {
+      const reason = sqliteSettled.reason as {
+        message?: string;
+        code?: string;
+      };
+      this.log.warn(
+        'Composite SQLite GQL leg failed; returning ClickHouse-only results',
+        {
+          message: reason?.message,
+          code: reason?.code,
+        },
+      );
+      warnings.push({
+        code: 'PARTIAL_RESULT',
+        message: `sqlite unavailable: ${reason?.code ?? reason?.message ?? 'unknown'}`,
+      });
+    }
+
+    // Combine the ClickHouse results with the SQLite results
     const edges = [
       ...txs.map((tx) => ({
         cursor: encodeTransactionGqlCursor(tx),
         node: tx,
       })),
-      ...gqlQueryableEdges,
+      ...sqliteEdges,
     ];
 
     // Sort the combined results by height, blockTransactionIndex, isDataItem, and id
@@ -565,14 +661,32 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         hasNextPage: edges.length > pageSize,
       },
       edges: edges.slice(0, pageSize),
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 
-  async getGqlTransaction({ id }: { id: string }) {
+  async getGqlTransaction({
+    id,
+    warnings,
+  }: {
+    id: string;
+    warnings?: GqlWarning[];
+  }) {
     const results = await this.getGqlTransactions({
       pageSize: 1,
       ids: [id],
+      tags: [],
     });
+    // Surface composite-level warnings (e.g. SQLite unavailable) so the
+    // single-record lookup isn't a silent false negative when the leg
+    // that would have produced the match is unreachable.
+    if (
+      warnings !== undefined &&
+      results.warnings !== undefined &&
+      results.warnings.length > 0
+    ) {
+      warnings.push(...results.warnings);
+    }
     if (!Array.isArray(results.edges) || results.edges.length === 0) {
       return null;
     } else {

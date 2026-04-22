@@ -16,11 +16,38 @@ import {
 import { readFileSync } from 'node:fs';
 
 import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
-import { GqlQueryable } from '../../types.js';
+import { GqlQueryable, GqlWarning } from '../../types.js';
 import { resolvers } from './resolvers.js';
 
 const typeDefsUrl = new URL('./schema/types.graphql', import.meta.url);
 const typeDefs = gql(readFileSync(typeDefsUrl, 'utf8'));
+
+// Emits `extensions.warnings` on GraphQL responses when resolvers push onto
+// `context.warnings`. Partial-result signals (SQLite unavailable in the
+// composite DB, failed fan-out sources) land here so callers can detect
+// degraded responses without breaking the standard `data` shape.
+const warningsPlugin = {
+  async requestDidStart() {
+    return {
+      async willSendResponse({
+        context,
+        response,
+      }: {
+        context: { warnings?: GqlWarning[] };
+        response: {
+          extensions?: Record<string, unknown>;
+        };
+      }) {
+        if (context.warnings && context.warnings.length > 0) {
+          response.extensions = {
+            ...response.extensions,
+            warnings: context.warnings,
+          };
+        }
+      },
+    };
+  },
+};
 
 const apolloServer = (
   db: GqlQueryable,
@@ -34,9 +61,14 @@ const apolloServer = (
     plugins: [
       ApolloServerPluginLandingPageDisabled(),
       ApolloServerPluginLandingPageGraphQLPlayground(),
+      warningsPlugin,
     ],
     context: () => {
-      return { db, txMetadataResolver };
+      return {
+        db,
+        txMetadataResolver,
+        warnings: [] as GqlWarning[],
+      };
     },
     ...opts,
   });

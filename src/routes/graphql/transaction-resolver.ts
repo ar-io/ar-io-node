@@ -7,7 +7,7 @@
 import type { SelectionSetNode } from 'graphql';
 
 import { isSelectionAwareGqlQueryable } from '../../database/gateways-gql-queryable.js';
-import { GqlQueryable } from '../../types.js';
+import { GqlQueryable, GqlWarning } from '../../types.js';
 
 interface MetadataResolver {
   resolve(id: string): Promise<unknown | undefined>;
@@ -28,11 +28,12 @@ function fetchTransaction(
   db: GqlQueryable,
   id: string,
   nodeSelection: SelectionSetNode | undefined,
+  warnings: GqlWarning[],
 ) {
   if (isSelectionAwareGqlQueryable(db)) {
-    return db.getGqlTransaction({ id, nodeSelection });
+    return db.getGqlTransaction({ id, nodeSelection, warnings });
   }
-  return db.getGqlTransaction({ id });
+  return db.getGqlTransaction({ id, warnings });
 }
 
 export async function resolveTransactionQuery(
@@ -45,6 +46,7 @@ export async function resolveTransactionQuery(
     onDemandSemaphore,
     log,
     nodeSelection,
+    warnings,
   }: {
     db: GqlQueryable;
     txMetadataResolver?: MetadataResolver;
@@ -53,6 +55,13 @@ export async function resolveTransactionQuery(
     onDemandSemaphore: SemaphoreLike;
     log: LoggerLike;
     nodeSelection?: SelectionSetNode;
+    /**
+     * Accumulator for partial-result warnings surfaced by the DB layer.
+     * Caller-owned; this function pushes onto it rather than returning
+     * warnings in the result, because a null lookup is itself the
+     * failure mode we want to flag.
+     */
+    warnings: GqlWarning[];
   },
 ): Promise<unknown | null> {
   log.info('GraphQL transaction query', {
@@ -60,7 +69,12 @@ export async function resolveTransactionQuery(
     queryParams,
   });
 
-  const result = await fetchTransaction(db, queryParams.id, nodeSelection);
+  const result = await fetchTransaction(
+    db,
+    queryParams.id,
+    nodeSelection,
+    warnings,
+  );
   if (result != null) {
     return result;
   }
@@ -91,7 +105,7 @@ export async function resolveTransactionQuery(
       return null;
     }
 
-    return fetchTransaction(db, queryParams.id, nodeSelection);
+    return fetchTransaction(db, queryParams.id, nodeSelection, warnings);
   } catch (error: any) {
     log.warn('GraphQL on-demand resolution failed', {
       id: queryParams.id,

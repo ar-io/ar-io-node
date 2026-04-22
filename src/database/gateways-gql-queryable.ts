@@ -19,6 +19,7 @@ import {
   GqlTransaction,
   GqlTransactionEdge,
   GqlTransactionsResult,
+  GqlWarning,
 } from '../types.js';
 import {
   decodeBlockGqlCursor,
@@ -63,6 +64,7 @@ export interface SelectionAwareGqlQueryable {
   getGqlTransaction(args: {
     id: string;
     nodeSelection?: SelectionSetNode;
+    warnings?: GqlWarning[];
   }): Promise<GqlTransaction | null>;
 
   getGqlTransactions(
@@ -270,7 +272,7 @@ class RemoteGqlQueryable implements GqlQueryable {
   private async fetch<T>(
     query: string,
     variables: Record<string, unknown>,
-  ): Promise<T> {
+  ): Promise<{ data: T; warnings: GqlWarning[] }> {
     const response = await this.axiosInstance.post(`${this.url}/graphql`, {
       query,
       variables,
@@ -284,28 +286,48 @@ class RemoteGqlQueryable implements GqlQueryable {
     if (!body?.data) {
       throw new Error(`Missing data in GraphQL response from ${this.url}`);
     }
-    return body.data as T;
+    const upstreamWarnings = body.extensions?.warnings;
+    const warnings: GqlWarning[] = Array.isArray(upstreamWarnings)
+      ? upstreamWarnings
+          .filter(
+            (w: unknown): w is { code: unknown; message: unknown } =>
+              typeof w === 'object' && w !== null,
+          )
+          .map((w) => ({
+            code: typeof w.code === 'string' ? w.code : 'UNKNOWN',
+            message: typeof w.message === 'string' ? w.message : '',
+            source: this.url,
+          }))
+      : [];
+    return { data: body.data as T, warnings };
   }
 
   private async post<T>(
     query: string,
     variables: Record<string, unknown>,
-  ): Promise<T> {
-    return (await this.breaker.fire(query, variables)) as T;
+  ): Promise<{ data: T; warnings: GqlWarning[] }> {
+    return (await this.breaker.fire(query, variables)) as {
+      data: T;
+      warnings: GqlWarning[];
+    };
   }
 
   async getGqlTransaction({
     id,
     nodeSelection,
+    warnings,
   }: {
     id: string;
     nodeSelection?: SelectionSetNode;
+    warnings?: GqlWarning[];
   }): Promise<GqlTransaction | null> {
     const nodeFields = resolveNodeFields(nodeSelection);
-    const data = await this.post<{ transaction: RemoteTxNode | null }>(
-      buildTransactionQuery(nodeFields),
-      { id },
-    );
+    const { data, warnings: upstreamWarnings } = await this.post<{
+      transaction: RemoteTxNode | null;
+    }>(buildTransactionQuery(nodeFields), { id });
+    if (warnings !== undefined && upstreamWarnings.length > 0) {
+      warnings.push(...upstreamWarnings);
+    }
     if (data.transaction == null) return null;
     // Single-record queries don't come with a cursor; decode from null.
     return mapRemoteTransaction(data.transaction, undefined);
@@ -345,7 +367,7 @@ class RemoteGqlQueryable implements GqlQueryable {
     };
 
     const nodeFields = resolveNodeFields(args.nodeSelection);
-    const data = await this.post<{
+    const { data, warnings } = await this.post<{
       transactions: {
         pageInfo: { hasNextPage: boolean };
         edges: { cursor: string; node: RemoteTxNode }[];
@@ -358,11 +380,12 @@ class RemoteGqlQueryable implements GqlQueryable {
         cursor: edge.cursor,
         node: mapRemoteTransaction(edge.node, edge.cursor),
       })),
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 
   async getGqlBlock({ id }: { id: string }): Promise<GqlBlock | undefined> {
-    const data = await this.post<{ block: GqlBlock | null }>(BLOCK_QUERY, {
+    const { data } = await this.post<{ block: GqlBlock | null }>(BLOCK_QUERY, {
       id,
     });
     return data.block ?? undefined;
@@ -389,7 +412,7 @@ class RemoteGqlQueryable implements GqlQueryable {
       sort: args.sortOrder ?? 'HEIGHT_DESC',
     };
 
-    const data = await this.post<{
+    const { data, warnings } = await this.post<{
       blocks: {
         pageInfo: { hasNextPage: boolean };
         edges: { cursor: string; node: GqlBlock }[];
@@ -399,6 +422,7 @@ class RemoteGqlQueryable implements GqlQueryable {
     return {
       pageInfo: { hasNextPage: data.blocks.pageInfo.hasNextPage },
       edges: data.blocks.edges,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 }
@@ -710,11 +734,17 @@ export class GatewaysGqlQueryable
 
   async getGqlTransaction({
     id,
+    warnings,
   }: {
     id: string;
+    warnings?: GqlWarning[];
   }): Promise<GqlTransaction | null> {
+    // Shared sink so every source writes into the same array; the race
+    // resolves on first non-null but losing sources may keep running and
+    // write warnings after the resolver has already copied the sink into
+    // the Apollo context, so any late writes are harmless.
     const promises = this.sources.map((source) =>
-      source.getGqlTransaction({ id }),
+      source.getGqlTransaction({ id, warnings }),
     );
 
     return (
@@ -736,14 +766,25 @@ export class GatewaysGqlQueryable
     const results = await Promise.allSettled(
       this.sources.map((source) => source.getGqlTransactions(args)),
     );
-    this.handleSourceFailures(results, 'getGqlTransactions', args);
+    const failureWarnings = this.handleSourceFailures(
+      results,
+      'getGqlTransactions',
+      args,
+    );
 
     const streams: GqlTransactionEdge[][] = [];
+    const warnings: GqlWarning[] = [...failureWarnings];
     let anyUpstreamHasMore = false;
-    for (const r of results) {
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
       if (r.status === 'fulfilled') {
         streams.push(r.value.edges);
         if (r.value.pageInfo.hasNextPage) anyUpstreamHasMore = true;
+        if (r.value.warnings !== undefined && r.value.warnings.length > 0) {
+          for (const w of r.value.warnings) {
+            warnings.push({ ...w, source: w.source ?? this.sourceLabels[i] });
+          }
+        }
       }
     }
 
@@ -757,6 +798,7 @@ export class GatewaysGqlQueryable
     return {
       pageInfo: { hasNextPage: anyUpstreamHasMore || hasUnconsumed },
       edges,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 
@@ -765,16 +807,27 @@ export class GatewaysGqlQueryable
     const results = await Promise.allSettled(
       this.sources.map((source) => source.getGqlBlocks(args)),
     );
-    this.handleSourceFailures(results, 'getGqlBlocks', args);
+    const failureWarnings = this.handleSourceFailures(
+      results,
+      'getGqlBlocks',
+      args,
+    );
 
     const streams: { cursor: string; node: GqlBlock }[][] = [];
+    const warnings: GqlWarning[] = [...failureWarnings];
     let anyUpstreamHasMore = false;
-    for (const r of results) {
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
       if (r.status === 'fulfilled') {
         streams.push(
           r.value.edges.map((e) => ({ cursor: e.cursor, node: e.node })),
         );
         if (r.value.pageInfo.hasNextPage) anyUpstreamHasMore = true;
+        if (r.value.warnings !== undefined && r.value.warnings.length > 0) {
+          for (const w of r.value.warnings) {
+            warnings.push({ ...w, source: w.source ?? this.sourceLabels[i] });
+          }
+        }
       }
     }
 
@@ -788,6 +841,7 @@ export class GatewaysGqlQueryable
     return {
       pageInfo: { hasNextPage: anyUpstreamHasMore || hasUnconsumed },
       edges,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 
@@ -848,7 +902,7 @@ export class GatewaysGqlQueryable
     results: PromiseSettledResult<unknown>[],
     method: string,
     args: unknown,
-  ): void {
+  ): GqlWarning[] {
     const failures = results
       .map((r, i) => ({ r, label: this.sourceLabels[i] }))
       .filter((x) => x.r.status === 'rejected') as {
@@ -856,7 +910,7 @@ export class GatewaysGqlQueryable
       label: string;
     }[];
 
-    if (failures.length === 0) return;
+    if (failures.length === 0) return [];
 
     for (const f of failures) {
       const level = f.r.reason?.code === 'EOPENBREAKER' ? 'debug' : 'warn';
@@ -873,6 +927,18 @@ export class GatewaysGqlQueryable
         `All ${results.length} GatewaysGqlQueryable source(s) failed for ${method}: ${failures[0].r.reason?.message ?? failures[0].r.reason}`,
       );
     }
+
+    // Partial fan-out failure: surface each failed source as a warning so
+    // the caller knows the merge is missing contributions, instead of
+    // silently returning reduced results.
+    return failures.map((f) => ({
+      code:
+        f.r.reason?.code === 'EOPENBREAKER'
+          ? 'UPSTREAM_CIRCUIT_OPEN'
+          : 'UPSTREAM_UNAVAILABLE',
+      message: f.r.reason?.message ?? String(f.r.reason),
+      source: f.label,
+    }));
   }
 }
 

@@ -542,6 +542,7 @@ const breakerSourceNames = [
   // Keep this list alphabetized
   'ar-io-data-source',
   'ar-io-peer-manager',
+  'composite-sqlite-gql',
   'get-data-attributes',
   'get-data-item-attributes',
   'get-data-parent',
