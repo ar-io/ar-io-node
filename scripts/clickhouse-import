@@ -353,30 +353,25 @@ import_partition_files() {
   local import_start=$(date +%s%N)
   local success=true
 
-  # Import blocks
-  for parquet_file in "$partition_base_dir"/blocks/data/"$partition_name"/*.parquet; do
-    if [[ -f "$parquet_file" ]]; then
-      if ! import_parquet_file "$parquet_file" "staging_blocks"; then
-        success=false
+  local table staging_table parquet_file matched_count glob_dir
+  for table in blocks transactions tags; do
+    staging_table="staging_${table}"
+    glob_dir="$partition_base_dir/$table/data/$partition_name"
+    matched_count=0
+    for parquet_file in "$glob_dir"/*.parquet; do
+      if [[ -f "$parquet_file" ]]; then
+        matched_count=$((matched_count + 1))
+        if ! import_parquet_file "$parquet_file" "$staging_table"; then
+          success=false
+        fi
       fi
-    fi
-  done
-
-  # Import transactions
-  for parquet_file in "$partition_base_dir"/transactions/data/"$partition_name"/*.parquet; do
-    if [[ -f "$parquet_file" ]]; then
-      if ! import_parquet_file "$parquet_file" "staging_transactions"; then
-        success=false
-      fi
-    fi
-  done
-
-  # Import tags
-  for parquet_file in "$partition_base_dir"/tags/data/"$partition_name"/*.parquet; do
-    if [[ -f "$parquet_file" ]]; then
-      if ! import_parquet_file "$parquet_file" "staging_tags"; then
-        success=false
-      fi
+    done
+    # blocks and transactions are required for the migrate step to produce
+    # meaningful data; tags may legitimately be empty for a partition.
+    if [[ $matched_count -eq 0 && "$table" != "tags" ]]; then
+      echo "    Error: No $table Parquet file found for partition $partition_name" >&2
+      echo "    Expected: $glob_dir/*.parquet" >&2
+      success=false
     fi
   done
 
