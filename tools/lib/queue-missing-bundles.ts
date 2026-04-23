@@ -396,10 +396,17 @@ async function checkExistence(
   // The SELECT alias must not be `id` — ClickHouse would resolve `id` in the
   // WHERE clause against the alias (an encoded string) instead of the column
   // (the raw BLOB), making the IN comparison silently fail.
+  //
+  // `optimize_use_projections = 0` forces this id lookup to run against the
+  // main table so `id_bloom` can prune granules. owner_projection wins the
+  // planner's size-only cost estimate and would otherwise force a full
+  // projection scan (projections can't carry skip indexes).
   const idList = dataItemIds
     .map((id) => `base64URLDecode('${id}')`)
     .join(',');
-  const sql = `SELECT base64URLEncode(id) AS encoded_id FROM ${database}.transactions WHERE id IN (${idList})`;
+  const sql =
+    `SELECT base64URLEncode(id) AS encoded_id FROM ${database}.transactions ` +
+    `WHERE id IN (${idList}) SETTINGS optimize_use_projections = 0`;
 
   const result = await client.query({ query: sql, format: 'JSONEachRow' });
   const rows = (await result.json()) as Array<{ encoded_id: string }>;
