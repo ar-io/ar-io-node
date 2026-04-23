@@ -45,6 +45,9 @@ interface Config {
   progressInterval: number;
   bypassFilter: boolean;
   dryRun: boolean;
+  checkpointPath: string | null; // null = default (<input>.progress.json)
+  noCheckpoint: boolean;
+  restart: boolean;
 }
 
 interface Stats {
@@ -85,13 +88,21 @@ Behavior:
                              (default: 10000)
   --concurrency <n>          Parallel POSTs to /ar-io/admin/queue-bundle
                              (default: 4)
-  --progress-interval <n>    Rows between progress log lines (default: 100000)
+  --progress-interval <n>    Rows between progress log lines (default: 100000).
+                             Also the cadence for checkpoint writes.
   --no-bypass-filter         Post with bypassFilter=false (bundle must match
                              ANS104_UNBUNDLE_FILTER to be queued)
   --skip-header              Force-skip first CSV row
   --no-skip-header           Force-keep first CSV row
                              (default: auto-detect header)
   --dry-run                  Check ClickHouse but don't POST to the service
+
+Resume / checkpointing (per-input-file):
+  --checkpoint-path <path>   Override the checkpoint file location
+                             (default: <input>.progress.json alongside input)
+  --no-checkpoint            Disable checkpoint read/write entirely
+  --restart                  Ignore any existing checkpoint and start over
+                             (the stale checkpoint is overwritten on first save)
   -h, --help                 Show this help
 
 Examples:
@@ -137,6 +148,9 @@ function parseArgs(argv: string[]): Config {
     progressInterval: 100000,
     bypassFilter: true,
     dryRun: false,
+    checkpointPath: null,
+    noCheckpoint: false,
+    restart: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -196,6 +210,15 @@ function parseArgs(argv: string[]): Config {
         break;
       case '--dry-run':
         config.dryRun = true;
+        break;
+      case '--checkpoint-path':
+        config.checkpointPath = next();
+        break;
+      case '--no-checkpoint':
+        config.noCheckpoint = true;
+        break;
+      case '--restart':
+        config.restart = true;
         break;
       case '-h':
       case '--help':
@@ -434,9 +457,13 @@ async function processBatch(
   }
 }
 
-function formatStats(stats: Stats, elapsedMs: number): string {
+function formatStats(
+  stats: Stats,
+  elapsedMs: number,
+  baseRowsRead = 0,
+): string {
   const secs = Math.max(elapsedMs / 1000, 0.001);
-  const rate = (stats.rowsRead / secs).toFixed(1);
+  const rate = ((stats.rowsRead - baseRowsRead) / secs).toFixed(1);
   return (
     `rows=${stats.rowsRead} (${rate}/s) ` +
     `checked=${stats.dataItemsChecked} ` +
@@ -448,7 +475,55 @@ function formatStats(stats: Stats, elapsedMs: number): string {
   );
 }
 
+interface Checkpoint {
+  inputPath: string;
+  fileSize: number;
+  fileMtimeMs: number;
+  recordsConsumed: number; // includes header row if present
+  stats: Stats;
+  savedAt: string;
+}
+
+/**
+ * Resolve the checkpoint sidecar path for this run, or null if checkpointing
+ * is disabled (stdin input or --no-checkpoint). Defaults to
+ * <input>.progress.json so each input file gets independent resume state.
+ */
+function resolveCheckpointPath(config: Config): string | null {
+  if (config.noCheckpoint) return null;
+  if (config.inputPath === '-') return null;
+  if (config.checkpointPath !== null) return config.checkpointPath;
+  return `${path.resolve(config.inputPath)}.progress.json`;
+}
+
+function loadCheckpoint(checkpointPath: string): Checkpoint | null {
+  if (!fs.existsSync(checkpointPath)) return null;
+  const raw = fs.readFileSync(checkpointPath, 'utf8');
+  try {
+    return JSON.parse(raw) as Checkpoint;
+  } catch (err: any) {
+    throw new Error(
+      `Checkpoint ${checkpointPath} is corrupt (${err.message ?? err}). ` +
+        `Remove it or pass --restart to start fresh.`,
+    );
+  }
+}
+
+function saveCheckpoint(checkpointPath: string, ckpt: Checkpoint): void {
+  // Write-then-rename so a crash mid-write can't leave a half-file that we'd
+  // later refuse to parse.
+  const tmp = `${checkpointPath}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(ckpt, null, 2));
+  fs.renameSync(tmp, checkpointPath);
+}
+
+function deleteCheckpoint(checkpointPath: string): void {
+  if (fs.existsSync(checkpointPath)) fs.unlinkSync(checkpointPath);
+}
+
 async function run(config: Config): Promise<void> {
+  const checkpointPath = resolveCheckpointPath(config);
+
   console.log('=== Queue Missing Bundles ===');
   console.log(`Input:            ${config.inputPath}`);
   console.log(`Core URL:         ${config.coreUrl}`);
@@ -459,6 +534,7 @@ async function run(config: Config): Promise<void> {
   console.log(`Concurrency:      ${config.concurrency}`);
   console.log(`Bypass filter:    ${config.bypassFilter}`);
   console.log(`Dry run:          ${config.dryRun}`);
+  console.log(`Checkpoint:       ${checkpointPath ?? '(disabled)'}`);
   console.log('');
 
   if (config.inputPath !== '-' && !fs.existsSync(config.inputPath)) {
@@ -484,6 +560,33 @@ async function run(config: Config): Promise<void> {
     bundlesSkippedByService: 0,
     bundleQueueRetries: 0,
   };
+
+  // Resume state: how many parser records to discard before we start doing
+  // work. Counts the header row too, so on resume we always skip past it.
+  let resumeSkip = 0;
+  if (checkpointPath !== null && !config.restart) {
+    const existing = loadCheckpoint(checkpointPath);
+    if (existing !== null) {
+      const st = fs.statSync(config.inputPath);
+      if (
+        existing.fileSize !== st.size ||
+        existing.fileMtimeMs !== st.mtimeMs
+      ) {
+        throw new Error(
+          `Checkpoint at ${checkpointPath} was saved against a different ` +
+            `version of ${config.inputPath} (size or mtime changed). ` +
+            `Remove it or pass --restart to discard it.`,
+        );
+      }
+      resumeSkip = existing.recordsConsumed;
+      Object.assign(stats, existing.stats);
+      console.log(
+        `Resuming: skipping ${resumeSkip} CSV records already processed ` +
+          `(saved ${existing.savedAt}).`,
+      );
+      console.log('');
+    }
+  }
 
   let postError: Error | null = null;
   const bundleQueue = createBundleQueue({
@@ -515,14 +618,62 @@ async function run(config: Config): Promise<void> {
     }),
   );
 
-  let headerHandled = false;
+  // Graceful shutdown: on SIGINT/SIGTERM finish the current record, flush, and
+  // persist a checkpoint so the run can resume exactly where it left off.
+  let shutdownRequested = false;
+  const onSignal = (sig: NodeJS.Signals) => {
+    if (!shutdownRequested) {
+      console.log(`\nReceived ${sig}, flushing and saving checkpoint...`);
+      shutdownRequested = true;
+    }
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+
+  // On resume we've already consumed the header row (if there was one), so
+  // don't run header auto-detection against the first post-skip record.
+  let headerHandled = resumeSkip > 0;
   let batch: CsvRow[] = [];
+  let recordsConsumed = 0;
   const startedAt = Date.now();
-  let lastProgressRow = 0;
+  const baseRowsRead = stats.rowsRead;
+  let lastProgressRow = stats.rowsRead;
+
+  const persistCheckpoint = async (): Promise<void> => {
+    if (checkpointPath === null) return;
+    // Flush any buffered batch and drain in-flight POSTs first so the saved
+    // recordsConsumed reflects work that's truly done, not work still pending.
+    if (batch.length > 0) {
+      await processBatch(
+        batch,
+        client,
+        config.clickhouseDatabase,
+        bundleQueue,
+        queuedBundles,
+        stats,
+      );
+      batch = [];
+    }
+    await bundleQueue.drain();
+    if (postError !== null) throw postError;
+    const st = fs.statSync(config.inputPath);
+    saveCheckpoint(checkpointPath, {
+      inputPath: path.resolve(config.inputPath),
+      fileSize: st.size,
+      fileMtimeMs: st.mtimeMs,
+      recordsConsumed,
+      stats: { ...stats },
+      savedAt: new Date().toISOString(),
+    });
+  };
 
   try {
     for await (const record of parser as AsyncIterable<string[]>) {
+      recordsConsumed++;
+      if (recordsConsumed <= resumeSkip) continue;
+
       if (postError !== null) throw postError;
+      if (shutdownRequested) break;
 
       if (!headerHandled) {
         headerHandled = true;
@@ -563,7 +714,10 @@ async function run(config: Config): Promise<void> {
 
       if (stats.rowsRead - lastProgressRow >= config.progressInterval) {
         lastProgressRow = stats.rowsRead;
-        console.log(`  ${formatStats(stats, Date.now() - startedAt)}`);
+        await persistCheckpoint();
+        console.log(
+          `  ${formatStats(stats, Date.now() - startedAt, baseRowsRead)}`,
+        );
       }
     }
 
@@ -576,11 +730,37 @@ async function run(config: Config): Promise<void> {
         queuedBundles,
         stats,
       );
+      batch = [];
     }
 
     await bundleQueue.drain();
     if (postError !== null) throw postError;
+
+    if (shutdownRequested) {
+      await persistCheckpoint();
+      throw new Error(
+        'Shutdown requested before end of input — progress saved, re-run to resume.',
+      );
+    }
+
+    // Completed cleanly: drop the checkpoint so the next run starts fresh.
+    if (checkpointPath !== null) {
+      deleteCheckpoint(checkpointPath);
+    }
+  } catch (err) {
+    // Best-effort: preserve progress for operator-driven resume. Swallow any
+    // checkpoint write error so the original failure surfaces.
+    if (checkpointPath !== null) {
+      try {
+        await persistCheckpoint();
+      } catch {
+        // ignore
+      }
+    }
+    throw err;
   } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
     await client.close();
   }
 
@@ -635,5 +815,9 @@ export {
   looksLikeHeader,
   createBundleQueue,
   processBatch,
+  resolveCheckpointPath,
+  loadCheckpoint,
+  saveCheckpoint,
+  deleteCheckpoint,
 };
-export type { Config, Stats, CsvRow };
+export type { Config, Stats, CsvRow, Checkpoint };
