@@ -236,10 +236,6 @@ function looksLikeHeader(row: string[]): boolean {
   return !isValidId(row[0]) || !isValidId(row[1]);
 }
 
-function b64UrlToHex(id: string): string {
-  return Buffer.from(id, 'base64url').toString('hex');
-}
-
 interface BundleQueue {
   enqueue(bundleId: string): Promise<void>;
   drain(): Promise<void>;
@@ -369,21 +365,25 @@ async function checkExistence(
 ): Promise<Set<string>> {
   if (dataItemIds.length === 0) return new Set();
 
-  // ClickHouse stores tx/data-item ids as raw 32-byte BLOBs, so convert the
-  // base64url text ids to hex and round-trip via unhex(). Using hex() on the
-  // projection avoids shipping binary blobs over HTTP JSON.
-  const hexList = dataItemIds.map((id) => `unhex('${b64UrlToHex(id)}')`);
-  const sql = `SELECT hex(id) AS id FROM ${database}.transactions WHERE id IN (${hexList.join(',')})`;
+  // ClickHouse stores tx/data-item ids as raw 32-byte BLOBs. Decode the
+  // base64url text ids server-side and project base64URLEncode(id) back out so
+  // we can compare strings without shipping binary blobs over HTTP JSON.
+  // (IDs are pre-validated as [A-Za-z0-9_-]{43}, so interpolation is safe.)
+  //
+  // The SELECT alias must not be `id` — ClickHouse would resolve `id` in the
+  // WHERE clause against the alias (an encoded string) instead of the column
+  // (the raw BLOB), making the IN comparison silently fail.
+  const idList = dataItemIds
+    .map((id) => `base64URLDecode('${id}')`)
+    .join(',');
+  const sql = `SELECT base64URLEncode(id) AS encoded_id FROM ${database}.transactions WHERE id IN (${idList})`;
 
   const result = await client.query({ query: sql, format: 'JSONEachRow' });
-  const rows = (await result.json()) as Array<{ id: string }>;
+  const rows = (await result.json()) as Array<{ encoded_id: string }>;
 
   const existing = new Set<string>();
   for (const row of rows) {
-    // ClickHouse returns hex uppercase; normalize to match our b64url round-trip.
-    existing.add(
-      Buffer.from(row.id, 'hex').toString('base64url'),
-    );
+    existing.add(row.encoded_id);
   }
   return existing;
 }
@@ -633,7 +633,6 @@ export {
   parseArgs,
   isValidId,
   looksLikeHeader,
-  b64UrlToHex,
   createBundleQueue,
   processBatch,
 };
