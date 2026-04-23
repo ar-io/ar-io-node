@@ -74,6 +74,18 @@ Five coordinated edits are required:
   files stay current. Down migrations go in `migrations/down/` with the same
   filename.
 
+### Auto-verify source adapters
+
+Schema changes to SQLite `stable_*` tables, the Parquet export, or the
+ClickHouse `transactions` table must be reflected in the corresponding
+adapter under `src/tests/auto-verify/sources/` and in the canonical types
+in `src/tests/auto-verify/types.ts`. The adapters project each source into
+a shared canonical shape for comparison, so a silent divergence shows up
+as `field_mismatch` / `missing_in_source` discrepancies rather than a
+build error. Also re-check the staging/final table list in
+`gateway-control.ts`'s `cleanClickHouseTables` when tables are added or
+removed. See `docs/auto-verify.md`.
+
 ### Upload dry-run
 
 For testing uploads without broadcasting to Arweave, see
