@@ -23,12 +23,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${PROJECT_ROOT}"
 
-# Load .env so CORE_PORT / ADMIN_API_KEY / CLICKHOUSE_* are picked up as defaults.
+# Let Node parse .env directly so values with JSON/array contents don't have to
+# be shell-safe (bash `source` chokes on unquoted `FOO={"a": 1, "b": 2}`).
+env_file_args=()
 if [ -f .env ]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
+  env_file_args=(--env-file=.env)
 fi
 
-exec node --import ./register.js tools/lib/queue-missing-bundles.ts "$@"
+exec node "${env_file_args[@]}" --import ./register.js tools/lib/queue-missing-bundles.ts "$@"
