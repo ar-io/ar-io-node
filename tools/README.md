@@ -224,9 +224,10 @@ Compares the local AR.IO node GraphQL endpoint against `arweave.net` for
 Drive-Id and owner-address queries, runs pagination consistency checks in both
 directions, and performs database-level integrity checks against the local
 ClickHouse instance. Generates HTML and JSON reports under
-`test-results/runs/<timestamp>/`. Defaults for the core port and ClickHouse
-credentials are read from `.env`. See
-[CLICKHOUSE_TESTING.md](./CLICKHOUSE_TESTING.md) for the full guide.
+`test-results/runs/<timestamp>/` (with a `latest` symlink). Defaults for the
+core port and ClickHouse credentials are read from `.env`; a JSON config file
+can be supplied via `--config` — see `tools/example-test-config.json` for the
+shape.
 
 **Usage:**
 ```bash
@@ -243,6 +244,28 @@ credentials are read from `.env`. See
 
 Run `./tools/test-clickhouse-graphql --help` for the full flag list. Open
 `test-results/latest/report.html` after a run for the interactive summary.
+
+**Interpreting results:**
+- **Duplicates** — same transaction ID appears more than once in a result set.
+- **Missing** — transaction exists in one source but not the other.
+- **Discrepancies** — same transaction has different field values between
+  sources. Severity is `critical` for core fields (id, owner, amount),
+  `minor` for non-essential differences, and `informational` for expected
+  differences (e.g. owner keys that the gateway may omit for data items).
+- **Pagination** — order violations mean results aren't sorted consistently by
+  height; cross-page duplicates mean the same transaction appears on multiple
+  pages.
+
+**Troubleshooting:**
+- **No Drive-Ids discovered** — the ClickHouse `transactions` table may not be
+  populated yet (data items are unbundled asynchronously), or lower
+  `discovery.minTransactionCount` in the config to see smaller drives.
+- **Slow queries / timeouts** — lower `pageSize` and/or `maxPagesPerTest` in
+  config, reduce `--top`, or set `--max-transactions` to cap per-entity
+  fetching.
+- **Schema note** — the tool reads directly from the ClickHouse `transactions`
+  table; there is no separate `owner_transactions` table, so owner aggregation
+  is done with `FROM transactions GROUP BY owner_address`.
 
 ## Release tools
 

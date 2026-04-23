@@ -79,6 +79,12 @@ Technical details about Arweave data structures.
 |----------|-------------|
 | [Auto-Verify](auto-verify.md) | Cross-source indexing verification (SQLite / Parquet / bundle-parser / ClickHouse) |
 
+## Developer Tools
+
+| Document | Description |
+|----------|-------------|
+| [Tools README](../tools/README.md) | CLI tools for development, debugging, and testing (fetch-with-hint, queue-missing-bundles, test-clickhouse-graphql, release/worktree tooling, etc.) |
+
 ## Processes
 
 | Document | Description |
