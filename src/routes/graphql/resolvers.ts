@@ -175,7 +175,7 @@ export async function resolveTxSignature(tx: GqlTransaction) {
         signatureOffset: parseInt(tx.signatureOffset),
       });
 
-      return signature;
+      return signature ?? NOT_FOUND;
     } else {
       return NOT_FOUND;
     }
