@@ -73,6 +73,12 @@ Technical details about Arweave data structures.
 | [002 - ArNS Cache Timing](madr/002-arns-cache-timing.md) | ArNS resolution caching strategy |
 | [003 - ArNS Undername Limits](madr/003-arns-undername-limits.md) | Undername resolution limits |
 
+## Testing
+
+| Document | Description |
+|----------|-------------|
+| [Auto-Verify](auto-verify.md) | Cross-source indexing verification (SQLite / Parquet / bundle-parser / ClickHouse) |
+
 ## Processes
 
 | Document | Description |
