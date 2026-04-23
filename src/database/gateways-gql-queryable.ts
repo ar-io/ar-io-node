@@ -485,7 +485,7 @@ function mapRemoteTransaction(
     contentType: node.data?.type ?? null,
     blockIndepHash: node.block?.id ?? null,
     blockTimestamp: node.block?.timestamp ?? null,
-    height: node.block?.height ?? decoded.height ?? null,
+    height: node.block?.height ?? null,
     blockPreviousBlock: node.block?.previous ?? null,
     parentId: node.bundledIn?.id ?? null,
     blockTransactionIndex: decoded.blockTransactionIndex ?? 0,

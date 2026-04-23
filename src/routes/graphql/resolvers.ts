@@ -265,8 +265,7 @@ export const resolvers: IResolvers = {
   },
   Transaction: {
     block: (parent: GqlTransaction) => {
-      // TODO remove ClickHouse height !== null hack once blocks are in ClickHouse
-      return parent.height !== null || parent.blockIndepHash !== null
+      return parent.blockIndepHash !== null
         ? {
             id: parent.blockIndepHash,
             timestamp: parent.blockTimestamp,
