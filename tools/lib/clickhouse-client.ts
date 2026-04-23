@@ -78,40 +78,7 @@ export class ClickHouseAnalysisClient {
       }));
     } catch (error) {
       console.error('Error querying Drive-Id counts:', error);
-      // Fallback: try a simpler query approach
-      return this.getDriveTransactionCountsFallback(minTransactionCount);
-    }
-  }
-
-  /**
-   * Fallback method for Drive-Id counts using a different approach
-   */
-  private async getDriveTransactionCountsFallback(minTransactionCount: number): Promise<DriveCount[]> {
-    // Simple fallback: just search for any transactions with Drive-Id in tag names
-    const driveIdTagHex = Buffer.from('Drive-Id').toString('hex');
-
-    const query = `
-      SELECT
-        'unknown' as drive_id_hex,
-        COUNT(*) as transaction_count
-      FROM transactions
-      WHERE arrayExists(x -> hex(x.1) = '${driveIdTagHex.toUpperCase()}', tags)
-      HAVING transaction_count >= ${minTransactionCount}
-    `;
-
-    console.log('🔄 Using fallback query for Drive-Id counts...');
-
-    try {
-      const result = await this.client.query({ query });
-      const data = (await result.json()) as ClickHouseJsonResult;
-
-      return data.data.map((row: any) => ({
-        driveId: 'unknown-drive-id',
-        transactionCount: parseInt(row.transaction_count, 10),
-      }));
-    } catch (error) {
-      console.warn('Fallback query also failed, returning empty Drive-Id results:', error);
-      return [];
+      throw error;
     }
   }
 
@@ -246,7 +213,9 @@ export class ClickHouseAnalysisClient {
     try {
       const result = await this.client.query({ query: 'SELECT 1 as test' });
       const data = (await result.json()) as ClickHouseJsonResult;
-      return data.data[0]?.test === 1;
+      // ClickHouse's JSON format stringifies numeric columns by default, so
+      // compare after coercion rather than with a strict `=== 1`.
+      return Number(data.data[0]?.test) === 1;
     } catch (error) {
       console.error('ClickHouse connection test failed:', error);
       return false;
@@ -455,59 +424,6 @@ export class ClickHouseAnalysisClient {
     }
   }
 
-  /**
-   * Verify if specific transaction IDs exist in ClickHouse
-   */
-  async verifyTransactionsExist(transactionIds: string[]): Promise<{
-    existing: string[];
-    missing: string[];
-  }> {
-    if (transactionIds.length === 0) {
-      return { existing: [], missing: [] };
-    }
-
-    try {
-      const hexIds = transactionIds.map(id => `'${id.replace(/^0x/, '').toUpperCase()}'`).join(', ');
-
-      const query = `
-        SELECT DISTINCT hex(id) as transaction_id
-        FROM transactions
-        WHERE hex(id) IN (${hexIds})
-      `;
-
-      const result = await this.client.query({ query });
-      const data = (await result.json()) as ClickHouseJsonResult;
-      const existing = data.data.map((row: any) => row.transaction_id);
-      const existingSet = new Set(existing);
-      const missing = transactionIds.filter(id => !existingSet.has(id.replace(/^0x/, '').toUpperCase()));
-
-      return { existing, missing };
-    } catch (error) {
-      console.error('Error verifying transaction existence:', error);
-      return { existing: [], missing: transactionIds };
-    }
-  }
-
-  /**
-   * Get sample transaction IDs for testing (random sample from database)
-   */
-  async getSampleTransactionIds(limit: number = 100): Promise<string[]> {
-    const query = `
-      SELECT hex(id) as transaction_id
-      FROM transactions
-      ORDER BY rand()
-      LIMIT ${limit}
-    `;
-
-    try {
-      const result = await this.client.query({ query });
-      const data = (await result.json()) as ClickHouseJsonResult;
-      return data.data.map((row: any) => row.transaction_id);
-    } catch (error) {
-      console.error('Error getting sample transaction IDs:', error);
-      return [];
-    }
-  }
 
   /**
    * Close the ClickHouse client connection

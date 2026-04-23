@@ -223,7 +223,7 @@ Run `./tools/queue-missing-bundles --help` for the full flag list.
 Compares the local AR.IO node GraphQL endpoint against `arweave.net` for
 Drive-Id and owner-address queries, runs pagination consistency checks in both
 directions, and performs database-level integrity checks against the local
-ClickHouse instance. Generates HTML, JSON, and CSV reports under
+ClickHouse instance. Generates HTML and JSON reports under
 `test-results/runs/<timestamp>/`. Defaults for the core port and ClickHouse
 credentials are read from `.env`. See
 [CLICKHOUSE_TESTING.md](./CLICKHOUSE_TESTING.md) for the full guide.

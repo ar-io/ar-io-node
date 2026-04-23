@@ -18,7 +18,7 @@ ClickHouse instance.
   and checks ordering and cross-page duplicates.
 - **Database integrity**: samples ClickHouse rows and verifies they round-trip
   through both GraphQL endpoints (and vice versa).
-- **Reporting**: writes HTML, JSON, and CSV reports under
+- **Reporting**: writes HTML and JSON reports under
   `test-results/runs/<timestamp>/` with a `latest` symlink.
 
 ## Prerequisites
@@ -185,4 +185,4 @@ Check `CORE_PORT`, and that the service is running.
 
 The tool reads directly from the ClickHouse `transactions` table. There is no
 separate `owner_transactions` table in the current schema — owner aggregation
-is done with `GROUP BY owner_address FROM transactions`.
+is done with `FROM transactions GROUP BY owner_address`.

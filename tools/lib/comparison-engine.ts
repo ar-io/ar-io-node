@@ -410,39 +410,62 @@ export class ComparisonEngine {
       severity: 'critical' | 'minor' | 'informational';
     }> = [];
 
-    // Create maps for efficient comparison
-    const localTagMap = new Map(localTags.map(tag => [tag.name, tag.value]));
-    const remoteTagMap = new Map(remoteTags.map(tag => [tag.name, tag.value]));
+    // ANS-104 allows repeated tag names, so we group all values per name and
+    // compare the sorted-values array. A plain Map<name, value> would silently
+    // drop duplicates and make two transactions compare equal when one side
+    // has a repeated tag and the other doesn't.
+    const toTagMap = (tags: Array<{ name: string; value: string }>): Map<string, string[]> => {
+      const tagMap = new Map<string, string[]>();
+      for (const tag of tags) {
+        const values = tagMap.get(tag.name) ?? [];
+        values.push(tag.value);
+        tagMap.set(tag.name, values);
+      }
+      for (const values of tagMap.values()) {
+        values.sort();
+      }
+      return tagMap;
+    };
 
-    // Check for missing tags
-    for (const [name, value] of localTagMap) {
-      if (!remoteTagMap.has(name)) {
+    const sameValues = (a: string[], b: string[]): boolean => {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    };
+
+    const localTagMap = toTagMap(localTags);
+    const remoteTagMap = toTagMap(remoteTags);
+
+    // Check for missing/differing tags by name
+    for (const [name, values] of localTagMap) {
+      const remoteValues = remoteTagMap.get(name);
+      if (remoteValues === undefined) {
         discrepancies.push({
           transactionId: id,
           field: `tags.${name}`,
-          localValue: value,
+          localValue: values,
           remoteValue: null,
           severity: 'minor',
         });
-      } else if (remoteTagMap.get(name) !== value) {
+      } else if (!sameValues(values, remoteValues)) {
         discrepancies.push({
           transactionId: id,
           field: `tags.${name}`,
-          localValue: value,
-          remoteValue: remoteTagMap.get(name),
+          localValue: values,
+          remoteValue: remoteValues,
           severity: 'minor',
         });
       }
     }
 
-    // Check for extra tags in remote
-    for (const [name, value] of remoteTagMap) {
+    // Extra tag names in remote
+    for (const [name, values] of remoteTagMap) {
       if (!localTagMap.has(name)) {
         discrepancies.push({
           transactionId: id,
           field: `tags.${name}`,
           localValue: null,
-          remoteValue: value,
+          remoteValue: values,
           severity: 'minor',
         });
       }

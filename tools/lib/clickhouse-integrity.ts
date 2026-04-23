@@ -7,6 +7,13 @@
 import type { GraphQLTransaction } from './graphql-client.js';
 import type { ClickHouseAnalysisClient } from './clickhouse-client.js';
 
+// ClickHouse stores transaction ids as raw BLOB and exposes them via `hex(id)`
+// (uppercase, 64 chars). GraphQL uses base64url (43 chars). Normalize to base64url
+// so set comparisons line up — base64url is case-sensitive, so we preserve case.
+function hexToBase64Url(hex: string): string {
+  return Buffer.from(hex, 'hex').toString('base64url');
+}
+
 interface DatabaseIntegrityResult {
   clickhouseDuplicates: Array<{
     transactionId: string;
@@ -168,9 +175,12 @@ export class ClickHouseIntegrityCheck {
   }> {
     console.log(`   🔍 Checking for missing transactions between GraphQL and ClickHouse...`);
 
-    const clickhouseSet = new Set(clickhouseTransactionIds.map(id => id.toLowerCase()));
-    const localSet = new Set(localTransactions.map(tx => tx.id.toLowerCase()));
-    const remoteSet = new Set(remoteTransactions.map(tx => tx.id.toLowerCase()));
+    // Normalize the ClickHouse hex ids to base64url so they compare cleanly
+    // against the GraphQL-side tx.id. Do NOT lowercase — base64url is
+    // case-sensitive and lowercasing would collapse distinct ids.
+    const clickhouseSet = new Set(clickhouseTransactionIds.map(hexToBase64Url));
+    const localSet = new Set(localTransactions.map(tx => tx.id));
+    const remoteSet = new Set(remoteTransactions.map(tx => tx.id));
 
     const graphqlToClickhouseMissing: Array<{
       transactionId: string;
@@ -187,8 +197,8 @@ export class ClickHouseIntegrityCheck {
 
     // Find transactions in GraphQL but missing from ClickHouse
     for (const tx of localTransactions) {
-      if (!clickhouseSet.has(tx.id.toLowerCase())) {
-        const inRemote = remoteSet.has(tx.id.toLowerCase());
+      if (!clickhouseSet.has(tx.id)) {
+        const inRemote = remoteSet.has(tx.id);
         graphqlToClickhouseMissing.push({
           transactionId: tx.id,
           source: inRemote ? 'both' : 'local',
@@ -200,7 +210,7 @@ export class ClickHouseIntegrityCheck {
 
     // Add remote-only transactions missing from ClickHouse
     for (const tx of remoteTransactions) {
-      if (!clickhouseSet.has(tx.id.toLowerCase()) && !localSet.has(tx.id.toLowerCase())) {
+      if (!clickhouseSet.has(tx.id) && !localSet.has(tx.id)) {
         graphqlToClickhouseMissing.push({
           transactionId: tx.id,
           source: 'remote',
@@ -210,27 +220,29 @@ export class ClickHouseIntegrityCheck {
       }
     }
 
-    // Find transactions in ClickHouse but missing from GraphQL (sample to avoid performance issues)
+    // Find transactions in ClickHouse but missing from GraphQL (sample to avoid performance issues).
+    // Compare in base64url space — the ClickHouse ids are hex.
     const sampledClickhouseIds = this.sampleTransactionIds(clickhouseTransactionIds);
-    for (const txId of sampledClickhouseIds) {
-      const inLocal = localSet.has(txId.toLowerCase());
-      const inRemote = remoteSet.has(txId.toLowerCase());
+    for (const hexId of sampledClickhouseIds) {
+      const b64Id = hexToBase64Url(hexId);
+      const inLocal = localSet.has(b64Id);
+      const inRemote = remoteSet.has(b64Id);
 
       if (!inLocal && !inRemote) {
         clickhouseToGraphqlMissing.push({
-          transactionId: txId,
+          transactionId: b64Id,
           target: 'both',
           severity: 'critical',
         });
       } else if (!inLocal) {
         clickhouseToGraphqlMissing.push({
-          transactionId: txId,
+          transactionId: b64Id,
           target: 'local',
           severity: 'warning',
         });
       } else if (!inRemote && this.options.checkRemoteGraphql) {
         clickhouseToGraphqlMissing.push({
-          transactionId: txId,
+          transactionId: b64Id,
           target: 'remote',
           severity: 'warning',
         });
