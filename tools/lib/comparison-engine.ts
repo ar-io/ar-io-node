@@ -109,7 +109,11 @@ export class ComparisonEngine {
     const intersection = new Set([...localIds].filter(id => remoteIds.has(id)));
 
     result.summary.totalMatched = intersection.size;
-    result.summary.duplicateCount = result.duplicates.length;
+    // Count unique duplicated ids: findDuplicatesInSet emits a 'local' and
+    // 'remote' entry for the same id, and findCrossSourcDuplicates adds a
+    // 'both' entry on top when the id appears on both sides. result.duplicates
+    // keeps all three for reporting; the summary should reflect ids.
+    result.summary.duplicateCount = new Set(result.duplicates.map(d => d.transactionId)).size;
     result.summary.missingCount = result.missing.length;
     result.summary.discrepancyCount = result.discrepancies.length;
 
