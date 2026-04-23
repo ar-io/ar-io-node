@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   tag_values Array(BLOB) MATERIALIZED arrayMap(x -> x.2, tags),
   INDEX id_bloom (id) TYPE bloom_filter(0.01) GRANULARITY 1,
   INDEX target_bloom (target) TYPE bloom_filter(0.01) GRANULARITY 1,
+  INDEX owner_address_bloom (owner_address) TYPE bloom_filter(0.01) GRANULARITY 1,
   INDEX tag_names_bloom tag_names TYPE bloom_filter(0.01) GRANULARITY 4,
   INDEX tag_values_bloom tag_values TYPE bloom_filter(0.01) GRANULARITY 4,
   -- tag_names/tag_values are MATERIALIZED, so SELECT * excludes them. They
@@ -123,6 +124,11 @@ SETTINGS deduplicate_merge_projection_mode = 'rebuild';
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS expires_at Nullable(DateTime);
 ALTER TABLE transactions MODIFY TTL ifNull(expires_at, toDateTime(0)) DELETE WHERE expires_at IS NOT NULL;
 
+-- Idempotent add for the owner_address bloom skip index. New inserts get the
+-- index for free, but existing parts need a one-time MATERIALIZE INDEX to
+-- populate it (see manual migration block below). Safe to re-run.
+ALTER TABLE transactions ADD INDEX IF NOT EXISTS owner_address_bloom (owner_address) TYPE bloom_filter(0.01) GRANULARITY 1;
+
 -- One-time manual migration for nodes whose owner_projection was created with
 -- the old `SELECT *` body (which excluded tag_names/tag_values, preventing
 -- the optimizer from using the projection for tag-filtered queries). Not
@@ -140,3 +146,15 @@ ALTER TABLE transactions MODIFY TTL ifNull(expires_at, toDateTime(0)) DELETE WHE
 -- Track progress via `SELECT * FROM system.mutations WHERE table='transactions'
 -- AND NOT is_done`. Fresh deployments get the correct body from the CREATE
 -- TABLE above and do not need this migration.
+
+-- One-time manual migration to populate the owner_address bloom skip index on
+-- existing parts. The ADD INDEX above registers the index so it's built for
+-- new inserts, but old parts remain unindexed until MATERIALIZE INDEX rewrites
+-- them. Not run automatically because MATERIALIZE INDEX rewrites every part
+-- and would re-trigger on each clickhouse-import cycle. Run once against an
+-- existing node:
+--
+--   ALTER TABLE transactions MATERIALIZE INDEX owner_address_bloom;
+--
+-- Track progress via `SELECT * FROM system.mutations WHERE table='transactions'
+-- AND NOT is_done`.
