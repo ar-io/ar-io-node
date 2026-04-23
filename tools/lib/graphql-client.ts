@@ -299,25 +299,28 @@ export class GraphQLClient {
     const { tags, owners, recipients, ids, pageSize, cursor, sortOrder, heightRange } = options;
 
     const filters: string[] = [];
+    // GraphQL strings need the same escaping rules as JSON strings for the
+    // subset of values we use, so JSON.stringify is a safe and minimal escaper.
+    const gqlString = (value: string): string => JSON.stringify(value);
 
     if (tags && tags.length > 0) {
       const tagsStr = tags.map(tag => `{
-        name: "${tag.name}"
-        values: [${tag.values.map(v => `"${v}"`).join(', ')}]
+        name: ${gqlString(tag.name)}
+        values: [${tag.values.map(gqlString).join(', ')}]
       }`).join(', ');
       filters.push(`tags: [${tagsStr}]`);
     }
 
     if (owners && owners.length > 0) {
-      filters.push(`owners: [${owners.map(o => `"${o}"`).join(', ')}]`);
+      filters.push(`owners: [${owners.map(gqlString).join(', ')}]`);
     }
 
     if (recipients && recipients.length > 0) {
-      filters.push(`recipients: [${recipients.map(r => `"${r}"`).join(', ')}]`);
+      filters.push(`recipients: [${recipients.map(gqlString).join(', ')}]`);
     }
 
     if (ids && ids.length > 0) {
-      filters.push(`ids: [${ids.map(id => `"${id}"`).join(', ')}]`);
+      filters.push(`ids: [${ids.map(gqlString).join(', ')}]`);
     }
 
     if (heightRange && (heightRange.minHeight !== undefined || heightRange.maxHeight !== undefined)) {
@@ -332,7 +335,7 @@ export class GraphQLClient {
     }
 
     const filtersStr = filters.length > 0 ? filters.join('\n    ') : '';
-    const afterClause = cursor ? `after: "${cursor}"` : '';
+    const afterClause = cursor ? `after: ${gqlString(cursor)}` : '';
 
     return `
       query {

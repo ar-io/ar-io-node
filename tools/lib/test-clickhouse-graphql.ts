@@ -756,6 +756,8 @@ class ClickHouseGraphQLTester {
     driveIds?: string[];
     ownerAddresses?: string[];
     autoDiscover?: boolean;
+    discoverDrives?: boolean;
+    discoverOwners?: boolean;
     topEntities?: number;
     verbose?: boolean;
   }): Promise<void> {
@@ -765,14 +767,25 @@ class ClickHouseGraphQLTester {
 
     let entitiesToTest: Array<{ type: 'drive' | 'owner'; id: string; transactionCount: number }> = [];
 
-    if (options.autoDiscover) {
+    const anyDiscovery = options.autoDiscover || options.discoverDrives || options.discoverOwners;
+    if (anyDiscovery) {
+      // --auto-discover implies both. --discover-drives / --discover-owners filter to one.
+      const includeDrives = options.autoDiscover || options.discoverDrives;
+      const includeOwners = options.autoDiscover || options.discoverOwners;
+
       const { drives, owners } = await this.discoverEntities();
       const topCount = options.topEntities || Math.min(this.config.discovery.topDrives, this.config.discovery.topOwners);
 
-      entitiesToTest = [
-        ...drives.slice(0, topCount).map(d => ({ type: 'drive' as const, id: d.driveId, transactionCount: d.transactionCount })),
-        ...owners.slice(0, topCount).map(o => ({ type: 'owner' as const, id: o.ownerAddress, transactionCount: o.transactionCount })),
-      ];
+      if (includeDrives) {
+        entitiesToTest.push(
+          ...drives.slice(0, topCount).map(d => ({ type: 'drive' as const, id: d.driveId, transactionCount: d.transactionCount })),
+        );
+      }
+      if (includeOwners) {
+        entitiesToTest.push(
+          ...owners.slice(0, topCount).map(o => ({ type: 'owner' as const, id: o.ownerAddress, transactionCount: o.transactionCount })),
+        );
+      }
     } else {
       // Manual testing mode
       if (options.driveIds) {
@@ -785,6 +798,12 @@ class ClickHouseGraphQLTester {
           entitiesToTest.push({ type: 'owner', id: ownerAddress, transactionCount: 0 });
         }
       }
+    }
+
+    if (entitiesToTest.length === 0) {
+      throw new Error(
+        'No entities selected. Pass --auto-discover, --discover-drives, --discover-owners, --drive-id, or --owner.',
+      );
     }
 
     const results: TestResult[] = [];
@@ -808,9 +827,10 @@ async function main() {
     driveIds?: string[];
     ownerAddresses?: string[];
     autoDiscover?: boolean;
+    discoverDrives?: boolean;
+    discoverOwners?: boolean;
     topEntities?: number;
     configFile?: string;
-    exportCsv?: string;
     verbose?: boolean;
   } = {};
 
@@ -843,12 +863,10 @@ async function main() {
         options.autoDiscover = true;
         break;
       case '--discover-drives':
-        options.autoDiscover = true;
-        // Could add logic to only discover drives
+        options.discoverDrives = true;
         break;
       case '--discover-owners':
-        options.autoDiscover = true;
-        // Could add logic to only discover owners
+        options.discoverOwners = true;
         break;
       case '--top':
         if (nextArg) {
@@ -889,12 +907,6 @@ async function main() {
       case '--remote-endpoint':
         if (nextArg) {
           config.endpoints.remote = nextArg;
-          i++;
-        }
-        break;
-      case '--export-csv':
-        if (nextArg) {
-          options.exportCsv = nextArg;
           i++;
         }
         break;
@@ -940,7 +952,6 @@ Options:
   --clickhouse-password <pwd>  ClickHouse password (overrides env var)
   --local-endpoint <url>       Local GraphQL endpoint (overrides env var)
   --remote-endpoint <url>      Remote GraphQL endpoint (overrides env var)
-  --export-csv <file>          Export results to CSV file
   --max-transactions <n>       Override max transactions per entity for complete comparison
   --allow-partial              Allow partial comparisons (include entities with many transactions)
   --complete-only              Only test entities where all transactions can be fetched (default)
@@ -974,8 +985,19 @@ Note: The script automatically loads configuration from .env file in the project
   if (options.configFile) {
     try {
       const configContent = await fs.readFile(options.configFile, 'utf-8');
-      const fileConfig = JSON.parse(configContent);
-      config = { ...config, ...fileConfig };
+      const fileConfig = JSON.parse(configContent) as Partial<TestConfig>;
+      // Deep-merge each known section so partial config files don't wipe out
+      // sibling defaults (e.g. testing: { pageSize: 50 } should keep the
+      // default maxPagesPerTest etc.).
+      config = {
+        ...config,
+        ...fileConfig,
+        clickhouse: { ...config.clickhouse, ...fileConfig.clickhouse },
+        endpoints: { ...config.endpoints, ...fileConfig.endpoints },
+        discovery: { ...config.discovery, ...fileConfig.discovery },
+        testing: { ...config.testing, ...fileConfig.testing },
+        databaseIntegrity: { ...config.databaseIntegrity, ...fileConfig.databaseIntegrity },
+      };
     } catch (error) {
       console.error(`Error loading config file: ${error}`);
       process.exit(1);
@@ -987,7 +1009,10 @@ Note: The script automatically loads configuration from .env file in the project
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch(console.error);
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }
 
 export { ClickHouseGraphQLTester, type TestConfig, type TestResult };
