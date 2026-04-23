@@ -1,278 +1,188 @@
 # ClickHouse GraphQL Testing Tool
 
-This tool systematically tests the ClickHouse GraphQL implementation by comparing results against arweave.net, with a focus on Drive-Id tags and owner addresses.
+`./tools/test-clickhouse-graphql` systematically compares the local AR.IO node
+GraphQL endpoint against `arweave.net`, with a focus on Drive-Id tags and owner
+addresses. It also runs database-level integrity checks against the local
+ClickHouse instance.
 
-## Features
+## What it does
 
-- **Transaction Count Discovery**: Queries ClickHouse directly to find high-volume drives and owners
-- **Comprehensive Comparison**: Compares transaction data between local ClickHouse and arweave.net
-- **Duplicate Detection**: Identifies duplicate transactions within and across result sets
-- **Missing Item Detection**: Finds transactions present in one source but not the other
-- **Pagination Testing**: Tests pagination consistency in both HEIGHT_ASC and HEIGHT_DESC directions
-- **Detailed Reporting**: Generates HTML, JSON, and CSV reports with comprehensive metrics
+- **Transaction count discovery**: queries ClickHouse directly to find high-volume
+  drives (by `Drive-Id` tag) and owners by transaction count.
+- **Cross-endpoint comparison**: issues the same GraphQL query against the local
+  endpoint and `arweave.net`, then diffs the result sets.
+- **Duplicate / missing / discrepancy detection**: identifies transactions that
+  appear more than once, transactions present in only one source, and field-level
+  mismatches.
+- **Pagination consistency**: walks pages in both `HEIGHT_ASC` and `HEIGHT_DESC`
+  and checks ordering and cross-page duplicates.
+- **Database integrity**: samples ClickHouse rows and verifies they round-trip
+  through both GraphQL endpoints (and vice versa).
+- **Reporting**: writes HTML, JSON, and CSV reports under
+  `test-results/runs/<timestamp>/` with a `latest` symlink.
 
 ## Prerequisites
 
-- Node.js with TypeScript support
-- ClickHouse instance running and accessible
-- Local AR.IO node with GraphQL endpoint
-- Internet access to query arweave.net
-
-## Installation
-
-The tool is included with the AR.IO node codebase. Ensure dependencies are installed:
-
-```bash
-yarn install
-```
-
-## Quick Start
-
-### Auto-Discovery Mode
-
-Discover and test the top entities by transaction count:
-
-```bash
-# Test top 10 drives and owners
-./tools/test-clickhouse-graphql --auto-discover --top 10
-
-# Test only drives
-./tools/test-clickhouse-graphql --discover-drives --top 5
-
-# Test only owners
-./tools/test-clickhouse-graphql --discover-owners --top 5
-```
-
-### Manual Testing
-
-Test specific entities:
-
-```bash
-# Test specific drive
-./tools/test-clickhouse-graphql --drive-id "your-drive-id-here"
-
-# Test specific owner
-./tools/test-clickhouse-graphql --owner "owner-address-here"
-
-# Test multiple entities
-./tools/test-clickhouse-graphql --drive-id "drive1" --drive-id "drive2" --owner "owner1"
-```
-
-### Custom Configuration
-
-Use a configuration file for repeated testing:
-
-```bash
-# Copy and modify the example config
-cp tools/example-test-config.json my-test-config.json
-
-# Run with custom config
-./tools/test-clickhouse-graphql --config my-test-config.json --auto-discover
-```
+- Local ar-io-node service running (GraphQL on `http://localhost:${CORE_PORT}/graphql`).
+- ClickHouse reachable (defaults read from `.env`).
+- Internet access for `arweave.net`.
 
 ## Configuration
 
-Configuration can be provided via command line arguments or a JSON file:
+The bash wrapper loads `.env` via `node --env-file`, so variables defined there
+are picked up automatically. Canonical names (matching `docker-compose.yaml` and
+the rest of the project):
 
-### JSON Configuration File
+| Variable | Default | Purpose |
+|---|---|---|
+| `CORE_PORT` | `4000` | Local ar-io-node port. Used to build `http://localhost:${CORE_PORT}/graphql`. |
+| `CLICKHOUSE_HOST` | `localhost` | ClickHouse host. |
+| `CLICKHOUSE_PORT_2` | `8123` | ClickHouse HTTP port. |
+| `CLICKHOUSE_USER` | `default` | ClickHouse user. |
+| `CLICKHOUSE_PASSWORD` | _(empty)_ | ClickHouse password. |
+
+CLI flags override env values. See `--help` for the full list.
+
+### Config file
+
+You can instead pass a JSON config with `--config`. See
+`tools/example-test-config.json` for the shape. All top-level keys are optional —
+anything you omit falls back to the env/CLI defaults:
 
 ```json
 {
-  "clickhouse": {
-    "url": "http://localhost:8123",
-    "user": "default",
-    "password": ""
-  },
+  "clickhouse": { "url": "http://localhost:8123", "user": "default", "password": "" },
   "endpoints": {
     "local": "http://localhost:4000/graphql",
     "remote": "https://arweave.net/graphql"
   },
-  "discovery": {
-    "topDrives": 20,
-    "topOwners": 20,
-    "minTransactionCount": 100
-  },
+  "discovery": { "topDrives": 10, "topOwners": 10, "minTransactionCount": 100 },
   "testing": {
     "pageSize": 100,
-    "maxPagesPerTest": 10,
-    "testBothDirections": true
+    "maxPagesPerTest": 100,
+    "testBothDirections": true,
+    "maxTransactionsPerEntity": 10000,
+    "allowPartialComparisons": false
+  },
+  "databaseIntegrity": {
+    "enabled": true,
+    "enableDuplicateCheck": true,
+    "enableMissingCheck": true,
+    "sampleSize": 1000,
+    "checkRemoteGraphql": true
   }
 }
 ```
 
-### Command Line Options
+## Usage
 
 ```bash
---config <file>              Use configuration file
---drive-id <id>              Test specific drive ID
---owner <address>            Test specific owner address
---auto-discover              Auto-discover entities by transaction count
---discover-drives            Discover and test drives
---discover-owners            Discover and test owners
---top <n>                    Number of top entities to test
---sample-size <n>            Alias for --top
---clickhouse-url <url>       ClickHouse URL (default: http://localhost:8123)
---clickhouse-user <user>     ClickHouse user (default: default)
---clickhouse-password <pwd>  ClickHouse password
---local-endpoint <url>       Local GraphQL endpoint (default: http://localhost:4000/graphql)
---remote-endpoint <url>      Remote GraphQL endpoint (default: https://arweave.net/graphql)
---export-csv <file>          Export results to CSV file
---help                       Show help message
+# Auto-discover and test top 10 drives + owners
+./tools/test-clickhouse-graphql --auto-discover --top 10
+
+# Target a specific drive
+./tools/test-clickhouse-graphql --drive-id <drive-id>
+
+# Target a specific owner
+./tools/test-clickhouse-graphql --owner <owner-address>
+
+# Multiple entities in one run
+./tools/test-clickhouse-graphql --drive-id drive1 --drive-id drive2 --owner owner1
+
+# Config-driven
+./tools/test-clickhouse-graphql --config tools/example-test-config.json --auto-discover
+
+# Allow partial comparisons for entities with many transactions
+./tools/test-clickhouse-graphql --auto-discover --allow-partial
+
+# Tighter maxTransactionsPerEntity for faster iteration
+./tools/test-clickhouse-graphql --auto-discover --max-transactions 5000
+
+# Verbose — logs every GraphQL query
+./tools/test-clickhouse-graphql --drive-id <drive-id> --verbose
 ```
 
-## Output Structure
+Run `./tools/test-clickhouse-graphql --help` for the full flag list.
 
-Results are saved in `test-results/runs/` with a timestamp-based directory structure:
+## Output
 
 ```
 test-results/
 ├── runs/
-│   └── 2025-01-22-10-30-45/          # Timestamp-based run directory
-│       ├── config.json                # Test configuration snapshot
+│   └── 2026-04-23-10-30-45/
+│       ├── config.json            # Snapshot of the config used
 │       ├── discovery/
-│       │   ├── drive-counts.json      # Drive-ID transaction counts
-│       │   ├── owner-counts.json      # Owner transaction counts
-│       │   └── summary.json           # Discovery phase summary
+│       │   ├── drive-counts.json
+│       │   ├── owner-counts.json
+│       │   └── summary.json
 │       ├── tests/
-│       │   ├── drives/
-│       │   │   ├── drive_<id>_test.json
-│       │   │   └── drive_<id>_details.jsonl
-│       │   └── owners/
-│       │       ├── owner_<addr>_test.json
-│       │       └── owner_<addr>_details.jsonl
+│       │   ├── drives/drive_<id>_test.json
+│       │   └── owners/owner_<addr>_test.json
 │       ├── comparisons/
-│       │   ├── duplicates.json        # All duplicates found
-│       │   ├── missing.json           # Missing transactions
-│       │   └── discrepancies.json     # Data mismatches
-│       ├── report.html                # Human-readable HTML report
-│       ├── report.json                # Machine-readable summary
-│       └── metrics.json               # Performance metrics
-└── latest -> runs/2025-01-22-10-30-45 # Symlink to latest run
+│       │   ├── duplicates.json
+│       │   ├── missing.json
+│       │   └── discrepancies.json
+│       ├── report.html            # Interactive summary
+│       ├── report.json            # Machine-readable summary
+│       └── metrics.json
+└── latest -> runs/2026-04-23-10-30-45
 ```
 
-## Report Analysis
+Open `test-results/latest/report.html` in a browser for the interactive view.
 
-### HTML Report
+## Interpreting results
 
-Open `test-results/latest/report.html` in a browser for an interactive view of:
-- Test summary and statistics
-- Performance metrics comparison
-- Detailed issue breakdown
-- Entity-by-entity results
+- **Duplicates**: same transaction ID appears more than once in a result set.
+- **Missing**: transaction exists in one source but not the other.
+- **Discrepancies**: same transaction has different field values between sources.
 
-### JSON Report
+Severity:
 
-Machine-readable summary in `test-results/latest/report.json` containing:
-- Complete test results
-- Issue categorization
-- Performance metrics
-- Entity metadata
+- **Critical**: core transaction data differs (id, owner, amount, etc.).
+- **Minor**: non-essential differences.
+- **Informational**: expected differences (e.g. owner keys, which the gateway
+  may omit for data items).
 
-### CSV Export
+Pagination issues:
 
-Export results to CSV for spreadsheet analysis:
-
-```bash
-./tools/test-clickhouse-graphql --export-csv results.csv
-```
-
-## Understanding Results
-
-### Issue Types
-
-- **Duplicates**: Same transaction ID appears multiple times
-- **Missing**: Transaction exists in one source but not the other
-- **Discrepancies**: Same transaction has different field values
-
-### Severity Levels
-
-- **Critical**: Core transaction data differs (ID, owner, amount, etc.)
-- **Minor**: Non-essential differences (timestamps, formatting)
-- **Informational**: Expected differences (owner keys, metadata)
-
-### Pagination Issues
-
-- **Inconsistent Ordering**: Results not properly sorted by height
-- **Missing Transactions**: Gaps in pagination sequences
-- **Duplicate Across Pages**: Same transaction appears on multiple pages
+- **Order violations**: results not sorted consistently by height.
+- **Cross-page duplicates**: same transaction on multiple pages.
 
 ## Troubleshooting
 
-### Connection Issues
-
-1. **ClickHouse Connection Failed**
-   - Verify ClickHouse is running: `curl http://localhost:8123/ping`
-   - Check credentials and URL in configuration
-
-2. **Local GraphQL Endpoint Failed**
-   - Verify AR.IO node is running with GraphQL enabled
-   - Check endpoint URL (typically `http://localhost:4000/graphql`)
-
-3. **Remote GraphQL Endpoint Failed**
-   - Check internet connectivity
-   - Verify arweave.net is accessible
-
-### Performance Issues
-
-1. **Slow Queries**
-   - Reduce `pageSize` in configuration
-   - Lower `maxPagesPerTest` to limit scope
-   - Test fewer entities at once
-
-2. **Timeout Errors**
-   - Increase query timeout in GraphQL client
-   - Check network latency to remote endpoint
-
-### Data Issues
-
-1. **No Drive-Ids Found**
-   - Verify ClickHouse has ArDrive data
-   - Check if Drive-Id tags are properly indexed
-   - Try lowering `minTransactionCount`
-
-2. **No Owners Found**
-   - Verify owner_transactions table is populated
-   - Check ClickHouse indexing status
-
-## Advanced Usage
-
-### Testing Specific Height Ranges
+### Can't reach ClickHouse
 
 ```bash
-# Test entities with transactions in specific height range
-./tools/test-clickhouse-graphql --auto-discover --min-height 1000000 --max-height 1100000
+curl http://localhost:8123/ping   # should return "Ok."
 ```
 
-### Custom Comparison Settings
+Check `CLICKHOUSE_HOST` / `CLICKHOUSE_PORT_2` in `.env`. The ClickHouse container
+binds `${CLICKHOUSE_PORT_2:-8123}` on the host.
 
-Create a configuration file with custom comparison rules:
-
-```json
-{
-  "comparison": {
-    "strictComparison": true,
-    "checkOwnerKeys": true,
-    "tolerateTimestampDifference": 0,
-    "ignoreFields": []
-  }
-}
-```
-
-### Continuous Monitoring
-
-Set up scheduled testing to monitor data consistency:
+### Can't reach local GraphQL
 
 ```bash
-# Run hourly with cron
-0 * * * * /path/to/ar-io-node/tools/test-clickhouse-graphql --auto-discover --top 5
+curl -X POST http://localhost:4000/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ transactions(first:1){ edges { node { id } } } }"}'
 ```
 
-## Contributing
+Check `CORE_PORT`, and that the service is running.
 
-When modifying the testing tool:
+### No Drive-Ids discovered
 
-1. Update type definitions in the main script
-2. Add comprehensive error handling
-3. Include progress logging for long operations
-4. Update documentation for new features
-5. Test with various ClickHouse and GraphQL configurations
+- The ClickHouse `transactions` table may not be populated yet (data items are
+  unbundled asynchronously).
+- Lower `minTransactionCount` in `discovery` if you want to see smaller drives.
+
+### Slow queries or timeouts
+
+- Lower `pageSize` and/or `maxPagesPerTest` in config.
+- Reduce `--top` or test fewer entities at once.
+- Set `--max-transactions` to cap per-entity transaction fetching.
+
+## Schema note
+
+The tool reads directly from the ClickHouse `transactions` table. There is no
+separate `owner_transactions` table in the current schema — owner aggregation
+is done with `GROUP BY owner_address FROM transactions`.

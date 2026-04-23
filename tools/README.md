@@ -219,6 +219,31 @@ cat data-items.csv | ./tools/queue-missing-bundles --input - \
 
 Run `./tools/queue-missing-bundles --help` for the full flag list.
 
+### `test-clickhouse-graphql`
+Compares the local AR.IO node GraphQL endpoint against `arweave.net` for
+Drive-Id and owner-address queries, runs pagination consistency checks in both
+directions, and performs database-level integrity checks against the local
+ClickHouse instance. Generates HTML, JSON, and CSV reports under
+`test-results/runs/<timestamp>/`. Defaults for the core port and ClickHouse
+credentials are read from `.env`. See
+[CLICKHOUSE_TESTING.md](./CLICKHOUSE_TESTING.md) for the full guide.
+
+**Usage:**
+```bash
+# Auto-discover top 10 drives and owners by transaction count and diff them
+./tools/test-clickhouse-graphql --auto-discover --top 10
+
+# Target a specific drive or owner
+./tools/test-clickhouse-graphql --drive-id <drive-id>
+./tools/test-clickhouse-graphql --owner <owner-address>
+
+# Config-driven run
+./tools/test-clickhouse-graphql --config tools/example-test-config.json --auto-discover
+```
+
+Run `./tools/test-clickhouse-graphql --help` for the full flag list. Open
+`test-results/latest/report.html` after a run for the interactive summary.
+
 ## Release tools
 
 Small, composable primitives used by the release workflow. Each tool does one
