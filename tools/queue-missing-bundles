@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Queue Missing Bundles
+#
+# Reads a CSV of (data_item_id, bundle_id, ...) rows, checks which data items
+# are missing from ClickHouse, and queues the associated bundles for indexing
+# on the ar-io-node core service. Streams the CSV so it handles very large
+# inputs, deduplicates bundle ids across the run, and waits on HTTP 429 when
+# the bundle importer queue is full.
+#
+# Usage: ./tools/queue-missing-bundles --input <csv> [options]
+# Run with --help for all options.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+# Load .env so CORE_PORT / ADMIN_API_KEY / CLICKHOUSE_* are picked up as defaults.
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
+exec node --import ./register.js tools/lib/queue-missing-bundles.ts "$@"
