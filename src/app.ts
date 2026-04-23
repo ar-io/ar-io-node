@@ -103,7 +103,11 @@ app.use(
 app.use(createRequestIdMiddleware());
 
 // Attach AbortSignal to all requests for client disconnect handling
-app.use(createAbortSignalMiddleware());
+app.use(
+  createAbortSignalMiddleware({
+    disableRequestAbortSignal: config.DISABLE_REQUEST_ABORT_SIGNAL,
+  }),
+);
 
 // HTTPSIG response signing — must be before cache-control so the writeHead
 // LIFO order ensures signing runs AFTER cache-control has set default headers.
