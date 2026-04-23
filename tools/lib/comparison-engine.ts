@@ -96,9 +96,11 @@ export class ComparisonEngine {
     // Find duplicates across both sets
     result.duplicates.push(...this.findCrossSourcDuplicates(localMap, remoteMap));
 
-    // Find missing transactions
-    result.missing.push(...this.findMissingTransactions(localMap, remoteMap, 'remote'));
-    result.missing.push(...this.findMissingTransactions(remoteMap, localMap, 'local'));
+    // Find missing transactions. The third argument is where the id IS present
+    // (the source side), not where it's missing — findMissingTransactions
+    // iterates the source map and reports ids absent from target.
+    result.missing.push(...this.findMissingTransactions(localMap, remoteMap, 'local'));
+    result.missing.push(...this.findMissingTransactions(remoteMap, localMap, 'remote'));
 
     // Find discrepancies in matching transactions
     result.discrepancies.push(...this.findDiscrepancies(localMap, remoteMap));

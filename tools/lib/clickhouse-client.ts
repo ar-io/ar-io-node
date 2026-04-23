@@ -6,6 +6,15 @@
  */
 import { ClickHouseClient, createClient } from '@clickhouse/client';
 
+import { hexToB64Url } from '../../src/lib/encoding.js';
+
+// Owner addresses are stored in ClickHouse as BLOBs (raw 32-byte SHA-256
+// hashes) and surfaced via `hex(owner_address)` as 64-char uppercase hex.
+// GraphQL represents the same address as 43-char base64url. Convert at method
+// boundaries so callers always see base64url.
+const b64UrlOwnerToUpperHex = (ownerAddress: string): string =>
+  Buffer.from(ownerAddress, 'base64url').toString('hex').toUpperCase();
+
 // Shape of the JSON response from ClickHouse for SELECT queries. Row fields are
 // query-dependent; call sites read them loosely rather than typing each query.
 interface ClickHouseJsonResult<TRow = any> {
@@ -106,7 +115,7 @@ export class ClickHouseAnalysisClient {
       const data = (await result.json()) as ClickHouseJsonResult;
 
       return data.data.map((row: any) => ({
-        ownerAddress: row.owner_address_hex,
+        ownerAddress: hexToB64Url(row.owner_address_hex),
         transactionCount: parseInt(row.transaction_count, 10),
       }));
     } catch (error) {
@@ -142,13 +151,14 @@ export class ClickHouseAnalysisClient {
   }
 
   /**
-   * Get transaction count for a specific owner address
+   * Get transaction count for a specific owner address (base64url).
    */
   async getOwnerTransactionCount(ownerAddress: string): Promise<number> {
+    const ownerHex = b64UrlOwnerToUpperHex(ownerAddress);
     const query = `
       SELECT COUNT(*) as transaction_count
       FROM transactions
-      WHERE hex(owner_address) = '${ownerAddress.replace(/^0x/, '').toUpperCase()}'
+      WHERE hex(owner_address) = '${ownerHex}'
     `;
 
     try {
@@ -158,51 +168,6 @@ export class ClickHouseAnalysisClient {
     } catch (error) {
       console.error(`Error getting transaction count for owner ${ownerAddress}:`, error);
       return 0;
-    }
-  }
-
-  /**
-   * Get all unique Drive-Ids in the database
-   */
-  async getAllDriveIds(): Promise<string[]> {
-    const driveIdTagHex = Buffer.from('Drive-Id').toString('hex');
-
-    const query = `
-      SELECT DISTINCT hex(arrayFirst(x -> x.1 = unhex('${driveIdTagHex}'), tags).2) as drive_id_hex
-      FROM transactions
-      WHERE has(tags, tuple(unhex('${driveIdTagHex}'), anyHeavy(arrayMap(x -> x.2, arrayFilter(y -> y.1 = unhex('${driveIdTagHex}'), tags)))))
-        AND drive_id_hex != ''
-      ORDER BY drive_id_hex
-    `;
-
-    try {
-      const result = await this.client.query({ query });
-      const data = (await result.json()) as ClickHouseJsonResult;
-      return data.data.map((row: any) => this.hexToString(row.drive_id_hex));
-    } catch (error) {
-      console.error('Error getting all Drive-Ids:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Get all unique owner addresses in the database
-   */
-  async getAllOwners(): Promise<string[]> {
-    const query = `
-      SELECT DISTINCT hex(owner_address) as owner_address_hex
-      FROM transactions
-      WHERE length(owner_address) > 0
-      ORDER BY owner_address_hex
-    `;
-
-    try {
-      const result = await this.client.query({ query });
-      const data = (await result.json()) as ClickHouseJsonResult;
-      return data.data.map((row: any) => row.owner_address_hex);
-    } catch (error) {
-      console.error('Error getting all owners:', error);
-      return [];
     }
   }
 
@@ -255,8 +220,6 @@ export class ClickHouseAnalysisClient {
     totalTransactions: number;
     totalDrives: number;
     totalOwners: number;
-    avgTransactionsPerDrive: number;
-    avgTransactionsPerOwner: number;
     heightRange: { minHeight: number; maxHeight: number };
   }> {
     try {
@@ -301,8 +264,6 @@ export class ClickHouseAnalysisClient {
         totalTransactions,
         totalDrives,
         totalOwners,
-        avgTransactionsPerDrive: totalDrives > 0 ? totalTransactions / totalDrives : 0,
-        avgTransactionsPerOwner: totalOwners > 0 ? totalTransactions / totalOwners : 0,
         heightRange,
       };
     } catch (error) {
@@ -311,8 +272,6 @@ export class ClickHouseAnalysisClient {
         totalTransactions: 0,
         totalDrives: 0,
         totalOwners: 0,
-        avgTransactionsPerDrive: 0,
-        avgTransactionsPerOwner: 0,
         heightRange: { minHeight: 0, maxHeight: 0 },
       };
     }
@@ -362,13 +321,14 @@ export class ClickHouseAnalysisClient {
   }
 
   /**
-   * Get transaction IDs for a specific owner address
+   * Get transaction IDs for a specific owner address (base64url).
    */
   async getOwnerTransactionIds(ownerAddress: string): Promise<string[]> {
+    const ownerHex = b64UrlOwnerToUpperHex(ownerAddress);
     const query = `
       SELECT DISTINCT hex(id) as transaction_id
       FROM transactions
-      WHERE hex(owner_address) = '${ownerAddress.replace(/^0x/, '').toUpperCase()}'
+      WHERE hex(owner_address) = '${ownerHex}'
       ORDER BY transaction_id
     `;
 

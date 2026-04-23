@@ -687,6 +687,23 @@ class ClickHouseGraphQLTester {
   }
 
   private generateHTMLReport(summary: any): string {
+    // Entity IDs (Drive-Id tag values, owner addresses) are attacker-controlled
+    // on-chain data. Escape everything interpolated as text so the report is
+    // safe to open in a browser.
+    const escapeHtml = (value: unknown): string =>
+      String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const dbIssues = summary.databaseIntegrityIssues;
+    const dbIssuesTotal =
+      (dbIssues?.clickhouseDuplicates ?? 0) +
+      (dbIssues?.graphqlToClickhouseMissing ?? 0) +
+      (dbIssues?.clickhouseToGraphqlMissing ?? 0);
+
     return `
 <!DOCTYPE html>
 <html>
@@ -707,22 +724,22 @@ class ClickHouseGraphQLTester {
     <h1>ClickHouse GraphQL Test Report</h1>
     <div class="summary">
         <h2>Summary</h2>
-        <p><strong>Timestamp:</strong> ${summary.timestamp}</p>
-        <p><strong>Entities Tested:</strong> ${summary.totalEntitiesTested}</p>
-        <p><strong>Transactions Compared:</strong> ${summary.totalTransactionsCompared}</p>
+        <p><strong>Timestamp:</strong> ${escapeHtml(summary.timestamp)}</p>
+        <p><strong>Entities Tested:</strong> ${escapeHtml(summary.totalEntitiesTested)}</p>
+        <p><strong>Transactions Compared:</strong> ${escapeHtml(summary.totalTransactionsCompared)}</p>
         <p><strong>GraphQL Issues Found:</strong> ${summary.issuesSummary.duplicates + summary.issuesSummary.missing + summary.issuesSummary.discrepancies}</p>
         <ul>
-            <li>Duplicates: ${summary.issuesSummary.duplicates}</li>
-            <li>Missing: ${summary.issuesSummary.missing}</li>
-            <li>Discrepancies: ${summary.issuesSummary.discrepancies}</li>
+            <li>Duplicates: ${escapeHtml(summary.issuesSummary.duplicates)}</li>
+            <li>Missing: ${escapeHtml(summary.issuesSummary.missing)}</li>
+            <li>Discrepancies: ${escapeHtml(summary.issuesSummary.discrepancies)}</li>
         </ul>
-        <p><strong>Database Integrity Issues:</strong> ${summary.databaseIntegrityIssues?.clickhouseDuplicates + summary.databaseIntegrityIssues?.graphqlToClickhouseMissing + summary.databaseIntegrityIssues?.clickhouseToGraphqlMissing || 0}</p>
+        <p><strong>Database Integrity Issues:</strong> ${dbIssuesTotal}</p>
         <ul>
-            <li>ClickHouse Duplicates: ${summary.databaseIntegrityIssues?.clickhouseDuplicates || 0}</li>
-            <li>GraphQL→ClickHouse Missing: ${summary.databaseIntegrityIssues?.graphqlToClickhouseMissing || 0}</li>
-            <li>ClickHouse→GraphQL Missing: ${summary.databaseIntegrityIssues?.clickhouseToGraphqlMissing || 0}</li>
-            <li>Critical Issues: ${summary.databaseIntegrityIssues?.totalCritical || 0}</li>
-            <li>Warning Issues: ${summary.databaseIntegrityIssues?.totalWarnings || 0}</li>
+            <li>ClickHouse Duplicates: ${escapeHtml(dbIssues?.clickhouseDuplicates ?? 0)}</li>
+            <li>GraphQL→ClickHouse Missing: ${escapeHtml(dbIssues?.graphqlToClickhouseMissing ?? 0)}</li>
+            <li>ClickHouse→GraphQL Missing: ${escapeHtml(dbIssues?.clickhouseToGraphqlMissing ?? 0)}</li>
+            <li>Critical Issues: ${escapeHtml(dbIssues?.totalCritical ?? 0)}</li>
+            <li>Warning Issues: ${escapeHtml(dbIssues?.totalWarnings ?? 0)}</li>
         </ul>
     </div>
 
@@ -738,9 +755,9 @@ class ClickHouseGraphQLTester {
         <tr><th>Entity Type</th><th>Entity ID</th><th>Transaction Count</th><th>Coverage</th><th>Complete</th><th>GraphQL Issues</th><th>DB Issues</th></tr>
         ${summary.results.map((result: TestResult) => `
             <tr>
-                <td>${result.entity.type}</td>
-                <td>${result.entity.id}</td>
-                <td>${result.entity.transactionCount}</td>
+                <td>${escapeHtml(result.entity.type)}</td>
+                <td>${escapeHtml(result.entity.id)}</td>
+                <td>${escapeHtml(result.entity.transactionCount)}</td>
                 <td>${result.completeness.localCoverage.toFixed(1)}% / ${result.completeness.remoteCoverage.toFixed(1)}%</td>
                 <td>${result.completeness.isComplete ? '✅' : '⚠️'}</td>
                 <td>${result.issues.duplicates.length + result.issues.missing.length + result.issues.discrepancies.length}</td>
