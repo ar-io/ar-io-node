@@ -472,7 +472,7 @@ while true; do
         if [ "$import_success" = true ]; then
             echo "Pruning stable data items from height $current_height to $end_height..."
             prune_start_time=$(date +%s)
-            curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
+            curl -s --fail --show-error -o /dev/null -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
                 -H "Authorization: Bearer $ADMIN_API_KEY" \
                 -H "Content-Type: application/json" \
                 -d "{

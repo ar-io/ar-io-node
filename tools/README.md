@@ -193,6 +193,32 @@ Converts Arweave storage partition files to height ranges for data analysis and 
 - Support migration and data management operations
 - Enable height-based analytics on partitioned data
 
+### `queue-missing-bundles`
+Streams a CSV of `(data_item_id, bundle_id, ...)` rows, identifies the data items missing from ClickHouse, and POSTs the associated bundles to `/ar-io/admin/queue-bundle` on a running core service. Deduplicates bundle IDs within the run, handles HTTP 429 backpressure from the bundle importer queue with exponential backoff, and streams the input so tens of millions of rows fit in bounded memory. The CSV header is optional and auto-detected; the first two columns (data item ID, bundle ID) are used and any remaining columns are ignored. Defaults for the core port, admin API key, and ClickHouse credentials are read from `.env`.
+
+Progress is checkpointed per input file to `<input>.progress.json` at each progress-log boundary (the buffered batch is flushed and the queue drained before writing, so the recorded offset reflects work that's actually complete). If the process is interrupted (SIGINT/SIGTERM, crash, or an unrecoverable POST error), the checkpoint is left in place; the next invocation on the same file resumes right after the last persisted record. The checkpoint records file size and mtime — if either has changed since the last run, the tool refuses to resume until you pass `--restart`. On successful completion the checkpoint is deleted. Stdin input is not resumable and skips checkpointing entirely.
+
+**Usage:**
+```bash
+# Defaults from .env: http://localhost:${CORE_PORT:-4000} and http://${CLICKHOUSE_HOST:-localhost}:${CLICKHOUSE_PORT_2:-8123}
+./tools/queue-missing-bundles --input data-items.csv
+
+# Dry run (check ClickHouse but don't POST)
+./tools/queue-missing-bundles --input data-items.csv --dry-run
+
+# Resume after an interrupted run picks up automatically — just re-run the
+# same command. To start over (and overwrite the existing checkpoint):
+./tools/queue-missing-bundles --input data-items.csv --restart
+
+# Read from stdin with custom endpoints / parallelism (stdin disables checkpointing)
+cat data-items.csv | ./tools/queue-missing-bundles --input - \
+  --core-url http://localhost:4000 \
+  --clickhouse-url http://localhost:8123 \
+  --batch-size 20000 --concurrency 8
+```
+
+Run `./tools/queue-missing-bundles --help` for the full flag list.
+
 ## Release tools
 
 Small, composable primitives used by the release workflow. Each tool does one

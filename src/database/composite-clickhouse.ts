@@ -461,11 +461,14 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     const dedupByPk =
       'LIMIT 1 BY height, block_transaction_index, is_data_item, id';
     // Per-query settings:
-    // - `optimize_use_projections = 0` for id lookups: the projection cost
-    //   estimator compares projection marks vs. main-table marks BEFORE
-    //   applying skip indexes, so owner_projection (no bloom on id) wins
-    //   over the main table and forces a full scan. Disabling it for id
-    //   lookups lets id_bloom narrow ~6000 granules to a handful.
+    // - `optimize_use_projections = 0` for id and tag lookups: projections
+    //   don't support inline skip indexes (ClickHouse grammar rejects INDEX
+    //   inside a PROJECTION body), so any skip-index pruning has to happen
+    //   against the main table. The projection cost estimator also compares
+    //   marks BEFORE applying skip indexes, so owner_projection wins on raw
+    //   size and forces a full scan. Disabling it lets id_bloom /
+    //   tag_names_bloom / tag_values_bloom do their job, with
+    //   owner_address_bloom pruning the owner dimension on the main table.
     // - `max_rows_to_read` as a hard guardrail: any GQL query that ends up
     //   scanning more than the configured threshold throws Code: 158
     //   instead of grinding through the whole table. Catches future
@@ -473,7 +476,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     const settings: string[] = [
       `max_rows_to_read = ${config.CLICKHOUSE_GQL_MAX_ROWS_TO_READ}`,
     ];
-    if (ids?.length > 0) {
+    if (ids?.length > 0 || tags.length > 0) {
       settings.push('optimize_use_projections = 0');
     }
     const settingsClause = ` SETTINGS ${settings.join(', ')}`;
