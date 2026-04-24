@@ -21,6 +21,7 @@ import {
   resolveTxQuantity,
   resolveTxRecipient,
   resolveTxSignature,
+  resolvers,
 } from './resolvers.js';
 import { GqlTransaction } from '../../types.js';
 
@@ -201,6 +202,51 @@ describe('topLevelFieldNames helper', () => {
       'transaction',
     );
     assert.deepEqual(topLevelFieldNames(info), ['id', 'anchor']);
+  });
+});
+
+describe('Transaction.block resolver', () => {
+  // The resolver is defined inline on the exported resolvers object; cast so
+  // we can call it directly with just the parent arg.
+  const blockResolver = (
+    resolvers.Transaction as { block: (p: GqlTransaction) => unknown }
+  ).block;
+
+  it('returns null for an unmined data item even when height is populated', () => {
+    // Scenario: header enqueued via admin API before its bundle/parent tx is
+    // on chain. No block row exists, so blockIndepHash/blockTimestamp/
+    // blockPreviousBlock are null. `height` may still be populated (from a
+    // cursor, a decoded header, or a ClickHouse row). Returning a partial
+    // Block here would violate the non-nullable schema on Block.timestamp.
+    const tx = {
+      ...GQL_TX,
+      blockIndepHash: null,
+      blockTimestamp: null,
+      height: 834713,
+      blockPreviousBlock: null,
+    };
+    assert.equal(blockResolver(tx as unknown as GqlTransaction), null);
+  });
+
+  it('returns a fully populated Block when the tx is mined', () => {
+    assert.deepEqual(blockResolver(GQL_TX as unknown as GqlTransaction), {
+      id: 'CT075juenGfi1wKif0Af-6Y9KJ2tR7kqPkeALB99eJUJnrWafqG8uq0kN4cpAN3I',
+      timestamp: 1639925391,
+      height: 834713,
+      previous:
+        '-WmnSux8p6DccMRwGh-jq3_wv_deZc0XsgpZnzt0WhPVpA5GmmBW14zhRMT3DbiT',
+    });
+  });
+
+  it('returns null when all block fields are null', () => {
+    const tx = {
+      ...GQL_TX,
+      blockIndepHash: null,
+      blockTimestamp: null,
+      height: null,
+      blockPreviousBlock: null,
+    };
+    assert.equal(blockResolver(tx as unknown as GqlTransaction), null);
   });
 });
 
