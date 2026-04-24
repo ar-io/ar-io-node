@@ -4,9 +4,66 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 77] - 2026-04-24
+
+This is a **recommended release** focused on **cross-gateway GraphQL
+fan-out**, **ClickHouse query-path hardening**, and **composite query
+resilience**. Key highlights include **`GatewaysGqlQueryable`**, a new
+adapter that fans GraphQL queries out to configured upstream
+ar-io-node gateways and merges the results — letting a node compose
+its local index with broader upstream coverage — and a **parallelized
+composite ClickHouse/SQLite GraphQL path** protected by a SQLite
+circuit breaker that surfaces `PARTIAL_RESULT` warnings via
+`extensions.warnings` instead of silent partials. ClickHouse gets
+several query-path improvements: **dropping `FINAL` in favor of
+`LIMIT 1 BY` dedupe** to re-enable projection planning, a new
+**`owner_address` bloom with projection skipping on tag filters**, a
+**`tag_names` / `tag_values` fix for `owner_projection`**, a
+**configurable query timeout** (default 3s), and a
+**`max_rows_to_read` guardrail** that fails noisy full-scans fast. It
+also adds **per-job status tracking** to the Parquet export admin API
+and bundles an **Observer update to `ddd3a9c`** with reference-gateway
+chunk-header offset validation and continuous-observer reliability
+hardening, alongside a set of **ClickHouse auto-import reliability
+fixes**.
 
 ### Added
+
+- **Fan-Out GraphQL Over Upstream Gateways (`GatewaysGqlQueryable`)**: A
+  new `GqlQueryable` adapter fans GraphQL queries out to configured
+  upstream ar-io-node gateways and merges the results, letting a node
+  act as a thin fan-out proxy or compose its local index with upstream
+  sources for broader coverage. Single-record queries use
+  first-non-null resolution; connection queries k-way merge by the
+  ar-io-node cursor tuple and dedupe by id. Per-endpoint circuit
+  breakers isolate slow or failing upstreams. Configured via
+  `GATEWAYS_GQL_URLS`; disabled by default.
+
+- **Configurable ClickHouse GraphQL Query Timeout**: The ClickHouse GQL
+  backend now applies a configurable timeout both server-side (as
+  `max_execution_time`, so ClickHouse aborts runaway queries and frees
+  resources) and client-side (as the HTTP `request_timeout`, with a 2s
+  grace window so the server-side timeout error surfaces before the
+  client aborts). Default 3s.
+
+- **`max_rows_to_read` Guardrail on ClickHouse GraphQL Queries**: Every
+  GraphQL query against the ClickHouse `transactions` table now appends
+  `SETTINGS max_rows_to_read = N`. Queries that would scan more than the
+  configured threshold throw `Code: 158: Limit for rows ... exceeded`
+  instead of silently scanning the whole table — catches
+  projection-shadowing bugs and planner regressions where a skip index
+  is bypassed. Default 10M rows (~20% of current table size); tunable
+  via `CLICKHOUSE_GQL_MAX_ROWS_TO_READ`.
+
+- **Per-Job Status Tracking for Parquet Export API**:
+  `POST /ar-io/admin/export-parquet` now returns a `jobId`, and the
+  exporter keeps a bounded per-job history (32 entries) so concurrent
+  callers can each poll their own record at
+  `GET /ar-io/admin/export-parquet/status/:jobId`. The legacy singleton
+  status endpoint is retained for back-compat and still reflects the
+  most-recent update. `scripts/parquet-export` prefers the per-job
+  endpoint when a `jobId` is returned and falls back to the
+  singleton-with-drift-detection path for older gateways.
 
 ### Changed
 
@@ -55,6 +112,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   because Arweave transaction data is immutable: all versions of a given
   primary key are byte-identical by construction.
 
+- **Composite ClickHouse GraphQL Parallelized With SQLite Circuit
+  Breaker**: The `CompositeClickHouseDatabase` now runs its ClickHouse
+  and SQLite legs concurrently instead of serially, and wraps the
+  SQLite leg in an opossum circuit breaker. ClickHouse errors
+  (timeout, `max_rows_to_read`) still propagate to the caller, while
+  SQLite failures degrade the response to ClickHouse-only results with
+  a `PARTIAL_RESULT` warning attached via GraphQL `extensions.warnings`
+  — ending silent partials for tip-of-chain rows and for the
+  single-record `transaction(id)` lookup, which previously returned a
+  bare `null` when SQLite was unavailable. The ClickHouse max-height
+  boundary-optimization cache is now read non-blocking from the request
+  path, with a background refresh keeping it warm. Fan-out preserves
+  warnings end-to-end: `RemoteGqlQueryable` pulls upstream
+  `extensions.warnings` off each response, `GatewaysGqlQueryable`
+  merges them across sources, and synthesizes `UPSTREAM_UNAVAILABLE` /
+  `UPSTREAM_CIRCUIT_OPEN` warnings for partially-failed aggregates that
+  were previously logged-and-dropped. New env vars under
+  `CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_*` (defaults: timeout 5000ms,
+  error threshold 80%, reset timeout 60000ms, rolling window 30000ms).
+
+- **ClickHouse `owner_address` Bloom + Skip Projection on Tag Filters**:
+  ClickHouse projections cannot carry inline skip indexes, so
+  owner+tag GraphQL queries that routed through `owner_projection`
+  scanned every granule within the owner range. An `owner_address`
+  bloom filter is now defined on the main `transactions` table, and
+  the per-query `optimize_use_projections = 0` guard is extended to
+  tag filters. Owner-only queries still benefit from
+  `owner_projection`'s sort order; owner+tag queries now fall back to
+  the main table where `id_bloom` / `tag_names_bloom` /
+  `tag_values_bloom` / `owner_address_bloom` can prune granules across
+  all three dimensions. Existing deployments get the index registered
+  via an idempotent `ALTER TABLE ... ADD INDEX IF NOT EXISTS` on the
+  next `clickhouse-import` cycle; a manual
+  `MATERIALIZE INDEX owner_address_bloom` is required to populate the
+  index on existing parts.
+
+- **Parquet Export Defaults to Include L1 Transactions and Tags**:
+  `ParquetExporter.export()` defaults now align with the
+  `scripts/parquet-export` CLI wrapper and the auto-verify harness,
+  both of which already included L1 by default. Callers that want
+  L2-only output must now pass `skipL1Transactions` /
+  `skipL1Tags` explicitly.
+
 ### Fixed
 
 - **ClickHouse `owner_projection` now usable for tag-filtered owner queries**:
@@ -69,6 +169,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   PROJECTION`) — see the inline comment in
   `src/database/clickhouse/schema.sql`. Fresh deployments get the corrected
   projection from the `CREATE TABLE` body with no operator action required.
+
+- **GraphQL `Block.timestamp` Non-Nullable Field Error**: Addresses a
+  "Cannot return null for non-nullable field Block.timestamp" error
+  that could surface when resolving blocks with incomplete data.
+
+- **GraphQL Data Item Signature Fetch Falls Back to `NOT_FOUND`**: The
+  data-item path in `resolveTxSignature` returned the fetcher result
+  directly, so an `undefined` from
+  `SignatureFetcher.getDataItemSignature` (e.g., missing attributes or
+  a stream failure reading from the parent bundle) would trigger a
+  "Cannot return null for non-nullable field" error on the `String!`
+  signature field. The data-item path now mirrors the transaction
+  path and falls back to `NOT_FOUND`.
+
+- **`clickhouse-auto-import` Honors `SQLITE_DATA_PATH`**: The
+  `clickhouse-auto-import` container had its SQLite bind mount
+  hardcoded to `./data/sqlite`, while `core` used
+  `${SQLITE_DATA_PATH:-./data/sqlite}`. When `SQLITE_DATA_PATH` was
+  set, the two containers diverged: the daemon's `batch_has_data`
+  pre-check resolved to a missing path and silently failed open, so
+  empty height ranges were still sent through the full export/import
+  pipeline. The mount is now consistent with core.
+
+- **Fail-Fast on ClickHouse GraphQL Rejection**: Awaiting
+  `Promise.allSettled` gated ClickHouse errors on the SQLite leg's
+  breaker timeout. The composite flow now awaits ClickHouse first and
+  rethrows immediately, absorbing SQLite rejections eagerly so bailing
+  out early does not emit an unhandled rejection.
+
+- **Reject Concurrent Parquet Exports + Skip Empty ETL Ranges**: The
+  auto-import loop previously wasted cycles (and logged spurious
+  "Input directory does not exist" / "Parquet file too short" errors)
+  on batches that either collided with a still-running export or
+  spanned empty height ranges. The admin endpoint now returns `409`
+  instead of swallowing the rejection, the exporter script surfaces a
+  clear error when the singleton status is stale, and batches with no
+  source rows short-circuit via a `sqlite3` pre-check.
+
+- **Hive-Layout ClickHouse Importer Requires `blocks` and
+  `transactions` Files**: The Hive-layout importer iterated a
+  per-table glob; when no files matched, bash left the literal pattern
+  string in the loop variable and the `-f` check silently
+  short-circuited, so the partition reported success even though zero
+  required files were imported — combined with export races that
+  produced empty staging dirs, this was silently dropping data. The
+  `matched_count` validation from the flat-dir path is now ported so
+  `blocks` and `transactions` each must contribute at least one file;
+  `tags` may still be empty.
+
+- **GraphQL Boundary Skips `minHeight` on SQLite "New" Tables**: The
+  ClickHouse/SQLite GraphQL boundary raises `minHeight` to route
+  historical queries away from SQLite. Applied to `new_transactions` /
+  `new_data_items`, the resulting `height >= :minHeight` silently
+  dropped pending rows whose height is `NULL`. Because the "new"
+  tables only hold unstable/recent data that ClickHouse never covers,
+  the predicate is now skipped entirely for those sources.
 
 ## [Release 76] - 2026-04-17
 
