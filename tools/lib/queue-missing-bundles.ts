@@ -40,6 +40,7 @@ interface Config {
   clickhousePassword: string;
   clickhouseDatabase: string;
   batchSize: number;
+  batchPauseMs: number;
   concurrency: number;
   skipHeader: boolean | null; // null = auto-detect
   progressInterval: number;
@@ -85,7 +86,9 @@ Connection options (defaults pulled from .env when set):
 
 Behavior:
   --batch-size <n>           Data item IDs per ClickHouse existence query
-                             (default: 10000)
+                             (default: 1000)
+  --batch-pause-ms <n>       Milliseconds to sleep between batches
+                             (default: 500; set to 0 to disable)
   --concurrency <n>          Parallel POSTs to /ar-io/admin/queue-bundle
                              (default: 4)
   --progress-interval <n>    Rows between progress log lines (default: 100000).
@@ -142,7 +145,8 @@ function parseArgs(argv: string[]): Config {
     clickhouseUser: env.CLICKHOUSE_USER ?? 'default',
     clickhousePassword: env.CLICKHOUSE_PASSWORD ?? '',
     clickhouseDatabase: env.CLICKHOUSE_DATABASE ?? 'default',
-    batchSize: 10000,
+    batchSize: 1000,
+    batchPauseMs: 500,
     concurrency: 4,
     skipHeader: null,
     progressInterval: 100000,
@@ -186,6 +190,9 @@ function parseArgs(argv: string[]): Config {
         break;
       case '--batch-size':
         config.batchSize = parsePositiveInt(next(), '--batch-size');
+        break;
+      case '--batch-pause-ms':
+        config.batchPauseMs = parseNonNegativeInt(next(), '--batch-pause-ms');
         break;
       case '--concurrency':
         config.concurrency = parsePositiveInt(next(), '--concurrency');
@@ -245,6 +252,14 @@ function parsePositiveInt(value: string, name: string): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n <= 0) {
     throw new Error(`${name} must be a positive integer, got: ${value}`);
+  }
+  return n;
+}
+
+function parseNonNegativeInt(value: string, name: string): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(`${name} must be a non-negative integer, got: ${value}`);
   }
   return n;
 }
@@ -538,6 +553,7 @@ async function run(config: Config): Promise<void> {
   console.log(`ClickHouse user:  ${config.clickhouseUser}`);
   console.log(`ClickHouse db:    ${config.clickhouseDatabase}`);
   console.log(`Batch size:       ${config.batchSize}`);
+  console.log(`Batch pause (ms): ${config.batchPauseMs}`);
   console.log(`Concurrency:      ${config.concurrency}`);
   console.log(`Bypass filter:    ${config.bypassFilter}`);
   console.log(`Dry run:          ${config.dryRun}`);
@@ -717,6 +733,9 @@ async function run(config: Config): Promise<void> {
           stats,
         );
         batch = [];
+        if (config.batchPauseMs > 0) {
+          await sleep(config.batchPauseMs);
+        }
       }
 
       if (stats.rowsRead - lastProgressRow >= config.progressInterval) {

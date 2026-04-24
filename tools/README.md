@@ -214,7 +214,7 @@ Progress is checkpointed per input file to `<input>.progress.json` at each progr
 cat data-items.csv | ./tools/queue-missing-bundles --input - \
   --core-url http://localhost:4000 \
   --clickhouse-url http://localhost:8123 \
-  --batch-size 20000 --concurrency 8
+  --batch-size 5000 --batch-pause-ms 0 --concurrency 8
 ```
 
 Run `./tools/queue-missing-bundles --help` for the full flag list.
