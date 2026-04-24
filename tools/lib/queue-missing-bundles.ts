@@ -91,7 +91,7 @@ Behavior:
                              (default: 500; set to 0 to disable)
   --concurrency <n>          Parallel POSTs to /ar-io/admin/queue-bundle
                              (default: 4)
-  --progress-interval <n>    Rows between progress log lines (default: 100000).
+  --progress-interval <n>    Rows between progress log lines (default: 1000).
                              Also the cadence for checkpoint writes.
   --no-bypass-filter         Post with bypassFilter=false (bundle must match
                              ANS104_UNBUNDLE_FILTER to be queued)
@@ -149,7 +149,7 @@ function parseArgs(argv: string[]): Config {
     batchPauseMs: 500,
     concurrency: 4,
     skipHeader: null,
-    progressInterval: 100000,
+    progressInterval: 1000,
     bypassFilter: true,
     dryRun: false,
     checkpointPath: null,
