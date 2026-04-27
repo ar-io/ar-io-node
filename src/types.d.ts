@@ -1037,10 +1037,17 @@ export interface ContiguousDataSource {
   }): Promise<ContiguousData>;
 }
 
+export type ManifestResolutionType = 'path' | 'index' | 'fallback';
+
 export interface ManifestResolution {
   id: string;
   resolvedId: string | undefined;
   complete: boolean;
+  // How the resolvedId was matched within the manifest. Used to drive
+  // Cache-Control decisions: 'path' and 'index' bindings are immutable for
+  // a given manifest tx, but 'fallback' bindings can be invalidated when a
+  // future manifest revision adds the missing path. See PE-9072.
+  resolutionType?: ManifestResolutionType;
 }
 
 export interface ManifestPathResolver {

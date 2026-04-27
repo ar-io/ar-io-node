@@ -248,7 +248,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
 
   pipeline.on('end', () => {
     if (fallbackId !== undefined) {
-      emitter.emit('fallback', { id: fallbackId });
+      emitter.emit('fallback', { id: fallbackId, type: 'fallback' });
     }
 
     emitter.emit('end', {
@@ -310,6 +310,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       ) {
         emitter.emit('index', {
           id: paths[indexProps.path],
+          type: 'index',
         });
       }
       paths = {};
@@ -325,6 +326,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       indexProps.id = data;
       emitter.emit('index', {
         id: data,
+        type: 'index',
       });
       paths = {};
     }
@@ -348,11 +350,11 @@ export function parseManifestStream(stream: Readable): EventEmitter {
     ) {
       pathCount++;
       const p = keyPath[1];
-      emitter.emit('path', { path: p, id: data });
+      emitter.emit('path', { path: p, id: data, type: 'path' });
       if (indexProps.path === undefined && indexProps.id === undefined) {
         paths[p] = data; // Maintain map of paths for use later
       } else if (p === indexProps.path) {
-        emitter.emit('index', { path: p, id: data });
+        emitter.emit('index', { path: p, id: data, type: 'index' });
         paths = {};
       }
     }
@@ -361,10 +363,17 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   return emitter;
 }
 
+export type ManifestResolutionType = 'path' | 'index' | 'fallback';
+
+export interface ResolvedManifestPath {
+  id: string | undefined;
+  resolutionType?: ManifestResolutionType;
+}
+
 export function resolveManifestStreamPath(
   stream: Readable,
   path?: string,
-): Promise<string | undefined> {
+): Promise<ResolvedManifestPath> {
   return new Promise((resolve, reject) => {
     const emitter = parseManifestStream(stream);
 
@@ -376,25 +385,25 @@ export function resolveManifestStreamPath(
     });
 
     emitter.on('end', () => {
-      resolve(undefined);
+      resolve({ id: undefined });
     });
 
     emitter.on('index', (data) => {
       if (sanitizedPath === '') {
-        resolve(data.id);
+        resolve({ id: data.id, resolutionType: data.type });
       }
     });
 
     emitter.on('fallback', (data) => {
       if (data.id !== undefined) {
-        resolve(data.id);
+        resolve({ id: data.id, resolutionType: data.type });
       }
     });
 
     emitter.on('path', (data) => {
       const trimmedDataPath = data.path.replace(/\/+$/g, '');
       if (sanitizedPath !== '' && trimmedDataPath === sanitizedPath) {
-        resolve(data.id);
+        resolve({ id: data.id, resolutionType: data.type });
       }
     });
   });
