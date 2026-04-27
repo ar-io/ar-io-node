@@ -974,9 +974,11 @@ export const sendInvalidId = (res: Response, id: string) => {
 };
 
 export const sendNotFound = (res: Response) => {
+  // 404s are transient — use must-revalidate, not immutable, so upstream
+  // caches refresh once the resource (potentially) becomes available.
   res.header(
     'Cache-Control',
-    `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, immutable`,
+    `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
   );
   res.status(404).send('Not found');
 };
@@ -1332,6 +1334,7 @@ const sendManifestResponse = async ({
   id,
   resolvedId,
   complete,
+  resolutionType,
   requestAttributes,
   rateLimiter,
   paymentProcessor,
@@ -1347,6 +1350,7 @@ const sendManifestResponse = async ({
   id: string;
   resolvedId: string | undefined;
   complete: boolean;
+  resolutionType?: 'path' | 'index' | 'fallback';
   requestAttributes: RequestAttributes;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
@@ -1430,6 +1434,19 @@ const sendManifestResponse = async ({
       resolvedId,
       dataItemMetaResolver,
     );
+
+    // URL→data-id mapping is mutable for fallback resolutions: a future
+    // manifest revision can add the missing path, changing what this URL
+    // resolves to. Override any ArNS-set ANT TTL with a short, must-revalidate
+    // directive so upstream proxies don't pin stale fallback content. Do NOT
+    // remove without understanding upstream-cache poisoning implications —
+    // see PE-9072.
+    if (resolutionType === 'fallback') {
+      res.setHeader(
+        'Cache-Control',
+        `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+      );
+    }
 
     // Set headers and stream data
     try {

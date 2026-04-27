@@ -1003,6 +1003,15 @@ export const CACHE_BLOCKED_MAX_AGE = env.positiveIntOrDefault(
   'CACHE_BLOCKED_MAX_AGE',
   2592000,
 );
+// APEX_TX_ID responses — 1 hour. APEX_TX_ID is operator-controlled and
+// rotated infrequently, but if it IS rotated upstream proxy caches will
+// otherwise pin the previous content for the data-layer max-age (up to
+// CACHE_STABLE_MAX_AGE). 1h with must-revalidate bounds the poisoning
+// window without sacrificing typical caching benefits. See PE-9072.
+export const CACHE_APEX_MAX_AGE = env.positiveIntOrDefault(
+  'CACHE_APEX_MAX_AGE',
+  3600,
+);
 
 // Tag response headers
 export const ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED =

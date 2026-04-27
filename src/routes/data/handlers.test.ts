@@ -2673,6 +2673,276 @@ st
       });
     });
 
+    describe('Cache-Control: manifest fallback override (PE-9072)', () => {
+      // Helper: install a middleware that simulates ArNS pre-setting a long
+      // ANT TTL Cache-Control header before the data handler runs. The fix
+      // must override this for fallback resolutions, but preserve it for
+      // path/index resolutions.
+      const withSimulatedArnsTtl = (ttl: number) =>
+        (req: any, res: any, next: any) => {
+          res.setHeader('Cache-Control', `public, max-age=${ttl}`);
+          next();
+        };
+
+      // Helper: build a manifest-shaped data attributes / data source pair
+      // that flows through sendManifestResponse with a given resolutionType.
+      const setupManifestFlow = (resolutionType: 'path' | 'index' | 'fallback') => {
+        const resolvedId = 'resolved-inner-id';
+
+        // First lookup: outer manifest is stable+trusted (worst-case TTL).
+        // Second lookup: inner resolved id is also stable+trusted.
+        dataAttributesSource.getDataAttributes = (id: string) => {
+          if (id === resolvedId) {
+            return Promise.resolve({
+              hash: 'inner-hash',
+              size: 10,
+              contentType: 'text/html',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+          }
+          return Promise.resolve({
+            hash: 'manifest-hash',
+            size: 100,
+            contentType: 'application/x.arweave-manifest+json',
+            isManifest: true,
+            stable: true,
+            verified: true,
+            signature: null,
+          });
+        };
+
+        dataSource.getData = (params: any) => {
+          if (params?.id === resolvedId) {
+            return Promise.resolve({
+              stream: Readable.from(Buffer.from('inner-content')),
+              size: 13,
+              verified: true,
+              trusted: true,
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            });
+          }
+          // Outer manifest body — content doesn't matter, resolveFromData
+          // is mocked.
+          return Promise.resolve({
+            stream: Readable.from(Buffer.from('{}')),
+            size: 2,
+            verified: true,
+            trusted: true,
+            cached: true,
+            sourceContentType: 'application/x.arweave-manifest+json',
+            requestAttributes: {
+              origin: 'node-url',
+              hops: 0,
+              clientIps: [],
+            },
+          });
+        };
+
+        manifestPathResolver = {
+          resolveFromIndex: () =>
+            Promise.resolve({
+              id: 'manifest-id',
+              resolvedId: undefined,
+              complete: false,
+            }),
+          resolveFromData: () =>
+            Promise.resolve({
+              id: 'manifest-id',
+              resolvedId,
+              complete: true,
+              resolutionType,
+            }),
+        };
+      };
+
+      it('should override pre-set ArNS Cache-Control with short TTL on fallback resolutions', async () => {
+        setupManifestFlow('fallback');
+
+        app.get(
+          '/:id/*',
+          withSimulatedArnsTtl(86400),
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/manifest-id/missing/path')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+            );
+          });
+      });
+
+      it('should preserve pre-set ArNS Cache-Control on path resolutions', async () => {
+        setupManifestFlow('path');
+
+        app.get(
+          '/:id/*',
+          withSimulatedArnsTtl(86400),
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/manifest-id/some/path')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(res.headers['cache-control'], 'public, max-age=86400');
+          });
+      });
+
+      it('should preserve pre-set ArNS Cache-Control on index resolutions', async () => {
+        setupManifestFlow('index');
+
+        app.get(
+          '/:id/*',
+          withSimulatedArnsTtl(86400),
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/manifest-id/')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(res.headers['cache-control'], 'public, max-age=86400');
+          });
+      });
+
+      it('should override pre-set ArNS Cache-Control with short TTL on fallback range requests', async () => {
+        setupManifestFlow('fallback');
+
+        app.get(
+          '/:id/*',
+          withSimulatedArnsTtl(86400),
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/manifest-id/missing/path')
+          .set('Range', 'bytes=0-4')
+          .expect(206)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+            );
+          });
+      });
+
+      it('should fall back to data-layer TTL when no Cache-Control was pre-set and resolution is path', async () => {
+        setupManifestFlow('path');
+
+        app.get(
+          '/:id/*',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        // Inner resolved id is stable+trusted → 30-day immutable.
+        return request(app)
+          .get('/manifest-id/some/path')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              'public, max-age=2592000, immutable',
+            );
+          });
+      });
+
+      it('should still apply short TTL on fallback even when no ArNS Cache-Control was pre-set', async () => {
+        setupManifestFlow('fallback');
+
+        app.get(
+          '/:id/*',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/manifest-id/missing/path')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+            );
+          });
+      });
+    });
+
+    describe('Cache-Control: 404 directives (PE-9072)', () => {
+      it('should use must-revalidate (not immutable) on sendNotFound 404', async () => {
+        // Force a 404 by failing data retrieval.
+        dataAttributesSource.getDataAttributes = () => Promise.resolve(undefined);
+        dataSource.getData = () => Promise.reject(new Error('not found'));
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/missing-id')
+          .expect(404)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+            );
+          });
+      });
+    });
+
     describe('Cache-Control private directive', () => {
       describe('matchContentTypePattern', () => {
         it('should match exact content types', () => {
