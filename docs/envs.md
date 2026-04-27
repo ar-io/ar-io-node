@@ -190,7 +190,7 @@ This document describes the environment variables that can be used to configure 
 | CHUNK_REBROADCAST_MIN_SUCCESS_COUNT              | Number               | 1                                             | Minimum broadcast success count for chunk to be added to dedup cache                                                                                                 |
 | BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS             | String               | "300"                                         | Interval in seconds for retrying bundles                                                                                                                             |
 | BUNDLE_REPAIR_RETRY_BATCH_SIZE                   | String               | "1000"                                        | Batch size for retrying bundles                                                                                                                                      |
-| APEX_TX_ID                                       | String               | undefined                                     | If set, serves this transaction ID's data at the root path (/)                                                                                                       |
+| APEX_TX_ID                                       | String               | undefined                                     | If set, serves this transaction ID's data at the root path (/). Cache-Control on the response is bounded by `CACHE_APEX_MAX_AGE` with `must-revalidate` so apex rotations propagate to upstream caches predictably |
 | APEX_ARNS_NAME                                   | String               | undefined                                     | If set, resolves and serves this ArNS name's content at the root path (/). Supports comma-separated values positionally mapped to `ARNS_ROOT_HOST` entries (e.g., `turbo,ar-io` for two hosts). A single value applies to all hosts. |
 | ENABLE_RATE_LIMITER                              | Boolean              | false                                         | If true, enables rate limiting enforcement (returns 429 when limits exceeded). When false, limits are tracked but not enforced                                       |
 | RATE_LIMITER_TYPE                                | String               | "redis" (docker), "memory" (standalone)       | Sets the rate limiter implementation type. Use "memory" for local development/single-node, "redis" for production multi-node deployments                              |
@@ -206,10 +206,11 @@ This document describes the environment variables that can be used to configure 
 | CACHE_PRIVATE_SIZE_THRESHOLD                     | Number               | 104857600 (100 MB)                            | Response size threshold in bytes above which Cache-Control uses 'private' directive. Helps CDNs respect rate limiting and x402 payment requirements for large responses |
 | CACHE_PRIVATE_CONTENT_TYPES                      | String               | ""                                            | Comma-separated list of content types that should use 'private' Cache-Control directive. Supports wildcards (e.g., "image/*,video/*"). Helps CDNs respect rate limiting and x402 payments for specific content types |
 | CACHE_DEFAULT_MAX_AGE                            | Number               | 30                                            | Default Cache-Control max-age (seconds) applied by middleware when no handler sets its own header                                                                     |
-| CACHE_STABLE_MAX_AGE                             | Number               | 2592000 (30 days)                             | Cache-Control max-age (seconds) for stable (deeply confirmed) data                                                                                                   |
-| CACHE_UNSTABLE_TRUSTED_MAX_AGE                   | Number               | 43200 (12 hours)                              | Cache-Control max-age (seconds) for unstable data from a trusted source                                                                                              |
-| CACHE_UNSTABLE_MAX_AGE                           | Number               | 7200 (2 hours)                                | Cache-Control max-age (seconds) for unstable data from an untrusted source                                                                                           |
-| CACHE_NOT_FOUND_MAX_AGE                          | Number               | 60 (1 minute)                                 | Cache-Control max-age (seconds) for not-found responses                                                                                                              |
+| CACHE_STABLE_MAX_AGE                             | Number               | 2592000 (30 days)                             | Cache-Control max-age (seconds) for stable (deeply confirmed) data. **Warning:** values larger than your longest expected ANT TTL amplify upstream-cache poisoning when an ArNS record or manifest is updated — see note below |
+| CACHE_UNSTABLE_TRUSTED_MAX_AGE                   | Number               | 43200 (12 hours)                              | Cache-Control max-age (seconds) for unstable data from a trusted source. **Warning:** see CACHE_STABLE_MAX_AGE note below                                            |
+| CACHE_UNSTABLE_MAX_AGE                           | Number               | 7200 (2 hours)                                | Cache-Control max-age (seconds) for unstable data from an untrusted source. **Warning:** see CACHE_STABLE_MAX_AGE note below                                         |
+| CACHE_NOT_FOUND_MAX_AGE                          | Number               | 60 (1 minute)                                 | Cache-Control max-age (seconds) for not-found responses, manifest fallback responses, and ArNS custom-404 responses (`ARNS_NOT_FOUND_TX_ID` / `ARNS_NOT_FOUND_ARNS_NAME`) |
+| CACHE_APEX_MAX_AGE                               | Number               | 3600 (1 hour)                                 | Cache-Control max-age (seconds) for `APEX_TX_ID` responses. Bounds the upstream-cache poisoning window when operators rotate `APEX_TX_ID` (lower than the data-layer ladder so a rotation propagates within the configured window) |
 | ENABLE_X_402_USDC_DATA_EGRESS                    | Boolean              | false                                         | If true, enables x402 USDC payment verification and settlement for data egress                                                                                       |
 | X_402_USDC_NETWORK                               | String               | "base-sepolia"                                | USDC network to use ("base" for mainnet, "base-sepolia" for testnet)                                                                                                 |
 | X_402_USDC_WALLET_ADDRESS                        | String               | undefined                                     | Ethereum wallet address (0x...) to receive USDC payments                                                                                                             |
@@ -252,6 +253,43 @@ This document describes the environment variables that can be used to configure 
 | OTEL_TAIL_SAMPLING_OFFSET_OVERWRITE_RATE         | Number               | 10                                            | Percentage (1-100) of offset overwrite risk traces to sample. Captures traces where both DynamoDB offsets AND raw data paths executed, the scenario that triggered the Release 59 offset bug |
 
 **Security Note:** Variables marked as **SENSITIVE SECRET** (such as `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, and `CDP_API_KEY_SECRET_FILE`) contain confidential credentials that must never be printed to logs, exposed in error messages, or included in any diagnostic output. Always mask or omit these values in logs, store them in a secure secrets manager, and restrict access using the principle of least privilege.
+
+### Cache-Control / upstream cache poisoning
+
+`CACHE_STABLE_MAX_AGE`, `CACHE_UNSTABLE_TRUSTED_MAX_AGE`, and
+`CACHE_UNSTABLE_MAX_AGE` govern the `Cache-Control: max-age` returned for
+data responses. `CACHE_STABLE_MAX_AGE` additionally emits the `immutable`
+directive, which tells browsers and upstream proxies (e.g., nginx) **not**
+to revalidate before the max-age expires.
+
+URL → data-id bindings served via ArNS are **mutable**: ArNS records can be
+updated, manifests can be republished, and a previously-fallback path may
+become path-mapped in a future manifest revision. If a `CACHE_*_MAX_AGE`
+value exceeds your longest expected ANT TTL, upstream proxies hold these
+responses long after the underlying mapping has changed, producing stale
+or broken pages — typically blank apps, missing images, or "domain-yours"
+placeholders served on a now-active ArNS name.
+
+Note that `ARNS_NOT_FOUND_ARNS_NAME` defaults to `'unregistered_arns'`, so
+**every gateway with default config** routes failed ArNS resolutions
+through this branch. As of PE-9072 these responses are explicitly bounded
+to `CACHE_NOT_FOUND_MAX_AGE` regardless of `CACHE_UNSTABLE_*_MAX_AGE`; on
+gateways running prior versions, lower `CACHE_UNSTABLE_TRUSTED_MAX_AGE` to
+the default and sweep upstream caches for placeholder content.
+
+Recommendations:
+
+- Keep `CACHE_STABLE_MAX_AGE`, `CACHE_UNSTABLE_TRUSTED_MAX_AGE`, and
+  `CACHE_UNSTABLE_MAX_AGE` at their defaults unless you have an operational
+  procedure for evicting poisoned upstream cache entries (e.g., grep nginx
+  cache files for the placeholder's `X-AR-IO-Data-Id` and remove matches).
+- Manifest fallback responses, `ARNS_NOT_FOUND_TX_ID` /
+  `ARNS_NOT_FOUND_ARNS_NAME` responses, and 404s are bounded to
+  `CACHE_NOT_FOUND_MAX_AGE` (default 60s) with `must-revalidate` regardless
+  of the operator's other cache settings.
+- `APEX_TX_ID` responses are bounded to `CACHE_APEX_MAX_AGE` (default 1h)
+  with `must-revalidate` so an apex rotation propagates within the
+  configured window.
 
 ## Observer Configuration
 
