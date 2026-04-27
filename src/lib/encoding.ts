@@ -363,8 +363,29 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   return emitter;
 }
 
+/**
+ * Discriminator describing how a manifest path was resolved.
+ *
+ * - `'path'` — exact match against the manifest's `paths` map.
+ * - `'index'` — the manifest's index entry (by `path` or `id`).
+ * - `'fallback'` — v0.2.0 manifest fallback `id`, taken when no `paths` entry
+ *   matched.
+ *
+ * `'path'` and `'index'` bindings are immutable for a given manifest tx;
+ * `'fallback'` bindings can be invalidated when a future manifest revision
+ * adds the missing path. Consumers gating cache behavior should treat
+ * `'fallback'` specially. See PE-9072.
+ */
 export type ManifestResolutionType = 'path' | 'index' | 'fallback';
 
+/**
+ * Result of resolving a path against a streamed Arweave manifest.
+ *
+ * `resolutionType` is undefined when `id` is undefined (no match found and
+ * no fallback present). Callers gating Cache-Control on resolution type
+ * should treat undefined as "not a fallback" and apply normal data-layer
+ * caching.
+ */
 export interface ResolvedManifestPath {
   id: string | undefined;
   resolutionType?: ManifestResolutionType;

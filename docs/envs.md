@@ -254,7 +254,7 @@ This document describes the environment variables that can be used to configure 
 
 **Security Note:** Variables marked as **SENSITIVE SECRET** (such as `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, and `CDP_API_KEY_SECRET_FILE`) contain confidential credentials that must never be printed to logs, exposed in error messages, or included in any diagnostic output. Always mask or omit these values in logs, store them in a secure secrets manager, and restrict access using the principle of least privilege.
 
-### Cache-Control / upstream cache poisoning
+## Cache-Control / upstream cache poisoning
 
 `CACHE_STABLE_MAX_AGE`, `CACHE_UNSTABLE_TRUSTED_MAX_AGE`, and
 `CACHE_UNSTABLE_MAX_AGE` govern the `Cache-Control: max-age` returned for

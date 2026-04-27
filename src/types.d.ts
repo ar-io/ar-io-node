@@ -1037,16 +1037,38 @@ export interface ContiguousDataSource {
   }): Promise<ContiguousData>;
 }
 
+/**
+ * Discriminator describing how a manifest path was resolved.
+ *
+ * - `'path'` — exact match against the manifest's `paths` map.
+ * - `'index'` — the manifest's index entry (by `path` or `id`).
+ * - `'fallback'` — v0.2.0 manifest fallback `id`, taken when no `paths` entry
+ *   matched.
+ *
+ * Mutability classes (relevant to `Cache-Control`):
+ * - `'path'` and `'index'` bindings are **immutable** for a given manifest tx.
+ * - `'fallback'` bindings are **mutable** across manifest revisions: a future
+ *   manifest revision can add the missing path, changing what the URL
+ *   resolves to.
+ *
+ * See PE-9072.
+ */
 export type ManifestResolutionType = 'path' | 'index' | 'fallback';
 
 export interface ManifestResolution {
   id: string;
   resolvedId: string | undefined;
   complete: boolean;
-  // How the resolvedId was matched within the manifest. Used to drive
-  // Cache-Control decisions: 'path' and 'index' bindings are immutable for
-  // a given manifest tx, but 'fallback' bindings can be invalidated when a
-  // future manifest revision adds the missing path. See PE-9072.
+  /**
+   * How the `resolvedId` was matched within the manifest.
+   *
+   * Used by the data handler to apply different `Cache-Control` policies
+   * per resolution class — see {@link ManifestResolutionType}. Optional so
+   * external `ManifestPathResolver` implementations remain compatible;
+   * undefined behaves like a non-fallback resolution (no override).
+   *
+   * See PE-9072.
+   */
   resolutionType?: ManifestResolutionType;
 }
 
