@@ -443,49 +443,53 @@ describe('ArNS 404s', { skip: true }, function () {
 // for hours-to-months. This block uses no ARNS_NOT_FOUND_* override —
 // representing a default-config gateway.
 // TODO: temporarily disabled - failures are CU-related, not code issues
-describe('ArNS resolution failure under default config', { skip: true }, function () {
-  before(async function () {
-    await cleanDb();
+describe(
+  'ArNS resolution failure under default config',
+  { skip: true },
+  function () {
+    before(async function () {
+      await cleanDb();
 
-    compose = await composeUp({
-      START_WRITERS: 'false',
-      ARNS_ROOT_HOST: 'ar-io.localhost',
-      // Intentionally not setting ARNS_NOT_FOUND_TX_ID or
-      // ARNS_NOT_FOUND_ARNS_NAME — relying on the code default of
-      // 'unregistered_arns' for ARNS_NOT_FOUND_ARNS_NAME.
-    });
-  });
-
-  after(async function () {
-    await compose.down();
-  });
-
-  it('GET unresolvable name returns short Cache-Control with must-revalidate', async function () {
-    const res = await axios.get('http://localhost:4000/', {
-      headers: {
-        Host: 'completelynonsensicalnameXYZ123.ar-io.localhost',
-      },
-      validateStatus: () => true,
+      compose = await composeUp({
+        START_WRITERS: 'false',
+        ARNS_ROOT_HOST: 'ar-io.localhost',
+        // Intentionally not setting ARNS_NOT_FOUND_TX_ID or
+        // ARNS_NOT_FOUND_ARNS_NAME — relying on the code default of
+        // 'unregistered_arns' for ARNS_NOT_FOUND_ARNS_NAME.
+      });
     });
 
-    // The default-config gateway resolves the placeholder via
-    // 'unregistered_arns' and serves it with status 404 (set at line 240
-    // of arns.ts before falling through to dataHandler).
-    assert.strictEqual(res.status, 404);
+    after(async function () {
+      await compose.down();
+    });
 
-    // Critical: must NOT inherit CACHE_UNSTABLE_TRUSTED_MAX_AGE (43200s)
-    // or any data-layer ladder value.
-    const cacheControl = res.headers['cache-control'] ?? '';
-    assert.match(cacheControl, /must-revalidate/);
-    assert.ok(!cacheControl.includes('immutable'));
-    const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
-    assert.ok(maxAgeMatch !== null);
-    assert.ok(
-      Number(maxAgeMatch[1]) <= 600,
-      `expected short max-age, got ${maxAgeMatch[1]} (cache-control=${cacheControl})`,
-    );
-  });
-});
+    it('GET unresolvable name returns short Cache-Control with must-revalidate', async function () {
+      const res = await axios.get('http://localhost:4000/', {
+        headers: {
+          Host: 'completelynonsensicalnameXYZ123.ar-io.localhost',
+        },
+        validateStatus: () => true,
+      });
+
+      // The default-config gateway resolves the placeholder via
+      // 'unregistered_arns' and serves it with status 404 (set at line 240
+      // of arns.ts before falling through to dataHandler).
+      assert.strictEqual(res.status, 404);
+
+      // Critical: must NOT inherit CACHE_UNSTABLE_TRUSTED_MAX_AGE (43200s)
+      // or any data-layer ladder value.
+      const cacheControl = res.headers['cache-control'] ?? '';
+      assert.match(cacheControl, /must-revalidate/);
+      assert.ok(!cacheControl.includes('immutable'));
+      const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+      assert.ok(maxAgeMatch !== null);
+      assert.ok(
+        Number(maxAgeMatch[1]) <= 600,
+        `expected short max-age, got ${maxAgeMatch[1]} (cache-control=${cacheControl})`,
+      );
+    });
+  },
+);
 
 // PE-9072: APEX_TX_ID is operator-controlled and may be rotated. Without
 // CACHE_APEX_MAX_AGE the apex response inherits the data-layer ladder

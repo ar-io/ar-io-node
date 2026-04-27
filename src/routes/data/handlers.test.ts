@@ -2678,15 +2678,17 @@ st
       // ANT TTL Cache-Control header before the data handler runs. The fix
       // must override this for fallback resolutions, but preserve it for
       // path/index resolutions.
-      const withSimulatedArnsTtl = (ttl: number) =>
-        (req: any, res: any, next: any) => {
+      const withSimulatedArnsTtl =
+        (ttl: number) => (req: any, res: any, next: any) => {
           res.setHeader('Cache-Control', `public, max-age=${ttl}`);
           next();
         };
 
       // Helper: build a manifest-shaped data attributes / data source pair
       // that flows through sendManifestResponse with a given resolutionType.
-      const setupManifestFlow = (resolutionType: 'path' | 'index' | 'fallback') => {
+      const setupManifestFlow = (
+        resolutionType: 'path' | 'index' | 'fallback',
+      ) => {
         const resolvedId = 'resolved-inner-id';
 
         // First lookup: outer manifest is stable+trusted (worst-case TTL).
@@ -2917,7 +2919,8 @@ st
     describe('Cache-Control: 404 directives (PE-9072)', () => {
       it('should use must-revalidate (not immutable) on sendNotFound 404', async () => {
         // Force a 404 by failing data retrieval.
-        dataAttributesSource.getDataAttributes = () => Promise.resolve(undefined);
+        dataAttributesSource.getDataAttributes = () =>
+          Promise.resolve(undefined);
         dataSource.getData = () => Promise.reject(new Error('not found'));
 
         app.get(
