@@ -1506,6 +1506,143 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('upsertNewDataItem clobber resistance (PE-9073)', () => {
+    // Regression: after the unbundle path back-fills parent_id /
+    // root_transaction_id / data_offset on a previously-optimistic data item,
+    // a subsequent optimistic re-POST (which passes NULL for those fields)
+    // must NOT clobber the back-filled values. Without this, a follow-up
+    // flushStableDataItems would crash on stable_data_item_tags.parent_id
+    // NOT NULL.
+    const itemId = 'PE9073RegressionTestPE9073RegressionTestAAA';
+    const bundleParentId = '2222222222222222222222222222222222222222222';
+    const bundleRootTxId = '3333333333333333333333333333333333333333333';
+
+    const optimisticItem = {
+      anchor: 'YW5jaG9y',
+      data_hash: null,
+      data_offset: null,
+      data_size: 1234,
+      id: itemId,
+      index: null,
+      offset: null,
+      owner: 'b3duZXI',
+      owner_address: 'b3duZXJfYWRkcmVzcw',
+      owner_offset: null,
+      owner_size: null,
+      parent_id: null,
+      parent_index: null,
+      root_parent_offset: null,
+      root_tx_id: null,
+      signature: 'c2lnbmF0dXJl',
+      signature_offset: null,
+      signature_size: null,
+      signature_type: null,
+      size: null,
+      tags: [],
+      target: 'dGFyZ2V0',
+    } as unknown as NormalizedDataItem;
+
+    const bundleBackfillItem = {
+      ...optimisticItem,
+      data_offset: 100,
+      filter: '{"always": true}',
+      index: 0,
+      offset: 200,
+      owner_offset: 50,
+      owner_size: 32,
+      parent_id: bundleParentId,
+      parent_index: 0,
+      root_parent_offset: 300,
+      root_tx_id: bundleRootTxId,
+      signature_offset: 60,
+      signature_size: 32,
+      signature_type: 1,
+      size: 1234,
+    } as unknown as NormalizedDataItem;
+
+    it('preserves back-filled parent_id, root_transaction_id, data_offset on optimistic re-POST', async () => {
+      // 1. Optimistic POST: row inserted with NULL parent_id / root_transaction_id / data_offset.
+      await db.saveDataItem(optimisticItem);
+
+      // 2. Unbundle back-fill: same id, non-NULL values via upsert.
+      await db.saveDataItem(bundleBackfillItem);
+
+      // 3. Optimistic re-POST. Pre-fix this clobbered values back to NULL.
+      await db.saveDataItem(optimisticItem);
+
+      const row = bundlesDb
+        .prepare(
+          'SELECT parent_id, root_transaction_id, data_offset FROM new_data_items WHERE id = @id',
+        )
+        .get({ id: fromB64Url(itemId) }) as
+        | {
+            parent_id: Buffer | null;
+            root_transaction_id: Buffer | null;
+            data_offset: number | null;
+          }
+        | undefined;
+
+      assert.notEqual(row, undefined, 'data item row should exist');
+      assert.notEqual(
+        row!.parent_id,
+        null,
+        'parent_id must survive optimistic re-POST',
+      );
+      assert.notEqual(
+        row!.root_transaction_id,
+        null,
+        'root_transaction_id must survive optimistic re-POST',
+      );
+      assert.notEqual(
+        row!.data_offset,
+        null,
+        'data_offset must survive optimistic re-POST',
+      );
+      assert.deepEqual(row!.parent_id, fromB64Url(bundleParentId));
+      assert.deepEqual(row!.root_transaction_id, fromB64Url(bundleRootTxId));
+      assert.equal(row!.data_offset, 100);
+
+      // Now exercise the flush path that previously hit
+      // SQLITE_CONSTRAINT_NOTNULL on stable_data_item_tags.parent_id
+      // (Defect A). Force heights non-NULL on both the data item and
+      // its tag rows, then make bundleRootTxId stable so the flush JOINs
+      // match.
+      const dataItemHeight = 100;
+      bundlesDb
+        .prepare('UPDATE new_data_items SET height = @h WHERE id = @id')
+        .run({ h: dataItemHeight, id: fromB64Url(itemId) });
+      bundlesDb
+        .prepare(
+          'UPDATE new_data_item_tags SET height = @h WHERE data_item_id = @id',
+        )
+        .run({ h: dataItemHeight, id: fromB64Url(itemId) });
+      coreDb
+        .prepare(
+          `INSERT INTO stable_block_transactions (
+             block_indep_hash, transaction_id, block_transaction_index
+           ) VALUES (@hash, @tx, 0)`,
+        )
+        .run({
+          hash: crypto.randomBytes(32),
+          tx: fromB64Url(bundleRootTxId),
+        });
+
+      // Pre-fix this throws inside the worker transaction. With the fix
+      // (back-fill preserved by COALESCE; flush guarded by IS NOT NULL),
+      // it completes and the row lands in stable_data_items.
+      await db.flushStableDataItems(dataItemHeight + 1, Date.now());
+
+      const stableRow = bundlesDb
+        .prepare('SELECT id FROM stable_data_items WHERE id = @id')
+        .get({ id: fromB64Url(itemId) });
+      assert.notEqual(
+        stableRow,
+        undefined,
+        'data item should land in stable_data_items after flush',
+      );
+    });
+  });
+
   // skipping for now as it works when running the test individually
   describe.skip('saveVerificationStatus', () => {
     const dataItemRootTxId = '0000000000000000000000000000000000000000000';

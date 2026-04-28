@@ -120,6 +120,18 @@ UPDATE SET
   last_indexed_at = @indexed_at
 
 -- upsertNewDataItem
+--
+-- Tuple consistency note: the fields {parent_id, root_transaction_id,
+-- root_parent_offset, data_offset, offset, size, signature_offset,
+-- signature_size, owner_offset, owner_size, signature_type} describe a
+-- single bundling ("root atom") and ought to move atomically. The
+-- COALESCE clauses below cover only the three immediately involved in
+-- the PE-9073 chain-stall (parent_id, root_transaction_id, data_offset)
+-- plus the IFNULL on height. The remaining root-atom fields are
+-- INSERT-only — an admin POST that arrives before the unbundle path
+-- will leave them NULL on later unbundle writes. The structural fix
+-- (split this statement into an optimistic-only insert and a
+-- root-atom upsert) is tracked as a follow-up to PE-9073.
 INSERT INTO new_data_items (
   id, parent_id, root_transaction_id, height, signature, anchor,
   owner_address, target, data_offset, data_size, content_type,
@@ -134,7 +146,7 @@ INSERT INTO new_data_items (
   @root_parent_offset
 ) ON CONFLICT DO
 UPDATE SET
-  height = IFNULL(@height, height),
-  root_transaction_id = @root_transaction_id,
-  parent_id = @parent_id,
-  data_offset = @data_offset
+  height              = IFNULL(@height,              height),
+  root_transaction_id = COALESCE(@root_transaction_id, root_transaction_id),
+  parent_id           = COALESCE(@parent_id,           parent_id),
+  data_offset         = COALESCE(@data_offset,         data_offset)

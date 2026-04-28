@@ -487,7 +487,10 @@ arIoRouter.post(
             tags: dataItemHeader.tags ?? [],
             target: dataItemHeader.target ?? '',
             anchor: dataItemHeader.anchor ?? '',
-            // These fields are not yet known, to be backfilled
+            // These fields are not yet known, to be backfilled. Re-POSTs
+            // pass NULL here and rely on the COALESCE in upsertNewDataItem
+            // (PE-9073) to preserve any values back-filled by the unbundle
+            // path.
             data_hash: null,
             data_offset: null,
             filter: config.ANS104_INDEX_FILTER_STRING,
