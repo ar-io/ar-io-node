@@ -248,7 +248,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
 
   pipeline.on('end', () => {
     if (fallbackId !== undefined) {
-      emitter.emit('fallback', { id: fallbackId });
+      emitter.emit('fallback', { id: fallbackId, type: 'fallback' });
     }
 
     emitter.emit('end', {
@@ -310,6 +310,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       ) {
         emitter.emit('index', {
           id: paths[indexProps.path],
+          type: 'index',
         });
       }
       paths = {};
@@ -325,6 +326,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       indexProps.id = data;
       emitter.emit('index', {
         id: data,
+        type: 'index',
       });
       paths = {};
     }
@@ -348,11 +350,11 @@ export function parseManifestStream(stream: Readable): EventEmitter {
     ) {
       pathCount++;
       const p = keyPath[1];
-      emitter.emit('path', { path: p, id: data });
+      emitter.emit('path', { path: p, id: data, type: 'path' });
       if (indexProps.path === undefined && indexProps.id === undefined) {
         paths[p] = data; // Maintain map of paths for use later
       } else if (p === indexProps.path) {
-        emitter.emit('index', { path: p, id: data });
+        emitter.emit('index', { path: p, id: data, type: 'index' });
         paths = {};
       }
     }
@@ -361,10 +363,38 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   return emitter;
 }
 
+/**
+ * Discriminator describing how a manifest path was resolved.
+ *
+ * - `'path'` — exact match against the manifest's `paths` map.
+ * - `'index'` — the manifest's index entry (by `path` or `id`).
+ * - `'fallback'` — v0.2.0 manifest fallback `id`, taken when no `paths` entry
+ *   matched.
+ *
+ * `'path'` and `'index'` bindings are immutable for a given manifest tx;
+ * `'fallback'` bindings can be invalidated when a future manifest revision
+ * adds the missing path. Consumers gating cache behavior should treat
+ * `'fallback'` specially. See PE-9072.
+ */
+export type ManifestResolutionType = 'path' | 'index' | 'fallback';
+
+/**
+ * Result of resolving a path against a streamed Arweave manifest.
+ *
+ * `resolutionType` is undefined when `id` is undefined (no match found and
+ * no fallback present). Callers gating Cache-Control on resolution type
+ * should treat undefined as "not a fallback" and apply normal data-layer
+ * caching.
+ */
+export interface ResolvedManifestPath {
+  id: string | undefined;
+  resolutionType?: ManifestResolutionType;
+}
+
 export function resolveManifestStreamPath(
   stream: Readable,
   path?: string,
-): Promise<string | undefined> {
+): Promise<ResolvedManifestPath> {
   return new Promise((resolve, reject) => {
     const emitter = parseManifestStream(stream);
 
@@ -376,25 +406,25 @@ export function resolveManifestStreamPath(
     });
 
     emitter.on('end', () => {
-      resolve(undefined);
+      resolve({ id: undefined });
     });
 
     emitter.on('index', (data) => {
       if (sanitizedPath === '') {
-        resolve(data.id);
+        resolve({ id: data.id, resolutionType: data.type });
       }
     });
 
     emitter.on('fallback', (data) => {
       if (data.id !== undefined) {
-        resolve(data.id);
+        resolve({ id: data.id, resolutionType: data.type });
       }
     });
 
     emitter.on('path', (data) => {
       const trimmedDataPath = data.path.replace(/\/+$/g, '');
       if (sanitizedPath !== '' && trimmedDataPath === sanitizedPath) {
-        resolve(data.id);
+        resolve({ id: data.id, resolutionType: data.type });
       }
     });
   });

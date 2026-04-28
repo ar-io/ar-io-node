@@ -8,9 +8,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`CACHE_APEX_MAX_AGE` Configuration**: New environment variable that
+  bounds the `Cache-Control` `max-age` returned for `APEX_TX_ID` responses
+  (default 3600s, 1 hour) and adds the `must-revalidate` directive.
+  Operators can now rotate `APEX_TX_ID` without leaving upstream proxies
+  serving the previous content for the data-layer cache lifetime
+  (potentially up to `CACHE_STABLE_MAX_AGE` with `immutable`). See
+  PE-9072.
+
 ### Changed
 
+- **Manifest Resolution Type Surfaced**: `ManifestResolution` now carries
+  an optional `resolutionType` field (`'path' | 'index' | 'fallback'`)
+  populated by `StreamingManifestPathResolver`. Used by the data handler
+  to apply different `Cache-Control` policies per resolution type — see
+  Fixed below. The field is optional so external implementations of
+  `ManifestPathResolver` remain compatible.
+
 ### Fixed
+
+- **Stale ArNS Resolution-Failure Caching (affects all gateways by
+  default)**: `ARNS_NOT_FOUND_ARNS_NAME` defaults to `'unregistered_arns'`,
+  so on every failed ArNS resolution the middleware sets `req.dataId` to
+  the resolved placeholder and calls `dataHandler` without setting any
+  `Cache-Control`. `setDataHeaders` then applied the data-layer ladder —
+  most commonly `CACHE_UNSTABLE_TRUSTED_MAX_AGE` (default 12h, but some
+  operators run 90d). Result: the "Make this domain space yours"
+  placeholder cached upstream (nginx honors upstream `Cache-Control`)
+  and downstream long after a name actually registered. Same bug class
+  on the `ARNS_NOT_FOUND_TX_ID` and `APEX_TX_ID` branches, and on
+  manifest fallback responses where the URL → data-id binding is
+  mutable across manifest revisions.
+
+  Fixes:
+  - `ARNS_NOT_FOUND_TX_ID` and `ARNS_NOT_FOUND_ARNS_NAME` resolved-404
+    responses now emit
+    `public, max-age=${CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`
+    (default 60s).
+  - Manifest **fallback** responses emit the same short `Cache-Control`,
+    overriding any longer ANT TTL set by the ArNS middleware. Path- and
+    index-resolved manifest responses still inherit the ANT TTL.
+  - `APEX_TX_ID` responses are bounded by `CACHE_APEX_MAX_AGE` with
+    `must-revalidate` (see Added).
+  - `sendNotFound` 404 responses now emit `must-revalidate` instead of
+    `immutable`. (PE-9072)
+
+  **Operator one-time sweep:** entries already poisoned in nginx caches
+  must be evicted manually — grep cache files for the placeholder's
+  `X-AR-IO-Data-Id` (or for the resolved id of `unregistered_arns` on
+  default-config gateways) and remove matches.
 
 ## [Release 77] - 2026-04-24
 

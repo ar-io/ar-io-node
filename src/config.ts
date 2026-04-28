@@ -1003,6 +1003,21 @@ export const CACHE_BLOCKED_MAX_AGE = env.positiveIntOrDefault(
   'CACHE_BLOCKED_MAX_AGE',
   2592000,
 );
+/**
+ * Cache-Control max-age (seconds) for `APEX_TX_ID` responses, paired with
+ * `must-revalidate`. Default: 3600 (1 hour).
+ *
+ * `APEX_TX_ID` is operator-controlled and typically rotated infrequently,
+ * but when it IS rotated upstream proxy caches would otherwise pin the
+ * previous content for the data-layer max-age (up to
+ * `CACHE_STABLE_MAX_AGE` with `immutable`). 1h with `must-revalidate`
+ * bounds the poisoning window while preserving typical caching benefits;
+ * operators who rotate more frequently can lower this. See PE-9072.
+ */
+export const CACHE_APEX_MAX_AGE = env.positiveIntOrDefault(
+  'CACHE_APEX_MAX_AGE',
+  3600,
+);
 
 // Tag response headers
 export const ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED =
