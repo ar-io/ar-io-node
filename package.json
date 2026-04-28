@@ -12,6 +12,7 @@
   "dependencies": {
     "@ar.io/sdk": "3.20.0",
     "@ardrive/ardrive-promise-cache": "^1.4.0",
+    "@ardrive/turbo-sdk": "^1.40.2",
     "@aws-lite/client": "^0.23.2",
     "@aws-lite/s3": "^0.2.6",
     "@aws-sdk/client-dynamodb": "^3.968.0",
@@ -115,7 +116,6 @@
     "yaml": "2.8.3"
   },
   "devDependencies": {
-    "@ardrive/turbo-sdk": "^1.40.2",
     "@aws-lite/s3-types": "^0.2.6",
     "@eslint/eslintrc": "^3.3.1",
     "@eslint/js": "^9.36.0",
