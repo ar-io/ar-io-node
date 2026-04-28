@@ -487,10 +487,13 @@ arIoRouter.post(
             tags: dataItemHeader.tags ?? [],
             target: dataItemHeader.target ?? '',
             anchor: dataItemHeader.anchor ?? '',
-            // These fields are not yet known, to be backfilled. Re-POSTs
-            // pass NULL here and rely on the COALESCE in upsertNewDataItem
-            // (PE-9073) to preserve any values back-filled by the unbundle
-            // path.
+            // The optimistic admin path has no knowledge of this data
+            // item's bundling placement. Hardcoded NULLs flow into the
+            // insertOptimisticDataItem statement, which inserts the row
+            // if absent and never updates the root atom on conflict —
+            // so a re-POST after the unbundle path has back-filled
+            // these fields cannot regress them. See the contract
+            // comment in src/database/sql/bundles/import.sql.
             data_hash: null,
             data_offset: null,
             filter: config.ANS104_INDEX_FILTER_STRING,
@@ -508,6 +511,7 @@ arIoRouter.post(
             size: null,
           },
           true, // Prioritized
+          true, // Optimistic — no root-atom claim
         );
       }
 

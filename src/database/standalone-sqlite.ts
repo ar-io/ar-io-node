@@ -429,6 +429,7 @@ export class StandaloneSqliteDatabaseWorker {
   resetCoreToHeightFn: Sqlite.Transaction;
   insertTxFn: Sqlite.Transaction;
   insertDataItemFn: Sqlite.Transaction;
+  insertOptimisticDataItemFn: Sqlite.Transaction;
   insertBlockAndTxsFn: Sqlite.Transaction;
   saveCoreStableDataFn: Sqlite.Transaction;
   saveBundlesStableDataFn: Sqlite.Transaction;
@@ -554,6 +555,13 @@ export class StandaloneSqliteDatabaseWorker {
       },
     );
 
+    // Full-claim path: caller has the complete root atom (parent_id,
+    // root_transaction_id, all the offset/size fields, signature_type,
+    // root_parent_offset). Used by the unbundle pipeline and by the
+    // on-demand metadata resolver. Atomic root-atom upsert; any of the
+    // tuple fields the caller leaves NULL are preserved by COALESCE in
+    // upsertNewDataItem rather than clobbered (see the contract comment
+    // in import.sql).
     this.insertDataItemFn = this.dbs.bundles.transaction(
       (item: NormalizedDataItem, height?: number) => {
         const rows = dataItemToDbRows(item, height);
@@ -577,8 +585,6 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
         }
 
-        // We do not insert bundle data item rows for opimistically indexed
-        // data items
         if (rows.bundleDataItem) {
           this.stmts.bundles.upsertBundleDataItem.run({
             ...rows.bundleDataItem,
@@ -587,6 +593,42 @@ export class StandaloneSqliteDatabaseWorker {
         }
 
         this.stmts.bundles.upsertNewDataItem.run({
+          ...rows.newDataItem,
+          height,
+        });
+      },
+    );
+
+    // Optimistic path: caller has no tuple knowledge. Used by the admin
+    // queue-data-item route. INSERT-if-absent for the data item row;
+    // never updates the root-atom fields on conflict. Tag rows still
+    // upsert the always-known optimistic metadata. We deliberately skip
+    // the bundle_data_items write — that table records actual unbundle
+    // observations, not optimistic claims.
+    this.insertOptimisticDataItemFn = this.dbs.bundles.transaction(
+      (item: NormalizedDataItem, height?: number) => {
+        const rows = dataItemToDbRows(item, height);
+
+        for (const row of rows.tagNames) {
+          this.stmts.bundles.insertOrIgnoreTagName.run(row);
+        }
+
+        for (const row of rows.tagValues) {
+          this.stmts.bundles.insertOrIgnoreTagValue.run(row);
+        }
+
+        for (const row of rows.newDataItemTags) {
+          this.stmts.bundles.upsertNewDataItemTag.run({
+            ...row,
+            height,
+          });
+        }
+
+        for (const row of rows.wallets) {
+          this.stmts.bundles.insertOrIgnoreWallet.run(row);
+        }
+
+        this.stmts.bundles.insertOptimisticDataItem.run({
           ...rows.newDataItem,
           height,
         });
@@ -958,7 +1000,7 @@ export class StandaloneSqliteDatabaseWorker {
     return id;
   }
 
-  saveDataItem(item: NormalizedDataItem) {
+  saveDataItem(item: NormalizedDataItem, isOptimistic = false) {
     const rootTxId = item.root_tx_id ? fromB64Url(item.root_tx_id) : null;
     const maybeTxHeight = this.stmts.bundles.selectTransactionHeight.get({
       transaction_id: rootTxId,
@@ -967,7 +1009,12 @@ export class StandaloneSqliteDatabaseWorker {
     if (config.WRITE_ANS104_DATA_ITEM_DB_SIGNATURES === false) {
       item.signature = null;
     }
-    this.insertDataItemFn(item, maybeTxHeight);
+
+    if (isOptimistic) {
+      this.insertOptimisticDataItemFn(item, maybeTxHeight);
+    } else {
+      this.insertDataItemFn(item, maybeTxHeight);
+    }
   }
 
   saveBundleRetries(rootTransactionId: string) {
@@ -3256,13 +3303,16 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('core', 'saveTxOffset', [id, offset]);
   }
 
-  async saveDataItem(item: NormalizedDataItem): Promise<void> {
+  async saveDataItem(
+    item: NormalizedDataItem,
+    isOptimistic = false,
+  ): Promise<void> {
     if (this.shouldFlushDataItems()) {
       await this.flushStableDataItems();
     }
 
     this.newDataItemsCount++;
-    return this.queueWrite('bundles', 'saveDataItem', [item]);
+    return this.queueWrite('bundles', 'saveDataItem', [item, isOptimistic]);
   }
 
   saveBundleRetries(rootTransactionId: string): Promise<void> {
@@ -3755,7 +3805,7 @@ if (!isMainThread) {
           parentPort?.postMessage(null);
           break;
         case 'saveDataItem':
-          worker.saveDataItem(args[0]);
+          worker.saveDataItem(args[0], args[1]);
           parentPort?.postMessage(null);
           break;
         case 'saveBundleRetries':

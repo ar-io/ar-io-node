@@ -197,6 +197,26 @@ export class SignatureFetcher
         signatureOffset = dataItemAttributes.signatureOffset;
       }
 
+      // Shadow-victim guard: rows produced by an admin POST that arrived
+      // before the unbundle path can have a populated parent_id but NULL
+      // signature_offset / signature_size (the offset/size columns aren't
+      // covered by the pre-structural-fix UPDATE clause). Coercing those
+      // NULLs into FsDataStore.get yields a degenerate read range
+      // (end = offset + size - 1 = -1) and throws RangeError. Bail out
+      // here with a clear warning instead.
+      if (
+        parentId == null ||
+        signatureSize == null ||
+        signatureSize === 0 ||
+        signatureOffset == null
+      ) {
+        this.log.warn(
+          'Skipping signature fetch — data item has incomplete root atom (likely a shadow row pending repair, see PE-9073 follow-up)',
+          { id, parentId, signatureSize, signatureOffset },
+        );
+        return undefined;
+      }
+
       const signature = await this.fetchDataFromParent({
         parentId,
         offset: signatureOffset,
@@ -336,6 +356,23 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         parentId = dataItemAttributes.parentId;
         ownerSize = dataItemAttributes.ownerSize;
         ownerOffset = dataItemAttributes.ownerOffset;
+      }
+
+      // Shadow-victim guard: see corresponding comment in
+      // getDataItemSignature. Skips the FsDataStore read for rows with
+      // an incomplete root atom rather than throwing RangeError on a
+      // degenerate read range.
+      if (
+        parentId == null ||
+        ownerSize == null ||
+        ownerSize === 0 ||
+        ownerOffset == null
+      ) {
+        this.log.warn(
+          'Skipping owner fetch — data item has incomplete root atom (likely a shadow row pending repair, see PE-9073 follow-up)',
+          { id, parentId, ownerSize, ownerOffset },
+        );
+        return undefined;
       }
 
       const owner = await this.fetchDataFromParent({
