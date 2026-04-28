@@ -487,18 +487,21 @@ arIoRouter.post(
             tags: dataItemHeader.tags ?? [],
             target: dataItemHeader.target ?? '',
             anchor: dataItemHeader.anchor ?? '',
+            // Default null when caller omits; preserved by COALESCE in
+            // upsertNewDataItem so subsequent re-POSTs don't clobber values
+            // backfilled by the unbundle path.
+            data_offset: dataItemHeader.data_offset ?? null,
+            parent_id: dataItemHeader.parent_id ?? null,
+            root_tx_id: dataItemHeader.root_tx_id ?? null,
             // These fields are not yet known, to be backfilled
             data_hash: null,
-            data_offset: null,
             filter: config.ANS104_INDEX_FILTER_STRING,
             index: null,
             offset: null,
             owner_offset: null,
             owner_size: null,
-            parent_id: null,
             parent_index: null,
             root_parent_offset: null,
-            root_tx_id: null,
             signature_offset: null,
             signature_size: null,
             signature_type: null,

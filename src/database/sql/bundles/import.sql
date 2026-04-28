@@ -134,7 +134,7 @@ INSERT INTO new_data_items (
   @root_parent_offset
 ) ON CONFLICT DO
 UPDATE SET
-  height = IFNULL(@height, height),
-  root_transaction_id = @root_transaction_id,
-  parent_id = @parent_id,
-  data_offset = @data_offset
+  height              = IFNULL(@height,              height),
+  root_transaction_id = COALESCE(@root_transaction_id, root_transaction_id),
+  parent_id           = COALESCE(@parent_id,           parent_id),
+  data_offset         = COALESCE(@data_offset,         data_offset)
