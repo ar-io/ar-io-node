@@ -439,45 +439,21 @@ export interface QueueDataItemHeaders {
   content_type?: string;
   target?: string;
   anchor?: string;
-  // Optional. Caller may pre-populate these when known (e.g., a partial
-  // re-POST after the unbundle path has back-filled). Forwarded to
-  // upsertNewDataItem; null/undefined leaves the columns alone (preserves
-  // back-fill via COALESCE).
-  data_offset?: number | null;
-  parent_id?: string | null;
-  root_tx_id?: string | null;
 }
 
 /** Type guard for ensuring required fields on incoming data item headers */
 export function isDataItemHeaders(
   dataItemHeader: unknown,
 ): dataItemHeader is QueueDataItemHeaders {
-  if (
-    typeof dataItemHeader !== 'object' ||
-    dataItemHeader === null ||
-    !('data_size' in dataItemHeader) ||
-    !('id' in dataItemHeader) ||
-    !('owner' in dataItemHeader) ||
-    !('owner_address' in dataItemHeader) ||
-    !('signature' in dataItemHeader)
-  ) {
-    return false;
-  }
-
-  // Optional fields newly forwarded to upsertNewDataItem must be the
-  // expected type when present, else SQLite type coercion accepts garbage
-  // that downstream code reads as the wrong type.
-  const h = dataItemHeader as Record<string, unknown>;
-  if (h.data_offset != null && typeof h.data_offset !== 'number') {
-    return false;
-  }
-  if (h.parent_id != null && typeof h.parent_id !== 'string') {
-    return false;
-  }
-  if (h.root_tx_id != null && typeof h.root_tx_id !== 'string') {
-    return false;
-  }
-  return true;
+  return (
+    typeof dataItemHeader === 'object' &&
+    dataItemHeader !== null &&
+    'data_size' in dataItemHeader &&
+    'id' in dataItemHeader &&
+    'owner' in dataItemHeader &&
+    'owner_address' in dataItemHeader &&
+    'signature' in dataItemHeader
+  );
 }
 
 // Queue a bundle data item for processing
@@ -511,21 +487,21 @@ arIoRouter.post(
             tags: dataItemHeader.tags ?? [],
             target: dataItemHeader.target ?? '',
             anchor: dataItemHeader.anchor ?? '',
-            // Default null when caller omits; preserved by COALESCE in
-            // upsertNewDataItem so subsequent re-POSTs don't clobber values
-            // backfilled by the unbundle path.
-            data_offset: dataItemHeader.data_offset ?? null,
-            parent_id: dataItemHeader.parent_id ?? null,
-            root_tx_id: dataItemHeader.root_tx_id ?? null,
-            // These fields are not yet known, to be backfilled
+            // These fields are not yet known, to be backfilled. Re-POSTs
+            // pass NULL here and rely on the COALESCE in upsertNewDataItem
+            // (PE-9073) to preserve any values back-filled by the unbundle
+            // path.
             data_hash: null,
+            data_offset: null,
             filter: config.ANS104_INDEX_FILTER_STRING,
             index: null,
             offset: null,
             owner_offset: null,
             owner_size: null,
+            parent_id: null,
             parent_index: null,
             root_parent_offset: null,
+            root_tx_id: null,
             signature_offset: null,
             signature_size: null,
             signature_type: null,
