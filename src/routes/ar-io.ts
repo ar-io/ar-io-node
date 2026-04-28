@@ -439,21 +439,45 @@ export interface QueueDataItemHeaders {
   content_type?: string;
   target?: string;
   anchor?: string;
+  // Optional. Caller may pre-populate these when known (e.g., a partial
+  // re-POST after the unbundle path has back-filled). Forwarded to
+  // upsertNewDataItem; null/undefined leaves the columns alone (preserves
+  // back-fill via COALESCE).
+  data_offset?: number | null;
+  parent_id?: string | null;
+  root_tx_id?: string | null;
 }
 
 /** Type guard for ensuring required fields on incoming data item headers */
 export function isDataItemHeaders(
   dataItemHeader: unknown,
 ): dataItemHeader is QueueDataItemHeaders {
-  return (
-    typeof dataItemHeader === 'object' &&
-    dataItemHeader !== null &&
-    'data_size' in dataItemHeader &&
-    'id' in dataItemHeader &&
-    'owner' in dataItemHeader &&
-    'owner_address' in dataItemHeader &&
-    'signature' in dataItemHeader
-  );
+  if (
+    typeof dataItemHeader !== 'object' ||
+    dataItemHeader === null ||
+    !('data_size' in dataItemHeader) ||
+    !('id' in dataItemHeader) ||
+    !('owner' in dataItemHeader) ||
+    !('owner_address' in dataItemHeader) ||
+    !('signature' in dataItemHeader)
+  ) {
+    return false;
+  }
+
+  // Optional fields newly forwarded to upsertNewDataItem must be the
+  // expected type when present, else SQLite type coercion accepts garbage
+  // that downstream code reads as the wrong type.
+  const h = dataItemHeader as Record<string, unknown>;
+  if (h.data_offset != null && typeof h.data_offset !== 'number') {
+    return false;
+  }
+  if (h.parent_id != null && typeof h.parent_id !== 'string') {
+    return false;
+  }
+  if (h.root_tx_id != null && typeof h.root_tx_id !== 'string') {
+    return false;
+  }
+  return true;
 }
 
 // Queue a bundle data item for processing

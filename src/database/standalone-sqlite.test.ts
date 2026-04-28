@@ -1599,11 +1599,47 @@ describe('StandaloneSqliteDatabase', () => {
         'data_offset must survive optimistic re-POST',
       );
       assert.deepEqual(row!.parent_id, fromB64Url(bundleParentId));
-      assert.deepEqual(
-        row!.root_transaction_id,
-        fromB64Url(bundleRootTxId),
-      );
+      assert.deepEqual(row!.root_transaction_id, fromB64Url(bundleRootTxId));
       assert.equal(row!.data_offset, 100);
+
+      // Now exercise the flush path that previously hit
+      // SQLITE_CONSTRAINT_NOTNULL on stable_data_item_tags.parent_id
+      // (Defect A). Force heights non-NULL on both the data item and
+      // its tag rows, then make bundleRootTxId stable so the flush JOINs
+      // match.
+      const dataItemHeight = 100;
+      bundlesDb
+        .prepare('UPDATE new_data_items SET height = @h WHERE id = @id')
+        .run({ h: dataItemHeight, id: fromB64Url(itemId) });
+      bundlesDb
+        .prepare(
+          'UPDATE new_data_item_tags SET height = @h WHERE data_item_id = @id',
+        )
+        .run({ h: dataItemHeight, id: fromB64Url(itemId) });
+      coreDb
+        .prepare(
+          `INSERT INTO stable_block_transactions (
+             block_indep_hash, transaction_id, block_transaction_index
+           ) VALUES (@hash, @tx, 0)`,
+        )
+        .run({
+          hash: crypto.randomBytes(32),
+          tx: fromB64Url(bundleRootTxId),
+        });
+
+      // Pre-fix this throws inside the worker transaction. With the fix
+      // (back-fill preserved by COALESCE; flush guarded by IS NOT NULL),
+      // it completes and the row lands in stable_data_items.
+      await db.flushStableDataItems(dataItemHeight + 1, Date.now());
+
+      const stableRow = bundlesDb
+        .prepare('SELECT id FROM stable_data_items WHERE id = @id')
+        .get({ id: fromB64Url(itemId) });
+      assert.notEqual(
+        stableRow,
+        undefined,
+        'data item should land in stable_data_items after flush',
+      );
     });
   });
 
