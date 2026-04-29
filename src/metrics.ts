@@ -253,6 +253,12 @@ export const arnsCacheMissCounter = new promClient.Counter({
   help: 'Number of misses in the arns cache',
 });
 
+export const arnsCachedResolutionFallbackOnEmptyCounter =
+  new promClient.Counter({
+    name: 'arns_cached_resolution_fallback_on_empty_total',
+    help: 'Count of times CompositeArNSResolver returned a cached resolution because fresh resolution had no resolved id (no error/timeout)',
+  });
+
 export const arnsNameCacheDurationSummary = new promClient.Summary({
   name: 'arns_name_cache_duration_ms',
   help: 'Time in ms it takes to fetch and cache arns base names',
