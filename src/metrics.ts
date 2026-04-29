@@ -253,6 +253,13 @@ export const arnsCacheMissCounter = new promClient.Counter({
   help: 'Number of misses in the arns cache',
 });
 
+/**
+ * Incremented when {@link CompositeArNSResolver} returns a cached resolution
+ * because a fresh resolution attempt resolved with no resolved id — distinct
+ * from the timeout-triggered cached fallback. Tracks how often the gateway
+ * is serving stale data due to upstream (names cache / AO / CU) returning
+ * `undefined` faster than the cached-resolution fallback timeout.
+ */
 export const arnsCachedResolutionFallbackOnEmptyCounter =
   new promClient.Counter({
     name: 'arns_cached_resolution_fallback_on_empty_total',
