@@ -348,8 +348,8 @@ export class CompositeArNSResolver implements NameResolver {
       // resolution returns no resolved id or we exceed the cached resolution
       // fallback timeout.
       let usedCachedFallback = false;
-      const fresh = await (cachedResolution
-        ? // Cached resultion exists
+      const resolution = await (cachedResolution
+        ? // Cached resolution exists
           pTimeout(
             this.resolveParallel({
               name,
@@ -379,20 +379,22 @@ export class CompositeArNSResolver implements NameResolver {
             parentSpan: span,
           }));
 
-      // pTimeout's `fallback` only fires on timeout — when it fires, `fresh`
-      // is the cached resolution returned by the fallback. Surface that path
-      // first so the on-empty metric below is never confused with a timeout.
-      if (usedCachedFallback) {
+      // pTimeout's `fallback` only fires on timeout — when it fires,
+      // `resolution` is the cached value returned by the fallback. Surface
+      // that path first so the on-empty metric below is never confused with
+      // a timeout. The `&& cachedResolution` guard narrows the type and is
+      // defensive against future drift around the ternary above.
+      if (usedCachedFallback && cachedResolution) {
         span.addEvent('Resolved by cache fallback');
-        return fresh as NameResolution;
+        return cachedResolution;
       }
       // If fresh resolution resolved fast with no resolved id (e.g.,
       // names-cache miss, AO/CU dry-run error swallowed to undefined), still
       // prefer the cached resolution if one exists. Matches the
       // comment-documented intent of "fall back if error occurs OR timeout".
-      if (fresh?.resolvedId !== undefined) {
+      if (resolution?.resolvedId !== undefined) {
         span.addEvent('Resolved by fresh resolution');
-        return fresh;
+        return resolution;
       }
       if (cachedResolution) {
         span.addEvent(
