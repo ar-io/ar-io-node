@@ -221,6 +221,7 @@ describe('StandaloneSqliteDatabase', () => {
   let dbWorker: StandaloneSqliteDatabaseWorker;
 
   before(() => {
+    process.env.GET_DEBUG_INFO_CACHE_TTL_MS = '0';
     db = new StandaloneSqliteDatabase({
       log,
       coreDbPath,

@@ -422,6 +422,11 @@ export class StandaloneSqliteDatabaseWorker {
 
   private insertDataHashCache: LRUCache<string, boolean>;
 
+  private cachedDebugInfo: {
+    result: ReturnType<StandaloneSqliteDatabaseWorker['computeDebugInfo']>;
+    expiresAt: number;
+  } | null = null;
+
   private tagSelectivity: Record<string, number>;
 
   // Transactions
@@ -1198,6 +1203,25 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   getDebugInfo() {
+    const ttlMs = config.GET_DEBUG_INFO_CACHE_TTL_MS;
+    if (ttlMs > 0 && this.cachedDebugInfo !== null) {
+      if (Date.now() < this.cachedDebugInfo.expiresAt) {
+        return this.cachedDebugInfo.result;
+      }
+    }
+
+    const result = this.computeDebugInfo();
+
+    if (ttlMs > 0) {
+      this.cachedDebugInfo = { result, expiresAt: Date.now() + ttlMs };
+    } else {
+      this.cachedDebugInfo = null;
+    }
+
+    return result;
+  }
+
+  private computeDebugInfo() {
     const chainStats = this.stmts.core.selectChainStats.get();
     const bundleStats = this.stmts.bundles.selectBundleStats.get();
     const dataItemStats = this.stmts.bundles.selectDataItemStats.get();
