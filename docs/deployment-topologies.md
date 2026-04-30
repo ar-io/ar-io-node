@@ -126,9 +126,12 @@ Readers scale horizontally without re-indexing.
   the writer also streams the unstable head into ClickHouse `new_*`
   tables in near-real time. Readers running with `START_WRITERS=false`
   then see a complete chain — including the live tip — without needing
-  a local SQLite. Pair with `CLICKHOUSE_GQL_SKIP_SQLITE_READS=true` on
-  readers to make ClickHouse the sole read path; the SQLite circuit
-  breaker still acts as a fallback if left enabled.
+  a local SQLite. Two mutually exclusive reader configurations:
+  - `CLICKHOUSE_GQL_SKIP_SQLITE_READS=true` on readers makes ClickHouse
+    the sole read path; SQLite is not queried at all.
+  - Leaving the flag unset keeps SQLite available as a circuit-breaker-
+    governed fallback for the brief window when the streaming pipeline
+    is degraded.
 
 ---
 
