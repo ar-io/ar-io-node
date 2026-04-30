@@ -67,7 +67,12 @@ arIoRouter.use(
           return '/ar-io/resolver/:name';
         if (path.match(/^\/ar-io\/admin\/bundle-status\/[a-zA-Z0-9_-]{43}$/))
           return '/ar-io/admin/bundle-status/:id';
-        if (path.startsWith('/ar-io/admin/')) return path; // Keep other admin routes as-is
+        if (path.match(/^\/ar-io\/admin\/export-parquet\/status\/[^/]+$/))
+          return '/ar-io/admin/export-parquet/status/:jobId';
+        // Any new admin route with a path parameter MUST be normalized
+        // above this line, or each unique parameter value will permanently
+        // accumulate as a distinct prom-client label set.
+        if (path.startsWith('/ar-io/admin/')) return path;
         if (path.startsWith('/ar-io/')) return path; // Keep other ar-io routes as-is
       }
 
