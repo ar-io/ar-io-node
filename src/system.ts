@@ -300,6 +300,20 @@ export const dataBlockListValidator: DataBlockListValidator = db;
 export const nameBlockListValidator: NameBlockListValidator = db;
 export const nestedDataIndexWriter: NestedDataIndexWriter = db;
 export const dataItemIndexWriter: DataItemIndexWriter = db;
+if (
+  config.CLICKHOUSE_GQL_SKIP_SQLITE_READS &&
+  !config.CLICKHOUSE_STREAMING_ENABLED
+) {
+  log.warn(
+    'CLICKHOUSE_GQL_SKIP_SQLITE_READS is set but ' +
+      'CLICKHOUSE_STREAMING_ENABLED is not — ignoring the skip flag. ' +
+      'Without streaming, SQLite is the only source for unstable-head ' +
+      'rows; skipping it would silently drop recent transactions from ' +
+      'GraphQL responses. Enable streaming alongside the skip flag, or ' +
+      'unset the skip flag to silence this warning.',
+  );
+}
+
 export const gqlQueryable: GqlQueryable = (() => {
   const localGql: GqlQueryable =
     config.CLICKHOUSE_URL !== undefined
@@ -318,8 +332,15 @@ export const gqlQueryable: GqlQueryable = (() => {
           // `new_transactions` as a third leg covering the unstable
           // head, and the SQLite leg drops to a tight-timeout fallback
           // (or is skipped entirely if SKIP_SQLITE_READS is set).
+          //
+          // skipSqliteReads is gated on streaming-enabled because
+          // without streaming, SQLite is the *only* source for the
+          // unstable head — skipping it would silently drop recent
+          // transactions from GraphQL.
           queryUnstableHead: config.CLICKHOUSE_STREAMING_ENABLED,
-          skipSqliteReads: config.CLICKHOUSE_GQL_SKIP_SQLITE_READS,
+          skipSqliteReads:
+            config.CLICKHOUSE_STREAMING_ENABLED &&
+            config.CLICKHOUSE_GQL_SKIP_SQLITE_READS,
           ...(config.CLICKHOUSE_STREAMING_ENABLED
             ? {
                 sqliteCircuitBreakerOptions: {
@@ -1441,11 +1462,16 @@ metrics.registerQueueLengthGauge('webhookEmitter', {
 // from app.ts via `clickhouseStreamer?.start()` so a schema-validation
 // failure surfaces at startup rather than silently in the background.
 export const clickhouseStreamer = (() => {
-  if (
-    !config.CLICKHOUSE_STREAMING_ENABLED ||
-    config.CLICKHOUSE_URL === undefined
-  ) {
+  if (!config.CLICKHOUSE_STREAMING_ENABLED) {
     return undefined;
+  }
+  // Fail fast on an explicit opt-in with missing prerequisites — silently
+  // returning undefined would let the gateway start up looking healthy
+  // while the streaming pipeline doesn't actually run.
+  if (config.CLICKHOUSE_URL === undefined) {
+    throw new Error(
+      'CLICKHOUSE_STREAMING_ENABLED=true requires CLICKHOUSE_URL to be set.',
+    );
   }
   const streamerClient = createClickHouseClient({
     url: config.CLICKHOUSE_URL,

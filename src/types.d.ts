@@ -491,6 +491,7 @@ export interface GqlQueryable {
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
+    bundledIn?: string[] | null;
     tags: { name: string; values: string[] }[];
   }): Promise<GqlTransactionsResult>;
 

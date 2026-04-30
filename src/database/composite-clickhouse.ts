@@ -714,6 +714,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
             owners,
             minHeight: sqliteMinHeight,
             maxHeight,
+            bundledIn,
             tags,
           });
 

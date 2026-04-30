@@ -416,7 +416,7 @@ height that would be silently dropped by a `height >= :minHeight` predicate
 | CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS   | Number  | 60000         | Rolling window (ms) over which the SQLite-leg breaker's error rate is measured                                                                                                |
 | CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS           | Number  | 30000         | How long the SQLite-leg breaker stays open before transitioning to half-open for a trial request                                                                              |
 
-#### Streaming pipeline (unstable head)
+### Streaming pipeline (unstable head)
 
 When enabled, indexed blocks, L1 transactions, and ANS-104 data items are
 streamed into ClickHouse `new_blocks` / `new_transactions` so the unstable

@@ -3466,7 +3466,7 @@ export class StandaloneSqliteDatabase
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
-    bundledIn?: string[];
+    bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }) {
     return this.queueRead('gql', 'getGqlTransactions', [
