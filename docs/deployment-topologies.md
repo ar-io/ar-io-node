@@ -120,6 +120,15 @@ Readers scale horizontally without re-indexing.
   the auto-import sleep interval. Operators who need recent-height
   coverage on readers should leave writers enabled and accept the
   duplicated ingest work locally.
+- **Streaming pipeline (alternative).** With
+  `CLICKHOUSE_STREAMING_ENABLED=true` on the writer (see
+  [ClickHouse Pipeline → Streaming pipeline](clickhouse-pipeline.md#streaming-pipeline-unstable-head)),
+  the writer also streams the unstable head into ClickHouse `new_*`
+  tables in near-real time. Readers running with `START_WRITERS=false`
+  then see a complete chain — including the live tip — without needing
+  a local SQLite. Pair with `CLICKHOUSE_GQL_SKIP_SQLITE_READS=true` on
+  readers to make ClickHouse the sole read path; the SQLite circuit
+  breaker still acts as a fallback if left enabled.
 
 ---
 
