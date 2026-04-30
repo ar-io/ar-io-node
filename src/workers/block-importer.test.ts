@@ -56,6 +56,7 @@ describe('BlockImporter', () => {
   };
 
   before(async () => {
+    process.env.GET_DEBUG_INFO_CACHE_TTL_MS = '0';
     log = createTestLogger({ suite: 'BlockImporter' });
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();

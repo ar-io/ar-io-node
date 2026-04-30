@@ -1364,6 +1364,16 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
   `${1000 * 60 * 60 * 4}`, // every 4 hours
 );
 
+// Cache TTL for the SQLite worker's getDebugInfo response. The /ar-io/admin/debug
+// endpoint runs ~8 unfiltered COUNT(*) scans plus aggregation across new and
+// stable data items, which can monopolize the single debug worker thread when
+// polled frequently (e.g. by clickhouse-auto-import). Setting > 0 caches the
+// computed snapshot for this many milliseconds. Set to 0 to disable.
+export const GET_DEBUG_INFO_CACHE_TTL_MS = env.nonNegativeIntOrDefault(
+  'GET_DEBUG_INFO_CACHE_TTL_MS',
+  5 * 60 * 1000, // 5 minutes
+);
+
 //
 // GraphQL
 //
