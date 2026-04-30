@@ -1478,6 +1478,41 @@ export const CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
     30 * 1_000,
   );
 
+// Streaming pipeline (unstable head). When enabled, indexed blocks /
+// transactions / data items are streamed into ClickHouse `new_blocks` /
+// `new_transactions` so the unstable head is queryable from CH directly
+// instead of only from SQLite. The stable Parquet pipeline is unchanged
+// — once a row stabilizes it lands in `transactions` and the unstable
+// copy ages out via TTL. Default off; safe to flip without coordinating
+// with the Parquet pipeline.
+export const CLICKHOUSE_STREAMING_ENABLED =
+  env.varOrDefault('CLICKHOUSE_STREAMING_ENABLED', 'false') === 'true';
+
+// Maximum rows buffered before the streamer issues a bulk INSERT. A
+// time-based flush (CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS) ensures
+// rows aren't held indefinitely when ingest is slow.
+export const CLICKHOUSE_STREAMER_BATCH_SIZE = env.positiveIntOrDefault(
+  'CLICKHOUSE_STREAMER_BATCH_SIZE',
+  500,
+);
+
+// Time-based flush interval. Rows queued for less than this still
+// flush at this cadence, capping unstable-head latency at the
+// configured value (plus the bulk-insert RTT).
+export const CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS = env.positiveIntOrDefault(
+  'CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS',
+  1_000,
+);
+
+// Hard cap on the streamer's in-memory buffer. Once exceeded, the
+// streamer drops oldest rows to keep memory bounded under sustained
+// CH unavailability. Drops are logged + metric'd; the missing rows
+// will land via the stable Parquet pipeline once they stabilize.
+export const CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE = env.positiveIntOrDefault(
+  'CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE',
+  10_000,
+);
+
 //
 // Healthchecks
 //

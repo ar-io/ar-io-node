@@ -85,6 +85,13 @@ if (config.START_WRITERS) {
   system.mempoolWatcher?.start();
 }
 
+// ClickHouse streaming pipeline (issue #696). Started here so a
+// schema-validation failure aborts startup with a clear error rather
+// than silently failing in the background.
+if (system.clickhouseStreamer !== undefined) {
+  await system.clickhouseStreamer.start();
+}
+
 // HTTP server
 const app = express();
 

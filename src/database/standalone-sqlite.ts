@@ -171,7 +171,7 @@ function hashTagPart(value: Buffer) {
   return crypto.createHash('sha1').update(value).digest();
 }
 
-function isContentTypeTag(tagName: Buffer) {
+export function isContentTypeTag(tagName: Buffer) {
   return tagName.toString('utf8').toLowerCase() === 'content-type';
 }
 
@@ -179,7 +179,7 @@ function isContentEncodingTag(tagName: Buffer) {
   return tagName.toString('utf8').toLowerCase() === 'content-encoding';
 }
 
-function ownerToAddress(owner: Buffer) {
+export function ownerToAddress(owner: Buffer) {
   return crypto.createHash('sha256').update(owner).digest();
 }
 

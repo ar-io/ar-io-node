@@ -92,6 +92,8 @@ import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
 import { TransactionOffsetImporter } from './workers/transaction-offset-importer.js';
 import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
+import { createClient as createClickHouseClient } from '@clickhouse/client';
+import { ClickHouseStreamer } from './workers/clickhouse-streamer.js';
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSKvStore, createArNSResolver } from './init/resolvers.js';
 import {
@@ -1412,6 +1414,41 @@ const webhookEmitter = new WebhookEmitter({
 metrics.registerQueueLengthGauge('webhookEmitter', {
   length: () => webhookEmitter.queueDepth(),
 });
+
+// Streaming pipeline (issue #696): mirror the SQLite unstable head into
+// ClickHouse `new_blocks` / `new_transactions` so CH becomes a complete
+// read store. Opt-in; the stable Parquet pipeline is unchanged. Started
+// from app.ts via `clickhouseStreamer?.start()` so a schema-validation
+// failure surfaces at startup rather than silently in the background.
+export const clickhouseStreamer = (() => {
+  if (
+    !config.CLICKHOUSE_STREAMING_ENABLED ||
+    config.CLICKHOUSE_URL === undefined
+  ) {
+    return undefined;
+  }
+  const streamerClient = createClickHouseClient({
+    url: config.CLICKHOUSE_URL,
+    username: config.CLICKHOUSE_USER,
+    password: config.CLICKHOUSE_PASSWORD,
+  });
+  const streamer = new ClickHouseStreamer({
+    log,
+    eventEmitter,
+    clickhouseClient: streamerClient,
+    batchSize: config.CLICKHOUSE_STREAMER_BATCH_SIZE,
+    flushIntervalMs: config.CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS,
+    maxQueueSize: config.CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE,
+  });
+  metrics.registerQueueLengthGauge('clickhouseStreamer', {
+    length: () => streamer.queueDepth(),
+  });
+  registerCleanupHandler('clickhouseStreamer', async () => {
+    await streamer.stop();
+    await streamerClient.close();
+  });
+  return streamer;
+})();
 
 export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
   ? new MempoolWatcher({
