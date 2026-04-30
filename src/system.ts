@@ -314,6 +314,26 @@ export const gqlQueryable: GqlQueryable = (() => {
           maxHeightCacheTtlSeconds:
             config.CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS,
           queryTimeoutSeconds: config.CLICKHOUSE_QUERY_TIMEOUT_SECONDS,
+          // Streaming mode: when enabled, the composite queries
+          // `new_transactions` as a third leg covering the unstable
+          // head, and the SQLite leg drops to a tight-timeout fallback
+          // (or is skipped entirely if SKIP_SQLITE_READS is set).
+          queryUnstableHead: config.CLICKHOUSE_STREAMING_ENABLED,
+          skipSqliteReads: config.CLICKHOUSE_GQL_SKIP_SQLITE_READS,
+          ...(config.CLICKHOUSE_STREAMING_ENABLED
+            ? {
+                sqliteCircuitBreakerOptions: {
+                  timeout:
+                    config.CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS,
+                  errorThresholdPercentage:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+                  rollingCountTimeout:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
+                  resetTimeout:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
+                },
+              }
+            : {}),
         })
       : db;
 

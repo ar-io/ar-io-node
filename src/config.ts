@@ -1513,6 +1513,28 @@ export const CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE = env.positiveIntOrDefault(
   10_000,
 );
 
+// When true, the GraphQL composite layer skips the SQLite leg entirely.
+// Pairs with CLICKHOUSE_STREAMING_ENABLED for operators who want CH to be
+// the sole read path: streaming covers the unstable head, Parquet covers
+// stable, and SQLite stays write-only (still feeds the Parquet export
+// → stable pipeline). When false (default), SQLite remains as a degraded-
+// mode fallback governed by CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS.
+export const CLICKHOUSE_GQL_SKIP_SQLITE_READS =
+  env.varOrDefault('CLICKHOUSE_GQL_SKIP_SQLITE_READS', 'false') === 'true';
+
+// Circuit-breaker timeout for the SQLite leg when streaming is enabled.
+// In that mode CH-unstable covers the live tip and SQLite is a last-
+// resort fallback for outages — a tight timeout keeps GraphQL responsive
+// when CH itself is healthy. Distinct from
+// CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS (which sizes for SQLite
+// being on the critical path) so operators running both modes on
+// different nodes don't have to choose one envelope.
+export const CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS',
+    250,
+  );
+
 //
 // Healthchecks
 //
