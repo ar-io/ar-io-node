@@ -24,6 +24,14 @@ export const BLOCK_TX_FETCH_FAILED = 'block-tx-fetch-failed';
 /** An Arweave TX from a mined block was indexed */
 export const BLOCK_TX_INDEXED = 'block-tx-indexed';
 
+/**
+ * A chain reorg or gap was detected and the index was rewound.
+ * Payload: { forkHeight: number } — the highest height that remains valid
+ * (i.e., the value passed to `resetToHeight`). Listeners should treat all
+ * heights > forkHeight as discarded.
+ */
+export const CHAIN_REORG = 'chain-reorg';
+
 /** An Arweave TX was fetch asynchonously from the network */
 export const TX_FETCHED = 'tx-fetched';
 

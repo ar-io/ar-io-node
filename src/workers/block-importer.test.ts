@@ -17,6 +17,7 @@ import {
 import { EventEmitter } from 'node:events';
 import wait from '../lib/wait.js';
 
+import * as events from '../../src/events.js';
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
 import { BlockImporter } from '../../src/workers/block-importer.js';
 import {
@@ -197,6 +198,45 @@ describe('BlockImporter', () => {
           (db.saveBlockAndTxs as any).mock.calls[0].arguments[0].height,
           1,
         );
+      });
+    });
+
+    describe('CHAIN_REORG event emission', () => {
+      let reorgEvents: { forkHeight: number }[];
+      const captureReorg = (payload: { forkHeight: number }) => {
+        reorgEvents.push(payload);
+      };
+
+      beforeEach(() => {
+        reorgEvents = [];
+        eventEmitter.on(events.CHAIN_REORG, captureReorg);
+      });
+
+      afterEach(() => {
+        eventEmitter.off(events.CHAIN_REORG, captureReorg);
+      });
+
+      it('should emit CHAIN_REORG on gap detection with forkHeight = previousHeight - 1', async () => {
+        blockImporter = createBlockImporter({ startHeight: 1 });
+        await blockImporter.importBlock(1);
+        await blockImporter.importBlock(6);
+        // First gap is detected at height 6: previousHeight=5, so the
+        // first emit pegs forkHeight to 4 (= 5 - 1).
+        assert.ok(reorgEvents.length > 0, 'expected CHAIN_REORG to fire');
+        assert.equal(reorgEvents[0].forkHeight, 4);
+      });
+
+      it('should emit CHAIN_REORG on fork detection with forkHeight = previousHeight - 1', async () => {
+        blockImporter = createBlockImporter({ startHeight: 1 });
+        chainSource.setTempBlockIdOverride(
+          2,
+          'JRhPWF4b66QtiYXe-nBHhj6nKVc7oFgvnwOEqhWmfUGdronQUeOUkyI789uBSGPP',
+        );
+        await blockImporter.importBlock(1);
+        await blockImporter.importBlock(2);
+        // Fork at height 2: previousHeight=1, so forkHeight = 0.
+        assert.equal(reorgEvents.length, 1);
+        assert.equal(reorgEvents[0].forkHeight, 0);
       });
     });
 
