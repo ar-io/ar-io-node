@@ -213,10 +213,17 @@ sql_escape_literal() {
 render_schema_sql() {
   local schema_file="$1"
   local schema_sql
+  # TTL window for the streaming-pipeline unstable tables (new_blocks /
+  # new_transactions). 240 min (4h) is comfortably past 18 confirmations
+  # × ~2 min/block plus a 1h auto-import cycle, so a stalled chain or a
+  # delayed import won't expire rows before they stabilize into
+  # `transactions`.
+  local new_tx_ttl_minutes="${CLICKHOUSE_NEW_TX_TTL_MINUTES:-240}"
 
   schema_sql=$(<"$schema_file")
   schema_sql=${schema_sql//'{{CLICKHOUSE_DICT_USER}}'/$(sql_escape_literal "$CLICKHOUSE_USER")}
   schema_sql=${schema_sql//'{{CLICKHOUSE_DICT_PASSWORD}}'/$(sql_escape_literal "$CLICKHOUSE_PASSWORD")}
+  schema_sql=${schema_sql//'{{NEW_TX_TTL_MINUTES}}'/$new_tx_ttl_minutes}
   printf '%s' "$schema_sql"
 }
 
