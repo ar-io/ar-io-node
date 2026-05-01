@@ -83,6 +83,16 @@ interface NewTransactionRow {
   tags_count: number;
 }
 
+/**
+ * Column list for `INSERT INTO new_transactions` — the order MUST
+ * match {@link NewTransactionRow} field order and the order produced
+ * by {@link rowValuesLiteral}, since the SQL is positional.
+ *
+ * `inserted_at` MUST be present here — without it CH defaults the
+ * column to epoch 0 and the table's `inserted_at + INTERVAL N MINUTE`
+ * TTL drops every row on the next merge. Exported so tests can assert
+ * the coupling stays intact.
+ */
 export const NEW_TRANSACTION_COLUMNS = [
   'height',
   'block_transaction_index',
@@ -179,6 +189,49 @@ function blockRowValuesLiteral(row: NewBlockRow): string {
     .join(', ');
 }
 
+/**
+ * Streams the indexer's unstable head (~18 confirmations of recent
+ * blocks, transactions, and ANS-104 data items) into ClickHouse
+ * `new_blocks` / `new_transactions` so CH becomes a complete read
+ * store. Sits alongside — not in place of — the existing Parquet
+ * pipeline: stable rows still land in `transactions` via
+ * parquet-export, the unstable copy ages out via TTL once a row
+ * stabilizes.
+ *
+ * Subscribes to:
+ * - `BLOCK_INDEXED` — caches block context for the L1-tx handlers
+ *   that fire next on the same event-loop tick, and buffers a
+ *   `new_blocks` row.
+ * - `BLOCK_TX_INDEXED` — buffers a `new_transactions` row with
+ *   `is_data_item=false`, denormalizing block fields from the
+ *   matching `BLOCK_INDEXED`. Caches `tx.id → { height,
+ *   blockTransactionIndex }` so child data items can resolve their
+ *   parent's row context later.
+ * - `ANS104_DATA_ITEM_INDEXED` — buffers a `new_transactions` row
+ *   with `is_data_item=true`, inheriting `block_transaction_index`
+ *   from its parent L1 transaction (looked up in the in-memory
+ *   cache). Skips if parent isn't cached (cold-start gap, intentional
+ *   trade-off — those rows land via the stable pipeline once they
+ *   stabilize).
+ * - `CHAIN_REORG` — issues a bounded `ALTER TABLE new_blocks DELETE`
+ *   and evicts in-memory state. Orphan `new_transactions` rows are
+ *   filtered at query time by the `(height, block_indep_hash)` join
+ *   and age out via TTL — no DELETE needed there.
+ *
+ * Buffering is size-triggered (`CLICKHOUSE_STREAMER_BATCH_SIZE`) or
+ * time-triggered (`CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS`). A
+ * single-flight flush serializes overlapping triggers. The buffer is
+ * bounded (`CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE`); on overflow the
+ * streamer drops oldest rows with a warning — those rows still land
+ * via the stable Parquet pipeline.
+ *
+ * Streaming is best-effort by design: ClickHouse availability is not
+ * required for indexing to make progress. Flush errors are logged
+ * and swallowed; the rows for that batch are dropped, since retrying
+ * could amplify load during a CH outage.
+ *
+ * See `clickhouse-pipeline.md` and PR #699 for the design rationale.
+ */
 export class ClickHouseStreamer {
   // Dependencies
   private log: winston.Logger;
@@ -242,8 +295,15 @@ export class ClickHouseStreamer {
     this.listenerReferences = new Map();
   }
 
-  // Start sequence: validate schema (fail closed if tables missing),
-  // register event listeners, start the flush timer.
+  /**
+   * Validates that `new_blocks` and `new_transactions` exist in the
+   * configured CH database, then registers event listeners and starts
+   * the flush timer. Fails closed (throws) if the tables are missing
+   * — operators run `scripts/clickhouse-import` once to bootstrap.
+   * Called from `app.ts` after `START_WRITERS`-gated workers so a
+   * schema mismatch surfaces as a startup error rather than failing
+   * silently in the background.
+   */
   async start(): Promise<void> {
     await this.validateSchema();
     this.registerListeners();
@@ -258,6 +318,13 @@ export class ClickHouseStreamer {
     this.log.info('ClickHouseStreamer started.');
   }
 
+  /**
+   * Graceful shutdown: stops the flush timer, removes event listeners,
+   * waits for any in-flight flush to drain, and issues one final
+   * flush so buffered rows aren't lost. Idempotent — calling stop()
+   * on an already-stopped streamer is a no-op. Registered as a
+   * cleanup handler in `system.ts`.
+   */
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
@@ -282,6 +349,12 @@ export class ClickHouseStreamer {
     this.log.info('ClickHouseStreamer stopped.');
   }
 
+  /**
+   * Combined depth of pending block and transaction buffers. Surfaced
+   * as the `clickhouseStreamer` Prometheus queue-length gauge so
+   * operators can spot CH-side back-pressure or sustained outages
+   * (queue grows toward `maxQueueSize`, then drops oldest).
+   */
   queueDepth(): number {
     return this.blockBuffer.length + this.txBuffer.length;
   }
@@ -416,9 +489,37 @@ export class ClickHouseStreamer {
   }: {
     forkHeight: number;
   }): Promise<void> {
-    // Bounded DELETE on new_blocks; orphan rows in new_transactions are
-    // filtered out at query time by the (height, block_indep_hash) join
-    // and age out via TTL.
+    // Step 1: drain any in-flight flush. Without this, a flush started
+    // before the reorg signal can INSERT pre-fork rows AFTER our DELETE
+    // runs (network ordering at CH, plus they're concurrent HTTP calls),
+    // leaving orphan `new_blocks` rows past the fork until TTL drops
+    // them ~4h later.
+    if (this.flushInFlight !== null) {
+      await this.flushInFlight.catch(() => {});
+    }
+
+    // Step 2: evict in-memory state past the fork BEFORE issuing the
+    // DELETE. The DELETE is async; if a timer-triggered flush fires
+    // between this synchronous block and the DELETE returning, we want
+    // it to operate on a clean buffer. New event handlers (the next
+    // BLOCK_INDEXED from the recursive re-import) re-populate from the
+    // new chain.
+    for (const h of Array.from(this.blocksByHeight.keys())) {
+      if (h > forkHeight) this.blocksByHeight.delete(h);
+    }
+    for (const [txId, ctx] of Array.from(this.txContextsById.entries())) {
+      if (ctx.height > forkHeight) this.txContextsById.delete(txId);
+    }
+    if (this.currentBlock !== null && this.currentBlock.height > forkHeight) {
+      this.currentBlock = null;
+    }
+    this.blockBuffer = this.blockBuffer.filter((r) => r.height <= forkHeight);
+    this.txBuffer = this.txBuffer.filter((r) => r.height <= forkHeight);
+
+    // Step 3: bounded DELETE on new_blocks. Orphan rows in
+    // new_transactions are filtered out at query time by the
+    // (height, block_indep_hash) join and age out via TTL — no DELETE
+    // needed there.
     try {
       await this.clickhouseClient.command({
         query: `ALTER TABLE new_blocks DELETE WHERE height > ${forkHeight}`,
@@ -431,22 +532,6 @@ export class ClickHouseStreamer {
         { forkHeight, message: err?.message },
       );
     }
-
-    // Drop in-memory contexts for heights above the fork.
-    for (const h of Array.from(this.blocksByHeight.keys())) {
-      if (h > forkHeight) this.blocksByHeight.delete(h);
-    }
-    for (const [txId, ctx] of Array.from(this.txContextsById.entries())) {
-      if (ctx.height > forkHeight) this.txContextsById.delete(txId);
-    }
-    if (this.currentBlock !== null && this.currentBlock.height > forkHeight) {
-      this.currentBlock = null;
-    }
-
-    // Best-effort: drop any pending unstable rows above the fork from
-    // the in-memory buffer so we don't INSERT them post-prune.
-    this.blockBuffer = this.blockBuffer.filter((r) => r.height <= forkHeight);
-    this.txBuffer = this.txBuffer.filter((r) => r.height <= forkHeight);
   }
 
   private evictOldBlockContexts(currentHeight: number): void {

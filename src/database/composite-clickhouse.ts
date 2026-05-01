@@ -270,20 +270,28 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       .from('transactions AS t');
   }
 
-  // Unstable-head leg: mirrors the column shape of `getGqlTransactionsBaseSql`
-  // so addGqlTransactionFilters and the result mapper work identically across
-  // the two CH legs. `new_transactions` deliberately doesn't store the offset
-  // family (offset/size pointers are stable-pipeline artifacts), so those
-  // columns are projected as NULL — keeping the result shape uniform with
-  // the stable leg avoids special-casing in the JS merge or in downstream
-  // GraphQL resolvers.
-  //
-  // The orphan-filter join is expressed as a tuple-IN subquery against
-  // `new_blocks`. Reorgs prune `new_blocks` directly, so any unstable
-  // transactions whose (height, block_indep_hash) no longer matches a row
-  // in `new_blocks` are filtered out at query time and age out via TTL.
-  // ClickHouse handles the tuple-IN with a single hash-set probe over the
-  // small `new_blocks` table.
+  /**
+   * Builds the base SELECT for the **unstable-head** ClickHouse leg of
+   * the GraphQL transactions merge — reads from `new_transactions`
+   * joined against `new_blocks` for orphan filtering.
+   *
+   * Mirrors the column shape of {@link getGqlTransactionsBaseSql} so
+   * `addGqlTransactionFilters` and the result mapper work identically
+   * across the two CH legs. `new_transactions` deliberately doesn't
+   * store the offset/size pointer family (those are stable-pipeline
+   * artifacts), so those columns are projected as NULL — keeping the
+   * result shape uniform with the stable leg avoids special-casing in
+   * the JS merge or in downstream GraphQL resolvers.
+   *
+   * The orphan-filter join is expressed as a tuple-IN subquery against
+   * `new_blocks`. Reorgs prune `new_blocks` directly, so any unstable
+   * transactions whose `(height, block_indep_hash)` no longer matches
+   * a row in `new_blocks` are filtered out at query time and age out
+   * via TTL. ClickHouse handles the tuple-IN with a single hash-set
+   * probe over the small `new_blocks` table.
+   *
+   * Only invoked when `queryUnstableHead` is true. See PR #699.
+   */
   getGqlUnstableTransactionsBaseSql() {
     const base = sql
       .select(
@@ -585,6 +593,30 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     };
   }
 
+  /**
+   * Composite GraphQL `transactions` query. Fans out across up to
+   * three legs in parallel and merges the results with explicit
+   * precedence:
+   *
+   * 1. **CH stable** (`transactions`) — primary path, fail-fast on
+   *    rejection (slow/bad queries surface to the caller).
+   * 2. **CH unstable** (`new_transactions ⨝ new_blocks`) — best-effort,
+   *    only invoked when `queryUnstableHead` is true; rejection
+   *    degrades to a `PARTIAL_RESULT` warning rather than failing the
+   *    whole request.
+   * 3. **SQLite fallback** — tight-timeout circuit-broken leg; skipped
+   *    entirely when `skipSqliteReads` is true.
+   *
+   * Set-based dedup with stable > unstable > sqlite precedence handles
+   * the stabilization-overlap window where the same `id` briefly lives
+   * in both `transactions` and `new_transactions` until TTL drops the
+   * unstable copy. JS-side sort + slice produces a deterministic page;
+   * `hasNextPage` is computed against the deduped edge list (not the
+   * raw concatenation) so cross-leg duplicates that collapse the page
+   * don't falsely advertise more results.
+   *
+   * See `clickhouse-pipeline.md` and PR #699 for the design rationale.
+   */
   async getGqlTransactions({
     pageSize,
     cursor,
