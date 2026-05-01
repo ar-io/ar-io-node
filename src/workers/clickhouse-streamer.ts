@@ -49,6 +49,11 @@ interface NewBlockRow {
 // Mirrors the column order in `new_transactions` so row construction and
 // the INSERT column list stay in lockstep. Binary fields are Buffer or
 // null; numeric / string fields are typed as themselves.
+//
+// `inserted_at` MUST be written explicitly (not relying on a CH default)
+// because the table's TTL is keyed off it as `inserted_at + INTERVAL N
+// MINUTE`. A missing inserted_at defaults to epoch 0, which makes the
+// row immediately TTL-expired and silently dropped on the next merge.
 interface NewTransactionRow {
   height: number;
   block_transaction_index: number;
@@ -68,6 +73,7 @@ interface NewTransactionRow {
   block_timestamp: number | null;
   block_previous_block: Buffer | null;
   indexed_at: number;
+  inserted_at: number; // anchors TTL — must be set, not defaulted
   owner: Buffer | null;
   signature: Buffer | null;
   signature_type: number | null;
@@ -77,7 +83,7 @@ interface NewTransactionRow {
   tags_count: number;
 }
 
-const NEW_TRANSACTION_COLUMNS = [
+export const NEW_TRANSACTION_COLUMNS = [
   'height',
   'block_transaction_index',
   'is_data_item',
@@ -96,6 +102,7 @@ const NEW_TRANSACTION_COLUMNS = [
   'block_timestamp',
   'block_previous_block',
   'indexed_at',
+  'inserted_at',
   'owner',
   'signature',
   'signature_type',
@@ -154,6 +161,7 @@ function rowValuesLiteral(row: NewTransactionRow): string {
     row.block_timestamp,
     row.block_previous_block,
     row.indexed_at,
+    row.inserted_at,
     row.owner,
     row.signature,
     row.signature_type,
@@ -488,6 +496,7 @@ export class ClickHouseStreamer {
       block_previous_block:
         block.previous_block !== '' ? fromB64Url(block.previous_block) : null,
       indexed_at: currentUnixTimestamp(),
+      inserted_at: currentUnixTimestamp(),
       owner: ownerBuf,
       signature: tx.signature !== null ? fromB64Url(tx.signature) : null,
       signature_type: null,
@@ -547,6 +556,7 @@ export class ClickHouseStreamer {
       block_previous_block:
         block.previous_block !== '' ? fromB64Url(block.previous_block) : null,
       indexed_at: currentUnixTimestamp(),
+      inserted_at: currentUnixTimestamp(),
       owner: fromB64Url(item.owner),
       signature: item.signature !== null ? fromB64Url(item.signature) : null,
       signature_type: item.signature_type ?? null,

@@ -301,14 +301,19 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         'toString(data_size) AS data_size',
         'content_type',
         'hex(owner_address) AS owner_address',
-        'NULL AS owner_size',
-        'NULL AS owner_offset',
+        // ClickHouse parses bare `NULL AS alias` as a column-reference to
+        // an identifier named NULL, not a NULL literal — explicit CAST
+        // forces it to a typed nullable. Type matches the corresponding
+        // column on `transactions` (UInt64 → Nullable(UInt64)) so the
+        // result-row shape is uniform across the two CH legs.
+        'CAST(NULL AS Nullable(UInt64)) AS owner_size',
+        'CAST(NULL AS Nullable(UInt64)) AS owner_offset',
         'hex(parent_id) AS parent_id',
         'tags_count',
         'tags',
         'indexed_at',
-        'NULL AS signature_size',
-        'NULL AS signature_offset',
+        'CAST(NULL AS Nullable(UInt64)) AS signature_size',
+        'CAST(NULL AS Nullable(UInt64)) AS signature_offset',
         'signature_type',
       )
       .from('new_transactions AS t');

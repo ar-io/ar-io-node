@@ -18,6 +18,7 @@ import {
   CompositeClickHouseDatabase,
   encodeTransactionGqlCursor,
 } from './composite-clickhouse.js';
+import { NEW_TRANSACTION_COLUMNS } from '../workers/clickhouse-streamer.js';
 
 const log = createTestLogger({ suite: 'CompositeClickHouseDatabase' });
 
@@ -488,6 +489,17 @@ describe('CompositeClickHouseDatabase', () => {
 
       await composite.getGqlTransactions({ pageSize: 10 });
       assert.equal(unstableQueried, false);
+    });
+  });
+
+  describe('streamer regressions', () => {
+    it('includes inserted_at in new_transactions INSERT columns', () => {
+      // Without this column in the INSERT list the streamer's bulk inserts
+      // ship with `inserted_at = 0` (epoch), and the table's TTL of
+      // `inserted_at + INTERVAL N MINUTE` immediately puts every row past
+      // its expiry — a background merge then drops them silently. Caught
+      // end-to-end during smoke testing on 2026-05-01.
+      assert.ok(NEW_TRANSACTION_COLUMNS.includes('inserted_at'));
     });
   });
 
