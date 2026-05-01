@@ -194,6 +194,134 @@ describe('CompositeArNSResolver', () => {
     });
   });
 
+  it('falls back to cached resolution when fresh resolver returns undefined fast (PE-9075)', async () => {
+    const now = Date.now();
+    const expiredCachedResolution: NameResolution = {
+      name: 'test.ar',
+      resolvedId: 'cached-tx',
+      resolvedAt: now - 1_000_000, // expired (resolvedAt + ttl*1000 < now)
+      ttl: 300,
+      processId: 'process1',
+      limit: 1,
+      index: 1,
+    };
+
+    mock.method(mockResolutionCache, 'get', async () =>
+      Buffer.from(JSON.stringify(expiredCachedResolution)),
+    );
+
+    const resolver1: NameResolver = {
+      resolve: mock.fn(async () => {
+        // Fast-fail: throws synchronously, resolveParallel returns undefined
+        // well within arnsCachedResolutionFallbackTimeoutMs.
+        throw new Error('AO/CU dry-run failed');
+      }),
+    };
+
+    const compositeResolver = new CompositeArNSResolver({
+      log,
+      resolvers: [resolver1],
+      resolutionCache: mockResolutionCache,
+      registryCache: mockRegistryCache,
+      arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
+      maxConcurrentResolutions: 1,
+      resolverTimeoutMs: 1000,
+      arnsCachedResolutionFallbackTimeoutMs: 1000,
+    });
+
+    const result = await compositeResolver.resolve({ name: 'test.ar' });
+
+    assert.strictEqual((resolver1.resolve as any).mock.calls.length, 1);
+    assert.deepEqual(result, expiredCachedResolution);
+  });
+
+  it('falls back to cached resolution when fresh resolver exceeds the cached-resolution fallback timeout', async () => {
+    const now = Date.now();
+    const expiredCachedResolution: NameResolution = {
+      name: 'test.ar',
+      resolvedId: 'cached-tx',
+      resolvedAt: now - 1_000_000,
+      ttl: 300,
+      processId: 'process1',
+      limit: 1,
+      index: 1,
+    };
+
+    mock.method(mockResolutionCache, 'get', async () =>
+      Buffer.from(JSON.stringify(expiredCachedResolution)),
+    );
+
+    const resolver1: NameResolver = {
+      resolve: mock.fn(
+        async () =>
+          new Promise<NameResolution>((resolve) =>
+            setTimeout(
+              () =>
+                resolve({
+                  name: 'test.ar',
+                  resolvedId: 'fresh-tx',
+                  resolvedAt: Date.now(),
+                  ttl: 300,
+                  processId: 'process1',
+                  limit: 1,
+                  index: 1,
+                }),
+              500,
+            ),
+          ),
+      ),
+    };
+
+    const compositeResolver = new CompositeArNSResolver({
+      log,
+      resolvers: [resolver1],
+      resolutionCache: mockResolutionCache,
+      registryCache: mockRegistryCache,
+      arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
+      maxConcurrentResolutions: 1,
+      resolverTimeoutMs: 1000,
+      lastResolverTimeoutMs: 1000,
+      arnsCachedResolutionFallbackTimeoutMs: 50,
+    });
+
+    const result = await compositeResolver.resolve({ name: 'test.ar' });
+
+    assert.deepEqual(result, expiredCachedResolution);
+  });
+
+  it('returns undefined resolution when fresh resolver fast-fails AND no cached resolution exists (PE-9075)', async () => {
+    mock.method(mockResolutionCache, 'get', async () => undefined);
+
+    const resolver1: NameResolver = {
+      resolve: mock.fn(async () => {
+        throw new Error('AO/CU dry-run failed');
+      }),
+    };
+
+    const compositeResolver = new CompositeArNSResolver({
+      log,
+      resolvers: [resolver1],
+      resolutionCache: mockResolutionCache,
+      registryCache: mockRegistryCache,
+      arnsNamesCache: {} as ArNSNamesCache, // unused, avoids unawaited promises
+      maxConcurrentResolutions: 1,
+      resolverTimeoutMs: 1000,
+      arnsCachedResolutionFallbackTimeoutMs: 1000,
+    });
+
+    const result = await compositeResolver.resolve({ name: 'test.ar' });
+
+    assert.deepEqual(result, {
+      name: 'test.ar',
+      resolvedId: undefined,
+      resolvedAt: undefined,
+      ttl: undefined,
+      processId: undefined,
+      limit: undefined,
+      index: undefined,
+    });
+  });
+
   it('should respect maxConcurrentResolutions limit', async () => {
     let activeResolutions = 0;
     let maxActiveResolutions = 0;
