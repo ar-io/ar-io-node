@@ -162,6 +162,25 @@ export async function sendBodyWithOptionalDigest({
         bufferedBytes: total,
       });
       if (!res.headersSent) {
+        // Clear trust/representation headers set earlier in the data handler
+        // so the HTTPSIG signer doesn't sign a 502 with stale x-ar-io-* /
+        // x-arweave-* metadata that imply the (failed) response carried real
+        // content. The signer only fires when a trigger header is present, so
+        // dropping them disables signing on the error response entirely.
+        for (const name of Object.keys(res.getHeaders())) {
+          const lower = name.toLowerCase();
+          if (
+            lower.startsWith('x-ar-io-') ||
+            lower.startsWith('x-arweave-') ||
+            lower.startsWith('x-arns-') ||
+            lower === 'content-type' ||
+            lower === 'content-length' ||
+            lower === 'etag' ||
+            lower === 'content-digest'
+          ) {
+            res.removeHeader(name);
+          }
+        }
         res.status(502).end();
       } else {
         res.destroy();

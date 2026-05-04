@@ -216,16 +216,14 @@ export const createChunkOffsetHandler = ({
           }
         }
 
-        // Set common headers (source tracking, cache status)
-        const { hashString } = setCommonChunkHeaders(response, chunk, span);
-
-        // Set ETag when hash is available (cache hits or HEAD requests)
-        if (
-          hashString !== undefined &&
-          (chunk.source === 'cache' || request.method === 'HEAD')
-        ) {
-          setChunkETag(response, hashString);
-        }
+        // Set common headers (source tracking, cache status). The hashString
+        // returned here is the hash of the raw chunk BYTES — not the JSON
+        // wrapper served by this endpoint. We deliberately do NOT use it for
+        // ETag here because ETag must describe the served representation
+        // (RFC 9110 §8.8.1), and what's served is the JSON wrapper. The
+        // raw-chunk hash still lives in X-AR-IO-Hash via setCommonChunkHeaders
+        // for clients that need to identify the underlying chunk bytes.
+        setCommonChunkHeaders(response, chunk, span);
 
         // Set content type and prepare response
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -244,15 +242,16 @@ export const createChunkOffsetHandler = ({
 
         // Bind the JSON body to the HTTPSIG signature: hash the serialized
         // response (NOT the raw chunk bytes — those are wrapped in JSON here)
-        // and emit Content-Digest (in CO_SIGNABLE_HEADERS) plus X-AR-IO-Digest.
-        // ETag is left as-is (chunk-bytes hash from setChunkETag above) for
-        // backwards compatibility with existing clients. JSON is fully in
-        // memory so this is unconditional and free — no threshold, no
-        // buffering tradeoffs.
+        // and emit Content-Digest (in CO_SIGNABLE_HEADERS) plus X-AR-IO-Digest
+        // and ETag, all derived from the same JSON-body hash so the
+        // representation, the digest, and the cache validator agree. JSON is
+        // fully in memory so this is unconditional and free — no threshold,
+        // no buffering tradeoffs.
         const jsonDigestB64Url = crypto
           .createHash('sha256')
           .update(responseBodyString)
           .digest('base64url');
+        setChunkETag(response, jsonDigestB64Url);
         response.setHeader(headerNames.digest, jsonDigestB64Url);
         response.setHeader(
           headerNames.contentDigest,
