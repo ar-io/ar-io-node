@@ -793,8 +793,7 @@ st
         // (size_too_large, size_unknown, disabled).
         const EXPECTED_TESTING_DIGEST_B64URL =
           'rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q';
-        const EXPECTED_TESTING_CONTENT_DIGEST =
-          `sha-256=:rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5++TfXcNws7Q=:`;
+        const EXPECTED_TESTING_CONTENT_DIGEST = `sha-256=:rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5++TfXcNws7Q=:`;
 
         it('computes digest/etag from the buffered body when no stored hash is available', async () => {
           // dataAttributesSource returns undefined (no stored hash).
@@ -1279,12 +1278,14 @@ st
             });
         });
 
-        it('returns 304 when ETag from buffered-digest matches If-None-Match', async () => {
+        it('returns 200 with buffered-digest ETag when If-None-Match does not match', async () => {
           // Contract change (2026): the buffered-digest helper now computes
-          // and sets ETag for small uncached responses, so the 304 path can
-          // fire on If-None-Match matches. (The old test asserted "no ETag
-          // therefore 200" — that case now requires a body > buffer threshold,
-          // which is exercised in buffered-digest.test.ts.)
+          // and sets ETag for small uncached responses. This test covers the
+          // non-match path — request sends a wrong If-None-Match, so the 304
+          // short-circuit is skipped and we get the 200 + body + ETag from the
+          // computed buffered digest. (The old test asserted "no ETag therefore
+          // 200" — that case now requires a body > buffer threshold, which is
+          // exercised in buffered-digest.test.ts.)
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
@@ -1319,6 +1320,55 @@ st
               );
               assert.equal(res.body.toString(), 'testing...');
             });
+        });
+
+        it('returns 304 when If-None-Match matches the cached-digest ETag', async () => {
+          // The 304 short-circuit fires *before* sendBodyWithOptionalDigest
+          // runs (handlers.ts handleIfNoneMatch path), so it can only match
+          // when an ETag was set earlier — i.e. when the cached/HEAD digest
+          // path (setDigestStableVerifiedHeaders) populated ETag from
+          // dataAttributes.hash. That gate requires data.cached === true OR
+          // a HEAD request, so we override the data source to return cached.
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+          dataSource.getData = (_params?: any) =>
+            Promise.resolve({
+              hash: 'rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q',
+              stream: Readable.from(Buffer.from('testing...')),
+              size: 10,
+              sourceContentType: 'application/octet-stream',
+              verified: true,
+              trusted: true,
+              cached: true,
+              requestAttributes: { hops: 0 },
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .set(
+              'If-None-Match',
+              '"rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q"',
+            )
+            .expect(304);
         });
 
         it('should return 304 for range request when If-None-Match matches ETag', async () => {

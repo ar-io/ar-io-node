@@ -242,6 +242,27 @@ export const createChunkOffsetHandler = ({
           Buffer.byteLength(responseBodyString).toString(),
         );
 
+        // Bind the JSON body to the HTTPSIG signature: hash the serialized
+        // response (NOT the raw chunk bytes — those are wrapped in JSON here)
+        // and emit Content-Digest (in CO_SIGNABLE_HEADERS) plus X-AR-IO-Digest.
+        // ETag is left as-is (chunk-bytes hash from setChunkETag above) for
+        // backwards compatibility with existing clients. JSON is fully in
+        // memory so this is unconditional and free — no threshold, no
+        // buffering tradeoffs.
+        const jsonDigestB64Url = crypto
+          .createHash('sha256')
+          .update(responseBodyString)
+          .digest('base64url');
+        response.setHeader(headerNames.digest, jsonDigestB64Url);
+        response.setHeader(
+          headerNames.contentDigest,
+          formatContentDigest(jsonDigestB64Url),
+        );
+        metrics.httpSigContentDigestTotal.inc({
+          source: 'computed_buffered',
+          path: 'chunk',
+        });
+
         // Handle conditional requests (If-None-Match)
         if (handleIfNoneMatch(request, response)) {
           span.setAttribute('http.status_code', 304);
@@ -497,17 +518,24 @@ export const createChunkOffsetDataHandler = ({
         // bytes end-to-end. See architect-handoff/httpsig-body-binding-plan.md.
         let digestB64Url: string | undefined = hashString;
         if (digestB64Url !== undefined) {
-          metrics.httpSigContentDigestTotal.inc({ source: 'cache_hit' });
+          metrics.httpSigContentDigestTotal.inc({
+            source: 'cache_hit',
+            path: 'chunk',
+          });
         } else if (chunk.chunk !== undefined && chunk.chunk.length > 0) {
           digestB64Url = crypto
             .createHash('sha256')
             .update(chunk.chunk)
             .digest('base64url');
-          metrics.httpSigContentDigestTotal.inc({ source: 'computed_buffered' });
+          metrics.httpSigContentDigestTotal.inc({
+            source: 'computed_buffered',
+            path: 'chunk',
+          });
         }
 
         if (digestB64Url !== undefined) {
           setChunkETag(response, digestB64Url);
+          response.setHeader(headerNames.digest, digestB64Url);
           response.setHeader(
             headerNames.contentDigest,
             formatContentDigest(digestB64Url),

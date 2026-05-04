@@ -15,19 +15,21 @@ import { headerNames } from '../../constants.js';
 
 // supertest doesn't parse binary by default — pass this to .parse() so we
 // get a Buffer back in res.body for arbitrary-bytes responses.
-function parseAsBuffer(res: any, callback: (err: Error | null, body: Buffer) => void) {
+function parseAsBuffer(
+  res: any,
+  callback: (err: Error | null, body: Buffer) => void,
+) {
   res.setEncoding('binary');
   let data = '';
-  res.on('data', (chunk: string) => { data += chunk; });
+  res.on('data', (chunk: string) => {
+    data += chunk;
+  });
   res.on('end', () => callback(null, Buffer.from(data, 'binary')));
 }
 import { createTestLogger } from '../../../test/test-logger.js';
 import { sendBodyWithOptionalDigest } from './buffered-digest.js';
 import { formatContentDigest } from '../../lib/digest.js';
-import {
-  ContiguousData,
-  ContiguousDataAttributes,
-} from '../../types.js';
+import { ContiguousData } from '../../types.js';
 
 const log = createTestLogger({ suite: 'buffered-digest' });
 
@@ -66,16 +68,14 @@ function expectedDigest(bytes: Buffer): {
 
 /**
  * Mounts a tiny express app whose only route invokes sendBodyWithOptionalDigest
- * with caller-controlled `data`, `dataAttributes`, and `maxBytes`. Returns a
- * supertest agent for the app — same shape as handlers.test.ts uses.
+ * with caller-controlled `data` and `maxBytes`. Returns a supertest agent for
+ * the app — same shape as handlers.test.ts uses.
  */
 function makeApp({
   data,
-  dataAttributes,
   maxBytes,
 }: {
   data: ContiguousData;
-  dataAttributes?: ContiguousDataAttributes;
   maxBytes?: number;
 }) {
   const app = express();
@@ -84,7 +84,6 @@ function makeApp({
       req,
       res,
       data,
-      dataAttributes,
       log,
       dataId: 'test-id',
       maxBytes,
@@ -103,11 +102,16 @@ describe('sendBodyWithOptionalDigest', () => {
       maxBytes: ONE_MIB,
     });
 
-    const res = await request(app).get('/data').buffer(true).parse(parseAsBuffer);
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
 
     assert.equal(res.status, 200);
-    assert.equal(res.headers[headerNames.contentDigest.toLowerCase()],
-      contentDigest);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      contentDigest,
+    );
     assert.equal(res.headers[headerNames.digest.toLowerCase()], base64url);
     assert.equal(res.headers['etag'], `"${base64url}"`);
     assert.equal(res.headers['content-length'], String(body.length));
@@ -121,11 +125,16 @@ describe('sendBodyWithOptionalDigest', () => {
       maxBytes: 1024, // 1 KB threshold — body is over
     });
 
-    const res = await request(app).get('/data').buffer(true).parse(parseAsBuffer);
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
 
     assert.equal(res.status, 200);
-    assert.equal(res.headers[headerNames.contentDigest.toLowerCase()],
-      undefined);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      undefined,
+    );
     // Body still streamed correctly
     assert.equal(res.body.length, body.length);
   });
@@ -140,11 +149,16 @@ describe('sendBodyWithOptionalDigest', () => {
 
     const app = makeApp({ data, maxBytes: ONE_MIB });
 
-    const res = await request(app).get('/data').buffer(true).parse(parseAsBuffer);
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
 
     assert.equal(res.status, 200);
-    assert.equal(res.headers[headerNames.contentDigest.toLowerCase()],
-      undefined);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      undefined,
+    );
   });
 
   it('does nothing special when threshold is 0 (feature disabled)', async () => {
@@ -154,14 +168,19 @@ describe('sendBodyWithOptionalDigest', () => {
       maxBytes: 0,
     });
 
-    const res = await request(app).get('/data').buffer(true).parse(parseAsBuffer);
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
 
     assert.equal(res.status, 200);
-    assert.equal(res.headers[headerNames.contentDigest.toLowerCase()],
-      undefined);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      undefined,
+    );
   });
 
-  it('size lie: source declares small but streams over threshold — falls back, no Content-Digest', async () => {
+  it('size lie: source declares small but streams over threshold — fails with 502', async () => {
     // Source claims 16 bytes but the stream actually emits 2048.
     const realBody = Buffer.alloc(2048, 0x42);
     const data = {
@@ -171,15 +190,19 @@ describe('sendBodyWithOptionalDigest', () => {
 
     const app = makeApp({ data, maxBytes: 1024 });
 
-    const res = await request(app).get('/data').buffer(true).parse(parseAsBuffer);
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
 
     // The 16-byte declared size is below the 1024 threshold, so we'd try to
-    // buffer; partway through the stream we discover it's actually 2048 and
-    // bail to streaming with no Content-Digest set.
-    assert.equal(res.status, 200);
-    assert.equal(res.headers[headerNames.contentDigest.toLowerCase()],
-      undefined);
-    assert.equal(res.body.length, realBody.length);
+    // buffer; partway through the stream we discover it's actually 2048,
+    // and respond 502. Silent truncation would be worse than a loud failure.
+    assert.equal(res.status, 502);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      undefined,
+    );
   });
 
   it('passes through (no Content-Digest set by helper) when cache_hit header was already set upstream', async () => {
@@ -193,19 +216,23 @@ describe('sendBodyWithOptionalDigest', () => {
         req,
         res,
         data: makeData({ bytes: body, cached: true }),
-        dataAttributes: undefined,
         log,
         dataId: 'cached-test',
         maxBytes: ONE_MIB,
       });
     });
 
-    const res = await request(app).get('/data').buffer(true).parse(parseAsBuffer);
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
 
     assert.equal(res.status, 200);
     // The pre-set digest is what stays; helper does not overwrite.
-    assert.equal(res.headers[headerNames.contentDigest.toLowerCase()],
-      cachedDigest);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      cachedDigest,
+    );
   });
 
   it('boundary: body exactly at the threshold size IS buffered', async () => {
@@ -217,11 +244,42 @@ describe('sendBodyWithOptionalDigest', () => {
       maxBytes: 1024,
     });
 
-    const res = await request(app).get('/data').buffer(true).parse(parseAsBuffer);
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
 
     assert.equal(res.status, 200);
-    assert.equal(res.headers[headerNames.contentDigest.toLowerCase()],
-      contentDigest);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      contentDigest,
+    );
+  });
+
+  it('empty body: emits Content-Digest of empty SHA-256', async () => {
+    const body = Buffer.alloc(0);
+    const { base64url, contentDigest } = expectedDigest(body);
+    // Sanity-check the well-known constant for empty SHA-256.
+    assert.equal(base64url, '47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU');
+
+    const app = makeApp({
+      data: makeData({ bytes: body, cached: false }),
+      maxBytes: ONE_MIB,
+    });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    assert.equal(res.status, 200);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      contentDigest,
+    );
+    assert.equal(res.headers[headerNames.digest.toLowerCase()], base64url);
+    assert.equal(res.headers['content-length'], '0');
+    assert.equal(res.body.length, 0);
   });
 
   it('property-style: random byte sequences hash correctly across multiple sizes', async () => {
@@ -235,7 +293,10 @@ describe('sendBodyWithOptionalDigest', () => {
         maxBytes: FIVE_MIB,
       });
 
-      const res = await request(app).get('/data').buffer(true).parse(parseAsBuffer);
+      const res = await request(app)
+        .get('/data')
+        .buffer(true)
+        .parse(parseAsBuffer);
 
       assert.equal(res.status, 200, `size=${size} failed status check`);
       assert.equal(

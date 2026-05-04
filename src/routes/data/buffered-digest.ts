@@ -13,33 +13,37 @@ import { headerNames } from '../../constants.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { pipeStreamToResponse } from '../../lib/stream.js';
 import * as metrics from '../../metrics.js';
-import { ContiguousData, ContiguousDataAttributes } from '../../types.js';
+import { ContiguousData } from '../../types.js';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
+const METRIC_PATH = 'data';
 
 /**
  * Decide whether to buffer the response body to compute Content-Digest before
  * writing, or fall through to the existing streaming behavior. Cached and HEAD
- * paths never reach this helper — they already emit the stored digest in
- * setDigestStableVerifiedHeaders. The buffered branch covers the
+ * paths never reach the buffered branch — they already emit the stored digest
+ * in setDigestStableVerifiedHeaders. The buffered branch covers the
  * uncached-streaming case for bodies small enough to hold in memory safely.
  *
- * Three branches, each tracked via httpsig_content_digest_total:
+ * Branches, each tracked via httpsig_content_digest_total{path="data"}:
  *
- *   1. skipped_disabled       — feature off (threshold = 0)
- *   2. skipped_size_unknown   — source didn't report size; can't bound buffer
- *   3. skipped_too_large      — declared size exceeds threshold
- *   4. computed_buffered      — buffered + hashed + Content-Digest emitted
- *   5. overran_threshold      — source lied about size; fell back to streaming
+ *   - cache_hit             — Content-Digest already set upstream (cached/HEAD)
+ *   - skipped_disabled      — feature off (threshold = 0)
+ *   - skipped_size_unknown  — source didn't report size; can't bound buffer
+ *   - skipped_too_large     — declared size exceeds threshold
+ *   - computed_buffered     — buffered + hashed + Content-Digest emitted
+ *   - overran_threshold     — source lied about size; response fails with 502
  *
- * Cached and HEAD branches increment cache_hit upstream where the digest
- * is set from the stored hash.
+ * Note on Content-Encoding: when the stored data carries a Content-Encoding
+ * header (e.g. gzip on the original upload), it is passed through unchanged.
+ * Per RFC 9530 §3, Content-Digest covers the encoded representation, so the
+ * hash is computed over the bytes we put on the wire. Clients that decode
+ * before verifying will see a mismatch — that's their bug, not ours.
  */
 export async function sendBodyWithOptionalDigest({
   req,
   res,
   data,
-  dataAttributes: _dataAttributes,
   log,
   dataId,
   maxBytes = config.HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES,
@@ -47,10 +51,6 @@ export async function sendBodyWithOptionalDigest({
   req: Request;
   res: Response;
   data: ContiguousData;
-  // Currently unused — cache-hit detection runs via the response header set
-  // upstream by setDigestStableVerifiedHeaders. Kept in the signature so
-  // future logic (e.g. tracing) doesn't have to thread it through callers.
-  dataAttributes: ContiguousDataAttributes | undefined;
   log: Logger;
   dataId: string;
   maxBytes?: number;
@@ -64,25 +64,37 @@ export async function sendBodyWithOptionalDigest({
   // (setDigestStableVerifiedHeaders fires earlier; the header is present
   // when data.cached || dataAttributes.hash is known and HEAD.)
   if (res.getHeader(headerNames.contentDigest) !== undefined) {
-    metrics.httpSigContentDigestTotal.inc({ source: 'cache_hit' });
+    metrics.httpSigContentDigestTotal.inc({
+      source: 'cache_hit',
+      path: METRIC_PATH,
+    });
     return pipeStreamToResponse(data.stream, res, log, dataId);
   }
 
   // Feature disabled.
   if (maxBytes <= 0) {
-    metrics.httpSigContentDigestTotal.inc({ source: 'skipped_disabled' });
+    metrics.httpSigContentDigestTotal.inc({
+      source: 'skipped_disabled',
+      path: METRIC_PATH,
+    });
     return pipeStreamToResponse(data.stream, res, log, dataId);
   }
 
   // Size unknown — can't safely buffer.
   if (data.size === undefined || data.size === null) {
-    metrics.httpSigContentDigestTotal.inc({ source: 'skipped_size_unknown' });
+    metrics.httpSigContentDigestTotal.inc({
+      source: 'skipped_size_unknown',
+      path: METRIC_PATH,
+    });
     return pipeStreamToResponse(data.stream, res, log, dataId);
   }
 
   // Body too large — preserve streaming behavior, no TTFB tax.
   if (data.size > maxBytes) {
-    metrics.httpSigContentDigestTotal.inc({ source: 'skipped_too_large' });
+    metrics.httpSigContentDigestTotal.inc({
+      source: 'skipped_too_large',
+      path: METRIC_PATH,
+    });
     return pipeStreamToResponse(data.stream, res, log, dataId);
   }
 
@@ -90,67 +102,93 @@ export async function sendBodyWithOptionalDigest({
   // in one shot. Headers are emitted before res.write/end, so adding
   // Content-Digest now still ends up covered by the HTTPSIG signature middleware
   // (which signs at writeHead).
-  const hasher = crypto.createHash('sha256');
-  const buffers: Buffer[] = [];
-  let total = 0;
-  let overran = false;
+  //
+  // Inflight gauge: account up to the worst-case (maxBytes) on entry so a
+  // burst of concurrent requests is visible immediately, then reconcile to
+  // actual `total` on the way out. The gauge MUST be decremented on every
+  // exit path; that's enforced by the try/finally below.
+  metrics.httpSigBufferedBytesInflight.inc(maxBytes);
+  let bytesAccountedToGauge = maxBytes;
+  const adjustGauge = (actualBytes: number) => {
+    const delta = actualBytes - bytesAccountedToGauge;
+    if (delta !== 0) {
+      metrics.httpSigBufferedBytesInflight.inc(delta);
+      bytesAccountedToGauge = actualBytes;
+    }
+  };
 
   try {
-    for await (const chunk of data.stream as NodeJS.ReadableStream) {
-      const buf = chunk instanceof Buffer ? chunk : Buffer.from(chunk);
-      total += buf.length;
-      // Defense against source lying about size: if total exceeds the
-      // declared budget, stop buffering and stream the rest. We never want
-      // to OOM because an upstream returned more bytes than it claimed.
-      // Keep the overrunning chunk in `buffers` so it's not lost in the
-      // streaming-fallback write below — but don't update the hasher with
-      // it (we'll skip Content-Digest on overrun anyway).
-      if (total > maxBytes) {
-        overran = true;
+    const hasher = crypto.createHash('sha256');
+    const buffers: Buffer[] = [];
+    let total = 0;
+    let overran = false;
+
+    try {
+      for await (const chunk of data.stream as NodeJS.ReadableStream) {
+        const buf = chunk instanceof Buffer ? chunk : Buffer.from(chunk);
+        total += buf.length;
+        if (total > maxBytes) {
+          overran = true;
+          buffers.push(buf);
+          break;
+        }
+        hasher.update(buf);
         buffers.push(buf);
-        break;
       }
-      hasher.update(buf);
-      buffers.push(buf);
+    } catch (error: any) {
+      log.error('Stream error during buffered-digest read:', {
+        dataId,
+        message: error?.message,
+      });
+      if (!res.headersSent && !res.destroyed) {
+        res.destroy();
+      }
+      return;
     }
-  } catch (error: any) {
-    log.error('Stream error during buffered-digest read:', {
-      dataId,
-      message: error?.message,
+
+    if (overran) {
+      // The for-await break above triggered the iterator's return(), which
+      // destroyed the underlying stream — so we cannot resume streaming the
+      // remainder. Treat the size-lie as a hard upstream contract violation:
+      // fail the response with 502 and log loudly. Operators should see this
+      // and investigate the source. Silent truncation would be worse.
+      metrics.httpSigContentDigestTotal.inc({
+        source: 'overran_threshold',
+        path: METRIC_PATH,
+      });
+      log.warn('Buffered-digest overran declared size; failing with 502', {
+        dataId,
+        declaredSize: data.size,
+        bufferedBytes: total,
+      });
+      if (!res.headersSent) {
+        res.status(502).end();
+      } else {
+        res.destroy();
+      }
+      return;
+    }
+
+    // Success: reconcile gauge to actual size, compute final digest,
+    // emit headers + body.
+    adjustGauge(total);
+    const hashB64Url = hasher.digest('base64url');
+    res.setHeader(headerNames.digest, hashB64Url);
+    res.setHeader(headerNames.contentDigest, formatContentDigest(hashB64Url));
+    res.setHeader('ETag', `"${hashB64Url}"`);
+    res.setHeader('Content-Length', String(total));
+    metrics.httpSigContentDigestTotal.inc({
+      source: 'computed_buffered',
+      path: METRIC_PATH,
     });
-    if (!res.headersSent && !res.destroyed) {
-      res.destroy();
+
+    res.end(Buffer.concat(buffers));
+  } finally {
+    // Always release the gauge — covers success, overrun, error, and any
+    // unexpected throws above.
+    if (bytesAccountedToGauge > 0) {
+      metrics.httpSigBufferedBytesInflight.dec(bytesAccountedToGauge);
+      bytesAccountedToGauge = 0;
     }
-    return;
   }
-
-  if (overran) {
-    // Fall through to streaming with whatever we'd already buffered, plus the
-    // rest of the upstream stream. No Content-Digest is set since we can't
-    // hash bytes we already let through. This is rare and operationally
-    // notable — a size-lie from a data source is worth investigating.
-    metrics.httpSigContentDigestTotal.inc({ source: 'overran_threshold' });
-    log.warn('Buffered-digest overran declared size; falling back to streaming', {
-      dataId,
-      declaredSize: data.size,
-      bufferedBytes: total,
-    });
-    if (!res.headersSent) {
-      res.writeHead(200);
-    }
-    for (const buf of buffers) {
-      res.write(buf);
-    }
-    return pipeStreamToResponse(data.stream, res, log, dataId);
-  }
-
-  // Success: compute final digest and emit headers + body.
-  const hashB64Url = hasher.digest('base64url');
-  res.setHeader(headerNames.digest, hashB64Url);
-  res.setHeader(headerNames.contentDigest, formatContentDigest(hashB64Url));
-  res.setHeader('ETag', `"${hashB64Url}"`);
-  res.setHeader('Content-Length', String(total));
-  metrics.httpSigContentDigestTotal.inc({ source: 'computed_buffered' });
-
-  res.end(Buffer.concat(buffers));
 }

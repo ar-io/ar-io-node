@@ -1267,7 +1267,6 @@ export const createRawDataHandler = ({
               req,
               res,
               data,
-              dataAttributes,
               log,
               dataId: id,
             });
@@ -1516,7 +1515,6 @@ const sendManifestResponse = async ({
           req,
           res,
           data,
-          dataAttributes,
           log,
           dataId: resolvedId,
         });
@@ -1959,7 +1957,6 @@ export const createDataHandler = ({
             req,
             res,
             data,
-            dataAttributes,
             log,
             dataId: id,
           });

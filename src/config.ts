@@ -1060,10 +1060,24 @@ export const HTTPSIG_BIND_REQUEST =
 // end-to-end. Cached and HEAD responses are unaffected (they already emit the
 // stored digest). Set to 0 to disable buffered emission and preserve today's
 // streaming-without-digest behavior for the uncached path.
-export const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES = +env.varOrDefault(
-  'HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES',
-  '2097152', // 2 MiB
+// Parse defensively: an env value of "" or non-numeric input would otherwise
+// become NaN, which silently disables both the size cap (`size > maxBytes`
+// evaluates false for NaN) and the disabled-branch check (`maxBytes <= 0` is
+// also false for NaN), letting unbounded buffers through. Validate as a
+// non-negative finite integer; fall back to the default on bad input.
+const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT = 2 * 1024 * 1024; // 2 MiB
+const httpSigBodyDigestBufferMaxBytesParsed = Number.parseInt(
+  env.varOrDefault(
+    'HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES',
+    String(HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT),
+  ),
+  10,
 );
+export const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES =
+  Number.isFinite(httpSigBodyDigestBufferMaxBytesParsed) &&
+  httpSigBodyDigestBufferMaxBytesParsed >= 0
+    ? httpSigBodyDigestBufferMaxBytesParsed
+    : HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT;
 
 // Observer wallet for attestation signing
 export const OBSERVER_WALLET = env.varOrUndefined('OBSERVER_WALLET');
