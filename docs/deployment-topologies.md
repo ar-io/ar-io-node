@@ -9,10 +9,6 @@ code changes. The wiring is driven by a handful of env vars:
   indexer writes. Supports a `hashPartition` operator (see
   [Filters](filters.md#hash-partition-filter)) for deterministic splits
   by TX ID, owner, etc.
-- `START_WRITERS=false` — disables block/transaction/bundle indexing
-  workers. Appropriate for read-replica roles that consume a shared
-  ClickHouse cluster and accept having no local speed layer above the
-  composite boundary.
 - `CLICKHOUSE_URL` — when set, wraps the SQLite GraphQL queryable with
   `CompositeClickHouseDatabase` (see [ClickHouse Pipeline](clickhouse-pipeline.md)).
   The gateway only knows a single endpoint; replication or sharding is
@@ -83,8 +79,8 @@ flowchart LR
   end
 
   subgraph Readers["Reader gateways"]
-    R1["ar-io-node<br/>START_WRITERS=false<br/>CLICKHOUSE_URL=cluster"]
-    R2["ar-io-node<br/>START_WRITERS=false<br/>CLICKHOUSE_URL=cluster"]
+    R1["ar-io-node<br/>CLICKHOUSE_URL=cluster"]
+    R2["ar-io-node<br/>CLICKHOUSE_URL=cluster"]
   end
 
   subgraph CH["ClickHouse cluster (ReplicatedMergeTree + Keeper)"]
@@ -101,9 +97,11 @@ flowchart LR
   R2 -->|reads| N3
 ```
 
-**When to use.** You want a single authoritative batch layer shared
-across gateways and can afford the Keeper-quorum operational cost.
-Readers scale horizontally without re-indexing.
+**When to use.** You want a single authoritative GraphQL batch layer
+shared across gateways — readers answer `/graphql` out of the cluster
+instead of building their own ClickHouse — and can afford the
+Keeper-quorum operational cost. Readers still index the chain locally
+(see the note below).
 
 **Notes.**
 - ar-io-node itself has no notion of cluster topology — `CLICKHOUSE_URL`

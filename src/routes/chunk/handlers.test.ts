@@ -7,6 +7,7 @@
 
 import { strict as assert } from 'node:assert';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
+import crypto from 'node:crypto';
 import express from 'express';
 import { default as request } from 'supertest';
 import {
@@ -18,6 +19,36 @@ import { ChunkNotFoundError } from '../../data/chunk-retrieval-service.js';
 import log from '../../log.js';
 
 const CHUNK_OFFSET_PATH = '/chunk/:offset(\\d+)';
+
+/**
+ * Compute the expected ETag for a chunk-offset JSON response. The handler
+ * sets ETag from the SHA-256 (base64url) of the serialized JSON body — not
+ * from the raw chunk bytes — so ETag describes what's actually served per
+ * RFC 9110 §8.8.1. Tests use this helper to derive the expected value
+ * without hand-encoding it.
+ */
+function expectedJsonEtag(parts: {
+  chunk: Buffer;
+  data_path: Buffer;
+  tx_path?: Buffer;
+}): string {
+  const body: Record<string, string> = {
+    chunk: parts.chunk.toString('base64url'),
+    data_path: parts.data_path.toString('base64url'),
+  };
+  if (parts.tx_path !== undefined) {
+    body.tx_path = parts.tx_path.toString('base64url');
+  }
+  body.packing = 'unpacked';
+  const hash = crypto
+    .createHash('sha256')
+    .update(JSON.stringify(body))
+    .digest('base64url');
+  return `"${hash}"`;
+}
+
+const DEFAULT_MOCK_CHUNK = Buffer.from('chunk data');
+const DEFAULT_MOCK_DATA_PATH = Buffer.from('12345abc');
 
 /**
  * Creates a mock ChunkRetrievalService that returns a BoundaryFetchResult.
@@ -223,7 +254,15 @@ describe('Chunk routes', () => {
             'application/json; charset=utf-8',
           );
           assert.strictEqual(res.header['x-cache'], 'HIT');
-          assert.strictEqual(res.header['etag'], '"dGVzdC1oYXNo"');
+          // ETag describes the JSON representation served by this endpoint,
+          // not the raw chunk bytes.
+          assert.strictEqual(
+            res.header['etag'],
+            expectedJsonEtag({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
           assert.ok(res.header['content-length']);
           // HEAD request should have no body
           assert.ok(res.text === '' || res.text === undefined);
@@ -289,7 +328,12 @@ describe('Chunk routes', () => {
   });
 
   describe('ETag support', () => {
-    it('should include ETag when chunk hash is available and cached', async () => {
+    // Contract change (2026): ETag on /chunk/:offset describes the JSON
+    // body served by this endpoint, not the raw chunk bytes — so it is
+    // always present (the JSON is fully in memory) and always agrees with
+    // Content-Digest. Cache status / hash availability no longer gate it.
+
+    it('should include ETag derived from JSON body when cached', async () => {
       const chunkRetrievalService = mockService({
         source: 'cache',
         hash: Buffer.from('abc123def456', 'base64url'),
@@ -304,7 +348,13 @@ describe('Chunk routes', () => {
         .get('/chunk/1234')
         .expect(200)
         .then((res: any) => {
-          assert.strictEqual(res.header['etag'], '"abc123def456"');
+          assert.strictEqual(
+            res.header['etag'],
+            expectedJsonEtag({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
         });
     });
 
@@ -323,15 +373,22 @@ describe('Chunk routes', () => {
         .head('/chunk/1234')
         .expect(200)
         .then((res: any) => {
-          assert.strictEqual(res.header['etag'], '"abc123def456"');
+          assert.strictEqual(
+            res.header['etag'],
+            expectedJsonEtag({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
           assert.strictEqual(res.header['x-cache'], 'MISS');
         });
     });
 
-    it('should not include ETag when chunk hash is unavailable', async () => {
+    it('should include ETag even when chunk hash is unavailable', async () => {
       const chunkRetrievalService = mockService({
         source: 'network',
-        // No hash field
+        // No raw-chunk hash field — but ETag covers the JSON body, which
+        // we always have, so ETag is still emitted.
       });
 
       app.get(
@@ -343,12 +400,17 @@ describe('Chunk routes', () => {
         .get('/chunk/1234')
         .expect(200)
         .then((res: any) => {
-          // Express may set a weak ETag automatically, but we should not have our strong ETag
-          assert.ok(!res.header['etag'] || res.header['etag'].startsWith('W/'));
+          assert.strictEqual(
+            res.header['etag'],
+            expectedJsonEtag({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
         });
     });
 
-    it('should not include ETag for GET from network when hash available but not cached', async () => {
+    it('should include ETag for GET from network when not cached', async () => {
       const chunkRetrievalService = mockService({
         source: 'network',
         hash: Buffer.from('abc123def456', 'base64url'),
@@ -363,14 +425,24 @@ describe('Chunk routes', () => {
         .get('/chunk/1234')
         .expect(200)
         .then((res: any) => {
-          // No strong ETag for streamed network data on GET (Express may add weak ETag)
-          assert.ok(!res.header['etag'] || res.header['etag'].startsWith('W/'));
+          assert.strictEqual(
+            res.header['etag'],
+            expectedJsonEtag({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
           assert.strictEqual(res.header['x-cache'], 'MISS');
         });
     });
   });
 
   describe('If-None-Match conditional requests', () => {
+    const jsonEtag = expectedJsonEtag({
+      chunk: DEFAULT_MOCK_CHUNK,
+      data_path: DEFAULT_MOCK_DATA_PATH,
+    });
+
     it('should return 304 when If-None-Match matches ETag for GET', async () => {
       const chunkRetrievalService = mockService({
         source: 'cache',
@@ -384,7 +456,7 @@ describe('Chunk routes', () => {
 
       await request(app)
         .get('/chunk/1234')
-        .set('If-None-Match', '"dGVzdC1oYXNo"')
+        .set('If-None-Match', jsonEtag)
         .expect(304)
         .then((res: any) => {
           assert.strictEqual(res.status, 304);
@@ -407,7 +479,7 @@ describe('Chunk routes', () => {
 
       await request(app)
         .head('/chunk/1234')
-        .set('If-None-Match', '"dGVzdC1oYXNo"')
+        .set('If-None-Match', jsonEtag)
         .expect(304)
         .then((res: any) => {
           assert.strictEqual(res.status, 304);
@@ -434,7 +506,7 @@ describe('Chunk routes', () => {
         .then((res: any) => {
           assert.strictEqual(res.status, 200);
           assert.ok(res.body.chunk);
-          assert.strictEqual(res.header['etag'], '"dGVzdC1oYXNo"');
+          assert.strictEqual(res.header['etag'], jsonEtag);
         });
     });
 
@@ -456,8 +528,16 @@ describe('Chunk routes', () => {
         .then((res: any) => {
           assert.strictEqual(res.status, 200);
           assert.ok(res.body.chunk);
-          // Express may set a weak ETag, but we should not have a strong one matching our hash
-          assert.ok(!res.header['etag'] || res.header['etag'].startsWith('W/'));
+          // ETag is now derived from the JSON body (always available), so
+          // the request's mismatched If-None-Match returns 200 with the
+          // computed ETag instead of 304.
+          assert.strictEqual(
+            res.header['etag'],
+            expectedJsonEtag({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
         });
     });
   });

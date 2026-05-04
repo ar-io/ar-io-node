@@ -1053,6 +1053,32 @@ export const HTTPSIG_KEY_FILE = env.varOrDefault(
 export const HTTPSIG_BIND_REQUEST =
   env.varOrDefault('HTTPSIG_BIND_REQUEST', 'true') === 'true';
 
+// When > 0 and a /raw/:id response is uncached + has a known size at-or-below
+// this byte threshold, the data path buffers the body to compute SHA-256 and
+// emit Content-Digest. The header is already in CO_SIGNABLE_HEADERS, so once
+// emitted it's covered by the HTTPSIG signature — making the body verifiable
+// end-to-end. Cached and HEAD responses are unaffected (they already emit the
+// stored digest). Set to 0 to disable buffered emission and preserve today's
+// streaming-without-digest behavior for the uncached path.
+// Parse defensively: an env value of "" or non-numeric input would otherwise
+// become NaN, which silently disables both the size cap (`size > maxBytes`
+// evaluates false for NaN) and the disabled-branch check (`maxBytes <= 0` is
+// also false for NaN), letting unbounded buffers through. Validate as a
+// non-negative finite integer; fall back to the default on bad input.
+const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT = 2 * 1024 * 1024; // 2 MiB
+const httpSigBodyDigestBufferMaxBytesParsed = Number.parseInt(
+  env.varOrDefault(
+    'HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES',
+    String(HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT),
+  ),
+  10,
+);
+export const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES =
+  Number.isFinite(httpSigBodyDigestBufferMaxBytesParsed) &&
+  httpSigBodyDigestBufferMaxBytesParsed >= 0
+    ? httpSigBodyDigestBufferMaxBytesParsed
+    : HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT;
+
 // Observer wallet for attestation signing
 export const OBSERVER_WALLET = env.varOrUndefined('OBSERVER_WALLET');
 export const WALLETS_PATH = env.varOrDefault('WALLETS_PATH', 'wallets');
@@ -1362,6 +1388,16 @@ export const FS_CLEANUP_WORKER_BATCH_PAUSE_DURATION = +env.varOrDefault(
 export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
   'FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION',
   `${1000 * 60 * 60 * 4}`, // every 4 hours
+);
+
+// Cache TTL for the SQLite worker's getDebugInfo response. The /ar-io/admin/debug
+// endpoint runs ~8 unfiltered COUNT(*) scans plus aggregation across new and
+// stable data items, which can monopolize the single debug worker thread when
+// polled frequently (e.g. by clickhouse-auto-import). Setting > 0 caches the
+// computed snapshot for this many milliseconds. Set to 0 to disable.
+export const GET_DEBUG_INFO_CACHE_TTL_MS = env.nonNegativeIntOrDefault(
+  'GET_DEBUG_INFO_CACHE_TTL_MS',
+  5 * 60 * 1000, // 5 minutes
 );
 
 //

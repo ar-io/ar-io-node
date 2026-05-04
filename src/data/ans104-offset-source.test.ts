@@ -12,6 +12,7 @@ import { serializeTags } from '@dha-team/arbundles';
 
 import { Ans104OffsetSource } from './ans104-offset-source.js';
 import { ContiguousDataSource } from '../types.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('Ans104OffsetSource', () => {
   let log: winston.Logger;
@@ -1230,5 +1231,189 @@ describe('Ans104OffsetSource', () => {
       assert.strictEqual(result.contentType, undefined);
       assert.strictEqual(result.payloadSize, 50);
     });
+  });
+});
+
+// PE-9077 regression: parse paths in Ans104OffsetSource consume only a
+// bounded prefix of the stream returned by getData and historically
+// dropped the reference without destroying the stream. Under axios
+// `responseType: 'stream'` the unread tail stays anchored in the
+// IncomingMessage's external Buffer pool — invisible to V8 — until
+// the socket is destroyed. These tests assert every stream returned
+// by getData is destroyed once parsing completes (or throws).
+describe('Ans104OffsetSource stream lifecycle', () => {
+  let log: winston.Logger;
+  let getDataMock: any;
+  let dataSource: ContiguousDataSource;
+  let ans104OffsetSource: Ans104OffsetSource;
+  let returnedStreams: Readable[];
+
+  // 1MB of padding deliberately exceeds what any parse path reads.
+  // This ensures the stream is NOT auto-ended via iterable exhaustion
+  // (which would set destroyed=true even without the fix), so the test
+  // truly distinguishes "explicitly destroyed by consumer" from
+  // "happened to end on its own."
+  const PADDING_BYTES = 1024 * 1024;
+
+  function makeStreamFromPrefix(prefix: Buffer): Readable {
+    const stream = Readable.from([prefix, Buffer.alloc(PADDING_BYTES)]);
+    returnedStreams.push(stream);
+    return stream;
+  }
+
+  function buildDataItemHeaderBytes(): Buffer {
+    return Buffer.concat([
+      Buffer.from([0x01, 0x00]), // signature type 1 (Arweave)
+      Buffer.alloc(512), // signature
+      Buffer.alloc(512), // owner
+      Buffer.from([0]), // no target
+      Buffer.from([0]), // no anchor
+      Buffer.alloc(16), // tags metadata: 0 tags, 0 bytes
+    ]);
+  }
+
+  beforeEach(() => {
+    log = createTestLogger({ suite: 'Ans104OffsetSource stream lifecycle' });
+    returnedStreams = [];
+    getDataMock = mock.fn();
+    dataSource = { getData: getDataMock };
+    ans104OffsetSource = new Ans104OffsetSource({ log, dataSource });
+  });
+
+  afterEach(() => {
+    mock.restoreAll();
+  });
+
+  it('destroys the stream after parseDataItemHeader resolves', async () => {
+    const headerBytes = buildDataItemHeaderBytes();
+
+    getDataMock.mock.mockImplementation(async () => ({
+      stream: makeStreamFromPrefix(headerBytes),
+      size: headerBytes.length + PADDING_BYTES,
+      verified: false,
+      trusted: false,
+      cached: false,
+    }));
+
+    await ans104OffsetSource.parseDataItemHeader(
+      'bundle-id',
+      0,
+      headerBytes.length + PADDING_BYTES,
+    );
+
+    assert.strictEqual(returnedStreams.length, 1);
+    assert.strictEqual(
+      returnedStreams[0].destroyed,
+      true,
+      'parseDataItemHeader should destroy the stream returned by getData',
+    );
+  });
+
+  it('destroys the stream after extractDataItemMeta resolves', async () => {
+    const headerBytes = buildDataItemHeaderBytes();
+
+    getDataMock.mock.mockImplementation(async () => ({
+      stream: makeStreamFromPrefix(headerBytes),
+      size: headerBytes.length + PADDING_BYTES,
+      verified: false,
+      trusted: false,
+      cached: false,
+    }));
+
+    await ans104OffsetSource.extractDataItemMeta(
+      'bundle-id',
+      0,
+      headerBytes.length + PADDING_BYTES,
+    );
+
+    assert.strictEqual(returnedStreams.length, 1);
+    assert.strictEqual(
+      returnedStreams[0].destroyed,
+      true,
+      'extractDataItemMeta should destroy the stream returned by getData',
+    );
+  });
+
+  it('destroys every stream produced during a full getDataItemOffset traversal', async () => {
+    // Mirrors the existing "find data item in root bundle" fixture but
+    // tracks every Readable handed out. Asserts all are destroyed when
+    // the public entry point completes.
+    const itemIdBuffer = Buffer.alloc(32);
+    itemIdBuffer.write('lifecycle-item-id');
+    const dataItemId = itemIdBuffer.toString('base64url');
+    const rootBundleId = 'lifecycle-root-bundle-id';
+
+    const itemCount = Buffer.alloc(32);
+    itemCount.writeBigInt64LE(1n, 0);
+
+    const itemSize = Buffer.alloc(32);
+    itemSize.writeBigInt64LE(2000n, 0);
+
+    const bundleHeader = Buffer.concat([itemCount, itemSize, itemIdBuffer]);
+    const dataItemHeader = buildDataItemHeaderBytes();
+
+    getDataMock.mock.mockImplementation(async (args: any) => {
+      let prefix: Buffer;
+      if (args.region?.size === 32) {
+        prefix = itemCount;
+      } else if (args.region?.size === 96) {
+        prefix = bundleHeader;
+      } else {
+        prefix = dataItemHeader;
+      }
+      return {
+        stream: makeStreamFromPrefix(prefix),
+        size: prefix.length + PADDING_BYTES,
+        verified: false,
+        trusted: false,
+        cached: false,
+      };
+    });
+
+    const result = await ans104OffsetSource.getDataItemOffset(
+      dataItemId,
+      rootBundleId,
+    );
+
+    assert.notStrictEqual(result, null);
+    assert.ok(
+      returnedStreams.length >= 3,
+      `expected at least 3 streams (count, headers, item header); got ${returnedStreams.length}`,
+    );
+    for (const stream of returnedStreams) {
+      assert.strictEqual(
+        stream.destroyed,
+        true,
+        'every stream returned by getData should be destroyed after traversal',
+      );
+    }
+  });
+
+  it('destroys the stream when parseDataItemHeader throws mid-parse', async () => {
+    // Invalid signature type (0) makes getSignatureMeta throw "Invalid
+    // signature type" after 2 bytes have been read. The padding keeps the
+    // stream alive past the throw so destroyed=true cannot come from the
+    // iterable exhausting on its own — it must come from the fix.
+    const invalidSigTypeHeader = Buffer.from([0x00, 0x00]);
+
+    getDataMock.mock.mockImplementation(async () => ({
+      stream: makeStreamFromPrefix(invalidSigTypeHeader),
+      size: invalidSigTypeHeader.length + PADDING_BYTES,
+      verified: false,
+      trusted: false,
+      cached: false,
+    }));
+
+    await assert.rejects(
+      ans104OffsetSource.parseDataItemHeader('bundle-id', 0, 1044),
+      /Invalid signature type/,
+    );
+
+    assert.strictEqual(returnedStreams.length, 1);
+    assert.strictEqual(
+      returnedStreams[0].destroyed,
+      true,
+      'stream should be destroyed even when the parse path throws',
+    );
   });
 });

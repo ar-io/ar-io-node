@@ -253,6 +253,19 @@ export const arnsCacheMissCounter = new promClient.Counter({
   help: 'Number of misses in the arns cache',
 });
 
+/**
+ * Incremented when {@link CompositeArNSResolver} returns a cached resolution
+ * because a fresh resolution attempt resolved with no resolved id — distinct
+ * from the timeout-triggered cached fallback. Tracks how often the gateway
+ * is serving stale data due to upstream (names cache / AO / CU) returning
+ * `undefined` faster than the cached-resolution fallback timeout.
+ */
+export const arnsCachedResolutionFallbackOnEmptyCounter =
+  new promClient.Counter({
+    name: 'arns_cached_resolution_fallback_on_empty_total',
+    help: 'Count of times CompositeArNSResolver returned a cached resolution because fresh resolution had no resolved id (no error/timeout)',
+  });
+
 export const arnsNameCacheDurationSummary = new promClient.Summary({
   name: 'arns_name_cache_duration_ms',
   help: 'Time in ms it takes to fetch and cache arns base names',
@@ -973,4 +986,26 @@ export const httpSigSigningDuration = new promClient.Histogram({
 export const httpSigErrorsTotal = new promClient.Counter({
   name: 'httpsig_errors_total',
   help: 'Total HTTPSIG signing errors',
+});
+
+// Outcomes for Content-Digest emission on data and chunk responses. Helps
+// tune the HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES threshold from real traffic.
+// The `path` label separates the two routes so chunks (always small,
+// always hashable) can be observed independently of data responses.
+export const httpSigContentDigestTotal = new promClient.Counter({
+  name: 'httpsig_content_digest_total',
+  help: 'Content-Digest emission outcomes on data and chunk responses',
+  labelNames: ['source', 'path'],
+  // source = cache_hit | computed_buffered | skipped_size_unknown
+  //        | skipped_too_large | skipped_disabled | overran_threshold
+  // path   = data | chunk
+});
+
+// Aggregate bytes currently held in memory by buffered-digest in-flight
+// computations. Watch this gauge to detect concurrency-driven memory
+// pressure on the digest path. Each in-flight buffered request contributes
+// up to HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES.
+export const httpSigBufferedBytesInflight = new promClient.Gauge({
+  name: 'httpsig_buffered_bytes_inflight',
+  help: 'Aggregate bytes held in memory by buffered-digest in-flight reads',
 });
