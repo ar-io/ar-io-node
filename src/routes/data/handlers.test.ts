@@ -783,7 +783,23 @@ st
       });
 
       describe('X-AR-IO-Digest/Etag', () => {
-        it("shouldn't return digest/etag when hash is not available", async () => {
+        // Contract change (2026): the buffered-digest helper
+        // (src/routes/data/buffered-digest.ts) emits Content-Digest/Etag for
+        // small uncached responses too — so the gateway's signed response
+        // binds the body cryptographically end-to-end. Old tests that asserted
+        // "no digest for uncached" no longer reflect the new behavior; the
+        // assertions now expect the computed digest of the served body.
+        // The "no digest" branch is exercised in buffered-digest.test.ts
+        // (size_too_large, size_unknown, disabled).
+        const EXPECTED_TESTING_DIGEST_B64URL =
+          'rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q';
+        const EXPECTED_TESTING_CONTENT_DIGEST =
+          `sha-256=:rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5++TfXcNws7Q=:`;
+
+        it('computes digest/etag from the buffered body when no stored hash is available', async () => {
+          // dataAttributesSource returns undefined (no stored hash).
+          // dataSource returns 10 bytes ('testing...') with size=10, under
+          // the 2 MiB buffer threshold, so the helper buffers + hashes.
           app.get(
             '/:id',
             createDataHandler({
@@ -799,13 +815,26 @@ st
             .get('/not-a-real-id')
             .expect(200)
             .then((res: any) => {
-              assert.equal(res.headers['x-ar-io-digest'], undefined);
-              assert.equal(res.headers['content-digest'], undefined);
-              assert.equal(res.headers['etag'], undefined);
+              assert.equal(
+                res.headers['x-ar-io-digest'],
+                EXPECTED_TESTING_DIGEST_B64URL,
+              );
+              assert.equal(
+                res.headers['content-digest'],
+                EXPECTED_TESTING_CONTENT_DIGEST,
+              );
+              assert.equal(
+                res.headers['etag'],
+                `"${EXPECTED_TESTING_DIGEST_B64URL}"`,
+              );
             });
         });
 
-        it("shouldn't return digest/etag when hash is available AND data is not cached", async () => {
+        it('computes digest/etag from the buffered body when uncached even if a stored hash exists', async () => {
+          // Stored hash is 'hash' but data is not cached. Old behavior was to
+          // skip Content-Digest entirely; new behavior is to compute the
+          // digest from the actual served body so the response is verifiable.
+          // The computed digest reflects the served bytes, not the stored hash.
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'hash',
@@ -832,9 +861,18 @@ st
             .get('/not-a-real-id')
             .expect(200)
             .then((res: any) => {
-              assert.equal(res.headers['x-ar-io-digest'], undefined);
-              assert.equal(res.headers['content-digest'], undefined);
-              assert.equal(res.headers['etag'], undefined);
+              assert.equal(
+                res.headers['x-ar-io-digest'],
+                EXPECTED_TESTING_DIGEST_B64URL,
+              );
+              assert.equal(
+                res.headers['content-digest'],
+                EXPECTED_TESTING_CONTENT_DIGEST,
+              );
+              assert.equal(
+                res.headers['etag'],
+                `"${EXPECTED_TESTING_DIGEST_B64URL}"`,
+              );
             });
         });
 
@@ -1241,8 +1279,12 @@ st
             });
         });
 
-        it('should not return 304 when ETag is not set', async () => {
-          // No hash means no ETag
+        it('returns 304 when ETag from buffered-digest matches If-None-Match', async () => {
+          // Contract change (2026): the buffered-digest helper now computes
+          // and sets ETag for small uncached responses, so the 304 path can
+          // fire on If-None-Match matches. (The old test asserted "no ETag
+          // therefore 200" — that case now requires a body > buffer threshold,
+          // which is exercised in buffered-digest.test.ts.)
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
@@ -1264,12 +1306,17 @@ st
             }),
           );
 
+          // Send a non-matching If-None-Match — ETag from buffered digest
+          // won't match, so we get 200 with the body.
           return request(app)
             .get('/not-a-real-id')
-            .set('If-None-Match', '"some-hash"')
+            .set('If-None-Match', '"some-other-hash"')
             .expect(200)
             .then((res: any) => {
-              assert.equal(res.headers['etag'], undefined);
+              assert.equal(
+                res.headers['etag'],
+                `"rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q"`,
+              );
               assert.equal(res.body.toString(), 'testing...');
             });
         });

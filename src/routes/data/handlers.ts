@@ -11,6 +11,7 @@ import rangeParser from 'range-parser';
 import { Logger } from 'winston';
 import { headerNames } from '../../constants.js';
 import { pipeStreamToResponse } from '../../lib/stream.js';
+import { sendBodyWithOptionalDigest } from './buffered-digest.js';
 import * as config from '../../config.js';
 import { release } from '../../version.js';
 import { tracer, context, trace } from '../../tracing.js';
@@ -1262,7 +1263,14 @@ export const createRawDataHandler = ({
 
             span.setAttribute('http.status_code', res.statusCode || 200);
             span.addEvent('Streaming data to client');
-            pipeStreamToResponse(data.stream, res, log, id);
+            await sendBodyWithOptionalDigest({
+              req,
+              res,
+              data,
+              dataAttributes,
+              log,
+              dataId: id,
+            });
           }
         } catch (error: any) {
           // Handle client disconnect (AbortError) specially — only when the
@@ -1504,7 +1512,14 @@ const sendManifestResponse = async ({
           return true;
         }
 
-        pipeStreamToResponse(data.stream, res, log, resolvedId);
+        await sendBodyWithOptionalDigest({
+          req,
+          res,
+          data,
+          dataAttributes,
+          log,
+          dataId: resolvedId,
+        });
       }
     } catch (error: any) {
       log.error('Error retrieving data attributes:', {
@@ -1940,7 +1955,14 @@ export const createDataHandler = ({
 
           span.setAttribute('http.status_code', res.statusCode || 200);
           span.addEvent('Streaming data to client');
-          pipeStreamToResponse(data.stream, res, log, id);
+          await sendBodyWithOptionalDigest({
+            req,
+            res,
+            data,
+            dataAttributes,
+            log,
+            dataId: id,
+          });
         }
       } catch (error: any) {
         // Handle client disconnect (AbortError) specially — only when the

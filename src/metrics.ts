@@ -987,3 +987,14 @@ export const httpSigErrorsTotal = new promClient.Counter({
   name: 'httpsig_errors_total',
   help: 'Total HTTPSIG signing errors',
 });
+
+// Outcomes for Content-Digest emission on data responses. Helps tune the
+// HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES threshold from real traffic — see
+// the source labels for the four branches in the data response path.
+export const httpSigContentDigestTotal = new promClient.Counter({
+  name: 'httpsig_content_digest_total',
+  help: 'Content-Digest emission outcomes on data responses',
+  labelNames: ['source'],
+  // source = cache_hit | computed_buffered | skipped_size_unknown
+  //        | skipped_too_large | skipped_disabled | overran_threshold
+});

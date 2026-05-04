@@ -1053,6 +1053,18 @@ export const HTTPSIG_KEY_FILE = env.varOrDefault(
 export const HTTPSIG_BIND_REQUEST =
   env.varOrDefault('HTTPSIG_BIND_REQUEST', 'true') === 'true';
 
+// When > 0 and a /raw/:id response is uncached + has a known size at-or-below
+// this byte threshold, the data path buffers the body to compute SHA-256 and
+// emit Content-Digest. The header is already in CO_SIGNABLE_HEADERS, so once
+// emitted it's covered by the HTTPSIG signature — making the body verifiable
+// end-to-end. Cached and HEAD responses are unaffected (they already emit the
+// stored digest). Set to 0 to disable buffered emission and preserve today's
+// streaming-without-digest behavior for the uncached path.
+export const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES = +env.varOrDefault(
+  'HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES',
+  '2097152', // 2 MiB
+);
+
 // Observer wallet for attestation signing
 export const OBSERVER_WALLET = env.varOrUndefined('OBSERVER_WALLET');
 export const WALLETS_PATH = env.varOrDefault('WALLETS_PATH', 'wallets');

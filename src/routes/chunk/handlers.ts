@@ -5,8 +5,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import crypto from 'node:crypto';
 import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
+import * as metrics from '../../metrics.js';
 import {
   CHUNK_GET_BASE64_SIZE_BYTES,
   CHUNK_POST_ABORT_TIMEOUT_MS,
@@ -487,15 +489,28 @@ export const createChunkOffsetDataHandler = ({
         // Set common headers (source tracking, cache status)
         const { hashString } = setCommonChunkHeaders(response, chunk, span);
 
-        // Set ETag and Content-Digest when hash is available (cache hits or HEAD requests)
-        if (
-          hashString !== undefined &&
-          (chunk.source === 'cache' || request.method === 'HEAD')
-        ) {
-          setChunkETag(response, hashString);
+        // Set ETag and Content-Digest. Cache hits / HEAD requests use the
+        // already-known hashString. Uncached chunks compute the digest from
+        // the in-memory chunk bytes — chunks are bounded at 256 KiB so this
+        // is always cheap (~50 µs SHA-256). Result: every served chunk
+        // carries a body-bound digest, so the HTTPSIG signature pins the
+        // bytes end-to-end. See architect-handoff/httpsig-body-binding-plan.md.
+        let digestB64Url: string | undefined = hashString;
+        if (digestB64Url !== undefined) {
+          metrics.httpSigContentDigestTotal.inc({ source: 'cache_hit' });
+        } else if (chunk.chunk !== undefined && chunk.chunk.length > 0) {
+          digestB64Url = crypto
+            .createHash('sha256')
+            .update(chunk.chunk)
+            .digest('base64url');
+          metrics.httpSigContentDigestTotal.inc({ source: 'computed_buffered' });
+        }
+
+        if (digestB64Url !== undefined) {
+          setChunkETag(response, digestB64Url);
           response.setHeader(
             headerNames.contentDigest,
-            formatContentDigest(hashString),
+            formatContentDigest(digestB64Url),
           );
         }
 
