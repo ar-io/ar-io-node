@@ -875,6 +875,60 @@ st
             });
         });
 
+        it('emits X-AR-IO-Digest from chain index for uncached LARGE responses (above buffer threshold) but no Content-Digest/ETag', async () => {
+          // Body is larger than HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES (2 MiB
+          // default) and uncached, so the buffered helper skips digest
+          // computation. Pre-Option-A: no digest headers at all.
+          // Post-Option-A: X-AR-IO-Digest is set from the chain hash as an
+          // informational/advisory header, but Content-Digest and ETag stay
+          // omitted because we haven't verified the bytes ourselves.
+          const HASH = 'chain-hash-large-body';
+          const LARGE_SIZE = 3 * 1024 * 1024; // 3 MiB > 2 MiB threshold
+          const largeBody = Buffer.alloc(LARGE_SIZE, 0x5a);
+
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              hash: HASH,
+              size: LARGE_SIZE,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: false,
+              signature: null,
+            });
+          dataSource.getData = async () => ({
+            stream: Readable.from(largeBody),
+            size: LARGE_SIZE,
+            sourceContentType: 'application/octet-stream',
+            verified: false,
+            cached: false, // NOT cached
+            trusted: true,
+          });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/some-large-id')
+            .expect(200)
+            .then((res: any) => {
+              // The advisory header IS now emitted from the chain hash.
+              assert.equal(res.headers['x-ar-io-digest'], HASH);
+              // But the committed-to representation headers are NOT emitted
+              // for uncached responses we haven't verified.
+              assert.equal(res.headers['content-digest'], undefined);
+              assert.equal(res.headers['etag'], undefined);
+            });
+        });
+
         it('should return digest/etag when hash is available AND data is cached', async () => {
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({

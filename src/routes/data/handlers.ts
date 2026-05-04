@@ -193,20 +193,30 @@ const setDigestStableVerifiedHeaders = ({
       dataAttributes.verified && data.cached ? 'true' : 'false',
     );
 
-    // We only add digest and ETag headers when the data is either a HEAD
-    // request or cached locally. If the data is not cached, we might stream
-    // from the network and end up with a different hash than what is currently
-    // stored in the DB.
-    if (
-      dataAttributes.hash !== undefined &&
-      (data.cached || req.method === REQUEST_METHOD_HEAD)
-    ) {
+    // X-AR-IO-Digest is the gateway's stated hash for this data. We emit it
+    // any time the chain index has a hash on file — even when the bytes are
+    // about to be streamed from a peer rather than served from local cache —
+    // so clients can verify the bytes they receive against the canonical
+    // value without an extra round-trip. The header is informational and is
+    // NOT covered by the HTTPSIG signature, so emitting an as-yet-unverified
+    // hash makes no signed claim. If the buffered-digest helper later
+    // computes the actual served-body hash, it will overwrite this value
+    // with the served-bytes hash before the response goes out.
+    //
+    // ETag and Content-Digest are different: they describe the
+    // representation we COMMIT to serving (ETag is a cache validator;
+    // Content-Digest is in CO_SIGNABLE_HEADERS and is signed). We only emit
+    // those when we can stand behind them — local cache or HEAD — to avoid
+    // signing a claim about bytes we haven't verified.
+    if (dataAttributes.hash !== undefined) {
       res.setHeader(headerNames.digest, dataAttributes.hash);
-      res.setHeader(
-        headerNames.contentDigest,
-        formatContentDigest(dataAttributes.hash),
-      );
-      res.setHeader('ETag', `"${dataAttributes.hash}"`);
+      if (data.cached || req.method === REQUEST_METHOD_HEAD) {
+        res.setHeader(
+          headerNames.contentDigest,
+          formatContentDigest(dataAttributes.hash),
+        );
+        res.setHeader('ETag', `"${dataAttributes.hash}"`);
+      }
     }
   }
 
