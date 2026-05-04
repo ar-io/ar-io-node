@@ -1338,6 +1338,10 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
       { bundle_format: 'ans-104' },
       bundleEvent.itemCount,
     );
+    metrics.bundleDataItemCountHistogram.observe(
+      { bundle_format: 'ans-104' },
+      bundleEvent.itemCount,
+    );
     db.saveBundle({
       id: bundleEvent.parentId,
       format: 'ans-104',
