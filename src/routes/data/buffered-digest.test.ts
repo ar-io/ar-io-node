@@ -7,6 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import crypto from 'node:crypto';
+import http from 'node:http';
 import { Readable } from 'node:stream';
 import express from 'express';
 import { default as request } from 'supertest';
@@ -280,6 +281,80 @@ describe('sendBodyWithOptionalDigest', () => {
     assert.equal(res.headers[headerNames.digest.toLowerCase()], base64url);
     assert.equal(res.headers['content-length'], '0');
     assert.equal(res.body.length, 0);
+  });
+
+  it('client abort mid-buffer destroys the upstream stream', async () => {
+    // Wire up a slow upstream stream — emit one chunk, wait, emit nothing
+    // more — so the helper is mid-buffer when the client aborts. After abort,
+    // the upstream stream's destroy() must have been called so we don't pin
+    // memory waiting for a stream the client no longer cares about.
+    const upstream = new Readable({
+      read() {
+        // Emit one chunk then stall — caller will abort before completion.
+        if (!(this as any).__emitted) {
+          (this as any).__emitted = true;
+          this.push(Buffer.alloc(1024, 0x55));
+        }
+        // Don't push null; just stall.
+      },
+    });
+    let upstreamDestroyed = false;
+    upstream.on('close', () => {
+      upstreamDestroyed = true;
+    });
+
+    const data = {
+      stream: upstream,
+      size: 1024 * 1024, // claim 1 MiB so we enter the buffered branch
+      sourceContentType: 'application/octet-stream',
+      verified: false,
+      trusted: true,
+      cached: false,
+    } as unknown as ContiguousData;
+
+    const app = express();
+    app.get('/data', async (req, res) => {
+      await sendBodyWithOptionalDigest({
+        req,
+        res,
+        data,
+        log,
+        dataId: 'abort-test',
+        maxBytes: ONE_MIB,
+      });
+    });
+
+    const server = app.listen(0);
+    const port = (server.address() as { port: number }).port;
+    await new Promise<void>((resolve) => {
+      const req = http.request(
+        { hostname: '127.0.0.1', port, path: '/data' },
+        (res) => {
+          res.once('data', () => {
+            // We aborted before any data could arrive, but if we got here,
+            // close the response side too.
+            res.destroy();
+            resolve();
+          });
+          res.once('end', resolve);
+          res.once('close', resolve);
+        },
+      );
+      req.on('error', () => resolve());
+      req.end();
+      // Abort almost immediately, before the helper has finished buffering.
+      setTimeout(() => req.destroy(), 30);
+    });
+
+    // Give the helper a tick to observe the abort and tear down upstream.
+    await new Promise((r) => setTimeout(r, 100));
+    server.close();
+
+    assert.equal(
+      upstreamDestroyed,
+      true,
+      'upstream stream should be destroyed when client aborts mid-buffer',
+    );
   });
 
   it('property-style: random byte sequences hash correctly across multiple sizes', async () => {

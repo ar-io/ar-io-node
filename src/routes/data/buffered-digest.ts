@@ -117,6 +117,26 @@ export async function sendBodyWithOptionalDigest({
     }
   };
 
+  // Client-disconnect guard: if the client aborts mid-buffer, destroy the
+  // upstream stream so we don't keep consuming bytes into memory we're
+  // never going to send. Without this, a burst of abort-immediately attacks
+  // could pin maxBytes per request in memory until each upstream stream
+  // happens to end on its own. Mirrors the same pattern used by
+  // pipeStreamToResponse for the streaming path.
+  let clientAborted = false;
+  const onClientClose = () => {
+    if (!res.writableFinished) {
+      clientAborted = true;
+      const stream = data.stream as NodeJS.ReadableStream & {
+        destroy?: (err?: Error) => void;
+      };
+      if (typeof stream.destroy === 'function') {
+        stream.destroy();
+      }
+    }
+  };
+  res.once('close', onClientClose);
+
   try {
     const hasher = crypto.createHash('sha256');
     const buffers: Buffer[] = [];
@@ -136,13 +156,24 @@ export async function sendBodyWithOptionalDigest({
         buffers.push(buf);
       }
     } catch (error: any) {
-      log.error('Stream error during buffered-digest read:', {
-        dataId,
-        message: error?.message,
-      });
+      // If the client aborted, the for-await rejects with an abort/destroy
+      // error — that's expected, not noteworthy. Log only real upstream
+      // failures.
+      if (!clientAborted) {
+        log.error('Stream error during buffered-digest read:', {
+          dataId,
+          message: error?.message,
+        });
+      }
       if (!res.headersSent && !res.destroyed) {
         res.destroy();
       }
+      return;
+    }
+
+    // If the client disconnected during a clean stream end, bail before
+    // setting headers / writing body — the connection is gone.
+    if (clientAborted) {
       return;
     }
 
@@ -209,5 +240,7 @@ export async function sendBodyWithOptionalDigest({
       metrics.httpSigBufferedBytesInflight.dec(bytesAccountedToGauge);
       bytesAccountedToGauge = 0;
     }
+    // Detach the close listener so we don't leak it on the response object.
+    res.removeListener('close', onClientClose);
   }
 }

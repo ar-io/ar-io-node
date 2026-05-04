@@ -251,8 +251,11 @@ export const createChunkOffsetHandler = ({
           .createHash('sha256')
           .update(responseBodyString)
           .digest('base64url');
+        // Note: chunk responses deliberately do NOT emit X-AR-IO-Digest.
+        // That legacy header carries the raw-chunk hash on the data path
+        // for Wayfinder backwards-compat, which doesn't apply here. The
+        // standards-track Content-Digest is what carries the body binding.
         setChunkETag(response, jsonDigestB64Url);
-        response.setHeader(headerNames.digest, jsonDigestB64Url);
         response.setHeader(
           headerNames.contentDigest,
           formatContentDigest(jsonDigestB64Url),
@@ -533,8 +536,10 @@ export const createChunkOffsetDataHandler = ({
         }
 
         if (digestB64Url !== undefined) {
+          // Note: chunk responses deliberately do NOT emit X-AR-IO-Digest.
+          // Content-Digest (standards-track, signed) is what carries the
+          // body binding here.
           setChunkETag(response, digestB64Url);
-          response.setHeader(headerNames.digest, digestB64Url);
           response.setHeader(
             headerNames.contentDigest,
             formatContentDigest(digestB64Url),
