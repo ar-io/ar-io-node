@@ -31,7 +31,7 @@ import {
   parseContentLength,
   parseContentRange,
 } from '../lib/http-utils.js';
-import { attachStallTimeout } from '../lib/stream.js';
+import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
 
 const MAX_DATA_HOPS = 3;
 
@@ -323,6 +323,18 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   );
                 }
 
+                // PE-9081: when the consumer asked for a region, refuse
+                // responses whose Content-Length exceeds the requested
+                // size. Defense against upstreams that return 206 with a
+                // truthful but oversized Content-Length header.
+                if (region !== undefined && contentLength > region.size) {
+                  stream.destroy();
+                  throw new Error(
+                    `Gateway Content-Length (${contentLength}) exceeds ` +
+                      `requested region size (${region.size}) for ${id}`,
+                  );
+                }
+
                 attachStallTimeout(stream, this.streamStallTimeoutMs);
 
                 const gatewayTrusted =
@@ -385,9 +397,27 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   );
                 });
 
+                // PE-9081: hard-cap the consumer-visible byte count when
+                // a region was requested. ByteRangeTransform pushes null
+                // after region.size bytes regardless of upstream behavior,
+                // and we destroy the underlying socket on transform-end so
+                // the upstream connection is released promptly.
+                const cappedStream =
+                  region !== undefined
+                    ? stream.pipe(new ByteRangeTransform(0, region.size))
+                    : stream;
+
+                if (region !== undefined && cappedStream !== stream) {
+                  cappedStream.once('end', () => {
+                    if (!stream.destroyed) {
+                      stream.destroy();
+                    }
+                  });
+                }
+
                 return {
-                  stream,
-                  size: contentLength,
+                  stream: cappedStream,
+                  size: region !== undefined ? region.size : contentLength,
                   totalSize: parseContentRange(
                     response.headers['content-range'],
                   )?.total,
