@@ -147,6 +147,16 @@ UPDATE SET
  */
 
 -- insertOptimisticDataItem
+--
+-- The eleven root-atom columns are hardcoded to NULL here, even though
+-- the prepared-statement bindings could supply them. This enforces the
+-- "no tuple knowledge" contract at the SQL layer: a future caller that
+-- accidentally binds non-NULL values for parent_id / root_transaction_id
+-- / the offset/size fields cannot recreate the shadow-row class this
+-- statement exists to prevent. The TS dispatch via the isOptimistic
+-- flag is the first line of defense; this is the second.
+-- height stays bound — it's not part of the root atom and is written
+-- on a separate timeline by chain ingestion.
 INSERT INTO new_data_items (
   id, parent_id, root_transaction_id, height, signature, anchor,
   owner_address, target, data_offset, data_size, content_type,
@@ -154,11 +164,11 @@ INSERT INTO new_data_items (
   owner_size, signature_offset, signature_size, content_encoding,
   root_parent_offset
 ) VALUES (
-  @id, @parent_id, @root_transaction_id, @height, @signature, @anchor,
-  @owner_address, @target, @data_offset, @data_size, @content_type,
-  @tag_count, @indexed_at, @signature_type, @offset, @size, @owner_offset,
-  @owner_size, @signature_offset, @signature_size, @content_encoding,
-  @root_parent_offset
+  @id, NULL, NULL, @height, @signature, @anchor,
+  @owner_address, @target, NULL, @data_size, @content_type,
+  @tag_count, @indexed_at, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, @content_encoding,
+  NULL
 ) ON CONFLICT DO NOTHING
 
 -- upsertNewDataItem
