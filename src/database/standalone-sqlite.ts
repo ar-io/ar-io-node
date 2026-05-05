@@ -171,7 +171,8 @@ function hashTagPart(value: Buffer) {
   return crypto.createHash('sha1').update(value).digest();
 }
 
-export function isContentTypeTag(tagName: Buffer) {
+/** Returns true if the decoded tag name is `content-type` (case-insensitive). */
+export function isContentTypeTag(tagName: Buffer): boolean {
   return tagName.toString('utf8').toLowerCase() === 'content-type';
 }
 
@@ -179,7 +180,8 @@ function isContentEncodingTag(tagName: Buffer) {
   return tagName.toString('utf8').toLowerCase() === 'content-encoding';
 }
 
-export function ownerToAddress(owner: Buffer) {
+/** Derives the wallet-address bytes (sha256 of the owner public modulus). */
+export function ownerToAddress(owner: Buffer): Buffer {
   return crypto.createHash('sha256').update(owner).digest();
 }
 

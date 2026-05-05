@@ -76,6 +76,16 @@ if (
     });
 }
 
+// ClickHouse streaming pipeline (issue #696). Started before writers so
+// listeners are registered before any BLOCK_INDEXED / BLOCK_TX_INDEXED /
+// ANS104_DATA_ITEM_INDEXED events fire, otherwise early unstable-head
+// events would be missed during boot. Started here (rather than inside
+// system.ts) so a schema-validation failure aborts startup with a clear
+// error rather than silently failing in the background.
+if (system.clickhouseStreamer !== undefined) {
+  await system.clickhouseStreamer.start();
+}
+
 // Allow starting without writers to support SQLite replication
 if (config.START_WRITERS) {
   system.blockImporter.start();
@@ -83,13 +93,6 @@ if (config.START_WRITERS) {
   system.txRepairWorker.start();
   system.bundleRepairWorker.start();
   system.mempoolWatcher?.start();
-}
-
-// ClickHouse streaming pipeline (issue #696). Started here so a
-// schema-validation failure aborts startup with a clear error rather
-// than silently failing in the background.
-if (system.clickhouseStreamer !== undefined) {
-  await system.clickhouseStreamer.start();
 }
 
 // HTTP server

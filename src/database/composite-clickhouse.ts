@@ -292,7 +292,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
    *
    * Only invoked when `queryUnstableHead` is true. See PR #699.
    */
-  getGqlUnstableTransactionsBaseSql() {
+  private getGqlUnstableTransactionsBaseSql() {
     const base = sql
       .select(
         'height AS height',

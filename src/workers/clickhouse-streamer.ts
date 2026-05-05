@@ -305,6 +305,10 @@ export class ClickHouseStreamer {
    * silently in the background.
    */
   async start(): Promise<void> {
+    if (this.running) {
+      this.log.warn('ClickHouseStreamer start() called while already running.');
+      return;
+    }
     await this.validateSchema();
     this.registerListeners();
     this.flushTimer = setInterval(() => {

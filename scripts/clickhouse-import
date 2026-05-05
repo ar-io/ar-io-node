@@ -219,6 +219,10 @@ render_schema_sql() {
   # delayed import won't expire rows before they stabilize into
   # `transactions`.
   local new_tx_ttl_minutes="${CLICKHOUSE_NEW_TX_TTL_MINUTES:-240}"
+  if [[ ! "$new_tx_ttl_minutes" =~ ^[0-9]+$ ]] || [[ "$new_tx_ttl_minutes" -le 0 ]]; then
+    echo "Error: CLICKHOUSE_NEW_TX_TTL_MINUTES must be a positive integer (got: $new_tx_ttl_minutes)" >&2
+    exit 1
+  fi
 
   schema_sql=$(<"$schema_file")
   schema_sql=${schema_sql//'{{CLICKHOUSE_DICT_USER}}'/$(sql_escape_literal "$CLICKHOUSE_USER")}
