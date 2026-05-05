@@ -94,5 +94,22 @@ describe('ContiguousDataByteRangeSource', () => {
 
       await assert.rejects(source.read(0, 100), /short read/);
     });
+
+    // PE-9081: streamToBuffer should accept non-Buffer chunks (Uint8Array,
+    // string, etc.) by routing through Buffer.from. Defensive against
+    // streams that emit non-Buffer typed-array chunks.
+    it('should accept non-Buffer chunks via Buffer.from fallback', async () => {
+      // Readable.from with strings emits raw strings which the for-await
+      // sees as non-Buffer chunk values; the source must coerce them.
+      const source = new ContiguousDataByteRangeSource({
+        dataSource: makeDataSource(() =>
+          Readable.from(['ab', 'cd'], { objectMode: false }),
+        ),
+        id: 'tx',
+      });
+
+      const result = await source.read(0, 4);
+      assert.equal(result.toString(), 'abcd');
+    });
   });
 });

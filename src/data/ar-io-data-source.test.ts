@@ -455,6 +455,40 @@ describe('ArIODataSource', () => {
       );
     });
 
+    // PE-9081: when the ByteRangeTransform finishes early because it has
+    // consumed region.size bytes, the underlying upstream socket should be
+    // destroyed promptly so it doesn't sit idle pinning a connection.
+    it('should destroy the upstream stream when ByteRangeTransform reaches its cap', async () => {
+      const upstream = new PassThrough();
+      mock.method(axios, 'get', async () => ({
+        status: 206,
+        data: upstream,
+        headers: {
+          'content-length': '50',
+          'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'true',
+          [headerNames.trusted.toLowerCase()]: 'false',
+        },
+      }));
+
+      const region = { offset: 0, size: 50 };
+      const data = await dataSource.getData({ id: 'dataId', region });
+
+      // Feed enough bytes to satisfy the cap and cause cappedStream to end.
+      upstream.write(Buffer.alloc(50, 0x41));
+      upstream.end();
+
+      // Drain cappedStream to fire its 'end' handler.
+      for await (const _chunk of data.stream) {
+        void _chunk;
+      }
+
+      // Allow the once('end') handler to run.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.equal(upstream.destroyed, true);
+    });
+
     // PE-9081: ByteRangeTransform caps consumer-visible bytes to region.size
     // even when the upstream emits more than declared.
     it('should cap consumer-visible bytes to region.size via ByteRangeTransform', async () => {
