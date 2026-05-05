@@ -474,6 +474,91 @@ describe('TxChunksDataSource', () => {
       }
     });
 
+    it('should propagate caller abort to chain source geometry calls and avoid subsequent chunk fetches', async () => {
+      // Regression: TxChunksDataSource.getData passes its caller's signal
+      // through to chainSource.getTxField/getTxOffset and aborts cleanly
+      // before any chunk fetches happen if the caller disconnects during
+      // the geometry phase.
+      const controller = new AbortController();
+
+      const getTxFieldSignals: (AbortSignal | undefined)[] = [];
+      const getTxOffsetSignals: (AbortSignal | undefined)[] = [];
+      let chunkFetchCalls = 0;
+
+      const waitForAbort = (signal?: AbortSignal) =>
+        new Promise<never>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new DOMException('The operation was aborted', 'AbortError'));
+            return;
+          }
+          signal?.addEventListener(
+            'abort',
+            () => {
+              reject(
+                new DOMException('The operation was aborted', 'AbortError'),
+              );
+            },
+            { once: true },
+          );
+        });
+
+      mock.method(
+        chainSource,
+        'getTxField',
+        async (_id: string, _field: string, signal?: AbortSignal) => {
+          getTxFieldSignals.push(signal);
+          await waitForAbort(signal);
+        },
+      );
+      mock.method(
+        chainSource,
+        'getTxOffset',
+        async (_id: string, signal?: AbortSignal) => {
+          getTxOffsetSignals.push(signal);
+          await waitForAbort(signal);
+        },
+      );
+      mock.method(chunkSource, 'getChunkDataByAny', async () => {
+        chunkFetchCalls++;
+        return { hash: Buffer.alloc(0), chunk: Buffer.from('') };
+      });
+      mock.method(chunkSource, 'getChunkByAny', async () => {
+        chunkFetchCalls++;
+        throw new Error('Should not be called');
+      });
+
+      const requestPromise = txChunkRetriever.getData({
+        id: TX_ID,
+        requestAttributes,
+        signal: controller.signal,
+      });
+
+      // Fire the abort on the next tick so both Promise.all branches are
+      // already awaiting on the signal (simulating client disconnect mid-
+      // geometry).
+      await new Promise((resolve) => setImmediate(resolve));
+      controller.abort();
+
+      await assert.rejects(
+        () => requestPromise,
+        (error: any) => error.name === 'AbortError',
+      );
+
+      assert.ok(
+        getTxFieldSignals[0] instanceof AbortSignal,
+        'getTxField should receive caller signal',
+      );
+      assert.ok(
+        getTxOffsetSignals[0] instanceof AbortSignal,
+        'getTxOffset should receive caller signal',
+      );
+      assert.equal(
+        chunkFetchCalls,
+        0,
+        'No chunk fetches should occur after geometry aborts',
+      );
+    });
+
     it('should abort in-flight chunk requests when timeout fires', async () => {
       mock.method(metrics.chunkFirstDataTimeoutsTotal, 'inc');
 

@@ -190,10 +190,14 @@ export interface ChainSource {
     txId: string;
     isPendingTx?: boolean;
   }): Promise<PartialJsonTransaction>;
-  getTxOffset(txId: string): Promise<JsonTransactionOffset>;
+  getTxOffset(
+    txId: string,
+    signal?: AbortSignal,
+  ): Promise<JsonTransactionOffset>;
   getTxField<K extends keyof PartialJsonTransaction>(
     txId: string,
     field: K,
+    signal?: AbortSignal,
   ): Promise<PartialJsonTransaction[K]>;
   getBlockAndTxsByHeight(height: number): Promise<{
     block: PartialJsonBlock;
