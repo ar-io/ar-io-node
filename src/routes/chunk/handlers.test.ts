@@ -16,6 +16,7 @@ import {
   determineFailureStatusCode,
 } from './handlers.js';
 import { ChunkNotFoundError } from '../../data/chunk-retrieval-service.js';
+import { formatContentDigest } from '../../lib/digest.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'chunk-handlers' });
@@ -23,13 +24,12 @@ const log = createTestLogger({ suite: 'chunk-handlers' });
 const CHUNK_OFFSET_PATH = '/chunk/:offset(\\d+)';
 
 /**
- * Compute the expected ETag for a chunk-offset JSON response. The handler
- * sets ETag from the SHA-256 (base64url) of the serialized JSON body — not
- * from the raw chunk bytes — so ETag describes what's actually served per
- * RFC 9110 §8.8.1. Tests use this helper to derive the expected value
- * without hand-encoding it.
+ * SHA-256 (base64url) of the serialized JSON body that the chunk-offset
+ * handler emits. Both ETag and Content-Digest are derived from this single
+ * hash — the helpers below split into the two formats the handler actually
+ * sets on the response.
  */
-function expectedJsonEtag(parts: {
+function expectedJsonHash(parts: {
   chunk: Buffer;
   data_path: Buffer;
   tx_path?: Buffer;
@@ -42,11 +42,39 @@ function expectedJsonEtag(parts: {
     body.tx_path = parts.tx_path.toString('base64url');
   }
   body.packing = 'unpacked';
-  const hash = crypto
+  return crypto
     .createHash('sha256')
     .update(JSON.stringify(body))
     .digest('base64url');
-  return `"${hash}"`;
+}
+
+/**
+ * Compute the expected ETag for a chunk-offset JSON response. The handler
+ * sets ETag from the SHA-256 (base64url) of the serialized JSON body — not
+ * from the raw chunk bytes — so ETag describes what's actually served per
+ * RFC 9110 §8.8.1.
+ */
+function expectedJsonEtag(parts: {
+  chunk: Buffer;
+  data_path: Buffer;
+  tx_path?: Buffer;
+}): string {
+  return `"${expectedJsonHash(parts)}"`;
+}
+
+/**
+ * Compute the expected `Content-Digest` for a chunk-offset JSON response,
+ * in RFC 9530 dictionary syntax (`sha-256=:<base64>:`). Derived from the
+ * same hash as ETag — pairing the two assertions in tests guards against
+ * the representation validator and the HTTPSIG body-binding digest
+ * silently disagreeing.
+ */
+function expectedJsonContentDigest(parts: {
+  chunk: Buffer;
+  data_path: Buffer;
+  tx_path?: Buffer;
+}): string {
+  return formatContentDigest(expectedJsonHash(parts));
 }
 
 const DEFAULT_MOCK_CHUNK = Buffer.from('chunk data');
@@ -357,6 +385,13 @@ describe('Chunk routes', () => {
               data_path: DEFAULT_MOCK_DATA_PATH,
             }),
           );
+          assert.strictEqual(
+            res.header['content-digest'],
+            expectedJsonContentDigest({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
         });
     });
 
@@ -378,6 +413,13 @@ describe('Chunk routes', () => {
           assert.strictEqual(
             res.header['etag'],
             expectedJsonEtag({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
+          assert.strictEqual(
+            res.header['content-digest'],
+            expectedJsonContentDigest({
               chunk: DEFAULT_MOCK_CHUNK,
               data_path: DEFAULT_MOCK_DATA_PATH,
             }),
@@ -409,6 +451,13 @@ describe('Chunk routes', () => {
               data_path: DEFAULT_MOCK_DATA_PATH,
             }),
           );
+          assert.strictEqual(
+            res.header['content-digest'],
+            expectedJsonContentDigest({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
         });
     });
 
@@ -434,6 +483,13 @@ describe('Chunk routes', () => {
               data_path: DEFAULT_MOCK_DATA_PATH,
             }),
           );
+          assert.strictEqual(
+            res.header['content-digest'],
+            expectedJsonContentDigest({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
           assert.strictEqual(res.header['x-cache'], 'MISS');
         });
     });
@@ -441,6 +497,10 @@ describe('Chunk routes', () => {
 
   describe('If-None-Match conditional requests', () => {
     const jsonEtag = expectedJsonEtag({
+      chunk: DEFAULT_MOCK_CHUNK,
+      data_path: DEFAULT_MOCK_DATA_PATH,
+    });
+    const jsonContentDigest = expectedJsonContentDigest({
       chunk: DEFAULT_MOCK_CHUNK,
       data_path: DEFAULT_MOCK_DATA_PATH,
     });
@@ -509,6 +569,7 @@ describe('Chunk routes', () => {
           assert.strictEqual(res.status, 200);
           assert.ok(res.body.chunk);
           assert.strictEqual(res.header['etag'], jsonEtag);
+          assert.strictEqual(res.header['content-digest'], jsonContentDigest);
         });
     });
 
@@ -536,6 +597,13 @@ describe('Chunk routes', () => {
           assert.strictEqual(
             res.header['etag'],
             expectedJsonEtag({
+              chunk: DEFAULT_MOCK_CHUNK,
+              data_path: DEFAULT_MOCK_DATA_PATH,
+            }),
+          );
+          assert.strictEqual(
+            res.header['content-digest'],
+            expectedJsonContentDigest({
               chunk: DEFAULT_MOCK_CHUNK,
               data_path: DEFAULT_MOCK_DATA_PATH,
             }),
