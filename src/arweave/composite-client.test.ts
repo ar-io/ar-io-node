@@ -103,6 +103,196 @@ describe('ArweaveCompositeClient', () => {
     });
   };
 
+  describe('AbortSignal threading', () => {
+    // Note: setInterval is mocked in beforeEach so the rate-limit bucket
+    // filler never runs. trustedNodeRequestBucket therefore starts at 0,
+    // which lets us deterministically exercise the bucket-wait code path.
+
+    it('rejects with AbortError when caller aborts while bucket is empty (the pivotal regression case)', async () => {
+      const client = createTestClient();
+
+      // Replace trustedNodeAxios with a mock so we can detect whether it was
+      // ever called. Under the bug, an aborted caller would still wait for
+      // bucket tokens and eventually issue the HTTP request.
+      const axiosMock = mock.fn(() => Promise.resolve({ data: 'unused' }));
+      (client as any).trustedNodeAxios = axiosMock;
+
+      // Bucket is empty — confirm.
+      assert.equal((client as any).trustedNodeRequestBucket, 0);
+
+      const controller = new AbortController();
+
+      // Fire the request, then abort almost immediately. The bucket will
+      // never have tokens (filler is mocked off), so the only way for the
+      // request to terminate is by honoring the abort signal.
+      const requestPromise = client.getTxOffset(
+        'test-tx-id',
+        controller.signal,
+      );
+
+      // Give the worker a tick to enter the bucket-wait loop, then abort.
+      await new Promise((resolve) => setImmediate(resolve));
+      controller.abort();
+
+      await assert.rejects(requestPromise, (error: any) => {
+        return (
+          error.name === 'AbortError' ||
+          error.message?.includes('aborted') ||
+          error.message?.includes('Aborted')
+        );
+      });
+
+      // The HTTP call must NOT have been made — we aborted before any
+      // tokens were available.
+      assert.equal(
+        axiosMock.mock.callCount(),
+        0,
+        'trustedNodeAxios should not have been called for an aborted request',
+      );
+    });
+
+    it('rejects immediately when signal is already aborted at call time', async () => {
+      const client = createTestClient();
+      const axiosMock = mock.fn(() => Promise.resolve({ data: 'unused' }));
+      (client as any).trustedNodeAxios = axiosMock;
+
+      const controller = new AbortController();
+      controller.abort();
+
+      await assert.rejects(
+        client.getTxOffset('test-tx-id', controller.signal),
+        (error: any) => error.name === 'AbortError',
+      );
+      await assert.rejects(
+        client.getTxField('test-tx-id', 'data_root', controller.signal),
+        (error: any) => error.name === 'AbortError',
+      );
+
+      assert.equal(
+        axiosMock.mock.callCount(),
+        0,
+        'No HTTP call should be made for a pre-aborted request',
+      );
+    });
+
+    it('passes signal through to axios so the HTTP request itself is cancellable', async () => {
+      const client = createTestClient();
+      // Manually pre-fill the bucket so the request can proceed past the
+      // rate-limit gate without waiting on the (mocked) filler.
+      (client as any).trustedNodeRequestBucket = 10;
+
+      const receivedConfigs: any[] = [];
+      (client as any).trustedNodeAxios = mock.fn((cfg: any) => {
+        receivedConfigs.push(cfg);
+        return Promise.resolve({ data: { offset: '1', size: '2' } });
+      });
+
+      const controller = new AbortController();
+      await client.getTxOffset('test-tx-id', controller.signal);
+
+      assert.equal(receivedConfigs.length, 1);
+      assert.ok(
+        receivedConfigs[0].signal instanceof AbortSignal,
+        'axios call should receive an AbortSignal in its config',
+      );
+      assert.equal(receivedConfigs[0].signal, controller.signal);
+    });
+
+    it('one caller aborting getChunkByAny does not abort the shared cached fetch', async () => {
+      const client = createTestClient();
+
+      // Replace peerGetChunk with a slow mock so the cache promise stays
+      // pending long enough for both callers to share it.
+      let resolveChunk!: (chunk: any) => void;
+      const sharedChunk = {
+        tx_path: Buffer.from(''),
+        data_root: Buffer.from(''),
+        data_size: 1000,
+        data_path: Buffer.from(''),
+        offset: 0,
+        hash: Buffer.from(''),
+        chunk: Buffer.from('payload'),
+      };
+      let peerGetChunkCalls = 0;
+      (client as any).peerGetChunk = mock.fn(() => {
+        peerGetChunkCalls++;
+        return new Promise((resolve) => {
+          resolveChunk = resolve;
+        });
+      });
+
+      const params = {
+        txSize: 1000,
+        absoluteOffset: 0,
+        dataRoot: 'test-root',
+        relativeOffset: 0,
+      };
+
+      const aborterA = new AbortController();
+      const aborterB = new AbortController();
+
+      // Two concurrent callers — they should share the same underlying
+      // cached promise (peerGetChunk should only be invoked once).
+      const promiseA = client.getChunkByAny(params, aborterA.signal);
+      const promiseB = client.getChunkByAny(params, aborterB.signal);
+
+      // Yield so promise initialization runs.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      // Caller A bails out — caller B should still be able to receive the
+      // chunk once the underlying fetch completes.
+      aborterA.abort();
+
+      await assert.rejects(
+        promiseA,
+        (error: any) => error.name === 'AbortError',
+      );
+
+      // Now resolve the underlying fetch. Caller B should still get the chunk.
+      resolveChunk(sharedChunk);
+
+      const result = await promiseB;
+      assert.equal(result.chunk.toString(), 'payload');
+
+      // The underlying fetch ran exactly once thanks to dedup.
+      assert.equal(peerGetChunkCalls, 1);
+    });
+
+    it('honors abort during the bucket-wait loop even after the bucket later refills', async () => {
+      const client = createTestClient();
+      const axiosMock = mock.fn(() => Promise.resolve({ data: 'unused' }));
+      (client as any).trustedNodeAxios = axiosMock;
+
+      // Bucket is empty — request will spin in the bucket-wait loop.
+      assert.equal((client as any).trustedNodeRequestBucket, 0);
+
+      const controller = new AbortController();
+      const requestPromise = client.getTxField(
+        'test-tx-id',
+        'data_root',
+        controller.signal,
+      );
+
+      // Let the worker enter the wait loop.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      // Abort first, then refill the bucket. The worker must still bail
+      // out because the abort signal was raised before/during its wait,
+      // not silently consume a token and proceed with HTTP.
+      controller.abort();
+      (client as any).trustedNodeRequestBucket = 100;
+
+      await assert.rejects(requestPromise, (error: any) => {
+        return error.name === 'AbortError';
+      });
+      assert.equal(
+        axiosMock.mock.callCount(),
+        0,
+        'trustedNodeAxios should not run when the request was aborted in the bucket-wait loop',
+      );
+    });
+  });
+
   describe('Preferred Chunk GET URLs', () => {
     it('should initialize with preferred chunk GET URLs', () => {
       const preferredChunkGetUrls = [

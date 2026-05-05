@@ -103,9 +103,12 @@ export class RebroadcastingChunkSource
     });
   }
 
-  async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
+  async getChunkByAny(
+    params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
+  ): Promise<Chunk> {
     // 1. Delegate to wrapped source
-    const chunk = await this.chunkSource.getChunkByAny(params);
+    const chunk = await this.chunkSource.getChunkByAny(params, signal);
 
     // 2. Fire-and-forget rebroadcast (non-blocking)
     const rebroadcastPromise = this.maybeRebroadcast(chunk, params)
@@ -127,8 +130,9 @@ export class RebroadcastingChunkSource
 
   async getChunkDataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkData> {
-    return this.chunkSource.getChunkDataByAny(params);
+    return this.chunkSource.getChunkDataByAny(params, signal);
   }
 
   /**

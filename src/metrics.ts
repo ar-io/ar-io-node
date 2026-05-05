@@ -4,6 +4,8 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { performance } from 'node:perf_hooks';
+
 import * as promClient from 'prom-client';
 import { Gauge } from 'prom-client';
 
@@ -19,6 +21,28 @@ import { Semaphore } from './lib/semaphore.js';
 // Set default labels for all metrics
 promClient.register.setDefaultLabels({
   release: AR_IO_NODE_RELEASE,
+});
+
+// prom-client default Node.js process metrics:
+//   process_resident_memory_bytes, process_cpu_*, nodejs_heap_size_*,
+//   nodejs_eventloop_lag_seconds (and quantiles), nodejs_gc_duration_seconds,
+//   nodejs_active_handles_total, nodejs_active_requests_total, etc.
+// These are essential for diagnosing event-loop saturation / GC pressure.
+promClient.collectDefaultMetrics();
+
+// Single-number summary of how busy the main thread is (0..1). Far more
+// diagnostic than lag percentiles for catching saturation: lag alone can sit
+// near zero until the loop is fully pegged. Sampled at scrape time.
+let lastELU = performance.eventLoopUtilization();
+new Gauge({
+  name: 'nodejs_event_loop_utilization',
+  help: 'Fraction of wallclock the event loop has been busy since the last scrape (0..1)',
+  collect() {
+    const next = performance.eventLoopUtilization();
+    const delta = performance.eventLoopUtilization(next, lastELU);
+    lastELU = next;
+    this.set(delta.utilization);
+  },
 });
 
 /**
@@ -74,6 +98,17 @@ export const dataItemsUnbundledCounter = new promClient.Counter({
   name: 'data_items_unbundled_total',
   help: 'Count of data items unbundled for potential indexing',
   labelNames: ['bundle_format'],
+});
+
+// Distribution of data-item counts per unbundled bundle. Use for correlating
+// queue/heap spikes with the *trigger* bundle's size — without this, we only
+// see data_items_unbundled_total rising and can't tell if it's a single
+// monster bundle or a steady stream of small ones.
+export const bundleDataItemCountHistogram = new promClient.Histogram({
+  name: 'bundle_data_item_count',
+  help: 'Distribution of data item counts per unbundled bundle',
+  labelNames: ['bundle_format'],
+  buckets: [1, 10, 100, 1000, 10_000, 100_000, 500_000, 1_000_000, 5_000_000],
 });
 
 export const dataItemsQueuedCounter = new promClient.Counter({
@@ -252,6 +287,19 @@ export const arnsCacheMissCounter = new promClient.Counter({
   name: 'arns_cache_miss_total',
   help: 'Number of misses in the arns cache',
 });
+
+/**
+ * Incremented when {@link CompositeArNSResolver} returns a cached resolution
+ * because a fresh resolution attempt resolved with no resolved id — distinct
+ * from the timeout-triggered cached fallback. Tracks how often the gateway
+ * is serving stale data due to upstream (names cache / AO / CU) returning
+ * `undefined` faster than the cached-resolution fallback timeout.
+ */
+export const arnsCachedResolutionFallbackOnEmptyCounter =
+  new promClient.Counter({
+    name: 'arns_cached_resolution_fallback_on_empty_total',
+    help: 'Count of times CompositeArNSResolver returned a cached resolution because fresh resolution had no resolved id (no error/timeout)',
+  });
 
 export const arnsNameCacheDurationSummary = new promClient.Summary({
   name: 'arns_name_cache_duration_ms',

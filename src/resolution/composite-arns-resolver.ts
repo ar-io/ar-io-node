@@ -344,11 +344,12 @@ export class CompositeArNSResolver implements NameResolver {
       metrics.arnsCacheMissCounter.inc();
       this.log.verbose('Resolution cache miss for ArNS name', { name });
 
-      // If there is a cached resolution, fall back to it if either an error
-      // occurs or we exceed the cached resolution fallback timeout
+      // If there is a cached resolution, fall back to it if either fresh
+      // resolution returns no resolved id or we exceed the cached resolution
+      // fallback timeout.
       let usedCachedFallback = false;
       const resolution = await (cachedResolution
-        ? // Cached resultion exists
+        ? // Cached resolution exists
           pTimeout(
             this.resolveParallel({
               name,
@@ -378,13 +379,29 @@ export class CompositeArNSResolver implements NameResolver {
             parentSpan: span,
           }));
 
-      if (resolution) {
-        if (usedCachedFallback) {
-          span.addEvent('Resolved by cache fallback');
-        } else {
-          span.addEvent('Resolved by fresh resolution');
-        }
+      // pTimeout's `fallback` only fires on timeout — when it fires,
+      // `resolution` is the cached value returned by the fallback. Surface
+      // that path first so the on-empty metric below is never confused with
+      // a timeout. The `&& cachedResolution` guard narrows the type and is
+      // defensive against future drift around the ternary above.
+      if (usedCachedFallback && cachedResolution) {
+        span.addEvent('Resolved by cache fallback');
+        return cachedResolution;
+      }
+      // If fresh resolution resolved fast with no resolved id (e.g.,
+      // names-cache miss, AO/CU dry-run error swallowed to undefined), still
+      // prefer the cached resolution if one exists. Matches the
+      // comment-documented intent of "fall back if error occurs OR timeout".
+      if (resolution?.resolvedId !== undefined) {
+        span.addEvent('Resolved by fresh resolution');
         return resolution;
+      }
+      if (cachedResolution) {
+        span.addEvent(
+          'Using cached resolution due to fresh-resolution returning no id',
+        );
+        metrics.arnsCachedResolutionFallbackOnEmptyCounter.inc();
+        return cachedResolution;
       }
 
       span.addEvent('Unable to resolve name');

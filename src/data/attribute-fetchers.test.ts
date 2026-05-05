@@ -81,7 +81,7 @@ describe('AttributeFetcher', () => {
 
   describe('fetchDataFromParent', () => {
     it('should fetch and return data from parent', async () => {
-      const testBuffer = Buffer.from('testData');
+      const testBuffer = Buffer.from('testData'); // 8 bytes
       mock.method(mocks.dataSource, 'getData', async () => ({
         stream: {
           [Symbol.asyncIterator]: async function* () {
@@ -93,10 +93,117 @@ describe('AttributeFetcher', () => {
       const result = await attributeFetcher.fetchDataFromParent({
         parentId: 'testParent',
         offset: 100,
-        size: 512,
+        size: testBuffer.length,
       });
 
       assert.strictEqual(result, testBuffer.toString('base64url'));
+    });
+
+    // PE-9081: input validation
+    it('should throw when size is 0', async () => {
+      await assert.rejects(
+        attributeFetcher.fetchDataFromParent({
+          parentId: 'testParent',
+          offset: 0,
+          size: 0,
+        }),
+        /invalid size/,
+      );
+    });
+
+    it('should throw when size is negative', async () => {
+      await assert.rejects(
+        attributeFetcher.fetchDataFromParent({
+          parentId: 'testParent',
+          offset: 0,
+          size: -1,
+        }),
+        /invalid size/,
+      );
+    });
+
+    it('should throw when offset is negative', async () => {
+      await assert.rejects(
+        attributeFetcher.fetchDataFromParent({
+          parentId: 'testParent',
+          offset: -1,
+          size: 8,
+        }),
+        /invalid offset/,
+      );
+    });
+
+    // PE-9081: streaming guards
+    it('should throw and destroy stream when upstream emits more bytes than requested', async () => {
+      const testBuffer = Buffer.from('TOO_MANY_BYTES_FOR_THIS_REQUEST'); // 31 bytes
+      let streamDestroyed = false;
+      const fakeStream: {
+        destroy: () => void;
+        [Symbol.asyncIterator]: () => AsyncGenerator<Buffer>;
+      } = {
+        destroy: () => {
+          streamDestroyed = true;
+        },
+        [Symbol.asyncIterator]: async function* () {
+          yield testBuffer;
+        },
+      };
+      mock.method(mocks.dataSource, 'getData', async () => ({
+        stream: fakeStream,
+      }));
+
+      await assert.rejects(
+        attributeFetcher.fetchDataFromParent({
+          parentId: 'testParent',
+          offset: 0,
+          size: 4, // requesting 4 bytes, upstream sends 31
+        }),
+        /more bytes than requested/,
+      );
+
+      assert.strictEqual(streamDestroyed, true);
+    });
+
+    it('should throw on short read', async () => {
+      const testBuffer = Buffer.from('short'); // 5 bytes
+      mock.method(mocks.dataSource, 'getData', async () => ({
+        stream: {
+          [Symbol.asyncIterator]: async function* () {
+            yield testBuffer;
+          },
+        },
+      }));
+
+      await assert.rejects(
+        attributeFetcher.fetchDataFromParent({
+          parentId: 'testParent',
+          offset: 0,
+          size: 100, // requesting 100 bytes, upstream sends 5
+        }),
+        /short read/,
+      );
+    });
+
+    it('should accept stream emitted across multiple chunks summing to size', async () => {
+      // Verifies the chunk.copy + offset accumulation path.
+      const chunk1 = Buffer.from('ab');
+      const chunk2 = Buffer.from('cd');
+      mock.method(mocks.dataSource, 'getData', async () => ({
+        stream: {
+          [Symbol.asyncIterator]: async function* () {
+            yield chunk1;
+            yield chunk2;
+          },
+        },
+      }));
+
+      const result = await attributeFetcher.fetchDataFromParent({
+        parentId: 'testParent',
+        offset: 0,
+        size: 4,
+      });
+
+      assert.strictEqual(result, Buffer.from('abcd').toString('base64url'));
     });
   });
 
@@ -304,7 +411,7 @@ describe('SignatureFetcher', () => {
       mock.method(signatureFetcher, 'getDataItemAttributes', async () => ({
         parentId: 'id',
         signatureOffset: 1,
-        signatureSize: 2,
+        signatureSize: testSignatureBuffer.length,
       }));
 
       mock.method(mocks.dataSource, 'getData', async () => ({
@@ -341,7 +448,7 @@ describe('SignatureFetcher', () => {
         id: 'id',
         parentId: 'parent',
         signatureOffset: 1,
-        signatureSize: 2,
+        signatureSize: testSignatureBuffer.length,
       });
 
       assert.strictEqual(result, testSignatureBuffer.toString('base64url'));
@@ -365,6 +472,64 @@ describe('SignatureFetcher', () => {
         (mocks.signatureStore.set as any).mock.calls.length,
         0,
       );
+    });
+
+    // PE-9081: caller-side validation. Production heap analysis showed
+    // upstream attribute stores returning signatureSize=0, which used to
+    // be silently forwarded into fetchDataFromParent and triggered the
+    // upstream-returns-full-bundle leak. These cases now bail out early.
+    it('should return undefined when attribute store returns signatureSize=0', async () => {
+      mock.method(signatureFetcher, 'getDataItemAttributes', async () => ({
+        parentId: 'parent',
+        signatureOffset: 0,
+        signatureSize: 0,
+      }));
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('getData should never be called when size=0');
+      });
+
+      const result = await signatureFetcher.getDataItemSignature({ id: 'id' });
+
+      assert.strictEqual(result, undefined);
+      assert.strictEqual(getDataMock.mock.calls.length, 0);
+      assert.strictEqual(
+        (mocks.signatureStore.set as any).mock.calls.length,
+        0,
+      );
+    });
+
+    it('should return undefined when attribute store returns missing signatureSize', async () => {
+      mock.method(signatureFetcher, 'getDataItemAttributes', async () => ({
+        parentId: 'parent',
+        signatureOffset: 0,
+        // signatureSize intentionally omitted
+      }));
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error(
+          'getData should never be called when signatureSize is missing',
+        );
+      });
+
+      const result = await signatureFetcher.getDataItemSignature({ id: 'id' });
+
+      assert.strictEqual(result, undefined);
+      assert.strictEqual(getDataMock.mock.calls.length, 0);
+    });
+
+    it('should return undefined when signatureOffset is negative', async () => {
+      mock.method(signatureFetcher, 'getDataItemAttributes', async () => ({
+        parentId: 'parent',
+        signatureOffset: -1,
+        signatureSize: 512,
+      }));
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('getData should never be called');
+      });
+
+      const result = await signatureFetcher.getDataItemSignature({ id: 'id' });
+
+      assert.strictEqual(result, undefined);
+      assert.strictEqual(getDataMock.mock.calls.length, 0);
     });
   });
 
@@ -538,7 +703,7 @@ describe('OwnerFetcher', () => {
       mock.method(ownerFetcher, 'getDataItemAttributes', async () => ({
         parentId: 'id',
         ownerOffset: 1,
-        ownerSize: 2,
+        ownerSize: testOwnerBuffer.length,
       }));
 
       mock.method(mocks.dataSource, 'getData', async () => ({
@@ -572,7 +737,7 @@ describe('OwnerFetcher', () => {
         id: 'id',
         parentId: 'parent',
         ownerOffset: 1,
-        ownerSize: 2,
+        ownerSize: testOwnerBuffer.length,
       });
 
       assert.strictEqual(result, testOwnerBuffer.toString('base64url'));
@@ -590,6 +755,56 @@ describe('OwnerFetcher', () => {
 
       assert.strictEqual(result, undefined);
       assert.strictEqual((mocks.ownerStore.set as any).mock.calls.length, 0);
+    });
+
+    // PE-9081: caller-side validation, parallel to SignatureFetcher.
+    it('should return undefined when attribute store returns ownerSize=0', async () => {
+      mock.method(ownerFetcher, 'getDataItemAttributes', async () => ({
+        parentId: 'parent',
+        ownerOffset: 0,
+        ownerSize: 0,
+      }));
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('getData should never be called when ownerSize=0');
+      });
+
+      const result = await ownerFetcher.getDataItemOwner({ id: 'id' });
+
+      assert.strictEqual(result, undefined);
+      assert.strictEqual(getDataMock.mock.calls.length, 0);
+      assert.strictEqual((mocks.ownerStore.set as any).mock.calls.length, 0);
+    });
+
+    it('should return undefined when attribute store returns missing ownerSize', async () => {
+      mock.method(ownerFetcher, 'getDataItemAttributes', async () => ({
+        parentId: 'parent',
+        ownerOffset: 0,
+        // ownerSize intentionally omitted
+      }));
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('getData should never be called');
+      });
+
+      const result = await ownerFetcher.getDataItemOwner({ id: 'id' });
+
+      assert.strictEqual(result, undefined);
+      assert.strictEqual(getDataMock.mock.calls.length, 0);
+    });
+
+    it('should return undefined when ownerOffset is negative', async () => {
+      mock.method(ownerFetcher, 'getDataItemAttributes', async () => ({
+        parentId: 'parent',
+        ownerOffset: -1,
+        ownerSize: 512,
+      }));
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('getData should never be called');
+      });
+
+      const result = await ownerFetcher.getDataItemOwner({ id: 'id' });
+
+      assert.strictEqual(result, undefined);
+      assert.strictEqual(getDataMock.mock.calls.length, 0);
     });
   });
 

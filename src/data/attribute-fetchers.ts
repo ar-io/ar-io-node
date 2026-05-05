@@ -58,6 +58,25 @@ export abstract class AttributeFetchers {
     size: number;
   }): Promise<string> {
     const log = this.log.child({ method: 'fetchDataFromParent' });
+
+    // Validate inputs. A `size` of 0 or negative cannot produce a meaningful
+    // signature/owner range, and historically caused the upstream Range
+    // header to be malformed (`bytes=0--1`) — most data sources then
+    // returned the FULL parent bundle as a 200 response, which the previous
+    // implementation silently accumulated into a multi-hundred-MB Buffer
+    // pinned in this async function's saved register frame across the
+    // upstream stall. (PE-9081.)
+    if (!Number.isFinite(size) || size <= 0) {
+      throw new Error(
+        `fetchDataFromParent: invalid size ${size} (parentId=${parentId}, offset=${offset})`,
+      );
+    }
+    if (!Number.isFinite(offset) || offset < 0) {
+      throw new Error(
+        `fetchDataFromParent: invalid offset ${offset} (parentId=${parentId}, size=${size})`,
+      );
+    }
+
     log.debug('Fetching data from parent', { parentId, offset, size });
 
     const { stream } = await this.dataSource.getData({
@@ -68,10 +87,44 @@ export abstract class AttributeFetchers {
       },
     });
 
-    let buffer = Buffer.alloc(0);
+    // Pre-allocated, fixed-size buffer with offset writes. Avoids the
+    // O(N²) Buffer.concat-per-chunk shape and removes the slot-8 pinned-
+    // accumulator leak. If upstream emits more bytes than requested,
+    // destroy the stream and throw — do not silently buffer past `size`.
+    const buffer = Buffer.alloc(size);
+    let bytesRead = 0;
 
-    for await (const chunk of stream) {
-      buffer = Buffer.concat([buffer, chunk]);
+    try {
+      for await (const chunk of stream) {
+        if (bytesRead + chunk.length > size) {
+          if (
+            typeof (stream as { destroy?: () => void }).destroy === 'function'
+          ) {
+            (stream as { destroy: () => void }).destroy();
+          }
+          throw new Error(
+            `fetchDataFromParent: upstream returned more bytes than requested ` +
+              `(parentId=${parentId}, requestedSize=${size}, ` +
+              `bytesAtOverage=${bytesRead + chunk.length})`,
+          );
+        }
+        chunk.copy(buffer, bytesRead);
+        bytesRead += chunk.length;
+      }
+    } catch (error) {
+      // Ensure the buffer reference can be GC'd promptly even when the
+      // for-await yields back to a still-pending Promise; rethrow.
+      if (typeof (stream as { destroy?: () => void }).destroy === 'function') {
+        (stream as { destroy: () => void }).destroy();
+      }
+      throw error;
+    }
+
+    if (bytesRead !== size) {
+      throw new Error(
+        `fetchDataFromParent: short read from upstream ` +
+          `(parentId=${parentId}, requestedSize=${size}, actualSize=${bytesRead})`,
+      );
     }
 
     return toB64Url(buffer);
@@ -197,20 +250,27 @@ export class SignatureFetcher
         signatureOffset = dataItemAttributes.signatureOffset;
       }
 
-      // Shadow-victim guard: rows produced by an admin POST that arrived
-      // before the unbundle path can have a populated parent_id but NULL
-      // signature_offset / signature_size (the offset/size columns aren't
-      // covered by the pre-structural-fix UPDATE clause). Coercing those
-      // NULLs into FsDataStore.get yields a degenerate read range
-      // (end = offset + size - 1 = -1) and throws RangeError. Bail out
-      // here with a clear warning instead.
+      // Incomplete-root-atom guard. Two failure modes converge here:
+      //   - PE-9073: rows produced by an admin POST that arrived before the
+      //     unbundle path can have a populated parent_id but NULL
+      //     signature_offset / signature_size. Coercing those NULLs into
+      //     FsDataStore.get yields a degenerate read range
+      //     (end = offset + size - 1 = -1) and throws RangeError.
+      //   - PE-9081: a 0 / negative signatureSize would produce a malformed
+      //     Range request; upstreams that ignore malformed Range return the
+      //     full parent bundle, which fetchDataFromParent previously
+      //     accumulated into a multi-hundred-MB Buffer.
+      // Both are downstream symptoms of the same data-integrity problem
+      // (incomplete root atom). Bail out with a warning instead.
+      // `== null` catches both null (from DB rows) and undefined.
       if (
         parentId == null ||
         signatureSize == null ||
-        signatureSize === 0 ||
-        signatureOffset == null
+        signatureSize <= 0 ||
+        signatureOffset == null ||
+        signatureOffset < 0
       ) {
-        this.log.warn(
+        log.warn(
           'Skipping signature fetch — data item has incomplete root atom (likely a shadow row pending repair, see PE-9073 follow-up)',
           { id, parentId, signatureSize, signatureOffset },
         );
@@ -358,17 +418,16 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         ownerOffset = dataItemAttributes.ownerOffset;
       }
 
-      // Shadow-victim guard: see corresponding comment in
-      // getDataItemSignature. Skips the FsDataStore read for rows with
-      // an incomplete root atom rather than throwing RangeError on a
-      // degenerate read range.
+      // Incomplete-root-atom guard. See getDataItemSignature for the full
+      // rationale (shadow-row RangeError + malformed-Range memory leak).
       if (
         parentId == null ||
         ownerSize == null ||
-        ownerSize === 0 ||
-        ownerOffset == null
+        ownerSize <= 0 ||
+        ownerOffset == null ||
+        ownerOffset < 0
       ) {
-        this.log.warn(
+        log.warn(
           'Skipping owner fetch — data item has incomplete root atom (likely a shadow row pending repair, see PE-9073 follow-up)',
           { id, parentId, ownerSize, ownerOffset },
         );

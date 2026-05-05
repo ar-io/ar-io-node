@@ -56,6 +56,17 @@ interface DataItemHeader {
   size: number;
 }
 
+// Range fetches return a Readable backed by an axios IncomingMessage.
+// When parsing only consumes a bounded prefix, the unread tail stays
+// anchored in the external Buffer pool — invisible to V8 and to
+// --max-old-space-size — until the socket is destroyed. Always destroy
+// after parsing, on success and on failure alike.
+function destroyStream(stream: Readable | undefined): void {
+  if (stream !== undefined && !stream.destroyed) {
+    stream.destroy();
+  }
+}
+
 export class Ans104OffsetSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
@@ -491,7 +502,12 @@ export class Ans104OffsetSource {
       region: { offset, size: 32 },
       signal,
     });
-    const itemCount = await this.parseItemCount(countData.stream);
+    let itemCount: number;
+    try {
+      itemCount = await this.parseItemCount(countData.stream);
+    } finally {
+      destroyStream(countData.stream);
+    }
 
     if (itemCount === 0) {
       return { items: [] };
@@ -507,7 +523,12 @@ export class Ans104OffsetSource {
       region: { offset, size: headerSize },
       signal,
     });
-    const items = await this.parseHeaders(headerData.stream, itemCount);
+    let items: DataItemHeader[];
+    try {
+      items = await this.parseHeaders(headerData.stream, itemCount);
+    } finally {
+      destroyStream(headerData.stream);
+    }
 
     return { items };
   }
@@ -559,7 +580,12 @@ export class Ans104OffsetSource {
         signal,
       });
 
-      const itemCount = await this.parseItemCount(countData.stream);
+      let itemCount: number;
+      try {
+        itemCount = await this.parseItemCount(countData.stream);
+      } finally {
+        destroyStream(countData.stream);
+      }
 
       if (itemCount === 0) {
         log.debug('Bundle has no items');
@@ -579,7 +605,12 @@ export class Ans104OffsetSource {
         signal,
       });
 
-      const items = await this.parseHeaders(headerData.stream, itemCount);
+      let items: DataItemHeader[];
+      try {
+        items = await this.parseHeaders(headerData.stream, itemCount);
+      } finally {
+        destroyStream(headerData.stream);
+      }
 
       // Check if target item is in this bundle
       const targetItem = items.find((item) => item.id === dataItemId);
@@ -697,7 +728,12 @@ export class Ans104OffsetSource {
         region: { offset: bundleContentOffset, size: 32 },
         signal,
       });
-      const itemCount = await this.parseItemCount(countData.stream);
+      let itemCount: number;
+      try {
+        itemCount = await this.parseItemCount(countData.stream);
+      } finally {
+        destroyStream(countData.stream);
+      }
 
       if (itemCount === 0) {
         log.debug('Bundle has no items');
@@ -712,7 +748,12 @@ export class Ans104OffsetSource {
         region: { offset: bundleContentOffset, size: headerSize },
         signal,
       });
-      const items = await this.parseHeaders(headerData.stream, itemCount);
+      let items: DataItemHeader[];
+      try {
+        items = await this.parseHeaders(headerData.stream, itemCount);
+      } finally {
+        destroyStream(headerData.stream);
+      }
 
       // Find which item contains the target offset
       for (const item of items) {
@@ -905,80 +946,84 @@ export class Ans104OffsetSource {
         signal,
       });
 
-      const reader = getReader(itemData.stream);
-      let bytes = (await reader.next()).value;
+      try {
+        const reader = getReader(itemData.stream);
+        let bytes = (await reader.next()).value;
 
-      // Skip signature type (2 bytes)
-      bytes = await readBytes(reader, bytes, 2);
-      const signatureType = byteArrayToLong(bytes.subarray(0, 2));
-      bytes = bytes.subarray(2);
+        // Skip signature type (2 bytes)
+        bytes = await readBytes(reader, bytes, 2);
+        const signatureType = byteArrayToLong(bytes.subarray(0, 2));
+        bytes = bytes.subarray(2);
 
-      const { sigLength, pubLength } = getSignatureMeta(signatureType);
+        const { sigLength, pubLength } = getSignatureMeta(signatureType);
 
-      // Skip signature
-      bytes = await readBytes(reader, bytes, sigLength);
-      bytes = bytes.subarray(sigLength);
+        // Skip signature
+        bytes = await readBytes(reader, bytes, sigLength);
+        bytes = bytes.subarray(sigLength);
 
-      // Skip owner
-      bytes = await readBytes(reader, bytes, pubLength);
-      bytes = bytes.subarray(pubLength);
+        // Skip owner
+        bytes = await readBytes(reader, bytes, pubLength);
+        bytes = bytes.subarray(pubLength);
 
-      // Skip target (1 byte flag + optional 32 bytes)
-      bytes = await readBytes(reader, bytes, 1);
-      const hasTarget = bytes[0] === 1;
-      bytes = bytes.subarray(1);
-      if (hasTarget) {
-        bytes = await readBytes(reader, bytes, 32);
-        bytes = bytes.subarray(32);
+        // Skip target (1 byte flag + optional 32 bytes)
+        bytes = await readBytes(reader, bytes, 1);
+        const hasTarget = bytes[0] === 1;
+        bytes = bytes.subarray(1);
+        if (hasTarget) {
+          bytes = await readBytes(reader, bytes, 32);
+          bytes = bytes.subarray(32);
+        }
+
+        // Skip anchor (1 byte flag + optional 32 bytes)
+        bytes = await readBytes(reader, bytes, 1);
+        const hasAnchor = bytes[0] === 1;
+        bytes = bytes.subarray(1);
+        if (hasAnchor) {
+          bytes = await readBytes(reader, bytes, 32);
+          bytes = bytes.subarray(32);
+        }
+
+        // Read tags length
+        bytes = await readBytes(reader, bytes, 16);
+        const tagsCount = byteArrayToLong(bytes.subarray(0, 8));
+        const tagsBytesLength = byteArrayToLong(bytes.subarray(8, 16));
+        bytes = bytes.subarray(16);
+
+        if (tagsCount === 0 || tagsBytesLength === 0) {
+          return false;
+        }
+
+        // Read tags bytes
+        bytes = await readBytes(reader, bytes, tagsBytesLength);
+        const tagsBytes = bytes.subarray(0, tagsBytesLength);
+
+        // Parse tags to check for Bundle-Format
+        // Use the arbundles library function for proper deserialization
+        const tags = deserializeTags(Buffer.from(tagsBytes));
+
+        const isBundleFormat = tags.some(
+          (tag) => tag.name === 'Bundle-Format' && tag.value === 'binary',
+        );
+
+        const isBundleVersion = tags.some(
+          (tag) => tag.name === 'Bundle-Version' && tag.value === '2.0.0',
+        );
+
+        const isBundle = isBundleFormat && isBundleVersion;
+
+        if (isBundle) {
+          log.debug('Item is a bundle', {
+            itemId: item.id,
+            tags: tags.filter(
+              (t) => t.name === 'Bundle-Format' || t.name === 'Bundle-Version',
+            ),
+          });
+        }
+
+        return isBundle;
+      } finally {
+        destroyStream(itemData.stream);
       }
-
-      // Skip anchor (1 byte flag + optional 32 bytes)
-      bytes = await readBytes(reader, bytes, 1);
-      const hasAnchor = bytes[0] === 1;
-      bytes = bytes.subarray(1);
-      if (hasAnchor) {
-        bytes = await readBytes(reader, bytes, 32);
-        bytes = bytes.subarray(32);
-      }
-
-      // Read tags length
-      bytes = await readBytes(reader, bytes, 16);
-      const tagsCount = byteArrayToLong(bytes.subarray(0, 8));
-      const tagsBytesLength = byteArrayToLong(bytes.subarray(8, 16));
-      bytes = bytes.subarray(16);
-
-      if (tagsCount === 0 || tagsBytesLength === 0) {
-        return false;
-      }
-
-      // Read tags bytes
-      bytes = await readBytes(reader, bytes, tagsBytesLength);
-      const tagsBytes = bytes.subarray(0, tagsBytesLength);
-
-      // Parse tags to check for Bundle-Format
-      // Use the arbundles library function for proper deserialization
-      const tags = deserializeTags(Buffer.from(tagsBytes));
-
-      const isBundleFormat = tags.some(
-        (tag) => tag.name === 'Bundle-Format' && tag.value === 'binary',
-      );
-
-      const isBundleVersion = tags.some(
-        (tag) => tag.name === 'Bundle-Version' && tag.value === '2.0.0',
-      );
-
-      const isBundle = isBundleFormat && isBundleVersion;
-
-      if (isBundle) {
-        log.debug('Item is a bundle', {
-          itemId: item.id,
-          tags: tags.filter(
-            (t) => t.name === 'Bundle-Format' || t.name === 'Bundle-Version',
-          ),
-        });
-      }
-
-      return isBundle;
     } catch (error: any) {
       // Handle specific error types differently
       if (error.message === 'Invalid buffer') {
@@ -1037,91 +1082,95 @@ export class Ans104OffsetSource {
         signal,
       });
 
-      const reader = getReader(headerData.stream);
-      let bytes = (await reader.next()).value;
-      let headerOffset = 0;
+      try {
+        const reader = getReader(headerData.stream);
+        let bytes = (await reader.next()).value;
+        let headerOffset = 0;
 
-      // Parse signature type (2 bytes)
-      bytes = await readBytes(reader, bytes, 2);
-      const signatureType = byteArrayToLong(bytes.subarray(0, 2));
-      bytes = bytes.subarray(2);
-      headerOffset += 2;
+        // Parse signature type (2 bytes)
+        bytes = await readBytes(reader, bytes, 2);
+        const signatureType = byteArrayToLong(bytes.subarray(0, 2));
+        bytes = bytes.subarray(2);
+        headerOffset += 2;
 
-      const { sigLength, pubLength } = getSignatureMeta(signatureType);
+        const { sigLength, pubLength } = getSignatureMeta(signatureType);
 
-      // Read signature (used to compute data item ID)
-      bytes = await readBytes(reader, bytes, sigLength);
-      const signature = bytes.subarray(0, sigLength);
-      const id = createHash('sha256').update(signature).digest('base64url');
-      bytes = bytes.subarray(sigLength);
-      headerOffset += sigLength;
+        // Read signature (used to compute data item ID)
+        bytes = await readBytes(reader, bytes, sigLength);
+        const signature = bytes.subarray(0, sigLength);
+        const id = createHash('sha256').update(signature).digest('base64url');
+        bytes = bytes.subarray(sigLength);
+        headerOffset += sigLength;
 
-      // Skip owner
-      bytes = await readBytes(reader, bytes, pubLength);
-      bytes = bytes.subarray(pubLength);
-      headerOffset += pubLength;
+        // Skip owner
+        bytes = await readBytes(reader, bytes, pubLength);
+        bytes = bytes.subarray(pubLength);
+        headerOffset += pubLength;
 
-      // Skip target (1 byte flag + optional 32 bytes)
-      bytes = await readBytes(reader, bytes, 1);
-      const hasTarget = bytes[0] === 1;
-      bytes = bytes.subarray(1);
-      headerOffset += 1;
-      if (hasTarget) {
-        bytes = await readBytes(reader, bytes, 32);
-        bytes = bytes.subarray(32);
-        headerOffset += 32;
-      }
-
-      // Skip anchor (1 byte flag + optional 32 bytes)
-      bytes = await readBytes(reader, bytes, 1);
-      const hasAnchor = bytes[0] === 1;
-      bytes = bytes.subarray(1);
-      headerOffset += 1;
-      if (hasAnchor) {
-        bytes = await readBytes(reader, bytes, 32);
-        bytes = bytes.subarray(32);
-        headerOffset += 32;
-      }
-
-      // Read tags metadata
-      bytes = await readBytes(reader, bytes, 16);
-      const tagsLength = byteArrayToLong(bytes.subarray(0, 8));
-      const tagsBytesLength = byteArrayToLong(bytes.subarray(8, 16));
-      bytes = bytes.subarray(16);
-      headerOffset += 16;
-
-      // Parse tags to extract Content-Type
-      let contentType: string | undefined;
-      if (tagsBytesLength > 0) {
-        bytes = await readBytes(reader, bytes, tagsBytesLength);
-        const tagsBytes = bytes.subarray(0, tagsBytesLength);
-
-        // Parse tags and find Content-Type (case-insensitive, use first match)
-        if (tagsLength > 0) {
-          const tags = deserializeTags(Buffer.from(tagsBytes));
-          const contentTypeTag = tags.find(
-            (tag) => tag.name.toLowerCase() === 'content-type',
-          );
-          contentType = contentTypeTag?.value;
+        // Skip target (1 byte flag + optional 32 bytes)
+        bytes = await readBytes(reader, bytes, 1);
+        const hasTarget = bytes[0] === 1;
+        bytes = bytes.subarray(1);
+        headerOffset += 1;
+        if (hasTarget) {
+          bytes = await readBytes(reader, bytes, 32);
+          bytes = bytes.subarray(32);
+          headerOffset += 32;
         }
 
-        bytes = bytes.subarray(tagsBytesLength);
-        headerOffset += tagsBytesLength;
+        // Skip anchor (1 byte flag + optional 32 bytes)
+        bytes = await readBytes(reader, bytes, 1);
+        const hasAnchor = bytes[0] === 1;
+        bytes = bytes.subarray(1);
+        headerOffset += 1;
+        if (hasAnchor) {
+          bytes = await readBytes(reader, bytes, 32);
+          bytes = bytes.subarray(32);
+          headerOffset += 32;
+        }
+
+        // Read tags metadata
+        bytes = await readBytes(reader, bytes, 16);
+        const tagsLength = byteArrayToLong(bytes.subarray(0, 8));
+        const tagsBytesLength = byteArrayToLong(bytes.subarray(8, 16));
+        bytes = bytes.subarray(16);
+        headerOffset += 16;
+
+        // Parse tags to extract Content-Type
+        let contentType: string | undefined;
+        if (tagsBytesLength > 0) {
+          bytes = await readBytes(reader, bytes, tagsBytesLength);
+          const tagsBytes = bytes.subarray(0, tagsBytesLength);
+
+          // Parse tags and find Content-Type (case-insensitive, use first match)
+          if (tagsLength > 0) {
+            const tags = deserializeTags(Buffer.from(tagsBytes));
+            const contentTypeTag = tags.find(
+              (tag) => tag.name.toLowerCase() === 'content-type',
+            );
+            contentType = contentTypeTag?.value;
+          }
+
+          bytes = bytes.subarray(tagsBytesLength);
+          headerOffset += tagsBytesLength;
+        }
+
+        // The data starts right after the header
+        const headerSize = headerOffset;
+        const payloadSize = totalSize - headerOffset;
+
+        log.debug('Parsed data item header', {
+          signatureType,
+          headerSize,
+          payloadSize,
+          totalSize,
+          contentType,
+        });
+
+        return { id, headerSize, payloadSize, contentType };
+      } finally {
+        destroyStream(headerData.stream);
       }
-
-      // The data starts right after the header
-      const headerSize = headerOffset;
-      const payloadSize = totalSize - headerOffset;
-
-      log.debug('Parsed data item header', {
-        signatureType,
-        headerSize,
-        payloadSize,
-        totalSize,
-        contentType,
-      });
-
-      return { id, headerSize, payloadSize, contentType };
     } catch (error: any) {
       log.error('Error parsing data item header', {
         error: error.message,
@@ -1164,115 +1213,119 @@ export class Ans104OffsetSource {
         signal,
       });
 
-      const reader = getReader(headerData.stream);
-      let bytes = (await reader.next()).value;
-      let headerOffset = 0;
+      try {
+        const reader = getReader(headerData.stream);
+        let bytes = (await reader.next()).value;
+        let headerOffset = 0;
 
-      // Parse signature type (2 bytes)
-      bytes = await readBytes(reader, bytes, 2);
-      const signatureType = byteArrayToLong(bytes.subarray(0, 2));
-      bytes = bytes.subarray(2);
-      headerOffset += 2;
+        // Parse signature type (2 bytes)
+        bytes = await readBytes(reader, bytes, 2);
+        const signatureType = byteArrayToLong(bytes.subarray(0, 2));
+        bytes = bytes.subarray(2);
+        headerOffset += 2;
 
-      const { sigLength, pubLength } = getSignatureMeta(signatureType);
+        const { sigLength, pubLength } = getSignatureMeta(signatureType);
 
-      // Read signature
-      bytes = await readBytes(reader, bytes, sigLength);
-      const signatureBytes = bytes.subarray(0, sigLength);
-      const id = createHash('sha256')
-        .update(signatureBytes)
-        .digest('base64url');
-      const signature = toB64Url(Buffer.from(signatureBytes));
-      bytes = bytes.subarray(sigLength);
-      headerOffset += sigLength;
+        // Read signature
+        bytes = await readBytes(reader, bytes, sigLength);
+        const signatureBytes = bytes.subarray(0, sigLength);
+        const id = createHash('sha256')
+          .update(signatureBytes)
+          .digest('base64url');
+        const signature = toB64Url(Buffer.from(signatureBytes));
+        bytes = bytes.subarray(sigLength);
+        headerOffset += sigLength;
 
-      // Read owner (full public key)
-      bytes = await readBytes(reader, bytes, pubLength);
-      const ownerBytes = bytes.subarray(0, pubLength);
-      const owner = toB64Url(Buffer.from(ownerBytes));
-      const ownerAddress = createHash('sha256')
-        .update(ownerBytes)
-        .digest('base64url');
-      bytes = bytes.subarray(pubLength);
-      headerOffset += pubLength;
+        // Read owner (full public key)
+        bytes = await readBytes(reader, bytes, pubLength);
+        const ownerBytes = bytes.subarray(0, pubLength);
+        const owner = toB64Url(Buffer.from(ownerBytes));
+        const ownerAddress = createHash('sha256')
+          .update(ownerBytes)
+          .digest('base64url');
+        bytes = bytes.subarray(pubLength);
+        headerOffset += pubLength;
 
-      // Read target (1 byte flag + optional 32 bytes)
-      bytes = await readBytes(reader, bytes, 1);
-      const hasTarget = bytes[0] === 1;
-      bytes = bytes.subarray(1);
-      headerOffset += 1;
-      let target = '';
-      if (hasTarget) {
-        bytes = await readBytes(reader, bytes, 32);
-        target = toB64Url(Buffer.from(bytes.subarray(0, 32)));
-        bytes = bytes.subarray(32);
-        headerOffset += 32;
-      }
-
-      // Read anchor (1 byte flag + optional 32 bytes)
-      bytes = await readBytes(reader, bytes, 1);
-      const hasAnchor = bytes[0] === 1;
-      bytes = bytes.subarray(1);
-      headerOffset += 1;
-      let anchor = '';
-      if (hasAnchor) {
-        bytes = await readBytes(reader, bytes, 32);
-        anchor = toB64Url(Buffer.from(bytes.subarray(0, 32)));
-        bytes = bytes.subarray(32);
-        headerOffset += 32;
-      }
-
-      // Read tags
-      bytes = await readBytes(reader, bytes, 16);
-      const tagsCount = byteArrayToLong(bytes.subarray(0, 8));
-      const tagsBytesLength = byteArrayToLong(bytes.subarray(8, 16));
-      bytes = bytes.subarray(16);
-      headerOffset += 16;
-
-      let tags: { name: string; value: string }[] = [];
-      let contentType: string | undefined;
-      if (tagsBytesLength > 0) {
-        bytes = await readBytes(reader, bytes, tagsBytesLength);
-        headerOffset += tagsBytesLength;
-        if (tagsCount > 0) {
-          const tagsBytes = bytes.subarray(0, tagsBytesLength);
-          tags = deserializeTags(Buffer.from(tagsBytes));
-          const contentTypeTag = tags.find(
-            (tag) => tag.name.toLowerCase() === 'content-type',
-          );
-          contentType = contentTypeTag?.value;
+        // Read target (1 byte flag + optional 32 bytes)
+        bytes = await readBytes(reader, bytes, 1);
+        const hasTarget = bytes[0] === 1;
+        bytes = bytes.subarray(1);
+        headerOffset += 1;
+        let target = '';
+        if (hasTarget) {
+          bytes = await readBytes(reader, bytes, 32);
+          target = toB64Url(Buffer.from(bytes.subarray(0, 32)));
+          bytes = bytes.subarray(32);
+          headerOffset += 32;
         }
+
+        // Read anchor (1 byte flag + optional 32 bytes)
+        bytes = await readBytes(reader, bytes, 1);
+        const hasAnchor = bytes[0] === 1;
+        bytes = bytes.subarray(1);
+        headerOffset += 1;
+        let anchor = '';
+        if (hasAnchor) {
+          bytes = await readBytes(reader, bytes, 32);
+          anchor = toB64Url(Buffer.from(bytes.subarray(0, 32)));
+          bytes = bytes.subarray(32);
+          headerOffset += 32;
+        }
+
+        // Read tags
+        bytes = await readBytes(reader, bytes, 16);
+        const tagsCount = byteArrayToLong(bytes.subarray(0, 8));
+        const tagsBytesLength = byteArrayToLong(bytes.subarray(8, 16));
+        bytes = bytes.subarray(16);
+        headerOffset += 16;
+
+        let tags: { name: string; value: string }[] = [];
+        let contentType: string | undefined;
+        if (tagsBytesLength > 0) {
+          bytes = await readBytes(reader, bytes, tagsBytesLength);
+          headerOffset += tagsBytesLength;
+          if (tagsCount > 0) {
+            const tagsBytes = bytes.subarray(0, tagsBytesLength);
+            tags = deserializeTags(Buffer.from(tagsBytes));
+            const contentTypeTag = tags.find(
+              (tag) => tag.name.toLowerCase() === 'content-type',
+            );
+            contentType = contentTypeTag?.value;
+          }
+        }
+
+        const headerSize = headerOffset;
+        const payloadSize = totalSize - headerOffset;
+
+        log.debug('Extracted full data item metadata', {
+          id,
+          signatureType,
+          headerSize,
+          payloadSize,
+          tagCount: tags.length,
+          contentType,
+        });
+
+        return {
+          id,
+          signatureType,
+          signature,
+          signatureOffset: 2,
+          signatureSize: sigLength,
+          owner,
+          ownerAddress,
+          ownerOffset: 2 + sigLength,
+          ownerSize: pubLength,
+          target,
+          anchor,
+          tags,
+          headerSize,
+          payloadSize,
+          contentType,
+        };
+      } finally {
+        destroyStream(headerData.stream);
       }
-
-      const headerSize = headerOffset;
-      const payloadSize = totalSize - headerOffset;
-
-      log.debug('Extracted full data item metadata', {
-        id,
-        signatureType,
-        headerSize,
-        payloadSize,
-        tagCount: tags.length,
-        contentType,
-      });
-
-      return {
-        id,
-        signatureType,
-        signature,
-        signatureOffset: 2,
-        signatureSize: sigLength,
-        owner,
-        ownerAddress,
-        ownerOffset: 2 + sigLength,
-        ownerSize: pubLength,
-        target,
-        anchor,
-        tags,
-        headerSize,
-        payloadSize,
-        contentType,
-      };
     } catch (error: any) {
       log.error('Error extracting data item metadata', {
         error: error.message,

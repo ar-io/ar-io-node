@@ -58,6 +58,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `X-AR-IO-Data-Id` (or for the resolved id of `unregistered_arns` on
   default-config gateways) and remove matches.
 
+- **ArNS cached fallback on fast-fail (PE-9075)**:
+  `CompositeArNSResolver` previously fell back to a cached resolution
+  only when fresh resolution exceeded
+  `ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS`. When fresh resolution
+  returned `undefined` faster than the timeout (names cache miss,
+  AO/CU dry-run error swallowed to undefined), the fallback didn't
+  fire and the gateway dropped through to `ARNS_NOT_FOUND_ARNS_NAME`
+  — serving the "unregistered" placeholder for names with valid
+  cached resolutions during AO/CU flaps. Now falls back to the
+  cached resolution whenever fresh has no resolved id, matching the
+  comment-documented intent. New metric
+  `arns_cached_resolution_fallback_on_empty_total` counts how often
+  this fires.
+
 ## [Release 77] - 2026-04-24
 
 This is a **recommended release** focused on **cross-gateway GraphQL
