@@ -28,7 +28,7 @@ import { headerNames } from '../constants.js';
 import { startChildSpan } from '../tracing.js';
 import { SpanStatusCode, Span } from '@opentelemetry/api';
 import { normalizeAbortError, parseContentRange } from '../lib/http-utils.js';
-import { attachStallTimeout } from '../lib/stream.js';
+import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
 import { PeerRequestLimiter } from './peer-request-limiter.js';
 import { executeHedgedRequest } from '../lib/hedged-request.js';
 
@@ -164,9 +164,22 @@ export class ArIODataSource implements ContiguousDataSource {
         signal.removeEventListener('abort', onClientAbort);
       }
 
-      if (response.status !== 200 && response.status !== 206) {
+      // PE-9081: enforce 206-when-Range parity with GatewaysDataSource
+      // (`src/data/gateways-data-source.ts:289-292`). Previously this
+      // accepted 200 unconditionally, so a peer that ignored a Range
+      // header and returned the full body was silently passed to the
+      // consumer (`fetchDataFromParent`), feeding the slot-8 pinned-
+      // accumulator leak.
+      if (
+        (region !== undefined && response.status !== 206) ||
+        (region === undefined && response.status !== 200)
+      ) {
         response.data.destroy();
-        throw new Error(`Unexpected status code from peer: ${response.status}`);
+        throw new Error(
+          `Unexpected status code from peer: ${response.status}. Expected ${
+            region !== undefined ? '206' : '200'
+          }.`,
+        );
       }
 
       attachStallTimeout(response.data, this.streamStallTimeoutMs);
@@ -447,6 +460,40 @@ export class ArIODataSource implements ContiguousDataSource {
       parseInt(response.headers['content-length'] ?? '0') || 0;
     const requestType = region ? 'range' : 'full';
 
+    // PE-9081: reject responses with missing or zero Content-Length —
+    // mirrors the b9088671 fix in `GatewaysDataSource:319-324`. Without
+    // this guard, a misbehaving peer could return headers that quietly
+    // resolve to size=0 here while emitting an arbitrary number of body
+    // bytes downstream.
+    if (contentLength === 0) {
+      stream.destroy();
+      throw new Error(
+        `Peer response has no content-length or zero content-length`,
+      );
+    }
+
+    // PE-9081: when the consumer asked for a region, refuse responses
+    // whose Content-Length is bigger than the requested size. The
+    // upstream may have returned 206 but with a bogus body length;
+    // the heap leak's smoking gun was exactly this kind of asymmetry.
+    if (region !== undefined && contentLength > region.size) {
+      stream.destroy();
+      throw new Error(
+        `Peer Content-Length (${contentLength}) exceeds requested region size (${region.size})`,
+      );
+    }
+
+    // PE-9081: defense-in-depth — wrap the body stream in a transform
+    // that hard-caps emitted bytes at `region.size`, regardless of what
+    // the upstream actually sends. ByteRangeTransform was already in
+    // `src/lib/stream.ts` and is used by Turbo*DataSource for the same
+    // purpose. We're acting as the consumer-of-the-region here, so we
+    // pass offset=0 (the upstream already sliced) and size=region.size.
+    const cappedStream =
+      region !== undefined
+        ? stream.pipe(new ByteRangeTransform(0, region.size))
+        : stream;
+
     stream.on('error', (err: any) => {
       // Don't penalize peers that were canceled by hedging
       if (err?.name !== 'AbortError') {
@@ -479,9 +526,23 @@ export class ArIODataSource implements ContiguousDataSource {
       );
     });
 
+    // PE-9081: when the cap is in effect, ensure the upstream socket is
+    // released as soon as we've consumed enough bytes. The transform
+    // handles its own 'end' but does not auto-destroy the source pipe.
+    if (region !== undefined && cappedStream !== stream) {
+      cappedStream.once('end', () => {
+        if (!stream.destroyed) {
+          stream.destroy();
+        }
+      });
+    }
+
     return {
-      stream,
-      size: contentLength,
+      stream: cappedStream,
+      // When a region was requested, prefer the requested size over the
+      // upstream-declared content length for downstream consumers — the
+      // ByteRangeTransform guarantees that's what they'll actually see.
+      size: region !== undefined ? region.size : contentLength,
       totalSize: parseContentRange(response.headers['content-range'])?.total,
       verified: false,
       trusted: false,
