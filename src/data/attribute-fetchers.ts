@@ -69,9 +69,43 @@ export abstract class AttributeFetchers {
     });
 
     let buffer = Buffer.alloc(0);
+    // Diagnostic instrumentation for suspected oversized-fetch leak. The
+    // function is supposed to return only `size` bytes (signature/owner
+    // ranges are sub-KB). If the upstream ignores the requested region,
+    // for-await-Buffer.concat silently accumulates the full parent bundle
+    // (potentially hundreds of MB) and pins it in this async function's
+    // saved register frame across the next await. See the 2026-05-04
+    // memory investigation for context.
+    const WARN_THRESHOLD_BYTES = 1 * 1024 * 1024;
+    let warned = false;
 
     for await (const chunk of stream) {
       buffer = Buffer.concat([buffer, chunk]);
+      if (!warned && buffer.length > WARN_THRESHOLD_BYTES) {
+        warned = true;
+        log.warn(
+          'fetchDataFromParent: buffer exceeded 1 MB threshold (upstream may not be honoring region)',
+          {
+            parentId,
+            offset,
+            requestedSize: size,
+            bufferSizeAtWarn: buffer.length,
+          },
+        );
+      }
+    }
+
+    if (buffer.length > size + 1024) {
+      log.warn(
+        'fetchDataFromParent: received more bytes than requested',
+        {
+          parentId,
+          offset,
+          requestedSize: size,
+          actualSize: buffer.length,
+          overage: buffer.length - size,
+        },
+      );
     }
 
     return toB64Url(buffer);
