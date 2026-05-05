@@ -359,7 +359,8 @@ describe('ArIODataSource', () => {
       mock.method(axios, 'get', async (_: string, config: any) => {
         rangeHeader = config.headers['Range'];
         return {
-          status: 200,
+          // PE-9081: 206 required when Range header is sent.
+          status: 206,
           data: axiosStreamData,
           headers: {
             'content-length': '50',
@@ -374,6 +375,113 @@ describe('ArIODataSource', () => {
       await dataSource.getData({ id: 'dataId', region });
 
       assert.equal(rangeHeader, 'bytes=100-299');
+    });
+
+    // PE-9081: peer responds 200 to a Range request — must be rejected.
+    it('should reject 200 responses when region is provided', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: axiosStreamData,
+        headers: {
+          'content-length': '50',
+          'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'true',
+          [headerNames.trusted.toLowerCase()]: 'false',
+        },
+      }));
+
+      const region = { offset: 100, size: 200 };
+      await assert.rejects(
+        dataSource.getData({ id: 'dataId', region, retryCount: 2 }),
+        /Failed to fetch contiguous data from ArIO peers/,
+      );
+    });
+
+    // PE-9081: peer responds 206 without a Range request — must be rejected.
+    it('should reject 206 responses when no region is provided', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 206,
+        data: Readable.from(['mocked stream']),
+        headers: {
+          'content-length': '50',
+          'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'true',
+          [headerNames.trusted.toLowerCase()]: 'false',
+        },
+      }));
+
+      await assert.rejects(
+        dataSource.getData({ id: 'dataId', retryCount: 2 }),
+        /Failed to fetch contiguous data from ArIO peers/,
+      );
+    });
+
+    // PE-9081: peer reports zero / missing Content-Length — must be rejected.
+    it('should reject responses with zero content-length', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: Readable.from(['mocked stream']),
+        headers: {
+          'content-length': '0',
+          'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'true',
+          [headerNames.trusted.toLowerCase()]: 'false',
+        },
+      }));
+
+      await assert.rejects(
+        dataSource.getData({ id: 'dataId', retryCount: 2 }),
+        /Failed to fetch contiguous data from ArIO peers/,
+      );
+    });
+
+    // PE-9081: peer Content-Length exceeds requested region.size — must reject.
+    it('should reject 206 responses whose content-length exceeds region.size', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 206,
+        data: Readable.from(['mocked stream']),
+        headers: {
+          'content-length': '999999999', // way bigger than region.size
+          'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'true',
+          [headerNames.trusted.toLowerCase()]: 'false',
+        },
+      }));
+
+      const region = { offset: 0, size: 100 };
+      await assert.rejects(
+        dataSource.getData({ id: 'dataId', region, retryCount: 2 }),
+        /Failed to fetch contiguous data from ArIO peers/,
+      );
+    });
+
+    // PE-9081: ByteRangeTransform caps consumer-visible bytes to region.size
+    // even when the upstream emits more than declared.
+    it('should cap consumer-visible bytes to region.size via ByteRangeTransform', async () => {
+      // Stream emits 200 bytes worth of payload, but region.size is 50.
+      // Content-Length header reports 50, satisfying the upper-bound check;
+      // we verify the transform cuts the stream off at 50 bytes.
+      const oversizedPayload = Buffer.alloc(200, 0x41); // 200 'A's
+      mock.method(axios, 'get', async () => ({
+        status: 206,
+        data: Readable.from([oversizedPayload]),
+        headers: {
+          'content-length': '50',
+          'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'true',
+          [headerNames.trusted.toLowerCase()]: 'false',
+        },
+      }));
+
+      const region = { offset: 0, size: 50 };
+      const data = await dataSource.getData({ id: 'dataId', region });
+      assert.equal(data.size, 50);
+
+      let bytesReceived = 0;
+      for await (const chunk of data.stream) {
+        bytesReceived += (chunk as Buffer).length;
+      }
+      assert.equal(bytesReceived, 50);
     });
 
     it('should handle errors when fetching data with region', async () => {
@@ -1109,7 +1217,8 @@ describe('ArIODataSource', () => {
       mock.method(axios, 'get', async (url: string, config: any) => {
         capturedHeaders = config.headers;
         return {
-          status: 200,
+          // PE-9081: 206 required when Range header is sent.
+          status: 206,
           data: axiosStreamData,
           headers: {
             'content-length': '50',

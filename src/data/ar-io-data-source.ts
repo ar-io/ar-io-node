@@ -112,12 +112,14 @@ export class ArIODataSource implements ContiguousDataSource {
     headers,
     requestAttributesHeaders,
     signal,
+    region,
   }: {
     peerAddress: string;
     id: string;
     headers: { [key: string]: string };
     requestAttributesHeaders?: ReturnType<typeof generateRequestAttributes>;
     signal?: AbortSignal;
+    region?: Region;
   }): Promise<AxiosResponse> {
     const path = `/raw/${id}`;
 
@@ -164,12 +166,7 @@ export class ArIODataSource implements ContiguousDataSource {
         signal.removeEventListener('abort', onClientAbort);
       }
 
-      // PE-9081: enforce 206-when-Range parity with GatewaysDataSource
-      // (`src/data/gateways-data-source.ts:289-292`). Previously this
-      // accepted 200 unconditionally, so a peer that ignored a Range
-      // header and returned the full body was silently passed to the
-      // consumer (`fetchDataFromParent`), feeding the slot-8 pinned-
-      // accumulator leak.
+      // PE-9081: enforce 206-when-Range parity with GatewaysDataSource.
       if (
         (region !== undefined && response.status !== 206) ||
         (region === undefined && response.status !== 200)
@@ -305,6 +302,7 @@ export class ArIODataSource implements ContiguousDataSource {
               },
               requestAttributesHeaders,
               signal: hedgeSignal,
+              region,
             });
             const ttfb = Date.now() - requestStartTime;
             const peerRequestDuration = Date.now() - requestStartTime;

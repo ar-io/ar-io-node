@@ -433,6 +433,48 @@ describe('GatewayDataSource', () => {
       assert.equal(data.sourceContentType, 'application/octet-stream');
     });
 
+    // PE-9081: Content-Length must not exceed region.size for Range requests.
+    it('should reject 206 responses whose Content-Length exceeds region.size', async () => {
+      mockedAxiosInstance.request = async () => ({
+        status: 206,
+        headers: {
+          'content-length': '999999999',
+          'content-type': 'application/octet-stream',
+        },
+        data: axiosStreamData,
+      });
+
+      const region = { offset: 0, size: 100 };
+      await assert.rejects(
+        dataSource.getData({ id: 'some-id', region }),
+        /Content-Length.*exceeds requested region size/,
+      );
+    });
+
+    // PE-9081: ByteRangeTransform caps consumer-visible bytes to region.size
+    // even when the upstream emits more than declared.
+    it('should cap consumer-visible bytes to region.size via ByteRangeTransform', async () => {
+      const oversizedPayload = Buffer.alloc(200, 0x41);
+      mockedAxiosInstance.request = async () => ({
+        status: 206,
+        headers: {
+          'content-length': '50',
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([oversizedPayload]),
+      });
+
+      const region = { offset: 0, size: 50 };
+      const data = await dataSource.getData({ id: 'some-id', region });
+      assert.equal(data.size, 50);
+
+      let bytesReceived = 0;
+      for await (const chunk of data.stream) {
+        bytesReceived += (chunk as Buffer).length;
+      }
+      assert.equal(bytesReceived, 50);
+    });
+
     describe('ArNS query parameters', () => {
       it('should include ArNS record and basename as query parameters when provided', async () => {
         let requestParams: any;
