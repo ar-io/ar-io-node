@@ -25,7 +25,9 @@ async function streamToBuffer(stream: Readable, size: number): Promise<Buffer> {
   let bytesRead = 0;
   try {
     for await (const rawChunk of stream) {
-      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      const chunk = Buffer.isBuffer(rawChunk)
+        ? rawChunk
+        : Buffer.from(rawChunk);
       if (bytesRead + chunk.length > size) {
         stream.destroy();
         throw new Error(

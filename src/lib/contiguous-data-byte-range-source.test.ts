@@ -82,10 +82,7 @@ describe('ContiguousDataByteRangeSource', () => {
         id: 'tx',
       });
 
-      await assert.rejects(
-        source.read(0, 10),
-        /more bytes than requested/,
-      );
+      await assert.rejects(source.read(0, 10), /more bytes than requested/);
       assert.equal(destroyed, true);
     });
 

@@ -97,7 +97,9 @@ export abstract class AttributeFetchers {
     try {
       for await (const chunk of stream) {
         if (bytesRead + chunk.length > size) {
-          if (typeof (stream as { destroy?: () => void }).destroy === 'function') {
+          if (
+            typeof (stream as { destroy?: () => void }).destroy === 'function'
+          ) {
             (stream as { destroy: () => void }).destroy();
           }
           throw new Error(

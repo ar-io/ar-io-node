@@ -72,10 +72,7 @@ describe('HttpByteRangeSource', () => {
         httpClient: fakeClient,
       });
 
-      await assert.rejects(
-        source.read(0, 100),
-        /expected 206 Partial Content/,
-      );
+      await assert.rejects(source.read(0, 100), /expected 206 Partial Content/);
     });
   });
 });

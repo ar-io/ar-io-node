@@ -484,13 +484,9 @@ describe('SignatureFetcher', () => {
         signatureOffset: 0,
         signatureSize: 0,
       }));
-      const getDataMock = mock.method(
-        mocks.dataSource,
-        'getData',
-        async () => {
-          throw new Error('getData should never be called when size=0');
-        },
-      );
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('getData should never be called when size=0');
+      });
 
       const result = await signatureFetcher.getDataItemSignature({ id: 'id' });
 
@@ -508,15 +504,11 @@ describe('SignatureFetcher', () => {
         signatureOffset: 0,
         // signatureSize intentionally omitted
       }));
-      const getDataMock = mock.method(
-        mocks.dataSource,
-        'getData',
-        async () => {
-          throw new Error(
-            'getData should never be called when signatureSize is missing',
-          );
-        },
-      );
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error(
+          'getData should never be called when signatureSize is missing',
+        );
+      });
 
       const result = await signatureFetcher.getDataItemSignature({ id: 'id' });
 
@@ -530,13 +522,9 @@ describe('SignatureFetcher', () => {
         signatureOffset: -1,
         signatureSize: 512,
       }));
-      const getDataMock = mock.method(
-        mocks.dataSource,
-        'getData',
-        async () => {
-          throw new Error('getData should never be called');
-        },
-      );
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('getData should never be called');
+      });
 
       const result = await signatureFetcher.getDataItemSignature({ id: 'id' });
 
@@ -776,13 +764,9 @@ describe('OwnerFetcher', () => {
         ownerOffset: 0,
         ownerSize: 0,
       }));
-      const getDataMock = mock.method(
-        mocks.dataSource,
-        'getData',
-        async () => {
-          throw new Error('getData should never be called when ownerSize=0');
-        },
-      );
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('getData should never be called when ownerSize=0');
+      });
 
       const result = await ownerFetcher.getDataItemOwner({ id: 'id' });
 
@@ -797,13 +781,9 @@ describe('OwnerFetcher', () => {
         ownerOffset: 0,
         // ownerSize intentionally omitted
       }));
-      const getDataMock = mock.method(
-        mocks.dataSource,
-        'getData',
-        async () => {
-          throw new Error('getData should never be called');
-        },
-      );
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('getData should never be called');
+      });
 
       const result = await ownerFetcher.getDataItemOwner({ id: 'id' });
 
@@ -817,13 +797,9 @@ describe('OwnerFetcher', () => {
         ownerOffset: -1,
         ownerSize: 512,
       }));
-      const getDataMock = mock.method(
-        mocks.dataSource,
-        'getData',
-        async () => {
-          throw new Error('getData should never be called');
-        },
-      );
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('getData should never be called');
+      });
 
       const result = await ownerFetcher.getDataItemOwner({ id: 'id' });
 
