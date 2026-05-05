@@ -32,7 +32,8 @@ const METRIC_PATH = 'data';
  *   - skipped_size_unknown  — source didn't report size; can't bound buffer
  *   - skipped_too_large     — declared size exceeds threshold
  *   - computed_buffered     — buffered + hashed + Content-Digest emitted
- *   - overran_threshold     — source lied about size; response fails with 502
+ *   - overran_threshold     — source lied larger than declared; fails with 502
+ *   - short_read            — source ended before declared size; fails with 502
  *
  * Note on Content-Encoding: when the stored data carries a Content-Encoding
  * header (e.g. gzip on the original upload), it is passed through unchanged.
@@ -177,27 +178,29 @@ export async function sendBodyWithOptionalDigest({
       return;
     }
 
-    if (overran) {
-      // The for-await break above triggered the iterator's return(), which
-      // destroyed the underlying stream — so we cannot resume streaming the
-      // remainder. Treat the size-lie as a hard upstream contract violation:
-      // fail the response with 502 and log loudly. Operators should see this
-      // and investigate the source. Silent truncation would be worse.
-      metrics.httpSigContentDigestTotal.inc({
-        source: 'overran_threshold',
-        path: METRIC_PATH,
-      });
-      log.warn('Buffered-digest overran declared size; failing with 502', {
+    // Fail upstream-contract violations with 502 — both directions of
+    // size lie. Silent truncation would be worse than a loud failure:
+    // a 200 response with a digest computed over partial bytes still
+    // looks valid to clients (signature checks pass against what was
+    // sent), so the corruption is invisible until somebody re-fetches
+    // and notices the bytes disagree.
+    const failUpstreamMismatch = (
+      source: 'overran_threshold' | 'short_read',
+      msg: string,
+    ): void => {
+      metrics.httpSigContentDigestTotal.inc({ source, path: METRIC_PATH });
+      log.warn(msg, {
         dataId,
         declaredSize: data.size,
         bufferedBytes: total,
       });
       if (!res.headersSent) {
-        // Clear trust/representation headers set earlier in the data handler
-        // so the HTTPSIG signer doesn't sign a 502 with stale x-ar-io-* /
-        // x-arweave-* metadata that imply the (failed) response carried real
-        // content. The signer only fires when a trigger header is present, so
-        // dropping them disables signing on the error response entirely.
+        // Clear trust/representation headers set earlier in the data
+        // handler so the HTTPSIG signer doesn't sign a 502 with stale
+        // x-ar-io-* / x-arweave-* metadata that imply the (failed)
+        // response carried real content. The signer only fires when a
+        // trigger header is present, so dropping them disables signing
+        // on the error response entirely.
         for (const name of Object.keys(res.getHeaders())) {
           const lower = name.toLowerCase();
           if (
@@ -216,6 +219,29 @@ export async function sendBodyWithOptionalDigest({
       } else {
         res.destroy();
       }
+    };
+
+    if (overran) {
+      // The for-await break above triggered the iterator's return(),
+      // which destroyed the underlying stream — so we cannot resume
+      // streaming the remainder.
+      failUpstreamMismatch(
+        'overran_threshold',
+        'Buffered-digest overran declared size; failing with 502',
+      );
+      return;
+    }
+
+    if (total < data.size) {
+      // Stream ended cleanly but produced fewer bytes than the source
+      // declared. Without this guard the response would mint a digest
+      // over the truncated bytes and return 200 — clients verifying
+      // the signature would see it pass and the data loss would stay
+      // invisible. Reject with 502 just like overrun.
+      failUpstreamMismatch(
+        'short_read',
+        'Buffered-digest short read; failing with 502',
+      );
       return;
     }
 

@@ -181,6 +181,33 @@ describe('sendBodyWithOptionalDigest', () => {
     );
   });
 
+  it('short read: source declares 1024 but streams 256 — fails with 502 (no digest minted over partial bytes)', async () => {
+    // Source claims 1024 bytes but the stream actually emits 256.
+    // Without the short-read guard the response would mint a SHA-256
+    // over the truncated 256 bytes and return 200 — clients verifying
+    // the signature would see it pass and the data loss would stay
+    // invisible. Rejecting with 502 surfaces it loudly.
+    const realBody = Buffer.alloc(256, 0x44);
+    const data = {
+      ...makeData({ bytes: realBody, cached: false }),
+      size: 1024, // declared (lying — claims more than it has)
+    } as unknown as ContiguousData;
+
+    const app = makeApp({ data, maxBytes: ONE_MIB });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    assert.equal(res.status, 502);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      undefined,
+    );
+    assert.equal(res.headers['etag'], undefined);
+  });
+
   it('size lie: source declares small but streams over threshold — fails with 502', async () => {
     // Source claims 16 bytes but the stream actually emits 2048.
     const realBody = Buffer.alloc(2048, 0x42);

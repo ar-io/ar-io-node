@@ -16,7 +16,9 @@ import {
   determineFailureStatusCode,
 } from './handlers.js';
 import { ChunkNotFoundError } from '../../data/chunk-retrieval-service.js';
-import log from '../../log.js';
+import { createTestLogger } from '../../../test/test-logger.js';
+
+const log = createTestLogger({ suite: 'chunk-handlers' });
 
 const CHUNK_OFFSET_PATH = '/chunk/:offset(\\d+)';
 

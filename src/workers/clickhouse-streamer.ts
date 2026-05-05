@@ -32,7 +32,11 @@ interface BlockContext {
   indep_hash: string;
   timestamp: number;
   previous_block: string;
-  txs: string[];
+  // L1-tx-id → block_transaction_index. Built once at BLOCK_INDEXED time
+  // so per-tx lookups in handleBlockTxIndexed are O(1) instead of an
+  // O(N) `indexOf` (which makes a full BLOCK_TX_INDEXED sweep O(N²) in
+  // the number of L1 txs in the block).
+  txIndexById: Map<string, number>;
 }
 
 interface TxContext {
@@ -409,12 +413,16 @@ export class ClickHouseStreamer {
   }
 
   private handleBlockIndexed(block: PartialJsonBlock): void {
+    const txIndexById = new Map<string, number>();
+    for (let i = 0; i < block.txs.length; i++) {
+      txIndexById.set(block.txs[i], i);
+    }
     const ctx: BlockContext = {
       height: block.height,
       indep_hash: block.indep_hash,
       timestamp: block.timestamp,
       previous_block: block.previous_block ?? '',
-      txs: block.txs,
+      txIndexById,
     };
     this.blocksByHeight.set(block.height, ctx);
     this.currentBlock = ctx;
@@ -436,8 +444,8 @@ export class ClickHouseStreamer {
       // via the stable pipeline.
       return;
     }
-    const blockTxIndex = this.currentBlock.txs.indexOf(tx.id);
-    if (blockTxIndex < 0) {
+    const blockTxIndex = this.currentBlock.txIndexById.get(tx.id);
+    if (blockTxIndex === undefined) {
       // tx wasn't in the most recent block's txs[] — block-importer
       // emit ordering says this shouldn't happen, but skip rather
       // than write a row with a wrong index.
