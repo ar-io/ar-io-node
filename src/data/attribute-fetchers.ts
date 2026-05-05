@@ -58,6 +58,25 @@ export abstract class AttributeFetchers {
     size: number;
   }): Promise<string> {
     const log = this.log.child({ method: 'fetchDataFromParent' });
+
+    // Validate inputs. A `size` of 0 or negative cannot produce a meaningful
+    // signature/owner range, and historically caused the upstream Range
+    // header to be malformed (`bytes=0--1`) — most data sources then
+    // returned the FULL parent bundle as a 200 response, which the previous
+    // implementation silently accumulated into a multi-hundred-MB Buffer
+    // pinned in this async function's saved register frame across the
+    // upstream stall. (PE-9081.)
+    if (!Number.isFinite(size) || size <= 0) {
+      throw new Error(
+        `fetchDataFromParent: invalid size ${size} (parentId=${parentId}, offset=${offset})`,
+      );
+    }
+    if (!Number.isFinite(offset) || offset < 0) {
+      throw new Error(
+        `fetchDataFromParent: invalid offset ${offset} (parentId=${parentId}, size=${size})`,
+      );
+    }
+
     log.debug('Fetching data from parent', { parentId, offset, size });
 
     const { stream } = await this.dataSource.getData({
@@ -68,10 +87,44 @@ export abstract class AttributeFetchers {
       },
     });
 
-    let buffer = Buffer.alloc(0);
+    // Pre-allocated, fixed-size buffer with offset writes. Avoids the
+    // O(N²) Buffer.concat-per-chunk shape and removes the slot-8 pinned-
+    // accumulator leak. If upstream emits more bytes than requested,
+    // destroy the stream and throw — do not silently buffer past `size`.
+    const buffer = Buffer.alloc(size);
+    let bytesRead = 0;
 
-    for await (const chunk of stream) {
-      buffer = Buffer.concat([buffer, chunk]);
+    try {
+      for await (const chunk of stream) {
+        if (bytesRead + chunk.length > size) {
+          if (
+            typeof (stream as { destroy?: () => void }).destroy === 'function'
+          ) {
+            (stream as { destroy: () => void }).destroy();
+          }
+          throw new Error(
+            `fetchDataFromParent: upstream returned more bytes than requested ` +
+              `(parentId=${parentId}, requestedSize=${size}, ` +
+              `bytesAtOverage=${bytesRead + chunk.length})`,
+          );
+        }
+        chunk.copy(buffer, bytesRead);
+        bytesRead += chunk.length;
+      }
+    } catch (error) {
+      // Ensure the buffer reference can be GC'd promptly even when the
+      // for-await yields back to a still-pending Promise; rethrow.
+      if (typeof (stream as { destroy?: () => void }).destroy === 'function') {
+        (stream as { destroy: () => void }).destroy();
+      }
+      throw error;
+    }
+
+    if (bytesRead !== size) {
+      throw new Error(
+        `fetchDataFromParent: short read from upstream ` +
+          `(parentId=${parentId}, requestedSize=${size}, actualSize=${bytesRead})`,
+      );
     }
 
     return toB64Url(buffer);
@@ -195,6 +248,25 @@ export class SignatureFetcher
         parentId = dataItemAttributes.parentId;
         signatureSize = dataItemAttributes.signatureSize;
         signatureOffset = dataItemAttributes.signatureOffset;
+      }
+
+      // PE-9081: defensive validation. A 0/undefined signatureSize from the
+      // attribute store would produce a malformed Range request and (in the
+      // previous implementation) cause the upstream to return the full
+      // parent bundle, which fetchDataFromParent then silently accumulated.
+      // Bail out here rather than firing the request.
+      if (
+        parentId === undefined ||
+        signatureSize === undefined ||
+        signatureSize <= 0 ||
+        signatureOffset === undefined ||
+        signatureOffset < 0
+      ) {
+        log.warn(
+          'Cannot fetch data item signature: parent attributes are missing or invalid',
+          { id, parentId, signatureSize, signatureOffset },
+        );
+        return undefined;
       }
 
       const signature = await this.fetchDataFromParent({
@@ -336,6 +408,21 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         parentId = dataItemAttributes.parentId;
         ownerSize = dataItemAttributes.ownerSize;
         ownerOffset = dataItemAttributes.ownerOffset;
+      }
+
+      // PE-9081: defensive validation. See getDataItemSignature for context.
+      if (
+        parentId === undefined ||
+        ownerSize === undefined ||
+        ownerSize <= 0 ||
+        ownerOffset === undefined ||
+        ownerOffset < 0
+      ) {
+        log.warn(
+          'Cannot fetch data item owner: parent attributes are missing or invalid',
+          { id, parentId, ownerSize, ownerOffset },
+        );
+        return undefined;
       }
 
       const owner = await this.fetchDataFromParent({
