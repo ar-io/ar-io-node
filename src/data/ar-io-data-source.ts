@@ -470,14 +470,17 @@ export class ArIODataSource implements ContiguousDataSource {
       );
     }
 
-    // PE-9081: when the consumer asked for a region, refuse responses
-    // whose Content-Length is bigger than the requested size. The
-    // upstream may have returned 206 but with a bogus body length;
-    // the heap leak's smoking gun was exactly this kind of asymmetry.
-    if (region !== undefined && contentLength > region.size) {
+    // PE-9081: when the consumer asked for a region, the peer's
+    // Content-Length must match region.size exactly. Oversize is the
+    // leak path; undersize (a truncated 206) is just as wrong because
+    // we report `size: region.size` to downstream consumers — they
+    // would observe a stream that claims to be region.size bytes but
+    // delivers fewer, with no signal that the upstream truncated.
+    // Both directions are the same defect from the consumer's view.
+    if (region !== undefined && contentLength !== region.size) {
       stream.destroy();
       throw new Error(
-        `Peer Content-Length (${contentLength}) exceeds requested region size (${region.size})`,
+        `Peer Content-Length (${contentLength}) does not match requested region size (${region.size})`,
       );
     }
 
@@ -525,14 +528,22 @@ export class ArIODataSource implements ContiguousDataSource {
     });
 
     // PE-9081: when the cap is in effect, ensure the upstream socket is
-    // released as soon as we've consumed enough bytes. The transform
-    // handles its own 'end' but does not auto-destroy the source pipe.
+    // released on every cappedStream termination — natural end (consumer
+    // read to completion), close (consumer destroyed early or unpipe),
+    // and error. `pipe()` does not propagate destination-side
+    // destruction back to the source, so without these the upstream
+    // axios response can sit open after the limiter slot is already
+    // released by the consumer-side close listener (per CodeRabbit
+    // review on PR #703).
     if (region !== undefined && cappedStream !== stream) {
-      cappedStream.once('end', () => {
+      const destroyUpstream = () => {
         if (!stream.destroyed) {
           stream.destroy();
         }
-      });
+      };
+      cappedStream.once('end', destroyUpstream);
+      cappedStream.once('close', destroyUpstream);
+      cappedStream.once('error', destroyUpstream);
     }
 
     return {

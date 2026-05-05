@@ -323,14 +323,15 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   );
                 }
 
-                // PE-9081: when the consumer asked for a region, refuse
-                // responses whose Content-Length exceeds the requested
-                // size. Defense against upstreams that return 206 with a
-                // truthful but oversized Content-Length header.
-                if (region !== undefined && contentLength > region.size) {
+                // PE-9081: ranged responses must have Content-Length
+                // exactly matching region.size. Oversize is a leak path;
+                // undersize is silently truncated data presented to the
+                // consumer as size=region.size. Both are equally wrong
+                // from the consumer's view.
+                if (region !== undefined && contentLength !== region.size) {
                   stream.destroy();
                   throw new Error(
-                    `Gateway Content-Length (${contentLength}) exceeds ` +
+                    `Gateway Content-Length (${contentLength}) does not match ` +
                       `requested region size (${region.size}) for ${id}`,
                   );
                 }
@@ -400,19 +401,27 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 // PE-9081: hard-cap the consumer-visible byte count when
                 // a region was requested. ByteRangeTransform pushes null
                 // after region.size bytes regardless of upstream behavior,
-                // and we destroy the underlying socket on transform-end so
-                // the upstream connection is released promptly.
+                // and we destroy the underlying socket on every
+                // termination path of the cappedStream (end, close,
+                // error) so the upstream connection is released promptly
+                // even when consumers destroy the cappedStream early or
+                // it errors. `pipe()` does not propagate destination
+                // termination back to the source (per CodeRabbit review
+                // on PR #703).
                 const cappedStream =
                   region !== undefined
                     ? stream.pipe(new ByteRangeTransform(0, region.size))
                     : stream;
 
                 if (region !== undefined && cappedStream !== stream) {
-                  cappedStream.once('end', () => {
+                  const destroyUpstream = () => {
                     if (!stream.destroyed) {
                       stream.destroy();
                     }
-                  });
+                  };
+                  cappedStream.once('end', destroyUpstream);
+                  cappedStream.once('close', destroyUpstream);
+                  cappedStream.once('error', destroyUpstream);
                 }
 
                 return {

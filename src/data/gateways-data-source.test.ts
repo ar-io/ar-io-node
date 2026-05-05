@@ -433,7 +433,8 @@ describe('GatewayDataSource', () => {
       assert.equal(data.sourceContentType, 'application/octet-stream');
     });
 
-    // PE-9081: Content-Length must not exceed region.size for Range requests.
+    // PE-9081: Content-Length must equal region.size for Range requests.
+    // Oversize path.
     it('should reject 206 responses whose Content-Length exceeds region.size', async () => {
       mockedAxiosInstance.request = async () => ({
         status: 206,
@@ -447,8 +448,53 @@ describe('GatewayDataSource', () => {
       const region = { offset: 0, size: 100 };
       await assert.rejects(
         dataSource.getData({ id: 'some-id', region }),
-        /Content-Length.*exceeds requested region size/,
+        /does not match requested region size/,
       );
+    });
+
+    // PE-9081: undersize / truncated 206. The previous-only-rejected-overage
+    // check let truncated responses through, but the consumer was told
+    // size=region.size so it would observe a stream that delivered fewer
+    // bytes than advertised — silent truncation. (CodeRabbit PR #703.)
+    it('should reject 206 responses whose Content-Length is less than region.size', async () => {
+      mockedAxiosInstance.request = async () => ({
+        status: 206,
+        headers: {
+          'content-length': '50',
+          'content-type': 'application/octet-stream',
+        },
+        data: axiosStreamData,
+      });
+
+      const region = { offset: 0, size: 100 };
+      await assert.rejects(
+        dataSource.getData({ id: 'some-id', region }),
+        /does not match requested region size/,
+      );
+    });
+
+    // PE-9081: when the consumer destroys the cappedStream early, the
+    // underlying upstream stream must also be destroyed. `pipe()` does
+    // not propagate destination destruction back to the source.
+    // (CodeRabbit PR #703.)
+    it('should destroy upstream when cappedStream is destroyed early', async () => {
+      const { PassThrough } = await import('node:stream');
+      const upstream = new PassThrough();
+      mockedAxiosInstance.request = async () => ({
+        status: 206,
+        headers: {
+          'content-length': '1000',
+          'content-type': 'application/octet-stream',
+        },
+        data: upstream,
+      });
+
+      const region = { offset: 0, size: 1000 };
+      const data = await dataSource.getData({ id: 'some-id', region });
+
+      data.stream.destroy();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(upstream.destroyed, true);
     });
 
     // PE-9081: ByteRangeTransform caps consumer-visible bytes to region.size
