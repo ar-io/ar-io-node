@@ -16,6 +16,19 @@ import {
   ChainAnchorMismatchError,
   anchorChunkMetadata,
 } from '../lib/chunk-metadata-anchor.js';
+import { normalizeAbortError } from '../lib/http-utils.js';
+
+// Largest absolute weave offset this source will probe via the
+// number-typed cache + chain cross-check path. The chain-anchored
+// metadata is consumed as `number` downstream (TxBoundary.weaveOffset
+// and the cache's txStart/txEndOffset bounds), so any offset past
+// Number.MAX_SAFE_INTEGER cannot round-trip without precision loss.
+// At weave-scale (~10^14 bytes today, MAX_SAFE_INTEGER is ~9×10^15)
+// the cap is well above current weave size; this is defense in depth
+// for the day the weave grows past 9 PB. Past the cap we fall through
+// to the canonical chain binary search rather than risk returning a
+// silently wrong tx boundary.
+const MAX_SAFE_OFFSET_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 /**
  * Outcome label for {@link metrics.chunkMetadataAnchorTotal}. Mirrors
@@ -141,6 +154,20 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       absoluteOffset: absoluteOffset.toString(),
     });
 
+    // Guard against unsafe bigint → number coercion. The downstream
+    // cache uses number-typed bounds and `anchorChunkMetadata` accepts
+    // `offset: number`, so a value past Number.MAX_SAFE_INTEGER would
+    // silently lose precision and could return the wrong boundary.
+    // Fall through to the canonical chain binary search instead.
+    if (absoluteOffset < 0n || absoluteOffset > MAX_SAFE_OFFSET_BIGINT) {
+      this.recordResult('error');
+      log.warn('Absolute offset outside safe-integer range; falling through', {
+        absoluteOffset: absoluteOffset.toString(),
+      });
+      return null;
+    }
+    const offsetNum = Number(absoluteOffset);
+
     const peer = this.peerUrls[0];
     const url = `${peer}/chunk/${absoluteOffset}/data`;
 
@@ -148,7 +175,11 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     try {
       headers = await this.fetchPeerChunkHeaders(url, signal);
     } catch (err: any) {
-      if (err?.name === 'AbortError') throw err;
+      // Normalize Axios's CanceledError (code ERR_CANCELED) into a
+      // plain AbortError so signal cancellations propagate instead of
+      // being silently demoted to `'error'` and falling through.
+      const normalized = normalizeAbortError(err);
+      if (normalized?.name === 'AbortError') throw normalized;
       this.recordResult('error');
       log.debug('Peer chunk-header fetch failed', {
         url,
@@ -169,7 +200,6 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     // call is caught here without a chain round-trip.
     const cached = this.cache.get(headerMetadata.txId);
     if (cached !== undefined) {
-      const offsetNum = Number(absoluteOffset);
       if (offsetNum < cached.txStartOffset || offsetNum > cached.txEndOffset) {
         this.recordResult('mismatch');
         log.debug('Cache offset-range mismatch', {
@@ -188,12 +218,13 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     try {
       anchored = await anchorChunkMetadata({
         headerMetadata,
-        offset: Number(absoluteOffset),
+        offset: offsetNum,
         fetchTxOffset: (txId) => this.fetchTxOffset(txId, signal),
         fetchTransaction: (txId) => this.fetchTransaction(txId, signal),
       });
     } catch (err: any) {
-      if (err?.name === 'AbortError') throw err;
+      const normalized = normalizeAbortError(err);
+      if (normalized?.name === 'AbortError') throw normalized;
       if (err instanceof ChainAnchorMismatchError) {
         this.recordResult('mismatch');
         log.warn('Chain anchor mismatch — falling through', {
@@ -254,7 +285,13 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       }
     } catch (err: any) {
       // Re-throw aborts so the caller's signal handling stays correct.
-      if (err?.name === 'AbortError') throw err;
+      // normalizeAbortError converts Axios's CanceledError (code
+      // ERR_CANCELED, which Axios uses for signal cancellations) into
+      // a plain AbortError; without this the cancellation would be
+      // misclassified as a network failure and we'd waste a follow-up
+      // GET attempt against an aborted signal.
+      const normalized = normalizeAbortError(err);
+      if (normalized?.name === 'AbortError') throw normalized;
       // Otherwise fall through to the GET fallback below.
     }
 

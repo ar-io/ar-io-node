@@ -302,7 +302,7 @@ AR.IO Node uses multiple offset types to efficiently locate and retrieve data.
 `/chunk/{offset}` endpoint (base64url-encoded JSON) or `/chunk/{offset}/data`
 endpoint (raw binary with metadata in headers).
 
-**Transaction Offset** - The end position (last byte) of a
+<a id="transaction-offset"></a> **Transaction Offset** - The end position (last byte) of a
 [transaction](#transaction) in the [weave](#weave). Combined with transaction
 size to calculate start position.
 
@@ -356,7 +356,7 @@ renaming. The legacy headers remain for backwards compatibility and will be
 removed after a deprecation window.
 
 <a id="chain-anchored-offset"></a> **Chain-Anchored Offset** - A
-[transaction offset](#offset) reported by an untrusted peer (via
+[transaction offset](#transaction-offset) reported by an untrusted peer (via
 `X-Arweave-Chunk-*` response headers on `/chunk/{offset}/data`) that has been
 cross-checked against the chain's own `/tx/{id}/offset` and `/tx/{id}` and so
 is safe to feed merkle proof validation. The anchor pattern lets the gateway

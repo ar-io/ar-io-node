@@ -382,5 +382,126 @@ describe('ChunkMetadataAnchorSource', () => {
 
       await assert.rejects(source.getTxBoundary(inRangeOffset, ac.signal));
     });
+
+    it("normalizes Axios's CanceledError (ERR_CANCELED) into AbortError", async () => {
+      // Axios 1.15.0 rejects an AbortSignal cancellation as
+      // CanceledError with code='ERR_CANCELED', NOT AbortError. The
+      // source must normalize via lib/http-utils.normalizeAbortError
+      // so the abort propagates instead of being demoted to
+      // 'error' and the canonical lookup running anyway.
+      const stub = makeAxiosStub();
+      stub.setHeadThrows(
+        Object.assign(new Error('canceled'), {
+          code: 'ERR_CANCELED',
+          name: 'CanceledError',
+        }),
+      );
+      // GET fallback should also reject with ERR_CANCELED — same
+      // normalization must apply there.
+      stub.axios.get = async () => {
+        throw Object.assign(new Error('canceled'), {
+          code: 'ERR_CANCELED',
+          name: 'CanceledError',
+        });
+      };
+      const source = makeSource({ axiosInstance: stub.axios });
+
+      await assert.rejects(
+        source.getTxBoundary(inRangeOffset),
+        (err: any) => err?.name === 'AbortError',
+      );
+    });
+
+    it('normalizes Axios CanceledError raised during chain cross-check', async () => {
+      // The second catch site lives around the anchorChunkMetadata
+      // call. If the chain fetcher rejects with ERR_CANCELED, the
+      // source must propagate it as AbortError, not log+swallow.
+      const stub = makeAxiosStub();
+      stub.setNextHead(200, chunkHeaders());
+      const source = makeSource({
+        axiosInstance: stub.axios,
+        fetchTxOffset: async () => {
+          throw Object.assign(new Error('canceled'), {
+            code: 'ERR_CANCELED',
+            name: 'CanceledError',
+          });
+        },
+      });
+
+      await assert.rejects(
+        source.getTxBoundary(inRangeOffset),
+        (err: any) => err?.name === 'AbortError',
+      );
+    });
+  });
+
+  describe('safe-integer offset guard', () => {
+    it('falls through (returns null) when absoluteOffset exceeds Number.MAX_SAFE_INTEGER', async () => {
+      // Cache + chain cross-check both consume the offset as `number`.
+      // A bigint past the safe-integer ceiling can't round-trip without
+      // precision loss and could yield a wrong tx boundary. The source
+      // must skip itself and let the canonical chain binary search take
+      // over for these (rare) probes.
+      const stub = makeAxiosStub();
+      stub.setNextHead(200, chunkHeaders());
+      const source = makeSource({ axiosInstance: stub.axios });
+
+      const unsafeOffset = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+      const result = await source.getTxBoundary(unsafeOffset);
+
+      assert.strictEqual(result, null);
+      // Must NOT have hit the peer or chain — bail before any I/O.
+      assert.strictEqual(stub.calls.length, 0);
+    });
+
+    it('falls through for negative offsets too', async () => {
+      // BigInt arithmetic can produce negatives. Defensive: never
+      // probe the peer with a negative offset.
+      const stub = makeAxiosStub();
+      const source = makeSource({ axiosInstance: stub.axios });
+
+      const result = await source.getTxBoundary(-1n);
+
+      assert.strictEqual(result, null);
+      assert.strictEqual(stub.calls.length, 0);
+    });
+
+    it('accepts MAX_SAFE_INTEGER itself (boundary inclusive)', async () => {
+      // Sanity: the guard uses `> MAX_SAFE_OFFSET_BIGINT`, so the
+      // MAX_SAFE_INTEGER value itself is allowed through. Any in-flight
+      // attempt requires an actually-fitting tx range, so we use a
+      // chain cross-check that fails and confirm the source did at
+      // least attempt the peer call (proves the guard didn't skip it).
+      const stub = makeAxiosStub();
+      stub.setNextHead(200, chunkHeaders());
+      const source = makeSource({
+        axiosInstance: stub.axios,
+        fetchTxOffset: async () => ({
+          // Make the chain say the tx ends at MAX_SAFE_INTEGER too,
+          // so the offset is in-range and the anchor succeeds.
+          size: '1',
+          offset: String(Number.MAX_SAFE_INTEGER),
+        }),
+        fetchTransaction: async () => ({ data_root: dataRoot }),
+      });
+
+      // Build headers consistent with the chain answer.
+      stub.setNextHead(
+        200,
+        chunkHeaders({
+          'x-arweave-chunk-tx-data-size': '1',
+          'x-arweave-chunk-tx-start-offset': String(Number.MAX_SAFE_INTEGER),
+          'x-arweave-chunk-start-offset': String(Number.MAX_SAFE_INTEGER),
+        }),
+      );
+
+      const result = await source.getTxBoundary(
+        BigInt(Number.MAX_SAFE_INTEGER),
+      );
+      // The peer was queried (proves guard didn't skip), and the
+      // chain cross-check succeeded.
+      assert.strictEqual(stub.calls.length, 1);
+      assert.notStrictEqual(result, null);
+    });
   });
 });
