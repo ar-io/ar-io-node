@@ -52,8 +52,26 @@ export const TRIGGER_HEADERS = new Set([
  * Co-signable headers (lowercase). These are included in the signature ONLY
  * when at least one TRIGGER_HEADER is also present. Signing them alone is too
  * broad — nearly every response has a Content-Type.
+ *
+ * Retrieval-hint envelope: the `x-ar-io-root-*` family describes where a
+ * data item lives within its root transaction (offset, size, path). Signing
+ * them whenever the response is already trust-relevant is what makes the
+ * cache-and-replay pattern in `retrieval-hints.md` cryptographically
+ * end-to-end — a downstream client caching these for replay can verify
+ * they came from a trusted gateway, not a tampered intermediary. Both
+ * the legacy pair (`-data-item-offset`, `-data-offset`) and the aligned
+ * pair (`-item-offset`, `-item-size`) are signed; the legacy pair will be
+ * removed after a deprecation window per docs/glossary.md.
  */
-export const CO_SIGNABLE_HEADERS = new Set(['content-type', 'content-digest']);
+export const CO_SIGNABLE_HEADERS = new Set([
+  'content-type',
+  'content-digest',
+  'x-ar-io-root-data-item-offset',
+  'x-ar-io-root-data-offset',
+  'x-ar-io-root-item-offset',
+  'x-ar-io-root-item-size',
+  'x-ar-io-root-path',
+]);
 
 // Header predicates normalize case defensively, but callers should pass
 // lowercase where possible. Express's `res.getHeaders()` keys are already

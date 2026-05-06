@@ -57,6 +57,18 @@ describe('httpsig lib', () => {
       assert.equal(isSignableHeader('content-digest'), true);
     });
 
+    it('matches retrieval-hint headers (legacy + aligned)', () => {
+      // Legacy pair (kept for backwards compat, will be removed after
+      // a deprecation window — see docs/glossary.md).
+      assert.equal(isSignableHeader('x-ar-io-root-data-item-offset'), true);
+      assert.equal(isSignableHeader('x-ar-io-root-data-offset'), true);
+      // Aligned-name pair (matches request-side hint header names so
+      // cache-and-replay clients can copy headers without renaming).
+      assert.equal(isSignableHeader('x-ar-io-root-item-offset'), true);
+      assert.equal(isSignableHeader('x-ar-io-root-item-size'), true);
+      assert.equal(isSignableHeader('x-ar-io-root-path'), true);
+    });
+
     it('matches x-arweave-tag-* prefix', () => {
       assert.equal(isSignableHeader('x-arweave-tag-content-type'), true);
       assert.equal(isSignableHeader('x-arweave-tag-app-name'), true);
