@@ -290,7 +290,21 @@ export interface BundleIndex {
 }
 
 export interface DataItemIndexWriter {
-  saveDataItem(item: NormalizedDataItem): Promise<void>;
+  /**
+   * Persist a data item.
+   *
+   * Set `isOptimistic` to true when the caller has no knowledge of the
+   * data item's bundling placement (the "root atom" — parent_id,
+   * root_transaction_id, the offset/size pairs, signature_type,
+   * root_parent_offset). Optimistic writes never touch the root atom
+   * on conflict; they only fill in the always-known fields if the row
+   * doesn't yet exist.
+   *
+   * Leave `isOptimistic` unset (or false) when the caller has the full
+   * root atom — e.g., the unbundle path or an on-demand metadata
+   * resolver. The implementation atomically upserts the full root atom.
+   */
+  saveDataItem(item: NormalizedDataItem, isOptimistic?: boolean): Promise<void>;
 }
 
 export interface NestedDataIndexWriter {

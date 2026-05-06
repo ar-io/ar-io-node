@@ -250,20 +250,28 @@ export class SignatureFetcher
         signatureOffset = dataItemAttributes.signatureOffset;
       }
 
-      // PE-9081: defensive validation. A 0/undefined signatureSize from the
-      // attribute store would produce a malformed Range request and (in the
-      // previous implementation) cause the upstream to return the full
-      // parent bundle, which fetchDataFromParent then silently accumulated.
-      // Bail out here rather than firing the request.
+      // Incomplete-root-atom guard. Two failure modes converge here:
+      //   - PE-9073: rows produced by an admin POST that arrived before the
+      //     unbundle path can have a populated parent_id but NULL
+      //     signature_offset / signature_size. Coercing those NULLs into
+      //     FsDataStore.get yields a degenerate read range
+      //     (end = offset + size - 1 = -1) and throws RangeError.
+      //   - PE-9081: a 0 / negative signatureSize would produce a malformed
+      //     Range request; upstreams that ignore malformed Range return the
+      //     full parent bundle, which fetchDataFromParent previously
+      //     accumulated into a multi-hundred-MB Buffer.
+      // Both are downstream symptoms of the same data-integrity problem
+      // (incomplete root atom). Bail out with a warning instead.
+      // `== null` catches both null (from DB rows) and undefined.
       if (
-        parentId === undefined ||
-        signatureSize === undefined ||
+        parentId == null ||
+        signatureSize == null ||
         signatureSize <= 0 ||
-        signatureOffset === undefined ||
+        signatureOffset == null ||
         signatureOffset < 0
       ) {
         log.warn(
-          'Cannot fetch data item signature: parent attributes are missing or invalid',
+          'Skipping signature fetch — data item has incomplete root atom (likely a shadow row pending repair, see PE-9073 follow-up)',
           { id, parentId, signatureSize, signatureOffset },
         );
         return undefined;
@@ -410,16 +418,17 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         ownerOffset = dataItemAttributes.ownerOffset;
       }
 
-      // PE-9081: defensive validation. See getDataItemSignature for context.
+      // Incomplete-root-atom guard. See getDataItemSignature for the full
+      // rationale (shadow-row RangeError + malformed-Range memory leak).
       if (
-        parentId === undefined ||
-        ownerSize === undefined ||
+        parentId == null ||
+        ownerSize == null ||
         ownerSize <= 0 ||
-        ownerOffset === undefined ||
+        ownerOffset == null ||
         ownerOffset < 0
       ) {
         log.warn(
-          'Cannot fetch data item owner: parent attributes are missing or invalid',
+          'Skipping owner fetch — data item has incomplete root atom (likely a shadow row pending repair, see PE-9073 follow-up)',
           { id, parentId, ownerSize, ownerOffset },
         );
         return undefined;

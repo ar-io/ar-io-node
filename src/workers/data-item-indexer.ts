@@ -15,6 +15,11 @@ import { DataItemIndexWriter, NormalizedDataItem } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
 
+interface DataItemJob {
+  item: NormalizedDataItem;
+  isOptimistic: boolean;
+}
+
 export class DataItemIndexer {
   // Dependencies
   private log: winston.Logger;
@@ -22,7 +27,7 @@ export class DataItemIndexer {
   private indexWriter: DataItemIndexWriter;
 
   // Data indexing queue
-  private queue: queueAsPromised<NormalizedDataItem, void>;
+  private queue: queueAsPromised<DataItemJob, void>;
 
   constructor({
     log,
@@ -45,21 +50,25 @@ export class DataItemIndexer {
   async queueDataItem(
     item: NormalizedDataItem,
     isPrioritized = false,
+    isOptimistic = false,
   ): Promise<void> {
     const log = this.log.child({
       method: 'queueDataItem',
       id: item.id,
       parentId: item.parent_id,
       rootTxId: item.root_tx_id,
+      isOptimistic,
     });
+
+    const job: DataItemJob = { item, isOptimistic };
 
     if (isPrioritized) {
       log.debug('Queueing prioritized data item for indexing...');
-      this.queue.unshift(item);
+      this.queue.unshift(job);
       log.debug('Prioritized data item queued for indexing.');
     } else {
       log.debug('Queueing data item for indexing...');
-      this.queue.push(item);
+      this.queue.push(job);
       log.debug('Data item queued for indexing.');
     }
   }
@@ -68,17 +77,19 @@ export class DataItemIndexer {
     return this.queue.length();
   }
 
-  async indexDataItem(item: NormalizedDataItem): Promise<void> {
+  async indexDataItem(job: DataItemJob): Promise<void> {
+    const { item, isOptimistic } = job;
     const log = this.log.child({
       method: 'indexDataItem',
       id: item.id,
       parentId: item.parent_id,
       rootTxId: item.root_tx_id,
+      isOptimistic,
     });
 
     try {
       log.debug('Indexing data item...');
-      await this.indexWriter.saveDataItem(item);
+      await this.indexWriter.saveDataItem(item, isOptimistic);
       metrics.dataItemsIndexedCounter.inc({
         parent_type:
           item.parent_id === item.root_tx_id ? 'transaction' : 'data_item',
