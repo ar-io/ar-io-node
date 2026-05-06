@@ -6,6 +6,7 @@
  */
 
 import { headerNames } from '../constants.js';
+import * as metrics from '../metrics.js';
 import { RequestAttributes } from '../types.js';
 import { parseNonNegativeInt } from './http-utils.js';
 
@@ -85,6 +86,40 @@ export const generateRequestAttributes = (
     attributes.via = requestAttributes.via;
   }
 
+  // Retrieval-hint propagation. When the caller has already resolved any
+  // part of the parent chain locally, send those hints along so the
+  // upstream gateway can short-circuit the resolver instead of redoing
+  // the same `bundledIn` traversal. The receiving gateway re-validates
+  // every hint against the parsed-header ID before serving bytes
+  // (`RootParentDataSource`), so a wrong hint produces a fallthrough,
+  // never wrong bytes — emitting a hint adds no trust surface.
+  if (requestAttributes.rootTransactionIdHint != null) {
+    headers[headerNames.rootTransactionId] =
+      requestAttributes.rootTransactionIdHint;
+    attributes.rootTransactionIdHint = requestAttributes.rootTransactionIdHint;
+    metrics.hintEmittedTotal.inc({ kind: 'root_id' });
+  }
+
+  if (
+    requestAttributes.rootPathHint != null &&
+    requestAttributes.rootPathHint.length > 0
+  ) {
+    headers[headerNames.rootPath] = requestAttributes.rootPathHint.join(',');
+    attributes.rootPathHint = requestAttributes.rootPathHint;
+    metrics.hintEmittedTotal.inc({ kind: 'path' });
+  }
+
+  if (requestAttributes.rootByteHint != null) {
+    headers[headerNames.rootItemOffset] = String(
+      requestAttributes.rootByteHint.offset,
+    );
+    headers[headerNames.rootItemSize] = String(
+      requestAttributes.rootByteHint.size,
+    );
+    attributes.rootByteHint = requestAttributes.rootByteHint;
+    metrics.hintEmittedTotal.inc({ kind: 'byte_offset' });
+  }
+
   return { headers, attributes };
 };
 
@@ -151,6 +186,34 @@ export const parseRequestAttributesHeaders = ({
   const viaHeader = headersLowercaseKeys[headerNames.via.toLowerCase()];
   const via = parseViaHeader(viaHeader);
 
+  // Retrieval hints — mirror of generateRequestAttributes so a forward
+  // through this helper preserves anything the upstream caller emitted.
+  // The route-handler parser at routes/data/handlers.ts:720-782 stays
+  // the canonical entry point with stricter validation (TX-ID format
+  // checks); this lib-level path is forgiving by design — a downstream
+  // gateway can re-validate before trusting any value.
+  const rootTransactionIdHint =
+    headersLowercaseKeys[headerNames.rootTransactionId.toLowerCase()];
+  const rootPathRaw = headersLowercaseKeys[headerNames.rootPath.toLowerCase()];
+  const rootPathHint = (() => {
+    if (rootPathRaw == null || rootPathRaw === '') return undefined;
+    const parts = rootPathRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s !== '');
+    return parts.length > 0 ? parts : undefined;
+  })();
+  const rootItemOffsetParsed = parseNonNegativeInt(
+    headersLowercaseKeys[headerNames.rootItemOffset.toLowerCase()],
+  );
+  const rootItemSizeParsed = parseNonNegativeInt(
+    headersLowercaseKeys[headerNames.rootItemSize.toLowerCase()],
+  );
+  const rootByteHint =
+    rootItemOffsetParsed != null && rootItemSizeParsed != null
+      ? { offset: rootItemOffsetParsed, size: rootItemSizeParsed }
+      : undefined;
+
   return {
     hops,
     origin: headersLowercaseKeys[headerNames.origin.toLowerCase()],
@@ -161,5 +224,8 @@ export const parseRequestAttributesHeaders = ({
     ...(arnsBasename != null && { arnsBasename }),
     ...(arnsRecord != null && { arnsRecord }),
     ...(via.length > 0 && { via }),
+    ...(rootTransactionIdHint != null && { rootTransactionIdHint }),
+    ...(rootPathHint != null && { rootPathHint }),
+    ...(rootByteHint != null && { rootByteHint }),
   };
 };

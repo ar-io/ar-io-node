@@ -154,12 +154,22 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
 
             const response = await this.axiosInstance.head(url);
 
-            // Parse offset headers from response
+            // Parse offset headers from response.
+            //
+            // Naming-symmetry transition: peers running the latest code
+            // emit the request-shaped pair (`X-AR-IO-Root-Item-Offset` /
+            // `X-AR-IO-Root-Item-Size`) alongside the legacy pair
+            // (`X-AR-IO-Root-Data-Item-Offset` / `X-AR-IO-Root-Data-Offset`).
+            // Prefer the aligned name when present, fall back to legacy.
+            // The legacy headers will be removed after a deprecation
+            // window — see docs/glossary.md.
             const rootTxId = response.headers['x-ar-io-root-transaction-id'];
             const rootOffsetStr =
+              response.headers['x-ar-io-root-item-offset'] ??
               response.headers['x-ar-io-root-data-item-offset'];
             const rootDataOffsetStr =
               response.headers['x-ar-io-root-data-offset'];
+            const rootItemSizeStr = response.headers['x-ar-io-root-item-size'];
             const contentType = response.headers['content-type'];
             const contentLengthStr = response.headers['content-length'];
 
@@ -169,13 +179,17 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
               const rootDataOffset = parseNonNegativeInt(rootDataOffsetStr);
               // Content-Length is the size of the data, not the full data item with headers
               const dataSize = parseNonNegativeInt(contentLengthStr);
-              // Calculate total size if we have offsets: header size + data size
+              // Prefer the explicit `Root-Item-Size` header when emitted;
+              // otherwise compute the legacy way: header size + data size.
+              const explicitItemSize = parseNonNegativeInt(rootItemSizeStr);
               const size =
-                rootOffset !== undefined &&
-                rootDataOffset !== undefined &&
-                dataSize !== undefined
-                  ? rootDataOffset - rootOffset + dataSize
-                  : undefined;
+                explicitItemSize !== undefined
+                  ? explicitItemSize
+                  : rootOffset !== undefined &&
+                      rootDataOffset !== undefined &&
+                      dataSize !== undefined
+                    ? rootDataOffset - rootOffset + dataSize
+                    : undefined;
 
               const result: CachedGatewayOffsets = {
                 rootTxId,

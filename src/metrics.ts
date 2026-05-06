@@ -1046,3 +1046,21 @@ export const chunkMetadataAnchorTotal = new promClient.Counter({
   help: 'Outcomes of chunk-metadata-anchor TxBoundary lookups',
   labelNames: ['result'],
 });
+
+/**
+ * Counter of retrieval-hint headers emitted on outbound proxy forwards.
+ * Together with the inbound hint parsing already in place, this measures
+ * how often the network is self-warming — every emit is a chance for the
+ * receiving gateway to skip the `bundledIn` traversal it would otherwise
+ * perform.
+ *
+ * Labels (`kind`):
+ * - `root_id`     — `X-AR-IO-Root-Transaction-Id` was sent
+ * - `path`        — `X-AR-IO-Root-Path` was sent (comma-separated parent chain)
+ * - `byte_offset` — `X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size` pair was sent
+ */
+export const hintEmittedTotal = new promClient.Counter({
+  name: 'ario_hint_emitted_total',
+  help: 'Retrieval-hint headers emitted on outbound forwards',
+  labelNames: ['kind'],
+});

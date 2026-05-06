@@ -503,12 +503,22 @@ const setDataHeaders = ({
     res.header(headerNames.rootTransactionId, dataAttributes.rootTransactionId);
   }
 
-  // Set absolute root offset headers
+  // Set absolute root offset headers.
+  //
+  // Naming-symmetry note: requests carry hints as `X-AR-IO-Root-Item-Offset`
+  // / `X-AR-IO-Root-Item-Size` (parsed at routes/data/handlers.ts into
+  // requestAttributes.rootByteHint). For the "cache response, replay on
+  // next request" pattern to work without renaming on the client side we
+  // emit BOTH the legacy response names (`X-AR-IO-Root-Data-Item-Offset`
+  // / `X-AR-IO-Root-Data-Offset`) AND the request-shaped names
+  // (`X-AR-IO-Root-Item-Offset` / `X-AR-IO-Root-Item-Size`). Existing
+  // consumers keep working; new consumers prefer the aligned pair. The
+  // legacy names will be removed after a deprecation window — see
+  // docs/glossary.md.
   if (dataAttributes?.rootDataItemOffset != null) {
-    res.header(
-      headerNames.rootDataItemOffset,
-      dataAttributes.rootDataItemOffset.toString(),
-    );
+    const offsetStr = dataAttributes.rootDataItemOffset.toString();
+    res.header(headerNames.rootDataItemOffset, offsetStr); // legacy
+    res.header(headerNames.rootItemOffset, offsetStr); // aligned
   }
 
   if (dataAttributes?.rootDataOffset != null) {
@@ -516,6 +526,10 @@ const setDataHeaders = ({
       headerNames.rootDataOffset,
       dataAttributes.rootDataOffset.toString(),
     );
+  }
+
+  if (dataAttributes?.itemSize != null) {
+    res.header(headerNames.rootItemSize, dataAttributes.itemSize.toString());
   }
 
   // Set relative offset headers for backward compatibility
