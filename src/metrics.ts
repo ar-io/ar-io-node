@@ -1022,3 +1022,27 @@ export const httpSigErrorsTotal = new promClient.Counter({
   name: 'httpsig_errors_total',
   help: 'Total HTTPSIG signing errors',
 });
+
+//
+// Chunk metadata anchor (offset → tx + data_root via reference peer
+// `/chunk/{offset}/data` headers, cross-checked against the chain).
+// See src/data/chunk-metadata-anchor-source.ts and ar-io/ar-io-node#681.
+//
+
+/**
+ * Counter of chunk-metadata-anchor lookup outcomes. The `result` label
+ * mirrors the observer's `observer_chunk_metadata_anchor_total` so
+ * dashboards stay consistent across the two services.
+ *
+ * Labels (`result`):
+ * - `hit`              — peer headers parsed AND chain cross-check passed
+ * - `cache_hit`        — same tx already anchored; offset confirmed in range
+ * - `metadata_missing` — peer didn't return required headers
+ * - `mismatch`         — chain disagreed with peer; falls through to next source
+ * - `error`            — HTTP/network failure; falls through
+ */
+export const chunkMetadataAnchorTotal = new promClient.Counter({
+  name: 'ario_chunk_metadata_anchor_total',
+  help: 'Outcomes of chunk-metadata-anchor TxBoundary lookups',
+  labelNames: ['result'],
+});
