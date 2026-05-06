@@ -1235,6 +1235,22 @@ export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
   '100000',
 );
 
+// Hard cap on DataItemIndexer's internal queue. Items pushed when the queue
+// is at this size are dropped (and the dropped counter is incremented).
+// Bundle re-enqueue via `bundle-repair-worker` is the recovery mechanism.
+// `0` disables the cap (unbounded growth — matches pre-cap behavior).
+export const DATA_ITEM_INDEXER_QUEUE_SIZE = +env.varOrDefault(
+  'DATA_ITEM_INDEXER_QUEUE_SIZE',
+  '500000',
+);
+
+// Hard cap on Ans104DataIndexer's internal queue. Same semantics as
+// DATA_ITEM_INDEXER_QUEUE_SIZE: drop on full, `0` = unbounded.
+export const ANS104_DATA_INDEXER_QUEUE_SIZE = +env.varOrDefault(
+  'ANS104_DATA_INDEXER_QUEUE_SIZE',
+  '500000',
+);
+
 // The maximum number of bundles to queue for unbundling before skipping
 export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
   'BUNDLE_DATA_IMPORTER_QUEUE_SIZE',

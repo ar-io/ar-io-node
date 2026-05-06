@@ -14,6 +14,8 @@ import * as events from '../events.js';
 import { DataItemIndexWriter, NormalizedDataItem } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
+const DEFAULT_MAX_QUEUE_SIZE = 500_000;
+const QUEUE_NAME = 'dataItemIndexer';
 
 interface DataItemJob {
   item: NormalizedDataItem;
@@ -26,6 +28,14 @@ export class DataItemIndexer {
   private eventEmitter: EventEmitter;
   private indexWriter: DataItemIndexWriter;
 
+  // Backpressure: hard cap on queue depth. `0` disables the cap.
+  // Prioritized pushes (e.g. admin POSTs) bypass the cap; non-prioritized
+  // pushes that arrive at the cap are dropped and counted in
+  // `data_items_dropped_total{queue_name="dataItemIndexer"}`. The bundle
+  // record's `last_fully_indexed_at` will stay NULL for any dropped item,
+  // so `bundle-repair-worker` is the recovery path.
+  private maxQueueSize: number;
+
   // Data indexing queue
   private queue: queueAsPromised<DataItemJob, void>;
 
@@ -34,15 +44,18 @@ export class DataItemIndexer {
     eventEmitter,
     indexWriter,
     workerCount = DEFAULT_WORKER_COUNT,
+    maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     indexWriter: DataItemIndexWriter;
     workerCount?: number;
+    maxQueueSize?: number;
   }) {
     this.log = log.child({ class: 'DataItemIndexer' });
     this.indexWriter = indexWriter;
     this.eventEmitter = eventEmitter;
+    this.maxQueueSize = maxQueueSize;
 
     this.queue = fastq.promise(this.indexDataItem.bind(this), workerCount);
   }
@@ -66,10 +79,19 @@ export class DataItemIndexer {
       log.debug('Queueing prioritized data item for indexing...');
       this.queue.unshift(job);
       log.debug('Prioritized data item queued for indexing.');
-    } else {
+    } else if (
+      this.maxQueueSize === 0 ||
+      this.queue.length() < this.maxQueueSize
+    ) {
       log.debug('Queueing data item for indexing...');
       this.queue.push(job);
       log.debug('Data item queued for indexing.');
+    } else {
+      metrics.dataItemsDroppedCounter.inc({ queue_name: QUEUE_NAME });
+      log.warn('Dropping data item — queue is at maxQueueSize.', {
+        queueDepth: this.queue.length(),
+        maxQueueSize: this.maxQueueSize,
+      });
     }
   }
 

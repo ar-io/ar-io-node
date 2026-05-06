@@ -19,6 +19,8 @@ import {
 import { ANS_104_FORMAT_ID } from '../constants.js';
 
 const DEFAULT_WORKER_COUNT = 1;
+const DEFAULT_MAX_QUEUE_SIZE = 500_000;
+const QUEUE_NAME = 'ans104DataIndexer';
 
 export class Ans104DataIndexer {
   // Dependencies
@@ -26,6 +28,13 @@ export class Ans104DataIndexer {
   private eventEmitter: EventEmitter;
   private indexWriter: NestedDataIndexWriter;
   private contiguousDataIndex: ContiguousDataIndex;
+
+  // Backpressure: hard cap on queue depth. `0` disables the cap.
+  // Items pushed at the cap are dropped and counted in
+  // `data_items_dropped_total{queue_name="ans104DataIndexer"}`. The bundle
+  // record's `last_fully_indexed_at` will stay NULL for any dropped item,
+  // so `bundle-repair-worker` is the recovery path.
+  private maxQueueSize: number;
 
   // Data indexing queue
   private queue: queueAsPromised<NormalizedDataItem, void>;
@@ -36,17 +45,20 @@ export class Ans104DataIndexer {
     indexWriter,
     contiguousDataIndex,
     workerCount = DEFAULT_WORKER_COUNT,
+    maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     indexWriter: NestedDataIndexWriter;
     contiguousDataIndex: ContiguousDataIndex;
     workerCount?: number;
+    maxQueueSize?: number;
   }) {
     this.log = log.child({ class: 'Ans104DataIndexer' });
     this.indexWriter = indexWriter;
     this.contiguousDataIndex = contiguousDataIndex;
     this.eventEmitter = eventEmitter;
+    this.maxQueueSize = maxQueueSize;
 
     this.queue = fastq.promise(this.indexDataItem.bind(this), workerCount);
   }
@@ -61,9 +73,17 @@ export class Ans104DataIndexer {
       dataSize: item?.data_size,
     });
 
-    log.debug('Queueing data item for indexing...');
-    this.queue.push(item);
-    log.debug('Data item queued for indexing.');
+    if (this.maxQueueSize === 0 || this.queue.length() < this.maxQueueSize) {
+      log.debug('Queueing data item for indexing...');
+      this.queue.push(item);
+      log.debug('Data item queued for indexing.');
+    } else {
+      metrics.dataItemsDroppedCounter.inc({ queue_name: QUEUE_NAME });
+      log.warn('Dropping data item — queue is at maxQueueSize.', {
+        queueDepth: this.queue.length(),
+        maxQueueSize: this.maxQueueSize,
+      });
+    }
   }
 
   queueDepth(): number {

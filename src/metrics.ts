@@ -123,6 +123,12 @@ export const dataItemsIndexedCounter = new promClient.Counter({
   labelNames: ['parent_type'],
 });
 
+export const dataItemsDroppedCounter = new promClient.Counter({
+  name: 'data_items_dropped_total',
+  help: 'Count of data items dropped because the indexer queue was at its cap',
+  labelNames: ['queue_name'],
+});
+
 export const dataItemDataIndexedCounter = new promClient.Counter({
   name: 'data_item_data_indexed_total',
   help: 'Count of data item data indexed',

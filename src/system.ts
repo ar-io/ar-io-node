@@ -1174,6 +1174,7 @@ export const dataItemIndexer = new DataItemIndexer({
   log,
   eventEmitter,
   indexWriter: dataItemIndexWriter,
+  maxQueueSize: config.DATA_ITEM_INDEXER_QUEUE_SIZE,
 });
 metrics.registerQueueLengthGauge('dataItemIndexer', {
   length: () => dataItemIndexer.queueDepth(),
@@ -1184,6 +1185,7 @@ const ans104DataIndexer = new Ans104DataIndexer({
   eventEmitter,
   indexWriter: nestedDataIndexWriter,
   contiguousDataIndex,
+  maxQueueSize: config.ANS104_DATA_INDEXER_QUEUE_SIZE,
 });
 metrics.registerQueueLengthGauge('ans104DataIndexer', {
   length: () => ans104DataIndexer.queueDepth(),
