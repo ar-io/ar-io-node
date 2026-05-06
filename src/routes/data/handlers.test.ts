@@ -1005,6 +1005,105 @@ st
         });
       });
 
+      describe('X-AR-IO-Root-Path', () => {
+        it('emits [rootTransactionId] for single-level data items (parentId === rootTransactionId)', async () => {
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              rootTransactionId: 'root-tx',
+              parentId: 'root-tx', // single-level: parent IS the root
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-root-path'], 'root-tx');
+            });
+        });
+
+        it('omits the header for multi-level data items (parentId !== rootTransactionId)', async () => {
+          // navigatePathAndFind would throw on a missing intermediate
+          // bundle, so emitting `[root, parent]` is strictly worse than
+          // not emitting. Receiving gateway falls back to linear search.
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              rootTransactionId: 'root-tx',
+              parentId: 'intermediate-bundle', // multi-level
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-root-path'], undefined);
+            });
+        });
+
+        it('omits the header for L1 transactions (no parentId, no rootTransactionId)', async () => {
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-root-path'], undefined);
+            });
+        });
+      });
+
       describe('If-None-Match', () => {
         it('should return 304 for HEAD request when If-None-Match matches ETag', async () => {
           dataAttributesSource.getDataAttributes = () =>

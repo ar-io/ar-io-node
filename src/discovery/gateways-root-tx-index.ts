@@ -4,7 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { default as axios, AxiosInstance } from 'axios';
+import { default as axios, AxiosInstance, AxiosResponse } from 'axios';
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
@@ -152,7 +152,7 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
             const url = `${gatewayUrl}/raw/${id}`;
             log.debug('Making HEAD request to gateway', { url });
 
-            const response = await this.axiosInstance.head(url);
+            const response = await this.fetchPeerHeaders(url);
 
             // Parse offset headers from response.
             //
@@ -258,5 +258,38 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
     }
 
     return undefined;
+  }
+
+  /**
+   * HEAD `/raw/:id` first; on a non-404 failure (network error, 405, 5xx,
+   * etc.) fall back to a zero-byte range GET. Some peers — especially
+   * those behind CDNs or proxies — don't support HEAD on this route even
+   * though the upstream gateway would. `bytes=0-0` is the smallest legal
+   * range; the server returns 1 byte of body we discard, and the headers
+   * are what we want.
+   *
+   * 404 is treated as a definitive "item doesn't exist on this peer" and
+   * propagated to the caller — falling back to GET would just hit the
+   * same 404 (or worse, mask a real not-found).
+   *
+   * Successful HEAD responses are returned as-is, even if they're missing
+   * the `X-AR-IO-Root-*` headers (the data may legitimately have no
+   * parent, e.g. an L1 tx) — falling back to GET in that case would just
+   * waste a request without changing the answer.
+   */
+  private async fetchPeerHeaders(url: string): Promise<AxiosResponse> {
+    try {
+      return await this.axiosInstance.head(url);
+    } catch (err: any) {
+      // 404: respect; peer says item doesn't exist here.
+      if (err.response?.status === 404) {
+        throw err;
+      }
+      // Network error, 405 Method Not Allowed, 5xx, etc. — try GET.
+      return this.axiosInstance.get(url, {
+        headers: { Range: 'bytes=0-0' },
+        responseType: 'arraybuffer',
+      });
+    }
   }
 }

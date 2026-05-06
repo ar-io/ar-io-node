@@ -503,6 +503,30 @@ const setDataHeaders = ({
     res.header(headerNames.rootTransactionId, dataAttributes.rootTransactionId);
   }
 
+  // X-AR-IO-Root-Path: emit only when we can reconstruct a faithful path
+  // the receiving gateway can replay through `getDataItemOffsetWithPath`.
+  //
+  // The single-level case (data item directly inside an L1 bundle) is the
+  // dominant ANS-104 pattern: `parentId === rootTransactionId`, so the
+  // path is just `[rootTransactionId]` — always correct.
+  //
+  // Multi-level nesting (`parentId !== rootTransactionId`) requires the
+  // chain of intermediate bundles, which `dataAttributes` doesn't carry
+  // today. Emitting `[root, parent]` instead would be malformed for
+  // 3+-level nesting — `navigatePathAndFind` (ans104-offset-source.ts:395)
+  // walks each intermediate and throws on a missing one, then gracefully
+  // falls back to linear search. That's strictly worse than not emitting:
+  // a failed parse + a linear search vs just a linear search. So we omit
+  // the header in the multi-level case until dataAttributes gains a full
+  // path field (separate follow-up).
+  if (
+    dataAttributes?.rootTransactionId != null &&
+    dataAttributes?.parentId != null &&
+    dataAttributes.parentId === dataAttributes.rootTransactionId
+  ) {
+    res.header(headerNames.rootPath, dataAttributes.rootTransactionId);
+  }
+
   // Set absolute root offset headers.
   //
   // Naming-symmetry note: requests carry hints as `X-AR-IO-Root-Item-Offset`
