@@ -1,4 +1,9 @@
 -- selectDataAttributes
+-- parent_id is NULL for L1 transactions (they have no parent — they ARE
+-- the root) and the immediate parent bundle for data items. Surfaced so
+-- the response handler can emit X-AR-IO-Root-Path for the single-level
+-- case (parent_id == root_transaction_id), unblocking the cache-and-
+-- replay pattern for clients without trusting them to compute the path.
 SELECT *
 FROM (
   SELECT
@@ -7,6 +12,7 @@ FROM (
     content_type,
     content_encoding,
     null AS root_transaction_id,
+    null AS parent_id,
     true AS stable,
     null AS root_parent_offset,
     null AS data_offset
@@ -19,6 +25,7 @@ FROM (
     content_type,
     content_encoding,
     null AS root_transaction_id,
+    null AS parent_id,
     false AS stable,
     null AS root_parent_offset,
     null AS data_offset
@@ -31,6 +38,7 @@ FROM (
     content_type,
     content_encoding,
     root_transaction_id,
+    parent_id,
     true AS stable,
     root_parent_offset,
     data_offset
@@ -43,6 +51,7 @@ FROM (
     content_type,
     content_encoding,
     root_transaction_id,
+    parent_id,
     false AS stable,
     root_parent_offset,
     data_offset

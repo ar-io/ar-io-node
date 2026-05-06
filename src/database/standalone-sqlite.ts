@@ -1112,12 +1112,21 @@ export class StandaloneSqliteDatabaseWorker {
     const dataOffset = dataRow?.data_offset ?? txOrItemRow?.data_offset;
     const offset = dataRow?.data_item_offset ?? dataItemAttributes?.offset;
 
+    // Immediate parent bundle for data items, undefined for L1 txs.
+    // Surfaced so route handlers can detect the single-level case
+    // (parentId === rootTransactionId) and emit X-AR-IO-Root-Path.
+    const parentId =
+      txOrItemRow?.parent_id !== null && txOrItemRow?.parent_id !== undefined
+        ? toB64Url(txOrItemRow.parent_id)
+        : undefined;
+
     return {
       hash: hash ? toB64Url(hash) : undefined,
       dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
       size: txOrItemRow?.data_size ?? dataRow?.data_size,
       contentEncoding: txOrItemRow?.content_encoding,
       contentType,
+      parentId,
       rootTransactionId,
       rootParentOffset,
       dataOffset,
