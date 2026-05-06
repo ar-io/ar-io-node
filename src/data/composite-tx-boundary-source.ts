@@ -11,9 +11,13 @@ import { TxBoundary, TxBoundarySource } from '../types.js';
 /**
  * Composite transaction boundary source that orchestrates multiple sources
  * with a DB-first strategy:
- * 1. Database (fastest) - for indexed transactions
- * 2. tx_path validation - for unindexed data with tx_path from peers
- * 3. Chain fallback (slowest) - binary search through chain
+ * 1. Database (fastest) — for indexed transactions
+ * 2. Chunk-metadata anchor (optional) — peer HEAD on /chunk/{offset}/data
+ *    cross-checked against the chain. Drops the typical fallback cost from
+ *    log₂(height) block fetches to one HEAD per offset and two chain
+ *    lookups per unique tx (cached). See ar-io/ar-io-node#681.
+ * 3. tx_path validation — for unindexed data with tx_path from peers
+ * 4. Chain fallback (slowest) — binary search through chain
  *
  * Returns the first successful result from any source.
  *
@@ -23,6 +27,7 @@ import { TxBoundary, TxBoundarySource } from '../types.js';
 export class CompositeTxBoundarySource implements TxBoundarySource {
   private log: winston.Logger;
   private dbSource: TxBoundarySource;
+  private anchorSource?: TxBoundarySource;
   private txPathSource?: TxBoundarySource;
   private chainSource?: TxBoundarySource;
   private chainFallbackConcurrencyLimit: number;
@@ -31,18 +36,21 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
   constructor({
     log,
     dbSource,
+    anchorSource,
     txPathSource,
     chainSource,
     chainFallbackConcurrencyLimit = 5,
   }: {
     log: winston.Logger;
     dbSource: TxBoundarySource;
+    anchorSource?: TxBoundarySource;
     txPathSource?: TxBoundarySource;
     chainSource?: TxBoundarySource;
     chainFallbackConcurrencyLimit?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dbSource = dbSource;
+    this.anchorSource = anchorSource;
     this.txPathSource = txPathSource;
     this.chainSource = chainSource;
     this.chainFallbackConcurrencyLimit = chainFallbackConcurrencyLimit;
@@ -83,10 +91,40 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
       log.debug('Database lookup failed', { error: error.message });
     }
 
+    // Check for abort before chunk-metadata anchor
+    signal?.throwIfAborted();
+
+    // 2. Try chunk-metadata anchor — HEAD a peer's /chunk/{offset}/data
+    //    and cross-check the headers against the chain. Cheaper than the
+    //    binary search below for any tx covered by a reachable peer.
+    if (this.anchorSource) {
+      try {
+        log.debug('Attempting chunk-metadata anchor');
+        const anchorResult = await this.anchorSource.getTxBoundary(
+          absoluteOffset,
+          signal,
+        );
+        if (anchorResult) {
+          log.debug('Chunk-metadata anchor successful', {
+            txId: anchorResult.id,
+            dataRoot: anchorResult.dataRoot,
+          });
+          return anchorResult;
+        }
+        log.debug('Chunk-metadata anchor returned no result');
+      } catch (error: any) {
+        // Re-throw AbortError to propagate cancellation
+        if (error.name === 'AbortError') {
+          throw error;
+        }
+        log.debug('Chunk-metadata anchor failed', { error: error.message });
+      }
+    }
+
     // Check for abort before tx_path validation
     signal?.throwIfAborted();
 
-    // 2. Try tx_path validation (for unindexed data)
+    // 3. Try tx_path validation (for unindexed data)
     if (this.txPathSource) {
       try {
         log.debug('Attempting tx_path validation');
@@ -113,7 +151,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     // Check for abort before chain fallback
     signal?.throwIfAborted();
 
-    // 3. Try chain fallback (slowest) with concurrency limit
+    // 4. Try chain fallback (slowest) with concurrency limit
     if (this.chainSource) {
       // Check concurrency limit before attempting chain fallback
       if (this.activeChainFallbackCount >= this.chainFallbackConcurrencyLimit) {

@@ -27,6 +27,7 @@ import { TxMetadataResolver } from './data/tx-metadata-resolver.js';
 import { CompositeTxBoundarySource } from './data/composite-tx-boundary-source.js';
 import { DatabaseTxBoundarySource } from './data/database-tx-boundary-source.js';
 import { ChainTxBoundarySource } from './data/chain-tx-boundary-source.js';
+import { ChunkMetadataAnchorSource } from './data/chunk-metadata-anchor-source.js';
 import { TxPathValidationSource } from './data/tx-path-validation-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
@@ -691,8 +692,9 @@ const chunkMetadataStore = new FsChunkMetadataStore({
   baseDir: 'data/chunks/metadata',
 });
 
-// Transaction boundary sources for chunk retrieval
-// Uses DB-first strategy: DB (fastest) → tx_path validation → chain (slowest)
+// Transaction boundary sources for chunk retrieval.
+// Uses DB-first strategy: DB → chunk-metadata anchor → tx_path validation
+// → chain (slowest).
 const dbBoundarySource = new DatabaseTxBoundarySource({ log, db });
 
 const txPathBoundarySource = new TxPathValidationSource({
@@ -705,9 +707,55 @@ const chainBoundarySource = config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
   ? new ChainTxBoundarySource({ log, arweaveClient })
   : undefined;
 
+// Resolve the reference-peer pool used for chunk-metadata anchoring,
+// in priority order: GATEWAYS_ROOT_TX_URLS (already populated for the
+// peer-emitted-hint-source pattern) → first TRUSTED_GATEWAYS_URLS
+// entry (the architect's original fallback). One pool key controls
+// both consumers; operators don't have to keep two lists in sync.
+const chunkAnchorPeerUrls: string[] = (() => {
+  const fromRootTx = Object.keys(config.GATEWAYS_ROOT_TX_URLS);
+  if (fromRootTx.length > 0) return fromRootTx;
+  const fromTrusted = Object.keys(config.TRUSTED_GATEWAYS_URLS);
+  return fromTrusted.length > 0 ? [fromTrusted[0]] : [];
+})();
+
+const chunkMetadataAnchorSource =
+  config.CHUNK_METADATA_ANCHOR_ENABLED && chunkAnchorPeerUrls.length > 0
+    ? new ChunkMetadataAnchorSource({
+        log,
+        peerUrls: chunkAnchorPeerUrls,
+        requestTimeoutMs: config.CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS,
+        cacheSize: config.CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE,
+        cacheTtlMs: config.CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS * 1000,
+        // Wrap the chain client to match anchorChunkMetadata's string-typed
+        // contract — weave-scale offsets need to round-trip through BigInt
+        // without Number.MAX_SAFE_INTEGER loss.
+        fetchTxOffset: async (txId, signal) => {
+          const r = await arweaveClient.getTxOffset(txId, signal);
+          return { size: String(r.size), offset: String(r.offset) };
+        },
+        fetchTransaction: async (txId, signal) => {
+          // arweaveClient.getTx doesn't currently thread signal; the
+          // outer composite still aborts via its own throwIfAborted
+          // checks, so worst case is one extra in-flight tx fetch on
+          // cancel — bounded and harmless.
+          signal?.throwIfAborted();
+          const tx = await arweaveClient.getTx({ txId });
+          return { data_root: tx.data_root };
+        },
+      })
+    : undefined;
+
+if (config.CHUNK_METADATA_ANCHOR_ENABLED && chunkAnchorPeerUrls.length === 0) {
+  log.warn(
+    'CHUNK_METADATA_ANCHOR_ENABLED=true but no peers in GATEWAYS_ROOT_TX_URLS or TRUSTED_GATEWAYS_URLS; anchor source disabled',
+  );
+}
+
 const txBoundarySource = new CompositeTxBoundarySource({
   log,
   dbSource: dbBoundarySource,
+  anchorSource: chunkMetadataAnchorSource,
   txPathSource: txPathBoundarySource,
   chainSource: chainBoundarySource,
   chainFallbackConcurrencyLimit: config.CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY,
