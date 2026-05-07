@@ -145,9 +145,26 @@ dataItemLastIndexedTimestampSeconds.setToCurrentTime();
 // GraphQL resolver metrics
 //
 
+export const graphqlRequestsCounter = new promClient.Counter({
+  name: 'graphql_requests_total',
+  help:
+    'Count of GraphQL requests received by the Apollo server. ' +
+    'Incremented once per request at `requestDidStart`, so it covers every ' +
+    'shape that hits the GraphQL endpoint — Query, Mutation, Subscription, ' +
+    'introspection, and even malformed/validation-failing requests. The ' +
+    'right denominator for the disconnect rate ' +
+    '(`graphql_resolver_cancellations_total / graphql_requests_total`) ' +
+    'because every cancelled request is, by definition, a request first.',
+});
+
 export const graphqlQueriesCounter = new promClient.Counter({
   name: 'graphql_queries_total',
-  help: 'Count of top-level GraphQL queries received by resolver',
+  help:
+    'Count of top-level Query resolver invocations, labeled by resolver name. ' +
+    'Increments per resolver hit, so a request with multiple top-level Query ' +
+    'fields increments multiple times. Captures resolver-level fan-out ' +
+    'volume, NOT request volume — use `graphql_requests_total` for the ' +
+    'denominator of any per-request rate (e.g. disconnect rate).',
   labelNames: ['resolver'],
 });
 

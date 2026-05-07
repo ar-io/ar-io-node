@@ -102,6 +102,24 @@ const warningsPlugin = {
   },
 };
 
+// Increments `graphql_requests_total` once per request — the
+// disconnect-rate denominator. `requestDidStart` fires for *every*
+// inbound request the Apollo server sees, including introspection,
+// mutations, subscriptions, and requests that fail validation before
+// reaching a resolver. That is the right population to divide
+// cancellations by — every cancelled request is a request first.
+//
+// Note that the per-resolver counter (`graphql_queries_total{resolver}`)
+// in resolvers.ts increments at a different scope (per Query resolver
+// invocation) and is NOT a substitute. Mixing the two as ratio
+// numerator/denominator is what produced the >100% disconnect-rate
+// readings before this plugin existed.
+const requestCountPlugin = {
+  async requestDidStart() {
+    metrics.graphqlRequestsCounter.inc();
+  },
+};
+
 const apolloServer = (
   db: GqlQueryable,
   opts: ApolloServerExpressConfig = {},
@@ -115,6 +133,7 @@ const apolloServer = (
       ApolloServerPluginLandingPageDisabled(),
       ApolloServerPluginLandingPageGraphQLPlayground(),
       warningsPlugin,
+      requestCountPlugin,
     ],
     context: ({ req }: { req: Request }) => {
       return {
