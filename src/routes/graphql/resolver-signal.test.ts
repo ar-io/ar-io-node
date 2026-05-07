@@ -121,28 +121,27 @@ describe('buildResolverSignal', () => {
     assert.equal(await cancelCount('client_disconnect'), before);
   });
 
-  it('counts immediately when req is already aborted at call time and response not sent', async () => {
+  it('IGNORES req.destroyed at call time — body-parser sets it on every request', async () => {
+    // Regression coverage for the production bug where the
+    // synchronous pre-check `req.destroyed === true` fired for every
+    // successful request (body-parser consumes the request body before
+    // Apollo invokes the context callback, and consuming a Readable
+    // stream sets destroyed=true). The pre-check has been removed; if
+    // a real abort occurs, the res.on('close') listener catches it
+    // later.
     const req = new FakeReq() as unknown as Request;
-    (req as unknown as FakeReq).aborted = true;
+    (req as unknown as FakeReq).destroyed = true; // normal post-body-parse state
     const res = new FakeRes() as unknown as Response;
     const ctx = newCtx();
     const before = await cancelCount('client_disconnect');
 
     const signal = buildResolverSignal(req, res, ctx);
 
-    assert.equal(signal.aborted, true);
-    assert.equal(await cancelCount('client_disconnect'), before + 1);
-  });
+    // Apollo proceeds normally; plugin marks responseSent; close fires.
+    ctx.responseSent = true;
+    (res as unknown as FakeRes).emit('close');
 
-  it('does NOT count when req is already aborted but response already sent', async () => {
-    const req = new FakeReq() as unknown as Request;
-    (req as unknown as FakeReq).aborted = true;
-    const res = new FakeRes() as unknown as Response;
-    const ctx: ResolverSignalState = { responseSent: true };
-    const before = await cancelCount('client_disconnect');
-
-    buildResolverSignal(req, res, ctx);
-
+    assert.equal(signal.aborted, false);
     assert.equal(await cancelCount('client_disconnect'), before);
   });
 });

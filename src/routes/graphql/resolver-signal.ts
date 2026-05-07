@@ -114,12 +114,15 @@ export function buildResolverSignal(
   // early — at request-body-parser-end time — to be a useful abort
   // signal under apollo-server-express. See the comment above.
   res.once('close', () => onClose('res'));
-  if (
-    (req.aborted === true || req.destroyed === true) &&
-    !responseFullySent()
-  ) {
-    onClose('req-already-aborted');
-  }
+  // No synchronous pre-check. We previously had
+  //   if (req.aborted === true || req.destroyed === true) onClose(...)
+  // but this fires for every request: body-parser reads the request
+  // body before invoking the Apollo context callback, and consuming
+  // the body's Readable stream sets `req.destroyed = true`. That's
+  // not an abort, just normal lifecycle. The diagnostic log under
+  // PE-9087 caught 100% of requests entering this path on every
+  // host. Real aborts will surface via the `res.on('close')` listener
+  // we just registered.
 
   if (config.GRAPHQL_RESOLVER_DEADLINE_MS > 0) {
     const timer = setTimeout(() => {
