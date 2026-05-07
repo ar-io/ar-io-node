@@ -114,7 +114,7 @@ const apolloServer = (
       requestCountPlugin,
       responseSentPlugin,
     ],
-    context: ({ req, res }: { req: Request; res: Response }) => {
+    context: ({ res }: { req: Request; res: Response }) => {
       // Use a NESTED `state` holder so apollo-server-core's shallow
       // clone of the context (it does this for plugin invocation;
       // see runHttpQuery.js:166) preserves the reference. The plugin
@@ -125,7 +125,7 @@ const apolloServer = (
         db,
         txMetadataResolver,
         warnings: [] as GqlWarning[],
-        signal: buildResolverSignal(req, res, state),
+        signal: buildResolverSignal(res, state),
         __state: state,
       };
     },

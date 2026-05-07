@@ -4,10 +4,9 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 
 import * as config from '../../config.js';
-import log from '../../log.js';
 import * as metrics from '../../metrics.js';
 
 /**
@@ -67,7 +66,6 @@ export type ResolverSignalState = {
  * it without booting the full gateway via `system.ts`.
  */
 export function buildResolverSignal(
-  req: Request,
   res: Response,
   state: ResolverSignalState,
 ): AbortSignal {
@@ -89,31 +87,15 @@ export function buildResolverSignal(
     metrics.graphqlResolverCancellationsCounter.inc({ reason });
   };
 
-  const onClose = (which: string) => {
+  const onClose = () => {
     if (responseFullySent()) return;
-    // TEMPORARY DIAGNOSTIC: when close fires and we still classify as
-    // an abort, log the state of every flag we know about. Sampled at
-    // 1% to bound log volume on high-traffic indexers. Remove once
-    // PE-9087 disconnect-rate accounting is confirmed end-to-end.
-    if (Math.random() < 0.01) {
-      log.info('PE-9087 diag: close fired; classifying as abort', {
-        which,
-        responseSent: state.responseSent,
-        writableEnded: res.writableEnded,
-        finished: (res as { finished?: boolean }).finished,
-        headersSent: res.headersSent,
-        statusCode: res.statusCode,
-        reqAborted: req.aborted,
-        reqDestroyed: req.destroyed,
-      });
-    }
     recordAbort('client_disconnect');
     controller.abort(new Error('Client disconnected'));
   };
   // Only listen on `res.on('close')`. `req.on('close')` fires too
   // early — at request-body-parser-end time — to be a useful abort
   // signal under apollo-server-express. See the comment above.
-  res.once('close', () => onClose('res'));
+  res.once('close', onClose);
   // No synchronous pre-check. We previously had
   //   if (req.aborted === true || req.destroyed === true) onClose(...)
   // but this fires for every request: body-parser reads the request

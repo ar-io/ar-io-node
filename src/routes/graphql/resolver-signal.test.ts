@@ -57,7 +57,7 @@ describe('buildResolverSignal', () => {
     const ctx = newCtx();
     const before = await cancelCount('client_disconnect');
 
-    const signal = buildResolverSignal(req, res, ctx);
+    const signal = buildResolverSignal(res, ctx);
 
     // Apollo plugin sets the flag, then Apollo writes the response,
     // then close eventually fires.
@@ -75,7 +75,7 @@ describe('buildResolverSignal', () => {
     const ctx = newCtx();
     const before = await cancelCount('client_disconnect');
 
-    const signal = buildResolverSignal(req, res, ctx);
+    const signal = buildResolverSignal(res, ctx);
 
     // Plugin didn't fire (hypothetical), but Node-level writableEnded
     // is set as fallback.
@@ -92,7 +92,7 @@ describe('buildResolverSignal', () => {
     const ctx = newCtx();
     const before = await cancelCount('client_disconnect');
 
-    const signal = buildResolverSignal(req, res, ctx);
+    const signal = buildResolverSignal(res, ctx);
 
     // Client disconnect: state.responseSent stays false, writableEnded
     // stays false, res 'close' fires.
@@ -112,7 +112,7 @@ describe('buildResolverSignal', () => {
     const ctx = newCtx();
     const before = await cancelCount('client_disconnect');
 
-    const signal = buildResolverSignal(req, res, ctx);
+    const signal = buildResolverSignal(res, ctx);
 
     // Emitting close on req must NOT trigger the abort path.
     (req as unknown as FakeReq).emit('close');
@@ -135,7 +135,7 @@ describe('buildResolverSignal', () => {
     const ctx = newCtx();
     const before = await cancelCount('client_disconnect');
 
-    const signal = buildResolverSignal(req, res, ctx);
+    const signal = buildResolverSignal(res, ctx);
 
     // Apollo proceeds normally; plugin marks responseSent; close fires.
     ctx.responseSent = true;
