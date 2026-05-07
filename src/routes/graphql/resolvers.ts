@@ -104,6 +104,7 @@ export function resolveTxFee(tx: GqlTransaction) {
 export type OwnerParent = {
   tx: GqlTransaction;
   keyPromise?: Promise<string | undefined>;
+  signal?: AbortSignal;
 };
 
 export function resolveTxOwnerAddress(parent: OwnerParent) {
@@ -115,13 +116,14 @@ export function resolveTxOwnerKey(parent: OwnerParent) {
   // owner (e.g. owner { a: key b: key }) share a single fetch — matching the
   // pre-split resolver's single-fetch-per-parent semantics.
   if (parent.keyPromise === undefined) {
-    parent.keyPromise = fetchTxOwnerKey(parent.tx);
+    parent.keyPromise = fetchTxOwnerKey(parent.tx, parent.signal);
   }
   return parent.keyPromise;
 }
 
 async function fetchTxOwnerKey(
   tx: GqlTransaction,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   if (tx.ownerKey !== null) {
     return tx.ownerKey;
@@ -134,12 +136,16 @@ async function fetchTxOwnerKey(
         parentId: tx.parentId,
         ownerSize: parseInt(tx.ownerSize),
         ownerOffset: parseInt(tx.ownerOffset),
+        signal,
       });
     }
     return NOT_FOUND;
   }
 
-  const ownerKey = await ownerFetcher.getTransactionOwner({ id: tx.id });
+  const ownerKey = await ownerFetcher.getTransactionOwner({
+    id: tx.id,
+    signal,
+  });
   return ownerKey !== undefined ? ownerKey : NOT_FOUND;
 }
 
@@ -161,7 +167,11 @@ export function resolveTxBundledIn(tx: GqlTransaction) {
   };
 }
 
-export async function resolveTxSignature(tx: GqlTransaction) {
+export async function resolveTxSignature(
+  tx: GqlTransaction,
+  _args: unknown,
+  ctx: { signal?: AbortSignal },
+) {
   if (tx.signature !== null) {
     return tx.signature;
   }
@@ -173,6 +183,7 @@ export async function resolveTxSignature(tx: GqlTransaction) {
         parentId: tx.parentId,
         signatureSize: parseInt(tx.signatureSize),
         signatureOffset: parseInt(tx.signatureOffset),
+        signal: ctx.signal,
       });
 
       return signature ?? NOT_FOUND;
@@ -183,6 +194,7 @@ export async function resolveTxSignature(tx: GqlTransaction) {
 
   const signature = await signatureFetcher.getTransactionSignature({
     id: tx.id,
+    signal: ctx.signal,
   });
 
   return signature ?? NOT_FOUND;
@@ -278,7 +290,11 @@ export const resolvers: IResolvers = {
     data: resolveTxData,
     quantity: resolveTxQuantity,
     fee: resolveTxFee,
-    owner: (tx: GqlTransaction): OwnerParent => ({ tx }),
+    owner: (
+      tx: GqlTransaction,
+      _args: unknown,
+      ctx: { signal?: AbortSignal },
+    ): OwnerParent => ({ tx, signal: ctx.signal }),
     parent: resolveTxParent,
     bundledIn: resolveTxBundledIn,
     signature: resolveTxSignature,

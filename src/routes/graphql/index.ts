@@ -13,11 +13,52 @@ import {
   ApolloServerExpressConfig,
   gql,
 } from 'apollo-server-express';
+import type { Request } from 'express';
 import { readFileSync } from 'node:fs';
 
+import * as config from '../../config.js';
 import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
 import { GqlQueryable, GqlWarning } from '../../types.js';
 import { resolvers } from './resolvers.js';
+
+/**
+ * Build an AbortSignal that fires when either the express request socket
+ * closes or `GRAPHQL_RESOLVER_DEADLINE_MS` elapses. Plumbed through the
+ * resolver context so attribute fetchers, data sources, and arweave-client
+ * requests can short-circuit when the response is already unwanted.
+ */
+function buildResolverSignal(req: Request): AbortSignal {
+  const controller = new AbortController();
+
+  const onClose = () => controller.abort(new Error('Client disconnected'));
+  if (req.aborted === true || req.destroyed === true) {
+    onClose();
+  } else {
+    req.once('close', onClose);
+    req.once('aborted', onClose);
+  }
+
+  if (config.GRAPHQL_RESOLVER_DEADLINE_MS > 0) {
+    const timer = setTimeout(
+      () =>
+        controller.abort(
+          new Error(
+            `GraphQL resolver deadline (${config.GRAPHQL_RESOLVER_DEADLINE_MS}ms) exceeded`,
+          ),
+        ),
+      config.GRAPHQL_RESOLVER_DEADLINE_MS,
+    );
+    // Don't keep the event loop alive past response.
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    controller.signal.addEventListener('abort', () => clearTimeout(timer), {
+      once: true,
+    });
+  }
+
+  return controller.signal;
+}
 
 const typeDefsUrl = new URL('./schema/types.graphql', import.meta.url);
 const typeDefs = gql(readFileSync(typeDefsUrl, 'utf8'));
@@ -63,11 +104,12 @@ const apolloServer = (
       ApolloServerPluginLandingPageGraphQLPlayground(),
       warningsPlugin,
     ],
-    context: () => {
+    context: ({ req }: { req: Request }) => {
       return {
         db,
         txMetadataResolver,
         warnings: [] as GqlWarning[],
+        signal: buildResolverSignal(req),
       };
     },
     ...opts,

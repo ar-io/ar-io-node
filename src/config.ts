@@ -1251,6 +1251,18 @@ export const ANS104_DATA_INDEXER_QUEUE_SIZE = +env.varOrDefault(
   '500000',
 );
 
+// Server-side hard deadline (ms) for GraphQL resolvers. Composed with the
+// caller's request signal so the resolver chain — including downstream
+// attribute fetches and arweave-client requests — is forcibly cancelled
+// after this duration even if the client connection close hasn't yet
+// surfaced. Picked slightly above the typical client/upstream 10s timeout
+// so legitimate slow fetches still complete most of the time, while
+// zombie work doesn't accumulate indefinitely. Set to `0` to disable.
+export const GRAPHQL_RESOLVER_DEADLINE_MS = +env.varOrDefault(
+  'GRAPHQL_RESOLVER_DEADLINE_MS',
+  '12000',
+);
+
 // The maximum number of bundles to queue for unbundling before skipping
 export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
   'BUNDLE_DATA_IMPORTER_QUEUE_SIZE',

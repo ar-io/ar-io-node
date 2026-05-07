@@ -1690,21 +1690,26 @@ export class ArweaveCompositeClient
   async getData({
     id,
     region,
+    signal,
   }: {
     id: string;
     region?: Region;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
     this.failureSimulator.maybeFail();
+    signal?.throwIfAborted();
 
     try {
       const [dataResponse, dataSizeResponse] = await Promise.all([
         this.trustedNodeRequestQueue.push({
           method: 'GET',
           url: `/tx/${id}/data`,
+          signal,
         }),
         this.trustedNodeRequestQueue.push({
           method: 'GET',
           url: `/tx/${id}/data_size`,
+          signal,
         }),
       ]);
 

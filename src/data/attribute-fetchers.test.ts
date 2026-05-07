@@ -6,6 +6,7 @@
  */
 
 import { strict as assert } from 'node:assert';
+import { Readable } from 'node:stream';
 import { describe, it, beforeEach, mock } from 'node:test';
 import {
   AttributeFetchers,
@@ -204,6 +205,82 @@ describe('AttributeFetcher', () => {
       });
 
       assert.strictEqual(result, Buffer.from('abcd').toString('base64url'));
+    });
+
+    it('should short-circuit when signal is already aborted before fetch', async () => {
+      // Pre-aborted signal must throw before we call dataSource.getData and
+      // before we allocate the buffer. Critical for cancelling resolver work
+      // whose client has already disconnected by the time the fetch is dispatched.
+      const getDataMock = mock.fn(async () => ({
+        stream: Readable.from([Buffer.from('unused')]),
+      }));
+      mocks.dataSource.getData = getDataMock as any;
+      const ctrl = new AbortController();
+      ctrl.abort(new Error('client gone'));
+
+      await assert.rejects(
+        attributeFetcher.fetchDataFromParent({
+          parentId: 'testParent',
+          offset: 0,
+          size: 4,
+          signal: ctrl.signal,
+        }),
+        /client gone/,
+      );
+      assert.equal(getDataMock.mock.callCount(), 0);
+    });
+
+    it('should destroy upstream stream and reject when aborted mid-stream', async () => {
+      // Mid-stream abort: upstream emits a small prefix and then stalls
+      // (simulating a slow gateway), the resolver-level signal fires, and
+      // the stream must be destroyed so the upstream connection can
+      // release and the rejection propagates promptly.
+      let destroyed = false;
+      let destroyError: Error | undefined;
+      let pushed = false;
+      const stream = new Readable({
+        read() {
+          // Push once, then go quiet — never end, never push again. The
+          // for-await consumer in fetchDataFromParent will hang waiting
+          // for more bytes; the abort handler must call destroy() to
+          // unblock it.
+          if (!pushed) {
+            pushed = true;
+            this.push(Buffer.from('ab'));
+          }
+        },
+      });
+      const origDestroy = stream.destroy.bind(stream);
+      stream.destroy = ((err?: Error) => {
+        destroyed = true;
+        destroyError = err;
+        return origDestroy(err);
+      }) as typeof stream.destroy;
+
+      mock.method(mocks.dataSource, 'getData', async () => ({ stream }));
+
+      const ctrl = new AbortController();
+      const pending = attributeFetcher.fetchDataFromParent({
+        parentId: 'testParent',
+        offset: 0,
+        size: 1000, // larger than the 2 bytes upstream will deliver
+        signal: ctrl.signal,
+      });
+      // Suppress the unhandled-rejection warning while the assert.rejects
+      // below is being scheduled — we are intentionally aborting.
+      pending.catch(() => {});
+
+      // Let the fetch start consuming the stream, then abort.
+      await new Promise((resolve) => setImmediate(resolve));
+      ctrl.abort(new Error('deadline elapsed'));
+
+      await assert.rejects(pending);
+      assert.equal(destroyed, true, 'stream.destroy must be called');
+      assert.match(
+        destroyError?.message ?? '',
+        /deadline elapsed/,
+        'destroy must receive the abort reason',
+      );
     });
   });
 

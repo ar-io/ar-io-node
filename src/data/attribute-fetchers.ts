@@ -52,10 +52,12 @@ export abstract class AttributeFetchers {
     parentId,
     offset,
     size,
+    signal,
   }: {
     parentId: string;
     offset: number;
     size: number;
+    signal?: AbortSignal;
   }): Promise<string> {
     const log = this.log.child({ method: 'fetchDataFromParent' });
 
@@ -77,6 +79,9 @@ export abstract class AttributeFetchers {
       );
     }
 
+    // Bail before any allocation if the caller already aborted.
+    signal?.throwIfAborted();
+
     log.debug('Fetching data from parent', { parentId, offset, size });
 
     const { stream } = await this.dataSource.getData({
@@ -85,14 +90,34 @@ export abstract class AttributeFetchers {
         offset,
         size,
       },
+      signal,
     });
 
     // Pre-allocated, fixed-size buffer with offset writes. Avoids the
     // O(N²) Buffer.concat-per-chunk shape and removes the slot-8 pinned-
     // accumulator leak. If upstream emits more bytes than requested,
     // destroy the stream and throw — do not silently buffer past `size`.
+    // If the caller aborts mid-stream we tear down the upstream stream
+    // and rethrow the AbortError so callers can clean up promptly.
     const buffer = Buffer.alloc(size);
     let bytesRead = 0;
+
+    const onAbort = () => {
+      if (typeof (stream as { destroy?: () => void }).destroy === 'function') {
+        (stream as { destroy: (err?: Error) => void }).destroy(
+          signal?.reason instanceof Error
+            ? signal.reason
+            : new Error('Aborted'),
+        );
+      }
+    };
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        onAbort();
+        throw signal.reason ?? new Error('Aborted');
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
 
     try {
       for await (const chunk of stream) {
@@ -113,11 +138,21 @@ export abstract class AttributeFetchers {
       }
     } catch (error) {
       // Ensure the buffer reference can be GC'd promptly even when the
-      // for-await yields back to a still-pending Promise; rethrow.
-      if (typeof (stream as { destroy?: () => void }).destroy === 'function') {
-        (stream as { destroy: () => void }).destroy();
+      // for-await yields back to a still-pending Promise. Forward the
+      // caught error to destroy() so the abort reason is preserved when
+      // upstream is being torn down due to AbortSignal — otherwise the
+      // first destroy(reason) from the abort handler would be overwritten
+      // by a no-arg destroy() here.
+      const s = stream as {
+        destroy?: (err?: Error) => void;
+        destroyed?: boolean;
+      };
+      if (typeof s.destroy === 'function' && s.destroyed !== true) {
+        s.destroy(error as Error);
       }
       throw error;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
     }
 
     if (bytesRead !== size) {
@@ -211,11 +246,13 @@ export class SignatureFetcher
     parentId,
     signatureSize,
     signatureOffset,
+    signal,
   }: {
     id: string;
     parentId?: string;
     signatureSize?: number;
     signatureOffset?: number;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getDataItemSignature' });
     log.debug('Fetching data item signature', { id });
@@ -281,6 +318,7 @@ export class SignatureFetcher
         parentId,
         offset: signatureOffset,
         size: signatureSize,
+        signal,
       });
 
       await this.signatureStore.set(id, signature);
@@ -298,8 +336,10 @@ export class SignatureFetcher
 
   async getTransactionSignature({
     id,
+    signal,
   }: {
     id: string;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getTransactionSignature' });
     log.debug('Fetching transaction signature', { id });
@@ -327,6 +367,7 @@ export class SignatureFetcher
       const signatureFromChain = await this.chainSource.getTxField(
         id,
         'signature',
+        signal,
       );
 
       if (typeof signatureFromChain === 'string') {
@@ -384,11 +425,13 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
     parentId,
     ownerSize,
     ownerOffset,
+    signal,
   }: {
     id: string;
     parentId?: string;
     ownerSize?: number;
     ownerOffset?: number;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getDataItemOwner' });
     log.debug('Fetching data item owner', { id });
@@ -438,6 +481,7 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         parentId,
         offset: ownerOffset,
         size: ownerSize,
+        signal,
       });
 
       await this.ownerStore.set(id, owner);
@@ -454,8 +498,10 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
 
   async getTransactionOwner({
     id,
+    signal,
   }: {
     id: string;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getTransactionOwner' });
     log.debug('Fetching transaction owner', { id });
@@ -483,7 +529,11 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
 
       let ownerFromChain;
 
-      const ownerChainField = await this.chainSource.getTxField(id, 'owner');
+      const ownerChainField = await this.chainSource.getTxField(
+        id,
+        'owner',
+        signal,
+      );
 
       // Arweave supports transactions where the owner field is an empty string.
       // This is possible because the public owner key can be derived from the signature payload.
