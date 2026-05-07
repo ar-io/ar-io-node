@@ -1258,9 +1258,9 @@ export const ANS104_DATA_INDEXER_QUEUE_SIZE = +env.varOrDefault(
 // surfaced. Picked slightly above the typical client/upstream 10s timeout
 // so legitimate slow fetches still complete most of the time, while
 // zombie work doesn't accumulate indefinitely. Set to `0` to disable.
-export const GRAPHQL_RESOLVER_DEADLINE_MS = +env.varOrDefault(
+export const GRAPHQL_RESOLVER_DEADLINE_MS = env.nonNegativeIntOrDefault(
   'GRAPHQL_RESOLVER_DEADLINE_MS',
-  '12000',
+  12000,
 );
 
 // The maximum number of bundles to queue for unbundling before skipping

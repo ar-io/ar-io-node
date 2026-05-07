@@ -179,40 +179,54 @@ investigating disconnects, and are worth their own threads.
 
 ### Now (blocking the disconnect-rate signal)
 
-1. **Add `graphql_requests_total` counter** via an Apollo plugin's
-   `requestDidStart` hook. Use as the disconnect-rate denominator.
-   Tiny code change. Without this, we cannot trust the disconnect-rate
-   panel's absolute values — only its trend direction.
+1. **Done (this PR):** `graphql_requests_total` counter wired via Apollo
+   `requestDidStart`. The disconnect-rate panel can now divide
+   `graphql_resolver_cancellations_total{reason="client_disconnect"}` by
+   `graphql_requests_total` for an accurate request-level ratio. Dashboard
+   query migration is the only remaining step.
 
 ### Next (chain path investigation, design-respecting)
 
-2. **Inspect indexer `.env`** for `TRUSTED_NODE_URL`,
+1. **Inspect indexer `.env`** for `TRUSTED_NODE_URL`,
    `TRUSTED_NODE_*REQUESTS_PER_SECOND`, and any axios timeout knobs
    that affect `chainSource.getTxField`. Document current values.
-3. **Pull `arweave_*` per-method counters** from the indexer to see
+2. **Pull `arweave_*` per-method counters** from the indexer to see
    actual chain success/failure rate breakdown.
-4. **Sample a handful of `signature:transaction:chain:aborted` ids
+3. **Sample a handful of `signature:transaction:chain:aborted` ids
    and curl-time the matching `/tx/{id}/signature` endpoint** directly
    from the indexer host. This bisects: if curl returns in 200 ms,
    the bottleneck is on our side (queue/throttle/timeout); if it
    returns in 30 s or 404s, the upstream is the problem.
-5. **Decide on the right chain knob to turn**: raise rate limit, swap
+4. **Decide on the right chain knob to turn**: raise rate limit, swap
    `TRUSTED_NODE_URL` to a lower-contention upstream, or extend
-   axios timeout. The data from (2)-(4) tells us which.
+   axios timeout. The data from (2)-(3) tells us which.
 
 ### Adjacent (not blocking PE-9087)
 
-6. **Add `outcome` label to the `attribute_fetch_duration_seconds`
+1. **Extend `ChainSource.getTx` to accept `AbortSignal`** — currently the
+   `getTransactionOwner` fallback only checks `signal?.throwIfAborted()`
+   before entering the call. The in-flight upstream fetch can still
+   continue to run because of the shared `txPromiseCache`. Reasoning
+   about cache semantics under per-caller cancellation is the reason this
+   was deferred from the main PR.
+2. **Add `outcome` label to the `attribute_fetch_duration_seconds`
    histogram** so p99 of `chain:hit` (when it ever happens) and p99
    of `chain:aborted` can be charted separately. Cardinality goes
    from 24 → 96 series, still small.
-7. **Investigate residual `owner:transaction:chain:aborted` ids**
+3. **Investigate residual `owner:transaction:chain:aborted` ids**
    to understand the wallets-table miss pattern.
-8. **Consider tuning Prometheus scrape interval** from 300 s → 30–60 s
+4. **Consider tuning Prometheus scrape interval** from 300 s → 30–60 s
    on the indexer job for finer observability.
-9. **Cross-mount caches** between indexer and gw-core (`MultiFsDataStore`
+5. **Cross-mount caches** between indexer and gw-core (`MultiFsDataStore`
    sketch from earlier) — narrower payoff than initially thought
    since most failures are L1-tx not data-item, but not zero benefit.
+6. **Track `attemptSource` per await in `getDataItemSignature`,
+   `getTransactionSignature`, and `getDataItemOwner`** — the catch
+   blocks currently hardcode the metric `source` label, which can
+   misattribute earlier-stage failures (e.g., an `attributes` lookup
+   failing in `getDataItemSignature` is recorded as `parent_data`).
+   `getTransactionOwner` already does this; the pattern just needs
+   to be applied to the other three methods.
 
 ## Decisions deferred
 

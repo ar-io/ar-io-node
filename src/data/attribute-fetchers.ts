@@ -688,6 +688,14 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         resolvedSource = 'chain';
       } else {
         attemptSource = 'derived';
+        // ChainSource.getTx() does not yet accept an AbortSignal — the
+        // implementation shares an in-flight promise cache across callers,
+        // so adding per-call cancellation requires reasoning about cache
+        // semantics that's out of scope here. Bail before entering the
+        // slow path if the caller has already aborted; the in-progress
+        // upstream fetch can still complete in the background and warm
+        // the cache for the next caller.
+        signal?.throwIfAborted();
         const chainTransaction = await this.chainSource.getTx({ txId: id });
         ownerFromChain = chainTransaction.owner;
         resolvedSource = 'derived';
@@ -715,7 +723,7 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
       );
       return ownerFromChain;
     } catch (error) {
-      log.error('Error fetching transaction signature', {
+      log.error('Error fetching transaction owner', {
         id,
         error: (error as Error).message,
       });

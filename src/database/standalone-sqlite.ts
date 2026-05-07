@@ -1216,6 +1216,23 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
+  /**
+   * Fetch L1 transaction signature/owner for GraphQL resolvers.
+   *
+   * Returns `undefined` when no row exists. Otherwise returns
+   * `{ signature, owner }` where each field is a base64url string or
+   * `null` when the corresponding column is null.
+   *
+   * `owner` is sourced from the joined `wallets.public_modulus` (the
+   * underlying SQL is `selectTransactionAttributes` in
+   * src/database/sql/core/transaction-attributes.sql, projecting
+   * `w.public_modulus AS owner`) — there is no `owner_key` column.
+   * `OwnerFetcher` only falls back to `chainSource` when this returns
+   * `null`, so a missing wallet join silently forces every L1-tx owner
+   * query onto the chain path. PE-9073 follow-up fixed a gate that
+   * checked the non-existent `row.owner_key`, which had this exact
+   * effect.
+   */
   getTransactionAttributes(id: string) {
     const row = this.stmts.core.selectTransactionAttributes.get({
       id: fromB64Url(id),
@@ -1226,12 +1243,6 @@ export class StandaloneSqliteDatabaseWorker {
     }
     return {
       signature: row.signature ? toB64Url(row.signature) : null,
-      // The SQL projects `w.public_modulus AS owner` (see
-      // src/database/sql/core/transaction-attributes.sql); there is no
-      // `owner_key` column. Prior to this fix the gate was `row.owner_key`
-      // which is always undefined → `owner` was always null even when the
-      // wallets table had public_modulus, forcing OwnerFetcher to fall
-      // through to chainSource for every L1-tx owner query.
       owner: row.owner ? toB64Url(row.owner) : null,
     };
   }
