@@ -10,7 +10,7 @@ import { describe, it, beforeEach } from 'node:test';
 import type { Request, Response } from 'express';
 
 import * as metrics from '../../metrics.js';
-import { buildResolverSignal } from './resolver-signal.js';
+import { buildResolverSignal, ResolverSignalState } from './resolver-signal.js';
 
 /**
  * Minimal req/res stand-ins. We only need EventEmitter for `once`/`emit`
@@ -23,12 +23,16 @@ class FakeReq extends EventEmitter {
 class FakeRes extends EventEmitter {
   writableEnded = false;
   finished = false;
+  headersSent = false;
+  statusCode = 200;
   finish() {
     this.writableEnded = true;
     this.finished = true;
     this.emit('finish');
   }
 }
+
+const newCtx = (): ResolverSignalState => ({ responseSent: false });
 
 const cancelCount = async (
   reason: 'client_disconnect' | 'deadline_exceeded',
@@ -43,77 +47,88 @@ describe('buildResolverSignal', () => {
     metrics.graphqlResolverCancellationsCounter.reset();
   });
 
-  it('does NOT count when close fires AFTER res.writableEnded is set (normal completion)', async () => {
+  it('does NOT count when ctx.responseSent is set (Apollo plugin path)', async () => {
+    // Authoritative success signal: the responseSentPlugin sets
+    // ctx.responseSent = true during willSendResponse, BEFORE the
+    // socket is written to. Close events that fire afterward must
+    // NOT be treated as aborts.
     const req = new FakeReq() as unknown as Request;
     const res = new FakeRes() as unknown as Response;
+    const ctx = newCtx();
     const before = await cancelCount('client_disconnect');
 
-    const signal = buildResolverSignal(req, res);
+    const signal = buildResolverSignal(req, res, ctx);
 
-    // Normal completion order: app calls res.end() (sets writableEnded
-    // synchronously); 'finish' fires async; then 'close' fires.
+    // Apollo plugin sets the flag, then Apollo writes the response,
+    // then close eventually fires.
+    ctx.responseSent = true;
+    (res as unknown as FakeRes).emit('close');
+    (req as unknown as FakeReq).emit('close');
+
+    assert.equal(signal.aborted, false);
+    assert.equal(await cancelCount('client_disconnect'), before);
+  });
+
+  it('does NOT count when writableEnded is true even if ctx.responseSent missed (defense-in-depth)', async () => {
+    const req = new FakeReq() as unknown as Request;
+    const res = new FakeRes() as unknown as Response;
+    const ctx = newCtx();
+    const before = await cancelCount('client_disconnect');
+
+    const signal = buildResolverSignal(req, res, ctx);
+
+    // Plugin didn't fire (hypothetical), but Node-level writableEnded
+    // is set as fallback.
     (res as unknown as FakeRes).writableEnded = true;
-    (res as unknown as FakeRes).emit('finish');
     (res as unknown as FakeRes).emit('close');
-    (req as unknown as FakeReq).emit('close');
 
     assert.equal(signal.aborted, false);
     assert.equal(await cancelCount('client_disconnect'), before);
   });
 
-  it('does NOT count when close fires while writableEnded is true even if finish never fired', async () => {
-    // Simulates the race where 'close' beats 'finish'. As long as the
-    // app called res.end() before close, writableEnded is true and the
-    // close should NOT be treated as an abort.
+  it('counts a cancellation when res close fires before any "response sent" signal', async () => {
     const req = new FakeReq() as unknown as Request;
     const res = new FakeRes() as unknown as Response;
+    const ctx = newCtx();
     const before = await cancelCount('client_disconnect');
 
-    const signal = buildResolverSignal(req, res);
+    const signal = buildResolverSignal(req, res, ctx);
 
-    (res as unknown as FakeRes).writableEnded = true; // res.end() was called
-    (res as unknown as FakeRes).emit('close'); // close fires before 'finish'
+    // Client disconnect: state.responseSent stays false, writableEnded
+    // stays false, res 'close' fires.
+    (res as unknown as FakeRes).emit('close');
+
+    assert.equal(signal.aborted, true);
+    assert.equal(await cancelCount('client_disconnect'), before + 1);
+  });
+
+  it('IGNORES req close — fires for normal completions in apollo-server-express', async () => {
+    // Regression coverage for the production bug where listening on
+    // `req.on('close')` caused every request to be classified as an
+    // abort, because Node fires `req.on('close')` at request-parser
+    // -end time — well before Apollo gets to send the response.
+    const req = new FakeReq() as unknown as Request;
+    const res = new FakeRes() as unknown as Response;
+    const ctx = newCtx();
+    const before = await cancelCount('client_disconnect');
+
+    const signal = buildResolverSignal(req, res, ctx);
+
+    // Emitting close on req must NOT trigger the abort path.
+    (req as unknown as FakeReq).emit('close');
 
     assert.equal(signal.aborted, false);
     assert.equal(await cancelCount('client_disconnect'), before);
-  });
-
-  it('counts a cancellation when close fires before the response is sent', async () => {
-    const req = new FakeReq() as unknown as Request;
-    const res = new FakeRes() as unknown as Response;
-    const before = await cancelCount('client_disconnect');
-
-    const signal = buildResolverSignal(req, res);
-
-    // Client disconnect: writableEnded never gets set; close fires.
-    (req as unknown as FakeReq).emit('close');
-
-    assert.equal(signal.aborted, true);
-    assert.equal(await cancelCount('client_disconnect'), before + 1);
-  });
-
-  it('counts at most one cancellation even when both res-close and req-close fire', async () => {
-    const req = new FakeReq() as unknown as Request;
-    const res = new FakeRes() as unknown as Response;
-    const before = await cancelCount('client_disconnect');
-
-    const signal = buildResolverSignal(req, res);
-
-    // Both close events fire (race) — only one cancellation should count.
-    (res as unknown as FakeRes).emit('close');
-    (req as unknown as FakeReq).emit('close');
-
-    assert.equal(signal.aborted, true);
-    assert.equal(await cancelCount('client_disconnect'), before + 1);
   });
 
   it('counts immediately when req is already aborted at call time and response not sent', async () => {
     const req = new FakeReq() as unknown as Request;
     (req as unknown as FakeReq).aborted = true;
     const res = new FakeRes() as unknown as Response;
+    const ctx = newCtx();
     const before = await cancelCount('client_disconnect');
 
-    const signal = buildResolverSignal(req, res);
+    const signal = buildResolverSignal(req, res, ctx);
 
     assert.equal(signal.aborted, true);
     assert.equal(await cancelCount('client_disconnect'), before + 1);
@@ -123,10 +138,10 @@ describe('buildResolverSignal', () => {
     const req = new FakeReq() as unknown as Request;
     (req as unknown as FakeReq).aborted = true;
     const res = new FakeRes() as unknown as Response;
-    (res as unknown as FakeRes).writableEnded = true;
+    const ctx: ResolverSignalState = { responseSent: true };
     const before = await cancelCount('client_disconnect');
 
-    buildResolverSignal(req, res);
+    buildResolverSignal(req, res, ctx);
 
     assert.equal(await cancelCount('client_disconnect'), before);
   });

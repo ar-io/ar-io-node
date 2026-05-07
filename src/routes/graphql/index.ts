@@ -20,7 +20,7 @@ import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
 import * as metrics from '../../metrics.js';
 import { GqlQueryable, GqlWarning } from '../../types.js';
 import { resolvers } from './resolvers.js';
-import { buildResolverSignal } from './resolver-signal.js';
+import { buildResolverSignal, ResolverSignalState } from './resolver-signal.js';
 
 const typeDefsUrl = new URL('./schema/types.graphql', import.meta.url);
 const typeDefs = gql(readFileSync(typeDefsUrl, 'utf8'));
@@ -70,6 +70,34 @@ const requestCountPlugin = {
   },
 };
 
+// Marks the per-request state holder as `responseSent = true` right
+// before Apollo writes to the socket. `buildResolverSignal` captured
+// the same `state` object in its closure (see context factory below),
+// so the close listener it set up can read `state.responseSent`.
+//
+// We mutate `context.__state.responseSent` rather than
+// `context.responseSent` because apollo-server-core shallow-clones
+// the user's context before invoking plugins
+// (`node_modules/apollo-server-core/dist/runHttpQuery.js:166`).
+// Root-level mutations are isolated to the clone and never reach the
+// signal builder. Nested object references are preserved by the
+// shallow clone, so writing through `__state` reaches the original.
+const responseSentPlugin = {
+  async requestDidStart() {
+    return {
+      async willSendResponse({
+        context,
+      }: {
+        context: { __state?: ResolverSignalState };
+      }) {
+        if (context.__state !== undefined) {
+          context.__state.responseSent = true;
+        }
+      },
+    };
+  },
+};
+
 const apolloServer = (
   db: GqlQueryable,
   opts: ApolloServerExpressConfig = {},
@@ -84,13 +112,21 @@ const apolloServer = (
       ApolloServerPluginLandingPageGraphQLPlayground(),
       warningsPlugin,
       requestCountPlugin,
+      responseSentPlugin,
     ],
     context: ({ req, res }: { req: Request; res: Response }) => {
+      // Use a NESTED `state` holder so apollo-server-core's shallow
+      // clone of the context (it does this for plugin invocation;
+      // see runHttpQuery.js:166) preserves the reference. The plugin
+      // writes through `context.__state.responseSent`; this signal
+      // builder closes over the same `state` object directly.
+      const state: ResolverSignalState = { responseSent: false };
       return {
         db,
         txMetadataResolver,
         warnings: [] as GqlWarning[],
-        signal: buildResolverSignal(req, res),
+        signal: buildResolverSignal(req, res, state),
+        __state: state,
       };
     },
     ...opts,
