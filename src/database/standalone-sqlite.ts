@@ -1226,7 +1226,13 @@ export class StandaloneSqliteDatabaseWorker {
     }
     return {
       signature: row.signature ? toB64Url(row.signature) : null,
-      owner: row.owner_key ? toB64Url(row.owner) : null,
+      // The SQL projects `w.public_modulus AS owner` (see
+      // src/database/sql/core/transaction-attributes.sql); there is no
+      // `owner_key` column. Prior to this fix the gate was `row.owner_key`
+      // which is always undefined → `owner` was always null even when the
+      // wallets table had public_modulus, forcing OwnerFetcher to fall
+      // through to chainSource for every L1-tx owner query.
+      owner: row.owner ? toB64Url(row.owner) : null,
     };
   }
 
