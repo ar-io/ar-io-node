@@ -343,6 +343,91 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('getTransactionAttributes', () => {
+    // Regression coverage for a defect introduced in commit 0bcccf6e where
+    // the worker checked `row.owner_key` (a column the SQL never returns)
+    // instead of `row.owner`. The bug always reported owner=null even when
+    // wallets.public_modulus was populated, forcing OwnerFetcher to fall
+    // through to chainSource for every L1-tx owner query. No prior test
+    // exercised the SQL→object boundary; AttributeFetcher tests mocked the
+    // dataIndex and the resolver tests used fixtures with inline ownerKey,
+    // so the typo went undetected. Keep these tests focused on that seam.
+    const id = '_H6KgmI_ZfSdSlf9r2xzDh_ebJnvQtTYLUBQlnRjIdM';
+    const ownerAddress = Buffer.alloc(32, 0xab);
+    const publicModulus = Buffer.alloc(512, 0xcd);
+    const signature = Buffer.alloc(512, 0xef);
+
+    const insertTx = (sigValue: Buffer | null) => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, signature, quantity, reward, tag_count,
+             offset, data_size)
+           VALUES (@id, 1, 0, 2, @last_tx,
+             @owner_address, @signature, '0', '0', 0,
+             0, 0)`,
+        )
+        .run({
+          id: fromB64Url(id),
+          last_tx: Buffer.alloc(32),
+          owner_address: ownerAddress,
+          signature: sigValue,
+        });
+    };
+
+    const insertWallet = () => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO wallets (address, public_modulus)
+           VALUES (@address, @public_modulus)`,
+        )
+        .run({ address: ownerAddress, public_modulus: publicModulus });
+    };
+
+    beforeEach(() => {
+      coreDb.prepare(`DELETE FROM stable_transactions WHERE id = @id`).run({
+        id: fromB64Url(id),
+      });
+      coreDb
+        .prepare(`DELETE FROM wallets WHERE address = @address`)
+        .run({ address: ownerAddress });
+    });
+
+    it('returns the wallet public_modulus as owner when joined', () => {
+      insertTx(signature);
+      insertWallet();
+
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs?.owner, toB64Url(publicModulus));
+      assert.equal(attrs?.signature, toB64Url(signature));
+    });
+
+    it('returns owner=null when wallets.public_modulus is missing', () => {
+      // No wallet row inserted — the LEFT JOIN produces a row with
+      // owner=NULL even though the tx exists.
+      insertTx(signature);
+
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs?.owner, null);
+      assert.equal(attrs?.signature, toB64Url(signature));
+    });
+
+    it('returns signature=null when stable_transactions.signature is NULL', () => {
+      insertTx(null);
+      insertWallet();
+
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs?.signature, null);
+      assert.equal(attrs?.owner, toB64Url(publicModulus));
+    });
+
+    it('returns undefined when the transaction is unknown', () => {
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs, undefined);
+    });
+  });
+
   describe('saveBlockAndTxs', () => {
     it('should insert the block in the new_blocks table', async () => {
       const height = 982575;

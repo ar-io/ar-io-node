@@ -110,11 +110,13 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
     // Check if request should be blocked
     if (requestAttributes) {
@@ -151,6 +153,7 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
       requestAttributes,
       region,
       parentSpan,
+      signal,
     });
   }
 }

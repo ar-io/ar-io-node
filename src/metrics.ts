@@ -123,6 +123,12 @@ export const dataItemsIndexedCounter = new promClient.Counter({
   labelNames: ['parent_type'],
 });
 
+export const dataItemsDroppedCounter = new promClient.Counter({
+  name: 'data_items_dropped_total',
+  help: 'Count of data items dropped because the indexer queue was at its cap',
+  labelNames: ['queue_name'],
+});
+
 export const dataItemDataIndexedCounter = new promClient.Counter({
   name: 'data_item_data_indexed_total',
   help: 'Count of data item data indexed',
@@ -134,6 +140,74 @@ export const dataItemLastIndexedTimestampSeconds = new promClient.Gauge({
   help: 'Timestamp of the last indexed data item',
 });
 dataItemLastIndexedTimestampSeconds.setToCurrentTime();
+
+//
+// GraphQL resolver metrics
+//
+
+export const graphqlRequestsCounter = new promClient.Counter({
+  name: 'graphql_requests_total',
+  help:
+    'Count of GraphQL requests received by the Apollo server. ' +
+    'Incremented once per request at `requestDidStart`, so it covers every ' +
+    'shape that hits the GraphQL endpoint — Query, Mutation, Subscription, ' +
+    'introspection, and even malformed/validation-failing requests. The ' +
+    'right denominator for the disconnect rate ' +
+    '(`graphql_resolver_cancellations_total / graphql_requests_total`) ' +
+    'because every cancelled request is, by definition, a request first.',
+});
+
+export const graphqlQueriesCounter = new promClient.Counter({
+  name: 'graphql_queries_total',
+  help:
+    'Count of top-level Query resolver invocations, labeled by resolver name. ' +
+    'Increments per resolver hit, so a request with multiple top-level Query ' +
+    'fields increments multiple times. Captures resolver-level fan-out ' +
+    'volume, NOT request volume — use `graphql_requests_total` for the ' +
+    'denominator of any per-request rate (e.g. disconnect rate).',
+  labelNames: ['resolver'],
+});
+
+export const graphqlRequestDurationHistogram = new promClient.Histogram({
+  name: 'graphql_request_duration_seconds',
+  help: 'Duration of top-level GraphQL resolver execution',
+  labelNames: ['resolver'],
+  buckets: [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+});
+
+export const graphqlResolverCancellationsCounter = new promClient.Counter({
+  name: 'graphql_resolver_cancellations_total',
+  help:
+    'Count of GraphQL resolver signal aborts. `client_disconnect` fires when ' +
+    'the express request socket closes; `deadline_exceeded` fires when the ' +
+    'server-side `GRAPHQL_RESOLVER_DEADLINE_MS` timer elapses first.',
+  labelNames: ['reason'],
+});
+
+//
+// Attribute fetcher metrics (signature/owner pipeline)
+//
+
+export const attributeFetchCounter = new promClient.Counter({
+  name: 'attribute_fetch_total',
+  help:
+    'Count of owner/signature attribute fetch attempts by source and outcome. ' +
+    "`source` records where the value came from (or where we gave up): " +
+    "`store` (signatureStore/ownerStore KV), `attributes` (inline value in " +
+    'data_item/transaction attributes), `parent_data` (bytes via ' +
+    "fetchDataFromParent — data items only), `chain` (chainSource — " +
+    "transactions only), `derived` (secp256k1 owner-from-tx recovery), " +
+    "`incomplete_root` (PE-9073 guard fired). `outcome` is one of `hit`, " +
+    "`aborted`, `error`, `not_found`.",
+  labelNames: ['kind', 'subject', 'source', 'outcome'],
+});
+
+export const attributeFetchDurationHistogram = new promClient.Histogram({
+  name: 'attribute_fetch_duration_seconds',
+  help: 'Duration of owner/signature attribute fetch operations',
+  labelNames: ['kind', 'subject', 'source'],
+  buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+});
 
 //
 // Arweave client metrics

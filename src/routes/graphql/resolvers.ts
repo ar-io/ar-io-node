@@ -12,10 +12,44 @@ import { isSelectionAwareGqlQueryable } from '../../database/gateways-gql-querya
 import { winstonToAr } from '../../lib/encoding.js';
 import { Semaphore } from '../../lib/semaphore.js';
 import log from '../../log.js';
+import * as metrics from '../../metrics.js';
 import { ownerFetcher, signatureFetcher } from '../../system.js';
 import { GqlTransaction, GqlWarning } from '../../types.js';
 import { isEmptyString } from '../../lib/string.js';
 import { resolveTransactionQuery } from './transaction-resolver.js';
+
+/**
+ * Wrap a top-level Query resolver to record `graphql_queries_total` and the
+ * `graphql_request_duration_seconds` histogram. Centralized here so each
+ * resolver entry stays focused on its own logic and can't accidentally drop
+ * the metric on an exception path.
+ */
+function withQueryMetrics<TArgs, TCtx, TResult>(
+  resolver: string,
+  fn: (
+    parent: unknown,
+    args: TArgs,
+    ctx: TCtx,
+    info: GraphQLResolveInfo,
+  ) => Promise<TResult>,
+) {
+  return async (
+    parent: unknown,
+    args: TArgs,
+    ctx: TCtx,
+    info: GraphQLResolveInfo,
+  ): Promise<TResult> => {
+    metrics.graphqlQueriesCounter.inc({ resolver });
+    const stop = metrics.graphqlRequestDurationHistogram.startTimer({
+      resolver,
+    });
+    try {
+      return await fn(parent, args, ctx, info);
+    } finally {
+      stop();
+    }
+  };
+}
 
 const onDemandSemaphore = new Semaphore(
   config.GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT,
@@ -104,6 +138,7 @@ export function resolveTxFee(tx: GqlTransaction) {
 export type OwnerParent = {
   tx: GqlTransaction;
   keyPromise?: Promise<string | undefined>;
+  signal?: AbortSignal;
 };
 
 export function resolveTxOwnerAddress(parent: OwnerParent) {
@@ -115,13 +150,14 @@ export function resolveTxOwnerKey(parent: OwnerParent) {
   // owner (e.g. owner { a: key b: key }) share a single fetch — matching the
   // pre-split resolver's single-fetch-per-parent semantics.
   if (parent.keyPromise === undefined) {
-    parent.keyPromise = fetchTxOwnerKey(parent.tx);
+    parent.keyPromise = fetchTxOwnerKey(parent.tx, parent.signal);
   }
   return parent.keyPromise;
 }
 
 async function fetchTxOwnerKey(
   tx: GqlTransaction,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   if (tx.ownerKey !== null) {
     return tx.ownerKey;
@@ -134,12 +170,16 @@ async function fetchTxOwnerKey(
         parentId: tx.parentId,
         ownerSize: parseInt(tx.ownerSize),
         ownerOffset: parseInt(tx.ownerOffset),
+        signal,
       });
     }
     return NOT_FOUND;
   }
 
-  const ownerKey = await ownerFetcher.getTransactionOwner({ id: tx.id });
+  const ownerKey = await ownerFetcher.getTransactionOwner({
+    id: tx.id,
+    signal,
+  });
   return ownerKey !== undefined ? ownerKey : NOT_FOUND;
 }
 
@@ -161,7 +201,11 @@ export function resolveTxBundledIn(tx: GqlTransaction) {
   };
 }
 
-export async function resolveTxSignature(tx: GqlTransaction) {
+export async function resolveTxSignature(
+  tx: GqlTransaction,
+  _args: unknown,
+  ctx: { signal?: AbortSignal },
+) {
   if (tx.signature !== null) {
     return tx.signature;
   }
@@ -173,6 +217,7 @@ export async function resolveTxSignature(tx: GqlTransaction) {
         parentId: tx.parentId,
         signatureSize: parseInt(tx.signatureSize),
         signatureOffset: parseInt(tx.signatureOffset),
+        signal: ctx.signal,
       });
 
       return signature ?? NOT_FOUND;
@@ -183,6 +228,7 @@ export async function resolveTxSignature(tx: GqlTransaction) {
 
   const signature = await signatureFetcher.getTransactionSignature({
     id: tx.id,
+    signal: ctx.signal,
   });
 
   return signature ?? NOT_FOUND;
@@ -190,78 +236,91 @@ export async function resolveTxSignature(tx: GqlTransaction) {
 
 export const resolvers: IResolvers = {
   Query: {
-    transaction: async (_, queryParams, ctx, info) => {
-      const warnings: GqlWarning[] = [];
-      const result = await resolveTransactionQuery(queryParams, {
-        db: ctx.db,
-        txMetadataResolver: ctx.txMetadataResolver,
-        onDemandResolutionEnabled: config.GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED,
-        onDemandResolutionTimeoutMs:
-          config.GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS,
-        onDemandSemaphore,
-        log,
-        nodeSelection: extractTransactionNodeSelection(info),
-        warnings,
-      });
-      collectWarnings(ctx, warnings);
-      return result;
-    },
-    transactions: async (_, queryParams, ctx, info) => {
-      log.info('GraphQL transactions query', {
-        resolver: 'transactions',
-        queryParams,
-      });
+    transaction: withQueryMetrics(
+      'transaction',
+      async (_, queryParams: any, ctx: any, info) => {
+        const warnings: GqlWarning[] = [];
+        const result = await resolveTransactionQuery(queryParams, {
+          db: ctx.db,
+          txMetadataResolver: ctx.txMetadataResolver,
+          onDemandResolutionEnabled:
+            config.GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED,
+          onDemandResolutionTimeoutMs:
+            config.GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS,
+          onDemandSemaphore,
+          log,
+          nodeSelection: extractTransactionNodeSelection(info),
+          warnings,
+        });
+        collectWarnings(ctx, warnings);
+        return result;
+      },
+    ),
+    transactions: withQueryMetrics(
+      'transactions',
+      async (_, queryParams: any, ctx: any, info) => {
+        log.info('GraphQL transactions query', {
+          resolver: 'transactions',
+          queryParams,
+        });
 
-      const args = {
-        pageSize: getPageSize(queryParams),
-        sortOrder: queryParams.sort,
-        cursor: isEmptyString(queryParams.after)
-          ? undefined
-          : queryParams.after,
-        ids: queryParams.ids,
-        recipients: queryParams.recipients,
-        owners: queryParams.owners,
-        minHeight: queryParams.block?.min,
-        maxHeight: queryParams.block?.max,
-        bundledIn:
-          queryParams.bundledIn !== undefined
-            ? queryParams.bundledIn
-            : queryParams.parent,
-        tags: queryParams.tags || [],
-      };
+        const args = {
+          pageSize: getPageSize(queryParams),
+          sortOrder: queryParams.sort,
+          cursor: isEmptyString(queryParams.after)
+            ? undefined
+            : queryParams.after,
+          ids: queryParams.ids,
+          recipients: queryParams.recipients,
+          owners: queryParams.owners,
+          minHeight: queryParams.block?.min,
+          maxHeight: queryParams.block?.max,
+          bundledIn:
+            queryParams.bundledIn !== undefined
+              ? queryParams.bundledIn
+              : queryParams.parent,
+          tags: queryParams.tags || [],
+        };
 
-      const result = isSelectionAwareGqlQueryable(ctx.db)
-        ? await ctx.db.getGqlTransactions({
-            ...args,
-            nodeSelection: extractTransactionsNodeSelection(info),
-          })
-        : await ctx.db.getGqlTransactions(args);
-      collectWarnings(ctx, result.warnings);
-      return result;
-    },
-    block: async (_, queryParams, { db }) => {
-      log.info('GraphQL block query', { resolver: 'block', queryParams });
+        const result = isSelectionAwareGqlQueryable(ctx.db)
+          ? await ctx.db.getGqlTransactions({
+              ...args,
+              nodeSelection: extractTransactionsNodeSelection(info),
+            })
+          : await ctx.db.getGqlTransactions(args);
+        collectWarnings(ctx, result.warnings);
+        return result;
+      },
+    ),
+    block: withQueryMetrics(
+      'block',
+      async (_, queryParams: any, { db }: any) => {
+        log.info('GraphQL block query', { resolver: 'block', queryParams });
 
-      return db.getGqlBlock({
-        id: queryParams.id,
-      });
-    },
-    blocks: async (_, queryParams, ctx) => {
-      log.info('GraphQL blocks query', { resolver: 'blocks', queryParams });
+        return db.getGqlBlock({
+          id: queryParams.id,
+        });
+      },
+    ),
+    blocks: withQueryMetrics(
+      'blocks',
+      async (_, queryParams: any, ctx: any) => {
+        log.info('GraphQL blocks query', { resolver: 'blocks', queryParams });
 
-      const result = await ctx.db.getGqlBlocks({
-        pageSize: getPageSize(queryParams),
-        sortOrder: queryParams.sort,
-        cursor: isEmptyString(queryParams.after)
-          ? undefined
-          : queryParams.after,
-        ids: queryParams.ids,
-        minHeight: queryParams.height?.min,
-        maxHeight: queryParams.height?.max,
-      });
-      collectWarnings(ctx, result.warnings);
-      return result;
-    },
+        const result = await ctx.db.getGqlBlocks({
+          pageSize: getPageSize(queryParams),
+          sortOrder: queryParams.sort,
+          cursor: isEmptyString(queryParams.after)
+            ? undefined
+            : queryParams.after,
+          ids: queryParams.ids,
+          minHeight: queryParams.height?.min,
+          maxHeight: queryParams.height?.max,
+        });
+        collectWarnings(ctx, result.warnings);
+        return result;
+      },
+    ),
   },
   Transaction: {
     block: (parent: GqlTransaction) => {
@@ -278,7 +337,11 @@ export const resolvers: IResolvers = {
     data: resolveTxData,
     quantity: resolveTxQuantity,
     fee: resolveTxFee,
-    owner: (tx: GqlTransaction): OwnerParent => ({ tx }),
+    owner: (
+      tx: GqlTransaction,
+      _args: unknown,
+      ctx: { signal?: AbortSignal },
+    ): OwnerParent => ({ tx, signal: ctx.signal }),
     parent: resolveTxParent,
     bundledIn: resolveTxBundledIn,
     signature: resolveTxSignature,
