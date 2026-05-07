@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs';
 
 import * as config from '../../config.js';
 import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
+import * as metrics from '../../metrics.js';
 import { GqlQueryable, GqlWarning } from '../../types.js';
 import { resolvers } from './resolvers.js';
 
@@ -30,7 +31,19 @@ import { resolvers } from './resolvers.js';
 function buildResolverSignal(req: Request): AbortSignal {
   const controller = new AbortController();
 
-  const onClose = () => controller.abort(new Error('Client disconnected'));
+  // Latch reason on the first abort cause so the counter increment is
+  // unambiguous even if both the socket close and the deadline timer fire.
+  let abortReason: 'client_disconnect' | 'deadline_exceeded' | undefined;
+  const recordAbort = (reason: 'client_disconnect' | 'deadline_exceeded') => {
+    if (abortReason !== undefined) return;
+    abortReason = reason;
+    metrics.graphqlResolverCancellationsCounter.inc({ reason });
+  };
+
+  const onClose = () => {
+    recordAbort('client_disconnect');
+    controller.abort(new Error('Client disconnected'));
+  };
   if (req.aborted === true || req.destroyed === true) {
     onClose();
   } else {
@@ -39,15 +52,14 @@ function buildResolverSignal(req: Request): AbortSignal {
   }
 
   if (config.GRAPHQL_RESOLVER_DEADLINE_MS > 0) {
-    const timer = setTimeout(
-      () =>
-        controller.abort(
-          new Error(
-            `GraphQL resolver deadline (${config.GRAPHQL_RESOLVER_DEADLINE_MS}ms) exceeded`,
-          ),
+    const timer = setTimeout(() => {
+      recordAbort('deadline_exceeded');
+      controller.abort(
+        new Error(
+          `GraphQL resolver deadline (${config.GRAPHQL_RESOLVER_DEADLINE_MS}ms) exceeded`,
         ),
-      config.GRAPHQL_RESOLVER_DEADLINE_MS,
-    );
+      );
+    }, config.GRAPHQL_RESOLVER_DEADLINE_MS);
     // Don't keep the event loop alive past response.
     if (typeof timer.unref === 'function') {
       timer.unref();
