@@ -1200,14 +1200,22 @@ export interface SignatureSource {
     parentId,
     signatureSize,
     signatureOffset,
+    signal,
   }: {
     id: string;
     parentId?: string;
     signatureSize?: number;
     signatureOffset?: number;
+    signal?: AbortSignal;
   }): Promise<string | undefined>;
 
-  getTransactionSignature({ id }: { id: string }): Promise<string | undefined>;
+  getTransactionSignature({
+    id,
+    signal,
+  }: {
+    id: string;
+    signal?: AbortSignal;
+  }): Promise<string | undefined>;
 }
 
 export interface OwnerSource {
@@ -1216,14 +1224,22 @@ export interface OwnerSource {
     parentId,
     ownerSize,
     ownerOffset,
+    signal,
   }: {
     id: string;
     parentId?: string;
     ownerSize?: number;
     ownerOffset?: number;
+    signal?: AbortSignal;
   }): Promise<string | undefined>;
 
-  getTransactionOwner({ id }: { id: string }): Promise<string | undefined>;
+  getTransactionOwner({
+    id,
+    signal,
+  }: {
+    id: string;
+    signal?: AbortSignal;
+  }): Promise<string | undefined>;
 }
 
 export interface WithPeers<T> {

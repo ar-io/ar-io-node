@@ -254,6 +254,8 @@ describe('resolveTxSignature', () => {
   it('should return signature', async () => {
     const signature = await resolveTxSignature(
       GQL_TX as unknown as GqlTransaction,
+      {},
+      {},
     );
     assert.equal(
       signature,

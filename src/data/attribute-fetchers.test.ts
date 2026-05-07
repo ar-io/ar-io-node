@@ -6,6 +6,7 @@
  */
 
 import { strict as assert } from 'node:assert';
+import { Readable } from 'node:stream';
 import { describe, it, beforeEach, mock } from 'node:test';
 import {
   AttributeFetchers,
@@ -21,6 +22,7 @@ import {
   SignatureStore,
   OwnerStore,
 } from '../types.js';
+import * as metrics from '../metrics.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'AttributeFetcher' });
@@ -204,6 +206,82 @@ describe('AttributeFetcher', () => {
       });
 
       assert.strictEqual(result, Buffer.from('abcd').toString('base64url'));
+    });
+
+    it('should short-circuit when signal is already aborted before fetch', async () => {
+      // Pre-aborted signal must throw before we call dataSource.getData and
+      // before we allocate the buffer. Critical for cancelling resolver work
+      // whose client has already disconnected by the time the fetch is dispatched.
+      const getDataMock = mock.fn(async () => ({
+        stream: Readable.from([Buffer.from('unused')]),
+      }));
+      mocks.dataSource.getData = getDataMock as any;
+      const ctrl = new AbortController();
+      ctrl.abort(new Error('client gone'));
+
+      await assert.rejects(
+        attributeFetcher.fetchDataFromParent({
+          parentId: 'testParent',
+          offset: 0,
+          size: 4,
+          signal: ctrl.signal,
+        }),
+        /client gone/,
+      );
+      assert.equal(getDataMock.mock.callCount(), 0);
+    });
+
+    it('should destroy upstream stream and reject when aborted mid-stream', async () => {
+      // Mid-stream abort: upstream emits a small prefix and then stalls
+      // (simulating a slow gateway), the resolver-level signal fires, and
+      // the stream must be destroyed so the upstream connection can
+      // release and the rejection propagates promptly.
+      let destroyed = false;
+      let destroyError: Error | undefined;
+      let pushed = false;
+      const stream = new Readable({
+        read() {
+          // Push once, then go quiet — never end, never push again. The
+          // for-await consumer in fetchDataFromParent will hang waiting
+          // for more bytes; the abort handler must call destroy() to
+          // unblock it.
+          if (!pushed) {
+            pushed = true;
+            this.push(Buffer.from('ab'));
+          }
+        },
+      });
+      const origDestroy = stream.destroy.bind(stream);
+      stream.destroy = ((err?: Error) => {
+        destroyed = true;
+        destroyError = err;
+        return origDestroy(err);
+      }) as typeof stream.destroy;
+
+      mock.method(mocks.dataSource, 'getData', async () => ({ stream }));
+
+      const ctrl = new AbortController();
+      const pending = attributeFetcher.fetchDataFromParent({
+        parentId: 'testParent',
+        offset: 0,
+        size: 1000, // larger than the 2 bytes upstream will deliver
+        signal: ctrl.signal,
+      });
+      // Suppress the unhandled-rejection warning while the assert.rejects
+      // below is being scheduled — we are intentionally aborting.
+      pending.catch(() => {});
+
+      // Let the fetch start consuming the stream, then abort.
+      await new Promise((resolve) => setImmediate(resolve));
+      ctrl.abort(new Error('deadline elapsed'));
+
+      await assert.rejects(pending);
+      assert.equal(destroyed, true, 'stream.destroy must be called');
+      assert.match(
+        destroyError?.message ?? '',
+        /deadline elapsed/,
+        'destroy must receive the abort reason',
+      );
     });
   });
 
@@ -952,5 +1030,171 @@ describe('OwnerFetcher', () => {
       assert.strictEqual(result, undefined);
       assert.strictEqual((mocks.ownerStore.set as any).mock.calls.length, 0);
     });
+  });
+});
+
+describe('attribute_fetch_total metric labels', () => {
+  // Smaller scope than the full behavior matrix above — these tests exist
+  // to lock in the (kind, subject, source, outcome) labels emitted from each
+  // resolution path so dashboards built on top of this metric stay stable
+  // across refactors.
+  let mocks: Mocks;
+  let signatureFetcher: SignatureFetcher;
+  let ownerFetcher: OwnerFetcher;
+
+  const counterValue = async (labels: {
+    kind: string;
+    subject: string;
+    source: string;
+    outcome: string;
+  }): Promise<number> => {
+    const out = await metrics.attributeFetchCounter.get();
+    const sample = out.values.find((v) =>
+      Object.entries(labels).every(([k, val]) => v.labels[k] === val),
+    );
+    return sample?.value ?? 0;
+  };
+
+  beforeEach(() => {
+    metrics.attributeFetchCounter.reset();
+    mocks = createMocks();
+    signatureFetcher = new SignatureFetcher({
+      log,
+      dataSource: mocks.dataSource,
+      dataIndex: mocks.dataIndex,
+      chainSource: mocks.chainSource,
+      dataItemAttributesStore: mocks.dataItemAttributesStore,
+      transactionAttributesStore: mocks.transactionAttributesStore,
+      signatureStore: mocks.signatureStore,
+    });
+    ownerFetcher = new OwnerFetcher({
+      log,
+      dataSource: mocks.dataSource,
+      dataIndex: mocks.dataIndex,
+      chainSource: mocks.chainSource,
+      dataItemAttributesStore: mocks.dataItemAttributesStore,
+      transactionAttributesStore: mocks.transactionAttributesStore,
+      ownerStore: mocks.ownerStore,
+    });
+  });
+
+  it('signature/data_item/store/hit fires when signatureStore returns a value', async () => {
+    mock.method(mocks.signatureStore, 'get', async () => 'cached-sig');
+    await signatureFetcher.getDataItemSignature({ id: 'id' });
+    assert.equal(
+      await counterValue({
+        kind: 'signature',
+        subject: 'data_item',
+        source: 'store',
+        outcome: 'hit',
+      }),
+      1,
+    );
+  });
+
+  it('signature/data_item/incomplete_root/not_found fires on PE-9073 guard', async () => {
+    mock.method(mocks.signatureStore, 'get', async () => undefined);
+    mock.method(mocks.dataItemAttributesStore, 'get', async () => undefined);
+    mock.method(mocks.dataIndex, 'getDataItemAttributes', async () => ({
+      parentId: 'parent',
+      // signatureSize=0 trips the incomplete-root-atom guard.
+      signatureSize: 0,
+      signatureOffset: 0,
+      ownerSize: 1,
+      ownerOffset: 0,
+    }));
+    await signatureFetcher.getDataItemSignature({ id: 'id' });
+    assert.equal(
+      await counterValue({
+        kind: 'signature',
+        subject: 'data_item',
+        source: 'incomplete_root',
+        outcome: 'not_found',
+      }),
+      1,
+    );
+  });
+
+  it('signature/transaction/chain/hit fires when chainSource returns the field', async () => {
+    mock.method(mocks.signatureStore, 'get', async () => undefined);
+    mock.method(mocks.dataIndex, 'getTransactionAttributes', async () => ({
+      signature: null,
+      owner: null,
+    }));
+    mock.method(mocks.chainSource, 'getTxField', async () => 'chain-sig');
+    await signatureFetcher.getTransactionSignature({ id: 'id' });
+    assert.equal(
+      await counterValue({
+        kind: 'signature',
+        subject: 'transaction',
+        source: 'chain',
+        outcome: 'hit',
+      }),
+      1,
+    );
+  });
+
+  it('owner/transaction/attributes/hit fires when local DB has owner', async () => {
+    mock.method(mocks.ownerStore, 'get', async () => undefined);
+    mock.method(mocks.dataIndex, 'getTransactionAttributes', async () => ({
+      signature: null,
+      owner: 'cached-owner',
+    }));
+    await ownerFetcher.getTransactionOwner({ id: 'id' });
+    assert.equal(
+      await counterValue({
+        kind: 'owner',
+        subject: 'transaction',
+        source: 'attributes',
+        outcome: 'hit',
+      }),
+      1,
+    );
+  });
+
+  it('owner/transaction/derived/hit fires on chainSource.getTx fallback', async () => {
+    mock.method(mocks.ownerStore, 'get', async () => undefined);
+    mock.method(mocks.dataIndex, 'getTransactionAttributes', async () => ({
+      signature: null,
+      owner: null,
+    }));
+    // Empty-string ownerChainField forces the derived-via-getTx path.
+    mock.method(mocks.chainSource, 'getTxField', async () => '');
+    mock.method(mocks.chainSource, 'getTx', async () => ({
+      owner: 'derived-owner',
+    }));
+    await ownerFetcher.getTransactionOwner({ id: 'id' });
+    assert.equal(
+      await counterValue({
+        kind: 'owner',
+        subject: 'transaction',
+        source: 'derived',
+        outcome: 'hit',
+      }),
+      1,
+    );
+  });
+
+  it('aborted error classification: AbortError ⇒ outcome=aborted on chain path', async () => {
+    mock.method(mocks.signatureStore, 'get', async () => undefined);
+    mock.method(mocks.dataIndex, 'getTransactionAttributes', async () => ({
+      signature: null,
+      owner: null,
+    }));
+    mock.method(mocks.chainSource, 'getTxField', async () => {
+      const err = new Error('Client disconnected');
+      (err as Error & { name: string }).name = 'AbortError';
+      throw err;
+    });
+    await signatureFetcher.getTransactionSignature({ id: 'id' });
+    assert.equal(
+      await counterValue({
+        kind: 'signature',
+        subject: 'transaction',
+        source: 'chain',
+        outcome: 'aborted',
+      }),
+      1,
+    );
   });
 });

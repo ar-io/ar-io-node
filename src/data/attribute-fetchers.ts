@@ -20,6 +20,55 @@ import {
 import winston from 'winston';
 import { toB64Url } from '../lib/encoding.js';
 import { isEmptyString } from '../lib/string.js';
+import * as metrics from '../metrics.js';
+
+type AttributeKind = 'owner' | 'signature';
+type AttributeSubject = 'data_item' | 'transaction';
+type AttributeSource =
+  | 'store'
+  | 'attributes'
+  | 'parent_data'
+  | 'chain'
+  | 'derived'
+  | 'incomplete_root';
+type AttributeOutcome = 'hit' | 'aborted' | 'error' | 'not_found';
+
+/**
+ * Classify a thrown error into an `AttributeOutcome` for the metric label.
+ * Cancellation paths (express request close, server-side deadline, axios
+ * cancel) all surface as `aborted`; everything else lands in `error`.
+ */
+const outcomeForError = (
+  error: unknown,
+  signal: AbortSignal | undefined,
+): AttributeOutcome => {
+  if (signal?.aborted === true) return 'aborted';
+  const e = error as { name?: string; message?: string; code?: string };
+  if (
+    e?.name === 'AbortError' ||
+    e?.code === 'ERR_CANCELED' ||
+    (typeof e?.message === 'string' &&
+      (e.message.includes('Client disconnected') ||
+        e.message.includes('deadline')))
+  ) {
+    return 'aborted';
+  }
+  return 'error';
+};
+
+const recordAttributeFetch = (
+  kind: AttributeKind,
+  subject: AttributeSubject,
+  source: AttributeSource,
+  outcome: AttributeOutcome,
+  startMs: number,
+): void => {
+  metrics.attributeFetchCounter.inc({ kind, subject, source, outcome });
+  metrics.attributeFetchDurationHistogram.observe(
+    { kind, subject, source },
+    (Date.now() - startMs) / 1000,
+  );
+};
 
 export abstract class AttributeFetchers {
   protected log: winston.Logger;
@@ -52,10 +101,12 @@ export abstract class AttributeFetchers {
     parentId,
     offset,
     size,
+    signal,
   }: {
     parentId: string;
     offset: number;
     size: number;
+    signal?: AbortSignal;
   }): Promise<string> {
     const log = this.log.child({ method: 'fetchDataFromParent' });
 
@@ -77,6 +128,9 @@ export abstract class AttributeFetchers {
       );
     }
 
+    // Bail before any allocation if the caller already aborted.
+    signal?.throwIfAborted();
+
     log.debug('Fetching data from parent', { parentId, offset, size });
 
     const { stream } = await this.dataSource.getData({
@@ -85,14 +139,34 @@ export abstract class AttributeFetchers {
         offset,
         size,
       },
+      signal,
     });
 
     // Pre-allocated, fixed-size buffer with offset writes. Avoids the
     // O(N²) Buffer.concat-per-chunk shape and removes the slot-8 pinned-
     // accumulator leak. If upstream emits more bytes than requested,
     // destroy the stream and throw — do not silently buffer past `size`.
+    // If the caller aborts mid-stream we tear down the upstream stream
+    // and rethrow the AbortError so callers can clean up promptly.
     const buffer = Buffer.alloc(size);
     let bytesRead = 0;
+
+    const onAbort = () => {
+      if (typeof (stream as { destroy?: () => void }).destroy === 'function') {
+        (stream as { destroy: (err?: Error) => void }).destroy(
+          signal?.reason instanceof Error
+            ? signal.reason
+            : new Error('Aborted'),
+        );
+      }
+    };
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        onAbort();
+        throw signal.reason ?? new Error('Aborted');
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
 
     try {
       for await (const chunk of stream) {
@@ -113,11 +187,21 @@ export abstract class AttributeFetchers {
       }
     } catch (error) {
       // Ensure the buffer reference can be GC'd promptly even when the
-      // for-await yields back to a still-pending Promise; rethrow.
-      if (typeof (stream as { destroy?: () => void }).destroy === 'function') {
-        (stream as { destroy: () => void }).destroy();
+      // for-await yields back to a still-pending Promise. Forward the
+      // caught error to destroy() so the abort reason is preserved when
+      // upstream is being torn down due to AbortSignal — otherwise the
+      // first destroy(reason) from the abort handler would be overwritten
+      // by a no-arg destroy() here.
+      const s = stream as {
+        destroy?: (err?: Error) => void;
+        destroyed?: boolean;
+      };
+      if (typeof s.destroy === 'function' && s.destroyed !== true) {
+        s.destroy(error as Error);
       }
       throw error;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
     }
 
     if (bytesRead !== size) {
@@ -211,18 +295,22 @@ export class SignatureFetcher
     parentId,
     signatureSize,
     signatureOffset,
+    signal,
   }: {
     id: string;
     parentId?: string;
     signatureSize?: number;
     signatureOffset?: number;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getDataItemSignature' });
+    const start = Date.now();
     log.debug('Fetching data item signature', { id });
     const signature = await this.signatureStore.get(id);
 
     if (signature !== undefined) {
       log.debug('Data item signature fetched from store', { id });
+      recordAttributeFetch('signature', 'data_item', 'store', 'hit', start);
       return signature;
     }
 
@@ -236,12 +324,25 @@ export class SignatureFetcher
 
         if (dataItemAttributes === undefined) {
           this.log.warn('No attributes found for data item', { id });
+          recordAttributeFetch(
+            'signature',
+            'data_item',
+            'attributes',
+            'not_found',
+            start,
+          );
           return undefined;
         }
 
         if (typeof dataItemAttributes.signature === 'string') {
           await this.signatureStore.set(id, dataItemAttributes.signature);
-
+          recordAttributeFetch(
+            'signature',
+            'data_item',
+            'attributes',
+            'hit',
+            start,
+          );
           return dataItemAttributes.signature;
         }
 
@@ -274,6 +375,13 @@ export class SignatureFetcher
           'Skipping signature fetch — data item has incomplete root atom (likely a shadow row pending repair, see PE-9073 follow-up)',
           { id, parentId, signatureSize, signatureOffset },
         );
+        recordAttributeFetch(
+          'signature',
+          'data_item',
+          'incomplete_root',
+          'not_found',
+          start,
+        );
         return undefined;
       }
 
@@ -281,33 +389,50 @@ export class SignatureFetcher
         parentId,
         offset: signatureOffset,
         size: signatureSize,
+        signal,
       });
 
       await this.signatureStore.set(id, signature);
-
+      recordAttributeFetch(
+        'signature',
+        'data_item',
+        'parent_data',
+        'hit',
+        start,
+      );
       return signature;
     } catch (error) {
       log.error('Error fetching data item signature', {
         id,
         error: (error as Error).message,
       });
-
+      recordAttributeFetch(
+        'signature',
+        'data_item',
+        'parent_data',
+        outcomeForError(error, signal),
+        start,
+      );
       return undefined;
     }
   }
 
   async getTransactionSignature({
     id,
+    signal,
   }: {
     id: string;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getTransactionSignature' });
+    const start = Date.now();
     log.debug('Fetching transaction signature', { id });
 
     const signature = await this.signatureStore.get(id);
 
     if (signature !== undefined) {
       log.debug('Transaction signature fetched from store', { id });
+      recordAttributeFetch('signature', 'transaction', 'store', 'hit', start);
       return signature;
     }
 
@@ -320,28 +445,48 @@ export class SignatureFetcher
 
       if (typeof transactionAttributes?.signature === 'string') {
         await this.signatureStore.set(id, transactionAttributes.signature);
-
+        recordAttributeFetch(
+          'signature',
+          'transaction',
+          'attributes',
+          'hit',
+          start,
+        );
         return transactionAttributes.signature;
       }
 
       const signatureFromChain = await this.chainSource.getTxField(
         id,
         'signature',
+        signal,
       );
 
       if (typeof signatureFromChain === 'string') {
         await this.signatureStore.set(id, signatureFromChain);
-
+        recordAttributeFetch('signature', 'transaction', 'chain', 'hit', start);
         return signatureFromChain;
       }
 
+      recordAttributeFetch(
+        'signature',
+        'transaction',
+        'chain',
+        'not_found',
+        start,
+      );
       return undefined;
     } catch (error) {
       log.error('Error fetching transaction signature', {
         id,
         error: (error as Error).message,
       });
-
+      recordAttributeFetch(
+        'signature',
+        'transaction',
+        'chain',
+        outcomeForError(error, signal),
+        start,
+      );
       return undefined;
     }
   }
@@ -384,19 +529,23 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
     parentId,
     ownerSize,
     ownerOffset,
+    signal,
   }: {
     id: string;
     parentId?: string;
     ownerSize?: number;
     ownerOffset?: number;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getDataItemOwner' });
+    const start = Date.now();
     log.debug('Fetching data item owner', { id });
 
     const owner = await this.ownerStore.get(id);
 
     if (owner !== undefined) {
       log.debug('Data item owner fetched from store', { id });
+      recordAttributeFetch('owner', 'data_item', 'store', 'hit', start);
       return owner;
     }
 
@@ -410,6 +559,13 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
 
         if (dataItemAttributes === undefined) {
           this.log.warn('No attributes found for data item', { id });
+          recordAttributeFetch(
+            'owner',
+            'data_item',
+            'attributes',
+            'not_found',
+            start,
+          );
           return undefined;
         }
 
@@ -431,6 +587,13 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
           'Skipping owner fetch — data item has incomplete root atom (likely a shadow row pending repair, see PE-9073 follow-up)',
           { id, parentId, ownerSize, ownerOffset },
         );
+        recordAttributeFetch(
+          'owner',
+          'data_item',
+          'incomplete_root',
+          'not_found',
+          start,
+        );
         return undefined;
       }
 
@@ -438,35 +601,50 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         parentId,
         offset: ownerOffset,
         size: ownerSize,
+        signal,
       });
 
       await this.ownerStore.set(id, owner);
+      recordAttributeFetch('owner', 'data_item', 'parent_data', 'hit', start);
       return owner;
     } catch (error) {
       log.error('Error fetching data item owner', {
         id,
         error: (error as Error).message,
       });
-
+      recordAttributeFetch(
+        'owner',
+        'data_item',
+        'parent_data',
+        outcomeForError(error, signal),
+        start,
+      );
       return undefined;
     }
   }
 
   async getTransactionOwner({
     id,
+    signal,
   }: {
     id: string;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getTransactionOwner' });
+    const start = Date.now();
     log.debug('Fetching transaction owner', { id });
 
     const owner = await this.ownerStore.get(id);
 
     if (owner !== undefined) {
       log.debug('Transaction owner fetched from store', { id });
+      recordAttributeFetch('owner', 'transaction', 'store', 'hit', start);
       return owner;
     }
 
+    // Track the source we are currently attempting so the catch block can
+    // attribute errors/aborts to the correct upstream layer.
+    let attemptSource: AttributeSource = 'attributes';
     try {
       const transactionAttributes = await this.getTransactionAttributes(id);
 
@@ -475,15 +653,27 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         typeof transactionAttributes.owner === 'string'
       ) {
         await this.ownerStore.set(id, transactionAttributes.owner);
-
+        recordAttributeFetch(
+          'owner',
+          'transaction',
+          'attributes',
+          'hit',
+          start,
+        );
         return transactionAttributes.owner;
       }
 
       this.log.warn('No attributes found for transaction', { id });
 
       let ownerFromChain;
+      let resolvedSource: AttributeSource;
 
-      const ownerChainField = await this.chainSource.getTxField(id, 'owner');
+      attemptSource = 'chain';
+      const ownerChainField = await this.chainSource.getTxField(
+        id,
+        'owner',
+        signal,
+      );
 
       // Arweave supports transactions where the owner field is an empty string.
       // This is possible because the public owner key can be derived from the signature payload.
@@ -495,25 +685,55 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         !isEmptyString(ownerChainField)
       ) {
         ownerFromChain = ownerChainField;
+        resolvedSource = 'chain';
       } else {
+        attemptSource = 'derived';
+        // ChainSource.getTx() does not yet accept an AbortSignal — the
+        // implementation shares an in-flight promise cache across callers,
+        // so adding per-call cancellation requires reasoning about cache
+        // semantics that's out of scope here. Bail before entering the
+        // slow path if the caller has already aborted; the in-progress
+        // upstream fetch can still complete in the background and warm
+        // the cache for the next caller.
+        signal?.throwIfAborted();
         const chainTransaction = await this.chainSource.getTx({ txId: id });
         ownerFromChain = chainTransaction.owner;
+        resolvedSource = 'derived';
       }
 
       if (ownerFromChain === undefined) {
         this.log.warn('No owner found for transaction', { id });
+        recordAttributeFetch(
+          'owner',
+          'transaction',
+          resolvedSource,
+          'not_found',
+          start,
+        );
         return undefined;
       }
 
       await this.ownerStore.set(id, ownerFromChain);
-
+      recordAttributeFetch(
+        'owner',
+        'transaction',
+        resolvedSource,
+        'hit',
+        start,
+      );
       return ownerFromChain;
     } catch (error) {
-      log.error('Error fetching transaction signature', {
+      log.error('Error fetching transaction owner', {
         id,
         error: (error as Error).message,
       });
-
+      recordAttributeFetch(
+        'owner',
+        'transaction',
+        attemptSource,
+        outcomeForError(error, signal),
+        start,
+      );
       return undefined;
     }
   }

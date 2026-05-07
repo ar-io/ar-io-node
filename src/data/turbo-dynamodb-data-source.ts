@@ -224,12 +224,15 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
+    signal?.throwIfAborted();
     const span = startChildSpan(
       'TurboDynamoDbDataSource.getData',
       {
@@ -372,6 +375,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
             size: region?.size ?? payloadLength,
           },
           parentSpan: span,
+          signal,
         });
 
         if (nestedDataItemDataStream?.stream === undefined) {
