@@ -116,6 +116,15 @@ services:
       - SANDBOX_PROTOCOL=${SANDBOX_PROTOCOL:-}
       - START_WRITERS=${START_WRITERS:-}
       - IO_PROCESS_ID=${IO_PROCESS_ID:-}
+      # AR.IO Network backend selection. `ao` (default) reads protocol state
+      # from the AR.IO AO process; `solana` reads from the AR.IO Solana
+      # programs identified by ARIO_*_PROGRAM_ID below.
+      - NETWORK_SOURCE=${NETWORK_SOURCE:-}
+      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-}
+      - ARIO_CORE_PROGRAM_ID=${ARIO_CORE_PROGRAM_ID:-}
+      - ARIO_GAR_PROGRAM_ID=${ARIO_GAR_PROGRAM_ID:-}
+      - ARIO_ARNS_PROGRAM_ID=${ARIO_ARNS_PROGRAM_ID:-}
+      - ARIO_ANT_PROGRAM_ID=${ARIO_ANT_PROGRAM_ID:-}
       - CHAIN_CACHE_TYPE=${CHAIN_CACHE_TYPE:-redis}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis:6379}
       - REDIS_USE_TLS=${REDIS_USE_TLS:-}
@@ -562,6 +571,17 @@ services:
       - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-}
       - IO_PROCESS_ID=${IO_PROCESS_ID:-}
+      # AR.IO Network backend selection — see core service for full docs.
+      - NETWORK_SOURCE=${NETWORK_SOURCE:-}
+      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-}
+      - ARIO_CORE_PROGRAM_ID=${ARIO_CORE_PROGRAM_ID:-}
+      - ARIO_GAR_PROGRAM_ID=${ARIO_GAR_PROGRAM_ID:-}
+      - ARIO_ARNS_PROGRAM_ID=${ARIO_ARNS_PROGRAM_ID:-}
+      - ARIO_ANT_PROGRAM_ID=${ARIO_ANT_PROGRAM_ID:-}
+      # Cranker (Solana-only). When unset, observer skips cranking.
+      - ENABLE_EPOCH_CRANKING=${ENABLE_EPOCH_CRANKING:-}
+      - ENABLE_CLEANUP=${ENABLE_CLEANUP:-}
+      - SOLANA_KEYPAIR_PATH=${SOLANA_KEYPAIR_PATH:-}
       - SUBMIT_CONTRACT_INTERACTIONS=${SUBMIT_CONTRACT_INTERACTIONS:-true}
       - NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP=${NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP:-8}
       - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}

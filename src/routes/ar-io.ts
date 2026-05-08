@@ -175,7 +175,17 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
 export const arIoInfoHandler = (_req: Request, res: Response) => {
   const response = buildArIoInfo({
     wallet: config.AR_IO_WALLET,
+    network: config.NETWORK_SOURCE,
     processId: config.IO_PROCESS_ID,
+    programIds:
+      config.NETWORK_SOURCE === 'solana'
+        ? {
+            core: config.ARIO_CORE_PROGRAM_ID,
+            gar: config.ARIO_GAR_PROGRAM_ID,
+            arns: config.ARIO_ARNS_PROGRAM_ID,
+            ant: config.ARIO_ANT_PROGRAM_ID,
+          }
+        : undefined,
     ans104UnbundleFilter: config.ANS104_UNBUNDLE_FILTER_PARSED,
     ans104IndexFilter: config.ANS104_INDEX_FILTER_PARSED,
     release,

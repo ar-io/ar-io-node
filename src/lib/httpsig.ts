@@ -43,6 +43,7 @@ export const TRIGGER_HEADERS = new Set([
   'x-arns-resolved-id',
   'x-arns-ttl-seconds',
   'x-arns-process-id',
+  'x-arns-program-id',
   'x-arweave-chunk-data-root',
   'x-arweave-chunk-tx-id',
   'x-ar-io-chunk-source-type',

@@ -62,7 +62,23 @@ export const headerNames = {
   arnsRecord: 'X-ArNS-Record',
   arnsResolvedId: 'X-ArNS-Resolved-Id',
   dataId: 'X-AR-IO-Data-Id',
+  /**
+   * Identifier of the resolved ANT. Always emitted for backward compatibility.
+   * The value's encoding depends on the gateway's network backend:
+   *   - AO     → AO process ID (43-char base64url)
+   *   - Solana → ANT mint pubkey (base58)
+   * The accompanying `X-ArNS-Program-Id` header is present iff the gateway
+   * is in Solana mode; consumers can use its presence to disambiguate
+   * without sniffing the value of this header.
+   */
   arnsProcessId: 'X-ArNS-Process-Id',
+  /**
+   * Solana program ID that owns the ANT mint (i.e. the AR.IO ANT program).
+   * Emitted only when the gateway resolves names against Solana — no analog
+   * exists under AO. Lets clients verify the ANT lives under a known
+   * AR.IO program before trusting downstream metadata.
+   */
+  arnsProgramId: 'X-ArNS-Program-Id',
   arnsResolvedAt: 'X-ArNS-Resolved-At',
   arnsLimit: 'X-ArNS-Undername-Limit',
   arnsIndex: 'X-ArNS-Record-Index',
