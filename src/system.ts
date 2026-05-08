@@ -7,19 +7,15 @@
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
-import {
-  AOProcess,
-  AoARIORead,
-  ARIO,
-  Logger as ARIOLogger,
-} from '@ar.io/sdk';
+import { AOProcess, AoARIORead, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
 import { SolanaARIOReadable } from '@ar.io/sdk/solana';
 import {
   createSolanaRpc,
+  mainnet,
   type Address,
   address,
   type Rpc,
-  type SolanaRpcApi,
+  type SolanaRpcApiMainnet,
 } from '@solana/kit';
 import pLimit from 'p-limit';
 import postgres from 'postgres';
@@ -180,9 +176,15 @@ ARIOLogger.default.setLogLevel(config.AR_IO_SDK_LOG_LEVEL as any);
 // Shared Solana RPC client — undefined when NETWORK_SOURCE != solana so the
 // AO branch below stays untouched. Used by both the SolanaARIOReadable
 // network process and the ANT resolver in createArNSResolver.
-export const solanaRpc: Rpc<SolanaRpcApi> | undefined =
+//
+// The URL is wrapped in `mainnet()` purely for type branding — the SDK's
+// `SolanaRpc` is `Rpc<SolanaRpcApi> | Rpc<SolanaRpcApiMainnet>`, and an
+// unbranded string URL resolves to `Rpc<SolanaRpcApiForTestClusters>`.
+// All clusters expose the same JSON-RPC API at runtime, so the brand
+// only affects which RPC methods TypeScript considers callable.
+export const solanaRpc: Rpc<SolanaRpcApiMainnet> | undefined =
   config.NETWORK_SOURCE === 'solana'
-    ? createSolanaRpc(config.SOLANA_RPC_URL)
+    ? createSolanaRpc(mainnet(config.SOLANA_RPC_URL))
     : undefined;
 
 let networkProcess: AoARIORead;
@@ -191,24 +193,19 @@ if (config.NETWORK_SOURCE === 'solana') {
     throw new Error('SOLANA_RPC_URL is required when NETWORK_SOURCE=solana');
   }
   networkProcess = new SolanaARIOReadable({
-    // Cast through `any` — `@ar.io/sdk` brings a nested `@solana/rpc-spec`
-    // copy whose Rpc<...> type drifts from the top-level kit's. Runtime is
-    // structurally identical; this is purely a TS dedup workaround until
-    // the deps align (likely via yarn resolutions or @solana/kit major bump).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rpc: solanaRpc as any,
+    rpc: solanaRpc!,
     // Optional program-id overrides for devnet / localnet. Undefined keys
     // are dropped via spread so the SDK falls back to its bundled defaults.
-    ...(config.ARIO_CORE_PROGRAM_ID
+    ...(config.ARIO_CORE_PROGRAM_ID !== undefined
       ? { coreProgramId: address(config.ARIO_CORE_PROGRAM_ID) as Address }
       : {}),
-    ...(config.ARIO_GAR_PROGRAM_ID
+    ...(config.ARIO_GAR_PROGRAM_ID !== undefined
       ? { garProgramId: address(config.ARIO_GAR_PROGRAM_ID) as Address }
       : {}),
-    ...(config.ARIO_ARNS_PROGRAM_ID
+    ...(config.ARIO_ARNS_PROGRAM_ID !== undefined
       ? { arnsProgramId: address(config.ARIO_ARNS_PROGRAM_ID) as Address }
       : {}),
-    ...(config.ARIO_ANT_PROGRAM_ID
+    ...(config.ARIO_ANT_PROGRAM_ID !== undefined
       ? { antProgramId: address(config.ARIO_ANT_PROGRAM_ID) as Address }
       : {}),
   }) as unknown as AoARIORead;

@@ -10,7 +10,7 @@ import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
 import { ANT, AOProcess, AoArNSNameDataWithName, AoClient } from '@ar.io/sdk';
 import { SolanaANTReadable } from '@ar.io/sdk/solana';
-import { type Rpc, type SolanaRpcApi } from '@solana/kit';
+import { type Rpc, type SolanaRpcApiMainnet } from '@solana/kit';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
 import CircuitBreaker from 'opossum';
@@ -20,7 +20,7 @@ export class OnDemandArNSResolver implements NameResolver {
   private log: winston.Logger;
   private ao: AoClient;
   private hyperbeamUrl: string | undefined;
-  private solanaRpc?: Rpc<SolanaRpcApi>;
+  private solanaRpc?: Rpc<SolanaRpcApiMainnet>;
 
   constructor({
     log,
@@ -37,7 +37,7 @@ export class OnDemandArNSResolver implements NameResolver {
     ao?: AoClient;
     circuitBreakerOptions?: CircuitBreaker.Options;
     hyperbeamUrl?: string;
-    solanaRpc?: Rpc<SolanaRpcApi>;
+    solanaRpc?: Rpc<SolanaRpcApiMainnet>;
   }) {
     this.log = log.child({
       class: 'OnDemandArNSResolver',
@@ -106,10 +106,7 @@ export class OnDemandArNSResolver implements NameResolver {
       const ant =
         config.NETWORK_SOURCE === 'solana' && this.solanaRpc
           ? new SolanaANTReadable({
-              // See note in system.ts re: @solana/rpc-spec dep drift between
-              // @ar.io/sdk and top-level @solana/kit. Pure type-only cast.
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              rpc: this.solanaRpc as any,
+              rpc: this.solanaRpc,
               processId: processId,
             })
           : ANT.init({
