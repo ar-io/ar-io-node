@@ -36,6 +36,7 @@ import * as events from './events.js';
 import { MatchTags, TagMatch } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import { DnsResolver } from './lib/dns-resolver.js';
+import { createMatchedItemBuffer } from './lib/matched-item-buffer.js';
 import {
   makeBlockStore,
   makeTxStore,
@@ -1361,10 +1362,40 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
   }
 });
 
-eventEmitter.on(events.ANS104_DATA_ITEM_MATCHED, async (dataItem: any) => {
-  metrics.dataItemsQueuedCounter.inc({ bundle_format: 'ans-104' });
-  dataItemIndexer.queueDataItem(dataItem);
-  ans104DataIndexer.queueDataItem(dataItem);
+// Buffer + scheduled-drainer for `ANS104_DATA_ITEM_MATCHED`.
+//
+// The ANS-104 unbundler runs on a worker thread and posts a message
+// back per matched data item. Large (~15k-item) bundles produce
+// thousands of cross-thread messages per second. Doing `queueDataItem`
+// work synchronously in this handler monopolizes the JS thread:
+// SQLite-worker reply messages, HTTP accept callbacks, and GraphQL
+// resolvers can't be serviced, fastq can't drain (its in-flight task
+// awaits a reply that never lands), the queue grows unboundedly, and
+// the system wedges (PE-9089 incident on 2026-05-08).
+//
+// `createMatchedItemBuffer` accepts items in O(1) and dispatches them
+// to `onDrain` in batches of `BUNDLE_DATA_ITEM_DRAIN_BATCH` between
+// `setImmediate` cycles. The setImmediate boundary between batches
+// guarantees a full event-loop turn so other I/O gets serviced. The
+// drain logic, head-pointer indexing, and compaction live in the
+// dedicated module so they can be unit-tested without booting the
+// whole gateway.
+const matchedItemBufferDrainer = createMatchedItemBuffer<NormalizedDataItem>({
+  drainBatch: config.BUNDLE_DATA_ITEM_DRAIN_BATCH,
+  onDrain: (dataItem) => {
+    metrics.dataItemsQueuedCounter.inc({ bundle_format: 'ans-104' });
+    dataItemIndexer.queueDataItem(dataItem);
+    ans104DataIndexer.queueDataItem(dataItem);
+  },
+});
+
+eventEmitter.on(
+  events.ANS104_DATA_ITEM_MATCHED,
+  (dataItem: NormalizedDataItem) => matchedItemBufferDrainer.push(dataItem),
+);
+
+metrics.registerQueueLengthGauge('matchedItemBuffer', {
+  length: () => matchedItemBufferDrainer.depth(),
 });
 
 export const manifestPathResolver = new StreamingManifestPathResolver({

@@ -1263,6 +1263,24 @@ export const GRAPHQL_RESOLVER_DEADLINE_MS = env.nonNegativeIntOrDefault(
   12000,
 );
 
+// Number of `ANS104_DATA_ITEM_MATCHED` items to dispatch into the data-item
+// indexers per `setImmediate` drain cycle. The unbundler worker thread can
+// emit thousands of matched-item messages per second when processing large
+// bundles; doing the indexer enqueue work synchronously inside the
+// eventEmitter handler monopolizes the JS thread and starves other
+// callbacks (HTTP, GraphQL, SQLite-worker replies). Buffering items and
+// processing them in batches between event-loop turns guarantees the loop
+// makes a full cycle every batch, which lets those callbacks run.
+//
+// Larger values reduce per-batch overhead but extend the time between
+// loop turns. Smaller values yield to I/O more often at a small per-item
+// cost. 100 is a starting point — observable via the `queue_length`
+// gauge with `queue_name="matchedItemBuffer"`.
+export const BUNDLE_DATA_ITEM_DRAIN_BATCH = env.positiveIntOrDefault(
+  'BUNDLE_DATA_ITEM_DRAIN_BATCH',
+  100,
+);
+
 // The maximum number of bundles to queue for unbundling before skipping
 export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
   'BUNDLE_DATA_IMPORTER_QUEUE_SIZE',
