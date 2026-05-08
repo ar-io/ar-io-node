@@ -9,6 +9,8 @@ import winston from 'winston';
 import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
 import { ANT, AOProcess, AoArNSNameDataWithName, AoClient } from '@ar.io/sdk';
+import { SolanaANTReadable } from '@ar.io/sdk/solana';
+import { type Rpc, type SolanaRpcApi } from '@solana/kit';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
 import CircuitBreaker from 'opossum';
@@ -18,6 +20,7 @@ export class OnDemandArNSResolver implements NameResolver {
   private log: winston.Logger;
   private ao: AoClient;
   private hyperbeamUrl: string | undefined;
+  private solanaRpc?: Rpc<SolanaRpcApi>;
 
   constructor({
     log,
@@ -28,11 +31,13 @@ export class OnDemandArNSResolver implements NameResolver {
       GATEWAY_URL: config.AO_GATEWAY_URL,
     }),
     hyperbeamUrl = config.AO_ANT_HYPERBEAM_URL,
+    solanaRpc,
   }: {
     log: winston.Logger;
     ao?: AoClient;
     circuitBreakerOptions?: CircuitBreaker.Options;
     hyperbeamUrl?: string;
+    solanaRpc?: Rpc<SolanaRpcApi>;
   }) {
     this.log = log.child({
       class: 'OnDemandArNSResolver',
@@ -42,6 +47,7 @@ export class OnDemandArNSResolver implements NameResolver {
     });
     this.ao = ao;
     this.hyperbeamUrl = hyperbeamUrl;
+    this.solanaRpc = solanaRpc;
   }
 
   async resolve({
@@ -96,14 +102,23 @@ export class OnDemandArNSResolver implements NameResolver {
 
       const processId = baseArNSRecord.processId;
 
-      // now get the ant process from the process id
-      const ant = ANT.init({
-        process: new AOProcess({
-          processId: processId,
-          ao: this.ao,
-        }),
-        hyperbeamUrl: this.hyperbeamUrl,
-      });
+      // Get ANT records from the appropriate backend
+      const ant =
+        config.NETWORK_SOURCE === 'solana' && this.solanaRpc
+          ? new SolanaANTReadable({
+              // See note in system.ts re: @solana/rpc-spec dep drift between
+              // @ar.io/sdk and top-level @solana/kit. Pure type-only cast.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              rpc: this.solanaRpc as any,
+              processId: processId,
+            })
+          : ANT.init({
+              process: new AOProcess({
+                processId: processId,
+                ao: this.ao,
+              }),
+              hyperbeamUrl: this.hyperbeamUrl,
+            });
 
       // if it is the root name, then it should point to '@'
       const undername =
