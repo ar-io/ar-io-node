@@ -52,6 +52,16 @@ export const createArNSKvStore = ({
   return new NodeKvStore({ ttlSeconds, maxKeys });
 };
 
+/**
+ * Build the composite ArNS resolver chain from configured resolvers.
+ *
+ * @param solanaRpc - Optional shared Solana JSON-RPC client. When the
+ *   `'on-demand'` resolver is selected and `NETWORK_SOURCE='solana'`,
+ *   the `OnDemandArNSResolver` uses this client for ANT lookups via
+ *   `SolanaANTReadable`. If omitted under Solana mode, the resolver
+ *   throws at first resolution attempt rather than silently falling
+ *   back to AO. Pass through from `system.ts`'s exported `solanaRpc`.
+ */
 export const createArNSResolver = ({
   log,
   resolutionCache,

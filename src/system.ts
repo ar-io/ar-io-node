@@ -172,9 +172,20 @@ const arweave = Arweave.init({});
 
 ARIOLogger.default.setLogLevel(config.AR_IO_SDK_LOG_LEVEL as any);
 
-// Shared Solana RPC client — undefined when NETWORK_SOURCE != solana so the
-// AO branch below stays untouched. Used by both the SolanaARIOReadable
-// network process and the ANT resolver in createArNSResolver.
+/**
+ * Shared Solana JSON-RPC client.
+ *
+ * Initialized via `createSolanaRpc(SOLANA_RPC_URL)` only when
+ * `NETWORK_SOURCE === 'solana'`; `undefined` otherwise so the AO
+ * branch stays inert. Both the {@link SolanaARIOReadable} network
+ * process and the `OnDemandArNSResolver` (via `createArNSResolver`)
+ * read from this same client to keep RPC connection management in
+ * one place.
+ *
+ * Callers in the Solana branch can assume non-null after the
+ * `NETWORK_SOURCE === 'solana'` guard. Callers outside that branch
+ * MUST handle `undefined`.
+ */
 export const solanaRpc: Rpc<SolanaRpcApi> | undefined =
   config.NETWORK_SOURCE === 'solana'
     ? createSolanaRpc(config.SOLANA_RPC_URL)
