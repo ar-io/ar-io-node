@@ -96,17 +96,17 @@ describe('Ans104DataIndexer', () => {
     });
     const before = await droppedValue();
 
-    // Worker pulls 'a' immediately and blocks inside saveDataContentAttributes.
+    // 'a' admitted; depth=1 (in-flight item counts toward depth).
     await indexer.queueDataItem(makeItem('a'));
-    // Length=0 (worker has 'a' in flight) → 0<1 OK → 'b' queues, length=1.
+    // 'b' dropped (depth=1 < 1 is false).
     await indexer.queueDataItem(makeItem('b'));
-    // Length=1 → 1<1 false → 'c' dropped.
+    // 'c' also dropped.
     await indexer.queueDataItem(makeItem('c'));
-    // Length=1 → 'd' also dropped.
+    // 'd' also dropped.
     await indexer.queueDataItem(makeItem('d'));
 
     assert.equal(indexer.queueDepth(), 1);
-    assert.equal(await droppedValue(), before + 2);
+    assert.equal(await droppedValue(), before + 3);
   });
 
   it('does not drop when maxQueueSize is 0 (unlimited)', async () => {
@@ -126,7 +126,7 @@ describe('Ans104DataIndexer', () => {
     }
 
     assert.equal(await droppedValue(), before);
-    // Worker has one item in flight; the rest sit in queue.
-    assert.equal(indexer.queueDepth(), 49);
+    // All 50 counted: 1 in-flight + 49 queued; depth tracks both.
+    assert.equal(indexer.queueDepth(), 50);
   });
 });

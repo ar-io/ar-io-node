@@ -39,6 +39,15 @@ export class DataItemIndexer {
   // Data indexing queue
   private queue: queueAsPromised<DataItemJob, void>;
 
+  // Tracked queue depth. Mirrors `this.queue.length()` but is O(1) to read.
+  // fastq's `length()` walks the linked list of pending tasks, which is
+  // O(n) — at 100k+ depth that single call dominates main-thread CPU
+  // (PE-9089: ~7-15ms per push, scaling with depth, was the actual
+  // throughput-killer once the backpressure check was added in PE-9086).
+  // We increment when a job is queued and decrement in `indexDataItem`'s
+  // `finally` so the counter stays accurate even on worker errors.
+  private depth = 0;
+
   constructor({
     log,
     eventEmitter,
@@ -85,26 +94,25 @@ export class DataItemIndexer {
     if (isPrioritized) {
       this.log.debug('Queueing prioritized data item for indexing...', meta);
       this.queue.unshift(job);
+      this.depth++;
       this.log.debug('Prioritized data item queued for indexing.', meta);
-    } else if (
-      this.maxQueueSize === 0 ||
-      this.queue.length() < this.maxQueueSize
-    ) {
+    } else if (this.maxQueueSize === 0 || this.depth < this.maxQueueSize) {
       this.log.debug('Queueing data item for indexing...', meta);
       this.queue.push(job);
+      this.depth++;
       this.log.debug('Data item queued for indexing.', meta);
     } else {
       metrics.dataItemsDroppedCounter.inc({ queue_name: QUEUE_NAME });
       this.log.warn('Dropping data item — queue is at maxQueueSize.', {
         ...meta,
-        queueDepth: this.queue.length(),
+        queueDepth: this.depth,
         maxQueueSize: this.maxQueueSize,
       });
     }
   }
 
   queueDepth(): number {
-    return this.queue.length();
+    return this.depth;
   }
 
   async indexDataItem(job: DataItemJob): Promise<void> {
@@ -131,6 +139,8 @@ export class DataItemIndexer {
       log.debug('Data item indexed.');
     } catch (error) {
       log.error('Failed to index data item data:', error);
+    } finally {
+      this.depth--;
     }
   }
 

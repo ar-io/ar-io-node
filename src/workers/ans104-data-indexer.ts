@@ -39,6 +39,11 @@ export class Ans104DataIndexer {
   // Data indexing queue
   private queue: queueAsPromised<NormalizedDataItem, void>;
 
+  // Tracked queue depth. See data-item-indexer.ts:depth for the rationale:
+  // fastq's `length()` is O(n) and at 100k+ depth dominates main-thread
+  // CPU. Increment on push, decrement in `indexDataItem`'s `finally`.
+  private depth = 0;
+
   constructor({
     log,
     eventEmitter,
@@ -76,22 +81,23 @@ export class Ans104DataIndexer {
       dataSize: item?.data_size,
     };
 
-    if (this.maxQueueSize === 0 || this.queue.length() < this.maxQueueSize) {
+    if (this.maxQueueSize === 0 || this.depth < this.maxQueueSize) {
       this.log.debug('Queueing data item for indexing...', meta);
       this.queue.push(item);
+      this.depth++;
       this.log.debug('Data item queued for indexing.', meta);
     } else {
       metrics.dataItemsDroppedCounter.inc({ queue_name: QUEUE_NAME });
       this.log.warn('Dropping data item — queue is at maxQueueSize.', {
         ...meta,
-        queueDepth: this.queue.length(),
+        queueDepth: this.depth,
         maxQueueSize: this.maxQueueSize,
       });
     }
   }
 
   queueDepth(): number {
-    return this.queue.length();
+    return this.depth;
   }
 
   async indexDataItem(item: NormalizedDataItem): Promise<void> {
@@ -175,6 +181,8 @@ export class Ans104DataIndexer {
         stack: error.stack,
         id: item.id,
       });
+    } finally {
+      this.depth--;
     }
   }
 

@@ -68,16 +68,15 @@ describe('DataItemIndexer', () => {
     });
     const before = await droppedValue();
 
-    // 1: in flight (worker pulls immediately and blocks)
+    // 1: admitted; depth=1 (in-flight item counts toward depth).
     await indexer.queueDataItem(makeItem('a'));
-    // 2: queued (length=1 == maxQueueSize=1; cap is `length < maxQueueSize`,
-    //   so 0 < 1 OK → push, length becomes 1)
+    // 2: dropped (depth=1 < maxQueueSize=1 is false).
     await indexer.queueDataItem(makeItem('b'));
-    // 3: should be dropped (1 < 1 is false)
+    // 3: also dropped.
     await indexer.queueDataItem(makeItem('c'));
 
     assert.equal(indexer.queueDepth(), 1);
-    assert.equal(await droppedValue(), before + 1);
+    assert.equal(await droppedValue(), before + 2);
   });
 
   it('does not drop when maxQueueSize is 0 (unlimited)', async () => {
@@ -95,7 +94,8 @@ describe('DataItemIndexer', () => {
     }
 
     assert.equal(await droppedValue(), before);
-    assert.equal(indexer.queueDepth(), 49);
+    // All 50 counted: 1 in-flight + 49 queued; depth tracks both.
+    assert.equal(indexer.queueDepth(), 50);
   });
 
   it('prioritized items bypass the cap', async () => {
@@ -108,15 +108,14 @@ describe('DataItemIndexer', () => {
     });
     const before = await droppedValue();
 
-    // Saturate the queue with non-prioritized items.
-    await indexer.queueDataItem(makeItem('inflight')); // in flight
-    await indexer.queueDataItem(makeItem('queued')); // queued
-    // Cap is now reached — a non-prioritized push would be dropped.
-    // A prioritized push should still land via unshift().
+    // 'inflight' admitted; depth=1.
+    await indexer.queueDataItem(makeItem('inflight'));
+    // 'queued' would be dropped (depth=1 not < 1), so use a prioritized
+    // push to confirm it lands via unshift() regardless of cap.
     await indexer.queueDataItem(makeItem('priority'), /* isPrioritized */ true);
 
     assert.equal(await droppedValue(), before);
-    // 'queued' + 'priority' both waiting; in-flight item not counted.
+    // 'inflight' (running) + 'priority' (queued); depth tracks both.
     assert.equal(indexer.queueDepth(), 2);
   });
 });
