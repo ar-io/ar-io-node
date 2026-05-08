@@ -11,11 +11,10 @@ import { AOProcess, AoARIORead, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
 import { SolanaARIOReadable } from '@ar.io/sdk/solana';
 import {
   createSolanaRpc,
-  mainnet,
   type Address,
   address,
   type Rpc,
-  type SolanaRpcApiMainnet,
+  type SolanaRpcApi,
 } from '@solana/kit';
 import pLimit from 'p-limit';
 import postgres from 'postgres';
@@ -176,15 +175,9 @@ ARIOLogger.default.setLogLevel(config.AR_IO_SDK_LOG_LEVEL as any);
 // Shared Solana RPC client — undefined when NETWORK_SOURCE != solana so the
 // AO branch below stays untouched. Used by both the SolanaARIOReadable
 // network process and the ANT resolver in createArNSResolver.
-//
-// The URL is wrapped in `mainnet()` purely for type branding — the SDK's
-// `SolanaRpc` is `Rpc<SolanaRpcApi> | Rpc<SolanaRpcApiMainnet>`, and an
-// unbranded string URL resolves to `Rpc<SolanaRpcApiForTestClusters>`.
-// All clusters expose the same JSON-RPC API at runtime, so the brand
-// only affects which RPC methods TypeScript considers callable.
-export const solanaRpc: Rpc<SolanaRpcApiMainnet> | undefined =
+export const solanaRpc: Rpc<SolanaRpcApi> | undefined =
   config.NETWORK_SOURCE === 'solana'
-    ? createSolanaRpc(mainnet(config.SOLANA_RPC_URL))
+    ? createSolanaRpc(config.SOLANA_RPC_URL)
     : undefined;
 
 let networkProcess: AoARIORead;
@@ -193,7 +186,12 @@ if (config.NETWORK_SOURCE === 'solana') {
     throw new Error('SOLANA_RPC_URL is required when NETWORK_SOURCE=solana');
   }
   networkProcess = new SolanaARIOReadable({
-    rpc: solanaRpc!,
+    // `@ar.io/sdk` ships a nested `@solana/rpc-spec` whose Rpc<...> type
+    // drifts from the top-level `@solana/kit` copy. Runtime is
+    // structurally identical; `as any` is a TS-only workaround until
+    // the deps align (likely via yarn `resolutions` or a kit major
+    // bump in the SDK). Matches ar-io-observer/src/system.ts.
+    rpc: solanaRpc as any,
     // Optional program-id overrides for devnet / localnet. Undefined keys
     // are dropped via spread so the SDK falls back to its bundled defaults.
     ...(config.ARIO_CORE_PROGRAM_ID !== undefined

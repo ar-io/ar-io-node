@@ -114,7 +114,9 @@ export class OnDemandArNSResolver implements NameResolver {
           );
         }
         ant = new SolanaANTReadable({
-          rpc: this.solanaRpc,
+          // See note in system.ts re: nested @solana/rpc-spec drift
+          // between @ar.io/sdk and the top-level kit copy.
+          rpc: this.solanaRpc as any,
           processId: processId,
         });
       } else {
