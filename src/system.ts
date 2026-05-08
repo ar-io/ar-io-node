@@ -36,6 +36,7 @@ import * as events from './events.js';
 import { MatchTags, TagMatch } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import { DnsResolver } from './lib/dns-resolver.js';
+import { createMatchedItemBuffer } from './lib/matched-item-buffer.js';
 import {
   makeBlockStore,
   makeTxStore,
@@ -1361,79 +1362,40 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
   }
 });
 
-// Buffer + scheduled-drainer pattern for `ANS104_DATA_ITEM_MATCHED`.
+// Buffer + scheduled-drainer for `ANS104_DATA_ITEM_MATCHED`.
 //
-// The ANS-104 unbundler runs on a worker thread and posts a message back
-// per matched data item. Large (~15k-item) bundles produce thousands of
-// messages per second. Doing `queueDataItem` work synchronously in this
-// handler — log.child allocations, fastq pushes, metric increments — at
-// that rate monopolizes the JS thread: SQLite-worker reply messages,
-// HTTP accept callbacks, and GraphQL resolvers can't be serviced, fastq
-// can't drain (its in-flight task awaits a reply that never lands), the
-// queue grows unboundedly, and the system wedges (PE-9089).
+// The ANS-104 unbundler runs on a worker thread and posts a message
+// back per matched data item. Large (~15k-item) bundles produce
+// thousands of cross-thread messages per second. Doing `queueDataItem`
+// work synchronously in this handler monopolizes the JS thread:
+// SQLite-worker reply messages, HTTP accept callbacks, and GraphQL
+// resolvers can't be serviced, fastq can't drain (its in-flight task
+// awaits a reply that never lands), the queue grows unboundedly, and
+// the system wedges (PE-9089 incident on 2026-05-08).
 //
-// Instead, the handler just appends to `matchedItemBuffer` (very fast)
-// and schedules a `setImmediate` drainer if one isn't already pending.
-// The drainer processes up to `BUNDLE_DATA_ITEM_DRAIN_BATCH` items, then
-// re-schedules itself if more remain. The `setImmediate` between batches
-// guarantees a full event-loop turn — that turn services other I/O.
-// We index the buffer with a moving head pointer rather than calling
-// `splice(0, n)` to drain. `splice(0, n)` shifts the entire tail of the
-// array on every call (O(buffer.length) per drain via V8's
-// DoMoveElements), which under sustained burst would compound to O(n²)
-// work — the same shape of mistake that the O(1) depth counter on the
-// indexers fixes. Compaction is deferred until at least 4096 dead slots
-// are at the front and they account for ≥50% of the buffer, at which
-// point a single `splice` reclaims them.
-const matchedItemBuffer: NormalizedDataItem[] = [];
-let matchedItemBufferHead = 0;
-let matchedItemDrainScheduled = false;
-
-const drainMatchedItemBuffer = (): void => {
-  matchedItemDrainScheduled = false;
-  const drainUntil = Math.min(
-    matchedItemBuffer.length,
-    matchedItemBufferHead + config.BUNDLE_DATA_ITEM_DRAIN_BATCH,
-  );
-  for (; matchedItemBufferHead < drainUntil; matchedItemBufferHead++) {
-    const dataItem = matchedItemBuffer[matchedItemBufferHead];
+// `createMatchedItemBuffer` accepts items in O(1) and dispatches them
+// to `onDrain` in batches of `BUNDLE_DATA_ITEM_DRAIN_BATCH` between
+// `setImmediate` cycles. The setImmediate boundary between batches
+// guarantees a full event-loop turn so other I/O gets serviced. The
+// drain logic, head-pointer indexing, and compaction live in the
+// dedicated module so they can be unit-tested without booting the
+// whole gateway.
+const matchedItemBufferDrainer = createMatchedItemBuffer<NormalizedDataItem>({
+  drainBatch: config.BUNDLE_DATA_ITEM_DRAIN_BATCH,
+  onDrain: (dataItem) => {
     metrics.dataItemsQueuedCounter.inc({ bundle_format: 'ans-104' });
     dataItemIndexer.queueDataItem(dataItem);
     ans104DataIndexer.queueDataItem(dataItem);
-  }
-
-  if (matchedItemBufferHead === matchedItemBuffer.length) {
-    // Fully drained — reset both pointers cheaply.
-    matchedItemBuffer.length = 0;
-    matchedItemBufferHead = 0;
-  } else if (
-    matchedItemBufferHead >= 4096 &&
-    matchedItemBufferHead * 2 >= matchedItemBuffer.length
-  ) {
-    // Reclaim dead slots at the front.
-    matchedItemBuffer.splice(0, matchedItemBufferHead);
-    matchedItemBufferHead = 0;
-  }
-
-  if (matchedItemBufferHead < matchedItemBuffer.length) {
-    matchedItemDrainScheduled = true;
-    setImmediate(drainMatchedItemBuffer);
-  }
-};
+  },
+});
 
 eventEmitter.on(
   events.ANS104_DATA_ITEM_MATCHED,
-  (dataItem: NormalizedDataItem) => {
-    matchedItemBuffer.push(dataItem);
-    if (!matchedItemDrainScheduled) {
-      matchedItemDrainScheduled = true;
-      setImmediate(drainMatchedItemBuffer);
-    }
-  },
+  (dataItem: NormalizedDataItem) => matchedItemBufferDrainer.push(dataItem),
 );
 
 metrics.registerQueueLengthGauge('matchedItemBuffer', {
-  length: () => matchedItemBuffer.length - matchedItemBufferHead,
+  length: () => matchedItemBufferDrainer.depth(),
 });
 
 export const manifestPathResolver = new StreamingManifestPathResolver({
