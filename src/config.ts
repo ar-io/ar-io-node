@@ -2121,9 +2121,11 @@ export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
 // Solana
 //
 
+// Default to 'ao' so existing AO deployments don't break on upgrade —
+// operators must explicitly opt in to the Solana path.
 const NETWORK_SOURCE_VALUES = ['ao', 'solana'] as const;
 type NetworkSource = (typeof NETWORK_SOURCE_VALUES)[number];
-const rawNetworkSource = env.varOrDefault('NETWORK_SOURCE', 'solana');
+const rawNetworkSource = env.varOrDefault('NETWORK_SOURCE', 'ao');
 if (!NETWORK_SOURCE_VALUES.includes(rawNetworkSource as NetworkSource)) {
   throw new Error(
     `Invalid NETWORK_SOURCE='${rawNetworkSource}'. Must be one of: ${NETWORK_SOURCE_VALUES.join(', ')}.`,
