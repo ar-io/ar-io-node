@@ -65,30 +65,38 @@ export class DataItemIndexer {
     isPrioritized = false,
     isOptimistic = false,
   ): Promise<void> {
-    const log = this.log.child({
+    // Hot path under bundle ingest. Avoid `this.log.child(...)` here:
+    // winston's child() allocates a new logger and merges metadata,
+    // which dominates main-thread CPU at 5k+ items/sec (PE-9089
+    // profile attributed ~99% of self-time to this method's body
+    // largely via the child-logger creation). Share a meta object
+    // across the debug/warn sites instead — same observability,
+    // ~20× cheaper per call.
+    const meta = {
       method: 'queueDataItem',
       id: item.id,
       parentId: item.parent_id,
       rootTxId: item.root_tx_id,
       isOptimistic,
-    });
+    };
 
     const job: DataItemJob = { item, isOptimistic };
 
     if (isPrioritized) {
-      log.debug('Queueing prioritized data item for indexing...');
+      this.log.debug('Queueing prioritized data item for indexing...', meta);
       this.queue.unshift(job);
-      log.debug('Prioritized data item queued for indexing.');
+      this.log.debug('Prioritized data item queued for indexing.', meta);
     } else if (
       this.maxQueueSize === 0 ||
       this.queue.length() < this.maxQueueSize
     ) {
-      log.debug('Queueing data item for indexing...');
+      this.log.debug('Queueing data item for indexing...', meta);
       this.queue.push(job);
-      log.debug('Data item queued for indexing.');
+      this.log.debug('Data item queued for indexing.', meta);
     } else {
       metrics.dataItemsDroppedCounter.inc({ queue_name: QUEUE_NAME });
-      log.warn('Dropping data item — queue is at maxQueueSize.', {
+      this.log.warn('Dropping data item — queue is at maxQueueSize.', {
+        ...meta,
         queueDepth: this.queue.length(),
         maxQueueSize: this.maxQueueSize,
       });

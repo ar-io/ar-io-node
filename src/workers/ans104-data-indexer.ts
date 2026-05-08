@@ -64,22 +64,26 @@ export class Ans104DataIndexer {
   }
 
   async queueDataItem(item: NormalizedDataItem): Promise<void> {
-    const log = this.log.child({
+    // See data-item-indexer.ts:queueDataItem for the rationale: skip
+    // `this.log.child(...)` on the hot path; share a meta object across
+    // the debug/warn sites instead. (PE-9089)
+    const meta = {
       method: 'queueDataItem',
       id: item.id,
       parentId: item.parent_id,
       rootTxId: item.root_tx_id,
       dataOffset: item?.data_offset,
       dataSize: item?.data_size,
-    });
+    };
 
     if (this.maxQueueSize === 0 || this.queue.length() < this.maxQueueSize) {
-      log.debug('Queueing data item for indexing...');
+      this.log.debug('Queueing data item for indexing...', meta);
       this.queue.push(item);
-      log.debug('Data item queued for indexing.');
+      this.log.debug('Data item queued for indexing.', meta);
     } else {
       metrics.dataItemsDroppedCounter.inc({ queue_name: QUEUE_NAME });
-      log.warn('Dropping data item — queue is at maxQueueSize.', {
+      this.log.warn('Dropping data item — queue is at maxQueueSize.', {
+        ...meta,
         queueDepth: this.queue.length(),
         maxQueueSize: this.maxQueueSize,
       });
