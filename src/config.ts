@@ -2121,8 +2121,6 @@ export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
 // Solana
 //
 
-// Default to 'ao' so existing AO deployments don't break on upgrade —
-// operators must explicitly opt in to the Solana path.
 const NETWORK_SOURCE_VALUES = ['ao', 'solana'] as const;
 type NetworkSource = (typeof NETWORK_SOURCE_VALUES)[number];
 const rawNetworkSource = env.varOrDefault('NETWORK_SOURCE', 'ao');
@@ -2131,18 +2129,39 @@ if (!NETWORK_SOURCE_VALUES.includes(rawNetworkSource as NetworkSource)) {
     `Invalid NETWORK_SOURCE='${rawNetworkSource}'. Must be one of: ${NETWORK_SOURCE_VALUES.join(', ')}.`,
   );
 }
+/**
+ * Selects which backend the gateway reads protocol state from.
+ * - `'ao'` (default) — legacy AO compute-unit backend. Existing
+ *   deployments stay on this path unless explicitly opted out.
+ * - `'solana'` — read ArNS records, gateway registry, and epoch
+ *   data from on-chain Solana programs via `@ar.io/sdk/solana`.
+ *
+ * Throws at boot on unrecognised values so a typo doesn't silently
+ * route to the wrong backend.
+ */
 export const NETWORK_SOURCE = rawNetworkSource as NetworkSource;
+/**
+ * Solana RPC endpoint URL. Used only when `NETWORK_SOURCE === 'solana'`.
+ * Public mainnet-beta is rate-limited; production deployments should
+ * use a dedicated provider (Helius, QuickNode, Triton). Devnet:
+ * `https://api.devnet.solana.com`. Localnet: `http://127.0.0.1:8899`.
+ */
 export const SOLANA_RPC_URL = env.varOrDefault(
   'SOLANA_RPC_URL',
   'https://api.mainnet-beta.solana.com',
 );
-// Optional program-id overrides for devnet / localnet. If unset, the SDK
-// falls back to its bundled mainnet IDs (which won't resolve elsewhere).
-// See devnet-config.json in the ar-io/solana-ar-io monorepo for canonical
-// devnet values.
+/**
+ * Optional program-id overrides for devnet / localnet. When unset,
+ * `@ar.io/sdk/solana` falls back to its bundled mainnet IDs (which
+ * won't resolve against other clusters). See `devnet-config.json` in
+ * the `ar-io/solana-ar-io` monorepo for canonical devnet values.
+ */
 export const ARIO_CORE_PROGRAM_ID = env.varOrUndefined('ARIO_CORE_PROGRAM_ID');
+/** See {@link ARIO_CORE_PROGRAM_ID}. */
 export const ARIO_GAR_PROGRAM_ID = env.varOrUndefined('ARIO_GAR_PROGRAM_ID');
+/** See {@link ARIO_CORE_PROGRAM_ID}. */
 export const ARIO_ARNS_PROGRAM_ID = env.varOrUndefined('ARIO_ARNS_PROGRAM_ID');
+/** See {@link ARIO_CORE_PROGRAM_ID}. */
 export const ARIO_ANT_PROGRAM_ID = env.varOrUndefined('ARIO_ANT_PROGRAM_ID');
 
 //
