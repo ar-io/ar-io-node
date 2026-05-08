@@ -14,6 +14,7 @@ import { RedisKvStore } from '../store/redis-kv-store.js';
 import { NodeKvStore } from '../store/node-kv-store.js';
 import { KvArNSRegistryStore } from '../store/kv-arns-base-name-store.js';
 import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js';
+import { type Rpc, type SolanaRpcApi } from '@solana/kit';
 
 const supportedResolvers = ['on-demand', 'gateway'] as const;
 export type ArNSResolverType = (typeof supportedResolvers)[number];
@@ -60,6 +61,7 @@ export const createArNSResolver = ({
   trustedArnsResolverHostHeader,
   networkProcess,
   overrides,
+  solanaRpc,
 }: {
   log: Logger;
   resolutionCache: KvArNSResolutionStore;
@@ -71,10 +73,12 @@ export const createArNSResolver = ({
   overrides?: {
     ttlSeconds?: number;
   };
+  solanaRpc?: Rpc<SolanaRpcApi>;
 }): NameResolver => {
   const resolverMap: Record<ArNSResolverType, NameResolver | undefined> = {
     'on-demand': new OnDemandArNSResolver({
       log,
+      solanaRpc,
     }),
     gateway:
       trustedGatewayUrl !== undefined

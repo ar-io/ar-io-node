@@ -258,6 +258,22 @@ This document describes the environment variables that can be used to configure 
 
 **Security Note:** Variables marked as **SENSITIVE SECRET** (such as `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, and `CDP_API_KEY_SECRET_FILE`) contain confidential credentials that must never be printed to logs, exposed in error messages, or included in any diagnostic output. Always mask or omit these values in logs, store them in a secure secrets manager, and restrict access using the principle of least privilege.
 
+## Solana Backend
+
+The gateway can read protocol state from either AO (legacy) or Solana
+on-chain programs. Set `NETWORK_SOURCE=solana` to enable the Solana
+backend; the OnDemandArNSResolver will route ANT lookups through
+`@ar.io/sdk/solana::SolanaANTReadable` instead of `@permaweb/aoconnect`.
+
+| Variable               | Type   | Default                                  | Description                                                                                                                                                                                  |
+| ---------------------- | ------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NETWORK_SOURCE`       | String | `"solana"`                               | Network state backend. `"solana"` reads ArNS / gateway / epoch state from Solana on-chain programs; `"ao"` falls back to the legacy AO backend.                                              |
+| `SOLANA_RPC_URL`       | String | `"https://api.mainnet-beta.solana.com"`  | Solana RPC endpoint. Public mainnet-beta is rate-limited; use a dedicated provider (Helius, QuickNode, Triton) for production. For devnet: `https://api.devnet.solana.com`.                  |
+| `ARIO_CORE_PROGRAM_ID` | String | undefined (SDK falls back to mainnet ID) | Override the `ario-core` program ID. Required for devnet / localnet (canonical devnet value: `83CQLP848zzCgnZ4LTq87g6hvxTooNLX7YXXkUUGv5ig`). See `devnet-config.json` in `ar-io/solana-ar-io`. |
+| `ARIO_GAR_PROGRAM_ID`  | String | undefined                                | Override the `ario-gar` program ID. Devnet: `AF8QAEaR4hzsqeUDwEdeTXMYtdyFegTENBdnJro6WVLR`.                                                                                                   |
+| `ARIO_ARNS_PROGRAM_ID` | String | undefined                                | Override the `ario-arns` program ID. Devnet: `2HgSCKYjcapJPdHRKqkLrGXm7kvBmCP45ZyhWEm87oM1`.                                                                                                  |
+| `ARIO_ANT_PROGRAM_ID`  | String | undefined                                | Override the `ario-ant` program ID. Devnet: `8ZMuXhiK7DorjPUg8RB1rzu7CvsABMk38WDJRbM62y2C`.                                                                                                   |
+
 ## Cache-Control / upstream cache poisoning
 
 `CACHE_STABLE_MAX_AGE`, `CACHE_UNSTABLE_TRUSTED_MAX_AGE`, and

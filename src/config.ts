@@ -2118,6 +2118,26 @@ export const AO_GATEWAY_URL = env.varOrUndefined('AO_GATEWAY_URL');
 export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
 
 //
+// Solana
+//
+
+export const NETWORK_SOURCE = env.varOrDefault('NETWORK_SOURCE', 'solana') as
+  | 'ao'
+  | 'solana';
+export const SOLANA_RPC_URL = env.varOrDefault(
+  'SOLANA_RPC_URL',
+  'https://api.mainnet-beta.solana.com',
+);
+// Optional program-id overrides for devnet / localnet. If unset, the SDK
+// falls back to its bundled mainnet IDs (which won't resolve elsewhere).
+// See devnet-config.json in the ar-io/solana-ar-io monorepo for canonical
+// devnet values.
+export const ARIO_CORE_PROGRAM_ID = env.varOrUndefined('ARIO_CORE_PROGRAM_ID');
+export const ARIO_GAR_PROGRAM_ID = env.varOrUndefined('ARIO_GAR_PROGRAM_ID');
+export const ARIO_ARNS_PROGRAM_ID = env.varOrUndefined('ARIO_ARNS_PROGRAM_ID');
+export const ARIO_ANT_PROGRAM_ID = env.varOrUndefined('ARIO_ANT_PROGRAM_ID');
+
+//
 // Rate Limiter
 //
 
