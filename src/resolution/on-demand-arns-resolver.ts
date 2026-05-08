@@ -102,20 +102,30 @@ export class OnDemandArNSResolver implements NameResolver {
 
       const processId = baseArNSRecord.processId;
 
-      // Get ANT records from the appropriate backend
-      const ant =
-        config.NETWORK_SOURCE === 'solana' && this.solanaRpc
-          ? new SolanaANTReadable({
-              rpc: this.solanaRpc,
-              processId: processId,
-            })
-          : ANT.init({
-              process: new AOProcess({
-                processId: processId,
-                ao: this.ao,
-              }),
-              hyperbeamUrl: this.hyperbeamUrl,
-            });
+      // Get ANT records from the appropriate backend. Fail fast on a
+      // misconfigured Solana mode so we don't silently return AO-sourced
+      // records under a Solana-selected deployment (would be inconsistent
+      // with the network process's reads).
+      let ant;
+      if (config.NETWORK_SOURCE === 'solana') {
+        if (!this.solanaRpc) {
+          throw new Error(
+            'NETWORK_SOURCE=solana but no solanaRpc was provided to OnDemandArNSResolver. Wire it through createArNSResolver({ solanaRpc, ... }).',
+          );
+        }
+        ant = new SolanaANTReadable({
+          rpc: this.solanaRpc,
+          processId: processId,
+        });
+      } else {
+        ant = ANT.init({
+          process: new AOProcess({
+            processId: processId,
+            ao: this.ao,
+          }),
+          hyperbeamUrl: this.hyperbeamUrl,
+        });
+      }
 
       // if it is the root name, then it should point to '@'
       const undername =
