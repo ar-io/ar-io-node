@@ -2121,9 +2121,15 @@ export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
 // Solana
 //
 
-export const NETWORK_SOURCE = env.varOrDefault('NETWORK_SOURCE', 'solana') as
-  | 'ao'
-  | 'solana';
+const NETWORK_SOURCE_VALUES = ['ao', 'solana'] as const;
+type NetworkSource = (typeof NETWORK_SOURCE_VALUES)[number];
+const rawNetworkSource = env.varOrDefault('NETWORK_SOURCE', 'solana');
+if (!NETWORK_SOURCE_VALUES.includes(rawNetworkSource as NetworkSource)) {
+  throw new Error(
+    `Invalid NETWORK_SOURCE='${rawNetworkSource}'. Must be one of: ${NETWORK_SOURCE_VALUES.join(', ')}.`,
+  );
+}
+export const NETWORK_SOURCE = rawNetworkSource as NetworkSource;
 export const SOLANA_RPC_URL = env.varOrDefault(
   'SOLANA_RPC_URL',
   'https://api.mainnet-beta.solana.com',
