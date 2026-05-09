@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-69f2d933ef88180bb5c7690dcf0ebe9c1465fd6d}
     build:
       context: envoy/
     restart: unless-stopped
@@ -41,7 +41,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-c5fac97b930e51963d5fef4418d7488d10e11960}
     build:
       context: .
     restart: unless-stopped
@@ -493,7 +493,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-8a1c0c55ed712e283b55b87f2bc8c7111bbc0482}
     profiles:
       - clickhouse
     build:
@@ -584,7 +584,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
     build:
       context: litestream/
       dockerfile: Dockerfile
