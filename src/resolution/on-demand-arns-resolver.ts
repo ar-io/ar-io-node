@@ -10,7 +10,7 @@ import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
 import { ANT, AOProcess, AoArNSNameDataWithName, AoClient } from '@ar.io/sdk';
 import { SolanaANTReadable } from '@ar.io/sdk/solana';
-import { type Rpc, type SolanaRpcApiMainnet } from '@solana/kit';
+import { address, type Rpc, type SolanaRpcApiMainnet } from '@solana/kit';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
 import CircuitBreaker from 'opossum';
@@ -118,6 +118,13 @@ export class OnDemandArNSResolver implements NameResolver {
           // between @ar.io/sdk and the top-level kit copy.
           rpc: this.solanaRpc as any,
           processId: processId,
+          // Pin the ANT program to the gateway-configured ID so devnet/
+          // testnet deployments don't silently fall back to the SDK's
+          // bundled mainnet placeholder (which has no accounts off
+          // mainnet, producing empty `getRecords()` results).
+          ...(config.ARIO_ANT_PROGRAM_ID !== undefined && {
+            antProgramId: address(config.ARIO_ANT_PROGRAM_ID),
+          }),
         });
       } else {
         ant = ANT.init({
