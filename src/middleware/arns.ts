@@ -220,10 +220,7 @@ export const createArnsMiddleware = ({
               config.NETWORK_SOURCE === 'solana' &&
               config.ARIO_ANT_PROGRAM_ID !== undefined
             ) {
-              res.header(
-                headerNames.arnsProgramId,
-                config.ARIO_ANT_PROGRAM_ID,
-              );
+              res.header(headerNames.arnsProgramId, config.ARIO_ANT_PROGRAM_ID);
             }
           }
           if (resolvedAt !== undefined) {
