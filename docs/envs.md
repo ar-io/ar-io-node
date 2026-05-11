@@ -274,6 +274,36 @@ backend; the OnDemandArNSResolver will route ANT lookups through
 | `ARIO_ARNS_PROGRAM_ID` | String | undefined                                | Override the `ario-arns` program ID. Devnet: `2HgSCKYjcapJPdHRKqkLrGXm7kvBmCP45ZyhWEm87oM1`.                                                                                                  |
 | `ARIO_ANT_PROGRAM_ID`  | String | undefined                                | Override the `ario-ant` program ID. Devnet: `8ZMuXhiK7DorjPUg8RB1rzu7CvsABMk38WDJRbM62y2C`.                                                                                                   |
 
+### Solana Wallet Identities
+
+AR.IO gateways have three distinct roles that can be wired to one, two, three, or four
+separate wallets. Resolution lives in `ar-io-observer/src/wallet-config.ts` (covered by
+`wallet-config.test.ts`) and follows the precedence:
+
+```
+operator (= cranker)         = SOLANA_KEYPAIR_PATH                            (required)
+observer (save_observations) = OBSERVER_KEYPAIR_PATH      ?? SOLANA_KEYPAIR_PATH
+upload (Arweave wins if set) = ARWEAVE_UPLOAD_KEY_FILE | ARWEAVE_UPLOAD_JWK
+upload (Solana fallback)     = SOLANA_UPLOAD_KEYPAIR_PATH ?? observer signer
+```
+
+Supported configurations:
+
+| # | Operator | Observer | Upload | Required envs |
+| - | -------- | -------- | ------ | ------------- |
+| 1 | Solana   | =op      | =op (Solana bundle)  | `SOLANA_KEYPAIR_PATH` |
+| 2 | Solana   | =op      | Arweave JWK          | `SOLANA_KEYPAIR_PATH` + `ARWEAVE_UPLOAD_KEY_FILE` |
+| 3 | Solana A | Solana B | Solana C (bundle)    | `SOLANA_KEYPAIR_PATH` + `OBSERVER_KEYPAIR_PATH` + `SOLANA_UPLOAD_KEYPAIR_PATH` |
+| 4 | Solana A | Solana B | Arweave JWK          | `SOLANA_KEYPAIR_PATH` + `OBSERVER_KEYPAIR_PATH` + `ARWEAVE_UPLOAD_KEY_FILE` |
+
+| Variable                     | Type   | Default | Description |
+| ---------------------------- | ------ | ------- | ----------- |
+| `SOLANA_KEYPAIR_PATH`        | Path   | -       | Operator + cranker keypair. **Required** in Solana mode. Signs `join_network`, `update_gateway_settings`, and every permissionless cranker ix. |
+| `OBSERVER_KEYPAIR_PATH`      | Path   | -       | Optional separate observer keypair. Signs `save_observations`. When set, must match the on-chain `Gateway.observer_address` (settable at join time via `--observer-address` or later via `update_observer_address`). Falls back to `SOLANA_KEYPAIR_PATH`. |
+| `SOLANA_UPLOAD_KEYPAIR_PATH` | Path   | -       | Optional separate Solana keypair for report uploads (Solana-signed ANS-104 bundle). Falls back to `OBSERVER_KEYPAIR_PATH ?? SOLANA_KEYPAIR_PATH`. Ignored when `ARWEAVE_UPLOAD_*` is set. |
+| `ARWEAVE_UPLOAD_KEY_FILE`    | Path   | -       | Path to an Arweave JWK used for report uploads. When set, takes precedence over all Solana upload paths. |
+| `ARWEAVE_UPLOAD_JWK`         | String | -       | Inline Arweave JWK JSON. Lower priority than `ARWEAVE_UPLOAD_KEY_FILE`. |
+
 ## Cache-Control / upstream cache poisoning
 
 `CACHE_STABLE_MAX_AGE`, `CACHE_UNSTABLE_TRUSTED_MAX_AGE`, and
