@@ -572,6 +572,12 @@ services:
       - SOLANA_UPLOAD_KEYPAIR_PATH=${SOLANA_UPLOAD_KEYPAIR_PATH:-}
       - ARWEAVE_UPLOAD_KEY_FILE=${ARWEAVE_UPLOAD_KEY_FILE:-}
       - ARWEAVE_UPLOAD_JWK=${ARWEAVE_UPLOAD_JWK:-}
+      # Ethereum upload identity (alternative to Arweave/Solana for
+      # signing observation-report bundles before Turbo upload). Either
+      # set the FILE path or the inline hex value; setting BOTH chains
+      # at once raises a startup error. See wallet-config.ts precedence.
+      - ETHEREUM_UPLOAD_PRIVATE_KEY_FILE=${ETHEREUM_UPLOAD_PRIVATE_KEY_FILE:-}
+      - ETHEREUM_UPLOAD_PRIVATE_KEY=${ETHEREUM_UPLOAD_PRIVATE_KEY:-}
       - SUBMIT_CONTRACT_INTERACTIONS=${SUBMIT_CONTRACT_INTERACTIONS:-true}
       - NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP=${NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP:-8}
       - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}

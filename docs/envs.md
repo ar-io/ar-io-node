@@ -276,18 +276,36 @@ backend; the OnDemandArNSResolver will route ANT lookups through
 
 ### Solana Wallet Identities
 
-AR.IO gateways have three distinct roles that can be wired to one, two, three, or four
-separate wallets. Resolution lives in `ar-io-observer/src/wallet-config.ts` (covered by
-`wallet-config.test.ts`) and follows the precedence:
+AR.IO gateways have **four protocol-level roles** that can be wired to one or more
+wallets. The on-chain roles (`operator`, `observer`) must be Solana keypairs; the
+off-chain **upload** role can use any of three chains that Turbo accepts. Resolution
+lives in `ar-io-observer/src/wallet-config.ts` (covered by `wallet-config.test.ts`).
 
 ```
 operator (= cranker)         = SOLANA_KEYPAIR_PATH                            (required)
 observer (save_observations) = OBSERVER_KEYPAIR_PATH      ?? SOLANA_KEYPAIR_PATH
-upload (Arweave wins if set) = ARWEAVE_UPLOAD_KEY_FILE | ARWEAVE_UPLOAD_JWK
-upload (Solana fallback)     = SOLANA_UPLOAD_KEYPAIR_PATH ?? observer signer
+upload (precedence)          = Arweave > Ethereum > Solana(explicit) > Solana(fallback)
 ```
 
-Supported configurations:
+**Upload precedence (in order, first match wins):**
+
+1. `ARWEAVE_UPLOAD_KEY_FILE` (file) → `ArweaveSigner`
+2. `ARWEAVE_UPLOAD_JWK` (inline env) → `ArweaveSigner`
+3. `ETHEREUM_UPLOAD_PRIVATE_KEY_FILE` (file) → `EthereumSigner`
+4. `ETHEREUM_UPLOAD_PRIVATE_KEY` (inline env) → `EthereumSigner`
+5. `SOLANA_UPLOAD_KEYPAIR_PATH` (explicit) → `SolanaSigner`
+6. Fallback: `OBSERVER_KEYPAIR_PATH ?? SOLANA_KEYPAIR_PATH` → `SolanaSigner`
+
+**Conflict policy:** setting envs from **more than one chain group** at once
+(e.g. `ARWEAVE_UPLOAD_*` plus `ETHEREUM_UPLOAD_*`) raises a startup error
+listing every conflicting env. Pick exactly one upload chain.
+
+**Sniff validators** produce friendly errors when material is dropped into the
+wrong slot — e.g. a Solana keypair JSON at `ARWEAVE_UPLOAD_KEY_FILE`, an Arweave
+JWK at `SOLANA_UPLOAD_KEYPAIR_PATH`, a 32-byte hex string at a keypair path, etc.
+Each error names the offending env and suggests the correct one.
+
+Supported configurations (each tested in `wallet-config.test.ts`):
 
 | # | Operator | Observer | Upload | Required envs |
 | - | -------- | -------- | ------ | ------------- |
@@ -295,14 +313,17 @@ Supported configurations:
 | 2 | Solana   | =op      | Arweave JWK          | `SOLANA_KEYPAIR_PATH` + `ARWEAVE_UPLOAD_KEY_FILE` |
 | 3 | Solana A | Solana B | Solana C (bundle)    | `SOLANA_KEYPAIR_PATH` + `OBSERVER_KEYPAIR_PATH` + `SOLANA_UPLOAD_KEYPAIR_PATH` |
 | 4 | Solana A | Solana B | Arweave JWK          | `SOLANA_KEYPAIR_PATH` + `OBSERVER_KEYPAIR_PATH` + `ARWEAVE_UPLOAD_KEY_FILE` |
+| 5 | Solana A | Solana B | Ethereum             | `SOLANA_KEYPAIR_PATH` + `OBSERVER_KEYPAIR_PATH` + `ETHEREUM_UPLOAD_PRIVATE_KEY_FILE` |
 
-| Variable                     | Type   | Default | Description |
-| ---------------------------- | ------ | ------- | ----------- |
-| `SOLANA_KEYPAIR_PATH`        | Path   | -       | Operator + cranker keypair. **Required** in Solana mode. Signs `join_network`, `update_gateway_settings`, and every permissionless cranker ix. |
-| `OBSERVER_KEYPAIR_PATH`      | Path   | -       | Optional separate observer keypair. Signs `save_observations`. When set, must match the on-chain `Gateway.observer_address` (settable at join time via `--observer-address` or later via `update_observer_address`). Falls back to `SOLANA_KEYPAIR_PATH`. |
-| `SOLANA_UPLOAD_KEYPAIR_PATH` | Path   | -       | Optional separate Solana keypair for report uploads (Solana-signed ANS-104 bundle). Falls back to `OBSERVER_KEYPAIR_PATH ?? SOLANA_KEYPAIR_PATH`. Ignored when `ARWEAVE_UPLOAD_*` is set. |
-| `ARWEAVE_UPLOAD_KEY_FILE`    | Path   | -       | Path to an Arweave JWK used for report uploads. When set, takes precedence over all Solana upload paths. |
-| `ARWEAVE_UPLOAD_JWK`         | String | -       | Inline Arweave JWK JSON. Lower priority than `ARWEAVE_UPLOAD_KEY_FILE`. |
+| Variable                          | Type   | Default | Description |
+| --------------------------------- | ------ | ------- | ----------- |
+| `SOLANA_KEYPAIR_PATH`             | Path   | -       | Operator + cranker keypair. **Required** in Solana mode. Signs `join_network`, `update_gateway_settings`, and every permissionless cranker ix. |
+| `OBSERVER_KEYPAIR_PATH`           | Path   | -       | Optional separate observer keypair. Signs `save_observations`. When set, must match the on-chain `Gateway.observer_address` (settable at join time via `--observer-address` or later via `update_observer_address`). Falls back to `SOLANA_KEYPAIR_PATH`. |
+| `SOLANA_UPLOAD_KEYPAIR_PATH`      | Path   | -       | Optional separate Solana keypair for report uploads. Produces an `arbundles.SolanaSigner`. Falls back to `OBSERVER_KEYPAIR_PATH ?? SOLANA_KEYPAIR_PATH`. Ignored when `ARWEAVE_UPLOAD_*` or `ETHEREUM_UPLOAD_*` is set. |
+| `ARWEAVE_UPLOAD_KEY_FILE`         | Path   | -       | Path to an Arweave JWK used for report uploads (`arbundles.ArweaveSigner`). Top priority. |
+| `ARWEAVE_UPLOAD_JWK`              | String | -       | Inline Arweave JWK JSON. Lower priority than `ARWEAVE_UPLOAD_KEY_FILE`. |
+| `ETHEREUM_UPLOAD_PRIVATE_KEY_FILE`| Path   | -       | Path to a 32-byte hex Ethereum private key (with or without `0x` prefix). Produces an `arbundles.EthereumSigner`. Lower priority than Arweave; higher than Solana. |
+| `ETHEREUM_UPLOAD_PRIVATE_KEY`     | String | -       | Inline Ethereum private key (hex). Lower priority than the file form. |
 
 ## Cache-Control / upstream cache poisoning
 
