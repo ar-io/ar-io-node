@@ -126,7 +126,7 @@ This document describes the environment variables that can be used to configure 
 | ENABLE_CHUNK_SYMLINK_CLEANUP                     | Boolean              | true                                          | If true, periodically removes dead symlinks from chunk cache directories (symlinks pointing to expired cached data)                                                  |
 | CHUNK_SYMLINK_CLEANUP_INTERVAL                   | Number               | 86400                                         | Interval in seconds between dead symlink cleanup runs (default: 24 hours)                                                                                            |
 | NODE_JS_MAX_OLD_SPACE_SIZE                       | Number               | 2048 or 8192, depending on number of workers  | Sets the memory limit, in Megabytes, for NodeJs. Default value is 2048 if using less than 2 unbundle workers, otherwise 8192                                         |
-| SUBMIT_CONTRACT_INTERACTIONS                     | Boolean              | true                                          | If true, Observer will submit its generated reports to the ar.io Network                                                                                             |
+| SUBMIT_CONTRACT_INTERACTIONS                     | Boolean              | true                                          | If true, Observer will submit its generated reports to the ar.io Network. AO mode signs the legacy `save-observations` AO message with the AO wallet. Solana mode signs the `save_observations` ix with `OBSERVER_KEYPAIR_PATH ?? SOLANA_KEYPAIR_PATH` and pre-flight-skips when the observer isn't prescribed, already submitted, or past the observation window (no wasted tx fees on bouncing simulations). |
 | REDIS_MAX_MEMORY                                 | String               | 256mb                                         | Sets the max memory allocated to Redis                                                                                                                               |
 | REDIS_DATA_PATH                                  | String               | "./data/redis"                                | Sets the location for Redis data persistence files (dump.rdb, appendonly.aof). Only used if persistence is enabled via EXTRA_REDIS_FLAGS                            |
 | EXTRA_REDIS_FLAGS                                | String               | --save "" --appendonly no                     | Additional CLI flags passed to Redis server. Default disables persistence for performance. Set to "--save 300 10 --appendonly yes --appendfsync everysec" to enable hybrid persistence (recommended for x402 paid tokens) |
@@ -324,6 +324,19 @@ Supported configurations (each tested in `wallet-config.test.ts`):
 | `ARWEAVE_UPLOAD_JWK`              | String | -       | Inline Arweave JWK JSON. Lower priority than `ARWEAVE_UPLOAD_KEY_FILE`. |
 | `ETHEREUM_UPLOAD_PRIVATE_KEY_FILE`| Path   | -       | Path to a 32-byte hex Ethereum private key (with or without `0x` prefix). Produces an `arbundles.EthereumSigner`. Lower priority than Arweave; higher than Solana. |
 | `ETHEREUM_UPLOAD_PRIVATE_KEY`     | String | -       | Inline Ethereum private key (hex). Lower priority than the file form. |
+
+**`save_observations` submission flow (Solana mode, `SUBMIT_CONTRACT_INTERACTIONS=true`):**
+
+1. The `OnDemandArNSResolver` + continuous observer produce a `ObserverReport` for the current epoch.
+2. `TurboReportSink` uploads the report bundle to permaweb under the **upload** identity, returning the 43-char Arweave TX ID.
+3. `SolanaContractReportSink` reads the current Epoch account once (pre-flight gate). It skips submission if:
+   - The observer's pubkey isn't in `epoch.prescribed_observers` for this epoch (we weren't picked this round).
+   - The `has_observed` bit at our observer slot is already set (we already submitted).
+   - `now >= epoch.end_timestamp` (the observation window has closed).
+4. Otherwise it builds the `save_observations` instruction with the failed-gateway bitmap + base64url-decoded report TX ID and submits it signed by the **observer** keypair (not the operator/cranker).
+5. After the parent epoch is fully distributed, the cranker's `close_observation` loop reclaims the Observation PDA's rent.
+
+The on-chain `Observation.report_tx_id` field stores the **raw 32-byte hash** (lossless decode of the 43-char base64url txid) so consumers can recover the full Arweave txid for permaweb audits.
 
 ## Cache-Control / upstream cache poisoning
 
