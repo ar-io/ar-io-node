@@ -266,11 +266,44 @@ describe('renderTransactionNodeSelection', () => {
 
   it('preserves nested sub-selections without injecting id inside them', () => {
     const sel = nodeSelection(
-      `{ transactions { edges { node { id block { height } owner { address } } } } }`,
+      `{ transactions { edges { node { id block { id timestamp height previous } owner { address } } } } }`,
     );
     // Nested types like Owner have no `id` field; injecting one would cause a
-    // schema validation 400 at the upstream.
-    assert.equal(canon(render(sel)), 'id block { height } owner { address }');
+    // schema validation 400 at the upstream. block sub-fields are user-
+    // controlled in this test (all four already present) so no expansion is
+    // applied beyond the canonical-name dedupe.
+    assert.equal(
+      canon(render(sel)),
+      'id block { id timestamp height previous } owner { address }',
+    );
+  });
+
+  it('expands block sub-selection to include required co-fields (PE-9092)', () => {
+    // User selects only `block { height }`. The local Transaction.block
+    // resolver gates on `parent.blockIndepHash !== null`, which is only
+    // populated when the upstream response included `block.id`. To keep
+    // the resolver semantically correct under federation, we always
+    // forward the full four-field block selection upstream when block
+    // is selected. User's sub-selection is preserved verbatim.
+    const sel = nodeSelection(
+      `{ transactions { edges { node { id block { height } } } } }`,
+    );
+    assert.equal(
+      canon(render(sel)),
+      'id block { height id timestamp previous }',
+    );
+  });
+
+  it('does not double-add required co-fields the user already selected', () => {
+    // User picked `id` and `height` already; expansion only adds the
+    // missing two (`timestamp` and `previous`).
+    const sel = nodeSelection(
+      `{ transactions { edges { node { id block { id height } } } } }`,
+    );
+    assert.equal(
+      canon(render(sel)),
+      'id block { id height timestamp previous }',
+    );
   });
 
   it('dedupes repeated top-level selections of the same field', () => {

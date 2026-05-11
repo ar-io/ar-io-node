@@ -103,6 +103,29 @@ const DEFAULT_TRANSACTION_NODE_FIELDS = `
 `;
 
 /**
+ * Some upstream selections must always include certain sibling sub-fields
+ * because the local response-mapping flattens them into one row and a
+ * downstream resolver gates presence on a specific column being non-null.
+ *
+ * Concrete case (PE-9092): `Transaction.block` (`src/routes/graphql/
+ * resolvers.ts`) returns `null` if `blockIndepHash` is null on the flat
+ * `GqlTransaction`, even when `height` is set. `blockIndepHash` is only
+ * populated when the upstream response included `block.id`. So a user
+ * query of `block { height }` would, without expansion, cause the
+ * resolver to drop the entire block object — including the height the
+ * user explicitly asked for.
+ *
+ * The expansion is opt-in per field name. The user's sub-selection is
+ * preserved verbatim; we just union the required co-fields onto it so
+ * the local flat representation matches the local-DB invariant
+ * ("if any block field is set, all of them are"). Wire overhead is a
+ * few extra fields per transaction edge.
+ */
+const REQUIRED_CO_FIELDS_BY_FIELD: Record<string, readonly string[]> = {
+  block: ['id', 'timestamp', 'height', 'previous'],
+};
+
+/**
  * Render a GraphQL selection set as a plain fragment body (no surrounding
  * braces). Aliases are stripped and selections are deduped by canonical name,
  * because the mapper reads canonical keys like `node.anchor`. Non-field
@@ -124,7 +147,24 @@ function renderSelectionSet(
         byName.set(name, print(field));
         continue;
       }
-      byName.set(name, `${name} { ${nested} }`);
+      const required = REQUIRED_CO_FIELDS_BY_FIELD[name];
+      if (required !== undefined) {
+        // Union the user's sub-selection with the required co-fields.
+        const present = new Set(
+          field.selectionSet.selections
+            .filter((s): s is FieldNode => s.kind === 'Field')
+            .map((s) => s.name.value),
+        );
+        const additions = required.filter((f) => !present.has(f)).join(' ');
+        byName.set(
+          name,
+          additions === ''
+            ? `${name} { ${nested} }`
+            : `${name} { ${nested} ${additions} }`,
+        );
+      } else {
+        byName.set(name, `${name} { ${nested} }`);
+      }
     } else {
       byName.set(name, name);
     }
