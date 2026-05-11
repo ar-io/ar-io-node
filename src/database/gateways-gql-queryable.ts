@@ -562,17 +562,31 @@ function compareBlockCursorsAsc(aCursor: string, bCursor: string): number {
  * Returns the merged edges plus a flag indicating whether any source still had
  * unconsumed edges after we stopped — used alongside per-source `hasNextPage`
  * to decide the merged pageInfo.
+ *
+ * When `compareRichness` is supplied, duplicate ids are resolved by keeping
+ * the "richer" representation rather than the first one emitted. This matters
+ * across heterogeneous federation peers: one source can return a transaction
+ * with `block.height` resolved while another still has the same id as a
+ * pending/optimistic entry (`block: null`). Without richness comparison and
+ * with the default `HEIGHT_DESC` sort (which puts NULL heights first because
+ * pending uploads should appear at the top of "latest" feeds), the optimistic
+ * entry would win the dedup race and the resolved version would be silently
+ * dropped (PE-9092).
  */
 function mergeEdges<T extends { cursor: string; node: { id: string } }>(
   streams: T[][],
   pageSize: number,
   sortOrder: SortOrder,
   compareAsc: (a: string, b: string) => number,
+  compareRichness?: (a: T, b: T) => number,
 ): { edges: T[]; hasUnconsumed: boolean } {
   const cursors = streams.map(() => 0);
   const sign = sortOrder === 'HEIGHT_ASC' ? 1 : -1;
   const emitted: T[] = [];
-  const emittedIds = new Set<string>();
+  // Map from node.id to its index in `emitted`. We track the index (not
+  // a boolean) so that when a later duplicate arrives we can replace the
+  // earlier emission in place if the new edge is richer.
+  const emittedIdxById = new Map<string, number>();
   let hasUnconsumed = false;
 
   const pickNext = (): T | undefined => {
@@ -600,25 +614,54 @@ function mergeEdges<T extends { cursor: string; node: { id: string } }>(
   while (emitted.length < pageSize) {
     const edge = pickNext();
     if (edge === undefined) break;
-    if (emittedIds.has(edge.node.id)) continue;
-    emittedIds.add(edge.node.id);
+    const existingIdx = emittedIdxById.get(edge.node.id);
+    if (existingIdx !== undefined) {
+      if (compareRichness && compareRichness(edge, emitted[existingIdx]) > 0) {
+        emitted[existingIdx] = edge;
+      }
+      continue;
+    }
+    emittedIdxById.set(edge.node.id, emitted.length);
     emitted.push(edge);
   }
 
   // We have to keep peeking past pageSize until we either find the next
   // distinct (not-yet-emitted) id or exhaust every stream. Otherwise
   // cross-source duplicates inflate hasNextPage and send clients to an
-  // empty next page.
+  // empty next page. We also keep upgrading existing emissions while we
+  // peek, so a richer duplicate that appears late in the merge can still
+  // replace the original.
   while (true) {
     const edge = pickNext();
     if (edge === undefined) break;
-    if (!emittedIds.has(edge.node.id)) {
+    const existingIdx = emittedIdxById.get(edge.node.id);
+    if (existingIdx === undefined) {
       hasUnconsumed = true;
       break;
+    }
+    if (compareRichness && compareRichness(edge, emitted[existingIdx]) > 0) {
+      emitted[existingIdx] = edge;
     }
   }
 
   return { edges: emitted, hasUnconsumed };
+}
+
+/**
+ * Richness comparator for transaction edges: an edge with a non-null block
+ * height beats an edge with a null block height. All other shapes are
+ * considered equivalent (first-write-wins as before). Designed for use
+ * with `mergeEdges` in federation merges.
+ */
+function compareTxRichness(
+  a: { cursor: string },
+  b: { cursor: string },
+): number {
+  const ah = decodeTransactionGqlCursor(a.cursor).height;
+  const bh = decodeTransactionGqlCursor(b.cursor).height;
+  if (ah == null && bh != null) return -1;
+  if (ah != null && bh == null) return 1;
+  return 0;
 }
 
 export class GatewaysGqlQueryable
@@ -739,17 +782,29 @@ export class GatewaysGqlQueryable
     id: string;
     warnings?: GqlWarning[];
   }): Promise<GqlTransaction | null> {
-    // Shared sink so every source writes into the same array; the race
-    // resolves on first non-null but losing sources may keep running and
-    // write warnings after the resolver has already copied the sink into
-    // the Apollo context, so any late writes are harmless.
+    // Shared sink so every source writes into the same array; losing
+    // sources may keep running and write warnings after the resolver
+    // has already copied the sink into the Apollo context, so any
+    // late writes are harmless.
+    //
+    // The race below prefers a "resolved" result (block.height set)
+    // over a pending one (block null), even when the pending result
+    // arrives first. See `raceFirstNonNullPreferringResolved` for the
+    // semantics. Without this, a federation peer with a stale
+    // optimistic copy can beat a peer that has the same transaction
+    // properly indexed with its block height, and the resolved row's
+    // data is silently dropped (PE-9092).
     const promises = this.sources.map((source) =>
       source.getGqlTransaction({ id, warnings }),
     );
 
     return (
-      (await this.raceFirstNonNull(promises, 'getGqlTransaction', { id })) ??
-      null
+      (await this.raceFirstNonNullPreferringResolved(
+        promises,
+        (tx) => tx?.height != null,
+        'getGqlTransaction',
+        { id },
+      )) ?? null
     );
   }
 
@@ -793,6 +848,7 @@ export class GatewaysGqlQueryable
       args.pageSize,
       sortOrder,
       compareTxCursorsAsc,
+      compareTxRichness,
     );
 
     return {
@@ -843,6 +899,89 @@ export class GatewaysGqlQueryable
       edges,
       ...(warnings.length > 0 ? { warnings } : {}),
     };
+  }
+
+  /**
+   * Best-effort single-record fan-out, biased toward a "fully resolved"
+   * answer. Fast path: resolves immediately when any source returns a
+   * non-null value for which `isResolved(value)` is true. Slow path:
+   * if every source has either rejected or returned a non-resolved
+   * value, resolves with the first non-resolved non-null value seen.
+   * Rejects only when every source rejects.
+   *
+   * Motivating example (PE-9092): a federated `transaction(id: X)`
+   * query reaches two peers. Peer A still has X as an optimistic
+   * upload with no block height; peer B has X properly indexed with
+   * its block height. If A is faster than B, the prior
+   * "first-non-null-wins" race returned A's null-height record and
+   * dropped B's resolved record. This method instead waits for B
+   * (or any other resolved peer), falling back to A only if every
+   * peer is in the same not-resolved state or unreachable.
+   *
+   * Failing sources are logged immediately (not deferred to the end)
+   * so log timing matches the original `raceFirstNonNull`.
+   */
+  private raceFirstNonNullPreferringResolved<T>(
+    promises: Promise<T | null | undefined>[],
+    isResolved: (value: T) => boolean,
+    method: string,
+    args: unknown,
+  ): Promise<T | undefined> {
+    return new Promise((resolve, reject) => {
+      let remaining = promises.length;
+      let rejectedCount = 0;
+      let firstError: unknown;
+      let settled = false;
+      let firstNonResolved: T | undefined;
+
+      if (remaining === 0) {
+        resolve(undefined);
+        return;
+      }
+
+      const finishWithFallback = () => {
+        if (settled) return;
+        if (rejectedCount === promises.length) {
+          settled = true;
+          const msg =
+            (firstError as Error)?.message ?? String(firstError ?? 'unknown');
+          reject(
+            new Error(
+              `All ${promises.length} GatewaysGqlQueryable source(s) failed for ${method}: ${msg}`,
+            ),
+          );
+          return;
+        }
+        settled = true;
+        resolve(firstNonResolved);
+      };
+
+      promises.forEach((p, i) => {
+        p.then((value) => {
+          if (settled) return;
+          if (value != null && isResolved(value)) {
+            settled = true;
+            resolve(value);
+            return;
+          }
+          if (value != null && firstNonResolved === undefined) {
+            firstNonResolved = value;
+          }
+          if (--remaining === 0) finishWithFallback();
+        }).catch((err) => {
+          const level = err?.code === 'EOPENBREAKER' ? 'debug' : 'warn';
+          this.log[level]('Upstream source failed', {
+            method,
+            args,
+            source: this.sourceLabels[i],
+            error: err?.message ?? String(err),
+          });
+          rejectedCount++;
+          if (firstError === undefined) firstError = err;
+          if (--remaining === 0) finishWithFallback();
+        });
+      });
+    });
   }
 
   /**

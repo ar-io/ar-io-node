@@ -357,6 +357,50 @@ describe('GatewaysGqlQueryable', () => {
       ]);
       await assert.rejects(() => merger.getGqlTransaction({ id: 'a' }));
     });
+
+    it('prefers a height-resolved peer over a faster peer with no height (PE-9092)', async () => {
+      // Source A returns immediately with the transaction in optimistic
+      // (no-block-height) shape. Source B is slower but returns the
+      // same transaction with its block height resolved. The merge
+      // must wait for B and return B's resolved record, not A's.
+      const resolved = txAt({ id: 'a', height: 1913780 });
+      const optimistic = { ...txAt({ id: 'a', height: 0 }), height: null };
+
+      class DelayedQueryable extends FakeQueryable {
+        constructor(
+          data: { transactions: GqlTransaction[] },
+          private readonly delayMs: number,
+        ) {
+          super(data);
+        }
+        async getGqlTransaction(args: { id: string }) {
+          await new Promise((r) => setTimeout(r, this.delayMs));
+          return super.getGqlTransaction(args);
+        }
+      }
+
+      const merger = makeMerger([
+        new DelayedQueryable({ transactions: [optimistic] }, 0),
+        new DelayedQueryable({ transactions: [resolved] }, 25),
+      ]);
+      const result = await merger.getGqlTransaction({ id: 'a' });
+      assert.equal(result?.id, 'a');
+      assert.equal(result?.height, 1913780);
+    });
+
+    it('falls back to a no-height peer if every other source has nothing or fails', async () => {
+      // Pure-optimistic case: only peer with the record has it without
+      // a block. We must return that record (not null/undefined).
+      const optimistic = { ...txAt({ id: 'a', height: 0 }), height: null };
+      const merger = makeMerger([
+        new FakeQueryable({ throws: new Error('peer-error') }),
+        new FakeQueryable({ transactions: [optimistic] }),
+        new FakeQueryable({}),
+      ]);
+      const result = await merger.getGqlTransaction({ id: 'a' });
+      assert.equal(result?.id, 'a');
+      assert.equal(result?.height, null);
+    });
   });
 
   describe('getGqlTransactions (connection merge)', () => {
@@ -414,6 +458,59 @@ describe('GatewaysGqlQueryable', () => {
         result.edges.map((e) => e.node.id),
         ['b', 'x', 'a'],
       );
+    });
+
+    it('prefers the height-resolved edge over the null-height edge for the same id (PE-9092)', async () => {
+      // Two sources both have id 'x'. Source A has it as a pending
+      // optimistic record (height null); source B has it resolved at
+      // height 100. In HEIGHT_DESC, nulls sort first, so without
+      // richness comparison the null-height edge would have won the
+      // dedup and the resolved one would have been silently dropped.
+      const optimistic = {
+        ...txAt({ id: 'x', height: 0, blockTransactionIndex: 1 }),
+        height: null,
+      };
+      const resolved = txAt({ id: 'x', height: 100, blockTransactionIndex: 1 });
+
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: [optimistic] }),
+        new FakeQueryable({ transactions: [resolved] }),
+      ]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.equal(result.edges.length, 1);
+      assert.equal(result.edges[0].node.id, 'x');
+      assert.equal(result.edges[0].node.height, 100);
+    });
+
+    it('keeps a null-height edge when no source has a resolved version', async () => {
+      // Both sources only know about 'x' as a pending/optimistic record.
+      // The merger must keep the (null-height) edge rather than dropping
+      // it just because no resolved version exists.
+      const optimisticA = {
+        ...txAt({ id: 'x', height: 0, blockTransactionIndex: 1, indexedAt: 1 }),
+        height: null,
+      };
+      const optimisticB = {
+        ...txAt({ id: 'x', height: 0, blockTransactionIndex: 1, indexedAt: 2 }),
+        height: null,
+      };
+
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: [optimisticA] }),
+        new FakeQueryable({ transactions: [optimisticB] }),
+      ]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.equal(result.edges.length, 1);
+      assert.equal(result.edges[0].node.id, 'x');
+      assert.equal(result.edges[0].node.height, null);
     });
 
     it('honors HEIGHT_ASC', async () => {
