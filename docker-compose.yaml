@@ -581,7 +581,15 @@ services:
       # Cranker (Solana-only). When unset, observer skips cranking.
       - ENABLE_EPOCH_CRANKING=${ENABLE_EPOCH_CRANKING:-}
       - ENABLE_CLEANUP=${ENABLE_CLEANUP:-}
+      # Solana wallet identities (operator/observer/upload). All four
+      # supported configurations are documented in the observer's
+      # `src/wallet-config.ts`. SOLANA_KEYPAIR_PATH is required in
+      # solana mode; the others are optional fallbacks.
       - SOLANA_KEYPAIR_PATH=${SOLANA_KEYPAIR_PATH:-}
+      - OBSERVER_KEYPAIR_PATH=${OBSERVER_KEYPAIR_PATH:-}
+      - SOLANA_UPLOAD_KEYPAIR_PATH=${SOLANA_UPLOAD_KEYPAIR_PATH:-}
+      - ARWEAVE_UPLOAD_KEY_FILE=${ARWEAVE_UPLOAD_KEY_FILE:-}
+      - ARWEAVE_UPLOAD_JWK=${ARWEAVE_UPLOAD_JWK:-}
       - SUBMIT_CONTRACT_INTERACTIONS=${SUBMIT_CONTRACT_INTERACTIONS:-true}
       - NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP=${NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP:-8}
       - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}
