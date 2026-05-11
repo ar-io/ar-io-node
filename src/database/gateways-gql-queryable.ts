@@ -903,23 +903,32 @@ export class GatewaysGqlQueryable
 
   /**
    * Best-effort single-record fan-out, biased toward a "fully resolved"
-   * answer. Fast path: resolves immediately when any source returns a
-   * non-null value for which `isResolved(value)` is true. Slow path:
-   * if every source has either rejected or returned a non-resolved
-   * value, resolves with the first non-resolved non-null value seen.
-   * Rejects only when every source rejects.
+   * answer. Composed of three promise paths (PE-9092):
    *
-   * Motivating example (PE-9092): a federated `transaction(id: X)`
-   * query reaches two peers. Peer A still has X as an optimistic
-   * upload with no block height; peer B has X properly indexed with
-   * its block height. If A is faster than B, the prior
-   * "first-non-null-wins" race returned A's null-height record and
-   * dropped B's resolved record. This method instead waits for B
-   * (or any other resolved peer), falling back to A only if every
-   * peer is in the same not-resolved state or unreachable.
+   * 1. **Fast path** (`Promise.any` of value-and-resolved-check chains):
+   *    resolves as soon as any source returns a value for which
+   *    `isResolved(value)` is true. Rejects (`AggregateError`) only when
+   *    no source meets that bar.
+   * 2. **Slow path** (`Promise.allSettled` followed by a chained scan):
+   *    waits for every source to settle, then resolves with the first
+   *    non-null value seen, or `undefined` if every source returned null,
+   *    or rejects with our standard "All N failed" message when every
+   *    source rejected.
+   * 3. **Race** (`Promise.any([fast, slow])`): yields whichever path
+   *    resolves first. The fast path wins whenever a resolved record
+   *    arrives; otherwise the slow path's fallback takes over once
+   *    every source has settled.
    *
-   * Failing sources are logged immediately (not deferred to the end)
-   * so log timing matches the original `raceFirstNonNull`.
+   * Motivating example: a federated `transaction(id: X)` query reaches
+   * two peers. Peer A still has X as an optimistic upload with no
+   * block height; peer B has X properly indexed with its block height.
+   * Under the prior `raceFirstNonNull` semantics A's faster but
+   * height-less response would win and B's resolved record would be
+   * dropped. Here the fast path ignores A, the slow path keeps A as a
+   * fallback, and the race returns B as soon as it arrives.
+   *
+   * Failing sources are logged immediately via a per-promise `.catch`
+   * tap so log timing matches the original `raceFirstNonNull`.
    */
   private raceFirstNonNullPreferringResolved<T>(
     promises: Promise<T | null | undefined>[],
@@ -927,60 +936,71 @@ export class GatewaysGqlQueryable
     method: string,
     args: unknown,
   ): Promise<T | undefined> {
-    return new Promise((resolve, reject) => {
-      let remaining = promises.length;
-      let rejectedCount = 0;
-      let firstError: unknown;
-      let settled = false;
-      let firstNonResolved: T | undefined;
+    if (promises.length === 0) return Promise.resolve(undefined);
 
-      if (remaining === 0) {
-        resolve(undefined);
-        return;
-      }
-
-      const finishWithFallback = () => {
-        if (settled) return;
-        if (rejectedCount === promises.length) {
-          settled = true;
-          const msg =
-            (firstError as Error)?.message ?? String(firstError ?? 'unknown');
-          reject(
-            new Error(
-              `All ${promises.length} GatewaysGqlQueryable source(s) failed for ${method}: ${msg}`,
-            ),
-          );
-          return;
-        }
-        settled = true;
-        resolve(firstNonResolved);
-      };
-
-      promises.forEach((p, i) => {
-        p.then((value) => {
-          if (settled) return;
-          if (value != null && isResolved(value)) {
-            settled = true;
-            resolve(value);
-            return;
-          }
-          if (value != null && firstNonResolved === undefined) {
-            firstNonResolved = value;
-          }
-          if (--remaining === 0) finishWithFallback();
-        }).catch((err) => {
-          const level = err?.code === 'EOPENBREAKER' ? 'debug' : 'warn';
-          this.log[level]('Upstream source failed', {
-            method,
-            args,
-            source: this.sourceLabels[i],
-            error: err?.message ?? String(err),
-          });
-          rejectedCount++;
-          if (firstError === undefined) firstError = err;
-          if (--remaining === 0) finishWithFallback();
+    // Tap each source for immediate error logging. The wrapper re-throws
+    // so downstream `.then` / `.catch` paths still see the original
+    // error — logging is a side effect, not a transformation.
+    const tapped = promises.map((p, i) =>
+      p.catch((err) => {
+        const level = err?.code === 'EOPENBREAKER' ? 'debug' : 'warn';
+        this.log[level]('Upstream source failed', {
+          method,
+          args,
+          source: this.sourceLabels[i],
+          error: err?.message ?? String(err),
         });
-      });
+        throw err;
+      }),
+    );
+
+    // 1. Fast path.
+    const fastPath = Promise.any(
+      tapped.map((p) =>
+        p.then((v) => {
+          if (v != null && isResolved(v)) return v;
+          // Lose the Promise.any race so a resolved peer (if any) can win.
+          throw new Error('not resolved');
+        }),
+      ),
+    );
+
+    // 2. Slow path.
+    const slowPath = Promise.allSettled(tapped).then((results) => {
+      let firstError: unknown;
+      let rejectedCount = 0;
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value != null) return r.value as T;
+        if (r.status === 'rejected') {
+          rejectedCount++;
+          if (firstError === undefined) firstError = r.reason;
+        }
+      }
+      if (rejectedCount === results.length) {
+        const msg =
+          (firstError as Error)?.message ?? String(firstError ?? 'unknown');
+        throw new Error(
+          `All ${results.length} GatewaysGqlQueryable source(s) failed for ${method}: ${msg}`,
+        );
+      }
+      return undefined;
+    });
+
+    // 3. Race. If both paths reject — which only happens when every
+    // source rejected — surface the slow path's "All N failed" error
+    // instead of the AggregateError, to match prior callers' shape.
+    return Promise.any([fastPath, slowPath]).catch((agg: unknown) => {
+      if (agg instanceof AggregateError) {
+        for (const err of agg.errors) {
+          if (
+            err instanceof Error &&
+            err.message.startsWith(`All ${promises.length} `)
+          ) {
+            throw err;
+          }
+        }
+      }
+      throw agg;
     });
   }
 
