@@ -682,7 +682,7 @@ export const arIOPeerManager = new ArIOPeerManager({
   // Solana readable is structurally compatible with the AoARIORead
   // surface this consumer uses (getGateways) — the only nominal
   // mismatch is the AO-only `process: AOProcess` field which is unused.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   networkProcess: networkProcess as any,
   nodeWallet: config.AR_IO_WALLET,
 });
@@ -1575,7 +1575,7 @@ export const nameResolver = createArNSResolver({
   // Solana readable is structurally compatible with AoARIORead for
   // the surface this consumer uses (getArNSRecords); the only nominal
   // mismatch is the AO-only `process` field which is unused.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   networkProcess: networkProcess as any,
   resolutionCache: arnsResolutionCache,
   registryCache: arnsRegistryCache,
