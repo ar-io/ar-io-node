@@ -129,6 +129,27 @@ export const dataItemsDroppedCounter = new promClient.Counter({
   labelNames: ['queue_name'],
 });
 
+// `Ans104Unbundler.queueItem` may decide not to enqueue a bundle for
+// unbundling. Every such skip is a bundle whose data items will not enter
+// the indexer pipeline through this call (the same bundle may still be
+// re-queued later via `bundle-repair-worker`). Tracked separately from
+// `data_items_dropped_total` because the unit is bundles not items, and
+// because the upstream cause differs from indexer-queue cap pressure.
+//
+//   reason="no_workers"        — ANS104_UNBUNDLE_WORKERS is 0; the
+//                                unbundler is intentionally disabled.
+//   reason="high_queue_depth"  — `shouldUnbundle()` returned false
+//                                (downstream backpressure from the
+//                                data-item indexer queue).
+//   reason="queue_full"        — the unbundler's own fastq queue is at
+//                                `maxQueueSize` and the item wasn't
+//                                prioritized.
+export const bundlesUnbundleSkippedCounter = new promClient.Counter({
+  name: 'bundles_unbundle_skipped_total',
+  help: 'Count of bundles skipped by Ans104Unbundler.queueItem and never enqueued for unbundling',
+  labelNames: ['reason'],
+});
+
 export const dataItemDataIndexedCounter = new promClient.Counter({
   name: 'data_item_data_indexed_total',
   help: 'Count of data item data indexed',
