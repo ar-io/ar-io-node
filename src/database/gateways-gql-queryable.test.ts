@@ -320,6 +320,21 @@ describe('renderTransactionNodeSelection', () => {
     );
     assert.equal(render(sel), undefined);
   });
+
+  it('falls back to undefined when a co-field-bearing nested selection contains a fragment (PE-9092)', () => {
+    // `block` requires co-fields (id/timestamp/previous) for the local
+    // Transaction.block resolver to behave correctly. If the inner selection
+    // is a fragment we cannot inspect, printing the field as-is would leave
+    // those co-fields unselected upstream and re-introduce the
+    // `Transaction.block` nulling bug PR #718 was meant to fix. Returning
+    // undefined here forces the caller to fall back to
+    // DEFAULT_TRANSACTION_NODE_FIELDS, which includes the full co-field set.
+    const sel = nodeSelection(
+      `fragment B on Block { height }
+       { transactions { edges { node { id block { ...B } } } } }`,
+    );
+    assert.equal(render(sel), undefined);
+  });
 });
 
 describe('resolveNodeFields', () => {
@@ -517,6 +532,48 @@ describe('GatewaysGqlQueryable', () => {
       assert.equal(result.edges.length, 1);
       assert.equal(result.edges[0].node.id, 'x');
       assert.equal(result.edges[0].node.height, 100);
+    });
+
+    it('sorts edges by cursor after a richer duplicate replaces an earlier emission (PE-9092)', async () => {
+      // Regression for an ordering bug in the k-way merge: under HEIGHT_DESC
+      // nulls sort first, so the merger would emit `x(null)` from source A,
+      // then `y(200)` from source B, then see `x(100)` from source B as a
+      // duplicate and upgrade the earlier x slot in place. The original
+      // implementation kept emission order, yielding `[x(100), y(200)]`
+      // even though HEIGHT_DESC requires y(200) before x(100). Fix is to
+      // sort by cursor once after all richness upgrades have settled.
+      const xNull = {
+        ...txAt({ id: 'x', height: 0, blockTransactionIndex: 1 }),
+        height: null,
+      };
+      const xResolved = txAt({
+        id: 'x',
+        height: 100,
+        blockTransactionIndex: 1,
+      });
+      const yResolved = txAt({
+        id: 'y',
+        height: 200,
+        blockTransactionIndex: 1,
+      });
+
+      const merger = makeMerger([
+        new FakeQueryable({ transactions: [xNull] }),
+        new FakeQueryable({ transactions: [yResolved, xResolved] }),
+      ]);
+      const result = await merger.getGqlTransactions({
+        pageSize: 10,
+        sortOrder: 'HEIGHT_DESC',
+        tags: [],
+      });
+      assert.equal(result.edges.length, 2);
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        ['y', 'x'],
+      );
+      // And the surviving x edge is the height-resolved one.
+      const xEdge = result.edges.find((e) => e.node.id === 'x');
+      assert.equal(xEdge?.node.height, 100);
     });
 
     it('keeps a null-height edge when no source has a resolved version', async () => {

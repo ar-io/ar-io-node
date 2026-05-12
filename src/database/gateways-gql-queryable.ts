@@ -144,6 +144,19 @@ function renderSelectionSet(
     if (field.selectionSet !== undefined) {
       const nested = renderSelectionSet(field.selectionSet);
       if (nested === undefined) {
+        // Inner selection contains a FragmentSpread or InlineFragment.
+        // For most fields we can preserve the user's intent by printing
+        // the field as-is. But for fields whose flat-mapper invariant
+        // depends on specific co-fields being present
+        // (REQUIRED_CO_FIELDS_BY_FIELD), printing a fragment as-is can
+        // leave those co-fields unselected — reproducing the original
+        // `Transaction.block` nulling bug PR #718 was meant to fix.
+        // Bail to the caller's fallback (`DEFAULT_TRANSACTION_NODE_FIELDS`,
+        // which includes the full co-field set) rather than silently
+        // emitting a fragment-shaped selection that loses correctness.
+        if (REQUIRED_CO_FIELDS_BY_FIELD[name] !== undefined) {
+          return undefined;
+        }
         byName.set(name, print(field));
         continue;
       }
@@ -622,11 +635,14 @@ function mergeEdges<T extends { cursor: string; node: { id: string } }>(
 ): { edges: T[]; hasUnconsumed: boolean } {
   const cursors = streams.map(() => 0);
   const sign = sortOrder === 'HEIGHT_ASC' ? 1 : -1;
-  const emitted: T[] = [];
-  // Map from node.id to its index in `emitted`. We track the index (not
-  // a boolean) so that when a later duplicate arrives we can replace the
-  // earlier emission in place if the new edge is richer.
-  const emittedIdxById = new Map<string, number>();
+  // Track emitted edges by id (no array slot) so that richness upgrades
+  // never mutate emission position. The k-way merge below would otherwise
+  // pick `x(null)` first under HEIGHT_DESC (nulls sort first), emit it,
+  // pick `y(200)` next, emit it, then encounter `x(100)` as a duplicate
+  // and overwrite slot 0 — yielding `[x(100), y(200)]` even though
+  // HEIGHT_DESC requires `[y(200), x(100)]`. Building the result as a
+  // Map and sorting once at the end avoids that ordering hazard.
+  const emittedById = new Map<string, T>();
   let hasUnconsumed = false;
 
   const pickNext = (): T | undefined => {
@@ -651,40 +667,46 @@ function mergeEdges<T extends { cursor: string; node: { id: string } }>(
     return edge;
   };
 
-  while (emitted.length < pageSize) {
+  while (emittedById.size < pageSize) {
     const edge = pickNext();
     if (edge === undefined) break;
-    const existingIdx = emittedIdxById.get(edge.node.id);
-    if (existingIdx !== undefined) {
-      if (compareRichness && compareRichness(edge, emitted[existingIdx]) > 0) {
-        emitted[existingIdx] = edge;
+    const existing = emittedById.get(edge.node.id);
+    if (existing !== undefined) {
+      if (compareRichness && compareRichness(edge, existing) > 0) {
+        emittedById.set(edge.node.id, edge);
       }
       continue;
     }
-    emittedIdxById.set(edge.node.id, emitted.length);
-    emitted.push(edge);
+    emittedById.set(edge.node.id, edge);
   }
 
-  // We have to keep peeking past pageSize until we either find the next
-  // distinct (not-yet-emitted) id or exhaust every stream. Otherwise
-  // cross-source duplicates inflate hasNextPage and send clients to an
-  // empty next page. We also keep upgrading existing emissions while we
-  // peek, so a richer duplicate that appears late in the merge can still
-  // replace the original.
+  // Keep peeking past pageSize until we either find a not-yet-emitted id
+  // or exhaust every stream. Otherwise cross-source duplicates inflate
+  // hasNextPage and send clients to an empty next page. We also keep
+  // upgrading existing entries so a richer duplicate that appears late in
+  // the merge still wins.
   while (true) {
     const edge = pickNext();
     if (edge === undefined) break;
-    const existingIdx = emittedIdxById.get(edge.node.id);
-    if (existingIdx === undefined) {
+    const existing = emittedById.get(edge.node.id);
+    if (existing === undefined) {
       hasUnconsumed = true;
       break;
     }
-    if (compareRichness && compareRichness(edge, emitted[existingIdx]) > 0) {
-      emitted[existingIdx] = edge;
+    if (compareRichness && compareRichness(edge, existing) > 0) {
+      emittedById.set(edge.node.id, edge);
     }
   }
 
-  return { edges: emitted, hasUnconsumed };
+  // Sort by cursor after richness-based upgrades. Without this, a richer
+  // duplicate replacing an earlier emission could land the upgraded edge
+  // out of sort order. The sort key is the same cursor comparator used by
+  // pickNext, so the final result respects the user's `sortOrder`.
+  const edges = Array.from(emittedById.values()).sort(
+    (a, b) => sign * compareAsc(a.cursor, b.cursor),
+  );
+
+  return { edges, hasUnconsumed };
 }
 
 /**
