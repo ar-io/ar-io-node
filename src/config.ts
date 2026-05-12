@@ -10,11 +10,8 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
-import { initHttpSig, saveAttestationTxId } from './lib/httpsig.js';
-import type {
-  HttpSigObserverContext,
-  HttpSigSignerContext,
-} from './lib/httpsig.js';
+import { initHttpSig } from './lib/httpsig.js';
+import type { HttpSigSignerContext } from './lib/httpsig.js';
 import { release } from './version.js';
 import logger from './log.js';
 import { verificationPriorities } from './constants.js';
@@ -1043,7 +1040,7 @@ export const TX_METADATA_RESOLVE_CONCURRENCY = env.positiveIntOrDefault(
 //
 
 export const HTTPSIG_ENABLED =
-  env.varOrDefault('HTTPSIG_ENABLED', 'false') === 'true';
+  env.varOrDefault('HTTPSIG_ENABLED', 'true') === 'true';
 
 export const HTTPSIG_KEY_FILE = env.varOrDefault(
   'HTTPSIG_KEY_FILE',
@@ -1053,41 +1050,25 @@ export const HTTPSIG_KEY_FILE = env.varOrDefault(
 export const HTTPSIG_BIND_REQUEST =
   env.varOrDefault('HTTPSIG_BIND_REQUEST', 'true') === 'true';
 
-// Observer wallet for attestation signing
-export const OBSERVER_WALLET = env.varOrUndefined('OBSERVER_WALLET');
-export const WALLETS_PATH = env.varOrDefault('WALLETS_PATH', 'wallets');
-export const HTTPSIG_UPLOAD_ATTESTATION =
-  env.varOrDefault('HTTPSIG_UPLOAD_ATTESTATION', 'true') === 'true';
+// Observer Solana keypair for HTTPSIG signing. When set, the observer's
+// Ed25519 key is used directly — its Solana address is registered on-chain
+// in the GAR, so verification is a simple lookup (no attestation needed).
+// When unset, falls back to an auto-generated PEM at HTTPSIG_KEY_FILE.
+export const OBSERVER_KEYPAIR_PATH = env.varOrUndefined(
+  'OBSERVER_KEYPAIR_PATH',
+);
 
 let _httpSigSigner: HttpSigSignerContext | undefined;
-let _httpSigObserver: HttpSigObserverContext | undefined;
 
 if (isMainThread && HTTPSIG_ENABLED) {
-  const result = initHttpSig({
+  _httpSigSigner = initHttpSig({
     keyFile: HTTPSIG_KEY_FILE,
-    bindRequest: HTTPSIG_BIND_REQUEST,
-    observerWallet: OBSERVER_WALLET,
-    walletsPath: WALLETS_PATH,
-    gatewayAddress: env.varOrUndefined('AR_IO_WALLET'),
+    observerKeypairPath: OBSERVER_KEYPAIR_PATH,
     log: logger,
   });
-  _httpSigSigner = result.signer;
-  _httpSigObserver = result.observer;
 }
 
 export const HTTPSIG_SIGNER = _httpSigSigner;
-export const HTTPSIG_OBSERVER = _httpSigObserver;
-
-/**
- * Record the Arweave TX ID of a successfully uploaded attestation. Mutates
- * `HTTPSIG_OBSERVER.attestationTxId` and persists it to the cache file so
- * subsequent restarts skip re-uploading.
- */
-export function setHttpSigAttestationTxId(txId: string): void {
-  if (_httpSigObserver === undefined) return;
-  _httpSigObserver.attestationTxId = txId;
-  saveAttestationTxId(_httpSigObserver.keysDir, txId);
-}
 
 //
 // Indexing
