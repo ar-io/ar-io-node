@@ -129,6 +129,65 @@ export const dataItemsDroppedCounter = new promClient.Counter({
   labelNames: ['queue_name'],
 });
 
+// `Ans104Unbundler.queueItem` may decide not to enqueue a bundle for
+// unbundling. Every such skip is a bundle whose data items will not enter
+// the indexer pipeline through this call (the same bundle may still be
+// re-queued later via `bundle-repair-worker`). Tracked separately from
+// `data_items_dropped_total` because the unit is bundles not items, and
+// because the upstream cause differs from indexer-queue cap pressure.
+//
+//   reason="no_workers"        — ANS104_UNBUNDLE_WORKERS is 0; the
+//                                unbundler is intentionally disabled.
+//   reason="high_queue_depth"  — `shouldUnbundle()` returned false
+//                                (downstream backpressure from the
+//                                data-item indexer queue).
+//   reason="queue_full"        — the unbundler's own fastq queue is at
+//                                `maxQueueSize` and the item wasn't
+//                                prioritized.
+export const bundlesUnbundleSkippedCounter = new promClient.Counter({
+  name: 'bundles_unbundle_skipped_total',
+  help: 'Count of bundles skipped by Ans104Unbundler.queueItem and never enqueued for unbundling',
+  labelNames: ['reason'],
+});
+
+// Observability for `BundleRepairWorker`. The worker has no direct view of
+// "successful repair" (whether a re-queued bundle eventually transitions to
+// fully indexed happens downstream of this worker), but the combination of
+// these signals lets operators answer it indirectly:
+//
+//   sent-for-repair rate   = rate(bundle_repair_retries_total{kind="retry"}[5m])
+//   current backlog        = bundle_repair_pending_bundles
+//   throughput             = -derivative(bundle_repair_pending_bundles[15m])
+//                            (negative slope of backlog == net repair throughput)
+//   cycle health           = rate(bundle_repair_errors_total[15m]),
+//                            histogram_quantile(0.95, ... cycle_duration ...)
+//
+// `kind` label cardinality is bounded at the four cycle methods:
+// retry | timestamp_update | backfill | filter_reprocess.
+export const bundleRepairRetriesCounter = new promClient.Counter({
+  name: 'bundle_repair_retries_total',
+  help: 'Bundles re-queued by bundle-repair-worker (per cycle kind)',
+  labelNames: ['kind'],
+});
+
+export const bundleRepairCycleDurationHistogram = new promClient.Histogram({
+  name: 'bundle_repair_cycle_duration_seconds',
+  help: 'Wall-clock duration of each bundle-repair-worker cycle, by kind',
+  labelNames: ['kind'],
+  buckets: [0.05, 0.5, 1, 5, 30, 60, 300, 600],
+});
+
+export const bundleRepairErrorsCounter = new promClient.Counter({
+  name: 'bundle_repair_errors_total',
+  help: 'Bundle-repair-worker cycle errors, by kind',
+  labelNames: ['kind'],
+});
+
+export const bundleRepairPendingBundlesGauge = new promClient.Gauge({
+  name: 'bundle_repair_pending_bundles',
+  help: 'Bundles awaiting full indexing (matched_data_item_count > 0 AND last_fully_indexed_at IS NULL AND last_skipped_at IS NULL). Refreshed once per `updateBundleTimestamps` cycle.',
+});
+
 export const dataItemDataIndexedCounter = new promClient.Counter({
   name: 'data_item_data_indexed_total',
   help: 'Count of data item data indexed',
