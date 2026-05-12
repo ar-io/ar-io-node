@@ -103,6 +103,29 @@ const DEFAULT_TRANSACTION_NODE_FIELDS = `
 `;
 
 /**
+ * Some upstream selections must always include certain sibling sub-fields
+ * because the local response-mapping flattens them into one row and a
+ * downstream resolver gates presence on a specific column being non-null.
+ *
+ * Concrete case (PE-9092): `Transaction.block` (`src/routes/graphql/
+ * resolvers.ts`) returns `null` if `blockIndepHash` is null on the flat
+ * `GqlTransaction`, even when `height` is set. `blockIndepHash` is only
+ * populated when the upstream response included `block.id`. So a user
+ * query of `block { height }` would, without expansion, cause the
+ * resolver to drop the entire block object — including the height the
+ * user explicitly asked for.
+ *
+ * The expansion is opt-in per field name. The user's sub-selection is
+ * preserved verbatim; we just union the required co-fields onto it so
+ * the local flat representation matches the local-DB invariant
+ * ("if any block field is set, all of them are"). Wire overhead is a
+ * few extra fields per transaction edge.
+ */
+const REQUIRED_CO_FIELDS_BY_FIELD: Record<string, readonly string[]> = {
+  block: ['id', 'timestamp', 'height', 'previous'],
+};
+
+/**
  * Render a GraphQL selection set as a plain fragment body (no surrounding
  * braces). Aliases are stripped and selections are deduped by canonical name,
  * because the mapper reads canonical keys like `node.anchor`. Non-field
@@ -121,10 +144,40 @@ function renderSelectionSet(
     if (field.selectionSet !== undefined) {
       const nested = renderSelectionSet(field.selectionSet);
       if (nested === undefined) {
+        // Inner selection contains a FragmentSpread or InlineFragment.
+        // For most fields we can preserve the user's intent by printing
+        // the field as-is. But for fields whose flat-mapper invariant
+        // depends on specific co-fields being present
+        // (REQUIRED_CO_FIELDS_BY_FIELD), printing a fragment as-is can
+        // leave those co-fields unselected — reproducing the original
+        // `Transaction.block` nulling bug PR #718 was meant to fix.
+        // Bail to the caller's fallback (`DEFAULT_TRANSACTION_NODE_FIELDS`,
+        // which includes the full co-field set) rather than silently
+        // emitting a fragment-shaped selection that loses correctness.
+        if (REQUIRED_CO_FIELDS_BY_FIELD[name] !== undefined) {
+          return undefined;
+        }
         byName.set(name, print(field));
         continue;
       }
-      byName.set(name, `${name} { ${nested} }`);
+      const required = REQUIRED_CO_FIELDS_BY_FIELD[name];
+      if (required !== undefined) {
+        // Union the user's sub-selection with the required co-fields.
+        const present = new Set(
+          field.selectionSet.selections
+            .filter((s): s is FieldNode => s.kind === 'Field')
+            .map((s) => s.name.value),
+        );
+        const additions = required.filter((f) => !present.has(f)).join(' ');
+        byName.set(
+          name,
+          additions === ''
+            ? `${name} { ${nested} }`
+            : `${name} { ${nested} ${additions} }`,
+        );
+      } else {
+        byName.set(name, `${name} { ${nested} }`);
+      }
     } else {
       byName.set(name, name);
     }
@@ -562,17 +615,34 @@ function compareBlockCursorsAsc(aCursor: string, bCursor: string): number {
  * Returns the merged edges plus a flag indicating whether any source still had
  * unconsumed edges after we stopped — used alongside per-source `hasNextPage`
  * to decide the merged pageInfo.
+ *
+ * When `compareRichness` is supplied, duplicate ids are resolved by keeping
+ * the "richer" representation rather than the first one emitted. This matters
+ * across heterogeneous federation peers: one source can return a transaction
+ * with `block.height` resolved while another still has the same id as a
+ * pending/optimistic entry (`block: null`). Without richness comparison and
+ * with the default `HEIGHT_DESC` sort (which puts NULL heights first because
+ * pending uploads should appear at the top of "latest" feeds), the optimistic
+ * entry would win the dedup race and the resolved version would be silently
+ * dropped (PE-9092).
  */
 function mergeEdges<T extends { cursor: string; node: { id: string } }>(
   streams: T[][],
   pageSize: number,
   sortOrder: SortOrder,
   compareAsc: (a: string, b: string) => number,
+  compareRichness?: (a: T, b: T) => number,
 ): { edges: T[]; hasUnconsumed: boolean } {
   const cursors = streams.map(() => 0);
   const sign = sortOrder === 'HEIGHT_ASC' ? 1 : -1;
-  const emitted: T[] = [];
-  const emittedIds = new Set<string>();
+  // Track emitted edges by id (no array slot) so that richness upgrades
+  // never mutate emission position. The k-way merge below would otherwise
+  // pick `x(null)` first under HEIGHT_DESC (nulls sort first), emit it,
+  // pick `y(200)` next, emit it, then encounter `x(100)` as a duplicate
+  // and overwrite slot 0 — yielding `[x(100), y(200)]` even though
+  // HEIGHT_DESC requires `[y(200), x(100)]`. Building the result as a
+  // Map and sorting once at the end avoids that ordering hazard.
+  const emittedById = new Map<string, T>();
   let hasUnconsumed = false;
 
   const pickNext = (): T | undefined => {
@@ -597,28 +667,63 @@ function mergeEdges<T extends { cursor: string; node: { id: string } }>(
     return edge;
   };
 
-  while (emitted.length < pageSize) {
+  while (emittedById.size < pageSize) {
     const edge = pickNext();
     if (edge === undefined) break;
-    if (emittedIds.has(edge.node.id)) continue;
-    emittedIds.add(edge.node.id);
-    emitted.push(edge);
+    const existing = emittedById.get(edge.node.id);
+    if (existing !== undefined) {
+      if (compareRichness && compareRichness(edge, existing) > 0) {
+        emittedById.set(edge.node.id, edge);
+      }
+      continue;
+    }
+    emittedById.set(edge.node.id, edge);
   }
 
-  // We have to keep peeking past pageSize until we either find the next
-  // distinct (not-yet-emitted) id or exhaust every stream. Otherwise
-  // cross-source duplicates inflate hasNextPage and send clients to an
-  // empty next page.
+  // Keep peeking past pageSize until we either find a not-yet-emitted id
+  // or exhaust every stream. Otherwise cross-source duplicates inflate
+  // hasNextPage and send clients to an empty next page. We also keep
+  // upgrading existing entries so a richer duplicate that appears late in
+  // the merge still wins.
   while (true) {
     const edge = pickNext();
     if (edge === undefined) break;
-    if (!emittedIds.has(edge.node.id)) {
+    const existing = emittedById.get(edge.node.id);
+    if (existing === undefined) {
       hasUnconsumed = true;
       break;
     }
+    if (compareRichness && compareRichness(edge, existing) > 0) {
+      emittedById.set(edge.node.id, edge);
+    }
   }
 
-  return { edges: emitted, hasUnconsumed };
+  // Sort by cursor after richness-based upgrades. Without this, a richer
+  // duplicate replacing an earlier emission could land the upgraded edge
+  // out of sort order. The sort key is the same cursor comparator used by
+  // pickNext, so the final result respects the user's `sortOrder`.
+  const edges = Array.from(emittedById.values()).sort(
+    (a, b) => sign * compareAsc(a.cursor, b.cursor),
+  );
+
+  return { edges, hasUnconsumed };
+}
+
+/**
+ * Richness comparator for transaction edges: an edge with a non-null block
+ * height beats an edge with a null block height. All other shapes are
+ * considered equivalent (first-write-wins as before). Designed for use
+ * with `mergeEdges` in federation merges.
+ */
+function compareTxRichness(
+  a: { cursor: string },
+  b: { cursor: string },
+): number {
+  const ah = decodeTransactionGqlCursor(a.cursor).height;
+  const bh = decodeTransactionGqlCursor(b.cursor).height;
+  if (ah == null && bh != null) return -1;
+  if (ah != null && bh == null) return 1;
+  return 0;
 }
 
 export class GatewaysGqlQueryable
@@ -739,17 +844,29 @@ export class GatewaysGqlQueryable
     id: string;
     warnings?: GqlWarning[];
   }): Promise<GqlTransaction | null> {
-    // Shared sink so every source writes into the same array; the race
-    // resolves on first non-null but losing sources may keep running and
-    // write warnings after the resolver has already copied the sink into
-    // the Apollo context, so any late writes are harmless.
+    // Shared sink so every source writes into the same array; losing
+    // sources may keep running and write warnings after the resolver
+    // has already copied the sink into the Apollo context, so any
+    // late writes are harmless.
+    //
+    // The race below prefers a "resolved" result (block.height set)
+    // over a pending one (block null), even when the pending result
+    // arrives first. See `raceFirstNonNullPreferringResolved` for the
+    // semantics. Without this, a federation peer with a stale
+    // optimistic copy can beat a peer that has the same transaction
+    // properly indexed with its block height, and the resolved row's
+    // data is silently dropped (PE-9092).
     const promises = this.sources.map((source) =>
       source.getGqlTransaction({ id, warnings }),
     );
 
     return (
-      (await this.raceFirstNonNull(promises, 'getGqlTransaction', { id })) ??
-      null
+      (await this.raceFirstNonNullPreferringResolved(
+        promises,
+        (tx) => tx?.height != null,
+        'getGqlTransaction',
+        { id },
+      )) ?? null
     );
   }
 
@@ -793,6 +910,7 @@ export class GatewaysGqlQueryable
       args.pageSize,
       sortOrder,
       compareTxCursorsAsc,
+      compareTxRichness,
     );
 
     return {
@@ -843,6 +961,109 @@ export class GatewaysGqlQueryable
       edges,
       ...(warnings.length > 0 ? { warnings } : {}),
     };
+  }
+
+  /**
+   * Best-effort single-record fan-out, biased toward a "fully resolved"
+   * answer. Composed of three promise paths (PE-9092):
+   *
+   * 1. **Fast path** (`Promise.any` of value-and-resolved-check chains):
+   *    resolves as soon as any source returns a value for which
+   *    `isResolved(value)` is true. Rejects (`AggregateError`) only when
+   *    no source meets that bar.
+   * 2. **Slow path** (`Promise.allSettled` followed by a chained scan):
+   *    waits for every source to settle, then resolves with the first
+   *    non-null value seen, or `undefined` if every source returned null,
+   *    or rejects with our standard "All N failed" message when every
+   *    source rejected.
+   * 3. **Race** (`Promise.any([fast, slow])`): yields whichever path
+   *    resolves first. The fast path wins whenever a resolved record
+   *    arrives; otherwise the slow path's fallback takes over once
+   *    every source has settled.
+   *
+   * Motivating example: a federated `transaction(id: X)` query reaches
+   * two peers. Peer A still has X as an optimistic upload with no
+   * block height; peer B has X properly indexed with its block height.
+   * Under the prior `raceFirstNonNull` semantics A's faster but
+   * height-less response would win and B's resolved record would be
+   * dropped. Here the fast path ignores A, the slow path keeps A as a
+   * fallback, and the race returns B as soon as it arrives.
+   *
+   * Failing sources are logged immediately via a per-promise `.catch`
+   * tap so log timing matches the original `raceFirstNonNull`.
+   */
+  private raceFirstNonNullPreferringResolved<T>(
+    promises: Promise<T | null | undefined>[],
+    isResolved: (value: T) => boolean,
+    method: string,
+    args: unknown,
+  ): Promise<T | undefined> {
+    if (promises.length === 0) return Promise.resolve(undefined);
+
+    // Tap each source for immediate error logging. The wrapper re-throws
+    // so downstream `.then` / `.catch` paths still see the original
+    // error — logging is a side effect, not a transformation.
+    const tapped = promises.map((p, i) =>
+      p.catch((err) => {
+        const level = err?.code === 'EOPENBREAKER' ? 'debug' : 'warn';
+        this.log[level]('Upstream source failed', {
+          method,
+          args,
+          source: this.sourceLabels[i],
+          error: err?.message ?? String(err),
+        });
+        throw err;
+      }),
+    );
+
+    // 1. Fast path.
+    const fastPath = Promise.any(
+      tapped.map((p) =>
+        p.then((v) => {
+          if (v != null && isResolved(v)) return v;
+          // Lose the Promise.any race so a resolved peer (if any) can win.
+          throw new Error('not resolved');
+        }),
+      ),
+    );
+
+    // 2. Slow path.
+    const slowPath = Promise.allSettled(tapped).then((results) => {
+      let firstError: unknown;
+      let rejectedCount = 0;
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value != null) return r.value as T;
+        if (r.status === 'rejected') {
+          rejectedCount++;
+          if (firstError === undefined) firstError = r.reason;
+        }
+      }
+      if (rejectedCount === results.length) {
+        const msg =
+          (firstError as Error)?.message ?? String(firstError ?? 'unknown');
+        throw new Error(
+          `All ${results.length} GatewaysGqlQueryable source(s) failed for ${method}: ${msg}`,
+        );
+      }
+      return undefined;
+    });
+
+    // 3. Race. If both paths reject — which only happens when every
+    // source rejected — surface the slow path's "All N failed" error
+    // instead of the AggregateError, to match prior callers' shape.
+    return Promise.any([fastPath, slowPath]).catch((agg: unknown) => {
+      if (agg instanceof AggregateError) {
+        for (const err of agg.errors) {
+          if (
+            err instanceof Error &&
+            err.message.startsWith(`All ${promises.length} `)
+          ) {
+            throw err;
+          }
+        }
+      }
+      throw agg;
+    });
   }
 
   /**
