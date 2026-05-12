@@ -6,9 +6,12 @@
  */
 import * as winston from 'winston';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 
 import { BundleIndex } from '../types.js';
 import { TransactionFetcher } from './transaction-fetcher.js';
+
+type CycleKind = 'retry' | 'timestamp_update' | 'backfill' | 'filter_reprocess';
 
 export class BundleRepairWorker {
   // Dependencies
@@ -86,16 +89,40 @@ export class BundleRepairWorker {
     log.debug('Stopped successfully.');
   }
 
+  /**
+   * Runs `fn` and observes the wall-clock duration into the
+   * `bundle_repair_cycle_duration_seconds{kind}` histogram. On thrown
+   * exceptions, increments `bundle_repair_errors_total{kind}` and rethrows.
+   * Caller is responsible for surrounding try/catch — keeps the metric
+   * side of the wrapper minimal.
+   */
+  private async measure<T>(kind: CycleKind, fn: () => Promise<T>): Promise<T> {
+    const stop = metrics.bundleRepairCycleDurationHistogram
+      .labels({ kind })
+      .startTimer();
+    try {
+      return await fn();
+    } catch (error) {
+      metrics.bundleRepairErrorsCounter.inc({ kind });
+      throw error;
+    } finally {
+      stop();
+    }
+  }
+
   async retryBundles() {
     try {
-      const bundleIds = await this.bundleIndex.getFailedBundleIds(
-        config.BUNDLE_REPAIR_RETRY_BATCH_SIZE,
-      );
-      for (const bundleId of bundleIds) {
-        this.log.info('Retrying failed bundle', { bundleId });
-        await this.bundleIndex.saveBundleRetries(bundleId);
-        await this.txFetcher.queueTxId({ txId: bundleId });
-      }
+      await this.measure('retry', async () => {
+        const bundleIds = await this.bundleIndex.getFailedBundleIds(
+          config.BUNDLE_REPAIR_RETRY_BATCH_SIZE,
+        );
+        for (const bundleId of bundleIds) {
+          this.log.info('Retrying failed bundle', { bundleId });
+          await this.bundleIndex.saveBundleRetries(bundleId);
+          await this.txFetcher.queueTxId({ txId: bundleId });
+          metrics.bundleRepairRetriesCounter.inc({ kind: 'retry' });
+        }
+      });
     } catch (error: any) {
       this.log.error('Error retrying failed bundles:', error);
     }
@@ -103,9 +130,25 @@ export class BundleRepairWorker {
 
   async updateBundleTimestamps() {
     try {
-      this.log.info('Updating bundle timestamps...');
-      await this.bundleIndex.updateBundlesFullyIndexedAt();
-      this.log.info('Bundle timestamps updated.');
+      await this.measure('timestamp_update', async () => {
+        this.log.info('Updating bundle timestamps...');
+        await this.bundleIndex.updateBundlesFullyIndexedAt();
+        this.log.info('Bundle timestamps updated.');
+
+        // Refresh the pending-backlog gauge on the same cadence as the
+        // timestamp update so the dashboard reflects the post-update
+        // state. Failure here is non-fatal — we'd rather miss one gauge
+        // refresh than fail the cycle outright.
+        try {
+          const pending = await this.bundleIndex.getRepairBacklogCount();
+          metrics.bundleRepairPendingBundlesGauge.set(pending);
+        } catch (gaugeError: any) {
+          this.log.warn(
+            'Failed to refresh bundle_repair_pending_bundles gauge',
+            { error: gaugeError?.message ?? String(gaugeError) },
+          );
+        }
+      });
     } catch (error: any) {
       this.log.error('Error updating bundle timestamps:', error);
     }
@@ -113,9 +156,11 @@ export class BundleRepairWorker {
 
   async backfillBundles() {
     try {
-      this.log.info('Backfilling bundle records...');
-      await this.bundleIndex.backfillBundles();
-      this.log.info('Bundle records backfilled.');
+      await this.measure('backfill', async () => {
+        this.log.info('Backfilling bundle records...');
+        await this.bundleIndex.backfillBundles();
+        this.log.info('Bundle records backfilled.');
+      });
     } catch (error: any) {
       this.log.error('Error backfilling bundle records:', error);
     }
@@ -123,12 +168,14 @@ export class BundleRepairWorker {
 
   async updateForFilterChange() {
     try {
-      this.log.info('Update bundles for filter change...');
-      await this.bundleIndex.updateBundlesForFilterChange(
-        this.unbundledFilter,
-        this.indexFilter,
-      );
-      this.log.info('Bundles updated for filter change.');
+      await this.measure('filter_reprocess', async () => {
+        this.log.info('Update bundles for filter change...');
+        await this.bundleIndex.updateBundlesForFilterChange(
+          this.unbundledFilter,
+          this.indexFilter,
+        );
+        this.log.info('Bundles updated for filter change.');
+      });
     } catch (error: any) {
       this.log.error('Error updating bundles for filter change:', error);
     }

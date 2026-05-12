@@ -24,6 +24,14 @@ FROM (
 )
 ORDER BY RANDOM()
 
+-- selectRepairBacklogCount
+SELECT COUNT(*) AS n
+FROM bundles
+WHERE matched_data_item_count IS NOT NULL
+  AND matched_data_item_count > 0
+  AND last_fully_indexed_at IS NULL
+  AND last_skipped_at IS NULL
+
 -- updateFullyIndexedAt
 UPDATE bundles
 SET

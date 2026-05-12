@@ -281,6 +281,12 @@ export interface BundleIndex {
   saveBundle(bundle: BundleRecord): Promise<BundleSaveResult>;
   saveBundleRetries(rootTransactionId: string): Promise<void>;
   getFailedBundleIds(limit: number): Promise<string[]>;
+  /**
+   * Count of bundles awaiting full indexing: `matched_data_item_count > 0`,
+   * `last_fully_indexed_at IS NULL`, `last_skipped_at IS NULL`. Drives the
+   * `bundle_repair_pending_bundles` gauge.
+   */
+  getRepairBacklogCount(): Promise<number>;
   updateBundlesFullyIndexedAt(): Promise<void>;
   updateBundlesForFilterChange(
     unbundleFilter: string,
