@@ -14,7 +14,12 @@ describe('buildArIoInfo', () => {
   it('should return basic info when both features are disabled', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: { allow: [] },
       ans104IndexFilter: { allow: [] },
       release: 'r123',
@@ -45,7 +50,12 @@ describe('buildArIoInfo', () => {
   it('should include rateLimiter when enabled', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -82,7 +92,12 @@ describe('buildArIoInfo', () => {
   it('should include x402 when enabled with testnet', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -150,7 +165,12 @@ describe('buildArIoInfo', () => {
   it('should include x402 when enabled with mainnet', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -175,7 +195,12 @@ describe('buildArIoInfo', () => {
   it('should include both rateLimiter and x402 when both are enabled', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -208,7 +233,12 @@ describe('buildArIoInfo', () => {
   it('should correctly calculate convenience fields for rate limiter', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -234,7 +264,12 @@ describe('buildArIoInfo', () => {
   it('should correctly calculate example costs for x402', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -284,7 +319,12 @@ describe('buildArIoInfo', () => {
   it('should apply minPrice correctly when perBytePrice is very low', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -312,7 +352,12 @@ describe('buildArIoInfo', () => {
   it('should apply maxPrice correctly when calculated cost is very high', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -339,7 +384,12 @@ describe('buildArIoInfo', () => {
   it('should not expose internal implementation details', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -383,7 +433,12 @@ describe('buildArIoInfo', () => {
   it('should include default bundler URL', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -401,7 +456,12 @@ describe('buildArIoInfo', () => {
   it('should include custom single bundler URL', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -417,7 +477,12 @@ describe('buildArIoInfo', () => {
   it('should include multiple bundler URLs', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -439,7 +504,12 @@ describe('buildArIoInfo', () => {
   it('should always include bundlers field even with empty array', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -455,7 +525,12 @@ describe('buildArIoInfo', () => {
   it('should format bundlers as array of objects with url property', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -474,7 +549,12 @@ describe('buildArIoInfo', () => {
   it('should include httpsig in info response when enabled', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -499,7 +579,12 @@ describe('buildArIoInfo', () => {
   it('should include httpsig with attestation and solana address', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
@@ -540,7 +625,12 @@ describe('buildArIoInfo', () => {
   it('should omit httpsig when not configured', () => {
     const result = buildArIoInfo({
       wallet: 'test-wallet',
-      programIds: { core: 'P_CORE', gar: 'P_GAR', arns: 'P_ARNS', ant: 'P_ANT' },
+      programIds: {
+        core: 'P_CORE',
+        gar: 'P_GAR',
+        arns: 'P_ARNS',
+        ant: 'P_ANT',
+      },
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
