@@ -173,14 +173,21 @@ describe('BundleRepairWorker metrics', () => {
 
   it('does not fail the cycle when pending-count refresh throws', async () => {
     bundleIndex.throwOn.getRepairBacklogCount = new Error('count failed');
-    // updateBundlesFullyIndexedAt itself should still complete; only the
-    // gauge refresh fails (non-fatal).
+    // Counters are global module state across the test process, so a prior
+    // test (or any future addition above this one) could have already
+    // incremented the timestamp_update error counter. Assert that this
+    // call does not move it, rather than that its absolute value is zero.
+    const before = await getCounterValue(metrics.bundleRepairErrorsCounter, {
+      kind: 'timestamp_update',
+    });
     await worker.updateBundleTimestamps();
     // No error counter increment for timestamp_update because the main
     // call succeeded; gauge refresh failure is logged and swallowed.
-    const errors = await getCounterValue(metrics.bundleRepairErrorsCounter, {
-      kind: 'timestamp_update',
-    });
-    assert.equal(errors, 0);
+    assert.equal(
+      await getCounterValue(metrics.bundleRepairErrorsCounter, {
+        kind: 'timestamp_update',
+      }),
+      before,
+    );
   });
 });
