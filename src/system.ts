@@ -7,7 +7,7 @@
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
-import { AOProcess, AoARIORead, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
+import { Logger as ARIOLogger } from '@ar.io/sdk';
 import { SolanaARIOReadable } from '@ar.io/sdk/solana';
 import {
   createSolanaRpc,
@@ -114,7 +114,6 @@ import { PeerRequestLimiter } from './data/peer-request-limiter.js';
 import { ArIOChunkSource } from './data/ar-io-chunk-source.js';
 import { ArIOPeerManager } from './peers/ar-io-peer-manager.js';
 import { S3DataSource } from './data/s3-data-source.js';
-import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetchers.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
@@ -169,65 +168,39 @@ const arweave = Arweave.init({});
 ARIOLogger.default.setLogLevel(config.AR_IO_SDK_LOG_LEVEL as any);
 
 /**
- * Shared Solana JSON-RPC client.
- *
- * Initialized via `createSolanaRpc(SOLANA_RPC_URL)` only when
- * `NETWORK_SOURCE === 'solana'`; `undefined` otherwise so the AO
- * branch stays inert. Both the {@link SolanaARIOReadable} network
- * process and the `OnDemandArNSResolver` (via `createArNSResolver`)
- * read from this same client to keep RPC connection management in
- * one place.
- *
- * Callers in the Solana branch can assume non-null after the
- * `NETWORK_SOURCE === 'solana'` guard. Callers outside that branch
- * MUST handle `undefined`.
+ * Shared Solana JSON-RPC client. Both the {@link SolanaARIOReadable}
+ * network process and the `OnDemandArNSResolver` (via
+ * `createArNSResolver`) read from this same client to keep RPC
+ * connection management in one place.
  */
-export const solanaRpc: Rpc<SolanaRpcApi> | undefined =
-  config.NETWORK_SOURCE === 'solana'
-    ? createSolanaRpc(config.SOLANA_RPC_URL)
-    : undefined;
-
-let networkProcess: AoARIORead;
-if (config.NETWORK_SOURCE === 'solana') {
-  if (!config.SOLANA_RPC_URL) {
-    throw new Error('SOLANA_RPC_URL is required when NETWORK_SOURCE=solana');
-  }
-  networkProcess = new SolanaARIOReadable({
-    // `@ar.io/sdk` ships a nested `@solana/rpc-spec` whose Rpc<...> type
-    // drifts from the top-level `@solana/kit` copy. Runtime is
-    // structurally identical; `as any` is a TS-only workaround until
-    // the deps align (likely via yarn `resolutions` or a kit major
-    // bump in the SDK). Matches ar-io-observer/src/system.ts.
-    rpc: solanaRpc as any,
-    // Optional program-id overrides for devnet / localnet. Undefined keys
-    // are dropped via spread so the SDK falls back to its bundled defaults.
-    ...(config.ARIO_CORE_PROGRAM_ID !== undefined
-      ? { coreProgramId: address(config.ARIO_CORE_PROGRAM_ID) as Address }
-      : {}),
-    ...(config.ARIO_GAR_PROGRAM_ID !== undefined
-      ? { garProgramId: address(config.ARIO_GAR_PROGRAM_ID) as Address }
-      : {}),
-    ...(config.ARIO_ARNS_PROGRAM_ID !== undefined
-      ? { arnsProgramId: address(config.ARIO_ARNS_PROGRAM_ID) as Address }
-      : {}),
-    ...(config.ARIO_ANT_PROGRAM_ID !== undefined
-      ? { antProgramId: address(config.ARIO_ANT_PROGRAM_ID) as Address }
-      : {}),
-  }) as unknown as AoARIORead;
-} else {
-  networkProcess = ARIO.init({
-    process: new AOProcess({
-      processId: config.IO_PROCESS_ID,
-      ao: connect({
-        // @permaweb/aoconnect defaults will be used if these are not provided
-        MU_URL: config.AO_MU_URL,
-        CU_URL: config.NETWORK_AO_CU_URL,
-        GRAPHQL_URL: config.AO_GRAPHQL_URL,
-        GATEWAY_URL: config.AO_GATEWAY_URL,
-      }),
-    }),
-  });
+if (!config.SOLANA_RPC_URL) {
+  throw new Error('SOLANA_RPC_URL is required');
 }
+export const solanaRpc: Rpc<SolanaRpcApi> = createSolanaRpc(
+  config.SOLANA_RPC_URL,
+);
+
+const networkProcess = new SolanaARIOReadable({
+  // `@ar.io/sdk` ships a nested `@solana/rpc-spec` whose Rpc<...> type
+  // drifts from the top-level `@solana/kit` copy. Runtime is
+  // structurally identical; `as any` is a TS-only workaround until
+  // the deps align. Matches ar-io-observer/src/system.ts.
+  rpc: solanaRpc as any,
+  // Optional program-id overrides for devnet / localnet. Undefined keys
+  // are dropped via spread so the SDK falls back to its bundled defaults.
+  ...(config.ARIO_CORE_PROGRAM_ID !== undefined
+    ? { coreProgramId: address(config.ARIO_CORE_PROGRAM_ID) as Address }
+    : {}),
+  ...(config.ARIO_GAR_PROGRAM_ID !== undefined
+    ? { garProgramId: address(config.ARIO_GAR_PROGRAM_ID) as Address }
+    : {}),
+  ...(config.ARIO_ARNS_PROGRAM_ID !== undefined
+    ? { arnsProgramId: address(config.ARIO_ARNS_PROGRAM_ID) as Address }
+    : {}),
+  ...(config.ARIO_ANT_PROGRAM_ID !== undefined
+    ? { antProgramId: address(config.ARIO_ANT_PROGRAM_ID) as Address }
+    : {}),
+});
 
 // Initialize DNS resolver for preferred chunk GET nodes if configured
 const dnsResolver =
@@ -668,7 +641,11 @@ const gatewaysDataSource = new FilteredContiguousDataSource({
 
 export const arIOPeerManager = new ArIOPeerManager({
   log,
-  networkProcess,
+  // Solana readable is structurally compatible with the AoARIORead
+  // surface this consumer uses (getGateways) — the only nominal
+  // mismatch is the AO-only `process: AOProcess` field which is unused.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  networkProcess: networkProcess as any,
   nodeWallet: config.AR_IO_WALLET,
 });
 
@@ -1454,7 +1431,11 @@ export const nameResolver = createArNSResolver({
   trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
   trustedArnsResolverHostHeader: config.TRUSTED_ARNS_RESOLVER_HOST_HEADER,
   resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
-  networkProcess: networkProcess,
+  // Solana readable is structurally compatible with AoARIORead for
+  // the surface this consumer uses (getArNSRecords); the only nominal
+  // mismatch is the AO-only `process` field which is unused.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  networkProcess: networkProcess as any,
   resolutionCache: arnsResolutionCache,
   registryCache: arnsRegistryCache,
   solanaRpc,

@@ -40,7 +40,6 @@ describe('TrustedGatewayArNSResolver', () => {
             statusText: 'OK',
             headers: {
               [headerNames.arnsResolvedId.toLowerCase()]: resolvedId,
-              [headerNames.arnsProcessId.toLowerCase()]: 'process1',
               [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
               [headerNames.arnsLimit.toLowerCase()]: '10',
               [headerNames.arnsIndex.toLowerCase()]: '0',
@@ -78,7 +77,6 @@ describe('TrustedGatewayArNSResolver', () => {
             statusText: 'OK',
             headers: {
               [headerNames.arnsResolvedId.toLowerCase()]: resolvedId,
-              [headerNames.arnsProcessId.toLowerCase()]: 'process1',
               [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
               [headerNames.arnsLimit.toLowerCase()]: '10',
               [headerNames.arnsIndex.toLowerCase()]: '0',

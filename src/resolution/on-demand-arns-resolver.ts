@@ -8,45 +8,26 @@ import winston from 'winston';
 
 import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
-import { ANT, AOProcess, AoArNSNameDataWithName, AoClient } from '@ar.io/sdk';
+import { AoArNSNameDataWithName } from '@ar.io/sdk';
 import { SolanaANTReadable } from '@ar.io/sdk/solana';
 import { address, type Rpc, type SolanaRpcApiMainnet } from '@solana/kit';
 import * as config from '../config.js';
-import { connect } from '@permaweb/aoconnect';
 import CircuitBreaker from 'opossum';
 import * as metrics from '../metrics.js';
 
 export class OnDemandArNSResolver implements NameResolver {
   private log: winston.Logger;
-  private ao: AoClient;
-  private hyperbeamUrl: string | undefined;
-  private solanaRpc?: Rpc<SolanaRpcApiMainnet>;
+  private solanaRpc: Rpc<SolanaRpcApiMainnet>;
 
   constructor({
     log,
-    ao = connect({
-      MU_URL: config.AO_MU_URL,
-      CU_URL: config.ANT_AO_CU_URL,
-      GRAPHQL_URL: config.AO_GRAPHQL_URL,
-      GATEWAY_URL: config.AO_GATEWAY_URL,
-    }),
-    hyperbeamUrl = config.AO_ANT_HYPERBEAM_URL,
     solanaRpc,
   }: {
     log: winston.Logger;
-    ao?: AoClient;
     circuitBreakerOptions?: CircuitBreaker.Options;
-    hyperbeamUrl?: string;
-    solanaRpc?: Rpc<SolanaRpcApiMainnet>;
+    solanaRpc: Rpc<SolanaRpcApiMainnet>;
   }) {
-    this.log = log.child({
-      class: 'OnDemandArNSResolver',
-      networkCuUrl: config.NETWORK_AO_CU_URL ?? '<sdk default>',
-      antCuUrl: config.ANT_AO_CU_URL ?? '<sdk default>',
-      hyperbeamUrl: hyperbeamUrl ?? '<sdk default>',
-    });
-    this.ao = ao;
-    this.hyperbeamUrl = hyperbeamUrl;
+    this.log = log.child({ class: 'OnDemandArNSResolver' });
     this.solanaRpc = solanaRpc;
   }
 
@@ -102,39 +83,19 @@ export class OnDemandArNSResolver implements NameResolver {
 
       const processId = baseArNSRecord.processId;
 
-      // Get ANT records from the appropriate backend. Fail fast on a
-      // misconfigured Solana mode so we don't silently return AO-sourced
-      // records under a Solana-selected deployment (would be inconsistent
-      // with the network process's reads).
-      let ant;
-      if (config.NETWORK_SOURCE === 'solana') {
-        if (!this.solanaRpc) {
-          throw new Error(
-            'NETWORK_SOURCE=solana but no solanaRpc was provided to OnDemandArNSResolver. Wire it through createArNSResolver({ solanaRpc, ... }).',
-          );
-        }
-        ant = new SolanaANTReadable({
-          // See note in system.ts re: nested @solana/rpc-spec drift
-          // between @ar.io/sdk and the top-level kit copy.
-          rpc: this.solanaRpc as any,
-          processId: processId,
-          // Pin the ANT program to the gateway-configured ID so devnet/
-          // testnet deployments don't silently fall back to the SDK's
-          // bundled mainnet placeholder (which has no accounts off
-          // mainnet, producing empty `getRecords()` results).
-          ...(config.ARIO_ANT_PROGRAM_ID !== undefined && {
-            antProgramId: address(config.ARIO_ANT_PROGRAM_ID),
-          }),
-        });
-      } else {
-        ant = ANT.init({
-          process: new AOProcess({
-            processId: processId,
-            ao: this.ao,
-          }),
-          hyperbeamUrl: this.hyperbeamUrl,
-        });
-      }
+      const ant = new SolanaANTReadable({
+        // See note in system.ts re: nested @solana/rpc-spec drift
+        // between @ar.io/sdk and the top-level kit copy.
+        rpc: this.solanaRpc as any,
+        processId: processId,
+        // Pin the ANT program to the gateway-configured ID so devnet/
+        // testnet deployments don't silently fall back to the SDK's
+        // bundled mainnet placeholder (which has no accounts off
+        // mainnet, producing empty `getRecords()` results).
+        ...(config.ARIO_ANT_PROGRAM_ID !== undefined && {
+          antProgramId: address(config.ARIO_ANT_PROGRAM_ID),
+        }),
+      });
 
       // if it is the root name, then it should point to '@'
       const undername =

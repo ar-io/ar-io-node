@@ -58,7 +58,7 @@ export class CompositeArNSResolver implements NameResolver {
     resolvers: NameResolver[];
     resolutionCache: KvArNSResolutionStore;
     registryCache: KvArNSRegistryStore;
-    networkProcess?: AoARIORead;
+    networkProcess: AoARIORead;
     overrides?: {
       ttlSeconds?: number;
     };

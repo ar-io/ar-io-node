@@ -55,12 +55,9 @@ export const createArNSKvStore = ({
 /**
  * Build the composite ArNS resolver chain from configured resolvers.
  *
- * @param solanaRpc - Optional shared Solana JSON-RPC client. When the
- *   `'on-demand'` resolver is selected and `NETWORK_SOURCE='solana'`,
- *   the `OnDemandArNSResolver` uses this client for ANT lookups via
- *   `SolanaANTReadable`. If omitted under Solana mode, the resolver
- *   throws at first resolution attempt rather than silently falling
- *   back to AO. Pass through from `system.ts`'s exported `solanaRpc`.
+ * @param solanaRpc - Shared Solana JSON-RPC client; consumed by
+ *   `OnDemandArNSResolver` for ANT lookups via `SolanaANTReadable`.
+ *   Pass through from `system.ts`'s exported `solanaRpc`.
  */
 export const createArNSResolver = ({
   log,
@@ -79,11 +76,11 @@ export const createArNSResolver = ({
   registryCache: KvArNSRegistryStore;
   trustedGatewayUrl?: string;
   trustedArnsResolverHostHeader?: string;
-  networkProcess?: AoARIORead;
+  networkProcess: AoARIORead;
   overrides?: {
     ttlSeconds?: number;
   };
-  solanaRpc?: Rpc<SolanaRpcApi>;
+  solanaRpc: Rpc<SolanaRpcApi>;
 }): NameResolver => {
   const resolverMap: Record<ArNSResolverType, NameResolver | undefined> = {
     'on-demand': new OnDemandArNSResolver({

@@ -1109,7 +1109,13 @@ export interface ValidNameResolution {
   resolvedId: string;
   resolvedAt: number;
   ttl: number;
-  processId: string;
+  /**
+   * ANT mint pubkey that resolved this name. Set when the resolution
+   * came from a direct SDK call (`OnDemandArNSResolver` /
+   * `ArNSNamesCache`); `undefined` on trusted-gateway hops since the
+   * ANT identity is no longer propagated over HTTP.
+   */
+  processId: string | undefined;
   limit: number;
   index: number;
 }
