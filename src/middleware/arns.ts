@@ -214,14 +214,11 @@ export const createArnsMiddleware = ({
           if (ttl !== undefined) {
             res.header(headerNames.arnsTtlSeconds, ttl.toString());
           }
-          if (processId !== undefined) {
-            res.header(headerNames.arnsProcessId, processId);
-            if (
-              config.NETWORK_SOURCE === 'solana' &&
-              config.ARIO_ANT_PROGRAM_ID !== undefined
-            ) {
-              res.header(headerNames.arnsProgramId, config.ARIO_ANT_PROGRAM_ID);
-            }
+          if (config.ARIO_ANT_PROGRAM_ID !== undefined) {
+            res.header(
+              headerNames.arnsAntProgramId,
+              config.ARIO_ANT_PROGRAM_ID,
+            );
           }
           if (resolvedAt !== undefined) {
             res.header(headerNames.arnsResolvedAt, resolvedAt.toString());

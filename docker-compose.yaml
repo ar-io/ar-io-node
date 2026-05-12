@@ -115,11 +115,8 @@ services:
       - ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
       - SANDBOX_PROTOCOL=${SANDBOX_PROTOCOL:-}
       - START_WRITERS=${START_WRITERS:-}
-      - IO_PROCESS_ID=${IO_PROCESS_ID:-}
-      # AR.IO Network backend selection. `ao` (default) reads protocol state
-      # from the AR.IO AO process; `solana` reads from the AR.IO Solana
+      # AR.IO Network backend — reads protocol state from the AR.IO Solana
       # programs identified by ARIO_*_PROGRAM_ID below.
-      - NETWORK_SOURCE=${NETWORK_SOURCE:-}
       - SOLANA_RPC_URL=${SOLANA_RPC_URL:-}
       - ARIO_CORE_PROGRAM_ID=${ARIO_CORE_PROGRAM_ID:-}
       - ARIO_GAR_PROGRAM_ID=${ARIO_GAR_PROGRAM_ID:-}
@@ -261,13 +258,6 @@ services:
       - CHUNK_REBROADCAST_MAX_CONCURRENT=${CHUNK_REBROADCAST_MAX_CONCURRENT:-}
       - CHUNK_REBROADCAST_DEDUP_TTL_SECONDS=${CHUNK_REBROADCAST_DEDUP_TTL_SECONDS:-}
       - CHUNK_REBROADCAST_MIN_SUCCESS_COUNT=${CHUNK_REBROADCAST_MIN_SUCCESS_COUNT:-}
-      - AO_CU_URL=${AO_CU_URL:-}
-      - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}
-      - ANT_AO_CU_URL=${ANT_AO_CU_URL:-}
-      - AO_ANT_HYPERBEAM_URL=${AO_ANT_HYPERBEAM_URL:-}
-      - AO_MU_URL=${AO_MU_URL:-}
-      - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
-      - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
       - WRITE_ANS104_DATA_ITEM_DB_SIGNATURES=${WRITE_ANS104_DATA_ITEM_DB_SIGNATURES:-}
       - WRITE_TRANSACTION_DB_SIGNATURES=${WRITE_TRANSACTION_DB_SIGNATURES:-}
       - ENABLE_DATA_DB_WAL_CLEANUP=${ENABLE_DATA_DB_WAL_CLEANUP:-}
@@ -570,9 +560,7 @@ services:
     environment:
       - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-}
-      - IO_PROCESS_ID=${IO_PROCESS_ID:-}
-      # AR.IO Network backend selection — see core service for full docs.
-      - NETWORK_SOURCE=${NETWORK_SOURCE:-}
+      # AR.IO Network backend — see core service for full docs.
       - SOLANA_RPC_URL=${SOLANA_RPC_URL:-}
       - ARIO_CORE_PROGRAM_ID=${ARIO_CORE_PROGRAM_ID:-}
       - ARIO_GAR_PROGRAM_ID=${ARIO_GAR_PROGRAM_ID:-}
@@ -605,11 +593,6 @@ services:
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-80-pre}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
-      - AO_CU_URL=${AO_CU_URL:-}
-      - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}
-      - AO_MU_URL=${AO_MU_URL:-}
-      - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
-      - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
       # Reference Gateway Configuration
       - REFERENCE_GATEWAY_HOSTS=${REFERENCE_GATEWAY_HOSTS:-}
       - REFERENCE_GATEWAY_NETWORK_ONLY=${REFERENCE_GATEWAY_NETWORK_ONLY:-}

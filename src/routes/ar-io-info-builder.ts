@@ -118,16 +118,8 @@ export interface HttpsigInfo {
 }
 
 /**
- * AR.IO Network backend the gateway is reading state from.
- *
- * - `'ao'` — legacy AO Compute Unit; identity is `processId` (base64url, 43 chars).
- * - `'solana'` — Solana programs; identity is `programIds` (base58 pubkeys).
- */
-export type NetworkBackend = 'ao' | 'solana';
-
-/**
- * Solana program IDs for the AR.IO Network suite. Present only when
- * `network === 'solana'`. Each is a base58-encoded Solana pubkey.
+ * Solana program IDs for the AR.IO Network suite. Each is a base58-encoded
+ * Solana pubkey.
  */
 export interface SolanaProgramIds {
   core: string | undefined;
@@ -141,16 +133,7 @@ export interface SolanaProgramIds {
  */
 export interface ArIoInfoResponse {
   wallet: string | undefined;
-  network: NetworkBackend;
-  /**
-   * Legacy AO process ID. Always emitted for backward compatibility — under
-   * Solana mode it is the configured `IO_PROCESS_ID` (typically the legacy
-   * AO mainnet process so AO-aware clients don't break) and the canonical
-   * identity lives in `programIds.gar`.
-   */
-  processId: string | undefined;
-  /** Solana program IDs. Omitted when `network === 'ao'`. */
-  programIds?: SolanaProgramIds;
+  programIds: SolanaProgramIds;
   ans104UnbundleFilter: BundleFilter;
   ans104IndexFilter: BundleFilter;
   supportedManifestVersions: string[];
@@ -166,9 +149,7 @@ export interface ArIoInfoResponse {
  */
 export interface ArIoInfoConfig {
   wallet: string | undefined;
-  network: NetworkBackend;
-  processId: string | undefined;
-  programIds?: SolanaProgramIds;
+  programIds: SolanaProgramIds;
   ans104UnbundleFilter: BundleFilter;
   ans104IndexFilter: BundleFilter;
   release: string;
@@ -238,8 +219,7 @@ export interface ArIoInfoConfig {
 export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
   const response: ArIoInfoResponse = {
     wallet: config.wallet,
-    network: config.network,
-    processId: config.processId,
+    programIds: config.programIds,
     ans104UnbundleFilter: config.ans104UnbundleFilter,
     ans104IndexFilter: config.ans104IndexFilter,
     supportedManifestVersions: ['0.1.0', '0.2.0'],
@@ -248,10 +228,6 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
       bundlers: config.bundlerUrls.map((url) => ({ url })),
     },
   };
-
-  if (config.network === 'solana' && config.programIds !== undefined) {
-    response.programIds = config.programIds;
-  }
 
   if (config.rateLimiter?.enabled) {
     const { resourceCapacity, resourceRefillRate, ipCapacity, ipRefillRate } =

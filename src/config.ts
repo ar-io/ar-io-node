@@ -1950,11 +1950,6 @@ export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
 // The wallet for this gateway
 export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
 
-export const IO_PROCESS_ID = env.varOrDefault(
-  'IO_PROCESS_ID',
-  'qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE',
-);
-
 export const AR_IO_NODE_RELEASE = env.varOrDefault(
   'AR_IO_NODE_RELEASE',
   release,
@@ -2405,58 +2400,15 @@ export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
 //
 
 // TODO: move this
-/**
- * Removes trailing slashes from URLs
- * @param url The URL to sanitize
- * @returns The sanitized URL without trailing slashes or undefined if input was undefined
- */
-function sanitizeUrl(url: string | undefined): string | undefined {
-  if (url === undefined) {
-    return undefined;
-  }
-  return url.replace(/\/+$/, '');
-}
-
-export const AO_MU_URL = sanitizeUrl(env.varOrUndefined('AO_MU_URL'));
-export const AO_CU_URL = sanitizeUrl(env.varOrUndefined('AO_CU_URL'));
-export const NETWORK_AO_CU_URL = sanitizeUrl(
-  env.varOrUndefined('NETWORK_AO_CU_URL') ?? AO_CU_URL,
-);
-export const ANT_AO_CU_URL = sanitizeUrl(
-  env.varOrUndefined('ANT_AO_CU_URL') ?? AO_CU_URL,
-);
-export const AO_GRAPHQL_URL = env.varOrUndefined('AO_GRAPHQL_URL');
-export const AO_GATEWAY_URL = env.varOrUndefined('AO_GATEWAY_URL');
-export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
-
 //
 // Solana
 //
 
-const NETWORK_SOURCE_VALUES = ['ao', 'solana'] as const;
-type NetworkSource = (typeof NETWORK_SOURCE_VALUES)[number];
-const rawNetworkSource = env.varOrDefault('NETWORK_SOURCE', 'ao');
-if (!NETWORK_SOURCE_VALUES.includes(rawNetworkSource as NetworkSource)) {
-  throw new Error(
-    `Invalid NETWORK_SOURCE='${rawNetworkSource}'. Must be one of: ${NETWORK_SOURCE_VALUES.join(', ')}.`,
-  );
-}
 /**
- * Selects which backend the gateway reads protocol state from.
- * - `'ao'` (default) — legacy AO compute-unit backend. Existing
- *   deployments stay on this path unless explicitly opted out.
- * - `'solana'` — read ArNS records, gateway registry, and epoch
- *   data from on-chain Solana programs via `@ar.io/sdk/solana`.
- *
- * Throws at boot on unrecognised values so a typo doesn't silently
- * route to the wrong backend.
- */
-export const NETWORK_SOURCE = rawNetworkSource as NetworkSource;
-/**
- * Solana RPC endpoint URL. Used only when `NETWORK_SOURCE === 'solana'`.
- * Public mainnet-beta is rate-limited; production deployments should
- * use a dedicated provider (Helius, QuickNode, Triton). Devnet:
- * `https://api.devnet.solana.com`. Localnet: `http://127.0.0.1:8899`.
+ * Solana RPC endpoint URL. Public mainnet-beta is rate-limited;
+ * production deployments should use a dedicated provider (Helius,
+ * QuickNode, Triton). Devnet: `https://api.devnet.solana.com`.
+ * Localnet: `http://127.0.0.1:8899`.
  */
 export const SOLANA_RPC_URL = env.varOrDefault(
   'SOLANA_RPC_URL',

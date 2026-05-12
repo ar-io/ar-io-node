@@ -66,8 +66,11 @@ export class TrustedGatewayArNSResolver implements NameResolver {
 
       const resolvedId =
         response.headers[headerNames.arnsResolvedId.toLowerCase()];
-      const processId =
-        response.headers[headerNames.arnsProcessId.toLowerCase()];
+      // ANT identity is no longer surfaced on the HTTP response — peers
+      // expose only `X-ArNS-Ant-Program-Id` (the AR.IO ANT program). The
+      // per-name ANT mint is not propagated across the trusted-gateway
+      // hop; downstream callers that need it must re-resolve via the SDK.
+      const processId: string | undefined = undefined;
       const ttl =
         parseInt(response.headers[headerNames.arnsTtlSeconds.toLowerCase()]) ||
         DEFAULT_ARNS_TTL_SECONDS;

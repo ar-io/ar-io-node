@@ -7,15 +7,11 @@
 import winston from 'winston';
 
 import {
-  AoClient,
   AoARIORead,
-  AOProcess,
-  ARIO,
   AoArNSNameDataWithName,
   PaginationResult,
 } from '@ar.io/sdk';
 import * as config from '../config.js';
-import { connect } from '@permaweb/aoconnect';
 import { KvDebounceStore } from '../store/kv-debounce-store.js';
 import { KVBufferStore } from '../types.js';
 import * as metrics from '../metrics.js';
@@ -44,25 +40,13 @@ export class ArNSNamesCache {
   constructor({
     log,
     registryCache,
-    ao = connect({
-      MU_URL: config.AO_MU_URL,
-      CU_URL: config.NETWORK_AO_CU_URL,
-      GRAPHQL_URL: config.AO_GRAPHQL_URL,
-      GATEWAY_URL: config.AO_GATEWAY_URL,
-    }),
-    networkProcess = ARIO.init({
-      process: new AOProcess({
-        processId: config.IO_PROCESS_ID,
-        ao: ao,
-      }),
-    }),
+    networkProcess,
     cacheMissDebounceTtl = DEFAULT_CACHE_MISS_DEBOUNCE_TTL,
     cacheHitDebounceTtl = DEFAULT_CACHE_HIT_DEBOUNCE_TTL,
   }: {
     log: winston.Logger;
     registryCache: KVBufferStore;
-    ao?: AoClient;
-    networkProcess?: AoARIORead;
+    networkProcess: AoARIORead;
     cacheMissDebounceTtl?: number;
     cacheHitDebounceTtl?: number;
   }) {

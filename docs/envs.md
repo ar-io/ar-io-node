@@ -139,7 +139,7 @@ This document describes the environment variables that can be used to configure 
 | ENABLE_CHUNK_SYMLINK_CLEANUP                     | Boolean              | true                                          | If true, periodically removes dead symlinks from chunk cache directories (symlinks pointing to expired cached data)                                                  |
 | CHUNK_SYMLINK_CLEANUP_INTERVAL                   | Number               | 86400                                         | Interval in seconds between dead symlink cleanup runs (default: 24 hours)                                                                                            |
 | NODE_JS_MAX_OLD_SPACE_SIZE                       | Number               | 2048 or 8192, depending on number of workers  | Sets the memory limit, in Megabytes, for NodeJs. Default value is 2048 if using less than 2 unbundle workers, otherwise 8192                                         |
-| SUBMIT_CONTRACT_INTERACTIONS                     | Boolean              | true                                          | If true, Observer will submit its generated reports to the ar.io Network. AO mode signs the legacy `save-observations` AO message with the AO wallet. Solana mode signs the `save_observations` ix with `OBSERVER_KEYPAIR_PATH ?? SOLANA_KEYPAIR_PATH` and pre-flight-skips when the observer isn't prescribed, already submitted, or past the observation window (no wasted tx fees on bouncing simulations). |
+| SUBMIT_CONTRACT_INTERACTIONS                     | Boolean              | true                                          | If true, Observer will submit its generated reports to the ar.io Network by signing the `save_observations` ix with `OBSERVER_KEYPAIR_PATH ?? SOLANA_KEYPAIR_PATH`. Pre-flight-skips when the observer isn't prescribed, already submitted, or past the observation window (no wasted tx fees on bouncing simulations). |
 | REDIS_MAX_MEMORY                                 | String               | 256mb                                         | Sets the max memory allocated to Redis                                                                                                                               |
 | REDIS_DATA_PATH                                  | String               | "./data/redis"                                | Sets the location for Redis data persistence files (dump.rdb, appendonly.aof). Only used if persistence is enabled via EXTRA_REDIS_FLAGS                            |
 | EXTRA_REDIS_FLAGS                                | String               | --save "" --appendonly no                     | Additional CLI flags passed to Redis server. Default disables persistence for performance. Set to "--save 300 10 --appendonly yes --appendfsync everysec" to enable hybrid persistence (recommended for x402 paid tokens) |
@@ -273,14 +273,12 @@ This document describes the environment variables that can be used to configure 
 
 ## Solana Backend
 
-The gateway can read protocol state from either AO (legacy) or Solana
-on-chain programs. Set `NETWORK_SOURCE=solana` to enable the Solana
-backend; the OnDemandArNSResolver will route ANT lookups through
-`@ar.io/sdk/solana::SolanaANTReadable` instead of `@permaweb/aoconnect`.
+The gateway reads protocol state from Solana on-chain programs. The
+OnDemandArNSResolver routes ANT lookups through
+`@ar.io/sdk/solana::SolanaANTReadable`.
 
 | Variable               | Type   | Default                                  | Description                                                                                                                                                                                  |
 | ---------------------- | ------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NETWORK_SOURCE`       | String | `"solana"`                               | Network state backend. `"solana"` reads ArNS / gateway / epoch state from Solana on-chain programs; `"ao"` falls back to the legacy AO backend.                                              |
 | `SOLANA_RPC_URL`       | String | `"https://api.mainnet-beta.solana.com"`  | Solana RPC endpoint. Public mainnet-beta is rate-limited; use a dedicated provider (Helius, QuickNode, Triton) for production. For devnet: `https://api.devnet.solana.com`.                  |
 | `ARIO_CORE_PROGRAM_ID` | String | undefined (SDK falls back to mainnet ID) | Override the `ario-core` program ID. Required for devnet / localnet (canonical devnet value: `83CQLP848zzCgnZ4LTq87g6hvxTooNLX7YXXkUUGv5ig`). See `devnet-config.json` in `ar-io/solana-ar-io`. |
 | `ARIO_GAR_PROGRAM_ID`  | String | undefined                                | Override the `ario-gar` program ID. Devnet: `AF8QAEaR4hzsqeUDwEdeTXMYtdyFegTENBdnJro6WVLR`.                                                                                                   |
