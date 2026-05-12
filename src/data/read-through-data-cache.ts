@@ -6,7 +6,7 @@
  */
 import crypto from 'node:crypto';
 import * as EventEmitter from 'node:events';
-import { Readable, pipeline } from 'node:stream';
+import { Readable, Transform, pipeline } from 'node:stream';
 import winston from 'winston';
 
 import * as events from '../events.js';
@@ -627,8 +627,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         'data.trusted': data.trusted,
       });
 
-      data.stream.setMaxListeners(Infinity); // Suppress listener leak warnings
-
       // Skip caching when serving regions to avoid persisting data fragments
       // and (more importantly) writing invalid ID to hash relationships in the
       // DB, and when data size is zero to avoid unnecessary storage operations
@@ -640,7 +638,23 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
 
-        pipeline(data.stream, cacheStream, async (error: any) => {
+        // Hash + byte-count chunks inside a Transform so backpressure flows
+        // end-to-end (data.stream → hashingStream → cacheStream). Previously
+        // bytesReceived + hasher.update lived in a `.on('data')` listener
+        // alongside the pipeline, which put the readable into flowing mode
+        // and short-circuited the writable's backpressure — letting
+        // cacheStream's internal buffer accumulate multi-MB of pending writes
+        // per concurrent download. At high ANS104_DOWNLOAD_WORKERS this
+        // produced external-memory bloat that drove the container OOM.
+        const hashingStream = new Transform({
+          transform(chunk: Buffer, _encoding, callback) {
+            bytesReceived += chunk.length;
+            hasher.update(chunk);
+            callback(null, chunk);
+          },
+        });
+
+        pipeline(data.stream, hashingStream, cacheStream, async (error: any) => {
           const cachingDuration = Date.now() - cachingStart;
           if (error !== undefined) {
             // Handle abort errors specially - just log at debug level
@@ -837,11 +851,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               }
             }
           }
-        });
-
-        data.stream.on('data', (chunk) => {
-          bytesReceived += chunk.length;
-          hasher.update(chunk);
         });
       } else {
         // Log why caching was skipped
