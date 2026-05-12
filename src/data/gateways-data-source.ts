@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { default as axios } from 'axios';
+import http from 'node:http';
+import https from 'node:https';
 import winston from 'winston';
 import {
   detectLoopInViaChain,
@@ -35,6 +37,20 @@ import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
 
 const MAX_DATA_HOPS = 3;
 
+// Shared keep-alive agent pool, one entry per gateway URL. Reusing TCP+TLS
+// connections across requests avoids per-request handshake cost, slashes
+// kernel TIME_WAIT churn, and gives upstream connections a chance to settle
+// into stable buffer sizes (which matters at high ANS104_DOWNLOAD_WORKERS).
+// maxSockets caps concurrent connections per gateway so a burst of retry
+// traffic doesn't open hundreds of sockets simultaneously.
+const AGENT_OPTIONS = {
+  keepAlive: true,
+  keepAliveMsecs: 30_000,
+  maxSockets: 16,
+  maxFreeSockets: 4,
+  timeout: 60_000,
+} as const;
+
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private trustedGateways: Map<number, string[]>;
@@ -43,6 +59,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private readonly streamStallTimeoutMs: number;
   private readonly fallbackToBasePath: boolean;
   private readonly maxHopsAllowed: number;
+  private readonly agents: Map<string, http.Agent | https.Agent> = new Map();
 
   constructor({
     log,
@@ -80,6 +97,20 @@ export class GatewaysDataSource implements ContiguousDataSource {
       this.trustedGateways.get(priority)?.push(url);
       this.gatewayTrust.set(url, trusted);
     }
+  }
+
+  // Returns a long-lived keep-alive agent for the given gateway URL. The agent
+  // is created lazily on first request and cached for the lifetime of this
+  // data source instance.
+  private getAgent(gatewayUrl: string): http.Agent | https.Agent {
+    let agent = this.agents.get(gatewayUrl);
+    if (agent === undefined) {
+      agent = gatewayUrl.startsWith('https://')
+        ? new https.Agent(AGENT_OPTIONS)
+        : new http.Agent(AGENT_OPTIONS);
+      this.agents.set(gatewayUrl, agent);
+    }
+    return agent;
   }
 
   async getData({
@@ -170,11 +201,15 @@ export class GatewaysDataSource implements ContiguousDataSource {
               continue;
             }
 
+            const isHttps = gatewayUrl.startsWith('https://');
+            const agent = this.getAgent(gatewayUrl);
             const gatewayAxios = axios.create({
               baseURL: gatewayUrl,
               headers: {
                 'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
               },
+              httpAgent: isHttps ? undefined : (agent as http.Agent),
+              httpsAgent: isHttps ? (agent as https.Agent) : undefined,
             });
 
             gatewayAxios.interceptors.request.use((config) => {
