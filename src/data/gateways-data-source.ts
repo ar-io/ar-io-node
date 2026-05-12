@@ -4,10 +4,21 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { Span } from '@opentelemetry/api';
 import { default as axios } from 'axios';
 import http from 'node:http';
 import https from 'node:https';
 import winston from 'winston';
+
+import * as config from '../config.js';
+import { TrustedGatewayConfig } from '../config.js';
+import {
+  buildRangeHeader,
+  normalizeAbortError,
+  parseContentLength,
+  parseContentRange,
+} from '../lib/http-utils.js';
+import { shuffleArray } from '../lib/random.js';
 import {
   detectLoopInViaChain,
   generateRequestAttributes,
@@ -15,25 +26,15 @@ import {
   parseUpstreamTagHeaders,
   validateHopCount,
 } from '../lib/request-attributes.js';
-import { shuffleArray } from '../lib/random.js';
+import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
+import * as metrics from '../metrics.js';
+import { startChildSpan } from '../tracing.js';
 import {
   ContiguousData,
   ContiguousDataSource,
   Region,
   RequestAttributes,
 } from '../types.js';
-import * as metrics from '../metrics.js';
-import * as config from '../config.js';
-import { TrustedGatewayConfig } from '../config.js';
-import { startChildSpan } from '../tracing.js';
-import { Span } from '@opentelemetry/api';
-import {
-  buildRangeHeader,
-  normalizeAbortError,
-  parseContentLength,
-  parseContentRange,
-} from '../lib/http-utils.js';
-import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
 
 const MAX_DATA_HOPS = 3;
 
