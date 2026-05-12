@@ -12,6 +12,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- The bundle retry-loop SELECT (`selectFailedBundleIds`) is now ~200× faster
+  after correcting the index column. The pre-existing
+  `import_attempt_last_retried_idx` had been on `import_attempt_count` since
+  the Jan 2025 retry-stats refactor, but the query orders by
+  `retry_attempt_count` — a different column. Replaced with
+  `bundles_active_retry_priority_idx` on `(last_fully_indexed_at,
+  retry_attempt_count, last_retried_at)`. Live measurement: 4.32 s → 20.5 ms
+  per call.
+
 ## [Release 78] - 2026-05-08
 
 This is a **recommended release** focused on **request-cancellation
