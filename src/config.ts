@@ -1189,11 +1189,17 @@ export const OBSERVER_KEYPAIR_PATH = env.varOrUndefined(
 let _httpSigSigner: HttpSigSignerContext | undefined;
 
 if (isMainThread && HTTPSIG_ENABLED) {
-  _httpSigSigner = initHttpSig({
-    keyFile: HTTPSIG_KEY_FILE,
-    observerKeypairPath: OBSERVER_KEYPAIR_PATH,
-    log: logger,
-  });
+  try {
+    _httpSigSigner = initHttpSig({
+      keyFile: HTTPSIG_KEY_FILE,
+      observerKeypairPath: OBSERVER_KEYPAIR_PATH,
+      log: logger,
+    });
+  } catch (error: any) {
+    logger.warn('HTTPSIG initialization failed; signing disabled', {
+      error: error?.message,
+    });
+  }
 }
 
 export const HTTPSIG_SIGNER = _httpSigSigner;
