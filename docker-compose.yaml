@@ -60,7 +60,6 @@ services:
       - ${ETL_STAGING_PATH:-./data/etl/staging}:/app/data/etl/staging
       - ${CDB64_ROOT_TX_INDEX_DATA_PATH:-./data/cdb64-root-tx-index}:/app/data/cdb64-root-tx-index
       - ${KEYS_DATA_PATH:-./data/keys}:/app/data/keys
-      - ${WALLETS_PATH:-./wallets}:/app/wallets:ro
       - ${SECRETS_PATH:-./secrets}:/app/secrets:ro
       - envoy-eds-data:/app/data/envoy-eds
     environment:
