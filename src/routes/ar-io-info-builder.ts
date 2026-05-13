@@ -87,34 +87,14 @@ export interface X402Info {
 }
 
 /**
- * RSA-signed attestation linking an Ed25519 signing key to an Arweave
- * observer wallet identity. Enables verifiers to establish the trust chain
- * from HTTP signatures back to the on-chain gateway registration.
- */
-export interface HttpsigAttestationInfo {
-  /** Arweave transaction ID where attestation is permanently stored. */
-  txId?: string;
-  /** Base64url Arweave address of the observer wallet that signed the attestation. */
-  observerAddress: string;
-  /** Canonical JSON attestation payload. */
-  payload: string;
-  /** RSA-PSS-SHA256 signature over the payload (base64url). */
-  signature: string;
-  /** RSA public key in SPKI DER format (base64url). */
-  rsaPublicKey: string;
-}
-
-/**
  * HTTPSIG response signing configuration exposed in the info endpoint.
- * When enabled, qualifying responses include RFC 9421 Message Signatures.
+ * Presence of this field means the gateway signs qualifying responses per
+ * RFC 9421. Verifiers can look up `solanaAddress` in the on-chain GAR to
+ * confirm the signing key belongs to a registered gateway.
  */
 export interface HttpsigInfo {
-  enabled: true;
   algorithm: string;
-  publicKey: string;
-  keyId: string;
-  solanaAddress?: string;
-  attestation?: HttpsigAttestationInfo;
+  solanaAddress: string;
 }
 
 /**
@@ -172,18 +152,8 @@ export interface ArIoInfoConfig {
     capacityMultiplier: number;
   };
   httpsig?: {
-    enabled: boolean;
     algorithm: string;
-    publicKey: string;
-    keyId: string;
-    solanaAddress?: string;
-    attestation?: {
-      txId?: string;
-      observerAddress: string;
-      payload: string;
-      signature: string;
-      rsaPublicKey: string;
-    };
+    solanaAddress: string;
   };
 }
 
@@ -311,14 +281,10 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
     };
   }
 
-  if (config.httpsig?.enabled) {
+  if (config.httpsig !== undefined) {
     response.httpsig = {
-      enabled: true,
       algorithm: config.httpsig.algorithm,
-      publicKey: config.httpsig.publicKey,
-      keyId: config.httpsig.keyId,
       solanaAddress: config.httpsig.solanaAddress,
-      attestation: config.httpsig.attestation,
     };
   }
 

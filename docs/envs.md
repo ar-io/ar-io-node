@@ -461,18 +461,16 @@ When enabled, the `transaction(id)` GraphQL query can resolve unindexed data ite
 
 Signs gateway responses with an Ed25519 key per [RFC 9421](https://www.rfc-editor.org/rfc/rfc9421) (HTTP Message Signatures). Every qualifying response gets `Signature` and `Signature-Input` headers that cryptographically bind the gateway's trust claims (verification status, ArNS resolution, data item tags) to a staked on-chain identity.
 
-When `OBSERVER_WALLET` is set, the gateway also creates an RSA attestation linking the Ed25519 signing key to the observer wallet (which is registered to the gateway on-chain), and uploads it permanently to Arweave.
+When `OBSERVER_KEYPAIR_PATH` is set, the gateway uses the observer's Solana keypair directly as the HTTPSIG signing key. Verifiers derive the Solana address from the public key in the `keyId` and look it up in the on-chain GAR — no separate attestation document is needed. When unset, a standalone Ed25519 key is auto-generated (responses are signed but not verifiable against the on-chain registry).
 
 | ENV_NAME                    | TYPE    | DEFAULT_VALUE          | DESCRIPTION                                                                                                          |
 | --------------------------- | ------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| HTTPSIG_ENABLED             | Boolean | false                  | Enable RFC 9421 HTTP Message Signature signing on gateway responses                                                  |
-| HTTPSIG_KEY_FILE            | String  | data/keys/httpsig.pem  | Path to Ed25519 private key PEM file. Auto-generated on first startup if missing                                     |
+| HTTPSIG_ENABLED             | Boolean | true                   | Enable RFC 9421 HTTP Message Signature signing on gateway responses                                                  |
+| HTTPSIG_KEY_FILE            | String  | data/keys/httpsig.pem  | Path to Ed25519 private key PEM file. Auto-generated on first startup if missing. Ignored when OBSERVER_KEYPAIR_PATH is set |
 | KEYS_DATA_PATH              | String  | ./data/keys            | Host path for the keys volume mount (docker-compose only). Maps to `/app/data/keys` inside the container             |
 | HTTPSIG_BIND_REQUEST        | Boolean | true                   | Include `@method;req` and `@path;req` in signatures, binding each response to the specific request that triggered it |
 | HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES | Number  | 2097152 (2 MiB)        | Applies only to **uncached data responses** (`/raw`, `/tx`, ArNS-resolved, manifest-served). When > 0, uncached responses with a known body size at-or-below this byte threshold are buffered to compute SHA-256 and emit `Content-Digest`, which is in `CO_SIGNABLE_HEADERS` and therefore covered by the HTTPSIG signature. Cached and HEAD responses always emit the stored digest. Chunk responses (`/chunk/:offset`, `/chunk/:offset/data`) compute their digest inline from the in-memory 256 KiB chunk regardless of this setting and are not affected by it. Set to `0` to disable buffered emission for uncached small data responses; cached and chunk responses still emit `Content-Digest`. Non-numeric or negative values fall back to the default. **Independent of this setting**, `X-AR-IO-Digest` is emitted as an unsigned advisory header for any indexed transaction whose canonical hash is on file — including large uncached responses — so clients can verify served bytes against the chain value without an extra round-trip; it is overwritten by the actually-served-body hash when the buffered helper runs. |
-| HTTPSIG_UPLOAD_ATTESTATION  | Boolean | true                   | Upload the attestation to Arweave at startup (requires `OBSERVER_WALLET`). Set to false to skip upload               |
-| OBSERVER_WALLET             | String  | -                      | Arweave wallet address for attestation signing. Key file must exist at `<WALLETS_PATH>/<OBSERVER_WALLET>.json`       |
-| WALLETS_PATH                | String  | wallets                | Directory containing wallet JWK files                                                                                |
+| OBSERVER_KEYPAIR_PATH       | String  | -                      | Path to the observer's Solana keypair JSON file (64-byte array). When set, this key is used for HTTPSIG signing and its Solana address is verifiable in the on-chain GAR |
 
 ## ClickHouse TTL Rules
 

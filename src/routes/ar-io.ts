@@ -209,22 +209,8 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
     httpsig:
       config.HTTPSIG_ENABLED && config.HTTPSIG_SIGNER !== undefined
         ? {
-            enabled: true,
             algorithm: 'ed25519',
-            publicKey: config.HTTPSIG_SIGNER.publicKeyB64Url,
-            keyId: config.HTTPSIG_SIGNER.keyId,
             solanaAddress: config.HTTPSIG_SIGNER.solanaAddress,
-            attestation:
-              config.HTTPSIG_OBSERVER !== undefined
-                ? {
-                    txId: config.HTTPSIG_OBSERVER.attestationTxId,
-                    observerAddress: config.HTTPSIG_OBSERVER.address,
-                    payload: config.HTTPSIG_OBSERVER.attestation.payload,
-                    signature: config.HTTPSIG_OBSERVER.attestation.signature,
-                    rsaPublicKey:
-                      config.HTTPSIG_OBSERVER.attestation.rsaPublicKey,
-                  }
-                : undefined,
           }
         : undefined,
   });
