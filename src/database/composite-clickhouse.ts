@@ -207,6 +207,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
           return null;
         }
         this.maxHeightCache = { value, fetchedAt: Date.now() };
+        metrics.clickhouseMaxImportedHeight.set(value);
         return value;
       } catch (error: any) {
         this.log.warn(

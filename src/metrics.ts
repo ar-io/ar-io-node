@@ -398,6 +398,30 @@ export const lastHeightImported = new promClient.Gauge({
 });
 
 //
+// ClickHouse Export Visibility Metrics
+//
+
+// Lowest height still present in stable_data_items. Flat over multiple
+// auto-import cycles indicates the prune step is no-op-ing — usually
+// because backfill writes at low heights keep landing with an indexed_at
+// newer than the prune threshold, so SQLite never shrinks and every
+// cycle restarts from the same low bucket.
+export const minStableDataItemHeight = new promClient.Gauge({
+  name: 'min_stable_data_item_height',
+  help: 'Lowest height present in stable_data_items (MIN(height)).',
+});
+
+// Cached value of `SELECT max(height) FROM transactions` on ClickHouse.
+// Gap from `last_height_imported` is the ClickHouse sync lag — historical
+// GQL queries route to ClickHouse below this height, so a wide gap means
+// stable_data_items in the gap are invisible to GQL when
+// CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED is true.
+export const clickhouseMaxImportedHeight = new promClient.Gauge({
+  name: 'clickhouse_max_imported_height',
+  help: 'Max height present in the ClickHouse `transactions` table (refreshed lazily).',
+});
+
+//
 // Redis Cache Metrics
 //
 

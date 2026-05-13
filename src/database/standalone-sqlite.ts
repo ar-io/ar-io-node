@@ -1295,6 +1295,11 @@ export class StandaloneSqliteDatabaseWorker {
     const bundleStats = this.stmts.bundles.selectBundleStats.get();
     const dataItemStats = this.stmts.bundles.selectDataItemStats.get();
 
+    const minStableHeight = dataItemStats.min_stable_height ?? -1;
+    if (Number.isFinite(minStableHeight) && minStableHeight >= 0) {
+      metrics.minStableDataItemHeight.set(minStableHeight as number);
+    }
+
     const now = currentUnixTimestamp();
 
     const warnings: string[] = [];
