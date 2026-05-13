@@ -4,9 +4,9 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { Readable, Writable } from 'node:stream';
 import { AoArNSNameDataWithName } from '@ar.io/sdk';
 import { Span } from '@opentelemetry/api';
+import { Readable, Writable } from 'node:stream';
 
 export interface B64uTag {
   name: string;
@@ -281,6 +281,7 @@ export interface BundleIndex {
   saveBundle(bundle: BundleRecord): Promise<BundleSaveResult>;
   saveBundleRetries(rootTransactionId: string): Promise<void>;
   getFailedBundleIds(limit: number): Promise<string[]>;
+  getLargeFailedBundleIds(limit: number, threshold: number): Promise<string[]>;
   updateBundlesFullyIndexedAt(): Promise<void>;
   updateBundlesForFilterChange(
     unbundleFilter: string,

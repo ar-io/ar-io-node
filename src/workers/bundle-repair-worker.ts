@@ -5,8 +5,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import * as winston from 'winston';
-import * as config from '../config.js';
 
+import * as config from '../config.js';
 import { BundleIndex } from '../types.js';
 import { TransactionFetcher } from './transaction-fetcher.js';
 
@@ -54,6 +54,14 @@ export class BundleRepairWorker {
     );
     this.intervalIds.push(defaultInterval);
 
+    if (config.BUNDLE_REPAIR_LARGE_RETRY_BATCH_SIZE > 0) {
+      const largeRetryInterval = setInterval(
+        this.retryLargeBundles.bind(this),
+        config.BUNDLE_REPAIR_LARGE_RETRY_INTERVAL_SECONDS * 1000,
+      );
+      this.intervalIds.push(largeRetryInterval);
+    }
+
     const defaultUpdateInterval = setInterval(
       this.updateBundleTimestamps.bind(this),
       config.BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS * 1000,
@@ -98,6 +106,32 @@ export class BundleRepairWorker {
       }
     } catch (error: any) {
       this.log.error('Error retrying failed bundles:', error);
+    }
+  }
+
+  // Parallel retry lane for large (Turbo-class) bundles. Picks bundles whose
+  // data_item_count is known and >= BUNDLE_REPAIR_LARGE_BUNDLE_THRESHOLD,
+  // ordered by data_item_count DESC. txFetcher.queueTxId is idempotent within
+  // a single in-flight queue snapshot, so if a bundle is also picked by
+  // retryBundles in the same cycle the second queueTxId is a no-op; the only
+  // observable effect is retry_attempt_count incrementing twice instead of
+  // once, which is cosmetic.
+  async retryLargeBundles() {
+    try {
+      const bundleIds = await this.bundleIndex.getLargeFailedBundleIds(
+        config.BUNDLE_REPAIR_LARGE_RETRY_BATCH_SIZE,
+        config.BUNDLE_REPAIR_LARGE_BUNDLE_THRESHOLD,
+      );
+      for (const bundleId of bundleIds) {
+        this.log.info('Retrying large failed bundle', {
+          bundleId,
+          priority: 'large',
+        });
+        await this.bundleIndex.saveBundleRetries(bundleId);
+        await this.txFetcher.queueTxId({ txId: bundleId });
+      }
+    } catch (error: any) {
+      this.log.error('Error retrying large failed bundles:', error);
     }
   }
 

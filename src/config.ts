@@ -5,9 +5,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { canonicalize } from 'json-canonicalize';
-import { isMainThread } from 'node:worker_threads';
 import { existsSync, readFileSync } from 'node:fs';
+import { isMainThread } from 'node:worker_threads';
 
+import { verificationPriorities } from './constants.js';
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
 import { initHttpSig, saveAttestationTxId } from './lib/httpsig.js';
@@ -15,9 +16,8 @@ import type {
   HttpSigObserverContext,
   HttpSigSignerContext,
 } from './lib/httpsig.js';
-import { release } from './version.js';
 import logger from './log.js';
-import { verificationPriorities } from './constants.js';
+import { release } from './version.js';
 
 //
 // HTTP server
@@ -1330,6 +1330,36 @@ export const BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS =
 export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
   'BUNDLE_REPAIR_RETRY_BATCH_SIZE',
   '5000',
+);
+
+// Parallel retry lane for large (Turbo-class) bundles. Runs alongside the
+// normal retry loop. Without this lane, the normal loop's ordering (by
+// retry_attempt_count) treats a 2-DI direct ArDrive bundle and a 500-DI Turbo
+// bundle equally, so the abundant small bundles starve the large ones. This
+// lane picks only bundles with known data_item_count >= threshold and orders
+// by size DESC, so workers chip away at the largest bundles first.
+//
+// All three knobs default to safe values:
+//   - interval = 300s (matches BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS)
+//   - batch_size = 500 (small — each large bundle takes 30-60s to download)
+//   - threshold = 50 (above 1-2 DIs of direct ArDrive, captures Turbo bulk)
+//
+// Setting batch_size = 0 effectively disables this lane (the SELECT returns
+// an empty set with LIMIT 0; the for-loop in retryLargeBundles iterates over
+// nothing). Use this for a quick soft-disable without redeploying.
+export const BUNDLE_REPAIR_LARGE_RETRY_INTERVAL_SECONDS = +env.varOrDefault(
+  'BUNDLE_REPAIR_LARGE_RETRY_INTERVAL_SECONDS',
+  '300',
+);
+
+export const BUNDLE_REPAIR_LARGE_RETRY_BATCH_SIZE = +env.varOrDefault(
+  'BUNDLE_REPAIR_LARGE_RETRY_BATCH_SIZE',
+  '500',
+);
+
+export const BUNDLE_REPAIR_LARGE_BUNDLE_THRESHOLD = +env.varOrDefault(
+  'BUNDLE_REPAIR_LARGE_BUNDLE_THRESHOLD',
+  '50',
 );
 
 //

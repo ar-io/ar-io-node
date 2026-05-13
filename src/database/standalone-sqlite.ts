@@ -905,6 +905,16 @@ export class StandaloneSqliteDatabaseWorker {
     return rows.map((row): string => toB64Url(row.id));
   }
 
+  getLargeFailedBundleIds(limit: number, threshold: number) {
+    const rows = this.stmts.bundles.selectLargeFailedBundleIds.all({
+      limit,
+      threshold,
+      reprocess_cutoff: currentUnixTimestamp() - BUNDLE_REPROCESS_WAIT_SECS,
+    });
+
+    return rows.map((row): string => toB64Url(row.id));
+  }
+
   backfillBundles() {
     this.stmts.bundles.insertMissingBundles.run();
   }
@@ -3309,6 +3319,16 @@ export class StandaloneSqliteDatabase
     return this.queueRead('bundles', 'getFailedBundleIds', [limit]);
   }
 
+  getLargeFailedBundleIds(
+    limit: number,
+    threshold: number,
+  ): Promise<string[]> {
+    return this.queueRead('bundles', 'getLargeFailedBundleIds', [
+      limit,
+      threshold,
+    ]);
+  }
+
   backfillBundles() {
     return this.queueRead('bundles', 'backfillBundles', undefined);
   }
@@ -3811,6 +3831,13 @@ if (!isMainThread) {
         case 'getFailedBundleIds':
           const failedBundleIds = worker.getFailedBundleIds(args[0]);
           parentPort?.postMessage(failedBundleIds);
+          break;
+        case 'getLargeFailedBundleIds':
+          const largeFailedBundleIds = worker.getLargeFailedBundleIds(
+            args[0],
+            args[1],
+          );
+          parentPort?.postMessage(largeFailedBundleIds);
           break;
         case 'backfillBundles':
           worker.backfillBundles();

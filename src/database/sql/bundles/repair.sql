@@ -24,6 +24,51 @@ FROM (
 )
 ORDER BY RANDOM()
 
+-- selectLargeFailedBundleIds
+-- Parallel retry lane for already-parsed bundles whose data_item_count is at
+-- or above @threshold (Turbo-class bundles with many DIs each). The original
+-- selectFailedBundleIds ordering (by retry_attempt_count) gives equal weight
+-- to a 2-DI direct ArDrive bundle and a 500-DI Turbo bundle, which means
+-- direct bundles dominate the worker pool and large bundles starve. This
+-- query targets only the subset where we already know data_item_count >=
+-- threshold and orders by size DESC so workers chip away at the largest
+-- bundles first. Bundles whose size is not yet known (data_item_count IS
+-- NULL) are intentionally excluded — they are handled by selectFailedBundleIds
+-- and get their size populated on first unbundle, after which they become
+-- eligible for this lane on subsequent retries.
+--
+-- Backed by bundles_large_active_priority_idx (partial index on
+-- (data_item_count, retry_attempt_count, last_retried_at) WHERE
+-- last_fully_indexed_at IS NULL AND data_item_count >= 50). The partial
+-- WHERE predicate uses the same threshold literal (50) as the default
+-- BUNDLE_REPAIR_LARGE_BUNDLE_THRESHOLD env var; lowering the env without
+-- recreating the index will still work but the index will only serve the
+-- subset >= 50.
+SELECT DISTINCT id
+FROM (
+  SELECT b.root_transaction_id AS id
+  FROM bundles b
+  WHERE (
+      (b.last_queued_at IS NULL AND b.last_skipped_at IS NULL)
+      OR (
+        b.last_queued_at IS NOT NULL
+        AND (
+          b.last_skipped_at IS NULL
+          OR b.last_skipped_at <= b.last_queued_at
+        )
+        AND b.last_queued_at < @reprocess_cutoff
+      )
+    )
+    AND b.last_fully_indexed_at IS NULL
+    AND b.matched_data_item_count IS NOT NULL
+    AND b.matched_data_item_count > 0
+    AND b.data_item_count IS NOT NULL
+    AND b.data_item_count >= @threshold
+  ORDER BY b.data_item_count DESC, b.retry_attempt_count, b.last_retried_at ASC
+  LIMIT @limit
+)
+ORDER BY RANDOM()
+
 -- updateFullyIndexedAt
 UPDATE bundles
 SET

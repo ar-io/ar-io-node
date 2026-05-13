@@ -158,6 +158,7 @@ CREATE INDEX bundle_data_items_root_transaction_id_idx ON bundle_data_items (roo
 CREATE INDEX stable_data_items_indexed_at_idx ON stable_data_items (indexed_at);
 CREATE INDEX root_transaction_id_idx ON bundles (root_transaction_id);
 CREATE INDEX bundles_active_retry_priority_idx ON bundles (last_fully_indexed_at, retry_attempt_count, last_retried_at);
+CREATE INDEX bundles_large_active_priority_idx ON bundles (data_item_count, retry_attempt_count, last_retried_at) WHERE last_fully_indexed_at IS NULL AND data_item_count >= 50;
 PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 CREATE TABLE bundle_formats (
