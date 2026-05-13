@@ -1433,3 +1433,8 @@ export const httpSigBufferedBytesInflight = new promClient.Gauge({
   name: 'httpsig_buffered_bytes_inflight',
   help: 'Aggregate bytes held in memory by buffered-digest in-flight reads',
 });
+
+export const httpSigInitFailedTotal = new promClient.Counter({
+  name: 'httpsig_init_failed_total',
+  help: 'HTTPSIG signing initialization failed at startup; signing is disabled',
+});

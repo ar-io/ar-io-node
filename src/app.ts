@@ -9,6 +9,7 @@ import express from 'express';
 import { Server } from 'node:http';
 import * as config from './config.js';
 import log from './log.js';
+import * as metrics from './metrics.js';
 import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
 import { createRequestIdMiddleware } from './middleware/request-id.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
@@ -86,6 +87,10 @@ app.use(createAbortSignalMiddleware());
 
 // HTTPSIG response signing — must be before cache-control so the writeHead
 // LIFO order ensures signing runs AFTER cache-control has set default headers.
+config.initializeHttpSig();
+if (config.HTTPSIG_INIT_ERROR !== undefined) {
+  metrics.httpSigInitFailedTotal.inc();
+}
 if (config.HTTPSIG_ENABLED && config.HTTPSIG_SIGNER !== undefined) {
   app.use(
     createHttpSigMiddleware({
