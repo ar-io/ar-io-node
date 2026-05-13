@@ -1096,3 +1096,8 @@ export const httpSigErrorsTotal = new promClient.Counter({
   name: 'httpsig_errors_total',
   help: 'Total HTTPSIG signing errors',
 });
+
+export const httpSigInitFailedTotal = new promClient.Counter({
+  name: 'httpsig_init_failed_total',
+  help: 'HTTPSIG signing initialization failed at startup; signing is disabled',
+});

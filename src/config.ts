@@ -1058,23 +1058,34 @@ export const OBSERVER_KEYPAIR_PATH = env.varOrUndefined(
   'OBSERVER_KEYPAIR_PATH',
 );
 
-let _httpSigSigner: HttpSigSignerContext | undefined;
+// HTTPSIG signing state. Populated by `initializeHttpSig()`, which the
+// application entry point calls explicitly during startup. Kept out of
+// module-evaluation side effects so that importing config.ts (e.g., from
+// tests) does not touch the filesystem.
+export let HTTPSIG_SIGNER: HttpSigSignerContext | undefined;
+export let HTTPSIG_INIT_ERROR: string | undefined;
 
-if (isMainThread && HTTPSIG_ENABLED) {
+let _httpSigInitAttempted = false;
+
+export function initializeHttpSig(): void {
+  if (!isMainThread || !HTTPSIG_ENABLED || _httpSigInitAttempted) {
+    return;
+  }
+  _httpSigInitAttempted = true;
+
   try {
-    _httpSigSigner = initHttpSig({
+    HTTPSIG_SIGNER = initHttpSig({
       keyFile: HTTPSIG_KEY_FILE,
       observerKeypairPath: OBSERVER_KEYPAIR_PATH,
       log: logger,
     });
   } catch (error: any) {
-    logger.warn('HTTPSIG initialization failed; signing disabled', {
-      error: error?.message,
+    HTTPSIG_INIT_ERROR = error?.message ?? String(error);
+    logger.error('HTTPSIG initialization failed; signing disabled', {
+      error: HTTPSIG_INIT_ERROR,
     });
   }
 }
-
-export const HTTPSIG_SIGNER = _httpSigSigner;
 
 //
 // Indexing

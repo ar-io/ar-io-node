@@ -525,6 +525,24 @@ describe('httpsig lib', () => {
       assert.ok(fs.existsSync(keyFile));
     });
 
+    it('propagates errors when keyFile path is unwritable', () => {
+      // dirname(keyFile) points at a regular file, so mkdirSync fails with
+      // ENOTDIR. This mirrors the EACCES failure from a root-owned data/keys/
+      // dir — both surface as a throw out of loadOrGenerateKey, which is what
+      // config.ts's `initializeHttpSig` catches.
+      const dir = makeTmpDir();
+      const blockingFile = path.join(dir, 'not-a-dir');
+      fs.writeFileSync(blockingFile, 'blocking');
+
+      assert.throws(() =>
+        initHttpSig({
+          keyFile: path.join(blockingFile, 'httpsig.pem'),
+          observerKeypairPath: undefined,
+          log: noopLog,
+        }),
+      );
+    });
+
     it('uses Solana keypair when path is provided', () => {
       const dir = makeTmpDir();
 
