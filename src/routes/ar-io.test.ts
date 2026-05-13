@@ -560,66 +560,13 @@ describe('buildArIoInfo', () => {
       release: 'r123',
       bundlerUrls: [],
       httpsig: {
-        enabled: true,
         algorithm: 'ed25519',
-        publicKey: 'test-public-key-base64url',
-        keyId: 'ed25519:test-public-key-base64url',
-      },
-    });
-
-    assert.strictEqual(result.httpsig?.enabled, true);
-    assert.strictEqual(result.httpsig?.algorithm, 'ed25519');
-    assert.strictEqual(result.httpsig?.publicKey, 'test-public-key-base64url');
-    assert.strictEqual(
-      result.httpsig?.keyId,
-      'ed25519:test-public-key-base64url',
-    );
-  });
-
-  it('should include httpsig with attestation and solana address', () => {
-    const result = buildArIoInfo({
-      wallet: 'test-wallet',
-      programIds: {
-        core: 'P_CORE',
-        gar: 'P_GAR',
-        arns: 'P_ARNS',
-        ant: 'P_ANT',
-      },
-      ans104UnbundleFilter: {},
-      ans104IndexFilter: {},
-      release: 'r123',
-      bundlerUrls: [],
-      httpsig: {
-        enabled: true,
-        algorithm: 'ed25519',
-        publicKey: 'test-pubkey',
-        keyId: 'ed25519:test-pubkey',
         solanaAddress: 'SoLaNaAdDrEsS',
-        attestation: {
-          txId: 'arweave-tx-123',
-          observerAddress: 'observer-addr',
-          payload: '{"test":"payload"}',
-          signature: 'sig-base64url',
-          rsaPublicKey: 'rsa-pub-base64url',
-        },
       },
     });
 
+    assert.strictEqual(result.httpsig?.algorithm, 'ed25519');
     assert.strictEqual(result.httpsig?.solanaAddress, 'SoLaNaAdDrEsS');
-    assert.strictEqual(result.httpsig?.attestation?.txId, 'arweave-tx-123');
-    assert.strictEqual(
-      result.httpsig?.attestation?.observerAddress,
-      'observer-addr',
-    );
-    assert.strictEqual(
-      result.httpsig?.attestation?.payload,
-      '{"test":"payload"}',
-    );
-    assert.strictEqual(result.httpsig?.attestation?.signature, 'sig-base64url');
-    assert.strictEqual(
-      result.httpsig?.attestation?.rsaPublicKey,
-      'rsa-pub-base64url',
-    );
   });
 
   it('should omit httpsig when not configured', () => {

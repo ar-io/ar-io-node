@@ -13,7 +13,6 @@ import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
 import { createRequestIdMiddleware } from './middleware/request-id.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
 import { createHttpSigMiddleware } from './middleware/httpsig.js';
-import { uploadAttestation } from './lib/httpsig-upload.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
@@ -45,36 +44,6 @@ system.headerFsCacheCleanupWorker?.start();
 system.contiguousDataFsCacheCleanupWorker?.start();
 
 system.chunkDataFsCacheCleanupWorker?.start();
-
-// Upload HTTPSIG attestation to Arweave (non-blocking, non-fatal).
-// Skip if the txId is already persisted from a prior successful upload.
-if (
-  config.HTTPSIG_ENABLED &&
-  config.HTTPSIG_UPLOAD_ATTESTATION &&
-  config.HTTPSIG_SIGNER !== undefined &&
-  config.HTTPSIG_OBSERVER !== undefined &&
-  config.HTTPSIG_OBSERVER.attestationTxId === undefined
-) {
-  const signer = config.HTTPSIG_SIGNER;
-  const observer = config.HTTPSIG_OBSERVER;
-  uploadAttestation({
-    jwk: observer.jwk,
-    attestation: observer.attestation,
-    gatewayAddress: config.AR_IO_WALLET,
-    observerAddress: observer.address,
-    ed25519PublicKey: signer.publicKeyB64Url,
-    keyId: signer.keyId,
-    log,
-  })
-    .then((txId) => {
-      config.setHttpSigAttestationTxId(txId);
-    })
-    .catch((error: any) => {
-      log.warn('HTTPSIG attestation upload failed', {
-        error: error?.message,
-      });
-    });
-}
 
 // Allow starting without writers to support SQLite replication
 if (config.START_WRITERS) {
