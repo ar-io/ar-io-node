@@ -257,7 +257,32 @@ export class WebhookEmitter {
         );
       }
     } catch (error) {
-      this.log.error('Unexpected error while emitting webhook:', error);
+      // Avoid passing raw axios errors to winston: error.request.agent holds
+      // the keep-alive socket pool, which serializes to the entire Node Timer
+      // wheel (megabytes of `_idleNext`/`_idlePrev` chains per failure) and
+      // drowns stdout / docker logs. Extract just the fields we need.
+      if (axios.isAxiosError(error)) {
+        const rawBody = error.response?.data;
+        const body =
+          typeof rawBody === 'string'
+            ? rawBody
+            : rawBody !== undefined
+              ? JSON.stringify(rawBody)
+              : undefined;
+        this.log.error('Failed to emit webhook', {
+          targetServer,
+          status: error.response?.status,
+          code: error.code,
+          message: error.message,
+          responseBody: body?.slice(0, 500),
+        });
+      } else {
+        this.log.error('Unexpected error while emitting webhook', {
+          targetServer,
+          message: (error as Error)?.message,
+          stack: (error as Error)?.stack,
+        });
+      }
     }
   }
 
