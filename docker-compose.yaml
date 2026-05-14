@@ -613,6 +613,15 @@ services:
       # observer rejects with "Epoch duration too short for configured buffers").
       - OBSERVATION_STABILITY_BUFFER_MS=${OBSERVATION_STABILITY_BUFFER_MS:-}
       - OBSERVATION_SUBMISSION_BUFFER_MS=${OBSERVATION_SUBMISSION_BUFFER_MS:-}
+      # Maximum fraction of failed gateways before the report-sink circuit
+      # breaker refuses to submit. Default `0.8` is production-safe; on
+      # devnet (where most registered gateways are stubs that don't serve
+      # HTTP) `1.0` effectively disables the gate so the honest "all-
+      # failed" report can still ship — required for a freshly-joined
+      # devnet observer to ever increment its observerPerformanceRatio.
+      # See ar-io-observer src/config.ts OBSERVER_MAX_GATEWAY_FAILURE_
+      # THRESHOLD for context.
+      - OBSERVER_MAX_GATEWAY_FAILURE_THRESHOLD=${OBSERVER_MAX_GATEWAY_FAILURE_THRESHOLD:-}
       # Offset Observation Configuration
       - OFFSET_OBSERVATION_SAMPLE_RATE=${OFFSET_OBSERVATION_SAMPLE_RATE:-}
       - OFFSET_OBSERVATION_ENABLED=${OFFSET_OBSERVATION_ENABLED:-}
