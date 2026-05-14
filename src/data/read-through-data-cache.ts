@@ -7,7 +7,7 @@
 import { Span } from '@opentelemetry/api';
 import crypto from 'node:crypto';
 import * as EventEmitter from 'node:events';
-import { Readable, Transform, pipeline } from 'node:stream';
+import { PassThrough, Readable, Transform, pipeline } from 'node:stream';
 import winston from 'winston';
 
 import { PREFERRED_ARNS_BASE_NAMES, PREFERRED_ARNS_NAMES } from '../config.js';
@@ -644,18 +644,50 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
 
+        // Tee the upstream stream so the cache pipeline and downstream
+        // consumers (DataImporter, HTTP /raw/ responses) operate on
+        // independent stream objects.
+        //
+        // The wedge this fixes: returning the inner `data.stream` directly
+        // gave it two consumers — `pipeline(data.stream, ...)` below AND the
+        // caller's listeners. The pipeline pauses the source for backpressure
+        // when cacheStream is slow; the caller (e.g., DataImporter) calls
+        // `.resume()` once and walks away expecting `'end'`/`'error'`. After
+        // a backpressure pause neither side re-resumes (pipeline only
+        // resumes from its own 'drain' listener, which can stall on slow
+        // disk; the caller has no resume loop). The underlying TCP
+        // IncomingMessage halts on socket recv-window-zero, the peer goes
+        // idle, and the worker is wedged forever — `'end'` never fires
+        // because the upstream never sent FIN, `'error'` never fires
+        // because no party times out the socket. PR #734's wall-clock cap
+        // on `attachStallTimeout` was supposed to be a safety net but its
+        // cleanup is triggered by pipeline's 'close', cancelling the timer
+        // before it can fire.
+        //
+        // Fix: pipeline is the sole consumer of the source IncomingMessage.
+        // A `PassThrough` (`consumerStream`) becomes the new `data.stream`
+        // returned to callers. The hashing Transform writes each chunk to
+        // both its normal output (→ cacheStream) AND consumerStream — a
+        // synchronous fan-out — and the pipeline callback signals
+        // completion on consumerStream via `.end()` / `.destroy(error)`.
+        // Backpressure now isolates: cache write speed can't starve the
+        // caller, and a stalled consumer can't pause the source.
+        const consumerStream = new PassThrough();
+
         // Hash + byte-count chunks inside a Transform so backpressure flows
-        // end-to-end (data.stream → hashingStream → cacheStream). Previously
-        // bytesReceived + hasher.update lived in a `.on('data')` listener
-        // alongside the pipeline, which put the readable into flowing mode
-        // and short-circuited the writable's backpressure — letting
-        // cacheStream's internal buffer accumulate multi-MB of pending writes
-        // per concurrent download. At high ANS104_DOWNLOAD_WORKERS this
-        // produced external-memory bloat that drove the container OOM.
+        // end-to-end on the cache branch (data.stream → hashingStream →
+        // cacheStream). Tee the same chunk to consumerStream synchronously.
+        // We deliberately ignore consumerStream.write()'s return value: a
+        // slow consumer buffers in memory rather than backpressuring the
+        // shared pipeline. For DataImporter (which `.resume()`s and
+        // discards), the buffer stays empty. For HTTP `/raw/` clients,
+        // short slow periods buffer briefly on a single bundle's worth of
+        // bytes — bounded by `data.size`.
         const hashingStream = new Transform({
           transform(chunk: Buffer, _encoding, callback) {
             bytesReceived += chunk.length;
             hasher.update(chunk);
+            consumerStream.write(chunk);
             callback(null, chunk);
           },
         });
@@ -862,8 +894,25 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                 }
               }
             }
-          },
-        );
+          }
+
+          // Signal the consumer side of the tee. End-of-data fires after
+          // the cache finalize logic above so callers don't see 'end'
+          // before the cache write is durable. On error, propagate via
+          // destroy(err) — DataImporter's reject() handler picks it up
+          // and the worker promptly fails-and-retries instead of wedging.
+          if (error !== undefined) {
+            consumerStream.destroy(error);
+          } else {
+            consumerStream.end();
+          }
+        });
+
+        // Replace `data.stream` with the consumer-side tee branch so
+        // downstream callers (the metric listeners below, DataImporter,
+        // HTTP /raw/ pipes) only see the PassThrough — never the inner
+        // IncomingMessage that the pipeline now owns exclusively.
+        data.stream = consumerStream;
       } else {
         // Log why caching was skipped
         const reasons = [];
