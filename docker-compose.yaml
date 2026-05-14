@@ -608,6 +608,11 @@ services:
       - OBSERVATION_WINDOW_FRACTION=${OBSERVATION_WINDOW_FRACTION:-}
       - OBSERVATION_CYCLE_INTERVAL_MS=${OBSERVATION_CYCLE_INTERVAL_MS:-}
       - MAJORITY_VOTE_THRESHOLD=${MAJORITY_VOTE_THRESHOLD:-}
+      # Epoch-relative submission window (defaults tuned for mainnet's ~24h
+      # epochs; shorter-epoch networks like devnet must shrink these or the
+      # observer rejects with "Epoch duration too short for configured buffers").
+      - OBSERVATION_STABILITY_BUFFER_MS=${OBSERVATION_STABILITY_BUFFER_MS:-}
+      - OBSERVATION_SUBMISSION_BUFFER_MS=${OBSERVATION_SUBMISSION_BUFFER_MS:-}
       # Offset Observation Configuration
       - OFFSET_OBSERVATION_SAMPLE_RATE=${OFFSET_OBSERVATION_SAMPLE_RATE:-}
       - OFFSET_OBSERVATION_ENABLED=${OFFSET_OBSERVATION_ENABLED:-}
