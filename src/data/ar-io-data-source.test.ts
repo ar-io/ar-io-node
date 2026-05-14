@@ -1285,6 +1285,119 @@ describe('ArIODataSource', () => {
           singlePeerManager.stopUpdatingPeers();
         }
       });
+
+      it("should release the slot on 'end' alone when 'close' never fires", async () => {
+        // Regression: HTTP IncomingMessage under a keepAlive http.Agent can
+        // fire 'end' (data fully received) without firing 'close' (socket
+        // returned to pool, response object never destroyed). The original
+        // code listened only on 'close', so each "successful" download leaked
+        // a limiter slot. After enough downloads, every peer hit
+        // maxConcurrent and tryAcquire returned false for all candidates,
+        // wedging the bundle pipeline. This test simulates that scenario by
+        // emitting 'end' without 'close'.
+        const limiter = new PeerRequestLimiter(2);
+
+        const singlePeerManager = new ArIOPeerManager({
+          log,
+          networkProcess: ARIO.init(),
+          nodeWallet: 'localNode',
+          initialPeers: { peer1: 'http://peer1.com' },
+          initialCategories: ['data'],
+        });
+
+        const singlePeerDataSource = new ArIODataSource({
+          log,
+          peerManager: singlePeerManager,
+          dataAttributesStore: mockDataAttributesStore,
+          peerRequestLimiter: limiter,
+        });
+
+        const stream = new PassThrough();
+        mock.method(axios, 'get', async () => ({
+          status: 200,
+          data: stream,
+          headers: {
+            'content-length': '10',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        }));
+
+        try {
+          await singlePeerDataSource.getData({ id: 'id1' });
+
+          // Slot is held while the stream is active
+          assert.equal(limiter.getActiveCount('http://peer1.com'), 1);
+
+          // Simulate the keepAlive scenario: only 'end' fires, not 'close'
+          stream.emit('end');
+
+          // With the fix, this releases the slot. Without the fix, the slot
+          // would leak indefinitely until 'close' eventually fired (or never).
+          assert.equal(limiter.getActiveCount('http://peer1.com'), 0);
+        } finally {
+          singlePeerManager.stopUpdatingPeers();
+          stream.destroy();
+        }
+      });
+
+      it('should not double-release when both end and close fire', async () => {
+        const limiter = new PeerRequestLimiter(2);
+
+        const singlePeerManager = new ArIOPeerManager({
+          log,
+          networkProcess: ARIO.init(),
+          nodeWallet: 'localNode',
+          initialPeers: { peer1: 'http://peer1.com' },
+          initialCategories: ['data'],
+        });
+
+        const singlePeerDataSource = new ArIODataSource({
+          log,
+          peerManager: singlePeerManager,
+          dataAttributesStore: mockDataAttributesStore,
+          peerRequestLimiter: limiter,
+        });
+
+        const stream = new PassThrough();
+        mock.method(axios, 'get', async () => ({
+          status: 200,
+          data: stream,
+          headers: {
+            'content-length': '10',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        }));
+
+        try {
+          await singlePeerDataSource.getData({ id: 'id1' });
+          assert.equal(limiter.getActiveCount('http://peer1.com'), 1);
+
+          // Both events fire — only one release should happen
+          stream.emit('end');
+          stream.emit('close');
+
+          // If the guard worked, active count is 0 (released exactly once).
+          // Without the guard, two releases on a count of 1 would still
+          // bottom out at 0 — but the second release would have been called
+          // against an absent key. Acquire a fresh slot to verify the
+          // limiter's internal accounting is still sane.
+          assert.equal(limiter.getActiveCount('http://peer1.com'), 0);
+          assert.equal(limiter.tryAcquire('http://peer1.com'), true);
+          assert.equal(limiter.tryAcquire('http://peer1.com'), true);
+          assert.equal(
+            limiter.tryAcquire('http://peer1.com'),
+            false,
+            'limiter still respects maxConcurrent after double event',
+          );
+        } finally {
+          singlePeerManager.stopUpdatingPeers();
+          stream.destroy();
+        }
+      });
     });
 
     it('should throw when skipRemoteForwarding is set', async () => {
