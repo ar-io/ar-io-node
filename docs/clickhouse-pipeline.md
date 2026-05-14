@@ -359,6 +359,41 @@ once their window closes. There's no DELETE on
 `new_blocks` is the truth anchor and the join keeps results
 clean.
 
+#### Mutation-latency race window
+
+`ALTER TABLE … DELETE` is an asynchronous ClickHouse mutation —
+the statement returns once the mutation is enqueued, not once
+the rows are physically gone. Between submission and execution
+there's a window where the pre-fork row `(forkHeight+1, oldHash)`
+is still readable. If a fresh `BLOCK_INDEXED` for the same
+height arrives during that window and inserts
+`(forkHeight+1, newHash)`, both rows are visible until the
+`ReplacingMergeTree(inserted_at)` merge resolves to the newer
+copy. The orphan-filter join, evaluated against this pre-merge
+state, could briefly match orphaned transactions to the old
+`(height, oldHash)` row in `new_blocks`.
+
+Three things bound the window:
+
+1. The mutation latency itself is typically seconds against
+   the tiny `new_blocks` table — small height range, no
+   partitioning, no skip indexes.
+2. `ReplacingMergeTree(inserted_at)` keeps results monotonic
+   once a merge runs: the newer `inserted_at` wins, and the
+   pre-fork row becomes unreachable.
+3. The streamer drains any in-flight flush *before* issuing
+   the DELETE (`handleReorg` step 1), and filters its
+   in-memory buffer to `height <= forkHeight` *before* the
+   DELETE returns — so the streamer itself never adds new
+   pre-fork rows during the window.
+
+TTL is the ultimate backstop: any row that escapes both the
+DELETE and the merge ages out within
+`CLICKHOUSE_NEW_TX_TTL_MINUTES`. This is consistent with the
+"best-effort unstable head" failure model — a sub-second race
+on rare reorgs is acceptable when the stable Parquet pipeline
+is the authoritative source.
+
 ## GraphQL routing
 
 When `CLICKHOUSE_URL` is set, `src/system.ts` wraps the SQLite
