@@ -894,19 +894,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                 }
               }
             }
-          }
 
-          // Signal the consumer side of the tee. End-of-data fires after
-          // the cache finalize logic above so callers don't see 'end'
-          // before the cache write is durable. On error, propagate via
-          // destroy(err) — DataImporter's reject() handler picks it up
-          // and the worker promptly fails-and-retries instead of wedging.
-          if (error !== undefined) {
-            consumerStream.destroy(error);
-          } else {
-            consumerStream.end();
-          }
-        });
+            // Signal the consumer side of the tee. End-of-data fires after
+            // the cache finalize logic above so callers don't see 'end'
+            // before the cache write is durable. On error, propagate via
+            // destroy(err) — DataImporter's reject() handler picks it up
+            // and the worker promptly fails-and-retries instead of wedging.
+            if (error !== undefined) {
+              consumerStream.destroy(error);
+            } else {
+              consumerStream.end();
+            }
+          },
+        );
 
         // Replace `data.stream` with the consumer-side tee branch so
         // downstream callers (the metric listeners below, DataImporter,
