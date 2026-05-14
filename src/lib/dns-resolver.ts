@@ -94,15 +94,31 @@ export class DnsResolver {
         throw new Error(`No IP addresses found for hostname: ${hostname}`);
       }
 
-      // Use the first IP address
-      const selectedIp = ips[0];
-      // IPv6 addresses need brackets when setting hostname
-      if (selectedIp.includes(':')) {
-        url.hostname = `[${selectedIp}]`;
+      // For HTTPS URLs, do NOT substitute the hostname with an IP. fetch()
+      // would otherwise set TLS SNI and Host to the IP, which mismatches the
+      // server certificate (cert is for the hostname, not the IP) and trips
+      // ERR_TLS_CERT_ALTNAME_INVALID. The DNS resolution still runs so
+      // change-detection logging and the IP cache stay accurate; we just
+      // return the original URL and let Node's native DNS resolve it at
+      // request time with the correct hostname for SNI.
+      let resolvedUrl: string;
+      if (url.protocol === 'https:') {
+        resolvedUrl = urlString;
+        log.debug('Preserving hostname for HTTPS URL to maintain SNI', {
+          hostname,
+          resolvedIps: ips.length,
+        });
       } else {
-        url.hostname = selectedIp;
+        // Use the first IP address
+        const selectedIp = ips[0];
+        // IPv6 addresses need brackets when setting hostname
+        if (selectedIp.includes(':')) {
+          url.hostname = `[${selectedIp}]`;
+        } else {
+          url.hostname = selectedIp;
+        }
+        resolvedUrl = url.toString();
       }
-      const resolvedUrl = url.toString();
 
       const result: ResolvedUrl = {
         hostname,

@@ -29,12 +29,12 @@ describe('DnsResolver', () => {
       mock.method(dns, 'resolve4', mockResolve4);
 
       const result = await dnsResolver.resolveUrl(
-        'https://example.com:8080/path',
+        'http://example.com:8080/path',
       );
 
       assert.equal(result.hostname, 'example.com');
-      assert.equal(result.originalUrl, 'https://example.com:8080/path');
-      assert.equal(result.resolvedUrl, 'https://192.168.1.1:8080/path');
+      assert.equal(result.originalUrl, 'http://example.com:8080/path');
+      assert.equal(result.resolvedUrl, 'http://192.168.1.1:8080/path');
       assert.deepEqual(result.ips, ['192.168.1.1', '192.168.1.2']);
       assert.equal(result.resolutionError, undefined);
       assert.equal(mockResolve4.mock.calls.length, 1);
@@ -49,10 +49,10 @@ describe('DnsResolver', () => {
       mock.method(dns, 'resolve4', mockResolve4);
       mock.method(dns, 'resolve6', mockResolve6);
 
-      const result = await dnsResolver.resolveUrl('https://example.com/path');
+      const result = await dnsResolver.resolveUrl('http://example.com/path');
 
       assert.equal(result.hostname, 'example.com');
-      assert.equal(result.resolvedUrl, 'https://[2001:db8::1]/path');
+      assert.equal(result.resolvedUrl, 'http://[2001:db8::1]/path');
       assert.deepEqual(result.ips, ['2001:db8::1']);
       assert.equal(mockResolve4.mock.calls.length, 1);
       assert.equal(mockResolve6.mock.calls.length, 1);
@@ -63,10 +63,10 @@ describe('DnsResolver', () => {
       mock.method(dns, 'resolve4', mockResolve4);
 
       const result = await dnsResolver.resolveUrl(
-        'https://data.example.com:8080/chunk',
+        'http://data.example.com:8080/chunk',
       );
 
-      assert.equal(result.resolvedUrl, 'https://10.0.0.1:8080/chunk');
+      assert.equal(result.resolvedUrl, 'http://10.0.0.1:8080/chunk');
     });
 
     it('should preserve path in resolved URL', async () => {
@@ -74,10 +74,45 @@ describe('DnsResolver', () => {
       mock.method(dns, 'resolve4', mockResolve4);
 
       const result = await dnsResolver.resolveUrl(
+        'http://example.com/chunk/12345',
+      );
+
+      assert.equal(result.resolvedUrl, 'http://10.0.0.1/chunk/12345');
+    });
+
+    it('should preserve hostname for HTTPS URLs (SNI/TLS cert validity)', async () => {
+      const mockResolve4 = mock.fn(async () => ['10.0.0.1', '10.0.0.2']);
+      mock.method(dns, 'resolve4', mockResolve4);
+
+      const result = await dnsResolver.resolveUrl(
         'https://example.com/chunk/12345',
       );
 
-      assert.equal(result.resolvedUrl, 'https://10.0.0.1/chunk/12345');
+      // Hostname must NOT be substituted with the IP for HTTPS, otherwise
+      // fetch() sends TLS SNI = IP and the server cert (issued for the
+      // hostname) trips ERR_TLS_CERT_ALTNAME_INVALID.
+      assert.equal(result.hostname, 'example.com');
+      assert.equal(result.originalUrl, 'https://example.com/chunk/12345');
+      assert.equal(result.resolvedUrl, 'https://example.com/chunk/12345');
+      // DNS resolution still runs so change-detection logging and the IP
+      // cache stay accurate.
+      assert.deepEqual(result.ips, ['10.0.0.1', '10.0.0.2']);
+      assert.equal(result.resolutionError, undefined);
+      assert.equal(mockResolve4.mock.calls.length, 1);
+    });
+
+    it('should preserve HTTPS hostname even when IPv4 falls back to IPv6', async () => {
+      const mockResolve4 = mock.fn(async () => {
+        throw new Error('IPv4 resolution failed');
+      });
+      const mockResolve6 = mock.fn(async () => ['2001:db8::1']);
+      mock.method(dns, 'resolve4', mockResolve4);
+      mock.method(dns, 'resolve6', mockResolve6);
+
+      const result = await dnsResolver.resolveUrl('https://example.com/path');
+
+      assert.equal(result.resolvedUrl, 'https://example.com/path');
+      assert.deepEqual(result.ips, ['2001:db8::1']);
     });
 
     it('should skip resolution for IP addresses', async () => {
@@ -141,13 +176,13 @@ describe('DnsResolver', () => {
       });
       mock.method(dns, 'resolve4', mockResolve4);
 
-      const urls = ['https://example1.com/path1', 'https://example2.com/path2'];
+      const urls = ['http://example1.com/path1', 'http://example2.com/path2'];
 
       const results = await dnsResolver.resolveUrls(urls);
 
       assert.equal(results.length, 2);
-      assert.equal(results[0].resolvedUrl, 'https://10.0.0.1/path1');
-      assert.equal(results[1].resolvedUrl, 'https://10.0.0.2/path2');
+      assert.equal(results[0].resolvedUrl, 'http://10.0.0.1/path1');
+      assert.equal(results[1].resolvedUrl, 'http://10.0.0.2/path2');
       assert.equal(mockResolve4.mock.calls.length, 2);
     });
 
@@ -162,14 +197,14 @@ describe('DnsResolver', () => {
       mock.method(dns, 'resolve4', mockResolve4);
       mock.method(dns, 'resolve6', mockResolve6);
 
-      const urls = ['https://success.com/path', 'https://failure.com/path'];
+      const urls = ['http://success.com/path', 'http://failure.com/path'];
 
       const results = await dnsResolver.resolveUrls(urls);
 
       assert.equal(results.length, 2);
-      assert.equal(results[0].resolvedUrl, 'https://10.0.0.1/path');
+      assert.equal(results[0].resolvedUrl, 'http://10.0.0.1/path');
       assert.equal(results[0].resolutionError, undefined);
-      assert.equal(results[1].resolvedUrl, 'https://failure.com/path');
+      assert.equal(results[1].resolvedUrl, 'http://failure.com/path');
       assert(results[1].resolutionError !== undefined);
     });
   });
@@ -179,12 +214,12 @@ describe('DnsResolver', () => {
       const mockResolve4 = mock.fn(async () => ['10.0.0.1']);
       mock.method(dns, 'resolve4', mockResolve4);
 
-      await dnsResolver.resolveUrl('https://example.com/path');
+      await dnsResolver.resolveUrl('http://example.com/path');
       const cached = dnsResolver.getResolvedUrl('example.com');
 
       assert(cached);
       assert.equal(cached.hostname, 'example.com');
-      assert.equal(cached.resolvedUrl, 'https://10.0.0.1/path');
+      assert.equal(cached.resolvedUrl, 'http://10.0.0.1/path');
     });
 
     it('should return undefined for unknown hostname', () => {
@@ -201,18 +236,18 @@ describe('DnsResolver', () => {
       });
       mock.method(dns, 'resolve4', mockResolve4);
 
-      await dnsResolver.resolveUrl('https://known.com/path');
+      await dnsResolver.resolveUrl('http://known.com/path');
 
       const urls = [
-        'https://known.com/different-path',
-        'https://unknown.com/path',
+        'http://known.com/different-path',
+        'http://unknown.com/path',
       ];
 
       const resolved = dnsResolver.getResolvedUrlStrings(urls);
 
       assert.equal(resolved.length, 2);
-      assert.equal(resolved[0], 'https://10.0.0.1/different-path');
-      assert.equal(resolved[1], 'https://unknown.com/path');
+      assert.equal(resolved[0], 'http://10.0.0.1/different-path');
+      assert.equal(resolved[1], 'http://unknown.com/path');
     });
 
     it('should handle invalid URLs gracefully', () => {
@@ -236,15 +271,15 @@ describe('DnsResolver', () => {
       mock.method(dns, 'resolve4', mockResolve4);
 
       // Initial resolution
-      await dnsResolver.resolveUrl('https://example.com/path');
+      await dnsResolver.resolveUrl('http://example.com/path');
       const initial = dnsResolver.getResolvedUrl('example.com');
-      assert.equal(initial?.resolvedUrl, 'https://10.0.0.1/path');
+      assert.equal(initial?.resolvedUrl, 'http://10.0.0.1/path');
 
       // Re-resolve URLs - should detect change
-      await dnsResolver.resolveUrls(['https://example.com/path']);
+      await dnsResolver.resolveUrls(['http://example.com/path']);
 
       const updated = dnsResolver.getResolvedUrl('example.com');
-      assert.equal(updated?.resolvedUrl, 'https://10.0.0.2/path');
+      assert.equal(updated?.resolvedUrl, 'http://10.0.0.2/path');
     });
   });
 });
