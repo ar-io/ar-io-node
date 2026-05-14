@@ -53,7 +53,7 @@ export class OnDemandArNSResolver implements NameResolver {
           resolvedId: undefined,
           resolvedAt: undefined,
           ttl: undefined,
-          processId: undefined,
+          antId: undefined,
           limit: undefined,
           index: undefined,
         };
@@ -75,19 +75,22 @@ export class OnDemandArNSResolver implements NameResolver {
           resolvedId: undefined,
           resolvedAt: Date.now(),
           ttl: 300,
-          processId: undefined,
+          antId: undefined,
           limit: undefined,
           index: undefined,
         };
       }
 
-      const processId = baseArNSRecord.processId;
+      // SDK boundary: `baseArNSRecord.processId` is the SDK's field name for
+      // the per-ANT identifier (a Solana PDA in Solana mode). We expose it
+      // internally and on the wire as `antId` / `X-ArNS-Ant-Id`.
+      const antId = baseArNSRecord.processId;
 
       const ant = new SolanaANTReadable({
         // See note in system.ts re: nested @solana/rpc-spec drift
         // between @ar.io/sdk and the top-level kit copy.
         rpc: this.solanaRpc as any,
-        processId: processId,
+        processId: antId,
         // Pin the ANT program to the gateway-configured ID so devnet/
         // testnet deployments don't silently fall back to the SDK's
         // bundled mainnet placeholder (which has no accounts off
@@ -122,7 +125,7 @@ export class OnDemandArNSResolver implements NameResolver {
         name,
         resolvedId,
         resolvedAt: Date.now(),
-        processId: processId,
+        antId,
         ttl,
         limit: baseArNSRecord.undernameLimit,
         index,
@@ -140,7 +143,7 @@ export class OnDemandArNSResolver implements NameResolver {
       resolvedId: undefined,
       resolvedAt: undefined,
       ttl: undefined,
-      processId: undefined,
+      antId: undefined,
       limit: undefined,
       index: undefined,
     };

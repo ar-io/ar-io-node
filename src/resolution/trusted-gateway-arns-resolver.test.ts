@@ -127,5 +127,65 @@ describe('TrustedGatewayArNSResolver', () => {
       assert.equal(resolution.ttl, DEFAULT_ARNS_TTL_SECONDS);
       assert.ok(resolution.resolvedAt !== undefined);
     });
+
+    it('should propagate antId from upstream X-ArNS-Ant-Id header', async () => {
+      const upstreamAntId = 'AntPda1111111111111111111111111111111111111';
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {
+              [headerNames.arnsResolvedId.toLowerCase()]: resolvedId,
+              [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
+              [headerNames.arnsLimit.toLowerCase()]: '10',
+              [headerNames.arnsIndex.toLowerCase()]: '0',
+              [headerNames.arnsAntId.toLowerCase()]: upstreamAntId,
+            },
+            config,
+            data: null,
+          });
+        return config;
+      });
+
+      const resolver = new TrustedGatewayArNSResolver({
+        log,
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
+      });
+
+      const resolution = await resolver.resolve({ name: 'test' });
+
+      assert.equal(resolution.antId, upstreamAntId);
+      assert.equal(resolution.resolvedId, resolvedId);
+    });
+
+    it('should leave antId undefined when upstream omits X-ArNS-Ant-Id', async () => {
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {
+              [headerNames.arnsResolvedId.toLowerCase()]: resolvedId,
+              [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
+              [headerNames.arnsLimit.toLowerCase()]: '10',
+              [headerNames.arnsIndex.toLowerCase()]: '0',
+            },
+            config,
+            data: null,
+          });
+        return config;
+      });
+
+      const resolver = new TrustedGatewayArNSResolver({
+        log,
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
+      });
+
+      const resolution = await resolver.resolve({ name: 'test' });
+
+      assert.equal(resolution.antId, undefined);
+      assert.equal(resolution.resolvedId, resolvedId);
+    });
   });
 });

@@ -58,7 +58,7 @@ export class TrustedGatewayArNSResolver implements NameResolver {
           resolvedId: undefined,
           resolvedAt: Date.now(),
           ttl: DEFAULT_ARNS_TTL_SECONDS,
-          processId: undefined,
+          antId: undefined,
           limit: undefined,
           index: undefined,
         };
@@ -66,11 +66,15 @@ export class TrustedGatewayArNSResolver implements NameResolver {
 
       const resolvedId =
         response.headers[headerNames.arnsResolvedId.toLowerCase()];
-      // ANT identity is no longer surfaced on the HTTP response — peers
-      // expose only `X-ArNS-Ant-Program-Id` (the AR.IO ANT program). The
-      // per-name ANT mint is not propagated across the trusted-gateway
-      // hop; downstream callers that need it must re-resolve via the SDK.
-      const processId: string | undefined = undefined;
+      // Per-ANT identifier from the upstream peer. Peers that have not
+      // shipped the X-ArNS-Ant-Id header yet will return `undefined` here;
+      // downstream callers that need the ANT id must re-resolve via the
+      // SDK in that case.
+      const antIdHeader = response.headers[headerNames.arnsAntId.toLowerCase()];
+      const antId: string | undefined =
+        typeof antIdHeader === 'string' && antIdHeader.length > 0
+          ? antIdHeader
+          : undefined;
       const ttl =
         parseInt(response.headers[headerNames.arnsTtlSeconds.toLowerCase()]) ||
         DEFAULT_ARNS_TTL_SECONDS;
@@ -87,7 +91,7 @@ export class TrustedGatewayArNSResolver implements NameResolver {
           statusCode: response.status,
           resolvedId,
           resolvedAt: Date.now(),
-          processId,
+          antId,
           ttl,
           limit,
           index,
@@ -115,7 +119,7 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       resolvedId: undefined,
       resolvedAt: undefined,
       ttl: undefined,
-      processId: undefined,
+      antId: undefined,
       limit: undefined,
       index: undefined,
     };

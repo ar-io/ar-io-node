@@ -17,7 +17,7 @@ declare global {
         basename: string;
         record: string;
         ttl?: number;
-        processId?: string;
+        antId?: string;
         resolvedAt?: number;
         limit?: number;
         index?: number;

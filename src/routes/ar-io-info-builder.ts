@@ -171,7 +171,6 @@ export interface ArIoInfoConfig {
  * ```typescript
  * const info = buildArIoInfo({
  *   wallet: 'wallet-address',
- *   processId: 'process-id',
  *   ans104UnbundleFilter: {},
  *   ans104IndexFilter: {},
  *   release: 'r123',
