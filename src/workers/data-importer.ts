@@ -107,6 +107,17 @@ export class DataImporter {
     const log = this.log.child({ method: 'download', id: item.id });
     const startMs = Date.now();
 
+    // Phase counters: lets operators see *where* a worker is stuck when
+    // the bundle pipeline wedges (queue pegged, no completions, no errors).
+    //   started - got_data       = workers currently inside getData()
+    //   got_data - stream_ended  - stream_errored = workers waiting on
+    //                                               stream end/error
+    // If (started - got_data) keeps climbing while completion counters
+    // flatline, the hang is in the source chain (cache lookup, sequential
+    // source dispatch, or one of the inner sources). If the gap is on the
+    // stream side, the hang is in the cache write or stream consumption.
+    metrics.dataImporterPhaseCounter.inc({ phase: 'started' });
+
     // Instrument the source-chain rejection path (all sources exhausted,
     // 404 from every tier, etc.) so failures before a stream is returned
     // still show up in the duration / size histograms. Without this, the
@@ -121,12 +132,15 @@ export class DataImporter {
         elapsedMs / 1000,
       );
       metrics.bundleDownloadSizeBytes.observe({ outcome: 'error' }, 0);
+      metrics.dataImporterPhaseCounter.inc({ phase: 'getData_errored' });
       throw error;
     }
+    metrics.dataImporterPhaseCounter.inc({ phase: 'got_data' });
     const size = data.size;
 
     return new Promise((resolve, reject) => {
       data.stream.on('end', () => {
+        metrics.dataImporterPhaseCounter.inc({ phase: 'stream_ended' });
         const elapsedMs = Date.now() - startMs;
         metrics.bundleDownloadDurationSeconds.observe(
           { outcome: 'success' },
@@ -147,6 +161,7 @@ export class DataImporter {
       });
 
       data.stream.on('error', (error) => {
+        metrics.dataImporterPhaseCounter.inc({ phase: 'stream_errored' });
         const elapsedMs = Date.now() - startMs;
         metrics.bundleDownloadDurationSeconds.observe(
           { outcome: 'error' },
