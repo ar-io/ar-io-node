@@ -90,7 +90,72 @@ function inB64UrlStrings(xs: string[]) {
   return sql(xs.map((x) => `unhex('${b64UrlToHex(x)}')`).join(', '));
 }
 
+// Single source of truth for the GraphQL transactions SELECT column
+// list, shared by both the stable leg (`transactions`) and the unstable
+// leg (`new_transactions`). The unstable table doesn't store the
+// offset/size pointer family — those are stable-pipeline artifacts —
+// so when the caller asks for `'null'` projections those four columns
+// become typed-nullable NULL casts. The cast is required: ClickHouse
+// would otherwise parse a bare `NULL AS alias` as a reference to a
+// column literally named NULL, not a NULL literal. The same column
+// order is also what `mapTransactionRow` and `addGqlTransactionFilters`
+// depend on, so adding a column means updating those in lockstep.
+function buildGqlTransactionColumns(
+  offsetFamily: 'concrete' | 'null',
+): string[] {
+  const nullCol = (name: string) =>
+    offsetFamily === 'null'
+      ? `CAST(NULL AS Nullable(UInt64)) AS ${name}`
+      : name;
+  return [
+    'height AS height',
+    'block_transaction_index',
+    'hex(block_indep_hash) AS block_indep_hash',
+    'block_timestamp',
+    'hex(block_previous_block) AS block_previous_block',
+    'is_data_item',
+    'hex(id) AS id',
+    'hex(anchor)',
+    'hex(target) AS target',
+    'toString(reward) AS reward',
+    'toString(quantity) AS quantity',
+    'toString(data_size) AS data_size',
+    'content_type',
+    'hex(owner_address) AS owner_address',
+    nullCol('owner_size'),
+    nullCol('owner_offset'),
+    'hex(parent_id) AS parent_id',
+    'tags_count',
+    'tags',
+    'indexed_at',
+    nullCol('signature_size'),
+    nullCol('signature_offset'),
+    'signature_type',
+  ];
+}
+
 type SqliteGqlArgs = Parameters<GqlQueryable['getGqlTransactions']>[0];
+
+// Pre-encoded SQL literal forms shared across the two CH legs in
+// `getGqlTransactions`. Built once by `prepareGqlFilterEncodings` and
+// passed into `addGqlTransactionFilters` so each leg doesn't redo the
+// same hex/b64url encoding work on a hot path. `sql.Statement`
+// fragments are pure data (rendered to strings at `query.toString()`
+// time) and safe to reuse across query objects.
+interface EncodedGqlFilters {
+  idsInList?: sql.Statement;
+  recipientsInList?: sql.Statement;
+  ownersInList?: sql.Statement;
+  bundledInList?: sql.Statement;
+  tagPredicates: Array<{
+    // `(unhex('aa'), unhex('bb')), (unhex('aa'), unhex('cc')), ...`
+    pairsSql: string;
+    // `unhex('aa')`
+    nameSql: string;
+    // `unhex('bb'), unhex('cc'), ...`
+    valueListSql: string;
+  }>;
+}
 
 export class CompositeClickHouseDatabase implements GqlQueryable {
   private log: winston.Logger;
@@ -242,31 +307,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
 
   getGqlTransactionsBaseSql() {
     return sql
-      .select(
-        'height AS height',
-        'block_transaction_index',
-        'hex(block_indep_hash) AS block_indep_hash',
-        'block_timestamp',
-        'hex(block_previous_block) AS block_previous_block',
-        'is_data_item',
-        'hex(id) AS id',
-        'hex(anchor)',
-        'hex(target) AS target',
-        'toString(reward) AS reward',
-        'toString(quantity) AS quantity',
-        'toString(data_size) AS data_size',
-        'content_type',
-        'hex(owner_address) AS owner_address',
-        'owner_size',
-        'owner_offset',
-        'hex(parent_id) AS parent_id',
-        'tags_count',
-        'tags',
-        'indexed_at',
-        'signature_size',
-        'signature_offset',
-        'signature_type',
-      )
+      .select(...buildGqlTransactionColumns('concrete'))
       .from('transactions AS t');
   }
 
@@ -294,36 +335,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
    */
   private getGqlUnstableTransactionsBaseSql() {
     const base = sql
-      .select(
-        'height AS height',
-        'block_transaction_index',
-        'hex(block_indep_hash) AS block_indep_hash',
-        'block_timestamp',
-        'hex(block_previous_block) AS block_previous_block',
-        'is_data_item',
-        'hex(id) AS id',
-        'hex(anchor)',
-        'hex(target) AS target',
-        'toString(reward) AS reward',
-        'toString(quantity) AS quantity',
-        'toString(data_size) AS data_size',
-        'content_type',
-        'hex(owner_address) AS owner_address',
-        // ClickHouse parses bare `NULL AS alias` as a column-reference to
-        // an identifier named NULL, not a NULL literal — explicit CAST
-        // forces it to a typed nullable. Type matches the corresponding
-        // column on `transactions` (UInt64 → Nullable(UInt64)) so the
-        // result-row shape is uniform across the two CH legs.
-        'CAST(NULL AS Nullable(UInt64)) AS owner_size',
-        'CAST(NULL AS Nullable(UInt64)) AS owner_offset',
-        'hex(parent_id) AS parent_id',
-        'tags_count',
-        'tags',
-        'indexed_at',
-        'CAST(NULL AS Nullable(UInt64)) AS signature_size',
-        'CAST(NULL AS Nullable(UInt64)) AS signature_offset',
-        'signature_type',
-      )
+      .select(...buildGqlTransactionColumns('null'))
       .from('new_transactions AS t');
     base.where(
       sql(
@@ -369,6 +381,54 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     return parts.join(', ');
   }
 
+  /**
+   * Hex/b64url-encodes id/recipient/owner/bundledIn lists and per-tag
+   * name/value bytes into the SQL-literal forms that
+   * `addGqlTransactionFilters` will splice into `WHERE` clauses. The
+   * resulting struct is pure data — no `sql-bricks` query objects are
+   * mutated here — so it can be safely passed to both the stable and
+   * unstable leg builders, which would otherwise each redo the same
+   * `Buffer.from(...).toString('hex')` and `inB64UrlStrings(...)` work
+   * on a hot path when streaming is enabled.
+   */
+  prepareGqlFilterEncodings({
+    ids = [],
+    recipients = [],
+    owners = [],
+    bundledIn,
+    tags = [],
+  }: {
+    ids?: string[];
+    recipients?: string[];
+    owners?: string[];
+    bundledIn?: string[] | null;
+    tags?: { name: string; values: string[] }[];
+  }): EncodedGqlFilters {
+    const encoded: EncodedGqlFilters = { tagPredicates: [] };
+    if (ids.length > 0) encoded.idsInList = inB64UrlStrings(ids);
+    if (recipients.length > 0)
+      encoded.recipientsInList = inB64UrlStrings(recipients);
+    if (owners.length > 0) encoded.ownersInList = inB64UrlStrings(owners);
+    if (Array.isArray(bundledIn))
+      encoded.bundledInList = inB64UrlStrings(bundledIn);
+    for (const tag of tags) {
+      const hexName = Buffer.from(tag.name).toString('hex');
+      const hexValues = tag.values.map((value) =>
+        Buffer.from(value).toString('hex'),
+      );
+      encoded.tagPredicates.push({
+        pairsSql: hexValues
+          .map((hexValue) => `(unhex('${hexName}'), unhex('${hexValue}'))`)
+          .join(', '),
+        nameSql: `unhex('${hexName}')`,
+        valueListSql: hexValues
+          .map((hexValue) => `unhex('${hexValue}')`)
+          .join(', '),
+      });
+    }
+    return encoded;
+  }
+
   addGqlTransactionFilters({
     query,
     cursor,
@@ -380,6 +440,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     maxHeight = -1,
     bundledIn,
     tags = [],
+    encoded,
   }: {
     query: sql.SelectStatement;
     cursor?: string;
@@ -391,37 +452,37 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags: { name: string; values: string[] }[];
+    // Optional pre-encoded forms shared across CH legs. When omitted
+    // (single-leg callers and tests) the encoding happens inline.
+    encoded?: EncodedGqlFilters;
   }) {
     const maxDbHeight = Infinity;
-
-    if (ids?.length > 0) {
-      query.where(sql.in('t.id', inB64UrlStrings(ids)));
-    }
-
-    if (recipients?.length > 0) {
-      query.where(sql.in('t.target', inB64UrlStrings(recipients)));
-    }
-
-    if (owners?.length > 0) {
-      query.where(sql.in('t.owner_address', inB64UrlStrings(owners)));
-    }
-
-    if (tags.length > 0) {
-      tags.forEach((tag) => {
-        const hexName = Buffer.from(tag.name).toString('hex');
-        const hexValues = tag.values.map((value) =>
-          Buffer.from(value).toString('hex'),
-        );
-        const pairs = hexValues
-          .map((hexValue) => `(unhex('${hexName}'), unhex('${hexValue}'))`)
-          .join(', ');
-        const valueList = hexValues
-          .map((hexValue) => `unhex('${hexValue}')`)
-          .join(', ');
-        query.where(sql(`hasAny(t.tags, [${pairs}])`));
-        query.where(sql(`has(t.tag_names, unhex('${hexName}'))`));
-        query.where(sql(`hasAny(t.tag_values, [${valueList}])`));
+    const prepared =
+      encoded ??
+      this.prepareGqlFilterEncodings({
+        ids,
+        recipients,
+        owners,
+        bundledIn,
+        tags,
       });
+
+    if (prepared.idsInList !== undefined) {
+      query.where(sql.in('t.id', prepared.idsInList));
+    }
+
+    if (prepared.recipientsInList !== undefined) {
+      query.where(sql.in('t.target', prepared.recipientsInList));
+    }
+
+    if (prepared.ownersInList !== undefined) {
+      query.where(sql.in('t.owner_address', prepared.ownersInList));
+    }
+
+    for (const tagPred of prepared.tagPredicates) {
+      query.where(sql(`hasAny(t.tags, [${tagPred.pairsSql}])`));
+      query.where(sql(`has(t.tag_names, ${tagPred.nameSql})`));
+      query.where(sql(`hasAny(t.tag_values, [${tagPred.valueListSql}])`));
     }
 
     if (minHeight != null && minHeight > 0) {
@@ -432,8 +493,8 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       query.where(sql.lte('t.height', maxHeight));
     }
 
-    if (Array.isArray(bundledIn)) {
-      query.where(sql.in('t.parent_id', inB64UrlStrings(bundledIn)));
+    if (prepared.bundledInList !== undefined) {
+      query.where(sql.in('t.parent_id', prepared.bundledInList));
     }
 
     const {
@@ -640,6 +701,17 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }): Promise<GqlTransactionsResult> {
+    // Encode id/recipient/owner/bundledIn lists and per-tag bytes
+    // once and share across both CH legs — the work is the same per
+    // leg and shows up on tag-heavy queries when streaming is on.
+    const encodedFilters = this.prepareGqlFilterEncodings({
+      ids,
+      recipients,
+      owners,
+      bundledIn,
+      tags,
+    });
+
     // STABLE LEG — `transactions`. Always queried; this is CH's primary
     // role and any failure here surfaces to the caller (fail-fast).
     const stableQuery = this.getGqlTransactionsBaseSql();
@@ -654,6 +726,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       maxHeight,
       bundledIn,
       tags,
+      encoded: encodedFilters,
     });
     const stableSql = this.buildChTransactionsSql({
       innerSql: stableQuery.toString(),
@@ -716,6 +789,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
             maxHeight,
             bundledIn,
             tags,
+            encoded: encodedFilters,
           });
           const unstableSql = this.buildChTransactionsSql({
             innerSql: unstableQuery.toString(),
