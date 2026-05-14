@@ -525,20 +525,19 @@ describe('ClickHouseStreamer', () => {
       assert.equal(streamer.queueDepth(), 2);
     });
 
-    it('clears currentBlock when its height is past forkHeight', async () => {
+    it('clears currentBlockHeight when its height is past forkHeight', async () => {
       eventEmitter.emit(events.BLOCK_INDEXED, makeBlock({ height: 100 }));
       await tick();
-      assert.notEqual((streamer as any).currentBlock, null);
+      assert.notEqual((streamer as any).currentBlockHeight, null);
       await (streamer as any).handleReorg({ forkHeight: 50 });
-      assert.equal((streamer as any).currentBlock, null);
+      assert.equal((streamer as any).currentBlockHeight, null);
     });
 
-    it('preserves currentBlock when its height is at or below forkHeight', async () => {
+    it('preserves currentBlockHeight when its height is at or below forkHeight', async () => {
       eventEmitter.emit(events.BLOCK_INDEXED, makeBlock({ height: 30 }));
       await tick();
       await (streamer as any).handleReorg({ forkHeight: 50 });
-      assert.notEqual((streamer as any).currentBlock, null);
-      assert.equal((streamer as any).currentBlock.height, 30);
+      assert.equal((streamer as any).currentBlockHeight, 30);
     });
 
     it('swallows DELETE failures so the streamer survives a CH outage during reorg', async () => {

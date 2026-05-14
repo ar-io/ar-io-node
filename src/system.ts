@@ -1477,6 +1477,15 @@ export const clickhouseStreamer = (() => {
     url: config.CLICKHOUSE_URL,
     username: config.CLICKHOUSE_USER,
     password: config.CLICKHOUSE_PASSWORD,
+    // Batched INSERTs inline up to BATCH_SIZE rows of tag-bearing
+    // transactions; an L1 tx or data item with many large tags can push
+    // the rendered SQL past ClickHouse's default `max_query_size` of
+    // 256 KiB, which would reject the whole batch (flush errors are
+    // swallowed best-effort, so the rejection is silent except for a
+    // log line). 1 GiB is generous headroom over any realistic batch.
+    clickhouse_settings: {
+      max_query_size: '1073741824',
+    },
   });
   const streamer = new ClickHouseStreamer({
     log,

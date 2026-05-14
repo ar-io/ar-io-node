@@ -16,6 +16,7 @@ import {
   ownerToAddress,
 } from '../database/standalone-sqlite.js';
 import {
+  B64uTag,
   NormalizedDataItem,
   PartialJsonBlock,
   PartialJsonTransaction,
@@ -26,6 +27,13 @@ import {
 // ~1 block/min). Cheap to keep generous — each entry is one block's
 // metadata plus its tx-id list.
 const BLOCK_CONTEXT_RETENTION_HEIGHTS = 480;
+
+// Streaming-pipeline ClickHouse table names. Both must exist in the
+// configured database — `validateSchema` checks this at startup and the
+// INSERT/DELETE paths reference these constants so a rename only needs
+// to land here.
+const TABLE_NEW_BLOCKS = 'new_blocks';
+const TABLE_NEW_TRANSACTIONS = 'new_transactions';
 
 interface BlockContext {
   height: number;
@@ -143,7 +151,6 @@ function sqlLiteral(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map(sqlLiteral).join(', ')}]`;
   }
-  // Tag tuple: pair of Buffers.
   throw new Error(`sqlLiteral: unsupported value type: ${typeof value}`);
 }
 
@@ -191,6 +198,58 @@ function blockRowValuesLiteral(row: NewBlockRow): string {
   return [row.height, row.indep_hash, row.inserted_at]
     .map(sqlLiteral)
     .join(', ');
+}
+
+// Single pass over a data item's or L1 tx's tags: emits the
+// `Array(Tuple(BLOB, BLOB))` pair list that `new_transactions.tags`
+// expects, and pulls out the first Content-Type tag value (the schema
+// stores it denormalized into its own column for fast filtering).
+// `fallbackContentType` is the data-item-only escape hatch: when an
+// item has no Content-Type tag but the indexer sniffed one from the
+// payload, we promote that into the column so it's never blank.
+function parseTagsAndContentType(
+  tags: B64uTag[],
+  fallbackContentType?: string,
+): { tagPairs: Array<[Buffer, Buffer]>; contentType: string | null } {
+  let contentType: string | null = null;
+  const tagPairs: Array<[Buffer, Buffer]> = [];
+  for (const tag of tags) {
+    const name = fromB64Url(tag.name);
+    const value = fromB64Url(tag.value);
+    if (contentType === null && isContentTypeTag(name)) {
+      contentType = value.toString('utf8');
+    }
+    tagPairs.push([name, value]);
+  }
+  if (contentType === null && fallbackContentType !== undefined) {
+    contentType = fallbackContentType;
+  }
+  return { tagPairs, contentType };
+}
+
+// Fields that the row inherits unmodified from its containing block
+// (L1 txs and data items both denormalize block context onto every
+// `new_transactions` row). Centralizing them here means a future
+// block-derived column only needs a single edit; the two row builders
+// spread the result into their full row shape. `indexed_at` and
+// `inserted_at` are taken from the same `now` so they're equal per
+// row (the TTL is keyed off `inserted_at`).
+function buildBlockDerivedFields(block: BlockContext): {
+  block_indep_hash: Buffer;
+  block_timestamp: number;
+  block_previous_block: Buffer | null;
+  indexed_at: number;
+  inserted_at: number;
+} {
+  const now = currentUnixTimestamp();
+  return {
+    block_indep_hash: fromB64Url(block.indep_hash),
+    block_timestamp: block.timestamp,
+    block_previous_block:
+      block.previous_block !== '' ? fromB64Url(block.previous_block) : null,
+    indexed_at: now,
+    inserted_at: now,
+  };
 }
 
 /**
@@ -258,11 +317,14 @@ export class ClickHouseStreamer {
   // lookups (which fire asynchronously, much later than block import).
   private blocksByHeight = new Map<number, BlockContext>();
 
-  // The most recent BLOCK_INDEXED — populated synchronously and consumed
-  // by the BLOCK_TX_INDEXED handler that fires immediately after on the
-  // same event-loop tick (see block-importer.ts:160-164). Cleared on
-  // reorg if the current tip is no longer valid.
-  private currentBlock: BlockContext | null = null;
+  // Height of the most recent BLOCK_INDEXED — populated synchronously
+  // and consumed by the BLOCK_TX_INDEXED handler that fires immediately
+  // after on the same event-loop tick (see block-importer.ts:160-164).
+  // The full `BlockContext` lives in `blocksByHeight`; storing only the
+  // height here means reorg + eviction paths have a single source of
+  // truth to keep in sync. Cleared (set to null) on reorg if the current
+  // tip is no longer valid.
+  private currentBlockHeight: number | null = null;
 
   // L1-tx-id → { height, blockTransactionIndex }, populated from
   // BLOCK_TX_INDEXED. Consumed by ANS104_DATA_ITEM_INDEXED to denormalize
@@ -371,18 +433,17 @@ export class ClickHouseStreamer {
   // not the schema authority; pointing the operator at clickhouse-import
   // is more diagnosable than column-mismatch errors on the first INSERT.
   private async validateSchema(): Promise<void> {
+    const required = [TABLE_NEW_BLOCKS, TABLE_NEW_TRANSACTIONS];
     const result = await this.clickhouseClient.query({
       query:
         'SELECT name FROM system.tables ' +
         'WHERE database = currentDatabase() ' +
-        "AND name IN ('new_blocks', 'new_transactions')",
+        `AND name IN (${required.map((t) => `'${t}'`).join(', ')})`,
       format: 'JSONEachRow',
     });
     const rows = (await result.json<{ name: string }>()) as { name: string }[];
     const present = new Set(rows.map((r) => r.name));
-    const missing = ['new_blocks', 'new_transactions'].filter(
-      (t) => !present.has(t),
-    );
+    const missing = required.filter((t) => !present.has(t));
     if (missing.length > 0) {
       throw new Error(
         `ClickHouseStreamer cannot start: required table(s) missing in ` +
@@ -425,7 +486,7 @@ export class ClickHouseStreamer {
       txIndexById,
     };
     this.blocksByHeight.set(block.height, ctx);
-    this.currentBlock = ctx;
+    this.currentBlockHeight = block.height;
     this.evictOldBlockContexts(block.height);
 
     this.blockBuffer.push({
@@ -437,38 +498,56 @@ export class ClickHouseStreamer {
   }
 
   private handleBlockTxIndexed(tx: PartialJsonTransaction): void {
-    if (this.currentBlock === null) {
+    if (this.currentBlockHeight === null) {
       // BLOCK_TX_INDEXED before any BLOCK_INDEXED — only happens on
       // restart while the current block's indexing is mid-flight, or
-      // after a reorg cleared currentBlock. Skip; the row will land
-      // via the stable pipeline.
+      // after a reorg cleared currentBlockHeight. Skip; the row will
+      // land via the stable pipeline.
       return;
     }
-    const blockTxIndex = this.currentBlock.txIndexById.get(tx.id);
+    const currentBlock = this.blocksByHeight.get(this.currentBlockHeight);
+    if (currentBlock === undefined) {
+      // Would only happen if eviction ran between currentBlockHeight
+      // being set and a tx event firing — not possible on the current
+      // event-loop ordering, but guard rather than crash.
+      this.log.warn('BLOCK_TX_INDEXED: currentBlockHeight not in cache', {
+        txId: tx.id,
+        currentBlockHeight: this.currentBlockHeight,
+      });
+      return;
+    }
+    const blockTxIndex = currentBlock.txIndexById.get(tx.id);
     if (blockTxIndex === undefined) {
       // tx wasn't in the most recent block's txs[] — block-importer
       // emit ordering says this shouldn't happen, but skip rather
       // than write a row with a wrong index.
       this.log.warn('BLOCK_TX_INDEXED tx not found in currentBlock.txs', {
         txId: tx.id,
-        currentHeight: this.currentBlock.height,
+        currentHeight: currentBlock.height,
       });
       return;
     }
 
     this.txContextsById.set(tx.id, {
-      height: this.currentBlock.height,
+      height: currentBlock.height,
       blockTransactionIndex: blockTxIndex,
     });
 
-    this.txBuffer.push(this.buildL1TxRow(tx, this.currentBlock, blockTxIndex));
+    this.txBuffer.push(this.buildL1TxRow(tx, currentBlock, blockTxIndex));
     this.enforceQueueCapAndMaybeFlush();
   }
 
   private handleDataItemIndexed(item: NormalizedDataItem): void {
     if (item.root_tx_id === null || item.root_tx_id === undefined) {
-      // Optimistic data items have no root_tx_id yet — they'll be
-      // re-emitted with one once the bundle is mined. Skip.
+      // Optimistic data items (admin-API uploads, `routes/ar-io.ts`)
+      // emit ANS104_DATA_ITEM_INDEXED with `root_tx_id=null`. Once the
+      // bundle is mined and unbundled, `lib/ans-104.ts` emits
+      // ANS104_DATA_ITEM_MATCHED → `system.ts` re-queues the same
+      // item through `data-item-indexer`, which re-emits
+      // ANS104_DATA_ITEM_INDEXED with `root_tx_id` set. So skipping
+      // here is correct — we'll get a second event with the full
+      // shape. Until then the row only lives in SQLite; queries fall
+      // through to the SQLite leg.
       return;
     }
     const txCtx = this.txContextsById.get(item.root_tx_id);
@@ -522,8 +601,11 @@ export class ClickHouseStreamer {
     for (const [txId, ctx] of Array.from(this.txContextsById.entries())) {
       if (ctx.height > forkHeight) this.txContextsById.delete(txId);
     }
-    if (this.currentBlock !== null && this.currentBlock.height > forkHeight) {
-      this.currentBlock = null;
+    if (
+      this.currentBlockHeight !== null &&
+      this.currentBlockHeight > forkHeight
+    ) {
+      this.currentBlockHeight = null;
     }
     this.blockBuffer = this.blockBuffer.filter((r) => r.height <= forkHeight);
     this.txBuffer = this.txBuffer.filter((r) => r.height <= forkHeight);
@@ -534,7 +616,7 @@ export class ClickHouseStreamer {
     // needed there.
     try {
       await this.clickhouseClient.command({
-        query: `ALTER TABLE new_blocks DELETE WHERE height > ${forkHeight}`,
+        query: `ALTER TABLE ${TABLE_NEW_BLOCKS} DELETE WHERE height > ${forkHeight}`,
       });
     } catch (err: any) {
       this.log.error(
@@ -562,18 +644,10 @@ export class ClickHouseStreamer {
     block: BlockContext,
     blockTxIndex: number,
   ): NewTransactionRow {
-    let contentType: string | null = null;
-    const tagPairs: Array<[Buffer, Buffer]> = [];
-    for (const tag of tx.tags) {
-      const name = fromB64Url(tag.name);
-      const value = fromB64Url(tag.value);
-      if (contentType === null && isContentTypeTag(name)) {
-        contentType = value.toString('utf8');
-      }
-      tagPairs.push([name, value]);
-    }
+    const { tagPairs, contentType } = parseTagsAndContentType(tx.tags);
     const ownerBuf = fromB64Url(tx.owner);
     return {
+      ...buildBlockDerivedFields(block),
       height: block.height,
       block_transaction_index: blockTxIndex,
       is_data_item: false,
@@ -588,12 +662,6 @@ export class ClickHouseStreamer {
       format: tx.format,
       data_root: tx.data_root !== '' ? fromB64Url(tx.data_root) : null,
       parent_id: null,
-      block_indep_hash: fromB64Url(block.indep_hash),
-      block_timestamp: block.timestamp,
-      block_previous_block:
-        block.previous_block !== '' ? fromB64Url(block.previous_block) : null,
-      indexed_at: currentUnixTimestamp(),
-      inserted_at: currentUnixTimestamp(),
       owner: ownerBuf,
       signature: tx.signature !== null ? fromB64Url(tx.signature) : null,
       signature_type: null,
@@ -609,24 +677,16 @@ export class ClickHouseStreamer {
     block: BlockContext,
     txCtx: TxContext,
   ): NewTransactionRow {
-    let contentType: string | null = null;
-    const tagPairs: Array<[Buffer, Buffer]> = [];
-    for (const tag of item.tags) {
-      const name = fromB64Url(tag.name);
-      const value = fromB64Url(tag.value);
-      if (contentType === null && isContentTypeTag(name)) {
-        contentType = value.toString('utf8');
-      }
-      tagPairs.push([name, value]);
-    }
-    if (contentType === null && item.content_type !== undefined) {
-      contentType = item.content_type;
-    }
+    const { tagPairs, contentType } = parseTagsAndContentType(
+      item.tags,
+      item.content_type,
+    );
     return {
+      ...buildBlockDerivedFields(block),
+      // Data items inherit their parent L1 tx's height and
+      // block_transaction_index (matches how the stable Parquet path
+      // projects them into `transactions`).
       height: txCtx.height,
-      // Data items inherit their parent L1 tx's block_transaction_index
-      // (matches how the stable Parquet path projects them into
-      // `transactions`).
       block_transaction_index: txCtx.blockTransactionIndex,
       is_data_item: true,
       id: fromB64Url(item.id),
@@ -648,12 +708,6 @@ export class ClickHouseStreamer {
         item.parent_id !== null && item.parent_id !== ''
           ? fromB64Url(item.parent_id)
           : null,
-      block_indep_hash: fromB64Url(block.indep_hash),
-      block_timestamp: block.timestamp,
-      block_previous_block:
-        block.previous_block !== '' ? fromB64Url(block.previous_block) : null,
-      indexed_at: currentUnixTimestamp(),
-      inserted_at: currentUnixTimestamp(),
       owner: fromB64Url(item.owner),
       signature: item.signature !== null ? fromB64Url(item.signature) : null,
       signature_type: item.signature_type ?? null,
@@ -668,15 +722,27 @@ export class ClickHouseStreamer {
   }
 
   private enforceQueueCapAndMaybeFlush(): void {
-    // Bounded buffer: drop oldest on overflow. Drops are intentional —
+    // Bounded buffers: drop oldest on overflow. Drops are intentional —
     // streaming is best-effort and the stable Parquet pipeline is the
-    // backstop. Dropped rows will appear once they stabilize.
+    // backstop. Dropped rows will appear once they stabilize. Block
+    // volume is ~1/min so the block buffer overflow is mostly a
+    // backstop for symmetry, but if CH is down for hours we'd rather
+    // bound both than only one.
     if (this.txBuffer.length > this.maxQueueSize) {
       const drop = this.txBuffer.length - this.maxQueueSize;
       this.txBuffer.splice(0, drop);
-      this.log.warn('Streamer buffer over cap; dropped oldest rows', {
+      this.log.warn('Streamer tx buffer over cap; dropped oldest rows', {
         droppedRows: drop,
         bufferSize: this.txBuffer.length,
+        maxQueueSize: this.maxQueueSize,
+      });
+    }
+    if (this.blockBuffer.length > this.maxQueueSize) {
+      const drop = this.blockBuffer.length - this.maxQueueSize;
+      this.blockBuffer.splice(0, drop);
+      this.log.warn('Streamer block buffer over cap; dropped oldest rows', {
+        droppedRows: drop,
+        bufferSize: this.blockBuffer.length,
         maxQueueSize: this.maxQueueSize,
       });
     }
@@ -703,18 +769,35 @@ export class ClickHouseStreamer {
 
     this.flushInFlight = (async () => {
       try {
-        if (blocksToFlush.length > 0) {
-          await this.insertBlocks(blocksToFlush);
+        // The two INSERTs target unrelated tables with no ordering
+        // dependency, so run them in parallel — flush latency directly
+        // caps the unstable head's freshness window. allSettled (not
+        // all) so one leg's failure doesn't mask the other's outcome
+        // in logs; both rejections are still effectively "log + drop"
+        // under best-effort semantics.
+        const [blocksResult, txsResult] = await Promise.allSettled([
+          blocksToFlush.length > 0
+            ? this.insertBlocks(blocksToFlush)
+            : Promise.resolve(),
+          txsToFlush.length > 0
+            ? this.insertTransactions(txsToFlush)
+            : Promise.resolve(),
+        ]);
+        if (blocksResult.status === 'rejected') {
+          this.log.error('ClickHouseStreamer flush failed: insertBlocks', {
+            message: blocksResult.reason?.message,
+            blocks: blocksToFlush.length,
+          });
         }
-        if (txsToFlush.length > 0) {
-          await this.insertTransactions(txsToFlush);
+        if (txsResult.status === 'rejected') {
+          this.log.error(
+            'ClickHouseStreamer flush failed: insertTransactions',
+            {
+              message: txsResult.reason?.message,
+              transactions: txsToFlush.length,
+            },
+          );
         }
-      } catch (err: any) {
-        this.log.error('ClickHouseStreamer flush failed', {
-          message: err?.message,
-          blocks: blocksToFlush.length,
-          transactions: txsToFlush.length,
-        });
       } finally {
         this.flushInFlight = null;
       }
@@ -725,13 +808,13 @@ export class ClickHouseStreamer {
 
   private async insertBlocks(rows: NewBlockRow[]): Promise<void> {
     const values = rows.map((r) => `(${blockRowValuesLiteral(r)})`).join(', ');
-    const sql = `INSERT INTO new_blocks (height, indep_hash, inserted_at) VALUES ${values}`;
+    const sql = `INSERT INTO ${TABLE_NEW_BLOCKS} (height, indep_hash, inserted_at) VALUES ${values}`;
     await this.clickhouseClient.command({ query: sql });
   }
 
   private async insertTransactions(rows: NewTransactionRow[]): Promise<void> {
     const values = rows.map((r) => `(${rowValuesLiteral(r)})`).join(', ');
-    const sql = `INSERT INTO new_transactions (${NEW_TRANSACTION_COLUMNS.join(', ')}) VALUES ${values}`;
+    const sql = `INSERT INTO ${TABLE_NEW_TRANSACTIONS} (${NEW_TRANSACTION_COLUMNS.join(', ')}) VALUES ${values}`;
     await this.clickhouseClient.command({ query: sql });
   }
 }
