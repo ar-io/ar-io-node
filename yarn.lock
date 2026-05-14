@@ -134,15 +134,17 @@
   dependencies:
     xss "^1.0.8"
 
-"@ar.io/sdk@4.0.0-solana.4":
-  version "4.0.0-solana.4"
-  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-4.0.0-solana.4.tgz#0b0bfc4dc7ff15c2aaab842d42fd9eb916af3d3e"
-  integrity sha512-75fp8NIDTH3UVoASq09pWgi87w5pKhZEe/ndwEmPG6fN6Nvsg0OoEDvna3i5cW+DbxjJIj+3tYN7wl6LQufcDQ==
+"@ar.io/sdk@4.0.0-solana.8":
+  version "4.0.0-solana.8"
+  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-4.0.0-solana.8.tgz#5b0ec089dd0ee732e027094107375d7adf782af3"
+  integrity sha512-+xusf3K9qhHsALPxqpc7HeivQ6dNdFp48Sd/E7HzmnfFH/wPiKASC2z135yUV3B2SJAmO4/SqIvoEnj8APppcQ==
   dependencies:
+    "@ar.io/solana-contracts" "0.1.0-devnet.0"
     "@ardrive/turbo-sdk" "^1.19.0"
     "@dha-team/arbundles" "^1.0.1"
     "@permaweb/aoconnect" "0.0.68"
     "@solana-program/compute-budget" "^0.15.0"
+    "@solana-program/token" "^0.13.0"
     "@solana/kit" "^6.8.0"
     arweave "1.15.5"
     axios "^1.13.2"
@@ -150,6 +152,11 @@
     commander "^12.1.0"
     eventemitter3 "^5.0.1"
     prompts "^2.4.2"
+
+"@ar.io/solana-contracts@0.1.0-devnet.0":
+  version "0.1.0-devnet.0"
+  resolved "https://registry.yarnpkg.com/@ar.io/solana-contracts/-/solana-contracts-0.1.0-devnet.0.tgz#b03d1fd243b80665bd289232b335a25a22e3795a"
+  integrity sha512-MzdoB2lBHWNqGRi5Ki7a8legTv8YuoymwuahPSQr6lk75UMr7dMz5VWF2ypXLv2GJZODz69ChNSd/eTP7X4n8g==
 
 "@ardrive/ardrive-promise-cache@^1.4.0":
   version "1.4.0"
@@ -4125,21 +4132,6 @@
     warp-arbundles "^1.0.4"
     zod "^3.24.1"
 
-"@permaweb/aoconnect@^0.0.63":
-  version "0.0.63"
-  resolved "https://registry.yarnpkg.com/@permaweb/aoconnect/-/aoconnect-0.0.63.tgz#2ea84eea9dc5d18f3e7064535c1abde681be45ca"
-  integrity sha512-4RMc3ioS82f/xwZAF5PhAjz9vOpXMv05eSl2wm3gJcvI6KO4yh5Sut6+Jj4ZQhkKOK63QfMbY04VDrw5QERIbA==
-  dependencies:
-    "@permaweb/ao-scheduler-utils" "~0.0.25"
-    "@permaweb/protocol-tag-utils" "~0.0.2"
-    buffer "^6.0.3"
-    debug "^4.3.7"
-    hyper-async "^1.1.2"
-    mnemonist "^0.39.8"
-    ramda "^0.30.1"
-    warp-arbundles "^1.0.4"
-    zod "^3.23.8"
-
 "@permaweb/protocol-tag-utils@~0.0.2":
   version "0.0.2"
   resolved "https://registry.yarnpkg.com/@permaweb/protocol-tag-utils/-/protocol-tag-utils-0.0.2.tgz#c8a2eddf7da15d70a6e60aecff839730cb59aee3"
@@ -5399,6 +5391,11 @@
   resolved "https://registry.yarnpkg.com/@solana-program/compute-budget/-/compute-budget-0.8.0.tgz#0930aca4de1170ed607d64d89375074930aa8b93"
   integrity sha512-qPKxdxaEsFxebZ4K5RPuy7VQIm/tfJLa1+Nlt3KNA8EYQkz9Xm8htdoEaXVrer9kpgzzp9R3I3Bh6omwCM06tQ==
 
+"@solana-program/system@^0.12.0":
+  version "0.12.0"
+  resolved "https://registry.yarnpkg.com/@solana-program/system/-/system-0.12.0.tgz#a69ebdd9918d5a0d06246555965a59a829991ad9"
+  integrity sha512-ZnAAWeGVMWNtJhw3GdifI2HnhZ0A0H0qs8tBkcFvxp/8wIavvO+GOM4Jd0N22u2+Lni2zcwvcrxrsxj6Mjphng==
+
 "@solana-program/system@^0.8.0":
   version "0.8.1"
   resolved "https://registry.yarnpkg.com/@solana-program/system/-/system-0.8.1.tgz#0711362899ee4a76d2dc0a8ca5176e3426b8458c"
@@ -5413,6 +5410,13 @@
   version "0.6.1"
   resolved "https://registry.yarnpkg.com/@solana-program/token-2022/-/token-2022-0.6.1.tgz#dcc44d56228e34c3b90099d9d3cab97d84c12367"
   integrity sha512-Ex02cruDMGfBMvZZCrggVR45vdQQSI/unHVpt/7HPt/IwFYB4eTlXtO8otYZyqV/ce5GqZ8S6uwyRf0zy6fdbA==
+
+"@solana-program/token@^0.13.0":
+  version "0.13.0"
+  resolved "https://registry.yarnpkg.com/@solana-program/token/-/token-0.13.0.tgz#6ef44f5fdc9cc4f087fcda3a001da8fe033ab678"
+  integrity sha512-/Apjrd5lwOJGrPB0J5Rv7EBeclvyEBQPAGA85Scm7wBH+GpkbdLDM9uK3TNg8jjFKyWQYai/JtPHbrx7VgFLSg==
+  dependencies:
+    "@solana-program/system" "^0.12.0"
 
 "@solana-program/token@^0.5.1":
   version "0.5.1"
@@ -9719,7 +9723,7 @@ debug@2.6.9:
   dependencies:
     ms "2.0.0"
 
-debug@4, debug@^4.1.0, debug@^4.1.1, debug@^4.3.1, debug@^4.3.2, debug@^4.3.3, debug@^4.3.4, debug@^4.3.5, debug@^4.3.7, debug@^4.4.0, debug@^4.4.3, debug@~4.4.1:
+debug@4, debug@^4.1.0, debug@^4.1.1, debug@^4.3.1, debug@^4.3.2, debug@^4.3.3, debug@^4.3.4, debug@^4.3.5, debug@^4.4.0, debug@^4.4.3, debug@~4.4.1:
   version "4.4.3"
   resolved "https://registry.yarnpkg.com/debug/-/debug-4.4.3.tgz#c6ae432d9bd9662582fce08709b038c58e9e3d6a"
   integrity sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==

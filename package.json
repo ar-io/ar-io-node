@@ -10,7 +10,7 @@
     "url": "https://github.com/ar-io/ar-io-node"
   },
   "dependencies": {
-    "@ar.io/sdk": "4.0.0-solana.4",
+    "@ar.io/sdk": "4.0.0-solana.8",
     "@ardrive/ardrive-promise-cache": "^1.4.0",
     "@ardrive/turbo-sdk": "^1.40.2",
     "@solana/kit": "^2.1.0",
