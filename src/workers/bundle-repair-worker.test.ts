@@ -11,7 +11,7 @@ import { createTestLogger } from '../../test/test-logger.js';
 import * as metrics from '../metrics.js';
 import { BundleIndex } from '../types.js';
 import { BundleRepairWorker } from './bundle-repair-worker.js';
-import { TransactionFetcher } from './transaction-fetcher.js';
+import { Ans104Unbundler, UnbundleableItem } from './ans104-unbundler.js';
 
 class FakeBundleIndex implements BundleIndex {
   failedBundleIds: string[] = [];
@@ -49,10 +49,20 @@ class FakeBundleIndex implements BundleIndex {
   }
 }
 
-class FakeTxFetcher {
-  queued: string[] = [];
-  queueTxId({ txId }: { txId: string }): void {
-    this.queued.push(txId);
+class FakeAns104Unbundler {
+  // Records every queueItem call. The repair worker passes the failed
+  // bundle's root_transaction_id as item.id; tests assert on that.
+  queued: Array<{
+    id: string;
+    prioritized: boolean | undefined;
+    bypassFilter: boolean;
+  }> = [];
+  async queueItem(
+    item: UnbundleableItem,
+    prioritized: boolean | undefined,
+    bypassFilter = false,
+  ): Promise<void> {
+    this.queued.push({ id: item.id, prioritized, bypassFilter });
   }
 }
 
@@ -84,17 +94,17 @@ async function getHistogramCount(
 describe('BundleRepairWorker metrics', () => {
   let log: ReturnType<typeof createTestLogger>;
   let bundleIndex: FakeBundleIndex;
-  let txFetcher: FakeTxFetcher;
+  let ans104Unbundler: FakeAns104Unbundler;
   let worker: BundleRepairWorker;
 
   beforeEach(() => {
     log = createTestLogger({ suite: 'BundleRepairWorker' });
     bundleIndex = new FakeBundleIndex();
-    txFetcher = new FakeTxFetcher();
+    ans104Unbundler = new FakeAns104Unbundler();
     worker = new BundleRepairWorker({
       log,
       bundleIndex,
-      txFetcher: txFetcher as unknown as TransactionFetcher,
+      ans104Unbundler: ans104Unbundler as unknown as Ans104Unbundler,
       unbundleFilter: '{}',
       indexFilter: '{}',
       shouldBackfillBundles: false,
@@ -102,7 +112,14 @@ describe('BundleRepairWorker metrics', () => {
     });
   });
 
-  it('increments retries counter once per re-queued bundle', async () => {
+  it('queues each failed bundle to the unbundler with bypassFilter=true and increments the retries counter', async () => {
+    // selectFailedBundleIds aliases bundles.root_transaction_id AS id, so
+    // the ids handed to the worker are L1/parent ids. For BDIs that's the
+    // parent L1; for L1s it's the L1's own id. Either way the repair
+    // worker should hand them to the unbundler directly — bypassing
+    // TransactionFetcher — so the unbundle attempt is guaranteed to fire
+    // this cycle rather than depending on a (possibly-deduped or already-
+    // imported) txFetcher path.
     bundleIndex.failedBundleIds = ['bundle-a', 'bundle-b', 'bundle-c'];
     const before = await getCounterValue(metrics.bundleRepairRetriesCounter, {
       kind: 'retry',
@@ -111,7 +128,18 @@ describe('BundleRepairWorker metrics', () => {
     await worker.retryBundles();
 
     assert.equal(bundleIndex.saveBundleRetriesCalls.length, 3);
-    assert.deepEqual(txFetcher.queued, ['bundle-a', 'bundle-b', 'bundle-c']);
+    assert.deepEqual(
+      ans104Unbundler.queued.map((q) => q.id),
+      ['bundle-a', 'bundle-b', 'bundle-c'],
+    );
+    // Every retry should bypass the filter (we're explicitly re-trying a
+    // bundle that was previously accepted; the filter has nothing new to
+    // say) and run as non-prioritized so it doesn't preempt chain-tip
+    // ingest.
+    for (const q of ans104Unbundler.queued) {
+      assert.equal(q.bypassFilter, true);
+      assert.equal(q.prioritized, false);
+    }
     assert.equal(
       await getCounterValue(metrics.bundleRepairRetriesCounter, {
         kind: 'retry',
