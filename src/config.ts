@@ -219,6 +219,20 @@ export const STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
   1000 * 30, // 30 seconds
 );
 
+// Wall-clock cap on a single HTTP-response stream's total time from
+// attachment to completion. Belt-and-suspenders for the
+// backpressure-pause-then-upstream-stall wedge: STREAM_STALL_TIMEOUT_MS
+// is cleared on pause, so an upstream that goes silent while we're
+// paused for backpressure can hang forever. This cap fires regardless
+// of pause state and forces a worker to give up after the configured
+// duration so the bundle is retried on a different peer. Generous
+// default — only legitimately slow transfers exceeding ~1.1 MB/s on a
+// 1 GB bundle would trip it.
+export const STREAM_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
+  'STREAM_REQUEST_TIMEOUT_MS',
+  1000 * 60 * 15, // 15 minutes
+);
+
 // GraphQL root TX lookup gateways (separate from data retrieval gateways)
 export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(
