@@ -111,6 +111,47 @@ export const bundleDataItemCountHistogram = new promClient.Histogram({
   buckets: [1, 10, 100, 1000, 10_000, 100_000, 500_000, 1_000_000, 5_000_000],
 });
 
+// Wall-clock seconds spent in a single bundle download attempt
+// (from contiguousDataSource.getData → stream end / error). Labelled by
+// `outcome` so we can separately observe success vs error tails. Wide
+// buckets because turbo bundles can legitimately take many minutes.
+export const bundleDownloadDurationSeconds = new promClient.Histogram({
+  name: 'bundle_download_duration_seconds',
+  help: 'Wall-clock duration of a bundle download attempt',
+  labelNames: ['outcome'],
+  buckets: [0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600],
+});
+
+// Reported size (in bytes) of the contiguous data backing each bundle
+// download attempt. Useful for correlating size with download duration —
+// answers "are slow downloads big, or are big downloads also slow when
+// they finish?"
+export const bundleDownloadSizeBytes = new promClient.Histogram({
+  name: 'bundle_download_size_bytes',
+  help: 'Bundle download size in bytes (as reported by contiguousDataSource)',
+  labelNames: ['outcome'],
+  buckets: [
+    1_024,
+    10_240,
+    102_400,
+    1_048_576,
+    10_485_760,
+    104_857_600,
+    1_073_741_824,
+    10_737_418_240,
+  ],
+});
+
+// Count of items dropped by DataImporter because its queue was at
+// maxQueueSize. Critical for diagnosing retry-lane effectiveness: if this
+// is high while BundleRepairWorker.retryLargeBundles is running, retries
+// are being silently absorbed.
+export const dataImporterQueueFullSkipsCounter = new promClient.Counter({
+  name: 'data_importer_queue_full_skips_total',
+  help: 'Items dropped by DataImporter due to full queue',
+  labelNames: ['importer'],
+});
+
 export const dataItemsQueuedCounter = new promClient.Counter({
   name: 'data_items_queued_total',
   help: 'Count of data items queued for indexing',
