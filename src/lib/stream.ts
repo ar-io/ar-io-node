@@ -20,17 +20,37 @@ import * as metrics from '../metrics.js';
  * `'data'` listener switches it to flowing mode. Callers must call
  * `stream.pipe()` or `stream.resume()` to start flowing.
  *
+ * **Wall-clock cap (`maxRequestMs`, optional):** the stall timer is cleared
+ * on every `'pause'` so legitimate backpressure does not look like an
+ * upstream stall. That leaves an edge case where an upstream peer goes
+ * silent *while* the consumer is paused for backpressure — neither
+ * `'data'`, `'pause'`, nor `'resume'` fires again, the stall timer is
+ * never re-armed, and the stream hangs forever. When a caller passes
+ * `maxRequestMs`, a second timer is scheduled that fires unconditionally
+ * after that duration regardless of pause/resume state. Mirrors the
+ * connection-phase `setTimeout(controller.abort, requestTimeoutMs)` idiom
+ * used in ar-io-data-source.ts for the connection phase. Use this for any
+ * HTTP-response stream where a hung peer must not wedge a worker.
+ *
  * Returns a cleanup function that clears the timer and removes listeners.
  */
 export function attachStallTimeout(
   stream: Readable,
   stallTimeoutMs: number,
+  maxRequestMs?: number,
 ): () => void {
   let timer: NodeJS.Timeout | undefined;
+  let maxTimer: NodeJS.Timeout | undefined;
   const clearTimer = () => {
     if (timer !== undefined) {
       clearTimeout(timer);
       timer = undefined;
+    }
+  };
+  const clearMaxTimer = () => {
+    if (maxTimer !== undefined) {
+      clearTimeout(maxTimer);
+      maxTimer = undefined;
     }
   };
   const armTimer = () => {
@@ -67,6 +87,19 @@ export function attachStallTimeout(
     armTimer();
   }
 
+  // Wall-clock cap: fires regardless of pause/resume state. Catches the
+  // backpressure-pause-then-upstream-stall wedge that the per-data stall
+  // timer cannot see.
+  if (maxRequestMs !== undefined) {
+    maxTimer = setTimeout(() => {
+      stream.destroy(
+        new Error(
+          `Stream wall-clock timeout: not complete within ${maxRequestMs}ms`,
+        ),
+      );
+    }, maxRequestMs);
+  }
+
   // Re-pause the stream since adding a 'data' listener switches it to
   // flowing mode. Consumers control when the stream starts flowing via
   // pipe() or resume().
@@ -74,6 +107,7 @@ export function attachStallTimeout(
 
   const cleanup = () => {
     clearTimer();
+    clearMaxTimer();
     stream.off('resume', onResume);
     stream.off('pause', onPause);
     stream.off('data', onData);

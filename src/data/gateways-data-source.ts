@@ -58,6 +58,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private gatewayTrust: Map<string, boolean>;
   private readonly requestTimeoutMs: number;
   private readonly streamStallTimeoutMs: number;
+  private readonly streamRequestTimeoutMs: number;
   private readonly fallbackToBasePath: boolean;
   private readonly maxHopsAllowed: number;
   private readonly rangeAccept200MaxOffset: number;
@@ -68,6 +69,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     trustedGatewaysUrls,
     requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
     streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
+    streamRequestTimeoutMs = config.STREAM_REQUEST_TIMEOUT_MS,
     fallbackToBasePath = false,
     maxHopsAllowed = MAX_DATA_HOPS,
     rangeAccept200MaxOffset = config.GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET,
@@ -76,6 +78,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
     requestTimeoutMs?: number;
     streamStallTimeoutMs?: number;
+    streamRequestTimeoutMs?: number;
     fallbackToBasePath?: boolean;
     maxHopsAllowed?: number;
     rangeAccept200MaxOffset?: number;
@@ -83,6 +86,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
     this.streamStallTimeoutMs = streamStallTimeoutMs;
+    this.streamRequestTimeoutMs = streamRequestTimeoutMs;
     this.fallbackToBasePath = fallbackToBasePath;
     this.maxHopsAllowed = maxHopsAllowed;
     this.rangeAccept200MaxOffset = rangeAccept200MaxOffset;
@@ -506,7 +510,11 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   }
                 }
 
-                attachStallTimeout(stream, this.streamStallTimeoutMs);
+                attachStallTimeout(
+                  stream,
+                  this.streamStallTimeoutMs,
+                  this.streamRequestTimeoutMs,
+                );
 
                 const gatewayTrusted =
                   this.gatewayTrust.get(gatewayUrl) ?? true;
