@@ -43,7 +43,7 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
     return;
   }
 
-  const { statusCode, resolvedId, ttl, processId, resolvedAt, index, limit } =
+  const { statusCode, resolvedId, ttl, antId, resolvedAt, index, limit } =
     resolved;
 
   if (resolvedId === undefined || statusCode === 404) {
@@ -59,6 +59,9 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
   if (config.ARIO_ANT_PROGRAM_ID !== undefined) {
     res.header(headerNames.arnsAntProgramId, config.ARIO_ANT_PROGRAM_ID);
   }
+  if (antId !== undefined) {
+    res.header(headerNames.arnsAntId, antId);
+  }
   if (resolvedAt !== undefined) {
     res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
   }
@@ -69,7 +72,7 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
   res.json({
     txId: resolvedId,
     ttlSeconds: ttl,
-    processId,
+    antId,
     resolvedAt,
     index,
     limit,

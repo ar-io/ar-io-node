@@ -150,7 +150,6 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
  * Response (both features enabled):
  * {
  *   "wallet": "...",
- *   "processId": "...",
  *   "bundlers": [
  *     { "url": "https://turbo.ardrive.io/" }
  *   ],

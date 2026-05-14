@@ -421,9 +421,14 @@ components:
         ttlSeconds:
           type: integer
           description: Time-to-live in seconds for this resolution
-        processId:
+        antId:
           type: string
-          description: AO process ID
+          description: |
+            Per-ANT identifier for the ANT that resolved this name. In
+            Solana mode this is the ANT mint's PDA (base58 pubkey); in AO
+            mode this was the ANT's AO process ID. Omitted when resolution
+            came via a trusted-gateway peer that has not yet shipped the
+            X-ArNS-Ant-Id header.
         resolvedAt:
           type: integer
           description: Unix timestamp when the name was resolved
@@ -436,7 +441,6 @@ components:
       required:
         - txId
         - ttlSeconds
-        - processId
         - resolvedAt
         - index
         - limit
@@ -531,9 +535,6 @@ paths:
                       wallet:
                         $ref: '#/components/schemas/Base64Url43'
                         description: Gateway wallet address
-                      processId:
-                        $ref: '#/components/schemas/Base64Url43'
-                        description: Gateway process ID
                       ans104UnbundleFilter:
                         type: object
                         description: Configuration for ANS-104 unbundling filter
@@ -550,7 +551,6 @@ paths:
                         type: string
                         description: Gateway software release version
                     required:
-                      - processId
                       - supportedManifestVersions
                       - release
             application/octet-stream:
@@ -617,8 +617,6 @@ paths:
                   wallet:
                     $ref: '#/components/schemas/Base64Url43'
                     description: Gateway wallet address
-                  processId:
-                    $ref: '#/components/schemas/Base64Url43'
                   ans104UnbundleFilter:
                     type: object
                     description: Configuration for ANS-104 unbundling filter
@@ -870,7 +868,6 @@ paths:
                       - publicKey
                       - keyId
                 required:
-                  - processId
                   - supportedManifestVersions
                   - release
                   - bundlers
@@ -2591,10 +2588,23 @@ paths:
               schema:
                 type: string
               description: Time-to-live in seconds for this resolution
-            x-arns-process-id:
+            x-arns-ant-program-id:
               schema:
                 type: string
-              description: AO process ID
+              description: |
+                Solana program ID of the AR.IO ANT program that owns the
+                ANT mint that resolved this name. Single value across all
+                ArNS names served by this gateway. Set from
+                ARIO_ANT_PROGRAM_ID.
+            x-arns-ant-id:
+              schema:
+                type: string
+              description: |
+                Per-ANT identifier for the ANT that resolved this request
+                (Solana ANT mint PDA in Solana mode, AO process ID in AO
+                mode). Replaces the AO-era X-ArNS-Process-Id header.
+                Omitted when resolution came via a trusted-gateway peer
+                that has not yet shipped this header.
             x-arns-resolved-at:
               schema:
                 type: string
