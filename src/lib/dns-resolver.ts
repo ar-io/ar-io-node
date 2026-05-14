@@ -131,7 +131,7 @@ export class DnsResolver {
       this.resolvedUrls.set(hostname, result);
       log.debug('Successfully resolved URL', {
         hostname,
-        selectedIp,
+        selectedIp: ips[0],
         totalIps: ips.length,
       });
 
