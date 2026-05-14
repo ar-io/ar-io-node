@@ -260,7 +260,7 @@ export const createChunkOffsetHandler = ({
           headerNames.contentDigest,
           formatContentDigest(jsonDigestB64Url),
         );
-        metrics.httpSigContentDigestTotal.inc({
+        metrics.incHttpSigContentDigest({
           source: 'computed_buffered',
           path: 'chunk',
         });
@@ -520,7 +520,7 @@ export const createChunkOffsetDataHandler = ({
         // bytes end-to-end. See architect-handoff/httpsig-body-binding-plan.md.
         let digestB64Url: string | undefined = hashString;
         if (digestB64Url !== undefined) {
-          metrics.httpSigContentDigestTotal.inc({
+          metrics.incHttpSigContentDigest({
             source: 'cache_hit',
             path: 'chunk',
           });
@@ -529,7 +529,7 @@ export const createChunkOffsetDataHandler = ({
             .createHash('sha256')
             .update(chunk.chunk)
             .digest('base64url');
-          metrics.httpSigContentDigestTotal.inc({
+          metrics.incHttpSigContentDigest({
             source: 'computed_buffered',
             path: 'chunk',
           });

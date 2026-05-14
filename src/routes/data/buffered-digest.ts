@@ -16,7 +16,21 @@ import * as metrics from '../../metrics.js';
 import { ContiguousData } from '../../types.js';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
-const METRIC_PATH = 'data';
+const METRIC_PATH = 'data' as const;
+
+// Allowlist of headers that may survive on a 502 response from
+// `failUpstreamMismatch`. The signer's trigger-header check is what
+// decides whether to sign — by stripping everything outside this set
+// we guarantee no stale trust / representation metadata can survive
+// on the error response, even if a future feature adds a new trigger
+// header we haven't thought to denylist.
+const HEADERS_ALLOWED_ON_502 = new Set<string>([
+  'date',
+  'connection',
+  'transfer-encoding',
+  'keep-alive',
+  'server',
+]);
 
 /**
  * Decide whether to buffer the response body to compute Content-Digest before
@@ -65,7 +79,7 @@ export async function sendBodyWithOptionalDigest({
   // (setDigestStableVerifiedHeaders fires earlier; the header is present
   // when data.cached || dataAttributes.hash is known and HEAD.)
   if (res.getHeader(headerNames.contentDigest) !== undefined) {
-    metrics.httpSigContentDigestTotal.inc({
+    metrics.incHttpSigContentDigest({
       source: 'cache_hit',
       path: METRIC_PATH,
     });
@@ -74,7 +88,7 @@ export async function sendBodyWithOptionalDigest({
 
   // Feature disabled.
   if (maxBytes <= 0) {
-    metrics.httpSigContentDigestTotal.inc({
+    metrics.incHttpSigContentDigest({
       source: 'skipped_disabled',
       path: METRIC_PATH,
     });
@@ -83,7 +97,7 @@ export async function sendBodyWithOptionalDigest({
 
   // Size unknown — can't safely buffer.
   if (data.size === undefined || data.size === null) {
-    metrics.httpSigContentDigestTotal.inc({
+    metrics.incHttpSigContentDigest({
       source: 'skipped_size_unknown',
       path: METRIC_PATH,
     });
@@ -92,7 +106,7 @@ export async function sendBodyWithOptionalDigest({
 
   // Body too large — preserve streaming behavior, no TTFB tax.
   if (data.size > maxBytes) {
-    metrics.httpSigContentDigestTotal.inc({
+    metrics.incHttpSigContentDigest({
       source: 'skipped_too_large',
       path: METRIC_PATH,
     });
@@ -188,7 +202,7 @@ export async function sendBodyWithOptionalDigest({
       source: 'overran_threshold' | 'short_read',
       msg: string,
     ): void => {
-      metrics.httpSigContentDigestTotal.inc({ source, path: METRIC_PATH });
+      metrics.incHttpSigContentDigest({ source, path: METRIC_PATH });
       log.warn(msg, {
         dataId,
         declaredSize: data.size,
@@ -201,17 +215,12 @@ export async function sendBodyWithOptionalDigest({
         // response carried real content. The signer only fires when a
         // trigger header is present, so dropping them disables signing
         // on the error response entirely.
+        //
+        // Allowlist (not denylist) so newly-added trigger headers in
+        // the future don't accidentally survive on the 502 — anything
+        // outside the protocol-level set below is stripped.
         for (const name of Object.keys(res.getHeaders())) {
-          const lower = name.toLowerCase();
-          if (
-            lower.startsWith('x-ar-io-') ||
-            lower.startsWith('x-arweave-') ||
-            lower.startsWith('x-arns-') ||
-            lower === 'content-type' ||
-            lower === 'content-length' ||
-            lower === 'etag' ||
-            lower === 'content-digest'
-          ) {
+          if (!HEADERS_ALLOWED_ON_502.has(name.toLowerCase())) {
             res.removeHeader(name);
           }
         }
@@ -253,7 +262,7 @@ export async function sendBodyWithOptionalDigest({
     res.setHeader(headerNames.contentDigest, formatContentDigest(hashB64Url));
     res.setHeader('ETag', `"${hashB64Url}"`);
     res.setHeader('Content-Length', String(total));
-    metrics.httpSigContentDigestTotal.inc({
+    metrics.incHttpSigContentDigest({
       source: 'computed_buffered',
       path: METRIC_PATH,
     });

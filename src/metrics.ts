@@ -1007,6 +1007,27 @@ export const httpSigContentDigestTotal = new promClient.Counter({
   labelNames: ['source', 'path'],
 });
 
+// String-union types for the `httpSigContentDigestTotal` labels. The
+// underlying prom-client Counter accepts arbitrary strings, so use the
+// `incHttpSigContentDigest` wrapper below for compile-time typo safety
+// — direct `.inc({ source: 'whatever' })` calls bypass the check.
+export type HttpSigDigestSource =
+  | 'cache_hit'
+  | 'computed_buffered'
+  | 'skipped_disabled'
+  | 'skipped_size_unknown'
+  | 'skipped_too_large'
+  | 'overran_threshold'
+  | 'short_read';
+export type HttpSigDigestPath = 'data' | 'chunk';
+
+export function incHttpSigContentDigest(labels: {
+  source: HttpSigDigestSource;
+  path: HttpSigDigestPath;
+}): void {
+  httpSigContentDigestTotal.inc(labels);
+}
+
 /**
  * Gauge of aggregate bytes currently held in memory by buffered-digest
  * in-flight computations. Each in-flight buffered request contributes
