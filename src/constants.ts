@@ -69,6 +69,13 @@ export const headerNames = {
    * metadata.
    */
   arnsAntProgramId: 'X-ArNS-Ant-Program-Id',
+  /**
+   * Identifier of the specific ANT (the per-name account, not the program)
+   * that resolved this request. In Solana mode this is the ANT mint's PDA;
+   * in AO mode this was the ANT's AO process ID. Replaces the AO-era
+   * `X-ArNS-Process-Id` header — same purpose, generalized name.
+   */
+  arnsAntId: 'X-ArNS-Ant-Id',
   arnsResolvedAt: 'X-ArNS-Resolved-At',
   arnsLimit: 'X-ArNS-Undername-Limit',
   arnsIndex: 'X-ArNS-Record-Index',

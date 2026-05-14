@@ -161,8 +161,7 @@ export const createArnsMiddleware = ({
         const resolution = await nameResolver.resolve({
           name: arnsSubdomain,
         });
-        const { resolvedId, ttl, processId, resolvedAt, limit, index } =
-          resolution;
+        const { resolvedId, ttl, antId, resolvedAt, limit, index } = resolution;
         end();
         const resolutionDuration = Date.now() - resolutionStart;
         span.setAttribute('arns.resolution_duration_ms', resolutionDuration);
@@ -198,7 +197,7 @@ export const createArnsMiddleware = ({
             basename,
             record,
             ttl,
-            processId,
+            antId,
             resolvedAt,
             limit,
             index,
@@ -219,6 +218,9 @@ export const createArnsMiddleware = ({
               headerNames.arnsAntProgramId,
               config.ARIO_ANT_PROGRAM_ID,
             );
+          }
+          if (antId !== undefined) {
+            res.header(headerNames.arnsAntId, antId);
           }
           if (resolvedAt !== undefined) {
             res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
