@@ -1351,6 +1351,11 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
       { bundle_format: 'ans-104' },
       bundleEvent.itemCount,
     );
+    if (typeof bundleEvent.alreadyIndexedSkippedCount === 'number') {
+      metrics.dataItemsSkippedAlreadyIndexedCounter.inc(
+        bundleEvent.alreadyIndexedSkippedCount,
+      );
+    }
     db.saveBundle({
       id: bundleEvent.parentId,
       format: 'ans-104',

@@ -1,15 +1,25 @@
 -- selectIndexedChildIds
--- Returns ids of all data items already indexed as children of @parent_id,
--- across both new_data_items (pre-flush) and stable_data_items
--- (post-flush). Used by the Ans104Unbundler before parsing to build a
--- skip-set: any child the parser would otherwise emit but whose id is
--- already in this set can be dropped pre-queue, avoiding redundant
--- queue pressure and downstream upsert no-ops when a bundle is
--- re-parsed because some prior children were dropped at the data-item
--- indexer's queue cap.
-SELECT id FROM new_data_items WHERE parent_id = @parent_id
+-- Returns ids of children of @parent_id whose row in new_data_items or
+-- stable_data_items has been fully populated by a prior parser-emit
+-- (signalled by `data_offset IS NOT NULL`). Used by the Ans104Unbundler
+-- before parsing to build a skip-set so the parser can drop redundant
+-- child emits when a bundle is re-parsed.
+--
+-- The `data_offset IS NOT NULL` predicate is critical. The optimistic
+-- insert path (insertOrIgnoreNewDataItem, used by /ar-io/admin/queue-data-item)
+-- intentionally writes the eleven root-atom columns as NULL — including
+-- data_offset — and a subsequent full parser-emit fills them via the
+-- COALESCE/IFNULL clauses in upsertNewDataItem's ON CONFLICT UPDATE.
+-- Skipping the emit for an optimistically-inserted row would strand
+-- those tuple fields permanently NULL. We only skip rows whose tuple
+-- fields are already populated.
+SELECT id FROM new_data_items
+WHERE parent_id = @parent_id
+  AND data_offset IS NOT NULL
 UNION
-SELECT id FROM stable_data_items WHERE parent_id = @parent_id
+SELECT id FROM stable_data_items
+WHERE parent_id = @parent_id
+  AND data_offset IS NOT NULL
 
 -- selectFailedBundleIds
 SELECT DISTINCT id

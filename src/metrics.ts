@@ -100,6 +100,19 @@ export const dataItemsUnbundledCounter = new promClient.Counter({
   labelNames: ['bundle_format'],
 });
 
+// Data items the parser would have emitted but skipped because their
+// id was already present in new_data_items or stable_data_items with
+// data_offset populated (i.e. fully indexed by a prior parser-emit).
+// Skip-set is provided to the parser by Ans104Unbundler via
+// BundleIndex.getIndexedChildIds. Increases on this counter mean
+// redundant queue work that we successfully avoided; persistent zero
+// after a bundle re-parse cycle would indicate the skip-set isn't
+// being populated or the path isn't being exercised.
+export const dataItemsSkippedAlreadyIndexedCounter = new promClient.Counter({
+  name: 'bundles_data_items_skipped_already_indexed_total',
+  help: 'Count of data items the parser skipped re-emit for because their row was already fully populated under the same parent',
+});
+
 // Distribution of data-item counts per unbundled bundle. Use for correlating
 // queue/heap spikes with the *trigger* bundle's size — without this, we only
 // see data_items_unbundled_total rising and can't tell if it's a single
