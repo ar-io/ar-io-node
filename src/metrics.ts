@@ -556,13 +556,21 @@ export const getDataStreamSizeHistogram = new promClient.Histogram({
 
 // Incremented when GatewaysDataSource sent a Range request but the upstream
 // answered with a full 200 body instead of a 206 partial-content response.
-// We slice the body locally to satisfy the consumer's region request, but
-// the upstream still pushed the full payload across the wire — the metric
-// surfaces which gateways are doing this so wasted bandwidth is observable.
+// `outcome` distinguishes the cases:
+//   - 'sliced':                    we accepted the 200 and sliced locally
+//                                  (region.offset <= the configured cap)
+//   - 'rejected_offset_too_high':  region.offset exceeded the cap, so we
+//                                  rejected the response and let the data
+//                                  source chain fall through to the next
+//                                  priority tier instead of burning
+//                                  region.offset bytes of bandwidth
+// The metric surfaces which gateways are doing this and the per-gateway
+// rate of each outcome, so operators can tune
+// GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET.
 export const gatewayRangeIgnoredTotal = new promClient.Counter({
   name: 'gateway_range_ignored_total',
-  help: 'Count of Range requests where the upstream returned a full 200 body, requiring local slicing',
-  labelNames: ['gateway_url', 'priority'] as const,
+  help: 'Count of Range requests where the upstream returned a full 200 body, with outcome label for accepted (sliced locally) vs rejected (offset above threshold)',
+  labelNames: ['gateway_url', 'priority', 'outcome'] as const,
 });
 
 export const dataRequestChunksHistogram = new promClient.Histogram({

@@ -583,8 +583,9 @@ describe('GatewayDataSource', () => {
 
     // PE-9098: visibility — the metric increments when an upstream answers
     // a Range request with a full 200 body, so we can see per-gateway
-    // wasted-bandwidth volume in Prometheus.
-    it('should increment gatewayRangeIgnoredTotal on 200-for-Range', async () => {
+    // wasted-bandwidth volume in Prometheus. `outcome=sliced` for the
+    // accepted-and-sliced path.
+    it('should increment gatewayRangeIgnoredTotal with outcome=sliced on 200-for-Range', async () => {
       mock.method(metrics.gatewayRangeIgnoredTotal, 'inc');
 
       const fullBody = Buffer.alloc(500, 0x00);
@@ -608,6 +609,75 @@ describe('GatewayDataSource', () => {
         .arguments[0];
       assert.equal(labels.gateway_url, 'https://gateway.domain');
       assert.equal(labels.priority, '1');
+      assert.equal(labels.outcome, 'sliced');
+    });
+
+    // PE-9098: when region.offset exceeds GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET,
+    // the prefix-bandwidth cost of accepting the 200 is too high. Reject
+    // and let the data source chain fall through to the next tier. The
+    // metric records the rejection so operators can tune the cap.
+    it('should reject 200-for-Range when region.offset exceeds the configured cap', async () => {
+      mock.method(metrics.gatewayRangeIgnoredTotal, 'inc');
+
+      const fullBody = Buffer.alloc(10000, 0x00);
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': String(fullBody.length),
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([fullBody]),
+      });
+
+      // Construct a fresh data source with a small offset cap so the
+      // test doesn't depend on the production default (10 MiB).
+      const cappedDataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway.domain': { priority: 1, trusted: true },
+        },
+        rangeAccept200MaxOffset: 1024,
+      });
+
+      const region = { offset: 2048, size: 100 }; // offset > cap
+      await assert.rejects(
+        cappedDataSource.getData({ id: 'some-id', region }),
+        /exceeds GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET/,
+      );
+
+      assert.equal(
+        (metrics.gatewayRangeIgnoredTotal.inc as any).mock.callCount(),
+        1,
+      );
+      const labels = (metrics.gatewayRangeIgnoredTotal.inc as any).mock.calls[0]
+        .arguments[0];
+      assert.equal(labels.outcome, 'rejected_offset_too_high');
+    });
+
+    // PE-9098: edge of the cap — region.offset exactly equal to the cap
+    // should still be accepted (the threshold is strictly greater-than).
+    it('should accept 200-for-Range when region.offset equals the configured cap', async () => {
+      const fullBody = Buffer.alloc(10000, 0xcc);
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': String(fullBody.length),
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([fullBody]),
+      });
+
+      const cappedDataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway.domain': { priority: 1, trusted: true },
+        },
+        rangeAccept200MaxOffset: 2048,
+      });
+
+      const region = { offset: 2048, size: 50 }; // offset == cap
+      const data = await cappedDataSource.getData({ id: 'some-id', region });
+      assert.equal(data.size, 50);
     });
 
     describe('ArNS query parameters', () => {

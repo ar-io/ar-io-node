@@ -43,6 +43,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private readonly streamStallTimeoutMs: number;
   private readonly fallbackToBasePath: boolean;
   private readonly maxHopsAllowed: number;
+  private readonly rangeAccept200MaxOffset: number;
 
   constructor({
     log,
@@ -51,6 +52,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
     fallbackToBasePath = false,
     maxHopsAllowed = MAX_DATA_HOPS,
+    rangeAccept200MaxOffset = config.GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
@@ -58,12 +60,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
     streamStallTimeoutMs?: number;
     fallbackToBasePath?: boolean;
     maxHopsAllowed?: number;
+    rangeAccept200MaxOffset?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
     this.streamStallTimeoutMs = streamStallTimeoutMs;
     this.fallbackToBasePath = fallbackToBasePath;
     this.maxHopsAllowed = maxHopsAllowed;
+    this.rangeAccept200MaxOffset = rangeAccept200MaxOffset;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -324,14 +328,47 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 }
 
                 if (upstreamIgnoredRange) {
+                  // Cap the prefix bandwidth we're willing to burn to
+                  // slice locally. If region.offset exceeds the cap, the
+                  // cost of pulling [0, region.offset) bytes from this
+                  // upstream is too high — reject and let the data source
+                  // chain fall through to the next priority tier.
+                  if (region.offset > this.rangeAccept200MaxOffset) {
+                    metrics.gatewayRangeIgnoredTotal.inc({
+                      gateway_url: gatewayUrl,
+                      priority: String(priority),
+                      outcome: 'rejected_offset_too_high',
+                    });
+                    span.addEvent(
+                      'Gateway returned full body for Range; rejected (offset above threshold)',
+                      {
+                        'gateways.url': gatewayUrl,
+                        'gateways.tier.priority': priority,
+                        'gateways.request.path': path,
+                        'data.region.offset': region.offset,
+                        'gateways.range_accept_200_max_offset':
+                          this.rangeAccept200MaxOffset,
+                      },
+                    );
+                    response.data.destroy();
+                    throw new Error(
+                      `Gateway returned full body for Range request but ` +
+                        `region.offset (${region.offset}) exceeds ` +
+                        `GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET ` +
+                        `(${this.rangeAccept200MaxOffset}); refusing to ` +
+                        `burn ${region.offset} prefix bytes for ${id}`,
+                    );
+                  }
                   metrics.gatewayRangeIgnoredTotal.inc({
                     gateway_url: gatewayUrl,
                     priority: String(priority),
+                    outcome: 'sliced',
                   });
-                  span.addEvent('Gateway returned full body for Range', {
+                  span.addEvent('Gateway returned full body for Range; sliced locally', {
                     'gateways.url': gatewayUrl,
                     'gateways.tier.priority': priority,
                     'gateways.request.path': path,
+                    'data.region.offset': region.offset,
                   });
                 }
 
