@@ -113,11 +113,21 @@ export function attachStallTimeout(
     stream.off('data', onData);
     stream.off('end', cleanup);
     stream.off('error', cleanup);
-    stream.off('close', cleanup);
   };
+  // Intentionally NOT registered on 'close': pipeline()'s eos() helper can
+  // synchronously emit 'close' on streams during chain setup or when a
+  // downstream stream is destroyed (cacheStream errors, peer aborts mid-
+  // stream, etc.). Registering cleanup on 'close' caused maxTimer to be
+  // cleared before it could ever fire — which is the exact wedge symptom
+  // we kept hitting after PR #737: source stream paused for backpressure
+  // and never emits 'end'/'error', maxTimer was supposed to be the safety
+  // net but had been silently nuked by an earlier pipeline-driven 'close'.
+  // 'end' and 'error' alone cover the common cases; for streams that fire
+  // 'close' without either, maxTimer ticks until it fires (and calls
+  // destroy() on an already-closed stream, a no-op) — a harmless N-minute
+  // setTimeout outliving the stream, vs. permanently wedged workers.
   stream.once('end', cleanup);
   stream.once('error', cleanup);
-  stream.once('close', cleanup);
   return cleanup;
 }
 
