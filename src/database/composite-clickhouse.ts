@@ -115,7 +115,7 @@ function buildGqlTransactionColumns(
     'hex(block_previous_block) AS block_previous_block',
     'is_data_item',
     'hex(id) AS id',
-    'hex(anchor)',
+    'hex(anchor) AS anchor',
     'hex(target) AS target',
     'toString(reward) AS reward',
     'toString(quantity) AS quantity',
