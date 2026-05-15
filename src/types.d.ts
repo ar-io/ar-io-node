@@ -287,6 +287,14 @@ export interface BundleIndex {
    * `bundle_repair_pending_bundles` gauge.
    */
   getRepairBacklogCount(): Promise<number>;
+  /**
+   * Ids of data items already indexed as children of `parentId`, across
+   * both `new_data_items` and `stable_data_items`. Used by the
+   * Ans104Unbundler to skip re-emit of children that previous parses
+   * already produced, when the same bundle is being re-parsed because
+   * some children were dropped at the data-item indexer queue cap.
+   */
+  getIndexedChildIds(parentId: string): Promise<string[]>;
   updateBundlesFullyIndexedAt(): Promise<void>;
   updateBundlesForFilterChange(
     unbundleFilter: string,

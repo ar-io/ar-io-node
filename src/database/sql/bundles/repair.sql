@@ -1,3 +1,16 @@
+-- selectIndexedChildIds
+-- Returns ids of all data items already indexed as children of @parent_id,
+-- across both new_data_items (pre-flush) and stable_data_items
+-- (post-flush). Used by the Ans104Unbundler before parsing to build a
+-- skip-set: any child the parser would otherwise emit but whose id is
+-- already in this set can be dropped pre-queue, avoiding redundant
+-- queue pressure and downstream upsert no-ops when a bundle is
+-- re-parsed because some prior children were dropped at the data-item
+-- indexer's queue cap.
+SELECT id FROM new_data_items WHERE parent_id = @parent_id
+UNION
+SELECT id FROM stable_data_items WHERE parent_id = @parent_id
+
 -- selectFailedBundleIds
 SELECT DISTINCT id
 FROM (

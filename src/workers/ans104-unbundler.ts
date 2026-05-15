@@ -12,6 +12,7 @@ import * as winston from 'winston';
 import { Ans104Parser } from '../lib/ans-104.js';
 import * as metrics from '../metrics.js';
 import {
+  BundleIndex,
   ContiguousDataSource,
   ItemFilter,
   NormalizedBundleDataItem,
@@ -38,6 +39,7 @@ export class Ans104Unbundler {
   // Dependencies
   private log: winston.Logger;
   private filter: ItemFilter;
+  private bundleIndex: BundleIndex | undefined;
 
   // Unbundling queue
   private workerCount: number;
@@ -61,6 +63,7 @@ export class Ans104Unbundler {
     maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
     shouldUnbundle = () => true,
     ans104Parser,
+    bundleIndex,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
@@ -71,9 +74,20 @@ export class Ans104Unbundler {
     maxQueueSize?: number;
     shouldUnbundle?: () => boolean;
     ans104Parser?: Ans104Parser;
+    /**
+     * Optional index used to look up already-indexed children of a
+     * bundle being parsed. When supplied, the parser receives the
+     * id-set and skips re-emit for those children. Reduces redundant
+     * pressure on the data-item indexer queues when a bundle is
+     * re-parsed by the repair worker after some children were dropped
+     * at the indexer's queue cap on a previous attempt. Tests can omit
+     * this; production wires it from system.ts.
+     */
+    bundleIndex?: BundleIndex;
   }) {
     this.log = log.child({ class: 'Ans104Unbundler' });
     this.filter = filter;
+    this.bundleIndex = bundleIndex;
     this.ans104Parser =
       ans104Parser ||
       new Ans104Parser({
@@ -161,11 +175,40 @@ export class Ans104Unbundler {
           rootParentOffset = item.root_parent_offset + item.data_offset;
         }
 
+        // Pre-fetch the set of children already indexed under this
+        // parent so the parser can skip re-emit for them. This is the
+        // primary efficiency lever when the repair worker re-queues a
+        // bundle whose previous parse had some children dropped at the
+        // data-item indexer's queue cap: without this set, the re-parse
+        // re-queues every child (90%+ of which are idempotent no-ops at
+        // the DB layer but still consume queue slots and contend with
+        // the genuinely-new children for the cap). Lookup is a single
+        // indexed SQLite read; if it fails for any reason we fall back
+        // to the un-skipped behavior rather than failing the unbundle.
+        let skipChildIds: string[] | undefined;
+        if (this.bundleIndex !== undefined) {
+          try {
+            skipChildIds = await this.bundleIndex.getIndexedChildIds(item.id);
+            if (skipChildIds.length > 0) {
+              log.debug('Pre-loaded already-indexed children to skip', {
+                count: skipChildIds.length,
+              });
+            }
+          } catch (err: any) {
+            log.warn(
+              'Failed to pre-load already-indexed children; proceeding without skip-set',
+              { error: err?.message ?? String(err) },
+            );
+            skipChildIds = undefined;
+          }
+        }
+
         await this.ans104Parser.parseBundle({
           rootTxId,
           parentId: item.id,
           parentIndex: item.index,
           rootParentOffset,
+          skipChildIds,
         });
         log.info('Bundle unbundled.');
       }

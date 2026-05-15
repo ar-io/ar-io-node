@@ -271,11 +271,13 @@ export class Ans104Parser {
     parentId,
     parentIndex,
     rootParentOffset,
+    skipChildIds,
   }: {
     rootTxId: string;
     parentId: string;
     parentIndex: number;
     rootParentOffset: number;
+    skipChildIds?: string[];
   }): Promise<void> {
     // eslint-disable-next-line no-async-promise-executor
     return new Promise(async (resolve, reject) => {
@@ -332,6 +334,7 @@ export class Ans104Parser {
                 parentIndex,
                 bundlePath,
                 rootParentOffset,
+                skipChildIds,
               },
             });
             this.drainQueue();
@@ -408,8 +411,14 @@ if (!isMainThread) {
       process.exit(0);
     }
 
-    const { rootTxId, parentId, parentIndex, bundlePath, rootParentOffset } =
-      message;
+    const {
+      rootTxId,
+      parentId,
+      parentIndex,
+      bundlePath,
+      rootParentOffset,
+      skipChildIds,
+    } = message;
     let stream: fs.ReadStream | undefined = undefined;
     try {
       stream = fs.createReadStream(bundlePath);
@@ -417,9 +426,26 @@ if (!isMainThread) {
       const bundleLength = iterable.length;
       let matchedItemCount = 0;
       let duplicatedItemCount = 0;
+      let alreadyIndexedSkippedCount = 0;
 
       const fnLog = log.child({ rootTxId, parentId, bundleLength });
       fnLog.info('Unbundling ANS-104 bundle stream data items...');
+
+      // Set of data item ids known to already be in `new_data_items` or
+      // `stable_data_items` for this parent (supplied by the caller).
+      // Used to avoid re-emitting children that previous parses of this
+      // same bundle already produced — which happens whenever a bundle
+      // is re-parsed via the repair worker because some of its children
+      // were dropped at the data-item indexer's queue cap. Skipped items
+      // still count toward `matchedItemCount` so the bundle's
+      // `matched_data_item_count` invariant (= bundle_data_items rows)
+      // continues to hold. We assume the filter is stable between parses
+      // — when filters change, the filter-reprocess path resets bundles
+      // separately and `skipChildIds` is empty for those.
+      const skipSet =
+        Array.isArray(skipChildIds) && skipChildIds.length > 0
+          ? new Set<string>(skipChildIds)
+          : null;
 
       const processedDataItemIds = new Set<string>();
       for await (const [index, dataItem] of iterable.entries()) {
@@ -446,6 +472,18 @@ if (!isMainThread) {
         }
 
         processedDataItemIds.add(dataItem.id);
+
+        // Skip re-emit for children already indexed in a prior parse of
+        // this same bundle. We count toward matchedItemCount so the
+        // bundle's matched_data_item_count invariant continues to hold
+        // (the existing bundle_data_items rows already represent the
+        // "matched" outcome from when this item was first emitted).
+        if (skipSet?.has(dataItem.id)) {
+          alreadyIndexedSkippedCount++;
+          matchedItemCount++;
+          diLog.debug('Skipping data item: already indexed.');
+          continue;
+        }
 
         // compute the hash of the data item data
         const dataItemHash = await hashDataItemData(
@@ -481,6 +519,7 @@ if (!isMainThread) {
         itemCount: bundleLength,
         matchedItemCount,
         duplicatedItemCount,
+        alreadyIndexedSkippedCount,
       });
     } catch (error: any) {
       log.error('Error unbundling ANS-104 bundle stream', {

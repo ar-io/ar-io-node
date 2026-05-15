@@ -1197,6 +1197,7 @@ const ans104Unbundler = new Ans104Unbundler({
   dataItemIndexFilterString: config.ANS104_INDEX_FILTER_STRING,
   workerCount: config.ANS104_UNBUNDLE_WORKERS,
   shouldUnbundle: shouldUnbundleDataItems,
+  bundleIndex,
 });
 metrics.registerQueueLengthGauge('ans104Unbundler', {
   length: () => ans104Unbundler.queueDepth(),

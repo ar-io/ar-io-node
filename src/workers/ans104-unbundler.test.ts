@@ -131,7 +131,65 @@ describe('Ans104Unbundler', () => {
           parentIndex: undefined,
           rootParentOffset: 0,
           rootTxId: 'root_tx_id',
+          // No bundleIndex was provided to the Ans104Unbundler in this
+          // test's setup, so the pre-load step is skipped entirely and
+          // skipChildIds is left undefined.
+          skipChildIds: undefined,
         },
+      );
+    });
+
+    it('passes already-indexed child ids to the parser when bundleIndex is provided', async () => {
+      mock.method(mockAns104Parser, 'parseBundle');
+      const knownChildren = ['child-a', 'child-b', 'child-c'];
+      (ans104Unbundler as any).bundleIndex = {
+        getIndexedChildIds: async (parentId: string) => {
+          assert.equal(parentId, 'test-id');
+          return knownChildren;
+        },
+      };
+
+      const mockItem = {
+        id: 'test-id',
+        root_tx_id: 'root_tx_id',
+      } as UnbundleableItem;
+
+      await ans104Unbundler.queueItem(mockItem, false, true);
+
+      assert.deepEqual(
+        (mockAns104Parser.parseBundle as any).mock.calls[0].arguments[0],
+        {
+          parentId: 'test-id',
+          parentIndex: undefined,
+          rootParentOffset: 0,
+          rootTxId: 'root_tx_id',
+          skipChildIds: knownChildren,
+        },
+      );
+    });
+
+    it('falls back to no skip-set when getIndexedChildIds throws', async () => {
+      mock.method(mockAns104Parser, 'parseBundle');
+      (ans104Unbundler as any).bundleIndex = {
+        getIndexedChildIds: async () => {
+          throw new Error('boom');
+        },
+      };
+
+      const mockItem = {
+        id: 'test-id',
+        root_tx_id: 'root_tx_id',
+      } as UnbundleableItem;
+
+      await ans104Unbundler.queueItem(mockItem, false, true);
+
+      // The unbundle still proceeds — failure to pre-load the skip-set
+      // degrades to the pre-fix behavior, not a hard failure.
+      assert.equal((mockAns104Parser.parseBundle as any).mock.callCount(), 1);
+      assert.equal(
+        (mockAns104Parser.parseBundle as any).mock.calls[0].arguments[0]
+          .skipChildIds,
+        undefined,
       );
     });
   });
