@@ -364,12 +364,15 @@ export class GatewaysDataSource implements ContiguousDataSource {
                     priority: String(priority),
                     outcome: 'sliced',
                   });
-                  span.addEvent('Gateway returned full body for Range; sliced locally', {
-                    'gateways.url': gatewayUrl,
-                    'gateways.tier.priority': priority,
-                    'gateways.request.path': path,
-                    'data.region.offset': region.offset,
-                  });
+                  span.addEvent(
+                    'Gateway returned full body for Range; sliced locally',
+                    {
+                      'gateways.url': gatewayUrl,
+                      'gateways.tier.priority': priority,
+                      'gateways.request.path': path,
+                      'data.region.offset': region.offset,
+                    },
+                  );
                 }
 
                 // Connection established - clear connection timeout and
