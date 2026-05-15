@@ -554,6 +554,17 @@ export const getDataStreamSizeHistogram = new promClient.Histogram({
   buckets: [102400, 1048576, 10485760, 104857600], // 100KB, 1MB, 10MB, 100MB
 });
 
+// Incremented when GatewaysDataSource sent a Range request but the upstream
+// answered with a full 200 body instead of a 206 partial-content response.
+// We slice the body locally to satisfy the consumer's region request, but
+// the upstream still pushed the full payload across the wire — the metric
+// surfaces which gateways are doing this so wasted bandwidth is observable.
+export const gatewayRangeIgnoredTotal = new promClient.Counter({
+  name: 'gateway_range_ignored_total',
+  help: 'Count of Range requests where the upstream returned a full 200 body, requiring local slicing',
+  labelNames: ['gateway_url', 'priority'] as const,
+});
+
 export const dataRequestChunksHistogram = new promClient.Histogram({
   name: 'data_request_chunks',
   help: 'Number of chunks fetched per data request',
