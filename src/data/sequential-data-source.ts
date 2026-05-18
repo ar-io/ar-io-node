@@ -36,12 +36,14 @@ export class SequentialDataSource implements ContiguousDataSource {
     region,
     parentSpan,
     signal,
+    acceptContentType,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
     signal?: AbortSignal;
+    acceptContentType?: (contentType: string | undefined) => boolean;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'SequentialDataSource.getData',
@@ -103,6 +105,7 @@ export class SequentialDataSource implements ContiguousDataSource {
             region,
             parentSpan: sourceSpan,
             signal,
+            acceptContentType,
           });
 
           const sourceDuration = Date.now() - sourceStart;

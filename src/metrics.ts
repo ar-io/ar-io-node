@@ -573,6 +573,29 @@ export const gatewayRangeIgnoredTotal = new promClient.Counter({
   labelNames: ['gateway_url', 'priority', 'outcome'] as const,
 });
 
+// PE-9099: count of upstream responses rejected because the caller-supplied
+// `acceptContentType` predicate refused the response's content-type. The
+// known case is `text/html` parking pages cached in the legacy gateway's
+// S3 layer from a Sept-2024 outage of `gateway.bundlr.network`. Operators
+// can correlate the per-gateway rate to know which upstream caches are
+// still serving poison.
+export const gatewayContentTypeRejectedTotal = new promClient.Counter({
+  name: 'gateway_content_type_rejected_total',
+  help: 'Count of upstream responses rejected by the caller-supplied content-type predicate (e.g., text/html when expecting bundle bytes).',
+  labelNames: ['gateway_url', 'priority', 'content_type'] as const,
+});
+
+// PE-9099: count of local on-disk cache entries evicted by the lazy
+// poison-detection in ReadThroughDataCache when a caller's
+// `acceptContentType` predicate refuses the stored content-type. The
+// blob is deleted and the request falls through to upstream; the next
+// successful cache write replaces the entry with clean bytes.
+export const poisonedCacheEvictionsTotal = new promClient.Counter({
+  name: 'poisoned_cache_evictions_total',
+  help: 'Count of on-disk cache blobs evicted because their stored content-type was rejected by the caller predicate (lazy heal of poisoned cache entries).',
+  labelNames: ['content_type'] as const,
+});
+
 export const dataRequestChunksHistogram = new promClient.Histogram({
   name: 'data_request_chunks',
   help: 'Number of chunks fetched per data request',

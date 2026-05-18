@@ -804,6 +804,95 @@ describe('GatewayDataSource', () => {
       });
     });
 
+    describe('acceptContentType predicate (PE-9099)', () => {
+      it('throws when caller predicate rejects upstream content-type', async () => {
+        // Simulates the production poison: upstream returns 200/1134-byte
+        // text/html (bundlr.network parking page) for a request that the
+        // caller intends to parse as an ANS-104 bundle.
+        mockedAxiosInstance.request = async () => ({
+          status: 200,
+          data: Readable.from([Buffer.alloc(1134, 0x3c)]),
+          headers: {
+            'content-length': '1134',
+            'content-type': 'text/html; charset=utf-8',
+          },
+        });
+
+        await assert.rejects(
+          dataSource.getData({
+            id: 'poisoned-id',
+            requestAttributes,
+            acceptContentType: (ct) =>
+              ct === undefined || ct.startsWith('application/octet-stream'),
+          }),
+          /content-type "text\/html; charset=utf-8" rejected by caller predicate/,
+        );
+      });
+
+      it('accepts when caller predicate accepts upstream content-type', async () => {
+        mockedAxiosInstance.request = async () => ({
+          status: 200,
+          data: Readable.from([Buffer.alloc(128)]),
+          headers: {
+            'content-length': '128',
+            'content-type': 'application/octet-stream',
+          },
+        });
+
+        const result = await dataSource.getData({
+          id: 'binary-id',
+          requestAttributes,
+          acceptContentType: (ct) =>
+            ct === undefined || ct.startsWith('application/octet-stream'),
+        });
+
+        assert.equal(result.size, 128);
+        assert.equal(result.sourceContentType, 'application/octet-stream');
+      });
+
+      it('accepts when caller predicate allows undefined content-type', async () => {
+        // Some upstreams omit content-type for raw bundle responses; the
+        // predicate must be able to allow this.
+        mockedAxiosInstance.request = async () => ({
+          status: 200,
+          data: Readable.from([Buffer.alloc(128)]),
+          headers: {
+            'content-length': '128',
+            // no content-type at all
+          },
+        });
+
+        const result = await dataSource.getData({
+          id: 'untyped-id',
+          requestAttributes,
+          acceptContentType: (ct) => ct === undefined,
+        });
+
+        assert.equal(result.size, 128);
+      });
+
+      it('passes the response through unchanged when no predicate is supplied', async () => {
+        // Backward-compat: callers without a predicate must not see any
+        // new validation — text/html should be returned just like before.
+        mockedAxiosInstance.request = async () => ({
+          status: 200,
+          data: Readable.from([Buffer.alloc(1134, 0x3c)]),
+          headers: {
+            'content-length': '1134',
+            'content-type': 'text/html; charset=utf-8',
+          },
+        });
+
+        const result = await dataSource.getData({
+          id: 'html-id-no-predicate',
+          requestAttributes,
+        });
+
+        assert.equal(result.size, 1134);
+        assert.equal(result.sourceContentType, 'text/html; charset=utf-8');
+      });
+    });
+
     it('should throw when skipRemoteForwarding is set', async () => {
       await assert.rejects(
         dataSource.getData({

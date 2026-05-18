@@ -41,6 +41,30 @@ const UNBUNDLE_ERROR: ParseEventName = 'unbundle-error';
 
 const DEFAULT_STREAM_TIMEOUT = 1000 * 30; // 30 seconds
 
+/**
+ * Predicate used by ANS-104 bundle fetches to reject upstream responses
+ * whose content-type can't plausibly be a raw bundle. The known footprint
+ * is `text/html` parking pages cached in the legacy gateway's S3 layer
+ * from a Sept-2024 outage of `gateway.bundlr.network`; rejecting them
+ * here forces the data-source chain to fall through to the next priority
+ * tier (and ultimately to `TxChunksDataSource` for fresh Arweave chunks).
+ *
+ * Accepts:
+ *   - `undefined` — many legitimate upstreams omit Content-Type for raw
+ *     bundle responses.
+ *   - `application/octet-stream` — the canonical bundle content-type.
+ *   - `application/x-arweave-data` — used by some Arweave-stack tools.
+ */
+export const isAcceptableBundleContentType = (
+  contentType: string | undefined,
+): boolean => {
+  if (contentType === undefined) return true;
+  return (
+    contentType.startsWith('application/octet-stream') ||
+    contentType.startsWith('application/x-arweave-data')
+  );
+};
+
 interface ParserMessage {
   eventName: ParseEventName;
   dataItem?: NormalizedDataItem;
@@ -284,8 +308,15 @@ export class Ans104Parser {
       try {
         const log = this.log.child({ parentId });
 
-        // Get data stream
-        data = await this.contiguousDataSource.getData({ id: parentId });
+        // Get data stream. PE-9099: refuse responses whose content-type
+        // can't be a raw ANS-104 bundle (most notably text/html parking
+        // pages held in poisoned upstream caches). The data source chain
+        // will fall through to the next priority tier and ultimately to
+        // chunks, which fetches real bytes from Arweave network nodes.
+        data = await this.contiguousDataSource.getData({
+          id: parentId,
+          acceptContentType: isAcceptableBundleContentType,
+        });
 
         // Construct temp path for passing data to worker
         await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {

@@ -108,12 +108,14 @@ export class SamplingContiguousDataSource implements ContiguousDataSource {
     region,
     parentSpan,
     signal,
+    acceptContentType,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
     signal?: AbortSignal;
+    acceptContentType?: (contentType: string | undefined) => boolean;
   }): Promise<ContiguousData> {
     // Check for abort before starting
     signal?.throwIfAborted();
@@ -167,6 +169,7 @@ export class SamplingContiguousDataSource implements ContiguousDataSource {
         region,
         parentSpan: span,
         signal,
+        acceptContentType,
       });
 
       const latencyMs = Date.now() - startTime;

@@ -22,6 +22,7 @@ import { toB64Url } from '../lib/encoding.js';
 import { isEmptyString } from '../lib/string.js';
 import * as metrics from '../metrics.js';
 import { startChildSpan } from '../tracing.js';
+import { isAcceptableBundleContentType } from '../lib/ans-104.js';
 
 type AttributeKind = 'owner' | 'signature';
 type AttributeSubject = 'data_item' | 'transaction';
@@ -155,6 +156,15 @@ export abstract class AttributeFetchers {
         },
         parentSpan: span,
         signal,
+        // PE-9099: refuse parent-bundle responses whose content-type
+        // can't plausibly be a raw ANS-104 bundle. Defends against the
+        // in-range silent-corruption case for small bundles where the
+        // requested signature/owner offset would otherwise fall within
+        // a poisoned cache's 1134-byte parking-page payload — we'd
+        // silently store HTML bytes as cryptographic material in the
+        // attribute store. With the predicate the cache/gateway layer
+        // throws and the source chain falls through to chunks.
+        acceptContentType: isAcceptableBundleContentType,
       });
       const { stream } = data;
       span.setAttributes({

@@ -124,12 +124,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
     region,
     parentSpan,
     signal,
+    acceptContentType,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
     signal?: AbortSignal;
+    acceptContentType?: (contentType: string | undefined) => boolean;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'GatewaysDataSource.getData',
@@ -361,6 +363,42 @@ export class GatewaysDataSource implements ContiguousDataSource {
                       isRangedRequest ? '200 or 206' : '200'
                     }.`,
                   );
+                }
+
+                // PE-9099: caller-supplied content-type predicate. Used by
+                // callers that intend to parse the bytes as a specific
+                // format (e.g., ANS-104 bundles) to refuse responses that
+                // are obviously not that format — most notably the
+                // `text/html` parking pages a legacy gateway's S3 cache
+                // can hold from a 2024 outage of `gateway.bundlr.network`.
+                // Reject + throw so the data-source chain falls through
+                // to the next priority tier (and ultimately to chunks).
+                if (acceptContentType !== undefined) {
+                  const upstreamContentType = response.headers[
+                    'content-type'
+                  ] as string | undefined;
+                  if (!acceptContentType(upstreamContentType)) {
+                    response.data.destroy();
+                    metrics.gatewayContentTypeRejectedTotal.inc({
+                      gateway_url: gatewayUrl,
+                      priority: String(priority),
+                      content_type: upstreamContentType ?? 'unknown',
+                    });
+                    span.addEvent(
+                      'Gateway response content-type rejected by caller',
+                      {
+                        'gateways.url': gatewayUrl,
+                        'gateways.tier.priority': priority,
+                        'gateways.request.path': path,
+                        'http.content_type': upstreamContentType,
+                      },
+                    );
+                    throw new Error(
+                      `Gateway content-type "${upstreamContentType ?? '(none)'}" ` +
+                        `rejected by caller predicate for ${id} ` +
+                        `(likely poisoned upstream cache)`,
+                    );
+                  }
                 }
 
                 if (upstreamIgnoredRange) {
