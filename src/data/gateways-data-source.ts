@@ -446,6 +446,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 });
 
                 const requestType = region ? 'range' : 'full';
+                // Consumer-visible byte count. When `region` is set the
+                // returned stream is always sliced to `region.size`
+                // (regardless of whether upstream was 206 or 200-with-Range),
+                // so contentLength would overcount for the sliced path.
+                const emittedSize =
+                  region !== undefined ? region.size : contentLength;
 
                 stream.on('error', () => {
                   metrics.getDataStreamErrorsTotal.inc({
@@ -469,7 +475,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                       source: gatewayUrl,
                       request_type: requestType,
                     },
-                    contentLength,
+                    emittedSize,
                   );
 
                   metrics.getDataStreamSizeHistogram.observe(
@@ -478,7 +484,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                       source: gatewayUrl,
                       request_type: requestType,
                     },
-                    contentLength,
+                    emittedSize,
                   );
                 });
 
