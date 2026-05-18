@@ -256,6 +256,26 @@ export const STREAM_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
   1000 * 60 * 15, // 15 minutes
 );
 
+// Wall-clock cap on DataImporter.download() — the entire span from queue
+// dequeue through stream completion. Covers TWO failure modes that
+// STREAM_REQUEST_TIMEOUT_MS cannot:
+//   (1) Pre-stream wedge: workers blocked in `await getData()` waiting for
+//       the cascade to produce a stream (e.g., every source in
+//       BACKGROUND_RETRIEVAL_ORDER failing/timing-out serially).
+//       STREAM_REQUEST_TIMEOUT_MS is on the stream itself and never
+//       attaches in this state.
+//   (2) Belt-and-suspenders for the stream phase if a per-stream cap
+//       somehow doesn't fire.
+// Implementation propagates abort into the cascade via AbortController —
+// SequentialDataSource and each inner source (ArIO/Gateways/TxChunks)
+// already honor the signal end-to-end. Default sized comfortably above
+// STREAM_REQUEST_TIMEOUT_MS so legitimate slow downloads finish before
+// this fires.
+export const DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS = env.positiveIntOrDefault(
+  'DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS',
+  1000 * 60 * 20, // 20 minutes
+);
+
 // GraphQL root TX lookup gateways (separate from data retrieval gateways)
 export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(

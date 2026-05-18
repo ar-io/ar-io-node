@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import * as winston from 'winston';
 
 export interface HedgedRequestOptions<T> {
   candidates: string[];
@@ -15,6 +16,7 @@ export interface HedgedRequestOptions<T> {
   hedgeDelayMs: number;
   maxConcurrent: number;
   signal?: AbortSignal;
+  log?: winston.Logger;
 }
 
 export async function executeHedgedRequest<T>(
@@ -30,6 +32,7 @@ export async function executeHedgedRequest<T>(
     hedgeDelayMs,
     maxConcurrent,
     signal,
+    log,
   } = options;
 
   // Fail fast if client already aborted
@@ -157,6 +160,16 @@ export async function executeHedgedRequest<T>(
       signal.addEventListener(
         'abort',
         () => {
+          // INSTRUMENTATION (2026-05-17): trace abort-path propagation.
+          // If `optB.timer_fired` appears in logs but this doesn't, the
+          // listener registration is broken. If this fires but the awaiter
+          // doesn't return, the reject below doesn't propagate.
+          log?.info('optB.hedge_aborted', {
+            already_resolved: resolved,
+            in_flight: inFlight,
+            candidate_index: candidateIndex,
+            total_candidates: candidates.length,
+          });
           if (!resolved) {
             resolved = true;
             loserController.abort();

@@ -135,7 +135,17 @@ export class ArIODataSource implements ContiguousDataSource {
       () => controller.abort(new Error('Connection timeout')),
       this.requestTimeoutMs,
     );
-    const onClientAbort = () => controller.abort(signal?.reason);
+    const onClientAbort = () => {
+      // INSTRUMENTATION (2026-05-17): trace abort-path propagation. If
+      // `optB.hedge_aborted` fires but this doesn't, AbortSignal.any
+      // isn't propagating the parent abort to per-peer attempts.
+      this.log.info('optB.peer_aborted', {
+        peer: peerAddress,
+        id,
+        reason: (signal as any)?.reason?.message,
+      });
+      controller.abort(signal?.reason);
+    };
     if (signal?.aborted) {
       onClientAbort();
     } else if (signal) {
@@ -414,6 +424,7 @@ export class ArIODataSource implements ContiguousDataSource {
         hedgeDelayMs: config.PEER_HEDGE_DELAY_MS,
         maxConcurrent: config.PEER_MAX_HEDGED_REQUESTS,
         signal,
+        log: this.log,
       });
 
       return result;
