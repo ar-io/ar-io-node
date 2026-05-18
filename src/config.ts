@@ -226,11 +226,21 @@ export const STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
 // can't recover. If region.offset exceeds this threshold the bandwidth
 // cost is unacceptable, so we reject the response and let the data
 // source chain fall through to the next priority tier instead.
-// Default: 10 MiB.
-export const GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET = +env.varOrDefault(
-  'GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET',
-  String(10 * 1024 * 1024),
+// Default: 10 MiB. Parsed as a non-negative integer — a malformed env
+// value would otherwise become NaN, and `NaN > X` is false, which would
+// silently disable the cap entirely (defeats the safety purpose).
+const GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET_DEFAULT = 10 * 1024 * 1024;
+const parsedRangeAccept200MaxOffset = Number(
+  env.varOrDefault(
+    'GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET',
+    String(GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET_DEFAULT),
+  ),
 );
+export const GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET =
+  Number.isFinite(parsedRangeAccept200MaxOffset) &&
+  parsedRangeAccept200MaxOffset >= 0
+    ? Math.floor(parsedRangeAccept200MaxOffset)
+    : GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET_DEFAULT;
 
 // GraphQL root TX lookup gateways (separate from data retrieval gateways)
 export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
