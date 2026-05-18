@@ -112,13 +112,24 @@ Keeper-quorum operational cost. Readers still index the chain locally
   cluster to avoid redundant imports. The staging/final migration is
   per-partition idempotent, so a duplicate run is recoverable but
   wasteful.
-- Readers should keep writers enabled (the default). `START_WRITERS`
-  also gates the chain index (blocks, L1 transactions, bundle
-  membership, data-item → root-TX mappings, offsets), which data
-  retrieval paths like `/raw`, `/ar`, and `/tx/:id` depend on — not
-  just GraphQL. Shared ClickHouse scales query-serving capacity; it
-  does not replace the local SQLite index. The cost is duplicated
-  ingest work on each reader, which is the intended tradeoff.
+- Readers with `START_WRITERS=false` have no local speed layer, so
+  heights above the composite boundary are not served at all — there
+  is a gap between the ClickHouse tip and the chain tip bounded by
+  the auto-import sleep interval. Operators who need recent-height
+  coverage on readers should leave writers enabled and accept the
+  duplicated ingest work locally.
+- **Streaming pipeline (alternative).** With
+  `CLICKHOUSE_STREAMING_ENABLED=true` on the writer (see
+  [ClickHouse Pipeline → Streaming pipeline](clickhouse-pipeline.md#streaming-pipeline-unstable-head)),
+  the writer also streams the unstable head into ClickHouse `new_*`
+  tables in near-real time. Readers running with `START_WRITERS=false`
+  then see a complete chain — including the live tip — without needing
+  a local SQLite. Two mutually exclusive reader configurations:
+  - `CLICKHOUSE_GQL_SKIP_SQLITE_READS=true` on readers makes ClickHouse
+    the sole read path; SQLite is not queried at all.
+  - Leaving the flag unset keeps SQLite available as a circuit-breaker-
+    governed fallback for the brief window when the streaming pipeline
+    is degraded.
 
 ---
 

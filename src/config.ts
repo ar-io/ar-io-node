@@ -219,6 +219,29 @@ export const STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
   1000 * 30, // 30 seconds
 );
 
+// PE-9098: when a trusted gateway answers a Range request with a full 200
+// body (e.g., nginx with proxy_cache but no `slice` module), we slice
+// locally to satisfy the consumer's region. The upstream still streams
+// the prefix bytes [0, region.offset) across the wire — bandwidth we
+// can't recover. If region.offset exceeds this threshold the bandwidth
+// cost is unacceptable, so we reject the response and let the data
+// source chain fall through to the next priority tier instead.
+// Default: 10 MiB. Parsed as a non-negative integer — a malformed env
+// value would otherwise become NaN, and `NaN > X` is false, which would
+// silently disable the cap entirely (defeats the safety purpose).
+const GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET_DEFAULT = 10 * 1024 * 1024;
+const parsedRangeAccept200MaxOffset = Number(
+  env.varOrDefault(
+    'GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET',
+    String(GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET_DEFAULT),
+  ),
+);
+export const GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET =
+  Number.isFinite(parsedRangeAccept200MaxOffset) &&
+  parsedRangeAccept200MaxOffset >= 0
+    ? Math.floor(parsedRangeAccept200MaxOffset)
+    : GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET_DEFAULT;
+
 // GraphQL root TX lookup gateways (separate from data retrieval gateways)
 export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(
@@ -1053,6 +1076,42 @@ export const HTTPSIG_KEY_FILE = env.varOrDefault(
 export const HTTPSIG_BIND_REQUEST =
   env.varOrDefault('HTTPSIG_BIND_REQUEST', 'true') === 'true';
 
+/**
+ * Buffered Content-Digest threshold (bytes). When > 0 and a /raw/:id
+ * response is uncached + has a known size at-or-below this threshold,
+ * the data path buffers the body to compute SHA-256 and emit
+ * Content-Digest. The header is in CO_SIGNABLE_HEADERS, so once emitted
+ * it's covered by the HTTPSIG signature — making the body verifiable
+ * end-to-end. Cached and HEAD responses are unaffected (they already
+ * emit the stored digest). Set to 0 to disable buffered emission and
+ * preserve streaming-without-digest behavior for the uncached path.
+ *
+ * Parsed strictly as a non-negative safe integer. `Number.parseInt`
+ * accepts malformed prefixes (`"1e6"` → 1, `"2MB"` → 2, `"08x"` → 8)
+ * which would silently let smaller-than-expected limits through; the
+ * `^\d+$` guard rejects those before parsing. NaN/negative/unsafe
+ * input falls back to the default — the size cap (`size > maxBytes`)
+ * and disabled-branch check (`maxBytes <= 0`) both evaluate false for
+ * NaN, so accepting bad input would let unbounded buffers through.
+ *
+ * Default: 2 MiB.
+ */
+const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT = 2 * 1024 * 1024;
+const httpSigBodyDigestBufferMaxBytesRaw = env.varOrDefault(
+  'HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES',
+  String(HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT),
+);
+const httpSigBodyDigestBufferMaxBytesParsed = /^\d+$/.test(
+  httpSigBodyDigestBufferMaxBytesRaw,
+)
+  ? Number.parseInt(httpSigBodyDigestBufferMaxBytesRaw, 10)
+  : Number.NaN;
+export const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES =
+  Number.isSafeInteger(httpSigBodyDigestBufferMaxBytesParsed) &&
+  httpSigBodyDigestBufferMaxBytesParsed >= 0
+    ? httpSigBodyDigestBufferMaxBytesParsed
+    : HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT;
+
 // Observer wallet for attestation signing
 export const OBSERVER_WALLET = env.varOrUndefined('OBSERVER_WALLET');
 export const WALLETS_PATH = env.varOrDefault('WALLETS_PATH', 'wallets');
@@ -1532,6 +1591,85 @@ export const CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
   env.positiveIntOrDefault(
     'CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
     30 * 1_000,
+  );
+
+/**
+ * Toggle the ClickHouse streaming pipeline for the unstable head. When
+ * enabled, indexed blocks / transactions / data items are streamed into
+ * `new_blocks` / `new_transactions` so the unstable head is queryable
+ * from CH directly instead of only from SQLite. The stable Parquet
+ * pipeline is unchanged — once a row stabilizes it lands in
+ * `transactions` and the unstable copy ages out via TTL.
+ *
+ * Default: false. Safe to flip without coordinating with Parquet.
+ */
+export const CLICKHOUSE_STREAMING_ENABLED =
+  env.varOrDefault('CLICKHOUSE_STREAMING_ENABLED', 'false') === 'true';
+
+/**
+ * Maximum rows buffered before the streamer issues a bulk INSERT. The
+ * time-based flush ({@link CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS})
+ * ensures rows aren't held indefinitely when ingest is slow.
+ *
+ * Default: 500.
+ */
+export const CLICKHOUSE_STREAMER_BATCH_SIZE = env.positiveIntOrDefault(
+  'CLICKHOUSE_STREAMER_BATCH_SIZE',
+  500,
+);
+
+/**
+ * Time-based flush interval (ms). Rows queued shorter than this still
+ * flush at this cadence, capping unstable-head latency at the configured
+ * value (plus the bulk-insert RTT).
+ *
+ * Default: 1000 ms.
+ */
+export const CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS = env.positiveIntOrDefault(
+  'CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS',
+  1_000,
+);
+
+/**
+ * Hard cap on the streamer's in-memory buffer. Once exceeded, the
+ * streamer drops oldest rows to keep memory bounded under sustained CH
+ * unavailability. Drops are logged + metric'd; the missing rows will
+ * land via the stable Parquet pipeline once they stabilize.
+ *
+ * Default: 10 000.
+ */
+export const CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE = env.positiveIntOrDefault(
+  'CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE',
+  10_000,
+);
+
+/**
+ * When true, the GraphQL composite layer skips the SQLite leg entirely.
+ * Pairs with {@link CLICKHOUSE_STREAMING_ENABLED} for operators who want
+ * CH to be the sole read path: streaming covers the unstable head,
+ * Parquet covers stable, and SQLite stays write-only (still feeds the
+ * Parquet export → stable pipeline). When false (default), SQLite
+ * remains as a degraded-mode fallback governed by
+ * {@link CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS}.
+ */
+export const CLICKHOUSE_GQL_SKIP_SQLITE_READS =
+  env.varOrDefault('CLICKHOUSE_GQL_SKIP_SQLITE_READS', 'false') === 'true';
+
+/**
+ * Circuit-breaker timeout (ms) for the SQLite leg when streaming is
+ * enabled. In that mode CH-unstable covers the live tip and SQLite is a
+ * last-resort fallback for outages — a tight timeout keeps GraphQL
+ * responsive when CH itself is healthy. Distinct from
+ * `CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS` (which sizes for SQLite
+ * being on the critical path) so operators running both modes on
+ * different nodes don't have to choose one envelope.
+ *
+ * Default: 250 ms.
+ */
+export const CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS',
+    250,
   );
 
 //

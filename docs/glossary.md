@@ -174,6 +174,24 @@ YAML file loaded at the top of every import cycle; when multiple rules match
 a row the shortest TTL wins. Unmatched rows are retained indefinitely. See
 [Parquet and ClickHouse usage](./parquet-and-clickhouse-usage.md#tag-based-ttl-rules).
 
+<a id="streaming-pipeline"></a> **Streaming pipeline** - Optional path
+(opt-in via `CLICKHOUSE_STREAMING_ENABLED`) that mirrors the SQLite
+[unstable head](#unstable-head) into a separate pair of ClickHouse tables
+(`new_blocks`, `new_transactions`) in near-real time. Runs alongside — not
+in place of — the existing Parquet pipeline: stable rows still land in the
+`transactions` table via parquet-export, the unstable copy ages out via
+TTL once a row stabilizes. Enables ClickHouse to serve the live tip
+without a SQLite fallback. See [ClickHouse Pipeline § Streaming
+pipeline](./clickhouse-pipeline.md#streaming-pipeline-unstable-head).
+
+<a id="unstable-head"></a> **Unstable head** - The recent stretch of the
+chain that hasn't yet accumulated enough confirmations (~18) to be
+considered stable. Rows in this window can still be reorged out, so they
+live in the SQLite `new_*` tables (and, when streaming is enabled, in the
+ClickHouse `new_*` tables too) until they stabilize. Once stabilized, a
+row migrates to the `stable_*` tables in SQLite and the `transactions`
+table in ClickHouse via the [Parquet pipeline](./clickhouse-pipeline.md).
+
 ## CDB64 Indexing
 
 **CDB64** — Constant database format with 64-bit file offset support, used for

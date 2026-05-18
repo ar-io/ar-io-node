@@ -344,6 +344,103 @@ queries get partition pruning and read-in-order termination. There's no
 single access path that's best for all shapes, and the per-query
 settings let each shape take its best path.
 
+## Streaming-pipeline tables: `new_blocks` / `new_transactions`
+
+When the streaming pipeline is enabled
+(`CLICKHOUSE_STREAMING_ENABLED=true`), two additional tables hold the
+**unstable head** — the last ~18 confirmations of recent data,
+streamed from the indexer's event bus in near-real time. Stable rows
+continue to land in `transactions` via the unchanged Parquet pipeline;
+the unstable copy ages out via TTL once a row stabilizes.
+
+```sql
+CREATE TABLE new_blocks (
+  height UInt32 CODEC(Delta(4), LZ4),
+  indep_hash BLOB,
+  inserted_at DateTime CODEC(Delta(4), ZSTD(1)),
+  PRIMARY KEY (height)
+) Engine = ReplacingMergeTree(inserted_at)
+ORDER BY (height)
+TTL inserted_at + INTERVAL 240 MINUTE;
+
+CREATE TABLE new_transactions (
+  -- Same column shape as `transactions`, minus the offset/size pointer
+  -- family (offset, size, data_offset, owner_offset, owner_size,
+  -- signature_offset, signature_size, expires_at), plus inline
+  -- `signature` and `owner` BLOBs since the bytes are known at index
+  -- time.
+  ...
+  signature BLOB CODEC(ZSTD(3)),
+  owner BLOB CODEC(ZSTD(3)),
+  ...
+  tag_names Array(BLOB) MATERIALIZED arrayMap(x -> x.1, tags),
+  tag_values Array(BLOB) MATERIALIZED arrayMap(x -> x.2, tags),
+  PRIMARY KEY (height, block_transaction_index, is_data_item, id)
+) Engine = ReplacingMergeTree(inserted_at)
+ORDER BY (height, block_transaction_index, is_data_item, id)
+TTL inserted_at + INTERVAL 240 MINUTE;
+```
+
+(See `src/database/clickhouse/schema.sql` for the canonical
+definitions; the TTL is rendered from
+`CLICKHOUSE_NEW_TX_TTL_MINUTES` at schema-render time.)
+
+### Deliberate departures from `transactions`
+
+These differences from the stable schema are choices, not oversights:
+
+- **No `PARTITION BY`.** The unstable head covers a few thousand
+  rows in a tight height range; partition metadata would cost more
+  than the pruning saves.
+- **No bloom skip indexes.** A full scan is cheaper than the
+  index lookup at this row count, and the indexes would add merge
+  cost. Tag-filtered queries against the unstable head still work
+  via the `MATERIALIZED tag_names` / `tag_values` columns; the
+  lambda form `arrayMap(x -> x.1, tags)` is only a problem for
+  bloom-filter matching, which we've removed.
+- **No `owner_projection`** and no
+  `deduplicate_merge_projection_mode = 'rebuild'`. Same reasoning
+  as the bloom indexes — not worth the merge cost at this size.
+- **No offset/size pointer family.** Those are stable-pipeline
+  artifacts (the parquet exporter computes them from SQLite
+  offsets); they don't exist at stream time. Inline `signature` and
+  `owner` BLOBs replace them — we have the bytes in hand at index
+  time and ZSTD compression handles the size.
+- **No `expires_at` / operator TTL rules.** The unstable head uses
+  a uniform time-since-insert TTL keyed off `inserted_at` (the
+  Parquet-side TTL machinery applies only to `transactions`).
+- **`new_blocks` is intentionally minimal.** Just `(height,
+  indep_hash, inserted_at)` — enough for the orphan-filter join
+  against `new_transactions`, no more. Per-row block context on
+  GraphQL transaction queries comes from the denormalized columns
+  on `new_transactions` itself. A future stable-block table, if
+  added, deserves its own partitioning / indexing decisions made
+  in context, not inherited from this minimal shape.
+
+### Reorg handling
+
+`new_blocks` is the truth anchor. On a chain reorg the streamer
+issues `ALTER TABLE new_blocks DELETE WHERE height > forkHeight`
+(bounded — at most a handful of rows). Orphaned `new_transactions`
+rows retain their old denormalized `block_indep_hash` and are
+filtered at query time by the `(height, block_indep_hash) IN
+(SELECT height, indep_hash FROM new_blocks)` join, then age out
+via TTL. There's no DELETE on `new_transactions`, no tombstones,
+no CollapsingMergeTree.
+
+### Query merge
+
+The GraphQL composite layer
+(`src/database/composite-clickhouse.ts`) runs three legs in
+parallel: `transactions` (CH stable), `new_transactions ⨝
+new_blocks` (CH unstable), and SQLite as a degraded-mode fallback.
+Set-based dedup with explicit precedence (stable > unstable >
+SQLite) handles the stabilization-overlap window where the same
+`id` briefly exists in `transactions` and `new_transactions`.
+
+See [ClickHouse Pipeline § Streaming pipeline](clickhouse-pipeline.md#streaming-pipeline-unstable-head)
+for the runtime flow and failure model.
+
 ## Composite routing
 
 `CompositeClickHouseDatabase` runs both the ClickHouse query and the

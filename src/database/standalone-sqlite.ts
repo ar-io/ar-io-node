@@ -171,7 +171,8 @@ function hashTagPart(value: Buffer) {
   return crypto.createHash('sha1').update(value).digest();
 }
 
-function isContentTypeTag(tagName: Buffer) {
+/** Returns true if the decoded tag name is `content-type` (case-insensitive). */
+export function isContentTypeTag(tagName: Buffer): boolean {
   return tagName.toString('utf8').toLowerCase() === 'content-type';
 }
 
@@ -179,7 +180,8 @@ function isContentEncodingTag(tagName: Buffer) {
   return tagName.toString('utf8').toLowerCase() === 'content-encoding';
 }
 
-function ownerToAddress(owner: Buffer) {
+/** Derives the wallet-address bytes (sha256 of the owner public modulus). */
+export function ownerToAddress(owner: Buffer): Buffer {
   return crypto.createHash('sha256').update(owner).digest();
 }
 
@@ -905,6 +907,11 @@ export class StandaloneSqliteDatabaseWorker {
     return rows.map((row): string => toB64Url(row.id));
   }
 
+  getRepairBacklogCount(): number {
+    const row = this.stmts.bundles.selectRepairBacklogCount.get();
+    return row?.n ?? 0;
+  }
+
   backfillBundles() {
     this.stmts.bundles.insertMissingBundles.run();
   }
@@ -1289,6 +1296,7 @@ export class StandaloneSqliteDatabaseWorker {
     const chainStats = this.stmts.core.selectChainStats.get();
     const bundleStats = this.stmts.bundles.selectBundleStats.get();
     const dataItemStats = this.stmts.bundles.selectDataItemStats.get();
+
 
     const now = currentUnixTimestamp();
 
@@ -3309,6 +3317,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('bundles', 'getFailedBundleIds', [limit]);
   }
 
+  getRepairBacklogCount(): Promise<number> {
+    return this.queueRead('bundles', 'getRepairBacklogCount', undefined);
+  }
+
   backfillBundles() {
     return this.queueRead('bundles', 'backfillBundles', undefined);
   }
@@ -3460,8 +3472,27 @@ export class StandaloneSqliteDatabase
     }
   }
 
-  getDebugInfo(): Promise<DebugInfo> {
-    return this.queueRead('debug', 'getDebugInfo', undefined);
+  async getDebugInfo(): Promise<DebugInfo> {
+    const debugInfo = (await this.queueRead(
+      'debug',
+      'getDebugInfo',
+      undefined,
+    )) as DebugInfo;
+
+    // Worker threads have their own prom-client module instance, so a
+    // gauge set inside computeDebugInfo() never reaches the main-thread
+    // Prometheus registry served by `/ar-io/__gateway_metrics`. Set it
+    // here in the main thread after the worker returns.
+    const minStableHeight = debugInfo?.heights?.minStableDataItem;
+    if (
+      typeof minStableHeight === 'number' &&
+      Number.isFinite(minStableHeight) &&
+      minStableHeight >= 0
+    ) {
+      metrics.minStableDataItemHeight.set(minStableHeight);
+    }
+
+    return debugInfo;
   }
 
   saveDataContentAttributes({
@@ -3557,7 +3588,7 @@ export class StandaloneSqliteDatabase
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
-    bundledIn?: string[];
+    bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }) {
     return this.queueRead('gql', 'getGqlTransactions', [
@@ -3811,6 +3842,9 @@ if (!isMainThread) {
         case 'getFailedBundleIds':
           const failedBundleIds = worker.getFailedBundleIds(args[0]);
           parentPort?.postMessage(failedBundleIds);
+          break;
+        case 'getRepairBacklogCount':
+          parentPort?.postMessage(worker.getRepairBacklogCount());
           break;
         case 'backfillBundles':
           worker.backfillBundles();

@@ -93,6 +93,8 @@ import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
 import { TransactionOffsetImporter } from './workers/transaction-offset-importer.js';
 import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
+import { createClient as createClickHouseClient } from '@clickhouse/client';
+import { ClickHouseStreamer } from './workers/clickhouse-streamer.js';
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSKvStore, createArNSResolver } from './init/resolvers.js';
 import {
@@ -299,6 +301,20 @@ export const dataBlockListValidator: DataBlockListValidator = db;
 export const nameBlockListValidator: NameBlockListValidator = db;
 export const nestedDataIndexWriter: NestedDataIndexWriter = db;
 export const dataItemIndexWriter: DataItemIndexWriter = db;
+if (
+  config.CLICKHOUSE_GQL_SKIP_SQLITE_READS &&
+  !config.CLICKHOUSE_STREAMING_ENABLED
+) {
+  log.warn(
+    'CLICKHOUSE_GQL_SKIP_SQLITE_READS is set but ' +
+      'CLICKHOUSE_STREAMING_ENABLED is not — ignoring the skip flag. ' +
+      'Without streaming, SQLite is the only source for unstable-head ' +
+      'rows; skipping it would silently drop recent transactions from ' +
+      'GraphQL responses. Enable streaming alongside the skip flag, or ' +
+      'unset the skip flag to silence this warning.',
+  );
+}
+
 export const gqlQueryable: GqlQueryable = (() => {
   const localGql: GqlQueryable =
     config.CLICKHOUSE_URL !== undefined
@@ -313,6 +329,33 @@ export const gqlQueryable: GqlQueryable = (() => {
           maxHeightCacheTtlSeconds:
             config.CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS,
           queryTimeoutSeconds: config.CLICKHOUSE_QUERY_TIMEOUT_SECONDS,
+          // Streaming mode: when enabled, the composite queries
+          // `new_transactions` as a third leg covering the unstable
+          // head, and the SQLite leg drops to a tight-timeout fallback
+          // (or is skipped entirely if SKIP_SQLITE_READS is set).
+          //
+          // skipSqliteReads is gated on streaming-enabled because
+          // without streaming, SQLite is the *only* source for the
+          // unstable head — skipping it would silently drop recent
+          // transactions from GraphQL.
+          queryUnstableHead: config.CLICKHOUSE_STREAMING_ENABLED,
+          skipSqliteReads:
+            config.CLICKHOUSE_STREAMING_ENABLED &&
+            config.CLICKHOUSE_GQL_SKIP_SQLITE_READS,
+          ...(config.CLICKHOUSE_STREAMING_ENABLED
+            ? {
+                sqliteCircuitBreakerOptions: {
+                  timeout:
+                    config.CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS,
+                  errorThresholdPercentage:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+                  rollingCountTimeout:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
+                  resetTimeout:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
+                },
+              }
+            : {}),
         })
       : db;
 
@@ -577,15 +620,8 @@ export const txOffsetRepairWorker = new TransactionOffsetRepairWorker({
   txOffsetIndexer: txOffsetImporter,
 });
 
-export const bundleRepairWorker = new BundleRepairWorker({
-  log,
-  bundleIndex,
-  txFetcher,
-  unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
-  indexFilter: config.ANS104_INDEX_FILTER_STRING,
-  shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
-  filtersChanged: config.FILTER_CHANGE_REPROCESS,
-});
+// bundleRepairWorker is defined further down — it depends on
+// ans104Unbundler which is constructed later in this file.
 
 const peerRequestLimiter = new PeerRequestLimiter(
   config.PEER_MAX_CONCURRENT_OUTBOUND,
@@ -1209,6 +1245,18 @@ metrics.registerQueueLengthGauge('ans104Unbundler', {
   length: () => ans104Unbundler.queueDepth(),
 });
 
+// BundleRepairWorker depends on ans104Unbundler so it's constructed
+// here, after Ans104Unbundler is available.
+export const bundleRepairWorker = new BundleRepairWorker({
+  log,
+  bundleIndex,
+  ans104Unbundler,
+  unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
+  indexFilter: config.ANS104_INDEX_FILTER_STRING,
+  shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
+  filtersChanged: config.FILTER_CHANGE_REPROCESS,
+});
+
 export const verificationDataImporter = new DataImporter({
   log,
   contiguousDataSource: txChunksDataSource,
@@ -1449,6 +1497,55 @@ const webhookEmitter = new WebhookEmitter({
 metrics.registerQueueLengthGauge('webhookEmitter', {
   length: () => webhookEmitter.queueDepth(),
 });
+
+// Streaming pipeline (issue #696): mirror the SQLite unstable head into
+// ClickHouse `new_blocks` / `new_transactions` so CH becomes a complete
+// read store. Opt-in; the stable Parquet pipeline is unchanged. Started
+// from app.ts via `clickhouseStreamer?.start()` so a schema-validation
+// failure surfaces at startup rather than silently in the background.
+export const clickhouseStreamer = (() => {
+  if (!config.CLICKHOUSE_STREAMING_ENABLED) {
+    return undefined;
+  }
+  // Fail fast on an explicit opt-in with missing prerequisites — silently
+  // returning undefined would let the gateway start up looking healthy
+  // while the streaming pipeline doesn't actually run.
+  if (config.CLICKHOUSE_URL === undefined) {
+    throw new Error(
+      'CLICKHOUSE_STREAMING_ENABLED=true requires CLICKHOUSE_URL to be set.',
+    );
+  }
+  const streamerClient = createClickHouseClient({
+    url: config.CLICKHOUSE_URL,
+    username: config.CLICKHOUSE_USER,
+    password: config.CLICKHOUSE_PASSWORD,
+    // Batched INSERTs inline up to BATCH_SIZE rows of tag-bearing
+    // transactions; an L1 tx or data item with many large tags can push
+    // the rendered SQL past ClickHouse's default `max_query_size` of
+    // 256 KiB, which would reject the whole batch (flush errors are
+    // swallowed best-effort, so the rejection is silent except for a
+    // log line). 1 GiB is generous headroom over any realistic batch.
+    clickhouse_settings: {
+      max_query_size: '1073741824',
+    },
+  });
+  const streamer = new ClickHouseStreamer({
+    log,
+    eventEmitter,
+    clickhouseClient: streamerClient,
+    batchSize: config.CLICKHOUSE_STREAMER_BATCH_SIZE,
+    flushIntervalMs: config.CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS,
+    maxQueueSize: config.CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE,
+  });
+  metrics.registerQueueLengthGauge('clickhouseStreamer', {
+    length: () => streamer.queueDepth(),
+  });
+  registerCleanupHandler('clickhouseStreamer', async () => {
+    await streamer.stop();
+    await streamerClient.close();
+  });
+  return streamer;
+})();
 
 export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
   ? new MempoolWatcher({

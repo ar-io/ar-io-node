@@ -60,6 +60,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private readonly streamStallTimeoutMs: number;
   private readonly fallbackToBasePath: boolean;
   private readonly maxHopsAllowed: number;
+  private readonly rangeAccept200MaxOffset: number;
   private readonly agents: Map<string, http.Agent | https.Agent> = new Map();
 
   constructor({
@@ -69,6 +70,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
     fallbackToBasePath = false,
     maxHopsAllowed = MAX_DATA_HOPS,
+    rangeAccept200MaxOffset = config.GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
@@ -76,12 +78,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
     streamStallTimeoutMs?: number;
     fallbackToBasePath?: boolean;
     maxHopsAllowed?: number;
+    rangeAccept200MaxOffset?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
     this.streamStallTimeoutMs = streamStallTimeoutMs;
     this.fallbackToBasePath = fallbackToBasePath;
     this.maxHopsAllowed = maxHopsAllowed;
+    this.rangeAccept200MaxOffset = rangeAccept200MaxOffset;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -322,23 +326,88 @@ export class GatewaysDataSource implements ContiguousDataSource {
 
                 const gatewayRequestDuration = Date.now() - gatewayRequestStart;
 
-                if (
-                  (region !== undefined && response.status !== 206) ||
-                  (region === undefined && response.status !== 200)
-                ) {
+                // For region requests we accept either 206 (proper partial
+                // content) or 200 (upstream ignored our Range header and
+                // returned the full body — common when nginx caching is in
+                // front of an origin without slice configured). On the 200
+                // path we slice the full body locally below to satisfy the
+                // consumer's region; the upstream bandwidth cost is real
+                // but unavoidable here, and rejecting the response just
+                // forces a fallback to the next tier which is strictly
+                // worse for callers. For non-region requests only 200 is
+                // acceptable.
+                const isRangedRequest = region !== undefined;
+                const upstreamIgnoredRange =
+                  isRangedRequest && response.status === 200;
+                const acceptableStatus =
+                  (isRangedRequest &&
+                    (response.status === 206 || response.status === 200)) ||
+                  (!isRangedRequest && response.status === 200);
+
+                if (!acceptableStatus) {
                   response.data.destroy();
                   span.addEvent('Gateway returned unexpected status', {
                     'gateways.url': gatewayUrl,
                     'gateways.tier.priority': priority,
                     'gateways.request.path': path,
                     'http.status_code': response.status,
-                    'http.expected_status': region !== undefined ? 206 : 200,
+                    'http.expected_status': isRangedRequest
+                      ? '200 or 206'
+                      : '200',
                     'gateways.request.duration_ms': gatewayRequestDuration,
                   });
                   throw new Error(
                     `Unexpected status code from gateway: ${response.status}. Expected ${
-                      region !== undefined ? '206' : '200'
+                      isRangedRequest ? '200 or 206' : '200'
                     }.`,
+                  );
+                }
+
+                if (upstreamIgnoredRange) {
+                  // Cap the prefix bandwidth we're willing to burn to
+                  // slice locally. If region.offset exceeds the cap, the
+                  // cost of pulling [0, region.offset) bytes from this
+                  // upstream is too high — reject and let the data source
+                  // chain fall through to the next priority tier.
+                  if (region.offset > this.rangeAccept200MaxOffset) {
+                    metrics.gatewayRangeIgnoredTotal.inc({
+                      gateway_url: gatewayUrl,
+                      priority: String(priority),
+                      outcome: 'rejected_offset_too_high',
+                    });
+                    span.addEvent(
+                      'Gateway returned full body for Range; rejected (offset above threshold)',
+                      {
+                        'gateways.url': gatewayUrl,
+                        'gateways.tier.priority': priority,
+                        'gateways.request.path': path,
+                        'data.region.offset': region.offset,
+                        'gateways.range_accept_200_max_offset':
+                          this.rangeAccept200MaxOffset,
+                      },
+                    );
+                    response.data.destroy();
+                    throw new Error(
+                      `Gateway returned full body for Range request but ` +
+                        `region.offset (${region.offset}) exceeds ` +
+                        `GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET ` +
+                        `(${this.rangeAccept200MaxOffset}); refusing to ` +
+                        `burn ${region.offset} prefix bytes for ${id}`,
+                    );
+                  }
+                  metrics.gatewayRangeIgnoredTotal.inc({
+                    gateway_url: gatewayUrl,
+                    priority: String(priority),
+                    outcome: 'sliced',
+                  });
+                  span.addEvent(
+                    'Gateway returned full body for Range; sliced locally',
+                    {
+                      'gateways.url': gatewayUrl,
+                      'gateways.tier.priority': priority,
+                      'gateways.request.path': path,
+                      'data.region.offset': region.offset,
+                    },
                   );
                 }
 
@@ -359,17 +428,32 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   );
                 }
 
-                // PE-9081: ranged responses must have Content-Length
-                // exactly matching region.size. Oversize is a leak path;
-                // undersize is silently truncated data presented to the
-                // consumer as size=region.size. Both are equally wrong
-                // from the consumer's view.
-                if (region !== undefined && contentLength !== region.size) {
-                  stream.destroy();
-                  throw new Error(
-                    `Gateway Content-Length (${contentLength}) does not match ` +
-                      `requested region size (${region.size}) for ${id}`,
-                  );
+                // PE-9081 / PE-9098: Content-Length validation depends on
+                // which status the upstream chose:
+                //  - 206: Content-Length is the partial body length and must
+                //    match region.size exactly. Oversize is a leak path;
+                //    undersize is silent truncation.
+                //  - 200 with Range requested (upstreamIgnoredRange): the
+                //    upstream sent the full body, so Content-Length is the
+                //    total object size and must be large enough to contain
+                //    the requested region. We'll slice it locally below.
+                if (isRangedRequest && !upstreamIgnoredRange) {
+                  if (contentLength !== region.size) {
+                    stream.destroy();
+                    throw new Error(
+                      `Gateway Content-Length (${contentLength}) does not match ` +
+                        `requested region size (${region.size}) for ${id}`,
+                    );
+                  }
+                } else if (isRangedRequest && upstreamIgnoredRange) {
+                  const requiredBytes = region.offset + region.size;
+                  if (contentLength < requiredBytes) {
+                    stream.destroy();
+                    throw new Error(
+                      `Gateway full body (${contentLength}) too small for ` +
+                        `requested region [${region.offset}, ${requiredBytes}) for ${id}`,
+                    );
+                  }
                 }
 
                 attachStallTimeout(stream, this.streamStallTimeoutMs);
@@ -398,6 +482,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 });
 
                 const requestType = region ? 'range' : 'full';
+                // Consumer-visible byte count. When `region` is set the
+                // returned stream is always sliced to `region.size`
+                // (regardless of whether upstream was 206 or 200-with-Range),
+                // so contentLength would overcount for the sliced path.
+                const emittedSize =
+                  region !== undefined ? region.size : contentLength;
 
                 stream.on('error', () => {
                   metrics.getDataStreamErrorsTotal.inc({
@@ -421,7 +511,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                       source: gatewayUrl,
                       request_type: requestType,
                     },
-                    contentLength,
+                    emittedSize,
                   );
 
                   metrics.getDataStreamSizeHistogram.observe(
@@ -430,23 +520,33 @@ export class GatewaysDataSource implements ContiguousDataSource {
                       source: gatewayUrl,
                       request_type: requestType,
                     },
-                    contentLength,
+                    emittedSize,
                   );
                 });
 
-                // PE-9081: hard-cap the consumer-visible byte count when
-                // a region was requested. ByteRangeTransform pushes null
-                // after region.size bytes regardless of upstream behavior,
-                // and we destroy the underlying socket on every
-                // termination path of the cappedStream (end, close,
-                // error) so the upstream connection is released promptly
-                // even when consumers destroy the cappedStream early or
-                // it errors. `pipe()` does not propagate destination
-                // termination back to the source (per CodeRabbit review
-                // on PR #703).
+                // PE-9081 / PE-9098: hard-cap the consumer-visible byte
+                // count when a region was requested. The slice offset
+                // depends on what the upstream returned:
+                //  - 206: stream starts at region.offset, slice (0, size).
+                //  - 200 (upstreamIgnoredRange): stream is the full body
+                //    starting at offset 0, slice (region.offset, size) to
+                //    skip the prefix and stop at the right boundary.
+                // ByteRangeTransform pushes null after `size` bytes
+                // regardless of upstream behavior, and we destroy the
+                // underlying socket on every termination path of the
+                // cappedStream (end, close, error) so the upstream
+                // connection is released promptly even when consumers
+                // destroy the cappedStream early or it errors. `pipe()`
+                // does not propagate destination termination back to the
+                // source (per CodeRabbit review on PR #703).
                 const cappedStream =
                   region !== undefined
-                    ? stream.pipe(new ByteRangeTransform(0, region.size))
+                    ? stream.pipe(
+                        new ByteRangeTransform(
+                          upstreamIgnoredRange ? region.offset : 0,
+                          region.size,
+                        ),
+                      )
                     : stream;
 
                 if (region !== undefined && cappedStream !== stream) {
@@ -463,9 +563,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 return {
                   stream: cappedStream,
                   size: region !== undefined ? region.size : contentLength,
-                  totalSize: parseContentRange(
-                    response.headers['content-range'],
-                  )?.total,
+                  // 206 carries totalSize in the Content-Range header; on
+                  // the 200-with-Range path Content-Length IS the total.
+                  totalSize: upstreamIgnoredRange
+                    ? contentLength
+                    : parseContentRange(response.headers['content-range'])
+                        ?.total,
                   verified: false,
                   trusted: gatewayTrusted,
                   sourceContentType: response.headers['content-type'],

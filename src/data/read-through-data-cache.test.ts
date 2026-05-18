@@ -279,6 +279,49 @@ describe('ReadThroughDataCache', function () {
       assert.deepEqual(result?.stream, mockStream);
       assert.deepEqual(result?.size, 20);
     });
+
+    it('should preserve caller region.size through parent-data resolution (PE-9098)', async function () {
+      // Regression: when an item resolves via its parent's cached blob, the
+      // recursive getCacheData call must keep the caller's requested slice
+      // size, not replace it with the child's full data size. The previous
+      // behavior asked FsDataStore to open a 1.55 GB window when the
+      // attribute-fetcher only wanted 512 bytes of signature data.
+      let regionPassedToDataStore: { offset: number; size: number } | undefined;
+      const mockStream = new Readable();
+      mockStream.push('cached data');
+      mockStream.push(null);
+      mock.method(
+        mockContiguousDataStore,
+        'get',
+        (hash: string, region?: { offset: number; size: number }) => {
+          if (hash === 'test-parent-hash') {
+            regionPassedToDataStore = region;
+            return Promise.resolve(mockStream);
+          }
+          return Promise.resolve(undefined);
+        },
+      );
+      mock.method(mockContiguousDataIndex, 'getDataParent', () => {
+        return Promise.resolve({
+          parentId: 'test-parent-id',
+          parentHash: 'test-parent-hash',
+          offset: 2766,
+          size: 1545359648, // child's full data size (1.55 GB)
+        });
+      });
+
+      await readThroughDataCache.getCacheData(
+        'test-id',
+        'test-hash',
+        1545359648,
+        { offset: 1690, size: 512 },
+      );
+
+      assert.deepEqual(regionPassedToDataStore, {
+        offset: 2766 + 1690,
+        size: 512, // caller's requested slice — NOT 1545359648
+      });
+    });
   });
 
   describe('getData', function () {

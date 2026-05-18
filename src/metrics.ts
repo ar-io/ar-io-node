@@ -129,6 +129,65 @@ export const dataItemsDroppedCounter = new promClient.Counter({
   labelNames: ['queue_name'],
 });
 
+// `Ans104Unbundler.queueItem` may decide not to enqueue a bundle for
+// unbundling. Every such skip is a bundle whose data items will not enter
+// the indexer pipeline through this call (the same bundle may still be
+// re-queued later via `bundle-repair-worker`). Tracked separately from
+// `data_items_dropped_total` because the unit is bundles not items, and
+// because the upstream cause differs from indexer-queue cap pressure.
+//
+//   reason="no_workers"        — ANS104_UNBUNDLE_WORKERS is 0; the
+//                                unbundler is intentionally disabled.
+//   reason="high_queue_depth"  — `shouldUnbundle()` returned false
+//                                (downstream backpressure from the
+//                                data-item indexer queue).
+//   reason="queue_full"        — the unbundler's own fastq queue is at
+//                                `maxQueueSize` and the item wasn't
+//                                prioritized.
+export const bundlesUnbundleSkippedCounter = new promClient.Counter({
+  name: 'bundles_unbundle_skipped_total',
+  help: 'Count of bundles skipped by Ans104Unbundler.queueItem and never enqueued for unbundling',
+  labelNames: ['reason'],
+});
+
+// Observability for `BundleRepairWorker`. The worker has no direct view of
+// "successful repair" (whether a re-queued bundle eventually transitions to
+// fully indexed happens downstream of this worker), but the combination of
+// these signals lets operators answer it indirectly:
+//
+//   sent-for-repair rate   = rate(bundle_repair_retries_total{kind="retry"}[5m])
+//   current backlog        = bundle_repair_pending_bundles
+//   throughput             = -derivative(bundle_repair_pending_bundles[15m])
+//                            (negative slope of backlog == net repair throughput)
+//   cycle health           = rate(bundle_repair_errors_total[15m]),
+//                            histogram_quantile(0.95, ... cycle_duration ...)
+//
+// `kind` label cardinality is bounded at the four cycle methods:
+// retry | timestamp_update | backfill | filter_reprocess.
+export const bundleRepairRetriesCounter = new promClient.Counter({
+  name: 'bundle_repair_retries_total',
+  help: 'Bundles re-queued by bundle-repair-worker (per cycle kind)',
+  labelNames: ['kind'],
+});
+
+export const bundleRepairCycleDurationHistogram = new promClient.Histogram({
+  name: 'bundle_repair_cycle_duration_seconds',
+  help: 'Wall-clock duration of each bundle-repair-worker cycle, by kind',
+  labelNames: ['kind'],
+  buckets: [0.05, 0.5, 1, 5, 30, 60, 300, 600],
+});
+
+export const bundleRepairErrorsCounter = new promClient.Counter({
+  name: 'bundle_repair_errors_total',
+  help: 'Bundle-repair-worker cycle errors, by kind',
+  labelNames: ['kind'],
+});
+
+export const bundleRepairPendingBundlesGauge = new promClient.Gauge({
+  name: 'bundle_repair_pending_bundles',
+  help: 'Bundles awaiting full indexing (matched_data_item_count > 0 AND last_fully_indexed_at IS NULL AND last_skipped_at IS NULL). Refreshed once per `updateBundleTimestamps` cycle.',
+});
+
 export const dataItemDataIndexedCounter = new promClient.Counter({
   name: 'data_item_data_indexed_total',
   help: 'Count of data item data indexed',
@@ -339,6 +398,30 @@ export const lastHeightImported = new promClient.Gauge({
 });
 
 //
+// ClickHouse Export Visibility Metrics
+//
+
+// Lowest height still present in stable_data_items. Flat over multiple
+// auto-import cycles indicates the prune step is no-op-ing — usually
+// because backfill writes at low heights keep landing with an indexed_at
+// newer than the prune threshold, so SQLite never shrinks and every
+// cycle restarts from the same low bucket.
+export const minStableDataItemHeight = new promClient.Gauge({
+  name: 'min_stable_data_item_height',
+  help: 'Lowest height present in stable_data_items (MIN(height)).',
+});
+
+// Cached value of `SELECT max(height) FROM transactions` on ClickHouse.
+// Gap from `last_height_imported` is the ClickHouse sync lag — historical
+// GQL queries route to ClickHouse below this height, so a wide gap means
+// stable_data_items in the gap are invisible to GQL when
+// CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED is true.
+export const clickhouseMaxImportedHeight = new promClient.Gauge({
+  name: 'clickhouse_max_imported_height',
+  help: 'Max height present in the ClickHouse `transactions` table (refreshed lazily).',
+});
+
+//
 // Redis Cache Metrics
 //
 
@@ -469,6 +552,25 @@ export const getDataStreamSizeHistogram = new promClient.Histogram({
   help: 'Distribution of data stream sizes in bytes',
   labelNames: ['class', 'source', 'request_type'] as const,
   buckets: [102400, 1048576, 10485760, 104857600], // 100KB, 1MB, 10MB, 100MB
+});
+
+// Incremented when GatewaysDataSource sent a Range request but the upstream
+// answered with a full 200 body instead of a 206 partial-content response.
+// `outcome` distinguishes the cases:
+//   - 'sliced':                    we accepted the 200 and sliced locally
+//                                  (region.offset <= the configured cap)
+//   - 'rejected_offset_too_high':  region.offset exceeded the cap, so we
+//                                  rejected the response and let the data
+//                                  source chain fall through to the next
+//                                  priority tier instead of burning
+//                                  region.offset bytes of bandwidth
+// The metric surfaces which gateways are doing this and the per-gateway
+// rate of each outcome, so operators can tune
+// GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET.
+export const gatewayRangeIgnoredTotal = new promClient.Counter({
+  name: 'gateway_range_ignored_total',
+  help: 'Count of Range requests where the upstream returned a full 200 body, with outcome label for accepted (sliced locally) vs rejected (offset above threshold)',
+  labelNames: ['gateway_url', 'priority', 'outcome'] as const,
 });
 
 export const dataRequestChunksHistogram = new promClient.Histogram({
@@ -1095,4 +1197,55 @@ export const httpSigSigningDuration = new promClient.Histogram({
 export const httpSigErrorsTotal = new promClient.Counter({
   name: 'httpsig_errors_total',
   help: 'Total HTTPSIG signing errors',
+});
+
+/**
+ * Counter of Content-Digest emission outcomes on data and chunk
+ * responses. Helps tune `HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES` from
+ * real traffic.
+ *
+ * Labels:
+ * - `source`: `cache_hit` | `computed_buffered` | `skipped_size_unknown`
+ *   | `skipped_too_large` | `skipped_disabled` | `overran_threshold`
+ *   | `short_read`
+ * - `path`: `data` | `chunk` — separates the two routes so chunks
+ *   (always small, always hashable) can be observed independently of
+ *   data responses.
+ */
+export const httpSigContentDigestTotal = new promClient.Counter({
+  name: 'httpsig_content_digest_total',
+  help: 'Content-Digest emission outcomes on data and chunk responses',
+  labelNames: ['source', 'path'],
+});
+
+// String-union types for the `httpSigContentDigestTotal` labels. The
+// underlying prom-client Counter accepts arbitrary strings, so use the
+// `incHttpSigContentDigest` wrapper below for compile-time typo safety
+// — direct `.inc({ source: 'whatever' })` calls bypass the check.
+export type HttpSigDigestSource =
+  | 'cache_hit'
+  | 'computed_buffered'
+  | 'skipped_disabled'
+  | 'skipped_size_unknown'
+  | 'skipped_too_large'
+  | 'overran_threshold'
+  | 'short_read';
+export type HttpSigDigestPath = 'data' | 'chunk';
+
+export function incHttpSigContentDigest(labels: {
+  source: HttpSigDigestSource;
+  path: HttpSigDigestPath;
+}): void {
+  httpSigContentDigestTotal.inc(labels);
+}
+
+/**
+ * Gauge of aggregate bytes currently held in memory by buffered-digest
+ * in-flight computations. Each in-flight buffered request contributes
+ * up to `HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES`. Watch this to detect
+ * concurrency-driven memory pressure on the digest path.
+ */
+export const httpSigBufferedBytesInflight = new promClient.Gauge({
+  name: 'httpsig_buffered_bytes_inflight',
+  help: 'Aggregate bytes held in memory by buffered-digest in-flight reads',
 });

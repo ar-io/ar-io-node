@@ -521,6 +521,165 @@ describe('GatewayDataSource', () => {
       assert.equal(bytesReceived, 50);
     });
 
+    // PE-9098: some upstreams (e.g., nginx with proxy_cache enabled but
+    // no `slice` module) silently strip the client's Range header and
+    // return a full 200 body instead of a 206. We accept that response
+    // and slice the body locally to satisfy the consumer's region.
+    it('should accept 200 response for a Range request and slice locally', async () => {
+      // Distinguishable prefix vs tail so the test verifies that the
+      // slice starts at region.offset (not at 0).
+      const fullBody = Buffer.alloc(1000);
+      fullBody.fill(0xaa, 0, 100); // prefix: should NOT appear in output
+      fullBody.fill(0xbb, 100); // tail starting at offset 100: should fill output
+
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': String(fullBody.length),
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([fullBody]),
+      });
+
+      const region = { offset: 100, size: 200 };
+      const data = await dataSource.getData({ id: 'some-id', region });
+
+      // Consumer sees region.size bytes; totalSize reflects the full body
+      // since no Content-Range header was present.
+      assert.equal(data.size, 200);
+      assert.equal(data.totalSize, 1000);
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of data.stream) {
+        chunks.push(chunk as Buffer);
+      }
+      const received = Buffer.concat(chunks);
+      assert.equal(received.length, 200);
+      assert.ok(
+        received.every((b) => b === 0xbb),
+        'expected sliced body to be all 0xbb (no prefix bytes leaked through)',
+      );
+    });
+
+    // PE-9098: a full-body 200 that doesn't actually contain the requested
+    // region must be rejected before we hand a truncated stream to the
+    // consumer.
+    it('should reject 200 response when body is smaller than requested region', async () => {
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': '150',
+          'content-type': 'application/octet-stream',
+        },
+        data: axiosStreamData,
+      });
+
+      const region = { offset: 100, size: 200 }; // requires 300 bytes
+      await assert.rejects(
+        dataSource.getData({ id: 'some-id', region }),
+        /too small for requested region/,
+      );
+    });
+
+    // PE-9098: visibility — the metric increments when an upstream answers
+    // a Range request with a full 200 body, so we can see per-gateway
+    // wasted-bandwidth volume in Prometheus. `outcome=sliced` for the
+    // accepted-and-sliced path.
+    it('should increment gatewayRangeIgnoredTotal with outcome=sliced on 200-for-Range', async () => {
+      mock.method(metrics.gatewayRangeIgnoredTotal, 'inc');
+
+      const fullBody = Buffer.alloc(500, 0x00);
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': String(fullBody.length),
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([fullBody]),
+      });
+
+      const region = { offset: 0, size: 100 };
+      await dataSource.getData({ id: 'some-id', region });
+
+      assert.equal(
+        (metrics.gatewayRangeIgnoredTotal.inc as any).mock.callCount(),
+        1,
+      );
+      const labels = (metrics.gatewayRangeIgnoredTotal.inc as any).mock.calls[0]
+        .arguments[0];
+      assert.equal(labels.gateway_url, 'https://gateway.domain');
+      assert.equal(labels.priority, '1');
+      assert.equal(labels.outcome, 'sliced');
+    });
+
+    // PE-9098: when region.offset exceeds GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET,
+    // the prefix-bandwidth cost of accepting the 200 is too high. Reject
+    // and let the data source chain fall through to the next tier. The
+    // metric records the rejection so operators can tune the cap.
+    it('should reject 200-for-Range when region.offset exceeds the configured cap', async () => {
+      mock.method(metrics.gatewayRangeIgnoredTotal, 'inc');
+
+      const fullBody = Buffer.alloc(10000, 0x00);
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': String(fullBody.length),
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([fullBody]),
+      });
+
+      // Construct a fresh data source with a small offset cap so the
+      // test doesn't depend on the production default (10 MiB).
+      const cappedDataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway.domain': { priority: 1, trusted: true },
+        },
+        rangeAccept200MaxOffset: 1024,
+      });
+
+      const region = { offset: 2048, size: 100 }; // offset > cap
+      await assert.rejects(
+        cappedDataSource.getData({ id: 'some-id', region }),
+        /exceeds GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET/,
+      );
+
+      assert.equal(
+        (metrics.gatewayRangeIgnoredTotal.inc as any).mock.callCount(),
+        1,
+      );
+      const labels = (metrics.gatewayRangeIgnoredTotal.inc as any).mock.calls[0]
+        .arguments[0];
+      assert.equal(labels.outcome, 'rejected_offset_too_high');
+    });
+
+    // PE-9098: edge of the cap — region.offset exactly equal to the cap
+    // should still be accepted (the threshold is strictly greater-than).
+    it('should accept 200-for-Range when region.offset equals the configured cap', async () => {
+      const fullBody = Buffer.alloc(10000, 0xcc);
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': String(fullBody.length),
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([fullBody]),
+      });
+
+      const cappedDataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway.domain': { priority: 1, trusted: true },
+        },
+        rangeAccept200MaxOffset: 2048,
+      });
+
+      const region = { offset: 2048, size: 50 }; // offset == cap
+      const data = await cappedDataSource.getData({ id: 'some-id', region });
+      assert.equal(data.size, 50);
+    });
+
     describe('ArNS query parameters', () => {
       it('should include ArNS record and basename as query parameters when provided', async () => {
         let requestParams: any;

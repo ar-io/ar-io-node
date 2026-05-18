@@ -421,7 +421,13 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         size,
         {
           offset: (region?.offset ?? 0) + parentData.offset,
-          size,
+          // Preserve the caller's requested slice size. Falling back to
+          // the child's full data size here (the previous behavior) made
+          // FsDataStore open the parent file with end=start+child_size-1
+          // and emit up to that many bytes — for BDI-nested items that's
+          // hundreds of MB per request, which then trips strict size
+          // checks in callers like fetchDataFromParent (PE-9098).
+          size: region?.size ?? size,
         },
       );
     }

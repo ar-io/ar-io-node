@@ -5,8 +5,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import crypto from 'node:crypto';
 import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
+import * as metrics from '../../metrics.js';
 import {
   CHUNK_GET_BASE64_SIZE_BYTES,
   CHUNK_POST_ABORT_TIMEOUT_MS,
@@ -214,16 +216,14 @@ export const createChunkOffsetHandler = ({
           }
         }
 
-        // Set common headers (source tracking, cache status)
-        const { hashString } = setCommonChunkHeaders(response, chunk, span);
-
-        // Set ETag when hash is available (cache hits or HEAD requests)
-        if (
-          hashString !== undefined &&
-          (chunk.source === 'cache' || request.method === 'HEAD')
-        ) {
-          setChunkETag(response, hashString);
-        }
+        // Set common headers (source tracking, cache status). The hashString
+        // returned here is the hash of the raw chunk BYTES — not the JSON
+        // wrapper served by this endpoint. We deliberately do NOT use it for
+        // ETag here because ETag must describe the served representation
+        // (RFC 9110 §8.8.1), and what's served is the JSON wrapper. The
+        // raw-chunk hash still lives in X-AR-IO-Hash via setCommonChunkHeaders
+        // for clients that need to identify the underlying chunk bytes.
+        setCommonChunkHeaders(response, chunk, span);
 
         // Set content type and prepare response
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -239,6 +239,31 @@ export const createChunkOffsetHandler = ({
           'Content-Length',
           Buffer.byteLength(responseBodyString).toString(),
         );
+
+        // Bind the JSON body to the HTTPSIG signature: hash the serialized
+        // response (NOT the raw chunk bytes — those are wrapped in JSON here)
+        // and emit Content-Digest (in CO_SIGNABLE_HEADERS) plus X-AR-IO-Digest
+        // and ETag, all derived from the same JSON-body hash so the
+        // representation, the digest, and the cache validator agree. JSON is
+        // fully in memory so this is unconditional and free — no threshold,
+        // no buffering tradeoffs.
+        const jsonDigestB64Url = crypto
+          .createHash('sha256')
+          .update(responseBodyString)
+          .digest('base64url');
+        // Note: chunk responses deliberately do NOT emit X-AR-IO-Digest.
+        // That legacy header carries the raw-chunk hash on the data path
+        // for Wayfinder backwards-compat, which doesn't apply here. The
+        // standards-track Content-Digest is what carries the body binding.
+        setChunkETag(response, jsonDigestB64Url);
+        response.setHeader(
+          headerNames.contentDigest,
+          formatContentDigest(jsonDigestB64Url),
+        );
+        metrics.incHttpSigContentDigest({
+          source: 'computed_buffered',
+          path: 'chunk',
+        });
 
         // Handle conditional requests (If-None-Match)
         if (handleIfNoneMatch(request, response)) {
@@ -487,15 +512,37 @@ export const createChunkOffsetDataHandler = ({
         // Set common headers (source tracking, cache status)
         const { hashString } = setCommonChunkHeaders(response, chunk, span);
 
-        // Set ETag and Content-Digest when hash is available (cache hits or HEAD requests)
-        if (
-          hashString !== undefined &&
-          (chunk.source === 'cache' || request.method === 'HEAD')
-        ) {
-          setChunkETag(response, hashString);
+        // Set ETag and Content-Digest. Cache hits / HEAD requests use the
+        // already-known hashString. Uncached chunks compute the digest from
+        // the in-memory chunk bytes — chunks are bounded at 256 KiB so this
+        // is always cheap (~50 µs SHA-256). Result: every served chunk
+        // carries a body-bound digest, so the HTTPSIG signature pins the
+        // bytes end-to-end. See architect-handoff/httpsig-body-binding-plan.md.
+        let digestB64Url: string | undefined = hashString;
+        if (digestB64Url !== undefined) {
+          metrics.incHttpSigContentDigest({
+            source: 'cache_hit',
+            path: 'chunk',
+          });
+        } else if (chunk.chunk !== undefined && chunk.chunk.length > 0) {
+          digestB64Url = crypto
+            .createHash('sha256')
+            .update(chunk.chunk)
+            .digest('base64url');
+          metrics.incHttpSigContentDigest({
+            source: 'computed_buffered',
+            path: 'chunk',
+          });
+        }
+
+        if (digestB64Url !== undefined) {
+          // Note: chunk responses deliberately do NOT emit X-AR-IO-Digest.
+          // Content-Digest (standards-track, signed) is what carries the
+          // body binding here.
+          setChunkETag(response, digestB64Url);
           response.setHeader(
             headerNames.contentDigest,
-            formatContentDigest(hashString),
+            formatContentDigest(digestB64Url),
           );
         }
 
