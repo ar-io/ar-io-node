@@ -261,6 +261,173 @@ filters tuned for the GraphQL query mix (see
   `src/database/clickhouse/schema.sql` and `ttl-schema.sql`. These run
   on every import, making upgrades a no-op once applied.
 
+## Streaming pipeline (unstable head)
+
+The Parquet pipeline above only sees data after it stabilizes
+(~18 confirmations) and after the next auto-import cycle runs.
+That's a gap of up to ~1 hour between index time and ClickHouse
+visibility, during which recent rows are queryable only from
+SQLite. The streaming pipeline closes that gap by mirroring the
+SQLite unstable head into a separate pair of ClickHouse tables in
+near-real time.
+
+The streaming and Parquet paths are independent and run side-by-side:
+
+```text
+                    block-importer / data-item-indexer
+                              │
+                              │ event bus
+              ┌───────────────┴────────────────┐
+              │                                │
+              ▼                                ▼
+       SQLite new_*                    ClickHouseStreamer
+       (source of truth)                       │
+              │                                │ batched INSERT
+              │ (existing flush)               ▼
+              ▼                        CH new_blocks +
+       SQLite stable_*                 CH new_transactions
+              │                          (4h TTL window)
+              │ (parquet-export)                ╲
+              ▼                                  ╲ stabilization
+       Parquet warehouse                          ╲ handoff
+              │                                    ╲
+              │ (clickhouse-import)                 ▼
+              ▼                              CH transactions
+       CH transactions ←───────── stable rows live here
+                                       (TTL drops the
+                                        unstable copy)
+```
+
+**Status:** opt-in via `CLICKHOUSE_STREAMING_ENABLED` (default
+off). When disabled the gateway behaves exactly as before — the
+streamer isn't constructed and the GraphQL composite layer runs
+its 2-leg (CH stable + SQLite) path. See [envs.md](envs.md) for
+the full env-var surface.
+
+### Streamer
+
+`src/workers/clickhouse-streamer.ts` subscribes to indexing
+lifecycle events on the central event bus and bulk-inserts rows
+into `new_blocks` / `new_transactions`:
+
+- `BLOCK_INDEXED` → one `new_blocks` row plus a synchronously
+  stored block-context entry the streamer uses to denormalize the
+  three block fields onto each tx row that follows.
+- `BLOCK_TX_INDEXED` → one `new_transactions` row with
+  `is_data_item = false`. The block context comes from the
+  matching `BLOCK_INDEXED` that fires immediately before on the
+  same event-loop tick (see `block-importer.ts`).
+- `ANS104_DATA_ITEM_INDEXED` → one `new_transactions` row with
+  `is_data_item = true`, inheriting `block_transaction_index` from
+  its parent L1 transaction (looked up in an in-memory cache the
+  streamer maintains from prior `BLOCK_TX_INDEXED` events).
+- `CHAIN_REORG` → bounded `ALTER TABLE new_blocks DELETE WHERE
+  height > forkHeight`. Orphaned `new_transactions` rows are
+  filtered at query time by the `(height, block_indep_hash)` join
+  and age out via TTL.
+
+Buffering is size-triggered (`CLICKHOUSE_STREAMER_BATCH_SIZE`,
+default 500) or time-triggered (`CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS`,
+default 1000ms). A single-flight flush serializes overlapping
+triggers. The buffer is bounded
+(`CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE`, default 10000); on overflow
+the streamer drops oldest rows with a warning — those rows still
+land via the stable Parquet pipeline once they stabilize.
+
+### Failure model
+
+Streaming is best-effort. ClickHouse availability is **not**
+required for indexing to make progress:
+
+- ClickHouse unreachable / errors: the streamer logs and continues.
+  Rows for that flush are dropped; they will appear in
+  `transactions` when the stable Parquet pipeline lands them.
+- Indexer crash mid-flush: the in-memory buffer is lost. SQLite is
+  still the source of truth; the stable pipeline catches up.
+- Reorg-DELETE failure: the in-memory block-context map is still
+  evicted, and the orphan-filter join keeps query results correct.
+  The unstable head retains the stale rows until the next
+  successful prune or TTL expiry.
+- Schema validation failure at startup: the streamer fails closed
+  with a clear error pointing at `scripts/clickhouse-import`. This
+  surfaces missing tables as a startup error rather than as
+  column-mismatch errors on the first INSERT.
+
+Cold-start gap: data items unbundled from L1 transactions whose
+`BLOCK_TX_INDEXED` event fired before the streamer started are
+skipped (logged at debug level, exposed as a metric). They land
+via the stable pipeline within the unstable window. The brief
+visibility gap on restart is intentional — a synchronous SQLite
+fallback per data item would add latency disproportionate to the
+upside.
+
+### Stabilization handoff
+
+Once a row crosses ~18 confirmations and the next auto-import
+fires, the existing Parquet export pipeline lands it in
+`transactions`. During the overlap (until TTL drops the unstable
+copy) the same `id` exists in both tables; the GraphQL composite
+layer's precedence-aware merge picks the stable side per call.
+
+Default TTL is 240 minutes (`CLICKHOUSE_NEW_TX_TTL_MINUTES`),
+comfortably past 18 confirmations × ~2 min/block plus a 1h
+auto-import cycle so a stalled chain or delayed import doesn't
+expire rows before they stabilize. ClickHouse TTL fires on
+background merge, not on access — the row may linger past its
+expiry by a merge cycle, but the merge picks stable so it doesn't
+affect query results.
+
+### Reorgs
+
+`block-importer.ts` emits `CHAIN_REORG` from both detection sites
+(fork detection + height-gap detection) carrying
+`{ forkHeight: previousHeight - 1 }`. The streamer issues
+`ALTER TABLE new_blocks DELETE WHERE height > forkHeight` —
+bounded to a handful of rows since the unstable window is narrow.
+
+Orphan transactions in `new_transactions` retain their old
+denormalized `block_indep_hash`; the GraphQL query's tuple-IN
+join against `new_blocks` filters them out, and TTL drops them
+once their window closes. There's no DELETE on
+`new_transactions`, no tombstones, no CollapsingMergeTree —
+`new_blocks` is the truth anchor and the join keeps results
+clean.
+
+#### Mutation-latency race window
+
+`ALTER TABLE … DELETE` is an asynchronous ClickHouse mutation —
+the statement returns once the mutation is enqueued, not once
+the rows are physically gone. Between submission and execution
+there's a window where the pre-fork row `(forkHeight+1, oldHash)`
+is still readable. If a fresh `BLOCK_INDEXED` for the same
+height arrives during that window and inserts
+`(forkHeight+1, newHash)`, both rows are visible until the
+`ReplacingMergeTree(inserted_at)` merge resolves to the newer
+copy. The orphan-filter join, evaluated against this pre-merge
+state, could briefly match orphaned transactions to the old
+`(height, oldHash)` row in `new_blocks`.
+
+Three things bound the window:
+
+1. The mutation latency itself is typically seconds against
+   the tiny `new_blocks` table — small height range, no
+   partitioning, no skip indexes.
+2. `ReplacingMergeTree(inserted_at)` keeps results monotonic
+   once a merge runs: the newer `inserted_at` wins, and the
+   pre-fork row becomes unreachable.
+3. The streamer drains any in-flight flush *before* issuing
+   the DELETE (`handleReorg` step 1), and filters its
+   in-memory buffer to `height <= forkHeight` *before* the
+   DELETE returns — so the streamer itself never adds new
+   pre-fork rows during the window.
+
+TTL is the ultimate backstop: any row that escapes both the
+DELETE and the merge ages out within
+`CLICKHOUSE_NEW_TX_TTL_MINUTES`. This is consistent with the
+"best-effort unstable head" failure model — a sub-second race
+on rare reorgs is acceptable when the stable Parquet pipeline
+is the authoritative source.
+
 ## GraphQL routing
 
 When `CLICKHOUSE_URL` is set, `src/system.ts` wraps the SQLite

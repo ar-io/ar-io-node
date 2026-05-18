@@ -31,6 +31,12 @@ caching, ANS-104 bundle unbundling, and multi-source data retrieval.
   `WEBHOOK_INDEX_FILTER`) share a composable JSON filter system — see
   `docs/filters.md`.
 - Responses include trust headers indicating verification status.
+- HTTPSIG signs response headers (RFC 9421); `Content-Digest` is in
+  `CO_SIGNABLE_HEADERS` so when present it binds the body to the signature.
+  Cached and HEAD responses always emit it from the stored hash; small
+  uncached responses (≤ `HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES`, default 2 MiB)
+  buffer + hash to emit it. Larger uncached bodies stream without a body
+  digest. Chunks are bounded at 256 KiB so they always carry one.
 
 ## Gotchas
 

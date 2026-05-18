@@ -35,6 +35,18 @@ For each block range (see `src/tests/auto-verify/block-ranges.json`):
 Blocks are compared only across `sqlite` and `parquet` (ClickHouse has no
 standalone blocks table and bundle-parser doesn't produce blocks).
 
+The harness today runs a single **stable** pass: it flushes new tables to
+stable, exports Parquet, imports to ClickHouse, then collects from each
+source. The `sqlite` and `clickhouse` sources also implement
+`getUnstableTransactions` / `getUnstableDataItems` against the SQLite
+`new_*` tables and the ClickHouse `new_blocks` / `new_transactions`
+streaming-pipeline tables, projecting into sibling canonical types
+(`CanonicalUnstableTransaction` / `CanonicalUnstableDataItem`) that omit
+the offset/size pointer family and add inline `signature` / `owner` /
+denormalized block fields. Wiring an explicit unstable comparison pass
+through the harness (a separate run that skips the flush-to-stable step)
+is reserved for a follow-up — the adapter scaffolding is in place.
+
 ## Running
 
 ```sh

@@ -1198,3 +1198,54 @@ export const httpSigErrorsTotal = new promClient.Counter({
   name: 'httpsig_errors_total',
   help: 'Total HTTPSIG signing errors',
 });
+
+/**
+ * Counter of Content-Digest emission outcomes on data and chunk
+ * responses. Helps tune `HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES` from
+ * real traffic.
+ *
+ * Labels:
+ * - `source`: `cache_hit` | `computed_buffered` | `skipped_size_unknown`
+ *   | `skipped_too_large` | `skipped_disabled` | `overran_threshold`
+ *   | `short_read`
+ * - `path`: `data` | `chunk` — separates the two routes so chunks
+ *   (always small, always hashable) can be observed independently of
+ *   data responses.
+ */
+export const httpSigContentDigestTotal = new promClient.Counter({
+  name: 'httpsig_content_digest_total',
+  help: 'Content-Digest emission outcomes on data and chunk responses',
+  labelNames: ['source', 'path'],
+});
+
+// String-union types for the `httpSigContentDigestTotal` labels. The
+// underlying prom-client Counter accepts arbitrary strings, so use the
+// `incHttpSigContentDigest` wrapper below for compile-time typo safety
+// — direct `.inc({ source: 'whatever' })` calls bypass the check.
+export type HttpSigDigestSource =
+  | 'cache_hit'
+  | 'computed_buffered'
+  | 'skipped_disabled'
+  | 'skipped_size_unknown'
+  | 'skipped_too_large'
+  | 'overran_threshold'
+  | 'short_read';
+export type HttpSigDigestPath = 'data' | 'chunk';
+
+export function incHttpSigContentDigest(labels: {
+  source: HttpSigDigestSource;
+  path: HttpSigDigestPath;
+}): void {
+  httpSigContentDigestTotal.inc(labels);
+}
+
+/**
+ * Gauge of aggregate bytes currently held in memory by buffered-digest
+ * in-flight computations. Each in-flight buffered request contributes
+ * up to `HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES`. Watch this to detect
+ * concurrency-driven memory pressure on the digest path.
+ */
+export const httpSigBufferedBytesInflight = new promClient.Gauge({
+  name: 'httpsig_buffered_bytes_inflight',
+  help: 'Aggregate bytes held in memory by buffered-digest in-flight reads',
+});

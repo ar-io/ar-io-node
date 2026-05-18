@@ -380,6 +380,7 @@ When `OBSERVER_WALLET` is set, the gateway also creates an RSA attestation linki
 | HTTPSIG_KEY_FILE            | String  | data/keys/httpsig.pem  | Path to Ed25519 private key PEM file. Auto-generated on first startup if missing                                     |
 | KEYS_DATA_PATH              | String  | ./data/keys            | Host path for the keys volume mount (docker-compose only). Maps to `/app/data/keys` inside the container             |
 | HTTPSIG_BIND_REQUEST        | Boolean | true                   | Include `@method;req` and `@path;req` in signatures, binding each response to the specific request that triggered it |
+| HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES | Number  | 2097152 (2 MiB)        | Applies only to **uncached data responses** (`/raw`, `/tx`, ArNS-resolved, manifest-served). When > 0, uncached responses with a known body size at-or-below this byte threshold are buffered to compute SHA-256 and emit `Content-Digest`, which is in `CO_SIGNABLE_HEADERS` and therefore covered by the HTTPSIG signature. Cached and HEAD responses always emit the stored digest. Chunk responses (`/chunk/:offset`, `/chunk/:offset/data`) compute their digest inline from the in-memory 256 KiB chunk regardless of this setting and are not affected by it. Set to `0` to disable buffered emission for uncached small data responses; cached and chunk responses still emit `Content-Digest`. Non-numeric or negative values fall back to the default. **Independent of this setting**, `X-AR-IO-Digest` is emitted as an unsigned advisory header for any indexed transaction whose canonical hash is on file — including large uncached responses — so clients can verify served bytes against the chain value without an extra round-trip; it is overwritten by the actually-served-body hash when the buffered helper runs. |
 | HTTPSIG_UPLOAD_ATTESTATION  | Boolean | true                   | Upload the attestation to Arweave at startup (requires `OBSERVER_WALLET`). Set to false to skip upload               |
 | OBSERVER_WALLET             | String  | -                      | Arweave wallet address for attestation signing. Key file must exist at `<WALLETS_PATH>/<OBSERVER_WALLET>.json`       |
 | WALLETS_PATH                | String  | wallets                | Directory containing wallet JWK files                                                                                |
@@ -440,3 +441,32 @@ height that would be silently dropped by a `height >= :minHeight` predicate
 | CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE | Number  | 80            | Error rate (0–100) within the rolling window that trips the SQLite-leg breaker open                                                                                           |
 | CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS   | Number  | 60000         | Rolling window (ms) over which the SQLite-leg breaker's error rate is measured                                                                                                |
 | CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS           | Number  | 30000         | How long the SQLite-leg breaker stays open before transitioning to half-open for a trial request                                                                              |
+
+### Streaming pipeline (unstable head)
+
+When enabled, indexed blocks, L1 transactions, and ANS-104 data items are
+streamed into ClickHouse `new_blocks` / `new_transactions` so the unstable
+head (~18 confirmations of recent data) is queryable from CH directly
+instead of only from SQLite. The stable Parquet pipeline is unchanged —
+once a row stabilizes it lands in `transactions` via parquet-export and
+the unstable copy ages out via TTL. GraphQL merges the two transparently.
+
+Streaming is opt-in. The default-off mode preserves today's behavior
+exactly. Operators who want CH to be the sole read path can pair
+`CLICKHOUSE_STREAMING_ENABLED=true` with `CLICKHOUSE_GQL_SKIP_SQLITE_READS=true`.
+SQLite WRITES are unaffected by either flag — the indexer still feeds
+SQLite for the Parquet export pipeline.
+
+The unstable tables are created idempotently by `scripts/clickhouse-import`.
+On streaming-only deployments the streamer fails closed at startup if the
+tables are missing — operators run the import script once to bootstrap.
+
+| ENV_NAME                                                   | TYPE    | DEFAULT_VALUE | DESCRIPTION                                                                                                              |
+| ---------------------------------------------------------- | ------- | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| CLICKHOUSE_STREAMING_ENABLED                               | Boolean | false         | Master switch for the streaming pipeline. When true: indexer streams unstable rows into ClickHouse, GraphQL adds a third merge leg over `new_transactions`, and the SQLite leg drops to a tight-timeout fallback governed by `CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS`. When false (default): behavior is identical to the pre-streaming 2-leg path |
+| CLICKHOUSE_NEW_TX_TTL_MINUTES                              | Number  | 240           | TTL (minutes) for rows in `new_blocks` and `new_transactions`. Once a row stabilizes it lands in `transactions` via the Parquet pipeline; the unstable copy expires after this window. Default of 4h is comfortably past 18 confirmations × ~2 min/block plus a 1h auto-import cycle, so a stalled chain or delayed import won't expire rows before they stabilize. Read by `scripts/clickhouse-import` at schema-render time, not at runtime |
+| CLICKHOUSE_STREAMER_BATCH_SIZE                             | Number  | 500           | Maximum rows the streamer buffers before issuing a bulk INSERT. A time-based flush (`CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS`) ensures rows aren't held indefinitely when ingest is slow                                                                                                                                                                          |
+| CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS                      | Number  | 1000          | Time-based flush interval (ms). Caps unstable-head latency at this value plus the bulk-insert RTT                                                                                                                                                                                                                                                                |
+| CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE                         | Number  | 10000         | Hard cap on the streamer's in-memory buffer. Once exceeded, the streamer drops oldest rows to keep memory bounded under sustained CH unavailability — drops are logged and surface as a Prometheus metric. Dropped rows land via the stable Parquet pipeline once they stabilize                                                                                |
+| CLICKHOUSE_GQL_SKIP_SQLITE_READS                           | Boolean | false         | When true, GraphQL queries skip the SQLite leg entirely. Pairs with `CLICKHOUSE_STREAMING_ENABLED` for operators who want CH to be the sole read path. Has no effect on SQLite WRITES                                                                                                                                                                            |
+| CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS      | Number  | 250           | Replacement for `CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS` when streaming is enabled. In that mode CH-unstable covers the live tip and SQLite is a last-resort fallback for outages — a tight timeout keeps GraphQL responsive when CH itself is healthy. Distinct env var so operators running both modes on different nodes don't have to pick one envelope |
