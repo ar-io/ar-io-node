@@ -82,7 +82,7 @@ consulted.
 Verified by tracing `8Mvr`'s repair lifecycle in `ar-io-node-indexer-core-1`
 logs:
 
-```
+```text
 18:03:28.241  BundleRepairWorker   Retrying failed bundle  bundleId=8Mvr...
 18:03:28.242  TransactionFetcher   Queuing transaction...
 18:03:28.242  TransactionFetcher   Transaction already queued.
