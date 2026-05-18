@@ -8,16 +8,49 @@ import * as winston from 'winston';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
-import { BundleIndex } from '../types.js';
-import { TransactionFetcher } from './transaction-fetcher.js';
+import { BundleIndex, PartialJsonTransaction } from '../types.js';
+import { Ans104Unbundler, UnbundleableItem } from './ans104-unbundler.js';
 
 type CycleKind = 'retry' | 'timestamp_update' | 'backfill' | 'filter_reprocess';
+
+/**
+ * Builds a minimal PartialJsonTransaction-shaped item for re-queueing a
+ * bundle to the unbundler. The unbundler's `unbundle()` only reads `id`,
+ * the presence of `last_tx` (to discriminate L1 from BDI), and `index`
+ * from the item; the rest is consumed only when filter matching runs.
+ * With `bypassFilter=true` the filter doesn't read tags or other fields,
+ * so a minimal item suffices.
+ *
+ * `selectFailedBundleIds` (the SQL behind `BundleIndex.getFailedBundleIds`)
+ * already aliases `bundles.root_transaction_id AS id`, so the value we
+ * pass here is the parent L1's id for BDIs and the L1's own id for L1s.
+ * Both shapes route through the unbundler's L1 branch
+ * (`rootTxId = item.id`), which is correct: parsing the L1 from offset 0
+ * re-emits all children including any failed BDI nested under it, with
+ * proper offsets discovered by the parser.
+ */
+function buildRootBundleItem(rootTxId: string): UnbundleableItem {
+  const tx: PartialJsonTransaction = {
+    id: rootTxId,
+    signature: null,
+    format: 2,
+    last_tx: '',
+    owner: '',
+    target: '',
+    quantity: '0',
+    reward: '0',
+    data_size: '0',
+    data_root: '',
+    tags: [],
+  };
+  return { ...tx, index: -1 };
+}
 
 export class BundleRepairWorker {
   // Dependencies
   private log: winston.Logger;
   private bundleIndex: BundleIndex;
-  private txFetcher: TransactionFetcher;
+  private ans104Unbundler: Ans104Unbundler;
   private unbundledFilter: string;
   private indexFilter: string;
   private shouldBackfillBundles: boolean;
@@ -27,7 +60,7 @@ export class BundleRepairWorker {
   constructor({
     log,
     bundleIndex,
-    txFetcher,
+    ans104Unbundler,
     unbundleFilter,
     indexFilter,
     shouldBackfillBundles,
@@ -35,7 +68,7 @@ export class BundleRepairWorker {
   }: {
     log: winston.Logger;
     bundleIndex: BundleIndex;
-    txFetcher: TransactionFetcher;
+    ans104Unbundler: Ans104Unbundler;
     unbundleFilter: string;
     indexFilter: string;
     shouldBackfillBundles: boolean;
@@ -43,7 +76,7 @@ export class BundleRepairWorker {
   }) {
     this.log = log.child({ class: 'BundleRepairWorker' });
     this.bundleIndex = bundleIndex;
-    this.txFetcher = txFetcher;
+    this.ans104Unbundler = ans104Unbundler;
     this.unbundledFilter = unbundleFilter;
     this.indexFilter = indexFilter;
     this.shouldBackfillBundles = shouldBackfillBundles;
@@ -119,7 +152,32 @@ export class BundleRepairWorker {
         for (const bundleId of bundleIds) {
           this.log.info('Retrying failed bundle', { bundleId });
           await this.bundleIndex.saveBundleRetries(bundleId);
-          await this.txFetcher.queueTxId({ txId: bundleId });
+
+          // Queue directly to the unbundler rather than routing through
+          // TransactionFetcher → TransactionImporter → TX_INDEXED event →
+          // unbundler-subscription. The event-driven chain silently drops
+          // retries when the unbundler queue is full at the moment the
+          // event fires, and subsequent TxFetcher re-queues for the same
+          // already-imported L1 are no-ops, leaving the bundle stuck. A
+          // direct queueItem call ensures every retry cycle attempts an
+          // unbundle. With bypassFilter=true the filter doesn't re-run;
+          // we're explicitly retrying a bundle that was previously
+          // accepted, so the filter has nothing new to say. Queue-full
+          // backpressure still applies (see bundlesUnbundleSkippedCounter)
+          // — the call returns without parsing if the unbundler is
+          // saturated, letting the next cycle try again.
+          //
+          // Note: `bundleId` here is the bundle row's
+          // `root_transaction_id` (per the alias in `selectFailedBundleIds`).
+          // For BDIs that's the parent L1; the parser re-reads the
+          // parent and re-emits all children with correct offsets,
+          // which causes any nested BDI in the failed pool to re-enter
+          // the unbundle pipeline naturally.
+          await this.ans104Unbundler.queueItem(
+            buildRootBundleItem(bundleId),
+            false /* prioritized */,
+            true /* bypassFilter */,
+          );
           metrics.bundleRepairRetriesCounter.inc({ kind: 'retry' });
         }
       });

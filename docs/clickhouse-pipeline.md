@@ -210,6 +210,40 @@ Notes:
   it only for operator tooling — the export path itself is admin-API
   driven.
 
+#### Cycle latency tuning
+
+Each batch is dominated by the parquet-export status-poll loop (default
+`POLL_INTERVAL=5` in `scripts/parquet-export`), not by actual export or
+ClickHouse import work. On a busy gateway each batch typically takes
+~7–10 s of wall-clock, of which roughly 5 s is the single
+post-kickoff sleep before the script notices the export finished.
+
+A full cycle walks every batch from `minStableDataItem` up to
+`maxStableDataItem` — at the default `CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL=100`
+that can be tens of thousands of batches. Two levers materially shorten
+the cycle:
+
+1. **Raise `CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL`** (env on the
+   `clickhouse-auto-import` container). Bigger batches amortize the
+   fixed per-batch overhead across more heights. Going from 100 → 1000
+   typically cuts cycle time by ~5–10× because the per-batch poll +
+   HTTP overhead dominates over the linear-in-rows export cost.
+2. **Lower `POLL_INTERVAL`** in `scripts/parquet-export` (currently
+   only settable by editing the script in the auto-import image —
+   either a bind-mount override or an upstream image change). Dropping
+   from 5 s to 1 s removes most of the per-batch dead time.
+
+**Mixed partition sizes are safe to introduce.** ClickHouse's
+`ReplacingMergeTree` collapses duplicate rows across overlapping
+partitions. The dataset directory accumulates differently-named
+partition dirs (e.g. `height=776500-776599/` alongside
+`height=776000-776999/`); nothing in the pipeline enforces uniform
+partition width, and the Iceberg metadata generator (when enabled)
+treats partition dirs as opaque. Expect a one-time disk-space increase
+on the first cycle after the bump as the new wider partitions are
+written alongside the existing narrow ones. Old partitions can be
+deleted manually once the wider ones cover the same range.
+
 ### 5. Final-table lifecycle
 
 The final `transactions` table is a `ReplacingMergeTree(inserted_at)`
@@ -336,6 +370,21 @@ Spark), not the live ClickHouse instance.
   can run `OPTIMIZE TABLE transactions PARTITION ... FINAL` manually
   if duplicate counts grow, but this is heavy — prefer waiting for
   background merges under normal load.
+- **Prune no-op (`minStableDataItem` stuck).** The auto-import scopes
+  its prune to `indexed_at < batch_max_indexed_at` (snapshot taken
+  before the batch's export). A workload that continuously inserts
+  stable data items at *old* heights — most often a retroactive
+  bundle backfill (ArDrive, Solana registration re-enqueue, etc.) —
+  keeps refreshing `indexed_at` at low heights, so prune never matches
+  those rows and `minStableDataItem` never advances. Each cycle then
+  re-walks the same range from the same low floor, SQLite never
+  shrinks, and read/write performance degrades linearly with the
+  retained history. Diagnose via the
+  `min_stable_data_item_height` Prometheus gauge — a flat line over
+  multiple cycle periods is the smoking gun. Mitigation: pause the
+  retroactive workload until `minStableDataItem` catches up to the
+  tip, or accept the SQLite bloat and rely on ClickHouse via the
+  composite query path.
 
 ## Key code references
 

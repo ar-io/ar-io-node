@@ -398,6 +398,30 @@ export const lastHeightImported = new promClient.Gauge({
 });
 
 //
+// ClickHouse Export Visibility Metrics
+//
+
+// Lowest height still present in stable_data_items. Flat over multiple
+// auto-import cycles indicates the prune step is no-op-ing — usually
+// because backfill writes at low heights keep landing with an indexed_at
+// newer than the prune threshold, so SQLite never shrinks and every
+// cycle restarts from the same low bucket.
+export const minStableDataItemHeight = new promClient.Gauge({
+  name: 'min_stable_data_item_height',
+  help: 'Lowest height present in stable_data_items (MIN(height)).',
+});
+
+// Cached value of `SELECT max(height) FROM transactions` on ClickHouse.
+// Gap from `last_height_imported` is the ClickHouse sync lag — historical
+// GQL queries route to ClickHouse below this height, so a wide gap means
+// stable_data_items in the gap are invisible to GQL when
+// CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED is true.
+export const clickhouseMaxImportedHeight = new promClient.Gauge({
+  name: 'clickhouse_max_imported_height',
+  help: 'Max height present in the ClickHouse `transactions` table (refreshed lazily).',
+});
+
+//
 // Redis Cache Metrics
 //
 
@@ -528,6 +552,25 @@ export const getDataStreamSizeHistogram = new promClient.Histogram({
   help: 'Distribution of data stream sizes in bytes',
   labelNames: ['class', 'source', 'request_type'] as const,
   buckets: [102400, 1048576, 10485760, 104857600], // 100KB, 1MB, 10MB, 100MB
+});
+
+// Incremented when GatewaysDataSource sent a Range request but the upstream
+// answered with a full 200 body instead of a 206 partial-content response.
+// `outcome` distinguishes the cases:
+//   - 'sliced':                    we accepted the 200 and sliced locally
+//                                  (region.offset <= the configured cap)
+//   - 'rejected_offset_too_high':  region.offset exceeded the cap, so we
+//                                  rejected the response and let the data
+//                                  source chain fall through to the next
+//                                  priority tier instead of burning
+//                                  region.offset bytes of bandwidth
+// The metric surfaces which gateways are doing this and the per-gateway
+// rate of each outcome, so operators can tune
+// GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET.
+export const gatewayRangeIgnoredTotal = new promClient.Counter({
+  name: 'gateway_range_ignored_total',
+  help: 'Count of Range requests where the upstream returned a full 200 body, with outcome label for accepted (sliced locally) vs rejected (offset above threshold)',
+  labelNames: ['gateway_url', 'priority', 'outcome'] as const,
 });
 
 export const dataRequestChunksHistogram = new promClient.Histogram({

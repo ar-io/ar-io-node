@@ -577,15 +577,8 @@ export const txOffsetRepairWorker = new TransactionOffsetRepairWorker({
   txOffsetIndexer: txOffsetImporter,
 });
 
-export const bundleRepairWorker = new BundleRepairWorker({
-  log,
-  bundleIndex,
-  txFetcher,
-  unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
-  indexFilter: config.ANS104_INDEX_FILTER_STRING,
-  shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
-  filtersChanged: config.FILTER_CHANGE_REPROCESS,
-});
+// bundleRepairWorker is defined further down — it depends on
+// ans104Unbundler which is constructed later in this file.
 
 const peerRequestLimiter = new PeerRequestLimiter(
   config.PEER_MAX_CONCURRENT_OUTBOUND,
@@ -1207,6 +1200,18 @@ const ans104Unbundler = new Ans104Unbundler({
 });
 metrics.registerQueueLengthGauge('ans104Unbundler', {
   length: () => ans104Unbundler.queueDepth(),
+});
+
+// BundleRepairWorker depends on ans104Unbundler so it's constructed
+// here, after Ans104Unbundler is available.
+export const bundleRepairWorker = new BundleRepairWorker({
+  log,
+  bundleIndex,
+  ans104Unbundler,
+  unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
+  indexFilter: config.ANS104_INDEX_FILTER_STRING,
+  shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
+  filtersChanged: config.FILTER_CHANGE_REPROCESS,
 });
 
 export const verificationDataImporter = new DataImporter({

@@ -21,6 +21,7 @@ import winston from 'winston';
 import { toB64Url } from '../lib/encoding.js';
 import { isEmptyString } from '../lib/string.js';
 import * as metrics from '../metrics.js';
+import { startChildSpan } from '../tracing.js';
 
 type AttributeKind = 'owner' | 'signature';
 type AttributeSubject = 'data_item' | 'transaction';
@@ -133,85 +134,149 @@ export abstract class AttributeFetchers {
 
     log.debug('Fetching data from parent', { parentId, offset, size });
 
-    const { stream } = await this.dataSource.getData({
-      id: parentId,
-      region: {
-        offset,
-        size,
+    // Investigation span (PE-9098): wraps the upstream fetch + drain so
+    // SequentialDataSource / ReadThroughDataCache child spans nest under
+    // this attempt and identify which source served the response when the
+    // overage forensics fire below.
+    const span = startChildSpan('AttributeFetchers.fetchDataFromParent', {
+      attributes: {
+        'data.id': parentId,
+        'data.region.offset': offset,
+        'data.region.size': size,
       },
-      signal,
     });
 
-    // Pre-allocated, fixed-size buffer with offset writes. Avoids the
-    // O(N²) Buffer.concat-per-chunk shape and removes the slot-8 pinned-
-    // accumulator leak. If upstream emits more bytes than requested,
-    // destroy the stream and throw — do not silently buffer past `size`.
-    // If the caller aborts mid-stream we tear down the upstream stream
-    // and rethrow the AbortError so callers can clean up promptly.
-    const buffer = Buffer.alloc(size);
-    let bytesRead = 0;
-
-    const onAbort = () => {
-      if (typeof (stream as { destroy?: () => void }).destroy === 'function') {
-        (stream as { destroy: (err?: Error) => void }).destroy(
-          signal?.reason instanceof Error
-            ? signal.reason
-            : new Error('Aborted'),
-        );
-      }
-    };
-    if (signal !== undefined) {
-      if (signal.aborted) {
-        onAbort();
-        throw signal.reason ?? new Error('Aborted');
-      }
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-
     try {
-      for await (const chunk of stream) {
-        if (bytesRead + chunk.length > size) {
-          if (
-            typeof (stream as { destroy?: () => void }).destroy === 'function'
-          ) {
-            (stream as { destroy: () => void }).destroy();
-          }
-          throw new Error(
-            `fetchDataFromParent: upstream returned more bytes than requested ` +
-              `(parentId=${parentId}, requestedSize=${size}, ` +
-              `bytesAtOverage=${bytesRead + chunk.length})`,
+      const data = await this.dataSource.getData({
+        id: parentId,
+        region: {
+          offset,
+          size,
+        },
+        parentSpan: span,
+        signal,
+      });
+      const { stream } = data;
+      span.setAttributes({
+        'data.cached': data.cached,
+        'data.trusted': data.trusted,
+        'data.upstream_size': data.size,
+        'data.upstream_total_size': data.totalSize,
+      });
+
+      // Pre-allocated, fixed-size buffer with offset writes. Avoids the
+      // O(N²) Buffer.concat-per-chunk shape and removes the slot-8 pinned-
+      // accumulator leak. If upstream emits more bytes than requested,
+      // destroy the stream and throw — do not silently buffer past `size`.
+      // If the caller aborts mid-stream we tear down the upstream stream
+      // and rethrow the AbortError so callers can clean up promptly.
+      const buffer = Buffer.alloc(size);
+      let bytesRead = 0;
+      // Forensic capture: first 32 bytes of the FIRST emitted chunk. Used
+      // only by the overage log path to distinguish "upstream honored
+      // offset but ignored size" (prefix looks like signature/owner bytes)
+      // from "upstream ignored region entirely" (prefix looks like a
+      // bundle header — leading zeros + small item count + 64-byte item
+      // headers).
+      let firstChunkPrefixHex: string | undefined;
+      let firstChunkLength: number | undefined;
+
+      const onAbort = () => {
+        if (
+          typeof (stream as { destroy?: () => void }).destroy === 'function'
+        ) {
+          (stream as { destroy: (err?: Error) => void }).destroy(
+            signal?.reason instanceof Error
+              ? signal.reason
+              : new Error('Aborted'),
           );
         }
-        chunk.copy(buffer, bytesRead);
-        bytesRead += chunk.length;
-      }
-    } catch (error) {
-      // Ensure the buffer reference can be GC'd promptly even when the
-      // for-await yields back to a still-pending Promise. Forward the
-      // caught error to destroy() so the abort reason is preserved when
-      // upstream is being torn down due to AbortSignal — otherwise the
-      // first destroy(reason) from the abort handler would be overwritten
-      // by a no-arg destroy() here.
-      const s = stream as {
-        destroy?: (err?: Error) => void;
-        destroyed?: boolean;
       };
-      if (typeof s.destroy === 'function' && s.destroyed !== true) {
-        s.destroy(error as Error);
+      if (signal !== undefined) {
+        if (signal.aborted) {
+          onAbort();
+          throw signal.reason ?? new Error('Aborted');
+        }
+        signal.addEventListener('abort', onAbort, { once: true });
       }
+
+      try {
+        for await (const chunk of stream) {
+          if (firstChunkPrefixHex === undefined) {
+            firstChunkLength = chunk.length;
+            firstChunkPrefixHex = chunk
+              .subarray(0, Math.min(32, chunk.length))
+              .toString('hex');
+          }
+          if (bytesRead + chunk.length > size) {
+            if (
+              typeof (stream as { destroy?: () => void }).destroy === 'function'
+            ) {
+              (stream as { destroy: () => void }).destroy();
+            }
+            // Investigation log (PE-9098): emit forensic context on
+            // overage BEFORE re-throwing so the source can be identified
+            // from the nested OTel span + the hex prefix tells us whether
+            // the source ignored `region` entirely or just ignored `size`.
+            log.warn('fetchDataFromParent overage forensics', {
+              parentId,
+              requestedOffset: offset,
+              requestedSize: size,
+              bytesAtOverage: bytesRead + chunk.length,
+              firstChunkLength,
+              firstChunkPrefixHex,
+              upstreamCached: data.cached,
+              upstreamTrusted: data.trusted,
+              upstreamSize: data.size,
+              upstreamTotalSize: data.totalSize,
+            });
+            span.setAttributes({
+              'overage.bytes_at_overage': bytesRead + chunk.length,
+              'overage.first_chunk_length': firstChunkLength,
+              'overage.first_chunk_prefix_hex': firstChunkPrefixHex,
+            });
+            throw new Error(
+              `fetchDataFromParent: upstream returned more bytes than requested ` +
+                `(parentId=${parentId}, requestedSize=${size}, ` +
+                `bytesAtOverage=${bytesRead + chunk.length})`,
+            );
+          }
+          chunk.copy(buffer, bytesRead);
+          bytesRead += chunk.length;
+        }
+      } catch (error) {
+        // Ensure the buffer reference can be GC'd promptly even when the
+        // for-await yields back to a still-pending Promise. Forward the
+        // caught error to destroy() so the abort reason is preserved when
+        // upstream is being torn down due to AbortSignal — otherwise the
+        // first destroy(reason) from the abort handler would be overwritten
+        // by a no-arg destroy() here.
+        const s = stream as {
+          destroy?: (err?: Error) => void;
+          destroyed?: boolean;
+        };
+        if (typeof s.destroy === 'function' && s.destroyed !== true) {
+          s.destroy(error as Error);
+        }
+        throw error;
+      } finally {
+        signal?.removeEventListener('abort', onAbort);
+      }
+
+      if (bytesRead !== size) {
+        throw new Error(
+          `fetchDataFromParent: short read from upstream ` +
+            `(parentId=${parentId}, requestedSize=${size}, actualSize=${bytesRead})`,
+        );
+      }
+
+      return toB64Url(buffer);
+    } catch (error) {
+      span.recordException(error as Error);
       throw error;
     } finally {
-      signal?.removeEventListener('abort', onAbort);
+      span.end();
     }
-
-    if (bytesRead !== size) {
-      throw new Error(
-        `fetchDataFromParent: short read from upstream ` +
-          `(parentId=${parentId}, requestedSize=${size}, actualSize=${bytesRead})`,
-      );
-    }
-
-    return toB64Url(buffer);
   }
 
   protected async getDataItemAttributes(

@@ -1295,6 +1295,7 @@ export class StandaloneSqliteDatabaseWorker {
     const bundleStats = this.stmts.bundles.selectBundleStats.get();
     const dataItemStats = this.stmts.bundles.selectDataItemStats.get();
 
+
     const now = currentUnixTimestamp();
 
     const warnings: string[] = [];
@@ -3469,8 +3470,27 @@ export class StandaloneSqliteDatabase
     }
   }
 
-  getDebugInfo(): Promise<DebugInfo> {
-    return this.queueRead('debug', 'getDebugInfo', undefined);
+  async getDebugInfo(): Promise<DebugInfo> {
+    const debugInfo = (await this.queueRead(
+      'debug',
+      'getDebugInfo',
+      undefined,
+    )) as DebugInfo;
+
+    // Worker threads have their own prom-client module instance, so a
+    // gauge set inside computeDebugInfo() never reaches the main-thread
+    // Prometheus registry served by `/ar-io/__gateway_metrics`. Set it
+    // here in the main thread after the worker returns.
+    const minStableHeight = debugInfo?.heights?.minStableDataItem;
+    if (
+      typeof minStableHeight === 'number' &&
+      Number.isFinite(minStableHeight) &&
+      minStableHeight >= 0
+    ) {
+      metrics.minStableDataItemHeight.set(minStableHeight);
+    }
+
+    return debugInfo;
   }
 
   saveDataContentAttributes({
