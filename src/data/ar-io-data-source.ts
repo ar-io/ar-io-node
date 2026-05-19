@@ -335,8 +335,26 @@ export class ArIODataSource implements ContiguousDataSource {
 
             // Defer limiter release until the stream is fully consumed so the
             // slot accurately reflects active outbound transfers.
+            //
+            // Listen on 'end', 'error', AND 'close' rather than 'close' alone:
+            // for HTTP IncomingMessage streams consumed via pipeline() under a
+            // keepAlive http.Agent, 'close' can fire late or not at all (the
+            // socket is returned to the pool without the response being
+            // destroyed). That left limiter slots leaked permanently — after
+            // ~30 min of activity every peer hit maxConcurrent, tryAcquire
+            // returned false for all candidates, and getData() stopped
+            // dispatching to any peer (download pipeline wedged with the
+            // bundleDataImporter queue pegged at its cap, no errors logged).
+            // 'end' is the canonical "data fully received" event and fires
+            // reliably for normal completion; 'error' covers explicit
+            // destroys (stall timeout, wall-clock cap, peer aborts).
+            // released guard makes the handler idempotent so multiple events
+            // do not double-release.
             streamPeerCounts.set(peer, (streamPeerCounts.get(peer) ?? 0) + 1);
-            contiguousData.stream.once('close', () => {
+            let released = false;
+            const releaseSlot = () => {
+              if (released) return;
+              released = true;
               const count = streamPeerCounts.get(peer) ?? 1;
               if (count <= 1) {
                 streamPeerCounts.delete(peer);
@@ -344,7 +362,10 @@ export class ArIODataSource implements ContiguousDataSource {
                 streamPeerCounts.set(peer, count - 1);
               }
               this.peerRequestLimiter?.release(peer);
-            });
+            };
+            contiguousData.stream.once('end', releaseSlot);
+            contiguousData.stream.once('error', releaseSlot);
+            contiguousData.stream.once('close', releaseSlot);
 
             return contiguousData;
           } catch (error: any) {
