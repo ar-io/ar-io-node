@@ -62,10 +62,15 @@ export const isAcceptableBundleContentType = (
   contentType: string | undefined,
 ): boolean => {
   if (contentType === undefined) return true;
+  // Real upstreams have been observed to send variant casings and
+  // whitespace (`Application/Octet-Stream`, ` application/octet-stream `).
+  // Normalize before prefix-matching so we don't reject valid responses
+  // on a cosmetic difference.
+  const normalized = contentType.trim().toLowerCase();
   return (
-    contentType.startsWith('application/octet-stream') ||
-    contentType.startsWith('application/x-arweave-data') ||
-    contentType.startsWith('binary/octet-stream')
+    normalized.startsWith('application/octet-stream') ||
+    normalized.startsWith('application/x-arweave-data') ||
+    normalized.startsWith('binary/octet-stream')
   );
 };
 

@@ -379,10 +379,22 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   ] as string | undefined;
                   if (!acceptContentType(upstreamContentType)) {
                     response.data.destroy();
+                    // Strip params (`; charset=utf-8`), trim, lowercase
+                    // before using as a metric label so Prometheus doesn't
+                    // explode into one series per minor variant.
+                    const normalizedContentType = upstreamContentType
+                      ?.split(';', 1)[0]
+                      ?.trim()
+                      .toLowerCase();
+                    const contentTypeLabel =
+                      normalizedContentType !== undefined &&
+                      normalizedContentType !== ''
+                        ? normalizedContentType
+                        : 'unknown';
                     metrics.gatewayContentTypeRejectedTotal.inc({
                       gateway_url: gatewayUrl,
                       priority: String(priority),
-                      content_type: upstreamContentType ?? 'unknown',
+                      content_type: contentTypeLabel,
                     });
                     span.addEvent(
                       'Gateway response content-type rejected by caller',

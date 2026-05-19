@@ -39,6 +39,21 @@ describe('isAcceptableBundleContentType (PE-9099)', () => {
     assert.equal(isAcceptableBundleContentType('binary/octet-stream'), true);
   });
 
+  it('accepts variant casings and surrounding whitespace', () => {
+    assert.equal(
+      isAcceptableBundleContentType('Application/Octet-Stream'),
+      true,
+    );
+    assert.equal(
+      isAcceptableBundleContentType('  application/octet-stream  '),
+      true,
+    );
+    assert.equal(
+      isAcceptableBundleContentType('APPLICATION/X-ARWEAVE-DATA'),
+      true,
+    );
+  });
+
   it('rejects text/html (the bundlr.network parking-page poison)', () => {
     assert.equal(
       isAcceptableBundleContentType('text/html; charset=utf-8'),
