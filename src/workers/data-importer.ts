@@ -117,10 +117,7 @@ export class DataImporter {
           { outcome: 'success' },
           elapsedMs / 1000,
         );
-        metrics.bundleDownloadSizeBytes.observe(
-          { outcome: 'success' },
-          size,
-        );
+        metrics.bundleDownloadSizeBytes.observe({ outcome: 'success' }, size);
         const hasIndexProperty = this.hasIndexPropery(item);
         log.info('Bundle download completed', {
           elapsedMs,
@@ -140,10 +137,7 @@ export class DataImporter {
           { outcome: 'error' },
           elapsedMs / 1000,
         );
-        metrics.bundleDownloadSizeBytes.observe(
-          { outcome: 'error' },
-          size,
-        );
+        metrics.bundleDownloadSizeBytes.observe({ outcome: 'error' }, size);
         log.error('Bundle download failed', {
           elapsedMs,
           size,
