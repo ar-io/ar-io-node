@@ -109,13 +109,15 @@ export class DataImporter {
 
     // Phase counters: lets operators see *where* a worker is stuck when
     // the bundle pipeline wedges (queue pegged, no completions, no errors).
-    //   started - got_data       = workers currently inside getData()
-    //   got_data - stream_ended  - stream_errored = workers waiting on
-    //                                               stream end/error
-    // If (started - got_data) keeps climbing while completion counters
-    // flatline, the hang is in the source chain (cache lookup, sequential
-    // source dispatch, or one of the inner sources). If the gap is on the
-    // stream side, the hang is in the cache write or stream consumption.
+    //   started - got_data - getData_errored        = workers currently
+    //                                                 inside getData()
+    //   got_data - stream_ended - stream_errored    = workers waiting on
+    //                                                 stream end/error
+    // If (started - got_data - getData_errored) keeps climbing while
+    // completion counters flatline, the hang is in the source chain
+    // (cache lookup, sequential source dispatch, or one of the inner
+    // sources). If the gap is on the stream side, the hang is in the
+    // cache write or stream consumption.
     metrics.dataImporterPhaseCounter.inc({ phase: 'started' });
 
     // Instrument the source-chain rejection path (all sources exhausted,
