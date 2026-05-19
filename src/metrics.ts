@@ -158,6 +158,22 @@ export const dataItemsQueuedCounter = new promClient.Counter({
   labelNames: ['bundle_format'],
 });
 
+// Per-phase counters for DataImporter.download(). Exposes where a worker
+// is when the bundle pipeline wedges (queue pegged at cap, no completions).
+//   started:        function entry, before any await
+//   got_data:       contiguousDataSource.getData() returned successfully
+//   getData_errored: getData() rejected (peer exhaustion, network error, etc.)
+//   stream_ended:   response stream emitted 'end' (full read)
+//   stream_errored: response stream emitted 'error' (stall, abort, peer cut)
+// Read as deltas:
+//   (started - got_data - getData_errored)            = workers stuck in source chain
+//   (got_data - stream_ended - stream_errored)        = workers waiting on stream events
+export const dataImporterPhaseCounter = new promClient.Counter({
+  name: 'data_importer_worker_phase_total',
+  help: 'DataImporter worker progression through download() phases. Subtract pairs to find stuck workers.',
+  labelNames: ['phase'],
+});
+
 export const dataItemsIndexedCounter = new promClient.Counter({
   name: 'data_items_indexed_total',
   help: 'Count of data items indexed',
