@@ -14,6 +14,13 @@ describe('isAcceptableBundleContentType (PE-9099)', () => {
     assert.equal(isAcceptableBundleContentType(undefined), true);
   });
 
+  it('accepts null (SQLite-stored attributes surface as JS null)', () => {
+    // Regression guard: prior version crashed with
+    // "Cannot read properties of null (reading 'trim')" when called
+    // from ReadThroughDataCache with a NULL stored content_type.
+    assert.equal(isAcceptableBundleContentType(null), true);
+  });
+
   it('accepts application/octet-stream', () => {
     assert.equal(
       isAcceptableBundleContentType('application/octet-stream'),

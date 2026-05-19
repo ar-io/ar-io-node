@@ -59,9 +59,15 @@ const DEFAULT_STREAM_TIMEOUT = 1000 * 30; // 30 seconds
  *     from older upstreams (PE-9099 investigation, 2026-05-18).
  */
 export const isAcceptableBundleContentType = (
-  contentType: string | undefined,
+  contentType: string | null | undefined,
 ): boolean => {
-  if (contentType === undefined) return true;
+  // Stored attributes in SQLite surface NULL as JS `null`, not
+  // `undefined`. Treat both as "no content-type known" and accept.
+  // (A previous version handled only `undefined` and crashed on `null`
+  // when called from ReadThroughDataCache's eviction check — every
+  // bundle whose stored contentType was NULL would throw "Cannot read
+  // properties of null (reading 'trim')" and the unbundle would fail.)
+  if (contentType === undefined || contentType === null) return true;
   // Real upstreams have been observed to send variant casings and
   // whitespace (`Application/Octet-Stream`, ` application/octet-stream `).
   // Normalize before prefix-matching so we don't reject valid responses
