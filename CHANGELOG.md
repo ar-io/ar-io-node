@@ -8,6 +8,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+- The bundle retry-loop SELECT (`selectFailedBundleIds`) is now ~200× faster
+  after correcting the index column. The pre-existing
+  `import_attempt_last_retried_idx` had been on `import_attempt_count` since
+  the Jan 2025 retry-stats refactor, but the query orders by
+  `retry_attempt_count` — a different column. Replaced with
+  `bundles_active_retry_priority_idx` on `(last_fully_indexed_at,
+  retry_attempt_count, last_retried_at)`. Live measurement: 4.32 s → 20.5 ms
+  per call.
+
+## [Release 78] - 2026-05-08
+
+This is a **recommended release** focused on **request-cancellation
+plumbing**, **memory-safety hardening across data fetch paths**, and
+**indexer backpressure**. Key highlights include **end-to-end
+`AbortSignal` threading through GraphQL resolvers, attribute fetchers,
+chunk fetches, and the trusted-node request queue** so client
+disconnects no longer leave zombie work pinned on shared queues; a
+**byte-range / Range-request hardening pass (PE-9081)** that closes
+multiple paths through which oversized or truncated upstream responses
+silently pinned large `Buffer`s in the external memory pool; and
+**indexer backpressure** via batched matched-item draining
+(`BUNDLE_DATA_ITEM_DRAIN_BATCH`) and hard caps on the
+`DataItemIndexer` / `Ans104DataIndexer` queues with drop-on-full
+recovery via `bundle-repair-worker`. Other notable fixes: stale ArNS
+resolution-failure caching that poisoned upstream nginx caches with
+the "unregistered" placeholder (PE-9072), a `CompositeArNSResolver`
+fast-fail fallback gap during AO/CU flaps (PE-9075), a bundles
+root-atom consistency bug that crashed the SQLite worker on optimistic
+indexing races (PE-9073), an envoy `/tx` prefix routing fix for txids
+starting with `tx` (PE-9079), an export-parquet metric-cardinality
+bloat fix (PE-9078), an `Ans104OffsetSource` stream-lifecycle leak
+(PE-9077), and a runtime dependency declaration for
+`@ardrive/turbo-sdk` (PE-9074). Adds a substantial set of new
+observability metrics for GraphQL request volume + cancellations,
+attribute-fetch source attribution, and Node.js process / event-loop
+saturation.
+
+### Added
+
 - **`CACHE_APEX_MAX_AGE` Configuration**: New environment variable that
   bounds the `Cache-Control` `max-age` returned for `APEX_TX_ID` responses
   (default 3600s, 1 hour) and adds the `must-revalidate` directive.
@@ -15,6 +58,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   serving the previous content for the data-layer cache lifetime
   (potentially up to `CACHE_STABLE_MAX_AGE` with `immutable`). See
   PE-9072.
+
+- **GraphQL Request Cancellation + Source-Attribution Metrics
+  (PE-9087)**: A single `AbortSignal` composed from the express request
+  close event and a configurable server-side deadline is now threaded
+  through every GraphQL resolver and downstream attribute fetcher.
+  When a client disconnects (or the deadline elapses), in-flight
+  attribute fetches and `arweaveClient` requests cancel immediately
+  instead of running to completion against arweave.net while their
+  results are discarded. New env var `GRAPHQL_RESOLVER_DEADLINE_MS`
+  (default 12000ms; set to `0` to disable) caps server-side resolver
+  runtime. New metrics: `graphql_requests_total` (denominator for
+  cancellation-rate alerts), `graphql_resolver_cancellations_total`
+  with `{reason="client_disconnect"|"deadline_exceeded"}`,
+  `attribute_fetch_total` and `attribute_fetch_duration_seconds`
+  with `{kind, subject, source, outcome}` labels for end-to-end
+  source attribution of L1 attribute fetches. Also fixes a bug where
+  `getTransactionAttributes` always returned `owner: null` for L1
+  transactions even when the wallet was already cached, forcing every
+  owner query to round-trip to arweave.net.
+
+- **Indexer Backpressure: Queue Caps + Batched Matched-Item Drain
+  (PE-9089 + PE-9086)**: The unbundler's matched-item firehose now
+  buffers in-process and drains in `setImmediate` batches sized by
+  `BUNDLE_DATA_ITEM_DRAIN_BATCH` (default 100), guaranteeing
+  event-loop turns for SQLite worker replies and other I/O when
+  large bundles produce thousands of cross-thread messages per
+  second. Buffer depth is exposed as
+  `queue_length{queue_name="matchedItemBuffer"}`. The
+  `DataItemIndexer` and `Ans104DataIndexer` queues now enforce hard
+  caps (`DATA_ITEM_INDEXER_QUEUE_SIZE` and
+  `ANS104_DATA_INDEXER_QUEUE_SIZE`, both default 500000; set `0` to
+  disable). Non-prioritized items pushed at the cap are dropped and
+  counted in `data_items_dropped_total{queue_name}`; the
+  `bundle-repair-worker` recovers the dropped items on its next
+  cycle, so dropping is a backpressure release valve, not data loss.
+  Backpressure and depth checks are now O(1) tracked counters
+  instead of linked-list walks.
+
+- **Node.js Process and Event-Loop Observability Metrics**: The
+  default `prom-client` collectors are now enabled, exposing
+  `process_resident_memory_bytes`, `nodejs_heap_size_*`,
+  `nodejs_eventloop_lag_seconds`, `nodejs_gc_duration_seconds`, and
+  `nodejs_active_handles_total`. Adds a new
+  `nodejs_event_loop_utilization` gauge (0..1, sampled at scrape
+  time) — the most reliable signal for detecting main-thread
+  saturation, since lag percentiles can read near-zero while the
+  loop is fully pegged. Adds a `bundle_data_item_count` histogram
+  (buckets up to 5M items) so heap and queue spikes can be
+  correlated with the bundle size that triggered them rather than
+  with aggregate ingest throughput.
 
 ### Changed
 
@@ -71,6 +164,100 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   comment-documented intent. New metric
   `arns_cached_resolution_fallback_on_empty_total` counts how often
   this fires.
+
+- **Byte-Range and Range-Request Hardening (PE-9081)**: Closes a set
+  of related defects across the byte-range fetch paths that allowed
+  oversized or truncated upstream responses to silently pass through
+  to consumers and pin large `Buffer`s in the external memory pool.
+  All byte-range sources now enforce a symmetric contract: the
+  upstream `content-length` must equal the requested region size, and
+  responses that exceed the requested range are truncated by a
+  bounded transform that destroys the underlying socket on close.
+  `attribute-fetchers` rejects signature/owner attributes whose size
+  is `0` or undefined, and `fetchDataFromParent` pre-allocates its
+  result buffer and aborts on the first oversize chunk (closing an
+  unbounded accumulator path). `contiguous-data-byte-range-source`
+  and `http-byte-range-source` now pass `maxContentLength` to axios
+  to bound client-side buffering, and `ar-io-data-source` /
+  `gateways-data-source` apply matching `206`-when-`Range`,
+  `content-length` guards, and per-region byte caps.
+
+- **AbortSignal Threading Through Chunk Fetches and Trusted-Node
+  Path (PE-9076)**: When a client request aborted, the cancellation
+  signal had no path into `trustedNodeRequestQueue` or the
+  bucket-wait loops, so abandoned client requests still issued HTTP
+  calls to arweave.net whose responses had nowhere to go.
+  `trustedNodeRequest` now checks `signal.throwIfAborted()` at
+  entry, after the bucket wait, and between tokens, releasing queue
+  capacity immediately on disconnect. A new `abortablePromiseRace`
+  helper isolates caller signals from the shared
+  `chunkPromiseCache`, so a cancelled caller bails out without
+  cancelling the underlying fetch for other waiters.
+
+- **ANS-104 Offsets Stream Lifecycle Repair (PE-9077)**: Parsing
+  paths in `Ans104OffsetSource` consume only a bounded prefix of the
+  stream returned by `getData` and previously dropped the reference
+  without destroying the stream. Under axios `responseType: 'stream'`
+  the unread tail stayed pinned in the `IncomingMessage` external
+  buffer pool — invisible to V8 — until the underlying socket was
+  destroyed by eventual GC or unrelated cleanup. The parsing paths
+  in `parseDataItemHeader`, `extractDataItemMeta`, and
+  `getDataItemOffset` now explicitly destroy the stream on both
+  success and error.
+
+- **Envoy `/tx` Path Routing Fix (PE-9079)**: A redundant `/tx`
+  prefix route in `envoy.template.yaml` shadowed the more specific
+  `/tx/` rule for transactions whose ids start with the literal
+  string "tx". Those requests were being routed to the
+  `trusted_arweave_nodes` cluster intended for header-prefixed
+  paths instead of the gateway data path, producing incorrect
+  cache headers and skipping peer diversity. The redundant route
+  is removed.
+
+- **Export-Parquet Job-Status Metric Cardinality
+  Normalization (PE-9078)**: The
+  `/ar-io/admin/export-parquet/status/:jobId` route was falling
+  through to the admin catch-all in the `normalizePath` helper, so
+  every `randomUUID`-generated `jobId` became a permanent label
+  value on `http_request_duration_seconds`. Combined with
+  clickhouse-auto-import's polling cadence, metric cardinality grew
+  unbounded over time and inflated scrape latency on indexer
+  deployments. The path is now explicitly normalized alongside the
+  singleton bundle-status endpoint.
+
+- **Bundles Root-Atom Consistency + Optimistic-Indexing Fix
+  (PE-9073)**: Fixes two interacting defects that caused the
+  indexer's SQLite worker to crash when the optimistic data-item
+  admin endpoint (`/ar-io/admin/queue-data-item`) raced with
+  ANS-104 unbundling. The `new_data_items` table enforces a "root
+  atom" invariant on eleven bundling-metadata fields (`parent_id`,
+  `root_transaction_id`, `root_parent_offset`, `data_offset`,
+  `offset`, `size`, `signature_offset`, `signature_size`,
+  `owner_offset`, `owner_size`, `signature_type`) — they must move
+  together or remain entirely `NULL` together. The admin endpoint
+  unconditionally nulled three of them on every re-POST, so
+  repeated admin POSTs after an unbundle regressed back-filled
+  values to `NULL` and the next flush failed `NOT NULL` checks.
+  The admin path now uses a dedicated `insertOptimisticDataItem`
+  (`INSERT` with the root atom hardcoded `NULL`) and the unbundler
+  uses `upsertNewDataItem` (atomic root-atom `UPDATE` with a
+  `COALESCE`-protected safety net). GraphQL signature/owner
+  resolvers guard against incomplete root-atom rows and return
+  `undefined` with a warning rather than throwing. The
+  `/ar-io/admin/debug` SQLite snapshot is now cached for
+  `GET_DEBUG_INFO_CACHE_TTL_MS` (default 5 min, set `0` to
+  disable), since each call runs unfiltered `COUNT(*)` scans on
+  the SQLite worker and frequent polling was monopolizing the
+  debug worker.
+
+- **`@ardrive/turbo-sdk` Moved to Runtime Dependencies (PE-9074)**:
+  `@ardrive/turbo-sdk` is required at runtime by the HTTPSIG
+  attestation upload path (`src/lib/httpsig-upload.ts`) but was
+  declared in `devDependencies`. The production Dockerfile's
+  `yarn install --production` pruned it, producing a silent
+  `MODULE_NOT_FOUND` at upload time and a fallback to the L1
+  upload path — which fails when the gateway wallet has no AR
+  balance. Now declared as a runtime dependency.
 
 ## [Release 77] - 2026-04-24
 

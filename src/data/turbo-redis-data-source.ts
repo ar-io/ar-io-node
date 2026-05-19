@@ -162,12 +162,15 @@ export class TurboRedisDataSource implements ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
+    signal?.throwIfAborted();
     const span = startChildSpan(
       'TurboRedisDataSource.getData',
       {
@@ -230,6 +233,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
             size: region?.size ?? payloadLength,
           },
           parentSpan: span,
+          signal,
         });
         if (nestedDataItemDataStream?.stream === undefined) {
           const errMsg = `Turbo Elasticache: Parent ${parentDataItemId} payload data not found for nested data item ${id}`;
@@ -308,6 +312,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
           payloadStartOffset: metadata.payloadStartOffset,
           region,
           requestAttributes,
+          signal,
         });
         // .then((dataStream) => {
         //   TODO: Distinguish between 'cache' and 'fs' hits when fs is introduced
@@ -426,13 +431,16 @@ export class TurboRedisDataSource implements ContiguousDataSource {
     payloadStartOffset,
     region,
     requestAttributes,
+    signal,
   }: {
     dataItemId: string;
     payloadContentType: string;
     payloadStartOffset: number;
     region?: Region;
     requestAttributes?: RequestAttributes;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
+    signal?.throwIfAborted();
     const rawDataItemBuffer = await this.fire(() =>
       this.redis.getBuffer(`raw_{${dataItemId}}`),
     ).catch(() => undefined);

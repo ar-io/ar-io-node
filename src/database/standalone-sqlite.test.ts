@@ -343,6 +343,91 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('getTransactionAttributes', () => {
+    // Regression coverage for a defect introduced in commit 0bcccf6e where
+    // the worker checked `row.owner_key` (a column the SQL never returns)
+    // instead of `row.owner`. The bug always reported owner=null even when
+    // wallets.public_modulus was populated, forcing OwnerFetcher to fall
+    // through to chainSource for every L1-tx owner query. No prior test
+    // exercised the SQL→object boundary; AttributeFetcher tests mocked the
+    // dataIndex and the resolver tests used fixtures with inline ownerKey,
+    // so the typo went undetected. Keep these tests focused on that seam.
+    const id = '_H6KgmI_ZfSdSlf9r2xzDh_ebJnvQtTYLUBQlnRjIdM';
+    const ownerAddress = Buffer.alloc(32, 0xab);
+    const publicModulus = Buffer.alloc(512, 0xcd);
+    const signature = Buffer.alloc(512, 0xef);
+
+    const insertTx = (sigValue: Buffer | null) => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, signature, quantity, reward, tag_count,
+             offset, data_size)
+           VALUES (@id, 1, 0, 2, @last_tx,
+             @owner_address, @signature, '0', '0', 0,
+             0, 0)`,
+        )
+        .run({
+          id: fromB64Url(id),
+          last_tx: Buffer.alloc(32),
+          owner_address: ownerAddress,
+          signature: sigValue,
+        });
+    };
+
+    const insertWallet = () => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO wallets (address, public_modulus)
+           VALUES (@address, @public_modulus)`,
+        )
+        .run({ address: ownerAddress, public_modulus: publicModulus });
+    };
+
+    beforeEach(() => {
+      coreDb.prepare(`DELETE FROM stable_transactions WHERE id = @id`).run({
+        id: fromB64Url(id),
+      });
+      coreDb
+        .prepare(`DELETE FROM wallets WHERE address = @address`)
+        .run({ address: ownerAddress });
+    });
+
+    it('returns the wallet public_modulus as owner when joined', () => {
+      insertTx(signature);
+      insertWallet();
+
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs?.owner, toB64Url(publicModulus));
+      assert.equal(attrs?.signature, toB64Url(signature));
+    });
+
+    it('returns owner=null when wallets.public_modulus is missing', () => {
+      // No wallet row inserted — the LEFT JOIN produces a row with
+      // owner=NULL even though the tx exists.
+      insertTx(signature);
+
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs?.owner, null);
+      assert.equal(attrs?.signature, toB64Url(signature));
+    });
+
+    it('returns signature=null when stable_transactions.signature is NULL', () => {
+      insertTx(null);
+      insertWallet();
+
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs?.signature, null);
+      assert.equal(attrs?.owner, toB64Url(publicModulus));
+    });
+
+    it('returns undefined when the transaction is unknown', () => {
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs, undefined);
+    });
+  });
+
   describe('saveBlockAndTxs', () => {
     it('should insert the block in the new_blocks table', async () => {
       const height = 982575;
@@ -1637,14 +1722,19 @@ describe('StandaloneSqliteDatabase', () => {
     } as unknown as NormalizedDataItem;
 
     it('preserves back-filled parent_id, root_transaction_id, data_offset on optimistic re-POST', async () => {
-      // 1. Optimistic POST: row inserted with NULL parent_id / root_transaction_id / data_offset.
-      await db.saveDataItem(optimisticItem);
+      // 1. Optimistic POST (no tuple knowledge): row inserted with NULL
+      //    root-atom fields via insertOptimisticDataItem.
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
 
-      // 2. Unbundle back-fill: same id, non-NULL values via upsert.
+      // 2. Unbundle back-fill (full tuple): same id, non-NULL values via
+      //    the atomic root-atom upsert.
       await db.saveDataItem(bundleBackfillItem);
 
-      // 3. Optimistic re-POST. Pre-fix this clobbered values back to NULL.
-      await db.saveDataItem(optimisticItem);
+      // 3. Optimistic re-POST. With the structural fix, this routes to
+      //    insertOptimisticDataItem (DO NOTHING on conflict) and cannot
+      //    touch the root atom. Pre-structural-fix this corrupted values
+      //    via the per-column COALESCE on a single shared upsert.
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
 
       const row = bundlesDb
         .prepare(
@@ -1716,6 +1806,73 @@ describe('StandaloneSqliteDatabase', () => {
         undefined,
         'data item should land in stable_data_items after flush',
       );
+    });
+
+    it('heals shadow-victim offset/size fields when unbundle follows an optimistic POST', async () => {
+      // Regression for the residual half of PE-9073: pre-structural-fix
+      // the upsert's UPDATE clause only covered parent_id /
+      // root_transaction_id / data_offset / height. The remaining
+      // root-atom fields (root_parent_offset, offset, size,
+      // signature_offset, signature_size, owner_offset, owner_size,
+      // signature_type) were INSERT-only — admin-first then unbundle
+      // left them NULL on the existing row, which breaks GraphQL
+      // signature/owner resolvers (RangeError on degenerate read range
+      // from FsDataStore.get with size=0). Post-fix the unbundle path's
+      // atomic root-atom upsert lands all eleven fields together.
+      const shadowItemId = 'PE9073ShadowHealingPE9073ShadowHealingAAAAAA';
+
+      const shadowOptimistic = {
+        ...optimisticItem,
+        id: shadowItemId,
+      } as unknown as NormalizedDataItem;
+
+      const shadowBackfill = {
+        ...bundleBackfillItem,
+        id: shadowItemId,
+      } as unknown as NormalizedDataItem;
+
+      // 1. Admin POST arrives first.
+      await db.saveDataItem(shadowOptimistic, /* isOptimistic */ true);
+
+      // 2. Unbundle follows with the full root atom.
+      await db.saveDataItem(shadowBackfill);
+
+      const row = bundlesDb
+        .prepare(
+          `SELECT parent_id, root_transaction_id, data_offset,
+                  root_parent_offset, "offset", size,
+                  signature_offset, signature_size,
+                  owner_offset, owner_size, signature_type
+           FROM new_data_items WHERE id = @id`,
+        )
+        .get({ id: fromB64Url(shadowItemId) }) as {
+        parent_id: Buffer | null;
+        root_transaction_id: Buffer | null;
+        data_offset: number | null;
+        root_parent_offset: number | null;
+        offset: number | null;
+        size: number | null;
+        signature_offset: number | null;
+        signature_size: number | null;
+        owner_offset: number | null;
+        owner_size: number | null;
+        signature_type: number | null;
+      };
+
+      assert.notEqual(row, undefined, 'shadow-healed row should exist');
+      // All eleven root-atom fields should be populated by the unbundle
+      // upsert, not shadowed-NULL.
+      assert.deepEqual(row.parent_id, fromB64Url(bundleParentId));
+      assert.deepEqual(row.root_transaction_id, fromB64Url(bundleRootTxId));
+      assert.equal(row.data_offset, 100);
+      assert.equal(row.root_parent_offset, 300);
+      assert.equal(row.offset, 200);
+      assert.equal(row.size, 1234);
+      assert.equal(row.signature_offset, 60);
+      assert.equal(row.signature_size, 32);
+      assert.equal(row.owner_offset, 50);
+      assert.equal(row.owner_size, 32);
+      assert.equal(row.signature_type, 1);
     });
   });
 

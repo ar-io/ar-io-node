@@ -158,3 +158,83 @@ ALTER TABLE transactions ADD INDEX IF NOT EXISTS owner_address_bloom (owner_addr
 --
 -- Track progress via `SELECT * FROM system.mutations WHERE table='transactions'
 -- AND NOT is_done`.
+
+-- =============================================================================
+-- Streaming pipeline: unstable head (mirrors the SQLite new_* tables)
+-- =============================================================================
+--
+-- new_blocks / new_transactions hold the live unstable head of the chain
+-- (~18 confirmations of recent data) streamed from the indexer's event bus.
+-- The stable Parquet pipeline is unchanged — once a row stabilizes it lands
+-- in `transactions` via parquet-export and the unstable copy ages out via
+-- TTL. GraphQL merges the two at query time.
+--
+-- Deliberate departures from `transactions` (do not "fix"):
+--   * No PARTITION BY — table covers a few thousand rows in a tight height
+--     range; partition metadata costs more than partition pruning saves.
+--   * No bloom skip indexes (id_bloom, target_bloom, owner_address_bloom,
+--     tag_names_bloom, tag_values_bloom) — full scan is cheaper than the
+--     index lookup at this size, and indexes only add merge cost.
+--   * No owner_projection — same reasoning; not worth the merge cost.
+--   * No deduplicate_merge_projection_mode = 'rebuild' — no projection.
+--   * No offset/size pointer family — those are stable-pipeline artifacts;
+--     unstable rows write `signature` and `owner` inline instead.
+--   * No expires_at / operator TTL rules — uniform time-since-insert TTL
+--     keyed off inserted_at; rows expire once stabilization handoff lands
+--     them in `transactions`.
+--
+-- new_blocks is intentionally minimal (height + indep_hash). The only thing
+-- read from it is the (height, indep_hash) pair for the orphan-filter join
+-- against new_transactions; per-row block context on transactions queries
+-- comes from the denormalized columns on new_transactions itself. A future
+-- block-metadata table — if needed — should make its own partitioning and
+-- indexing decisions in context, not inherit them from this minimal shape.
+CREATE TABLE IF NOT EXISTS new_blocks (
+  height UInt32 NOT NULL CODEC(Delta(4), LZ4),
+  indep_hash BLOB,
+  inserted_at DateTime CODEC(Delta(4), ZSTD(1)),
+  PRIMARY KEY (height)
+) Engine = ReplacingMergeTree(inserted_at)
+ORDER BY (height)
+TTL inserted_at + INTERVAL {{NEW_TX_TTL_MINUTES}} MINUTE;
+
+-- Schema parity with `transactions` is the goal so the merge query treats
+-- the two tables uniformly. Codecs match column-for-column; differences are
+-- documented in the block comment above.
+CREATE TABLE IF NOT EXISTS new_transactions (
+  height UInt32 NOT NULL CODEC(Delta(4), LZ4),
+  block_transaction_index UInt16 CODEC(Delta(2), LZ4),
+  is_data_item Boolean,
+  id BLOB NOT NULL,
+  anchor BLOB NOT NULL CODEC(ZSTD(3)),
+  owner_address BLOB,
+  target BLOB,
+  quantity Decimal(20,0) NOT NULL,
+  reward Decimal(20,0) NOT NULL,
+  data_size UInt64,
+  content_type LowCardinality(String),
+  format UInt8 NOT NULL,
+  data_root BLOB,
+  parent_id BLOB,
+  block_indep_hash BLOB,
+  block_timestamp UInt32 CODEC(Delta(4), ZSTD(1)),
+  block_previous_block BLOB,
+  indexed_at UInt64 CODEC(Delta(8), ZSTD(1)),
+  inserted_at DateTime CODEC(Delta(4), ZSTD(1)),
+  owner BLOB CODEC(ZSTD(3)),
+  signature BLOB CODEC(ZSTD(3)),
+  signature_type UInt8,
+  root_transaction_id BLOB,
+  root_parent_offset UInt64,
+  tags Array(Tuple(BLOB, BLOB)),
+  tags_count UInt32,
+  -- MATERIALIZED twins of `tags` so SELECT projection lists are identical
+  -- across `transactions` and `new_transactions` (the merge query treats
+  -- both tables uniformly). No bloom skip indexes — full scan is cheap at
+  -- this row count.
+  tag_names Array(BLOB) MATERIALIZED arrayMap(x -> x.1, tags),
+  tag_values Array(BLOB) MATERIALIZED arrayMap(x -> x.2, tags),
+  PRIMARY KEY (height, block_transaction_index, is_data_item, id)
+) Engine = ReplacingMergeTree(inserted_at)
+ORDER BY (height, block_transaction_index, is_data_item, id)
+TTL inserted_at + INTERVAL {{NEW_TX_TTL_MINUTES}} MINUTE;

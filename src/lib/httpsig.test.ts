@@ -424,14 +424,17 @@ describe('httpsig lib', () => {
 
   // --- Phase 2: Attestation tests ---
 
-  /** Generate a test RSA-4096 JWK (Arweave wallet format). */
-  function generateTestRsaJwk(): crypto.JsonWebKey {
-    const { privateKey } = crypto.generateKeyPairSync('rsa', {
-      modulusLength: 4096,
-      publicExponent: 65537,
-    });
-    return privateKey.export({ format: 'jwk' }) as crypto.JsonWebKey;
-  }
+  // Load fixed RSA-4096 wallet fixtures rather than generating a fresh
+  // keypair per test (~500 ms each on CI). Fixtures live in
+  // test/mock_files/wallets/ and are committed; they're test-only,
+  // never used for any signing on the live network.
+  const loadTestWallet = (n: 1 | 2): crypto.JsonWebKey =>
+    JSON.parse(
+      fs.readFileSync(`test/mock_files/wallets/test-wallet-${n}.json`, 'utf8'),
+    );
+
+  /** Default RSA JWK fixture for tests that don't care which wallet they get. */
+  const getTestRsaJwk = (): crypto.JsonWebKey => loadTestWallet(1);
 
   describe('getSolanaAddress', () => {
     it('returns a base58 string', () => {
@@ -453,7 +456,7 @@ describe('httpsig lib', () => {
     it('loads a valid RSA JWK from file', () => {
       const dir = makeTmpDir();
       const walletFile = path.join(dir, 'test-wallet.json');
-      const jwk = generateTestRsaJwk();
+      const jwk = getTestRsaJwk();
       fs.writeFileSync(walletFile, JSON.stringify(jwk));
 
       const loaded = loadWalletJwk(walletFile);
@@ -491,21 +494,21 @@ describe('httpsig lib', () => {
 
   describe('jwkToArweaveAddress', () => {
     it('returns a base64url string', () => {
-      const jwk = generateTestRsaJwk();
+      const jwk = getTestRsaJwk();
       const addr = jwkToArweaveAddress(jwk);
       assert.match(addr, /^[A-Za-z0-9_-]+$/);
       assert.equal(addr.length, 43); // SHA-256 = 32 bytes = 43 base64url chars
     });
 
     it('is stable across calls', () => {
-      const jwk = generateTestRsaJwk();
+      const jwk = getTestRsaJwk();
       assert.equal(jwkToArweaveAddress(jwk), jwkToArweaveAddress(jwk));
     });
   });
 
   describe('createAttestation', () => {
     it('returns payload, signature, and rsaPublicKey', () => {
-      const observerJwk = generateTestRsaJwk();
+      const observerJwk = getTestRsaJwk();
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
       const att = createAttestation({
@@ -520,7 +523,7 @@ describe('httpsig lib', () => {
     });
 
     it('payload is valid canonical JSON with expected fields', () => {
-      const observerJwk = generateTestRsaJwk();
+      const observerJwk = getTestRsaJwk();
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
       const att = createAttestation({
@@ -542,7 +545,7 @@ describe('httpsig lib', () => {
     });
 
     it('signature is verifiable with the RSA public key', () => {
-      const observerJwk = generateTestRsaJwk();
+      const observerJwk = getTestRsaJwk();
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
       const att = createAttestation({
@@ -573,7 +576,7 @@ describe('httpsig lib', () => {
     });
 
     it('observerAddress matches SHA-256 of RSA public key modulus', () => {
-      const observerJwk = generateTestRsaJwk();
+      const observerJwk = getTestRsaJwk();
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
       const att = createAttestation({
@@ -591,7 +594,7 @@ describe('httpsig lib', () => {
   describe('loadOrCreateAttestation', () => {
     it('creates and caches a new attestation', () => {
       const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
+      const observerJwk = getTestRsaJwk();
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
       const result = loadOrCreateAttestation({
@@ -608,7 +611,7 @@ describe('httpsig lib', () => {
 
     it('loads cached attestation when Ed25519 key unchanged', () => {
       const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
+      const observerJwk = getTestRsaJwk();
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
       const first = loadOrCreateAttestation({
@@ -632,7 +635,7 @@ describe('httpsig lib', () => {
 
     it('recreates attestation when Ed25519 key changes', () => {
       const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
+      const observerJwk = getTestRsaJwk();
       const { publicKey: pub1 } = crypto.generateKeyPairSync('ed25519');
       const { publicKey: pub2 } = crypto.generateKeyPairSync('ed25519');
 
@@ -657,7 +660,7 @@ describe('httpsig lib', () => {
 
     it('returns persisted txId from cache', () => {
       const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
+      const observerJwk = getTestRsaJwk();
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
       // Create attestation
@@ -685,8 +688,10 @@ describe('httpsig lib', () => {
 
     it('recreates attestation when observer wallet changes', () => {
       const dir = makeTmpDir();
-      const observerJwk1 = generateTestRsaJwk();
-      const observerJwk2 = generateTestRsaJwk();
+      // Distinct fixtures: this test verifies that a wallet change
+      // invalidates the cached attestation, so jwk1 and jwk2 must differ.
+      const observerJwk1 = loadTestWallet(1);
+      const observerJwk2 = loadTestWallet(2);
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
       const first = loadOrCreateAttestation({
@@ -710,7 +715,7 @@ describe('httpsig lib', () => {
 
     it('recreates attestation when gateway address changes', () => {
       const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
+      const observerJwk = getTestRsaJwk();
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
       const first = loadOrCreateAttestation({
@@ -733,7 +738,7 @@ describe('httpsig lib', () => {
 
     it('handles corrupt cache file gracefully', () => {
       const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
+      const observerJwk = getTestRsaJwk();
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
       // Write corrupt cache

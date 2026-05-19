@@ -1,0 +1,411 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+import { strict as assert } from 'node:assert';
+import { describe, it } from 'node:test';
+import crypto from 'node:crypto';
+import http from 'node:http';
+import { Readable } from 'node:stream';
+import express from 'express';
+import { default as request } from 'supertest';
+
+import { headerNames } from '../../constants.js';
+
+// supertest doesn't parse binary by default — pass this to .parse() so we
+// get a Buffer back in res.body for arbitrary-bytes responses.
+function parseAsBuffer(
+  res: any,
+  callback: (err: Error | null, body: Buffer) => void,
+) {
+  res.setEncoding('binary');
+  let data = '';
+  res.on('data', (chunk: string) => {
+    data += chunk;
+  });
+  res.on('end', () => callback(null, Buffer.from(data, 'binary')));
+}
+import { createTestLogger } from '../../../test/test-logger.js';
+import { sendBodyWithOptionalDigest } from './buffered-digest.js';
+import { formatContentDigest } from '../../lib/digest.js';
+import { ContiguousData } from '../../types.js';
+
+const log = createTestLogger({ suite: 'buffered-digest' });
+
+const FIVE_MIB = 5 * 1024 * 1024;
+const ONE_MIB = 1024 * 1024;
+
+function makeData({
+  bytes,
+  size,
+  cached = false,
+}: {
+  bytes: Buffer;
+  size?: number;
+  cached?: boolean;
+}): ContiguousData {
+  return {
+    stream: Readable.from(bytes, { objectMode: false }),
+    size: size === undefined ? bytes.length : size,
+    sourceContentType: 'application/octet-stream',
+    verified: false,
+    trusted: true,
+    cached,
+  } as unknown as ContiguousData;
+}
+
+function expectedDigest(bytes: Buffer): {
+  base64url: string;
+  contentDigest: string;
+} {
+  const base64url = crypto
+    .createHash('sha256')
+    .update(bytes)
+    .digest('base64url');
+  return { base64url, contentDigest: formatContentDigest(base64url) };
+}
+
+/**
+ * Mounts a tiny express app whose only route invokes sendBodyWithOptionalDigest
+ * with caller-controlled `data` and `maxBytes`. Returns a supertest agent for
+ * the app — same shape as handlers.test.ts uses.
+ */
+function makeApp({
+  data,
+  maxBytes,
+}: {
+  data: ContiguousData;
+  maxBytes?: number;
+}) {
+  const app = express();
+  app.get('/data', async (req, res) => {
+    await sendBodyWithOptionalDigest({
+      req,
+      res,
+      data,
+      log,
+      dataId: 'test-id',
+      maxBytes,
+    });
+  });
+  return app;
+}
+
+describe('sendBodyWithOptionalDigest', () => {
+  it('emits Content-Digest matching the body for a small uncached response (golden)', async () => {
+    const body = Buffer.from('hello, ar.io');
+    const { base64url, contentDigest } = expectedDigest(body);
+
+    const app = makeApp({
+      data: makeData({ bytes: body, cached: false }),
+      maxBytes: ONE_MIB,
+    });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    assert.equal(res.status, 200);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      contentDigest,
+    );
+    assert.equal(res.headers[headerNames.digest.toLowerCase()], base64url);
+    assert.equal(res.headers['etag'], `"${base64url}"`);
+    assert.equal(res.headers['content-length'], String(body.length));
+    assert.deepEqual(res.body, body);
+  });
+
+  it('does not buffer when size exceeds threshold', async () => {
+    const body = Buffer.alloc(2048, 0x41); // 2 KB
+    const app = makeApp({
+      data: makeData({ bytes: body, cached: false }),
+      maxBytes: 1024, // 1 KB threshold — body is over
+    });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    assert.equal(res.status, 200);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      undefined,
+    );
+    // Body still streamed correctly
+    assert.equal(res.body.length, body.length);
+  });
+
+  it('does not buffer when size is unknown', async () => {
+    const body = Buffer.from('payload');
+    // Synthesize a data object with size=undefined
+    const data = {
+      ...makeData({ bytes: body, cached: false }),
+      size: undefined,
+    } as unknown as ContiguousData;
+
+    const app = makeApp({ data, maxBytes: ONE_MIB });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    assert.equal(res.status, 200);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      undefined,
+    );
+  });
+
+  it('does nothing special when threshold is 0 (feature disabled)', async () => {
+    const body = Buffer.from('disabled');
+    const app = makeApp({
+      data: makeData({ bytes: body, cached: false }),
+      maxBytes: 0,
+    });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    assert.equal(res.status, 200);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      undefined,
+    );
+  });
+
+  it('short read: source declares 1024 but streams 256 — fails with 502 (no digest minted over partial bytes)', async () => {
+    // Source claims 1024 bytes but the stream actually emits 256.
+    // Without the short-read guard the response would mint a SHA-256
+    // over the truncated 256 bytes and return 200 — clients verifying
+    // the signature would see it pass and the data loss would stay
+    // invisible. Rejecting with 502 surfaces it loudly.
+    const realBody = Buffer.alloc(256, 0x44);
+    const data = {
+      ...makeData({ bytes: realBody, cached: false }),
+      size: 1024, // declared (lying — claims more than it has)
+    } as unknown as ContiguousData;
+
+    const app = makeApp({ data, maxBytes: ONE_MIB });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    assert.equal(res.status, 502);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      undefined,
+    );
+    assert.equal(res.headers['etag'], undefined);
+  });
+
+  it('size lie: source declares small but streams over threshold — fails with 502', async () => {
+    // Source claims 16 bytes but the stream actually emits 2048.
+    const realBody = Buffer.alloc(2048, 0x42);
+    const data = {
+      ...makeData({ bytes: realBody, cached: false }),
+      size: 16, // declared (lying)
+    } as unknown as ContiguousData;
+
+    const app = makeApp({ data, maxBytes: 1024 });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    // The 16-byte declared size is below the 1024 threshold, so we'd try to
+    // buffer; partway through the stream we discover it's actually 2048,
+    // and respond 502. Silent truncation would be worse than a loud failure.
+    assert.equal(res.status, 502);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      undefined,
+    );
+  });
+
+  it('passes through (no Content-Digest set by helper) when cache_hit header was already set upstream', async () => {
+    const body = Buffer.from('cached body');
+    // Pre-set Content-Digest like setDigestStableVerifiedHeaders would.
+    const cachedDigest = 'sha-256=:already-set:';
+    const app = express();
+    app.get('/data', async (req, res) => {
+      res.setHeader(headerNames.contentDigest, cachedDigest);
+      await sendBodyWithOptionalDigest({
+        req,
+        res,
+        data: makeData({ bytes: body, cached: true }),
+        log,
+        dataId: 'cached-test',
+        maxBytes: ONE_MIB,
+      });
+    });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    assert.equal(res.status, 200);
+    // The pre-set digest is what stays; helper does not overwrite.
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      cachedDigest,
+    );
+  });
+
+  it('boundary: body exactly at the threshold size IS buffered', async () => {
+    const body = Buffer.alloc(1024, 0x43); // exactly 1 KB
+    const { contentDigest } = expectedDigest(body);
+
+    const app = makeApp({
+      data: makeData({ bytes: body, cached: false }),
+      maxBytes: 1024,
+    });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    assert.equal(res.status, 200);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      contentDigest,
+    );
+  });
+
+  it('empty body: emits Content-Digest of empty SHA-256', async () => {
+    const body = Buffer.alloc(0);
+    const { base64url, contentDigest } = expectedDigest(body);
+    // Sanity-check the well-known constant for empty SHA-256.
+    assert.equal(base64url, '47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU');
+
+    const app = makeApp({
+      data: makeData({ bytes: body, cached: false }),
+      maxBytes: ONE_MIB,
+    });
+
+    const res = await request(app)
+      .get('/data')
+      .buffer(true)
+      .parse(parseAsBuffer);
+
+    assert.equal(res.status, 200);
+    assert.equal(
+      res.headers[headerNames.contentDigest.toLowerCase()],
+      contentDigest,
+    );
+    assert.equal(res.headers[headerNames.digest.toLowerCase()], base64url);
+    assert.equal(res.headers['content-length'], '0');
+    assert.equal(res.body.length, 0);
+  });
+
+  it('client abort mid-buffer destroys the upstream stream', async () => {
+    // Wire up a slow upstream stream — emit one chunk, wait, emit nothing
+    // more — so the helper is mid-buffer when the client aborts. After abort,
+    // the upstream stream's destroy() must have been called so we don't pin
+    // memory waiting for a stream the client no longer cares about.
+    const upstream = new Readable({
+      read() {
+        // Emit one chunk then stall — caller will abort before completion.
+        if (!(this as any).__emitted) {
+          (this as any).__emitted = true;
+          this.push(Buffer.alloc(1024, 0x55));
+        }
+        // Don't push null; just stall.
+      },
+    });
+    let upstreamDestroyed = false;
+    upstream.on('close', () => {
+      upstreamDestroyed = true;
+    });
+
+    const data = {
+      stream: upstream,
+      size: 1024 * 1024, // claim 1 MiB so we enter the buffered branch
+      sourceContentType: 'application/octet-stream',
+      verified: false,
+      trusted: true,
+      cached: false,
+    } as unknown as ContiguousData;
+
+    const app = express();
+    app.get('/data', async (req, res) => {
+      await sendBodyWithOptionalDigest({
+        req,
+        res,
+        data,
+        log,
+        dataId: 'abort-test',
+        maxBytes: ONE_MIB,
+      });
+    });
+
+    const server = app.listen(0);
+    const port = (server.address() as { port: number }).port;
+    await new Promise<void>((resolve) => {
+      const req = http.request(
+        { hostname: '127.0.0.1', port, path: '/data' },
+        (res) => {
+          res.once('data', () => {
+            // We aborted before any data could arrive, but if we got here,
+            // close the response side too.
+            res.destroy();
+            resolve();
+          });
+          res.once('end', resolve);
+          res.once('close', resolve);
+        },
+      );
+      req.on('error', () => resolve());
+      req.end();
+      // Abort almost immediately, before the helper has finished buffering.
+      setTimeout(() => req.destroy(), 30);
+    });
+
+    // Give the helper a tick to observe the abort and tear down upstream.
+    await new Promise((r) => setTimeout(r, 100));
+    server.close();
+
+    assert.equal(
+      upstreamDestroyed,
+      true,
+      'upstream stream should be destroyed when client aborts mid-buffer',
+    );
+  });
+
+  it('property-style: random byte sequences hash correctly across multiple sizes', async () => {
+    const sizes = [1, 256, 1024, 64 * 1024, ONE_MIB];
+    for (const size of sizes) {
+      const body = crypto.randomBytes(size);
+      const { contentDigest } = expectedDigest(body);
+
+      const app = makeApp({
+        data: makeData({ bytes: body, cached: false }),
+        maxBytes: FIVE_MIB,
+      });
+
+      const res = await request(app)
+        .get('/data')
+        .buffer(true)
+        .parse(parseAsBuffer);
+
+      assert.equal(res.status, 200, `size=${size} failed status check`);
+      assert.equal(
+        res.headers[headerNames.contentDigest.toLowerCase()],
+        contentDigest,
+        `size=${size} digest mismatch`,
+      );
+    }
+  });
+});

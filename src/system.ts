@@ -37,6 +37,7 @@ import * as events from './events.js';
 import { MatchTags, TagMatch } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import { DnsResolver } from './lib/dns-resolver.js';
+import { createMatchedItemBuffer } from './lib/matched-item-buffer.js';
 import {
   makeBlockStore,
   makeTxStore,
@@ -93,6 +94,8 @@ import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
 import { TransactionOffsetImporter } from './workers/transaction-offset-importer.js';
 import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
+import { createClient as createClickHouseClient } from '@clickhouse/client';
+import { ClickHouseStreamer } from './workers/clickhouse-streamer.js';
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSKvStore, createArNSResolver } from './init/resolvers.js';
 import {
@@ -299,6 +302,20 @@ export const dataBlockListValidator: DataBlockListValidator = db;
 export const nameBlockListValidator: NameBlockListValidator = db;
 export const nestedDataIndexWriter: NestedDataIndexWriter = db;
 export const dataItemIndexWriter: DataItemIndexWriter = db;
+if (
+  config.CLICKHOUSE_GQL_SKIP_SQLITE_READS &&
+  !config.CLICKHOUSE_STREAMING_ENABLED
+) {
+  log.warn(
+    'CLICKHOUSE_GQL_SKIP_SQLITE_READS is set but ' +
+      'CLICKHOUSE_STREAMING_ENABLED is not — ignoring the skip flag. ' +
+      'Without streaming, SQLite is the only source for unstable-head ' +
+      'rows; skipping it would silently drop recent transactions from ' +
+      'GraphQL responses. Enable streaming alongside the skip flag, or ' +
+      'unset the skip flag to silence this warning.',
+  );
+}
+
 export const gqlQueryable: GqlQueryable = (() => {
   const localGql: GqlQueryable =
     config.CLICKHOUSE_URL !== undefined
@@ -313,6 +330,33 @@ export const gqlQueryable: GqlQueryable = (() => {
           maxHeightCacheTtlSeconds:
             config.CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS,
           queryTimeoutSeconds: config.CLICKHOUSE_QUERY_TIMEOUT_SECONDS,
+          // Streaming mode: when enabled, the composite queries
+          // `new_transactions` as a third leg covering the unstable
+          // head, and the SQLite leg drops to a tight-timeout fallback
+          // (or is skipped entirely if SKIP_SQLITE_READS is set).
+          //
+          // skipSqliteReads is gated on streaming-enabled because
+          // without streaming, SQLite is the *only* source for the
+          // unstable head — skipping it would silently drop recent
+          // transactions from GraphQL.
+          queryUnstableHead: config.CLICKHOUSE_STREAMING_ENABLED,
+          skipSqliteReads:
+            config.CLICKHOUSE_STREAMING_ENABLED &&
+            config.CLICKHOUSE_GQL_SKIP_SQLITE_READS,
+          ...(config.CLICKHOUSE_STREAMING_ENABLED
+            ? {
+                sqliteCircuitBreakerOptions: {
+                  timeout:
+                    config.CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS,
+                  errorThresholdPercentage:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+                  rollingCountTimeout:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
+                  resetTimeout:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
+                },
+              }
+            : {}),
         })
       : db;
 
@@ -577,15 +621,8 @@ export const txOffsetRepairWorker = new TransactionOffsetRepairWorker({
   txOffsetIndexer: txOffsetImporter,
 });
 
-export const bundleRepairWorker = new BundleRepairWorker({
-  log,
-  bundleIndex,
-  txFetcher,
-  unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
-  indexFilter: config.ANS104_INDEX_FILTER_STRING,
-  shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
-  filtersChanged: config.FILTER_CHANGE_REPROCESS,
-});
+// bundleRepairWorker is defined further down — it depends on
+// ans104Unbundler which is constructed later in this file.
 
 const peerRequestLimiter = new PeerRequestLimiter(
   config.PEER_MAX_CONCURRENT_OUTBOUND,
@@ -1222,6 +1259,7 @@ export const dataItemIndexer = new DataItemIndexer({
   log,
   eventEmitter,
   indexWriter: dataItemIndexWriter,
+  maxQueueSize: config.DATA_ITEM_INDEXER_QUEUE_SIZE,
 });
 metrics.registerQueueLengthGauge('dataItemIndexer', {
   length: () => dataItemIndexer.queueDepth(),
@@ -1232,6 +1270,7 @@ const ans104DataIndexer = new Ans104DataIndexer({
   eventEmitter,
   indexWriter: nestedDataIndexWriter,
   contiguousDataIndex,
+  maxQueueSize: config.ANS104_DATA_INDEXER_QUEUE_SIZE,
 });
 metrics.registerQueueLengthGauge('ans104DataIndexer', {
   length: () => ans104DataIndexer.queueDepth(),
@@ -1252,6 +1291,18 @@ const ans104Unbundler = new Ans104Unbundler({
 });
 metrics.registerQueueLengthGauge('ans104Unbundler', {
   length: () => ans104Unbundler.queueDepth(),
+});
+
+// BundleRepairWorker depends on ans104Unbundler so it's constructed
+// here, after Ans104Unbundler is available.
+export const bundleRepairWorker = new BundleRepairWorker({
+  log,
+  bundleIndex,
+  ans104Unbundler,
+  unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
+  indexFilter: config.ANS104_INDEX_FILTER_STRING,
+  shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
+  filtersChanged: config.FILTER_CHANGE_REPROCESS,
 });
 
 export const verificationDataImporter = new DataImporter({
@@ -1407,10 +1458,40 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
   }
 });
 
-eventEmitter.on(events.ANS104_DATA_ITEM_MATCHED, async (dataItem: any) => {
-  metrics.dataItemsQueuedCounter.inc({ bundle_format: 'ans-104' });
-  dataItemIndexer.queueDataItem(dataItem);
-  ans104DataIndexer.queueDataItem(dataItem);
+// Buffer + scheduled-drainer for `ANS104_DATA_ITEM_MATCHED`.
+//
+// The ANS-104 unbundler runs on a worker thread and posts a message
+// back per matched data item. Large (~15k-item) bundles produce
+// thousands of cross-thread messages per second. Doing `queueDataItem`
+// work synchronously in this handler monopolizes the JS thread:
+// SQLite-worker reply messages, HTTP accept callbacks, and GraphQL
+// resolvers can't be serviced, fastq can't drain (its in-flight task
+// awaits a reply that never lands), the queue grows unboundedly, and
+// the system wedges (PE-9089 incident on 2026-05-08).
+//
+// `createMatchedItemBuffer` accepts items in O(1) and dispatches them
+// to `onDrain` in batches of `BUNDLE_DATA_ITEM_DRAIN_BATCH` between
+// `setImmediate` cycles. The setImmediate boundary between batches
+// guarantees a full event-loop turn so other I/O gets serviced. The
+// drain logic, head-pointer indexing, and compaction live in the
+// dedicated module so they can be unit-tested without booting the
+// whole gateway.
+const matchedItemBufferDrainer = createMatchedItemBuffer<NormalizedDataItem>({
+  drainBatch: config.BUNDLE_DATA_ITEM_DRAIN_BATCH,
+  onDrain: (dataItem) => {
+    metrics.dataItemsQueuedCounter.inc({ bundle_format: 'ans-104' });
+    dataItemIndexer.queueDataItem(dataItem);
+    ans104DataIndexer.queueDataItem(dataItem);
+  },
+});
+
+eventEmitter.on(
+  events.ANS104_DATA_ITEM_MATCHED,
+  (dataItem: NormalizedDataItem) => matchedItemBufferDrainer.push(dataItem),
+);
+
+metrics.registerQueueLengthGauge('matchedItemBuffer', {
+  length: () => matchedItemBufferDrainer.depth(),
 });
 
 export const manifestPathResolver = new StreamingManifestPathResolver({
@@ -1464,6 +1545,55 @@ const webhookEmitter = new WebhookEmitter({
 metrics.registerQueueLengthGauge('webhookEmitter', {
   length: () => webhookEmitter.queueDepth(),
 });
+
+// Streaming pipeline (issue #696): mirror the SQLite unstable head into
+// ClickHouse `new_blocks` / `new_transactions` so CH becomes a complete
+// read store. Opt-in; the stable Parquet pipeline is unchanged. Started
+// from app.ts via `clickhouseStreamer?.start()` so a schema-validation
+// failure surfaces at startup rather than silently in the background.
+export const clickhouseStreamer = (() => {
+  if (!config.CLICKHOUSE_STREAMING_ENABLED) {
+    return undefined;
+  }
+  // Fail fast on an explicit opt-in with missing prerequisites — silently
+  // returning undefined would let the gateway start up looking healthy
+  // while the streaming pipeline doesn't actually run.
+  if (config.CLICKHOUSE_URL === undefined) {
+    throw new Error(
+      'CLICKHOUSE_STREAMING_ENABLED=true requires CLICKHOUSE_URL to be set.',
+    );
+  }
+  const streamerClient = createClickHouseClient({
+    url: config.CLICKHOUSE_URL,
+    username: config.CLICKHOUSE_USER,
+    password: config.CLICKHOUSE_PASSWORD,
+    // Batched INSERTs inline up to BATCH_SIZE rows of tag-bearing
+    // transactions; an L1 tx or data item with many large tags can push
+    // the rendered SQL past ClickHouse's default `max_query_size` of
+    // 256 KiB, which would reject the whole batch (flush errors are
+    // swallowed best-effort, so the rejection is silent except for a
+    // log line). 1 GiB is generous headroom over any realistic batch.
+    clickhouse_settings: {
+      max_query_size: '1073741824',
+    },
+  });
+  const streamer = new ClickHouseStreamer({
+    log,
+    eventEmitter,
+    clickhouseClient: streamerClient,
+    batchSize: config.CLICKHOUSE_STREAMER_BATCH_SIZE,
+    flushIntervalMs: config.CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS,
+    maxQueueSize: config.CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE,
+  });
+  metrics.registerQueueLengthGauge('clickhouseStreamer', {
+    length: () => streamer.queueDepth(),
+  });
+  registerCleanupHandler('clickhouseStreamer', async () => {
+    await streamer.stop();
+    await streamerClient.close();
+  });
+  return streamer;
+})();
 
 export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
   ? new MempoolWatcher({

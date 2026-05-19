@@ -19,6 +19,8 @@ import {
 import { ANS_104_FORMAT_ID } from '../constants.js';
 
 const DEFAULT_WORKER_COUNT = 1;
+const DEFAULT_MAX_QUEUE_SIZE = 500_000;
+const QUEUE_NAME = 'ans104DataIndexer';
 
 export class Ans104DataIndexer {
   // Dependencies
@@ -27,8 +29,20 @@ export class Ans104DataIndexer {
   private indexWriter: NestedDataIndexWriter;
   private contiguousDataIndex: ContiguousDataIndex;
 
+  // Backpressure: hard cap on queue depth. `0` disables the cap.
+  // Items pushed at the cap are dropped and counted in
+  // `data_items_dropped_total{queue_name="ans104DataIndexer"}`. The bundle
+  // record's `last_fully_indexed_at` will stay NULL for any dropped item,
+  // so `bundle-repair-worker` is the recovery path.
+  private maxQueueSize: number;
+
   // Data indexing queue
   private queue: queueAsPromised<NormalizedDataItem, void>;
+
+  // Tracked queue depth. See data-item-indexer.ts:depth for the rationale:
+  // fastq's `length()` is O(n) and at 100k+ depth dominates main-thread
+  // CPU. Increment on push, decrement in `indexDataItem`'s `finally`.
+  private depth = 0;
 
   constructor({
     log,
@@ -36,38 +50,54 @@ export class Ans104DataIndexer {
     indexWriter,
     contiguousDataIndex,
     workerCount = DEFAULT_WORKER_COUNT,
+    maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     indexWriter: NestedDataIndexWriter;
     contiguousDataIndex: ContiguousDataIndex;
     workerCount?: number;
+    maxQueueSize?: number;
   }) {
     this.log = log.child({ class: 'Ans104DataIndexer' });
     this.indexWriter = indexWriter;
     this.contiguousDataIndex = contiguousDataIndex;
     this.eventEmitter = eventEmitter;
+    this.maxQueueSize = maxQueueSize;
 
     this.queue = fastq.promise(this.indexDataItem.bind(this), workerCount);
   }
 
   async queueDataItem(item: NormalizedDataItem): Promise<void> {
-    const log = this.log.child({
+    // See data-item-indexer.ts:queueDataItem for the rationale: skip
+    // `this.log.child(...)` on the hot path; share a meta object across
+    // the debug/warn sites instead. (PE-9089)
+    const meta = {
       method: 'queueDataItem',
       id: item.id,
       parentId: item.parent_id,
       rootTxId: item.root_tx_id,
       dataOffset: item?.data_offset,
       dataSize: item?.data_size,
-    });
+    };
 
-    log.debug('Queueing data item for indexing...');
-    this.queue.push(item);
-    log.debug('Data item queued for indexing.');
+    if (this.maxQueueSize === 0 || this.depth < this.maxQueueSize) {
+      this.log.debug('Queueing data item for indexing...', meta);
+      this.queue.push(item);
+      this.depth++;
+      this.log.debug('Data item queued for indexing.', meta);
+    } else {
+      metrics.dataItemsDroppedCounter.inc({ queue_name: QUEUE_NAME });
+      this.log.warn('Dropping data item — queue is at maxQueueSize.', {
+        ...meta,
+        queueDepth: this.depth,
+        maxQueueSize: this.maxQueueSize,
+      });
+    }
   }
 
   queueDepth(): number {
-    return this.queue.length();
+    return this.depth;
   }
 
   async indexDataItem(item: NormalizedDataItem): Promise<void> {
@@ -151,6 +181,8 @@ export class Ans104DataIndexer {
         stack: error.stack,
         id: item.id,
       });
+    } finally {
+      this.depth--;
     }
   }
 

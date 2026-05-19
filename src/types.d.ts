@@ -305,6 +305,12 @@ export interface BundleIndex {
   saveBundle(bundle: BundleRecord): Promise<BundleSaveResult>;
   saveBundleRetries(rootTransactionId: string): Promise<void>;
   getFailedBundleIds(limit: number): Promise<string[]>;
+  /**
+   * Count of bundles awaiting full indexing: `matched_data_item_count > 0`,
+   * `last_fully_indexed_at IS NULL`, `last_skipped_at IS NULL`. Drives the
+   * `bundle_repair_pending_bundles` gauge.
+   */
+  getRepairBacklogCount(): Promise<number>;
   updateBundlesFullyIndexedAt(): Promise<void>;
   updateBundlesForFilterChange(
     unbundleFilter: string,
@@ -314,7 +320,21 @@ export interface BundleIndex {
 }
 
 export interface DataItemIndexWriter {
-  saveDataItem(item: NormalizedDataItem): Promise<void>;
+  /**
+   * Persist a data item.
+   *
+   * Set `isOptimistic` to true when the caller has no knowledge of the
+   * data item's bundling placement (the "root atom" — parent_id,
+   * root_transaction_id, the offset/size pairs, signature_type,
+   * root_parent_offset). Optimistic writes never touch the root atom
+   * on conflict; they only fill in the always-known fields if the row
+   * doesn't yet exist.
+   *
+   * Leave `isOptimistic` unset (or false) when the caller has the full
+   * root atom — e.g., the unbundle path or an on-demand metadata
+   * resolver. The implementation atomically upserts the full root atom.
+   */
+  saveDataItem(item: NormalizedDataItem, isOptimistic?: boolean): Promise<void>;
 }
 
 export interface NestedDataIndexWriter {
@@ -519,6 +539,7 @@ export interface GqlQueryable {
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
+    bundledIn?: string[] | null;
     tags: { name: string; values: string[] }[];
   }): Promise<GqlTransactionsResult>;
 
@@ -1210,14 +1231,22 @@ export interface SignatureSource {
     parentId,
     signatureSize,
     signatureOffset,
+    signal,
   }: {
     id: string;
     parentId?: string;
     signatureSize?: number;
     signatureOffset?: number;
+    signal?: AbortSignal;
   }): Promise<string | undefined>;
 
-  getTransactionSignature({ id }: { id: string }): Promise<string | undefined>;
+  getTransactionSignature({
+    id,
+    signal,
+  }: {
+    id: string;
+    signal?: AbortSignal;
+  }): Promise<string | undefined>;
 }
 
 export interface OwnerSource {
@@ -1226,14 +1255,22 @@ export interface OwnerSource {
     parentId,
     ownerSize,
     ownerOffset,
+    signal,
   }: {
     id: string;
     parentId?: string;
     ownerSize?: number;
     ownerOffset?: number;
+    signal?: AbortSignal;
   }): Promise<string | undefined>;
 
-  getTransactionOwner({ id }: { id: string }): Promise<string | undefined>;
+  getTransactionOwner({
+    id,
+    signal,
+  }: {
+    id: string;
+    signal?: AbortSignal;
+  }): Promise<string | undefined>;
 }
 
 export interface WithPeers<T> {
