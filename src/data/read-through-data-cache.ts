@@ -441,6 +441,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     region,
     parentSpan,
     signal,
+    acceptContentType,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
@@ -450,6 +451,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     };
     parentSpan?: Span;
     signal?: AbortSignal;
+    acceptContentType?: (contentType: string | undefined) => boolean;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'ReadThroughDataCache.getData',
@@ -474,7 +476,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // Check for abort before starting
       signal?.throwIfAborted();
       // Get data attributes
-      const attributes = await this.dataAttributesStore.getDataAttributes(id);
+      let attributes = await this.dataAttributesStore.getDataAttributes(id);
 
       if (attributes) {
         span.setAttributes({
@@ -484,6 +486,50 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           'data.verified': attributes.verified,
           'data.content_type': attributes.contentType,
         });
+      }
+
+      // PE-9099: lazy poison eviction. If the caller supplied a
+      // content-type predicate and the cached attributes record a
+      // content-type the caller refuses (e.g., text/html for a
+      // request that expects an ANS-104 bundle, a known footprint of
+      // legacy gateway S3 caches poisoned with `gateway.bundlr.network`
+      // parking pages), drop the on-disk blob and treat this request
+      // as a cache miss. The next successful cache write (after a
+      // fall-through to a clean source) will overwrite the stale
+      // attributes with the correct content-type, healing the entry
+      // for future requests.
+      if (
+        acceptContentType !== undefined &&
+        attributes !== undefined &&
+        !acceptContentType(attributes.contentType)
+      ) {
+        span.addEvent('Evicting poisoned cache entry', {
+          'cache.evicted.id': id,
+          'cache.evicted.hash': attributes.hash,
+          'cache.evicted.content_type': attributes.contentType,
+        });
+        this.log.warn('Evicting poisoned cache entry', {
+          id,
+          hash: attributes.hash,
+          contentType: attributes.contentType,
+        });
+        metrics.poisonedCacheEvictionsTotal.inc({
+          content_type: attributes.contentType ?? 'unknown',
+        });
+        if (attributes.hash !== undefined) {
+          try {
+            await this.dataStore.delete(attributes.hash);
+          } catch (err: any) {
+            this.log.warn('Failed to delete poisoned cache blob', {
+              id,
+              hash: attributes.hash,
+              message: err?.message,
+            });
+          }
+        }
+        // Clear attributes so the rest of getData() falls through
+        // as if this were a cold cache miss.
+        attributes = undefined;
       }
 
       if (attributes?.hash !== undefined) {
@@ -613,6 +659,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         region,
         parentSpan: span,
         signal,
+        acceptContentType,
       });
       const upstreamDuration = Date.now() - upstreamStart;
 

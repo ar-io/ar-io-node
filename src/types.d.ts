@@ -1077,12 +1077,29 @@ export interface ContiguousDataSource {
     region,
     parentSpan,
     signal,
+    acceptContentType,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
     signal?: AbortSignal;
+    /**
+     * Optional predicate the caller supplies to validate the upstream's
+     * response content-type. When provided, sources MUST reject the
+     * response if `acceptContentType(contentType)` returns false. The
+     * argument is the raw value of the upstream's `Content-Type` header
+     * (case as received) or `undefined` if absent.
+     *
+     * Use case: callers that intend to parse the bytes as a specific
+     * format (e.g., raw ANS-104 bundle) can refuse responses that are
+     * obviously not that format (e.g., `text/html` from a poisoned
+     * upstream cache returning a domain-parking page). The predicate
+     * runs before any bytes are handed back, so the caller is shielded
+     * from poison and the data-source chain can fall through to the
+     * next priority tier. PE-9099.
+     */
+    acceptContentType?: (contentType: string | undefined) => boolean;
   }): Promise<ContiguousData>;
 }
 
