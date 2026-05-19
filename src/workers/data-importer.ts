@@ -107,7 +107,22 @@ export class DataImporter {
     const log = this.log.child({ method: 'download', id: item.id });
     const startMs = Date.now();
 
-    const data = await this.contiguousDataSource.getData({ id: item.id });
+    // Instrument the source-chain rejection path (all sources exhausted,
+    // 404 from every tier, etc.) so failures before a stream is returned
+    // still show up in the duration / size histograms. Without this, the
+    // outcome="error" bucket only captures mid-stream failures.
+    let data;
+    try {
+      data = await this.contiguousDataSource.getData({ id: item.id });
+    } catch (error) {
+      const elapsedMs = Date.now() - startMs;
+      metrics.bundleDownloadDurationSeconds.observe(
+        { outcome: 'error' },
+        elapsedMs / 1000,
+      );
+      metrics.bundleDownloadSizeBytes.observe({ outcome: 'error' }, 0);
+      throw error;
+    }
     const size = data.size;
 
     return new Promise((resolve, reject) => {
