@@ -1313,6 +1313,7 @@ export const bundleRepairWorker = new BundleRepairWorker({
 
 export const verificationDataImporter = new DataImporter({
   log,
+  name: 'verificationDataImporter',
   contiguousDataSource: txChunksDataSource,
   workerCount: config.ANS104_DOWNLOAD_WORKERS,
   maxQueueSize: config.VERIFICATION_DATA_IMPORTER_QUEUE_SIZE,
@@ -1322,6 +1323,7 @@ metrics.registerQueueLengthGauge('verificationDataImporter', {
 });
 export const bundleDataImporter = new DataImporter({
   log,
+  name: 'bundleDataImporter',
   contiguousDataSource: backgroundContiguousDataSource,
   ans104Unbundler,
   workerCount: config.ANS104_DOWNLOAD_WORKERS,

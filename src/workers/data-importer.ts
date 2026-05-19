@@ -15,6 +15,7 @@ import {
   PartialJsonTransaction,
 } from '../types.js';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 
 interface IndexProperty {
   index: number;
@@ -39,24 +40,28 @@ export class DataImporter {
   private ans104Unbundler: Ans104Unbundler | undefined;
 
   // Contiguous data queue
+  private name: string;
   private workerCount: number;
   private maxQueueSize: number;
   private queue: queueAsPromised<DataImporterQueueItem, void>;
 
   constructor({
     log,
+    name = 'default',
     contiguousDataSource,
     ans104Unbundler,
     workerCount,
     maxQueueSize = config.BUNDLE_DATA_IMPORTER_QUEUE_SIZE,
   }: {
     log: winston.Logger;
+    name?: string;
     contiguousDataSource: ContiguousDataSource;
     ans104Unbundler?: Ans104Unbundler;
     workerCount: number;
     maxQueueSize?: number;
   }) {
-    this.log = log.child({ class: this.constructor.name });
+    this.name = name;
+    this.log = log.child({ class: this.constructor.name, importer: name });
     this.contiguousDataSource = contiguousDataSource;
     if (ans104Unbundler) {
       this.ans104Unbundler = ans104Unbundler;
@@ -89,6 +94,7 @@ export class DataImporter {
       this.queue.push({ item, prioritized, bypassFilter });
       log.debug('Contiguous data download queued.');
     } else {
+      metrics.dataImporterQueueFullSkipsCounter.inc({ importer: this.name });
       log.debug('Skipping contiguous data download, queue is full.');
     }
   }
@@ -99,27 +105,57 @@ export class DataImporter {
     bypassFilter,
   }: DataImporterQueueItem): Promise<void> {
     const log = this.log.child({ method: 'download', id: item.id });
+    const startMs = Date.now();
 
-    const data = await this.contiguousDataSource.getData({ id: item.id });
+    // Instrument the source-chain rejection path (all sources exhausted,
+    // 404 from every tier, etc.) so failures before a stream is returned
+    // still show up in the duration / size histograms. Without this, the
+    // outcome="error" bucket only captures mid-stream failures.
+    let data;
+    try {
+      data = await this.contiguousDataSource.getData({ id: item.id });
+    } catch (error) {
+      const elapsedMs = Date.now() - startMs;
+      metrics.bundleDownloadDurationSeconds.observe(
+        { outcome: 'error' },
+        elapsedMs / 1000,
+      );
+      metrics.bundleDownloadSizeBytes.observe({ outcome: 'error' }, 0);
+      throw error;
+    }
+    const size = data.size;
 
     return new Promise((resolve, reject) => {
       data.stream.on('end', () => {
+        const elapsedMs = Date.now() - startMs;
+        metrics.bundleDownloadDurationSeconds.observe(
+          { outcome: 'success' },
+          elapsedMs / 1000,
+        );
+        metrics.bundleDownloadSizeBytes.observe({ outcome: 'success' }, size);
         const hasIndexProperty = this.hasIndexPropery(item);
+        log.info('Bundle download completed', {
+          elapsedMs,
+          size,
+          cached: data.cached,
+          willUnbundle: this.ans104Unbundler !== undefined && hasIndexProperty,
+        });
         if (this.ans104Unbundler && hasIndexProperty) {
-          log.debug('Data download completed. Queuing for unbundling...');
           this.ans104Unbundler.queueItem(item, prioritized, bypassFilter);
-        } else {
-          log.debug(
-            hasIndexProperty
-              ? 'Data download completed, skipping unbundling because unbundler is not available'
-              : 'Data download completed, skipping unbundling because no index was provided to the tx/data-item',
-          );
         }
         resolve();
       });
 
       data.stream.on('error', (error) => {
-        log.error('Error downloading data.', {
+        const elapsedMs = Date.now() - startMs;
+        metrics.bundleDownloadDurationSeconds.observe(
+          { outcome: 'error' },
+          elapsedMs / 1000,
+        );
+        metrics.bundleDownloadSizeBytes.observe({ outcome: 'error' }, size);
+        log.error('Bundle download failed', {
+          elapsedMs,
+          size,
           message: error.message,
           stack: error.stack,
         });
