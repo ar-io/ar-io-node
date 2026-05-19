@@ -254,6 +254,30 @@ export interface TxBoundarySource {
   ): Promise<TxBoundary | null>;
 }
 
+/**
+ * Decoded `X-Arweave-Chunk-*` response headers from a peer's
+ * `/chunk/{offset}/data` endpoint. Mirrors the headers `ar-io-node`
+ * itself emits (see `src/routes/chunk/handlers.ts` /
+ * `response-utils.ts`), so peers running the same code surface the
+ * same shape.
+ *
+ * NOTE: this is **untrusted input**. Values must be cross-checked
+ * against the chain (`/tx/{id}/offset`, `/tx/{id}`) before they may
+ * feed merkle proof validation. See {@link AnchoredChunkMetadata}
+ * for the verified shape and `lib/chunk-metadata-anchor.ts` for the
+ * cross-check.
+ */
+export interface ChunkHeaderMetadata {
+  txId: string;
+  dataRoot: string;
+  dataPath: string;
+  txPath: string;
+  txStartOffset: bigint;
+  txDataSize: bigint;
+  chunkStartOffset: bigint;
+  chunkRelativeStartOffset: bigint;
+}
+
 export interface BundleRecord {
   id: string;
   rootTransactionId?: string;

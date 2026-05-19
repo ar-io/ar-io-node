@@ -4,7 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { default as axios, AxiosInstance } from 'axios';
+import { default as axios, AxiosInstance, AxiosResponse } from 'axios';
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
@@ -152,14 +152,24 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
             const url = `${gatewayUrl}/raw/${id}`;
             log.debug('Making HEAD request to gateway', { url });
 
-            const response = await this.axiosInstance.head(url);
+            const response = await this.fetchPeerHeaders(url);
 
-            // Parse offset headers from response
+            // Parse offset headers from response.
+            //
+            // Naming-symmetry transition: peers running the latest code
+            // emit the request-shaped pair (`X-AR-IO-Root-Item-Offset` /
+            // `X-AR-IO-Root-Item-Size`) alongside the legacy pair
+            // (`X-AR-IO-Root-Data-Item-Offset` / `X-AR-IO-Root-Data-Offset`).
+            // Prefer the aligned name when present, fall back to legacy.
+            // The legacy headers will be removed after a deprecation
+            // window — see docs/glossary.md.
             const rootTxId = response.headers['x-ar-io-root-transaction-id'];
             const rootOffsetStr =
+              response.headers['x-ar-io-root-item-offset'] ??
               response.headers['x-ar-io-root-data-item-offset'];
             const rootDataOffsetStr =
               response.headers['x-ar-io-root-data-offset'];
+            const rootItemSizeStr = response.headers['x-ar-io-root-item-size'];
             const contentType = response.headers['content-type'];
             const contentLengthStr = response.headers['content-length'];
 
@@ -169,13 +179,17 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
               const rootDataOffset = parseNonNegativeInt(rootDataOffsetStr);
               // Content-Length is the size of the data, not the full data item with headers
               const dataSize = parseNonNegativeInt(contentLengthStr);
-              // Calculate total size if we have offsets: header size + data size
+              // Prefer the explicit `Root-Item-Size` header when emitted;
+              // otherwise compute the legacy way: header size + data size.
+              const explicitItemSize = parseNonNegativeInt(rootItemSizeStr);
               const size =
-                rootOffset !== undefined &&
-                rootDataOffset !== undefined &&
-                dataSize !== undefined
-                  ? rootDataOffset - rootOffset + dataSize
-                  : undefined;
+                explicitItemSize !== undefined
+                  ? explicitItemSize
+                  : rootOffset !== undefined &&
+                      rootDataOffset !== undefined &&
+                      dataSize !== undefined
+                    ? rootDataOffset - rootOffset + dataSize
+                    : undefined;
 
               const result: CachedGatewayOffsets = {
                 rootTxId,
@@ -244,5 +258,38 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
     }
 
     return undefined;
+  }
+
+  /**
+   * HEAD `/raw/:id` first; on a non-404 failure (network error, 405, 5xx,
+   * etc.) fall back to a zero-byte range GET. Some peers — especially
+   * those behind CDNs or proxies — don't support HEAD on this route even
+   * though the upstream gateway would. `bytes=0-0` is the smallest legal
+   * range; the server returns 1 byte of body we discard, and the headers
+   * are what we want.
+   *
+   * 404 is treated as a definitive "item doesn't exist on this peer" and
+   * propagated to the caller — falling back to GET would just hit the
+   * same 404 (or worse, mask a real not-found).
+   *
+   * Successful HEAD responses are returned as-is, even if they're missing
+   * the `X-AR-IO-Root-*` headers (the data may legitimately have no
+   * parent, e.g. an L1 tx) — falling back to GET in that case would just
+   * waste a request without changing the answer.
+   */
+  private async fetchPeerHeaders(url: string): Promise<AxiosResponse> {
+    try {
+      return await this.axiosInstance.head(url);
+    } catch (err: any) {
+      // 404: respect; peer says item doesn't exist here.
+      if (err.response?.status === 404) {
+        throw err;
+      }
+      // Network error, 405 Method Not Allowed, 5xx, etc. — try GET.
+      return this.axiosInstance.get(url, {
+        headers: { Range: 'bytes=0-0' },
+        responseType: 'arraybuffer',
+      });
+    }
   }
 }

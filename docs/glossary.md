@@ -320,7 +320,7 @@ AR.IO Node uses multiple offset types to efficiently locate and retrieve data.
 `/chunk/{offset}` endpoint (base64url-encoded JSON) or `/chunk/{offset}/data`
 endpoint (raw binary with metadata in headers).
 
-**Transaction Offset** - The end position (last byte) of a
+<a id="transaction-offset"></a> **Transaction Offset** - The end position (last byte) of a
 [transaction](#transaction) in the [weave](#weave). Combined with transaction
 size to calculate start position.
 
@@ -351,6 +351,39 @@ signature bytes.
 **Data Item Offset** - The position of a [data item](#data-item) within its
 parent [bundle](#bundle), relative to the bundle's start. Used to locate
 specific items within bundled data.
+
+<a id="retrieval-hint"></a> **Retrieval Hint** - A piece of already-resolved
+parent-chain metadata that one gateway can pass to another (as request headers
+on a forwarded request, or as response headers on a served response) so the
+receiving side can skip the resolver work it would otherwise do. Three kinds
+exist today: a root [transaction ID](#transaction) (`X-AR-IO-Root-Transaction-Id`),
+a parent path of intermediate bundle IDs (`X-AR-IO-Root-Path`), and a byte
+range within the root tx pointing at the [data item](#data-item)
+(`X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size`). Hints are always
+re-validated by the receiving gateway against parsed-header IDs before serving
+bytes — a wrong hint produces a fallthrough, never wrong bytes — so emitting
+one adds no trust surface.
+
+**Naming-symmetry note**: response headers historically used the longer pair
+`X-AR-IO-Root-Data-Item-Offset` / `X-AR-IO-Root-Data-Offset`, while the
+request-side hint pair uses the shorter `X-AR-IO-Root-Item-Offset` /
+`X-AR-IO-Root-Item-Size`. As of the chunk-metadata-anchor / hint-propagation
+work, ar-io-node responses now emit BOTH the legacy pair and the aligned pair
+so cache-and-replay can copy headers between request and response without
+renaming. The legacy headers remain for backwards compatibility and will be
+removed after a deprecation window.
+
+<a id="chain-anchored-offset"></a> **Chain-Anchored Offset** - A
+[transaction offset](#transaction-offset) reported by an untrusted peer (via
+`X-Arweave-Chunk-*` response headers on `/chunk/{offset}/data`) that has been
+cross-checked against the chain's own `/tx/{id}/offset` and `/tx/{id}` and so
+is safe to feed merkle proof validation. The anchor pattern lets the gateway
+skip the log₂(height) block binary search that would otherwise be needed when
+the local DB doesn't cover an offset, replacing it with one HEAD per offset
+plus two chain lookups per unique tx (cached in an LRU keyed by tx-id). On any
+disagreement between the peer and the chain, the source returns null and the
+composite falls through to the canonical chain binary search — never trust
+the peer over the node. See ar-io/ar-io-node#681.
 
 ## Network Participation
 

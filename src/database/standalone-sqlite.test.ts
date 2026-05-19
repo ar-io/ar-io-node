@@ -1592,6 +1592,81 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('getDataAttributes — parentId surfacing (PR #705)', () => {
+    // Regression: the canonical selectDataAttributes SQL didn't SELECT
+    // parent_id, so dataAttributes.parentId was always undefined. The
+    // route handler's X-AR-IO-Root-Path emission depended on it
+    // matching rootTransactionId for the single-level case. Without
+    // these rows, the header silently never fired in production. See
+    // src/database/sql/core/data-attributes.sql and
+    // src/routes/data/handlers.ts:502 for the cache-and-replay path.
+    // Use IDs distinct from DATA_ITEM_ID/dataItemRootTxId — earlier
+    // describe blocks mutate the shared `normalizedDataItem` fixture
+    // (e.g. getRootTx sets root_tx_id = null), so reusing the same
+    // IDs here would inherit polluted state under full-suite ordering.
+    //
+    // Both IDs are 43-char base64url strings ending in '0'. The last
+    // char of a 43-char b64url id encodes only the high 4 bits of a
+    // byte; the trailing 2 bits MUST be zero for the string to be
+    // canonical (round-trip stable through fromB64Url → toB64Url).
+    // '0' = 110100 has trailing '00' — canonical. Without this, the
+    // SQL row's parent_id encodes back to a different string and the
+    // assertion fails on a benign-looking single-char delta.
+    const PARENT_TEST_DATA_ITEM_ID =
+      'PrtTstParentIdSurfaceCheckPrtTstParentIdSI0';
+    const PARENT_TEST_PARENT_ID = '1111111111111111111111111111111111111111110';
+
+    it('returns parentId from a data item row', async () => {
+      const item = normalizeAns104DataItem({
+        rootTxId: PARENT_TEST_PARENT_ID,
+        parentId: PARENT_TEST_PARENT_ID,
+        parentIndex: -1,
+        index: 0,
+        ans104DataItem: { ...dataItem, id: PARENT_TEST_DATA_ITEM_ID },
+        filter: '',
+        dataHash: '',
+        rootParentOffset: 0,
+      });
+      await db.saveDataItem(item);
+
+      const attrs = await db.getDataAttributes(PARENT_TEST_DATA_ITEM_ID);
+      assert.notEqual(attrs, undefined);
+      assert.equal(attrs!.parentId, PARENT_TEST_PARENT_ID);
+      // Sanity: rootTransactionId should also be populated and equal
+      // parentId in the single-level case (parentId === rootTxId) —
+      // this is exactly what triggers X-AR-IO-Root-Path emission.
+      assert.equal(attrs!.rootTransactionId, PARENT_TEST_PARENT_ID);
+    });
+
+    it('returns parentId === undefined for an L1 transaction', async () => {
+      // L1 transactions have no parent — they ARE the root. The SQL
+      // selects null AS parent_id from the stable_transactions /
+      // new_transactions branches; the JS layer maps that to
+      // parentId === undefined (NOT null) so consumers can use the
+      // simple `!= null` guard.
+      const l1TxId = 'vYQNQruccPlvxatkcRYmoaVywIzHxS3DuBG1CPxNMPA';
+      const height = 982575;
+      const { block, txs, missingTxIds } =
+        await chainSource.getBlockAndTxsByHeight(height);
+      await db.saveBlockAndTxs(block, txs, missingTxIds);
+
+      const attrs = await db.getDataAttributes(l1TxId);
+      assert.notEqual(attrs, undefined);
+      assert.equal(attrs!.parentId, undefined);
+      // Note: L1 txs surface rootTransactionId === undefined too — the
+      // SQL selects null AS root_transaction_id from the transaction
+      // branches. The route handler's path-emit guard requires both to
+      // be non-null AND equal, so L1s correctly omit X-AR-IO-Root-Path.
+    });
+
+    it('returns undefined when the id is not in the database at all', async () => {
+      const attrs = await db.getDataAttributes(
+        'unknown-data-attributes-id-not-in-db-aaaaaaaaa',
+      );
+      assert.equal(attrs, undefined);
+    });
+  });
+
   describe('upsertNewDataItem clobber resistance (PE-9073)', () => {
     // Regression: after the unbundle path back-fills parent_id /
     // root_transaction_id / data_offset on a previously-optimistic data item,

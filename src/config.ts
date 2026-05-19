@@ -392,6 +392,41 @@ export const GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
 
+// Chain-anchored chunk metadata source (offset → tx + data_root via
+// reference-peer `/chunk/{offset}/data` headers, cross-checked against
+// the chain). Fast-path replacement for the log₂(height) block binary
+// search inside CompositeTxBoundarySource. See ar-io/ar-io-node#681.
+export const CHUNK_METADATA_ANCHOR_ENABLED =
+  env.varOrDefault('CHUNK_METADATA_ANCHOR_ENABLED', 'true') === 'true';
+
+// HTTP timeout (ms) for the peer HEAD/GET against `/chunk/{offset}/data`.
+// Kept tight: a slow reference peer should fail fast and let the
+// composite fall through to the existing tx-path / chain-search source.
+// Must be > 0; a zero timeout would immediately abort every request.
+export const CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS =
+  env.positiveIntOrDefault('CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS', 5000);
+
+// LRU cache size for anchored tx metadata. Each entry is keyed by tx-id
+// and holds the chain-verified bounds; sizing for the typical working
+// set of recently-probed txs. Must be > 0 — a zero-size cache is just
+// dead code.
+export const CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE = env.positiveIntOrDefault(
+  'CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE',
+  1024,
+);
+
+// LRU TTL (seconds) for cached anchored tx metadata. Bounds the window
+// over which a single chain cross-check covers repeated chunk probes
+// against the same tx. Values are immutable for stable txs, so TTL is
+// purely an eviction knob, not a correctness one — set to 0 to disable
+// time-based eviction (lru-cache interprets `ttl: 0` as no TTL; entries
+// then only evict under size pressure).
+export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
+  env.nonNegativeIntOrDefault(
+    'CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS',
+    300,
+  );
+
 // Root TX index lookup order configuration
 export const ROOT_TX_LOOKUP_ORDER = env
   .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql,hyperbeam,cdb')
