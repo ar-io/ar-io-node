@@ -891,6 +891,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     message: error.message,
                     stack: error.stack,
                   });
+                  await this.dataStore.cleanup(cacheStream);
                 }
               }
             }
