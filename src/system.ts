@@ -746,14 +746,20 @@ const chainBoundarySource = config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
 
 // Resolve the reference-peer pool used for chunk-metadata anchoring,
 // in priority order: GATEWAYS_ROOT_TX_URLS (already populated for the
-// peer-emitted-hint-source pattern) → first TRUSTED_GATEWAYS_URLS
+// peer-emitted-hint-source pattern) → highest-priority TRUSTED_GATEWAYS_URLS
 // entry (the architect's original fallback). One pool key controls
 // both consumers; operators don't have to keep two lists in sync.
+//
+// TRUSTED_GATEWAYS_URLS carries a per-entry `priority` (lower number =
+// higher priority); object insertion order from JSON isn't authoritative,
+// so sort explicitly before picking the single fallback.
 const chunkAnchorPeerUrls: string[] = (() => {
   const fromRootTx = Object.keys(config.GATEWAYS_ROOT_TX_URLS);
   if (fromRootTx.length > 0) return fromRootTx;
-  const fromTrusted = Object.keys(config.TRUSTED_GATEWAYS_URLS);
-  return fromTrusted.length > 0 ? [fromTrusted[0]] : [];
+  const fromTrusted = Object.entries(config.TRUSTED_GATEWAYS_URLS).sort(
+    ([, a], [, b]) => a.priority - b.priority,
+  );
+  return fromTrusted.length > 0 ? [fromTrusted[0][0]] : [];
 })();
 
 const chunkMetadataAnchorSource =

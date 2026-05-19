@@ -1169,6 +1169,11 @@ export class StandaloneSqliteDatabaseWorker {
     // Immediate parent bundle for data items, undefined for L1 txs.
     // Surfaced so route handlers can detect the single-level case
     // (parentId === rootTransactionId) and emit X-AR-IO-Root-Path.
+    // Sourced only from txOrItemRow (bundles.*_data_items.parent_id):
+    // data.db has no parent_id column on contiguous_data_ids — the
+    // parent relationship there lives in the separate
+    // contiguous_data_id_parents join table, accessed via
+    // selectDataParent.
     const parentId =
       txOrItemRow?.parent_id !== null && txOrItemRow?.parent_id !== undefined
         ? toB64Url(txOrItemRow.parent_id)
