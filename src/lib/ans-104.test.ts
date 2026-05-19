@@ -35,6 +35,10 @@ describe('isAcceptableBundleContentType (PE-9099)', () => {
     );
   });
 
+  it('accepts binary/octet-stream (legacy synonym for application/octet-stream)', () => {
+    assert.equal(isAcceptableBundleContentType('binary/octet-stream'), true);
+  });
+
   it('rejects text/html (the bundlr.network parking-page poison)', () => {
     assert.equal(
       isAcceptableBundleContentType('text/html; charset=utf-8'),

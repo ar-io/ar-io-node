@@ -54,6 +54,9 @@ const DEFAULT_STREAM_TIMEOUT = 1000 * 30; // 30 seconds
  *     bundle responses.
  *   - `application/octet-stream` — the canonical bundle content-type.
  *   - `application/x-arweave-data` — used by some Arweave-stack tools.
+ *   - `binary/octet-stream` — legacy MIME synonym for application/octet-stream;
+ *     ~350 such rows exist in production gateway `data.db.contiguous_data`
+ *     from older upstreams (PE-9099 investigation, 2026-05-18).
  */
 export const isAcceptableBundleContentType = (
   contentType: string | undefined,
@@ -61,7 +64,8 @@ export const isAcceptableBundleContentType = (
   if (contentType === undefined) return true;
   return (
     contentType.startsWith('application/octet-stream') ||
-    contentType.startsWith('application/x-arweave-data')
+    contentType.startsWith('application/x-arweave-data') ||
+    contentType.startsWith('binary/octet-stream')
   );
 };
 
