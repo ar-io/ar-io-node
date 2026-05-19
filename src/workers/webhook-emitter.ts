@@ -261,20 +261,17 @@ export class WebhookEmitter {
       // the keep-alive socket pool, which serializes to the entire Node Timer
       // wheel (megabytes of `_idleNext`/`_idlePrev` chains per failure) and
       // drowns stdout / docker logs. Extract just the fields we need.
+      //
+      // Response body is intentionally NOT logged: webhook receivers may
+      // echo user content (e.g., scanner returning matched data, downstream
+      // services reflecting request payloads). Status + code + message are
+      // sufficient for delivery-failure debugging.
       if (axios.isAxiosError(error)) {
-        const rawBody = error.response?.data;
-        const body =
-          typeof rawBody === 'string'
-            ? rawBody
-            : rawBody !== undefined
-              ? JSON.stringify(rawBody)
-              : undefined;
         this.log.error('Failed to emit webhook', {
           targetServer,
           status: error.response?.status,
           code: error.code,
           message: error.message,
-          responseBody: body?.slice(0, 500),
         });
       } else {
         this.log.error('Unexpected error while emitting webhook', {
