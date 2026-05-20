@@ -1,4 +1,14 @@
 -- selectFailedBundleIds
+-- The retry pool must hold only actual bundles. The live (TX_INDEXED ->
+-- ans104TxMatcher) and backfill (insertMissingBundles) queue paths both
+-- gate on the Bundle-Format tag; the admin queue-bundle endpoint does
+-- not, so non-bundle transactions can land in `bundles` and would
+-- otherwise be retried forever (they never set matched_data_item_count).
+-- A row is excluded only when its root transaction is indexed here and
+-- provably lacks Bundle-Format=binary. If the root tx is unknown to this
+-- gateway we cannot prove it is a non-bundle, so it stays eligible. Hash
+-- literals are the Bundle-Format / "binary" name+value hashes, identical
+-- to insertMissingBundles below.
 SELECT DISTINCT id
 FROM (
   SELECT b.root_transaction_id AS id
@@ -18,6 +28,30 @@ FROM (
     AND (
       b.matched_data_item_count IS NULL
       OR b.matched_data_item_count > 0
+    )
+    AND (
+      EXISTS (
+        SELECT 1 FROM stable_transaction_tags stt
+        WHERE stt.transaction_id = b.root_transaction_id
+          AND stt.tag_name_hash = x'BF796ECA81CCE3FF36CEA53FA1EBB0F274A0FF29'
+          AND stt.tag_value_hash = x'7E57CFE843145135AEE1F4D0D63CEB7842093712'
+      )
+      OR EXISTS (
+        SELECT 1 FROM new_transaction_tags ntt
+        WHERE ntt.transaction_id = b.root_transaction_id
+          AND ntt.tag_name_hash = x'BF796ECA81CCE3FF36CEA53FA1EBB0F274A0FF29'
+          AND ntt.tag_value_hash = x'7E57CFE843145135AEE1F4D0D63CEB7842093712'
+      )
+      OR (
+        NOT EXISTS (
+          SELECT 1 FROM stable_transactions st
+          WHERE st.id = b.root_transaction_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM new_transactions nt
+          WHERE nt.id = b.root_transaction_id
+        )
+      )
     )
   ORDER BY b.retry_attempt_count, b.last_retried_at ASC
   LIMIT @limit

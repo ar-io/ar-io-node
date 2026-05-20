@@ -1513,6 +1513,91 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('getFailedBundleIds — bundle-format gate (PE-9101)', () => {
+    // selectFailedBundleIds must retry only actual bundles. Non-bundle
+    // transactions can reach the bundles table via the admin queue-bundle
+    // endpoint, which bypasses the Bundle-Format gate the live and backfill
+    // queue paths enforce; without the gate they are retried forever.
+    // sha256-derived ids: canonical base64url (round-trip safe through
+    // fromB64Url/toB64Url) and collision-proof against other tests' rows.
+    const hashId = (seed: string): string =>
+      toB64Url(crypto.createHash('sha256').update(seed).digest());
+    const realRootId = hashId('PE-9101 realRoot');
+    const unknownRootId = hashId('PE-9101 unknownRoot');
+    const nonBundleRootId = hashId('PE-9101 nonBundleRoot');
+
+    // Bundle-Format / "binary" tag name+value hashes (see bundles/repair.sql).
+    const bundleFormatNameHash = Buffer.from(
+      'BF796ECA81CCE3FF36CEA53FA1EBB0F274A0FF29',
+      'hex',
+    );
+    const binaryValueHash = Buffer.from(
+      '7E57CFE843145135AEE1F4D0D63CEB7842093712',
+      'hex',
+    );
+
+    const insertBundleRow = (id: string, rootId: string) => {
+      bundlesDb
+        .prepare(
+          `INSERT INTO bundles (
+             id, format_id, matched_data_item_count,
+             root_transaction_id, retry_attempt_count
+           ) VALUES (@id, 1, 2, @root, 0)`,
+        )
+        .run({ id: fromB64Url(id), root: fromB64Url(rootId) });
+    };
+
+    // beforeEach (not before): the suite's global afterEach truncates
+    // every table, so fixtures must be re-seeded ahead of each test.
+    beforeEach(() => {
+      // Real bundle: root tx carries Bundle-Format=binary -> retried.
+      insertBundleRow(realRootId, realRootId);
+      coreDb
+        .prepare(
+          `INSERT INTO stable_transaction_tags (
+             tag_name_hash, tag_value_hash, height,
+             block_transaction_index, transaction_tag_index, transaction_id
+           ) VALUES (@name, @value, 1, 0, 0, @txId)`,
+        )
+        .run({
+          name: bundleFormatNameHash,
+          value: binaryValueHash,
+          txId: fromB64Url(realRootId),
+        });
+
+      // Non-bundle: root tx is indexed here but has no Bundle-Format tag
+      // -> provably not a bundle -> excluded from the retry pool.
+      insertBundleRow(nonBundleRootId, nonBundleRootId);
+      coreDb
+        .prepare(
+          `INSERT INTO stable_transactions (
+             id, height, block_transaction_index, format,
+             last_tx, owner_address, quantity, reward, tag_count
+           ) VALUES (@id, 1, 0, 2, @zero, @zero, '0', '0', 0)`,
+        )
+        .run({ id: fromB64Url(nonBundleRootId), zero: Buffer.alloc(32) });
+
+      // Unknown: root tx is not indexed on this gateway, so we cannot
+      // prove it is a non-bundle -> stays eligible for retry.
+      insertBundleRow(unknownRootId, unknownRootId);
+    });
+
+    it('retries a bundle whose root carries Bundle-Format=binary', async () => {
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(ids.includes(realRootId));
+    });
+
+    it('excludes a non-bundle whose indexed root tx has no Bundle-Format tag', async () => {
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(!ids.includes(nonBundleRootId));
+    });
+
+    it('keeps a bundle whose root tx is not indexed on this gateway', async () => {
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(ids.includes(unknownRootId));
+    });
+  });
+
   describe('getVerifiableDataIds', () => {
     it("should return an empty list if there's no verifiable data ids", async () => {
       const emptyDbIds = await db.getVerifiableDataIds();
