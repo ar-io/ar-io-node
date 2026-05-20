@@ -58,6 +58,8 @@ export class Ans104Unbundler {
     contiguousDataSource,
     dataItemIndexFilterString,
     workerCount,
+    getDataTimeoutMs,
+    streamTotalTimeoutMs,
     maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
     shouldUnbundle = () => true,
     ans104Parser,
@@ -68,6 +70,8 @@ export class Ans104Unbundler {
     contiguousDataSource: ContiguousDataSource;
     dataItemIndexFilterString: string;
     workerCount: number;
+    getDataTimeoutMs?: number;
+    streamTotalTimeoutMs?: number;
     maxQueueSize?: number;
     shouldUnbundle?: () => boolean;
     ans104Parser?: Ans104Parser;
@@ -82,6 +86,8 @@ export class Ans104Unbundler {
         contiguousDataSource,
         workerCount,
         dataItemIndexFilterString,
+        getDataTimeoutMs,
+        streamTotalTimeoutMs,
       });
 
     this.workerCount = workerCount;

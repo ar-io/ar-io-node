@@ -1293,6 +1293,8 @@ const ans104Unbundler = new Ans104Unbundler({
   contiguousDataSource: backgroundContiguousDataSource,
   dataItemIndexFilterString: config.ANS104_INDEX_FILTER_STRING,
   workerCount: config.ANS104_UNBUNDLE_WORKERS,
+  getDataTimeoutMs: config.ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS,
+  streamTotalTimeoutMs: config.ANS104_UNBUNDLE_STREAM_TOTAL_TIMEOUT_MS,
   shouldUnbundle: shouldUnbundleDataItems,
 });
 metrics.registerQueueLengthGauge('ans104Unbundler', {

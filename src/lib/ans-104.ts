@@ -169,6 +169,8 @@ export class Ans104Parser {
   private log: winston.Logger;
   private contiguousDataSource: ContiguousDataSource;
   private streamTimeout: number;
+  private getDataTimeoutMs: number;
+  private streamTotalTimeoutMs: number;
   private workers: any[] = []; // TODO what's the type for this?
   private workQueue: any[] = []; // TODO what's the type for this?
 
@@ -179,6 +181,8 @@ export class Ans104Parser {
     dataItemIndexFilterString,
     workerCount,
     streamTimeout = DEFAULT_STREAM_TIMEOUT,
+    getDataTimeoutMs = 30000,
+    streamTotalTimeoutMs = 120000,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
@@ -186,10 +190,14 @@ export class Ans104Parser {
     dataItemIndexFilterString: string;
     workerCount: number;
     streamTimeout?: number;
+    getDataTimeoutMs?: number;
+    streamTotalTimeoutMs?: number;
   }) {
     this.log = log.child({ class: 'Ans104Parser' });
     this.contiguousDataSource = contiguousDataSource;
     this.streamTimeout = streamTimeout;
+    this.getDataTimeoutMs = getDataTimeoutMs;
+    this.streamTotalTimeoutMs = streamTotalTimeoutMs;
 
     const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
 
@@ -328,16 +336,34 @@ export class Ans104Parser {
       let data: ContiguousData | undefined;
       try {
         const log = this.log.child({ parentId });
+        const getDataController = new AbortController();
+        let getDataTimer: NodeJS.Timeout | undefined;
+        if (this.getDataTimeoutMs > 0) {
+          getDataTimer = setTimeout(() => {
+            getDataController.abort(
+              new Error(
+                `Ans104Parser getData timeout after ${this.getDataTimeoutMs}ms`,
+              ),
+            );
+          }, this.getDataTimeoutMs);
+        }
 
         // Get data stream. PE-9099: refuse responses whose content-type
         // can't be a raw ANS-104 bundle (most notably text/html parking
         // pages held in poisoned upstream caches). The data source chain
         // will fall through to the next priority tier and ultimately to
         // chunks, which fetches real bytes from Arweave network nodes.
-        data = await this.contiguousDataSource.getData({
-          id: parentId,
-          acceptContentType: isAcceptableBundleContentType,
-        });
+        try {
+          data = await this.contiguousDataSource.getData({
+            id: parentId,
+            signal: getDataController.signal,
+            acceptContentType: isAcceptableBundleContentType,
+          });
+        } finally {
+          if (getDataTimer !== undefined) {
+            clearTimeout(getDataTimer);
+          }
+        }
 
         // Construct temp path for passing data to worker
         await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
@@ -354,12 +380,25 @@ export class Ans104Parser {
           data.stream,
           this.streamTimeout,
         );
+        let streamTotalTimer: NodeJS.Timeout | undefined;
+        if (this.streamTotalTimeoutMs > 0) {
+          streamTotalTimer = setTimeout(() => {
+            const timeoutError = new Error(
+              `Ans104Parser bundle stream timeout after ${this.streamTotalTimeoutMs}ms`,
+            );
+            data?.stream.destroy(timeoutError);
+            writeStream.destroy(timeoutError);
+          }, this.streamTotalTimeoutMs);
+        }
         data.stream.pause();
 
         // Write data stream to temp file
         const writeStream = fs.createWriteStream(bundlePath);
         pipeline(data.stream, writeStream, async (error) => {
           cleanupStallTimeout();
+          if (streamTotalTimer !== undefined) {
+            clearTimeout(streamTotalTimer);
+          }
           if (error !== undefined) {
             reject(error);
             log.error('Error writing ANS-104 bundle stream', error);
