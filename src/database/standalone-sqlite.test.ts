@@ -1598,6 +1598,44 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('getFullRepairBacklogCount (PE-9101)', () => {
+    const insertBundle = (
+      seed: string,
+      matched: number | null,
+      fullyIndexedAt: number | null,
+      skippedAt: number | null,
+    ) => {
+      bundlesDb
+        .prepare(
+          `INSERT INTO bundles (
+             id, format_id, matched_data_item_count,
+             last_fully_indexed_at, last_skipped_at
+           ) VALUES (@id, 1, @matched, @fully, @skipped)`,
+        )
+        .run({
+          id: crypto
+            .createHash('sha256')
+            .update(`PE-9101 full-backlog ${seed}`)
+            .digest(),
+          matched,
+          fully: fullyIndexedAt,
+          skipped: skippedAt,
+        });
+    };
+
+    beforeEach(() => {
+      insertBundle('never-unbundled', null, null, null); // counted
+      insertBundle('in-flight', 5, null, null); // counted
+      insertBundle('finished-zero-items', 0, null, null); // excluded
+      insertBundle('fully-indexed', 5, 1_700_000_000, null); // excluded
+      insertBundle('skipped', 5, null, 1_700_000_000); // excluded
+    });
+
+    it('counts never-unbundled + in-flight bundles, excludes finished/indexed/skipped', async () => {
+      assert.equal(await db.getFullRepairBacklogCount(), 2);
+    });
+  });
+
   describe('getVerifiableDataIds', () => {
     it("should return an empty list if there's no verifiable data ids", async () => {
       const emptyDbIds = await db.getVerifiableDataIds();

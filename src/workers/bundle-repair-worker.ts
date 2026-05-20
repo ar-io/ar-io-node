@@ -200,11 +200,12 @@ export class BundleRepairWorker {
         try {
           const pending = await this.bundleIndex.getRepairBacklogCount();
           metrics.bundleRepairPendingBundlesGauge.set(pending);
+          const backlog = await this.bundleIndex.getFullRepairBacklogCount();
+          metrics.bundleRepairBacklogBundlesGauge.set(backlog);
         } catch (gaugeError: any) {
-          this.log.warn(
-            'Failed to refresh bundle_repair_pending_bundles gauge',
-            { error: gaugeError?.message ?? String(gaugeError) },
-          );
+          this.log.warn('Failed to refresh bundle repair backlog gauges', {
+            error: gaugeError?.message ?? String(gaugeError),
+          });
         }
       });
     } catch (error: any) {

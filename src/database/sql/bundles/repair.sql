@@ -66,6 +66,19 @@ WHERE matched_data_item_count IS NOT NULL
   AND last_fully_indexed_at IS NULL
   AND last_skipped_at IS NULL
 
+-- selectFullRepairBacklogCount
+-- Full unbundling backlog: every bundle still awaiting unbundling work,
+-- not just the matched_data_item_count > 0 subset that
+-- selectRepairBacklogCount reports. Counts bundles never successfully
+-- unbundled (matched_data_item_count IS NULL) as well; excludes finished
+-- bundles (matched_data_item_count = 0), fully-indexed rows, and
+-- parked/skipped rows.
+SELECT COUNT(*) AS n
+FROM bundles
+WHERE (matched_data_item_count IS NULL OR matched_data_item_count > 0)
+  AND last_fully_indexed_at IS NULL
+  AND last_skipped_at IS NULL
+
 -- updateFullyIndexedAt
 UPDATE bundles
 SET
