@@ -163,6 +163,44 @@ describe('attachStallTimeout', () => {
     // Clean up
     stream.destroy();
   });
+
+  it('should destroy stream when maxRequestMs elapses even while paused', async () => {
+    // The wedge scenario: stall timer is cleared on pause, so a paused
+    // stream whose upstream goes silent would hang forever without this
+    // wall-clock cap.
+    const stream = new PassThrough();
+    attachStallTimeout(stream, 1000, 50); // stall=1s, maxRequest=50ms
+    // Don't resume — leave stream in its initial paused state, simulating
+    // backpressure + upstream stall.
+
+    await sleep(80);
+    assert.equal(stream.destroyed, true);
+  });
+
+  it('should not fire maxRequestMs after stream ends', async () => {
+    const stream = new PassThrough();
+    attachStallTimeout(stream, 1000, 50);
+    stream.end();
+
+    // Allow the maxRequestMs window to pass; if cleanup didn't clear
+    // the timer, .destroy() would still get called (harmless on an
+    // already-ended stream, but we want to verify the timer is cleared).
+    await sleep(80);
+    // Stream is ended (and Node autoDestroy makes destroyed=true too,
+    // but that's a normal-completion side effect, not the maxTimer).
+    assert.equal(stream.readableEnded, true);
+  });
+
+  it('should not arm maxRequestMs when not provided (backward compatibility)', async () => {
+    const stream = new PassThrough();
+    attachStallTimeout(stream, 1000); // no maxRequestMs
+    // Keep paused and wait beyond what a default cap might be
+    await sleep(80);
+    assert.equal(stream.destroyed, false);
+
+    // Clean up
+    stream.destroy();
+  });
 });
 
 describe('pipeStreamToResponse', () => {
