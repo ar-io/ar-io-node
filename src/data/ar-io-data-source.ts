@@ -44,6 +44,7 @@ export class ArIODataSource implements ContiguousDataSource {
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
   private streamStallTimeoutMs: number;
+  private streamRequestTimeoutMs: number;
   private peerManager: ArIOPeerManager;
   private dataAttributesStore: ContiguousDataAttributesStore;
   private peerRequestLimiter?: PeerRequestLimiter;
@@ -57,6 +58,7 @@ export class ArIODataSource implements ContiguousDataSource {
     maxHopsAllowed = MAX_DATA_HOPS,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
+    streamRequestTimeoutMs = config.STREAM_REQUEST_TIMEOUT_MS,
   }: {
     log: winston.Logger;
     peerManager: ArIOPeerManager;
@@ -65,11 +67,13 @@ export class ArIODataSource implements ContiguousDataSource {
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
     streamStallTimeoutMs?: number;
+    streamRequestTimeoutMs?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
     this.streamStallTimeoutMs = streamStallTimeoutMs;
+    this.streamRequestTimeoutMs = streamRequestTimeoutMs;
     this.peerManager = peerManager;
     this.dataAttributesStore = dataAttributesStore;
     this.peerRequestLimiter = peerRequestLimiter;
@@ -131,7 +135,17 @@ export class ArIODataSource implements ContiguousDataSource {
       () => controller.abort(new Error('Connection timeout')),
       this.requestTimeoutMs,
     );
-    const onClientAbort = () => controller.abort(signal?.reason);
+    const onClientAbort = () => {
+      // INSTRUMENTATION (2026-05-17): trace abort-path propagation. If
+      // `optB.hedge_aborted` fires but this doesn't, AbortSignal.any
+      // isn't propagating the parent abort to per-peer attempts.
+      this.log.info('optB.peer_aborted', {
+        peer: peerAddress,
+        id,
+        reason: (signal as any)?.reason?.message,
+      });
+      controller.abort(signal?.reason);
+    };
     if (signal?.aborted) {
       onClientAbort();
     } else if (signal) {
@@ -179,7 +193,11 @@ export class ArIODataSource implements ContiguousDataSource {
         );
       }
 
-      attachStallTimeout(response.data, this.streamStallTimeoutMs);
+      attachStallTimeout(
+        response.data,
+        this.streamStallTimeoutMs,
+        this.streamRequestTimeoutMs,
+      );
 
       return response;
     } catch (rawError) {
@@ -406,6 +424,7 @@ export class ArIODataSource implements ContiguousDataSource {
         hedgeDelayMs: config.PEER_HEDGE_DELAY_MS,
         maxConcurrent: config.PEER_MAX_HEDGED_REQUESTS,
         signal,
+        log: this.log,
       });
 
       return result;

@@ -242,6 +242,40 @@ export const GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET =
     ? Math.floor(parsedRangeAccept200MaxOffset)
     : GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET_DEFAULT;
 
+// Wall-clock cap on a single HTTP-response stream's total time from
+// attachment to completion. Belt-and-suspenders for the
+// backpressure-pause-then-upstream-stall wedge: STREAM_STALL_TIMEOUT_MS
+// is cleared on pause, so an upstream that goes silent while we're
+// paused for backpressure can hang forever. This cap fires regardless
+// of pause state and forces a worker to give up after the configured
+// duration so the bundle is retried on a different peer. Generous
+// default — only legitimately slow transfers exceeding ~1.1 MB/s on a
+// 1 GB bundle would trip it.
+export const STREAM_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
+  'STREAM_REQUEST_TIMEOUT_MS',
+  1000 * 60 * 15, // 15 minutes
+);
+
+// Wall-clock cap on DataImporter.download() — the entire span from queue
+// dequeue through stream completion. Covers TWO failure modes that
+// STREAM_REQUEST_TIMEOUT_MS cannot:
+//   (1) Pre-stream wedge: workers blocked in `await getData()` waiting for
+//       the cascade to produce a stream (e.g., every source in
+//       BACKGROUND_RETRIEVAL_ORDER failing/timing-out serially).
+//       STREAM_REQUEST_TIMEOUT_MS is on the stream itself and never
+//       attaches in this state.
+//   (2) Belt-and-suspenders for the stream phase if a per-stream cap
+//       somehow doesn't fire.
+// Implementation propagates abort into the cascade via AbortController —
+// SequentialDataSource and each inner source (ArIO/Gateways/TxChunks)
+// already honor the signal end-to-end. Default sized comfortably above
+// STREAM_REQUEST_TIMEOUT_MS so legitimate slow downloads finish before
+// this fires.
+export const DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS = env.positiveIntOrDefault(
+  'DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS',
+  1000 * 60 * 20, // 20 minutes
+);
+
 // GraphQL root TX lookup gateways (separate from data retrieval gateways)
 export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(

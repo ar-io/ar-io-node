@@ -10,6 +10,7 @@ import * as winston from 'winston';
 
 import { Ans104Unbundler } from './ans104-unbundler.js';
 import {
+  ContiguousData,
   ContiguousDataSource,
   NormalizedDataItem,
   PartialJsonTransaction,
@@ -43,6 +44,7 @@ export class DataImporter {
   private name: string;
   private workerCount: number;
   private maxQueueSize: number;
+  private downloadTimeoutMs: number;
   private queue: queueAsPromised<DataImporterQueueItem, void>;
 
   constructor({
@@ -52,6 +54,7 @@ export class DataImporter {
     ans104Unbundler,
     workerCount,
     maxQueueSize = config.BUNDLE_DATA_IMPORTER_QUEUE_SIZE,
+    downloadTimeoutMs = config.DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS,
   }: {
     log: winston.Logger;
     name?: string;
@@ -59,6 +62,7 @@ export class DataImporter {
     ans104Unbundler?: Ans104Unbundler;
     workerCount: number;
     maxQueueSize?: number;
+    downloadTimeoutMs?: number;
   }) {
     this.name = name;
     this.log = log.child({ class: this.constructor.name, importer: name });
@@ -68,6 +72,7 @@ export class DataImporter {
     }
     this.workerCount = workerCount;
     this.maxQueueSize = maxQueueSize;
+    this.downloadTimeoutMs = downloadTimeoutMs;
     this.queue = fastq.promise(
       this.download.bind(this),
       Math.max(workerCount, 1), // fastq doesn't allow 0 workers
@@ -107,80 +112,149 @@ export class DataImporter {
     const log = this.log.child({ method: 'download', id: item.id });
     const startMs = Date.now();
 
-    // Phase counters: lets operators see *where* a worker is stuck when
-    // the bundle pipeline wedges (queue pegged, no completions, no errors).
-    //   started - got_data - getData_errored        = workers currently
-    //                                                 inside getData()
-    //   got_data - stream_ended - stream_errored    = workers waiting on
-    //                                                 stream end/error
-    // If (started - got_data - getData_errored) keeps climbing while
-    // completion counters flatline, the hang is in the source chain
-    // (cache lookup, sequential source dispatch, or one of the inner
-    // sources). If the gap is on the stream side, the hang is in the
-    // cache write or stream consumption.
-    metrics.dataImporterPhaseCounter.inc({ phase: 'started' });
+    // Wall-clock cap on the WHOLE download using Promise.race against a
+    // setTimeout-rejected promise. This is the AbortSignal-independent
+    // version: regardless of whether abort propagates through the cascade,
+    // download() is GUARANTEED to return when the timeout fires.
+    //
+    // Why Promise.race + setTimeout instead of just AbortController:
+    // Investigation 2026-05-17/18 proved abort propagation through the
+    // cascade is unreliable. Timer counter math showed `timer_fired`
+    // increments without `download()` returning — 32 workers stuck pre-data
+    // forever because `await contiguousDataSource.getData(...)` never threw
+    // even after `abortController.abort()` was called. The downside of
+    // Promise.race: the underlying cascade may continue running in the
+    // background after the race is decided (resource leak we accept), but
+    // the fastq worker is freed to pick up the next bundle.
+    //
+    // We still arm `abortController` and call `.abort()` from the timeout
+    // callback — when abort DOES propagate (most cases), it cleans up the
+    // background cascade properly. When it doesn't, Promise.race fires
+    // anyway. Belt and suspenders.
+    const abortController = new AbortController();
+    let data: ContiguousData | undefined;
+    let timedOut = false;
+    // INSTRUMENTATION: counter-based timer lifecycle. Compare:
+    //   timer_created   = downloads that armed a setTimeout
+    //   timer_fired     = timeouts that won the race
+    //   timer_cleared   = timeouts cleared by finally{} (normal completion)
+    metrics.dataImporterPhaseCounter.inc({ phase: 'timer_created' });
 
-    // Instrument the source-chain rejection path (all sources exhausted,
-    // 404 from every tier, etc.) so failures before a stream is returned
-    // still show up in the duration / size histograms. Without this, the
-    // outcome="error" bucket only captures mid-stream failures.
-    let data;
-    try {
-      data = await this.contiguousDataSource.getData({ id: item.id });
-    } catch (error) {
-      const elapsedMs = Date.now() - startMs;
-      metrics.bundleDownloadDurationSeconds.observe(
-        { outcome: 'error' },
-        elapsedMs / 1000,
-      );
-      metrics.bundleDownloadSizeBytes.observe({ outcome: 'error' }, 0);
-      metrics.dataImporterPhaseCounter.inc({ phase: 'getData_errored' });
-      throw error;
-    }
-    metrics.dataImporterPhaseCounter.inc({ phase: 'got_data' });
-    const size = data.size;
-
-    return new Promise((resolve, reject) => {
-      data.stream.on('end', () => {
-        metrics.dataImporterPhaseCounter.inc({ phase: 'stream_ended' });
-        const elapsedMs = Date.now() - startMs;
-        metrics.bundleDownloadDurationSeconds.observe(
-          { outcome: 'success' },
-          elapsedMs / 1000,
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        const err = new Error(
+          `DataImporter download exceeded ${this.downloadTimeoutMs}ms wall-clock cap`,
         );
-        metrics.bundleDownloadSizeBytes.observe({ outcome: 'success' }, size);
-        const hasIndexProperty = this.hasIndexPropery(item);
-        log.info('Bundle download completed', {
-          elapsedMs,
-          size,
-          cached: data.cached,
-          willUnbundle: this.ans104Unbundler !== undefined && hasIndexProperty,
+        metrics.dataImporterPhaseCounter.inc({ phase: 'timer_fired' });
+        log.info('optB.timer_fired', {
+          id: item.id,
+          timeoutMs: this.downloadTimeoutMs,
+          hadStream: data !== undefined,
         });
-        if (this.ans104Unbundler && hasIndexProperty) {
-          this.ans104Unbundler.queueItem(item, prioritized, bypassFilter);
+        // Still attempt clean cancellation — when abort DOES propagate it
+        // tears down the background work. When it doesn't, Promise.race
+        // below frees the worker anyway via the reject().
+        abortController.abort(err);
+        if (data?.stream && !data.stream.destroyed) {
+          try {
+            data.stream.destroy(err);
+          } catch {
+            /* destroy on already-destroyed stream is a no-op */
+          }
         }
-        resolve();
-      });
-
-      data.stream.on('error', (error) => {
-        metrics.dataImporterPhaseCounter.inc({ phase: 'stream_errored' });
-        const elapsedMs = Date.now() - startMs;
-        metrics.bundleDownloadDurationSeconds.observe(
-          { outcome: 'error' },
-          elapsedMs / 1000,
-        );
-        metrics.bundleDownloadSizeBytes.observe({ outcome: 'error' }, size);
-        log.error('Bundle download failed', {
-          elapsedMs,
-          size,
-          message: error.message,
-          stack: error.stack,
-        });
-        reject(error);
-      });
-
-      data.stream.resume();
+        reject(err);
+      }, this.downloadTimeoutMs);
     });
+
+    // The actual download flow as an IIFE so Promise.race can pit it
+    // against the timeout. The IIFE keeps running in the background if
+    // timeoutPromise wins the race — that's the acceptable leak.
+    const downloadPromise = (async () => {
+      // Phase counters from #736: locate stuck workers when pipeline wedges.
+      metrics.dataImporterPhaseCounter.inc({ phase: 'started' });
+      try {
+        data = await this.contiguousDataSource.getData({
+          id: item.id,
+          signal: abortController.signal,
+        });
+      } catch (error) {
+        metrics.dataImporterPhaseCounter.inc({ phase: 'getData_errored' });
+        throw error;
+      }
+      metrics.dataImporterPhaseCounter.inc({ phase: 'got_data' });
+      const size = data.size;
+
+      await new Promise<void>((resolve, reject) => {
+        data!.stream.on('end', () => {
+          metrics.dataImporterPhaseCounter.inc({ phase: 'stream_ended' });
+          const elapsedMs = Date.now() - startMs;
+          metrics.bundleDownloadDurationSeconds.observe(
+            { outcome: 'success' },
+            elapsedMs / 1000,
+          );
+          metrics.bundleDownloadSizeBytes.observe({ outcome: 'success' }, size);
+          const hasIndexProperty = this.hasIndexPropery(item);
+          log.info('Bundle download completed', {
+            elapsedMs,
+            size,
+            cached: data!.cached,
+            willUnbundle:
+              this.ans104Unbundler !== undefined && hasIndexProperty,
+          });
+          if (this.ans104Unbundler && hasIndexProperty) {
+            this.ans104Unbundler.queueItem(item, prioritized, bypassFilter);
+          }
+          resolve();
+        });
+
+        data!.stream.on('error', (error) => {
+          metrics.dataImporterPhaseCounter.inc({ phase: 'stream_errored' });
+          const elapsedMs = Date.now() - startMs;
+          metrics.bundleDownloadDurationSeconds.observe(
+            { outcome: 'error' },
+            elapsedMs / 1000,
+          );
+          metrics.bundleDownloadSizeBytes.observe({ outcome: 'error' }, size);
+          log.error('Bundle download failed', {
+            elapsedMs,
+            size,
+            message: error.message,
+            stack: error.stack,
+          });
+          reject(error);
+        });
+
+        data!.stream.resume();
+      });
+    })();
+
+    // Suppress unhandled-rejection if downloadPromise loses the race and
+    // eventually rejects (it can keep running in the background). Attaching
+    // a .catch on the original promise marks any future rejection as handled
+    // without affecting what Promise.race observes from `downloadPromise`.
+    downloadPromise.catch(() => {
+      /* loser of race — already handled via timeoutPromise reject */
+    });
+
+    try {
+      await Promise.race([downloadPromise, timeoutPromise]);
+    } catch (error: any) {
+      if (timedOut) {
+        log.warn('Download aborted by wall-clock cap', {
+          timeoutMs: this.downloadTimeoutMs,
+          message: error.message,
+        });
+      }
+      throw error;
+    } finally {
+      // INSTRUMENTATION: timer_cleared only on normal completion path.
+      if (!timedOut) {
+        metrics.dataImporterPhaseCounter.inc({ phase: 'timer_cleared' });
+      }
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
   }
 
   async stop(): Promise<void> {
