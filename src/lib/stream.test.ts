@@ -188,6 +188,7 @@ describe('attachStallTimeout', () => {
     await sleep(80);
     // Stream is ended but not destroyed by our timer
     assert.equal(stream.readableEnded, true);
+    assert.equal(stream.destroyed, false);
   });
 
   it('should not arm maxRequestMs when not provided (backward compatibility)', async () => {

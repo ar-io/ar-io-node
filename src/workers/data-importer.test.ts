@@ -277,7 +277,6 @@ describe('DataImporter', () => {
         maxQueueSize: 1,
         downloadTimeoutMs: 60_000, // long enough that healthy path completes first
       });
-      mock.method(ans104Unbundler, 'queueItem');
 
       await importer.download({
         item: mockItem,
