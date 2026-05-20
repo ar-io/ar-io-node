@@ -316,7 +316,7 @@ export interface BundleIndex {
    * unbundling work — `last_fully_indexed_at IS NULL`, `last_skipped_at IS
    * NULL`, and `matched_data_item_count` either NULL or > 0. Unlike
    * `getRepairBacklogCount` this includes bundles never successfully
-   * unbundled. Drives the `bundle_repair_backlog_bundles` gauge.
+   * unbundled. Drives the `bundles_unbundling_backlog` gauge.
    */
   getFullRepairBacklogCount(): Promise<number>;
   updateBundlesFullyIndexedAt(): Promise<void>;

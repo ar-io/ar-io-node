@@ -201,7 +201,7 @@ export class BundleRepairWorker {
           const pending = await this.bundleIndex.getRepairBacklogCount();
           metrics.bundleRepairPendingBundlesGauge.set(pending);
           const backlog = await this.bundleIndex.getFullRepairBacklogCount();
-          metrics.bundleRepairBacklogBundlesGauge.set(backlog);
+          metrics.bundlesUnbundlingBacklogGauge.set(backlog);
         } catch (gaugeError: any) {
           this.log.warn('Failed to refresh bundle repair backlog gauges', {
             error: gaugeError?.message ?? String(gaugeError),

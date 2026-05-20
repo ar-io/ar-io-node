@@ -198,7 +198,7 @@ describe('BundleRepairWorker metrics', () => {
       1234,
     );
     assert.equal(
-      (await metrics.bundleRepairBacklogBundlesGauge.get()).values[0]?.value,
+      (await metrics.bundlesUnbundlingBacklogGauge.get()).values[0]?.value,
       9_000_000,
     );
 
@@ -210,7 +210,7 @@ describe('BundleRepairWorker metrics', () => {
       7,
     );
     assert.equal(
-      (await metrics.bundleRepairBacklogBundlesGauge.get()).values[0]?.value,
+      (await metrics.bundlesUnbundlingBacklogGauge.get()).values[0]?.value,
       11,
     );
   });
