@@ -912,6 +912,13 @@ export class StandaloneSqliteDatabaseWorker {
     return row?.n ?? 0;
   }
 
+  getIndexedChildIds(parentId: string): string[] {
+    const rows = this.stmts.bundles.selectIndexedChildIds.all({
+      parent_id: fromB64Url(parentId),
+    });
+    return rows.map((row): string => toB64Url(row.id));
+  }
+
   backfillBundles() {
     this.stmts.bundles.insertMissingBundles.run();
   }
@@ -3335,6 +3342,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('bundles', 'getRepairBacklogCount', undefined);
   }
 
+  getIndexedChildIds(parentId: string): Promise<string[]> {
+    return this.queueRead('bundles', 'getIndexedChildIds', [parentId]);
+  }
+
   backfillBundles() {
     return this.queueRead('bundles', 'backfillBundles', undefined);
   }
@@ -3859,6 +3870,9 @@ if (!isMainThread) {
           break;
         case 'getRepairBacklogCount':
           parentPort?.postMessage(worker.getRepairBacklogCount());
+          break;
+        case 'getIndexedChildIds':
+          parentPort?.postMessage(worker.getIndexedChildIds(args[0]));
           break;
         case 'backfillBundles':
           worker.backfillBundles();
