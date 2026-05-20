@@ -211,6 +211,10 @@ export class Ans104Parser {
 
       let job: any = null; // Current item from the queue
       let error: any = null; // Error that caused the worker to crash
+      // A worker can emit 'exit' without ever emitting 'online' (failed
+      // startup). Track whether it was counted so 'exit' doesn't drive the
+      // pool-size gauge negative.
+      let countedInPool = false;
 
       function takeWork() {
         if (!job && self.workQueue.length) {
@@ -222,6 +226,7 @@ export class Ans104Parser {
 
       worker
         .on('online', () => {
+          countedInPool = true;
           metrics.ans104ParserWorkerPoolSizeGauge.inc();
           self.workers.push({ takeWork });
           takeWork();
@@ -262,7 +267,9 @@ export class Ans104Parser {
           error = err;
         })
         .on('exit', (code) => {
-          metrics.ans104ParserWorkerPoolSizeGauge.dec();
+          if (countedInPool) {
+            metrics.ans104ParserWorkerPoolSizeGauge.dec();
+          }
           metrics.ans104ParserWorkerExitsCounter.inc({
             exit_code: String(code),
           });
@@ -334,6 +341,7 @@ export class Ans104Parser {
     return new Promise(async (resolve, reject) => {
       let bundlePath: string | undefined;
       let data: ContiguousData | undefined;
+      let streamTotalTimer: NodeJS.Timeout | undefined;
       try {
         const log = this.log.child({ parentId });
         const getDataController = new AbortController();
@@ -380,7 +388,12 @@ export class Ans104Parser {
           data.stream,
           this.streamTimeout,
         );
-        let streamTotalTimer: NodeJS.Timeout | undefined;
+
+        // Write data stream to temp file. Created before the total-stream
+        // timer is armed so the timer callback never references it before
+        // assignment, and a createWriteStream throw can't leave the timer
+        // armed.
+        const writeStream = fs.createWriteStream(bundlePath);
         if (this.streamTotalTimeoutMs > 0) {
           streamTotalTimer = setTimeout(() => {
             const timeoutError = new Error(
@@ -392,8 +405,6 @@ export class Ans104Parser {
         }
         data.stream.pause();
 
-        // Write data stream to temp file
-        const writeStream = fs.createWriteStream(bundlePath);
         pipeline(data.stream, writeStream, async (error) => {
           cleanupStallTimeout();
           if (streamTotalTimer !== undefined) {
@@ -431,6 +442,9 @@ export class Ans104Parser {
         });
       } catch (error) {
         reject(error);
+        if (streamTotalTimer !== undefined) {
+          clearTimeout(streamTotalTimer);
+        }
         if (bundlePath !== undefined) {
           try {
             await fsPromises.unlink(bundlePath);
