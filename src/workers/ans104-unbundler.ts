@@ -136,6 +136,8 @@ export class Ans104Unbundler {
     bypassFilter: boolean;
   }): Promise<void> {
     const log = this.log.child({ method: 'unbundle', id: item.id });
+    metrics.bundlesUnbundleStartedCounter.inc();
+    metrics.bundlesUnbundleInFlightGauge.inc();
     try {
       let rootTxId: string | undefined;
       if ('root_tx_id' in item && item.root_tx_id !== null) {
@@ -174,6 +176,8 @@ export class Ans104Unbundler {
         message: error?.message,
         stack: error?.stack,
       });
+    } finally {
+      metrics.bundlesUnbundleInFlightGauge.dec();
     }
   }
 

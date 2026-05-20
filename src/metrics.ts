@@ -207,6 +207,47 @@ export const bundlesUnbundleSkippedCounter = new promClient.Counter({
   labelNames: ['reason'],
 });
 
+// Liveness instrumentation for the unbundle pipeline. The Ans104Unbundler
+// fastq worker (`unbundle`) has no timeout: if a parse hangs, its slot is
+// held forever, and once all slots are held the queue stops draining. These
+// metrics make a stall provable and localizable:
+//
+//   bundles_unbundle_in_flight pinned at the worker count, while
+//   bundles_unbundle_started_total is flat and queue_length is non-empty,
+//   means the unbundler is hung — not merely slow.
+//
+//   started_total advancing while ans104_parser_jobs_started_total is flat
+//   => the hang is before the parse stage (download/pipeline).
+//   jobs_started advancing but no completions => the hang is in a parse
+//   worker.
+//   ans104_parser_worker_pool_size declining toward 0 => workers are
+//   exiting without respawn (only non-zero exit codes trigger a respawn).
+export const bundlesUnbundleStartedCounter = new promClient.Counter({
+  name: 'bundles_unbundle_started_total',
+  help: 'Count of Ans104Unbundler.unbundle invocations (fastq job starts).',
+});
+
+export const bundlesUnbundleInFlightGauge = new promClient.Gauge({
+  name: 'bundles_unbundle_in_flight',
+  help: 'Ans104Unbundler.unbundle invocations currently in progress. Pinned at the worker count with no completions indicates the unbundler is hung.',
+});
+
+export const ans104ParserWorkerPoolSizeGauge = new promClient.Gauge({
+  name: 'ans104_parser_worker_pool_size',
+  help: 'Live Ans104Parser worker threads. A monotonic decline toward 0 means workers are exiting without being respawned.',
+});
+
+export const ans104ParserWorkerExitsCounter = new promClient.Counter({
+  name: 'ans104_parser_worker_exits_total',
+  help: 'Ans104Parser worker thread exits, labelled by exit code.',
+  labelNames: ['exit_code'],
+});
+
+export const ans104ParserJobsStartedCounter = new promClient.Counter({
+  name: 'ans104_parser_jobs_started_total',
+  help: 'Parse jobs dispatched to the Ans104Parser worker pool (reached the post-download parse stage).',
+});
+
 // Observability for `BundleRepairWorker`. The worker has no direct view of
 // "successful repair" (whether a re-queued bundle eventually transitions to
 // fully indexed happens downstream of this worker), but the combination of

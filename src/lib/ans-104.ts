@@ -22,6 +22,7 @@ import * as winston from 'winston';
 import * as events from '../events.js';
 import { createFilter } from '../filters.js';
 import log from '../log.js';
+import * as metrics from '../metrics.js';
 import {
   ContiguousData,
   ContiguousDataSource,
@@ -213,6 +214,7 @@ export class Ans104Parser {
 
       worker
         .on('online', () => {
+          metrics.ans104ParserWorkerPoolSizeGauge.inc();
           self.workers.push({ takeWork });
           takeWork();
         })
@@ -252,6 +254,10 @@ export class Ans104Parser {
           error = err;
         })
         .on('exit', (code) => {
+          metrics.ans104ParserWorkerPoolSizeGauge.dec();
+          metrics.ans104ParserWorkerExitsCounter.inc({
+            exit_code: String(code),
+          });
           self.workers = self.workers.filter(
             (w: any) => w.takeWork !== takeWork,
           );
@@ -369,6 +375,7 @@ export class Ans104Parser {
             }
           } else {
             log.info('Parsing ANS-104 bundle stream...');
+            metrics.ans104ParserJobsStartedCounter.inc();
             this.workQueue.push({
               resolve,
               reject,
