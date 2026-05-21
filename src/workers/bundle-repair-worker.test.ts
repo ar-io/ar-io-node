@@ -17,6 +17,7 @@ class FakeBundleIndex implements BundleIndex {
   failedBundleIds: string[] = [];
   saveBundleRetriesCalls: string[] = [];
   pendingCount = 0;
+  fullBacklogCount = 0;
   throwOn: Partial<Record<keyof BundleIndex, Error>> = {};
 
   // unused but required by the interface
@@ -35,6 +36,11 @@ class FakeBundleIndex implements BundleIndex {
     if (this.throwOn.getRepairBacklogCount)
       throw this.throwOn.getRepairBacklogCount;
     return this.pendingCount;
+  }
+  async getFullRepairBacklogCount(): Promise<number> {
+    if (this.throwOn.getFullRepairBacklogCount)
+      throw this.throwOn.getFullRepairBacklogCount;
+    return this.fullBacklogCount;
   }
   async updateBundlesFullyIndexedAt(): Promise<void> {
     if (this.throwOn.updateBundlesFullyIndexedAt)
@@ -183,19 +189,29 @@ describe('BundleRepairWorker metrics', () => {
     );
   });
 
-  it('refreshes the pending-bundles gauge after each timestamp update', async () => {
+  it('refreshes the pending and full-backlog gauges after each timestamp update', async () => {
     bundleIndex.pendingCount = 1234;
+    bundleIndex.fullBacklogCount = 9_000_000;
     await worker.updateBundleTimestamps();
     assert.equal(
       (await metrics.bundleRepairPendingBundlesGauge.get()).values[0]?.value,
       1234,
     );
+    assert.equal(
+      (await metrics.bundlesUnbundlingBacklogGauge.get()).values[0]?.value,
+      9_000_000,
+    );
 
     bundleIndex.pendingCount = 7;
+    bundleIndex.fullBacklogCount = 11;
     await worker.updateBundleTimestamps();
     assert.equal(
       (await metrics.bundleRepairPendingBundlesGauge.get()).values[0]?.value,
       7,
+    );
+    assert.equal(
+      (await metrics.bundlesUnbundlingBacklogGauge.get()).values[0]?.value,
+      11,
     );
   });
 

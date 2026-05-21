@@ -286,6 +286,17 @@ export const bundleRepairPendingBundlesGauge = new promClient.Gauge({
   help: 'Bundles awaiting full indexing (matched_data_item_count > 0 AND last_fully_indexed_at IS NULL AND last_skipped_at IS NULL). Refreshed once per `updateBundleTimestamps` cycle.',
 });
 
+// Full unbundling backlog. Deliberately not named with "repair": most of
+// this count is bundles awaiting their first unbundling, not repairs.
+// bundle_repair_pending_bundles only counts the matched_data_item_count > 0
+// subset — bundles that already unbundled once — so it under-reports total
+// outstanding work by orders of magnitude when most of the backlog has
+// never been successfully unbundled. This gauge is the complete picture.
+export const bundlesUnbundlingBacklogGauge = new promClient.Gauge({
+  name: 'bundles_unbundling_backlog',
+  help: 'Full unbundling backlog: all bundles still awaiting unbundling work (last_fully_indexed_at IS NULL AND last_skipped_at IS NULL AND matched_data_item_count IS NULL or > 0). Includes bundles never successfully unbundled, unlike bundle_repair_pending_bundles. Refreshed once per `updateBundleTimestamps` cycle.',
+});
+
 export const dataItemDataIndexedCounter = new promClient.Counter({
   name: 'data_item_data_indexed_total',
   help: 'Count of data item data indexed',
