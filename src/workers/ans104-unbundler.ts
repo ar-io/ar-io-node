@@ -58,6 +58,8 @@ export class Ans104Unbundler {
     contiguousDataSource,
     dataItemIndexFilterString,
     workerCount,
+    getDataTimeoutMs,
+    streamTotalTimeoutMs,
     maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
     shouldUnbundle = () => true,
     ans104Parser,
@@ -68,6 +70,8 @@ export class Ans104Unbundler {
     contiguousDataSource: ContiguousDataSource;
     dataItemIndexFilterString: string;
     workerCount: number;
+    getDataTimeoutMs?: number;
+    streamTotalTimeoutMs?: number;
     maxQueueSize?: number;
     shouldUnbundle?: () => boolean;
     ans104Parser?: Ans104Parser;
@@ -82,6 +86,8 @@ export class Ans104Unbundler {
         contiguousDataSource,
         workerCount,
         dataItemIndexFilterString,
+        getDataTimeoutMs,
+        streamTotalTimeoutMs,
       });
 
     this.workerCount = workerCount;
@@ -136,6 +142,8 @@ export class Ans104Unbundler {
     bypassFilter: boolean;
   }): Promise<void> {
     const log = this.log.child({ method: 'unbundle', id: item.id });
+    metrics.bundlesUnbundleStartedCounter.inc();
+    metrics.bundlesUnbundleInFlightGauge.inc();
     try {
       let rootTxId: string | undefined;
       if ('root_tx_id' in item && item.root_tx_id !== null) {
@@ -174,6 +182,8 @@ export class Ans104Unbundler {
         message: error?.message,
         stack: error?.stack,
       });
+    } finally {
+      metrics.bundlesUnbundleInFlightGauge.dec();
     }
   }
 

@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { createHash } from 'node:crypto';
-import { Readable } from 'node:stream';
+import { Readable, addAbortSignal } from 'node:stream';
 import winston from 'winston';
 import {
   byteArrayToLong,
@@ -504,7 +504,7 @@ export class Ans104OffsetSource {
     });
     let itemCount: number;
     try {
-      itemCount = await this.parseItemCount(countData.stream);
+      itemCount = await this.parseItemCount(countData.stream, signal);
     } finally {
       destroyStream(countData.stream);
     }
@@ -525,7 +525,7 @@ export class Ans104OffsetSource {
     });
     let items: DataItemHeader[];
     try {
-      items = await this.parseHeaders(headerData.stream, itemCount);
+      items = await this.parseHeaders(headerData.stream, itemCount, signal);
     } finally {
       destroyStream(headerData.stream);
     }
@@ -582,7 +582,7 @@ export class Ans104OffsetSource {
 
       let itemCount: number;
       try {
-        itemCount = await this.parseItemCount(countData.stream);
+        itemCount = await this.parseItemCount(countData.stream, signal);
       } finally {
         destroyStream(countData.stream);
       }
@@ -607,7 +607,7 @@ export class Ans104OffsetSource {
 
       let items: DataItemHeader[];
       try {
-        items = await this.parseHeaders(headerData.stream, itemCount);
+        items = await this.parseHeaders(headerData.stream, itemCount, signal);
       } finally {
         destroyStream(headerData.stream);
       }
@@ -730,7 +730,7 @@ export class Ans104OffsetSource {
       });
       let itemCount: number;
       try {
-        itemCount = await this.parseItemCount(countData.stream);
+        itemCount = await this.parseItemCount(countData.stream, signal);
       } finally {
         destroyStream(countData.stream);
       }
@@ -750,7 +750,7 @@ export class Ans104OffsetSource {
       });
       let items: DataItemHeader[];
       try {
-        items = await this.parseHeaders(headerData.stream, itemCount);
+        items = await this.parseHeaders(headerData.stream, itemCount, signal);
       } finally {
         destroyStream(headerData.stream);
       }
@@ -827,55 +827,33 @@ export class Ans104OffsetSource {
     }
   }
 
-  private async parseItemCount(stream: Readable): Promise<number> {
-    // Read the first 32 bytes from the stream
-    const chunks: Buffer[] = [];
-    let totalLength = 0;
-    const targetLength = 32;
-
-    return new Promise((resolve, reject) => {
-      const tryRead = () => {
-        let chunk;
-        while ((chunk = stream.read()) !== null) {
-          chunks.push(chunk);
-          totalLength += chunk.length;
-          if (totalLength >= targetLength) {
-            // We have enough data
-            stream.removeListener('readable', tryRead);
-            stream.removeListener('end', onEnd);
-            const buffer = Buffer.concat(chunks);
-            resolve(byteArrayToLong(buffer.subarray(0, 32)));
-            return;
-          }
-        }
-      };
-
-      const onEnd = () => {
-        stream.removeListener('readable', tryRead);
-        if (totalLength < targetLength) {
-          reject(
-            new Error(
-              `Not enough data to read item count (got ${totalLength} bytes, need 32)`,
-            ),
-          );
-        } else {
-          const buffer = Buffer.concat(chunks);
-          resolve(byteArrayToLong(buffer.subarray(0, 32)));
-        }
-      };
-
-      stream.on('readable', tryRead);
-      stream.once('end', onEnd);
-
-      // Try reading immediately in case data is already available
-      tryRead();
-    });
+  private async parseItemCount(
+    stream: Readable,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    // Read the first 32 bytes — the ANS-104 item count. Consuming the stream
+    // via getReader()/readBytes() rather than a hand-rolled 'readable'/'end'
+    // Promise is deliberate: the previous implementation registered no
+    // 'error' listener and took no signal, so an upstream socket failure
+    // left this Promise — and the whole unbundle awaiting it — hung forever.
+    // getReader()'s async iteration rejects on stream 'error', and
+    // addAbortSignal() destroys the stream when the abort signal fires.
+    if (signal !== undefined) {
+      addAbortSignal(signal, stream);
+    }
+    const reader = getReader(stream);
+    const bytes = await readBytes(reader, Buffer.alloc(0), 32);
+    return byteArrayToLong(bytes.subarray(0, 32));
   }
 
   private async parseHeaders(
     stream: Readable,
     itemCount: number,
+    signal?: AbortSignal,
   ): Promise<DataItemHeader[]> {
+    if (signal !== undefined) {
+      addAbortSignal(signal, stream);
+    }
     const reader = getReader(stream);
     let bytes = (await reader.next()).value;
 
@@ -945,6 +923,9 @@ export class Ans104OffsetSource {
         region: { offset: cumulativeOffset, size: checkSize },
         signal,
       });
+      if (signal !== undefined) {
+        addAbortSignal(signal, itemData.stream);
+      }
 
       try {
         const reader = getReader(itemData.stream);
@@ -1081,6 +1062,9 @@ export class Ans104OffsetSource {
         region: { offset: itemOffset, size: fetchSize },
         signal,
       });
+      if (signal !== undefined) {
+        addAbortSignal(signal, headerData.stream);
+      }
 
       try {
         const reader = getReader(headerData.stream);
@@ -1212,6 +1196,9 @@ export class Ans104OffsetSource {
         region: { offset: itemOffset, size: fetchSize },
         signal,
       });
+      if (signal !== undefined) {
+        addAbortSignal(signal, headerData.stream);
+      }
 
       try {
         const reader = getReader(headerData.stream);

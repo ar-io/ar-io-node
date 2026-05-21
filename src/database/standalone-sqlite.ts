@@ -912,6 +912,11 @@ export class StandaloneSqliteDatabaseWorker {
     return row?.n ?? 0;
   }
 
+  getFullRepairBacklogCount(): number {
+    const row = this.stmts.bundles.selectFullRepairBacklogCount.get();
+    return row?.n ?? 0;
+  }
+
   backfillBundles() {
     this.stmts.bundles.insertMissingBundles.run();
   }
@@ -3335,6 +3340,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('bundles', 'getRepairBacklogCount', undefined);
   }
 
+  getFullRepairBacklogCount(): Promise<number> {
+    return this.queueRead('bundles', 'getFullRepairBacklogCount', undefined);
+  }
+
   backfillBundles() {
     return this.queueRead('bundles', 'backfillBundles', undefined);
   }
@@ -3859,6 +3868,9 @@ if (!isMainThread) {
           break;
         case 'getRepairBacklogCount':
           parentPort?.postMessage(worker.getRepairBacklogCount());
+          break;
+        case 'getFullRepairBacklogCount':
+          parentPort?.postMessage(worker.getFullRepairBacklogCount());
           break;
         case 'backfillBundles':
           worker.backfillBundles();

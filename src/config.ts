@@ -1335,6 +1335,23 @@ export const ANS104_DOWNLOAD_WORKERS = +env.varOrDefault(
   getDefaultWorkerCount('5'),
 );
 
+// Wall-clock timeout (ms) for fetching bundle bytes in Ans104Parser before
+// stream processing begins. Set to `0` to disable.
+export const ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS = env.nonNegativeIntOrDefault(
+  'ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS',
+  30000,
+);
+
+// Wall-clock timeout (ms) for streaming bundle bytes to temp file in
+// Ans104Parser. This complements STREAM_STALL_TIMEOUT_MS by bounding
+// drip-feed/non-terminating streams that never go fully idle. Set to `0` to
+// disable.
+export const ANS104_UNBUNDLE_STREAM_TOTAL_TIMEOUT_MS =
+  env.nonNegativeIntOrDefault(
+    'ANS104_UNBUNDLE_STREAM_TOTAL_TIMEOUT_MS',
+    120000,
+  );
+
 // Whether or not to attempt to rematch old bundles using the current filter
 export const FILTER_CHANGE_REPROCESS =
   env.varOrDefault('FILTER_CHANGE_REPROCESS', 'false') === 'true';

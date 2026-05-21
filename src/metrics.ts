@@ -207,6 +207,47 @@ export const bundlesUnbundleSkippedCounter = new promClient.Counter({
   labelNames: ['reason'],
 });
 
+// Liveness instrumentation for the unbundle pipeline. The Ans104Unbundler
+// fastq worker (`unbundle`) has no timeout: if a parse hangs, its slot is
+// held forever, and once all slots are held the queue stops draining. These
+// metrics make a stall provable and localizable:
+//
+//   bundles_unbundle_in_flight pinned at the worker count, while
+//   bundles_unbundle_started_total is flat and queue_length is non-empty,
+//   means the unbundler is hung — not merely slow.
+//
+//   started_total advancing while ans104_parser_jobs_started_total is flat
+//   => the hang is before the parse stage (download/pipeline).
+//   jobs_started advancing but no completions => the hang is in a parse
+//   worker.
+//   ans104_parser_worker_pool_size declining toward 0 => workers are
+//   exiting without respawn (only non-zero exit codes trigger a respawn).
+export const bundlesUnbundleStartedCounter = new promClient.Counter({
+  name: 'bundles_unbundle_started_total',
+  help: 'Count of Ans104Unbundler.unbundle invocations (fastq job starts).',
+});
+
+export const bundlesUnbundleInFlightGauge = new promClient.Gauge({
+  name: 'bundles_unbundle_in_flight',
+  help: 'Ans104Unbundler.unbundle invocations currently in progress. Pinned at the worker count with no completions indicates the unbundler is hung.',
+});
+
+export const ans104ParserWorkerPoolSizeGauge = new promClient.Gauge({
+  name: 'ans104_parser_worker_pool_size',
+  help: 'Live Ans104Parser worker threads. A monotonic decline toward 0 means workers are exiting without being respawned.',
+});
+
+export const ans104ParserWorkerExitsCounter = new promClient.Counter({
+  name: 'ans104_parser_worker_exits_total',
+  help: 'Ans104Parser worker thread exits, labelled by exit code.',
+  labelNames: ['exit_code'],
+});
+
+export const ans104ParserJobsStartedCounter = new promClient.Counter({
+  name: 'ans104_parser_jobs_started_total',
+  help: 'Parse jobs dispatched to the Ans104Parser worker pool (reached the post-download parse stage).',
+});
+
 // Observability for `BundleRepairWorker`. The worker has no direct view of
 // "successful repair" (whether a re-queued bundle eventually transitions to
 // fully indexed happens downstream of this worker), but the combination of
@@ -243,6 +284,17 @@ export const bundleRepairErrorsCounter = new promClient.Counter({
 export const bundleRepairPendingBundlesGauge = new promClient.Gauge({
   name: 'bundle_repair_pending_bundles',
   help: 'Bundles awaiting full indexing (matched_data_item_count > 0 AND last_fully_indexed_at IS NULL AND last_skipped_at IS NULL). Refreshed once per `updateBundleTimestamps` cycle.',
+});
+
+// Full unbundling backlog. Deliberately not named with "repair": most of
+// this count is bundles awaiting their first unbundling, not repairs.
+// bundle_repair_pending_bundles only counts the matched_data_item_count > 0
+// subset — bundles that already unbundled once — so it under-reports total
+// outstanding work by orders of magnitude when most of the backlog has
+// never been successfully unbundled. This gauge is the complete picture.
+export const bundlesUnbundlingBacklogGauge = new promClient.Gauge({
+  name: 'bundles_unbundling_backlog',
+  help: 'Full unbundling backlog: all bundles still awaiting unbundling work (last_fully_indexed_at IS NULL AND last_skipped_at IS NULL AND matched_data_item_count IS NULL or > 0). Includes bundles never successfully unbundled, unlike bundle_repair_pending_bundles. Refreshed once per `updateBundleTimestamps` cycle.',
 });
 
 export const dataItemDataIndexedCounter = new promClient.Counter({
