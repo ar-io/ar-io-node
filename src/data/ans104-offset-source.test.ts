@@ -38,6 +38,75 @@ describe('Ans104OffsetSource', () => {
     mock.restoreAll();
   });
 
+  describe('parseItemCount', () => {
+    // parseItemCount is private; it is exercised directly here to guard a
+    // regression: a stream 'error' (or a silent stall under an aborting
+    // signal) must reject the call — it must never leave it hung. This
+    // reproduces the canary-gateway unbundle wedge investigated 2026-05-21,
+    // where the prior hand-rolled Promise listened only for 'readable'/'end'.
+    const callParseItemCount = (
+      stream: Readable,
+      signal?: AbortSignal,
+    ): Promise<number> =>
+      (ans104OffsetSource as any).parseItemCount(stream, signal);
+
+    // Settles with the wrapped promise, but rejects with a distinct error if
+    // it has not settled within `ms` — so a regression fails fast instead of
+    // hanging the whole suite.
+    const settleWithin = async <T>(p: Promise<T>, ms: number): Promise<T> => {
+      let timer: NodeJS.Timeout | undefined;
+      const guard = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`did not settle within ${ms}ms`)),
+          ms,
+        );
+      });
+      try {
+        return await Promise.race([p, guard]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    it('rejects when the source stream errors before 32 bytes arrive', async () => {
+      const stream = new Readable({ read() {} });
+      // Swallow 'error' so a regression surfaces as a hang (caught by
+      // settleWithin) rather than an uncaughtException crashing the suite.
+      stream.on('error', () => {});
+      process.nextTick(() => stream.destroy(new Error('socket hang up')));
+
+      await assert.rejects(
+        settleWithin(callParseItemCount(stream), 1000),
+        /socket hang up/,
+      );
+    });
+
+    it('rejects when the abort signal fires while the stream is stalled', async () => {
+      // A stream that never emits data, 'end', or 'error' on its own.
+      const stream = new Readable({ read() {} });
+      stream.on('error', () => {});
+      const controller = new AbortController();
+      process.nextTick(() => controller.abort(new Error('getData timeout')));
+
+      await assert.rejects(
+        settleWithin(callParseItemCount(stream, controller.signal), 1000),
+        (error: Error) => !/did not settle/.test(error.message),
+      );
+    });
+
+    it('returns the item count for a well-formed stream', async () => {
+      const itemCount = Buffer.alloc(32);
+      itemCount.writeBigInt64LE(3n, 0);
+
+      const count = await settleWithin(
+        callParseItemCount(Readable.from([itemCount])),
+        1000,
+      );
+
+      assert.equal(count, 3);
+    });
+  });
+
   describe('getDataItemOffset', () => {
     it('should find data item in root bundle', async () => {
       // Use a 32-byte buffer that we'll convert to base64url
