@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { Readable, Writable } from 'node:stream';
-import { AoArNSNameDataWithName } from '@ar.io/sdk';
+import { ArNSNameDataWithName } from '@ar.io/sdk';
 import { Span } from '@opentelemetry/api';
 
 export interface B64uTag {
@@ -1216,7 +1216,7 @@ export interface NameResolver {
     name: string;
     baseArNSRecordFn?: (
       parentSpan?: Span,
-    ) => Promise<AoArNSNameDataWithName | undefined>;
+    ) => Promise<ArNSNameDataWithName | undefined>;
     signal?: AbortSignal;
   }): Promise<NameResolution>;
 }

@@ -8,8 +8,7 @@ import winston from 'winston';
 
 import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
-import { AoArNSNameDataWithName } from '@ar.io/sdk';
-import { SolanaANTReadable } from '@ar.io/sdk/solana';
+import { ArNSNameDataWithName, SolanaANTReadable } from '@ar.io/sdk';
 import { address, type Rpc, type SolanaRpcApiMainnet } from '@solana/kit';
 import * as config from '../config.js';
 import CircuitBreaker from 'opossum';
@@ -38,7 +37,7 @@ export class OnDemandArNSResolver implements NameResolver {
     name: string;
     baseArNSRecordFn: (
       parentSpan?: any,
-    ) => Promise<AoArNSNameDataWithName | undefined>;
+    ) => Promise<ArNSNameDataWithName | undefined>;
   }): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
     try {

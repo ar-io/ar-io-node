@@ -134,24 +134,19 @@
   dependencies:
     xss "^1.0.8"
 
-"@ar.io/sdk@4.0.0-solana.8":
-  version "4.0.0-solana.8"
-  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-4.0.0-solana.8.tgz#5b0ec089dd0ee732e027094107375d7adf782af3"
-  integrity sha512-+xusf3K9qhHsALPxqpc7HeivQ6dNdFp48Sd/E7HzmnfFH/wPiKASC2z135yUV3B2SJAmO4/SqIvoEnj8APppcQ==
+"@ar.io/sdk@^4.0.0-solana.14":
+  version "4.0.0-solana.14"
+  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-4.0.0-solana.14.tgz#b5eb5e2550b388f7ca7c2707a13d279f619f60c1"
+  integrity sha512-6Z1/4mclslBh2AZTK3rpHlYIVmX6McF5Y0t7fMEmmcj10deOJe+Mc6fGD7cWJUp2cQzwzOkozl4SqujEKtheQw==
   dependencies:
     "@ar.io/solana-contracts" "0.1.0-devnet.0"
-    "@ardrive/turbo-sdk" "^1.19.0"
-    "@dha-team/arbundles" "^1.0.1"
-    "@permaweb/aoconnect" "0.0.68"
     "@solana-program/compute-budget" "^0.15.0"
     "@solana-program/token" "^0.13.0"
     "@solana/kit" "^6.8.0"
-    arweave "1.15.5"
-    axios "^1.13.2"
     bs58 "^6.0.0"
     commander "^12.1.0"
-    eventemitter3 "^5.0.1"
     prompts "^2.4.2"
+    zod "^3.25.76"
 
 "@ar.io/solana-contracts@0.1.0-devnet.0":
   version "0.1.0-devnet.0"
@@ -164,30 +159,6 @@
   integrity sha512-S77u7ROUl+enHDZ5XJvcCoNR453Fmym8dG4jkwUcxI1GJ9OZ7+3bq6fRKiWLfJN9oZHmT/qGxKyJKYZj4PTwzw==
   dependencies:
     "@alexsasharegan/simple-cache" "^3.3.3"
-
-"@ardrive/turbo-sdk@^1.19.0":
-  version "1.41.2"
-  resolved "https://registry.yarnpkg.com/@ardrive/turbo-sdk/-/turbo-sdk-1.41.2.tgz#83637bae16214fa305f7d5e67d9ef95e327d5af5"
-  integrity sha512-SQUannhzLzW+YqoYNfJAod5VLuf30vd0JU+VT2wlAL47UMeCgdgBPbXIJG1NzuMmVu5epL5+JSEaCimpSXrvHw==
-  dependencies:
-    "@cosmjs/proto-signing" "^0.33.1"
-    "@cosmjs/stargate" "^0.33.1"
-    "@dha-team/arbundles" "^1.0.1"
-    "@ethersproject/signing-key" "^5.7.0"
-    "@permaweb/aoconnect" "0.0.57"
-    "@solana/web3.js" "^1.91.7"
-    arweave "^1.15.1"
-    bignumber.js "^9.1.2"
-    bs58 "^5.0.0"
-    cli-progress "^3.12.0"
-    commander "^12.1.0"
-    ethers "^6.12.0"
-    eventemitter3 "^5.0.1"
-    mime-types "^2.1.35"
-    plimit-lit "^3.0.1"
-    prompts "^2.4.2"
-    tweetnacl "^1.0.3"
-    x402-fetch "^1.0.0"
 
 "@ardrive/turbo-sdk@^1.40.2":
   version "1.40.2"
@@ -4093,7 +4064,7 @@
   resolved "https://registry.yarnpkg.com/@paulmillr/qr/-/qr-0.2.1.tgz#76ade7080be4ac4824f638146fd8b6db1805eeca"
   integrity sha512-IHnV6A+zxU7XwmKFinmYjUcwlyK9+xkG3/s9KcQhI9BjQKycrJ1JRO+FbNYPwZiPKW3je/DR0k7w8/gLa5eaxQ==
 
-"@permaweb/ao-scheduler-utils@~0.0.20", "@permaweb/ao-scheduler-utils@~0.0.25":
+"@permaweb/ao-scheduler-utils@~0.0.20":
   version "0.0.29"
   resolved "https://registry.yarnpkg.com/@permaweb/ao-scheduler-utils/-/ao-scheduler-utils-0.0.29.tgz#9dcfffd5a63a606d70156a1699a3f87840ba64f2"
   integrity sha512-tzuNsy2NUcATLMG+SKaO1PxbXaDpfoQikEfI7BABkNWk6AyQoBLy0Zwuu0eypGEHeNP6gugXEo1j8oZez/8fXA==
@@ -4115,27 +4086,6 @@
     ramda "^0.30.1"
     warp-arbundles "^1.0.4"
     zod "^3.23.8"
-
-"@permaweb/aoconnect@0.0.68":
-  version "0.0.68"
-  resolved "https://registry.yarnpkg.com/@permaweb/aoconnect/-/aoconnect-0.0.68.tgz#216ad607929e92d5cf4de6a7ff6a41442ff2500d"
-  integrity sha512-QK8VJ/rbmyZ7esuk6O2F4uJG0AKiYNzDuQNzsdgCLH7kt+0FlKTS4MKM1KH9fvXivqXdXYs02OxmzkkWprNxog==
-  dependencies:
-    "@permaweb/ao-scheduler-utils" "~0.0.25"
-    "@permaweb/protocol-tag-utils" "~0.0.2"
-    buffer "^6.0.3"
-    debug "^4.4.0"
-    http-message-signatures "^1.0.4"
-    hyper-async "^1.1.2"
-    mnemonist "^0.39.8"
-    ramda "^0.30.1"
-    warp-arbundles "^1.0.4"
-    zod "^3.24.1"
-
-"@permaweb/protocol-tag-utils@~0.0.2":
-  version "0.0.2"
-  resolved "https://registry.yarnpkg.com/@permaweb/protocol-tag-utils/-/protocol-tag-utils-0.0.2.tgz#c8a2eddf7da15d70a6e60aecff839730cb59aee3"
-  integrity sha512-2IiKu71W7pkHKIzxabCGQ5q8DSppZaE/sPcPF2hn+OWwfe04M7b5X5LHRXQNPRuxHWuioieGdPQb3F7apOlffQ==
 
 "@pkgjs/parseargs@^0.11.0":
   version "0.11.0"
@@ -5929,7 +5879,7 @@
     "@solana/nominal-types" "6.9.0"
     "@solana/promises" "6.9.0"
 
-"@solana/kit@^2.1.0", "@solana/kit@^2.1.1":
+"@solana/kit@^2.1.1":
   version "2.3.0"
   resolved "https://registry.yarnpkg.com/@solana/kit/-/kit-2.3.0.tgz#92deb7c4883293617209aecac9a43d5e41ccf092"
   integrity sha512-sb6PgwoW2LjE5oTFu4lhlS/cGt/NB3YrShEyx7JgWFWysfgLdJnhwWThgwy/4HjNsmtMrQGWVls0yVBHcMvlMQ==
@@ -8659,16 +8609,6 @@ arweave-stream-tx@1.1.0:
     exponential-backoff "^3.1.0"
     stream-chunker "^1.2.8"
 
-arweave@1.15.5:
-  version "1.15.5"
-  resolved "https://registry.yarnpkg.com/arweave/-/arweave-1.15.5.tgz#d0fb209de01bfc9dc97d5da70270928a83ecee83"
-  integrity sha512-Zj3b8juz1ZtDaQDPQlzWyk2I4wZPx3RmcGq8pVJeZXl2Tjw0WRy5ueHPelxZtBLqCirGoZxZEAFRs6SZUSCBjg==
-  dependencies:
-    arconnect "^0.4.2"
-    asn1.js "^5.4.1"
-    base64-js "^1.5.1"
-    bignumber.js "^9.0.2"
-
 arweave@1.15.7, arweave@^1.10.13, arweave@^1.13.7, arweave@^1.15.1:
   version "1.15.7"
   resolved "https://registry.yarnpkg.com/arweave/-/arweave-1.15.7.tgz#d09265d128e93a471203649de083ba7fec52cb29"
@@ -8775,7 +8715,7 @@ axios-retry@^4.5.0:
   dependencies:
     is-retry-allowed "^2.2.0"
 
-axios@1.15.0, axios@^1.12.2, axios@^1.13.2, axios@^1.15.0, axios@^1.6.0:
+axios@1.15.0, axios@^1.12.2, axios@^1.15.0, axios@^1.6.0:
   version "1.15.0"
   resolved "https://registry.yarnpkg.com/axios/-/axios-1.15.0.tgz#0fcee91ef03d386514474904b27863b2c683bf4f"
   integrity sha512-wWyJDlAatxk30ZJer+GeCWS209sA42X+N5jU2jy6oHTp7ufw8uzUTVFBX9+wTfAlhiJXGS0Bq7X6efruWjuK9Q==
@@ -11327,13 +11267,6 @@ http-errors@~1.6.2:
     inherits "2.0.3"
     setprototypeof "1.1.0"
     statuses ">= 1.4.0 < 2"
-
-http-message-signatures@^1.0.4:
-  version "1.0.4"
-  resolved "https://registry.yarnpkg.com/http-message-signatures/-/http-message-signatures-1.0.4.tgz#3d1f614977d3a435af7c1d35a75e1e48d9094075"
-  integrity sha512-gavCQWnxHFg0BVlKs6CmYK7hNSH1o0x0mHTC68yBAHYOYuTVXPv52mEE7QuT5TenfiagTdOa/zPJzen4lEX7Rg==
-  dependencies:
-    structured-headers "^1.0.1"
 
 http-proxy-agent@^5.0.0:
   version "5.0.0"
@@ -14513,11 +14446,6 @@ strnum@^2.2.2:
   resolved "https://registry.yarnpkg.com/strnum/-/strnum-2.2.2.tgz#f11fd94ab62b536ba2ecc615858f3747c2881b3f"
   integrity sha512-DnR90I+jtXNSTXWdwrEy9FakW7UX+qUZg28gj5fk2vxxl7uS/3bpI4fjFYVmdK9etptYBPNkpahuQnEwhwECqA==
 
-structured-headers@^1.0.1:
-  version "1.0.1"
-  resolved "https://registry.yarnpkg.com/structured-headers/-/structured-headers-1.0.1.tgz#1821e434e0fe45bdd78f07c779b16519ab520415"
-  integrity sha512-QYBxdBtA4Tl5rFPuqmbmdrS9kbtren74RTJTcs0VSQNVV5iRhJD4QlYTLD0+81SBwUQctjEQzjTRI3WG4DzICA==
-
 stylus-lookup@^6.1.0:
   version "6.1.0"
   resolved "https://registry.yarnpkg.com/stylus-lookup/-/stylus-lookup-6.1.0.tgz#f0fe88a885b830dc7520f51dd0a7e59e5d3307b4"
@@ -15694,7 +15622,7 @@ zod@3.22.4:
   resolved "https://registry.yarnpkg.com/zod/-/zod-3.22.4.tgz#f31c3a9386f61b1f228af56faa9255e845cf3fff"
   integrity sha512-iC+8Io04lddc+mVqQ9AZ7OQ2MrUKGN+oIQyq1vemgt46jwCwLfhq7/pwnBnNXXXZb8VTVLKwp9EDkx+ryxIWmg==
 
-zod@^3.23.5, zod@^3.23.8, zod@^3.24.1, zod@^3.24.2, zod@^3.24.4:
+zod@^3.23.5, zod@^3.23.8, zod@^3.24.2, zod@^3.24.4, zod@^3.25.76:
   version "3.25.76"
   resolved "https://registry.yarnpkg.com/zod/-/zod-3.25.76.tgz#26841c3f6fd22a6a2760e7ccb719179768471e34"
   integrity sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==

@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import winston from 'winston';
-import { AoARIORead } from '@ar.io/sdk';
+import { ARIORead } from '@ar.io/sdk';
 import CircuitBreaker from 'opossum';
 import memoize from 'memoizee';
 import * as config from '../config.js';
@@ -52,7 +52,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
   private log: winston.Logger;
   private nodeWallet: string | undefined;
   private updatePeersRefreshIntervalMs: number;
-  private networkProcess: AoARIORead;
+  private networkProcess: ARIORead;
   private peers: Record<string, string> = {};
   private intervalId?: NodeJS.Timeout;
 
@@ -80,8 +80,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
 
   // circuit breaker for getGateways
   private arioGatewaysCircuitBreaker: CircuitBreaker<
-    Parameters<AoARIORead['getGateways']>,
-    Awaited<ReturnType<AoARIORead['getGateways']>>
+    Parameters<ARIORead['getGateways']>,
+    Awaited<ReturnType<ARIORead['getGateways']>>
   >;
 
   constructor({
@@ -104,7 +104,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
     },
   }: {
     log: winston.Logger;
-    networkProcess: AoARIORead;
+    networkProcess: ARIORead;
     nodeWallet?: string;
     initialPeers?: Record<string, string>;
     initialCategories?: WeightCategory[];

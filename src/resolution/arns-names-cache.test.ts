@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import { after, beforeEach, describe, it } from 'node:test';
 import winston from 'winston';
 import { ArNSNamesCache } from './arns-names-cache.js';
-import { AoARIORead, Logger as ARIOLogger } from '@ar.io/sdk';
+import { ARIORead, Logger as ARIOLogger } from '@ar.io/sdk';
 import { NodeKvStore } from '../store/node-kv-store.js';
 
 // disable sdk logging to reduce noise
@@ -57,7 +57,7 @@ describe('ArNSNamesCache', () => {
             nextCursor: undefined,
           };
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // let the cache hydrate
@@ -87,7 +87,7 @@ describe('ArNSNamesCache', () => {
             nextCursor: undefined,
           };
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // Request the name immediately, before hydration completes
@@ -118,7 +118,7 @@ describe('ArNSNamesCache', () => {
             nextCursor: undefined,
           };
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // let the cache hydrate
@@ -152,7 +152,7 @@ describe('ArNSNamesCache', () => {
             nextCursor: undefined,
           };
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // let the cache hydrate
@@ -208,7 +208,7 @@ describe('ArNSNamesCache', () => {
           }
           throw new Error('Network error');
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // let the cache hydrate
@@ -250,7 +250,7 @@ describe('ArNSNamesCache', () => {
           }
           throw new Error('Network error');
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // let the cache hydrate
@@ -302,7 +302,7 @@ describe('ArNSNamesCache', () => {
             nextCursor: undefined,
           };
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // let the cache hydrate
@@ -352,7 +352,7 @@ describe('ArNSNamesCache', () => {
             nextCursor: undefined,
           };
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // call count will get incremented on instantiation of the cache
@@ -401,7 +401,7 @@ describe('ArNSNamesCache', () => {
 
           return { items: [], nextCursor: undefined };
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // Wait for initial hydration
@@ -447,7 +447,7 @@ describe('ArNSNamesCache', () => {
             nextCursor: undefined,
           };
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // Wait for initial hydration
@@ -481,7 +481,7 @@ describe('ArNSNamesCache', () => {
           callCount++;
           throw new Error('AO service unavailable');
         },
-      } as unknown as AoARIORead,
+      } as unknown as ARIORead,
     });
 
     // Wait for initial hydration attempt

@@ -6,11 +6,7 @@
  */
 import winston from 'winston';
 
-import {
-  AoARIORead,
-  AoArNSNameDataWithName,
-  PaginationResult,
-} from '@ar.io/sdk';
+import { ARIORead, ArNSNameDataWithName, PaginationResult } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { KvDebounceStore } from '../store/kv-debounce-store.js';
 import { KVBufferStore } from '../types.js';
@@ -33,7 +29,7 @@ const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
  */
 export class ArNSNamesCache {
   private log: winston.Logger;
-  private networkProcess: AoARIORead;
+  private networkProcess: ARIORead;
   private arnsRegistryKvCache: KVBufferStore;
   private arnsDebounceCache: KvDebounceStore;
 
@@ -46,7 +42,7 @@ export class ArNSNamesCache {
   }: {
     log: winston.Logger;
     registryCache: KVBufferStore;
-    networkProcess: AoARIORead;
+    networkProcess: ARIORead;
     cacheMissDebounceTtl?: number;
     cacheHitDebounceTtl?: number;
   }) {
@@ -102,7 +98,7 @@ export class ArNSNamesCache {
             const {
               items: records,
               nextCursor,
-            }: PaginationResult<AoArNSNameDataWithName> =
+            }: PaginationResult<ArNSNameDataWithName> =
               await this.networkProcess.getArNSRecords({ cursor, limit: 1000 });
 
             for (const record of records) {
@@ -196,7 +192,7 @@ export class ArNSNamesCache {
   async getCachedArNSBaseName(
     name: string,
     parentSpan?: Span,
-  ): Promise<AoArNSNameDataWithName | undefined> {
+  ): Promise<ArNSNameDataWithName | undefined> {
     const span = parentSpan
       ? tracer.startSpan(
           'ArNSNamesCache.getCachedArNSBaseName',
@@ -218,7 +214,7 @@ export class ArNSNamesCache {
       if (record) {
         metrics.arnsNameCacheHitCounter.inc();
         span.setAttributes({ 'arns.cache.hit': true });
-        return <AoArNSNameDataWithName>JSON.parse(record.toString());
+        return <ArNSNameDataWithName>JSON.parse(record.toString());
       }
       metrics.arnsNameCacheMissCounter.inc();
       span.setAttributes({ 'arns.cache.hit': false });
@@ -233,7 +229,7 @@ export class ArNSNamesCache {
    * @param name - The name to set the ArNS name data for.
    * @param record - The ArNS name data to set.
    */
-  async setCachedArNSBaseName(name: string, record: AoArNSNameDataWithName) {
+  async setCachedArNSBaseName(name: string, record: ArNSNameDataWithName) {
     return this.arnsRegistryKvCache.set(
       name,
       Buffer.from(JSON.stringify(record)),
