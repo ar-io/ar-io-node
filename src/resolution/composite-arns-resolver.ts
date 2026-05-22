@@ -14,7 +14,7 @@ import * as metrics from '../metrics.js';
 import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js';
 import { KvArNSRegistryStore } from '../store/kv-arns-base-name-store.js';
 import { ArNSNamesCache } from './arns-names-cache.js';
-import { AoARIORead } from '@ar.io/sdk';
+import { ARIORead } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { tracer } from '../tracing.js';
 
@@ -58,7 +58,7 @@ export class CompositeArNSResolver implements NameResolver {
     resolvers: NameResolver[];
     resolutionCache: KvArNSResolutionStore;
     registryCache: KvArNSRegistryStore;
-    networkProcess: AoARIORead;
+    networkProcess: ARIORead;
     overrides?: {
       ttlSeconds?: number;
     };

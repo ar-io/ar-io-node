@@ -7,8 +7,7 @@
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
-import { Logger as ARIOLogger } from '@ar.io/sdk';
-import { SolanaARIOReadable } from '@ar.io/sdk/solana';
+import { Logger as ARIOLogger, SolanaARIOReadable } from '@ar.io/sdk';
 import {
   createSolanaRpc,
   type Address,
@@ -181,11 +180,7 @@ export const solanaRpc: Rpc<SolanaRpcApi> = createSolanaRpc(
 );
 
 const networkProcess = new SolanaARIOReadable({
-  // `@ar.io/sdk` ships a nested `@solana/rpc-spec` whose Rpc<...> type
-  // drifts from the top-level `@solana/kit` copy. Runtime is
-  // structurally identical; `as any` is a TS-only workaround until
-  // the deps align. Matches ar-io-observer/src/system.ts.
-  rpc: solanaRpc as any,
+  rpc: solanaRpc,
   // Optional program-id overrides for devnet / localnet. Undefined keys
   // are dropped via spread so the SDK falls back to its bundled defaults.
   ...(config.ARIO_CORE_PROGRAM_ID !== undefined
@@ -641,11 +636,7 @@ const gatewaysDataSource = new FilteredContiguousDataSource({
 
 export const arIOPeerManager = new ArIOPeerManager({
   log,
-  // Solana readable is structurally compatible with the AoARIORead
-  // surface this consumer uses (getGateways) — the only nominal
-  // mismatch is the AO-only `process: AOProcess` field which is unused.
-
-  networkProcess: networkProcess as any,
+  networkProcess,
   nodeWallet: config.AR_IO_WALLET,
 });
 
@@ -1431,11 +1422,7 @@ export const nameResolver = createArNSResolver({
   trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
   trustedArnsResolverHostHeader: config.TRUSTED_ARNS_RESOLVER_HOST_HEADER,
   resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
-  // Solana readable is structurally compatible with AoARIORead for
-  // the surface this consumer uses (getArNSRecords); the only nominal
-  // mismatch is the AO-only `process` field which is unused.
-
-  networkProcess: networkProcess as any,
+  networkProcess,
   resolutionCache: arnsResolutionCache,
   registryCache: arnsRegistryCache,
   solanaRpc,

@@ -15,7 +15,7 @@ import { KVBufferStore } from '../types.js';
  * {
  *   key: 'ardrive',
  *   value: {
- *      processId: AO_PROCESS_ID,
+ *      antId: ANT_PROGRAM_ADDRESS,
  *      undernameLimit: UNDERNAME_LIMIT,
  *      type: 'permabuy' | 'lease',
  *      startTimestamp: TIMESTAMP,

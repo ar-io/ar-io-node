@@ -6,13 +6,13 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
-import { AoARIORead } from '@ar.io/sdk';
+import { ARIORead } from '@ar.io/sdk';
 import { ArIOPeerManager } from './ar-io-peer-manager.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 let log: ReturnType<typeof createTestLogger>;
 let peerManager: ArIOPeerManager;
-let mockedArIOInstance: AoARIORead;
+let mockedArIOInstance: ARIORead;
 
 const INITIAL_PEERS = {
   peer1: 'http://peer1.com',
@@ -47,7 +47,7 @@ beforeEach(async () => {
       hasMore: false,
       nextCursor: undefined,
     }),
-  } as AoARIORead;
+  } as ARIORead;
 
   // Create peer manager with initial peers to avoid network calls
   peerManager = new ArIOPeerManager({

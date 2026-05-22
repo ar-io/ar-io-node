@@ -8,7 +8,7 @@ import { Logger } from 'winston';
 import { OnDemandArNSResolver } from '../resolution/on-demand-arns-resolver.js';
 import { TrustedGatewayArNSResolver } from '../resolution/trusted-gateway-arns-resolver.js';
 import { KVBufferStore, NameResolver } from '../types.js';
-import { AoARIORead } from '@ar.io/sdk';
+import { ARIORead } from '@ar.io/sdk';
 import { CompositeArNSResolver } from '../resolution/composite-arns-resolver.js';
 import { RedisKvStore } from '../store/redis-kv-store.js';
 import { NodeKvStore } from '../store/node-kv-store.js';
@@ -76,7 +76,7 @@ export const createArNSResolver = ({
   registryCache: KvArNSRegistryStore;
   trustedGatewayUrl?: string;
   trustedArnsResolverHostHeader?: string;
-  networkProcess: AoARIORead;
+  networkProcess: ARIORead;
   overrides?: {
     ttlSeconds?: number;
   };
