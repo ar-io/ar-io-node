@@ -171,6 +171,7 @@ export class Ans104Parser {
   private streamTimeout: number;
   private getDataTimeoutMs: number;
   private streamTotalTimeoutMs: number;
+  private parseJobTimeoutMs: number;
   private workers: any[] = []; // TODO what's the type for this?
   private workQueue: any[] = []; // TODO what's the type for this?
 
@@ -183,6 +184,7 @@ export class Ans104Parser {
     streamTimeout = DEFAULT_STREAM_TIMEOUT,
     getDataTimeoutMs = 30000,
     streamTotalTimeoutMs = 120000,
+    parseJobTimeoutMs = 600000,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
@@ -192,12 +194,14 @@ export class Ans104Parser {
     streamTimeout?: number;
     getDataTimeoutMs?: number;
     streamTotalTimeoutMs?: number;
+    parseJobTimeoutMs?: number;
   }) {
     this.log = log.child({ class: 'Ans104Parser' });
     this.contiguousDataSource = contiguousDataSource;
     this.streamTimeout = streamTimeout;
     this.getDataTimeoutMs = getDataTimeoutMs;
     this.streamTotalTimeoutMs = streamTotalTimeoutMs;
+    this.parseJobTimeoutMs = parseJobTimeoutMs;
 
     const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
 
@@ -215,12 +219,47 @@ export class Ans104Parser {
       // startup). Track whether it was counted so 'exit' doesn't drive the
       // pool-size gauge negative.
       let countedInPool = false;
+      // Per-job wall-clock timer. The parser worker thread can hang inside
+      // parseBundle without exiting and without posting any terminal
+      // message — observed in production after PR #746 closed the
+      // upstream getData/stream hangs. When this timer fires we terminate
+      // the worker; the existing 'exit' handler rejects the job and
+      // respawns. The PR #746 follow-up explicitly flagged this path.
+      let jobTimer: NodeJS.Timeout | undefined;
+
+      function clearJobTimer() {
+        if (jobTimer !== undefined) {
+          clearTimeout(jobTimer);
+          jobTimer = undefined;
+        }
+      }
 
       function takeWork() {
         if (!job && self.workQueue.length) {
           // If there's a job in the queue, send it to the worker
           job = self.workQueue.shift();
           worker.postMessage(job.message);
+          // Arm the per-job timeout. Skip for the 'terminate' control
+          // message — that's the clean shutdown path and should not be
+          // racing a wall-clock cap.
+          if (self.parseJobTimeoutMs > 0 && job.message !== 'terminate') {
+            const armedFor = job;
+            jobTimer = setTimeout(() => {
+              // Best-effort log; `armedFor.message` is the parseBundle args
+              // (parentId etc.) for the job that's been running too long.
+              self.log.error(
+                'Ans104 parser job exceeded wall-clock timeout, terminating worker',
+                {
+                  parentId: armedFor?.message?.parentId,
+                  timeoutMs: self.parseJobTimeoutMs,
+                },
+              );
+              metrics.ans104ParserJobTimeoutsCounter.inc();
+              // Terminate triggers the 'exit' handler (non-zero code),
+              // which already rejects the in-flight job and respawns.
+              worker.terminate();
+            }, self.parseJobTimeoutMs);
+          }
         }
       }
 
@@ -247,14 +286,17 @@ export class Ans104Parser {
                   dataItemIndexFilterString,
                   ...eventBody,
                 });
+                clearJobTimer();
                 job.resolve();
                 job = null;
                 break;
               case UNBUNDLE_ERROR:
+                clearJobTimer();
                 job.reject(new Error('Worker error'));
                 job = null;
                 break;
               default:
+                clearJobTimer();
                 job.reject(new Error('Unknown worker message'));
                 job = null;
                 break;
@@ -267,6 +309,10 @@ export class Ans104Parser {
           error = err;
         })
         .on('exit', (code) => {
+          // Clear before touching job — the 'exit' branch below may run
+          // job.resolve()/reject() which itself can fire downstream
+          // handlers; we don't want a pending timer to fire concurrently.
+          clearJobTimer();
           if (countedInPool) {
             metrics.ans104ParserWorkerPoolSizeGauge.dec();
           }
