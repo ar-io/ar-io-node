@@ -152,7 +152,7 @@ Then for each pair:
 ./tools/set-image-tag <ENV_VAR> <sha>
 ```
 
-Observer and AO CU images stay pinned — do not touch them.
+The observer image stays pinned — do not touch it.
 
 Commit:
 
@@ -282,7 +282,7 @@ done
 ./tools/changelog-add-unreleased
 ```
 
-Observer and AO CU stay pinned — don't reset them.
+The observer image stays pinned — don't reset it.
 
 Commit:
 

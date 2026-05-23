@@ -389,9 +389,9 @@ export class CompositeArNSResolver implements NameResolver {
         return cachedResolution;
       }
       // If fresh resolution resolved fast with no resolved id (e.g.,
-      // names-cache miss, AO/CU dry-run error swallowed to undefined), still
-      // prefer the cached resolution if one exists. Matches the
-      // comment-documented intent of "fall back if error occurs OR timeout".
+      // names-cache miss, RPC error swallowed to undefined), still prefer
+      // the cached resolution if one exists. Matches the comment-documented
+      // intent of "fall back if error occurs OR timeout".
       if (resolution?.resolvedId !== undefined) {
         span.addEvent('Resolved by fresh resolution');
         return resolution;

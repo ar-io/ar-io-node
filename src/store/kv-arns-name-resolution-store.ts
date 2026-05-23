@@ -16,7 +16,7 @@ import { KVBufferStore } from '../types.js';
  *   key: 'ardrive',
  *   value: Buffer.from({
  *      txId: <ARWEAVE-TX-ID>,
- *      antId: <PER-ANT-IDENTIFIER>, // Solana ANT PDA or AO process ID
+ *      antId: <ANT_PROGRAM_ADDRESS>, // ANT mint's PDA (base58 pubkey)
  *      owner: <OWNING_ANT_ADDRESS>,
  *      ttl: <TTL_SECONDS>
  *   })

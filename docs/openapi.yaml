@@ -424,10 +424,9 @@ components:
         antId:
           type: string
           description: |
-            Per-ANT identifier for the ANT that resolved this name. In
-            Solana mode this is the ANT mint's PDA (base58 pubkey); in AO
-            mode this was the ANT's AO process ID. Omitted when resolution
-            came via a trusted-gateway peer that has not yet shipped the
+            Per-ANT identifier for the ANT that resolved this name — the
+            ANT mint's PDA (base58 pubkey). Omitted when resolution came
+            via a trusted-gateway peer that has not yet shipped the
             X-ArNS-Ant-Id header.
         resolvedAt:
           type: integer
@@ -2600,11 +2599,10 @@ paths:
               schema:
                 type: string
               description: |
-                Per-ANT identifier for the ANT that resolved this request
-                (Solana ANT mint PDA in Solana mode, AO process ID in AO
-                mode). Replaces the AO-era X-ArNS-Process-Id header.
-                Omitted when resolution came via a trusted-gateway peer
-                that has not yet shipped this header.
+                Per-ANT identifier for the ANT that resolved this request —
+                the ANT mint's PDA (base58 pubkey). Omitted when resolution
+                came via a trusted-gateway peer that has not yet shipped
+                this header.
             x-arns-resolved-at:
               schema:
                 type: string
