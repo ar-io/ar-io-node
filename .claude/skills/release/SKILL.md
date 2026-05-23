@@ -169,8 +169,7 @@ Ensure Docker is available: `docker info >/dev/null`.
 Test each profile. Between profiles, always run the `down-all` cleanup:
 
 ```bash
-docker compose -f docker-compose.yaml -f docker-compose.ao.yaml \
-  --profile clickhouse --profile litestream --profile otel down
+docker compose --profile clickhouse --profile litestream --profile otel down
 ```
 
 Core containers expected to stay running across every profile: `envoy`, `core`,
@@ -188,7 +187,6 @@ docker ps --format '{{.Names}}'
 | clickhouse | `docker compose --profile clickhouse up -d`                           | core + `clickhouse`, `clickhouse-auto-import` | —               | 45s           |
 | litestream | `docker compose --profile litestream up -d`                           | core                        | `litestream` (may exit if no S3)  | 30s           |
 | otel       | `docker compose --profile otel up -d`                                 | core                        | `otel-collector` (may exit if no endpoint) | 30s  |
-| ao         | `docker compose up -d && docker compose -f docker-compose.yaml -f docker-compose.ao.yaml up -d` | core | `ao-cu` (may restart if unconfigured) | 30s    |
 
 For the default profile: after 30s, confirm core containers are up; after
 another 15s, confirm they're **still** up (catches restart loops).
@@ -303,7 +301,6 @@ git push origin develop
 | `CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG`  | yes              | SHA at finalize → `latest` at post      |
 | `LITESTREAM_IMAGE_TAG`              | yes              | SHA at finalize → `latest` at post      |
 | `OBSERVER_IMAGE_TAG`                | no               | stays pinned; only bump intentionally   |
-| AO CU image tag (in `docker-compose.ao.yaml`) | no     | stays pinned; only bump intentionally   |
 
 ## Failure recovery
 
