@@ -214,7 +214,7 @@ describe('CompositeArNSResolver', () => {
       resolve: mock.fn(async () => {
         // Fast-fail: throws synchronously, resolveParallel returns undefined
         // well within arnsCachedResolutionFallbackTimeoutMs.
-        throw new Error('AO/CU dry-run failed');
+        throw new Error('RPC dry-run failed');
       }),
     };
 
@@ -294,7 +294,7 @@ describe('CompositeArNSResolver', () => {
 
     const resolver1: NameResolver = {
       resolve: mock.fn(async () => {
-        throw new Error('AO/CU dry-run failed');
+        throw new Error('RPC dry-run failed');
       }),
     };
 

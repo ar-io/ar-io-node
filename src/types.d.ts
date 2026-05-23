@@ -1166,12 +1166,11 @@ export interface ValidNameResolution {
   resolvedAt: number;
   ttl: number;
   /**
-   * Per-ANT identifier for the ANT that resolved this name. In Solana mode
-   * this is the ANT mint's PDA; in AO mode this was the ANT's AO process
-   * ID. Set when the resolution came from a direct SDK call
-   * (`OnDemandArNSResolver` / `ArNSNamesCache`); read off the
-   * `X-ArNS-Ant-Id` header on trusted-gateway hops when the peer emits it,
-   * `undefined` otherwise.
+   * Per-ANT identifier for the ANT that resolved this name — the ANT
+   * mint's PDA (base58 pubkey). Set when the resolution came from a
+   * direct SDK call (`OnDemandArNSResolver` / `ArNSNamesCache`); read
+   * off the `X-ArNS-Ant-Id` header on trusted-gateway hops when the
+   * peer emits it, `undefined` otherwise.
    */
   antId: string | undefined;
   limit: number;

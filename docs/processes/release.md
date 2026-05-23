@@ -30,8 +30,8 @@ post-release:
 - `CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG`
 - `LITESTREAM_IMAGE_TAG`
 
-`OBSERVER_IMAGE_TAG` and the AO CU image (`docker-compose.ao.yaml`) stay
-pinned across releases and are only bumped intentionally.
+`OBSERVER_IMAGE_TAG` stays pinned across releases and is only bumped
+intentionally.
 
 ## Phases
 
@@ -98,8 +98,7 @@ Core containers expected to stay running across every profile: `envoy`,
 Between profiles, cleanup:
 
 ```bash
-docker compose -f docker-compose.yaml -f docker-compose.ao.yaml \
-  --profile clickhouse --profile litestream --profile otel down
+docker compose --profile clickhouse --profile litestream --profile otel down
 ```
 
 | Profile    | Up command                                                          | Expected                                                           |
@@ -108,7 +107,6 @@ docker compose -f docker-compose.yaml -f docker-compose.ao.yaml \
 | clickhouse | `docker compose --profile clickhouse up -d`                         | core + `clickhouse`, `clickhouse-auto-import`                      |
 | litestream | `docker compose --profile litestream up -d`                         | core; `litestream` may exit without S3 (expected)                  |
 | otel       | `docker compose --profile otel up -d`                               | core; `otel-collector` may exit without endpoint (expected)        |
-| ao         | `docker compose up -d && docker compose -f docker-compose.yaml -f docker-compose.ao.yaml up -d` | core; `ao-cu` may restart if unconfigured (expected) |
 
 After testing, run the cleanup command again.
 

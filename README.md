@@ -107,37 +107,6 @@ By default, the bundler will only accept data items uploaded by data item signer
 | Allow none             | EMPTY                                       | false               | EMPTY                        | EMPTY                    |
 | Allow payers           | EMPTY or supplied                           | false               | EMPTY or supplied            | your payment svc url     |
 
-### Run an AO Compute Unit (CU) as a Sidecar
-
-AO Compute Units are useful for interacting with AO Processes in manner that avoids Process side effects and that does not require gas payment via "[Dry Runs]".
-
-AO CU's rely on bundlers to periodically upload checkpoint data for evaluated Process memory. Additionally, they rely on gateway GQL to find those checkpoints, Scheduler assignments for each Process, and more. The indexing workload to support arbitrary AO Processes is effectively the indexing workload for most of Arweave's recent history. However, most recent AO Testnet Processes's data was bundled by Turbo in dedicated bundles with the tag:
-
-```
-Bundler-App-Name: AO
-```
-
-Including that tag filter in your indexing filters and indexing data from block height 1378000 forward should include the vast majority of the needed testnet data.
-
-If you control your own SU and can easily identify its L1 data transactions' tags, you can simply filter on those from a block height that captures all of the SU data for your processes of interest.
-
-Similarly to the bundler sidecar, the CU service is most easily managed via an independent docker compose file whose services share their network with that of the core services docker compose stack.
-
-To get started, supply the required environment variables in an environment variables file (e.g. `.env.ao`) for the integration, most notably:
-
-- `CU_WALLET`: a stringified JWK wallet used for uploading CU checkpoints to Arweave.
-- `PROCESS_CHECKPOINT_TRUSTED_OWNERS`: a comma-separated list of CU checkpoint uploader wallet addresses(normalized).
-
-See the `.env.ao.example` or the environment overrides in `docker-compose.ao.yaml` file for other important configuration options.
-
-Once environment variables are set, run docker compose with the ao-specific compose file.
-
-```shell
-docker compose --env-file ./.env.ao --file docker-compose.ao.yaml up
-```
-
-Now, the CU service will be running alongside the ar.io gateway. Within the docker network it can be reached at `http://envoy:3000/ao/cu` and `http://ao-cu:6363`. From the docker host machine, it can be reached at `http://localhost:3000/ao/cu` and `http://localhost:6363`. From your custom domain configured to forward traffic to envoy, it can be reached at `<your gateway url>/ao/cu`.
-
 ## Configuration
 
 When running via `docker compose`, it will read a `.env` file in the project root

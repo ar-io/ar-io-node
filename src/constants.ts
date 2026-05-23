@@ -71,9 +71,7 @@ export const headerNames = {
   arnsAntProgramId: 'X-ArNS-Ant-Program-Id',
   /**
    * Identifier of the specific ANT (the per-name account, not the program)
-   * that resolved this request. In Solana mode this is the ANT mint's PDA;
-   * in AO mode this was the ANT's AO process ID. Replaces the AO-era
-   * `X-ArNS-Process-Id` header — same purpose, generalized name.
+   * that resolved this request — the ANT mint's PDA (base58 pubkey).
    */
   arnsAntId: 'X-ArNS-Ant-Id',
   arnsResolvedAt: 'X-ArNS-Resolved-At',

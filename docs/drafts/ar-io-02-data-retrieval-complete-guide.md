@@ -595,7 +595,7 @@ Discovery details (src/arweave/composite-client.ts:697-741):
 
 #### b) ar.io Gateway Peers (ArIODataSource)
 Discovery details (src/data/ar-io-data-source.ts:247-283):
-- Discovered from the ar.io network process via AO (Arweave Computer)
+- Discovered from the ar.io network process on Solana via `@ar.io/sdk`
 - Uses paginated `getGateways()` API with 1000 items per page
 - Refreshed every hour by default
 - Filters out the node's own wallet address

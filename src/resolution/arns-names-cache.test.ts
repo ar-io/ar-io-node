@@ -479,7 +479,7 @@ describe('ArNSNamesCache', () => {
       networkProcess: {
         getArNSRecords: async () => {
           callCount++;
-          throw new Error('AO service unavailable');
+          throw new Error('Network process unavailable');
         },
       } as unknown as ARIORead,
     });

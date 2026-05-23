@@ -166,7 +166,7 @@ process.on('uncaughtException', (error) => {
 
 const arweave = Arweave.init({});
 
-// IO/AO SDK
+// AR.IO SDK
 
 ARIOLogger.default.setLogLevel(config.AR_IO_SDK_LOG_LEVEL as any);
 
