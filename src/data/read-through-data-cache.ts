@@ -435,6 +435,61 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     return undefined;
   }
 
+  /**
+   * Serve contiguous data addressed directly by its content hash (the
+   * value emitted as X-AR-IO-Digest and used as the on-disk cache key).
+   *
+   * Unlike {@link getData}, there is no id, no manifest/ArNS resolution, and
+   * no upstream fall-through: Arweave and peers address by transaction id,
+   * not by content hash, so a hash we have never materialized cannot be
+   * fetched on demand. The endpoint therefore serves only content already
+   * present in the local content store. Because the store is keyed by the
+   * SHA-256 of the bytes, a successful read is self-verifying — the bytes
+   * provably hash to the requested digest — so the result is reported as
+   * verified, trusted, and cached.
+   *
+   * @throws if no content is indexed for the hash, or the indexed blob is
+   *   missing from the store (evicted/pruned between index and read).
+   */
+  async getDataByHash(
+    hash: string,
+    region?: {
+      offset: number;
+      size: number;
+    },
+  ): Promise<ContiguousData> {
+    const attributes =
+      await this.contiguousDataIndex.getDataAttributesByHash(hash);
+    if (attributes === undefined) {
+      throw new Error(`No content indexed for hash: ${hash}`);
+    }
+
+    const cacheStream = await this.dataStore.get(hash, region);
+    if (cacheStream === undefined) {
+      throw new Error(`No cached data found for hash: ${hash}`);
+    }
+
+    const requestType = region !== undefined ? 'range' : 'full';
+    metrics.getDataStreamSuccessesTotal.inc({
+      class: this.constructor.name,
+      source: 'cache',
+      request_type: requestType,
+    });
+
+    const totalSize = attributes.size;
+    return {
+      hash,
+      stream: cacheStream,
+      size: region?.size ?? totalSize,
+      totalSize,
+      sourceContentType: attributes.contentType,
+      // Content-addressed: the bytes provably hash to the requested digest.
+      verified: true,
+      trusted: true,
+      cached: true,
+    };
+  }
+
   async getData({
     id,
     requestAttributes,

@@ -110,6 +110,22 @@ describe('ReadThroughDataCache', function () {
         return undefined;
       },
 
+      getDataAttributesByHash: async (hash: string) => {
+        if (hash === 'knownHash') {
+          return {
+            hash: 'knownHash',
+            size: 100,
+            contentType: 'text/plain',
+            id: 'knownId',
+          };
+        }
+        // Indexed in contiguous_data but the blob is missing from the store.
+        if (hash === 'indexedButNoBlob') {
+          return { hash: 'indexedButNoBlob', size: 50 };
+        }
+        return undefined;
+      },
+
       // eslint-disable-next-line no-empty-pattern
       saveDataContentAttributes: async ({}: {
         id: string;
@@ -167,6 +183,50 @@ describe('ReadThroughDataCache', function () {
 
   afterEach(() => {
     mock.restoreAll();
+  });
+
+  describe('getDataByHash', () => {
+    it('streams indexed content addressed by hash, marked self-verifying', async () => {
+      const result = await readThroughDataCache.getDataByHash('knownHash');
+
+      assert.equal(result.hash, 'knownHash');
+      assert.equal(result.size, 100);
+      assert.equal(result.totalSize, 100);
+      assert.equal(result.sourceContentType, 'text/plain');
+      // Content-addressed reads are self-verifying and always local-cache.
+      assert.equal(result.verified, true);
+      assert.equal(result.trusted, true);
+      assert.equal(result.cached, true);
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of result.stream) {
+        chunks.push(Buffer.from(chunk));
+      }
+      assert.equal(Buffer.concat(chunks).toString(), 'simulated data');
+    });
+
+    it('honors a byte region', async () => {
+      const result = await readThroughDataCache.getDataByHash('knownHash', {
+        offset: 0,
+        size: 4,
+      });
+      assert.equal(result.size, 4);
+      assert.equal(result.totalSize, 100);
+    });
+
+    it('rejects when the hash is not indexed', async () => {
+      await assert.rejects(
+        readThroughDataCache.getDataByHash('unknownHash'),
+        /No content indexed/,
+      );
+    });
+
+    it('rejects when indexed but the blob is missing from the store', async () => {
+      await assert.rejects(
+        readThroughDataCache.getDataByHash('indexedButNoBlob'),
+        /No cached data/,
+      );
+    });
   });
 
   describe('getCachedData', () => {

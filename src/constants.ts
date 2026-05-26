@@ -88,6 +88,11 @@ export const verificationPriorities = {
 export const DATA_PATH_REGEX =
   /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
 export const RAW_DATA_PATH_REGEX = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
+// Content-addressed data: base64url SHA-256 digest (43 chars), the value
+// emitted as X-AR-IO-Digest. Distinct prefix from /raw/:txid because a
+// digest is indistinguishable from a 43-char txid by shape alone.
+export const DIGEST_DATA_PATH_REGEX =
+  /^\/ar-io\/digest\/([a-zA-Z0-9-_]{43})\/?$/i;
 export const FARCASTER_FRAME_DATA_PATH_REGEX =
   /^\/local\/farcaster\/frame\/([a-zA-Z0-9-_]{43})\/?$/i;
 

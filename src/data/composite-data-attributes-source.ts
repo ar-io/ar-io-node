@@ -10,6 +10,7 @@ import winston from 'winston';
 import {
   ContiguousDataAttributes,
   ContiguousDataAttributesStore,
+  DataAttributesByHash,
   DataAttributesSource,
 } from '../types.js';
 
@@ -73,6 +74,18 @@ export class CompositeDataAttributesSource
       // Always clean up the pending promise
       this.pendingPromises.delete(id);
     }
+  }
+
+  /**
+   * Reverse lookup by content hash. Delegated straight to the source — this
+   * is a cheap indexed point lookup used only by the content-addressed
+   * endpoint, so it is not worth the cache-coherency cost of caching here
+   * (the id-keyed cache above would not help a hash-keyed query anyway).
+   */
+  async getDataAttributesByHash(
+    hash: string,
+  ): Promise<DataAttributesByHash | undefined> {
+    return this.source.getDataAttributesByHash(hash);
   }
 
   private async fetchAndCache(

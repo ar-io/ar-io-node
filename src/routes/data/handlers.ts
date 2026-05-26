@@ -28,6 +28,7 @@ import { isValidTxId } from '../../lib/validation.js';
 import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
 import {
   DataBlockListValidator,
+  ByHashDataSource,
   ContiguousData,
   ContiguousDataAttributes,
   ContiguousDataSource,
@@ -822,7 +823,7 @@ export const getRequestAttributes = (
 
 interface HandleRangeRequestArgs {
   log: Logger;
-  dataSource: ContiguousDataSource;
+  dataSource?: ContiguousDataSource;
   rangeHeader: string;
   res: Response;
   req: Request;
@@ -831,6 +832,15 @@ interface HandleRangeRequestArgs {
   dataAttributes: ContiguousDataAttributes | undefined;
   requestAttributes: RequestAttributes;
   parentSpan?: Span;
+  /**
+   * Optional override for fetching a byte region. When provided it is used
+   * instead of `dataSource.getData`, letting content-addressed callers
+   * (the /ar-io/digest endpoint) reuse this range machinery without an id.
+   */
+  getRegionData?: (region: {
+    offset: number;
+    size: number;
+  }) => Promise<ContiguousData>;
 }
 
 const handleRangeRequest = async ({
@@ -844,6 +854,7 @@ const handleRangeRequest = async ({
   dataAttributes,
   requestAttributes,
   parentSpan,
+  getRegionData,
 }: HandleRangeRequestArgs) => {
   const { startChildSpan } = await import('../../tracing.js');
   const span = startChildSpan(
@@ -857,6 +868,19 @@ const handleRangeRequest = async ({
     },
     parentSpan,
   );
+
+  // Fetch a single byte region, by content hash when getRegionData is
+  // supplied, otherwise by id through the standard data source.
+  const fetchRegion = (region: { offset: number; size: number }) =>
+    getRegionData !== undefined
+      ? getRegionData(region)
+      : dataSource!.getData({
+          id,
+          requestAttributes,
+          region,
+          parentSpan: span,
+          signal: req.signal,
+        });
 
   try {
     const ranges = rangeParser(data.size, rangeHeader);
@@ -909,15 +933,9 @@ const handleRangeRequest = async ({
         return;
       }
 
-      const rangeData = await dataSource.getData({
-        id,
-        requestAttributes,
-        region: {
-          offset: start,
-          size: end - start + 1,
-        },
-        parentSpan: span,
-        signal: req.signal,
+      const rangeData = await fetchRegion({
+        offset: start,
+        size: end - start + 1,
       });
 
       pipeStreamToResponse(rangeData.stream, res, log, id);
@@ -971,15 +989,9 @@ const handleRangeRequest = async ({
           const start = range.start;
           const end = range.end;
 
-          const rangeData = await dataSource.getData({
-            id,
-            requestAttributes,
-            region: {
-              offset: start,
-              size: end - start + 1,
-            },
-            parentSpan: span,
-            signal: req.signal,
+          const rangeData = await fetchRegion({
+            offset: start,
+            size: end - start + 1,
           });
 
           rangeStreams.push({ range, stream: rangeData.stream });
@@ -1372,6 +1384,296 @@ export const createRawDataHandler = ({
           stack: error.stack,
         });
         res.status(500).send('Internal server error');
+      } finally {
+        span.end();
+      }
+    });
+  });
+};
+
+/**
+ * Set response headers for a content-addressed (`/ar-io/digest/:digest`)
+ * response. The representation is immutable — the URL *is* the hash of the
+ * bytes — and self-verifying, so we cache hard and stand behind the digest
+ * as both a cache validator (ETag) and a signed integrity header
+ * (Content-Digest), unconditionally.
+ */
+/**
+ * Serve contiguous data addressed by its content hash (the value emitted as
+ * `X-AR-IO-Digest`) at `GET|HEAD /ar-io/digest/:digest`.
+ *
+ * Local-cache only — there is no on-demand fetch by content hash (Arweave and
+ * peers address by id), so an unknown digest is a 404. Bytes stream from the
+ * hash-keyed content store and are therefore self-verifying.
+ *
+ * For header parity with `/raw`, a representative id that resolves to this
+ * digest is looked up and run through the same {@link setDataHeaders} path,
+ * so the response carries the full id-scoped header set (X-AR-IO-Data-Id,
+ * tags, owner, signature, root offsets, …) which the HTTPSIG middleware then
+ * signs. The served digest is pinned onto the attributes so the digest/ETag/
+ * Content-Digest headers always describe the bytes actually streamed, even if
+ * the representative id's index entry has since changed.
+ */
+export const createDigestDataHandler = ({
+  log,
+  dataSource,
+  dataAttributesSource,
+  dataBlockListValidator,
+  rateLimiter,
+  paymentProcessor,
+  dataItemMetaResolver,
+}: {
+  log: Logger;
+  dataSource: ByHashDataSource;
+  dataAttributesSource: DataAttributesSource;
+  dataBlockListValidator: DataBlockListValidator;
+  rateLimiter?: RateLimiter;
+  paymentProcessor?: PaymentProcessor;
+  dataItemMetaResolver?: TxMetadataResolver;
+}) => {
+  return asyncHandler(async (req: Request, res: Response) => {
+    const requestAttributes = getRequestAttributes(req, res);
+    const digest = req.params[0];
+
+    const span = tracer.startSpan('DigestDataHandler.handle', {
+      attributes: {
+        'http.method': req.method,
+        'http.target': req.originalUrl,
+        'data.request.digest': digest,
+        'client.ip': requestAttributes?.clientIp ?? 'unknown',
+      },
+    });
+
+    return context.with(trace.setSpan(context.active(), span), async () => {
+      try {
+        // Validate the digest is a canonical 43-char base64url SHA-256. The
+        // route regex already enforces shape; this also rejects non-canonical
+        // encodings (round-trip mismatch).
+        if (
+          digest == null ||
+          !digest.match(/^[a-zA-Z0-9-_]{43}$/) ||
+          Buffer.from(digest, 'base64url').toString('base64url') !== digest
+        ) {
+          span.setAttribute('http.status_code', 400);
+          span.setAttribute('data.error', 'invalid_digest');
+          log.warn('Invalid digest', { digest });
+          res.status(400).send(`Invalid digest: ${digest}`);
+          return;
+        }
+
+        // Return 451 if the content hash is blocked by this node's policy.
+        try {
+          if (await dataBlockListValidator.isHashBlocked(digest)) {
+            span.setAttribute('http.status_code', 451);
+            span.setAttribute('data.error', 'hash_blocked');
+            sendBlocked(res, digest);
+            return;
+          }
+        } catch (error: any) {
+          span.recordException(error);
+          log.error('Error checking blocklist:', {
+            digest,
+            message: error.message,
+            stack: error.stack,
+          });
+        }
+
+        // Resolve a representative id for this digest (cheap indexed lookup)
+        // so the response can carry the full id-scoped, signed header set.
+        const byHash =
+          await dataAttributesSource.getDataAttributesByHash(digest);
+        const resolvedId = byHash?.id;
+        if (resolvedId !== undefined) {
+          span.setAttribute('data.representative_id', resolvedId);
+        }
+
+        // Fire item header (tags/owner/signature) resolution early, in
+        // parallel with the byte fetch, exactly as the raw handler does.
+        const tagsPromise =
+          resolvedId !== undefined
+            ? fireItemHeaderResolution(resolvedId, dataItemMetaResolver)
+            : Promise.resolve(undefined);
+
+        let data: ContiguousData;
+        try {
+          data = await dataSource.getDataByHash(digest);
+        } catch (error: any) {
+          if (error.name === 'AbortError' && req.signal?.aborted) {
+            throw error;
+          }
+          // Not indexed, or the blob is gone from the store. Either way the
+          // gateway can't serve it and can't fetch it by hash on demand.
+          span.setAttribute('http.status_code', 404);
+          span.setAttribute('data.error', 'not_found_by_hash');
+          log.debug('No content available for digest', {
+            digest,
+            message: error.message,
+          });
+          sendNotFound(res);
+          return;
+        }
+
+        try {
+          // Build the same attributes shape /raw uses. Prefer the
+          // representative id's full attributes (stable flag, root tx id,
+          // offsets); fall back to a minimal synthesized set when no id is
+          // indexed for the hash. Either way pin hash to the served digest
+          // and verified=true (content-addressed bytes are self-verifying).
+          let dataAttributes: ContiguousDataAttributes | undefined;
+          if (resolvedId !== undefined) {
+            const attrs =
+              await dataAttributesSource.getDataAttributes(resolvedId);
+            if (attrs !== undefined) {
+              // Clone — the attributes source caches this object.
+              dataAttributes = { ...attrs, hash: digest, verified: true };
+            }
+          }
+          dataAttributes ??= {
+            hash: digest,
+            size: data.totalSize ?? data.size,
+            offset: 0,
+            contentType: data.sourceContentType,
+            isManifest: data.sourceContentType === MANIFEST_CONTENT_TYPE,
+            stable: false,
+            verified: true,
+          } as ContiguousDataAttributes;
+
+          // Header id for X-AR-IO-Data-Id: the representative id when known.
+          const headerId = resolvedId ?? digest;
+
+          // === PAYMENT AND RATE LIMIT CHECK ===
+          const allowed = await handleDataRateLimitingAndPayment({
+            req,
+            res,
+            id: headerId,
+            data,
+            dataAttributes,
+            requestAttributes,
+            rateLimiter,
+            paymentProcessor,
+            parentSpan: span,
+            log,
+          });
+          if (!allowed) {
+            return;
+          }
+
+          // Content-addressed responses are immutable: the URL is the hash of
+          // the bytes. Pin Cache-Control before setDataHeaders (which only
+          // sets it when absent) so it is always marked immutable.
+          const contentType =
+            dataAttributes.contentType ??
+            data.sourceContentType ??
+            DEFAULT_CONTENT_TYPE;
+          const usePrivate = shouldUsePrivateCacheControl(
+            contentType,
+            data.size,
+          );
+          res.header(
+            'Cache-Control',
+            `${usePrivate ? 'private' : 'public'}, max-age=${
+              config.CACHE_STABLE_MAX_AGE
+            }, immutable`,
+          );
+
+          const itemHeaders = await awaitItemHeaders(
+            tagsPromise,
+            data.upstreamTags,
+            headerId,
+            resolvedId !== undefined ? dataItemMetaResolver : undefined,
+          );
+
+          const rangeHeader = req.headers.range;
+          if (rangeHeader !== undefined) {
+            span.addEvent('Handling range request');
+            span.setAttribute('data.request.range_request', true);
+            // Range requests create new streams so the original is no longer
+            // needed.
+            data.stream.destroy();
+            setDataHeaders({
+              req,
+              res,
+              dataAttributes,
+              data,
+              id: headerId,
+              itemHeaders,
+            });
+            await handleRangeRequest({
+              log,
+              rangeHeader,
+              res,
+              req,
+              data,
+              id: headerId,
+              dataAttributes,
+              requestAttributes,
+              parentSpan: span,
+              getRegionData: (region) =>
+                dataSource.getDataByHash(digest, region),
+            });
+            span.setAttribute('http.status_code', res.statusCode);
+            return;
+          }
+
+          setDataHeaders({
+            req,
+            res,
+            dataAttributes,
+            data,
+            id: headerId,
+            itemHeaders,
+          });
+          if (data.size > 0) {
+            res.header('Content-Length', data.size.toString());
+          }
+
+          // Handle If-None-Match for both HEAD and GET requests.
+          if (handleIfNoneMatch(req, res)) {
+            span.setAttribute('http.status_code', 304);
+            res.end();
+            data.stream.destroy();
+            return;
+          }
+
+          if (req.method === REQUEST_METHOD_HEAD) {
+            span.setAttribute('http.status_code', res.statusCode || 200);
+            res.end();
+            data.stream.destroy();
+            return;
+          }
+
+          span.setAttribute('http.status_code', res.statusCode || 200);
+          span.addEvent('Streaming data to client');
+          await sendBodyWithOptionalDigest({
+            req,
+            res,
+            data,
+            log,
+            dataId: headerId,
+          });
+        } catch (error: any) {
+          if (error.name === 'AbortError' && req.signal?.aborted) {
+            span.setAttribute('http.status_code', 499);
+            data.stream.destroy();
+            if (!res.headersSent) {
+              res.status(499).end();
+            }
+            return;
+          }
+          data.stream.destroy();
+          throw error;
+        }
+      } catch (error: any) {
+        span.recordException(error);
+        span.setAttribute('http.status_code', 500);
+        log.error('Unexpected error in digest data handler:', {
+          digest,
+          message: error.message,
+          stack: error.stack,
+        });
+        if (!res.headersSent) {
+          res.status(500).send('Internal server error');
+        }
       } finally {
         span.end();
       }

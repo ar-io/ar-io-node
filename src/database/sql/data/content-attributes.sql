@@ -155,6 +155,23 @@ FROM (
 )
 LIMIT 1
 
+-- selectDataAttributesByHash
+-- Reverse lookup: resolve content metadata directly from the content hash
+-- (the value emitted as X-AR-IO-Digest and used as the on-disk cache key).
+-- contiguous_data is keyed by hash (primary-key point lookup); the LEFT JOIN
+-- additionally surfaces one representative id that resolves to this hash
+-- (via the contiguous_data_hash index) so the content-addressed endpoint can
+-- emit id-scoped response headers. Many ids may share a hash; any one will do.
+SELECT
+  cd.hash,
+  cd.data_size,
+  cd.original_source_content_type,
+  cdi.id AS id
+FROM contiguous_data cd
+LEFT JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
+WHERE cd.hash = :hash
+LIMIT 1
+
 -- selectDataParent
 SELECT
   cdip.parent_id,

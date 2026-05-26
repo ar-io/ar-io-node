@@ -900,6 +900,7 @@ const breakerSourceNames = [
   'ar-io-peer-manager',
   'composite-sqlite-gql',
   'get-data-attributes',
+  'get-data-attributes-by-hash',
   'get-data-item-attributes',
   'get-data-parent',
   'get-transaction-attributes',

@@ -978,6 +978,29 @@ export interface TransactionAttributes {
   owner: string | null;
 }
 
+/**
+ * Minimal content metadata resolved directly from a content hash (the
+ * value emitted as X-AR-IO-Digest and used as the on-disk cache key).
+ * Unlike {@link ContiguousDataAttributes}, this carries no id-scoped fields
+ * (offsets, bundle hierarchy, verification) because the lookup is keyed by
+ * content, not by a transaction or data item id.
+ */
+export interface DataAttributesByHash {
+  /** SHA-256 hash of the contiguous data (base64url encoded). */
+  hash: string;
+  /** Total size of the data payload in bytes. */
+  size: number;
+  /** Source-declared content type, if recorded. */
+  contentType?: string;
+  /**
+   * A representative transaction/data item id that resolves to this hash,
+   * if any is indexed. Many ids can share one hash (identical content); this
+   * is an arbitrary one, used to populate id-scoped response headers
+   * (X-AR-IO-Data-Id, tags, signature) on the content-addressed endpoint.
+   */
+  id?: string;
+}
+
 export interface ContiguousDataParent {
   parentId: string;
   parentHash?: string;
@@ -987,6 +1010,9 @@ export interface ContiguousDataParent {
 
 export interface DataAttributesSource {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
+  getDataAttributesByHash(
+    hash: string,
+  ): Promise<DataAttributesByHash | undefined>;
 }
 
 export interface ContiguousDataAttributesStore extends DataAttributesSource {
@@ -998,6 +1024,9 @@ export interface ContiguousDataAttributesStore extends DataAttributesSource {
 
 export interface ContiguousDataIndex {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
+  getDataAttributesByHash(
+    hash: string,
+  ): Promise<DataAttributesByHash | undefined>;
   getDataItemAttributes(id: string): Promise<DataItemAttributes | undefined>;
   getTransactionAttributes(
     id: string,
@@ -1109,6 +1138,17 @@ export interface ContiguousDataSource {
      */
     acceptContentType?: (contentType: string | undefined) => boolean;
   }): Promise<ContiguousData>;
+}
+
+/**
+ * Serves contiguous data addressed by its content hash (X-AR-IO-Digest /
+ * on-disk cache key) rather than by transaction or data item id. Implemented
+ * by the local read-through cache; see {@link ContiguousDataSource} for the
+ * id-addressed path. Rejects when the hash is not present in the local
+ * content store (there is no on-demand fetch by content hash).
+ */
+export interface ByHashDataSource {
+  getDataByHash(hash: string, region?: Region): Promise<ContiguousData>;
 }
 
 /**

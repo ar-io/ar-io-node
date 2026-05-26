@@ -13,7 +13,11 @@ import {
   RAW_DATA_PATH_REGEX,
   FARCASTER_FRAME_DATA_PATH_REGEX,
 } from '../../constants.js';
-import { createDataHandler, createRawDataHandler } from './handlers.js';
+import {
+  createDataHandler,
+  createDigestDataHandler,
+  createRawDataHandler,
+} from './handlers.js';
 
 // Used by ArNS Router
 export const dataHandler = createDataHandler({
@@ -25,6 +29,18 @@ export const dataHandler = createDataHandler({
   rateLimiter: system.rateLimiter,
   paymentProcessor: system.paymentProcessor,
   negativeDataCache: system.negativeDataCache,
+  dataItemMetaResolver: system.dataItemTagHeaderResolver,
+});
+
+// Content-addressed data handler, mounted by the AR.IO router at
+// /ar-io/digest/:digest (see src/routes/ar-io.ts).
+export const digestDataHandler = createDigestDataHandler({
+  log,
+  dataSource: system.onDemandContiguousDataSource,
+  dataAttributesSource: system.dataAttributesStore,
+  dataBlockListValidator: system.dataBlockListValidator,
+  rateLimiter: system.rateLimiter,
+  paymentProcessor: system.paymentProcessor,
   dataItemMetaResolver: system.dataItemTagHeaderResolver,
 });
 

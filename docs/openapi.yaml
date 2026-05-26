@@ -1745,6 +1745,115 @@ paths:
         '416':
           description: Range not satisfiable for HEAD request
 
+  '/ar-io/digest/{digest}':
+    get:
+      tags: [Data]
+      summary: Get data by its content digest (SHA-256)
+      description: |
+        Retrieve contiguous data addressed by its SHA-256 content digest — the
+        same base64url value emitted in the `X-AR-IO-Digest` response header on
+        every data response (and used as the gateway's on-disk cache key).
+
+        This is a content-addressed endpoint: the bytes returned provably hash
+        to the requested digest, so the response is always self-verifying
+        (`X-AR-IO-Verified: true`) and immutable (`Cache-Control: …, immutable`).
+
+        Local-cache only: the gateway can only serve a digest it has already
+        materialized (via prior retrieval or bundle unbundling). There is no
+        on-demand fetch by content hash, because Arweave and peers address data
+        by transaction/data-item id, not by content hash — so a digest the node
+        has never stored returns 404.
+
+        For header parity with `/raw/{txId}`, a representative id that resolves
+        to this digest is used to populate the full id-scoped header set
+        (`X-AR-IO-Data-Id`, tags, owner, signature, root offsets), which are
+        then covered by the HTTPSIG signature when signing is enabled.
+      parameters:
+        - name: digest
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Base64Url43'
+          description: base64url-encoded SHA-256 content digest (X-AR-IO-Digest)
+        - name: Range
+          in: header
+          required: false
+          schema:
+            $ref: '#/components/schemas/ByteRange'
+          description: Byte range(s) to retrieve
+      responses:
+        '200':
+          description: |
+            Successful response. Emits the same header set as `/raw/{txId}`
+            (see that endpoint for the full list), with `X-AR-IO-Verified`
+            always `true` and an immutable `Cache-Control`.
+          headers:
+            Content-Type:
+              schema:
+                type: string
+                example: application/octet-stream
+            Content-Length:
+              schema:
+                type: string
+                example: 1024
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=2592000, immutable
+            X-AR-IO-Digest:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            ETag:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            Content-Digest:
+              schema:
+                type: string
+                description: RFC 9530 compliant digest header with SHA-256
+                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
+            X-AR-IO-Verified:
+              schema:
+                $ref: '#/components/schemas/VerificationStatus'
+                example: true
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: A representative id that resolves to this digest
+        '206':
+          description: Partial content for range requests
+        '400':
+          description: Malformed digest (not a canonical 43-char base64url SHA-256)
+        '404':
+          description: No content for this digest in the local cache
+        '416':
+          description: Range not satisfiable
+        '451':
+          description: Content blocked by this node's content policy
+    head:
+      tags: [Data]
+      summary: Get headers for data by its content digest
+      description: |
+        Existence check / header retrieval for content addressed by its SHA-256
+        digest. Returns the same headers as the GET response with no body.
+      parameters:
+        - name: digest
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Base64Url43'
+          description: base64url-encoded SHA-256 content digest (X-AR-IO-Digest)
+      responses:
+        '200':
+          description: Successful response (headers only)
+        '400':
+          description: Malformed digest
+        '404':
+          description: No content for this digest in the local cache
+        '451':
+          description: Content blocked by this node's content policy
+
   # Network and Node Status
   '/info':
     get:
