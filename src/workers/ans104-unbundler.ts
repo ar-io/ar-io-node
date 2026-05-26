@@ -61,6 +61,7 @@ export class Ans104Unbundler {
     getDataTimeoutMs,
     streamTotalTimeoutMs,
     parseJobTimeoutMs,
+    getDataWallClockTimeoutMs,
     maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
     shouldUnbundle = () => true,
     ans104Parser,
@@ -74,6 +75,7 @@ export class Ans104Unbundler {
     getDataTimeoutMs?: number;
     streamTotalTimeoutMs?: number;
     parseJobTimeoutMs?: number;
+    getDataWallClockTimeoutMs?: number;
     maxQueueSize?: number;
     shouldUnbundle?: () => boolean;
     ans104Parser?: Ans104Parser;
@@ -91,6 +93,7 @@ export class Ans104Unbundler {
         getDataTimeoutMs,
         streamTotalTimeoutMs,
         parseJobTimeoutMs,
+        getDataWallClockTimeoutMs,
       });
 
     this.workerCount = workerCount;
