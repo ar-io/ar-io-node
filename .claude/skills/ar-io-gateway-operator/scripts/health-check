@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Quick session-start health snapshot for any AR.IO gateway.
+#
+# Auto-discovers sidecars: any container matching the optional
+# *_PATTERN env vars below gets a healthcheck added to the report.
+# Defaults are conservative — only the gateway itself is checked
+# unless a deployment-overlay skill or env override widens the scope.
+#
+# Useful env knobs (all optional):
+#   AR_IO_NODE_PATH       (default: /programs/ar-io-node)
+#   CORE_CONTAINER        (default: ar-io-node-core-1)
+#   CH_CONTAINER          (default: ar-io-node-clickhouse-1)
+#   GATEWAY_HEALTH_URL    (default: http://localhost:4000/ar-io/healthcheck)
+#   SCANNER_HEALTH_URL    (no default — set to enable scanner check)
+#   C2PA_HEALTH_URL       (no default — set to enable c2pa "verify" sidecar check)
+#   VERIFY_HEALTH_URL     (no default — set to enable ar-io-verify sidecar check)
+#   CAPTURE_HEALTH_URL    (no default — set to enable turbo-capture-service check)
+#   CHAIN_INFO_URL        (default: https://arweave.net/info)
+set -uo pipefail
+
+AR_IO_NODE_PATH="${AR_IO_NODE_PATH:-/programs/ar-io-node}"
+CORE_CONTAINER="${CORE_CONTAINER:-ar-io-node-core-1}"
+CH_CONTAINER="${CH_CONTAINER:-ar-io-node-clickhouse-1}"
+GATEWAY_HEALTH_URL="${GATEWAY_HEALTH_URL:-http://localhost:4000/ar-io/healthcheck}"
+CHAIN_INFO_URL="${CHAIN_INFO_URL:-https://arweave.net/info}"
+SQLITE_DB="${SQLITE_DB:-$AR_IO_NODE_PATH/data/sqlite/core.db}"
+
+section() { printf '\n=== %s ===\n' "$1"; }
+
+section "containers"
+docker ps --format '{{.Names}}\t{{.Status}}' | sort
+
+section "disk"
+df -h / 2>/dev/null
+[[ -d /data ]] && df -h /data 2>/dev/null
+
+section "gateway healthcheck"
+if curl -sf -m 3 "$GATEWAY_HEALTH_URL"; then echo; else echo 'UNHEALTHY or unreachable'; fi
+
+if [[ -n "${SCANNER_HEALTH_URL:-}" ]]; then
+  section "scanner healthcheck"
+  if curl -sf -m 3 "$SCANNER_HEALTH_URL" >/dev/null; then echo ok; else echo 'down or unreachable'; fi
+fi
+
+if [[ -n "${C2PA_HEALTH_URL:-}" ]]; then
+  section "c2pa (verify-via-provenance) sidecar healthcheck"
+  if curl -sf -m 3 "$C2PA_HEALTH_URL" >/dev/null; then echo ok; else echo 'down or unreachable'; fi
+fi
+
+if [[ -n "${VERIFY_HEALTH_URL:-}" ]]; then
+  section "ar-io-verify sidecar healthcheck"
+  if curl -sf -m 3 "$VERIFY_HEALTH_URL" >/dev/null; then echo ok; else echo 'down or unreachable'; fi
+fi
+
+if [[ -n "${CAPTURE_HEALTH_URL:-}" ]]; then
+  section "turbo-capture-service healthcheck"
+  if curl -sf -m 3 "$CAPTURE_HEALTH_URL" >/dev/null; then echo ok; else echo 'down or unreachable'; fi
+fi
+
+section "indexer height vs chain head"
+local_h=$(sqlite3 "$SQLITE_DB" \
+  "SELECT MAX(MAX(height), (SELECT MAX(height) FROM stable_blocks)) FROM new_blocks" 2>/dev/null)
+chain_h=$(curl -sf -m 5 "$CHAIN_INFO_URL" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("height",""))' 2>/dev/null)
+echo "local: ${local_h:-?}  chain: ${chain_h:-?}"
+if [[ -n "$local_h" && -n "$chain_h" ]]; then
+  lag=$((chain_h - local_h))
+  echo "lag (blocks): $lag  ($([ $lag -le 5 ] && echo OK || echo BEHIND))"
+fi
+
+section "clickhouse rows + max heights"
+if docker ps --format '{{.Names}}' | grep -q "^${CH_CONTAINER}$"; then
+  docker exec "$CH_CONTAINER" clickhouse-client --query \
+    "SELECT 'transactions' t, count() rows, max(height) h FROM transactions
+     UNION ALL SELECT 'staging_transactions', count(), max(height) FROM staging_transactions
+     UNION ALL SELECT 'new_blocks', count(), max(height) FROM new_blocks
+     UNION ALL SELECT 'new_transactions', count(), max(height) FROM new_transactions
+     FORMAT TSV" 2>/dev/null || echo 'CH query failed'
+else
+  echo 'ClickHouse not running (no --profile clickhouse?)'
+fi
+
+section "core errors in last 5 minutes"
+if docker ps --format '{{.Names}}' | grep -q "^${CORE_CONTAINER}$"; then
+  docker logs --since=5m "$CORE_CONTAINER" 2>&1 \
+    | grep -viE '"buffer":|raw bytes|^[\[0-9, ]+$' \
+    | grep -ciE '"level":"error"|^[^|]*\| error:'
+else
+  echo "$CORE_CONTAINER not running"
+fi
+
+section "image SHAs (compare against ghcr digest if on a dev branch)"
+for c in "$CORE_CONTAINER" "$CH_CONTAINER" ar-io-node-clickhouse-auto-import-1; do
+  if docker ps --format '{{.Names}}' | grep -q "^${c}$"; then
+    printf '%-40s %s\n' "$c" "$(docker inspect "$c" --format '{{.Image}}')"
+  fi
+done
+# Sidecar SHAs if explicit container names were provided via env
+for c in "${SCANNER_CONTAINER:-}" "${C2PA_CONTAINER:-}"; do
+  if [[ -n "$c" ]] && docker ps --format '{{.Names}}' | grep -q "^${c}$"; then
+    printf '%-40s %s\n' "$c" "$(docker inspect "$c" --format '{{.Image}}')"
+  fi
+done
