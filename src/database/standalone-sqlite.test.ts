@@ -428,6 +428,185 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  // Regression coverage for the empty/NULL data_root content-confusion bug.
+  // An L1 tx with an empty data_root was served unrelated content because:
+  //   - the write side (insertDataRoot) planted a poison row keyed on the
+  //     empty data_root pointing at whatever bytes were last streamed, and
+  //   - the read side (selectDataAttributes' fallback branch) matched that
+  //     poison row via `dr.data_root = :data_root` for any other
+  //     empty-data_root tx, returning the unrelated file's hash.
+  // The fix guards both queries with `:data_root IS NOT NULL AND
+  // length(:data_root) > 0`. These tests pin both halves of the fix.
+  describe('getDataAttributes — empty/NULL data_root guard', () => {
+    // Synthetic ids (32-byte buffers) — the L1 tx under test.
+    const txId = toB64Url(Buffer.alloc(32, 0x01));
+    // A *different* tx whose content planted the empty-data_root poison row.
+    const planterTxId = toB64Url(Buffer.alloc(32, 0x02));
+    const txDataSize = 393110;
+    const rogueHash = Buffer.alloc(32, 0x9a);
+    const rogueSize = 17;
+    const realHash = Buffer.alloc(32, 0x11);
+
+    const insertL1Tx = (dataRoot: Buffer | null) => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type)
+           VALUES (@id, 1, 0, 2, @last_tx,
+             @owner_address, '0', '0', 0, @data_size,
+             @data_root, 'text/html')`,
+        )
+        .run({
+          id: fromB64Url(txId),
+          last_tx: Buffer.alloc(32),
+          owner_address: Buffer.alloc(32),
+          data_size: txDataSize,
+          data_root: dataRoot,
+        });
+    };
+
+    const insertContiguousData = (hash: Buffer, size: number) => {
+      dataDb
+        .prepare(
+          `INSERT OR REPLACE INTO contiguous_data
+            (hash, data_size, indexed_at) VALUES (@hash, @size, 0)`,
+        )
+        .run({ hash, size });
+    };
+
+    const insertDataId = (id: string, hash: Buffer) => {
+      dataDb
+        .prepare(
+          `INSERT OR REPLACE INTO contiguous_data_ids
+            (id, contiguous_data_hash, verified, indexed_at)
+           VALUES (@id, @hash, 1, 0)`,
+        )
+        .run({ id: fromB64Url(id), hash });
+    };
+
+    // Raw insert that bypasses the write-side guard, so we can reproduce the
+    // state a previously-unguarded build (or the migration's target) leaves.
+    const plantPoisonRow = (dataRoot: Buffer, hash: Buffer) => {
+      dataDb
+        .prepare(
+          `INSERT OR REPLACE INTO data_roots
+            (data_root, contiguous_data_hash, verified, indexed_at)
+           VALUES (@data_root, @hash, 0, 0)`,
+        )
+        .run({ data_root: dataRoot, hash });
+    };
+
+    it('returns no hash for an empty-data_root L1 tx even when a poison data_roots row exists', () => {
+      insertL1Tx(Buffer.alloc(0));
+      insertContiguousData(rogueHash, rogueSize);
+      // The poison row's hash must have a cdi row for the fallback JOIN to
+      // fire (as it did on the planter tx) — proving the guard, not a
+      // missing join, is what suppresses the match.
+      insertDataId(planterTxId, rogueHash);
+      plantPoisonRow(Buffer.alloc(0), rogueHash);
+
+      const attrs = dbWorker.getDataAttributes(txId);
+      assert.notEqual(attrs, undefined);
+      assert.equal(attrs?.hash, undefined);
+      // The tx's own declared size is still surfaced from the tx row.
+      assert.equal(attrs?.size, txDataSize);
+    });
+
+    it('returns no hash for a NULL-data_root L1 tx (guard + SQL NULL semantics)', () => {
+      insertL1Tx(null);
+      insertContiguousData(rogueHash, rogueSize);
+      insertDataId(planterTxId, rogueHash);
+      plantPoisonRow(Buffer.alloc(0), rogueHash);
+
+      const attrs = dbWorker.getDataAttributes(txId);
+      assert.notEqual(attrs, undefined);
+      assert.equal(attrs?.hash, undefined);
+    });
+
+    it('still returns the cdi-branch hash when a proper contiguous_data_ids row exists for the tx', () => {
+      insertL1Tx(Buffer.alloc(0));
+      insertContiguousData(realHash, txDataSize);
+      // Proper mapping for the tx itself (first UNION branch, cdi.id = :id).
+      insertDataId(txId, realHash);
+      // Adversarial poison row still present — must not win.
+      insertContiguousData(rogueHash, rogueSize);
+      insertDataId(planterTxId, rogueHash);
+      plantPoisonRow(Buffer.alloc(0), rogueHash);
+
+      const attrs = dbWorker.getDataAttributes(txId);
+      assert.equal(attrs?.hash, toB64Url(realHash));
+    });
+  });
+
+  describe('insertDataRoot — empty/NULL data_root guard', () => {
+    const id = toB64Url(Buffer.alloc(32, 0x01));
+    const hash = Buffer.alloc(32, 0x11);
+    const realDataRoot = Buffer.alloc(32, 0x22);
+
+    const countDataRoots = () =>
+      (dataDb.prepare(`SELECT COUNT(*) AS cnt FROM data_roots`).get() as any)
+        .cnt;
+    const countEmptyDataRoots = () =>
+      (
+        dataDb
+          .prepare(
+            `SELECT COUNT(*) AS cnt FROM data_roots
+             WHERE data_root IS NULL OR length(data_root) = 0`,
+          )
+          .get() as any
+      ).cnt;
+
+    it('is a no-op when data_root is empty', () => {
+      dbWorker.saveDataContentAttributes({
+        id,
+        dataRoot: '', // decodes to a zero-length blob
+        hash: toB64Url(hash),
+        dataSize: 17,
+      });
+      assert.equal(countEmptyDataRoots(), 0);
+    });
+
+    it('is a no-op when data_root is undefined (TS wrapper skips the insert)', () => {
+      dbWorker.saveDataContentAttributes({
+        id,
+        hash: toB64Url(hash),
+        dataSize: 17,
+      });
+      assert.equal(countDataRoots(), 0);
+    });
+
+    it('is a no-op when data_root is NULL (SQL guard, exercised directly)', () => {
+      // saveDataContentAttributes never passes NULL (it skips on undefined),
+      // so drive the actual prepared statement to pin the SQL-level guard.
+      (dbWorker as any).stmts.data.insertDataRoot.run({
+        data_root: null,
+        contiguous_data_hash: hash,
+        verified: 0,
+        indexed_at: 0,
+        verified_at: null,
+      });
+      assert.equal(countDataRoots(), 0);
+    });
+
+    it('still writes normally for a non-empty data_root', () => {
+      dbWorker.saveDataContentAttributes({
+        id,
+        dataRoot: toB64Url(realDataRoot),
+        hash: toB64Url(hash),
+        dataSize: 17,
+      });
+      const row = dataDb
+        .prepare(
+          `SELECT contiguous_data_hash FROM data_roots WHERE data_root = @data_root`,
+        )
+        .get({ data_root: realDataRoot }) as any;
+      assert.notEqual(row, undefined);
+      assert.deepEqual(row.contiguous_data_hash, hash);
+    });
+  });
+
   describe('saveBlockAndTxs', () => {
     it('should insert the block in the new_blocks table', async () => {
       const height = 982575;
