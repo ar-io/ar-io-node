@@ -172,6 +172,7 @@ export class Ans104Parser {
   private getDataTimeoutMs: number;
   private streamTotalTimeoutMs: number;
   private parseJobTimeoutMs: number;
+  private getDataWallClockTimeoutMs: number;
   private workers: any[] = []; // TODO what's the type for this?
   private workQueue: any[] = []; // TODO what's the type for this?
 
@@ -185,6 +186,7 @@ export class Ans104Parser {
     getDataTimeoutMs = 30000,
     streamTotalTimeoutMs = 120000,
     parseJobTimeoutMs = 600000,
+    getDataWallClockTimeoutMs = 300000,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
@@ -195,6 +197,7 @@ export class Ans104Parser {
     getDataTimeoutMs?: number;
     streamTotalTimeoutMs?: number;
     parseJobTimeoutMs?: number;
+    getDataWallClockTimeoutMs?: number;
   }) {
     this.log = log.child({ class: 'Ans104Parser' });
     this.contiguousDataSource = contiguousDataSource;
@@ -202,6 +205,7 @@ export class Ans104Parser {
     this.getDataTimeoutMs = getDataTimeoutMs;
     this.streamTotalTimeoutMs = streamTotalTimeoutMs;
     this.parseJobTimeoutMs = parseJobTimeoutMs;
+    this.getDataWallClockTimeoutMs = getDataWallClockTimeoutMs;
 
     const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
 
@@ -407,15 +411,65 @@ export class Ans104Parser {
         // pages held in poisoned upstream caches). The data source chain
         // will fall through to the next priority tier and ultimately to
         // chunks, which fetches real bytes from Arweave network nodes.
+        //
+        // PE-9102 follow-up: `getDataController.abort()` above is the
+        // *correct* termination path — it fires at `getDataTimeoutMs` and
+        // resolves cleanly in ~99 % of cases. But ~0.4 % of attempts get
+        // wedged in the cascade indefinitely: the abort fires, no source
+        // honors it, the await never throws. Per-bundle hang times of
+        // 130+ minutes were captured in production, pinning every unbundle
+        // worker and dropping throughput to zero.
+        //
+        // Mirrors PR #744's fix for `DataImporter.download`: race the
+        // cascade promise against a wall-clock cap. When the cap wins, the
+        // underlying cascade promise is abandoned (sockets / peer slots
+        // stay held until the cascade eventually unwedges; acceptable since
+        // the alternative is a permanent worker stall). The cap default is
+        // generous (5 min, 20× the abort timer) so it only fires for true
+        // zombies — the "slow but eventually resolves" cases (observed up
+        // to 10 min) still win on the abort path.
+        let getDataWallClockTimer: NodeJS.Timeout | undefined;
         try {
-          data = await this.contiguousDataSource.getData({
-            id: parentId,
-            signal: getDataController.signal,
-            acceptContentType: isAcceptableBundleContentType,
-          });
+          data = await Promise.race<ContiguousData>([
+            this.contiguousDataSource.getData({
+              id: parentId,
+              signal: getDataController.signal,
+              acceptContentType: isAcceptableBundleContentType,
+            }),
+            new Promise<never>((_, raceReject) => {
+              if (this.getDataWallClockTimeoutMs <= 0) return;
+              getDataWallClockTimer = setTimeout(() => {
+                log.error(
+                  'Ans104Parser getData wall-clock cap fired — cascade did not honor AbortSignal',
+                  {
+                    parentId,
+                    wallClockMs: this.getDataWallClockTimeoutMs,
+                  },
+                );
+                metrics.ans104ParserGetDataWallClockFiresCounter.inc();
+                // Best-effort: signal abort one more time in case the
+                // cascade can eventually clean up its socket / slot state.
+                try {
+                  getDataController.abort(
+                    new Error('Ans104Parser getData wall-clock cap'),
+                  );
+                } catch {
+                  // best-effort: we are about to reject regardless
+                }
+                raceReject(
+                  new Error(
+                    `Ans104Parser getData wall-clock cap after ${this.getDataWallClockTimeoutMs}ms (cascade did not honor AbortSignal)`,
+                  ),
+                );
+              }, this.getDataWallClockTimeoutMs);
+            }),
+          ]);
         } finally {
           if (getDataTimer !== undefined) {
             clearTimeout(getDataTimer);
+          }
+          if (getDataWallClockTimer !== undefined) {
+            clearTimeout(getDataWallClockTimer);
           }
         }
 

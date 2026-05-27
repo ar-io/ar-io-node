@@ -1297,6 +1297,8 @@ const ans104Unbundler = new Ans104Unbundler({
   getDataTimeoutMs: config.ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS,
   streamTotalTimeoutMs: config.ANS104_UNBUNDLE_STREAM_TOTAL_TIMEOUT_MS,
   parseJobTimeoutMs: config.ANS104_PARSE_JOB_TIMEOUT_MS,
+  getDataWallClockTimeoutMs:
+    config.ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS,
   shouldUnbundle: shouldUnbundleDataItems,
 });
 metrics.registerQueueLengthGauge('ans104Unbundler', {

@@ -253,6 +253,11 @@ export const ans104ParserJobTimeoutsCounter = new promClient.Counter({
   help: 'Parse jobs killed by ANS104_PARSE_JOB_TIMEOUT_MS — worker thread hung inside parseBundle without exiting or posting a terminal message. Always paired with an ans104_parser_worker_exits_total increment.',
 });
 
+export const ans104ParserGetDataWallClockFiresCounter = new promClient.Counter({
+  name: 'ans104_parser_get_data_wall_clock_fires_total',
+  help: 'Ans104Parser.parseBundle getData wall-clock cap fires — the AbortSignal-based getDataTimeoutMs did not propagate through the data-source cascade, and the Promise.race fallback rejected the await. Each increment marks one previously-permanent worker stall recovered.',
+});
+
 // Observability for `BundleRepairWorker`. The worker has no direct view of
 // "successful repair" (whether a re-queued bundle eventually transitions to
 // fully indexed happens downstream of this worker), but the combination of
