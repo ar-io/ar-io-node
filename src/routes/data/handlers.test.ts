@@ -67,7 +67,6 @@ describe('Data routes', () => {
       };
       dataAttributesSource = {
         getDataAttributes: () => Promise.resolve(undefined),
-        getDataAttributesByHash: () => Promise.resolve(undefined),
       };
       dataSource = {
         getData: (params?: any) => {
@@ -3409,17 +3408,6 @@ st
             stable: true,
             verified: false,
           } as any),
-        getDataAttributesByHash: (hash: string) =>
-          Promise.resolve(
-            hash === DIGEST
-              ? {
-                  hash: DIGEST,
-                  size: CONTENT.length,
-                  contentType: 'text/plain',
-                  id: REPRESENTATIVE_ID,
-                }
-              : undefined,
-          ),
       };
       dataSource = {
         getDataByHash: (hash: string, region?: any) => {
@@ -3439,6 +3427,7 @@ st
             verified: true,
             trusted: true,
             cached: true,
+            representativeId: REPRESENTATIVE_ID,
           });
         },
       };
@@ -3532,12 +3521,18 @@ st
     });
 
     it('still serves (200) when no representative id is indexed', async () => {
-      dataAttributesSource.getDataAttributesByHash = () =>
+      // getDataByHash resolves the bytes but yields no representative id.
+      dataSource.getDataByHash = () =>
         Promise.resolve({
           hash: DIGEST,
+          stream: Readable.from(CONTENT),
           size: CONTENT.length,
-          contentType: 'text/plain',
-          // no id
+          totalSize: CONTENT.length,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: true,
+          // no representativeId
         });
       app.get(route, build());
 

@@ -1824,6 +1824,40 @@ describe('StandaloneSqliteDatabase', () => {
       const attrs = await db.getDataAttributesByHash(unknown);
       assert.equal(attrs, undefined);
     });
+
+    it('deterministically prefers a verified id when several share a hash', async () => {
+      // Two distinct ids with byte-identical content → same hash. The
+      // representative must deterministically be the verified one, not
+      // whichever the index happens to yield first.
+      const sharedHash = crypto
+        .createHash('sha256')
+        .update('shared-by-two-ids')
+        .digest('base64url');
+      const unverifiedId = crypto
+        .createHash('sha256')
+        .update('dup-unverified')
+        .digest('base64url');
+      const verifiedId = crypto
+        .createHash('sha256')
+        .update('dup-verified')
+        .digest('base64url');
+
+      await db.saveDataContentAttributes({
+        id: unverifiedId,
+        hash: sharedHash,
+        dataSize: 99,
+        verified: false,
+      });
+      await db.saveDataContentAttributes({
+        id: verifiedId,
+        hash: sharedHash,
+        dataSize: 99,
+        verified: true,
+      });
+
+      const attrs = await db.getDataAttributesByHash(sharedHash);
+      assert.equal(attrs!.id, verifiedId);
+    });
   });
 
   describe('upsertNewDataItem clobber resistance (PE-9073)', () => {

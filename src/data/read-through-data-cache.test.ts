@@ -197,6 +197,8 @@ describe('ReadThroughDataCache', function () {
       assert.equal(result.verified, true);
       assert.equal(result.trusted, true);
       assert.equal(result.cached, true);
+      // The single internal lookup also surfaces the representative id.
+      assert.equal(result.representativeId, 'knownId');
 
       const chunks: Buffer[] = [];
       for await (const chunk of result.stream) {

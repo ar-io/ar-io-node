@@ -1010,9 +1010,6 @@ export interface ContiguousDataParent {
 
 export interface DataAttributesSource {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
-  getDataAttributesByHash(
-    hash: string,
-  ): Promise<DataAttributesByHash | undefined>;
 }
 
 export interface ContiguousDataAttributesStore extends DataAttributesSource {
@@ -1148,7 +1145,17 @@ export interface ContiguousDataSource {
  * content store (there is no on-demand fetch by content hash).
  */
 export interface ByHashDataSource {
-  getDataByHash(hash: string, region?: Region): Promise<ContiguousData>;
+  getDataByHash(hash: string, region?: Region): Promise<ByHashData>;
+}
+
+/**
+ * {@link ContiguousData} plus the representative id that resolved the hash.
+ * Returned by {@link ByHashDataSource.getDataByHash} so the content-addressed
+ * endpoint can emit id-scoped headers without a second by-hash lookup. May be
+ * undefined when a hash is present in the content store with no indexed id.
+ */
+export interface ByHashData extends ContiguousData {
+  representativeId?: string;
 }
 
 /**

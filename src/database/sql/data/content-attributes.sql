@@ -161,7 +161,11 @@ LIMIT 1
 -- contiguous_data is keyed by hash (primary-key point lookup); the LEFT JOIN
 -- additionally surfaces one representative id that resolves to this hash
 -- (via the contiguous_data_hash index) so the content-addressed endpoint can
--- emit id-scoped response headers. Many ids may share a hash; any one will do.
+-- emit id-scoped response headers. Many ids may share a hash (byte-identical
+-- content under different signed envelopes); the ORDER BY makes the choice
+-- deterministic and prefers the strongest provenance — a verified id over a
+-- trusted one over an arbitrary one — so the representative is stable across
+-- requests rather than dependent on index iteration order.
 SELECT
   cd.hash,
   cd.data_size,
@@ -170,6 +174,9 @@ SELECT
 FROM contiguous_data cd
 LEFT JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
 WHERE cd.hash = :hash
+ORDER BY cdi.verified DESC NULLS LAST,
+  cdi.trusted DESC NULLS LAST,
+  cdi.id ASC
 LIMIT 1
 
 -- selectDataParent

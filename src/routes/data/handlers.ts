@@ -28,6 +28,7 @@ import { isValidTxId } from '../../lib/validation.js';
 import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
 import {
   DataBlockListValidator,
+  ByHashData,
   ByHashDataSource,
   ContiguousData,
   ContiguousDataAttributes,
@@ -1478,23 +1479,12 @@ export const createDigestDataHandler = ({
           });
         }
 
-        // Resolve a representative id for this digest (cheap indexed lookup)
-        // so the response can carry the full id-scoped, signed header set.
-        const byHash =
-          await dataAttributesSource.getDataAttributesByHash(digest);
-        const resolvedId = byHash?.id;
-        if (resolvedId !== undefined) {
-          span.setAttribute('data.representative_id', resolvedId);
-        }
-
-        // Fire item header (tags/owner/signature) resolution early, in
-        // parallel with the byte fetch, exactly as the raw handler does.
-        const tagsPromise =
-          resolvedId !== undefined
-            ? fireItemHeaderResolution(resolvedId, dataItemMetaResolver)
-            : Promise.resolve(undefined);
-
-        let data: ContiguousData;
+        // Fetch the bytes by content hash. A single indexed lookup inside
+        // getDataByHash both confirms the digest is materialized and yields a
+        // representative id that resolves to it (returned as data.representativeId)
+        // — so the response can carry the full id-scoped, signed header set
+        // without a second by-hash query here.
+        let data: ByHashData;
         try {
           data = await dataSource.getDataByHash(digest);
         } catch (error: any) {
@@ -1512,6 +1502,18 @@ export const createDigestDataHandler = ({
           sendNotFound(res);
           return;
         }
+
+        const resolvedId = data.representativeId;
+        if (resolvedId !== undefined) {
+          span.setAttribute('data.representative_id', resolvedId);
+        }
+
+        // Resolve item headers (tags/owner/signature) for the representative
+        // id, mirroring the raw handler.
+        const tagsPromise =
+          resolvedId !== undefined
+            ? fireItemHeaderResolution(resolvedId, dataItemMetaResolver)
+            : Promise.resolve(undefined);
 
         try {
           // Build the same attributes shape /raw uses. Prefer the

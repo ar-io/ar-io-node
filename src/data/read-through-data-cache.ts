@@ -20,6 +20,7 @@ import * as metrics from '../metrics.js';
 import { KvJsonStore } from '../store/kv-attributes-store.js';
 import { startChildSpan } from '../tracing.js';
 import {
+  ByHashData,
   ContiguousData,
   ContiguousDataAttributesStore,
   ContiguousDataIndex,
@@ -457,7 +458,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       offset: number;
       size: number;
     },
-  ): Promise<ContiguousData> {
+  ): Promise<ByHashData> {
     const attributes =
       await this.contiguousDataIndex.getDataAttributesByHash(hash);
     if (attributes === undefined) {
@@ -487,6 +488,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       verified: true,
       trusted: true,
       cached: true,
+      // A representative id resolving to this hash (the same single lookup
+      // above), so callers need not re-query to emit id-scoped headers.
+      representativeId: attributes.id,
     };
   }
 
