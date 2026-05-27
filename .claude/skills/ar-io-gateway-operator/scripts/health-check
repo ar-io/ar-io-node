@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Quick session-start health snapshot for any AR.IO gateway.
+# Quick session-start health snapshot for an AR.IO gateway.
 #
-# Auto-discovers sidecars: any container matching the optional
-# *_PATTERN env vars below gets a healthcheck added to the report.
-# Defaults are conservative — only the gateway itself is checked
-# unless a deployment-overlay skill or env override widens the scope.
+# Covers only the core ar-io-node containers (gateway core, ClickHouse,
+# auto-import) defined in this repo's docker-compose. Sidecar / deployment
+# extensions belong in a separate deployment-overlay skill that calls this
+# script first and then adds its own checks.
 #
 # Useful env knobs (all optional):
 #   AR_IO_NODE_PATH                  (default: /programs/ar-io-node)
@@ -13,12 +13,6 @@
 #   CH_CONTAINER                     (default: ar-io-node-clickhouse-1)
 #   CH_AUTO_IMPORT_CONTAINER         (default: ar-io-node-clickhouse-auto-import-1)
 #   GATEWAY_HEALTH_URL               (default: http://localhost:4000/ar-io/healthcheck)
-#   SCANNER_HEALTH_URL               (no default — set to enable scanner check)
-#   SCANNER_CONTAINER                (no default — set to include scanner image SHA in report)
-#   C2PA_HEALTH_URL                  (no default — set to enable c2pa "verify" sidecar check)
-#   C2PA_CONTAINER                   (no default — set to include c2pa image SHA in report)
-#   VERIFY_HEALTH_URL                (no default — set to enable ar-io-verify sidecar check)
-#   CAPTURE_HEALTH_URL               (no default — set to enable turbo-capture-service check)
 #   CHAIN_INFO_URL                   (default: https://arweave.net/info)
 set -uo pipefail
 
@@ -42,26 +36,6 @@ df -h / 2>/dev/null
 
 section "gateway healthcheck"
 if curl -sf -m 3 "$GATEWAY_HEALTH_URL"; then echo; else echo 'UNHEALTHY or unreachable'; fi
-
-if [[ -n "${SCANNER_HEALTH_URL:-}" ]]; then
-  section "scanner healthcheck"
-  if curl -sf -m 3 "$SCANNER_HEALTH_URL" >/dev/null; then echo ok; else echo 'down or unreachable'; fi
-fi
-
-if [[ -n "${C2PA_HEALTH_URL:-}" ]]; then
-  section "c2pa (verify-via-provenance) sidecar healthcheck"
-  if curl -sf -m 3 "$C2PA_HEALTH_URL" >/dev/null; then echo ok; else echo 'down or unreachable'; fi
-fi
-
-if [[ -n "${VERIFY_HEALTH_URL:-}" ]]; then
-  section "ar-io-verify sidecar healthcheck"
-  if curl -sf -m 3 "$VERIFY_HEALTH_URL" >/dev/null; then echo ok; else echo 'down or unreachable'; fi
-fi
-
-if [[ -n "${CAPTURE_HEALTH_URL:-}" ]]; then
-  section "turbo-capture-service healthcheck"
-  if curl -sf -m 3 "$CAPTURE_HEALTH_URL" >/dev/null; then echo ok; else echo 'down or unreachable'; fi
-fi
 
 section "indexer height vs chain head"
 local_h=$(sqlite3 "$SQLITE_DB" \
@@ -99,12 +73,6 @@ fi
 section "image SHAs (compare against ghcr digest if on a dev branch)"
 for c in "$CORE_CONTAINER" "$CH_CONTAINER" "$CH_AUTO_IMPORT_CONTAINER"; do
   if docker ps --format '{{.Names}}' | grep -q "^${c}$"; then
-    printf '%-40s %s\n' "$c" "$(docker inspect "$c" --format '{{.Image}}')"
-  fi
-done
-# Sidecar SHAs if explicit container names were provided via env
-for c in "${SCANNER_CONTAINER:-}" "${C2PA_CONTAINER:-}"; do
-  if [[ -n "$c" ]] && docker ps --format '{{.Names}}' | grep -q "^${c}$"; then
     printf '%-40s %s\n' "$c" "$(docker inspect "$c" --format '{{.Image}}')"
   fi
 done

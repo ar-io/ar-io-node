@@ -20,7 +20,7 @@ What it checks and why:
 
 | Section | What "good" looks like | If wrong, jump to |
 |---|---|---|
-| containers | All gateway containers `Up`; sidecars (if any) `(healthy)` | "Bring everything up" |
+| containers | All core ar-io-node containers `Up` | "Bring everything up" |
 | disk | `/` < 80%, `/data` (if separate) has headroom | "Disk pressure" |
 | gateway healthcheck | `{"status":"ok",...}` | "When something breaks" |
 | indexer height vs chain head | lag ≤ 5 blocks | "Indexing falling behind" |
@@ -28,7 +28,7 @@ What it checks and why:
 | core errors last 5 min | < ~10 (operational noise: peer fetches, aborts) | grep deeper |
 | image SHAs | If on a dev branch, must differ from `:latest` digest | "Building from source" |
 
-The script auto-skips sidecar checks when their containers aren't present, so it works in any deployment.
+The script only covers the core ar-io-node containers defined in this repo's docker-compose. Sidecar checks belong in a deployment-overlay skill that calls this script then adds its own checks on top.
 
 ## How the gateway works (the model an operator needs)
 
@@ -202,7 +202,7 @@ curl -sf -X PUT "http://localhost:4000/ar-io/admin/block-data" \
   -d "{\"id\":\"$TX\",\"hash\":\"$TX\",\"source\":\"manual\",\"notes\":\"...\"}"
 ```
 
-If a content-scanner sidecar is present, prefer routing the block through it — depending on its config, it may also bust an edge cache after blocking.
+If a moderation sidecar is present (and wired via `WEBHOOK_TARGET_SERVERS`), prefer routing the block through it — depending on the sidecar's config, it may also bust an edge cache after blocking.
 
 ### HTTPSig overhead (for self-measurement)
 
@@ -220,7 +220,7 @@ Don't draw conclusions from `/ar-io/info` or `/ar-io/healthcheck` benchmarks —
 2. **Streaming tables empty (`new_blocks` / `new_transactions = 0`) despite `CLICKHOUSE_STREAMING_ENABLED=true`** — running the published `:latest` core image instead of a local build. The streaming columns/tables are populated only by the dev-branch code. Rebuild + force-recreate.
 3. **Webhook error flood (`getaddrinfo ENOTFOUND <sidecar-host>`)** — a configured sidecar isn't running. Bring it up. Don't strip the target unless intentionally retiring the sidecar — those targets are how moderation and provenance subsystems work.
 4. **Bundle unbundling looks idle (low matched count)** — `ANS104_UNBUNDLE_FILTER` is intentionally narrow on most operator configs (e.g., one App-Name + one owner). Confirm via `/ar-io/info`. Not a bug.
-5. **Gateway has no `DELETE /ar-io/admin/block-data` handler** — only PUT. Sidecars that send DELETE (e.g. content-scanner unblock) will see failures. Document but don't try to "fix" by changing the sidecar — the gateway is the side that needs the route.
+5. **Gateway has no `DELETE /ar-io/admin/block-data` handler** — only PUT. Sidecars that send DELETE (e.g. an unblock action) will see failures. Document but don't try to "fix" by changing the sidecar — the gateway is the side that needs the route.
 6. **`/ar-io/info` and `/ar-io/healthcheck` are unsigned** — they carry no trust-trigger headers, so HTTPSig signing skips them. Use `/raw/<id>` against a cached tx for HTTPSig benchmarks.
 7. **`docker logs <core> | tail` can dump megabytes of binary** — the streaming pipeline sometimes logs cert chains as raw byte arrays. Filter with `grep -viE '"buffer":|raw bytes|^[\[0-9, ]+$'`.
 8. **Five-edit dance for adding a database method** — SQL statement, worker impl in `StandaloneSqlite`, queue wrapper in main DB class, case in worker message handler, interface in `types.d.ts`. Skip any one and you get silent failures.
