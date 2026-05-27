@@ -1266,6 +1266,7 @@ export const dataItemIndexer = new DataItemIndexer({
   eventEmitter,
   indexWriter: dataItemIndexWriter,
   maxQueueSize: config.DATA_ITEM_INDEXER_QUEUE_SIZE,
+  workerCount: config.DATA_ITEM_INDEXER_WORKER_COUNT,
 });
 metrics.registerQueueLengthGauge('dataItemIndexer', {
   length: () => dataItemIndexer.queueDepth(),

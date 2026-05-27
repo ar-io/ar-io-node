@@ -1389,6 +1389,30 @@ export const DATA_ITEM_INDEXER_QUEUE_SIZE = +env.varOrDefault(
   '500000',
 );
 
+/**
+ * Fastq concurrency for `DataItemIndexer`'s `indexDataItem` worker.
+ *
+ * Default 1 matches pre-existing behavior: a single in-flight
+ * `saveDataItem` await at a time. Raising lets the main thread pipeline
+ * JS prep (event emit, metric inc, log) for the next item while the
+ * prior `saveDataItem` is in flight to the SQLite worker thread. The
+ * SQLite worker itself is single-threaded per database, so the upper
+ * bound on speedup is the gap between per-item JS work and per-item
+ * SQLite execute.
+ *
+ * @remarks
+ * Try `4` first when the failed-bundle backlog is the dominant load
+ * (large bundles, 50–500 items each); back off if main-thread CPU
+ * saturates. Validated as a strictly positive integer — `0`, negative,
+ * or non-integer values fall back to the default.
+ *
+ * @default 1
+ */
+export const DATA_ITEM_INDEXER_WORKER_COUNT = env.positiveIntOrDefault(
+  'DATA_ITEM_INDEXER_WORKER_COUNT',
+  1,
+);
+
 // Hard cap on Ans104DataIndexer's internal queue. Same semantics as
 // DATA_ITEM_INDEXER_QUEUE_SIZE: drop on full, `0` = unbounded.
 export const ANS104_DATA_INDEXER_QUEUE_SIZE = +env.varOrDefault(
