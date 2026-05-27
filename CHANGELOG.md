@@ -4,22 +4,331 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 79] - 2026-05-27
+
+This is a **recommended release** focused on **ANS-104 unbundling
+hang prevention**, the **ClickHouse streaming pipeline for the
+unstable head**, and **byte-range / partial-content hardening**.
+Key highlights include four new wall-clock-cap and timeout layers
+across the unbundling pipeline (#744, #746, #748, #754) that close
+every observed AbortSignal-immune hang path — workers can no longer
+wedge permanently inside `DataImporter.download`,
+`Ans104Parser.parseBundle`'s `getData`, the stream-to-disk pipeline,
+or the worker thread itself; a new opt-in **ClickHouse streaming
+pipeline** (`CLICKHOUSE_STREAMING_ENABLED`, #699) backed by
+`new_blocks` / `new_transactions` ClickHouse tables so GraphQL
+queries against the unstable head no longer wait for the hourly
+parquet round-trip; and a **Range / 200-acceptance hardening pass**
+(PE-9098) that gives the gateway a useful fallback when upstreams
+strip Range headers, bounds overstreaming via
+`GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET`, and corrects byte-count
+recording on the sliced path. Other notable additions: configurable
+`DATA_ITEM_INDEXER_WORKER_COUNT` (#747) for indexer-bound workloads,
+a **chain-anchored chunk metadata fast path with outbound hint
+propagation** (#705), and a substantial new observability surface
+for the data-importer phase counters, bundle download
+timing/size, and bundle-repair-worker. Operationally significant
+fixes: a `ReadThroughDataCache` source-stream tee that eliminates a
+backpressure race wedging the ar-io-network backfill (#737), an
+`ar-io-data-source` limiter-slot leak on stream 'end' (#735), an
+HTTPS-SNI bug in `DnsResolver` breaking the chunks-offset-aware
+path (#729), a content-type predicate that crashed on stored
+`null` content-types (PE-9099), and GraphQL federation
+sort-order / null-height regressions (PE-9092).
 
 ### Added
 
+- **ClickHouse Streaming Pipeline for the Unstable Head (#699,
+  #696)**: Opt-in pipeline that mirrors the SQLite `new_*` tables
+  into ClickHouse so GraphQL queries against the unstable head can
+  read from ClickHouse directly instead of waiting for the hourly
+  parquet round-trip. Adds `new_blocks` and `new_transactions`
+  tables (mirroring `transactions` shape, with inline `signature` /
+  `owner` and a uniform `inserted_at`-anchored TTL replacing the
+  stable table's offset/size/bloom/partition machinery). Reorgs
+  trigger bounded `ALTER TABLE ... DELETE WHERE` on the `new_*`
+  tables. Activated by `CLICKHOUSE_STREAMING_ENABLED` (default
+  `false`); tunable via `CLICKHOUSE_STREAMER_BATCH_SIZE` (default
+  500), `CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS` (default 1000),
+  `CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE`, and
+  `CLICKHOUSE_NEW_TX_TTL_MINUTES` (default 240). GraphQL gains a
+  third merge leg over `new_transactions`; the SQLite leg can be
+  reduced to a tight-timeout fallback via
+  `CLICKHOUSE_GQL_SKIP_SQLITE_READS` with the timeout governed by
+  `CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS`. Also
+  adds `HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES` (default 2 MiB) — the
+  upper bound for buffering small uncached bodies to emit a
+  `Content-Digest` header; larger bodies stream without one. When
+  `CLICKHOUSE_STREAMING_ENABLED=false` (the default), behavior is
+  identical to the pre-streaming two-leg path.
+
+- **ANS-104 Unbundling Hang Prevention (#744, #746, #748, #754)**:
+  Four cooperating layers that close every observed AbortSignal-immune
+  hang path. (1) `DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS` (default 20 min,
+  #744) caps `DataImporter.download` via `Promise.race` independent
+  of AbortSignal — fixes wedges where 32 of 32 download workers
+  pinned indefinitely on backpressured streams. (2)
+  `ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS` (default 30 s) +
+  `ANS104_UNBUNDLE_STREAM_TOTAL_TIMEOUT_MS` (default 2 min) (#746)
+  bound the parser's data-fetch and stream-to-disk phases with
+  AbortSignal-based timeouts; the offset source's reader is
+  rewritten to consume via `getReader()` so stream errors and
+  aborts reject the promise instead of hanging. (3)
+  `ANS104_PARSE_JOB_TIMEOUT_MS` (default 10 min, #748) covers the
+  remaining case where a worker thread stays alive but never posts
+  a terminal message — fires `worker.terminate()` and the existing
+  `'exit'` handler reaps and respawns. (4)
+  `ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS` (default 5 min,
+  #754) is the parseBundle-level mirror of #744's
+  `Promise.race` cap, closing the ~0.4 % of cases where the
+  cascade ignores the AbortSignal. New metrics:
+  `ans104_parser_get_data_wall_clock_fires_total`,
+  `ans104_parser_job_timeouts_total`,
+  `data_importer_worker_phase_total{phase="timer_*"}`,
+  `bundles_unbundle_started_total`, `bundles_unbundle_in_flight`,
+  `ans104_parser_jobs_started_total`,
+  `ans104_parser_worker_pool_size`,
+  `ans104_parser_worker_exits_total`. Also adds `STREAM_REQUEST_TIMEOUT_MS`
+  (default 15 min) — the underlying wall-clock cap on
+  `attachStallTimeout` used by `ArIODataSource` and
+  `GatewaysDataSource` to bound paused-stream wedges.
+
+- **Chain-Anchored Chunk Metadata Fast Path (#705)**: Decodes the
+  `X-Arweave-Chunk-*` headers that peer gateways emit on
+  `/chunk/{offset}/data` into structured chunk metadata, then
+  cross-checks every field against the chain — a header that
+  disagrees throws `ChainAnchorMismatchError` and the caller falls
+  back to the canonical chain lookup, so peer headers are *hints*,
+  never silently trusted. When the hint passes anchoring, the
+  gateway skips a chain round-trip per chunk and re-emits the same
+  headers on its outbound response so downstream consumers can
+  anchor in turn. Enabled by default
+  (`CHUNK_METADATA_ANCHOR_ENABLED=true`), with
+  `CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS` (default 5000),
+  `CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE` (default 1024), and
+  `CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS` (default 300) as
+  tunables.
+
+- **Accept 200 for Range Requests and Slice Locally (PE-9098)**:
+  Some upstreams (most often nginx with `proxy_cache` but no
+  `slice` module) silently strip the client's `Range` header and
+  return a full 200 body. `GatewaysDataSource` previously rejected
+  these with `Expected 206`, falling through to a worse source.
+  The gateway now accepts the 200, slices locally, and bounds the
+  wire-cost via `GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET` (default
+  10 MiB) — when `region.offset` exceeds the cap, the 200 is
+  rejected and the next source tier is tried. Guarded against
+  `NaN` / negative env values.
+
+- **Configurable `DATA_ITEM_INDEXER_WORKER_COUNT` (#747)**:
+  `DataItemIndexer`'s fastq concurrency was hardcoded to 1.
+  Operators draining a large failed-bundle backlog can now raise it
+  (default 1, backward compatible) to pipeline main-thread JS work
+  while the prior `saveDataItem` is in flight to the SQLite worker.
+  Upper bound on speedup is bounded by SQLite single-writer
+  semantics.
+
+- **Caller-Supplied Content-Type Predicate with Lazy Poisoned-Cache
+  Eviction (PE-9099)**: `ContiguousDataSource.getData()` accepts an
+  optional `acceptContentType` predicate. When supplied,
+  `GatewaysDataSource` rejects upstream responses whose
+  `Content-Type` fails the predicate before any bytes are returned
+  (the cascade falls through to the next priority tier), and
+  `ReadThroughDataCache` lazily evicts cache entries whose stored
+  content-type fails: the on-disk blob is deleted and the request
+  treated as a cache miss, so the next fall-through fetch heals the
+  entry. Closes the long-standing 1134-byte `text/html`
+  bundlr-network parking-page poisoning from the Sept-2024 outage
+  that the indexer's ANS-104 parser couldn't unbundle.
+
+- **Data-Importer + Bundle-Repair Observability (#728, #736,
+  2c51ee6f, 58090309)**:
+  `bundle_download_duration_seconds{outcome}` and
+  `bundle_download_size_bytes{outcome}` (#728) correlate slow
+  downloads with payload size; `data_importer_queue_full_skips_total`
+  (#728) makes previously-silent queue-full drops scrapeable.
+  `data_importer_worker_phase_total{phase=started|got_data|stream_ended|...}`
+  (#736) pinpoints where a wedged worker is stuck (gaps between
+  phases are exactly worker-count when the pipeline locks up).
+  Bundle-repair gains `bundles_unbundling_backlog` (true backlog
+  including bundles awaiting their first unbundle, not just retries)
+  alongside the existing `bundle_repair_pending_bundles`.
+  `bundles_unbundle_skipped_total{reason="no_workers"|"high_queue_depth"|"queue_full"}`
+  (58090309) accounts for each pre-pipeline skip path at
+  `Ans104Unbundler.queueItem`.
+
+- **ClickHouse Pipeline Observability (8f9b1151)**: Two new gauges
+  make the parquet → ClickHouse staleness gap legible from Grafana.
+  `min_stable_data_item_height` exposes `MIN(height)` over
+  `stable_data_items` — flat across multiple auto-import cycles
+  means the prune is no-op-ing (typically because a backfill keeps
+  inserting rows at low heights with an `indexed_at` newer than the
+  prune threshold). `clickhouse_max_imported_height` tracks how far
+  the auto-import process has advanced — the gap against the SQLite
+  stable height is the lag operators actually care about.
+
 ### Changed
+
+- **`isAcceptableBundleContentType` Widened (PE-9099)**: The
+  bundle content-type predicate now accepts `binary/octet-stream`
+  (a legacy MIME synonym of `application/octet-stream` present on
+  ~350 rows in production gateway caches) in addition to
+  `application/octet-stream`, `application/x-arweave-data`, and
+  absent / `null` content-types. Input is normalized with
+  `trim()` + `toLowerCase()` so cosmetic upstream variants
+  (`Application/Octet-Stream`, leading/trailing whitespace) no
+  longer cause spurious cache fall-through. The rejected
+  content-type metric label is also stripped of parameters
+  (`; charset=…`) to bound Prometheus cardinality.
+
+- **Bundle-Repair Routes Retries Directly to the Unbundler
+  (PE-9098)**: `BundleRepairWorker.retryBundles()` previously
+  routed every failed bundle through `TransactionFetcher.queueTxId`,
+  which is structurally wrong for BDIs (chain nodes don't index
+  BDIs) and event-driven for L1s (TX_INDEXED → unbundler
+  subscription drops retries silently when the unbundler queue is
+  full). Retries now queue directly to the unbundler, with bundles
+  that match neither path retained for the next BRW cycle.
+
+- **`selectFailedBundleIds` Skips Non-Bundle Transactions
+  (PE-9101)**: The live and backfill queue paths gate on the
+  `Bundle-Format` tag, but the admin `/ar-io/admin/queue-bundle`
+  endpoint does not (`bypassFilter` defaults to `true`). Non-bundle
+  transactions queued through admin landed in `bundles`, never set
+  `matched_data_item_count`, and were retried by `BundleRepairWorker`
+  forever — each retry failing in the ANS-104 parser with
+  `Invalid buffer`. The retry query now excludes rows whose root
+  transaction is provably non-bundle (indexed locally and lacking
+  `Bundle-Format=binary`); unknown roots stay eligible.
 
 ### Fixed
 
-- The bundle retry-loop SELECT (`selectFailedBundleIds`) is now ~200× faster
-  after correcting the index column. The pre-existing
-  `import_attempt_last_retried_idx` had been on `import_attempt_count` since
-  the Jan 2025 retry-stats refactor, but the query orders by
-  `retry_attempt_count` — a different column. Replaced with
-  `bundles_active_retry_priority_idx` on `(last_fully_indexed_at,
-  retry_attempt_count, last_retried_at)`. Live measurement: 4.32 s → 20.5 ms
-  per call.
+- **`ReadThroughDataCache` Source-Stream Tee (#737)**: On a cache
+  miss, `ReadThroughDataCache.getData()` returned the same inner
+  source stream to two consumers — the disk-cache `pipeline()` and
+  the caller (`DataImporter.download` or the HTTP handler). Pipeline
+  managed pause/resume internally; the caller called `.resume()` once
+  at startup. When the disk cache paused for a slow write, the source
+  went to recv-window-zero on its TCP socket, the peer stopped
+  sending, and the worker waited indefinitely for `'end'` /
+  `'error'` events that never came. Manifested as bundle-backfill
+  wedges 15–30 minutes into every run with
+  `BACKGROUND_RETRIEVAL_ORDER=ar-io-network,…`. Fix introduces a
+  `PassThrough` that the pipeline tees into so the source has a
+  single consumer governed entirely by the disk-pipeline's outcome,
+  not by pause/resume races on the underlying `IncomingMessage`.
+  Also fixes a `cacheStream` leak when `dataStore.finalize()` throws.
+
+- **`ar-io-data-source` Peer-Limiter Slot Release on Stream 'end'
+  (#735)**: The `streamPeerCounts` / `peerRequestLimiter` release
+  path listened only on `stream.once('close', …)`. For HTTP
+  `IncomingMessage` streams consumed via `pipeline()` under a
+  keepAlive `http.Agent`, `'close'` can fire late or not at all —
+  the socket is returned to the agent pool without the response
+  object being destroyed. Every "successful" download leaked one
+  limiter slot. After 15–30 minutes every peer hit `maxConcurrent`,
+  `executeHedgedRequest` could no longer dispatch, and 24 download
+  workers blocked silently on sources that never returned data. Now
+  listens on `'end'`, `'error'`, and `'close'`, whichever fires first.
+
+- **`DnsResolver` SNI Preservation for HTTPS URLs (#729)**: When
+  `PREFERRED_CHUNK_GET_NODE_URLS` included HTTPS endpoints (e.g.
+  `https://arweave.net`), the DNS resolver overwrote the URL
+  hostname with the resolved IP. `fetch()` then sent TLS SNI = IP
+  and `Host: IP`, mismatching the server certificate and triggering
+  `ERR_TLS_CERT_ALTNAME_INVALID`. Failures bubbled up through
+  `ArIOChunkSource` as silent zero-success rates from otherwise
+  healthy upstreams. HTTPS URLs now return unchanged from the
+  resolver; only HTTP URLs go through DNS substitution.
+
+- **`isAcceptableBundleContentType` Null Safety (PE-9099)**: Stored
+  attributes from SQLite surface `NULL` as JS `null`, not
+  `undefined`. The predicate's `undefined`-only guard missed it,
+  and `.trim()` on `null` threw `TypeError: Cannot read
+  properties of null (reading 'trim')` — every cache lookup where
+  the stored content-type was `NULL` failed, the unbundle bounced
+  back to the repair pool, and post-deploy throughput collapsed.
+  Signature widened to `string | null | undefined` with an explicit
+  null check.
+
+- **GraphQL Federation Sort-Order + Null-Height Preference
+  (PE-9092)**: Two interacting defects in the federation merge.
+  (1) `mergeEdges` could emit edges out of sort order when a richer
+  duplicate replaced an earlier emission — under `HEIGHT_DESC` the
+  merger picked null-height edges first and a later resolved
+  duplicate overwrote slot 0, yielding e.g. `[x(100), y(200)]`
+  instead of `[y(200), x(100)]`. (2) Dedup in
+  `getGqlTransaction` / `getGqlTransactions` could return a
+  null-height (optimistic) record over a fully-resolved record for
+  the same id when both were present in the peer set. Fix
+  collects emissions into a `Map` keyed by `node.id`, prefers
+  height-resolved over null-height, and always forwards the full
+  block sub-selection upstream so partial selections produce
+  consistent block field hydration.
+
+- **Range Path Consumer-Byte Recording on Sliced 200 (PE-9098)**:
+  When the 200-with-Range fallback kicks in, the stream is sliced
+  to `region.size`, but the stream-bytes total and size histogram
+  were recording the upstream `content-length`. Overcounted by up
+  to the full body minus `region.size` (e.g. 140 MB instead of
+  512 bytes for a signature fetch). Recorded counts are now the
+  consumer-visible sliced size.
+
+- **`ReadThroughDataCache` Caller Region Size Through BDI Parent
+  Resolution (PE-9098)**: When a requested item resolved via its
+  parent's cached blob, the recursive `getCacheData` call replaced
+  the caller's `region.size` with the child's full `data_size`
+  before handing the region to `FsDataStore`. For BDI-nested items
+  that meant opening an `fs.createReadStream` window spanning
+  hundreds of MB to multiple GB instead of the few hundred bytes
+  the caller wanted. Caller's region is now preserved end-to-end.
+
+- **Webhook Emitter Log Bloat (#727)**: The previous catch block
+  passed the entire `AxiosError` object to winston, which
+  serialized the underlying keep-alive agent's Timer linked list
+  until the circular guard kicked in — producing 2–4 MB log lines
+  per failed delivery. At ~30 failures/hour from a single 429
+  webhook target, the 100 MB × 5 docker log rotation budget was
+  consumed in ~10 minutes and other log lines were evicted.
+  Extracts useful fields (status, code, message, truncated body,
+  target URL) and logs a structured object; response bodies clamp
+  to 500 chars.
+
+- **`min_stable_data_item_height` Gauge Moved to Main Thread
+  (0fa21dee)**: `computeDebugInfo()` runs in a SQLite worker
+  thread, which has its own `prom-client` registry. The scrape
+  endpoint reads the main-thread registry, so a gauge set inside
+  the worker never reached it. Now set in
+  `StandaloneSqliteDatabase.getDebugInfo()` after `queueRead`
+  returns.
+
+- **Streaming Backpressure in `ReadThroughDataCache` Cache-Miss
+  Path (4c9d1d13)**: The cache-miss path piped into the disk-cache
+  write stream via `pipeline()` and also attached a `.on('data')`
+  hashing/byte-counting listener. Two consumers on the same
+  readable forced flowing mode and short-circuited pipeline
+  backpressure: `cacheStream`'s internal buffer grew beyond
+  `highWaterMark` while waiting on disk writes, holding
+  multi-MB per concurrent download. At 24+ download workers this
+  produced external-memory pressure. Hashing moved into a
+  `Transform` so backpressure is preserved end-to-end.
+
+- **`selectFailedBundleIds` Index (855ba8c3)**: The retry-loop
+  `SELECT` is now ~200× faster after correcting the index column.
+  The pre-existing `import_attempt_last_retried_idx` had been on
+  `import_attempt_count` since the Jan 2025 retry-stats refactor,
+  but the query orders by `retry_attempt_count` — a different
+  column. Replaced with `bundles_active_retry_priority_idx` on
+  `(last_fully_indexed_at, retry_attempt_count, last_retried_at)`.
+  Live measurement: 4.32 s → 20.5 ms per call.
+
+- **Shared Keep-Alive HTTP Agents in `GatewaysDataSource`
+  (f487dcaa)**: `axios.create()` was called per request without
+  agent configuration, so every request opened a fresh TCP+TLS
+  connection that closed after the response — sending sockets
+  through ~60 s TIME_WAIT. Under high `ANS104_DOWNLOAD_WORKERS`,
+  500+ closed sockets accumulated in `ss -s`. Per-gateway-URL
+  agent cache with `keepAlive: true` eliminates the churn.
 
 ## [Release 78] - 2026-05-08
 
