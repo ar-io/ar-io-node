@@ -1352,6 +1352,27 @@ export const ANS104_UNBUNDLE_STREAM_TOTAL_TIMEOUT_MS =
     120000,
   );
 
+// Wall-clock timeout (ms) on an in-flight parse job inside an Ans104Parser
+// worker thread. PR #746 closed the upstream getData/stream-to-disk hangs,
+// but the worker can still hang INSIDE parseBundle (e.g. on a malformed
+// bundle, an arbundles edge case, or any infinite-loop path) without
+// exiting and without posting a terminal message. When it does, every job
+// it touched stops responding; the fastq slot stays held; the unbundle
+// queue grows without draining. Observed twice in production: ~2.5 hours
+// of healthy operation, then total halt with `bundles_unbundle_in_flight`
+// pinned at the worker count and `ans104_parser_worker_exits_total` flat.
+//
+// When this timer fires we call `worker.terminate()`. That synthesizes a
+// non-zero exit, which the existing 'exit' handler picks up to reject the
+// stuck job's promise and respawn a fresh worker. The dead bundle goes
+// to `bundle-repair-worker` for retry. Default 10 minutes is comfortably
+// above the largest legitimate parse time we've observed; tighten if your
+// bundles are smaller. Set to `0` to disable.
+export const ANS104_PARSE_JOB_TIMEOUT_MS = env.nonNegativeIntOrDefault(
+  'ANS104_PARSE_JOB_TIMEOUT_MS',
+  600000,
+);
+
 // Whether or not to attempt to rematch old bundles using the current filter
 export const FILTER_CHANGE_REPROCESS =
   env.varOrDefault('FILTER_CHANGE_REPROCESS', 'false') === 'true';
