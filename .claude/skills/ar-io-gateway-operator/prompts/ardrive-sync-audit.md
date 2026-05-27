@@ -19,7 +19,7 @@ snapshot for an operator/audit conversation.
 
 ## Prompt to paste
 
-```
+```text
 ArDrive sync audit — read-only diagnostic. NO CHANGES.
 
 Goal: report how much ArDrive data this gateway has indexed, in a format

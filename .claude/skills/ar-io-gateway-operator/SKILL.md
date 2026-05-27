@@ -36,7 +36,7 @@ Knowing the data flows tells you where to look when symptoms appear. Source of t
 
 ### Request flow
 
-```
+```text
 client → (optional edge: nginx/CDN) → envoy :3000 → core :4000 → response with X-AR-IO-* trust headers
                                                               ↘ webhook fan-out → optional sidecars
 ```
@@ -69,7 +69,7 @@ Two write paths run side-by-side:
 
 Whenever a bundle TX matches `ANS104_UNBUNDLE_FILTER`, it walks a four-queue chain. Knowing the chain is essential for diagnosing throughput regressions — a single queue at cap can mask everything downstream of it.
 
-```
+```text
 bundleDataImporter ─→ ans104Unbundler ─→ ans104DataIndexer ─→ dataItemIndexer ─→ SQLite writer
    download workers      parser workers     post-parse buffer     pre-write buffer    single-writer
    (ANS104_DOWNLOAD_…)   (ANS104_UNBUNDLE_)  (ANS104_DATA_…_SIZE)  (DATA_ITEM_…_SIZE)
@@ -79,17 +79,17 @@ Tune knobs (all env-overridable):
 
 | Knob | Default | What it controls |
 |---|---:|---|
-| `ANS104_DOWNLOAD_WORKERS` | 5×CPU | Parallel bundle downloads. Network-bound; overprovisioning is cheap |
-| `ANS104_UNBUNDLE_WORKERS` | 1×CPU | Parallel parser worker_threads. CPU + network bound |
+| `ANS104_DOWNLOAD_WORKERS` | 5 | Parallel bundle downloads. Network-bound; overprovisioning is cheap |
+| `ANS104_UNBUNDLE_WORKERS` | 1 | Parallel parser worker_threads. CPU + network bound |
 | `DATA_ITEM_INDEXER_WORKER_COUNT` | 1 | Fastq concurrency for `indexDataItem`; SQLite is single-writer so gains are bounded |
 | `MAX_DATA_ITEM_QUEUE_SIZE` | 100000 | **Soft gate**: `shouldUnbundle()` returns false above this on either indexer queue |
-| `DATA_ITEM_INDEXER_QUEUE_SIZE` | 100000 | Hard cap on `dataItemIndexer`; items past this get dropped silently |
-| `ANS104_DATA_INDEXER_QUEUE_SIZE` | 100000 | Hard cap on `ans104DataIndexer` |
+| `DATA_ITEM_INDEXER_QUEUE_SIZE` | 500000 | Hard cap on `dataItemIndexer`; items past this get dropped silently |
+| `ANS104_DATA_INDEXER_QUEUE_SIZE` | 500000 | Hard cap on `ans104DataIndexer` |
 
-**The buffer between soft gate and hard cap is where data loss happens.** When `MAX_DATA_ITEM_QUEUE_SIZE` is much smaller than the hard caps, in-flight parser workers can flood items into the queue *after* the gate engages but *before* the indexer drains, exceeding the hard cap and silently dropping items. Symptom: `data_items_dropped_total{queue_name="dataItemIndexer"}` climbs while `bundles_unbundled_total` keeps increasing — bundles look "indexed" but their items aren't searchable.
+**The buffer between soft gate and hard cap is where data loss happens.** With defaults the gate engages at 100 K but the hard cap is 500 K — a 5× buffer. Under heavy load, in-flight parser workers can flood items into the queue *after* the gate engages but *before* the indexer drains, exceeding the hard cap and silently dropping items. Symptom: `data_items_dropped_total{queue_name="dataItemIndexer"}` climbs while `bundles_unbundled_total` keeps increasing — bundles look "indexed" but their items aren't searchable.
 
 Mitigations:
-- Tighten `MAX_DATA_ITEM_QUEUE_SIZE` so the gate engages well before the hard cap (e.g., 25 000 with 100 000 / 1 000 000 hard caps, giving 4×–40× headroom).
+- Tighten `MAX_DATA_ITEM_QUEUE_SIZE` so the gate engages well before the hard cap (e.g., 25 000 with 500 000 hard caps, giving a 20× buffer).
 - Raise the hard cap if memory permits (each item slot ≈ 1–2 KB).
 - Don't add parser workers when `data_items_dropped_total` is non-zero — more workers = bigger floods past the gate.
 

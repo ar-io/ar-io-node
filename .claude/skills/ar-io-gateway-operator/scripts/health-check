@@ -7,20 +7,26 @@
 # unless a deployment-overlay skill or env override widens the scope.
 #
 # Useful env knobs (all optional):
-#   AR_IO_NODE_PATH       (default: /programs/ar-io-node)
-#   CORE_CONTAINER        (default: ar-io-node-core-1)
-#   CH_CONTAINER          (default: ar-io-node-clickhouse-1)
-#   GATEWAY_HEALTH_URL    (default: http://localhost:4000/ar-io/healthcheck)
-#   SCANNER_HEALTH_URL    (no default — set to enable scanner check)
-#   C2PA_HEALTH_URL       (no default — set to enable c2pa "verify" sidecar check)
-#   VERIFY_HEALTH_URL     (no default — set to enable ar-io-verify sidecar check)
-#   CAPTURE_HEALTH_URL    (no default — set to enable turbo-capture-service check)
-#   CHAIN_INFO_URL        (default: https://arweave.net/info)
+#   AR_IO_NODE_PATH                  (default: /programs/ar-io-node)
+#   DATA_MOUNT_PATH                  (default: /data — set empty to skip extra disk check)
+#   CORE_CONTAINER                   (default: ar-io-node-core-1)
+#   CH_CONTAINER                     (default: ar-io-node-clickhouse-1)
+#   CH_AUTO_IMPORT_CONTAINER         (default: ar-io-node-clickhouse-auto-import-1)
+#   GATEWAY_HEALTH_URL               (default: http://localhost:4000/ar-io/healthcheck)
+#   SCANNER_HEALTH_URL               (no default — set to enable scanner check)
+#   SCANNER_CONTAINER                (no default — set to include scanner image SHA in report)
+#   C2PA_HEALTH_URL                  (no default — set to enable c2pa "verify" sidecar check)
+#   C2PA_CONTAINER                   (no default — set to include c2pa image SHA in report)
+#   VERIFY_HEALTH_URL                (no default — set to enable ar-io-verify sidecar check)
+#   CAPTURE_HEALTH_URL               (no default — set to enable turbo-capture-service check)
+#   CHAIN_INFO_URL                   (default: https://arweave.net/info)
 set -uo pipefail
 
 AR_IO_NODE_PATH="${AR_IO_NODE_PATH:-/programs/ar-io-node}"
+DATA_MOUNT_PATH="${DATA_MOUNT_PATH:-/data}"
 CORE_CONTAINER="${CORE_CONTAINER:-ar-io-node-core-1}"
 CH_CONTAINER="${CH_CONTAINER:-ar-io-node-clickhouse-1}"
+CH_AUTO_IMPORT_CONTAINER="${CH_AUTO_IMPORT_CONTAINER:-ar-io-node-clickhouse-auto-import-1}"
 GATEWAY_HEALTH_URL="${GATEWAY_HEALTH_URL:-http://localhost:4000/ar-io/healthcheck}"
 CHAIN_INFO_URL="${CHAIN_INFO_URL:-https://arweave.net/info}"
 SQLITE_DB="${SQLITE_DB:-$AR_IO_NODE_PATH/data/sqlite/core.db}"
@@ -32,7 +38,7 @@ docker ps --format '{{.Names}}\t{{.Status}}' | sort
 
 section "disk"
 df -h / 2>/dev/null
-[[ -d /data ]] && df -h /data 2>/dev/null
+[[ -n "$DATA_MOUNT_PATH" && -d "$DATA_MOUNT_PATH" ]] && df -h "$DATA_MOUNT_PATH" 2>/dev/null
 
 section "gateway healthcheck"
 if curl -sf -m 3 "$GATEWAY_HEALTH_URL"; then echo; else echo 'UNHEALTHY or unreachable'; fi
@@ -62,9 +68,11 @@ local_h=$(sqlite3 "$SQLITE_DB" \
   "SELECT MAX(MAX(height), (SELECT MAX(height) FROM stable_blocks)) FROM new_blocks" 2>/dev/null)
 chain_h=$(curl -sf -m 5 "$CHAIN_INFO_URL" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("height",""))' 2>/dev/null)
 echo "local: ${local_h:-?}  chain: ${chain_h:-?}"
-if [[ -n "$local_h" && -n "$chain_h" ]]; then
+if [[ "$local_h" =~ ^[0-9]+$ && "$chain_h" =~ ^[0-9]+$ ]]; then
   lag=$((chain_h - local_h))
   echo "lag (blocks): $lag  ($([ $lag -le 5 ] && echo OK || echo BEHIND))"
+else
+  echo "lag: skipped (non-numeric height; local='${local_h}' chain='${chain_h}')"
 fi
 
 section "clickhouse rows + max heights"
@@ -89,7 +97,7 @@ else
 fi
 
 section "image SHAs (compare against ghcr digest if on a dev branch)"
-for c in "$CORE_CONTAINER" "$CH_CONTAINER" ar-io-node-clickhouse-auto-import-1; do
+for c in "$CORE_CONTAINER" "$CH_CONTAINER" "$CH_AUTO_IMPORT_CONTAINER"; do
   if docker ps --format '{{.Names}}' | grep -q "^${c}$"; then
     printf '%-40s %s\n' "$c" "$(docker inspect "$c" --format '{{.Image}}')"
   fi
