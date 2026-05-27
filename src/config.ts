@@ -1373,19 +1373,25 @@ export const ANS104_PARSE_JOB_TIMEOUT_MS = env.nonNegativeIntOrDefault(
   600000,
 );
 
-// Wall-clock cap (ms) on Ans104Parser.parseBundle's `await getData()`. Acts
-// as a Promise.race fallback for the AbortSignal-based
-// ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS — in ~99% of cases the abort wins and
-// this never fires, but in the remaining cases the data-source cascade
-// fails to honor AbortSignal, leaving the await permanently hung
-// (~140 minute hangs observed on real workloads with the abort timer at
-// 15s). When this cap fires, the parseBundle promise rejects with a
-// "wall-clock cap" error and the worker is freed — the underlying cascade
-// promise leaks (held sockets/peer-slots) until it eventually unwedges,
-// which is acceptable given the alternative is a permanent worker stall.
-// Default 5 minutes (20× the abort timer) so it only fires for true
-// zombies; "slow but eventually resolves" cases still win on the abort
-// path. Set to `0` to disable.
+/**
+ * Wall-clock cap (ms) on `Ans104Parser.parseBundle`'s `await getData()`.
+ *
+ * Promise.race fallback for the AbortSignal-based
+ * {@link ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS}: in ~99% of cases the abort
+ * wins and this never fires, but in the remaining cases the data-source
+ * cascade fails to honor AbortSignal, leaving the await permanently hung
+ * (~140 minute hangs observed on real workloads).
+ *
+ * When this cap fires, the parseBundle promise rejects with a "wall-clock
+ * cap" error and the worker is freed — the underlying cascade promise
+ * leaks (held sockets/peer-slots) until it eventually unwedges, which is
+ * acceptable given the alternative is a permanent worker stall.
+ *
+ * Default 5 minutes — 10× the
+ * {@link ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS} default of 30000ms — so it
+ * only fires for true zombies; "slow but eventually resolves" cases still
+ * win on the abort path. Set to `0` to disable.
+ */
 export const ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS =
   env.nonNegativeIntOrDefault(
     'ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS',

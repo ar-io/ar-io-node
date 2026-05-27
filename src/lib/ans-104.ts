@@ -453,7 +453,9 @@ export class Ans104Parser {
                   getDataController.abort(
                     new Error('Ans104Parser getData wall-clock cap'),
                   );
-                } catch {}
+                } catch {
+                  // best-effort: we are about to reject regardless
+                }
                 raceReject(
                   new Error(
                     `Ans104Parser getData wall-clock cap after ${this.getDataWallClockTimeoutMs}ms (cascade did not honor AbortSignal)`,
