@@ -8,40 +8,26 @@ import winston from 'winston';
 
 import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
-import { ANT, AOProcess, AoArNSNameDataWithName, AoClient } from '@ar.io/sdk';
+import { ArNSNameDataWithName, SolanaANTReadable } from '@ar.io/sdk';
+import { address, type Rpc, type SolanaRpcApiMainnet } from '@solana/kit';
 import * as config from '../config.js';
-import { connect } from '@permaweb/aoconnect';
 import CircuitBreaker from 'opossum';
 import * as metrics from '../metrics.js';
 
 export class OnDemandArNSResolver implements NameResolver {
   private log: winston.Logger;
-  private ao: AoClient;
-  private hyperbeamUrl: string | undefined;
+  private solanaRpc: Rpc<SolanaRpcApiMainnet>;
 
   constructor({
     log,
-    ao = connect({
-      MU_URL: config.AO_MU_URL,
-      CU_URL: config.ANT_AO_CU_URL,
-      GRAPHQL_URL: config.AO_GRAPHQL_URL,
-      GATEWAY_URL: config.AO_GATEWAY_URL,
-    }),
-    hyperbeamUrl = config.AO_ANT_HYPERBEAM_URL,
+    solanaRpc,
   }: {
     log: winston.Logger;
-    ao?: AoClient;
     circuitBreakerOptions?: CircuitBreaker.Options;
-    hyperbeamUrl?: string;
+    solanaRpc: Rpc<SolanaRpcApiMainnet>;
   }) {
-    this.log = log.child({
-      class: 'OnDemandArNSResolver',
-      networkCuUrl: config.NETWORK_AO_CU_URL ?? '<sdk default>',
-      antCuUrl: config.ANT_AO_CU_URL ?? '<sdk default>',
-      hyperbeamUrl: hyperbeamUrl ?? '<sdk default>',
-    });
-    this.ao = ao;
-    this.hyperbeamUrl = hyperbeamUrl;
+    this.log = log.child({ class: 'OnDemandArNSResolver' });
+    this.solanaRpc = solanaRpc;
   }
 
   async resolve({
@@ -51,7 +37,7 @@ export class OnDemandArNSResolver implements NameResolver {
     name: string;
     baseArNSRecordFn: (
       parentSpan?: any,
-    ) => Promise<AoArNSNameDataWithName | undefined>;
+    ) => Promise<ArNSNameDataWithName | undefined>;
   }): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
     try {
@@ -66,7 +52,7 @@ export class OnDemandArNSResolver implements NameResolver {
           resolvedId: undefined,
           resolvedAt: undefined,
           ttl: undefined,
-          processId: undefined,
+          antId: undefined,
           limit: undefined,
           index: undefined,
         };
@@ -88,21 +74,29 @@ export class OnDemandArNSResolver implements NameResolver {
           resolvedId: undefined,
           resolvedAt: Date.now(),
           ttl: 300,
-          processId: undefined,
+          antId: undefined,
           limit: undefined,
           index: undefined,
         };
       }
 
-      const processId = baseArNSRecord.processId;
+      // SDK boundary: `baseArNSRecord.processId` is the SDK's field name for
+      // the per-ANT identifier (a Solana PDA in Solana mode). We expose it
+      // internally and on the wire as `antId` / `X-ArNS-Ant-Id`.
+      const antId = baseArNSRecord.processId;
 
-      // now get the ant process from the process id
-      const ant = ANT.init({
-        process: new AOProcess({
-          processId: processId,
-          ao: this.ao,
+      const ant = new SolanaANTReadable({
+        // See note in system.ts re: nested @solana/rpc-spec drift
+        // between @ar.io/sdk and the top-level kit copy.
+        rpc: this.solanaRpc as any,
+        processId: antId,
+        // Pin the ANT program to the gateway-configured ID so devnet/
+        // testnet deployments don't silently fall back to the SDK's
+        // bundled mainnet placeholder (which has no accounts off
+        // mainnet, producing empty `getRecords()` results).
+        ...(config.ARIO_ANT_PROGRAM_ID !== undefined && {
+          antProgramId: address(config.ARIO_ANT_PROGRAM_ID),
         }),
-        hyperbeamUrl: this.hyperbeamUrl,
       });
 
       // if it is the root name, then it should point to '@'
@@ -130,7 +124,7 @@ export class OnDemandArNSResolver implements NameResolver {
         name,
         resolvedId,
         resolvedAt: Date.now(),
-        processId: processId,
+        antId,
         ttl,
         limit: baseArNSRecord.undernameLimit,
         index,
@@ -148,7 +142,7 @@ export class OnDemandArNSResolver implements NameResolver {
       resolvedId: undefined,
       resolvedAt: undefined,
       ttl: undefined,
-      processId: undefined,
+      antId: undefined,
       limit: undefined,
       index: undefined,
     };

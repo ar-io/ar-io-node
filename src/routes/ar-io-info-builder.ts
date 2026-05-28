@@ -87,34 +87,25 @@ export interface X402Info {
 }
 
 /**
- * RSA-signed attestation linking an Ed25519 signing key to an Arweave
- * observer wallet identity. Enables verifiers to establish the trust chain
- * from HTTP signatures back to the on-chain gateway registration.
+ * HTTPSIG response signing configuration exposed in the info endpoint.
+ * Presence of this field means the gateway signs qualifying responses per
+ * RFC 9421. Verifiers can look up `solanaAddress` in the on-chain GAR to
+ * confirm the signing key belongs to a registered gateway.
  */
-export interface HttpsigAttestationInfo {
-  /** Arweave transaction ID where attestation is permanently stored. */
-  txId?: string;
-  /** Base64url Arweave address of the observer wallet that signed the attestation. */
-  observerAddress: string;
-  /** Canonical JSON attestation payload. */
-  payload: string;
-  /** RSA-PSS-SHA256 signature over the payload (base64url). */
-  signature: string;
-  /** RSA public key in SPKI DER format (base64url). */
-  rsaPublicKey: string;
+export interface HttpsigInfo {
+  algorithm: string;
+  solanaAddress: string;
 }
 
 /**
- * HTTPSIG response signing configuration exposed in the info endpoint.
- * When enabled, qualifying responses include RFC 9421 Message Signatures.
+ * Solana program IDs for the AR.IO Network suite. Each is a base58-encoded
+ * Solana pubkey.
  */
-export interface HttpsigInfo {
-  enabled: true;
-  algorithm: string;
-  publicKey: string;
-  keyId: string;
-  solanaAddress?: string;
-  attestation?: HttpsigAttestationInfo;
+export interface SolanaProgramIds {
+  core: string | undefined;
+  gar: string | undefined;
+  arns: string | undefined;
+  ant: string | undefined;
 }
 
 /**
@@ -122,7 +113,7 @@ export interface HttpsigInfo {
  */
 export interface ArIoInfoResponse {
   wallet: string | undefined;
-  processId: string | undefined;
+  programIds: SolanaProgramIds;
   ans104UnbundleFilter: BundleFilter;
   ans104IndexFilter: BundleFilter;
   supportedManifestVersions: string[];
@@ -138,7 +129,7 @@ export interface ArIoInfoResponse {
  */
 export interface ArIoInfoConfig {
   wallet: string | undefined;
-  processId: string | undefined;
+  programIds: SolanaProgramIds;
   ans104UnbundleFilter: BundleFilter;
   ans104IndexFilter: BundleFilter;
   release: string;
@@ -161,18 +152,8 @@ export interface ArIoInfoConfig {
     capacityMultiplier: number;
   };
   httpsig?: {
-    enabled: boolean;
     algorithm: string;
-    publicKey: string;
-    keyId: string;
-    solanaAddress?: string;
-    attestation?: {
-      txId?: string;
-      observerAddress: string;
-      payload: string;
-      signature: string;
-      rsaPublicKey: string;
-    };
+    solanaAddress: string;
   };
 }
 
@@ -190,7 +171,6 @@ export interface ArIoInfoConfig {
  * ```typescript
  * const info = buildArIoInfo({
  *   wallet: 'wallet-address',
- *   processId: 'process-id',
  *   ans104UnbundleFilter: {},
  *   ans104IndexFilter: {},
  *   release: 'r123',
@@ -208,7 +188,7 @@ export interface ArIoInfoConfig {
 export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
   const response: ArIoInfoResponse = {
     wallet: config.wallet,
-    processId: config.processId,
+    programIds: config.programIds,
     ans104UnbundleFilter: config.ans104UnbundleFilter,
     ans104IndexFilter: config.ans104IndexFilter,
     supportedManifestVersions: ['0.1.0', '0.2.0'],
@@ -300,14 +280,10 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
     };
   }
 
-  if (config.httpsig?.enabled) {
+  if (config.httpsig !== undefined) {
     response.httpsig = {
-      enabled: true,
       algorithm: config.httpsig.algorithm,
-      publicKey: config.httpsig.publicKey,
-      keyId: config.httpsig.keyId,
       solanaAddress: config.httpsig.solanaAddress,
-      attestation: config.httpsig.attestation,
     };
   }
 

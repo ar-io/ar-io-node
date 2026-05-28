@@ -150,7 +150,6 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
  * Response (both features enabled):
  * {
  *   "wallet": "...",
- *   "processId": "...",
  *   "bundlers": [
  *     { "url": "https://turbo.ardrive.io/" }
  *   ],
@@ -175,7 +174,12 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
 export const arIoInfoHandler = (_req: Request, res: Response) => {
   const response = buildArIoInfo({
     wallet: config.AR_IO_WALLET,
-    processId: config.IO_PROCESS_ID,
+    programIds: {
+      core: config.ARIO_CORE_PROGRAM_ID,
+      gar: config.ARIO_GAR_PROGRAM_ID,
+      arns: config.ARIO_ARNS_PROGRAM_ID,
+      ant: config.ARIO_ANT_PROGRAM_ID,
+    },
     ans104UnbundleFilter: config.ANS104_UNBUNDLE_FILTER_PARSED,
     ans104IndexFilter: config.ANS104_INDEX_FILTER_PARSED,
     release,
@@ -204,22 +208,8 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
     httpsig:
       config.HTTPSIG_ENABLED && config.HTTPSIG_SIGNER !== undefined
         ? {
-            enabled: true,
             algorithm: 'ed25519',
-            publicKey: config.HTTPSIG_SIGNER.publicKeyB64Url,
-            keyId: config.HTTPSIG_SIGNER.keyId,
             solanaAddress: config.HTTPSIG_SIGNER.solanaAddress,
-            attestation:
-              config.HTTPSIG_OBSERVER !== undefined
-                ? {
-                    txId: config.HTTPSIG_OBSERVER.attestationTxId,
-                    observerAddress: config.HTTPSIG_OBSERVER.address,
-                    payload: config.HTTPSIG_OBSERVER.attestation.payload,
-                    signature: config.HTTPSIG_OBSERVER.attestation.signature,
-                    rsaPublicKey:
-                      config.HTTPSIG_OBSERVER.attestation.rsaPublicKey,
-                  }
-                : undefined,
           }
         : undefined,
   });

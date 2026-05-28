@@ -9,11 +9,11 @@ import express from 'express';
 import { Server } from 'node:http';
 import * as config from './config.js';
 import log from './log.js';
+import * as metrics from './metrics.js';
 import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
 import { createRequestIdMiddleware } from './middleware/request-id.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
 import { createHttpSigMiddleware } from './middleware/httpsig.js';
-import { uploadAttestation } from './lib/httpsig-upload.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
@@ -45,36 +45,6 @@ system.headerFsCacheCleanupWorker?.start();
 system.contiguousDataFsCacheCleanupWorker?.start();
 
 system.chunkDataFsCacheCleanupWorker?.start();
-
-// Upload HTTPSIG attestation to Arweave (non-blocking, non-fatal).
-// Skip if the txId is already persisted from a prior successful upload.
-if (
-  config.HTTPSIG_ENABLED &&
-  config.HTTPSIG_UPLOAD_ATTESTATION &&
-  config.HTTPSIG_SIGNER !== undefined &&
-  config.HTTPSIG_OBSERVER !== undefined &&
-  config.HTTPSIG_OBSERVER.attestationTxId === undefined
-) {
-  const signer = config.HTTPSIG_SIGNER;
-  const observer = config.HTTPSIG_OBSERVER;
-  uploadAttestation({
-    jwk: observer.jwk,
-    attestation: observer.attestation,
-    gatewayAddress: config.AR_IO_WALLET,
-    observerAddress: observer.address,
-    ed25519PublicKey: signer.publicKeyB64Url,
-    keyId: signer.keyId,
-    log,
-  })
-    .then((txId) => {
-      config.setHttpSigAttestationTxId(txId);
-    })
-    .catch((error: any) => {
-      log.warn('HTTPSIG attestation upload failed', {
-        error: error?.message,
-      });
-    });
-}
 
 // ClickHouse streaming pipeline (issue #696). Started before writers so
 // listeners are registered before any BLOCK_INDEXED / BLOCK_TX_INDEXED /
@@ -117,6 +87,10 @@ app.use(createAbortSignalMiddleware());
 
 // HTTPSIG response signing — must be before cache-control so the writeHead
 // LIFO order ensures signing runs AFTER cache-control has set default headers.
+config.initializeHttpSig();
+if (config.HTTPSIG_INIT_ERROR !== undefined) {
+  metrics.httpSigInitFailedTotal.inc();
+}
 if (config.HTTPSIG_ENABLED && config.HTTPSIG_SIGNER !== undefined) {
   app.use(
     createHttpSigMiddleware({

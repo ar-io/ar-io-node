@@ -19,7 +19,7 @@ const mockResolution: NameResolution = {
   resolvedId: 'tx1',
   resolvedAt: Date.now(),
   ttl: 300,
-  processId: 'process1',
+  antId: 'process1',
   limit: 1,
   index: 1,
 };
@@ -101,7 +101,7 @@ describe('CompositeArNSResolver', () => {
       resolvedId: 'tx1',
       resolvedAt: now - 100000,
       ttl: 300,
-      processId: 'process1',
+      antId: 'process1',
       limit: 1,
       index: 1,
     };
@@ -188,7 +188,7 @@ describe('CompositeArNSResolver', () => {
       resolvedId: undefined,
       resolvedAt: undefined,
       ttl: undefined,
-      processId: undefined,
+      antId: undefined,
       limit: undefined,
       index: undefined,
     });
@@ -201,7 +201,7 @@ describe('CompositeArNSResolver', () => {
       resolvedId: 'cached-tx',
       resolvedAt: now - 1_000_000, // expired (resolvedAt + ttl*1000 < now)
       ttl: 300,
-      processId: 'process1',
+      antId: 'process1',
       limit: 1,
       index: 1,
     };
@@ -214,7 +214,7 @@ describe('CompositeArNSResolver', () => {
       resolve: mock.fn(async () => {
         // Fast-fail: throws synchronously, resolveParallel returns undefined
         // well within arnsCachedResolutionFallbackTimeoutMs.
-        throw new Error('AO/CU dry-run failed');
+        throw new Error('RPC dry-run failed');
       }),
     };
 
@@ -242,7 +242,7 @@ describe('CompositeArNSResolver', () => {
       resolvedId: 'cached-tx',
       resolvedAt: now - 1_000_000,
       ttl: 300,
-      processId: 'process1',
+      antId: 'process1',
       limit: 1,
       index: 1,
     };
@@ -262,7 +262,7 @@ describe('CompositeArNSResolver', () => {
                   resolvedId: 'fresh-tx',
                   resolvedAt: Date.now(),
                   ttl: 300,
-                  processId: 'process1',
+                  antId: 'process1',
                   limit: 1,
                   index: 1,
                 }),
@@ -294,7 +294,7 @@ describe('CompositeArNSResolver', () => {
 
     const resolver1: NameResolver = {
       resolve: mock.fn(async () => {
-        throw new Error('AO/CU dry-run failed');
+        throw new Error('RPC dry-run failed');
       }),
     };
 
@@ -316,7 +316,7 @@ describe('CompositeArNSResolver', () => {
       resolvedId: undefined,
       resolvedAt: undefined,
       ttl: undefined,
-      processId: undefined,
+      antId: undefined,
       limit: undefined,
       index: undefined,
     });
@@ -345,7 +345,7 @@ describe('CompositeArNSResolver', () => {
           resolvedId: undefined,
           resolvedAt: undefined,
           ttl: undefined,
-          processId: undefined,
+          antId: undefined,
           limit: undefined,
           index: undefined,
         };

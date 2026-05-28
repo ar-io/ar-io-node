@@ -12,18 +12,14 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   unlinkSync,
   writeFileSync,
   constants as fsConstants,
 } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname } from 'node:path';
 
 // @ts-expect-error bs58 v4 has no type declarations
 import bs58 from 'bs58';
-import { canonicalize } from 'json-canonicalize';
-
-import { fromB64Url, sha256B64Url } from './encoding.js';
 
 /**
  * Trust-triggering headers (lowercase). Presence of at least one of these on
@@ -42,7 +38,8 @@ export const TRIGGER_HEADERS = new Set([
   'x-arns-name',
   'x-arns-resolved-id',
   'x-arns-ttl-seconds',
-  'x-arns-process-id',
+  'x-arns-ant-program-id',
+  'x-arns-ant-id',
   'x-arweave-chunk-data-root',
   'x-arweave-chunk-tx-id',
   'x-ar-io-chunk-source-type',
@@ -100,6 +97,49 @@ export function isTriggerHeader(name: string): boolean {
 
 // Ed25519 SPKI DER has a fixed 12-byte prefix before the raw 32-byte public key.
 const SPKI_ED25519_PREFIX_LENGTH = 12;
+
+// Ed25519 PKCS8 DER has a fixed 16-byte prefix before the raw 32-byte seed.
+const PKCS8_ED25519_PREFIX = Buffer.from(
+  '302e020100300506032b657004220420',
+  'hex',
+);
+
+/**
+ * Load an Ed25519 private key from a Solana keypair file. The file contains a
+ * JSON array of 64 bytes — the first 32 bytes are the Ed25519 seed (private
+ * key), the last 32 are the public key.
+ */
+export function loadSolanaKeypair(keypairPath: string): crypto.KeyObject {
+  let raw: string;
+  try {
+    raw = readFileSync(keypairPath, 'utf8');
+  } catch (err: any) {
+    if (err.code === 'ENOENT') {
+      throw new Error(`Solana keypair file not found: ${keypairPath}`);
+    }
+    throw err;
+  }
+
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(JSON.parse(raw));
+  } catch {
+    throw new Error(`Invalid Solana keypair JSON: ${keypairPath}`);
+  }
+
+  if (bytes.length !== 64) {
+    throw new Error(
+      `Invalid Solana keypair: expected 64 bytes, got ${bytes.length}`,
+    );
+  }
+
+  const seed = bytes.slice(0, 32);
+  return crypto.createPrivateKey({
+    key: Buffer.concat([PKCS8_ED25519_PREFIX, Buffer.from(seed)]),
+    format: 'der',
+    type: 'pkcs8',
+  });
+}
 
 /**
  * Load an Ed25519 private key from a PEM file, or generate a new keypair and
@@ -176,6 +216,14 @@ export function getPublicKeyBase64Url(publicKey: crypto.KeyObject): string {
 }
 
 /**
+ * Derive the Solana address from an Ed25519 public key.
+ * A Solana address is the base58 encoding of the raw 32-byte public key.
+ */
+export function getSolanaAddress(publicKey: crypto.KeyObject): string {
+  return bs58.encode(getRawPublicKey(publicKey));
+}
+
+/**
  * Build the covered components list and the Signature-Input structured field
  * value per RFC 9421. `coveredHeaders` names are normalized to lowercase.
  *
@@ -248,275 +296,6 @@ export function buildSignatureBase(
   return { base: lines.join('\n'), paramStr };
 }
 
-// --- Attestation utilities (Phase 2) ---
-
-const REQUIRED_JWK_FIELDS = ['n', 'e', 'd', 'p', 'q', 'dp', 'dq', 'qi'];
-
-/**
- * Derive the Solana address from an Ed25519 public key.
- * A Solana address is the base58 encoding of the raw 32-byte public key.
- */
-export function getSolanaAddress(publicKey: crypto.KeyObject): string {
-  return bs58.encode(getRawPublicKey(publicKey));
-}
-
-/**
- * Load and validate an Arweave wallet JWK from a file path.
- */
-export function loadWalletJwk(walletFile: string): crypto.JsonWebKey {
-  let raw: string;
-  try {
-    raw = readFileSync(walletFile, 'utf8');
-  } catch (err: any) {
-    if (err.code === 'ENOENT') {
-      throw new Error(`Wallet file not found: ${walletFile}`);
-    }
-    throw err;
-  }
-  let jwk: Record<string, unknown>;
-  try {
-    jwk = JSON.parse(raw);
-  } catch {
-    throw new Error(`Invalid wallet JSON: ${walletFile}`);
-  }
-  for (const field of REQUIRED_JWK_FIELDS) {
-    if (!(field in jwk)) {
-      throw new Error(`Wallet JWK missing required field: ${field}`);
-    }
-  }
-  return jwk as crypto.JsonWebKey;
-}
-
-/**
- * Resolve the wallet file path for a given observer wallet address.
- */
-export function resolveWalletPath(
-  walletsPath: string,
-  observerWallet: string,
-): string {
-  const resolved = resolve(walletsPath, `${observerWallet}.json`);
-  const normalizedBase = resolve(walletsPath);
-  // Use path.relative to check containment — startsWith can be fooled by
-  // sibling directories (e.g., "wallets-evil" starts with "wallets").
-  const rel = relative(normalizedBase, resolved);
-  if (rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error(
-      `OBSERVER_WALLET contains path traversal: ${observerWallet}`,
-    );
-  }
-  return resolved;
-}
-
-/**
- * Derive an Arweave address from an RSA JWK.
- * An Arweave address is the base64url-encoded SHA-256 hash of the raw RSA
- * public key modulus (the 'n' value decoded from base64url).
- */
-export function jwkToArweaveAddress(jwk: crypto.JsonWebKey): string {
-  if (jwk.n === undefined) {
-    throw new Error('JWK missing RSA modulus (n) field');
-  }
-  return sha256B64Url(fromB64Url(jwk.n));
-}
-
-/**
- * Canonical attestation payload fields. Serialized via json-canonicalize
- * before signing. `gatewayAddress` is undefined when the operator has not
- * set `AR_IO_WALLET`.
- */
-export interface AttestationPayload {
-  type: 'ar-io-gateway-key-attestation';
-  version: 1;
-  /** Base64url Arweave address of the observer wallet. */
-  observerAddress: string;
-  /** Base64url Arweave address of the staked gateway wallet (may be undefined). */
-  gatewayAddress: string | undefined;
-  /** Base64url 32-byte Ed25519 public key. */
-  ed25519PublicKey: string;
-  /** Base58 Solana address derived from the Ed25519 key. */
-  solanaAddress: string;
-  /** Self-contained key ID: `ed25519:<base64url-pubkey>`. */
-  keyId: string;
-  purpose: 'http-response-signing';
-  /** ISO 8601 timestamp of attestation creation. */
-  issuedAt: string;
-}
-
-/**
- * Signed attestation ready for publication. `payload` is the canonical JSON
- * string, `signature` is the RSA-PSS-SHA256 signature (base64url), and
- * `rsaPublicKey` is the signer's public key in SPKI DER format (base64url).
- */
-export interface Attestation {
-  payload: string;
-  signature: string;
-  rsaPublicKey: string;
-}
-
-/**
- * Disk-persisted attestation with identity fields for cache invalidation.
- * All three identity fields (`ed25519PublicKey`, `observerAddress`,
- * `gatewayAddress`) must match current runtime values for the cache to be
- * considered valid — any change recreates the attestation.
- */
-export interface CachedAttestation extends Attestation {
-  /** Base64url 32-byte Ed25519 public key (gateway's signing key). */
-  ed25519PublicKey: string;
-  /** Base64url Arweave address of observer wallet that signed. */
-  observerAddress?: string;
-  /** Base64url Arweave address of staked gateway wallet (may be undefined). */
-  gatewayAddress?: string;
-  /** Arweave TX ID from successful upload (undefined until upload completes). */
-  txId?: string;
-}
-
-/**
- * Create an attestation document binding an Ed25519 signing key to an Arweave
- * observer wallet identity. The attestation is signed with RSA-PSS-SHA256.
- */
-export function createAttestation(opts: {
-  observerJwk: crypto.JsonWebKey;
-  ed25519PublicKey: crypto.KeyObject;
-  gatewayAddress: string | undefined;
-}): Attestation {
-  const { observerJwk, ed25519PublicKey, gatewayAddress } = opts;
-
-  const observerAddress = jwkToArweaveAddress(observerJwk);
-  const pubKeyB64Url = getPublicKeyBase64Url(ed25519PublicKey);
-  const solanaAddress = getSolanaAddress(ed25519PublicKey);
-  const keyId = deriveKeyId(ed25519PublicKey);
-
-  const attestationObj: AttestationPayload = {
-    type: 'ar-io-gateway-key-attestation',
-    version: 1,
-    observerAddress,
-    gatewayAddress,
-    ed25519PublicKey: pubKeyB64Url,
-    solanaAddress,
-    keyId,
-    purpose: 'http-response-signing',
-    issuedAt: new Date().toISOString(),
-  };
-
-  const payload = canonicalize(attestationObj) as string;
-
-  // Sign with RSA-PSS-SHA256 (salt length 0 for broadest Arweave compat)
-  const rsaPrivateKey = crypto.createPrivateKey({
-    key: observerJwk,
-    format: 'jwk',
-  });
-  const signature = crypto
-    .sign('sha256', Buffer.from(payload, 'utf8'), {
-      key: rsaPrivateKey,
-      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-      saltLength: 0,
-    })
-    .toString('base64url');
-
-  const rsaPublicKey = crypto
-    .createPublicKey(rsaPrivateKey)
-    .export({ type: 'spki', format: 'der' })
-    .toString('base64url');
-
-  return { payload, signature, rsaPublicKey };
-}
-
-/**
- * Write JSON to `path` atomically: write to a pid-suffixed temp file, then
- * renameSync over the destination. A unique suffix prevents startup-race
- * ENOENT failures when two processes write the same cache concurrently.
- */
-function writeJsonAtomic(path: string, data: unknown): void {
-  const tmpPath = `${path}.tmp.${process.pid}`;
-  writeFileSync(tmpPath, JSON.stringify(data, null, 2));
-  renameSync(tmpPath, path);
-}
-
-const ATTESTATION_CACHE_FILE = 'httpsig-attestation.json';
-
-/**
- * Load a cached attestation if it matches the current Ed25519 key, otherwise
- * create a new one and cache it to disk.
- */
-export function loadOrCreateAttestation(opts: {
-  keysDir: string;
-  observerJwk: crypto.JsonWebKey;
-  ed25519PublicKey: crypto.KeyObject;
-  gatewayAddress: string | undefined;
-}): Attestation & { cached: boolean; txId?: string } {
-  const { keysDir, observerJwk, ed25519PublicKey, gatewayAddress } = opts;
-  const cachePath = join(keysDir, ATTESTATION_CACHE_FILE);
-  const currentPubKey = getPublicKeyBase64Url(ed25519PublicKey);
-  const currentObserverAddr = jwkToArweaveAddress(observerJwk);
-
-  // Try to load cached attestation — validate all identity fields
-  let raw: string | undefined;
-  try {
-    raw = readFileSync(cachePath, 'utf8');
-  } catch (err: any) {
-    if (err.code !== 'ENOENT') throw err;
-  }
-  if (raw !== undefined) {
-    try {
-      const cached: CachedAttestation = JSON.parse(raw);
-      if (
-        cached.ed25519PublicKey === currentPubKey &&
-        cached.observerAddress === currentObserverAddr &&
-        cached.gatewayAddress === gatewayAddress
-      ) {
-        return {
-          payload: cached.payload,
-          signature: cached.signature,
-          rsaPublicKey: cached.rsaPublicKey,
-          txId: cached.txId,
-          cached: true,
-        };
-      }
-    } catch {
-      // Corrupt cache — delete before recreating
-      try {
-        unlinkSync(cachePath);
-      } catch (err: any) {
-        if (err.code !== 'ENOENT') throw err;
-      }
-    }
-  }
-
-  const attestation = createAttestation({
-    observerJwk,
-    ed25519PublicKey,
-    gatewayAddress,
-  });
-
-  const cacheData: CachedAttestation = {
-    ...attestation,
-    ed25519PublicKey: currentPubKey,
-    observerAddress: currentObserverAddr,
-    gatewayAddress,
-  };
-  mkdirSync(keysDir, { recursive: true });
-  writeJsonAtomic(cachePath, cacheData);
-
-  return { ...attestation, cached: false };
-}
-
-/**
- * Persist the Arweave TX ID of a successfully uploaded attestation into the
- * cache file so it survives restarts.
- */
-export function saveAttestationTxId(keysDir: string, txId: string): void {
-  const cachePath = join(keysDir, ATTESTATION_CACHE_FILE);
-  try {
-    const cached: CachedAttestation = JSON.parse(
-      readFileSync(cachePath, 'utf8'),
-    );
-    cached.txId = txId;
-    writeJsonAtomic(cachePath, cached);
-  } catch {
-    // Non-fatal — txId will be re-uploaded next restart
-  }
-}
-
 // --- Startup init (called from config.ts) ---
 
 /**
@@ -531,44 +310,34 @@ export interface HttpSigSignerContext {
 }
 
 /**
- * Observer-wallet-side state. Populated only when `OBSERVER_WALLET` is set
- * and the attestation loaded/created successfully. `attestationTxId` is the
- * one mutable field — updated after a successful Arweave upload.
- */
-export interface HttpSigObserverContext {
-  jwk: crypto.JsonWebKey;
-  address: string;
-  attestation: Attestation;
-  attestationTxId: string | undefined;
-  keysDir: string;
-}
-
-/**
- * Initialize HTTPSIG signing state from resolved configuration. Returns the
- * signer and (optionally) observer context to be exported by config. Logs
- * at info/warn levels via the supplied logger.
+ * Initialize HTTPSIG signing state from resolved configuration. When an
+ * observer keypair path is provided the signing key is loaded from that
+ * Solana keypair file; otherwise a standalone Ed25519 PEM is auto-generated
+ * at `keyFile`. The observer keypair path is preferred because it ties the
+ * HTTPSIG identity directly to the on-chain observer address, making
+ * verification a simple GAR lookup with no attestation document needed.
  */
 export function initHttpSig(opts: {
   keyFile: string;
-  bindRequest: boolean;
-  observerWallet: string | undefined;
-  walletsPath: string;
-  gatewayAddress: string | undefined;
+  observerKeypairPath: string | undefined;
   log: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
   };
-}): { signer: HttpSigSignerContext; observer?: HttpSigObserverContext } {
-  const {
-    keyFile,
-    bindRequest,
-    observerWallet,
-    walletsPath,
-    gatewayAddress,
-    log,
-  } = opts;
+}): HttpSigSignerContext {
+  const { keyFile, observerKeypairPath, log } = opts;
 
-  const privateKey = loadOrGenerateKey(keyFile);
+  let privateKey: crypto.KeyObject;
+  let keySource: string;
+
+  if (observerKeypairPath !== undefined) {
+    privateKey = loadSolanaKeypair(observerKeypairPath);
+    keySource = observerKeypairPath;
+  } else {
+    privateKey = loadOrGenerateKey(keyFile);
+    keySource = keyFile;
+  }
+
   const publicKey = crypto.createPublicKey(privateKey);
   const signer: HttpSigSignerContext = {
     privateKey,
@@ -581,50 +350,9 @@ export function initHttpSig(opts: {
     keyId: signer.keyId,
     publicKey: signer.publicKeyB64Url,
     solanaAddress: signer.solanaAddress,
-    keyFile,
-    bindRequest,
+    keySource,
+    observerKeypair: observerKeypairPath !== undefined,
   });
 
-  if (observerWallet === undefined) {
-    return { signer };
-  }
-
-  try {
-    const walletPath = resolveWalletPath(walletsPath, observerWallet);
-    const jwk = loadWalletJwk(walletPath);
-    const address = jwkToArweaveAddress(jwk);
-    const keysDir = dirname(keyFile);
-
-    const result = loadOrCreateAttestation({
-      keysDir,
-      observerJwk: jwk,
-      ed25519PublicKey: publicKey,
-      gatewayAddress,
-    });
-
-    log.info('HTTPSIG attestation ready', {
-      observerAddress: address,
-      cached: result.cached,
-    });
-
-    return {
-      signer,
-      observer: {
-        jwk,
-        address,
-        attestation: {
-          payload: result.payload,
-          signature: result.signature,
-          rsaPublicKey: result.rsaPublicKey,
-        },
-        attestationTxId: result.txId,
-        keysDir,
-      },
-    };
-  } catch (error: any) {
-    log.warn('HTTPSIG attestation creation failed', {
-      error: error?.message,
-    });
-    return { signer };
-  }
+  return signer;
 }
