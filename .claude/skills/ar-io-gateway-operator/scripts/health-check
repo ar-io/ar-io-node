@@ -12,7 +12,9 @@
 #   CORE_CONTAINER                   (default: ar-io-node-core-1)
 #   CH_CONTAINER                     (default: ar-io-node-clickhouse-1)
 #   CH_AUTO_IMPORT_CONTAINER         (default: ar-io-node-clickhouse-auto-import-1)
+#   OBSERVER_CONTAINER               (default: ar-io-node-observer-1)
 #   GATEWAY_HEALTH_URL               (default: http://localhost:4000/ar-io/healthcheck)
+#   GATEWAY_INFO_URL                 (default: http://localhost:4000/ar-io/info)
 #   CHAIN_INFO_URL                   (default: https://arweave.net/info)
 set -uo pipefail
 
@@ -21,7 +23,9 @@ DATA_MOUNT_PATH="${DATA_MOUNT_PATH:-/data}"
 CORE_CONTAINER="${CORE_CONTAINER:-ar-io-node-core-1}"
 CH_CONTAINER="${CH_CONTAINER:-ar-io-node-clickhouse-1}"
 CH_AUTO_IMPORT_CONTAINER="${CH_AUTO_IMPORT_CONTAINER:-ar-io-node-clickhouse-auto-import-1}"
+OBSERVER_CONTAINER="${OBSERVER_CONTAINER:-ar-io-node-observer-1}"
 GATEWAY_HEALTH_URL="${GATEWAY_HEALTH_URL:-http://localhost:4000/ar-io/healthcheck}"
+GATEWAY_INFO_URL="${GATEWAY_INFO_URL:-http://localhost:4000/ar-io/info}"
 CHAIN_INFO_URL="${CHAIN_INFO_URL:-https://arweave.net/info}"
 SQLITE_DB="${SQLITE_DB:-$AR_IO_NODE_PATH/data/sqlite/core.db}"
 
@@ -71,8 +75,56 @@ else
 fi
 
 section "image SHAs (compare against ghcr digest if on a dev branch)"
-for c in "$CORE_CONTAINER" "$CH_CONTAINER" "$CH_AUTO_IMPORT_CONTAINER"; do
+for c in "$CORE_CONTAINER" "$CH_CONTAINER" "$CH_AUTO_IMPORT_CONTAINER" "$OBSERVER_CONTAINER"; do
   if docker ps --format '{{.Names}}' | grep -q "^${c}$"; then
     printf '%-40s %s\n' "$c" "$(docker inspect "$c" --format '{{.Image}}')"
   fi
 done
+
+section "observer container (cranker + save_observations)"
+if docker ps --format '{{.Names}}\t{{.Status}}' | grep -q "^${OBSERVER_CONTAINER}"; then
+  docker ps --filter "name=${OBSERVER_CONTAINER}" --format '{{.Names}}\t{{.Status}}'
+  # Restart-loop detector: ContinuousObserver retries up to 12 times before giving up.
+  attempts=$(docker logs --since=15m "$OBSERVER_CONTAINER" 2>&1 \
+    | grep -oE 'auto-restart.*"attempt":[0-9]+' | tail -1 | grep -oE '[0-9]+$')
+  if [[ "$attempts" =~ ^[0-9]+$ ]]; then
+    echo "WARN: observer in restart loop — attempt ${attempts}/12 in last 15 min"
+    docker logs --since=15m "$OBSERVER_CONTAINER" 2>&1 \
+      | grep -oE '"error":"[^"]*"' | tail -1
+  fi
+  # Last cranker / observation-pipeline activity (best signal that the observer
+  # is actually doing on-chain work, not just polling epoch state).
+  last_act=$(docker logs --since=15m "$OBSERVER_CONTAINER" 2>&1 \
+    | grep -iE '\[crank:|Names \+ assessor initialized|Submitted observation|prescribe_epoch|tally_weights' \
+    | tail -1)
+  if [[ -n "$last_act" ]]; then
+    echo "last on-chain activity: ${last_act:0:160}..."
+  else
+    echo "no cranker/submission activity in last 15 min (network may have epochs disabled — see SKILL.md pitfalls)"
+  fi
+else
+  echo "$OBSERVER_CONTAINER not running"
+fi
+
+section "configured Solana network (programIds from /ar-io/info)"
+info_json=$(curl -sf -m 3 "$GATEWAY_INFO_URL" 2>/dev/null || true)
+if [[ -n "$info_json" ]]; then
+  echo "$info_json" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print('release:', d.get('release', '?'))
+    print('wallet: ', d.get('wallet', '?'))
+    pids = d.get('programIds') or {}
+    if pids:
+        for k in ('core', 'gar', 'arns', 'ant'):
+            v = pids.get(k, '<unset>')
+            print(f'  {k:5s}: {v}')
+    else:
+        print('  programIds: <missing — pre-cutover image?>')
+except Exception as e:
+    print(f'parse error: {e}', file=sys.stderr)
+" 2>/dev/null
+else
+  echo "/ar-io/info unreachable"
+fi

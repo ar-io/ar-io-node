@@ -109,18 +109,20 @@ Pipeline diagnostic: a single `curl -sf .../ar-io/__gateway_metrics | grep -E 'q
 
 ### ArNS resolution
 
-`CompositeArNSResolver` walks resolvers in order: `TrustedGatewayArNSResolver` (asks `TRUSTED_ARNS_GATEWAY_URL`, default `https://__NAME__.turbo-gateway.com`), then `OnDemandArNSResolver` (queries the AR.IO network ANT contract directly via `cu.ardrive.io`). Hits go into the in-memory `ArNSNamesCache`. Resolved IDs may be Arweave TXs (route to data path) or, on the streaming-head branch, IPFS CIDs (route to `/ipfs/<cid>` via the Kubo sidecar). Unknown names log `Unable to resolve name against all resolvers` — that's normal user-error traffic, not a service failure.
+`CompositeArNSResolver` walks resolvers in order: `TrustedGatewayArNSResolver` (asks `TRUSTED_ARNS_GATEWAY_URL`, default `https://__NAME__.turbo-gateway.com`), then `OnDemandArNSResolver` (queries the on-chain `ario-arns` and `ario-ant` programs directly via `SOLANA_RPC_URL`). The base name set is paginated into an in-memory `ArNSNamesCache` at boot and refreshed on a debounce. Resolved IDs may be Arweave TXs (route to data path) or, on the streaming-head branch, IPFS CIDs (route to `/ipfs/<cid>` via the Kubo sidecar). Unknown names log `Unable to resolve name against all resolvers` — that's normal user-error traffic, not a service failure.
 
 `/<name>` and `/<name>/<path>` requests carry `X-ArNS-*` trust headers in the response. Manifest path resolution still uses `StreamingManifestPathResolver`; the "from index" path is not implemented yet (logs warn `not implemented` then falls back to data-side resolution, which works).
 
 ### Network identity, observer, and incentives
 
-A gateway is a registered participant in the AR.IO network, not just a piece of software. Two distinct wallets matter:
+A gateway is a registered participant in the AR.IO network, not just a piece of software. Two distinct Solana identities matter:
 
-- `AR_IO_WALLET` — the **gateway** wallet. Stakes ARIO tokens (10,000 ARIO minimum = 10000000000 mARIO), receives rewards. Same address used for on-chain registration.
-- `OBSERVER_WALLET` — the **observer** wallet. Signs network compliance reports and the HTTPSig attestation. Key file must exist at `${WALLETS_PATH}/<OBSERVER_WALLET>.json`. The two wallets are deliberately separable so the observer key can sit on the gateway box while the staking key stays in cold storage.
+- **Operator** — `AR_IO_WALLET` (pubkey, base58) plus a signing key as either `SOLANA_KEYPAIR_PATH` (JSON file) or `SOLANA_PRIVATE_KEY` (base58 secret, Phantom-export form). Stakes ARIO tokens (20,000 minimum = 20000000000 mARIO since v3.0.0), receives rewards, signs cranker instructions when `ENABLE_EPOCH_CRANKING=true`.
+- **Observer** — `OBSERVER_WALLET` (pubkey) plus a signing key as either `OBSERVER_KEYPAIR_PATH` or `OBSERVER_PRIVATE_KEY`. Submits `save_observations` instructions and signs HTTPSig responses. The two roles are deliberately separable so the observer key can sit on the gateway box while the operator/staking key stays in cold storage. Setting both forms (path and PK string) for the same role is rejected at startup.
 
-When `OBSERVER_WALLET` is set, the gateway also creates an RSA attestation linking the per-response Ed25519 signing key (the one HTTPSig uses) to the observer wallet's on-chain identity, and uploads it to Arweave at startup (`HTTPSIG_UPLOAD_ATTESTATION=true`). That's the cryptographic chain that lets a client verify a response trace back to a staked, registered gateway.
+The Solana key designated for the observer role *is* the HTTPSig signing key. The observer's address is already registered in the on-chain Gateway Registry (GAR), so verifiers can confirm a signed response traces back to a staked, registered gateway with a single GAR lookup. No attestation document is uploaded to Arweave on the Solana path — the chain is the source of truth.
+
+Four Solana program IDs configure which network the gateway talks to: `ARIO_CORE_PROGRAM_ID`, `ARIO_GAR_PROGRAM_ID`, `ARIO_ARNS_PROGRAM_ID`, `ARIO_ANT_PROGRAM_ID`. Plus `SOLANA_RPC_URL` (premium provider strongly recommended in production; public mainnet-beta throttles hard). `GET /ar-io/info` echoes the resolved `programIds` object, which is the fastest way to confirm a running gateway is pointed at the network you think it is.
 
 Observer service knobs:
 - `RUN_OBSERVER=true` (default) — runs the observer alongside the gateway
@@ -132,10 +134,12 @@ Observer service knobs:
 **Epoch cadence is daily.** Observation reports drive reward eligibility. Operators may themselves be selected as observers for other gateways.
 
 Network onboarding (operator side, only needed once):
-- `npm install -g @ar.io/sdk` — provides the `ar.io` CLI for `get-gateway`, registration, etc.
-- Register via the CLI or the gateways.ar.io portal: gateway wallet, observer wallet, FQDN, Properties Tx ID, label, stake amount
-- Gateway must be reachable at the registered FQDN with valid TLS
-- Optional delegated staking — operators can accept delegations with a configurable reward share
+- `npm install -g @ar.io/sdk` — provides the `ar.io` CLI binary. Use `ar.io get-gateway --address <pubkey>` to read state, `ar.io join-network ...` to register.
+- The CLI accepts the operator key as either `--wallet-file <path>` (JSON) or `--private-key '<base58>'` (Phantom export — `bs58.decode` runs in-process).
+- Every Solana command needs `-t solana` and the four program IDs (`--core-program-id` / `--gar-program-id` / `--arns-program-id` / `--ant-program-id`) plus `--rpc-url`. As of `@ar.io/sdk@^4.0.0-solana.22` the bundled "mainnet" constants are still placeholders, so passing `--mainnet` alone resolves to non-existent addresses — always pass the explicit program IDs the network team publishes for whichever environment you're targeting (mainnet, staging-devnet, local devnet).
+- Register via the CLI or the gateways.ar.io portal: operator wallet, observer wallet, FQDN, Properties Tx ID, label, stake (`--operator-stake 20000` in whole ARIO — the CLI converts to mARIO internally via `requiredMARIOFromOptions` → `new ARIOToken(...).toMARIO()`).
+- Gateway must be reachable at the registered FQDN with valid TLS, AND configured for the same `programIds` set you joined with. The usual cause of a "I joined but nothing's working" report is a gateway whose `.env` still pins the old network's program IDs.
+- Optional delegated staking — operators can accept delegations with a configurable reward share. `--min-delegated-stake` is mARIO directly (no ARIO→mARIO conversion); `--operator-stake` is the only stake-input flag that takes whole ARIO.
 
 ### Serving content at the root path
 
@@ -224,6 +228,10 @@ Don't draw conclusions from `/ar-io/info` or `/ar-io/healthcheck` benchmarks —
 6. **`/ar-io/info` and `/ar-io/healthcheck` are unsigned** — they carry no trust-trigger headers, so HTTPSig signing skips them. Use `/raw/<id>` against a cached tx for HTTPSig benchmarks.
 7. **`docker logs <core> | tail` can dump megabytes of binary** — the streaming pipeline sometimes logs cert chains as raw byte arrays. Filter with `grep -viE '"buffer":|raw bytes|^[\[0-9, ]+$'`.
 8. **Five-edit dance for adding a database method** — SQL statement, worker impl in `StandaloneSqlite`, queue wrapper in main DB class, case in worker message handler, interface in `types.d.ts`. Skip any one and you get silent failures.
+9. **Observer restart-loops with `Epoch 0 PDA not found at <pda> — has prescribe_epoch run yet?`** — the network you're pointed at hasn't had its first epoch initialized. The observer can't bootstrap without entropy from `epoch[N].prescribed_observers`, and that PDA only exists after a cranker has called `create_epoch`. Confirm with `ar.io get-current-epoch ...` — `"Epoch 0 not found"` means network-side, not gateway-side. Wait for an active cranker (yours or another operator's) to bootstrap epoch 0.
+10. **Cranker started cleanly but never logs any `[crank:*]` activity** — `EpochSettings.enabled === false` on the target network. The cranker bails silently at `epoch-cranker.ts:173` (debug log only) so it doesn't burn SOL submitting ix against a paused network. Verify with `ar.io get-epoch-settings ...`. No fix on the gateway side; this is a network-operations state.
+11. **ArNS names return 404 even though `ar.io get-arns-record --name <name>` returns the record fine** — SDK version drift. `ArNSNamesCache.hydrate` paginates the on-chain registry; an SDK pin that's significantly older than the deployed `ario-arns` program may parse paginated responses incorrectly, hydrating "successfully" but with most entries missing. Logs show `Successfully hydrated ArNS names cache` quickly (~few seconds for thousands of records) followed by `Base name not found in ArNS names cache` on lookups. Fix: bump `@ar.io/sdk` in `package.json` to the latest `^4.0.0-solana.*` and rebuild.
+12. **`/ar-io/info` shows the OLD network's `programIds` after a migration / image swap** — the `.env` has explicit `CORE_IMAGE_TAG` / `ENVOY_IMAGE_TAG` / `OBSERVER_IMAGE_TAG` pins that shadow the compose defaults. Updating only the compose defaults won't move a gateway whose `.env` still pins old image tags. Either update both, or remove the explicit pins from `.env` and let compose defaults win.
 
 ## When something breaks: where to look
 
@@ -236,6 +244,9 @@ Don't draw conclusions from `/ar-io/info` or `/ar-io/healthcheck` benchmarks —
 | Admin API 401/404 | `ADMIN_API_KEY` mismatch with `.env` |
 | Webhook silent | `WEBHOOK_TARGET_SERVERS` in gateway `.env`; sidecars must be on the same docker network and reachable by service name |
 | `/data` filling | `du -h -d 1 /data \| sort -hr` — usually the `contiguous` cache |
+| Observer not submitting `save_observations` | `docker logs ar-io-node-observer-1 --since 10m \| grep -iE 'crank\|epoch'`. Combine with `ar.io get-current-epoch ...` to distinguish gateway-side issues from a paused/uninitialized network |
+| ArNS resolution returning 404 for names that demonstrably exist | Check the SDK pin in the container: `docker exec ar-io-node-core-1 /nodejs/bin/node -e "console.log(require('@ar.io/sdk/package.json').version)"`. Drift behind the deployed program causes silent partial cache hydration |
+| `/ar-io/info` shows wrong `programIds` after migration | `.env` likely has explicit `*_IMAGE_TAG` lines pinning the old images. Update them or remove to let compose defaults take over |
 
 ## Metrics worth watching
 
