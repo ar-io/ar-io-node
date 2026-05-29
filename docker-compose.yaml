@@ -427,7 +427,11 @@ services:
       - HTTPSIG_ENABLED=${HTTPSIG_ENABLED:-}
       - HTTPSIG_KEY_FILE=${HTTPSIG_KEY_FILE:-}
       - HTTPSIG_BIND_REQUEST=${HTTPSIG_BIND_REQUEST:-}
+      # Observer Solana keypair for HTTPSIG signing — accept either a
+      # JSON-file path or a base58 64-byte secret (Phantom export form).
+      # Setting both is rejected at startup as ambiguous.
       - OBSERVER_KEYPAIR_PATH=${OBSERVER_KEYPAIR_PATH:-}
+      - OBSERVER_PRIVATE_KEY=${OBSERVER_PRIVATE_KEY:-}
     ulimits:
       nofile:
         soft: 65536
@@ -569,11 +573,17 @@ services:
       - ENABLE_CLEANUP=${ENABLE_CLEANUP:-}
       # Solana wallet identities (operator/observer/upload). All four
       # supported configurations are documented in the observer's
-      # `src/wallet-config.ts`. SOLANA_KEYPAIR_PATH is required in
-      # solana mode; the others are optional fallbacks.
+      # `src/wallet-config.ts`. Each role accepts EITHER a JSON-file path
+      # (`*_KEYPAIR_PATH`) OR a base58 64-byte secret (`*_PRIVATE_KEY`,
+      # Phantom export form). Setting both for the same role is rejected
+      # as ambiguous. Operator key is required in solana mode; the others
+      # are optional fallbacks.
       - SOLANA_KEYPAIR_PATH=${SOLANA_KEYPAIR_PATH:-}
+      - SOLANA_PRIVATE_KEY=${SOLANA_PRIVATE_KEY:-}
       - OBSERVER_KEYPAIR_PATH=${OBSERVER_KEYPAIR_PATH:-}
+      - OBSERVER_PRIVATE_KEY=${OBSERVER_PRIVATE_KEY:-}
       - SOLANA_UPLOAD_KEYPAIR_PATH=${SOLANA_UPLOAD_KEYPAIR_PATH:-}
+      - SOLANA_UPLOAD_PRIVATE_KEY=${SOLANA_UPLOAD_PRIVATE_KEY:-}
       - ARWEAVE_UPLOAD_KEY_FILE=${ARWEAVE_UPLOAD_KEY_FILE:-}
       - ARWEAVE_UPLOAD_JWK=${ARWEAVE_UPLOAD_JWK:-}
       # Ethereum upload identity (alternative to Arweave/Solana for
