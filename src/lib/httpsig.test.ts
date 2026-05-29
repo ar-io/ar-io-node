@@ -11,6 +11,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import bs58 from 'bs58';
+
 import {
   TRIGGER_HEADERS,
   CO_SIGNABLE_HEADERS,
@@ -18,6 +20,7 @@ import {
   isTriggerHeader,
   loadOrGenerateKey,
   loadSolanaKeypair,
+  loadSolanaKeypairFromBase58,
   deriveKeyId,
   getPublicKeyBase64Url,
   buildSignatureBase,
@@ -517,6 +520,7 @@ describe('httpsig lib', () => {
       const signer = initHttpSig({
         keyFile,
         observerKeypairPath: undefined,
+        observerPrivateKey: undefined,
         log: noopLog,
       });
 
@@ -538,6 +542,7 @@ describe('httpsig lib', () => {
         initHttpSig({
           keyFile: path.join(blockingFile, 'httpsig.pem'),
           observerKeypairPath: undefined,
+          observerPrivateKey: undefined,
           log: noopLog,
         }),
       );
@@ -563,12 +568,134 @@ describe('httpsig lib', () => {
       const signer = initHttpSig({
         keyFile: path.join(dir, 'httpsig.pem'),
         observerKeypairPath: keypairPath,
+        observerPrivateKey: undefined,
         log: noopLog,
       });
 
       // Should use the Solana keypair, not generate a PEM
       assert.ok(!fs.existsSync(path.join(dir, 'httpsig.pem')));
       assert.equal(signer.publicKeyB64Url, getPublicKeyBase64Url(publicKey));
+    });
+
+    it('uses OBSERVER_PRIVATE_KEY (base58) and skips file I/O', () => {
+      // No keypair file on disk; key flows in via the env-string path.
+      const dir = makeTmpDir();
+      const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+      const seed = privateKey
+        .export({ type: 'pkcs8', format: 'der' })
+        .subarray(16);
+      const rawPub = publicKey
+        .export({ type: 'spki', format: 'der' })
+        .subarray(12);
+      const base58Secret = bs58.encode(Buffer.concat([seed, rawPub]));
+
+      const signer = initHttpSig({
+        keyFile: path.join(dir, 'httpsig.pem'),
+        observerKeypairPath: undefined,
+        observerPrivateKey: base58Secret,
+        log: noopLog,
+      });
+
+      // Same identity as the path-based loader for the same bytes.
+      assert.equal(signer.publicKeyB64Url, getPublicKeyBase64Url(publicKey));
+      // No PEM auto-generated.
+      assert.ok(!fs.existsSync(path.join(dir, 'httpsig.pem')));
+    });
+
+    it('rejects setting both OBSERVER_KEYPAIR_PATH and OBSERVER_PRIVATE_KEY', () => {
+      const dir = makeTmpDir();
+      const { privateKey } = crypto.generateKeyPairSync('ed25519');
+      const seed = privateKey
+        .export({ type: 'pkcs8', format: 'der' })
+        .subarray(16);
+      // We don't need a real keypair file on disk — the ambiguity check
+      // throws before any loader runs.
+      const fakePath = path.join(dir, 'observer.json');
+      fs.writeFileSync(fakePath, '[]');
+
+      assert.throws(
+        () =>
+          initHttpSig({
+            keyFile: path.join(dir, 'httpsig.pem'),
+            observerKeypairPath: fakePath,
+            observerPrivateKey: bs58.encode(
+              Buffer.concat([seed, Buffer.alloc(32)]),
+            ),
+            log: noopLog,
+          }),
+        {
+          message:
+            /Set exactly one of OBSERVER_KEYPAIR_PATH or OBSERVER_PRIVATE_KEY/,
+        },
+      );
+    });
+
+    it('treats empty-string envs as unset (falls through to PEM auto-gen)', () => {
+      // Some env loaders surface unset values as '' rather than undefined.
+      const dir = makeTmpDir();
+      const keyFile = path.join(dir, 'httpsig.pem');
+
+      const signer = initHttpSig({
+        keyFile,
+        observerKeypairPath: '',
+        observerPrivateKey: '',
+        log: noopLog,
+      });
+
+      assert.ok(signer.keyId.startsWith('ed25519:'));
+      assert.ok(fs.existsSync(keyFile));
+    });
+  });
+
+  describe('loadSolanaKeypairFromBase58', () => {
+    /** Build a valid 64-byte base58 secret-key payload for tests. */
+    function freshBase58Secret(): { base58: string; pub: Buffer } {
+      const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+      const seed = privateKey
+        .export({ type: 'pkcs8', format: 'der' })
+        .subarray(16);
+      const pub = publicKey
+        .export({ type: 'spki', format: 'der' })
+        .subarray(12);
+      return { base58: bs58.encode(Buffer.concat([seed, pub])), pub };
+    }
+
+    it('decodes a valid 64-byte base58 secret into the matching public key', () => {
+      const { base58, pub } = freshBase58Secret();
+
+      const key = loadSolanaKeypairFromBase58(base58, 'OBSERVER_PRIVATE_KEY');
+
+      assert.equal(key.type, 'private');
+      assert.equal(key.asymmetricKeyType, 'ed25519');
+      const derivedPub = crypto.createPublicKey(key);
+      assert.equal(
+        getPublicKeyBase64Url(derivedPub),
+        pub.toString('base64url'),
+      );
+    });
+
+    it('throws on a 32-byte (secret-only) payload with the env name in the message', () => {
+      const secretOnly = bs58.encode(Buffer.alloc(32));
+      assert.throws(
+        () => loadSolanaKeypairFromBase58(secretOnly, 'OBSERVER_PRIVATE_KEY'),
+        {
+          message: /OBSERVER_PRIVATE_KEY.*decoded 32 bytes.*expected 64/,
+        },
+      );
+    });
+
+    it('throws on non-base58 input with a friendly error', () => {
+      // `0` is not a base58 character — bs58.decode rejects it.
+      assert.throws(
+        () =>
+          loadSolanaKeypairFromBase58(
+            '0xdeadbeefdeadbeef',
+            'OBSERVER_PRIVATE_KEY',
+          ),
+        {
+          message: /OBSERVER_PRIVATE_KEY.*not a valid base58/,
+        },
+      );
     });
   });
 });
