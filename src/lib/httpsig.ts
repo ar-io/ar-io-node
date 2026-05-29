@@ -109,6 +109,21 @@ const PKCS8_ED25519_PREFIX = Buffer.from(
  * JSON array of 64 bytes — the first 32 bytes are the Ed25519 seed (private
  * key), the last 32 are the public key.
  */
+/**
+ * Wrap the first 32 bytes (the Ed25519 seed) of a 64-byte Solana keypair
+ * payload in the PKCS#8 envelope `crypto.createPrivateKey` expects. Both
+ * the file loader and the base58 loader funnel through here once they've
+ * obtained a length-validated 64-byte buffer.
+ */
+function solanaSeedToKey(bytes: Uint8Array): crypto.KeyObject {
+  const seed = bytes.slice(0, 32);
+  return crypto.createPrivateKey({
+    key: Buffer.concat([PKCS8_ED25519_PREFIX, Buffer.from(seed)]),
+    format: 'der',
+    type: 'pkcs8',
+  });
+}
+
 export function loadSolanaKeypair(keypairPath: string): crypto.KeyObject {
   let raw: string;
   try {
@@ -133,12 +148,35 @@ export function loadSolanaKeypair(keypairPath: string): crypto.KeyObject {
     );
   }
 
-  const seed = bytes.slice(0, 32);
-  return crypto.createPrivateKey({
-    key: Buffer.concat([PKCS8_ED25519_PREFIX, Buffer.from(seed)]),
-    format: 'der',
-    type: 'pkcs8',
-  });
+  return solanaSeedToKey(bytes);
+}
+
+/**
+ * Decode a Phantom-style base58 64-byte Solana secret key into an Ed25519
+ * `crypto.KeyObject`. Surfaces the offending env var name in errors for the
+ * two common failure modes:
+ *   - non-base58 input (e.g. a hex `0x…` key dropped into the slot)
+ *   - 32-byte secret-only payload (Phantom exports the full 64 bytes;
+ *     some other tooling emits only the 32-byte seed)
+ */
+export function loadSolanaKeypairFromBase58(
+  raw: string,
+  envName: string,
+): crypto.KeyObject {
+  let bytes: Uint8Array;
+  try {
+    bytes = bs58.decode(raw);
+  } catch {
+    throw new Error(
+      `${envName}: not a valid base58 string (expected a 64-byte Solana secret key, e.g. from a Phantom export).`,
+    );
+  }
+  if (bytes.length !== 64) {
+    throw new Error(
+      `${envName}: decoded ${bytes.length} bytes; expected 64 (the full secret + public key Solana wallets export). 32-byte secret-only material is not supported.`,
+    );
+  }
+  return solanaSeedToKey(bytes);
 }
 
 /**
@@ -310,29 +348,52 @@ export interface HttpSigSignerContext {
 }
 
 /**
- * Initialize HTTPSIG signing state from resolved configuration. When an
- * observer keypair path is provided the signing key is loaded from that
- * Solana keypair file; otherwise a standalone Ed25519 PEM is auto-generated
- * at `keyFile`. The observer keypair path is preferred because it ties the
- * HTTPSIG identity directly to the on-chain observer address, making
+ * Initialize HTTPSIG signing state from resolved configuration. The signing
+ * key is resolved in priority order:
+ *   1. `observerPrivateKey` — base58 64-byte secret key supplied via
+ *      `OBSERVER_PRIVATE_KEY` (Phantom-export format).
+ *   2. `observerKeypairPath` — JSON keypair file at `OBSERVER_KEYPAIR_PATH`.
+ *   3. Auto-generated standalone Ed25519 PEM at `keyFile`.
+ *
+ * Setting both `observerPrivateKey` and `observerKeypairPath` is rejected as
+ * ambiguous. Empty strings are treated as unset (env-loader compatibility).
+ *
+ * The observer key is preferred over the auto-generated PEM because it ties
+ * the HTTPSIG identity directly to the on-chain observer address, making
  * verification a simple GAR lookup with no attestation document needed.
  */
 export function initHttpSig(opts: {
   keyFile: string;
   observerKeypairPath: string | undefined;
+  observerPrivateKey: string | undefined;
   log: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
   };
 }): HttpSigSignerContext {
-  const { keyFile, observerKeypairPath, log } = opts;
+  const { keyFile, observerKeypairPath, observerPrivateKey, log } = opts;
+
+  const pathSet =
+    observerKeypairPath !== undefined && observerKeypairPath !== '';
+  const pkSet = observerPrivateKey !== undefined && observerPrivateKey !== '';
+  if (pathSet && pkSet) {
+    throw new Error(
+      'Set exactly one of OBSERVER_KEYPAIR_PATH or OBSERVER_PRIVATE_KEY — both are set, which is ambiguous.',
+    );
+  }
 
   let privateKey: crypto.KeyObject;
   let keySource: string;
 
-  if (observerKeypairPath !== undefined) {
-    privateKey = loadSolanaKeypair(observerKeypairPath);
-    keySource = observerKeypairPath;
+  if (pkSet) {
+    privateKey = loadSolanaKeypairFromBase58(
+      observerPrivateKey as string,
+      'OBSERVER_PRIVATE_KEY',
+    );
+    keySource = 'OBSERVER_PRIVATE_KEY (env)';
+  } else if (pathSet) {
+    privateKey = loadSolanaKeypair(observerKeypairPath as string);
+    keySource = observerKeypairPath as string;
   } else {
     privateKey = loadOrGenerateKey(keyFile);
     keySource = keyFile;
@@ -351,7 +412,7 @@ export function initHttpSig(opts: {
     publicKey: signer.publicKeyB64Url,
     solanaAddress: signer.solanaAddress,
     keySource,
-    observerKeypair: observerKeypairPath !== undefined,
+    observerKeypair: pathSet || pkSet,
   });
 
   return signer;

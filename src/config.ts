@@ -1186,6 +1186,13 @@ export const OBSERVER_KEYPAIR_PATH = env.varOrUndefined(
   'OBSERVER_KEYPAIR_PATH',
 );
 
+// Alternative to OBSERVER_KEYPAIR_PATH: a base58-encoded 64-byte Solana
+// secret key (the format Phantom and other browser wallets export).
+// Convenient for operators who don't already have a keypair JSON on disk.
+// Setting both OBSERVER_KEYPAIR_PATH and OBSERVER_PRIVATE_KEY is rejected
+// at HTTPSIG init as ambiguous.
+export const OBSERVER_PRIVATE_KEY = env.varOrUndefined('OBSERVER_PRIVATE_KEY');
+
 // HTTPSIG signing state. Populated by `initializeHttpSig()`, which the
 // application entry point calls explicitly during startup. Kept out of
 // module-evaluation side effects so that importing config.ts (e.g., from
@@ -1205,6 +1212,7 @@ export function initializeHttpSig(): void {
     HTTPSIG_SIGNER = initHttpSig({
       keyFile: HTTPSIG_KEY_FILE,
       observerKeypairPath: OBSERVER_KEYPAIR_PATH,
+      observerPrivateKey: OBSERVER_PRIVATE_KEY,
       log: logger,
     });
   } catch (error: any) {
