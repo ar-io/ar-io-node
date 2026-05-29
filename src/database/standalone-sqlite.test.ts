@@ -448,13 +448,19 @@ describe('StandaloneSqliteDatabase', () => {
     const realHash = Buffer.alloc(32, 0x11);
 
     const insertL1Tx = (dataRoot: Buffer | null) => {
+      // format=1 (v1 / legacy) is the real-world trigger: such txs never
+      // have a chain-side data_root, so the empty-data_root poisoning the
+      // guard fixes was hit on every v1 tx fetch. The SQL guard fires off
+      // data_root regardless of format, so the assertions hold for any tx
+      // with no data_root — but seeding the canonical case matches what
+      // operators see in production.
       coreDb
         .prepare(
           `INSERT OR REPLACE INTO stable_transactions
             (id, height, block_transaction_index, format, last_tx,
              owner_address, quantity, reward, tag_count, data_size,
              data_root, content_type)
-           VALUES (@id, 1, 0, 2, @last_tx,
+           VALUES (@id, 1, 0, 1, @last_tx,
              @owner_address, '0', '0', 0, @data_size,
              @data_root, 'text/html')`,
         )
