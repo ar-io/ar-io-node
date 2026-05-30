@@ -38,6 +38,24 @@ migration):
 
 `START_HEIGHT=800000 yarn start`
 
+### Operating with Claude Code
+
+This repo ships skills under `.claude/skills/` that Claude Code
+([claude.ai/code](https://claude.ai/code)) auto-loads when invoked from the
+repo root:
+
+- **`ar-io-gateway-operator`** — operator runbook covering the ANS-104
+  pipeline, ClickHouse, ArNS resolution, the observer/cranker, and common
+  pitfalls. Includes `scripts/health-check` for a one-screen gateway
+  health snapshot.
+- **`release`** — version bumps, image SHA pinning, tag and GitHub-release
+  creation.
+- **`testing`** — picks the right test layer (unit / property / e2e /
+  auto-verify / parquet integration / load) for a given change.
+
+The skills are plain Markdown — readable as runbooks even if you don't use
+Claude Code.
+
 ## Dev Docs
 
 ### Schema (WIP)
