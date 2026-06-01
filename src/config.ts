@@ -2032,6 +2032,16 @@ export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
   '',
 );
 
+// The delay in seconds before the first contiguous data cache cleanup runs.
+// The delay gives the metadata cache time to populate so that eviction
+// decisions reflect recent access rather than cold-start defaults. When unset,
+// this falls back to CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD (see system.ts).
+// Note: this timer is not persisted, so it restarts on every process restart.
+export const CONTIGUOUS_DATA_CACHE_CLEANUP_INITIAL_DELAY = env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_CLEANUP_INITIAL_DELAY',
+  '',
+);
+
 // The threshold in seconds to cleanup data associated with prefered ArNS from
 // the filesystem contiguous data cache
 export const PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD =

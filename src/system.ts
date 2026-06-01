@@ -474,6 +474,20 @@ const contiguousDataCacheCleanupThresholdSeconds = parseInt(
   config.CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD,
 );
 
+// Initial delay before the first cleanup. Defaults to the cleanup threshold to
+// preserve historical behavior when CONTIGUOUS_DATA_CACHE_CLEANUP_INITIAL_DELAY
+// is unset. Setting it explicitly decouples the warm-up delay from the
+// retention threshold (e.g. a long threshold no longer means the first cleanup
+// is deferred for the full retention window after every restart).
+const contiguousDataCacheCleanupInitialDelaySeconds = parseInt(
+  config.CONTIGUOUS_DATA_CACHE_CLEANUP_INITIAL_DELAY,
+);
+const contiguousDataCacheCleanupInitialDelayMs = !isNaN(
+  contiguousDataCacheCleanupInitialDelaySeconds,
+)
+  ? contiguousDataCacheCleanupInitialDelaySeconds * 1000
+  : contiguousDataCacheCleanupThresholdSeconds * 1000;
+
 // Only perform cleanup if the cleanup threshold is set
 export const contiguousDataFsCacheCleanupWorker = !isNaN(
   contiguousDataCacheCleanupThresholdSeconds,
@@ -482,7 +496,7 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
       log,
       basePath: 'data/contiguous',
       dataType: 'contiguous_data',
-      initialDelay: contiguousDataCacheCleanupThresholdSeconds * 1000, // Use cleanup threshold as initial delay
+      initialDelay: contiguousDataCacheCleanupInitialDelayMs,
       // Stats are passed by the worker to avoid redundant stat calls
       shouldDelete: async (path, stats) => {
         try {
