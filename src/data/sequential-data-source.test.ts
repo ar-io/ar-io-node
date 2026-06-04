@@ -142,20 +142,51 @@ describe('SequentialDataSource', () => {
       assert.equal(mockSource2.getData.mock.callCount(), 0);
     });
 
-    it('should not try next source when AbortError is thrown', async () => {
+    it('should not try next source when AbortError is thrown and the request signal is aborted (client disconnect)', async () => {
+      const controller = new AbortController();
       mockSource1.getData = mock.fn(async () => {
+        // Simulate a client disconnect mid-fetch: the shared signal aborts and
+        // the in-flight source rejects with an AbortError.
+        controller.abort();
         const error = new Error('aborted');
         error.name = 'AbortError';
         throw error;
       });
 
-      await assert.rejects(sequentialDataSource.getData({ id: 'test-id' }), {
-        name: 'AbortError',
-      });
+      await assert.rejects(
+        sequentialDataSource.getData({
+          id: 'test-id',
+          signal: controller.signal,
+        }),
+        { name: 'AbortError' },
+      );
 
       // Verify second source was never tried
       assert.equal(mockSource1.getData.mock.callCount(), 1);
       assert.equal(mockSource2.getData.mock.callCount(), 0);
+    });
+
+    it('should continue to next source when an AbortError is thrown but the signal was not aborted (internal source timeout)', async () => {
+      // GatewaysDataSource (and other sources) surface their own per-request
+      // timeout as an AbortError via normalizeAbortError, without aborting the
+      // shared request signal. That must NOT fail the whole cascade.
+      mockSource1.getData = mock.fn(async () => {
+        const error = new Error('Connection timeout');
+        error.name = 'AbortError';
+        throw error;
+      });
+
+      const result = await sequentialDataSource.getData({ id: 'test-id' });
+
+      assert.equal(result.size, 18);
+      assert.equal(mockSource1.getData.mock.callCount(), 1);
+      assert.equal(mockSource2.getData.mock.callCount(), 1);
+
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+      assert.equal(receivedData, 'data from source 2');
     });
 
     it('should check abort before each source attempt', async () => {
