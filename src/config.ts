@@ -383,6 +383,51 @@ export const GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
 
+// GraphQL root TX lookup request batching (coalesces many concurrent per-ID
+// lookups into single `transactions(ids: [...])` queries). Disabled by default;
+// when enabled, the per-batch outbound request consumes one rate-limiter token
+// (instead of one token per ID), so a page-load burst of asset lookups no
+// longer starves the bucket.
+export const GRAPHQL_ROOT_TX_BATCH_ENABLED =
+  env.varOrDefault('GRAPHQL_ROOT_TX_BATCH_ENABLED', 'false') === 'true';
+// Coalescing window: how long a forming batch waits for more IDs before it
+// flushes. A batch also flushes eagerly once it reaches the max batch size.
+export const GRAPHQL_ROOT_TX_BATCH_WINDOW_MS = +env.varOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_WINDOW_MS',
+  '20',
+);
+// Default max IDs per batched query. Arweave GraphQL caps `first` at 100, so
+// this should not exceed 100. Per-endpoint overrides may lower it further.
+export const GRAPHQL_ROOT_TX_BATCH_MAX_SIZE = +env.varOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_MAX_SIZE',
+  '100',
+);
+// Optional per-endpoint max batch size overrides, e.g.
+// '{"http://10.84.0.83:14000": 50}'. Endpoints absent from the map use
+// GRAPHQL_ROOT_TX_BATCH_MAX_SIZE.
+export const GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL = JSON.parse(
+  env.varOrDefault('GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL', '{}'),
+) as Record<string, number>;
+Object.entries(GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL).forEach(([url, size]) => {
+  if (typeof size !== 'number' || !Number.isInteger(size) || size <= 0) {
+    throw new Error(
+      `Invalid size in GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL for ${url}: ${size}`,
+    );
+  }
+});
+// Max number of IDs that may be waiting (pending + in-flight) before new
+// lookups are shed (resolved as not-found) rather than queued unbounded.
+export const GRAPHQL_ROOT_TX_BATCH_MAX_QUEUE_DEPTH = +env.varOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_MAX_QUEUE_DEPTH',
+  '1000',
+);
+// Max time a batch will wait to acquire a rate-limiter token before giving up
+// (the batch's IDs then resolve as not-found rather than blocking forever).
+export const GRAPHQL_ROOT_TX_BATCH_TOKEN_MAX_WAIT_MS = +env.varOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_TOKEN_MAX_WAIT_MS',
+  '5000',
+);
+
 // Gateways root TX lookup URLs (for HEAD request offset discovery)
 export const GATEWAYS_ROOT_TX_URLS = JSON.parse(
   env.varOrDefault(

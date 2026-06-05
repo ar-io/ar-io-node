@@ -13,16 +13,16 @@ import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import { parseNonNegativeInt } from '../lib/http-utils.js';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
+import {
+  GraphQLRootTxBatcher,
+  BatchEndpoint,
+  LeafResult,
+  NOT_FOUND,
+} from './graphql-root-tx-batcher.js';
 
-type CachedParentBundle = {
-  bundleId?: string;
-  contentType?: string;
-  size?: string;
-};
-
-// Special symbol to indicate item was not found (vs being a root tx)
-const NOT_FOUND = Symbol('NOT_FOUND');
+type CachedParentBundle = LeafResult;
 
 // Query for bundle parent traversal - minimal fields for performance
 const GRAPHQL_BUNDLE_QUERY = `
@@ -49,7 +49,27 @@ const GRAPHQL_METADATA_QUERY = `
   }
 `;
 
+// Batched query combining bundle-parent + metadata for many IDs at once. Used
+// only on the batching code path (GRAPHQL_ROOT_TX_BATCH_ENABLED). `first` is
+// set to the batch size at call time; Arweave GraphQL caps it at 100.
+const GRAPHQL_BATCH_QUERY = `
+  query getBundleParents($ids: [ID!]!, $first: Int!) {
+    transactions(ids: $ids, first: $first) {
+      edges {
+        node {
+          id
+          bundledIn { id }
+          data { type size }
+        }
+      }
+    }
+  }
+`;
+
 const DEFAULT_REQUEST_RETRY_COUNT = 3;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 export class GraphQLRootTxIndex implements DataItemRootIndex {
   private log: winston.Logger;
@@ -57,6 +77,8 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
   private readonly axiosInstance: AxiosInstance;
   private readonly cache?: LRUCache<string, CachedParentBundle>;
   private readonly limiter: TokenBucket;
+  private readonly batcher?: GraphQLRootTxBatcher;
+  private readonly tokenMaxWaitMs: number;
 
   constructor({
     log,
@@ -67,6 +89,12 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
     rateLimitTokensPerInterval = config.GRAPHQL_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
     rateLimitInterval = config.GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL,
     cache,
+    batchEnabled = config.GRAPHQL_ROOT_TX_BATCH_ENABLED,
+    batchWindowMs = config.GRAPHQL_ROOT_TX_BATCH_WINDOW_MS,
+    batchMaxSize = config.GRAPHQL_ROOT_TX_BATCH_MAX_SIZE,
+    batchMaxSizeByUrl = config.GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL,
+    batchMaxQueueDepth = config.GRAPHQL_ROOT_TX_BATCH_MAX_QUEUE_DEPTH,
+    batchTokenMaxWaitMs = config.GRAPHQL_ROOT_TX_BATCH_TOKEN_MAX_WAIT_MS,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, number>;
@@ -76,9 +104,16 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
     rateLimitTokensPerInterval?: number;
     rateLimitInterval?: 'second' | 'minute' | 'hour' | 'day';
     cache?: LRUCache<string, CachedParentBundle>;
+    batchEnabled?: boolean;
+    batchWindowMs?: number;
+    batchMaxSize?: number;
+    batchMaxSizeByUrl?: Record<string, number>;
+    batchMaxQueueDepth?: number;
+    batchTokenMaxWaitMs?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.cache = cache;
+    this.tokenMaxWaitMs = batchTokenMaxWaitMs;
 
     // Initialize rate limiter
     this.limiter = new TokenBucket({
@@ -133,6 +168,80 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
     };
 
     rax.attach(this.axiosInstance);
+
+    if (batchEnabled) {
+      const endpoints: BatchEndpoint[] = Object.entries(
+        trustedGatewaysUrls,
+      ).map(([url, priority]) => ({
+        url,
+        priority,
+        maxBatchSize: batchMaxSizeByUrl[url] ?? batchMaxSize,
+      }));
+
+      this.batcher = new GraphQLRootTxBatcher({
+        log: this.log,
+        endpoints,
+        cache,
+        windowMs: batchWindowMs,
+        maxBatchSize: batchMaxSize,
+        maxQueueDepth: batchMaxQueueDepth,
+        fetchBatch: (url, ids) => this.fetchBatch(url, ids),
+        acquireToken: () => this.acquireToken(),
+        metrics: {
+          batchesIssued: (endpoint, size) => {
+            metrics.graphqlRootTxBatchesTotal.inc({ endpoint });
+            metrics.graphqlRootTxBatchSize.observe(size);
+          },
+          shed: () => metrics.graphqlRootTxBatchShedTotal.inc(),
+          tokenWaitTimeout: (endpoint) =>
+            metrics.graphqlRootTxBatchTokenWaitTimeoutTotal.inc({ endpoint }),
+        },
+      });
+
+      this.log.info('GraphQL root TX request batching enabled', {
+        windowMs: batchWindowMs,
+        maxBatchSize: batchMaxSize,
+        maxQueueDepth: batchMaxQueueDepth,
+      });
+    }
+  }
+
+  // Acquire one rate-limiter token, polling tryRemoveTokens (leak-free, unlike
+  // racing removeTokens against a timeout) until success or the configured cap.
+  private async acquireToken(): Promise<boolean> {
+    const deadline = Date.now() + this.tokenMaxWaitMs;
+    while (!this.limiter.tryRemoveTokens(1)) {
+      if (Date.now() >= deadline) return false;
+      await sleep(25);
+    }
+    return true;
+  }
+
+  // Issue one batched query and return only the IDs that were found. Throws on
+  // transport error (the batcher carries those IDs to the next endpoint).
+  private async fetchBatch(
+    gatewayUrl: string,
+    ids: string[],
+  ): Promise<Map<string, LeafResult>> {
+    const response = await this.axiosInstance.post(`${gatewayUrl}/graphql`, {
+      query: GRAPHQL_BATCH_QUERY,
+      variables: { ids, first: ids.length },
+    });
+
+    const out = new Map<string, LeafResult>();
+    const edges = response.data?.data?.transactions?.edges;
+    if (Array.isArray(edges)) {
+      for (const edge of edges) {
+        const node = edge?.node;
+        if (node?.id == null) continue;
+        out.set(node.id, {
+          bundleId: node.bundledIn?.id,
+          contentType: node.data?.type,
+          size: node.data?.size,
+        });
+      }
+    }
+    return out;
   }
 
   async getRootTx(id: string): Promise<
@@ -148,6 +257,10 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
     | undefined
   > {
     const log = this.log.child({ method: 'getRootTx', id });
+
+    if (this.batcher !== undefined) {
+      return this.getRootTxViaBatcher(id, log);
+    }
 
     // First get the metadata for the original item
     const originalMetadata = await this.queryItemMetadata(id, log);
@@ -239,6 +352,95 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
 
     // If we get here, currentId should be falsy (loop exited normally)
     // This is a fallback case that shouldn't normally be reached
+    return undefined;
+  }
+
+  // Batched traversal: identical walk to the legacy getRootTx, but each level's
+  // GraphQL lookup goes through the coalescing batcher, and the original item's
+  // metadata is taken from its (combined) first-level result rather than a
+  // separate query.
+  private async getRootTxViaBatcher(
+    id: string,
+    log: winston.Logger,
+  ): Promise<
+    | {
+        rootTxId: string;
+        path?: string[];
+        contentType?: string;
+        size?: number;
+        dataSize?: number;
+      }
+    | undefined
+  > {
+    const batcher = this.batcher as GraphQLRootTxBatcher;
+    const visited = new Set<string>();
+    const traversalPath: string[] = [];
+    let currentId = id;
+    let depth = 0;
+    let originalMetadata: LeafResult | undefined;
+
+    while (
+      currentId &&
+      !visited.has(currentId) &&
+      depth < MAX_BUNDLE_NESTING_DEPTH
+    ) {
+      visited.add(currentId);
+      depth++;
+
+      const leaf = await batcher.lookup(currentId);
+      if (leaf === NOT_FOUND) {
+        log.debug('Item not found in GraphQL', { id: currentId });
+        return undefined;
+      }
+
+      // Metadata is only meaningful for the original item (first iteration).
+      if (depth === 1) {
+        originalMetadata = leaf;
+      }
+
+      if (leaf.bundleId === undefined) {
+        // Root transaction (not bundled).
+        const path =
+          traversalPath.length > 0
+            ? [currentId, ...traversalPath.reverse()]
+            : undefined;
+        log.debug('Found root transaction', {
+          originalId: id,
+          rootTxId: currentId,
+          depth: depth - 1,
+          pathLength: path?.length,
+        });
+        return {
+          rootTxId: currentId,
+          path,
+          contentType: originalMetadata?.contentType,
+          dataSize: parseNonNegativeInt(originalMetadata?.size),
+        };
+      }
+
+      if (depth > 1) {
+        traversalPath.push(currentId);
+      }
+      currentId = leaf.bundleId;
+    }
+
+    if (depth >= MAX_BUNDLE_NESTING_DEPTH) {
+      log.warn('Maximum nesting depth reached - aborting traversal', {
+        id,
+        depth,
+        visited: Array.from(visited),
+      });
+      return undefined;
+    }
+
+    if (visited.has(currentId)) {
+      log.warn(
+        'Circular reference detected in bundle chain - aborting traversal',
+        { id, circularId: currentId, visited: Array.from(visited) },
+      );
+      return undefined;
+    }
+
     return undefined;
   }
 
