@@ -134,12 +134,13 @@
   dependencies:
     xss "^1.0.8"
 
-"@ar.io/sdk@4.0.0-solana.26":
-  version "4.0.0-solana.26"
-  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-4.0.0-solana.26.tgz#7699e87ee6f060364332a39bbfb24862959552c2"
-  integrity sha512-15MaIRpv0ShlQE3BYh0hV+Fl6BqCuXX4EJiH0AqCjNd5MXX9RJBPJUO0Jth6VxaJrWltkpmRPh0L4zlwRcpoRA==
+"@ar.io/sdk@^4.0.0":
+  version "4.0.0"
+  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-4.0.0.tgz#15e189f81f18a4be911cfefe5db2bed8e35eae37"
+  integrity sha512-ey6Eyt/qEYP3dv53rcmO7RjflQq9vVwcsispQ+CXvsv1zMi6x7PMAPth1ItRL+1akn3Y2R+dLyQclCR3KSGghA==
   dependencies:
-    "@ar.io/solana-contracts" "0.5.0-staging.15"
+    "@ar.io/solana-contracts" "1.0.0"
+    "@noble/hashes" "^1.8.0"
     "@solana-program/address-lookup-table" "^0.11.0"
     "@solana-program/compute-budget" "^0.15.0"
     "@solana-program/token" "^0.13.0"
@@ -150,10 +151,10 @@
     prompts "^2.4.2"
     zod "^3.25.76"
 
-"@ar.io/solana-contracts@0.5.0-staging.15":
-  version "0.5.0-staging.15"
-  resolved "https://registry.yarnpkg.com/@ar.io/solana-contracts/-/solana-contracts-0.5.0-staging.15.tgz#42dbf0e5703598eb8b8c02affdc5731e914fdd0c"
-  integrity sha512-8sgIr+9e+L08PXTOoNXMzRJLfiERP/fycEP3tVmZYESbGdA85VUHpmiCuUr86m3ZEhwNM035/9g4bkcg6pCKlw==
+"@ar.io/solana-contracts@1.0.0":
+  version "1.0.0"
+  resolved "https://registry.yarnpkg.com/@ar.io/solana-contracts/-/solana-contracts-1.0.0.tgz#56ec1354542991899c5d641a8221ee2b33b8b99d"
+  integrity sha512-/rmxIyViK9USkedcn4zrHWkg+tGBE160PSbJ2xwEcugtXDSOf5Cc0E6R8YoG7HT5oKkU0QY1QEeSeVvcYgMYBQ==
   dependencies:
     "@noble/hashes" "^1.5.0"
     bs58 "^6.0.0"
