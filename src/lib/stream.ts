@@ -55,13 +55,18 @@ export function attachStallTimeout(
   };
   const armTimer = () => {
     clearTimer();
+    // unref so the watchdog never keeps the process alive on its own. In a
+    // live gateway the HTTP server/sockets hold the loop open, so this still
+    // fires on schedule; it only stops mattering when it is the sole
+    // remaining handle (e.g. test teardown after a stream is never drained),
+    // preventing a 15-minute idle hang from the wall-clock cap below.
     timer = setTimeout(() => {
       stream.destroy(
         new Error(
           `Stream stall timeout: no data received for ${stallTimeoutMs}ms`,
         ),
       );
-    }, stallTimeoutMs);
+    }, stallTimeoutMs).unref();
   };
   const onResume = () => {
     if (stream.readableFlowing === true) {
@@ -91,13 +96,17 @@ export function attachStallTimeout(
   // backpressure-pause-then-upstream-stall wedge that the per-data stall
   // timer cannot see.
   if (maxRequestMs !== undefined) {
+    // unref for the same reason as the stall timer: in production other
+    // handles keep the loop alive so this still fires, but it must not by
+    // itself hold a process open (a stream that is never drained in tests
+    // would otherwise wedge the runner for the full maxRequestMs).
     maxTimer = setTimeout(() => {
       stream.destroy(
         new Error(
           `Stream wall-clock timeout: not complete within ${maxRequestMs}ms`,
         ),
       );
-    }, maxRequestMs);
+    }, maxRequestMs).unref();
   }
 
   // Re-pause the stream since adding a 'data' listener switches it to

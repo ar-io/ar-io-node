@@ -137,8 +137,16 @@ export class SequentialDataSource implements ContiguousDataSource {
         } catch (error: any) {
           const sourceDuration = Date.now() - sourceStart;
 
-          // Re-throw AbortError immediately - don't try next source
-          if (error.name === 'AbortError') {
+          // Only short-circuit the whole cascade on a genuine client
+          // disconnect, i.e. when the shared request signal was actually
+          // aborted. A source's *internal* timeout (e.g. GatewaysDataSource's
+          // per-gateway connection timeout) is also surfaced as an AbortError
+          // via normalizeAbortError, but in that case the shared signal is NOT
+          // aborted — those must fall through to the next source rather than
+          // failing the entire request. This mirrors the
+          // `error.name === 'AbortError' && req.signal?.aborted` check used at
+          // the handler boundary in routes/data/handlers.ts.
+          if (error.name === 'AbortError' && signal?.aborted === true) {
             span.addEvent('Request aborted', {
               'sequential.source_index': i,
               'sequential.source_name': dataSource.constructor.name,
