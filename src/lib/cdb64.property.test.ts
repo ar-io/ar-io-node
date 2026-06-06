@@ -59,12 +59,21 @@ describe('CDB64 property tests', () => {
 
     it('should have a very low collision rate for random inputs', () => {
       // Test that collision rate is acceptably low (not that collisions never happen)
-      // With a 64-bit hash, collisions are mathematically possible but should be rare
+      // With a 64-bit hash, collisions are mathematically possible but should be rare.
+      //
+      // Use `fc.uniqueArray` rather than `fc.array` so the generator can't
+      // hand us duplicate inputs. With `fc.array`, fast-check's shrinker
+      // gleefully finds the all-zeros degenerate case (200 copies of the
+      // same 1-byte input) which hash identically by definition — a 99.5%
+      // collision rate that has nothing to do with `cdb64Hash`'s quality.
+      // The `selector` content-keys each Uint8Array so uniqueness is
+      // measured by bytes, not by reference.
       fc.assert(
         fc.property(
-          fc.array(fc.uint8Array({ minLength: 1, maxLength: 100 }), {
+          fc.uniqueArray(fc.uint8Array({ minLength: 1, maxLength: 100 }), {
             minLength: 200,
             maxLength: 200,
+            selector: (b) => Buffer.from(b).toString('base64'),
           }),
           (byteArrays) => {
             const hashes = new Set<bigint>();
@@ -79,8 +88,9 @@ describe('CDB64 property tests', () => {
               hashes.add(hash);
             }
 
-            // With 200 random keys and 64-bit hashes, collisions should be extremely rare
-            // Allow up to 5% collision rate to avoid flakiness (actual rate should be ~0%)
+            // With 200 unique keys and 64-bit hashes, collisions should be
+            // extremely rare. Allow up to 5% to avoid flakiness (actual rate
+            // should be ~0%).
             const collisionRate = collisions / byteArrays.length;
             return collisionRate < 0.05;
           },

@@ -4,6 +4,86 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 80] - 2026-06-06
+
+This is a **recommended release** focused on the **AO → Solana
+migration** of AR.IO protocol state, **Solana-native observation and
+HTTPSIG signing**, and **data-integrity hardening**. Key highlights
+include reading the Gateway Address Registry, ArNS/ANT records,
+epochs, and prescribed observers from Solana on-chain programs via
+`@ar.io/sdk` 4.0.0 (#709, #765); a Solana observer that signs and
+submits `save_observations`, uploads its report bundle, and can run
+the permissionless epoch cranker (#709); response trust headers
+signed directly with the observer's Solana key (#758); mainnet
+program IDs defaulted so a fresh mainnet deploy starts the observer
+out of the box (#766); the Solana 4.0.0 observer container wired in
+as the default image (#767); and a fix preventing L1 transactions
+with an empty/NULL `data_root` from serving unrelated content (#755).
+
+### Added
+
+- **Solana protocol backend — AO → Solana migration (#709)**: The
+  gateway now reads all AR.IO protocol state — the Gateway Address
+  Registry, ArNS names and ANT records, epochs, prescribed
+  observers, and observation status — from Solana on-chain programs
+  via `@ar.io/sdk`'s Solana backend, replacing the AO compute-unit
+  reads. Configured by `SOLANA_RPC_URL` (defaults to mainnet-beta;
+  use a dedicated provider in production) and the `ARIO_CORE_/GAR_/
+  ARNS_/ANT_PROGRAM_ID` env vars (default to the mainnet program
+  IDs). The `OnDemandArNSResolver` routes ANT lookups through
+  `SolanaANTReadable`.
+- **Solana observer, cranker, and report submission (#709)**: The
+  observer signs and submits `save_observations` from a Solana
+  keypair (`SOLANA_KEYPAIR_PATH` / `OBSERVER_KEYPAIR_PATH`), uploads
+  its report bundle to the permaweb under a separate upload identity
+  — Arweave, Ethereum, or Solana, via `ARWEAVE_UPLOAD_KEY_FILE`,
+  `ETHEREUM_UPLOAD_PRIVATE_KEY*`, or `SOLANA_UPLOAD_KEYPAIR_PATH` —
+  and optionally runs the permissionless epoch cranker
+  (`ENABLE_EPOCH_CRANKING`, default `false`).
+- **HTTPSIG signing with the Solana observer key (#758)**: Response
+  trust headers (RFC 9421) are signed directly with the observer's
+  Solana keypair; verifiers derive the Solana address from the
+  `keyId` and look it up in the on-chain GAR, so no separate
+  attestation document is needed. The key can be supplied as a file
+  (`OBSERVER_KEYPAIR_PATH`) or an inline base58 secret
+  (`OBSERVER_PRIVATE_KEY`).
+
+### Changed
+
+- **`@ar.io/sdk` → stable `4.0.0` (#765)**: Moves off the
+  `4.0.0-solana.*` prereleases (#761, #763) to the published stable
+  release, which includes the compound crank-step
+  transaction-size fix (`ar-io/ar-io-sdk#670`) that unwedges epoch
+  progression on populated networks.
+- **Mainnet program IDs by default (#766)**: `docker-compose.yaml`
+  now defaults the four `ARIO_*_PROGRAM_ID` vars to the mainnet
+  program IDs so a fresh mainnet deploy starts the observer without
+  extra configuration — the observer requires them set and will not
+  start otherwise. Operators on devnet/staging override via `.env`.
+- **Default observer image → Solana 4.0.0 container (#767)**:
+  `OBSERVER_IMAGE_TAG` now defaults to the Solana-track observer
+  build.
+- The gateway is now **Solana-only** for registry/ArNS/epoch
+  reads; the AO compute-unit dependency for protocol state has been
+  removed.
+
+### Fixed
+
+- **`attachStallTimeout` timer leak**: Unref the stall and
+  wall-clock timers so a settled stream no longer keeps the event
+  loop alive.
+- **Over-eager source-cascade abort (PE-9108)**: Abort the data
+  source cascade only on a genuine client disconnect, not on
+  internal stream transitions, so legitimate retrievals are no
+  longer cut short.
+- **Empty/NULL `data_root` could serve unrelated content (#755)**:
+  An L1 transaction with an empty or NULL `data_root` matched any
+  `data_roots` row keyed on an empty value, returning an unrelated
+  file's hash; the unguarded insert also planted such poison rows.
+  Both queries are now guarded, the insert is a no-op for empty
+  input, and a forward-only migration removes any previously
+  planted rows.
+
 ## [Release 79] - 2026-05-27
 
 This is a **recommended release** focused on **ANS-104 unbundling

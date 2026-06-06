@@ -92,19 +92,25 @@ ON CONFLICT(id) DO UPDATE SET
 WHERE contiguous_data_ids.verified != 1;
 
 -- insertDataRoot
+-- Guard against empty/NULL data_root. L1 transactions with no data_root
+-- (e.g. legacy data txs) would otherwise plant a poison row keyed on the
+-- empty value, which selectDataAttributes' fallback branch could then match
+-- for any other empty-data_root tx, serving unrelated content. The
+-- INSERT ... SELECT ... WHERE form lets callers pass an empty data_root
+-- without TS-side changes: the write simply no-ops.
 INSERT OR REPLACE INTO data_roots (
   data_root,
   contiguous_data_hash,
   verified,
   indexed_at,
   verified_at
-) VALUES (
+) SELECT
   :data_root,
   :contiguous_data_hash,
   :verified,
   :indexed_at,
   :verified_at
-)
+WHERE :data_root IS NOT NULL AND length(:data_root) > 0
 
 -- selectDataAttributes
 SELECT *
@@ -150,7 +156,9 @@ FROM (
   FROM data_roots dr
   JOIN contiguous_data cd ON dr.contiguous_data_hash = cd.hash
   JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
-  WHERE dr.data_root = :data_root
+  WHERE :data_root IS NOT NULL
+    AND length(:data_root) > 0
+    AND dr.data_root = :data_root
   LIMIT 1
 )
 LIMIT 1

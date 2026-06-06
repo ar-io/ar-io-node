@@ -568,7 +568,7 @@ export const arnsCacheMissCounter = new promClient.Counter({
  * Incremented when {@link CompositeArNSResolver} returns a cached resolution
  * because a fresh resolution attempt resolved with no resolved id — distinct
  * from the timeout-triggered cached fallback. Tracks how often the gateway
- * is serving stale data due to upstream (names cache / AO / CU) returning
+ * is serving stale data due to upstream (names cache / Solana RPC) returning
  * `undefined` faster than the cached-resolution fallback timeout.
  */
 export const arnsCachedResolutionFallbackOnEmptyCounter =
@@ -1432,4 +1432,9 @@ export function incHttpSigContentDigest(labels: {
 export const httpSigBufferedBytesInflight = new promClient.Gauge({
   name: 'httpsig_buffered_bytes_inflight',
   help: 'Aggregate bytes held in memory by buffered-digest in-flight reads',
+});
+
+export const httpSigInitFailedTotal = new promClient.Counter({
+  name: 'httpsig_init_failed_total',
+  help: 'HTTPSIG signing initialization failed at startup; signing is disabled',
 });

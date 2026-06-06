@@ -139,7 +139,7 @@ This document describes the environment variables that can be used to configure 
 | ENABLE_CHUNK_SYMLINK_CLEANUP                     | Boolean              | true                                          | If true, periodically removes dead symlinks from chunk cache directories (symlinks pointing to expired cached data)                                                  |
 | CHUNK_SYMLINK_CLEANUP_INTERVAL                   | Number               | 86400                                         | Interval in seconds between dead symlink cleanup runs (default: 24 hours)                                                                                            |
 | NODE_JS_MAX_OLD_SPACE_SIZE                       | Number               | 2048 or 8192, depending on number of workers  | Sets the memory limit, in Megabytes, for NodeJs. Default value is 2048 if using less than 2 unbundle workers, otherwise 8192                                         |
-| SUBMIT_CONTRACT_INTERACTIONS                     | Boolean              | true                                          | If true, Observer will submit its generated reports to the ar.io Network                                                                                             |
+| SUBMIT_CONTRACT_INTERACTIONS                     | Boolean              | true                                          | If true, Observer will submit its generated reports to the ar.io Network by signing the `save_observations` ix with `OBSERVER_KEYPAIR_PATH ?? SOLANA_KEYPAIR_PATH`. Pre-flight-skips when the observer isn't prescribed, already submitted, or past the observation window (no wasted tx fees on bouncing simulations). |
 | REDIS_MAX_MEMORY                                 | String               | 256mb                                         | Sets the max memory allocated to Redis                                                                                                                               |
 | REDIS_DATA_PATH                                  | String               | "./data/redis"                                | Sets the location for Redis data persistence files (dump.rdb, appendonly.aof). Only used if persistence is enabled via EXTRA_REDIS_FLAGS                            |
 | EXTRA_REDIS_FLAGS                                | String               | --save "" --appendonly no                     | Additional CLI flags passed to Redis server. Default disables persistence for performance. Set to "--save 300 10 --appendonly yes --appendfsync everysec" to enable hybrid persistence (recommended for x402 paid tokens) |
@@ -271,6 +271,84 @@ This document describes the environment variables that can be used to configure 
 
 **Security Note:** Variables marked as **SENSITIVE SECRET** (such as `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, and `CDP_API_KEY_SECRET_FILE`) contain confidential credentials that must never be printed to logs, exposed in error messages, or included in any diagnostic output. Always mask or omit these values in logs, store them in a secure secrets manager, and restrict access using the principle of least privilege.
 
+## Solana Backend
+
+The gateway reads protocol state from Solana on-chain programs. The
+OnDemandArNSResolver routes ANT lookups through
+`@ar.io/sdk/solana::SolanaANTReadable`.
+
+| Variable               | Type   | Default                                  | Description                                                                                                                                                                                  |
+| ---------------------- | ------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SOLANA_RPC_URL`       | String | `"https://api.mainnet-beta.solana.com"`  | Solana RPC endpoint. Public mainnet-beta is rate-limited; use a dedicated provider (Helius, QuickNode, Triton) for production. For devnet: `https://api.devnet.solana.com`.                  |
+| `ARIO_CORE_PROGRAM_ID` | String | undefined (SDK falls back to mainnet ID) | Override the `ario-core` program ID. Required for devnet / localnet (canonical devnet value: `83CQLP848zzCgnZ4LTq87g6hvxTooNLX7YXXkUUGv5ig`). See `devnet-config.json` in `ar-io/solana-ar-io`. |
+| `ARIO_GAR_PROGRAM_ID`  | String | undefined                                | Override the `ario-gar` program ID. Devnet: `AF8QAEaR4hzsqeUDwEdeTXMYtdyFegTENBdnJro6WVLR`.                                                                                                   |
+| `ARIO_ARNS_PROGRAM_ID` | String | undefined                                | Override the `ario-arns` program ID. Devnet: `2HgSCKYjcapJPdHRKqkLrGXm7kvBmCP45ZyhWEm87oM1`.                                                                                                  |
+| `ARIO_ANT_PROGRAM_ID`  | String | undefined                                | Override the `ario-ant` program ID. Devnet: `8ZMuXhiK7DorjPUg8RB1rzu7CvsABMk38WDJRbM62y2C`.                                                                                                   |
+
+### Solana Wallet Identities
+
+AR.IO gateways have **four protocol-level roles** that can be wired to one or more
+wallets. The on-chain roles (`operator`, `observer`) must be Solana keypairs; the
+off-chain **upload** role can use any of three chains that Turbo accepts. Resolution
+lives in `ar-io-observer/src/wallet-config.ts` (covered by `wallet-config.test.ts`).
+
+```
+operator (= cranker)         = SOLANA_KEYPAIR_PATH                            (required)
+observer (save_observations) = OBSERVER_KEYPAIR_PATH      ?? SOLANA_KEYPAIR_PATH
+upload (precedence)          = Arweave > Ethereum > Solana(explicit) > Solana(fallback)
+```
+
+**Upload precedence (in order, first match wins):**
+
+1. `ARWEAVE_UPLOAD_KEY_FILE` (file) → `ArweaveSigner`
+2. `ARWEAVE_UPLOAD_JWK` (inline env) → `ArweaveSigner`
+3. `ETHEREUM_UPLOAD_PRIVATE_KEY_FILE` (file) → `EthereumSigner`
+4. `ETHEREUM_UPLOAD_PRIVATE_KEY` (inline env) → `EthereumSigner`
+5. `SOLANA_UPLOAD_KEYPAIR_PATH` (explicit) → `SolanaSigner`
+6. Fallback: `OBSERVER_KEYPAIR_PATH ?? SOLANA_KEYPAIR_PATH` → `SolanaSigner`
+
+**Conflict policy:** setting envs from **more than one chain group** at once
+(e.g. `ARWEAVE_UPLOAD_*` plus `ETHEREUM_UPLOAD_*`) raises a startup error
+listing every conflicting env. Pick exactly one upload chain.
+
+**Sniff validators** produce friendly errors when material is dropped into the
+wrong slot — e.g. a Solana keypair JSON at `ARWEAVE_UPLOAD_KEY_FILE`, an Arweave
+JWK at `SOLANA_UPLOAD_KEYPAIR_PATH`, a 32-byte hex string at a keypair path, etc.
+Each error names the offending env and suggests the correct one.
+
+Supported configurations (each tested in `wallet-config.test.ts`):
+
+| # | Operator | Observer | Upload | Required envs |
+| - | -------- | -------- | ------ | ------------- |
+| 1 | Solana   | =op      | =op (Solana bundle)  | `SOLANA_KEYPAIR_PATH` |
+| 2 | Solana   | =op      | Arweave JWK          | `SOLANA_KEYPAIR_PATH` + `ARWEAVE_UPLOAD_KEY_FILE` |
+| 3 | Solana A | Solana B | Solana C (bundle)    | `SOLANA_KEYPAIR_PATH` + `OBSERVER_KEYPAIR_PATH` + `SOLANA_UPLOAD_KEYPAIR_PATH` |
+| 4 | Solana A | Solana B | Arweave JWK          | `SOLANA_KEYPAIR_PATH` + `OBSERVER_KEYPAIR_PATH` + `ARWEAVE_UPLOAD_KEY_FILE` |
+| 5 | Solana A | Solana B | Ethereum             | `SOLANA_KEYPAIR_PATH` + `OBSERVER_KEYPAIR_PATH` + `ETHEREUM_UPLOAD_PRIVATE_KEY_FILE` |
+
+| Variable                          | Type   | Default | Description |
+| --------------------------------- | ------ | ------- | ----------- |
+| `SOLANA_KEYPAIR_PATH`             | Path   | -       | Operator + cranker keypair. **Required** in Solana mode. Signs `join_network`, `update_gateway_settings`, and every permissionless cranker ix. |
+| `OBSERVER_KEYPAIR_PATH`           | Path   | -       | Optional separate observer keypair. Signs `save_observations`. When set, must match the on-chain `Gateway.observer_address` (settable at join time via `--observer-address` or later via `update_observer_address`). Falls back to `SOLANA_KEYPAIR_PATH`. |
+| `SOLANA_UPLOAD_KEYPAIR_PATH`      | Path   | -       | Optional separate Solana keypair for report uploads. Produces an `arbundles.SolanaSigner`. Falls back to `OBSERVER_KEYPAIR_PATH ?? SOLANA_KEYPAIR_PATH`. Ignored when `ARWEAVE_UPLOAD_*` or `ETHEREUM_UPLOAD_*` is set. |
+| `ARWEAVE_UPLOAD_KEY_FILE`         | Path   | -       | Path to an Arweave JWK used for report uploads (`arbundles.ArweaveSigner`). Top priority. |
+| `ARWEAVE_UPLOAD_JWK`              | String | -       | Inline Arweave JWK JSON. Lower priority than `ARWEAVE_UPLOAD_KEY_FILE`. |
+| `ETHEREUM_UPLOAD_PRIVATE_KEY_FILE`| Path   | -       | Path to a 32-byte hex Ethereum private key (with or without `0x` prefix). Produces an `arbundles.EthereumSigner`. Lower priority than Arweave; higher than Solana. |
+| `ETHEREUM_UPLOAD_PRIVATE_KEY`     | String | -       | Inline Ethereum private key (hex). Lower priority than the file form. |
+
+**`save_observations` submission flow (Solana mode, `SUBMIT_CONTRACT_INTERACTIONS=true`):**
+
+1. The `OnDemandArNSResolver` + continuous observer produce a `ObserverReport` for the current epoch.
+2. `TurboReportSink` uploads the report bundle to permaweb under the **upload** identity, returning the 43-char Arweave TX ID.
+3. `SolanaContractReportSink` reads the current Epoch account once (pre-flight gate). It skips submission if:
+   - The observer's pubkey isn't in `epoch.prescribed_observers` for this epoch (we weren't picked this round).
+   - The `has_observed` bit at our observer slot is already set (we already submitted).
+   - `now >= epoch.end_timestamp` (the observation window has closed).
+4. Otherwise it builds the `save_observations` instruction with the failed-gateway bitmap + base64url-decoded report TX ID and submits it signed by the **observer** keypair (not the operator/cranker).
+5. After the parent epoch is fully distributed, the cranker's `close_observation` loop reclaims the Observation PDA's rent.
+
+The on-chain `Observation.report_tx_id` field stores the **raw 32-byte hash** (lossless decode of the 43-char base64url txid) so consumers can recover the full Arweave txid for permaweb audits.
+
 ## Cache-Control / upstream cache poisoning
 
 `CACHE_STABLE_MAX_AGE`, `CACHE_UNSTABLE_TRUSTED_MAX_AGE`, and
@@ -383,18 +461,17 @@ When enabled, the `transaction(id)` GraphQL query can resolve unindexed data ite
 
 Signs gateway responses with an Ed25519 key per [RFC 9421](https://www.rfc-editor.org/rfc/rfc9421) (HTTP Message Signatures). Every qualifying response gets `Signature` and `Signature-Input` headers that cryptographically bind the gateway's trust claims (verification status, ArNS resolution, data item tags) to a staked on-chain identity.
 
-When `OBSERVER_WALLET` is set, the gateway also creates an RSA attestation linking the Ed25519 signing key to the observer wallet (which is registered to the gateway on-chain), and uploads it permanently to Arweave.
+When `OBSERVER_KEYPAIR_PATH` or `OBSERVER_PRIVATE_KEY` is set, the gateway uses the observer's Solana keypair directly as the HTTPSIG signing key. Verifiers derive the Solana address from the public key in the `keyId` and look it up in the on-chain GAR — no separate attestation document is needed. When neither is set, a standalone Ed25519 key is auto-generated (responses are signed but not verifiable against the on-chain registry). Setting both is rejected as ambiguous.
 
 | ENV_NAME                    | TYPE    | DEFAULT_VALUE          | DESCRIPTION                                                                                                          |
 | --------------------------- | ------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| HTTPSIG_ENABLED             | Boolean | false                  | Enable RFC 9421 HTTP Message Signature signing on gateway responses                                                  |
-| HTTPSIG_KEY_FILE            | String  | data/keys/httpsig.pem  | Path to Ed25519 private key PEM file. Auto-generated on first startup if missing                                     |
+| HTTPSIG_ENABLED             | Boolean | true                   | Enable RFC 9421 HTTP Message Signature signing on gateway responses                                                  |
+| HTTPSIG_KEY_FILE            | String  | data/keys/httpsig.pem  | Path to Ed25519 private key PEM file. Auto-generated on first startup if missing. Ignored when `OBSERVER_KEYPAIR_PATH` or `OBSERVER_PRIVATE_KEY` is set |
 | KEYS_DATA_PATH              | String  | ./data/keys            | Host path for the keys volume mount (docker-compose only). Maps to `/app/data/keys` inside the container             |
 | HTTPSIG_BIND_REQUEST        | Boolean | true                   | Include `@method;req` and `@path;req` in signatures, binding each response to the specific request that triggered it |
 | HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES | Number  | 2097152 (2 MiB)        | Applies only to **uncached data responses** (`/raw`, `/tx`, ArNS-resolved, manifest-served). When > 0, uncached responses with a known body size at-or-below this byte threshold are buffered to compute SHA-256 and emit `Content-Digest`, which is in `CO_SIGNABLE_HEADERS` and therefore covered by the HTTPSIG signature. Cached and HEAD responses always emit the stored digest. Chunk responses (`/chunk/:offset`, `/chunk/:offset/data`) compute their digest inline from the in-memory 256 KiB chunk regardless of this setting and are not affected by it. Set to `0` to disable buffered emission for uncached small data responses; cached and chunk responses still emit `Content-Digest`. Non-numeric or negative values fall back to the default. **Independent of this setting**, `X-AR-IO-Digest` is emitted as an unsigned advisory header for any indexed transaction whose canonical hash is on file — including large uncached responses — so clients can verify served bytes against the chain value without an extra round-trip; it is overwritten by the actually-served-body hash when the buffered helper runs. |
-| HTTPSIG_UPLOAD_ATTESTATION  | Boolean | true                   | Upload the attestation to Arweave at startup (requires `OBSERVER_WALLET`). Set to false to skip upload               |
-| OBSERVER_WALLET             | String  | -                      | Arweave wallet address for attestation signing. Key file must exist at `<WALLETS_PATH>/<OBSERVER_WALLET>.json`       |
-| WALLETS_PATH                | String  | wallets                | Directory containing wallet JWK files                                                                                |
+| OBSERVER_KEYPAIR_PATH       | String  | -                      | Path to the observer's Solana keypair JSON file (64-byte array). When set, this key is used for HTTPSIG signing and its Solana address is verifiable in the on-chain GAR |
+| OBSERVER_PRIVATE_KEY        | String  | -                      | Alternative to `OBSERVER_KEYPAIR_PATH`: a base58-encoded 64-byte Solana secret key (the format Phantom and other browser wallets export). Convenient for operators who don't already have a keypair JSON file on disk. Setting both `OBSERVER_KEYPAIR_PATH` and `OBSERVER_PRIVATE_KEY` is rejected as ambiguous |
 
 ## ClickHouse TTL Rules
 
