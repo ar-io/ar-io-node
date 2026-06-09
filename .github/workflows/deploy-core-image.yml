@@ -4,18 +4,14 @@ on:
   workflow_run:
     workflows: ['build-core']
     types: [completed]
-  push:
-    branches:
-      - main
 
 jobs:
   ar-io-core-deployment:
     runs-on: ubuntu-latest
     if: >
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'develop')
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.head_branch == 'develop' ||
+       github.event.workflow_run.head_branch == 'main')
 
     permissions:
       actions: write
@@ -30,7 +26,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Trigger Deployment For ardrive.net
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event.workflow_run.head_branch == 'main'
         run: |
           aws lambda invoke \
             --function-name ario-dev-deployment-trigger \
