@@ -60,6 +60,25 @@ RETURNING
   previous_index_filter_id,
   last_fully_indexed_at;
 
+-- selectFullyIndexedBundleWithFilters
+-- Returns a single row iff a bundles row exists for @id that is already
+-- fully indexed (last_fully_indexed_at IS NOT NULL) under filters whose
+-- stored ids correspond to the supplied current unbundle/index filter
+-- strings. This lets queueBundle reproduce its post-write dedupe-skip
+-- decision with a pure read, so it can avoid the saveBundle upserts that
+-- otherwise run before that guard for bundles the repair retry loop
+-- re-walks every few minutes. Joining to filters resolves the filter
+-- strings to ids in SQL, avoiding a separate filter-id round-trip.
+SELECT 1 AS is_fully_indexed
+FROM bundles AS b
+JOIN filters AS uf ON uf.id = b.unbundle_filter_id
+JOIN filters AS idf ON idf.id = b.index_filter_id
+WHERE b.id = @id
+  AND b.last_fully_indexed_at IS NOT NULL
+  AND uf.filter = @unbundle_filter
+  AND idf.filter = @index_filter
+LIMIT 1;
+
 -- updateBundleRetry
 UPDATE bundles
 SET

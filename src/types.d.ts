@@ -304,6 +304,19 @@ export interface BundleSaveResult {
 export interface BundleIndex {
   saveBundle(bundle: BundleRecord): Promise<BundleSaveResult>;
   saveBundleRetries(rootTransactionId: string): Promise<void>;
+  /**
+   * Read-only dedupe check used by the bundle-queueing path. Returns true
+   * iff a bundles row exists for `id` that is already fully indexed
+   * (`last_fully_indexed_at IS NOT NULL`) under the supplied current
+   * `unbundleFilter` / `indexFilter` strings. Lets `queueBundle` skip an
+   * already-complete bundle before performing any `saveBundle` upsert,
+   * avoiding redundant writes when the repair retry loop re-walks it.
+   */
+  isBundleFullyIndexedWithFilters(args: {
+    id: string;
+    unbundleFilter: string;
+    indexFilter: string;
+  }): Promise<boolean>;
   getFailedBundleIds(limit: number): Promise<string[]>;
   /**
    * Count of bundles awaiting full indexing: `matched_data_item_count > 0`,

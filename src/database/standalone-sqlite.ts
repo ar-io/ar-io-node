@@ -1518,6 +1518,24 @@ export class StandaloneSqliteDatabaseWorker {
     return null;
   }
 
+  isBundleFullyIndexedWithFilters({
+    id,
+    unbundleFilter,
+    indexFilter,
+  }: {
+    id: string;
+    unbundleFilter: string;
+    indexFilter: string;
+  }): boolean {
+    const row = this.stmts.bundles.selectFullyIndexedBundleWithFilters.get({
+      id: fromB64Url(id),
+      unbundle_filter: unbundleFilter,
+      index_filter: indexFilter,
+    });
+
+    return row !== undefined;
+  }
+
   getGqlNewTransactionTags(txId: Buffer) {
     const tags = this.stmts.core.selectNewTransactionTags.all({
       transaction_id: txId,
@@ -3591,6 +3609,14 @@ export class StandaloneSqliteDatabase
     return this.queueRead('bundles', 'getBundle', [id]);
   }
 
+  isBundleFullyIndexedWithFilters(args: {
+    id: string;
+    unbundleFilter: string;
+    indexFilter: string;
+  }): Promise<boolean> {
+    return this.queueRead('bundles', 'isBundleFullyIndexedWithFilters', [args]);
+  }
+
   getGqlTransactions({
     pageSize,
     cursor,
@@ -3969,6 +3995,11 @@ if (!isMainThread) {
         case 'getBundle':
           const bundle = worker.getBundle(args[0]);
           parentPort?.postMessage(bundle);
+          break;
+        case 'isBundleFullyIndexedWithFilters':
+          const bundleFullyIndexed =
+            worker.isBundleFullyIndexedWithFilters(args[0]);
+          parentPort?.postMessage(bundleFullyIndexed);
           break;
         case 'getGqlTransactions':
           const gqlTransactions = worker.getGqlTransactions(args[0]);

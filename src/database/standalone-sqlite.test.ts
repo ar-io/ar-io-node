@@ -1698,6 +1698,141 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('isBundleFullyIndexedWithFilters', () => {
+    // Read-only dedupe check that lets queueBundle skip an already
+    // fully-indexed bundle before performing any saveBundle write.
+    //
+    // DB state is arranged via the raw bundlesDb handle rather than
+    // db.saveBundle so the filters/bundles rows are guaranteed referentially
+    // consistent and the test is order-independent: the worker's getFilterId
+    // cache persists across tests while afterEach wipes the filters table, so
+    // db.saveBundle can leave bundles.<filter>_id pointing at a filters row
+    // that no longer exists. (That mismatch only occurs in this test harness;
+    // production never deletes filters.) Unique sha256-derived ids avoid
+    // collisions with other tests' rows.
+    const hashId = (seed: string): string =>
+      toB64Url(crypto.createHash('sha256').update(seed).digest());
+
+    const unbundleFilter = '{"always": true}';
+    const indexFilter = '{"never": true}';
+    const otherFilter = '{"attributes": {"owner": "abc"}}';
+
+    const fullyIndexedId = hashId('isBundleFullyIndexed fully');
+    const notFullyIndexedId = hashId('isBundleFullyIndexed notFully');
+    const otherFilterId = hashId('isBundleFullyIndexed otherFilter');
+    const unknownId = hashId('isBundleFullyIndexed unknown');
+
+    const getOrInsertFilterId = (filter: string): number => {
+      bundlesDb
+        .prepare(
+          'INSERT INTO filters (filter) VALUES (@filter) ON CONFLICT DO NOTHING',
+        )
+        .run({ filter });
+      return bundlesDb
+        .prepare('SELECT id FROM filters WHERE filter = @filter')
+        .get({ filter }).id;
+    };
+
+    const insertBundle = ({
+      id,
+      unbundleFilter,
+      indexFilter,
+      fullyIndexedAt,
+    }: {
+      id: string;
+      unbundleFilter: string;
+      indexFilter: string;
+      fullyIndexedAt: number | null;
+    }) => {
+      bundlesDb
+        .prepare(
+          `INSERT INTO bundles (
+             id, format_id, unbundle_filter_id, index_filter_id,
+             last_fully_indexed_at
+           ) VALUES (
+             @id, 1, @unbundle_filter_id, @index_filter_id, @fully_indexed_at
+           )`,
+        )
+        .run({
+          id: fromB64Url(id),
+          unbundle_filter_id: getOrInsertFilterId(unbundleFilter),
+          index_filter_id: getOrInsertFilterId(indexFilter),
+          fully_indexed_at: fullyIndexedAt,
+        });
+    };
+
+    beforeEach(() => {
+      // Fully indexed under the current filters.
+      insertBundle({
+        id: fullyIndexedId,
+        unbundleFilter,
+        indexFilter,
+        fullyIndexedAt: 1234567899,
+      });
+
+      // Same filters but never fully indexed.
+      insertBundle({
+        id: notFullyIndexedId,
+        unbundleFilter,
+        indexFilter,
+        fullyIndexedAt: null,
+      });
+
+      // Fully indexed, but under a different unbundle filter. Both filters
+      // exist in the table, so a false result reflects a genuine id mismatch.
+      insertBundle({
+        id: otherFilterId,
+        unbundleFilter: otherFilter,
+        indexFilter,
+        fullyIndexedAt: 1234567899,
+      });
+    });
+
+    it('returns true when fully indexed under the current filters', async () => {
+      assert.equal(
+        await db.isBundleFullyIndexedWithFilters({
+          id: fullyIndexedId,
+          unbundleFilter,
+          indexFilter,
+        }),
+        true,
+      );
+    });
+
+    it('returns false when the bundle is not fully indexed', async () => {
+      assert.equal(
+        await db.isBundleFullyIndexedWithFilters({
+          id: notFullyIndexedId,
+          unbundleFilter,
+          indexFilter,
+        }),
+        false,
+      );
+    });
+
+    it('returns false when fully indexed under a different filter', async () => {
+      assert.equal(
+        await db.isBundleFullyIndexedWithFilters({
+          id: otherFilterId,
+          unbundleFilter,
+          indexFilter,
+        }),
+        false,
+      );
+    });
+
+    it('returns false for an unknown id', async () => {
+      assert.equal(
+        await db.isBundleFullyIndexedWithFilters({
+          id: unknownId,
+          unbundleFilter,
+          indexFilter,
+        }),
+        false,
+      );
+    });
+  });
+
   describe('getFailedBundleIds — bundle-format gate (PE-9101)', () => {
     // selectFailedBundleIds must retry only actual bundles. Non-bundle
     // transactions can reach the bundles table via the admin queue-bundle

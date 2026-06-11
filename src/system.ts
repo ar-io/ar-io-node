@@ -1395,6 +1395,25 @@ export async function queueBundle(
       return { status: 'skipped' };
     }
 
+    // Write-avoidance fast path: the bundle-repair retry loop re-emits every
+    // child of stuck roots every few minutes, so most queueBundle calls are
+    // for bundles already fully indexed under the current filters. Detect that
+    // with a single read BEFORE any saveBundle upsert so re-walks of complete
+    // bundles cost zero writes to the saturated bundles DB. The post-write
+    // guard below is left intact as a correctness backstop for races.
+    if (
+      await db.isBundleFullyIndexedWithFilters({
+        id: item.id,
+        unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
+        indexFilter: config.ANS104_INDEX_FILTER_STRING,
+      })
+    ) {
+      log.info('Skipping fully unbundled bundle', {
+        id: item.id,
+      });
+      return { status: 'skipped' };
+    }
+
     await db.saveBundle({
       id: item.id,
       rootTransactionId: 'root_tx_id' in item ? item.root_tx_id : item.id,
