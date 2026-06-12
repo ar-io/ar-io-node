@@ -165,13 +165,20 @@ async function fetchTxOwnerKey(
 
   if (tx.parentId !== null) {
     if (tx.ownerSize !== null && tx.ownerOffset !== null) {
-      return ownerFetcher.getDataItemOwner({
+      // getDataItemOwner resolves to `undefined` on a miss/abort/error.
+      // owner.key is `String!` in the schema, so returning undefined here
+      // throws "Cannot return null for non-nullable field Owner.key", which
+      // nulls the whole node (and the entire list for plural `transactions`).
+      // Coerce to the NOT_FOUND sentinel — mirrors the signature resolver
+      // and the getTransactionOwner branch below.
+      const ownerKey = await ownerFetcher.getDataItemOwner({
         id: tx.id,
         parentId: tx.parentId,
         ownerSize: parseInt(tx.ownerSize),
         ownerOffset: parseInt(tx.ownerOffset),
         signal,
       });
+      return ownerKey ?? NOT_FOUND;
     }
     return NOT_FOUND;
   }
