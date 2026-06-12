@@ -1790,7 +1790,14 @@ describe('StandaloneSqliteDatabase', () => {
     // = 50, BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS = 900.
     const hashId = (seed: string): string =>
       toB64Url(crypto.createHash('sha256').update(seed).digest());
-    const now = Math.floor(Date.now() / 1000);
+    // Capture `now` per-test, not at suite load. The "within cooldown"
+    // assertion compares against getFailedBundleIds's real-time @retry_cutoff
+    // (now - BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS); a load-time `now` could age
+    // out of the 900s window if the suite runs long enough and flake the test.
+    let now: number;
+    beforeEach(() => {
+      now = Math.floor(Date.now() / 1000);
+    });
 
     const insertBundleRow = (
       id: string,
