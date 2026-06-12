@@ -160,9 +160,20 @@ don't select `owner { key }` (those are already inline/fast).
 - Manual: re-run the attestation script against a canary and compare page times
   to Goldsky.
 
-## Open questions
+## Decisions (2026-06-12) — IMPLEMENTED
 
-1. Dual-write the admin path (1a) now, or accept one-fetch-per-address warmup?
-2. Keep the id-fallback read for one TTL window, or hard-cut to address-only?
-3. Bump owner TTL / move owners to `lmdb` for persistence (separate PE)?
-4. Apply the same to `getTransactionOwner` (L1) in this PR or a follow-up?
+1. **Dual-write the admin path: yes.** `queue-data-item` now writes `ownerStore`
+   by both `id` and `owner_address`.
+2. **Keep the id-keyed fallback read** — both keys are read in parallel via
+   `Promise.any` (first hit wins; a miss rejects so it's ignored). Revisit
+   dropping the id read once the dependency on legacy entries is gone.
+3. **lmdb / TTL persistence: separate effort.** This change stays on the current
+   store (Redis, 4h TTL); only the cache *key* changes.
+4. **`getTransactionOwner` (L1): included** — same address-keyed read + dual-key
+   write + coalescer.
+
+Implemented on `PE-9120`: `attribute-fetchers.ts` (read/cache/coalesce helpers +
+both fetch methods), `resolvers.ts` (passes `tx.ownerAddress`), `ar-io.ts`
+(admin dual-write), `types.d.ts` (interface). Tests in
+`attribute-fetchers.test.ts` (address hit, id fallback, dual-write, coalescer);
+`tsc` clean, 56/56 local tests pass.

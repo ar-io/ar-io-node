@@ -475,6 +475,11 @@ arIoRouter.post(
           signatureStore.set(dataItemHeader.id, dataItemHeader.signature);
         }
         ownerStore.set(dataItemHeader.id, dataItemHeader.owner);
+        // Dual-write by owner_address so GraphQL owner.key resolution can serve
+        // every item by this owner from one cache entry (PE-9120).
+        if (dataItemHeader.owner_address.length > 0) {
+          ownerStore.set(dataItemHeader.owner_address, dataItemHeader.owner);
+        }
 
         system.dataItemIndexer.queueDataItem(
           {

@@ -886,6 +886,97 @@ describe('OwnerFetcher', () => {
     });
   });
 
+  describe('address-keyed owner cache (PE-9120)', () => {
+    const ADDR = 'owner-address-1';
+
+    const ownerStreamMock = () =>
+      mock.method(mocks.dataSource, 'getData', async () => ({
+        stream: {
+          [Symbol.asyncIterator]: async function* () {
+            yield Buffer.from('testOwner');
+          },
+        },
+      }));
+
+    it('returns from the address-keyed entry without fetching', async () => {
+      mock.method(mocks.ownerStore, 'get', async (key: string) =>
+        key === ADDR ? 'owner-by-address' : undefined,
+      );
+      const getDataMock = ownerStreamMock();
+
+      const result = await ownerFetcher.getDataItemOwner({
+        id: 'item-1',
+        parentId: 'parent',
+        ownerOffset: 1,
+        ownerSize: 9,
+        ownerAddress: ADDR,
+      });
+
+      assert.strictEqual(result, 'owner-by-address');
+      assert.strictEqual(getDataMock.mock.calls.length, 0);
+      assert.strictEqual((mocks.ownerStore.set as any).mock.calls.length, 0);
+    });
+
+    it('falls back to the id-keyed entry when address misses', async () => {
+      mock.method(mocks.ownerStore, 'get', async (key: string) =>
+        key === 'item-1' ? 'owner-by-id' : undefined,
+      );
+      const getDataMock = ownerStreamMock();
+
+      const result = await ownerFetcher.getDataItemOwner({
+        id: 'item-1',
+        parentId: 'parent',
+        ownerOffset: 1,
+        ownerSize: 9,
+        ownerAddress: ADDR,
+      });
+
+      assert.strictEqual(result, 'owner-by-id');
+      assert.strictEqual(getDataMock.mock.calls.length, 0);
+    });
+
+    it('dual-writes by id and address after a fetch', async () => {
+      mock.method(mocks.ownerStore, 'get', async () => undefined);
+      ownerStreamMock();
+
+      await ownerFetcher.getDataItemOwner({
+        id: 'item-1',
+        parentId: 'parent',
+        ownerOffset: 1,
+        ownerSize: 9,
+        ownerAddress: ADDR,
+      });
+
+      const setCalls = (mocks.ownerStore.set as any).mock.calls;
+      assert.strictEqual(setCalls.length, 2);
+      const keys = setCalls.map((c: any) => c.arguments[0]).sort();
+      assert.deepStrictEqual(keys, ['item-1', ADDR].sort());
+    });
+
+    it('coalesces concurrent fetches for the same address to one parent fetch', async () => {
+      mock.method(mocks.ownerStore, 'get', async () => undefined);
+      const getDataMock = ownerStreamMock();
+
+      const results = await Promise.all(
+        ['a', 'b', 'c'].map((id) =>
+          ownerFetcher.getDataItemOwner({
+            id,
+            parentId: 'parent',
+            ownerOffset: 1,
+            ownerSize: 9,
+            ownerAddress: ADDR,
+          }),
+        ),
+      );
+
+      assert.deepStrictEqual(
+        results,
+        results.map(() => Buffer.from('testOwner').toString('base64url')),
+      );
+      assert.strictEqual(getDataMock.mock.calls.length, 1);
+    });
+  });
+
   describe('getTransactionOwner', () => {
     it('should return owner from owner store if it exists', async () => {
       mock.method(mocks.ownerStore, 'get', async () => 'owner-from-store');

@@ -176,6 +176,8 @@ async function fetchTxOwnerKey(
         parentId: tx.parentId,
         ownerSize: parseInt(tx.ownerSize),
         ownerOffset: parseInt(tx.ownerOffset),
+        // Shared cache key: all items by this owner reuse one fetch (PE-9120).
+        ownerAddress: tx.ownerAddress,
         signal,
       });
       return ownerKey ?? NOT_FOUND;
@@ -185,6 +187,7 @@ async function fetchTxOwnerKey(
 
   const ownerKey = await ownerFetcher.getTransactionOwner({
     id: tx.id,
+    ownerAddress: tx.ownerAddress,
     signal,
   });
   return ownerKey !== undefined ? ownerKey : NOT_FOUND;
