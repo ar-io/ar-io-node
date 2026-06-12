@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import { GraphQLResolveInfo, OperationDefinitionNode, parse } from 'graphql';
 
 import {
@@ -24,6 +24,7 @@ import {
   resolvers,
 } from './resolvers.js';
 import { GqlTransaction } from '../../types.js';
+import { ownerFetcher } from '../../system.js';
 
 const GQL_TX = {
   id: 'LXCrfCRLHB7YyLGAeQoio00qb7LwT3UO3a-2TSDli8Q',
@@ -130,6 +131,30 @@ describe('resolveTxOwnerKey', () => {
       'repeated resolveTxOwnerKey calls on the same parent must share a Promise',
     );
     await first;
+  });
+
+  it('returns the NOT_FOUND sentinel (never null) when the data-item owner fetch misses/aborts', async () => {
+    // owner.key is `String!` in the schema. getDataItemOwner resolves to
+    // undefined on a miss/abort/error; without the sentinel coercion this
+    // throws "Cannot return null for non-nullable field Owner.key" and nulls
+    // the whole node (and the entire list for plural `transactions`).
+    mock.method(ownerFetcher, 'getDataItemOwner', () =>
+      Promise.resolve(undefined),
+    );
+    try {
+      const key = await resolveTxOwnerKey({
+        tx: {
+          id: 'data-item-id',
+          ownerKey: null,
+          parentId: 'parent-bundle-id',
+          ownerSize: '512',
+          ownerOffset: '100',
+        } as unknown as GqlTransaction,
+      });
+      assert.equal(key, '<not-found>');
+    } finally {
+      mock.restoreAll();
+    }
   });
 });
 

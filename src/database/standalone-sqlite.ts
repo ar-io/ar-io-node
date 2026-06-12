@@ -902,6 +902,9 @@ export class StandaloneSqliteDatabaseWorker {
     const rows = this.stmts.bundles.selectFailedBundleIds.all({
       limit,
       reprocess_cutoff: currentUnixTimestamp() - BUNDLE_REPROCESS_WAIT_SECS,
+      max_retry_attempts: config.BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS,
+      retry_cutoff:
+        currentUnixTimestamp() - config.BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS,
     });
 
     return rows.map((row): string => toB64Url(row.id));

@@ -1553,6 +1553,29 @@ export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
   '5000',
 );
 
+// Upper bound on how many times the repair loop will retry a single bundle.
+// A bundle that never finishes unbundling keeps matched_data_item_count NULL
+// forever and so can never be stamped fully-indexed; without a cap it is
+// re-selected and re-walked every cycle indefinitely. Once a bundle reaches
+// this many attempts it is dropped from the retry pool (and is the natural
+// hand-off boundary for a future dead-letter queue — keep the DLQ's selection
+// threshold in sync with this value).
+export const BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS = env.positiveIntOrDefault(
+  'BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS',
+  50,
+);
+
+// Minimum seconds between retries of the same bundle. The pre-existing
+// reprocess cooldown keys on last_queued_at, which only advances when the
+// unbundler actually processes the item — so under queue backpressure it
+// never advances and the same bundles are re-selected every cycle. This
+// cooldown keys on last_retried_at (always bumped by updateBundleRetry), so
+// it holds even when the unbundler is saturated.
+export const BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS = env.nonNegativeIntOrDefault(
+  'BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS',
+  900, // 15 minutes
+);
+
 //
 // PostgreSQL
 //
