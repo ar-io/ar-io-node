@@ -151,6 +151,34 @@ Attestation scan (finite registrant set) → likely 10–100× fewer owner fetch
 turbo page latency from ~8.4s toward Goldsky's ~0.6s. No effect on queries that
 don't select `owner { key }` (those are already inline/fast).
 
+## Observability
+
+Reuses the existing `attribute_fetch_total{kind,subject,source,outcome}` counter
+and `attribute_fetch_duration_seconds{kind,subject,source}` histogram — no new
+metrics for the common cases — plus one small counter for the coalescer.
+
+- **Successful retrievals / hits vs misses by cache type** —
+  `attribute_fetch_total{kind="owner",outcome="hit"}` sliced by `source`:
+  - `store_address` — served from the shared `owner_address` key (the cross-item
+    reuse this effort adds; a hit on an item whose own id was never written is
+    proof the optimization is working)
+  - `store_id` — served from the per-item / admin-written key
+  - `parent_data` / `chain` / `derived` — a cache **miss** that went to fetch
+    (data-item parent bytes vs L1 chain vs secp256k1 recovery)
+  - cache hit rate = `(store_address + store_id) / all owner hits`. Rising
+    `store_address` over time = address-keying paying off.
+- **Timing around owner lookups** — `attribute_fetch_duration_seconds{kind="owner",source}`
+  already exists; `store_*` latency (cache, ~ms) vs `parent_data` latency
+  (network, the slow tail) is directly comparable, by `subject`
+  (`data_item` / `transaction`).
+- **Coalescer effectiveness** — `owner_fetch_coalesced_total{subject}` counts
+  concurrent fetches collapsed onto one in-flight call. High relative to owner
+  `parent_data` fetches = intra-page dedup working.
+
+New label values: 2 (`store_address`, `store_id`) on the existing counter/
+histogram; 1 new counter (`owner_fetch_coalesced_total`, 2 series). Deliberately
+no new histogram — timing rides the existing one.
+
 ## Testing
 
 - Unit (no `system.js` boot — inject a mock `ownerStore` + `dataSource` into
