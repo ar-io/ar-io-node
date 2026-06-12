@@ -677,8 +677,21 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
     }
     const existing = this.inFlightOwnerByAddress.get(ownerAddress);
     if (existing !== undefined) {
-      metrics.ownerFetchCoalescedCounter.inc({ subject });
-      return existing;
+      // Reuse the in-flight leader only if it SUCCEEDS. A leader abort or a
+      // per-item miss (items share an owner_address but have different
+      // parent_id/offset, so retrievability can differ) must not be fanned out
+      // to concurrent callers that could resolve on their own — they fall back
+      // to their own fetch instead of inheriting the leader's failure.
+      return existing.then(
+        (leaderResult) => {
+          if (leaderResult !== undefined) {
+            metrics.ownerFetchCoalescedCounter.inc({ subject });
+            return leaderResult;
+          }
+          return fetch();
+        },
+        () => fetch(),
+      );
     }
     const promise = fetch().finally(() => {
       this.inFlightOwnerByAddress.delete(ownerAddress);

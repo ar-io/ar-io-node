@@ -975,6 +975,31 @@ describe('OwnerFetcher', () => {
       );
       assert.strictEqual(getDataMock.mock.calls.length, 1);
     });
+
+    it('does not fan out a failed leader fetch to coalesced callers', async () => {
+      mock.method(mocks.ownerStore, 'get', async () => undefined);
+      // Every fetch fails. A poisoning coalescer would issue one call and hand
+      // the leader's undefined to all callers; the correct behavior is that a
+      // failed leader makes each follower fall back to its own fetch.
+      const getDataMock = mock.method(mocks.dataSource, 'getData', async () => {
+        throw new Error('boom');
+      });
+
+      const results = await Promise.all(
+        ['a', 'b', 'c'].map((id) =>
+          ownerFetcher.getDataItemOwner({
+            id,
+            parentId: 'parent',
+            ownerOffset: 1,
+            ownerSize: 9,
+            ownerAddress: ADDR,
+          }),
+        ),
+      );
+
+      assert.deepStrictEqual(results, [undefined, undefined, undefined]);
+      assert.strictEqual(getDataMock.mock.calls.length, 3);
+    });
   });
 
   describe('getTransactionOwner', () => {

@@ -1,7 +1,7 @@
 # PE-9120 — Address-keyed owner-key cache (+ in-flight coalescer)
 
-**Branch:** `PE-9120-owner-key-address-cache` (off `PE-9118`)
-**Status:** spec / scoping — no implementation yet
+**Branch:** `PE-9120-owner-key-address-cache` (PR #777 → `develop`)
+**Status:** implemented — decisions resolved (see end), `tsc` clean + unit tests passing.
 **Goal:** make bulk `owner.key` GraphQL resolution serve from one fetch **per unique owner** instead of one fetch **per data item**.
 
 ---
