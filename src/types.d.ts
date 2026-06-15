@@ -1287,20 +1287,26 @@ export interface OwnerSource {
     parentId,
     ownerSize,
     ownerOffset,
+    ownerAddress,
     signal,
   }: {
     id: string;
     parentId?: string;
     ownerSize?: number;
     ownerOffset?: number;
+    // owner_address (= sha256(owner_key)); when present, used as the shared
+    // cache key so all items by an owner reuse one fetch (PE-9120).
+    ownerAddress?: string;
     signal?: AbortSignal;
   }): Promise<string | undefined>;
 
   getTransactionOwner({
     id,
+    ownerAddress,
     signal,
   }: {
     id: string;
+    ownerAddress?: string;
     signal?: AbortSignal;
   }): Promise<string | undefined>;
 }

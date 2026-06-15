@@ -28,12 +28,19 @@ type AttributeKind = 'owner' | 'signature';
 type AttributeSubject = 'data_item' | 'transaction';
 type AttributeSource =
   | 'store'
+  // Owner-key store hits split by which key served them (PE-9120):
+  // `store_address` is the shared owner_address key (cross-item reuse),
+  // `store_id` is the per-item / admin-written key.
+  | 'store_address'
+  | 'store_id'
   | 'attributes'
   | 'parent_data'
   | 'chain'
   | 'derived'
   | 'incomplete_root';
 type AttributeOutcome = 'hit' | 'aborted' | 'error' | 'not_found';
+// Which owner_store key served a cache hit (PE-9120). Subset of AttributeSource.
+type OwnerCacheSource = 'store_address' | 'store_id';
 
 /**
  * Classify a thrown error into an `AttributeOutcome` for the metric label.
@@ -599,30 +606,155 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
     this.ownerStore = ownerStore;
   }
 
+  // Dedup concurrent owner fetches for the same owner address (PE-9120): a
+  // GraphQL page of N items by one owner resolves owner.key concurrently, so
+  // without coalescing the first page would fire N identical fetches before
+  // any of them populates the cache.
+  private readonly inFlightOwnerByAddress = new Map<
+    string,
+    Promise<string | undefined>
+  >();
+
+  /**
+   * Read the cached owner key. owner_address = sha256(owner_key), so the key is
+   * identical for every item by an owner; we cache by address for cross-item
+   * reuse and fall back to the item id for legacy / admin-written entries. The
+   * two reads race — the first hit wins (PE-9120).
+   */
+  private async readCachedOwner(
+    ownerAddress: string | undefined,
+    id: string,
+  ): Promise<{ owner: string; source: OwnerCacheSource } | undefined> {
+    const hitOrThrow = async (
+      key: string,
+      source: OwnerCacheSource,
+    ): Promise<{ owner: string; source: OwnerCacheSource }> => {
+      const value = await this.ownerStore.get(key);
+      if (value === undefined) {
+        throw new Error('owner-store miss');
+      }
+      return { owner: value, source };
+    };
+    const reads: Promise<{ owner: string; source: OwnerCacheSource }>[] = [];
+    if (ownerAddress !== undefined && ownerAddress.length > 0) {
+      reads.push(hitOrThrow(ownerAddress, 'store_address'));
+    }
+    reads.push(hitOrThrow(id, 'store_id'));
+    try {
+      return await Promise.any(reads);
+    } catch {
+      // Both reads missed (or errored) — fall through to a fresh fetch.
+      return undefined;
+    }
+  }
+
+  /**
+   * Cache an owner key under both its address (shared across the owner's items)
+   * and the item id (so legacy id-keyed reads stay warm during migration).
+   */
+  private async cacheOwner(
+    ownerAddress: string | undefined,
+    id: string,
+    owner: string | undefined,
+  ): Promise<void> {
+    if (owner === undefined) {
+      return;
+    }
+    await this.ownerStore.set(id, owner);
+    if (ownerAddress !== undefined && ownerAddress.length > 0) {
+      await this.ownerStore.set(ownerAddress, owner);
+    }
+  }
+
+  /** Collapse concurrent fetches for one owner address to a single in-flight call. */
+  private coalesceOwnerFetch(
+    ownerAddress: string | undefined,
+    subject: AttributeSubject,
+    fetch: () => Promise<string | undefined>,
+  ): Promise<string | undefined> {
+    if (ownerAddress === undefined || ownerAddress.length === 0) {
+      return fetch();
+    }
+    const existing = this.inFlightOwnerByAddress.get(ownerAddress);
+    if (existing !== undefined) {
+      // Reuse the in-flight leader only if it SUCCEEDS. A leader abort or a
+      // per-item miss (items share an owner_address but have different
+      // parent_id/offset, so retrievability can differ) must not be fanned out
+      // to concurrent callers that could resolve on their own — they fall back
+      // to their own fetch instead of inheriting the leader's failure.
+      return existing.then(
+        (leaderResult) => {
+          if (leaderResult !== undefined) {
+            metrics.ownerFetchCoalescedCounter.inc({ subject });
+            return leaderResult;
+          }
+          return fetch();
+        },
+        () => fetch(),
+      );
+    }
+    const promise = fetch().finally(() => {
+      this.inFlightOwnerByAddress.delete(ownerAddress);
+    });
+    this.inFlightOwnerByAddress.set(ownerAddress, promise);
+    return promise;
+  }
+
   async getDataItemOwner({
     id,
     parentId,
     ownerSize,
     ownerOffset,
+    ownerAddress,
     signal,
   }: {
     id: string;
     parentId?: string;
     ownerSize?: number;
     ownerOffset?: number;
+    ownerAddress?: string;
     signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getDataItemOwner' });
     const start = Date.now();
-    log.debug('Fetching data item owner', { id });
+    log.debug('Fetching data item owner', { id, ownerAddress });
 
-    const owner = await this.ownerStore.get(id);
-
-    if (owner !== undefined) {
+    const cached = await this.readCachedOwner(ownerAddress, id);
+    if (cached !== undefined) {
       log.debug('Data item owner fetched from store', { id });
-      recordAttributeFetch('owner', 'data_item', 'store', 'hit', start);
-      return owner;
+      recordAttributeFetch('owner', 'data_item', cached.source, 'hit', start);
+      return cached.owner;
     }
+
+    return this.coalesceOwnerFetch(ownerAddress, 'data_item', () =>
+      this.fetchDataItemOwnerFromParent({
+        id,
+        parentId,
+        ownerSize,
+        ownerOffset,
+        ownerAddress,
+        signal,
+      }),
+    );
+  }
+
+  private async fetchDataItemOwnerFromParent({
+    id,
+    parentId,
+    ownerSize,
+    ownerOffset,
+    ownerAddress,
+    signal,
+  }: {
+    id: string;
+    parentId?: string;
+    ownerSize?: number;
+    ownerOffset?: number;
+    ownerAddress?: string;
+    signal?: AbortSignal;
+  }): Promise<string | undefined> {
+    const log = this.log.child({ method: 'getDataItemOwner' });
+    const start = Date.now();
 
     try {
       if (
@@ -679,7 +811,7 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         signal,
       });
 
-      await this.ownerStore.set(id, owner);
+      await this.cacheOwner(ownerAddress, id, owner);
       recordAttributeFetch('owner', 'data_item', 'parent_data', 'hit', start);
       return owner;
     } catch (error) {
@@ -700,22 +832,40 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
 
   async getTransactionOwner({
     id,
+    ownerAddress,
     signal,
   }: {
     id: string;
+    ownerAddress?: string;
     signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getTransactionOwner' });
     const start = Date.now();
-    log.debug('Fetching transaction owner', { id });
+    log.debug('Fetching transaction owner', { id, ownerAddress });
 
-    const owner = await this.ownerStore.get(id);
-
-    if (owner !== undefined) {
+    const cached = await this.readCachedOwner(ownerAddress, id);
+    if (cached !== undefined) {
       log.debug('Transaction owner fetched from store', { id });
-      recordAttributeFetch('owner', 'transaction', 'store', 'hit', start);
-      return owner;
+      recordAttributeFetch('owner', 'transaction', cached.source, 'hit', start);
+      return cached.owner;
     }
+
+    return this.coalesceOwnerFetch(ownerAddress, 'transaction', () =>
+      this.fetchTransactionOwnerFromChain({ id, ownerAddress, signal }),
+    );
+  }
+
+  private async fetchTransactionOwnerFromChain({
+    id,
+    ownerAddress,
+    signal,
+  }: {
+    id: string;
+    ownerAddress?: string;
+    signal?: AbortSignal;
+  }): Promise<string | undefined> {
+    const log = this.log.child({ method: 'getTransactionOwner' });
+    const start = Date.now();
 
     // Track the source we are currently attempting so the catch block can
     // attribute errors/aborts to the correct upstream layer.
@@ -727,7 +877,7 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         transactionAttributes !== undefined &&
         typeof transactionAttributes.owner === 'string'
       ) {
-        await this.ownerStore.set(id, transactionAttributes.owner);
+        await this.cacheOwner(ownerAddress, id, transactionAttributes.owner);
         recordAttributeFetch(
           'owner',
           'transaction',
@@ -788,7 +938,7 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         return undefined;
       }
 
-      await this.ownerStore.set(id, ownerFromChain);
+      await this.cacheOwner(ownerAddress, id, ownerFromChain);
       recordAttributeFetch(
         'owner',
         'transaction',

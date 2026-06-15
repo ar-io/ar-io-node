@@ -387,6 +387,21 @@ export const attributeFetchDurationHistogram = new promClient.Histogram({
   buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
 });
 
+// Owner-key cache observability (PE-9120). Hit/miss and timing by cache key
+// reuse attribute_fetch_total / attribute_fetch_duration_seconds via the
+// `store_address` (shared owner_address key — cross-item reuse) and `store_id`
+// (per-item / admin key) sources. This counter additionally tracks concurrent
+// fetches collapsed by the address-keyed in-flight coalescer.
+export const ownerFetchCoalescedCounter = new promClient.Counter({
+  name: 'owner_fetch_coalesced_total',
+  help:
+    'Count of owner-key fetches served by joining an in-flight fetch for the ' +
+    'same owner address instead of issuing a new one (PE-9120 coalescer). ' +
+    'High relative to owner `parent_data`/`chain` fetches means intra-page ' +
+    'dedup is working.',
+  labelNames: ['subject'],
+});
+
 //
 // Arweave client metrics
 //

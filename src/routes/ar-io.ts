@@ -470,11 +470,30 @@ arIoRouter.post(
       }
 
       for (const dataItemHeader of dataItemHeaders) {
+        // Fire-and-forget header-cache warming: never block the admin response
+        // or surface an unhandled rejection if a KV write fails.
+        const warnCacheWrite = (key: string) => (error: unknown) =>
+          log.warn('Failed to warm header cache from queue-data-item', {
+            key,
+            error: (error as Error).message,
+          });
+
         // cache signatures in signature store
         if (config.WRITE_ANS104_DATA_ITEM_DB_SIGNATURES === false) {
-          signatureStore.set(dataItemHeader.id, dataItemHeader.signature);
+          signatureStore
+            .set(dataItemHeader.id, dataItemHeader.signature)
+            .catch(warnCacheWrite(dataItemHeader.id));
         }
-        ownerStore.set(dataItemHeader.id, dataItemHeader.owner);
+        ownerStore
+          .set(dataItemHeader.id, dataItemHeader.owner)
+          .catch(warnCacheWrite(dataItemHeader.id));
+        // Dual-write by owner_address so GraphQL owner.key resolution can serve
+        // every item by this owner from one cache entry (PE-9120).
+        if (dataItemHeader.owner_address.length > 0) {
+          ownerStore
+            .set(dataItemHeader.owner_address, dataItemHeader.owner)
+            .catch(warnCacheWrite(dataItemHeader.owner_address));
+        }
 
         system.dataItemIndexer.queueDataItem(
           {
