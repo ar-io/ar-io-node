@@ -66,6 +66,16 @@ export const uncaughtExceptionCounter = new promClient.Counter({
   help: 'Count of uncaught exceptions',
 });
 
+// Errors that escape route handlers / earlier middleware and reach the
+// terminal Express error handler. Before this existed such errors fell to
+// Express's default finalhandler as unlogged, generic 500s — this counter
+// (plus the handler's logging) makes that previously-invisible path visible.
+export const unhandledRequestErrorsCounter = new promClient.Counter({
+  name: 'unhandled_request_errors_total',
+  help: 'Count of errors reaching the terminal Express error handler',
+  labelNames: ['method', 'status'],
+});
+
 //
 // Global bundle metrics
 //

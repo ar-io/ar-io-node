@@ -41,6 +41,94 @@ import {
 import { setCommonChunkHeaders, setChunkETag } from './response-utils.js';
 
 /**
+ * Classifies a failure thrown by {@link ChunkRetrievalService.retrieveChunk}
+ * into the most accurate HTTP status.
+ *
+ * The chunk endpoints proxy a cascade of upstream sources (local cache → tx
+ * boundary lookup → AR.IO peers → Arweave). A failure to obtain a chunk is
+ * therefore an upstream/gateway condition, NOT an internal server error, and
+ * must not be reported as a 500:
+ *
+ *   - client hung up mid-retrieval                    → 499 (Client Closed Request)
+ *   - boundary lookup says the chunk isn't locatable  → 404 (Not Found)
+ *   - an upstream timed out                           → 504 (Gateway Timeout)
+ *   - upstreams reachable but none served the chunk   → 502 (Bad Gateway)
+ *
+ * Only genuinely unexpected errors (programming/encoding bugs surfaced by the
+ * handler's outer try/catch) should remain 500s.
+ *
+ * Returning 502/504 here also matters operationally: these failures are
+ * retryable and were previously inflating the gateway's 5xx (specifically
+ * 500) rate, masking real internal errors.
+ */
+export function classifyChunkRetrievalError(
+  error: any,
+  clientAborted: boolean,
+): { statusCode: number; errorType: string } {
+  // If the caller's own request signal is aborted, this is a client
+  // disconnect — 499 — regardless of which error surfaced from the cascade.
+  // (The cascade can mislabel a disconnect as a generic "all peers failed"
+  // error; this is the backstop that keeps those out of the 5xx counts.)
+  if (clientAborted) {
+    return { statusCode: 499, errorType: 'client_disconnected' };
+  }
+  if (error instanceof ChunkNotFoundError) {
+    return { statusCode: 404, errorType: error.errorType };
+  }
+  // AbortSignal.timeout() rejects with a TimeoutError; the tx-chunks
+  // first-data timeout carries 'timeout' in its message.
+  if (error?.name === 'TimeoutError' || /timeout/i.test(error?.message ?? '')) {
+    return { statusCode: 504, errorType: 'upstream_timeout' };
+  }
+  return { statusCode: 502, errorType: 'upstream_unavailable' };
+}
+
+/**
+ * Applies a {@link classifyChunkRetrievalError} verdict to the response and
+ * span. Logs at warn (not error) for upstream conditions so they stop reading
+ * as server faults.
+ */
+function sendChunkRetrievalError(
+  error: any,
+  {
+    request,
+    response,
+    span,
+    log,
+    offset,
+  }: {
+    request: Request;
+    response: Response;
+    span: ReturnType<typeof tracer.startSpan>;
+    log: Logger;
+    offset: number;
+  },
+): void {
+  const { statusCode, errorType } = classifyChunkRetrievalError(
+    error,
+    request.signal?.aborted ?? false,
+  );
+  span.setAttribute('http.status_code', statusCode);
+  span.setAttribute('chunk.retrieval.error', errorType);
+  if (statusCode >= 500) {
+    span.recordException(error);
+    log.warn('Unable to retrieve chunk from upstream sources', {
+      offset,
+      statusCode,
+      errorType,
+      message: error?.message,
+    });
+  }
+  if (!response.headersSent) {
+    if (statusCode === 404) {
+      response.sendStatus(404);
+    } else {
+      response.status(statusCode).end();
+    }
+  }
+}
+
+/**
  * Creates a handler for the chunk offset endpoint (GET/HEAD /chunk/:offset).
  *
  * Returns chunk data in JSON format with base64url encoding.
@@ -138,21 +226,16 @@ export const createChunkOffsetHandler = ({
             request.signal,
           );
         } catch (error: any) {
-          if (error.name === 'AbortError' && request.signal?.aborted) {
-            span.setAttribute('http.status_code', 499);
-            span.setAttribute('chunk.retrieval.error', 'client_disconnected');
-            if (!response.headersSent) {
-              response.status(499).end();
-            }
-            return;
-          }
-          if (error instanceof ChunkNotFoundError) {
-            span.setAttribute('http.status_code', 404);
-            span.setAttribute('chunk.retrieval.error', error.errorType);
-            response.sendStatus(404);
-            return;
-          }
-          throw error;
+          // Retrieval failures are upstream/gateway conditions (or a client
+          // disconnect), never a 500. See classifyChunkRetrievalError.
+          sendChunkRetrievalError(error, {
+            request,
+            response,
+            span,
+            log,
+            offset,
+          });
+          return;
         }
 
         const { chunk, dataRoot, dataSize, weaveOffset, relativeOffset } =
@@ -399,21 +482,16 @@ export const createChunkOffsetDataHandler = ({
             request.signal,
           );
         } catch (error: any) {
-          if (error.name === 'AbortError' && request.signal?.aborted) {
-            span.setAttribute('http.status_code', 499);
-            span.setAttribute('chunk.retrieval.error', 'client_disconnected');
-            if (!response.headersSent) {
-              response.status(499).end();
-            }
-            return;
-          }
-          if (error instanceof ChunkNotFoundError) {
-            span.setAttribute('http.status_code', 404);
-            span.setAttribute('chunk.retrieval.error', error.errorType);
-            response.sendStatus(404);
-            return;
-          }
-          throw error;
+          // Retrieval failures are upstream/gateway conditions (or a client
+          // disconnect), never a 500. See classifyChunkRetrievalError.
+          sendChunkRetrievalError(error, {
+            request,
+            response,
+            span,
+            log,
+            offset,
+          });
+          return;
         }
 
         const {
@@ -444,14 +522,17 @@ export const createChunkOffsetDataHandler = ({
             offset: relativeOffset,
           });
         } catch (error: any) {
-          span.setAttribute('http.status_code', 500);
+          // The data_path was served by an upstream chunk source; if it won't
+          // parse/validate, that's bad upstream data (502), not a fault in
+          // this gateway (500).
+          span.setAttribute('http.status_code', 502);
           span.setAttribute(
             'chunk.retrieval.error',
             'merkle_path_parse_failed',
           );
           span.recordException(error);
-          log.error('Error parsing merkle path', { error });
-          response.status(500).send('Error parsing merkle path');
+          log.warn('Error parsing merkle path from upstream chunk', { error });
+          response.status(502).send('Error parsing merkle path');
           return;
         }
 
