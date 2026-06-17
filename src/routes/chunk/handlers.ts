@@ -43,7 +43,7 @@ import { setCommonChunkHeaders, setChunkETag } from './response-utils.js';
 
 /**
  * Thrown when a chunk serve exceeds {@link CHUNK_SERVE_DEADLINE_MS}. Classified
- * as a 504 by {@link classifyChunkRetrievalError}.
+ * as a 404 by {@link classifyChunkRetrievalError}.
  */
 export class ChunkServeTimeoutError extends Error {
   constructor(deadlineMs: number) {
@@ -89,7 +89,7 @@ export function withChunkServeDeadline<T>(
     timer = setTimeout(() => {
       // Reject BEFORE aborting. An abort-honoring `op` may reject its own
       // promise synchronously when the signal fires; rejecting the deadline
-      // first guarantees the race settles as a ChunkServeTimeoutError (→ 504)
+      // first guarantees the race settles as a ChunkServeTimeoutError (→ 404)
       // rather than the op's AbortError (which would misclassify as 502).
       reject(new ChunkServeTimeoutError(deadlineMs));
       deadline.abort();

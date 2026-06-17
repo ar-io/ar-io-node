@@ -274,8 +274,9 @@ export class ArIOChunkSource
         // Stop early if the caller has gone away. Without this guard the loop
         // burns through every remaining attempt and then throws a generic
         // "Failed to fetch chunk from N peers" error — which the chunk
-        // handlers misclassify as a 500 instead of a 499, and which wastes
-        // peer requests on behalf of a client that is no longer listening.
+        // handlers classify as a generic upstream failure (502) instead of a
+        // 499, and which wastes peer requests on behalf of a client that is no
+        // longer listening.
         clientSignal?.throwIfAborted();
 
         // Get the peers for this attempt
