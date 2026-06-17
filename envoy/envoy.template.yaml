@@ -28,7 +28,7 @@ static_resources:
                       domains:
                         #@ for host in data.values.ARNS_ROOT_HOST.split(","):
                         #@ if host.strip() != "":
-                        - #@ "*." + host.strip()
+                        -  #@ "*." + host.strip()
                         #@ end
                         #@ end
                       routes:
@@ -67,7 +67,7 @@ static_resources:
                         #! overloaded core with no failover target — pure load
                         #! amplification under a chunk-serving flood. Allow one
                         #! retry on a bare connection reset (transient), never on
-                        #! 5xx. PE-9121.
+                        #! 5xx.
                         - match:
                             prefix: '/chunk'
                           route:
