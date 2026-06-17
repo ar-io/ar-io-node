@@ -422,6 +422,9 @@ These settings control the continuous observation mode, which spreads observatio
 | OBSERVATION_WINDOW_FRACTION                      | Number               | 0.5                                           | Fraction of the epoch window (0.1-0.9) during which observations are spread. Higher values spread observations over more time                                       |
 | OBSERVATION_CYCLE_INTERVAL_MS                    | Number               | 60000                                         | Interval in milliseconds between observation cycles. Each cycle processes scheduled observations                                                                    |
 | MAJORITY_VOTE_THRESHOLD                          | Number               | 2                                             | Number of passing observations needed for a gateway to pass overall. Should be ≤ OBSERVATIONS_PER_GATEWAY                                                           |
+| GATEWAY_ASSESSMENT_CONCURRENCY                   | Number               | 10                                            | Parallel gateway assessments per observation cycle (network-bound). Higher values speed assessment but add concurrent outbound load                                 |
+| NAME_ASSESSMENT_CONCURRENCY                      | Number               | 5                                             | Parallel ArNS-name resolution checks per gateway during assessment                                                                                                  |
+| ENABLE_LOG_REPORT_SINK                           | Boolean              | false                                         | When true, enables the LogReportSink which logs full per-gateway assessment detail at info level                                                                    |
 
 ### Offset Observation Configuration
 

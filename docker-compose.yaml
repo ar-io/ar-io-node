@@ -624,6 +624,14 @@ services:
       - OBSERVATION_WINDOW_FRACTION=${OBSERVATION_WINDOW_FRACTION:-}
       - OBSERVATION_CYCLE_INTERVAL_MS=${OBSERVATION_CYCLE_INTERVAL_MS:-}
       - MAJORITY_VOTE_THRESHOLD=${MAJORITY_VOTE_THRESHOLD:-}
+      # Per-cycle assessment parallelism (gateway + ArNS-name probes). Without
+      # these the observer falls back to its built-in defaults regardless of
+      # the .env value — see ar-io-observer src/config.ts.
+      - GATEWAY_ASSESSMENT_CONCURRENCY=${GATEWAY_ASSESSMENT_CONCURRENCY:-}
+      - NAME_ASSESSMENT_CONCURRENCY=${NAME_ASSESSMENT_CONCURRENCY:-}
+      # Enable the LogReportSink — logs full per-gateway assessment detail at
+      # info level (off by default).
+      - ENABLE_LOG_REPORT_SINK=${ENABLE_LOG_REPORT_SINK:-}
       # Epoch-relative submission window (defaults tuned for mainnet's ~24h
       # epochs; shorter-epoch networks like devnet must shrink these or the
       # observer rejects with "Epoch duration too short for configured buffers").
