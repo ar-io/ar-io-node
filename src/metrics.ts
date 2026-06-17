@@ -76,6 +76,16 @@ export const unhandledRequestErrorsCounter = new promClient.Counter({
   labelNames: ['method', 'status'],
 });
 
+// Chunk serves cut short by the handler's wall-clock deadline
+// (CHUNK_SERVE_DEADLINE_MS). A rising rate means the retrieval cascade is
+// routinely exceeding the deadline — tune the deadline or the upstream load,
+// not a bug on its own. Use to size CHUNK_SERVE_DEADLINE_MS vs the proxy cap.
+export const chunkServeDeadlineExceededCounter = new promClient.Counter({
+  name: 'chunk_serve_deadline_exceeded_total',
+  help: 'Count of chunk serves aborted by the handler wall-clock deadline',
+  labelNames: ['method'],
+});
+
 //
 // Global bundle metrics
 //
