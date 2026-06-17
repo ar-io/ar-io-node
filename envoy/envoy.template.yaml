@@ -358,6 +358,21 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset'
                               num_retries: 5
+                        #! Chunk GET/HEAD serving (POST /chunk is matched above).
+                        #! ario_gateways has a single endpoint (the local core),
+                        #! so retrying a 5xx/reset just re-hammers the same
+                        #! overloaded core with no failover target — pure load
+                        #! amplification under a chunk-serving flood. Allow one
+                        #! retry on a bare connection reset (transient), never on
+                        #! 5xx.
+                        - match:
+                            prefix: '/chunk'
+                          route:
+                            cluster: ario_gateways
+                            timeout: 0s
+                            retry_policy:
+                              retry_on: 'reset'
+                              num_retries: 1
                         - match: { prefix: '/' }
                           route:
                             cluster: ario_gateways
