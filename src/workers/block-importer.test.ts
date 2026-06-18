@@ -22,6 +22,7 @@ import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.j
 import { BlockImporter } from '../../src/workers/block-importer.js';
 import {
   bundlesDbPath,
+  chunksDbPath,
   coreDbPath,
   dataDbPath,
   moderationDbPath,
@@ -64,6 +65,7 @@ describe('BlockImporter', () => {
     db = new StandaloneSqliteDatabase({
       log,
       bundlesDbPath,
+      chunksDbPath,
       coreDbPath,
       dataDbPath,
       moderationDbPath,

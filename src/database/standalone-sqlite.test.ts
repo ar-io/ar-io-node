@@ -24,6 +24,7 @@ import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
 import {
   bundlesDb,
   bundlesDbPath,
+  chunksDbPath,
   coreDb,
   coreDbPath,
   dataDb,
@@ -228,6 +229,7 @@ describe('StandaloneSqliteDatabase', () => {
       dataDbPath,
       moderationDbPath,
       bundlesDbPath,
+      chunksDbPath,
       tagSelectivity: {},
     });
     dbWorker = new StandaloneSqliteDatabaseWorker({
@@ -236,6 +238,7 @@ describe('StandaloneSqliteDatabase', () => {
       dataDbPath,
       moderationDbPath,
       bundlesDbPath,
+      chunksDbPath,
       tagSelectivity: {},
     });
     chainSource = new ArweaveChainSourceStub();
