@@ -2469,6 +2469,56 @@ export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
     ?.split(',')
     .map((ip) => ip.trim()) ?? [];
 
+//
+// Optimistic chunk ingest cache (POST /chunk)
+//
+
+// Master switch. When false (default), POST /chunk only relays to the network
+// (current behavior); no chunk is cached locally on ingest.
+export const CHUNK_INGEST_CACHE_ENABLED =
+  env.varOrDefault('CHUNK_INGEST_CACHE_ENABLED', 'false') === 'true';
+
+// IPs/CIDRs whose posted chunks are eligible for optimistic caching. Empty =
+// open ingest (any merkle-valid chunk is cached). When set, only these posters
+// earn caching; everyone else is still relayed (the gate is on caching, not
+// posting).
+export const CHUNK_INGEST_CACHE_ALLOWLIST =
+  env
+    .varOrUndefined('CHUNK_INGEST_CACHE_ALLOWLIST')
+    ?.split(',')
+    .map((ip) => ip.trim()) ?? [];
+
+// GC leash (seconds) for open-ingest chunks whose data_root never confirms
+// on-chain. Must exceed worst-case mine+index latency.
+export const CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS = +env.varOrDefault(
+  'CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS',
+  '21600', // 6 hours
+);
+
+// Longer GC leash (seconds) for allowlisted-poster chunks.
+export const CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS =
+  +env.varOrDefault(
+    'CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS',
+    '86400', // 24 hours
+  );
+
+// Disk backstop: when pending (unconfirmed) ingest-cached bytes exceed this,
+// the GC sweep evicts oldest-pending first. 0 disables the disk cap.
+export const CHUNK_INGEST_MAX_PENDING_BYTES = +env.varOrDefault(
+  'CHUNK_INGEST_MAX_PENDING_BYTES',
+  '0',
+);
+
+// GC sweep interval (ms) and per-sweep batch size.
+export const CHUNK_INGEST_GC_INTERVAL_MS = +env.varOrDefault(
+  'CHUNK_INGEST_GC_INTERVAL_MS',
+  '300000', // 5 minutes
+);
+export const CHUNK_INGEST_GC_BATCH_SIZE = +env.varOrDefault(
+  'CHUNK_INGEST_GC_BATCH_SIZE',
+  '1000',
+);
+
 // ArNS names to exclude from rate limiting
 export const RATE_LIMITER_ARNS_ALLOWLIST =
   env

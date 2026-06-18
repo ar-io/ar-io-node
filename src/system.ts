@@ -283,6 +283,7 @@ export const db = new StandaloneSqliteDatabase({
   dataDbPath: 'data/sqlite/data.db',
   moderationDbPath: 'data/sqlite/moderation.db',
   bundlesDbPath: 'data/sqlite/bundles.db',
+  chunksDbPath: 'data/sqlite/chunks.db',
   tagSelectivity: config.TAG_SELECTIVITY,
 });
 
@@ -480,6 +481,30 @@ export const envoyEndpointHealthWorker =
 eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
   eventEmitter.emit(events.TX_INDEXED, tx);
 });
+
+// Confirm pending optimistic chunk placements whose data_root matches a
+// newly-indexed L1 transaction. TX_INDEXED covers both block-imported txs
+// (re-emitted just above) and directly-imported txs. Confirmation is pushed
+// from indexing, so no data_root->tx index is needed; placements whose
+// data_root never confirms ride the GC TTL and are evicted.
+if (config.CHUNK_INGEST_CACHE_ENABLED) {
+  eventEmitter.on(events.TX_INDEXED, (tx: { data_root?: string }) => {
+    const dataRoot = tx?.data_root;
+    if (dataRoot !== undefined && dataRoot !== '') {
+      db.confirmChunkPlacements(dataRoot, Math.floor(Date.now() / 1000))
+        .then((confirmed) => {
+          if (confirmed > 0) {
+            metrics.chunkIngestConfirmedCounter.inc(confirmed);
+          }
+        })
+        .catch((error: unknown) => {
+          log.warn('Failed to confirm chunk placements', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }
+  });
+}
 
 export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
   ? new FsCleanupWorker({
@@ -743,12 +768,12 @@ export const chunkSource =
     : fullChunkSource;
 
 // Create stores for ChunkRetrievalService fast path (cache lookup by absoluteOffset)
-const chunkDataStore = new FsChunkDataStore({
+export const chunkDataStore = new FsChunkDataStore({
   log,
   baseDir: 'data/chunks',
 });
 
-const chunkMetadataStore = new FsChunkMetadataStore({
+export const chunkMetadataStore = new FsChunkMetadataStore({
   log,
   baseDir: 'data/chunks/metadata',
 });
