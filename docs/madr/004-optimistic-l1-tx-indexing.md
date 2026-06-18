@@ -56,7 +56,7 @@ permanent" could be:
 ## Decision Outcome
 
 **Chosen: option 2 (ride `new_transactions`), with the serving guard gating on
-(b) stable.**
+(a) mined.**
 
 ### Indexing — reuse the transaction lifecycle
 
@@ -92,38 +92,45 @@ submit a real id pointing at a forged `data_root`, nor index another signer's
 tx. A batch-size cap (`OPTIMISTIC_TX_MAX_BATCH_SIZE`, default 100) bounds the
 sequential verification work a single request can schedule.
 
-### Serving guard — never `verified` until stable
+### Serving guard — never `verified` while unmined
 
 This is the load-bearing decision. An optimistically-indexed tx supplies its own
 `data_root`; if its (poster-supplied) bytes are also present, the
 data-verification worker would find the indexed and computed data roots equal
-and stamp the data `verified` — **even though merkle self-consistency is not
-permanence**. So:
+and stamp the data `verified` — **even though merkle self-consistency is not the
+same as having an on-chain block**. So:
 
-> The data-verification worker withholds the `verified` stamp until the root tx
-> is **stable** (past `MAX_FORK_DEPTH`).
+> The data-verification worker withholds the `verified` stamp while the root tx
+> is **unmined** (`height IS NULL` — no block yet).
 
-We gate on **(b) stable**, not (a) mined, deliberately:
+We gate on **(a) mined**, not (b) stable, deliberately:
 
-- It matches the existing precedent for "treat as permanent": the response layer
-  already gates `Cache-Control: immutable` on the same `stable` flag. We must
-  never stamp `verified` on data we would not yet cache as `immutable`.
-- It closes the mined-then-reorged residual for free (a stable tx cannot reorg
-  out), whereas gating at mine would leave a window.
-- It requires no new DB method — `stable` is already returned by
-  `getDataAttributes`, which the worker already calls.
+- It enforces the invariant *exactly*. The integrity requirement is "never mark
+  `verified` a tx that has no on-chain block yet" — which is precisely the
+  optimistic `height IS NULL` state this feature creates. `stable` (past fork
+  depth) is a stronger, different property.
+- `verified` (data-integrity) and `stable` (inclusion-permanence) are **separate
+  trust signals** with separate response headers; gating `verified` on `stable`
+  conflates them and over-reaches.
+- It is **scoped to optimistic/unmined data** — normal mined data keeps its
+  status-quo verify-at-mined timing, so there is **zero impact** on normal data
+  (feature on or off), and any recompute is confined to optimistic data. Gating
+  on `stable` would instead delay verification for *all* recently-mined data
+  gateway-wide.
 
-The guard is **always on and gateway-wide** — not optimistic-tx-specific and not
-flag-gated. It moves the `verified` stamp for **all** data from verified-at-mine
-to **verified-at-stable**: a correct tightening, since a freshly mined tx is
-*not* yet stable (it can still reorg out within `MAX_FORK_DEPTH`), and we must
-never stamp `verified` on reorg-able data. In practice this is a no-op for the
-typical verification backlog (which is already well past stable when the worker
-reaches it), but it does delay verification of recently-mined data from at-mine
-to at-stable. The check runs **before** the data-root computation, so a
-not-yet-stable item is skipped cheaply rather than recomputed on every sweep, and
-withholding does not consume the verification retry budget — a not-yet-stable
-item verifies on the first sweep after it stabilizes.
+The check is **always on** but, because it only fires for unmined rows, it is a
+true no-op for normal mined data. It runs **before** the data-root computation,
+so an unmined item is skipped cheaply rather than having its data root recomputed
+on every sweep until it mines, and withholding does not consume the verification
+retry budget — the item verifies on the first sweep after it mines. The minimal
+DB addition is a `height` field on `getDataAttributes` (already fetched by the
+worker).
+
+Trade-off accepted: a tx that is mined but then reorged out (a fork shallower
+than `MAX_FORK_DEPTH`) could be momentarily verified-then-unmined. This is the
+*pre-existing* verify-at-mine behavior for all data — corner C neither
+introduces nor worsens it — and `resetToHeight` returns such a row to
+`height IS NULL`, re-arming this guard.
 
 ### Scope
 
@@ -136,15 +143,20 @@ refinement is likewise deferred.
 ## Consequences
 
 - **Positive:** completes the optimistic triad; the integrity invariant is
-  enforced by construction (and verified live: an optimistically-indexed tx with
-  byte-correct data is *not* marked verified until stable); minimal footprint
-  (no new tables/DB methods); reorg-safe; off by default; the always-on guard
-  also slightly *reduces* the pre-existing verify-at-mine reorg exposure.
-- **Negative / residual:** a reorg deeper than `MAX_FORK_DEPTH` of an
-  already-verified tx would leave a stale `verified` flag — astronomically rare,
-  pre-existing for any verified tx, and not worsened here. Verification of
-  not-yet-stable data is delayed to stabilization; in practice negligible since
-  verification runs as a background sweep over a backlog already past stable.
+  enforced *exactly* (verified live: an optimistically-indexed tx with
+  byte-correct data is *not* marked verified while unmined); **zero impact on
+  normal mined data** — verification timing and trust headers are unchanged for
+  everything except optimistic txs; minimal footprint (one `height` field added
+  to `getDataAttributes`, no new tables/DB methods); off by default.
+- **Negative / residual:** (1) the mined-then-reorged window (above) — pre-existing
+  for all data, not worsened. (2) Unmined items are not yet gated out of the
+  verification SELECT, so they occupy the `LIMIT 1000` batch and (keeping
+  `retry_count=0`) sort first; under high unmined volume they could crowd out
+  mined verifiable data. Bounded in practice (only optimistic txs with cached
+  data reach the worker; admin-rate-limited + GC'd; for Scope 1 there is no
+  pre-mine byte path so they have no `contiguous_data_ids` row at all) and
+  observable via `optimistic_tx_verification_blocked_total` — measure before
+  gating the SELECT on mined-status.
 - **Operational:** trusted posters only; never-mined rows are bounded by
   `OPTIMISTIC_TX_MAX_BATCH_SIZE` and reclaimed within
   `OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS`.

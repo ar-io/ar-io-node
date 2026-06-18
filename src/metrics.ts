@@ -1459,16 +1459,17 @@ export const optimisticTxIngestedCounter = new promClient.Counter({
 
 /**
  * Count of times the data-verification worker WITHHELD a verified=1 stamp
- * because the root transaction is not yet stable (past fork depth). This is the
- * serving guard firing — proof the gateway never marks not-yet-permanent data as
- * verified. It is GATEWAY-WIDE, not optimistic-tx-specific: it counts every
- * not-yet-stable withhold (recently-mined data as well as optimistically-indexed
- * txs awaiting confirmation). Use it to gauge how much verification is being
- * deferred to stabilization on a busy gateway — a steadily-draining value is
- * healthy; a persistently high/non-draining value indicates either heavy
- * recent-data churn or optimistic txs that never mined.
+ * because the root transaction is not yet mined (`height IS NULL`) — i.e. an
+ * optimistically-indexed tx with no on-chain block yet. This is the serving
+ * guard firing: proof the gateway never marks data `verified` for a tx with no
+ * block. Scoped to unmined data, so normal mined data is unaffected. A
+ * steadily-draining value is healthy (optimistic txs awaiting their block); a
+ * persistently high / non-draining value indicates optimistic txs that never
+ * mined. Also the magnitude signal for the LIMIT-1000 batch-occupancy residual
+ * (see data-verification.ts): measure this on a busy gateway before gating the
+ * verification SELECT on mined-status.
  */
 export const optimisticTxVerificationBlockedCounter = new promClient.Counter({
   name: 'optimistic_tx_verification_blocked_total',
-  help: 'Count of verification attempts withheld because the root tx is not yet stable (gateway-wide, not optimistic-tx-specific)',
+  help: 'Count of verification attempts withheld because the root tx is not yet mined (optimistic / NULL height)',
 });

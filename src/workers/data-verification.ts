@@ -166,27 +166,42 @@ export class DataVerificationWorker {
         await this.contiguousDataIndex.getDataAttributes(rootTxId);
 
       // SERVING GUARD — checked BEFORE computing the data root. Withhold
-      // verification for any root tx that is not yet `stable` (past fork depth):
-      // its data_root has no settled on-chain backing, and merkle
-      // self-consistency is not permanence, so we must never promote it to
-      // `verified` (the gateway can never serve not-yet-permanent data as
-      // permanent). `stable` is the same bar the response layer uses to mark a
-      // representation `immutable` (routes/data/handlers.ts). Checking here,
-      // before computeDataRoot, skips the expensive data-root computation for
-      // not-yet-stable items rather than recomputing it on every sweep until
-      // they stabilize. No retry penalty: the item stays eligible and verifies
-      // on the first sweep after it stabilizes.
+      // verification for an optimistically-indexed (not-yet-mined) root tx: it
+      // has NO on-chain block yet, so stamping its data `verified` would claim
+      // an on-chain existence we cannot back. `height === undefined` is exactly
+      // the unmined/optimistic state (a `new_transactions` row with NULL height
+      // — the state this feature creates); the normal block-import path fills
+      // the height when it mines, and verification then proceeds normally.
       //
-      // This is GATEWAY-WIDE, not optimistic-tx-specific: it moves the
-      // `verified` stamp for ALL data to verified-at-stable instead of
-      // verified-at-mine — a correct tightening (don't stamp `verified` on data
-      // that can still reorg out). In practice a no-op for the typical
-      // verification backlog (already past stable), but it does delay
-      // verification of recently-mined data from at-mine to at-stable.
-      if (dataAttributes?.stable !== true) {
+      // SCOPED to unmined data — this is NOT gateway-wide. Normal mined data
+      // keeps its status-quo verify-at-mined timing (zero impact, feature on or
+      // off); only optimistic (unmined) data is withheld. Gating on mined
+      // (`height`) rather than `stable` (past fork depth) is deliberate:
+      // `verified` (data-integrity) and `stable` (inclusion-permanence) are
+      // separate trust signals, and the integrity invariant here is only "never
+      // mark `verified` a tx that has no block yet" — not "wait out fork depth".
+      //
+      // Checking here, before computeDataRoot, skips the expensive data-root
+      // computation for unmined items instead of recomputing it on every sweep
+      // until they mine. No retry penalty: the item stays eligible and verifies
+      // on the first sweep after it mines.
+      //
+      // RESIDUAL (intentional, measure before fixing): withheld items are not
+      // gated out of selectVerifiableContiguousDataIds, so they still occupy the
+      // LIMIT 1000 batch, and — because withholding does not increment
+      // verification_retry_count — they keep retry_count=0, which sorts first
+      // (ASC NULLS FIRST). Under high unmined volume they could crowd out mined,
+      // verifiable data from a sweep. Bounded in practice (only optimistic txs
+      // that also have cached data reach here; admin-rate-limited + GC'd), and
+      // for Scope 1 there is no pre-mine byte path so unmined items have no
+      // contiguous_data_ids row at all. The complete fix is to gate
+      // selectVerifiableContiguousDataIds on mined-status; magnitude is
+      // observable via optimistic_tx_verification_blocked_total — measure on a
+      // busy gateway before doing it.
+      if (dataAttributes?.height == null) {
         withheldUnconfirmed = true;
         metrics.optimisticTxVerificationBlockedCounter.inc();
-        log.debug('Withholding verification: root tx not yet stable');
+        log.debug('Withholding verification: root tx not yet mined');
         return false;
       }
 

@@ -30,14 +30,14 @@ describe('DataVerificationWorker', () => {
   let getDataMock: any;
   let contiguousDataSource: ContiguousDataSource;
 
-  // Matching data root for the 'testing...' fixture below. A stable root tx
-  // (past fork depth) is the default fixture — the serving guard only withholds
-  // verification for not-yet-stable txs, which the dedicated guard tests set
-  // explicitly.
+  // Matching data root for the 'testing...' fixture below. A mined root tx
+  // (height set) is the default fixture — the serving guard only withholds
+  // verification for unmined (NULL-height) txs, which the dedicated guard tests
+  // set explicitly.
   const MATCHING_DATA_ROOT = 'UwpYX2u5CYy6hYJbRTWfBxIig01UDe74SY7Om3_1ftw';
-  const stableMatchingAttributes = async () => ({
+  const minedMatchingAttributes = async () => ({
     dataRoot: MATCHING_DATA_ROOT,
-    stable: true,
+    height: 100,
   });
 
   before(() => {
@@ -47,7 +47,7 @@ describe('DataVerificationWorker', () => {
     saveVerificationStatusMock = mock.fn(() => Promise.resolve(true));
 
     contiguousDataIndex = {
-      getDataAttributes: stableMatchingAttributes,
+      getDataAttributes: minedMatchingAttributes,
       saveVerificationStatus: saveVerificationStatusMock,
       incrementVerificationRetryCount: incrementVerificationRetryCountMock,
     } as any;
@@ -81,7 +81,7 @@ describe('DataVerificationWorker', () => {
     getDataMock.mock.resetCalls();
     // Restore the default fixture so tests that reassign getDataAttributes
     // (e.g. the mismatch cases) do not leak into subsequent tests.
-    (contiguousDataIndex as any).getDataAttributes = stableMatchingAttributes;
+    (contiguousDataIndex as any).getDataAttributes = minedMatchingAttributes;
   });
 
   after(async () => {
@@ -101,9 +101,9 @@ describe('DataVerificationWorker', () => {
   it('should fail verification when they dont match', async () => {
     (contiguousDataIndex as any).getDataAttributes = async () => {
       return {
-        // stable so it passes the serving guard and reaches the genuine
-        // mismatch path (where a real verification failure burns a retry).
-        stable: true,
+        // mined (height set) so it passes the serving guard and reaches the
+        // genuine mismatch path (where a real verification failure burns a retry).
+        height: 100,
         dataRoot: 'nomatch',
       };
     };
@@ -120,9 +120,9 @@ describe('DataVerificationWorker', () => {
   it('should increment retry count on verification failure', async () => {
     (contiguousDataIndex as any).getDataAttributes = async () => {
       return {
-        // stable so it passes the serving guard and reaches the genuine
-        // mismatch path (where a real verification failure burns a retry).
-        stable: true,
+        // mined (height set) so it passes the serving guard and reaches the
+        // genuine mismatch path (where a real verification failure burns a retry).
+        height: 100,
         dataRoot: 'nomatch',
       };
     };
@@ -142,9 +142,9 @@ describe('DataVerificationWorker', () => {
   it('should increment retry count for all associated data IDs', async () => {
     (contiguousDataIndex as any).getDataAttributes = async () => {
       return {
-        // stable so it passes the serving guard and reaches the genuine
-        // mismatch path (where a real verification failure burns a retry).
-        stable: true,
+        // mined (height set) so it passes the serving guard and reaches the
+        // genuine mismatch path (where a real verification failure burns a retry).
+        height: 100,
         dataRoot: 'nomatch',
       };
     };
@@ -171,14 +171,13 @@ describe('DataVerificationWorker', () => {
   });
 
   // Serving guard (optimistic L1 tx indexing / corner C): even when the indexed
-  // and computed data roots MATCH, an optimistically-indexed (not-yet-stable)
-  // root tx must never be promoted to `verified` — merkle self-consistency is
-  // not permanence. The gateway can never serve not-yet-permanent data as
-  // permanent.
-  it('should NOT verify when data roots match but the root tx is not stable', async () => {
+  // and computed data roots MATCH, an optimistically-indexed (not-yet-mined)
+  // root tx must never be promoted to `verified` — it has no on-chain block yet.
+  // Scoped to unmined data: normal mined data is unaffected.
+  it('should NOT verify when data roots match but the root tx is not mined', async () => {
     (contiguousDataIndex as any).getDataAttributes = async () => ({
       dataRoot: MATCHING_DATA_ROOT,
-      stable: false, // optimistic / not yet past fork depth
+      // no height → unmined / optimistic (new_transactions row with NULL height)
     });
 
     const verified = await dataVerificationWorker.verifyDataRoot({
@@ -190,29 +189,29 @@ describe('DataVerificationWorker', () => {
     // The verified stamp must be withheld...
     assert.equal(saveVerificationStatusMock.mock.calls.length, 0);
     // ...and it must NOT burn the retry budget — withholding is "try again once
-    // it stabilizes", not a verification failure. Otherwise a legitimately
-    // pending tx could exhaust its retries before it confirms.
+    // it mines", not a verification failure. Otherwise a legitimately pending tx
+    // could exhaust its retries before it mines.
     assert.equal(incrementVerificationRetryCountMock.mock.calls.length, 0);
     // ...and crucially the data root must NOT be computed (the expensive step):
-    // the guard short-circuits before computeDataRoot so a not-yet-stable item
-    // is skipped cheaply instead of recomputed every sweep.
+    // the guard short-circuits before computeDataRoot so an unmined item is
+    // skipped cheaply instead of recomputed every sweep.
     assert.equal(getDataMock.mock.calls.length, 0);
   });
 
-  it('should verify and stamp when the root tx is stable', async () => {
+  it('should verify and stamp when the root tx is mined', async () => {
     (contiguousDataIndex as any).getDataAttributes = async () => ({
       dataRoot: MATCHING_DATA_ROOT,
-      stable: true,
+      height: 100,
     });
 
     const verified = await dataVerificationWorker.verifyDataRoot({
-      rootTxId: 'stable-tx',
-      dataIds: ['stable-tx'],
+      rootTxId: 'mined-tx',
+      dataIds: ['mined-tx'],
     });
 
     assert.equal(verified, true);
     assert.equal(saveVerificationStatusMock.mock.calls.length, 1);
-    // A stable item IS verified, so the data root was computed.
+    // A mined item IS verified, so the data root was computed.
     assert.ok(getDataMock.mock.calls.length >= 1);
   });
 });

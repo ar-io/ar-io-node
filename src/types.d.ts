@@ -954,6 +954,14 @@ export interface ContiguousDataAttributes {
   stable: boolean;
 
   /**
+   * Block height of the root transaction, or undefined when it is not yet
+   * mined. An optimistically-indexed transaction sits in `new_transactions`
+   * with a NULL height until its block is imported, so `height === undefined`
+   * is exactly the unmined/optimistic state.
+   */
+  height?: number;
+
+  /**
    * True if the data has been verified to exist on Arweave and is cryptographically valid.
    * Verification confirms: (1) merkle paths prove the data exists on-chain, and
    * (2) for data items, the signature is valid.

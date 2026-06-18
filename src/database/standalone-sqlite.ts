@@ -1217,6 +1217,11 @@ export class StandaloneSqliteDatabaseWorker {
           : undefined),
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: txOrItemRow?.stable === true,
+      // Block height of the root tx/item, or undefined when not yet mined
+      // (an optimistically-indexed tx sits in new_transactions with NULL
+      // height until its block is imported). Used by the verification serving
+      // guard to withhold `verified` from unmined data.
+      height: txOrItemRow?.height ?? undefined,
       verified: dataRow?.verified === 1,
       trusted:
         dataRow?.trusted === 1
