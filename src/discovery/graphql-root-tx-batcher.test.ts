@@ -261,6 +261,25 @@ describe('GraphQLRootTxBatcher', () => {
     assert.deepEqual(fetchBatch.mock.calls[1].arguments[1], ['ghost']);
   });
 
+  it('short-circuits empty/blank IDs to NOT_FOUND without batching them', async () => {
+    const fetchBatch = mock.fn(async () => new Map<string, LeafResult>());
+    const batcher = new GraphQLRootTxBatcher({
+      log,
+      endpoints: [EP('http://gw1', 1)],
+      fetchBatch,
+      acquireToken: alwaysToken,
+      windowMs: 10,
+      maxBatchSize: 100,
+      maxQueueDepth: 1000,
+    });
+
+    assert.equal(await batcher.lookup(''), NOT_FOUND);
+    assert.equal(await batcher.lookup('   '), NOT_FOUND);
+    // An empty ID must never reach an endpoint: goldsky 400s the whole batch
+    // ("Ids can't be empty"), taking every co-batched ID down with it.
+    assert.equal(fetchBatch.mock.callCount(), 0);
+  });
+
   it('carries IDs to the next endpoint when a token cannot be acquired', async () => {
     const acquireToken = mock.fn(async (..._args: unknown[]) => true);
     // First call (gw1) fails to get a token, second (gw2) succeeds.
