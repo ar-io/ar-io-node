@@ -389,16 +389,24 @@ export const GRAPHQL_ROOT_TX_BATCH_ENABLED =
   env.varOrDefault('GRAPHQL_ROOT_TX_BATCH_ENABLED', 'false') === 'true';
 // Coalescing window: how long a forming batch waits for more IDs before it
 // flushes. A batch also flushes eagerly once it reaches the max batch size.
-export const GRAPHQL_ROOT_TX_BATCH_WINDOW_MS = +env.varOrDefault(
+export const GRAPHQL_ROOT_TX_BATCH_WINDOW_MS = env.positiveIntOrDefault(
   'GRAPHQL_ROOT_TX_BATCH_WINDOW_MS',
-  '20',
+  20,
 );
 // Default max IDs per batched query. Arweave GraphQL caps `first` at 100, so
 // this should not exceed 100. Per-endpoint overrides may lower it further.
-export const GRAPHQL_ROOT_TX_BATCH_MAX_SIZE = +env.varOrDefault(
+// Must be >= 1: a value of 0 would make GraphQLRootTxBatcher.flush() drain no
+// IDs yet keep re-scheduling, spinning forever — so validate at parse time.
+export const GRAPHQL_ROOT_TX_BATCH_MAX_SIZE = env.positiveIntOrDefault(
   'GRAPHQL_ROOT_TX_BATCH_MAX_SIZE',
-  '100',
+  100,
 );
+if (GRAPHQL_ROOT_TX_BATCH_MAX_SIZE > 100) {
+  throw new Error(
+    'GRAPHQL_ROOT_TX_BATCH_MAX_SIZE must not exceed 100 ' +
+      `(Arweave GraphQL caps \`first\` at 100), got: ${GRAPHQL_ROOT_TX_BATCH_MAX_SIZE}`,
+  );
+}
 // Optional per-endpoint max batch size overrides, e.g.
 // '{"http://10.84.0.83:14000": 50}'. Endpoints absent from the map use
 // GRAPHQL_ROOT_TX_BATCH_MAX_SIZE.
@@ -406,23 +414,29 @@ export const GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL = JSON.parse(
   env.varOrDefault('GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL', '{}'),
 ) as Record<string, number>;
 Object.entries(GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL).forEach(([url, size]) => {
-  if (typeof size !== 'number' || !Number.isInteger(size) || size <= 0) {
+  if (
+    typeof size !== 'number' ||
+    !Number.isInteger(size) ||
+    size <= 0 ||
+    size > 100
+  ) {
     throw new Error(
-      `Invalid size in GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL for ${url}: ${size}`,
+      `Invalid size in GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL for ${url}: ${size} ` +
+        '(must be an integer in [1, 100])',
     );
   }
 });
 // Max number of IDs that may be waiting (pending + in-flight) before new
 // lookups are shed (resolved as not-found) rather than queued unbounded.
-export const GRAPHQL_ROOT_TX_BATCH_MAX_QUEUE_DEPTH = +env.varOrDefault(
+export const GRAPHQL_ROOT_TX_BATCH_MAX_QUEUE_DEPTH = env.positiveIntOrDefault(
   'GRAPHQL_ROOT_TX_BATCH_MAX_QUEUE_DEPTH',
-  '1000',
+  1000,
 );
 // Max time a batch will wait to acquire a rate-limiter token before giving up
 // (the batch's IDs then resolve as not-found rather than blocking forever).
-export const GRAPHQL_ROOT_TX_BATCH_TOKEN_MAX_WAIT_MS = +env.varOrDefault(
+export const GRAPHQL_ROOT_TX_BATCH_TOKEN_MAX_WAIT_MS = env.positiveIntOrDefault(
   'GRAPHQL_ROOT_TX_BATCH_TOKEN_MAX_WAIT_MS',
-  '5000',
+  5000,
 );
 
 // Gateways root TX lookup URLs (for HEAD request offset discovery)
