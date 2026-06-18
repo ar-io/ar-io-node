@@ -220,6 +220,8 @@ describe('GraphQLRootTxBatcher', () => {
 
     assert.deepEqual(ra, { bundleId: 'pa' });
     assert.deepEqual(rb, { bundleId: 'pb' });
+    // Exactly two endpoint calls: no early stop, no redundant re-query.
+    assert.equal(fetchBatch.mock.callCount(), 2);
     // gw1 queried with both; gw2 queried with only the missing 'b'.
     assert.equal(fetchBatch.mock.calls[0].arguments[0], 'http://gw1');
     assert.deepEqual(fetchBatch.mock.calls[0].arguments[1].sort(), ['a', 'b']);
@@ -251,6 +253,12 @@ describe('GraphQLRootTxBatcher', () => {
 
     assert.deepEqual(root, { bundleId: undefined }); // found, is a root tx
     assert.equal(ghost, NOT_FOUND); // absent from every endpoint
+    // Both endpoints walked in priority order; only the still-missing 'ghost'
+    // is carried forward to gw2.
+    assert.equal(fetchBatch.mock.callCount(), 2);
+    assert.equal(fetchBatch.mock.calls[0].arguments[0], 'http://gw1');
+    assert.equal(fetchBatch.mock.calls[1].arguments[0], 'http://gw2');
+    assert.deepEqual(fetchBatch.mock.calls[1].arguments[1], ['ghost']);
   });
 
   it('carries IDs to the next endpoint when a token cannot be acquired', async () => {
