@@ -35,6 +35,12 @@ Fast, offline lookups for data item to root transaction mappings.
 |----------|-------------|
 | [Filters](filters.md) | Transaction and bundle filter syntax |
 
+### Chunk Ingest Cache
+
+| Document | Description |
+|----------|-------------|
+| [Optimistic Chunk Ingest Cache](chunk-ingest-cache.md) | Validating and caching chunks posted to the gateway, with confirmation-driven cleanup |
+
 ## Data Export
 
 | Document | Description |
