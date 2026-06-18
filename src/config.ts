@@ -10,11 +10,8 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
-import { initHttpSig, saveAttestationTxId } from './lib/httpsig.js';
-import type {
-  HttpSigObserverContext,
-  HttpSigSignerContext,
-} from './lib/httpsig.js';
+import { initHttpSig } from './lib/httpsig.js';
+import type { HttpSigSignerContext } from './lib/httpsig.js';
 import { release } from './version.js';
 import logger from './log.js';
 import { verificationPriorities } from './constants.js';
@@ -1010,6 +1007,20 @@ export const CHUNK_FIRST_DATA_TIMEOUT_MS = env.nonNegativeIntOrDefault(
   10000,
 );
 
+// Wall-clock deadline (ms) for serving a single chunk request
+// (/chunk/:offset and /chunk/:offset/data). The per-source timeouts in the
+// retrieval cascade are additive with no overall ceiling, and some awaited
+// operations don't honor the abort signal, so a slow serve can otherwise run
+// until the upstream proxy (nginx/envoy, ~15s observed) cuts it — yielding a
+// 504 that also leaves the in-flight work running. This bounds the whole
+// retrieval below that cap so the gateway returns promptly (a 404, matching
+// the timeout-as-not-found contract) and releases the connection itself. Must
+// stay below the proxy read timeout. 0 disables.
+export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
+  'CHUNK_SERVE_DEADLINE_MS',
+  12000,
+);
+
 // Chain fallback for chunk offset requests
 export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =
   env.varOrDefault('CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED', 'true') === 'true';
@@ -1180,7 +1191,7 @@ export const TX_METADATA_RESOLVE_CONCURRENCY = env.positiveIntOrDefault(
 //
 
 export const HTTPSIG_ENABLED =
-  env.varOrDefault('HTTPSIG_ENABLED', 'false') === 'true';
+  env.varOrDefault('HTTPSIG_ENABLED', 'true') === 'true';
 
 export const HTTPSIG_KEY_FILE = env.varOrDefault(
   'HTTPSIG_KEY_FILE',
@@ -1226,40 +1237,49 @@ export const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES =
     ? httpSigBodyDigestBufferMaxBytesParsed
     : HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT;
 
-// Observer wallet for attestation signing
-export const OBSERVER_WALLET = env.varOrUndefined('OBSERVER_WALLET');
-export const WALLETS_PATH = env.varOrDefault('WALLETS_PATH', 'wallets');
-export const HTTPSIG_UPLOAD_ATTESTATION =
-  env.varOrDefault('HTTPSIG_UPLOAD_ATTESTATION', 'true') === 'true';
+// Observer Solana keypair for HTTPSIG signing. When set, the observer's
+// Ed25519 key is used directly — its Solana address is registered on-chain
+// in the GAR, so verification is a simple lookup (no attestation needed).
+// When unset, falls back to an auto-generated PEM at HTTPSIG_KEY_FILE.
+export const OBSERVER_KEYPAIR_PATH = env.varOrUndefined(
+  'OBSERVER_KEYPAIR_PATH',
+);
 
-let _httpSigSigner: HttpSigSignerContext | undefined;
-let _httpSigObserver: HttpSigObserverContext | undefined;
+// Alternative to OBSERVER_KEYPAIR_PATH: a base58-encoded 64-byte Solana
+// secret key (the format Phantom and other browser wallets export).
+// Convenient for operators who don't already have a keypair JSON on disk.
+// Setting both OBSERVER_KEYPAIR_PATH and OBSERVER_PRIVATE_KEY is rejected
+// at HTTPSIG init as ambiguous.
+export const OBSERVER_PRIVATE_KEY = env.varOrUndefined('OBSERVER_PRIVATE_KEY');
 
-if (isMainThread && HTTPSIG_ENABLED) {
-  const result = initHttpSig({
-    keyFile: HTTPSIG_KEY_FILE,
-    bindRequest: HTTPSIG_BIND_REQUEST,
-    observerWallet: OBSERVER_WALLET,
-    walletsPath: WALLETS_PATH,
-    gatewayAddress: env.varOrUndefined('AR_IO_WALLET'),
-    log: logger,
-  });
-  _httpSigSigner = result.signer;
-  _httpSigObserver = result.observer;
-}
+// HTTPSIG signing state. Populated by `initializeHttpSig()`, which the
+// application entry point calls explicitly during startup. Kept out of
+// module-evaluation side effects so that importing config.ts (e.g., from
+// tests) does not touch the filesystem.
+export let HTTPSIG_SIGNER: HttpSigSignerContext | undefined;
+export let HTTPSIG_INIT_ERROR: string | undefined;
 
-export const HTTPSIG_SIGNER = _httpSigSigner;
-export const HTTPSIG_OBSERVER = _httpSigObserver;
+let _httpSigInitAttempted = false;
 
-/**
- * Record the Arweave TX ID of a successfully uploaded attestation. Mutates
- * `HTTPSIG_OBSERVER.attestationTxId` and persists it to the cache file so
- * subsequent restarts skip re-uploading.
- */
-export function setHttpSigAttestationTxId(txId: string): void {
-  if (_httpSigObserver === undefined) return;
-  _httpSigObserver.attestationTxId = txId;
-  saveAttestationTxId(_httpSigObserver.keysDir, txId);
+export function initializeHttpSig(): void {
+  if (!isMainThread || !HTTPSIG_ENABLED || _httpSigInitAttempted) {
+    return;
+  }
+  _httpSigInitAttempted = true;
+
+  try {
+    HTTPSIG_SIGNER = initHttpSig({
+      keyFile: HTTPSIG_KEY_FILE,
+      observerKeypairPath: OBSERVER_KEYPAIR_PATH,
+      observerPrivateKey: OBSERVER_PRIVATE_KEY,
+      log: logger,
+    });
+  } catch (error: any) {
+    HTTPSIG_INIT_ERROR = error?.message ?? String(error);
+    logger.error('HTTPSIG initialization failed; signing disabled', {
+      error: HTTPSIG_INIT_ERROR,
+    });
+  }
 }
 
 //
@@ -1590,6 +1610,29 @@ export const BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS =
 export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
   'BUNDLE_REPAIR_RETRY_BATCH_SIZE',
   '5000',
+);
+
+// Upper bound on how many times the repair loop will retry a single bundle.
+// A bundle that never finishes unbundling keeps matched_data_item_count NULL
+// forever and so can never be stamped fully-indexed; without a cap it is
+// re-selected and re-walked every cycle indefinitely. Once a bundle reaches
+// this many attempts it is dropped from the retry pool (and is the natural
+// hand-off boundary for a future dead-letter queue — keep the DLQ's selection
+// threshold in sync with this value).
+export const BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS = env.positiveIntOrDefault(
+  'BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS',
+  50,
+);
+
+// Minimum seconds between retries of the same bundle. The pre-existing
+// reprocess cooldown keys on last_queued_at, which only advances when the
+// unbundler actually processes the item — so under queue backpressure it
+// never advances and the same bundles are re-selected every cycle. This
+// cooldown keys on last_retried_at (always bumped by updateBundleRetry), so
+// it holds even when the unbundler is saturated.
+export const BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS = env.nonNegativeIntOrDefault(
+  'BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS',
+  900, // 15 minutes
 );
 
 //
@@ -1995,11 +2038,6 @@ export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
 // The wallet for this gateway
 export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
 
-export const IO_PROCESS_ID = env.varOrDefault(
-  'IO_PROCESS_ID',
-  'qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE',
-);
-
 export const AR_IO_NODE_RELEASE = env.varOrDefault(
   'AR_IO_NODE_RELEASE',
   release,
@@ -2158,9 +2196,9 @@ export const ARNS_CACHE_TTL_SECONDS = +env.varOrDefault(
   `${60 * 60 * 24}`, // 24 hours
 );
 
-// The maximum amount of time to wait for resolution from AO if there is a
-// cached value that can be served. When the timeout occurs, caches will still
-// be refreshed in the background.
+// The maximum amount of time to wait for resolution from the network process
+// when a cached value can be served. When the timeout occurs, caches will
+// still be refreshed in the background.
 export const ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS = +env.varOrDefault(
   'ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS',
   '250',
@@ -2207,30 +2245,30 @@ export const ARNS_MAX_CONCURRENT_RESOLUTIONS = +env.varOrDefault(
   '1',
 );
 
-// Controls the maximum time allowed for requests to AO for ARIO process state.
-// By default, requests should resolve in less than 3 seconds, but we set to 60
-// seconds to account for the worst case scenario. If requests exceed this
-// timeout, they will be considered failed and may trigger the circuit breaker
-// if the error threshold is reached.
+// Controls the maximum time allowed for requests to the ARIO network process
+// (Solana RPC reads through `@ar.io/sdk`). By default, requests should
+// resolve in less than 3 seconds, but we set to 60 seconds to account for
+// the worst case scenario. If requests exceed this timeout, they are
+// considered failed and may trigger the circuit breaker if the error
+// threshold is reached.
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS =
   +env.varOrDefault(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS',
     `${60 * 1000}`, // 60 seconds
   );
 
-// Controls the percentage of failed requests to AO for ARIO process state that
-// will trigger the circuit breaker to open. This is set to a relatively low
-// threshold (30%) to compensate for the extended timeout (10 seconds)
-// configured above.
+// Controls the percentage of failed requests to the ARIO network process
+// that will trigger the circuit breaker to open. This is set to a relatively
+// low threshold (30%) to compensate for the extended timeout configured above.
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
   +env.varOrDefault(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
     '30', // 30% failure limit before circuit breaker opens
   );
 
-// Defines the time window for tracking errors when retrieving ARIO process
-// state from AO The circuit breaker counts failures within this rolling time
-// window to determine if the error threshold percentage has been exceeded
+// Defines the time window for tracking errors when retrieving ARIO network
+// process state. The circuit breaker counts failures within this rolling time
+// window to determine if the error threshold percentage has been exceeded.
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
   +env.varOrDefault(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
@@ -2238,9 +2276,9 @@ export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
   );
 
 // Defines how long the circuit breaker stays in the open state after being
-// triggered During this period, all requests to AO for ARIO process state will
-// be rejected immediately After this timeout expires, the circuit breaker
-// transitions to half-open state to test if AO is responsive again
+// triggered. During this period, all requests to the ARIO network process
+// are rejected immediately. After this timeout expires, the circuit breaker
+// transitions to half-open state to test if the upstream is responsive again.
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
   +env.varOrDefault(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
@@ -2456,33 +2494,32 @@ export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
 );
 
 //
-// AO
+// Solana
 //
 
-// TODO: move this
 /**
- * Removes trailing slashes from URLs
- * @param url The URL to sanitize
- * @returns The sanitized URL without trailing slashes or undefined if input was undefined
+ * Solana RPC endpoint URL. Public mainnet-beta is rate-limited;
+ * production deployments should use a dedicated provider (Helius,
+ * QuickNode, Triton). Devnet: `https://api.devnet.solana.com`.
+ * Localnet: `http://127.0.0.1:8899`.
  */
-function sanitizeUrl(url: string | undefined): string | undefined {
-  if (url === undefined) {
-    return undefined;
-  }
-  return url.replace(/\/+$/, '');
-}
-
-export const AO_MU_URL = sanitizeUrl(env.varOrUndefined('AO_MU_URL'));
-export const AO_CU_URL = sanitizeUrl(env.varOrUndefined('AO_CU_URL'));
-export const NETWORK_AO_CU_URL = sanitizeUrl(
-  env.varOrUndefined('NETWORK_AO_CU_URL') ?? AO_CU_URL,
+export const SOLANA_RPC_URL = env.varOrDefault(
+  'SOLANA_RPC_URL',
+  'https://api.mainnet-beta.solana.com',
 );
-export const ANT_AO_CU_URL = sanitizeUrl(
-  env.varOrUndefined('ANT_AO_CU_URL') ?? AO_CU_URL,
-);
-export const AO_GRAPHQL_URL = env.varOrUndefined('AO_GRAPHQL_URL');
-export const AO_GATEWAY_URL = env.varOrUndefined('AO_GATEWAY_URL');
-export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
+/**
+ * Optional program-id overrides for devnet / localnet. When unset,
+ * `@ar.io/sdk/solana` falls back to its bundled mainnet IDs (which
+ * won't resolve against other clusters). See `devnet-config.json` in
+ * the `ar-io/solana-ar-io` monorepo for canonical devnet values.
+ */
+export const ARIO_CORE_PROGRAM_ID = env.varOrUndefined('ARIO_CORE_PROGRAM_ID');
+/** See {@link ARIO_CORE_PROGRAM_ID}. */
+export const ARIO_GAR_PROGRAM_ID = env.varOrUndefined('ARIO_GAR_PROGRAM_ID');
+/** See {@link ARIO_CORE_PROGRAM_ID}. */
+export const ARIO_ARNS_PROGRAM_ID = env.varOrUndefined('ARIO_ARNS_PROGRAM_ID');
+/** See {@link ARIO_CORE_PROGRAM_ID}. */
+export const ARIO_ANT_PROGRAM_ID = env.varOrUndefined('ARIO_ANT_PROGRAM_ID');
 
 //
 // Rate Limiter

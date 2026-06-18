@@ -14,7 +14,7 @@ import * as metrics from '../metrics.js';
 import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js';
 import { KvArNSRegistryStore } from '../store/kv-arns-base-name-store.js';
 import { ArNSNamesCache } from './arns-names-cache.js';
-import { AoARIORead } from '@ar.io/sdk';
+import { ARIORead } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { tracer } from '../tracing.js';
 
@@ -58,7 +58,7 @@ export class CompositeArNSResolver implements NameResolver {
     resolvers: NameResolver[];
     resolutionCache: KvArNSResolutionStore;
     registryCache: KvArNSRegistryStore;
-    networkProcess?: AoARIORead;
+    networkProcess: ARIORead;
     overrides?: {
       ttlSeconds?: number;
     };
@@ -268,7 +268,7 @@ export class CompositeArNSResolver implements NameResolver {
         resolvedId: undefined,
         resolvedAt: undefined,
         ttl: undefined,
-        processId: undefined,
+        antId: undefined,
         limit: undefined,
         index: undefined,
       };
@@ -389,9 +389,9 @@ export class CompositeArNSResolver implements NameResolver {
         return cachedResolution;
       }
       // If fresh resolution resolved fast with no resolved id (e.g.,
-      // names-cache miss, AO/CU dry-run error swallowed to undefined), still
-      // prefer the cached resolution if one exists. Matches the
-      // comment-documented intent of "fall back if error occurs OR timeout".
+      // names-cache miss, RPC error swallowed to undefined), still prefer
+      // the cached resolution if one exists. Matches the comment-documented
+      // intent of "fall back if error occurs OR timeout".
       if (resolution?.resolvedId !== undefined) {
         span.addEvent('Resolved by fresh resolution');
         return resolution;
@@ -424,7 +424,7 @@ export class CompositeArNSResolver implements NameResolver {
       resolvedId: undefined,
       resolvedAt: undefined,
       ttl: undefined,
-      processId: undefined,
+      antId: undefined,
       limit: undefined,
       index: undefined,
     };

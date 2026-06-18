@@ -27,7 +27,10 @@ after(async function () {
 describe('ArIO', function () {
   it('should return the network contract info on the /info endpoint', async function () {
     const res = await axios.get('http://localhost:4000/ar-io/info');
-    assert.ok(res.data.processId);
+    // `processId` was the AO process ID; replaced by an object of Solana
+    // program IDs (core/gar/arns/ant) in the AO→Solana cutover (#709).
+    assert.ok(res.data.programIds);
+    assert.equal(typeof res.data.programIds, 'object');
     assert.ok(res.data.supportedManifestVersions);
     assert.ok(res.data.release);
     assert.ok(res.data.services.bundlers);

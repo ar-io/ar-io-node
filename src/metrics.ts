@@ -66,6 +66,26 @@ export const uncaughtExceptionCounter = new promClient.Counter({
   help: 'Count of uncaught exceptions',
 });
 
+// Errors that escape route handlers / earlier middleware and reach the
+// terminal Express error handler. Before this existed such errors fell to
+// Express's default finalhandler as unlogged, generic 500s — this counter
+// (plus the handler's logging) makes that previously-invisible path visible.
+export const unhandledRequestErrorsCounter = new promClient.Counter({
+  name: 'unhandled_request_errors_total',
+  help: 'Count of errors reaching the terminal Express error handler',
+  labelNames: ['method', 'status'],
+});
+
+// Chunk serves cut short by the handler's wall-clock deadline
+// (CHUNK_SERVE_DEADLINE_MS). A rising rate means the retrieval cascade is
+// routinely exceeding the deadline — tune the deadline or the upstream load,
+// not a bug on its own. Use to size CHUNK_SERVE_DEADLINE_MS vs the proxy cap.
+export const chunkServeDeadlineExceededCounter = new promClient.Counter({
+  name: 'chunk_serve_deadline_exceeded_total',
+  help: 'Count of chunk serves aborted by the handler wall-clock deadline',
+  labelNames: ['method'],
+});
+
 //
 // GraphQL root TX lookup batching metrics
 //
@@ -408,6 +428,21 @@ export const attributeFetchDurationHistogram = new promClient.Histogram({
   buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
 });
 
+// Owner-key cache observability (PE-9120). Hit/miss and timing by cache key
+// reuse attribute_fetch_total / attribute_fetch_duration_seconds via the
+// `store_address` (shared owner_address key — cross-item reuse) and `store_id`
+// (per-item / admin key) sources. This counter additionally tracks concurrent
+// fetches collapsed by the address-keyed in-flight coalescer.
+export const ownerFetchCoalescedCounter = new promClient.Counter({
+  name: 'owner_fetch_coalesced_total',
+  help:
+    'Count of owner-key fetches served by joining an in-flight fetch for the ' +
+    'same owner address instead of issuing a new one (PE-9120 coalescer). ' +
+    'High relative to owner `parent_data`/`chain` fetches means intra-page ' +
+    'dedup is working.',
+  labelNames: ['subject'],
+});
+
 //
 // Arweave client metrics
 //
@@ -589,7 +624,7 @@ export const arnsCacheMissCounter = new promClient.Counter({
  * Incremented when {@link CompositeArNSResolver} returns a cached resolution
  * because a fresh resolution attempt resolved with no resolved id — distinct
  * from the timeout-triggered cached fallback. Tracks how often the gateway
- * is serving stale data due to upstream (names cache / AO / CU) returning
+ * is serving stale data due to upstream (names cache / Solana RPC) returning
  * `undefined` faster than the cached-resolution fallback timeout.
  */
 export const arnsCachedResolutionFallbackOnEmptyCounter =
@@ -1456,4 +1491,9 @@ export function incHttpSigContentDigest(labels: {
 export const httpSigBufferedBytesInflight = new promClient.Gauge({
   name: 'httpsig_buffered_bytes_inflight',
   help: 'Aggregate bytes held in memory by buffered-digest in-flight reads',
+});
+
+export const httpSigInitFailedTotal = new promClient.Counter({
+  name: 'httpsig_init_failed_total',
+  help: 'HTTPSIG signing initialization failed at startup; signing is disabled',
 });

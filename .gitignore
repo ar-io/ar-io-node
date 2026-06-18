@@ -10,7 +10,6 @@
 
 # Environment files
 /.env
-/.env.ao
 /.env.bundler
 .env.bak*
 

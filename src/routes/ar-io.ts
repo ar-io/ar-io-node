@@ -150,7 +150,6 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
  * Response (both features enabled):
  * {
  *   "wallet": "...",
- *   "processId": "...",
  *   "bundlers": [
  *     { "url": "https://turbo.ardrive.io/" }
  *   ],
@@ -175,7 +174,12 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
 export const arIoInfoHandler = (_req: Request, res: Response) => {
   const response = buildArIoInfo({
     wallet: config.AR_IO_WALLET,
-    processId: config.IO_PROCESS_ID,
+    programIds: {
+      core: config.ARIO_CORE_PROGRAM_ID,
+      gar: config.ARIO_GAR_PROGRAM_ID,
+      arns: config.ARIO_ARNS_PROGRAM_ID,
+      ant: config.ARIO_ANT_PROGRAM_ID,
+    },
     ans104UnbundleFilter: config.ANS104_UNBUNDLE_FILTER_PARSED,
     ans104IndexFilter: config.ANS104_INDEX_FILTER_PARSED,
     release,
@@ -204,22 +208,8 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
     httpsig:
       config.HTTPSIG_ENABLED && config.HTTPSIG_SIGNER !== undefined
         ? {
-            enabled: true,
             algorithm: 'ed25519',
-            publicKey: config.HTTPSIG_SIGNER.publicKeyB64Url,
-            keyId: config.HTTPSIG_SIGNER.keyId,
             solanaAddress: config.HTTPSIG_SIGNER.solanaAddress,
-            attestation:
-              config.HTTPSIG_OBSERVER !== undefined
-                ? {
-                    txId: config.HTTPSIG_OBSERVER.attestationTxId,
-                    observerAddress: config.HTTPSIG_OBSERVER.address,
-                    payload: config.HTTPSIG_OBSERVER.attestation.payload,
-                    signature: config.HTTPSIG_OBSERVER.attestation.signature,
-                    rsaPublicKey:
-                      config.HTTPSIG_OBSERVER.attestation.rsaPublicKey,
-                  }
-                : undefined,
           }
         : undefined,
   });
@@ -480,11 +470,30 @@ arIoRouter.post(
       }
 
       for (const dataItemHeader of dataItemHeaders) {
+        // Fire-and-forget header-cache warming: never block the admin response
+        // or surface an unhandled rejection if a KV write fails.
+        const warnCacheWrite = (key: string) => (error: unknown) =>
+          log.warn('Failed to warm header cache from queue-data-item', {
+            key,
+            error: (error as Error).message,
+          });
+
         // cache signatures in signature store
         if (config.WRITE_ANS104_DATA_ITEM_DB_SIGNATURES === false) {
-          signatureStore.set(dataItemHeader.id, dataItemHeader.signature);
+          signatureStore
+            .set(dataItemHeader.id, dataItemHeader.signature)
+            .catch(warnCacheWrite(dataItemHeader.id));
         }
-        ownerStore.set(dataItemHeader.id, dataItemHeader.owner);
+        ownerStore
+          .set(dataItemHeader.id, dataItemHeader.owner)
+          .catch(warnCacheWrite(dataItemHeader.id));
+        // Dual-write by owner_address so GraphQL owner.key resolution can serve
+        // every item by this owner from one cache entry (PE-9120).
+        if (dataItemHeader.owner_address.length > 0) {
+          ownerStore
+            .set(dataItemHeader.owner_address, dataItemHeader.owner)
+            .catch(warnCacheWrite(dataItemHeader.owner_address));
+        }
 
         system.dataItemIndexer.queueDataItem(
           {

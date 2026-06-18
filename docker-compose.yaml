@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-69f2d933ef88180bb5c7690dcf0ebe9c1465fd6d}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
     build:
       context: envoy/
     restart: unless-stopped
@@ -41,7 +41,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-4e8e8103d942b61dbd70fd1eb111852bacb855fe}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     restart: unless-stopped
@@ -115,7 +115,13 @@ services:
       - ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
       - SANDBOX_PROTOCOL=${SANDBOX_PROTOCOL:-}
       - START_WRITERS=${START_WRITERS:-}
-      - IO_PROCESS_ID=${IO_PROCESS_ID:-}
+      # AR.IO Network backend — reads protocol state from the AR.IO Solana
+      # programs identified by ARIO_*_PROGRAM_ID below.
+      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-}
+      - ARIO_CORE_PROGRAM_ID=${ARIO_CORE_PROGRAM_ID:-73YoECm6NKXpVRoe5f1Q9BcP5DJGPFUjnFy6AxBE5Nvh}
+      - ARIO_GAR_PROGRAM_ID=${ARIO_GAR_PROGRAM_ID:-89fNiiwgpFSPHKuqfNUkgYTYjtAJAhyqHjXmgXeppGpf}
+      - ARIO_ARNS_PROGRAM_ID=${ARIO_ARNS_PROGRAM_ID:-2yCUx5edFvUrkibYaUa2ZXWyx9kuJkS8CwyzsgHPWdZZ}
+      - ARIO_ANT_PROGRAM_ID=${ARIO_ANT_PROGRAM_ID:-2MWexMHfMhGJwMHv9Qm9YAVCqjUFUJwDJAysW4oCUGk5}
       - CHAIN_CACHE_TYPE=${CHAIN_CACHE_TYPE:-redis}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis:6379}
       - REDIS_USE_TLS=${REDIS_USE_TLS:-}
@@ -144,6 +150,7 @@ services:
       - CHUNK_METADATA_SOURCE_PARALLELISM=${CHUNK_METADATA_SOURCE_PARALLELISM:-}
       - CHUNK_REQUEST_CONCURRENCY=${CHUNK_REQUEST_CONCURRENCY:-}
       - CHUNK_FIRST_DATA_TIMEOUT_MS=${CHUNK_FIRST_DATA_TIMEOUT_MS:-}
+      - CHUNK_SERVE_DEADLINE_MS=${CHUNK_SERVE_DEADLINE_MS:-}
       - CHUNK_GET_BASE64_SIZE_BYTES=${CHUNK_GET_BASE64_SIZE_BYTES:-}
       - CHUNK_METADATA_CACHE_TYPE=${CHUNK_METADATA_CACHE_TYPE:-redis}
       - CONTIGUOUS_METADATA_CACHE_TYPE=${CONTIGUOUS_METADATA_CACHE_TYPE:-}
@@ -243,7 +250,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-79}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-81-pre}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT=${CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT:-}
       - CHUNK_POST_MAX_CONSECUTIVE_FAILURES=${CHUNK_POST_MAX_CONSECUTIVE_FAILURES:-}
@@ -256,13 +263,6 @@ services:
       - CHUNK_REBROADCAST_MAX_CONCURRENT=${CHUNK_REBROADCAST_MAX_CONCURRENT:-}
       - CHUNK_REBROADCAST_DEDUP_TTL_SECONDS=${CHUNK_REBROADCAST_DEDUP_TTL_SECONDS:-}
       - CHUNK_REBROADCAST_MIN_SUCCESS_COUNT=${CHUNK_REBROADCAST_MIN_SUCCESS_COUNT:-}
-      - AO_CU_URL=${AO_CU_URL:-}
-      - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}
-      - ANT_AO_CU_URL=${ANT_AO_CU_URL:-}
-      - AO_ANT_HYPERBEAM_URL=${AO_ANT_HYPERBEAM_URL:-}
-      - AO_MU_URL=${AO_MU_URL:-}
-      - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
-      - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
       - WRITE_ANS104_DATA_ITEM_DB_SIGNATURES=${WRITE_ANS104_DATA_ITEM_DB_SIGNATURES:-}
       - WRITE_TRANSACTION_DB_SIGNATURES=${WRITE_TRANSACTION_DB_SIGNATURES:-}
       - ENABLE_DATA_DB_WAL_CLEANUP=${ENABLE_DATA_DB_WAL_CLEANUP:-}
@@ -370,6 +370,8 @@ services:
       - CHUNK_SYMLINK_CLEANUP_INTERVAL=${CHUNK_SYMLINK_CLEANUP_INTERVAL:-}
       - BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS=${BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS:-}
       - BUNDLE_REPAIR_RETRY_BATCH_SIZE=${BUNDLE_REPAIR_RETRY_BATCH_SIZE:-}
+      - BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS=${BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS:-}
+      - BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS=${BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS:-}
       - BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS=${BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS:-}
       - BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS=${BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS:-}
       - BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS=${BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS:-}
@@ -438,9 +440,11 @@ services:
       - HTTPSIG_ENABLED=${HTTPSIG_ENABLED:-}
       - HTTPSIG_KEY_FILE=${HTTPSIG_KEY_FILE:-}
       - HTTPSIG_BIND_REQUEST=${HTTPSIG_BIND_REQUEST:-}
-      - HTTPSIG_UPLOAD_ATTESTATION=${HTTPSIG_UPLOAD_ATTESTATION:-}
-      - OBSERVER_WALLET=${OBSERVER_WALLET:-}
-      - WALLETS_PATH=/app/wallets
+      # Observer Solana keypair for HTTPSIG signing — accept either a
+      # JSON-file path or a base58 64-byte secret (Phantom export form).
+      # Setting both is rejected at startup as ambiguous.
+      - OBSERVER_KEYPAIR_PATH=${OBSERVER_KEYPAIR_PATH:-}
+      - OBSERVER_PRIVATE_KEY=${OBSERVER_PRIVATE_KEY:-}
     ulimits:
       nofile:
         soft: 65536
@@ -517,7 +521,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-07d9f4d5b57bdd251fcb617e34a00f85f452c7c9}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-latest}
     profiles:
       - clickhouse
     build:
@@ -559,7 +563,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-ddd3a9c15e426c84da24c9fb7a1107620ccc27c1}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-db292b8e368cdd8dab0b600bd426ade3768eaa75}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -571,7 +575,36 @@ services:
     environment:
       - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-}
-      - IO_PROCESS_ID=${IO_PROCESS_ID:-}
+      # AR.IO Network backend — see core service for full docs.
+      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-}
+      - ARIO_CORE_PROGRAM_ID=${ARIO_CORE_PROGRAM_ID:-73YoECm6NKXpVRoe5f1Q9BcP5DJGPFUjnFy6AxBE5Nvh}
+      - ARIO_GAR_PROGRAM_ID=${ARIO_GAR_PROGRAM_ID:-89fNiiwgpFSPHKuqfNUkgYTYjtAJAhyqHjXmgXeppGpf}
+      - ARIO_ARNS_PROGRAM_ID=${ARIO_ARNS_PROGRAM_ID:-2yCUx5edFvUrkibYaUa2ZXWyx9kuJkS8CwyzsgHPWdZZ}
+      - ARIO_ANT_PROGRAM_ID=${ARIO_ANT_PROGRAM_ID:-2MWexMHfMhGJwMHv9Qm9YAVCqjUFUJwDJAysW4oCUGk5}
+      # Cranker (Solana-only). When unset, observer skips cranking.
+      - ENABLE_EPOCH_CRANKING=${ENABLE_EPOCH_CRANKING:-}
+      - ENABLE_CLEANUP=${ENABLE_CLEANUP:-}
+      # Solana wallet identities (operator/observer/upload). All four
+      # supported configurations are documented in the observer's
+      # `src/wallet-config.ts`. Each role accepts EITHER a JSON-file path
+      # (`*_KEYPAIR_PATH`) OR a base58 64-byte secret (`*_PRIVATE_KEY`,
+      # Phantom export form). Setting both for the same role is rejected
+      # as ambiguous. Operator key is required in solana mode; the others
+      # are optional fallbacks.
+      - SOLANA_KEYPAIR_PATH=${SOLANA_KEYPAIR_PATH:-}
+      - SOLANA_PRIVATE_KEY=${SOLANA_PRIVATE_KEY:-}
+      - OBSERVER_KEYPAIR_PATH=${OBSERVER_KEYPAIR_PATH:-}
+      - OBSERVER_PRIVATE_KEY=${OBSERVER_PRIVATE_KEY:-}
+      - SOLANA_UPLOAD_KEYPAIR_PATH=${SOLANA_UPLOAD_KEYPAIR_PATH:-}
+      - SOLANA_UPLOAD_PRIVATE_KEY=${SOLANA_UPLOAD_PRIVATE_KEY:-}
+      - ARWEAVE_UPLOAD_KEY_FILE=${ARWEAVE_UPLOAD_KEY_FILE:-}
+      - ARWEAVE_UPLOAD_JWK=${ARWEAVE_UPLOAD_JWK:-}
+      # Ethereum upload identity (alternative to Arweave/Solana for
+      # signing observation-report bundles before Turbo upload). Either
+      # set the FILE path or the inline hex value; setting BOTH chains
+      # at once raises a startup error. See wallet-config.ts precedence.
+      - ETHEREUM_UPLOAD_PRIVATE_KEY_FILE=${ETHEREUM_UPLOAD_PRIVATE_KEY_FILE:-}
+      - ETHEREUM_UPLOAD_PRIVATE_KEY=${ETHEREUM_UPLOAD_PRIVATE_KEY:-}
       - SUBMIT_CONTRACT_INTERACTIONS=${SUBMIT_CONTRACT_INTERACTIONS:-true}
       - NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP=${NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP:-8}
       - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}
@@ -579,13 +612,8 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-79}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-81-pre}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
-      - AO_CU_URL=${AO_CU_URL:-}
-      - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}
-      - AO_MU_URL=${AO_MU_URL:-}
-      - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
-      - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
       # Reference Gateway Configuration
       - REFERENCE_GATEWAY_HOSTS=${REFERENCE_GATEWAY_HOSTS:-}
       - REFERENCE_GATEWAY_NETWORK_ONLY=${REFERENCE_GATEWAY_NETWORK_ONLY:-}
@@ -603,6 +631,28 @@ services:
       - OBSERVATION_WINDOW_FRACTION=${OBSERVATION_WINDOW_FRACTION:-}
       - OBSERVATION_CYCLE_INTERVAL_MS=${OBSERVATION_CYCLE_INTERVAL_MS:-}
       - MAJORITY_VOTE_THRESHOLD=${MAJORITY_VOTE_THRESHOLD:-}
+      # Per-cycle assessment parallelism (gateway + ArNS-name probes). Without
+      # these the observer falls back to its built-in defaults regardless of
+      # the .env value — see ar-io-observer src/config.ts.
+      - GATEWAY_ASSESSMENT_CONCURRENCY=${GATEWAY_ASSESSMENT_CONCURRENCY:-}
+      - NAME_ASSESSMENT_CONCURRENCY=${NAME_ASSESSMENT_CONCURRENCY:-}
+      # Enable the LogReportSink — logs full per-gateway assessment detail at
+      # info level (off by default).
+      - ENABLE_LOG_REPORT_SINK=${ENABLE_LOG_REPORT_SINK:-}
+      # Epoch-relative submission window (defaults tuned for mainnet's ~24h
+      # epochs; shorter-epoch networks like devnet must shrink these or the
+      # observer rejects with "Epoch duration too short for configured buffers").
+      - OBSERVATION_STABILITY_BUFFER_MS=${OBSERVATION_STABILITY_BUFFER_MS:-}
+      - OBSERVATION_SUBMISSION_BUFFER_MS=${OBSERVATION_SUBMISSION_BUFFER_MS:-}
+      # Maximum fraction of failed gateways before the report-sink circuit
+      # breaker refuses to submit. Default `0.8` is production-safe; on
+      # devnet (where most registered gateways are stubs that don't serve
+      # HTTP) `1.0` effectively disables the gate so the honest "all-
+      # failed" report can still ship — required for a freshly-joined
+      # devnet observer to ever increment its observerPerformanceRatio.
+      # See ar-io-observer src/config.ts OBSERVER_MAX_GATEWAY_FAILURE_
+      # THRESHOLD for context.
+      - OBSERVER_MAX_GATEWAY_FAILURE_THRESHOLD=${OBSERVER_MAX_GATEWAY_FAILURE_THRESHOLD:-}
       # Offset Observation Configuration
       - OFFSET_OBSERVATION_SAMPLE_RATE=${OFFSET_OBSERVATION_SAMPLE_RATE:-}
       - OFFSET_OBSERVATION_ENABLED=${OFFSET_OBSERVATION_ENABLED:-}
@@ -611,7 +661,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
     build:
       context: litestream/
       dockerfile: Dockerfile

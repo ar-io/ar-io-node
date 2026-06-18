@@ -271,6 +271,14 @@ export class ArIOChunkSource
 
       // Retry with different peers on failure (try peers in parallel each attempt)
       for (let attempt = 0; attempt < retryCount; attempt++) {
+        // Stop early if the caller has gone away. Without this guard the loop
+        // burns through every remaining attempt and then throws a generic
+        // "Failed to fetch chunk from N peers" error — which the chunk
+        // handlers classify as a generic upstream failure (502) instead of a
+        // 499, and which wastes peer requests on behalf of a client that is no
+        // longer listening.
+        clientSignal?.throwIfAborted();
+
         // Get the peers for this attempt
         const startIdx = attempt * peerSelectionCount;
         const endIdx = startIdx + peerSelectionCount;
@@ -346,6 +354,11 @@ export class ArIOChunkSource
         } catch (error: any) {
           // Abort any stragglers before retrying with new peers
           controller.abort();
+
+          // A client disconnect surfaces here as an AggregateError of aborted
+          // fetches. Re-throw it as an AbortError so the caller returns 499
+          // instead of looping into a generic "all peers failed" 5xx.
+          clientSignal?.throwIfAborted();
 
           // AggregateError means all promises rejected
           span.addEvent('All peers failed for attempt', {

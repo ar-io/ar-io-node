@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { PassThrough } from 'node:stream';
 import axios from 'axios';
-import { AoARIORead, ARIO } from '@ar.io/sdk';
+import { ARIORead, ARIO } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
 import { RequestAttributes, ContiguousDataAttributesStore } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
@@ -25,7 +25,7 @@ let dataSource: ArIODataSource;
 let peerManager: ArIOPeerManager;
 const nodeUrl = 'localNode.com';
 let requestAttributes: RequestAttributes;
-let mockedArIOInstance: AoARIORead;
+let mockedArIOInstance: ARIORead;
 let mockedAxiosGet: any;
 let mockDataAttributesStore: ContiguousDataAttributesStore;
 

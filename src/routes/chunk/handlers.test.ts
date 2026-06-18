@@ -14,6 +14,9 @@ import {
   createChunkOffsetHandler,
   createChunkOffsetDataHandler,
   determineFailureStatusCode,
+  withChunkServeDeadline,
+  ChunkServeTimeoutError,
+  classifyChunkRetrievalError,
 } from './handlers.js';
 import { ChunkNotFoundError } from '../../data/chunk-retrieval-service.js';
 import { formatContentDigest } from '../../lib/digest.js';
@@ -1101,5 +1104,129 @@ describe('determineFailureStatusCode', () => {
       },
     ];
     assert.strictEqual(determineFailureStatusCode(results), 500);
+  });
+});
+
+describe('withChunkServeDeadline', () => {
+  it('returns the op result when it resolves before the deadline', async () => {
+    const result = await withChunkServeDeadline(1000, undefined, async () => {
+      return 'ok';
+    });
+    assert.strictEqual(result, 'ok');
+  });
+
+  it('rejects with ChunkServeTimeoutError when the op exceeds the deadline', async () => {
+    await assert.rejects(
+      withChunkServeDeadline(
+        20,
+        undefined,
+        // Never settles on its own; only the deadline ends it.
+        (signal) =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(signal.reason), {
+              once: true,
+            });
+          }),
+      ),
+      (err: any) => err instanceof ChunkServeTimeoutError,
+    );
+  });
+
+  it('aborts the op signal when the deadline fires', async () => {
+    let abortedInsideOp = false;
+    await withChunkServeDeadline(20, undefined, (signal) => {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          'abort',
+          () => {
+            abortedInsideOp = true;
+            reject(signal.reason);
+          },
+          { once: true },
+        );
+      });
+    }).catch(() => {});
+    assert.strictEqual(abortedInsideOp, true);
+  });
+
+  it('propagates an op rejection that loses the race', async () => {
+    await assert.rejects(
+      withChunkServeDeadline(1000, undefined, async () => {
+        throw new Error('boom');
+      }),
+      (err: any) => err.message === 'boom',
+    );
+  });
+
+  it('passes the client signal straight through when deadline is 0 (disabled)', async () => {
+    const controller = new AbortController();
+    const seen = await withChunkServeDeadline(
+      0,
+      controller.signal,
+      async (signal) => signal,
+    );
+    assert.strictEqual(seen, controller.signal);
+  });
+
+  it('merges the client signal so a disconnect aborts the op', async () => {
+    const controller = new AbortController();
+    let abortedInsideOp = false;
+    const p = withChunkServeDeadline(1000, controller.signal, (signal) => {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          'abort',
+          () => {
+            abortedInsideOp = true;
+            reject(new Error('aborted'));
+          },
+          { once: true },
+        );
+      });
+    });
+    controller.abort();
+    await p.catch(() => {});
+    assert.strictEqual(abortedInsideOp, true);
+  });
+});
+
+describe('classifyChunkRetrievalError', () => {
+  it('maps ChunkServeTimeoutError to 404 serve_deadline_exceeded (timeout-as-not-found)', () => {
+    const v = classifyChunkRetrievalError(
+      new ChunkServeTimeoutError(12000),
+      false,
+    );
+    assert.strictEqual(v.statusCode, 404);
+    assert.strictEqual(v.errorType, 'serve_deadline_exceeded');
+  });
+
+  it('maps a TimeoutError to 404 upstream_timeout', () => {
+    const v = classifyChunkRetrievalError(
+      Object.assign(new Error('timed out'), { name: 'TimeoutError' }),
+      false,
+    );
+    assert.strictEqual(v.statusCode, 404);
+    assert.strictEqual(v.errorType, 'upstream_timeout');
+  });
+
+  it('maps a client-aborted request to 499 regardless of error', () => {
+    const v = classifyChunkRetrievalError(new Error('all peers failed'), true);
+    assert.strictEqual(v.statusCode, 499);
+  });
+
+  it('maps a ChunkNotFoundError to 404', () => {
+    const v = classifyChunkRetrievalError(
+      new ChunkNotFoundError('nope', 'boundary_not_found'),
+      false,
+    );
+    assert.strictEqual(v.statusCode, 404);
+    assert.strictEqual(v.errorType, 'boundary_not_found');
+  });
+
+  it('maps an unrecognized upstream failure to 502', () => {
+    const v = classifyChunkRetrievalError(
+      new Error('Failed to fetch chunk from AR.IO peers'),
+      false,
+    );
+    assert.strictEqual(v.statusCode, 502);
   });
 });

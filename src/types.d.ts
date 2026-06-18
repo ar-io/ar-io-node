@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { Readable, Writable } from 'node:stream';
-import { AoArNSNameDataWithName } from '@ar.io/sdk';
+import { ArNSNameDataWithName } from '@ar.io/sdk';
 import { Span } from '@opentelemetry/api';
 
 export interface B64uTag {
@@ -1165,7 +1165,14 @@ export interface ValidNameResolution {
   resolvedId: string;
   resolvedAt: number;
   ttl: number;
-  processId: string;
+  /**
+   * Per-ANT identifier for the ANT that resolved this name — the ANT
+   * mint's PDA (base58 pubkey). Set when the resolution came from a
+   * direct SDK call (`OnDemandArNSResolver` / `ArNSNamesCache`); read
+   * off the `X-ArNS-Ant-Id` header on trusted-gateway hops when the
+   * peer emits it, `undefined` otherwise.
+   */
+  antId: string | undefined;
   limit: number;
   index: number;
 }
@@ -1177,7 +1184,7 @@ export interface MissingNameResolution {
   resolvedId: undefined;
   resolvedAt: number;
   ttl: number;
-  processId: undefined;
+  antId: undefined;
   limit: undefined;
   index: undefined;
 }
@@ -1189,7 +1196,7 @@ export interface FailedNameResolution {
   resolvedId: undefined;
   resolvedAt: undefined;
   ttl: undefined;
-  processId: undefined;
+  antId: undefined;
   limit: undefined;
   index: undefined;
 }
@@ -1208,7 +1215,7 @@ export interface NameResolver {
     name: string;
     baseArNSRecordFn?: (
       parentSpan?: Span,
-    ) => Promise<AoArNSNameDataWithName | undefined>;
+    ) => Promise<ArNSNameDataWithName | undefined>;
     signal?: AbortSignal;
   }): Promise<NameResolution>;
 }
@@ -1280,20 +1287,26 @@ export interface OwnerSource {
     parentId,
     ownerSize,
     ownerOffset,
+    ownerAddress,
     signal,
   }: {
     id: string;
     parentId?: string;
     ownerSize?: number;
     ownerOffset?: number;
+    // owner_address (= sha256(owner_key)); when present, used as the shared
+    // cache key so all items by an owner reuse one fetch (PE-9120).
+    ownerAddress?: string;
     signal?: AbortSignal;
   }): Promise<string | undefined>;
 
   getTransactionOwner({
     id,
+    ownerAddress,
     signal,
   }: {
     id: string;
+    ownerAddress?: string;
     signal?: AbortSignal;
   }): Promise<string | undefined>;
 }

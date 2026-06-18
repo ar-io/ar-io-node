@@ -1,616 +1,173 @@
-# AR.IO Gateway Centralization Analysis: Engineering Deep Dive
+# AR.IO Gateway Centralization Analysis — Solana Edition
 
-## Executive Summary
+**Status**: Draft. Supersedes the prior AO-era analysis (same path) in git history.
 
-This document provides a comprehensive technical analysis of centralization risks within the ar.io gateway architecture. While the gateway successfully leverages Arweave's decentralized storage, our analysis reveals critical dependencies on centralized coordination services that pose risks to network resilience and censorship resistance.
-
-**Key Finding**: The hardcoded IO Process ID (`qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE`) represents a critical single point of failure for the entire AR.IO network.
+This document re-frames the centralization analysis for the Solana-native
+AR.IO gateway. The shape of the dependencies is different from the AO era:
+the gateway no longer talks to an AO Compute Unit or relies on a single
+AO process ID. Authoritative state lives in **Solana programs** (with
+program-derived accounts as the per-instance state), reached via the
+operator's chosen **Solana RPC provider**. Some risk categories carry
+over (registry control, RPC dependency), and some shift (program upgrade
+authority, validator centralization).
 
 ---
 
 ## Table of Contents
 
-1. [Critical Centralized Dependencies](#critical-centralized-dependencies)
-2. [Architectural Analysis](#architectural-analysis)
-3. [Risk Assessment](#risk-assessment)
-4. [Technical Deep Dive](#technical-deep-dive)
-5. [Attack Vectors](#attack-vectors)
-6. [Existing Mitigations](#existing-mitigations)
-7. [Recommendations](#recommendations)
-8. [Implementation Roadmap](#implementation-roadmap)
+1. [Critical Dependencies](#critical-dependencies)
+2. [Per-Dependency Analysis](#per-dependency-analysis)
+3. [Existing Mitigations](#existing-mitigations)
+4. [Open Risks](#open-risks)
+5. [Operator Knobs](#operator-knobs)
 
 ---
 
-## Critical Centralized Dependencies
+## Critical Dependencies
 
-### 1. IO Process - The Core Dependency
-
-**Location**: `src/config.ts:536`
-```typescript
-export const IO_PROCESS_ID = env.varOrDefault(
-  'IO_PROCESS_ID',
-  'qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE',
-);
-```
-
-**Impact**: CRITICAL - Network-wide coordination failure if compromised
-
-The IO Process controls:
-- **Gateway Registry**: All gateway registrations and metadata
-- **Peer Discovery**: Dynamic gateway peer list
-- **ArNS Registry**: Base name ownership and ANT process mappings
-- **Observer Reports**: Network health and compliance data
-- **Staking Records**: Gateway stake and reward distribution
-
-**Code Reference**: `src/system.ts:102-113`
-```typescript
-const networkProcess = ARIO.init({
-  process: new AOProcess({
-    processId: config.IO_PROCESS_ID,
-    ao: connect({
-      MU_URL: config.AO_MU_URL,
-      CU_URL: config.NETWORK_AO_CU_URL,
-      GRAPHQL_URL: config.AO_GRAPHQL_URL,
-      GATEWAY_URL: config.AO_GATEWAY_URL,
-    }),
-  }),
-});
-```
-
-### 2. Infrastructure Domain Dependencies
-
-#### Primary Domains at Risk
-
-| Domain | Usage | Default Configuration | Risk Level |
-|--------|-------|----------------------|------------|
-| `arweave.net` | Trusted node, Gateway fallback | `TRUSTED_NODE_URL`, `TRUSTED_GATEWAY_URL` | HIGH |
-| `ar-io.net` | ArNS resolution fallback | `TRUSTED_ARNS_GATEWAY_URL` | MEDIUM |
-| `peers.arweave.xyz` | Fallback peer discovery | Docker configuration | MEDIUM |
-
-**Code Reference**: `src/config.ts:64-80`
-```typescript
-export const TRUSTED_NODE_URL = env.varOrDefault(
-  'TRUSTED_NODE_URL',
-  'https://arweave.net',
-);
-
-export const TRUSTED_GATEWAYS_URLS = JSON.parse(
-  env.varOrDefault(
-    'TRUSTED_GATEWAYS_URLS',
-    TRUSTED_GATEWAY_URL !== undefined
-      ? JSON.stringify({ [TRUSTED_GATEWAY_URL]: 1 })
-      : '{ "https://arweave.net": 1}',
-  ),
-);
-```
-
-### 3. AO Infrastructure Dependencies
-
-The gateway requires access to AO (Arweave Operating System) components:
-
-```typescript
-// src/config.ts:852-859
-export const AO_MU_URL = sanitizeUrl(env.varOrUndefined('AO_MU_URL'));
-export const AO_CU_URL = sanitizeUrl(env.varOrUndefined('AO_CU_URL'));
-export const NETWORK_AO_CU_URL = sanitizeUrl(
-  env.varOrUndefined('NETWORK_AO_CU_URL') ?? AO_CU_URL,
-);
-```
-
-**Dependencies**:
-- **Message Unit (MU)**: Processes AO messages
-- **Compute Unit (CU)**: Executes AO processes
-- **GraphQL Endpoint**: Queries AO state
-- **Gateway URL**: Accesses AO data
-
-### 4. Permissioned Network Participation
-
-#### Gateway Registration Requirements
-
-1. **Stake Requirement**: Must stake tokens with IO Process
-2. **Wallet Ownership**: Requires Arweave wallet
-3. **Registration Transaction**: On-chain registration
-4. **Observer Participation**: Additional wallet for reporting
-
-**Code Reference**: `src/data/ar-io-data-source.ts`
-```typescript
-// Gateways filtered by registration status
-const gateways = await this.networkProcess.getGateways({
-  cursor,
-  limit: 1000,
-  sortBy: 'startTimestamp',
-  sortOrder: 'asc',
-});
-```
-
-#### Trusted Process Owners
-
-From `docker-compose.ao.yaml`:
-```yaml
-PROCESS_CHECKPOINT_TRUSTED_OWNERS: >
-  fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY,
-  -HFe6PleLxj1EdFMYMSetT2NIJioDsZIktn-Y0AwP54,
-  WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk
-```
-
-These wallets have elevated permissions in AO compute units.
-
-### 5. External Service Dependencies
-
-#### AWS/Cloud Services
-- Optional S3 storage creates cloud provider dependency
-- Risk of account suspension or regional blocking
-- Credentials required for access
-
-#### Redis Cache
-- Default caching layer
-- Single point of failure for performance
-- Not inherently decentralized
-
-### 6. Peer Discovery Centralization
-
-The `ArIODataSource` fetches gateway peers from the IO Process:
-```typescript
-const gateways = await this.networkProcess.getGateways({
-  cursor,
-  limit: 1000,
-  sortBy: 'startTimestamp',
-  sortOrder: 'asc',
-});
-```
-
-**Impact**: Without IO Process access, gateways cannot discover peers dynamically.
-
-### 7. Observer Component Dependencies
-
-The observer component:
-- Reports to the centralized IO Process
-- Requires wallet credentials
-- Can use `TURBO_UPLOAD_SERVICE_URL` (another centralized service)
-
-### 8. ArNS Resolution Dependencies
-
-ArNS name resolution depends on:
-1. IO Process for the name registry
-2. Trusted gateways for fallback
-3. ANT processes controlled by name owners
-
-**Risk**: IO Process censorship breaks primary resolution path.
-
-### 9. Chunk Propagation Chokepoints
-
-Default chunk POST URLs point to `TRUSTED_NODE_URL`:
-- Creates dependency on specific Arweave nodes
-- Could be rate-limited or blocked
-- Affects data availability on the network
-
-### 10. Fallback Node Dependency
-
-Docker configuration includes:
-```
-FALLBACK_NODE_HOST: peers.arweave.xyz
-```
-
-Another centralized service that could be taken down.
+| Tier | Dependency | Substituted at runtime? |
+|---|---|---|
+| **Foundation** | AR.IO Solana programs (Core, GAR, ArNS, ANT) at their declared program IDs | Only if upgrade authority republishes; operator can override the program IDs per cluster via env vars |
+| **Network** | Solana RPC provider (mainnet-beta / devnet / localnet endpoint) | Yes — `SOLANA_RPC_URL` is operator-supplied |
+| **Network** | Validator set running the cluster | No — same trust assumption as any Solana app |
+| **Coordination** | Trusted-gateway peers used by `TrustedGatewayArNSResolver` | Yes — operator-configured peer list |
+| **Data** | Arweave gateways used as trusted nodes for chunk / tx fetches | Yes — `TRUSTED_GATEWAYS_URLS` |
+| **Identity** | Operator's Solana keypair (`SOLANA_KEYPAIR_PATH`), observer keypair | No — must be kept available and rotation requires a re-registration cycle |
 
 ---
 
-## Architectural Analysis
+## Per-Dependency Analysis
 
-### Centralization Layers
+### 1. AR.IO programs and their upgrade authority
+
+The four programs the gateway reads against are:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    User Requests                        │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────────────────┐
-│                 AR.IO Gateway                           │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │ Decentralized Components:                       │   │
-│  │ - Data retrieval from Arweave                   │   │
-│  │ - Chunk assembly and validation                 │   │
-│  │ - Multi-source data fetching                    │   │
-│  └─────────────────────────────────────────────────┘   │
-│                                                         │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │ CENTRALIZED DEPENDENCIES:                       │   │
-│  │ ┌─────────────────┐ ┌─────────────────────┐    │   │
-│  │ │  IO Process     │ │  AO Infrastructure  │    │   │
-│  │ │  (Coordination) │ │  (Computation)       │    │   │
-│  │ └────────┬────────┘ └──────────┬──────────┘    │   │
-│  │          │                      │                │   │
-│  │ ┌────────▼──────────────────────▼────────────┐  │   │
-│  │ │           Single Points of Failure         │  │   │
-│  │ │  - Gateway Discovery                       │  │   │
-│  │ │  - ArNS Resolution                         │  │   │
-│  │ │  - Network Participation                   │  │   │
-│  │ │  - Observer Reporting                      │  │   │
-│  │ └────────────────────────────────────────────┘  │   │
-│  └─────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
+Core   — ARIO_CORE_PROGRAM_ID  (default: bundled mainnet ID via @ar.io/sdk)
+GAR    — ARIO_GAR_PROGRAM_ID
+ArNS   — ARIO_ARNS_PROGRAM_ID
+ANT    — ARIO_ANT_PROGRAM_ID
 ```
 
-### Data Flow Dependencies
+All four program IDs default to mainnet values shipped inside `@ar.io/sdk`.
+Devnet / localnet operators override via env vars in `src/config.ts:2085+`.
 
-#### ArNS Resolution Flow
-```
-User Request → Gateway → IO Process → ANT Process → Response
-                ↓ (fallback)
-            Trusted Gateway → Cached Resolution
-```
+**Centralization risk**: the upgrade authority on each program is a Solana
+account (currently a multisig governed off-chain). A compromise of that
+authority could deploy a malicious upgrade that subverts gateway-observed
+state. This is the modern analog of the old "compromise the AO process
+ID" risk — the failure mode is identical (network-wide impact); the
+control surface is different (Solana on-chain authority + multisig
+discipline vs. AO process ownership).
 
-**Centralization Point**: IO Process required for fresh resolutions
+**Mitigation**: as adoption matures, the upgrade authority should
+transition to a transparent on-chain governance program (or be frozen
+entirely). The AR.IO core program's upgrade authority address should
+be published and monitored.
 
-#### Peer Discovery Flow
-```
-Gateway Startup → IO Process Query → Gateway List → Peer Connections
-                      ↓ (failure)
-                  No Discovery → Network Isolation
-```
+### 2. Solana RPC provider
 
-**Centralization Point**: No P2P discovery mechanism
+`SOLANA_RPC_URL` is the operator's choice of RPC endpoint. Public
+`mainnet-beta.solana.com` is rate-limited; production deployments use
+dedicated providers (Helius, QuickNode, Triton) or self-hosted validators.
 
----
+**Centralization risk**: an outage at the chosen provider stops fresh
+resolutions; in-flight requests fall back to cached values until the
+provider recovers (see ArNS doc, "Failure Modes"). The gateway does not
+multi-source RPC reads — a single endpoint is used per process.
 
-## Risk Assessment
+**Mitigation**: operators can run their own RPC node. A circuit breaker
+(`ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_*`) trips after sustained failures
+and rejects further attempts to call upstream rather than blocking the
+request pipeline.
 
-### Risk Matrix
+### 3. Validator set
 
-| Component | Likelihood | Impact | Risk Level | Mitigation Difficulty |
-|-----------|------------|--------|------------|----------------------|
-| IO Process Failure | Medium | Critical | **CRITICAL** | High |
-| Domain Seizure | Medium | High | **HIGH** | Medium |
-| AO Infrastructure Block | Low | High | **MEDIUM** | High |
-| Gateway Registration Denial | Medium | Medium | **MEDIUM** | Low |
-| Trusted Node Failure | High | Low | **LOW** | Low |
+The cluster's validator stake distribution is the same trust assumption as
+any other Solana app. Out of scope for this document.
 
-### Impact Analysis
+### 4. Trusted gateway peers
 
-#### IO Process Compromise/Failure
+`TRUSTED_GATEWAYS_URLS` and the related peer-discovery logic mean the
+gateway can offload data fetches (and optionally name resolution) to
+other AR.IO gateways. The peer set is operator-configured and seeded by
+peer discovery through the GAR (Gateway Address Registry) program.
 
-**Immediate Effects**:
-- No new gateway registrations
-- No peer discovery updates
-- ArNS resolution failures
-- Observer reports blocked
+**Centralization risk**: a malicious or coordinated subset of peers could
+serve incorrect resolutions or stale data, exploiting trust assumptions
+the local gateway places in their `X-ArNS-Ant-Id` / `X-AR-IO-Verified`
+headers. This is mitigated by:
 
-**Cascading Effects**:
-- Network fragmentation
-- Stale peer lists
-- Degraded name resolution
-- No stake rewards distribution
+- Verifying tx content (when `X-AR-IO-Verified: true` is asserted) against
+  the chunk hashes recorded on Arweave.
+- Tracking gateway reputation via the observer subsystem (see
+  `ar-io-observer`).
+- Falling back to direct on-chain SDK resolution when peer responses
+  fail validation.
 
-#### Domain Blocking Scenario
+### 5. Operator identity
 
-**arweave.net blocked**:
-- Default trusted node unreachable
-- Fallback to configured alternatives required
-- New operators cannot start without configuration
+The operator keypair signs `save_observations` transactions on the Core
+program (via the cranker) and identifies the gateway in registry reads.
+Loss of the keypair without backup means a forced re-registration at a
+new address; theft of the keypair means an attacker can submit
+observation reports as the gateway.
 
-**ar-io.net blocked**:
-- ArNS fallback resolution fails
-- Gateway peer discovery degraded
-- Network visibility reduced
-
----
-
-## Technical Deep Dive
-
-### IO Process Integration Points
-
-#### 1. Gateway Discovery (`src/data/ar-io-data-source.ts`)
-
-```typescript
-private async updatePeers(): Promise<void> {
-  try {
-    let cursor: string | undefined = undefined;
-    const gateways: Gateway[] = [];
-
-    do {
-      const page = await this.networkProcess.getGateways({
-        cursor,
-        limit: 1000,
-        sortBy: 'startTimestamp',
-        sortOrder: 'asc',
-      });
-
-      gateways.push(...page.items);
-      cursor = page.nextCursor;
-    } while (cursor !== undefined);
-
-    // Filter and process gateways...
-  } catch (error) {
-    this.log.error('Failed to update peers', error);
-  }
-}
-```
-
-**Vulnerability**: Complete dependency on `networkProcess.getGateways()`
-
-#### 2. ArNS Resolution (`src/resolution/on-demand-arns-resolver.ts`)
-
-```typescript
-const baseArNSRecord = await this.networkProcess.getArNSRecord({ 
-  name: baseName 
-});
-
-if (!baseArNSRecord) {
-  throw new Error(`ArNS name ${baseName} not found`);
-}
-
-// Process ANT records...
-```
-
-**Vulnerability**: No alternative to IO Process for name registry
-
-#### 3. Circuit Breaker Implementation
-
-```typescript
-// src/data/ao-network-process.ts
-this.aoCircuitBreaker = new CircuitBreaker(
-  async (fnName: string) => {
-    return this.io[fnName]();
-  },
-  {
-    timeout: 60000, // 60 seconds
-    errorThresholdPercentage: 30,
-    rollingCountTimeout: 600000, // 10 minutes
-    resetTimeout: 1200000, // 20 minutes
-  },
-);
-```
-
-**Mitigation**: Provides graceful degradation but doesn't solve dependency
-
-### Peer Management System
-
-#### Weight-Based Selection
-```typescript
-// src/arweave/composite-client.ts
-private adjustPeerWeight(
-  peerListName: string,
-  peer: string,
-  result: 'success' | 'failure',
-): void {
-  const weightedPeer = this[peerListName].find((p) => p.id === peer);
-  if (weightedPeer) {
-    const delta = this.config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
-    if (result === 'success') {
-      weightedPeer.weight = Math.min(weightedPeer.weight + delta, 100);
-    } else {
-      weightedPeer.weight = Math.max(weightedPeer.weight - delta, 1);
-    }
-  }
-}
-```
-
-**Limitation**: Only works with peers discovered through IO Process
-
----
-
-## Attack Vectors
-
-### 1. IO Process Targeted Attack
-
-**Method**: DDoS, legal action, or compromise of process owner
-**Impact**: Complete network coordination failure
-**Detection**: Circuit breaker opens, resolution failures spike
-
-### 2. DNS Hijacking
-
-**Method**: Domain seizure or DNS poisoning
-**Impact**: Traffic redirection, data integrity risks
-**Detection**: TLS certificate mismatches
-
-### 3. Sybil Attack via Registration
-
-**Method**: Mass registration of malicious gateways
-**Impact**: Network pollution, user misdirection
-**Detection**: Anomalous registration patterns
-
-### 4. AO Infrastructure Blocking
-
-**Method**: ISP/Government blocking of AO endpoints
-**Impact**: ArNS resolution failure, compute unavailable
-**Detection**: Timeout errors, circuit breakers open
+**Mitigation**: operators are responsible for keypair storage. The
+observer container expects the keypair file at the mounted
+`SOLANA_KEYPAIR_PATH`. Production deployments should use HSM-backed
+signers; this is an open enhancement for `@ar.io/sdk` (no first-class
+signer abstraction beyond the `KeyPairSigner` interface today).
 
 ---
 
 ## Existing Mitigations
 
-### 1. Configuration Flexibility
+The gateway already defends against several of the risks above:
 
-Most hardcoded values can be overridden:
-```bash
-TRUSTED_NODE_URL=https://my-node.example.com
-IO_PROCESS_ID=alternativeProcessId
-TRUSTED_GATEWAYS_URLS='{"https://gateway1.com": 1, "https://gateway2.com": 2}'
-```
-
-### 2. Circuit Breaker Pattern
-
-Prevents cascade failures:
-- Automatic failure detection
-- Graceful degradation
-- Periodic recovery attempts
-
-### 3. Multi-Source Data Retrieval
-
-```typescript
-// Sequential fallback through multiple sources
-ON_DEMAND_RETRIEVAL_ORDER='trusted-gateways,ar-io-network,chunks-data-item,tx-data'
-```
-
-### 4. Caching Layers
-
-Reduces dependency on live lookups:
-- ArNS resolution cache
-- Peer list caching
-- Data caching
-
-**Limitation**: Caches expire, requiring eventual IO Process access
+- **Multi-source data**: chunk fetches try AR.IO peers, Arweave gateways,
+  Arweave nodes, and S3 in configurable order. A single source failing
+  doesn't break content retrieval.
+- **Cached resolution fallback**: ArNS resolution prefers a cached entry
+  over failing the request, so a transient RPC outage doesn't 404 every
+  cached name.
+- **Trust headers**: responses include `X-AR-IO-Verified` and
+  `X-AR-IO-Trusted` so downstream consumers can decide whether to accept
+  cached / peered data.
+- **Circuit breakers**: the network-process circuit breaker prevents an
+  RPC outage from cascading into a backed-up request queue.
+- **Auto-verification**: the auto-verify subsystem cross-checks indexed
+  data against the canonical Parquet / ClickHouse / SQLite paths so an
+  intentionally-misindexed source surfaces as a discrepancy rather than
+  silently corrupting state.
 
 ---
 
-## Recommendations
+## Open Risks
 
-### Immediate Actions (0-3 months)
-
-#### 1. Implement Fallback IO Processes
-```typescript
-// Proposed configuration
-export const IO_PROCESS_IDS = env.varOrDefault(
-  'IO_PROCESS_IDS',
-  'primary-id,backup-id-1,backup-id-2'
-).split(',');
-
-// Fallback logic
-for (const processId of IO_PROCESS_IDS) {
-  try {
-    const result = await queryIOProcess(processId);
-    if (result) return result;
-  } catch (error) {
-    log.warn(`IO Process ${processId} failed, trying next`);
-  }
-}
-```
-
-#### 2. Local Peer Configuration
-```typescript
-// Allow manual peer list override
-export const STATIC_PEER_LIST = env.varOrDefault(
-  'STATIC_PEER_LIST',
-  ''
-).split(',').filter(Boolean);
-
-// Merge with discovered peers
-const allPeers = [...discoveredPeers, ...STATIC_PEER_LIST];
-```
-
-#### 3. Offline Mode Support
-- Cache IO Process responses locally
-- Extended TTLs for offline operation
-- Manual ArNS record injection
-
-### Medium-Term Goals (3-6 months)
-
-#### 1. P2P Discovery Protocol
-```typescript
-// Proposed peer exchange protocol
-interface PeerExchange {
-  requestPeers(): Promise<Peer[]>;
-  sharePeers(peers: Peer[]): Promise<void>;
-  verifyPeer(peer: Peer): Promise<boolean>;
-}
-```
-
-#### 2. Federated IO Processes
-- Multiple IO Processes with consensus
-- Cross-validation of registry data
-- Automatic failover with state sync
-
-#### 3. Direct ANT Resolution
-```typescript
-// Bypass IO Process for known ANT processes
-if (cachedANTProcess[name]) {
-  return queryANTDirectly(cachedANTProcess[name]);
-}
-```
-
-### Long-Term Vision (6-12 months)
-
-#### 1. Decentralized Coordination Protocol
-
-Replace IO Process with:
-- Blockchain-based registry (on Arweave)
-- Consensus-based peer discovery
-- Trustless name resolution
-
-#### 2. Autonomous Gateway Operation
-
-Enable gateways to:
-- Self-register via smart contracts
-- Discover peers via DHT
-- Resolve names via blockchain queries
-
-#### 3. Cryptographic Trust
-
-Implement:
-- Signed peer announcements
-- Merkle proofs for registry data
-- Zero-knowledge proofs for private operations
+| Risk | Status | Owner |
+|---|---|---|
+| Multi-RPC fan-out for read consensus | Not implemented — single `SOLANA_RPC_URL` per process | SDK / gateway |
+| HSM-backed signer support | Not implemented in `@ar.io/sdk`; gateway accepts file-loaded keypair | SDK |
+| Program upgrade authority transparency | Authority addresses live on-chain but are not surfaced in gateway diagnostics | Network operations |
+| Frozen-program path | Programs are upgradeable today; freezing is a network-governance call | Network governance |
+| ArNS peer cross-validation | Peers' `X-ArNS-*` headers are trusted by name even when content verification would catch malformed payloads | Gateway |
 
 ---
 
-## Implementation Roadmap
+## Operator Knobs
 
-### Phase 1: Resilience Enhancement (Month 1-2)
-- [ ] Implement multiple IO Process support
-- [ ] Add static peer configuration
-- [ ] Extend cache TTLs
-- [ ] Create offline mode flag
+These give operators direct control over their centralization posture:
 
-### Phase 2: Partial Decentralization (Month 3-4)
-- [ ] Design P2P discovery protocol
-- [ ] Implement peer exchange mechanism
-- [ ] Add direct ANT resolution
-- [ ] Create local registry cache
-
-### Phase 3: Federation (Month 5-6)
-- [ ] Deploy backup IO Processes
-- [ ] Implement consensus mechanism
-- [ ] Add cross-validation
-- [ ] Enable automatic failover
-
-### Phase 4: Full Decentralization (Month 7-12)
-- [ ] Design on-chain registry
-- [ ] Implement DHT discovery
-- [ ] Deploy trustless resolution
-- [ ] Remove IO Process dependency
+- `SOLANA_RPC_URL` — choose / self-host RPC
+- `ARIO_{CORE,GAR,ARNS,ANT}_PROGRAM_ID` — override program IDs per cluster
+- `TRUSTED_GATEWAYS_URLS` — control which peers are trusted for data
+- `ARNS_RESOLVER_PRIORITY_ORDER` — prefer direct SDK over peers, or vice versa
+- `ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_*` — tune RPC circuit-breaker thresholds
+- Auto-verify pipeline knobs (see `docs/auto-verify.md`) — independent cross-checking layer
 
 ---
 
-## Conclusion
-
-The ar.io gateway architecture successfully leverages Arweave's decentralized storage but introduces significant centralization risks through its coordination layer. The hardcoded IO Process dependency represents the most critical vulnerability, creating a single point of failure for network-wide operations.
-
-While existing mitigations provide some resilience, they don't address the fundamental architectural dependency. The proposed roadmap offers a path toward true decentralization while maintaining backward compatibility and network stability.
-
-**Key Takeaway**: Achieving full decentralization requires rearchitecting the coordination layer to remove single points of failure while preserving the performance and user experience benefits of the current system.
-
----
-
-## Appendix: Configuration Examples
-
-### Resilient Gateway Configuration
-```bash
-# Multiple fallback nodes
-TRUSTED_NODE_URL=https://node1.example.com
-TRUSTED_GATEWAYS_URLS='{"https://gw1.example.com": 1, "https://gw2.example.com": 2}'
-
-# Extended caching
-ARNS_CACHE_TTL_SECONDS=86400  # 24 hours
-ARNS_RESOLVER_OVERRIDE_TTL_SECONDS=3600  # 1 hour
-
-# Static peers
-STATIC_PEER_LIST=https://peer1.com,https://peer2.com,https://peer3.com
-
-# Increased timeouts
-ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS=120000  # 2 minutes
-```
-
-### Offline Mode Configuration
-```bash
-# Disable IO Process queries
-ENABLE_ARNS_RESOLUTION=false
-ENABLE_PEER_DISCOVERY=false
-
-# Use only cached/static data
-USE_CACHE_ONLY=true
-STATIC_ARNS_RECORDS=/path/to/arns-backup.json
-```
-
----
-
-*Document prepared for engineering team review and discussion.*
+*This document reflects the `solana` branch at SDK `4.0.0-solana.14`. For
+the AO-era analysis (IO Process as SPOF, AO Compute Unit dependency,
+etc.), see git history prior to the AO sidecar removal.*
