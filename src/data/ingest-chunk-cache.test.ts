@@ -8,11 +8,21 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import { createTestLogger } from '../../test/test-logger.js';
+import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 import {
   ingestCacheOrigin,
+  resyncPendingBytesEstimate,
   validateAndCacheIngestedChunk,
 } from './ingest-chunk-cache.js';
 import { toB64Url } from '../lib/encoding.js';
+
+async function skippedDiskFullCount(): Promise<number> {
+  const m = await metrics.chunkIngestCacheCounter.get();
+  return (
+    m.values.find((v) => v.labels.result === 'skipped_disk_full')?.value ?? 0
+  );
+}
 import {
   ChunkDataStore,
   ChunkMetadataStore,
@@ -59,6 +69,30 @@ describe('validateAndCacheIngestedChunk', () => {
     assert.equal(calls.setData, 0);
     assert.equal(calls.setMeta, 0);
     assert.equal(calls.saved, 0);
+  });
+
+  it('skips caching (no write) when the pending-bytes disk cap is exceeded', async () => {
+    const { calls, ...deps } = makeStores();
+    // Push the in-process pending estimate over the cap; the chunk must be
+    // rejected at the disk guard (before validation or any storage write).
+    resyncPendingBytesEstimate(config.CHUNK_INGEST_MAX_PENDING_BYTES + 1);
+    const before = await skippedDiskFullCount();
+    try {
+      const body: JsonChunkPost = {
+        data_root: toB64Url(Buffer.alloc(32)),
+        chunk: toB64Url(Buffer.from('x'.repeat(256))),
+        data_size: '256',
+        data_path: toB64Url(Buffer.alloc(96)),
+        offset: '0',
+      };
+      await validateAndCacheIngestedChunk({ ...deps, body, origin: 1, log });
+
+      assert.equal((await skippedDiskFullCount()) - before, 1);
+      assert.equal(calls.saved, 0);
+      assert.equal(calls.setData, 0);
+    } finally {
+      resyncPendingBytesEstimate(0);
+    }
   });
 
   it('rejects non-integer offset/size before validating', async () => {

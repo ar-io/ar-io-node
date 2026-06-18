@@ -11,6 +11,7 @@ import * as metrics from '../metrics.js';
 import {
   CHUNK_INGEST_ORIGIN_ALLOWLISTED,
   CHUNK_INGEST_ORIGIN_OPEN,
+  resyncPendingBytesEstimate,
 } from '../data/ingest-chunk-cache.js';
 import {
   ChunkDataStore,
@@ -77,6 +78,13 @@ export class ChunkIngestGcWorker {
     if (this.timer !== undefined) {
       return;
     }
+    // Seed the synchronous ingest-side disk guard from the on-disk total, so a
+    // restart with existing pending data enforces the cap immediately (before
+    // the first sweep).
+    void this.chunkPlacementIndex
+      .sumPendingChunkBytes()
+      .then((bytes) => resyncPendingBytesEstimate(bytes))
+      .catch(() => undefined);
     this.timer = setInterval(() => {
       void this.sweep();
     }, this.intervalMs);
@@ -131,7 +139,11 @@ export class ChunkIngestGcWorker {
           pendingBytes -= placement.chunkSize;
         }
       }
-      metrics.chunkIngestPendingBytesGauge.set(Math.max(0, pendingBytes));
+      const accuratePending = Math.max(0, pendingBytes);
+      metrics.chunkIngestPendingBytesGauge.set(accuratePending);
+      // Resync the synchronous ingest-side guard to the authoritative total so
+      // it self-corrects as placements confirm or are evicted.
+      resyncPendingBytesEstimate(accuratePending);
     } catch (error: unknown) {
       this.log.warn('Chunk ingest GC sweep failed', {
         message: error instanceof Error ? error.message : String(error),

@@ -27,6 +27,19 @@ import {
 export const CHUNK_INGEST_ORIGIN_OPEN = 1;
 export const CHUNK_INGEST_ORIGIN_ALLOWLISTED = 2;
 
+// In-process estimate of pending (unconfirmed) ingest-cached bytes, used to
+// enforce CHUNK_INGEST_MAX_PENDING_BYTES *synchronously* at ingest (not just via
+// the periodic GC sweep, which a burst could overrun between sweeps).
+// Incremented on each cache write; the GC worker resyncs it to the authoritative
+// on-disk total each sweep, so it self-corrects as placements confirm or evict.
+let pendingBytesEstimate = 0;
+export function getPendingBytesEstimate(): number {
+  return pendingBytesEstimate;
+}
+export function resyncPendingBytesEstimate(actualPendingBytes: number): void {
+  pendingBytesEstimate = Math.max(0, actualPendingBytes);
+}
+
 /**
  * Decide whether a posted chunk is eligible for optimistic caching, and under
  * which origin. Returns null when caching is disabled or the poster is not
@@ -88,6 +101,19 @@ export async function validateAndCacheIngestedChunk({
   }
 
   const chunkBuf = fromB64Url(body.chunk);
+
+  // Hard disk bound, enforced synchronously here so a burst of posts cannot
+  // overrun the disk between GC sweeps. Reject (cheaply, before validation or
+  // storage work) once the pending total would exceed the cap.
+  const maxPendingBytes = config.CHUNK_INGEST_MAX_PENDING_BYTES;
+  if (
+    maxPendingBytes > 0 &&
+    pendingBytesEstimate + chunkBuf.length > maxPendingBytes
+  ) {
+    metrics.chunkIngestCacheCounter.inc({ result: 'skipped_disk_full' });
+    return;
+  }
+
   const dataPathBuf = fromB64Url(body.data_path);
   const dataRootBuf = fromB64Url(body.data_root);
 
@@ -138,6 +164,7 @@ export async function validateAndCacheIngestedChunk({
     confirmedAt: undefined,
   });
 
+  pendingBytesEstimate += chunkBuf.length;
   metrics.chunkIngestCacheCounter.inc({
     result:
       origin === CHUNK_INGEST_ORIGIN_ALLOWLISTED

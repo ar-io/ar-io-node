@@ -77,6 +77,25 @@ is upheld by:
 > would make a pending tx's `data_root` resolvable (and thus create the exposure
 > this guard protects against).
 
+## Abuse resistance (disk fill)
+
+Open ingest (empty allowlist) lets any client POST chunks, so disk fill is bounded
+two ways:
+
+- **Synchronous disk cap** — `CHUNK_INGEST_MAX_PENDING_BYTES` (default 25 GiB) is
+  enforced *at ingest*: once the pending (unconfirmed) total would exceed it,
+  further caching is rejected immediately
+  (`chunk_ingest_cache_total{result="skipped_disk_full"}`), not minutes later by
+  the sweep — so a burst cannot overrun the disk.
+- **Confirmation-driven GC** — anything that never confirms is evicted after the
+  TTL.
+
+For production, prefer **allowlist-only** (`CHUNK_INGEST_CACHE_ALLOWLIST` = your
+bundler) so only a trusted poster earns caching. Note the cap bounds *disk*, not
+request *rate*: `POST /chunk` still does its normal broadcast/validation work
+regardless of caching, so put a rate limiter / auth in front of it before exposing
+open ingest on a public endpoint.
+
 ## Tuning
 
 Set `CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS` comfortably above your worst-case
@@ -91,7 +110,7 @@ All at `/ar-io/__gateway_metrics`:
 
 | Metric | Meaning |
 |---|---|
-| `chunk_ingest_cache_total{result}` | Outcome per POST: `cached`, `cached_allowlisted`, `invalid`, `skipped_not_allowlisted`. |
+| `chunk_ingest_cache_total{result}` | Outcome per POST: `cached`, `cached_allowlisted`, `invalid`, `skipped_not_allowlisted`, `skipped_disk_full`. |
 | `chunk_ingest_confirmed_total` | Pending placements confirmed by tx-indexed events. |
 | `chunk_ingest_confirmation_latency_seconds` | POST→confirm latency histogram (use to tune the TTLs). |
 | `chunk_ingest_evicted_total{reason}` | GC evictions: `ttl`, `disk_pressure`. |
