@@ -113,11 +113,17 @@ We gate on **(b) stable**, not (a) mined, deliberately:
 - It requires no new DB method — `stable` is already returned by
   `getDataAttributes`, which the worker already calls.
 
-The guard is **always on** (independent of the feature flag): normal mined txs
-arrive from blocks already stable, so it is a no-op for them; it only ever
-withholds not-yet-stable data. Withholding does not consume the verification
-retry budget, so a legitimately pending tx verifies on the first sweep after it
-stabilizes.
+The guard is **always on and gateway-wide** — not optimistic-tx-specific and not
+flag-gated. It moves the `verified` stamp for **all** data from verified-at-mine
+to **verified-at-stable**: a correct tightening, since a freshly mined tx is
+*not* yet stable (it can still reorg out within `MAX_FORK_DEPTH`), and we must
+never stamp `verified` on reorg-able data. In practice this is a no-op for the
+typical verification backlog (which is already well past stable when the worker
+reaches it), but it does delay verification of recently-mined data from at-mine
+to at-stable. The check runs **before** the data-root computation, so a
+not-yet-stable item is skipped cheaply rather than recomputed on every sweep, and
+withholding does not consume the verification retry budget — a not-yet-stable
+item verifies on the first sweep after it stabilizes.
 
 ### Scope
 

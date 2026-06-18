@@ -151,12 +151,12 @@ export class DataVerificationWorker {
     dataIds: string[];
   }): Promise<boolean> {
     const log = this.log.child({ method: 'verifyDataRoot', id: rootTxId });
-    // Serving guard (optimistic L1 tx indexing / corner C): set when we
-    // deliberately withhold verification because the root L1 tx is not yet
-    // stable. This is NOT a verification failure, so the finally block must
-    // skip the retry-count increment — otherwise a legitimately-pending tx
-    // would exhaust its retry budget before it stabilizes and could then never
-    // be verified. Distinct from the catch path, which still counts as a retry.
+    // Set when we deliberately withhold verification because the root tx is not
+    // yet stable (see the serving guard below). This is NOT a verification
+    // failure, so the finally block must skip the retry-count increment —
+    // otherwise a not-yet-stable item would exhaust its retry budget before it
+    // stabilizes and could then never be verified. Distinct from the catch
+    // path, which still counts as a retry.
     let withheldUnconfirmed = false;
     try {
       // TODO: use an implementation of contiguousDataIndex that attempts to
@@ -164,6 +164,31 @@ export class DataVerificationWorker {
       // GQL) when it's unavailable in the local index
       const dataAttributes =
         await this.contiguousDataIndex.getDataAttributes(rootTxId);
+
+      // SERVING GUARD — checked BEFORE computing the data root. Withhold
+      // verification for any root tx that is not yet `stable` (past fork depth):
+      // its data_root has no settled on-chain backing, and merkle
+      // self-consistency is not permanence, so we must never promote it to
+      // `verified` (the gateway can never serve not-yet-permanent data as
+      // permanent). `stable` is the same bar the response layer uses to mark a
+      // representation `immutable` (routes/data/handlers.ts). Checking here,
+      // before computeDataRoot, skips the expensive data-root computation for
+      // not-yet-stable items rather than recomputing it on every sweep until
+      // they stabilize. No retry penalty: the item stays eligible and verifies
+      // on the first sweep after it stabilizes.
+      //
+      // This is GATEWAY-WIDE, not optimistic-tx-specific: it moves the
+      // `verified` stamp for ALL data to verified-at-stable instead of
+      // verified-at-mine — a correct tightening (don't stamp `verified` on data
+      // that can still reorg out). In practice a no-op for the typical
+      // verification backlog (already past stable), but it does delay
+      // verification of recently-mined data from at-mine to at-stable.
+      if (dataAttributes?.stable !== true) {
+        withheldUnconfirmed = true;
+        metrics.optimisticTxVerificationBlockedCounter.inc();
+        log.debug('Withholding verification: root tx not yet stable');
+        return false;
+      }
 
       const indexedDataRoot = dataAttributes?.dataRoot;
       let computedDataRoot: string | undefined = undefined;
@@ -230,26 +255,6 @@ export class DataVerificationWorker {
           await this.chunkDataImporter.queueItem({ id: rootTxId }, true);
         }
 
-        return false;
-      }
-
-      // SERVING GUARD (optimistic L1 tx indexing / corner C): the indexed and
-      // computed data roots match, so the bytes are provably consistent with
-      // the claimed data_root — but merkle self-consistency is NOT permanence.
-      // If the root L1 transaction is not yet stable (past fork depth), its
-      // data_root has no settled on-chain backing, so we MUST NOT promote it to
-      // `verified`. The gateway can never serve not-yet-permanent data as
-      // permanent. `stable` is the same bar the response layer uses to mark a
-      // representation `immutable` (routes/data/handlers.ts). Withhold and keep
-      // the data eligible (no retry penalty) so it verifies on the first sweep
-      // after the tx stabilizes. Always-on; for a normally mined+stable tx this
-      // is a no-op.
-      if (dataAttributes?.stable !== true) {
-        withheldUnconfirmed = true;
-        metrics.optimisticTxVerificationBlockedCounter.inc();
-        log.debug(
-          'Withholding verification: root L1 tx not yet stable/confirmed',
-        );
         return false;
       }
 

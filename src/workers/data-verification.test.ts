@@ -27,6 +27,7 @@ describe('DataVerificationWorker', () => {
   let contiguousDataIndex: ContiguousDataIndex;
   let incrementVerificationRetryCountMock: any;
   let saveVerificationStatusMock: any;
+  let getDataMock: any;
   let contiguousDataSource: ContiguousDataSource;
 
   // Matching data root for the 'testing...' fixture below. A stable root tx
@@ -51,14 +52,18 @@ describe('DataVerificationWorker', () => {
       incrementVerificationRetryCount: incrementVerificationRetryCountMock,
     } as any;
 
+    // Spy on getData so tests can assert whether the data root was computed
+    // (computeDataRoot streams the data via getData).
+    getDataMock = mock.fn(() =>
+      Promise.resolve({
+        stream: Readable.from(Buffer.from('testing...')),
+        size: 10,
+        verified: false,
+        cached: false,
+      }),
+    );
     contiguousDataSource = {
-      getData: () =>
-        Promise.resolve({
-          stream: Readable.from(Buffer.from('testing...')),
-          size: 10,
-          verified: false,
-          cached: false,
-        }),
+      getData: getDataMock,
     };
 
     dataVerificationWorker = new DataVerificationWorker({
@@ -73,6 +78,7 @@ describe('DataVerificationWorker', () => {
     mock.restoreAll();
     incrementVerificationRetryCountMock.mock.resetCalls();
     saveVerificationStatusMock.mock.resetCalls();
+    getDataMock.mock.resetCalls();
     // Restore the default fixture so tests that reassign getDataAttributes
     // (e.g. the mismatch cases) do not leak into subsequent tests.
     (contiguousDataIndex as any).getDataAttributes = stableMatchingAttributes;
@@ -95,6 +101,9 @@ describe('DataVerificationWorker', () => {
   it('should fail verification when they dont match', async () => {
     (contiguousDataIndex as any).getDataAttributes = async () => {
       return {
+        // stable so it passes the serving guard and reaches the genuine
+        // mismatch path (where a real verification failure burns a retry).
+        stable: true,
         dataRoot: 'nomatch',
       };
     };
@@ -111,6 +120,9 @@ describe('DataVerificationWorker', () => {
   it('should increment retry count on verification failure', async () => {
     (contiguousDataIndex as any).getDataAttributes = async () => {
       return {
+        // stable so it passes the serving guard and reaches the genuine
+        // mismatch path (where a real verification failure burns a retry).
+        stable: true,
         dataRoot: 'nomatch',
       };
     };
@@ -130,6 +142,9 @@ describe('DataVerificationWorker', () => {
   it('should increment retry count for all associated data IDs', async () => {
     (contiguousDataIndex as any).getDataAttributes = async () => {
       return {
+        // stable so it passes the serving guard and reaches the genuine
+        // mismatch path (where a real verification failure burns a retry).
+        stable: true,
         dataRoot: 'nomatch',
       };
     };
@@ -178,6 +193,10 @@ describe('DataVerificationWorker', () => {
     // it stabilizes", not a verification failure. Otherwise a legitimately
     // pending tx could exhaust its retries before it confirms.
     assert.equal(incrementVerificationRetryCountMock.mock.calls.length, 0);
+    // ...and crucially the data root must NOT be computed (the expensive step):
+    // the guard short-circuits before computeDataRoot so a not-yet-stable item
+    // is skipped cheaply instead of recomputed every sweep.
+    assert.equal(getDataMock.mock.calls.length, 0);
   });
 
   it('should verify and stamp when the root tx is stable', async () => {
@@ -193,5 +212,7 @@ describe('DataVerificationWorker', () => {
 
     assert.equal(verified, true);
     assert.equal(saveVerificationStatusMock.mock.calls.length, 1);
+    // A stable item IS verified, so the data root was computed.
+    assert.ok(getDataMock.mock.calls.length >= 1);
   });
 });
