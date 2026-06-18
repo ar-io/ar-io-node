@@ -2490,16 +2490,17 @@ export const CHUNK_INGEST_CACHE_ALLOWLIST =
 
 // GC leash (seconds) for open-ingest chunks whose data_root never confirms
 // on-chain. Must exceed worst-case mine+index latency.
-export const CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS = +env.varOrDefault(
-  'CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS',
-  '21600', // 6 hours
-);
+export const CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS =
+  env.positiveIntOrDefault(
+    'CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS',
+    21600, // 6 hours
+  );
 
 // Longer GC leash (seconds) for allowlisted-poster chunks.
 export const CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS =
-  +env.varOrDefault(
+  env.positiveIntOrDefault(
     'CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS',
-    '86400', // 24 hours
+    86400, // 24 hours
   );
 
 // Runaway-disk backstop: when pending (unconfirmed) ingest-cached bytes exceed
@@ -2507,19 +2508,19 @@ export const CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS =
 // junk reclamation mechanism; this only catches pathological runaway (e.g. a
 // junk-fill flood under open ingest). Defaults to a conservative non-zero so
 // enabling caching can't silently fill the disk. Set to 0 to disable.
-export const CHUNK_INGEST_MAX_PENDING_BYTES = +env.varOrDefault(
+export const CHUNK_INGEST_MAX_PENDING_BYTES = env.nonNegativeIntOrDefault(
   'CHUNK_INGEST_MAX_PENDING_BYTES',
-  '26843545600', // 25 GiB
+  26843545600, // 25 GiB
 );
 
 // GC sweep interval (ms) and per-sweep batch size.
-export const CHUNK_INGEST_GC_INTERVAL_MS = +env.varOrDefault(
+export const CHUNK_INGEST_GC_INTERVAL_MS = env.positiveIntOrDefault(
   'CHUNK_INGEST_GC_INTERVAL_MS',
-  '300000', // 5 minutes
+  300000, // 5 minutes
 );
-export const CHUNK_INGEST_GC_BATCH_SIZE = +env.varOrDefault(
+export const CHUNK_INGEST_GC_BATCH_SIZE = env.positiveIntOrDefault(
   'CHUNK_INGEST_GC_BATCH_SIZE',
-  '1000',
+  1000,
 );
 
 // ArNS names to exclude from rate limiting

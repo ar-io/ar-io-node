@@ -17,6 +17,7 @@ import {
   CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT,
   MAX_CHUNK_SIZE,
 } from '../../config.js';
+import * as config from '../../config.js';
 import { headerNames } from '../../constants.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { toB64Url } from '../../lib/encoding.js';
@@ -735,20 +736,27 @@ export const createChunkPostHandler = ({
         // ingestCacheOrigin (enabled + allowlist). A chunk under a data_root
         // that never confirms on-chain is unaddressable and is reclaimed by the
         // GC sweep, so open ingest cannot poison or be served wrong bytes.
-        const ingestOrigin = ingestCacheOrigin(req);
-        if (ingestOrigin !== null) {
-          void validateAndCacheIngestedChunk({
-            chunkDataStore,
-            chunkMetadataStore,
-            chunkPlacementIndex,
-            body: req.body,
-            origin: ingestOrigin,
-            log,
-          }).catch((cacheError: any) => {
-            log.warn('Optimistic chunk caching failed', {
-              message: cacheError?.message,
+        if (config.CHUNK_INGEST_CACHE_ENABLED) {
+          const ingestOrigin = ingestCacheOrigin(req);
+          if (ingestOrigin !== null) {
+            void validateAndCacheIngestedChunk({
+              chunkDataStore,
+              chunkMetadataStore,
+              chunkPlacementIndex,
+              body: req.body,
+              origin: ingestOrigin,
+              log,
+            }).catch((cacheError: any) => {
+              log.warn('Optimistic chunk caching failed', {
+                message: cacheError?.message,
+              });
             });
-          });
+          } else {
+            // Enabled but poster not allowlisted — make gated posts observable.
+            metrics.chunkIngestCacheCounter.inc({
+              result: 'skipped_not_allowlisted',
+            });
+          }
         }
       } catch (error: any) {
         span.recordException(error);

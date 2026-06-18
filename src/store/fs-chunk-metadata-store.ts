@@ -103,12 +103,10 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
         this.chunkMetadataPath(dataRoot, relativeOffset),
       );
     } catch (error: any) {
+      // ENOENT = already gone (success). Propagate anything else so the GC
+      // caller leaves the placement row intact and retries on the next sweep.
       if (error.code !== 'ENOENT') {
-        this.log.warn('Failed to delete cached chunk metadata', {
-          dataRoot,
-          relativeOffset,
-          message: error.message,
-        });
+        throw error;
       }
     }
   }

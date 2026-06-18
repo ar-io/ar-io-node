@@ -41,19 +41,16 @@ export function resyncPendingBytesEstimate(actualPendingBytes: number): void {
 }
 
 /**
- * Decide whether a posted chunk is eligible for optimistic caching, and under
- * which origin. Returns null when caching is disabled or the poster is not
- * allowlisted (caching gated, not posting — the broadcast relay is unaffected).
+ * Decide the caching origin for a posted chunk, assuming the feature is enabled
+ * (the caller checks `CHUNK_INGEST_CACHE_ENABLED`). Returns null when the poster
+ * is not allowlisted — the caller emits the `skipped_not_allowlisted` metric so
+ * gated posts are observable.
  *
- * - Caching disabled        -> null
  * - Allowlist empty         -> OPEN  (any valid chunk is cached)
  * - Poster IP in allowlist  -> ALLOWLISTED
  * - Allowlist set, no match -> null  (relay only, no cache)
  */
 export function ingestCacheOrigin(req: Request): number | null {
-  if (!config.CHUNK_INGEST_CACHE_ENABLED) {
-    return null;
-  }
   const allowlist = config.CHUNK_INGEST_CACHE_ALLOWLIST;
   if (allowlist.length === 0) {
     return CHUNK_INGEST_ORIGIN_OPEN;
@@ -114,61 +111,75 @@ export async function validateAndCacheIngestedChunk({
     return;
   }
 
-  const dataPathBuf = fromB64Url(body.data_path);
-  const dataRootBuf = fromB64Url(body.data_root);
-
-  // Verify-first. validateChunk throws on a hash or data_path mismatch.
+  // Reserve the bytes synchronously *before* the async validation/storage path,
+  // so concurrent ingests count this chunk against the cap immediately. The
+  // reservation is released in the finally on any non-cache outcome.
+  pendingBytesEstimate += chunkBuf.length;
+  let cached = false;
   try {
-    await validateChunk(
-      dataSize,
-      { chunk: chunkBuf, data_path: dataPathBuf },
-      dataRootBuf,
-      relativeOffset,
-    );
-  } catch (error: any) {
-    metrics.chunkIngestCacheCounter.inc({ result: 'invalid' });
-    log.debug('Rejected invalid ingested chunk', {
+    const dataPathBuf = fromB64Url(body.data_path);
+    const dataRootBuf = fromB64Url(body.data_root);
+
+    // Verify-first. validateChunk throws on a hash or data_path mismatch.
+    try {
+      await validateChunk(
+        dataSize,
+        { chunk: chunkBuf, data_path: dataPathBuf },
+        dataRootBuf,
+        relativeOffset,
+      );
+    } catch (error: any) {
+      metrics.chunkIngestCacheCounter.inc({ result: 'invalid' });
+      log.debug('Rejected invalid ingested chunk', {
+        dataRoot: body.data_root,
+        relativeOffset,
+        message: error?.message,
+      });
+      return;
+    }
+
+    const hash = crypto.createHash('sha256').update(chunkBuf).digest();
+    const metadata: ChunkMetadata = {
+      data_root: dataRootBuf,
+      data_size: dataSize,
+      data_path: dataPathBuf,
+      offset: relativeOffset,
+      chunk_size: chunkBuf.length,
+      hash,
+    };
+    const chunkData: ChunkData = { hash, chunk: chunkBuf };
+
+    // Write the metadata + data pair, then record the ledger row. The stores
+    // swallow their own errors, so a partial write reads back as a cache miss
+    // (safe fallthrough) rather than serving wrong bytes.
+    await chunkMetadataStore.set(metadata);
+    await chunkDataStore.set(body.data_root, relativeOffset, chunkData);
+    await chunkPlacementIndex.saveChunkPlacement({
       dataRoot: body.data_root,
       relativeOffset,
-      message: error?.message,
+      dataSize,
+      chunkSize: chunkBuf.length,
+      hash: toB64Url(hash),
+      dataPath: body.data_path,
+      txPath: undefined,
+      origin,
+      cachedAt: Math.floor(Date.now() / 1000),
+      confirmedAt: undefined,
     });
-    return;
+
+    cached = true;
+    metrics.chunkIngestCacheCounter.inc({
+      result:
+        origin === CHUNK_INGEST_ORIGIN_ALLOWLISTED
+          ? 'cached_allowlisted'
+          : 'cached',
+    });
+  } finally {
+    if (!cached) {
+      pendingBytesEstimate = Math.max(
+        0,
+        pendingBytesEstimate - chunkBuf.length,
+      );
+    }
   }
-
-  const hash = crypto.createHash('sha256').update(chunkBuf).digest();
-  const metadata: ChunkMetadata = {
-    data_root: dataRootBuf,
-    data_size: dataSize,
-    data_path: dataPathBuf,
-    offset: relativeOffset,
-    chunk_size: chunkBuf.length,
-    hash,
-  };
-  const chunkData: ChunkData = { hash, chunk: chunkBuf };
-
-  // Write the metadata + data pair, then record the ledger row. The stores
-  // swallow their own errors, so a partial write reads back as a cache miss
-  // (safe fallthrough) rather than serving wrong bytes.
-  await chunkMetadataStore.set(metadata);
-  await chunkDataStore.set(body.data_root, relativeOffset, chunkData);
-  await chunkPlacementIndex.saveChunkPlacement({
-    dataRoot: body.data_root,
-    relativeOffset,
-    dataSize,
-    chunkSize: chunkBuf.length,
-    hash: toB64Url(hash),
-    dataPath: body.data_path,
-    txPath: undefined,
-    origin,
-    cachedAt: Math.floor(Date.now() / 1000),
-    confirmedAt: undefined,
-  });
-
-  pendingBytesEstimate += chunkBuf.length;
-  metrics.chunkIngestCacheCounter.inc({
-    result:
-      origin === CHUNK_INGEST_ORIGIN_ALLOWLISTED
-        ? 'cached_allowlisted'
-        : 'cached',
-  });
 }

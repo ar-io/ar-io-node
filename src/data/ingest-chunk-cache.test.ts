@@ -11,6 +11,7 @@ import { createTestLogger } from '../../test/test-logger.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 import {
+  CHUNK_INGEST_ORIGIN_OPEN,
   ingestCacheOrigin,
   resyncPendingBytesEstimate,
   validateAndCacheIngestedChunk,
@@ -112,8 +113,8 @@ describe('validateAndCacheIngestedChunk', () => {
 });
 
 describe('ingestCacheOrigin', () => {
-  it('returns null when ingest caching is disabled (default config)', () => {
+  it('returns OPEN when the allowlist is empty (open ingest)', () => {
     const req = { headers: {}, socket: {} } as any;
-    assert.equal(ingestCacheOrigin(req), null);
+    assert.equal(ingestCacheOrigin(req), CHUNK_INGEST_ORIGIN_OPEN);
   });
 });
