@@ -962,6 +962,20 @@ export const CHUNK_FIRST_DATA_TIMEOUT_MS = env.nonNegativeIntOrDefault(
   10000,
 );
 
+// Wall-clock deadline (ms) for serving a single chunk request
+// (/chunk/:offset and /chunk/:offset/data). The per-source timeouts in the
+// retrieval cascade are additive with no overall ceiling, and some awaited
+// operations don't honor the abort signal, so a slow serve can otherwise run
+// until the upstream proxy (nginx/envoy, ~15s observed) cuts it — yielding a
+// 504 that also leaves the in-flight work running. This bounds the whole
+// retrieval below that cap so the gateway returns promptly (a 404, matching
+// the timeout-as-not-found contract) and releases the connection itself. Must
+// stay below the proxy read timeout. 0 disables.
+export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
+  'CHUNK_SERVE_DEADLINE_MS',
+  12000,
+);
+
 // Chain fallback for chunk offset requests
 export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =
   env.varOrDefault('CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED', 'true') === 'true';

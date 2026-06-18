@@ -66,6 +66,26 @@ export const uncaughtExceptionCounter = new promClient.Counter({
   help: 'Count of uncaught exceptions',
 });
 
+// Errors that escape route handlers / earlier middleware and reach the
+// terminal Express error handler. Before this existed such errors fell to
+// Express's default finalhandler as unlogged, generic 500s — this counter
+// (plus the handler's logging) makes that previously-invisible path visible.
+export const unhandledRequestErrorsCounter = new promClient.Counter({
+  name: 'unhandled_request_errors_total',
+  help: 'Count of errors reaching the terminal Express error handler',
+  labelNames: ['method', 'status'],
+});
+
+// Chunk serves cut short by the handler's wall-clock deadline
+// (CHUNK_SERVE_DEADLINE_MS). A rising rate means the retrieval cascade is
+// routinely exceeding the deadline — tune the deadline or the upstream load,
+// not a bug on its own. Use to size CHUNK_SERVE_DEADLINE_MS vs the proxy cap.
+export const chunkServeDeadlineExceededCounter = new promClient.Counter({
+  name: 'chunk_serve_deadline_exceeded_total',
+  help: 'Count of chunk serves aborted by the handler wall-clock deadline',
+  labelNames: ['method'],
+});
+
 //
 // Global bundle metrics
 //
