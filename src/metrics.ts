@@ -98,7 +98,8 @@ export const graphqlRootTxBatchesTotal = new promClient.Counter({
 
 export const graphqlRootTxBatchSize = new promClient.Histogram({
   name: 'graphql_root_tx_batch_size',
-  help: 'Number of IDs per batched GraphQL root-tx query',
+  help: 'Number of IDs per batched GraphQL root-tx query, by endpoint',
+  labelNames: ['endpoint'],
   buckets: [1, 2, 5, 10, 25, 50, 100],
 });
 

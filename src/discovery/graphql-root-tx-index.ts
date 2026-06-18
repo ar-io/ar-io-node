@@ -190,7 +190,7 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
         metrics: {
           batchesIssued: (endpoint, size) => {
             metrics.graphqlRootTxBatchesTotal.inc({ endpoint });
-            metrics.graphqlRootTxBatchSize.observe(size);
+            metrics.graphqlRootTxBatchSize.observe({ endpoint }, size);
           },
           shed: () => metrics.graphqlRootTxBatchShedTotal.inc(),
           tokenWaitTimeout: (endpoint) =>
