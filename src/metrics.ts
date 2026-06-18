@@ -87,6 +87,34 @@ export const chunkServeDeadlineExceededCounter = new promClient.Counter({
 });
 
 //
+// GraphQL root TX lookup batching metrics
+//
+
+export const graphqlRootTxBatchesTotal = new promClient.Counter({
+  name: 'graphql_root_tx_batches_total',
+  help: 'Count of batched GraphQL root-tx queries issued, by endpoint',
+  labelNames: ['endpoint'],
+});
+
+export const graphqlRootTxBatchSize = new promClient.Histogram({
+  name: 'graphql_root_tx_batch_size',
+  help: 'Number of IDs per batched GraphQL root-tx query, by endpoint',
+  labelNames: ['endpoint'],
+  buckets: [1, 2, 5, 10, 25, 50, 100],
+});
+
+export const graphqlRootTxBatchShedTotal = new promClient.Counter({
+  name: 'graphql_root_tx_batch_shed_total',
+  help: 'Count of root-tx lookups shed because the batch queue was at max depth',
+});
+
+export const graphqlRootTxBatchTokenWaitTimeoutTotal = new promClient.Counter({
+  name: 'graphql_root_tx_batch_token_wait_timeout_total',
+  help: 'Count of batches that gave up waiting for a rate-limit token, by endpoint',
+  labelNames: ['endpoint'],
+});
+
+//
 // Global bundle metrics
 //
 
@@ -151,13 +179,7 @@ export const bundleDownloadSizeBytes = new promClient.Histogram({
   help: 'Bundle download size in bytes (as reported by contiguousDataSource)',
   labelNames: ['outcome'],
   buckets: [
-    1_024,
-    10_240,
-    102_400,
-    1_048_576,
-    10_485_760,
-    104_857_600,
-    1_073_741_824,
+    1_024, 10_240, 102_400, 1_048_576, 10_485_760, 104_857_600, 1_073_741_824,
     10_737_418_240,
   ],
 });
@@ -390,13 +412,13 @@ export const attributeFetchCounter = new promClient.Counter({
   name: 'attribute_fetch_total',
   help:
     'Count of owner/signature attribute fetch attempts by source and outcome. ' +
-    "`source` records where the value came from (or where we gave up): " +
-    "`store` (signatureStore/ownerStore KV), `attributes` (inline value in " +
+    '`source` records where the value came from (or where we gave up): ' +
+    '`store` (signatureStore/ownerStore KV), `attributes` (inline value in ' +
     'data_item/transaction attributes), `parent_data` (bytes via ' +
-    "fetchDataFromParent — data items only), `chain` (chainSource — " +
-    "transactions only), `derived` (secp256k1 owner-from-tx recovery), " +
-    "`incomplete_root` (PE-9073 guard fired). `outcome` is one of `hit`, " +
-    "`aborted`, `error`, `not_found`.",
+    'fetchDataFromParent — data items only), `chain` (chainSource — ' +
+    'transactions only), `derived` (secp256k1 owner-from-tx recovery), ' +
+    '`incomplete_root` (PE-9073 guard fired). `outcome` is one of `hit`, ' +
+    '`aborted`, `error`, `not_found`.',
   labelNames: ['kind', 'subject', 'source', 'outcome'],
 });
 
@@ -826,7 +848,14 @@ export const negativeCachePromotionsSuppressedTotal = new promClient.Counter({
 export const requestChunkTotal = new promClient.Counter({
   name: 'request_chunk_total',
   help: 'Count of each individual chunk http request, status can be "error" or "success", source_type can be "trusted", "preferred", or "peer", peer_type can be "bucket" or "general".',
-  labelNames: ['status', 'class', 'method', 'source', 'source_type', 'peer_type'] as const,
+  labelNames: [
+    'status',
+    'class',
+    'method',
+    'source',
+    'source_type',
+    'peer_type',
+  ] as const,
 });
 
 export const getChunkTotal = new promClient.Counter({
@@ -961,8 +990,7 @@ const breakerSources: BreakerSource[] = [...breakerSourceNames];
 // the breaker name. Kept separate from BreakerSource so the zero-init logic
 // for label-only breaker metrics doesn't create empty always-zero series.
 const endpointBreakerSourceNames = ['gateways-gql'] as const;
-export type EndpointBreakerSource =
-  (typeof endpointBreakerSourceNames)[number];
+export type EndpointBreakerSource = (typeof endpointBreakerSourceNames)[number];
 
 export const circuitBreakerOpenCount = createCounter({
   name: 'circuit_breaker_open_count',
@@ -1176,10 +1204,7 @@ export const compositeRootTxLookupDurationSummary = new promClient.Summary({
 //
 
 const semaphores: { [key: string]: Semaphore } = {};
-export function registerSemaphoreMetrics(
-  name: string,
-  semaphore: Semaphore,
-) {
+export function registerSemaphoreMetrics(name: string, semaphore: Semaphore) {
   semaphores[name] = semaphore;
 }
 
