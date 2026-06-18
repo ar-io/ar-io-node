@@ -1443,6 +1443,16 @@ export const OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS = +env.varOrDefault(
   `${60 * 60 * 2}`,
 );
 
+// Maximum number of transaction headers accepted in a single
+// `POST /ar-io/admin/queue-optimistic-tx` request. Each accepted tx triggers a
+// sequential signature verification, so this caps the worst-case work a single
+// (admin-authenticated) request can schedule — the 10 MB body limit alone would
+// otherwise permit thousands of small headers.
+export const OPTIMISTIC_TX_MAX_BATCH_SIZE = +env.varOrDefault(
+  'OPTIMISTIC_TX_MAX_BATCH_SIZE',
+  '100',
+);
+
 // Whether or not to enable the data database WAL cleanup worker
 export const ENABLE_DATA_DB_WAL_CLEANUP =
   env.varOrDefault('ENABLE_DATA_DB_WAL_CLEANUP', 'false') === 'true';

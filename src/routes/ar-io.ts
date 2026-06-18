@@ -19,6 +19,7 @@ import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
 import { sanityCheckTx } from '../lib/validation.js';
+import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
 
 const arweave = Arweave.init({});
@@ -427,24 +428,6 @@ arIoRouter.post(
   },
 );
 
-/**
- * Minimal structural guard for an incoming L1 transaction header. The payload
- * is the standard Arweave transaction JSON (the same shape `GET /tx/:id`
- * returns), which is field-compatible with `PartialJsonTransaction`. Deeper
- * structural + cryptographic validation is delegated to `sanityCheckTx` and
- * `arweave.transactions.verify` in the handler.
- */
-export function isL1TxHeader(tx: unknown): tx is PartialJsonTransaction {
-  return (
-    typeof tx === 'object' &&
-    tx !== null &&
-    typeof (tx as any).id === 'string' &&
-    typeof (tx as any).owner === 'string' &&
-    typeof (tx as any).signature === 'string' &&
-    typeof (tx as any).last_tx === 'string'
-  );
-}
-
 // Optimistically index a signed L1 transaction so it is resolvable
 // (GraphQL `transaction(id)`, with `block: null`) before it mines. Trusted /
 // allowlist-only: gated by the `/ar-io/admin` bearer auth above AND the
@@ -468,14 +451,16 @@ arIoRouter.post(
     }
 
     try {
-      const txs: unknown[] = Array.isArray(req.body) ? req.body : [req.body];
-
-      if (txs.length === 0 || !txs.every(isL1TxHeader)) {
-        res.status(400).send('Must provide L1 transaction header(s) as JSON');
+      const validation = validateOptimisticTxBatch(
+        req.body,
+        config.OPTIMISTIC_TX_MAX_BATCH_SIZE,
+      );
+      if (!validation.ok) {
+        res.status(validation.status).send(validation.message);
         return;
       }
 
-      for (const tx of txs) {
+      for (const tx of validation.txs) {
         // Structural check (id present + well-formed).
         try {
           sanityCheckTx(tx);
