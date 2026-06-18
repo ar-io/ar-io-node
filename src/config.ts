@@ -1438,9 +1438,9 @@ export const OPTIMISTIC_TX_INDEXING_ENABLED =
 // Must exceed worst-case mine + index latency so a legitimately-pending tx is
 // not evicted before it confirms. Default 2h matches the prior hardcoded
 // behavior; tune from observed confirmation latency.
-export const OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS = +env.varOrDefault(
+export const OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS = env.positiveIntOrDefault(
   'OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS',
-  `${60 * 60 * 2}`,
+  60 * 60 * 2,
 );
 
 // Maximum number of transaction headers accepted in a single
@@ -1448,9 +1448,9 @@ export const OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS = +env.varOrDefault(
 // sequential signature verification, so this caps the worst-case work a single
 // (admin-authenticated) request can schedule — the 10 MB body limit alone would
 // otherwise permit thousands of small headers.
-export const OPTIMISTIC_TX_MAX_BATCH_SIZE = +env.varOrDefault(
+export const OPTIMISTIC_TX_MAX_BATCH_SIZE = env.positiveIntOrDefault(
   'OPTIMISTIC_TX_MAX_BATCH_SIZE',
-  '100',
+  100,
 );
 
 // Whether or not to enable the data database WAL cleanup worker
