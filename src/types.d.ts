@@ -227,6 +227,55 @@ export interface ChainOffsetIndex {
 }
 
 /**
+ * A cached chunk's placement row in chunks.db. Serves as both the chunk
+ * metadata index (keyed by data_root + relative_offset) and the optimistic
+ * ingest ledger (origin / cached_at / confirmed_at drive GC). BLOB-valued
+ * fields (dataRoot, hash, dataPath, txPath) are base64url strings at this
+ * boundary and stored as BLOBs in SQLite.
+ */
+export interface ChunkPlacement {
+  dataRoot: string;
+  relativeOffset: number;
+  dataSize: number;
+  chunkSize: number;
+  hash: string;
+  dataPath: string;
+  txPath: string | undefined;
+  origin: number;
+  cachedAt: number;
+  confirmedAt: number | undefined;
+}
+
+/** Lightweight chunk-placement reference returned by GC selection queries. */
+export interface ChunkPlacementRef {
+  dataRoot: string;
+  relativeOffset: number;
+  chunkSize: number;
+}
+
+export interface ChunkPlacementIndex {
+  saveChunkPlacement(placement: ChunkPlacement): Promise<void>;
+  confirmChunkPlacements(dataRoot: string, confirmedAt: number): Promise<number>;
+  unconfirmChunkPlacements(dataRoot: string): Promise<void>;
+  selectExpiredUnconfirmedChunkPlacements(params: {
+    originIngest: number;
+    originIngestAllowlisted: number;
+    openCutoff: number;
+    allowCutoff: number;
+    limit: number;
+  }): Promise<ChunkPlacementRef[]>;
+  selectOldestPendingChunkPlacements(
+    limit: number,
+  ): Promise<ChunkPlacementRef[]>;
+  deleteChunkPlacement(dataRoot: string, relativeOffset: number): Promise<void>;
+  getChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<ChunkPlacement | undefined>;
+  sumPendingChunkBytes(): Promise<number>;
+}
+
+/**
  * Transaction boundary information for a given offset.
  * Contains the essential data needed to locate and validate a chunk
  * within a transaction.
