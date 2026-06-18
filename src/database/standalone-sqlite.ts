@@ -997,11 +997,12 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
-  confirmChunkPlacements(dataRoot: string, confirmedAt: number): number {
-    return this.stmts.chunks.confirmChunkPlacements.run({
+  confirmChunkPlacements(dataRoot: string, confirmedAt: number): number[] {
+    const rows = this.stmts.chunks.confirmChunkPlacements.all({
       data_root: fromB64Url(dataRoot),
       confirmed_at: confirmedAt,
-    }).changes;
+    });
+    return rows.map((row: any) => row.cached_at as number);
   }
 
   unconfirmChunkPlacements(dataRoot: string) {
@@ -3501,7 +3502,7 @@ export class StandaloneSqliteDatabase
   confirmChunkPlacements(
     dataRoot: string,
     confirmedAt: number,
-  ): Promise<number> {
+  ): Promise<number[]> {
     return this.queueWrite('data', 'confirmChunkPlacements', [
       dataRoot,
       confirmedAt,

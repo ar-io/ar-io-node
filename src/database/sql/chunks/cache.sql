@@ -20,6 +20,7 @@ UPDATE chunk_placements
 SET confirmed_at = @confirmed_at
 WHERE data_root = @data_root
   AND confirmed_at IS NULL
+RETURNING cached_at
 
 -- unconfirmChunkPlacements
 UPDATE chunk_placements

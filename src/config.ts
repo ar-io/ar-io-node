@@ -2502,11 +2502,14 @@ export const CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS =
     '86400', // 24 hours
   );
 
-// Disk backstop: when pending (unconfirmed) ingest-cached bytes exceed this,
-// the GC sweep evicts oldest-pending first. 0 disables the disk cap.
+// Runaway-disk backstop: when pending (unconfirmed) ingest-cached bytes exceed
+// this, the GC sweep evicts oldest-pending first. The TTL above is the primary
+// junk reclamation mechanism; this only catches pathological runaway (e.g. a
+// junk-fill flood under open ingest). Defaults to a conservative non-zero so
+// enabling caching can't silently fill the disk. Set to 0 to disable.
 export const CHUNK_INGEST_MAX_PENDING_BYTES = +env.varOrDefault(
   'CHUNK_INGEST_MAX_PENDING_BYTES',
-  '0',
+  '26843545600', // 25 GiB
 );
 
 // GC sweep interval (ms) and per-sweep batch size.

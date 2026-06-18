@@ -97,6 +97,22 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
     }
   }
 
+  async del(dataRoot: string, relativeOffset: number): Promise<void> {
+    try {
+      await fs.promises.unlink(
+        this.chunkMetadataPath(dataRoot, relativeOffset),
+      );
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') {
+        this.log.warn('Failed to delete cached chunk metadata', {
+          dataRoot,
+          relativeOffset,
+          message: error.message,
+        });
+      }
+    }
+  }
+
   async set(
     chunkMetadata: ChunkMetadata,
     absoluteOffset?: number,

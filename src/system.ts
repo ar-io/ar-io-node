@@ -120,6 +120,7 @@ import { S3DataSource } from './data/s3-data-source.js';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetchers.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
+import { ChunkIngestGcWorker } from './workers/chunk-ingest-gc.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
 import { awsClient, legacyAwsS3Client } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
@@ -491,10 +492,16 @@ if (config.CHUNK_INGEST_CACHE_ENABLED) {
   eventEmitter.on(events.TX_INDEXED, (tx: { data_root?: string }) => {
     const dataRoot = tx?.data_root;
     if (dataRoot !== undefined && dataRoot !== '') {
-      db.confirmChunkPlacements(dataRoot, Math.floor(Date.now() / 1000))
-        .then((confirmed) => {
-          if (confirmed > 0) {
-            metrics.chunkIngestConfirmedCounter.inc(confirmed);
+      const confirmedAt = Math.floor(Date.now() / 1000);
+      db.confirmChunkPlacements(dataRoot, confirmedAt)
+        .then((cachedAts) => {
+          if (cachedAts.length > 0) {
+            metrics.chunkIngestConfirmedCounter.inc(cachedAts.length);
+            for (const cachedAt of cachedAts) {
+              metrics.chunkIngestConfirmationLatencySeconds.observe(
+                Math.max(0, confirmedAt - cachedAt),
+              );
+            }
           }
         })
         .catch((error: unknown) => {
@@ -861,6 +868,24 @@ export const chunkRetrievalService = new ChunkRetrievalService({
   chunkDataStore,
   chunkMetadataStore,
 });
+
+// Optimistic chunk ingest GC: evicts cached chunks whose data_root never
+// confirms on-chain, plus a disk-pressure backstop. Only runs when ingest
+// caching is enabled.
+export const chunkIngestGcWorker = config.CHUNK_INGEST_CACHE_ENABLED
+  ? new ChunkIngestGcWorker({
+      log,
+      chunkDataStore,
+      chunkMetadataStore,
+      chunkPlacementIndex: db,
+    })
+  : undefined;
+if (chunkIngestGcWorker !== undefined) {
+  chunkIngestGcWorker.start();
+  registerCleanupHandler('chunkIngestGcWorker', async () => {
+    await chunkIngestGcWorker.stop();
+  });
+}
 
 // Create the base TX chunks data source
 const chunkRequestLimit = pLimit(config.CHUNK_REQUEST_CONCURRENCY);

@@ -153,6 +153,7 @@ export interface ChunkDataStore {
     chunkData: ChunkData,
     absoluteOffset?: number,
   ): Promise<void>;
+  del(dataRoot: string, relativeOffset: number): Promise<void>;
 }
 
 export interface ChunkMetadataStore {
@@ -165,6 +166,7 @@ export interface ChunkMetadataStore {
     absoluteOffset: number,
   ): Promise<ChunkMetadata | undefined>;
   set(chunkMetadata: ChunkMetadata, absoluteOffset?: number): Promise<void>;
+  del(dataRoot: string, relativeOffset: number): Promise<void>;
 }
 
 type Region = {
@@ -255,7 +257,10 @@ export interface ChunkPlacementRef {
 
 export interface ChunkPlacementIndex {
   saveChunkPlacement(placement: ChunkPlacement): Promise<void>;
-  confirmChunkPlacements(dataRoot: string, confirmedAt: number): Promise<number>;
+  confirmChunkPlacements(
+    dataRoot: string,
+    confirmedAt: number,
+  ): Promise<number[]>;
   unconfirmChunkPlacements(dataRoot: string): Promise<void>;
   selectExpiredUnconfirmedChunkPlacements(params: {
     originIngest: number;

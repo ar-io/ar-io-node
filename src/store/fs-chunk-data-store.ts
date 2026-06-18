@@ -106,6 +106,22 @@ export class FsChunkDataStore implements ChunkDataStore {
     }
   }
 
+  async del(dataRoot: string, relativeOffset: number): Promise<void> {
+    try {
+      await fs.promises.unlink(
+        this.chunkDataRootPath(dataRoot, relativeOffset),
+      );
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') {
+        this.log.warn('Failed to delete cached chunk data', {
+          dataRoot,
+          relativeOffset,
+          message: error.message,
+        });
+      }
+    }
+  }
+
   async set(
     dataRoot: string,
     relativeOffset: number,
