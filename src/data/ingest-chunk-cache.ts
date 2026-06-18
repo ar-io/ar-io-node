@@ -89,15 +89,27 @@ export async function validateAndCacheIngestedChunk({
   origin: number;
   log: Logger;
 }): Promise<void> {
-  const relativeOffset = parseInt(body.offset, 10);
+  const endOffset = parseInt(body.offset, 10);
   const dataSize = parseInt(body.data_size, 10);
 
-  if (!Number.isInteger(relativeOffset) || !Number.isInteger(dataSize)) {
+  if (!Number.isInteger(endOffset) || !Number.isInteger(dataSize)) {
     metrics.chunkIngestCacheCounter.inc({ result: 'invalid' });
     return;
   }
 
   const chunkBuf = fromB64Url(body.chunk);
+
+  // The chunk stores and placement index MUST be keyed by the chunk's START
+  // offset within the transaction — that is the value every read path
+  // (TxChunksDataSource, range streaming, the unbundler) looks chunks up by.
+  // body.offset is the Arweave chunk-POST END offset (maxByteRange - 1), so the
+  // start is end - size + 1. (validateChunk keeps using the END offset, which is
+  // what the merkle proof is computed against.)
+  const relativeOffset = endOffset - chunkBuf.length + 1;
+  if (relativeOffset < 0) {
+    metrics.chunkIngestCacheCounter.inc({ result: 'invalid' });
+    return;
+  }
 
   // Hard disk bound, enforced synchronously here so a burst of posts cannot
   // overrun the disk between GC sweeps. Reject (cheaply, before validation or
@@ -126,7 +138,7 @@ export async function validateAndCacheIngestedChunk({
         dataSize,
         { chunk: chunkBuf, data_path: dataPathBuf },
         dataRootBuf,
-        relativeOffset,
+        endOffset,
       );
     } catch (error: any) {
       metrics.chunkIngestCacheCounter.inc({ result: 'invalid' });

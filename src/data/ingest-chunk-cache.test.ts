@@ -6,6 +6,7 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
+import Arweave from 'arweave';
 
 import { createTestLogger } from '../../test/test-logger.js';
 import * as config from '../config.js';
@@ -84,7 +85,7 @@ describe('validateAndCacheIngestedChunk', () => {
         chunk: toB64Url(Buffer.from('x'.repeat(256))),
         data_size: '256',
         data_path: toB64Url(Buffer.alloc(96)),
-        offset: '0',
+        offset: '255', // END offset of a 256-byte chunk -> START 0 (valid)
       };
       await validateAndCacheIngestedChunk({ ...deps, body, origin: 1, log });
 
@@ -109,6 +110,61 @@ describe('validateAndCacheIngestedChunk', () => {
     await validateAndCacheIngestedChunk({ ...deps, body, origin: 1, log });
 
     assert.equal(calls.saved, 0);
+  });
+
+  it('keys storage by the chunk START offset so the read path can find it', async () => {
+    // Round-trip regression: a real (valid-proof) single-chunk tx starts at
+    // byte 0, so every read path queries offset 0 — NOT the Arweave END offset
+    // (data_size - 1) the chunk is POSTed with. The stores must be keyed by 0.
+    const arweave = Arweave.init({
+      host: 'localhost',
+      port: 1984,
+      protocol: 'http',
+    });
+    const wallet = await arweave.wallets.generate();
+    const data = Buffer.from(
+      'chunk-ingest start-offset regression ' + 'x'.repeat(64),
+    );
+    // Supply last_tx/reward so createTransaction does not fetch from a node.
+    const tx = await arweave.createTransaction(
+      { data, last_tx: '', reward: '0' },
+      wallet,
+    );
+    await arweave.transactions.sign(tx, wallet);
+    const chunk = tx.getChunk(0, data) as unknown as JsonChunkPost;
+
+    let dataOffset: number | undefined;
+    let metaOffset: number | undefined;
+    let placementOffset: number | undefined;
+    const chunkDataStore = {
+      async set(_dr: string, ro: number) {
+        dataOffset = ro;
+      },
+    } as unknown as ChunkDataStore;
+    const chunkMetadataStore = {
+      async set(m: { offset: number }) {
+        metaOffset = m.offset;
+      },
+    } as unknown as ChunkMetadataStore;
+    const chunkPlacementIndex = {
+      async saveChunkPlacement(p: { relativeOffset: number }) {
+        placementOffset = p.relativeOffset;
+      },
+    } as unknown as ChunkPlacementIndex;
+
+    await validateAndCacheIngestedChunk({
+      chunkDataStore,
+      chunkMetadataStore,
+      chunkPlacementIndex,
+      body: chunk,
+      origin: 1,
+      log,
+    });
+
+    assert.equal(dataOffset, 0);
+    assert.equal(metaOffset, 0);
+    assert.equal(placementOffset, 0);
+    assert.notEqual(Number(chunk.offset), 0); // sanity: END offset is non-zero
   });
 });
 
