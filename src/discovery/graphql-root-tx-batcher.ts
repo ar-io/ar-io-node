@@ -145,15 +145,6 @@ export class GraphQLRootTxBatcher {
   }
 
   async lookup(id: string): Promise<LookupResult> {
-    // An empty/blank ID can never match a transaction, and goldsky's
-    // Elasticsearch backend rejects the *entire* `transactions(ids:[...])`
-    // query with HTTP 400 ("Ids can't be empty") if any ID in the batch is
-    // empty — which would fail every other ID sharing that batch. Short-
-    // circuit here so a stray empty ID can never poison a batch.
-    if (!id || id.trim() === '') {
-      return NOT_FOUND;
-    }
-
     const cached = this.cache?.get(id);
     if (cached !== undefined) {
       return cached;
