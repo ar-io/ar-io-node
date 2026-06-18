@@ -92,7 +92,15 @@ export async function validateAndCacheIngestedChunk({
   const endOffset = parseInt(body.offset, 10);
   const dataSize = parseInt(body.data_size, 10);
 
-  if (!Number.isInteger(endOffset) || !Number.isInteger(dataSize)) {
+  // Bound the asserted metadata so a poster can't persist a nonsensical
+  // data_size / end offset into chunk_placements. The merkle END offset is
+  // maxByteRange - 1, so for any genuine chunk 0 <= endOffset < dataSize.
+  if (
+    !Number.isInteger(endOffset) ||
+    !Number.isInteger(dataSize) ||
+    dataSize <= 0 ||
+    endOffset >= dataSize
+  ) {
     metrics.chunkIngestCacheCounter.inc({ result: 'invalid' });
     return;
   }

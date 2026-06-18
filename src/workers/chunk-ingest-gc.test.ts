@@ -34,10 +34,14 @@ function makeDeps({
   expired = [],
   oldest = [],
   pendingBytes = 0,
+  confirmedKeys = new Set<string>(),
 }: {
   expired?: ChunkPlacementRef[];
   oldest?: ChunkPlacementRef[];
   pendingBytes?: number;
+  // keys ("dataRoot:relativeOffset") whose delete returns 0 rows, simulating a
+  // confirmation landing between the sweep's SELECT and the DELETE.
+  confirmedKeys?: Set<string>;
 }) {
   const rec: Recorder = { dataDel: [], metaDel: [], placementDel: [] };
   const chunkDataStore = {
@@ -59,6 +63,7 @@ function makeDeps({
     },
     async deleteChunkPlacement(dr: string, ro: number) {
       rec.placementDel.push([dr, ro]);
+      return confirmedKeys.has(`${dr}:${ro}`) ? 0 : 1;
     },
     async sumPendingChunkBytes() {
       return pendingBytes;
@@ -92,6 +97,31 @@ describe('ChunkIngestGcWorker', () => {
       ['root-a', 0],
       ['root-b', 256],
     ]);
+  });
+
+  it('keeps a placement (and its FS bytes) confirmed between select and delete', async () => {
+    const { rec, ...deps } = makeDeps({
+      expired: [ref('confirmed-root', 0, 100), ref('pending-root', 256, 200)],
+      // 'confirmed-root' got confirmed after selection -> guarded delete = 0 rows.
+      confirmedKeys: new Set(['confirmed-root:0']),
+    });
+    const worker = new ChunkIngestGcWorker({
+      log,
+      ...deps,
+      maxPendingBytes: 0,
+    });
+
+    await worker.sweep();
+
+    // Both deletes are attempted...
+    assert.deepEqual(rec.placementDel, [
+      ['confirmed-root', 0],
+      ['pending-root', 256],
+    ]);
+    // ...but the FS bytes are only unlinked for the row that was actually
+    // deleted. The now-confirmed chunk keeps its bytes (no orphan).
+    assert.deepEqual(rec.dataDel, [['pending-root', 256]]);
+    assert.deepEqual(rec.metaDel, [['pending-root', 256]]);
   });
 
   it('evicts oldest pending when pending bytes exceed the disk cap', async () => {

@@ -158,12 +158,21 @@ export class ChunkIngestGcWorker {
     relativeOffset: number,
     reason: string,
   ): Promise<void> {
-    await this.chunkDataStore.del(dataRoot, relativeOffset);
-    await this.chunkMetadataStore.del(dataRoot, relativeOffset);
-    await this.chunkPlacementIndex.deleteChunkPlacement(
+    // Delete the placement row FIRST. The DELETE is guarded by
+    // `confirmed_at IS NULL`, so if the placement was confirmed between the
+    // sweep's SELECT and now, it deletes 0 rows — in which case we keep both
+    // the row and its FS bytes (the chunk is now part of the confirmed metadata
+    // index). Unlinking bytes before the row could otherwise orphan a
+    // just-confirmed placement (row present, bytes gone -> cache miss).
+    const deleted = await this.chunkPlacementIndex.deleteChunkPlacement(
       dataRoot,
       relativeOffset,
     );
+    if (deleted === 0) {
+      return;
+    }
+    await this.chunkDataStore.del(dataRoot, relativeOffset);
+    await this.chunkMetadataStore.del(dataRoot, relativeOffset);
     metrics.chunkIngestEvictedCounter.inc({ reason });
   }
 }

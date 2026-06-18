@@ -272,7 +272,12 @@ export interface ChunkPlacementIndex {
   selectOldestPendingChunkPlacements(
     limit: number,
   ): Promise<ChunkPlacementRef[]>;
-  deleteChunkPlacement(dataRoot: string, relativeOffset: number): Promise<void>;
+  // Returns the number of rows deleted (0 if the placement was confirmed
+  // between selection and deletion, so the caller can keep its FS bytes).
+  deleteChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<number>;
   getChunkPlacement(
     dataRoot: string,
     relativeOffset: number,

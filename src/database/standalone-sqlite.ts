@@ -1041,11 +1041,11 @@ export class StandaloneSqliteDatabaseWorker {
     }));
   }
 
-  deleteChunkPlacement(dataRoot: string, relativeOffset: number) {
-    this.stmts.chunks.deleteChunkPlacement.run({
+  deleteChunkPlacement(dataRoot: string, relativeOffset: number): number {
+    return this.stmts.chunks.deleteChunkPlacement.run({
       data_root: fromB64Url(dataRoot),
       relative_offset: relativeOffset,
-    });
+    }).changes;
   }
 
   getChunkPlacement(
@@ -3534,7 +3534,7 @@ export class StandaloneSqliteDatabase
   deleteChunkPlacement(
     dataRoot: string,
     relativeOffset: number,
-  ): Promise<void> {
+  ): Promise<number> {
     return this.queueWrite('data', 'deleteChunkPlacement', [
       dataRoot,
       relativeOffset,
@@ -4106,8 +4106,9 @@ if (!isMainThread) {
           );
           break;
         case 'deleteChunkPlacement':
-          worker.deleteChunkPlacement(args[0], args[1]);
-          parentPort?.postMessage(null);
+          parentPort?.postMessage(
+            worker.deleteChunkPlacement(args[0], args[1]),
+          );
           break;
         case 'getChunkPlacement':
           parentPort?.postMessage(worker.getChunkPlacement(args[0], args[1]));

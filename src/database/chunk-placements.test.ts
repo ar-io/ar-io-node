@@ -145,11 +145,24 @@ describe('chunk_placements (chunks.db) worker methods', () => {
     assert.equal(worker.sumPendingChunkBytes(), 256);
   });
 
-  it('deletes a placement', () => {
+  it('deletes a pending placement and returns the deleted row count', () => {
     const placement = basePlacement();
     worker.saveChunkPlacement(placement);
-    worker.deleteChunkPlacement(placement.dataRoot, 0);
 
+    assert.equal(worker.deleteChunkPlacement(placement.dataRoot, 0), 1);
     assert.equal(worker.getChunkPlacement(placement.dataRoot, 0), undefined);
+  });
+
+  it('does not delete a confirmed placement and returns 0 (GC TOCTOU guard)', () => {
+    const placement = basePlacement();
+    worker.saveChunkPlacement(placement);
+    worker.confirmChunkPlacements(placement.dataRoot, 5000);
+
+    // A confirmation that lands between the GC sweep's SELECT and this DELETE
+    // must NOT evict the now-confirmed placement.
+    assert.equal(worker.deleteChunkPlacement(placement.dataRoot, 0), 0);
+    const got = worker.getChunkPlacement(placement.dataRoot, 0);
+    assert.ok(got);
+    assert.equal(got.confirmedAt, 5000);
   });
 });

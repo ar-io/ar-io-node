@@ -46,9 +46,13 @@ ORDER BY cached_at ASC
 LIMIT @limit
 
 -- deleteChunkPlacement
+-- Guarded by `confirmed_at IS NULL` so a placement confirmed between the GC
+-- sweep's SELECT and this DELETE is NOT evicted (TOCTOU). The caller relies on
+-- the returned change count to decide whether to also unlink the FS bytes.
 DELETE FROM chunk_placements
 WHERE data_root = @data_root
   AND relative_offset = @relative_offset
+  AND confirmed_at IS NULL
 
 -- getChunkPlacement
 SELECT data_root, relative_offset, data_size, chunk_size, hash,
