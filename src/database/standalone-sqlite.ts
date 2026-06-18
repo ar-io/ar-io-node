@@ -68,7 +68,11 @@ const MAX_WORKER_COUNT = 12;
 const MAX_WORKER_ERRORS = 100;
 
 const STABLE_FLUSH_INTERVAL = 5;
-const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
+// Grace period before a never-mined optimistic (NULL-height) transaction is
+// reclaimed by the stale-new-data GC. Configurable so operators running
+// optimistic L1 tx indexing (corner C) can tune the leash to observed
+// confirmation latency; defaults to the prior hardcoded 2h.
+const NEW_TX_CLEANUP_WAIT_SECS = config.OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS;
 const NEW_DATA_ITEM_CLEANUP_WAIT_SECS = 60 * 60 * 2;
 const BUNDLE_REPROCESS_WAIT_SECS = 60 * 15;
 

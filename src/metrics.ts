@@ -1438,3 +1438,34 @@ export const httpSigInitFailedTotal = new promClient.Counter({
   name: 'httpsig_init_failed_total',
   help: 'HTTPSIG signing initialization failed at startup; signing is disabled',
 });
+
+//
+// Optimistic L1 transaction indexing (corner C)
+//
+
+/**
+ * Count of L1 transactions submitted to the optimistic-tx admin ingest
+ * endpoint (`POST /ar-io/admin/queue-optimistic-tx`). `result`:
+ *   - `indexed`  — authenticated and inserted into `new_transactions`
+ *                  (height NULL = pending until mined)
+ *   - `invalid`  — rejected; the tx signature/id did not verify
+ *   - `disabled` — rejected; `OPTIMISTIC_TX_INDEXING_ENABLED` is false
+ */
+export const optimisticTxIngestedCounter = new promClient.Counter({
+  name: 'optimistic_tx_ingested_total',
+  help: 'Count of L1 txs submitted to the optimistic-tx ingest endpoint by result',
+  labelNames: ['result'],
+});
+
+/**
+ * Count of times the data-verification worker WITHHELD a verified=1 stamp
+ * because the root L1 transaction is not yet stable (past fork depth). This
+ * is the integrity guard for optimistic tx indexing firing — it proves the
+ * gateway is never marking not-yet-permanent data as verified. A non-zero,
+ * steadily-draining value is healthy (optimistic txs awaiting confirmation);
+ * a value that never drains indicates txs that were indexed but never mined.
+ */
+export const optimisticTxVerificationBlockedCounter = new promClient.Counter({
+  name: 'optimistic_tx_verification_blocked_total',
+  help: 'Count of verification attempts withheld because the root L1 tx is not yet stable/confirmed',
+});

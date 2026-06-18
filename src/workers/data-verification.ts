@@ -18,6 +18,7 @@ import {
 } from '../types.js';
 import { DataRootComputer } from '../lib/data-root.js';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 
 export type QueueBundleResponse = {
   status: 'skipped' | 'queued' | 'error';
@@ -150,6 +151,13 @@ export class DataVerificationWorker {
     dataIds: string[];
   }): Promise<boolean> {
     const log = this.log.child({ method: 'verifyDataRoot', id: rootTxId });
+    // Serving guard (optimistic L1 tx indexing / corner C): set when we
+    // deliberately withhold verification because the root L1 tx is not yet
+    // stable. This is NOT a verification failure, so the finally block must
+    // skip the retry-count increment — otherwise a legitimately-pending tx
+    // would exhaust its retry budget before it stabilizes and could then never
+    // be verified. Distinct from the catch path, which still counts as a retry.
+    let withheldUnconfirmed = false;
     try {
       // TODO: use an implementation of contiguousDataIndex that attempts to
       // get 'data_root' from network sources (trusted Arweave nodes, gateways,
@@ -225,6 +233,26 @@ export class DataVerificationWorker {
         return false;
       }
 
+      // SERVING GUARD (optimistic L1 tx indexing / corner C): the indexed and
+      // computed data roots match, so the bytes are provably consistent with
+      // the claimed data_root — but merkle self-consistency is NOT permanence.
+      // If the root L1 transaction is not yet stable (past fork depth), its
+      // data_root has no settled on-chain backing, so we MUST NOT promote it to
+      // `verified`. The gateway can never serve not-yet-permanent data as
+      // permanent. `stable` is the same bar the response layer uses to mark a
+      // representation `immutable` (routes/data/handlers.ts). Withhold and keep
+      // the data eligible (no retry penalty) so it verifies on the first sweep
+      // after the tx stabilizes. Always-on; for a normally mined+stable tx this
+      // is a no-op.
+      if (dataAttributes?.stable !== true) {
+        withheldUnconfirmed = true;
+        metrics.optimisticTxVerificationBlockedCounter.inc();
+        log.debug(
+          'Withholding verification: root L1 tx not yet stable/confirmed',
+        );
+        return false;
+      }
+
       log.debug('Data root verified successfully.');
       await this.contiguousDataIndex.saveVerificationStatus(rootTxId);
       log.debug('Saved verified status successfully.');
@@ -233,14 +261,18 @@ export class DataVerificationWorker {
       log.error('Error verifying data root', { error });
       return false;
     } finally {
-      // Increment retry count for all associated data IDs
-      for (const dataId of dataIds) {
-        try {
-          await this.contiguousDataIndex.incrementVerificationRetryCount(
-            dataId,
-          );
-        } catch (retryError) {
-          log.error('Error incrementing retry count', { dataId, retryError });
+      // Increment retry count for all associated data IDs — except when we
+      // deliberately withheld verification on a not-yet-stable root tx (see the
+      // serving guard above), which is a "try again later", not a failure.
+      if (!withheldUnconfirmed) {
+        for (const dataId of dataIds) {
+          try {
+            await this.contiguousDataIndex.incrementVerificationRetryCount(
+              dataId,
+            );
+          } catch (retryError) {
+            log.error('Error incrementing retry count', { dataId, retryError });
+          }
         }
       }
     }

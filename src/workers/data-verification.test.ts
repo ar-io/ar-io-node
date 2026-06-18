@@ -26,22 +26,28 @@ describe('DataVerificationWorker', () => {
   let dataVerificationWorker: DataVerificationWorker;
   let contiguousDataIndex: ContiguousDataIndex;
   let incrementVerificationRetryCountMock: any;
+  let saveVerificationStatusMock: any;
   let contiguousDataSource: ContiguousDataSource;
+
+  // Matching data root for the 'testing...' fixture below. A stable root tx
+  // (past fork depth) is the default fixture — the serving guard only withholds
+  // verification for not-yet-stable txs, which the dedicated guard tests set
+  // explicitly.
+  const MATCHING_DATA_ROOT = 'UwpYX2u5CYy6hYJbRTWfBxIig01UDe74SY7Om3_1ftw';
+  const stableMatchingAttributes = async () => ({
+    dataRoot: MATCHING_DATA_ROOT,
+    stable: true,
+  });
 
   before(() => {
     log = createTestLogger({ suite: 'DataVerificationWorker' });
 
     incrementVerificationRetryCountMock = mock.fn(() => Promise.resolve());
+    saveVerificationStatusMock = mock.fn(() => Promise.resolve(true));
 
     contiguousDataIndex = {
-      getDataAttributes: async () => {
-        return {
-          dataRoot: 'UwpYX2u5CYy6hYJbRTWfBxIig01UDe74SY7Om3_1ftw',
-        };
-      },
-      saveVerificationStatus: async () => {
-        return true;
-      },
+      getDataAttributes: stableMatchingAttributes,
+      saveVerificationStatus: saveVerificationStatusMock,
       incrementVerificationRetryCount: incrementVerificationRetryCountMock,
     } as any;
 
@@ -66,6 +72,10 @@ describe('DataVerificationWorker', () => {
   afterEach(async () => {
     mock.restoreAll();
     incrementVerificationRetryCountMock.mock.resetCalls();
+    saveVerificationStatusMock.mock.resetCalls();
+    // Restore the default fixture so tests that reassign getDataAttributes
+    // (e.g. the mismatch cases) do not leak into subsequent tests.
+    (contiguousDataIndex as any).getDataAttributes = stableMatchingAttributes;
   });
 
   after(async () => {
@@ -143,5 +153,45 @@ describe('DataVerificationWorker', () => {
       incrementVerificationRetryCountMock.mock.calls[2].arguments[0],
       'data-id-3',
     );
+  });
+
+  // Serving guard (optimistic L1 tx indexing / corner C): even when the indexed
+  // and computed data roots MATCH, an optimistically-indexed (not-yet-stable)
+  // root tx must never be promoted to `verified` — merkle self-consistency is
+  // not permanence. The gateway can never serve not-yet-permanent data as
+  // permanent.
+  it('should NOT verify when data roots match but the root tx is not stable', async () => {
+    (contiguousDataIndex as any).getDataAttributes = async () => ({
+      dataRoot: MATCHING_DATA_ROOT,
+      stable: false, // optimistic / not yet past fork depth
+    });
+
+    const verified = await dataVerificationWorker.verifyDataRoot({
+      rootTxId: 'optimistic-tx',
+      dataIds: ['optimistic-tx'],
+    });
+
+    assert.equal(verified, false);
+    // The verified stamp must be withheld...
+    assert.equal(saveVerificationStatusMock.mock.calls.length, 0);
+    // ...and it must NOT burn the retry budget — withholding is "try again once
+    // it stabilizes", not a verification failure. Otherwise a legitimately
+    // pending tx could exhaust its retries before it confirms.
+    assert.equal(incrementVerificationRetryCountMock.mock.calls.length, 0);
+  });
+
+  it('should verify and stamp when the root tx is stable', async () => {
+    (contiguousDataIndex as any).getDataAttributes = async () => ({
+      dataRoot: MATCHING_DATA_ROOT,
+      stable: true,
+    });
+
+    const verified = await dataVerificationWorker.verifyDataRoot({
+      rootTxId: 'stable-tx',
+      dataIds: ['stable-tx'],
+    });
+
+    assert.equal(verified, true);
+    assert.equal(saveVerificationStatusMock.mock.calls.length, 1);
   });
 });

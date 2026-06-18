@@ -1421,6 +1421,28 @@ export const WRITE_ANS104_DATA_ITEM_DB_SIGNATURES =
 export const WRITE_TRANSACTION_DB_SIGNATURES =
   env.varOrDefault('WRITE_TRANSACTION_DB_SIGNATURES', 'false') === 'true';
 
+// Optimistic L1 transaction indexing (corner C). When enabled, a trusted
+// poster (admin-key holder) may submit signed L1 tx headers to
+// `POST /ar-io/admin/queue-optimistic-tx` to make the tx resolvable
+// (GraphQL `transaction(id)`, with `block: null`) before it mines. The tx is
+// inserted into `new_transactions` with a NULL height; the normal block-import
+// path promotes it in place when it mines, and never-mined rows are reclaimed
+// by the existing stale-new-transaction GC. The data-verification serving
+// guard (always-on, independent of this flag) ensures an optimistic tx's data
+// is never stamped `verified` until its root tx is stable. Off by default.
+export const OPTIMISTIC_TX_INDEXING_ENABLED =
+  env.varOrDefault('OPTIMISTIC_TX_INDEXING_ENABLED', 'false') === 'true';
+
+// Grace period (seconds) before a never-mined optimistic (NULL-height)
+// transaction is reclaimed from `new_transactions` by the stale-new-data GC.
+// Must exceed worst-case mine + index latency so a legitimately-pending tx is
+// not evicted before it confirms. Default 2h matches the prior hardcoded
+// behavior; tune from observed confirmation latency.
+export const OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS = +env.varOrDefault(
+  'OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS',
+  `${60 * 60 * 2}`,
+);
+
 // Whether or not to enable the data database WAL cleanup worker
 export const ENABLE_DATA_DB_WAL_CLEANUP =
   env.varOrDefault('ENABLE_DATA_DB_WAL_CLEANUP', 'false') === 'true';

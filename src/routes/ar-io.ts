@@ -6,6 +6,7 @@
  */
 import { Router, Request, Response, default as express } from 'express';
 import promBundle from 'express-prom-bundle';
+import { default as Arweave } from 'arweave';
 
 import * as config from '../config.js';
 import * as system from '../system.js';
@@ -17,7 +18,10 @@ import { ParquetExporter } from '../workers/parquet-exporter.js';
 import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
+import { sanityCheckTx } from '../lib/validation.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
+
+const arweave = Arweave.init({});
 
 export const arIoRouter = Router();
 export let parquetExporter: ParquetExporter | null = null;
@@ -418,6 +422,116 @@ arIoRouter.post(
 
       res.json({ message: 'Bundle queued' });
     } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
+
+/**
+ * Minimal structural guard for an incoming L1 transaction header. The payload
+ * is the standard Arweave transaction JSON (the same shape `GET /tx/:id`
+ * returns), which is field-compatible with `PartialJsonTransaction`. Deeper
+ * structural + cryptographic validation is delegated to `sanityCheckTx` and
+ * `arweave.transactions.verify` in the handler.
+ */
+export function isL1TxHeader(tx: unknown): tx is PartialJsonTransaction {
+  return (
+    typeof tx === 'object' &&
+    tx !== null &&
+    typeof (tx as any).id === 'string' &&
+    typeof (tx as any).owner === 'string' &&
+    typeof (tx as any).signature === 'string' &&
+    typeof (tx as any).last_tx === 'string'
+  );
+}
+
+// Optimistically index a signed L1 transaction so it is resolvable
+// (GraphQL `transaction(id)`, with `block: null`) before it mines. Trusted /
+// allowlist-only: gated by the `/ar-io/admin` bearer auth above AND the
+// `OPTIMISTIC_TX_INDEXING_ENABLED` master switch (default off). Unlike an
+// unaddressable junk chunk (corner A), an indexed tx is immediately queryable,
+// so this is admin-only and every tx is authenticated (`arweave.transactions
+// .verify`) — a forged id/data_root cannot be injected. The row is inserted
+// with a NULL height (pending); the normal block-import path promotes it in
+// place when it mines, and never-mined rows are reclaimed by the existing
+// stale-new-transaction GC (`OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS`). The data is
+// never served as `verified`/permanent until the tx is stable — enforced,
+// independently of this endpoint, by the data-verification serving guard.
+arIoRouter.post(
+  '/ar-io/admin/queue-optimistic-tx',
+  express.json({ limit: '10mb' }),
+  async (req, res) => {
+    if (!config.OPTIMISTIC_TX_INDEXING_ENABLED) {
+      metrics.optimisticTxIngestedCounter.inc({ result: 'disabled' });
+      res.status(403).send('Optimistic tx indexing is disabled');
+      return;
+    }
+
+    try {
+      const txs: unknown[] = Array.isArray(req.body) ? req.body : [req.body];
+
+      if (txs.length === 0 || !txs.every(isL1TxHeader)) {
+        res.status(400).send('Must provide L1 transaction header(s) as JSON');
+        return;
+      }
+
+      for (const tx of txs) {
+        // Structural check (id present + well-formed).
+        try {
+          sanityCheckTx(tx);
+        } catch (e: any) {
+          metrics.optimisticTxIngestedCounter.inc({ result: 'invalid' });
+          res.status(400).send(`Invalid transaction: ${e?.message}`);
+          return;
+        }
+
+        // Cryptographic authentication: the id must bind to the signature and
+        // the signature must verify against the owner. Prevents a trusted but
+        // buggy/compromised poster injecting a forged, queryable phantom tx.
+        let isValid = false;
+        try {
+          isValid = await arweave.transactions.verify(
+            arweave.transactions.fromRaw(tx),
+          );
+        } catch (e: any) {
+          metrics.optimisticTxIngestedCounter.inc({ result: 'invalid' });
+          res
+            .status(400)
+            .send(`Could not verify transaction ${tx.id}: ${e?.message}`);
+          return;
+        }
+        if (!isValid) {
+          metrics.optimisticTxIngestedCounter.inc({ result: 'invalid' });
+          res.status(400).send(`Invalid signature for transaction ${tx.id}`);
+          return;
+        }
+
+        // Drop any inline data payload so we never hold tx bytes in memory or
+        // the tx store — we index headers only (mirrors prefetchTx).
+        delete (tx as any).data;
+
+        // Cache the signature for retrieval when signatures are not persisted
+        // to the DB (mirrors the queue-data-item path).
+        if (
+          config.WRITE_TRANSACTION_DB_SIGNATURES === false &&
+          tx.signature != null
+        ) {
+          signatureStore.set(tx.id, tx.signature);
+        }
+
+        // Optimistic insert: no missing_transactions row → saveTx inserts into
+        // new_transactions with a NULL height (pending) and adds the owner
+        // wallet row that GraphQL requires. ON CONFLICT only fills in a height
+        // later, so re-POSTs and the eventual mined import never regress it.
+        await system.db.saveTx(tx);
+        metrics.optimisticTxIngestedCounter.inc({ result: 'indexed' });
+      }
+
+      res.json({ message: 'Optimistic transaction(s) indexed' });
+    } catch (error: any) {
+      log.error('Error indexing optimistic transaction', {
+        error: error?.message,
+      });
       res.status(500).send(error?.message);
     }
   },
