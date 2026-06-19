@@ -2785,7 +2785,9 @@ paths:
                     type: string
                     example: 'Data item(s) queued'
         '400':
-          description: Invalid request body
+          description: >-
+            Invalid request body, or the batch exceeds
+            QUEUE_DATA_ITEM_MAX_BATCH_SIZE (split the request).
           content:
             text/plain:
               schema:
@@ -2793,6 +2795,21 @@ paths:
                 example: 'Must provide array of data item headers'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: >-
+            Indexer saturated — backpressure. Returned when the DataItemIndexer
+            queue depth exceeds QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH. Retry after
+            the Retry-After interval.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'Data item indexer saturated (queue depth 100001 exceeds 100000); retry after backpressure clears'
         '500':
           $ref: '#/components/responses/ServerError'
   '/ar-io/admin/queue-optimistic-tx':
