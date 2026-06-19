@@ -77,11 +77,62 @@ type ExportData = {
 // be reading. Oldest entries fall off first (insertion-ordered Map).
 const MAX_JOB_HISTORY = 32;
 
+/** DuckDB resource limits applied to the export connection. */
+export interface DuckDbResourceLimits {
+  /** e.g. `'2GB'`. Undefined → leave DuckDB's default. */
+  memoryLimit?: string;
+  /** Spill directory for out-of-core sorts. Undefined → no spill dir set. */
+  tempDirectory?: string;
+  /** e.g. `'64GB'`. Undefined → leave DuckDB's default. */
+  maxTempDirectorySize?: string;
+  /** Worker-thread cap. Undefined → leave DuckDB's default (one per core). */
+  threads?: number;
+}
+
+/**
+ * Apply DuckDB resource limits to an export connection so a large
+ * `COPY (... ORDER BY ...)` spills to disk instead of OOM-killing the worker.
+ *
+ * Setting `temp_directory` is what enables out-of-core processing; without it
+ * DuckDB sorts entirely in memory regardless of `memory_limit`. `memory_limit`
+ * should sit below the container's memory ceiling so DuckDB starts spilling
+ * before the cgroup OOM-killer fires. `preserve_insertion_order = false` is
+ * safe because every export query carries an explicit `ORDER BY`, and it
+ * lets large COPYs avoid the extra ordering buffer.
+ *
+ * Exported (and kept out of the worker-only block) so it is unit-testable on
+ * the main thread without spawning a worker.
+ */
+export async function applyDuckDbResourcePragmas(
+  connection: Connection,
+  limits: DuckDbResourceLimits,
+): Promise<void> {
+  const quote = (s: string): string => s.replace(/'/g, "''");
+  if (limits.tempDirectory !== undefined) {
+    await connection.exec(
+      `SET temp_directory = '${quote(limits.tempDirectory)}';`,
+    );
+  }
+  if (limits.maxTempDirectorySize !== undefined) {
+    await connection.exec(
+      `SET max_temp_directory_size = '${quote(limits.maxTempDirectorySize)}';`,
+    );
+  }
+  if (limits.memoryLimit !== undefined) {
+    await connection.exec(`SET memory_limit = '${quote(limits.memoryLimit)}';`);
+  }
+  if (limits.threads !== undefined) {
+    await connection.exec(`SET threads = ${limits.threads};`);
+  }
+  await connection.exec('SET preserve_insertion_order = false;');
+}
+
 export class ParquetExporter {
   private log: winston.Logger;
   private worker: Worker | null = null;
   private bundlesDbPath: string;
   private coreDbPath: string;
+  private duckDbLimits: DuckDbResourceLimits;
   private exportStatus: ExportData = {
     status: NOT_STARTED,
   };
@@ -91,14 +142,25 @@ export class ParquetExporter {
     log,
     bundlesDbPath,
     coreDbPath,
+    duckDbMemoryLimit,
+    duckDbMaxTempDirectorySize,
+    duckDbThreads,
   }: {
     log: winston.Logger;
     bundlesDbPath: string;
     coreDbPath: string;
+    duckDbMemoryLimit?: string;
+    duckDbMaxTempDirectorySize?: string;
+    duckDbThreads?: number;
   }) {
     this.log = log.child({ class: 'ParquetExporter' });
     this.bundlesDbPath = bundlesDbPath;
     this.coreDbPath = coreDbPath;
+    this.duckDbLimits = {
+      memoryLimit: duckDbMemoryLimit,
+      maxTempDirectorySize: duckDbMaxTempDirectorySize,
+      threads: duckDbThreads,
+    };
   }
 
   // Single mutation point for exportStatus so the per-job map stays in sync
@@ -175,6 +237,9 @@ export class ParquetExporter {
           skipL1Tags,
           bundlesDbPath: this.bundlesDbPath,
           coreDbPath: this.coreDbPath,
+          duckDbMemoryLimit: this.duckDbLimits.memoryLimit,
+          duckDbMaxTempDirectorySize: this.duckDbLimits.maxTempDirectorySize,
+          duckDbThreads: this.duckDbLimits.threads,
         },
       });
 
@@ -666,6 +731,9 @@ CREATE TABLE IF NOT EXISTS tags (
       skipL1Tags,
       bundlesDbPath,
       coreDbPath,
+      duckDbMemoryLimit,
+      duckDbMaxTempDirectorySize,
+      duckDbThreads,
     } = data;
 
     // e.g. "20260214T120000_12345"
@@ -687,6 +755,19 @@ CREATE TABLE IF NOT EXISTS tags (
 
       await logTiming('init-duckdb', async () => {
         await connection!.exec('INSTALL sqlite; LOAD sqlite;');
+
+        // Give DuckDB a disk spill path + memory budget so a large
+        // `COPY (... ORDER BY ...)` over an ultra-dense partition sorts
+        // out-of-core instead of OOM-killing the worker. The spill dir lives
+        // under the per-job tempDir, so it's removed by the finally cleanup.
+        const duckDbSpillDir = join(tempDir!, 'duckdb-tmp');
+        mkdirSync(duckDbSpillDir, { recursive: true });
+        await applyDuckDbResourcePragmas(connection!, {
+          memoryLimit: duckDbMemoryLimit,
+          tempDirectory: duckDbSpillDir,
+          maxTempDirectorySize: duckDbMaxTempDirectorySize,
+          threads: duckDbThreads,
+        });
       });
 
       // Create temp SQLite database

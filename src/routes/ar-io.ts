@@ -37,6 +37,10 @@ function getParquetExporter(): ParquetExporter {
       log,
       bundlesDbPath: 'data/sqlite/bundles.db',
       coreDbPath: 'data/sqlite/core.db',
+      duckDbMemoryLimit: config.PARQUET_EXPORT_DUCKDB_MEMORY_LIMIT,
+      duckDbMaxTempDirectorySize:
+        config.PARQUET_EXPORT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+      duckDbThreads: config.PARQUET_EXPORT_DUCKDB_THREADS,
     });
 
     // Register cleanup handler when exporter is first created
