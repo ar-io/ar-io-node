@@ -261,6 +261,8 @@ export interface ChunkPlacementIndex {
     dataRoot: string,
     confirmedAt: number,
   ): Promise<number[]>;
+  // Reserved for chain-reorg recovery; not yet wired (no clean reorg hook with
+  // orphaned data_roots). See the deferral note in system.ts.
   unconfirmChunkPlacements(dataRoot: string): Promise<void>;
   selectExpiredUnconfirmedChunkPlacements(params: {
     originIngest: number;

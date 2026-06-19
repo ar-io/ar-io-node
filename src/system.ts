@@ -511,6 +511,23 @@ if (config.CHUNK_INGEST_CACHE_ENABLED) {
         });
     }
   });
+
+  // Reorg-unconfirm is intentionally deferred (no symmetric CHAIN_REORG
+  // handler). db.unconfirmChunkPlacements() is fully plumbed and reserved for
+  // it, but there is no clean call site today: the CHAIN_REORG event carries
+  // only forkHeight, not the orphaned txs' data_roots, and chunk_placements is
+  // not height-indexed — so confirmed placements can't be mapped to a fork
+  // without a new confirming-height column (migration) or surfacing orphaned
+  // data_roots from the core reset path. A *blanket* un-confirm on reorg would
+  // be wrong: it would push legitimately-confirmed chunks (whose tx is still
+  // canonical and will NOT re-emit TX_INDEXED) back to pending and let the GC
+  // evict them. The leak from skipping it is negligible: cached bytes are
+  // merkle-valid, an orphaned tx's data is unaddressable post-reorg (no offset
+  // resolves to an unmined tx), and an orphaned Arweave tx with a valid reward
+  // typically re-mines and re-confirms. Only a tx that is orphaned AND never
+  // re-mines leaves a single valid-but-retained placement — rare and small.
+  // Wire unconfirmChunkPlacements() here once placements track their confirming
+  // height.
 }
 
 export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP

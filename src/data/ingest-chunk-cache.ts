@@ -55,6 +55,15 @@ export function ingestCacheOrigin(req: Request): number | null {
   if (allowlist.length === 0) {
     return CHUNK_INGEST_ORIGIN_OPEN;
   }
+  // SPOOFABILITY (documented, not a ship gate): extractAllClientIPs trusts
+  // client-supplied X-Forwarded-For / X-Real-IP with no trusted-proxy hop
+  // handling (shared util, also used by the rate limiter + payments), so a
+  // poster can forge an allowlisted source IP. Impact is bounded — the allowlist
+  // only gates *who* is cached and the TTL tier (24h vs 6h), never content
+  // integrity (validateChunk still applies) or the disk cap; and it's moot under
+  // the default open ingest (empty allowlist). The proper fix (trusted-proxy hop
+  // parsing in ip-utils) is tracked separately. See CHUNK_INGEST_CACHE_ALLOWLIST
+  // in docs/envs.md.
   const { clientIps } = extractAllClientIPs(req);
   if (isAnyIpAllowlisted(clientIps, allowlist)) {
     return CHUNK_INGEST_ORIGIN_ALLOWLISTED;
@@ -95,6 +104,14 @@ export async function validateAndCacheIngestedChunk({
   // Bound the asserted metadata so a poster can't persist a nonsensical
   // data_size / end offset into chunk_placements. The merkle END offset is
   // maxByteRange - 1, so for any genuine chunk 0 <= endOffset < dataSize.
+  //
+  // RESIDUAL (intentionally not fixed): an *inflated but internally consistent*
+  // dataSize (large value, small genuine endOffset) still passes. Fully
+  // validating dataSize would require the true tx size, which a single non-last
+  // chunk's data_path cannot yield (only the last chunk's maxByteRange equals
+  // the tx size). Left as-is because impact is negligible: bytes are always
+  // hash-validated against data_root (no wrong-bytes risk), and serving takes
+  // the authoritative data_size from the tx header, not this row.
   if (
     !Number.isInteger(endOffset) ||
     !Number.isInteger(dataSize) ||

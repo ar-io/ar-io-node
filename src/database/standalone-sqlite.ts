@@ -1005,6 +1005,12 @@ export class StandaloneSqliteDatabaseWorker {
     return rows.map((row: any) => row.cached_at as number);
   }
 
+  // Reserved for chain-reorg recovery: returns a confirmed placement to pending
+  // so the GC can reclaim it if its (now-orphaned) tx never re-confirms. NOT yet
+  // wired — see the deferral note at the TX_INDEXED confirm subscriber in
+  // system.ts: CHAIN_REORG carries no orphaned data_roots and placements aren't
+  // height-indexed, so there's no clean call site yet. Kept plumbed (worker +
+  // queue wrapper + ChunkPlacementIndex interface) for that future hook.
   unconfirmChunkPlacements(dataRoot: string) {
     this.stmts.chunks.unconfirmChunkPlacements.run({
       data_root: fromB64Url(dataRoot),
