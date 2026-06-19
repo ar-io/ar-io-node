@@ -23,25 +23,50 @@ import { verificationPriorities } from './constants.js';
 // HTTP server port
 export const PORT = +env.varOrDefault('PORT', '4000');
 
-// Node's HTTP server keep-alive idle timeout. Envoy fronts core and pools
-// upstream connections; if core (the server) closes an idle keepalive
-// connection before Envoy (the client) stops reusing it, Envoy can dispatch
-// a request onto a connection core is tearing down, producing an instant
-// reset that surfaces to clients as a 5xx with no upstream response. To
-// avoid that race the invariant must hold:
-//   Envoy upstream idle_timeout  <  HTTP_KEEP_ALIVE_TIMEOUT_MS  <  HTTP_HEADERS_TIMEOUT_MS
-// (see ENVOY upstream idle_timeout in envoy/envoy.template.yaml, default 55s).
-// Node's own defaults invert this (keepAliveTimeout 5s, headersTimeout 60s),
-// so we raise core above Envoy's idle window here. headersTimeout must stay
-// strictly greater than keepAliveTimeout.
+/**
+ * Idle keep-alive timeout (ms) for core's HTTP server
+ * (`server.keepAliveTimeout`).
+ *
+ * Envoy fronts core and pools upstream connections; if core (the server)
+ * closes an idle keepalive connection before Envoy (the client) stops
+ * reusing it, Envoy can dispatch a request onto a connection core is tearing
+ * down, producing an instant reset that surfaces to clients as a 5xx with no
+ * upstream response. To avoid that race the invariant must hold:
+ *
+ *   Envoy upstream idle_timeout < HTTP_KEEP_ALIVE_TIMEOUT_MS < HTTP_HEADERS_TIMEOUT_MS
+ *
+ * Node's own defaults invert the left side (keepAliveTimeout 5s vs Envoy's
+ * 1h upstream idle default), so we raise core above Envoy's idle window here.
+ *
+ * @see ENVOY_ARIO_GATEWAY_UPSTREAM_IDLE_TIMEOUT in envoy/envoy.template.yaml
+ *   (default 55s)
+ * @default 60000 (60 seconds)
+ */
 export const HTTP_KEEP_ALIVE_TIMEOUT_MS = env.positiveIntOrDefault(
   'HTTP_KEEP_ALIVE_TIMEOUT_MS',
   1000 * 60, // 60 seconds
 );
+/**
+ * Headers timeout (ms) for core's HTTP server (`server.headersTimeout`).
+ *
+ * Must stay strictly greater than {@link HTTP_KEEP_ALIVE_TIMEOUT_MS} — Node
+ * requires headersTimeout to exceed keepAliveTimeout, and the inequality is
+ * enforced at startup below.
+ *
+ * @default 65000 (65 seconds)
+ */
 export const HTTP_HEADERS_TIMEOUT_MS = env.positiveIntOrDefault(
   'HTTP_HEADERS_TIMEOUT_MS',
   1000 * 65, // 65 seconds — must exceed HTTP_KEEP_ALIVE_TIMEOUT_MS
 );
+// Fail fast on a misconfigured override rather than handing Node an invalid
+// pairing (headersTimeout must be strictly greater than keepAliveTimeout).
+if (HTTP_HEADERS_TIMEOUT_MS <= HTTP_KEEP_ALIVE_TIMEOUT_MS) {
+  throw new Error(
+    `HTTP_HEADERS_TIMEOUT_MS (${HTTP_HEADERS_TIMEOUT_MS}) must be strictly ` +
+      `greater than HTTP_KEEP_ALIVE_TIMEOUT_MS (${HTTP_KEEP_ALIVE_TIMEOUT_MS})`,
+  );
+}
 
 // API key for accessing admin HTTP endpoints
 // It's set once in the main thread
