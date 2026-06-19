@@ -23,6 +23,26 @@ import { verificationPriorities } from './constants.js';
 // HTTP server port
 export const PORT = +env.varOrDefault('PORT', '4000');
 
+// Node's HTTP server keep-alive idle timeout. Envoy fronts core and pools
+// upstream connections; if core (the server) closes an idle keepalive
+// connection before Envoy (the client) stops reusing it, Envoy can dispatch
+// a request onto a connection core is tearing down, producing an instant
+// reset that surfaces to clients as a 5xx with no upstream response. To
+// avoid that race the invariant must hold:
+//   Envoy upstream idle_timeout  <  HTTP_KEEP_ALIVE_TIMEOUT_MS  <  HTTP_HEADERS_TIMEOUT_MS
+// (see ENVOY upstream idle_timeout in envoy/envoy.template.yaml, default 55s).
+// Node's own defaults invert this (keepAliveTimeout 5s, headersTimeout 60s),
+// so we raise core above Envoy's idle window here. headersTimeout must stay
+// strictly greater than keepAliveTimeout.
+export const HTTP_KEEP_ALIVE_TIMEOUT_MS = env.positiveIntOrDefault(
+  'HTTP_KEEP_ALIVE_TIMEOUT_MS',
+  1000 * 60, // 60 seconds
+);
+export const HTTP_HEADERS_TIMEOUT_MS = env.positiveIntOrDefault(
+  'HTTP_HEADERS_TIMEOUT_MS',
+  1000 * 65, // 65 seconds — must exceed HTTP_KEEP_ALIVE_TIMEOUT_MS
+);
+
 // API key for accessing admin HTTP endpoints
 // It's set once in the main thread
 export let ADMIN_API_KEY = isMainThread

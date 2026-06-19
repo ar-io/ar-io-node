@@ -154,6 +154,14 @@ apolloServerInstanceGql.start().then(() => {
   server = app.listen(config.PORT, () => {
     log.info(`Listening on port ${config.PORT}`);
 
+    // Keep core's keepalive idle window wider than Envoy's upstream
+    // idle_timeout so Envoy always recycles a pooled connection before core
+    // closes it — otherwise Envoy races a request onto a connection core is
+    // tearing down and the client sees an instant reset/5xx. headersTimeout
+    // must stay strictly greater than keepAliveTimeout (Node requirement).
+    server.keepAliveTimeout = config.HTTP_KEEP_ALIVE_TIMEOUT_MS;
+    server.headersTimeout = config.HTTP_HEADERS_TIMEOUT_MS;
+
     // Register server cleanup handler with system shutdown registry
     system.registerCleanupHandler('http-server', async () => {
       return new Promise<void>((resolve) => {
