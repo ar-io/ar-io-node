@@ -251,6 +251,19 @@ verification. Higher priority items are verified first.
 **Verification Retry Count** - Number of failed verification attempts for a
 piece of data. Used with exponential backoff to manage retries.
 
+**Optimistic L1 Transaction Indexing** - An admin-only feature
+(`OPTIMISTIC_TX_INDEXING_ENABLED`, default off) letting a trusted poster index
+a signed L1 [transaction](#transaction) before it mines, via
+`POST /ar-io/admin/queue-optimistic-tx`. The tx is inserted into
+`new_transactions` with a NULL height so it is immediately resolvable through
+GraphQL `transaction(id)` (with `block: null`), and is promoted in place when
+its block is imported. Every submitted tx is signature-verified, and never-mined
+rows are reclaimed by the stale-new-transaction GC. The **serving guard** in
+[data verification](#data-verification) ensures such a tx's data is never marked
+`verified` until its root tx is [stable](#stable) (past fork depth) — the
+gateway never serves not-yet-permanent data as permanent. Mirrors the optimistic
+[chunk ingest cache](#chunks-database) and optimistic data-item index.
+
 ## Resolution
 
 **Root Transaction Index** - Service that resolves data items to their root

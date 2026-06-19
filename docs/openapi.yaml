@@ -177,6 +177,52 @@ components:
     Signature:
       type: string
       pattern: '^[0-9a-zA-Z_-]{1,683}$'
+    L1TransactionHeader:
+      type: object
+      description: |
+        A signed Arweave L1 transaction header (the same JSON shape returned by
+        `GET /tx/:id`). The signature is verified server-side, so every
+        consequential field (data_root, owner, target, quantity, reward,
+        last_tx, tags, data_size) is bound to the signature.
+      properties:
+        id:
+          $ref: '#/components/schemas/Base64Url43'
+          description: Transaction ID (sha256 of the signature)
+        owner:
+          $ref: '#/components/schemas/Owner'
+          description: Transaction signer's public key
+        signature:
+          $ref: '#/components/schemas/Signature'
+          description: Transaction signature
+        last_tx:
+          type: string
+          description: Anchor (a recent block hash or tx ID)
+        data_root:
+          $ref: '#/components/schemas/Base64Url43'
+          description: Merkle root of the transaction's data
+        data_size:
+          type: string
+          description: Size of the data in bytes (stringified integer)
+        format:
+          type: integer
+          description: Transaction format (2 for current data transactions)
+        target:
+          type: string
+          description: Optional recipient address
+        quantity:
+          type: string
+          description: Optional transfer amount in winston (stringified integer)
+        reward:
+          type: string
+          description: Mining reward in winston (stringified integer)
+        tags:
+          $ref: '#/components/schemas/TagList'
+          description: Optional transaction tags
+      required:
+        - id
+        - owner
+        - signature
+        - last_tx
     ByteRange:
       type: string
       pattern: '^bytes=\d*-\d*(?:,\d*-\d*)*$'
@@ -2747,6 +2793,64 @@ paths:
                 example: 'Must provide array of data item headers'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  '/ar-io/admin/queue-optimistic-tx':
+    post:
+      tags: [Admin]
+      summary: Optimistically index a signed L1 transaction before it mines
+      description: |
+        Index one or more signed L1 transaction headers so the transaction is
+        resolvable (GraphQL `transaction(id)`, returning `block: null`) before it
+        is mined. Trusted/allowlist only: requires the admin bearer token AND
+        `OPTIMISTIC_TX_INDEXING_ENABLED=true` (disabled by default → 403). Every
+        transaction is cryptographically verified (`arweave.transactions.verify`),
+        so a forged id or `data_root` is rejected. The row is inserted with a NULL
+        height and promoted in place when the transaction mines; never-mined rows
+        are reclaimed by the stale-transaction GC. The data is never marked
+        `verified` while the transaction is unmined (`height IS NULL`). Accepts a single
+        transaction object or an array, up to `OPTIMISTIC_TX_MAX_BATCH_SIZE`.
+      operationId: adminQueueOptimisticTx
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/L1TransactionHeader'
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/L1TransactionHeader'
+                  minItems: 1
+      responses:
+        '200':
+          description: Transaction(s) successfully indexed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: 'Optimistic transaction(s) indexed'
+        '400':
+          description: Invalid request body, invalid signature, or batch over the size cap
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'Invalid signature for transaction <id>'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Optimistic transaction indexing is disabled (OPTIMISTIC_TX_INDEXING_ENABLED=false)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'Optimistic tx indexing is disabled'
         '500':
           $ref: '#/components/responses/ServerError'
   '/ar-io/admin/bundle-status/{id}':
