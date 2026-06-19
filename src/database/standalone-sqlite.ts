@@ -57,6 +57,8 @@ import {
   PartialJsonBlock,
   PartialJsonTransaction,
   TransactionAttributes,
+  ChunkPlacement,
+  ChunkPlacementRef,
 } from '../types.js';
 import * as config from '../config.js';
 import { DetailedError } from '../lib/error.js';
@@ -412,12 +414,14 @@ export class StandaloneSqliteDatabaseWorker {
     data: Sqlite.Database;
     moderation: Sqlite.Database;
     bundles: Sqlite.Database;
+    chunks: Sqlite.Database;
   };
   private stmts: {
     core: { [stmtName: string]: Sqlite.Statement };
     data: { [stmtName: string]: Sqlite.Statement };
     moderation: { [stmtName: string]: Sqlite.Statement };
     bundles: { [stmtName: string]: Sqlite.Statement };
+    chunks: { [stmtName: string]: Sqlite.Statement };
   };
   private bundleFormatIds: { [filter: string]: number } = {};
   private filterIds: { [filter: string]: number } = {};
@@ -450,6 +454,7 @@ export class StandaloneSqliteDatabaseWorker {
     dataDbPath,
     moderationDbPath,
     bundlesDbPath,
+    chunksDbPath,
     tagSelectivity,
   }: {
     log: winston.Logger;
@@ -457,6 +462,7 @@ export class StandaloneSqliteDatabaseWorker {
     dataDbPath: string;
     moderationDbPath: string;
     bundlesDbPath: string;
+    chunksDbPath: string;
     tagSelectivity: Record<string, number>;
   }) {
     this.log = log;
@@ -467,6 +473,7 @@ export class StandaloneSqliteDatabaseWorker {
       data: new Sqlite(dataDbPath, { timeout }),
       moderation: new Sqlite(moderationDbPath, { timeout }),
       bundles: new Sqlite(bundlesDbPath, { timeout }),
+      chunks: new Sqlite(chunksDbPath, { timeout }),
     };
     for (const db of Object.values(this.dbs)) {
       db.pragma('journal_mode = WAL');
@@ -477,7 +484,7 @@ export class StandaloneSqliteDatabaseWorker {
     this.dbs.data.exec(`ATTACH DATABASE '${bundlesDbPath}' AS bundles`);
     this.dbs.bundles.exec(`ATTACH DATABASE '${coreDbPath}' AS core`);
 
-    this.stmts = { core: {}, data: {}, moderation: {}, bundles: {} };
+    this.stmts = { core: {}, data: {}, moderation: {}, bundles: {}, chunks: {} };
 
     for (const [stmtsKey, stmts] of Object.entries(this.stmts)) {
       const sqlUrl = new URL(`./sql/${stmtsKey}`, import.meta.url);
@@ -490,7 +497,8 @@ export class StandaloneSqliteDatabaseWorker {
             stmtsKey === 'core' ||
             stmtsKey === 'data' ||
             stmtsKey === 'moderation' ||
-            stmtsKey === 'bundles'
+            stmtsKey === 'bundles' ||
+            stmtsKey === 'chunks'
           ) {
             stmts[k] = this.dbs[stmtsKey].prepare(sql);
           } else {
@@ -969,6 +977,114 @@ export class StandaloneSqliteDatabaseWorker {
       id: fromB64Url(id),
       offset,
     });
+  }
+
+  // --- Chunk placement index (chunks.db) ---
+  // BLOB-valued fields (data_root, hash, data_path, tx_path) cross the worker
+  // boundary as base64url strings, matching the rest of this class, and are
+  // converted to Buffers here.
+
+  saveChunkPlacement(placement: ChunkPlacement) {
+    this.stmts.chunks.saveChunkPlacement.run({
+      data_root: fromB64Url(placement.dataRoot),
+      relative_offset: placement.relativeOffset,
+      data_size: placement.dataSize,
+      chunk_size: placement.chunkSize,
+      hash: fromB64Url(placement.hash),
+      data_path: fromB64Url(placement.dataPath),
+      tx_path:
+        placement.txPath !== undefined ? fromB64Url(placement.txPath) : null,
+      origin: placement.origin,
+      cached_at: placement.cachedAt,
+      confirmed_at: placement.confirmedAt ?? null,
+    });
+  }
+
+  confirmChunkPlacements(dataRoot: string, confirmedAt: number): number[] {
+    const rows = this.stmts.chunks.confirmChunkPlacements.all({
+      data_root: fromB64Url(dataRoot),
+      confirmed_at: confirmedAt,
+    });
+    return rows.map((row: any) => row.cached_at as number);
+  }
+
+  // Reserved for chain-reorg recovery: returns a confirmed placement to pending
+  // so the GC can reclaim it if its (now-orphaned) tx never re-confirms. NOT yet
+  // wired — see the deferral note at the TX_INDEXED confirm subscriber in
+  // system.ts: CHAIN_REORG carries no orphaned data_roots and placements aren't
+  // height-indexed, so there's no clean call site yet. Kept plumbed (worker +
+  // queue wrapper + ChunkPlacementIndex interface) for that future hook.
+  unconfirmChunkPlacements(dataRoot: string) {
+    this.stmts.chunks.unconfirmChunkPlacements.run({
+      data_root: fromB64Url(dataRoot),
+    });
+  }
+
+  selectExpiredUnconfirmedChunkPlacements(params: {
+    originIngest: number;
+    originIngestAllowlisted: number;
+    openCutoff: number;
+    allowCutoff: number;
+    limit: number;
+  }): ChunkPlacementRef[] {
+    const rows = this.stmts.chunks.selectExpiredUnconfirmedPlacements.all({
+      origin_ingest: params.originIngest,
+      origin_ingest_allowlisted: params.originIngestAllowlisted,
+      open_cutoff: params.openCutoff,
+      allow_cutoff: params.allowCutoff,
+      limit: params.limit,
+    });
+    return rows.map((row: any) => ({
+      dataRoot: toB64Url(row.data_root),
+      relativeOffset: row.relative_offset,
+      chunkSize: row.chunk_size,
+    }));
+  }
+
+  selectOldestPendingChunkPlacements(limit: number): ChunkPlacementRef[] {
+    const rows = this.stmts.chunks.selectOldestPendingPlacements.all({ limit });
+    return rows.map((row: any) => ({
+      dataRoot: toB64Url(row.data_root),
+      relativeOffset: row.relative_offset,
+      chunkSize: row.chunk_size,
+    }));
+  }
+
+  deleteChunkPlacement(dataRoot: string, relativeOffset: number): number {
+    return this.stmts.chunks.deleteChunkPlacement.run({
+      data_root: fromB64Url(dataRoot),
+      relative_offset: relativeOffset,
+    }).changes;
+  }
+
+  getChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): ChunkPlacement | undefined {
+    const row: any = this.stmts.chunks.getChunkPlacement.get({
+      data_root: fromB64Url(dataRoot),
+      relative_offset: relativeOffset,
+    });
+    if (row === undefined) {
+      return undefined;
+    }
+    return {
+      dataRoot: toB64Url(row.data_root),
+      relativeOffset: row.relative_offset,
+      dataSize: row.data_size,
+      chunkSize: row.chunk_size,
+      hash: toB64Url(row.hash),
+      dataPath: toB64Url(row.data_path),
+      txPath: row.tx_path != null ? toB64Url(row.tx_path) : undefined,
+      origin: row.origin,
+      cachedAt: row.cached_at,
+      confirmedAt: row.confirmed_at ?? undefined,
+    };
+  }
+
+  sumPendingChunkBytes(): number {
+    const row: any = this.stmts.chunks.sumPendingChunkBytes.get();
+    return row.pending_bytes as number;
   }
 
   getTxByOffset(offset: number): TxByOffsetResult {
@@ -3012,6 +3128,7 @@ export class StandaloneSqliteDatabase
     dataDbPath,
     moderationDbPath,
     bundlesDbPath,
+    chunksDbPath,
     tagSelectivity,
   }: {
     log: winston.Logger;
@@ -3019,6 +3136,7 @@ export class StandaloneSqliteDatabase
     dataDbPath: string;
     moderationDbPath: string;
     bundlesDbPath: string;
+    chunksDbPath: string;
     tagSelectivity: Record<string, number>;
   }) {
     this.log = log.child({ class: `${this.constructor.name}` });
@@ -3119,6 +3237,7 @@ export class StandaloneSqliteDatabase
           dataDbPath,
           moderationDbPath,
           bundlesDbPath,
+          chunksDbPath,
           tagSelectivity: tagSelectivity,
         },
       });
@@ -3380,6 +3499,69 @@ export class StandaloneSqliteDatabase
 
   saveTxOffset(id: string, offset: number) {
     return this.queueWrite('core', 'saveTxOffset', [id, offset]);
+  }
+
+  // --- Chunk placement index (chunks.db; routed through the `data` worker
+  // pool — chunks.db is a separate file, so it has its own WAL). ---
+
+  saveChunkPlacement(placement: ChunkPlacement): Promise<void> {
+    return this.queueWrite('data', 'saveChunkPlacement', [placement]);
+  }
+
+  confirmChunkPlacements(
+    dataRoot: string,
+    confirmedAt: number,
+  ): Promise<number[]> {
+    return this.queueWrite('data', 'confirmChunkPlacements', [
+      dataRoot,
+      confirmedAt,
+    ]);
+  }
+
+  unconfirmChunkPlacements(dataRoot: string): Promise<void> {
+    return this.queueWrite('data', 'unconfirmChunkPlacements', [dataRoot]);
+  }
+
+  selectExpiredUnconfirmedChunkPlacements(params: {
+    originIngest: number;
+    originIngestAllowlisted: number;
+    openCutoff: number;
+    allowCutoff: number;
+    limit: number;
+  }): Promise<ChunkPlacementRef[]> {
+    return this.queueRead('data', 'selectExpiredUnconfirmedChunkPlacements', [
+      params,
+    ]);
+  }
+
+  selectOldestPendingChunkPlacements(
+    limit: number,
+  ): Promise<ChunkPlacementRef[]> {
+    return this.queueRead('data', 'selectOldestPendingChunkPlacements', [limit]);
+  }
+
+  deleteChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<number> {
+    return this.queueWrite('data', 'deleteChunkPlacement', [
+      dataRoot,
+      relativeOffset,
+    ]);
+  }
+
+  getChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<ChunkPlacement | undefined> {
+    return this.queueRead('data', 'getChunkPlacement', [
+      dataRoot,
+      relativeOffset,
+    ]);
+  }
+
+  sumPendingChunkBytes(): Promise<number> {
+    return this.queueRead('data', 'sumPendingChunkBytes', undefined);
   }
 
   async saveDataItem(
@@ -3842,6 +4024,7 @@ if (!isMainThread) {
     dataDbPath: workerData.dataDbPath,
     moderationDbPath: workerData.moderationDbPath,
     bundlesDbPath: workerData.bundlesDbPath,
+    chunksDbPath: workerData.chunksDbPath,
     tagSelectivity: workerData.tagSelectivity,
   });
 
@@ -3907,6 +4090,40 @@ if (!isMainThread) {
         case 'saveTxOffset':
           worker.saveTxOffset(args[0], args[1]);
           parentPort?.postMessage(null);
+          break;
+        case 'saveChunkPlacement':
+          worker.saveChunkPlacement(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'confirmChunkPlacements':
+          parentPort?.postMessage(
+            worker.confirmChunkPlacements(args[0], args[1]),
+          );
+          break;
+        case 'unconfirmChunkPlacements':
+          worker.unconfirmChunkPlacements(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'selectExpiredUnconfirmedChunkPlacements':
+          parentPort?.postMessage(
+            worker.selectExpiredUnconfirmedChunkPlacements(args[0]),
+          );
+          break;
+        case 'selectOldestPendingChunkPlacements':
+          parentPort?.postMessage(
+            worker.selectOldestPendingChunkPlacements(args[0]),
+          );
+          break;
+        case 'deleteChunkPlacement':
+          parentPort?.postMessage(
+            worker.deleteChunkPlacement(args[0], args[1]),
+          );
+          break;
+        case 'getChunkPlacement':
+          parentPort?.postMessage(worker.getChunkPlacement(args[0], args[1]));
+          break;
+        case 'sumPendingChunkBytes':
+          parentPort?.postMessage(worker.sumPendingChunkBytes());
           break;
         case 'saveDataItem':
           worker.saveDataItem(args[0], args[1]);

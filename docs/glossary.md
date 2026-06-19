@@ -156,6 +156,16 @@ only sent when rate limits are exceeded.
 [data items](#data-item), and their relationships. Includes retry tracking for
 bundle processing.
 
+**Chunks Database** - SQLite database (`chunks.db`) holding `chunk_placements` —
+the chunk metadata index keyed by ([data root](#data-root), relative offset)
+that also serves as the **optimistic chunk ingest cache** ledger. When
+`CHUNK_INGEST_CACHE_ENABLED` is set, a chunk POSTed to the gateway is validated
+against its data root and write-through cached with a pending placement
+(`confirmed_at` NULL); the placement is confirmed when the chunk's
+[transaction](#transaction) is indexed, and a GC worker evicts placements whose
+data root never confirms on-chain (so the gateway never permanently keeps data
+that did not land on chain).
+
 **Core Database** - Primary SQLite database containing blocks,
 [transactions](#transaction), transaction [tags](#tags), stable/new data
 indexes, and the migrations table that tracks applied database schema changes.

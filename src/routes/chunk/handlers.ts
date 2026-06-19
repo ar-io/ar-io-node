@@ -18,10 +18,20 @@ import {
   CHUNK_SERVE_DEADLINE_MS,
   MAX_CHUNK_SIZE,
 } from '../../config.js';
+import * as config from '../../config.js';
 import { headerNames } from '../../constants.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { toB64Url } from '../../lib/encoding.js';
-import type { BroadcastChunkResponses } from '../../types.js';
+import type {
+  BroadcastChunkResponses,
+  ChunkDataStore,
+  ChunkMetadataStore,
+  ChunkPlacementIndex,
+} from '../../types.js';
+import {
+  ingestCacheOrigin,
+  validateAndCacheIngestedChunk,
+} from '../../data/ingest-chunk-cache.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
 import { tracer, context, trace } from '../../tracing.js';
@@ -813,9 +823,15 @@ export function determineFailureStatusCode(
  */
 export const createChunkPostHandler = ({
   arweaveClient,
+  chunkDataStore,
+  chunkMetadataStore,
+  chunkPlacementIndex,
   log,
 }: {
   arweaveClient: ArweaveCompositeClient;
+  chunkDataStore: ChunkDataStore;
+  chunkMetadataStore: ChunkMetadataStore;
+  chunkPlacementIndex: ChunkPlacementIndex;
   log: Logger;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
@@ -878,6 +894,34 @@ export const createChunkPostHandler = ({
           );
           span.setAttribute('http.status_code', failureStatusCode);
           res.status(failureStatusCode).send(result);
+        }
+
+        // Optimistic ingest caching: fire-and-forget after the response is
+        // queued so it never adds latency to the broadcast. Gated by
+        // ingestCacheOrigin (enabled + allowlist). A chunk under a data_root
+        // that never confirms on-chain is unaddressable and is reclaimed by the
+        // GC sweep, so open ingest cannot poison or be served wrong bytes.
+        if (config.CHUNK_INGEST_CACHE_ENABLED) {
+          const ingestOrigin = ingestCacheOrigin(req);
+          if (ingestOrigin !== null) {
+            void validateAndCacheIngestedChunk({
+              chunkDataStore,
+              chunkMetadataStore,
+              chunkPlacementIndex,
+              body: req.body,
+              origin: ingestOrigin,
+              log,
+            }).catch((cacheError: any) => {
+              log.warn('Optimistic chunk caching failed', {
+                message: cacheError?.message,
+              });
+            });
+          } else {
+            // Enabled but poster not allowlisted — make gated posts observable.
+            metrics.chunkIngestCacheCounter.inc({
+              result: 'skipped_not_allowlisted',
+            });
+          }
         }
       } catch (error: any) {
         span.recordException(error);

@@ -120,6 +120,7 @@ import { S3DataSource } from './data/s3-data-source.js';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetchers.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
+import { ChunkIngestGcWorker } from './workers/chunk-ingest-gc.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
 import { awsClient, legacyAwsS3Client } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
@@ -283,6 +284,7 @@ export const db = new StandaloneSqliteDatabase({
   dataDbPath: 'data/sqlite/data.db',
   moderationDbPath: 'data/sqlite/moderation.db',
   bundlesDbPath: 'data/sqlite/bundles.db',
+  chunksDbPath: 'data/sqlite/chunks.db',
   tagSelectivity: config.TAG_SELECTIVITY,
 });
 
@@ -480,6 +482,53 @@ export const envoyEndpointHealthWorker =
 eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
   eventEmitter.emit(events.TX_INDEXED, tx);
 });
+
+// Confirm pending optimistic chunk placements whose data_root matches a
+// newly-indexed L1 transaction. TX_INDEXED covers both block-imported txs
+// (re-emitted just above) and directly-imported txs. Confirmation is pushed
+// from indexing, so no data_root->tx index is needed; placements whose
+// data_root never confirms ride the GC TTL and are evicted.
+if (config.CHUNK_INGEST_CACHE_ENABLED) {
+  eventEmitter.on(events.TX_INDEXED, (tx: { data_root?: string }) => {
+    const dataRoot = tx?.data_root;
+    if (dataRoot !== undefined && dataRoot !== '') {
+      const confirmedAt = Math.floor(Date.now() / 1000);
+      db.confirmChunkPlacements(dataRoot, confirmedAt)
+        .then((cachedAts) => {
+          if (cachedAts.length > 0) {
+            metrics.chunkIngestConfirmedCounter.inc(cachedAts.length);
+            for (const cachedAt of cachedAts) {
+              metrics.chunkIngestConfirmationLatencySeconds.observe(
+                Math.max(0, confirmedAt - cachedAt),
+              );
+            }
+          }
+        })
+        .catch((error: unknown) => {
+          log.warn('Failed to confirm chunk placements', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }
+  });
+
+  // Reorg-unconfirm is intentionally deferred (no symmetric CHAIN_REORG
+  // handler). db.unconfirmChunkPlacements() is fully plumbed and reserved for
+  // it, but there is no clean call site today: the CHAIN_REORG event carries
+  // only forkHeight, not the orphaned txs' data_roots, and chunk_placements is
+  // not height-indexed — so confirmed placements can't be mapped to a fork
+  // without a new confirming-height column (migration) or surfacing orphaned
+  // data_roots from the core reset path. A *blanket* un-confirm on reorg would
+  // be wrong: it would push legitimately-confirmed chunks (whose tx is still
+  // canonical and will NOT re-emit TX_INDEXED) back to pending and let the GC
+  // evict them. The leak from skipping it is negligible: cached bytes are
+  // merkle-valid, an orphaned tx's data is unaddressable post-reorg (no offset
+  // resolves to an unmined tx), and an orphaned Arweave tx with a valid reward
+  // typically re-mines and re-confirms. Only a tx that is orphaned AND never
+  // re-mines leaves a single valid-but-retained placement — rare and small.
+  // Wire unconfirmChunkPlacements() here once placements track their confirming
+  // height.
+}
 
 export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
   ? new FsCleanupWorker({
@@ -757,12 +806,12 @@ export const chunkSource =
     : fullChunkSource;
 
 // Create stores for ChunkRetrievalService fast path (cache lookup by absoluteOffset)
-const chunkDataStore = new FsChunkDataStore({
+export const chunkDataStore = new FsChunkDataStore({
   log,
   baseDir: 'data/chunks',
 });
 
-const chunkMetadataStore = new FsChunkMetadataStore({
+export const chunkMetadataStore = new FsChunkMetadataStore({
   log,
   baseDir: 'data/chunks/metadata',
 });
@@ -850,6 +899,24 @@ export const chunkRetrievalService = new ChunkRetrievalService({
   chunkDataStore,
   chunkMetadataStore,
 });
+
+// Optimistic chunk ingest GC: evicts cached chunks whose data_root never
+// confirms on-chain, plus a disk-pressure backstop. Only runs when ingest
+// caching is enabled.
+export const chunkIngestGcWorker = config.CHUNK_INGEST_CACHE_ENABLED
+  ? new ChunkIngestGcWorker({
+      log,
+      chunkDataStore,
+      chunkMetadataStore,
+      chunkPlacementIndex: db,
+    })
+  : undefined;
+if (chunkIngestGcWorker !== undefined) {
+  chunkIngestGcWorker.start();
+  registerCleanupHandler('chunkIngestGcWorker', async () => {
+    await chunkIngestGcWorker.stop();
+  });
+}
 
 // Create the base TX chunks data source
 const chunkRequestLimit = pLimit(config.CHUNK_REQUEST_CONCURRENCY);

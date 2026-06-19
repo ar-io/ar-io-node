@@ -153,6 +153,7 @@ export interface ChunkDataStore {
     chunkData: ChunkData,
     absoluteOffset?: number,
   ): Promise<void>;
+  del(dataRoot: string, relativeOffset: number): Promise<void>;
 }
 
 export interface ChunkMetadataStore {
@@ -165,6 +166,7 @@ export interface ChunkMetadataStore {
     absoluteOffset: number,
   ): Promise<ChunkMetadata | undefined>;
   set(chunkMetadata: ChunkMetadata, absoluteOffset?: number): Promise<void>;
+  del(dataRoot: string, relativeOffset: number): Promise<void>;
 }
 
 type Region = {
@@ -224,6 +226,65 @@ export interface ChainIndex {
 export interface ChainOffsetIndex {
   getTxIdsMissingOffsets(limit: number): Promise<string[]>;
   saveTxOffset(txId: string, offset: number): Promise<void>;
+}
+
+/**
+ * A cached chunk's placement row in chunks.db. Serves as both the chunk
+ * metadata index (keyed by data_root + relative_offset) and the optimistic
+ * ingest ledger (origin / cached_at / confirmed_at drive GC). BLOB-valued
+ * fields (dataRoot, hash, dataPath, txPath) are base64url strings at this
+ * boundary and stored as BLOBs in SQLite.
+ */
+export interface ChunkPlacement {
+  dataRoot: string;
+  relativeOffset: number;
+  dataSize: number;
+  chunkSize: number;
+  hash: string;
+  dataPath: string;
+  txPath: string | undefined;
+  origin: number;
+  cachedAt: number;
+  confirmedAt: number | undefined;
+}
+
+/** Lightweight chunk-placement reference returned by GC selection queries. */
+export interface ChunkPlacementRef {
+  dataRoot: string;
+  relativeOffset: number;
+  chunkSize: number;
+}
+
+export interface ChunkPlacementIndex {
+  saveChunkPlacement(placement: ChunkPlacement): Promise<void>;
+  confirmChunkPlacements(
+    dataRoot: string,
+    confirmedAt: number,
+  ): Promise<number[]>;
+  // Reserved for chain-reorg recovery; not yet wired (no clean reorg hook with
+  // orphaned data_roots). See the deferral note in system.ts.
+  unconfirmChunkPlacements(dataRoot: string): Promise<void>;
+  selectExpiredUnconfirmedChunkPlacements(params: {
+    originIngest: number;
+    originIngestAllowlisted: number;
+    openCutoff: number;
+    allowCutoff: number;
+    limit: number;
+  }): Promise<ChunkPlacementRef[]>;
+  selectOldestPendingChunkPlacements(
+    limit: number,
+  ): Promise<ChunkPlacementRef[]>;
+  // Returns the number of rows deleted (0 if the placement was confirmed
+  // between selection and deletion, so the caller can keep its FS bytes).
+  deleteChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<number>;
+  getChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<ChunkPlacement | undefined>;
+  sumPendingChunkBytes(): Promise<number>;
 }
 
 /**

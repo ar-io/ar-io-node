@@ -115,6 +115,41 @@ export const graphqlRootTxBatchTokenWaitTimeoutTotal = new promClient.Counter({
 });
 
 //
+// Optimistic chunk ingest cache metrics
+//
+
+export const chunkIngestCacheCounter = new promClient.Counter({
+  name: 'chunk_ingest_cache_total',
+  help: 'Count of POST /chunk optimistic-cache outcomes',
+  labelNames: ['result'] as const,
+});
+
+export const chunkIngestConfirmedCounter = new promClient.Counter({
+  name: 'chunk_ingest_confirmed_total',
+  help: 'Count of tx-indexed events that confirmed pending chunk placements',
+});
+
+// The instrument that turns the confirmation-timeout defaults from "reasoned"
+// into "measured": observe the real cached_at -> confirmed_at distribution on
+// the live gateway, then tune CHUNK_INGEST_*_CONFIRMATION_TIMEOUT_SECONDS.
+export const chunkIngestConfirmationLatencySeconds = new promClient.Histogram({
+  name: 'chunk_ingest_confirmation_latency_seconds',
+  help: 'Seconds between an optimistic chunk being cached and its data_root confirming on-chain',
+  buckets: [10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 86400],
+});
+
+export const chunkIngestEvictedCounter = new promClient.Counter({
+  name: 'chunk_ingest_evicted_total',
+  help: 'Count of optimistically-cached chunks evicted by the GC sweep',
+  labelNames: ['reason'] as const,
+});
+
+export const chunkIngestPendingBytesGauge = new promClient.Gauge({
+  name: 'chunk_ingest_pending_bytes',
+  help: 'Estimated bytes held by pending (unconfirmed) ingest-cached chunks',
+});
+
+//
 // Global bundle metrics
 //
 

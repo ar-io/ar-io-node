@@ -14,10 +14,12 @@ export const coreDbPath = `test/tmp/core.db`;
 export const dataDbPath = `test/tmp/data.db`;
 export const moderationDbPath = `test/tmp/moderation.db`;
 export const bundlesDbPath = `test/tmp/bundles.db`;
+export const chunksDbPath = `test/tmp/chunks.db`;
 export let coreDb: Sqlite.Database;
 export let dataDb: Sqlite.Database;
 export let moderationDb: Sqlite.Database;
 export let bundlesDb: Sqlite.Database;
+export let chunksDb: Sqlite.Database;
 
 before(async () => {
   log.transports.forEach((t) => (t.silent = true));
@@ -49,10 +51,15 @@ before(async () => {
   bundlesDb = new Sqlite(bundlesDbPath);
   const bundlesSchema = fs.readFileSync('test/bundles-schema.sql', 'utf8');
   bundlesDb.exec(bundlesSchema);
+
+  // Chunks DB
+  chunksDb = new Sqlite(chunksDbPath);
+  const chunksSchema = fs.readFileSync('test/chunks-schema.sql', 'utf8');
+  chunksDb.exec(chunksSchema);
 });
 
 afterEach(async () => {
-  [coreDb, dataDb, moderationDb, bundlesDb].forEach((db) => {
+  [coreDb, dataDb, moderationDb, bundlesDb, chunksDb].forEach((db) => {
     db.prepare(
       "SELECT name FROM sqlite_schema WHERE type='table' AND tbl_name != 'bundle_formats'",
     )
