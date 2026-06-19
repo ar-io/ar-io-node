@@ -214,4 +214,23 @@ describe('DataVerificationWorker', () => {
     // A mined item IS verified, so the data root was computed.
     assert.ok(getDataMock.mock.calls.length >= 1);
   });
+
+  // A lookup-miss (getDataAttributes returns undefined — the root tx isn't in
+  // the index at all) is NOT the optimistic-unmined case. It must fall through
+  // to the normal path and burn a retry, not be withheld unpenalized — otherwise
+  // a perpetually-missing root would spin forever at retry_count=0.
+  it('should retry (not withhold) when the root tx has no attributes at all', async () => {
+    (contiguousDataIndex as any).getDataAttributes = async () => undefined;
+
+    const verified = await dataVerificationWorker.verifyDataRoot({
+      rootTxId: 'missing-tx',
+      dataIds: ['missing-tx'],
+    });
+
+    assert.equal(verified, false);
+    // Penalized like a normal failure, NOT withheld.
+    assert.equal(incrementVerificationRetryCountMock.mock.calls.length, 1);
+    // No data root computed (indexedDataRoot is undefined).
+    assert.equal(getDataMock.mock.calls.length, 0);
+  });
 });

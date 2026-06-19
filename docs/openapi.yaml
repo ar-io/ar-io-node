@@ -2807,8 +2807,8 @@ paths:
         transaction is cryptographically verified (`arweave.transactions.verify`),
         so a forged id or `data_root` is rejected. The row is inserted with a NULL
         height and promoted in place when the transaction mines; never-mined rows
-        are reclaimed by the stale-transaction GC. The data is never served as
-        `verified`/permanent until the transaction is stable. Accepts a single
+        are reclaimed by the stale-transaction GC. The data is never marked
+        `verified` while the transaction is unmined (`height IS NULL`). Accepts a single
         transaction object or an array, up to `OPTIMISTIC_TX_MAX_BATCH_SIZE`.
       operationId: adminQueueOptimisticTx
       security:

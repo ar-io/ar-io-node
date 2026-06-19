@@ -198,7 +198,13 @@ export class DataVerificationWorker {
       // selectVerifiableContiguousDataIds on mined-status; magnitude is
       // observable via optimistic_tx_verification_blocked_total — measure on a
       // busy gateway before doing it.
-      if (dataAttributes?.height == null) {
+      //
+      // NOTE: require dataAttributes to EXIST (not just `?.height == null`). A
+      // lookup-miss (getDataAttributes returns undefined) is a different case —
+      // the root tx isn't in the index at all — and must fall through to the
+      // normal indexedDataRoot===undefined path (which queues unbundling and
+      // burns a retry), not be treated as an unpenalized optimistic-unmined row.
+      if (dataAttributes !== undefined && dataAttributes.height == null) {
         withheldUnconfirmed = true;
         metrics.optimisticTxVerificationBlockedCounter.inc();
         log.debug('Withholding verification: root tx not yet mined');
