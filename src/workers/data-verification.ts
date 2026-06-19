@@ -152,10 +152,10 @@ export class DataVerificationWorker {
   }): Promise<boolean> {
     const log = this.log.child({ method: 'verifyDataRoot', id: rootTxId });
     // Set when we deliberately withhold verification because the root tx is not
-    // yet stable (see the serving guard below). This is NOT a verification
+    // yet mined (see the serving guard below). This is NOT a verification
     // failure, so the finally block must skip the retry-count increment —
-    // otherwise a not-yet-stable item would exhaust its retry budget before it
-    // stabilizes and could then never be verified. Distinct from the catch
+    // otherwise a not-yet-mined item would exhaust its retry budget before it
+    // mines and could then never be verified. Distinct from the catch
     // path, which still counts as a retry.
     let withheldUnconfirmed = false;
     try {
@@ -288,7 +288,7 @@ export class DataVerificationWorker {
       return false;
     } finally {
       // Increment retry count for all associated data IDs — except when we
-      // deliberately withheld verification on a not-yet-stable root tx (see the
+      // deliberately withheld verification on a not-yet-mined root tx (see the
       // serving guard above), which is a "try again later", not a failure.
       if (!withheldUnconfirmed) {
         for (const dataId of dataIds) {
