@@ -386,6 +386,20 @@ static_resources:
   clusters:
     - name: ario_gateways
       connect_timeout: 1s
+      #! Recycle pooled upstream connections to core before core's own
+      #! keepAliveTimeout fires. Core (Node) is the server on this hop; if
+      #! Envoy holds an idle connection past core's keepalive window, core
+      #! closes it and the next reused request resets with no response,
+      #! surfacing to clients as an instant 5xx. Invariant:
+      #!   idle_timeout (here) < core HTTP_KEEP_ALIVE_TIMEOUT_MS (default 60s)
+      #!                       < core HTTP_HEADERS_TIMEOUT_MS  (default 65s)
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          '@type': type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          common_http_protocol_options:
+            idle_timeout: #@ data.values.ARIO_GATEWAY_UPSTREAM_IDLE_TIMEOUT
+          explicit_http_config:
+            http_protocol_options: {}
       type: STRICT_DNS
       lb_policy: LEAST_REQUEST
       load_assignment:
