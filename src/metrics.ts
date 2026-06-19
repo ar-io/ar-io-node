@@ -263,6 +263,12 @@ export const dataItemsDroppedCounter = new promClient.Counter({
   labelNames: ['queue_name'],
 });
 
+export const dataItemQueueRejectedCounter = new promClient.Counter({
+  name: 'data_item_queue_rejected_total',
+  help: 'Count of queue-data-item admin requests rejected before enqueue, by reason (batch_too_large, backpressure)',
+  labelNames: ['reason'],
+});
+
 // `Ans104Unbundler.queueItem` may decide not to enqueue a bundle for
 // unbundling. Every such skip is a bundle whose data items will not enter
 // the indexer pipeline through this call (the same bundle may still be

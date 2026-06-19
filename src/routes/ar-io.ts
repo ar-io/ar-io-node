@@ -20,6 +20,7 @@ import { DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
 import { sanityCheckTx } from '../lib/validation.js';
 import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
+import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
 
 const arweave = Arweave.init({});
@@ -553,7 +554,7 @@ export function isDataItemHeaders(
 // Queue a bundle data item for processing
 arIoRouter.post(
   '/ar-io/admin/queue-data-item',
-  express.json(),
+  express.json({ limit: '10mb' }),
   async (req, res) => {
     try {
       const dataItemHeaders: unknown[] = req.body;
@@ -565,6 +566,28 @@ arIoRouter.post(
         !dataItemHeaders.every(isDataItemHeaders)
       ) {
         res.status(400).send('Must provide array of data item headers');
+        return;
+      }
+
+      // Admission control (corner B): admin POSTs are prioritized (unshift)
+      // and bypass the indexer's drop cap, so an unthrottled burst balloons the
+      // queue and starves the regular unbundling pipeline instead of dropping.
+      // Convert oversized batches and indexer saturation into retryable HTTP
+      // responses rather than silent queue growth.
+      const admission = evaluateDataItemQueueAdmission(
+        dataItemHeaders.length,
+        system.dataItemIndexer.queueDepth(),
+        {
+          maxBatchSize: config.QUEUE_DATA_ITEM_MAX_BATCH_SIZE,
+          backpressureDepth: config.QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH,
+        },
+      );
+      if (!admission.ok) {
+        metrics.dataItemQueueRejectedCounter.inc({ reason: admission.reason });
+        if (admission.retryAfterSeconds !== undefined) {
+          res.set('Retry-After', String(admission.retryAfterSeconds));
+        }
+        res.status(admission.status).send(admission.message);
         return;
       }
 
