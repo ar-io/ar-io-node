@@ -4,13 +4,71 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 81] - 2026-06-20
+
+This is a **recommended release** focused on **optimistic ingest and
+data-serving reliability**. Key highlights include an optimistic chunk ingest
+cache that verifies and serves freshly-posted chunks from local storage before
+they are fetched upstream, and optimistic L1 transaction indexing that makes
+signed transactions queryable before they mine (both off by default); admission
+control — depth-based backpressure and per-request batch caps — on the admin
+ingest endpoints so a high-volume bundler gets retryable responses instead of
+overrunning the indexer; a wall-clock deadline on chunk serves so slow
+retrievals fail fast as 404s rather than hanging; and a GraphQL owner-key cache
+with in-flight request coalescing plus batched root-tx lookups to cut upstream
+rate-limiting.
 
 ### Added
 
+- **Optimistic chunk ingest cache** — verify and optimistically cache chunks on
+  `POST /chunk`, then serve and unbundle them from local cache before fetching
+  upstream. Unconfirmed chunks are reclaimed by a GC sweep and bounded by a
+  synchronous pending-bytes disk cap. Off by default
+  (`CHUNK_INGEST_CACHE_ENABLED`); see the new `CHUNK_INGEST_*` env vars.
+- **Optimistic L1 transaction indexing** — new admin endpoint
+  `POST /ar-io/admin/queue-optimistic-tx` indexes signed L1 transaction headers
+  before they mine, making them queryable immediately; a serving guard withholds
+  `verified` until the transaction is mined. Off by default
+  (`OPTIMISTIC_TX_INDEXING_ENABLED`); see the new `OPTIMISTIC_TX_*` env vars and
+  MADR 004.
+- **Admission control on `POST /ar-io/admin/queue-data-item`** — a per-request
+  batch-size cap (`400`) and indexer-depth backpressure (`503` + `Retry-After`),
+  with the body limit raised to 10 MB, so a bundler burst gets a retryable
+  response instead of unbounded queue growth. New `QUEUE_DATA_ITEM_MAX_BATCH_SIZE`
+  / `QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH`; `data_item_queue_rejected_total{reason}`
+  metric.
+- **Wall-clock deadline for chunk serves** — chunk retrieval is bounded by a
+  wall-clock deadline; timeouts return `404` instead of hanging (PE-9121).
+- **GraphQL owner-key cache** — address-keyed owner-key cache with an in-flight
+  request coalescer, plus observability metrics (PE-9120).
+- **Batched GraphQL root-tx lookups** — discovery batches root-tx lookups to
+  avoid upstream rate-limit 404s (PE-9108).
+- **Parquet export resilience** — DuckDB sorts spill to disk to survive dense
+  partitions, with configurable DuckDB memory/thread limits (wired into compose)
+  and real export errors surfaced instead of swallowed.
+
 ### Changed
 
+- Aligned keepalive timeouts across envoy and core to prevent mid-request
+  connection resets (PE-9122).
+- Envoy chunk-retry behavior — conservative retry on the chunk route; stop
+  retrying chunk GET/HEAD serves against a single-endpoint core (PE-9121).
+- Decoupled contiguous-cache cleanup initial delay from the cleanup threshold
+  (PE-9106).
+- Bounded unbundling retries and cooldowns to prevent runaway loops.
+- Observer now receives assessment-concurrency and log-report-sink config.
+- Updated the bundled observer image to a stable `@ar.io/sdk` (`4.0.3`) build,
+  including the Solana epoch-cranker `finalize_gone` window-eligibility fix and
+  the report-sink failure-threshold adjustment.
+
 ### Fixed
+
+- Chunk-retrieval 5xx classification and terminal error handling so serve
+  failures surface cleanly (PE-9121).
+- GraphQL data-item `owner.key` misses now coerce to a NOT_FOUND sentinel
+  instead of erroring.
+- Validate numeric env vars (optimistic-tx, retry caps, root-tx batch) at parse
+  time to guard against NaN misconfiguration.
 
 ## [Release 80] - 2026-06-06
 
