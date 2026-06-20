@@ -683,7 +683,12 @@ CREATE TABLE IF NOT EXISTS tags (
              signature_offset::UBIGINT AS signature_offset,
              signature_size::UINTEGER AS signature_size,
              signature_type::UINTEGER AS signature_type, root_transaction_id,
-             root_parent_offset::UINTEGER AS root_parent_offset
+             -- root_parent_offset is a byte offset within the root L1 tx and
+             -- can exceed UINT32 (>4 GiB) for data items in large bundles, so
+             -- it must be UBIGINT to match the other byte offsets above and the
+             -- ClickHouse UInt64 column. UINTEGER here overflows and aborts the
+             -- export for those rows.
+             root_parent_offset::UBIGINT AS root_parent_offset
       FROM staging.transactions`,
     tags: `
       SELECT height::UBIGINT AS height, id,
