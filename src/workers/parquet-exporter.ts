@@ -227,6 +227,10 @@ export class ParquetExporter {
     return new Promise((resolve, reject) => {
       const workerUrl = new URL('./parquet-exporter.js', import.meta.url);
       this.worker = new Worker(workerUrl, {
+        // Surface the worker's stderr so a native DuckDB abort (e.g. an
+        // out-of-memory crash that kills the worker before any JS catch
+        // runs) is captured instead of being reduced to a bare exit code.
+        stderr: true,
         workerData: {
           outputDir,
           startHeight,
@@ -243,7 +247,24 @@ export class ParquetExporter {
         },
       });
 
+      // Tracks whether a terminal outcome (completion, an EXPORT_ERROR
+      // message, or a worker 'error') has already been recorded, so the
+      // 'exit' handler doesn't overwrite a specific cause with a generic
+      // "exit code N".
+      let settled = false;
       let startTime: number;
+
+      // Bounded tail of the worker's stderr. Attached to the exit error when
+      // the worker dies without reporting a JS error (the native-crash case),
+      // so the real DuckDB message survives instead of a bare exit code.
+      let stderrTail = '';
+      this.worker.stderr.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderrTail = (stderrTail + text).slice(-4096);
+        this.log.warn('Parquet export worker stderr', {
+          output: text.replace(/\s+$/, ''),
+        });
+      });
 
       this.worker.on('online', () => {
         startTime = Date.now();
@@ -292,6 +313,7 @@ export class ParquetExporter {
             durationInSeconds,
           });
 
+          settled = true;
           resolve();
         } else if (message.eventName === EXPORT_ERROR) {
           const endTime = new Date();
@@ -312,6 +334,7 @@ export class ParquetExporter {
             durationInSeconds,
           });
 
+          settled = true;
           reject(new Error(message.error));
         } else if (message.eventName === EXPORT_PROGRESS) {
           this.setStatus({
@@ -342,6 +365,8 @@ export class ParquetExporter {
       });
 
       this.worker.on('error', (error) => {
+        if (settled) return;
+        settled = true;
         this.setStatus({
           ...this.exportStatus,
           status: ERRORED,
@@ -354,15 +379,28 @@ export class ParquetExporter {
       });
 
       this.worker.on('exit', (code) => {
-        if (code !== 0) {
-          this.setStatus({
-            ...this.exportStatus,
-            status: ERRORED,
-            error: `Worker stopped with exit code ${code}`,
-          });
+        // Only act on an unexpected exit that nothing else has reported. A
+        // worker that posted EXPORT_ERROR (or emitted 'error') already
+        // carries the specific cause; don't clobber it with a generic
+        // message. When nothing was reported, fold in the captured stderr
+        // tail so a native crash isn't reduced to a bare exit code.
+        if (code === 0 || settled) return;
+        settled = true;
+        const detail =
+          stderrTail.trim() !== ''
+            ? `: ${stderrTail.trim().slice(-500)}`
+            : ' (no error reported — likely a native worker crash, e.g. OOM)';
+        const message = `Worker stopped with exit code ${code}${detail}`;
 
-          reject(new Error(`Worker stopped with exit code ${code}`));
-        }
+        this.setStatus({
+          ...this.exportStatus,
+          status: ERRORED,
+          error: message,
+        });
+
+        this.log.error(message);
+
+        reject(new Error(message));
       });
     });
   }
