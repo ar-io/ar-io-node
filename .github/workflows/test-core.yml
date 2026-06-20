@@ -31,7 +31,7 @@ jobs:
         run: docker build -t core .
       - name: Run E2E tests
         if: matrix.os == 'ubuntu-latest'
-        run: yarn test:file test/end-to-end/admin-ingest.test.ts
+        run: yarn test:e2e
         env:
           TEST_SKIP_TAGS: flaky
           USE_PREBUILT_IMAGE: 'true'
