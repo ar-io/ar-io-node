@@ -1692,6 +1692,31 @@ export const MAX_FLUSH_INTERVAL_SECONDS = +env.varOrDefault(
   '600',
 );
 
+// Parquet export (DuckDB) resource limits. The exporter runs `COPY (... ORDER
+// BY ...) TO parquet` inside an in-memory DuckDB instance; without a spill
+// path a single ultra-dense block height (tens/hundreds of thousands of data
+// items → millions of tag rows to sort) can exhaust memory and the worker is
+// OOM-killed. Setting a memory_limit plus a temp_directory lets DuckDB process
+// the sort out-of-core (spill to disk) instead of dying. Keep the limit below
+// the core container's memory ceiling.
+export const PARQUET_EXPORT_DUCKDB_MEMORY_LIMIT = env.varOrDefault(
+  'PARQUET_EXPORT_DUCKDB_MEMORY_LIMIT',
+  '2GB',
+);
+
+// Upper bound on how much DuckDB may spill to its temp_directory for a single
+// export. Guards against a runaway sort filling the data volume.
+export const PARQUET_EXPORT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE = env.varOrDefault(
+  'PARQUET_EXPORT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE',
+  '64GB',
+);
+
+// Optional cap on DuckDB worker threads during export. Fewer threads lowers
+// peak sort memory. Unset → leave DuckDB's default (one per core).
+export const PARQUET_EXPORT_DUCKDB_THREADS = env.positiveIntOrUndefined(
+  'PARQUET_EXPORT_DUCKDB_THREADS',
+);
+
 export const BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS = +env.varOrDefault(
   'BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS',
   '300', // 5 minutes
