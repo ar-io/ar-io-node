@@ -1615,6 +1615,22 @@ export const DATA_ITEM_INDEXER_WORKER_COUNT = env.positiveIntOrDefault(
   1,
 );
 
+// queue-data-item admin endpoint hardening (corner B). Admin POSTs are
+// prioritized — they bypass the indexer's drop cap (unshift), so an
+// unthrottled bundler burst balloons the queue and starves the regular
+// unbundling pipeline rather than dropping. Cap the per-request batch and
+// apply depth-based backpressure so oversized/overload requests get a
+// retryable 4xx/503 instead of silent queue growth. Defaults are starting
+// points; tune from the load characterization.
+export const QUEUE_DATA_ITEM_MAX_BATCH_SIZE = env.positiveIntOrDefault(
+  'QUEUE_DATA_ITEM_MAX_BATCH_SIZE',
+  5000,
+);
+export const QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH = env.positiveIntOrDefault(
+  'QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH',
+  100000,
+);
+
 // Hard cap on Ans104DataIndexer's internal queue. Same semantics as
 // DATA_ITEM_INDEXER_QUEUE_SIZE: drop on full, `0` = unbounded.
 export const ANS104_DATA_INDEXER_QUEUE_SIZE = +env.varOrDefault(
