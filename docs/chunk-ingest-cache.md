@@ -18,12 +18,16 @@ separate:
 
 - **Optimistic data-item indexing** — makes data items queryable by id before
   their bundle mines (`POST /ar-io/admin/queue-data-item`, already available).
-- **Optimistic L1 transaction indexing** — instant resolvability of a tx/bundle
-  *before* it mines — is **not yet implemented**.
+- **Optimistic L1 transaction indexing** — id-resolvability of a signed tx/bundle
+  *before* it mines — has since shipped (see
+  [`madr/004-optimistic-l1-tx-indexing.md`](madr/004-optimistic-l1-tx-indexing.md)),
+  with a serving guard that withholds the `verified` stamp until the tx mines.
 
 So today the behavior is: chunks cache when posted; when their transaction mines
 and is indexed they confirm and are served (and the unbundler reuses the cached
-bytes instead of re-fetching). Instant pre-mine resolvability is future work.
+bytes instead of re-fetching). Pre-mine byte-serving of `/raw/<id>` from this
+cache stays deferred (MADR 004 Scope 2), so a pending placement is cached but not
+served until its tx mines.
 
 ## Enabling
 
@@ -72,10 +76,10 @@ is upheld by:
 - **Open ingest is safe** because a junk chunk (fake `data_root`) is unaddressable
   and GC-reclaimed; the allowlist further restricts which posters earn caching.
 
-> An active "do not serve until `confirmed_at`" read guard is intentionally
-> deferred to the future optimistic-tx-index feature, where optimistic tx indexing
-> would make a pending tx's `data_root` resolvable (and thus create the exposure
-> this guard protects against).
+> Optimistic L1 tx indexing (MADR 004) can make a pending tx's `data_root`
+> resolvable, so the verification worker withholds `verified` while the tx is
+> unmined and pre-mine byte-serving from this cache stays deferred — a pending
+> placement is still never served.
 
 ## Abuse resistance (disk fill)
 
@@ -114,4 +118,4 @@ All at `/ar-io/__gateway_metrics`:
 | `chunk_ingest_confirmed_total` | Pending placements confirmed by tx-indexed events. |
 | `chunk_ingest_confirmation_latency_seconds` | POST→confirm latency histogram (use to tune the TTLs). |
 | `chunk_ingest_evicted_total{reason}` | GC evictions: `ttl`, `disk_pressure`. |
-| `chunk_ingest_pending_bytes` | Estimated bytes held by pending (unconfirmed) placements. |
+| `chunk_ingest_pending_bytes` | Estimated bytes held by pending (unconfirmed) placements. Refreshed on the GC sweep, so it can lag writes by up to one sweep interval — use `chunk_ingest_cache_total` for live confirmation. |
