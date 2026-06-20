@@ -23,6 +23,51 @@ import { verificationPriorities } from './constants.js';
 // HTTP server port
 export const PORT = +env.varOrDefault('PORT', '4000');
 
+/**
+ * Idle keep-alive timeout (ms) for core's HTTP server
+ * (`server.keepAliveTimeout`).
+ *
+ * Envoy fronts core and pools upstream connections; if core (the server)
+ * closes an idle keepalive connection before Envoy (the client) stops
+ * reusing it, Envoy can dispatch a request onto a connection core is tearing
+ * down, producing an instant reset that surfaces to clients as a 5xx with no
+ * upstream response. To avoid that race the invariant must hold:
+ *
+ *   Envoy upstream idle_timeout < HTTP_KEEP_ALIVE_TIMEOUT_MS < HTTP_HEADERS_TIMEOUT_MS
+ *
+ * Node's own defaults invert the left side (keepAliveTimeout 5s vs Envoy's
+ * 1h upstream idle default), so we raise core above Envoy's idle window here.
+ *
+ * @see ENVOY_ARIO_GATEWAY_UPSTREAM_IDLE_TIMEOUT in envoy/envoy.template.yaml
+ *   (default 55s)
+ * @default 60000 (60 seconds)
+ */
+export const HTTP_KEEP_ALIVE_TIMEOUT_MS = env.positiveIntOrDefault(
+  'HTTP_KEEP_ALIVE_TIMEOUT_MS',
+  1000 * 60, // 60 seconds
+);
+/**
+ * Headers timeout (ms) for core's HTTP server (`server.headersTimeout`).
+ *
+ * Must stay strictly greater than {@link HTTP_KEEP_ALIVE_TIMEOUT_MS} — Node
+ * requires headersTimeout to exceed keepAliveTimeout, and the inequality is
+ * enforced at startup below.
+ *
+ * @default 65000 (65 seconds)
+ */
+export const HTTP_HEADERS_TIMEOUT_MS = env.positiveIntOrDefault(
+  'HTTP_HEADERS_TIMEOUT_MS',
+  1000 * 65, // 65 seconds — must exceed HTTP_KEEP_ALIVE_TIMEOUT_MS
+);
+// Fail fast on a misconfigured override rather than handing Node an invalid
+// pairing (headersTimeout must be strictly greater than keepAliveTimeout).
+if (HTTP_HEADERS_TIMEOUT_MS <= HTTP_KEEP_ALIVE_TIMEOUT_MS) {
+  throw new Error(
+    `HTTP_HEADERS_TIMEOUT_MS (${HTTP_HEADERS_TIMEOUT_MS}) must be strictly ` +
+      `greater than HTTP_KEEP_ALIVE_TIMEOUT_MS (${HTTP_KEEP_ALIVE_TIMEOUT_MS})`,
+  );
+}
+
 // API key for accessing admin HTTP endpoints
 // It's set once in the main thread
 export let ADMIN_API_KEY = isMainThread
@@ -379,6 +424,65 @@ export const GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL',
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
+
+// GraphQL root TX lookup request batching (coalesces many concurrent per-ID
+// lookups into single `transactions(ids: [...])` queries). Disabled by default;
+// when enabled, the per-batch outbound request consumes one rate-limiter token
+// (instead of one token per ID), so a page-load burst of asset lookups no
+// longer starves the bucket.
+export const GRAPHQL_ROOT_TX_BATCH_ENABLED =
+  env.varOrDefault('GRAPHQL_ROOT_TX_BATCH_ENABLED', 'false') === 'true';
+// Coalescing window: how long a forming batch waits for more IDs before it
+// flushes. A batch also flushes eagerly once it reaches the max batch size.
+export const GRAPHQL_ROOT_TX_BATCH_WINDOW_MS = env.positiveIntOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_WINDOW_MS',
+  20,
+);
+// Default max IDs per batched query. Arweave GraphQL caps `first` at 100, so
+// this should not exceed 100. Per-endpoint overrides may lower it further.
+// Must be >= 1: a value of 0 would make GraphQLRootTxBatcher.flush() drain no
+// IDs yet keep re-scheduling, spinning forever — so validate at parse time.
+export const GRAPHQL_ROOT_TX_BATCH_MAX_SIZE = env.positiveIntOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_MAX_SIZE',
+  100,
+);
+if (GRAPHQL_ROOT_TX_BATCH_MAX_SIZE > 100) {
+  throw new Error(
+    'GRAPHQL_ROOT_TX_BATCH_MAX_SIZE must not exceed 100 ' +
+      `(Arweave GraphQL caps \`first\` at 100), got: ${GRAPHQL_ROOT_TX_BATCH_MAX_SIZE}`,
+  );
+}
+// Optional per-endpoint max batch size overrides, e.g.
+// '{"http://10.84.0.83:14000": 50}'. Endpoints absent from the map use
+// GRAPHQL_ROOT_TX_BATCH_MAX_SIZE.
+export const GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL = JSON.parse(
+  env.varOrDefault('GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL', '{}'),
+) as Record<string, number>;
+Object.entries(GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL).forEach(([url, size]) => {
+  if (
+    typeof size !== 'number' ||
+    !Number.isInteger(size) ||
+    size <= 0 ||
+    size > 100
+  ) {
+    throw new Error(
+      `Invalid size in GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL for ${url}: ${size} ` +
+        '(must be an integer in [1, 100])',
+    );
+  }
+});
+// Max number of IDs that may be waiting (pending + in-flight) before new
+// lookups are shed (resolved as not-found) rather than queued unbounded.
+export const GRAPHQL_ROOT_TX_BATCH_MAX_QUEUE_DEPTH = env.positiveIntOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_MAX_QUEUE_DEPTH',
+  1000,
+);
+// Max time a batch will wait to acquire a rate-limiter token before giving up
+// (the batch's IDs then resolve as not-found rather than blocking forever).
+export const GRAPHQL_ROOT_TX_BATCH_TOKEN_MAX_WAIT_MS = env.positiveIntOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_TOKEN_MAX_WAIT_MS',
+  5000,
+);
 
 // Gateways root TX lookup URLs (for HEAD request offset discovery)
 export const GATEWAYS_ROOT_TX_URLS = JSON.parse(
@@ -962,6 +1066,20 @@ export const CHUNK_FIRST_DATA_TIMEOUT_MS = env.nonNegativeIntOrDefault(
   10000,
 );
 
+// Wall-clock deadline (ms) for serving a single chunk request
+// (/chunk/:offset and /chunk/:offset/data). The per-source timeouts in the
+// retrieval cascade are additive with no overall ceiling, and some awaited
+// operations don't honor the abort signal, so a slow serve can otherwise run
+// until the upstream proxy (nginx/envoy, ~15s observed) cuts it — yielding a
+// 504 that also leaves the in-flight work running. This bounds the whole
+// retrieval below that cap so the gateway returns promptly (a 404, matching
+// the timeout-as-not-found contract) and releases the connection itself. Must
+// stay below the proxy read timeout. 0 disables.
+export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
+  'CHUNK_SERVE_DEADLINE_MS',
+  12000,
+);
+
 // Chain fallback for chunk offset requests
 export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =
   env.varOrDefault('CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED', 'true') === 'true';
@@ -1421,6 +1539,38 @@ export const WRITE_ANS104_DATA_ITEM_DB_SIGNATURES =
 export const WRITE_TRANSACTION_DB_SIGNATURES =
   env.varOrDefault('WRITE_TRANSACTION_DB_SIGNATURES', 'false') === 'true';
 
+// Optimistic L1 transaction indexing (corner C). When enabled, a trusted
+// poster (admin-key holder) may submit signed L1 tx headers to
+// `POST /ar-io/admin/queue-optimistic-tx` to make the tx resolvable
+// (GraphQL `transaction(id)`, with `block: null`) before it mines. The tx is
+// inserted into `new_transactions` with a NULL height; the normal block-import
+// path promotes it in place when it mines, and never-mined rows are reclaimed
+// by the existing stale-new-transaction GC. The data-verification serving
+// guard (always-on, independent of this flag) ensures an optimistic tx's data
+// is never stamped `verified` until its root tx is stable. Off by default.
+export const OPTIMISTIC_TX_INDEXING_ENABLED =
+  env.varOrDefault('OPTIMISTIC_TX_INDEXING_ENABLED', 'false') === 'true';
+
+// Grace period (seconds) before a never-mined optimistic (NULL-height)
+// transaction is reclaimed from `new_transactions` by the stale-new-data GC.
+// Must exceed worst-case mine + index latency so a legitimately-pending tx is
+// not evicted before it confirms. Default 2h matches the prior hardcoded
+// behavior; tune from observed confirmation latency.
+export const OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS = env.positiveIntOrDefault(
+  'OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS',
+  60 * 60 * 2,
+);
+
+// Maximum number of transaction headers accepted in a single
+// `POST /ar-io/admin/queue-optimistic-tx` request. Each accepted tx triggers a
+// sequential signature verification, so this caps the worst-case work a single
+// (admin-authenticated) request can schedule — the 10 MB body limit alone would
+// otherwise permit thousands of small headers.
+export const OPTIMISTIC_TX_MAX_BATCH_SIZE = env.positiveIntOrDefault(
+  'OPTIMISTIC_TX_MAX_BATCH_SIZE',
+  100,
+);
+
 // Whether or not to enable the data database WAL cleanup worker
 export const ENABLE_DATA_DB_WAL_CLEANUP =
   env.varOrDefault('ENABLE_DATA_DB_WAL_CLEANUP', 'false') === 'true';
@@ -1463,6 +1613,22 @@ export const DATA_ITEM_INDEXER_QUEUE_SIZE = +env.varOrDefault(
 export const DATA_ITEM_INDEXER_WORKER_COUNT = env.positiveIntOrDefault(
   'DATA_ITEM_INDEXER_WORKER_COUNT',
   1,
+);
+
+// queue-data-item admin endpoint hardening (corner B). Admin POSTs are
+// prioritized — they bypass the indexer's drop cap (unshift), so an
+// unthrottled bundler burst balloons the queue and starves the regular
+// unbundling pipeline rather than dropping. Cap the per-request batch and
+// apply depth-based backpressure so oversized/overload requests get a
+// retryable 4xx/503 instead of silent queue growth. Defaults are starting
+// points; tune from the load characterization.
+export const QUEUE_DATA_ITEM_MAX_BATCH_SIZE = env.positiveIntOrDefault(
+  'QUEUE_DATA_ITEM_MAX_BATCH_SIZE',
+  5000,
+);
+export const QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH = env.positiveIntOrDefault(
+  'QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH',
+  100000,
 );
 
 // Hard cap on Ans104DataIndexer's internal queue. Same semantics as
@@ -1526,6 +1692,31 @@ export const MAX_FLUSH_INTERVAL_SECONDS = +env.varOrDefault(
   '600',
 );
 
+// Parquet export (DuckDB) resource limits. The exporter runs `COPY (... ORDER
+// BY ...) TO parquet` inside an in-memory DuckDB instance; without a spill
+// path a single ultra-dense block height (tens/hundreds of thousands of data
+// items → millions of tag rows to sort) can exhaust memory and the worker is
+// OOM-killed. Setting a memory_limit plus a temp_directory lets DuckDB process
+// the sort out-of-core (spill to disk) instead of dying. Keep the limit below
+// the core container's memory ceiling.
+export const PARQUET_EXPORT_DUCKDB_MEMORY_LIMIT = env.varOrDefault(
+  'PARQUET_EXPORT_DUCKDB_MEMORY_LIMIT',
+  '2GB',
+);
+
+// Upper bound on how much DuckDB may spill to its temp_directory for a single
+// export. Guards against a runaway sort filling the data volume.
+export const PARQUET_EXPORT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE = env.varOrDefault(
+  'PARQUET_EXPORT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE',
+  '64GB',
+);
+
+// Optional cap on DuckDB worker threads during export. Fewer threads lowers
+// peak sort memory. Unset → leave DuckDB's default (one per core).
+export const PARQUET_EXPORT_DUCKDB_THREADS = env.positiveIntOrUndefined(
+  'PARQUET_EXPORT_DUCKDB_THREADS',
+);
+
 export const BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS = +env.varOrDefault(
   'BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS',
   '300', // 5 minutes
@@ -1551,6 +1742,29 @@ export const BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS =
 export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
   'BUNDLE_REPAIR_RETRY_BATCH_SIZE',
   '5000',
+);
+
+// Upper bound on how many times the repair loop will retry a single bundle.
+// A bundle that never finishes unbundling keeps matched_data_item_count NULL
+// forever and so can never be stamped fully-indexed; without a cap it is
+// re-selected and re-walked every cycle indefinitely. Once a bundle reaches
+// this many attempts it is dropped from the retry pool (and is the natural
+// hand-off boundary for a future dead-letter queue — keep the DLQ's selection
+// threshold in sync with this value).
+export const BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS = env.positiveIntOrDefault(
+  'BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS',
+  50,
+);
+
+// Minimum seconds between retries of the same bundle. The pre-existing
+// reprocess cooldown keys on last_queued_at, which only advances when the
+// unbundler actually processes the item — so under queue backpressure it
+// never advances and the same bundles are re-selected every cycle. This
+// cooldown keys on last_retried_at (always bumped by updateBundleRetry), so
+// it holds even when the unbundler is saturated.
+export const BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS = env.nonNegativeIntOrDefault(
+  'BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS',
+  900, // 15 minutes
 );
 
 //
@@ -2033,6 +2247,16 @@ export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
   '',
 );
 
+// The delay in seconds before the first contiguous data cache cleanup runs.
+// The delay gives the metadata cache time to populate so that eviction
+// decisions reflect recent access rather than cold-start defaults. When unset,
+// this falls back to CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD (see system.ts).
+// Note: this timer is not persisted, so it restarts on every process restart.
+export const CONTIGUOUS_DATA_CACHE_CLEANUP_INITIAL_DELAY = env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_CLEANUP_INITIAL_DELAY',
+  '',
+);
+
 // The threshold in seconds to cleanup data associated with prefered ArNS from
 // the filesystem contiguous data cache
 export const PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD =
@@ -2468,6 +2692,60 @@ export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
     .varOrUndefined('RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST')
     ?.split(',')
     .map((ip) => ip.trim()) ?? [];
+
+//
+// Optimistic chunk ingest cache (POST /chunk)
+//
+
+// Master switch. When false (default), POST /chunk only relays to the network
+// (current behavior); no chunk is cached locally on ingest.
+export const CHUNK_INGEST_CACHE_ENABLED =
+  env.varOrDefault('CHUNK_INGEST_CACHE_ENABLED', 'false') === 'true';
+
+// IPs/CIDRs whose posted chunks are eligible for optimistic caching. Empty =
+// open ingest (any merkle-valid chunk is cached). When set, only these posters
+// earn caching; everyone else is still relayed (the gate is on caching, not
+// posting).
+export const CHUNK_INGEST_CACHE_ALLOWLIST =
+  env
+    .varOrUndefined('CHUNK_INGEST_CACHE_ALLOWLIST')
+    ?.split(',')
+    .map((ip) => ip.trim()) ?? [];
+
+// GC leash (seconds) for open-ingest chunks whose data_root never confirms
+// on-chain. Must exceed worst-case mine+index latency.
+export const CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS =
+  env.positiveIntOrDefault(
+    'CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS',
+    21600, // 6 hours
+  );
+
+// Longer GC leash (seconds) for allowlisted-poster chunks.
+export const CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS =
+  env.positiveIntOrDefault(
+    'CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS',
+    86400, // 24 hours
+  );
+
+// Runaway-disk backstop: when pending (unconfirmed) ingest-cached bytes exceed
+// this, the GC sweep evicts oldest-pending first. The TTL above is the primary
+// junk reclamation mechanism; this only catches pathological runaway (e.g. a
+// junk-fill flood under open ingest). Defaults to a conservative non-zero so
+// enabling caching can't silently fill the disk. Set to 0 to disable.
+export const CHUNK_INGEST_MAX_PENDING_BYTES = env.nonNegativeIntOrDefault(
+  'CHUNK_INGEST_MAX_PENDING_BYTES',
+  26843545600, // 25 GiB
+);
+
+// GC sweep interval (ms) and per-sweep batch size.
+export const CHUNK_INGEST_GC_INTERVAL_MS = env.positiveIntOrDefault(
+  'CHUNK_INGEST_GC_INTERVAL_MS',
+  300000, // 5 minutes
+);
+export const CHUNK_INGEST_GC_BATCH_SIZE = env.positiveIntOrDefault(
+  'CHUNK_INGEST_GC_BATCH_SIZE',
+  1000,
+);
 
 // ArNS names to exclude from rate limiting
 export const RATE_LIMITER_ARNS_ALLOWLIST =

@@ -18,6 +18,7 @@ import {
 } from '../types.js';
 import { DataRootComputer } from '../lib/data-root.js';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 
 export type QueueBundleResponse = {
   status: 'skipped' | 'queued' | 'error';
@@ -150,12 +151,65 @@ export class DataVerificationWorker {
     dataIds: string[];
   }): Promise<boolean> {
     const log = this.log.child({ method: 'verifyDataRoot', id: rootTxId });
+    // Set when we deliberately withhold verification because the root tx is not
+    // yet mined (see the serving guard below). This is NOT a verification
+    // failure, so the finally block must skip the retry-count increment —
+    // otherwise a not-yet-mined item would exhaust its retry budget before it
+    // mines and could then never be verified. Distinct from the catch
+    // path, which still counts as a retry.
+    let withheldUnconfirmed = false;
     try {
       // TODO: use an implementation of contiguousDataIndex that attempts to
       // get 'data_root' from network sources (trusted Arweave nodes, gateways,
       // GQL) when it's unavailable in the local index
       const dataAttributes =
         await this.contiguousDataIndex.getDataAttributes(rootTxId);
+
+      // SERVING GUARD — checked BEFORE computing the data root. Withhold
+      // verification for an optimistically-indexed (not-yet-mined) root tx: it
+      // has NO on-chain block yet, so stamping its data `verified` would claim
+      // an on-chain existence we cannot back. `height === undefined` is exactly
+      // the unmined/optimistic state (a `new_transactions` row with NULL height
+      // — the state this feature creates); the normal block-import path fills
+      // the height when it mines, and verification then proceeds normally.
+      //
+      // SCOPED to unmined data — this is NOT gateway-wide. Normal mined data
+      // keeps its status-quo verify-at-mined timing (zero impact, feature on or
+      // off); only optimistic (unmined) data is withheld. Gating on mined
+      // (`height`) rather than `stable` (past fork depth) is deliberate:
+      // `verified` (data-integrity) and `stable` (inclusion-permanence) are
+      // separate trust signals, and the integrity invariant here is only "never
+      // mark `verified` a tx that has no block yet" — not "wait out fork depth".
+      //
+      // Checking here, before computeDataRoot, skips the expensive data-root
+      // computation for unmined items instead of recomputing it on every sweep
+      // until they mine. No retry penalty: the item stays eligible and verifies
+      // on the first sweep after it mines.
+      //
+      // RESIDUAL (intentional, measure before fixing): withheld items are not
+      // gated out of selectVerifiableContiguousDataIds, so they still occupy the
+      // LIMIT 1000 batch, and — because withholding does not increment
+      // verification_retry_count — they keep retry_count=0, which sorts first
+      // (ASC NULLS FIRST). Under high unmined volume they could crowd out mined,
+      // verifiable data from a sweep. Bounded in practice (only optimistic txs
+      // that also have cached data reach here; admin-rate-limited + GC'd), and
+      // for Scope 1 there is no pre-mine byte path so unmined items have no
+      // contiguous_data_ids row at all. The complete fix is to gate
+      // selectVerifiableContiguousDataIds on mined-status; magnitude is
+      // observable via optimistic_tx_verification_blocked_total — measure on a
+      // busy gateway before doing it.
+      //
+      // NOTE: require dataAttributes to EXIST (not just `?.height == null`). A
+      // lookup-miss (getDataAttributes returns undefined) is a different case —
+      // the root tx isn't in the index at all — and must fall through to the
+      // normal indexedDataRoot===undefined path (which queues unbundling and
+      // burns a retry), not be treated as an unpenalized optimistic-unmined row.
+      if (dataAttributes !== undefined && dataAttributes.height == null) {
+        withheldUnconfirmed = true;
+        metrics.optimisticTxVerificationBlockedCounter.inc();
+        log.debug('Withholding verification: root tx not yet mined');
+        return false;
+      }
 
       const indexedDataRoot = dataAttributes?.dataRoot;
       let computedDataRoot: string | undefined = undefined;
@@ -233,14 +287,18 @@ export class DataVerificationWorker {
       log.error('Error verifying data root', { error });
       return false;
     } finally {
-      // Increment retry count for all associated data IDs
-      for (const dataId of dataIds) {
-        try {
-          await this.contiguousDataIndex.incrementVerificationRetryCount(
-            dataId,
-          );
-        } catch (retryError) {
-          log.error('Error incrementing retry count', { dataId, retryError });
+      // Increment retry count for all associated data IDs — except when we
+      // deliberately withheld verification on a not-yet-mined root tx (see the
+      // serving guard above), which is a "try again later", not a failure.
+      if (!withheldUnconfirmed) {
+        for (const dataId of dataIds) {
+          try {
+            await this.contiguousDataIndex.incrementVerificationRetryCount(
+              dataId,
+            );
+          } catch (retryError) {
+            log.error('Error incrementing retry count', { dataId, retryError });
+          }
         }
       }
     }

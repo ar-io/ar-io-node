@@ -3,6 +3,7 @@
 sqlite3 data/sqlite/core.db < test/dump-core-schema.sql
 sqlite3 data/sqlite/data.db < test/dump-data-schema.sql
 sqlite3 data/sqlite/moderation.db < test/dump-moderation-schema.sql
+sqlite3 data/sqlite/chunks.db < test/dump-chunks-schema.sql
 
 # dump bundle schema
 sqlite3 data/sqlite/bundles.db < test/dump-bundles-schema.sql

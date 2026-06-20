@@ -35,6 +35,12 @@ Fast, offline lookups for data item to root transaction mappings.
 |----------|-------------|
 | [Filters](filters.md) | Transaction and bundle filter syntax |
 
+### Chunk Ingest Cache
+
+| Document | Description |
+|----------|-------------|
+| [Optimistic Chunk Ingest Cache](chunk-ingest-cache.md) | Validating and caching chunks posted to the gateway, with confirmation-driven cleanup |
+
 ## Data Export
 
 | Document | Description |
@@ -72,6 +78,7 @@ Technical details about Arweave data structures.
 | [001 - ClickHouse GQL](madr/001-clickhouse-gql.md) | GraphQL with ClickHouse backend |
 | [002 - ArNS Cache Timing](madr/002-arns-cache-timing.md) | ArNS resolution caching strategy |
 | [003 - ArNS Undername Limits](madr/003-arns-undername-limits.md) | Undername resolution limits |
+| [004 - Optimistic L1 Transaction Indexing](madr/004-optimistic-l1-tx-indexing.md) | Index a signed L1 tx before it mines + the never-serve-as-permanent guard |
 
 ## Testing
 

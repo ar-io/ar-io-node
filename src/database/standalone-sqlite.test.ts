@@ -24,6 +24,7 @@ import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
 import {
   bundlesDb,
   bundlesDbPath,
+  chunksDbPath,
   coreDb,
   coreDbPath,
   dataDb,
@@ -228,6 +229,7 @@ describe('StandaloneSqliteDatabase', () => {
       dataDbPath,
       moderationDbPath,
       bundlesDbPath,
+      chunksDbPath,
       tagSelectivity: {},
     });
     dbWorker = new StandaloneSqliteDatabaseWorker({
@@ -236,6 +238,7 @@ describe('StandaloneSqliteDatabase', () => {
       dataDbPath,
       moderationDbPath,
       bundlesDbPath,
+      chunksDbPath,
       tagSelectivity: {},
     });
     chainSource = new ArweaveChainSourceStub();
@@ -1780,6 +1783,80 @@ describe('StandaloneSqliteDatabase', () => {
     it('keeps a bundle whose root tx is not indexed on this gateway', async () => {
       const ids = await db.getFailedBundleIds(100_000);
       assert.ok(ids.includes(unknownRootId));
+    });
+  });
+
+  describe('getFailedBundleIds — retry cap + cooldown', () => {
+    // Roots are left unindexed on this gateway so they pass the bundle-format
+    // gate via the "unknown root" branch; that isolates the cap/cooldown
+    // clauses from the gate. Defaults under test: BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS
+    // = 50, BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS = 900.
+    const hashId = (seed: string): string =>
+      toB64Url(crypto.createHash('sha256').update(seed).digest());
+    // Capture `now` per-test, not at suite load. The "within cooldown"
+    // assertion compares against getFailedBundleIds's real-time @retry_cutoff
+    // (now - BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS); a load-time `now` could age
+    // out of the 900s window if the suite runs long enough and flake the test.
+    let now: number;
+    beforeEach(() => {
+      now = Math.floor(Date.now() / 1000);
+    });
+
+    const insertBundleRow = (
+      id: string,
+      {
+        retryAttemptCount = 0,
+        lastRetriedAt = null,
+      }: { retryAttemptCount?: number; lastRetriedAt?: number | null },
+    ) => {
+      bundlesDb
+        .prepare(
+          `INSERT INTO bundles (
+             id, format_id, matched_data_item_count,
+             root_transaction_id, retry_attempt_count, last_retried_at
+           ) VALUES (@id, 1, NULL, @root, @retry, @lastRetried)`,
+        )
+        .run({
+          id: fromB64Url(id),
+          root: fromB64Url(id),
+          retry: retryAttemptCount,
+          lastRetried: lastRetriedAt,
+        });
+    };
+
+    it('retries a bundle just under the attempt cap', async () => {
+      const id = hashId('cap under');
+      insertBundleRow(id, { retryAttemptCount: 49 });
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(ids.includes(id));
+    });
+
+    it('drops a bundle that has reached the attempt cap', async () => {
+      const id = hashId('cap reached');
+      insertBundleRow(id, { retryAttemptCount: 50 });
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(!ids.includes(id));
+    });
+
+    it('skips a bundle retried within the cooldown window', async () => {
+      const id = hashId('cooldown recent');
+      insertBundleRow(id, { lastRetriedAt: now });
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(!ids.includes(id));
+    });
+
+    it('retries a bundle whose last retry is older than the cooldown', async () => {
+      const id = hashId('cooldown old');
+      insertBundleRow(id, { lastRetriedAt: now - 100_000 });
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(ids.includes(id));
+    });
+
+    it('retries a bundle that has never been retried (null last_retried_at)', async () => {
+      const id = hashId('cooldown null');
+      insertBundleRow(id, { lastRetriedAt: null });
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(ids.includes(id));
     });
   });
 

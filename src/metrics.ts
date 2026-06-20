@@ -66,6 +66,89 @@ export const uncaughtExceptionCounter = new promClient.Counter({
   help: 'Count of uncaught exceptions',
 });
 
+// Errors that escape route handlers / earlier middleware and reach the
+// terminal Express error handler. Before this existed such errors fell to
+// Express's default finalhandler as unlogged, generic 500s — this counter
+// (plus the handler's logging) makes that previously-invisible path visible.
+export const unhandledRequestErrorsCounter = new promClient.Counter({
+  name: 'unhandled_request_errors_total',
+  help: 'Count of errors reaching the terminal Express error handler',
+  labelNames: ['method', 'status'],
+});
+
+// Chunk serves cut short by the handler's wall-clock deadline
+// (CHUNK_SERVE_DEADLINE_MS). A rising rate means the retrieval cascade is
+// routinely exceeding the deadline — tune the deadline or the upstream load,
+// not a bug on its own. Use to size CHUNK_SERVE_DEADLINE_MS vs the proxy cap.
+export const chunkServeDeadlineExceededCounter = new promClient.Counter({
+  name: 'chunk_serve_deadline_exceeded_total',
+  help: 'Count of chunk serves aborted by the handler wall-clock deadline',
+  labelNames: ['method'],
+});
+
+//
+// GraphQL root TX lookup batching metrics
+//
+
+export const graphqlRootTxBatchesTotal = new promClient.Counter({
+  name: 'graphql_root_tx_batches_total',
+  help: 'Count of batched GraphQL root-tx queries issued, by endpoint',
+  labelNames: ['endpoint'],
+});
+
+export const graphqlRootTxBatchSize = new promClient.Histogram({
+  name: 'graphql_root_tx_batch_size',
+  help: 'Number of IDs per batched GraphQL root-tx query, by endpoint',
+  labelNames: ['endpoint'],
+  buckets: [1, 2, 5, 10, 25, 50, 100],
+});
+
+export const graphqlRootTxBatchShedTotal = new promClient.Counter({
+  name: 'graphql_root_tx_batch_shed_total',
+  help: 'Count of root-tx lookups shed because the batch queue was at max depth',
+});
+
+export const graphqlRootTxBatchTokenWaitTimeoutTotal = new promClient.Counter({
+  name: 'graphql_root_tx_batch_token_wait_timeout_total',
+  help: 'Count of batches that gave up waiting for a rate-limit token, by endpoint',
+  labelNames: ['endpoint'],
+});
+
+//
+// Optimistic chunk ingest cache metrics
+//
+
+export const chunkIngestCacheCounter = new promClient.Counter({
+  name: 'chunk_ingest_cache_total',
+  help: 'Count of POST /chunk optimistic-cache outcomes',
+  labelNames: ['result'] as const,
+});
+
+export const chunkIngestConfirmedCounter = new promClient.Counter({
+  name: 'chunk_ingest_confirmed_total',
+  help: 'Count of tx-indexed events that confirmed pending chunk placements',
+});
+
+// The instrument that turns the confirmation-timeout defaults from "reasoned"
+// into "measured": observe the real cached_at -> confirmed_at distribution on
+// the live gateway, then tune CHUNK_INGEST_*_CONFIRMATION_TIMEOUT_SECONDS.
+export const chunkIngestConfirmationLatencySeconds = new promClient.Histogram({
+  name: 'chunk_ingest_confirmation_latency_seconds',
+  help: 'Seconds between an optimistic chunk being cached and its data_root confirming on-chain',
+  buckets: [10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 86400],
+});
+
+export const chunkIngestEvictedCounter = new promClient.Counter({
+  name: 'chunk_ingest_evicted_total',
+  help: 'Count of optimistically-cached chunks evicted by the GC sweep',
+  labelNames: ['reason'] as const,
+});
+
+export const chunkIngestPendingBytesGauge = new promClient.Gauge({
+  name: 'chunk_ingest_pending_bytes',
+  help: 'Estimated bytes held by pending (unconfirmed) ingest-cached chunks',
+});
+
 //
 // Global bundle metrics
 //
@@ -131,13 +214,7 @@ export const bundleDownloadSizeBytes = new promClient.Histogram({
   help: 'Bundle download size in bytes (as reported by contiguousDataSource)',
   labelNames: ['outcome'],
   buckets: [
-    1_024,
-    10_240,
-    102_400,
-    1_048_576,
-    10_485_760,
-    104_857_600,
-    1_073_741_824,
+    1_024, 10_240, 102_400, 1_048_576, 10_485_760, 104_857_600, 1_073_741_824,
     10_737_418_240,
   ],
 });
@@ -184,6 +261,12 @@ export const dataItemsDroppedCounter = new promClient.Counter({
   name: 'data_items_dropped_total',
   help: 'Count of data items dropped because the indexer queue was at its cap',
   labelNames: ['queue_name'],
+});
+
+export const dataItemQueueRejectedCounter = new promClient.Counter({
+  name: 'data_item_queue_rejected_total',
+  help: 'Count of queue-data-item admin requests rejected before enqueue, by reason (batch_too_large, backpressure)',
+  labelNames: ['reason'],
 });
 
 // `Ans104Unbundler.queueItem` may decide not to enqueue a bundle for
@@ -370,13 +453,13 @@ export const attributeFetchCounter = new promClient.Counter({
   name: 'attribute_fetch_total',
   help:
     'Count of owner/signature attribute fetch attempts by source and outcome. ' +
-    "`source` records where the value came from (or where we gave up): " +
-    "`store` (signatureStore/ownerStore KV), `attributes` (inline value in " +
+    '`source` records where the value came from (or where we gave up): ' +
+    '`store` (signatureStore/ownerStore KV), `attributes` (inline value in ' +
     'data_item/transaction attributes), `parent_data` (bytes via ' +
-    "fetchDataFromParent — data items only), `chain` (chainSource — " +
-    "transactions only), `derived` (secp256k1 owner-from-tx recovery), " +
-    "`incomplete_root` (PE-9073 guard fired). `outcome` is one of `hit`, " +
-    "`aborted`, `error`, `not_found`.",
+    'fetchDataFromParent — data items only), `chain` (chainSource — ' +
+    'transactions only), `derived` (secp256k1 owner-from-tx recovery), ' +
+    '`incomplete_root` (PE-9073 guard fired). `outcome` is one of `hit`, ' +
+    '`aborted`, `error`, `not_found`.',
   labelNames: ['kind', 'subject', 'source', 'outcome'],
 });
 
@@ -385,6 +468,21 @@ export const attributeFetchDurationHistogram = new promClient.Histogram({
   help: 'Duration of owner/signature attribute fetch operations',
   labelNames: ['kind', 'subject', 'source'],
   buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+});
+
+// Owner-key cache observability (PE-9120). Hit/miss and timing by cache key
+// reuse attribute_fetch_total / attribute_fetch_duration_seconds via the
+// `store_address` (shared owner_address key — cross-item reuse) and `store_id`
+// (per-item / admin key) sources. This counter additionally tracks concurrent
+// fetches collapsed by the address-keyed in-flight coalescer.
+export const ownerFetchCoalescedCounter = new promClient.Counter({
+  name: 'owner_fetch_coalesced_total',
+  help:
+    'Count of owner-key fetches served by joining an in-flight fetch for the ' +
+    'same owner address instead of issuing a new one (PE-9120 coalescer). ' +
+    'High relative to owner `parent_data`/`chain` fetches means intra-page ' +
+    'dedup is working.',
+  labelNames: ['subject'],
 });
 
 //
@@ -791,7 +889,14 @@ export const negativeCachePromotionsSuppressedTotal = new promClient.Counter({
 export const requestChunkTotal = new promClient.Counter({
   name: 'request_chunk_total',
   help: 'Count of each individual chunk http request, status can be "error" or "success", source_type can be "trusted", "preferred", or "peer", peer_type can be "bucket" or "general".',
-  labelNames: ['status', 'class', 'method', 'source', 'source_type', 'peer_type'] as const,
+  labelNames: [
+    'status',
+    'class',
+    'method',
+    'source',
+    'source_type',
+    'peer_type',
+  ] as const,
 });
 
 export const getChunkTotal = new promClient.Counter({
@@ -926,8 +1031,7 @@ const breakerSources: BreakerSource[] = [...breakerSourceNames];
 // the breaker name. Kept separate from BreakerSource so the zero-init logic
 // for label-only breaker metrics doesn't create empty always-zero series.
 const endpointBreakerSourceNames = ['gateways-gql'] as const;
-export type EndpointBreakerSource =
-  (typeof endpointBreakerSourceNames)[number];
+export type EndpointBreakerSource = (typeof endpointBreakerSourceNames)[number];
 
 export const circuitBreakerOpenCount = createCounter({
   name: 'circuit_breaker_open_count',
@@ -1141,10 +1245,7 @@ export const compositeRootTxLookupDurationSummary = new promClient.Summary({
 //
 
 const semaphores: { [key: string]: Semaphore } = {};
-export function registerSemaphoreMetrics(
-  name: string,
-  semaphore: Semaphore,
-) {
+export function registerSemaphoreMetrics(name: string, semaphore: Semaphore) {
   semaphores[name] = semaphore;
 }
 
@@ -1437,4 +1538,39 @@ export const httpSigBufferedBytesInflight = new promClient.Gauge({
 export const httpSigInitFailedTotal = new promClient.Counter({
   name: 'httpsig_init_failed_total',
   help: 'HTTPSIG signing initialization failed at startup; signing is disabled',
+});
+
+//
+// Optimistic L1 transaction indexing (corner C)
+//
+
+/**
+ * Count of L1 transactions submitted to the optimistic-tx admin ingest
+ * endpoint (`POST /ar-io/admin/queue-optimistic-tx`). `result`:
+ *   - `indexed`  — authenticated and inserted into `new_transactions`
+ *                  (height NULL = pending until mined)
+ *   - `invalid`  — rejected; the tx signature/id did not verify
+ *   - `disabled` — rejected; `OPTIMISTIC_TX_INDEXING_ENABLED` is false
+ */
+export const optimisticTxIngestedCounter = new promClient.Counter({
+  name: 'optimistic_tx_ingested_total',
+  help: 'Count of L1 txs submitted to the optimistic-tx ingest endpoint by result',
+  labelNames: ['result'],
+});
+
+/**
+ * Count of times the data-verification worker WITHHELD a verified=1 stamp
+ * because the root transaction is not yet mined (`height IS NULL`) — i.e. an
+ * optimistically-indexed tx with no on-chain block yet. This is the serving
+ * guard firing: proof the gateway never marks data `verified` for a tx with no
+ * block. Scoped to unmined data, so normal mined data is unaffected. A
+ * steadily-draining value is healthy (optimistic txs awaiting their block); a
+ * persistently high / non-draining value indicates optimistic txs that never
+ * mined. Also the magnitude signal for the LIMIT-1000 batch-occupancy residual
+ * (see data-verification.ts): measure this on a busy gateway before gating the
+ * verification SELECT on mined-status.
+ */
+export const optimisticTxVerificationBlockedCounter = new promClient.Counter({
+  name: 'optimistic_tx_verification_blocked_total',
+  help: 'Count of verification attempts withheld because the root tx is not yet mined (optimistic / NULL height)',
 });

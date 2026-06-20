@@ -15,7 +15,8 @@ FROM (
     null AS parent_id,
     true AS stable,
     null AS root_parent_offset,
-    null AS data_offset
+    null AS data_offset,
+    height
   FROM stable_transactions
   WHERE id = @id
   UNION
@@ -28,7 +29,8 @@ FROM (
     null AS parent_id,
     false AS stable,
     null AS root_parent_offset,
-    null AS data_offset
+    null AS data_offset,
+    height
   FROM new_transactions
   WHERE id = @id
   UNION
@@ -41,7 +43,8 @@ FROM (
     parent_id,
     true AS stable,
     root_parent_offset,
-    data_offset
+    data_offset,
+    height
   FROM bundles.stable_data_items
   WHERE id = @id
   UNION
@@ -54,7 +57,8 @@ FROM (
     parent_id,
     false AS stable,
     root_parent_offset,
-    data_offset
+    data_offset,
+    height
   FROM bundles.new_data_items
   WHERE id = @id
 )

@@ -156,6 +156,16 @@ only sent when rate limits are exceeded.
 [data items](#data-item), and their relationships. Includes retry tracking for
 bundle processing.
 
+**Chunks Database** - SQLite database (`chunks.db`) holding `chunk_placements` —
+the chunk metadata index keyed by ([data root](#data-root), relative offset)
+that also serves as the **optimistic chunk ingest cache** ledger. When
+`CHUNK_INGEST_CACHE_ENABLED` is set, a chunk POSTed to the gateway is validated
+against its data root and write-through cached with a pending placement
+(`confirmed_at` NULL); the placement is confirmed when the chunk's
+[transaction](#transaction) is indexed, and a GC worker evicts placements whose
+data root never confirms on-chain (so the gateway never permanently keeps data
+that did not land on chain).
+
 **Core Database** - Primary SQLite database containing blocks,
 [transactions](#transaction), transaction [tags](#tags), stable/new data
 indexes, and the migrations table that tracks applied database schema changes.
@@ -240,6 +250,19 @@ verification. Higher priority items are verified first.
 
 **Verification Retry Count** - Number of failed verification attempts for a
 piece of data. Used with exponential backoff to manage retries.
+
+**Optimistic L1 Transaction Indexing** - An admin-only feature
+(`OPTIMISTIC_TX_INDEXING_ENABLED`, default off) letting a trusted poster index
+a signed L1 [transaction](#transaction) before it mines, via
+`POST /ar-io/admin/queue-optimistic-tx`. The tx is inserted into
+`new_transactions` with a NULL height so it is immediately resolvable through
+GraphQL `transaction(id)` (with `block: null`), and is promoted in place when
+its block is imported. Every submitted tx is signature-verified, and never-mined
+rows are reclaimed by the stale-new-transaction GC. The **serving guard** in
+[data verification](#data-verification) ensures such a tx's data is never marked
+`verified` until its root tx is [stable](#stable) (past fork depth) — the
+gateway never serves not-yet-permanent data as permanent. Mirrors the optimistic
+[chunk ingest cache](#chunks-database) and optimistic data-item index.
 
 ## Resolution
 
