@@ -44,12 +44,13 @@ placing a CID in the URL path or subdomain. The gateway validates, rate-limits,
 and caches the request, then proxies it to the local Kubo node. No ArNS
 resolution is involved.
 
-**Phase 2 -- ArNS to CID Resolution (future):** ANT (Arweave Name Token)
-records will be able to store an IPFS CID in their `transactionId` field. When
-the gateway resolves an ArNS name and detects that the resolved ID is a CID
-rather than an Arweave transaction ID, it routes the request to the IPFS service
-instead of the Arweave data pipeline. This requires no contract changes -- CID
-detection happens at the gateway level.
+**Phase 2 -- ArNS to CID Resolution (implemented):** ANT (Arweave Name Token)
+records carry a `targetProtocol` field (`0` = Arweave, `1` = IPFS) and the
+content target may be an IPFS CID. When the gateway resolves an ArNS name whose
+record targets IPFS, it routes the request to the IPFS service instead of the
+Arweave data pipeline. See
+[Phase 2: ArNS to IPFS Resolution](#phase-2-arns-to-ipfs-resolution) for the
+full flow, headers, and caching semantics.
 
 ## Architecture
 
@@ -451,36 +452,52 @@ serve IPFS-hosted content without the user needing to know the CID.
 
 ### How It Works
 
-1. **ANT record stores a CID.** The Arweave Name Token contract's
-   `transactionId` field accepts any string. An ANT owner sets it to an IPFS CID
-   (e.g., `bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi`)
-   instead of an Arweave transaction ID.
+1. **ANT record targets a CID with `targetProtocol: ipfs`.** ANT records carry
+   a `targetProtocol` field (`0` = Arweave, `1` = IPFS, default `0`) alongside
+   the content target. An ANT owner (or controller) sets the target to an IPFS
+   CID and `targetProtocol` to `1` -- e.g. via the AR.IO SDK:
+   `ant.setUndernameRecord({ undername: 'ipfs', transactionId: '<CID>', ttlSeconds: 300, targetProtocol: 1 })`.
 
-2. **Gateway resolves the ArNS name.** The standard ArNS resolution pipeline
-   fetches the ANT record and extracts the `transactionId`.
+2. **The on-demand resolver reads `targetProtocol`.** `OnDemandArNSResolver`
+   reads the record's `targetProtocol`. When it is IPFS, it validates the target
+   as a CID (`isValidCid`) rather than as a 43-char Arweave ID, and surfaces
+   `protocol: 'ipfs'` on the resolution (carried through the resolution cache).
 
-3. **CID detection.** The gateway inspects the resolved ID. If it matches CID
-   format (multibase-prefixed, valid multicodec), it is classified as an IPFS
-   CID rather than an Arweave transaction ID.
+3. **The ArNS middleware routes by protocol.** When `protocol === 'ipfs'` and
+   IPFS serving is enabled, the middleware sets `ipfsCid`/`ipfsPath` on the
+   request and hands off to the same IPFS handler used by the path/subdomain
+   routes -- otherwise it serves via the Arweave data path as before.
 
-4. **Route to IPFS service.** Instead of fetching from the Arweave data pipeline
-   (cache, S3, peers, chunks), the gateway routes the request to the IPFS
-   service, which follows the same blocklist, rate limit, cache, and Kubo fetch
-   pipeline described above.
+4. **The IPFS service serves it.** Blocklist -> rate limit -> cache -> Kubo
+   fetch, exactly as for a direct `/ipfs/{CID}` request.
+
+The response carries the full ArNS envelope (`X-ArNS-Name`, `X-ArNS-Resolved-Id`
+= the CID, `X-ArNS-Ant-Id`, `X-ArNS-TTL-Seconds`) plus `X-ArNS-Protocol: ipfs`,
+`X-Ar-Io-Source: ipfs`, `X-Ipfs-Path`, and `ETag` = the CID. HTTPSIG signs the
+ArNS binding headers and the IPFS serving headers (and `Content-Digest` on cache
+hits), so the name->CID binding and the served bytes are both attested.
 
 ### Key Design Decisions
 
-- **No contract changes.** CID detection happens entirely at the gateway level.
-  The ANT contract's `transactionId` field is a free-form string, so it already
-  accepts CIDs.
+- **Explicit `targetProtocol`, not shape-sniffing.** Protocol comes from the
+  ANT record's `targetProtocol` field, so an Arweave TX ID and an IPFS CID are
+  never confused by guessing from string shape.
+- **Mutable-binding cache semantics.** A direct `/ipfs/{CID}` request is cached
+  `immutable` (content-addressed). But an ArNS name -> CID binding is **mutable**
+  (the record can be repointed), so ArNS-served IPFS responses use the ArNS TTL
+  for `Cache-Control`, not `immutable` -- a record update is never pinned in
+  caches for ~a year (cf. PE-9072).
 - **Transparent to users.** A user visiting `my-dapp.arweave.dev` does not need
-  to know whether the content is on Arweave or IPFS. The URL is the same either
-  way.
-- **Owner-controlled.** The ANT owner decides where content lives by setting
-  the `transactionId` to either an Arweave TX ID or an IPFS CID. Switching
-  between storage backends is a single contract interaction.
+  to know whether the content is on Arweave or IPFS; the URL is identical.
+- **Owner/controller-controlled.** Switching a name between Arweave and IPFS is
+  a single ANT record update (target + `targetProtocol`).
 - **Caching and moderation apply.** All Phase 1 protections (blocklist, rate
   limits, cache) apply to ArNS-resolved IPFS content.
+- **Resolver scope.** Protocol awareness lives in the on-demand resolver. The
+  trusted-gateway resolver does not yet propagate `targetProtocol` across
+  gateway hops, so a name whose resolution falls through to that path would be
+  treated as Arweave. Keep `on-demand` ahead of `gateway` in
+  `ARNS_RESOLVER_PRIORITY_ORDER` for IPFS-targeted names.
 
 ## Differences from Arweave Data Serving
 
@@ -491,7 +508,7 @@ serve IPFS-hosted content without the user needing to know the CID.
 | **Path resolution** | Manifest JSON parsed by the gateway | UnixFS directories resolved by Kubo |
 | **Verification** | Merkle proofs verified by the gateway | Block hashes verified internally by Kubo |
 | **Caching** | Archival (operators retain data long-term, often without eviction) | LRU with bounded size (eviction when full) |
-| **Cache-Control** | Varies by verification status and data source trust | `immutable` with 1-year max-age (content-addressed = never changes) |
+| **Cache-Control** | Varies by verification status and data source trust | Direct CID: `immutable`, 1-year max-age (content-addressed). Via ArNS: the ArNS TTL (mutable name->CID binding) |
 | **Rate limiting** | Shared Arweave token bucket | Separate IPFS token bucket |
 | **Data source** | Multi-source fallback chain (cache, S3, peers, gateways, Arweave nodes) | Single source: local Kubo node |
 | **Upstream network** | Arweave protocol (block weave, mining incentives) | IPFS/libp2p (DHT, Bitswap) |

@@ -37,6 +37,7 @@ export const TRIGGER_HEADERS = new Set([
   'x-arweave-tags-truncated',
   'x-arns-name',
   'x-arns-resolved-id',
+  'x-arns-protocol',
   'x-arns-ttl-seconds',
   'x-arns-ant-program-id',
   'x-arns-ant-id',

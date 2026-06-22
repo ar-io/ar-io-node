@@ -31,6 +31,7 @@ import {
 } from '../handlers/data-handler-utils.js';
 import { PaymentProcessor } from '../payments/types.js';
 import { extractAllClientIPs } from '../lib/ip-utils.js';
+import { formatContentDigest } from '../lib/digest.js';
 
 export function createIpfsRouter({
   log,
@@ -203,11 +204,26 @@ async function handleIpfsRequest({
     if (result.size > 0) {
       res.setHeader('Content-Length', result.size);
     }
-    // CIDs are content-addressed — content never changes
-    res.setHeader('Cache-Control', 'public, max-age=29030400, immutable');
+    // A direct /ipfs/{CID} or {CID}.host request is content-addressed and thus
+    // immutable. But when the request arrived via an ArNS name, the name->CID
+    // binding is MUTABLE and the ArNS middleware already set a TTL-bounded
+    // Cache-Control — don't override it with `immutable`, or a record update
+    // would be pinned in browsers/edge caches for ~a year (cf. PE-9072).
+    if ((req as Request & { arns?: unknown }).arns === undefined) {
+      res.setHeader('Cache-Control', 'public, max-age=29030400, immutable');
+    }
     res.setHeader('ETag', `"${cidToV1Base32(cidString)}"`);
     res.setHeader('X-Ipfs-Path', `/ipfs/${ipfsPath}`);
     res.setHeader('X-Ar-Io-Source', 'ipfs');
+
+    // Body binding (RFC 9530 Content-Digest). When a SHA-256 of the served
+    // bytes is known (computed at cache-write time, returned on cache hits),
+    // emit it — it's in CO_SIGNABLE_HEADERS, so HTTPSIG binds the body to the
+    // signature. Cache hits carry it for free; misses stream without it (the
+    // signed ETag=CID still attests content identity).
+    if (result.digest !== undefined) {
+      res.setHeader('Content-Digest', formatContentDigest(result.digest));
+    }
 
     if (result.cached) {
       res.setHeader('X-Cache', 'HIT');

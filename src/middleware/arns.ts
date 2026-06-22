@@ -231,6 +231,9 @@ export const createArnsMiddleware = ({
           // Populate the ArNS response headers for client visibility
           res.header(headerNames.arnsName, arnsSubdomain);
           res.header(headerNames.arnsResolvedId, resolvedId);
+          // Tell the client how to interpret the resolved id (Arweave TX vs
+          // IPFS CID). Signed (x-arns-protocol is a trigger header).
+          res.header(headerNames.arnsProtocol, arnsProtocol);
           if (basename !== '') {
             res.header(headerNames.arnsBasename, basename);
           }

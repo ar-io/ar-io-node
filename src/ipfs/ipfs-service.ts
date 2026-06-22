@@ -27,6 +27,12 @@ export interface IpfsGetContentResult {
   size: number;
   contentType: string;
   cached: boolean;
+  /**
+   * base64url SHA-256 of the served bytes, present on cache hits (computed at
+   * cache-write time). Used to emit an RFC 9530 Content-Digest. Absent on cache
+   * misses (the body streams straight from Kubo without being hashed inline).
+   */
+  digest?: string;
 }
 
 export class IpfsService {
@@ -110,6 +116,7 @@ export class IpfsService {
           size: cached.size,
           contentType: cached.contentType,
           cached: true,
+          digest: cached.digest,
         };
       }
 
@@ -189,6 +196,9 @@ export class IpfsService {
       .toString('hex')}`;
     let bytesWritten = 0;
     let failed = false;
+    // Hash the bytes as they're written so cache hits can emit an RFC 9530
+    // Content-Digest (body binding) without a re-read.
+    const hash = crypto.createHash('sha256');
 
     // Create the write stream synchronously. The temp directory is created
     // eagerly in the IpfsFsCache constructor, so there is no async mkdir to
@@ -242,6 +252,7 @@ export class IpfsService {
         return;
       }
 
+      hash.update(chunk);
       writeStream.write(chunk);
     });
 
@@ -250,10 +261,18 @@ export class IpfsService {
         cleanup();
         return;
       }
+      const digest = hash.digest('base64url');
       writeStream.end(() => {
         // Finalize: move temp file into cache
         this.cache
-          .putFromFile(cidString, tempPath, bytesWritten, contentType, path)
+          .putFromFile(
+            cidString,
+            tempPath,
+            bytesWritten,
+            contentType,
+            path,
+            digest,
+          )
           .catch((error) => {
             this.log.error('Failed to finalize IPFS cache entry', {
               cid: cidString,

@@ -61,6 +61,14 @@ export const headerNames = {
   arnsBasename: 'X-ArNS-Basename',
   arnsRecord: 'X-ArNS-Record',
   arnsResolvedId: 'X-ArNS-Resolved-Id',
+  /**
+   * Storage protocol of the resolved target: `arweave` (the resolved id is an
+   * Arweave TX / data-item ID served from the Arweave data path) or `ipfs`
+   * (the resolved id is an IPFS CID served via the Kubo IPFS path). Mirrors the
+   * ANT record's `targetProtocol`. Lets a client know how to interpret
+   * `X-ArNS-Resolved-Id` (43-char TX ID vs CID) without guessing from its shape.
+   */
+  arnsProtocol: 'X-ArNS-Protocol',
   dataId: 'X-AR-IO-Data-Id',
   /**
    * Identifier of the Solana program that owns the ANT mint that

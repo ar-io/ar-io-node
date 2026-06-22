@@ -67,7 +67,13 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
     return;
   }
 
+  // Storage protocol of the target (arweave TX id vs ipfs CID). Optional on the
+  // resolution; absent => arweave for backward compatibility.
+  const protocol =
+    (resolved as { protocol?: 'arweave' | 'ipfs' }).protocol ?? 'arweave';
+
   res.header(headerNames.arnsResolvedId, resolvedId);
+  res.header(headerNames.arnsProtocol, protocol);
   res.header(
     headerNames.arnsTtlSeconds,
     (ttl ?? DEFAULT_ARNS_TTL_SECONDS).toString(),
@@ -86,7 +92,11 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
     res.header(headerNames.arnsLimit, limit.toString());
   }
   res.json({
+    // `txId` kept for backward compatibility; for IPFS records it actually
+    // holds a CID. Prefer `resolvedId` + `protocol`.
     txId: resolvedId,
+    resolvedId,
+    protocol,
     ttlSeconds: ttl,
     antId,
     resolvedAt,

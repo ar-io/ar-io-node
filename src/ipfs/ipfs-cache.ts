@@ -18,6 +18,13 @@ import { currentUnixTimestamp } from '../lib/time.js';
 interface CacheEntry {
   size: number;
   contentType: string;
+  /**
+   * base64url SHA-256 of the cached bytes, computed at cache-write time.
+   * Emitted as an RFC 9530 Content-Digest on cache hits so the body can be
+   * bound into the HTTPSIG signature. Optional: pre-existing cache entries
+   * (written before this field existed) won't have it.
+   */
+  digest?: string;
 }
 
 export class IpfsFsCache {
@@ -111,7 +118,8 @@ export class IpfsFsCache {
     cidString: string,
     path?: string,
   ): Promise<
-    { stream: Readable; size: number; contentType: string } | undefined
+    | { stream: Readable; size: number; contentType: string; digest?: string }
+    | undefined
   > {
     const key = this.cacheKey(cidString, path);
     let entry = this.index.get(key);
@@ -139,6 +147,7 @@ export class IpfsFsCache {
           stream,
           size: entry.size,
           contentType: entry.contentType,
+          digest: entry.digest,
         };
       } catch (error: any) {
         this.log.error('Failed to read cached IPFS content', {
@@ -203,6 +212,7 @@ export class IpfsFsCache {
     size: number,
     contentType: string,
     path?: string,
+    digest?: string,
   ): Promise<void> {
     const key = this.cacheKey(cidString, path);
 
@@ -211,7 +221,7 @@ export class IpfsFsCache {
       await fs.promises.mkdir(dataDir, { recursive: true });
       await fs.promises.rename(tempPath, this.dataPath(key));
 
-      const meta: CacheEntry = { size, contentType };
+      const meta: CacheEntry = { size, contentType, digest };
       await fs.promises.writeFile(
         this.metaPath(key),
         JSON.stringify(meta),

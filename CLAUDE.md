@@ -74,7 +74,10 @@ yarn service:start / stop / restart / status / logs
   bundle unbundling, verification, and webhooks. Controlled by `START_WRITERS`.
 - IPFS serving (`src/ipfs/`) is opt-in via `IPFS_ENABLED`. Uses a Kubo sidecar
   for content retrieval with its own cache, rate limiter, and blocklist. Routes
-  mount before ArNS in `app.ts`. See `docs/ipfs-integration.md`.
+  mount before ArNS in `app.ts`. ArNS names whose ANT record has
+  `targetProtocol: ipfs` resolve to a CID and are routed to the same IPFS
+  handler by the ArNS middleware (`src/middleware/arns.ts`); the on-demand
+  resolver reads `targetProtocol`. See `docs/ipfs-integration.md`.
 - Responses include trust headers indicating verification status.
 - HTTPSIG signs response headers (RFC 9421); `Content-Digest` is in
   `CO_SIGNABLE_HEADERS` so when present it binds the body to the signature.
