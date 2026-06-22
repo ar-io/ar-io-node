@@ -122,7 +122,7 @@ import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetchers.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { ChunkIngestGcWorker } from './workers/chunk-ingest-gc.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
-import { awsClient, legacyAwsS3Client } from './aws-client.js';
+import { awsClient, legacyAwsS3Client, turboAwsClient } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { ChunkRetrievalService } from './data/chunk-retrieval-service.js';
@@ -1151,14 +1151,14 @@ const s3DataSource =
     : undefined;
 
 const turboS3DataSource =
-  awsClient !== undefined &&
+  turboAwsClient !== undefined &&
   config.AWS_S3_TURBO_CONTIGUOUS_DATA_BUCKET !== undefined
     ? new S3DataSource({
         log,
-        s3Client: awsClient.S3,
+        s3Client: turboAwsClient.S3,
         s3Bucket: config.AWS_S3_TURBO_CONTIGUOUS_DATA_BUCKET,
         s3Prefix: config.AWS_S3_TURBO_CONTIGUOUS_DATA_PREFIX,
-        awsClient,
+        awsClient: turboAwsClient,
       })
     : undefined;
 

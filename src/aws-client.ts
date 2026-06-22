@@ -33,6 +33,40 @@ export const awsClient = (await canInitAwsClient())
     })
   : undefined;
 
+// A separate Turbo S3 client is only created when BOTH a Turbo-specific region
+// and endpoint are provided, allowing the Turbo S3 data source to point at a
+// different AWS account/endpoint than the default client.
+function hasTurboAwsConfig() {
+  return (
+    process.env.TURBO_AWS_REGION !== undefined &&
+    process.env.TURBO_AWS_ENDPOINT !== undefined
+  );
+}
+
+// Turbo S3 client: a dedicated instance when both TURBO_AWS_REGION and
+// TURBO_AWS_ENDPOINT are set, otherwise the shared awsClient reference.
+// Credentials follow the same paradigm: Turbo-specific values are used when
+// provided and otherwise fall back to the default AWS_* credentials. When none
+// are set, aws-lite resolves credentials from the ambient provider chain (e.g.
+// IAM role), matching the default client.
+export const turboAwsClient = hasTurboAwsConfig()
+  ? await awsLite({
+      endpoint: process.env.TURBO_AWS_ENDPOINT,
+      region: process.env.TURBO_AWS_REGION, // guaranteed non-undefined now
+      accessKeyId:
+        process.env.TURBO_AWS_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey:
+        process.env.TURBO_AWS_SECRET_ACCESS_KEY ??
+        process.env.AWS_SECRET_ACCESS_KEY,
+      sessionToken:
+        process.env.TURBO_AWS_SESSION_TOKEN ?? process.env.AWS_SESSION_TOKEN,
+      plugins: [awsLiteS3],
+    }).catch((err) => {
+      console.error('Failed to initialize Turbo AWS client', err);
+      return awsClient; // fall back to the shared client
+    })
+  : awsClient;
+
 // Check if legacy S3 credentials are explicitly configured
 function hasLegacyS3Credentials() {
   return (
