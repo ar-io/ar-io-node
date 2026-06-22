@@ -7,19 +7,35 @@
 import { Router } from 'express';
 
 import * as config from '../config.js';
+import log from '../log.js';
 import { createArnsMiddleware } from '../middleware/arns.js';
 import { createSandboxMiddleware } from '../middleware/sandbox.js';
 import * as system from '../system.js';
 import { dataHandler } from './data/index.js';
+import { createIpfsHandler } from './ipfs.js';
 import { headerNames } from '../constants.js';
 import { sendNotFound } from './data/handlers.js';
 import { DEFAULT_ARNS_TTL_SECONDS } from '../resolution/trusted-gateway-arns-resolver.js';
 
 export const arnsRouter = Router();
 
+// When IPFS serving is enabled, ArNS names whose ANT record resolves to an
+// IPFS CID (targetProtocol = ipfs) are served through the same IPFS handler
+// used by the path/subdomain routes.
+const ipfsHandler =
+  config.IPFS_ENABLED && system.ipfsService !== undefined
+    ? createIpfsHandler({
+        log,
+        ipfsService: system.ipfsService,
+        rateLimiter: system.ipfsRateLimiter,
+        paymentProcessor: system.paymentProcessor,
+      })
+    : undefined;
+
 export const arnsMiddleware = createArnsMiddleware({
   dataHandler,
   nameResolver: system.nameResolver,
+  ipfsHandler,
 });
 
 if (config.ARNS_ROOT_HOSTS.length > 0) {
