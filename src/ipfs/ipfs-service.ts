@@ -184,48 +184,43 @@ export class IpfsService {
     stream: Readable,
     contentType: string,
   ): void {
-    const cacheDir = `${this.cache.getCachePath()}/tmp`;
-    const tempPath = `${cacheDir}/${crypto.randomBytes(16).toString('hex')}`;
-    let writeStream: fs.WriteStream | null = null;
+    const tempPath = `${this.cache.getCachePath()}/tmp/${crypto
+      .randomBytes(16)
+      .toString('hex')}`;
     let bytesWritten = 0;
     let failed = false;
-    const pendingChunks: Buffer[] = [];
+
+    // Create the write stream synchronously. The temp directory is created
+    // eagerly in the IpfsFsCache constructor, so there is no async mkdir to
+    // race against the stream's 'end' event. (A previous async-mkdir version
+    // dropped the cache entry whenever a small/fast response ended before the
+    // mkdir resolved — leaving writeStream null — so small objects never
+    // cached.) createWriteStream opens the fd lazily and buffers writes until
+    // it is ready, so synchronous creation is safe.
+    let writeStream: fs.WriteStream;
+    try {
+      writeStream = fs.createWriteStream(tempPath);
+    } catch (error: any) {
+      this.log.error('Failed to open IPFS cache write stream', {
+        cid: cidString,
+        message: error.message,
+      });
+      return;
+    }
 
     const cleanup = () => {
-      if (writeStream) {
-        writeStream.destroy();
-        writeStream = null;
-      }
-      pendingChunks.length = 0;
+      writeStream.destroy();
       fs.promises.unlink(tempPath).catch(() => {});
     };
 
-    // Create temp directory and write stream
-    fs.promises
-      .mkdir(cacheDir, { recursive: true })
-      .then(() => {
-        if (failed) return;
-        writeStream = fs.createWriteStream(tempPath);
-        writeStream.on('error', (error) => {
-          failed = true;
-          this.log.error('Cache write stream error', {
-            cid: cidString,
-            message: error.message,
-          });
-          cleanup();
-        });
-        // Flush any chunks that arrived before writeStream was ready
-        for (const chunk of pendingChunks) {
-          writeStream.write(chunk);
-        }
-        pendingChunks.length = 0;
-      })
-      .catch((error) => {
-        failed = true;
-        this.log.error('Failed to create cache temp dir', {
-          message: error.message,
-        });
+    writeStream.on('error', (error) => {
+      failed = true;
+      this.log.error('Cache write stream error', {
+        cid: cidString,
+        message: error.message,
       });
+      cleanup();
+    });
 
     stream.on('data', (chunk: Buffer) => {
       if (failed) return;
@@ -247,18 +242,11 @@ export class IpfsService {
         return;
       }
 
-      if (writeStream) {
-        writeStream.write(chunk);
-      } else {
-        // Buffer until writeStream is ready (typically only first 1-2 chunks)
-        pendingChunks.push(chunk);
-      }
+      writeStream.write(chunk);
     });
 
     stream.on('end', () => {
-      if (failed || !writeStream) {
-        // If writeStream never became ready, discard
-        failed = true;
+      if (failed) {
         cleanup();
         return;
       }

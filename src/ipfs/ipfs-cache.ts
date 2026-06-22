@@ -40,6 +40,12 @@ export class IpfsFsCache {
     this.log = log.child({ class: this.constructor.name });
     this.baseDir = basePath;
     this.eventEmitter = eventEmitter;
+    // Create the temp directory eagerly so the streaming cache writer can
+    // open its write stream synchronously. Doing the mkdir lazily per-request
+    // raced against fast/small responses ending before the async mkdir
+    // resolved, which left the write stream null and silently dropped the
+    // cache entry (so small IPFS objects never cached).
+    fs.mkdirSync(this.tempDir(), { recursive: true });
     this.index = new LRUCache<string, CacheEntry>({
       maxSize: maxSizeBytes,
       sizeCalculation: (entry) => entry.size,
