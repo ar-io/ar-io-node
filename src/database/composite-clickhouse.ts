@@ -672,10 +672,12 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
    * Set-based dedup with stable > unstable > sqlite precedence handles
    * the stabilization-overlap window where the same `id` briefly lives
    * in both `transactions` and `new_transactions` until TTL drops the
-   * unstable copy. JS-side sort + slice produces a deterministic page;
-   * `hasNextPage` is computed against the deduped edge list (not the
-   * raw concatenation) so cross-leg duplicates that collapse the page
-   * don't falsely advertise more results.
+   * unstable copy. JS-side sort + slice produces a deterministic page.
+   * `hasNextPage` is derived from each leg's raw result *before*
+   * cross-leg id-dedup: a leg returning more than `pageSize` rows has
+   * more matching data to give. Computing it against the deduped edge
+   * count instead would falsely signal completeness whenever duplicate
+   * ids collapse the merged page to `pageSize` or fewer (see PE-9124).
    *
    * See `clickhouse-pipeline.md` and PR #699 for the design rationale.
    */
