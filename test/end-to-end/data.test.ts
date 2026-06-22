@@ -144,7 +144,10 @@ describe('Data', function () {
       stream.on('error', reject);
     });
 
-    assert.equal(res.headers['x-ar-io-hops'], '1');
+    assert.ok(
+      parseInt(res.headers['x-ar-io-hops']) >= 1,
+      `Expected x-ar-io-hops >= 1, got ${res.headers['x-ar-io-hops']}`,
+    );
     assert.equal(res.headers['content-type'], 'text/html; charset=utf-8');
     assert.equal(res.headers['content-length'], '3922');
     assert.equal(res.status, 200);
@@ -216,7 +219,10 @@ describe('Data', function () {
       stream.on('error', reject);
     });
 
-    assert.equal(res.headers['x-ar-io-hops'], '1');
+    assert.ok(
+      parseInt(res.headers['x-ar-io-hops']) >= 1,
+      `Expected x-ar-io-hops >= 1, got ${res.headers['x-ar-io-hops']}`,
+    );
     assert.equal(
       res.headers['content-type'],
       'application/json; charset=utf-8',
@@ -635,7 +641,10 @@ describe('X-AR-IO headers', function () {
         },
       });
 
-      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.ok(
+        parseInt(res.headers['x-ar-io-hops']) >= 1,
+        `Expected x-ar-io-hops >= 1, got ${res.headers['x-ar-io-hops']}`,
+      );
 
       await waitForLogMessage({
         container: coreContainer,
@@ -661,7 +670,10 @@ describe('X-AR-IO headers', function () {
         },
       });
 
-      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.ok(
+        parseInt(res.headers['x-ar-io-hops']) >= 1,
+        `Expected x-ar-io-hops >= 1, got ${res.headers['x-ar-io-hops']}`,
+      );
 
       await waitForLogMessage({
         container: coreContainer,

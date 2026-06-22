@@ -11,6 +11,7 @@ import rangeParser from 'range-parser';
 import { Logger } from 'winston';
 import { headerNames } from '../../constants.js';
 import { pipeStreamToResponse } from '../../lib/stream.js';
+import { sendBodyWithOptionalDigest } from './buffered-digest.js';
 import * as config from '../../config.js';
 import { release } from '../../version.js';
 import { tracer, context, trace } from '../../tracing.js';
@@ -192,20 +193,30 @@ const setDigestStableVerifiedHeaders = ({
       dataAttributes.verified && data.cached ? 'true' : 'false',
     );
 
-    // We only add digest and ETag headers when the data is either a HEAD
-    // request or cached locally. If the data is not cached, we might stream
-    // from the network and end up with a different hash than what is currently
-    // stored in the DB.
-    if (
-      dataAttributes.hash !== undefined &&
-      (data.cached || req.method === REQUEST_METHOD_HEAD)
-    ) {
+    // X-AR-IO-Digest is the gateway's stated hash for this data. We emit it
+    // any time the chain index has a hash on file — even when the bytes are
+    // about to be streamed from a peer rather than served from local cache —
+    // so clients can verify the bytes they receive against the canonical
+    // value without an extra round-trip. The header is informational and is
+    // NOT covered by the HTTPSIG signature, so emitting an as-yet-unverified
+    // hash makes no signed claim. If the buffered-digest helper later
+    // computes the actual served-body hash, it will overwrite this value
+    // with the served-bytes hash before the response goes out.
+    //
+    // ETag and Content-Digest are different: they describe the
+    // representation we COMMIT to serving (ETag is a cache validator;
+    // Content-Digest is in CO_SIGNABLE_HEADERS and is signed). We only emit
+    // those when we can stand behind them — local cache or HEAD — to avoid
+    // signing a claim about bytes we haven't verified.
+    if (dataAttributes.hash !== undefined) {
       res.setHeader(headerNames.digest, dataAttributes.hash);
-      res.setHeader(
-        headerNames.contentDigest,
-        formatContentDigest(dataAttributes.hash),
-      );
-      res.setHeader('ETag', `"${dataAttributes.hash}"`);
+      if (data.cached || req.method === REQUEST_METHOD_HEAD) {
+        res.setHeader(
+          headerNames.contentDigest,
+          formatContentDigest(dataAttributes.hash),
+        );
+        res.setHeader('ETag', `"${dataAttributes.hash}"`);
+      }
     }
   }
 
@@ -503,12 +514,46 @@ const setDataHeaders = ({
     res.header(headerNames.rootTransactionId, dataAttributes.rootTransactionId);
   }
 
-  // Set absolute root offset headers
+  // X-AR-IO-Root-Path: emit only when we can reconstruct a faithful path
+  // the receiving gateway can replay through `getDataItemOffsetWithPath`.
+  //
+  // The single-level case (data item directly inside an L1 bundle) is the
+  // dominant ANS-104 pattern: `parentId === rootTransactionId`, so the
+  // path is just `[rootTransactionId]` — always correct.
+  //
+  // Multi-level nesting (`parentId !== rootTransactionId`) requires the
+  // chain of intermediate bundles, which `dataAttributes` doesn't carry
+  // today. Emitting `[root, parent]` instead would be malformed for
+  // 3+-level nesting — `navigatePathAndFind` (ans104-offset-source.ts:395)
+  // walks each intermediate and throws on a missing one, then gracefully
+  // falls back to linear search. That's strictly worse than not emitting:
+  // a failed parse + a linear search vs just a linear search. So we omit
+  // the header in the multi-level case until dataAttributes gains a full
+  // path field (separate follow-up).
+  if (
+    dataAttributes?.rootTransactionId != null &&
+    dataAttributes?.parentId != null &&
+    dataAttributes.parentId === dataAttributes.rootTransactionId
+  ) {
+    res.header(headerNames.rootPath, dataAttributes.rootTransactionId);
+  }
+
+  // Set absolute root offset headers.
+  //
+  // Naming-symmetry note: requests carry hints as `X-AR-IO-Root-Item-Offset`
+  // / `X-AR-IO-Root-Item-Size` (parsed at routes/data/handlers.ts into
+  // requestAttributes.rootByteHint). For the "cache response, replay on
+  // next request" pattern to work without renaming on the client side we
+  // emit BOTH the legacy response names (`X-AR-IO-Root-Data-Item-Offset`
+  // / `X-AR-IO-Root-Data-Offset`) AND the request-shaped names
+  // (`X-AR-IO-Root-Item-Offset` / `X-AR-IO-Root-Item-Size`). Existing
+  // consumers keep working; new consumers prefer the aligned pair. The
+  // legacy names will be removed after a deprecation window — see
+  // docs/glossary.md.
   if (dataAttributes?.rootDataItemOffset != null) {
-    res.header(
-      headerNames.rootDataItemOffset,
-      dataAttributes.rootDataItemOffset.toString(),
-    );
+    const offsetStr = dataAttributes.rootDataItemOffset.toString();
+    res.header(headerNames.rootDataItemOffset, offsetStr); // legacy
+    res.header(headerNames.rootItemOffset, offsetStr); // aligned
   }
 
   if (dataAttributes?.rootDataOffset != null) {
@@ -516,6 +561,10 @@ const setDataHeaders = ({
       headerNames.rootDataOffset,
       dataAttributes.rootDataOffset.toString(),
     );
+  }
+
+  if (dataAttributes?.itemSize != null) {
+    res.header(headerNames.rootItemSize, dataAttributes.itemSize.toString());
   }
 
   // Set relative offset headers for backward compatibility
@@ -974,9 +1023,11 @@ export const sendInvalidId = (res: Response, id: string) => {
 };
 
 export const sendNotFound = (res: Response) => {
+  // 404s are transient — use must-revalidate, not immutable, so upstream
+  // caches refresh once the resource (potentially) becomes available.
   res.header(
     'Cache-Control',
-    `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, immutable`,
+    `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
   );
   res.status(404).send('Not found');
 };
@@ -1260,7 +1311,13 @@ export const createRawDataHandler = ({
 
             span.setAttribute('http.status_code', res.statusCode || 200);
             span.addEvent('Streaming data to client');
-            pipeStreamToResponse(data.stream, res, log, id);
+            await sendBodyWithOptionalDigest({
+              req,
+              res,
+              data,
+              log,
+              dataId: id,
+            });
           }
         } catch (error: any) {
           // Handle client disconnect (AbortError) specially — only when the
@@ -1332,6 +1389,7 @@ const sendManifestResponse = async ({
   id,
   resolvedId,
   complete,
+  resolutionType,
   requestAttributes,
   rateLimiter,
   paymentProcessor,
@@ -1347,6 +1405,7 @@ const sendManifestResponse = async ({
   id: string;
   resolvedId: string | undefined;
   complete: boolean;
+  resolutionType?: 'path' | 'index' | 'fallback';
   requestAttributes: RequestAttributes;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
@@ -1431,6 +1490,19 @@ const sendManifestResponse = async ({
       dataItemMetaResolver,
     );
 
+    // URL→data-id mapping is mutable for fallback resolutions: a future
+    // manifest revision can add the missing path, changing what this URL
+    // resolves to. Override any ArNS-set ANT TTL with a short, must-revalidate
+    // directive so upstream proxies don't pin stale fallback content. Do NOT
+    // remove without understanding upstream-cache poisoning implications —
+    // see PE-9072.
+    if (resolutionType === 'fallback') {
+      res.setHeader(
+        'Cache-Control',
+        `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+      );
+    }
+
     // Set headers and stream data
     try {
       // Check if the request includes a Range header
@@ -1487,7 +1559,13 @@ const sendManifestResponse = async ({
           return true;
         }
 
-        pipeStreamToResponse(data.stream, res, log, resolvedId);
+        await sendBodyWithOptionalDigest({
+          req,
+          res,
+          data,
+          log,
+          dataId: resolvedId,
+        });
       }
     } catch (error: any) {
       log.error('Error retrieving data attributes:', {
@@ -1923,7 +2001,13 @@ export const createDataHandler = ({
 
           span.setAttribute('http.status_code', res.statusCode || 200);
           span.addEvent('Streaming data to client');
-          pipeStreamToResponse(data.stream, res, log, id);
+          await sendBodyWithOptionalDigest({
+            req,
+            res,
+            data,
+            log,
+            dataId: id,
+          });
         }
       } catch (error: any) {
         // Handle client disconnect (AbortError) specially — only when the

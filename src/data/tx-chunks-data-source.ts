@@ -117,9 +117,12 @@ export class TxChunksDataSource implements ContiguousDataSource {
       this.log.debug('Fetching chunk data for TX', { id });
 
       span.addEvent('Starting chain source requests');
+      // Pass caller's signal directly (not effectiveSignal — that's
+      // constructed below from caller's signal + first-data timeout, and the
+      // first-data timer should only start after geometry resolves).
       const [txDataRoot, txOffset] = await Promise.all([
-        this.chainSource.getTxField(id, 'data_root'),
-        this.chainSource.getTxOffset(id),
+        this.chainSource.getTxField(id, 'data_root', signal),
+        this.chainSource.getTxOffset(id, signal),
       ]);
       const size = +txOffset.size;
       const offset = +txOffset.offset;

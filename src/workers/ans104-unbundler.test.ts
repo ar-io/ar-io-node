@@ -9,6 +9,13 @@ import { describe, it, beforeEach, mock, afterEach } from 'node:test';
 import { Ans104Unbundler, UnbundleableItem } from './ans104-unbundler.js';
 import { EventEmitter } from 'node:events';
 import { createTestLogger } from '../../test/test-logger.js';
+import * as metrics from '../metrics.js';
+
+async function getSkipValue(reason: string): Promise<number> {
+  const out = await metrics.bundlesUnbundleSkippedCounter.get();
+  const sample = out.values.find((v) => v.labels.reason === reason);
+  return sample?.value ?? 0;
+}
 
 describe('Ans104Unbundler', () => {
   let log: ReturnType<typeof createTestLogger>;
@@ -55,6 +62,7 @@ describe('Ans104Unbundler', () => {
 
     it('should not queue item when shouldUnbundle returns false', async () => {
       shouldUnbundleMock.mock.mockImplementation(() => false);
+      const before = await getSkipValue('high_queue_depth');
 
       for (let i = 0; i < 10; i++) {
         ans104Unbundler.queueItem(mockItem, false);
@@ -62,15 +70,23 @@ describe('Ans104Unbundler', () => {
 
       assert.equal(shouldUnbundleMock.mock.calls.length, 10);
       assert.equal(ans104Unbundler.queueDepth(), 0);
+      assert.equal(await getSkipValue('high_queue_depth'), before + 10);
     });
 
     it('should queue item when shouldUnbundle returns true', async () => {
+      const before = await getSkipValue('queue_full');
       for (let i = 0; i < 10; i++) {
         ans104Unbundler.queueItem(mockItem, false);
       }
 
       assert.equal(shouldUnbundleMock.mock.calls.length, 10);
       assert.equal(ans104Unbundler.queueDepth(), 2);
+      // First push pulls a worker immediately (fastq increments _running
+      // and calls the worker synchronously when below concurrency), so
+      // queue length stays 0 after that push. The next two pushes land
+      // in the queue, bringing queueDepth to maxQueueSize=2. The
+      // remaining 7 hit the queue_full skip branch.
+      assert.equal(await getSkipValue('queue_full'), before + 7);
     });
 
     it('should queue prioritized item even when shouldUnbundle returns false', async () => {
@@ -86,6 +102,7 @@ describe('Ans104Unbundler', () => {
 
     it('should not call shouldUnbundle when workerCount is 0', async () => {
       ans104Unbundler['workerCount'] = 0;
+      const before = await getSkipValue('no_workers');
 
       for (let i = 0; i < 10; i++) {
         ans104Unbundler.queueItem(mockItem, false);
@@ -93,6 +110,7 @@ describe('Ans104Unbundler', () => {
 
       assert.equal(shouldUnbundleMock.mock.calls.length, 0);
       assert.equal(ans104Unbundler.queueDepth(), 0);
+      assert.equal(await getSkipValue('no_workers'), before + 10);
     });
 
     it("should parse bundle even if filter doesn't match if bypassFilter is true", async () => {

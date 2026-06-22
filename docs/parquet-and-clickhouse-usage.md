@@ -16,11 +16,13 @@ form of Parquet files.
 > ClickHouse **24.8 or later** is required (projections on
 > `ReplacingMergeTree` are production-safe from 24.8). The
 > `docker-compose.yaml` default image (`clickhouse-server:26.3`) satisfies
-> this. Operators upgrading from an earlier release of ar-io-node must drop
-> the previous `transactions`, `id_transactions`, `owner_transactions`, and
-> `target_transactions` tables and re-import from Parquet — the schema was
-> consolidated into a single `transactions` table with skip indexes and
-> projections.
+> this. Operators upgrading from an earlier release of ar-io-node need to
+> migrate to the consolidated single `transactions` table (previously split
+> across `id_transactions`, `owner_transactions`, and `target_transactions`).
+> The simplest path is to drop those tables and re-import from Parquet.
+> Operators who want to preserve `expires_at` state or avoid the re-import
+> can use the in-place path instead — see [In-place upgrade](#in-place-upgrade)
+> below.
 
 # Usage
 
@@ -128,16 +130,22 @@ includes:
 
 - Partitioning by `intDiv(height, 100000)` for partition pruning on
   height-bounded queries.
-- A `bloom_filter` skip index on `id` for fast point lookups.
-- A `bloom_filter` skip index on `tags` for fast tag-filter queries.
-- `PROJECTION owner_projection` sorted by
+- `bloom_filter` skip indexes on `id` and `target` for fast point and
+  recipient-filter queries.
+- `bloom_filter` skip indexes on `tag_names` and `tag_values`
+  (materialized columns projected from `tags` via
+  `arrayMap(x -> x.N, tags)`) for fast tag-filter queries. Skip indexes
+  cannot match lambda expressions directly, so the arrays are projected
+  into their own columns and indexed there.
+- `PROJECTION owner_projection` with body
+  `SELECT *, tag_names, tag_values` sorted by
   `(owner_address, height, block_transaction_index, is_data_item, id)`
-  for owner-filtered queries.
-- A `bloom_filter` skip index on `target` for fast recipient-filter
-  queries.
+  for owner-filtered queries. The `tag_names` / `tag_values` must be
+  listed explicitly in the projection body so the optimizer can serve
+  tag-filtered queries from it — they're `MATERIALIZED`, so `SELECT *`
+  alone would exclude them.
 - `Delta + ZSTD(1)` codecs on monotonic timestamp columns and
-  `LowCardinality` on `content_type` / `signature_type` for reduced
-  storage.
+  `LowCardinality` on `content_type` for reduced storage.
 
 See `src/database/clickhouse/schema.sql` and
 `src/database/clickhouse/ttl-schema.sql` for the full definition.
@@ -175,6 +183,45 @@ staging→final insert. If the file doesn't exist at import time the loader
 logs a warning and skips the reload step; any previously loaded rules
 remain active, and if no rules have ever been loaded rows get
 `expires_at = NULL`.
+
+```mermaid
+flowchart LR
+  YAML["config/<br/>clickhouse-ttl-rules.yaml"]
+  Loader["clickhouse-load-<br/>ttl-rules.py<br/>(each import cycle)"]
+
+  subgraph Src["source tables"]
+    direction TB
+    TS["ttl_tag_rules_src"]
+    TP["ttl_tag_prefix_rules"]
+    OS["ttl_owner_rules_src"]
+    OP["ttl_owner_prefix_rules"]
+    Settings["ttl_settings<br/>default_ttl_seconds<br/>l1_never_expires"]
+  end
+
+  subgraph Dicts["dictionaries<br/>(60–300s LIFETIME)"]
+    direction TB
+    DT["ttl_tag_rules"]
+    DO["ttl_owner_rules"]
+  end
+
+  Migrate["migrate_staging_to_final<br/>(per partition)"]
+  Final["transactions.expires_at"]
+
+  YAML --> Loader
+  Loader --> TS
+  Loader --> TP
+  Loader --> OS
+  Loader --> OP
+  Loader --> Settings
+  TS --> DT
+  OS --> DO
+  DT --> Migrate
+  TP --> Migrate
+  DO --> Migrate
+  OP --> Migrate
+  Settings --> Migrate
+  Migrate --> Final
+```
 
 ### Rules file format
 
@@ -235,6 +282,29 @@ of `ttl_seconds` (positive integer) or `never_expire: true`.
   3. One or more matching TTL rules → shortest `ttl_seconds` wins.
   4. `default_ttl_seconds` set at the top level → that value is applied.
   5. Otherwise → `expires_at` is `NULL` and the row is kept indefinitely.
+
+```mermaid
+flowchart TD
+  Start([row ready for<br/>migrate_staging_to_final])
+  L1{"l1_never_expires<br/>AND is_data_item = 0?"}
+  Exempt{"any matching rule<br/>with never_expire?"}
+  TTL{"any matching<br/>TTL rule?"}
+  Default{"default_ttl_seconds<br/>set?"}
+
+  KeepNull["expires_at = NULL<br/>(indefinite retention)"]
+  ShortestTTL["expires_at = now() +<br/>shortest matching<br/>ttl_seconds"]
+  DefaultTTL["expires_at = now() +<br/>default_ttl_seconds"]
+
+  Start --> L1
+  L1 -->|yes| KeepNull
+  L1 -->|no| Exempt
+  Exempt -->|yes| KeepNull
+  Exempt -->|no| TTL
+  TTL -->|yes| ShortestTTL
+  TTL -->|no| Default
+  Default -->|yes| DefaultTTL
+  Default -->|no| KeepNull
+```
 - **Normalization.** `tag_name` is lower-cased + trimmed on both sides;
   `tag_value` is trimmed but case-preserving. Owner `value` is stored as
   the operator-supplied base64url string and compared against
@@ -280,6 +350,38 @@ WHERE 1;
 
 This is a heavy mutation and should be scheduled off-peak.
 
+## In-place upgrade
+
+Operators upgrading an existing deployment who want to avoid the full
+drop-and-re-import can use the idempotent ALTERs that ship in
+`src/database/clickhouse/schema.sql`. The import script runs the
+`expires_at` column-add and TTL rewrite on every cycle, so they apply
+automatically on first startup. The one manual step is rebuilding
+`owner_projection` with the new body so tag-filter queries can be served
+from it:
+
+```sql
+ALTER TABLE transactions DROP PROJECTION IF EXISTS owner_projection;
+ALTER TABLE transactions ADD PROJECTION owner_projection (
+  SELECT *, tag_names, tag_values
+  ORDER BY (owner_address, height, block_transaction_index, is_data_item, id)
+);
+ALTER TABLE transactions MATERIALIZE PROJECTION owner_projection;
+```
+
+`MATERIALIZE PROJECTION` rewrites every part, so it's not run
+automatically — that would re-trigger on every import cycle. Track
+progress with:
+
+```sql
+SELECT * FROM system.mutations
+WHERE table = 'transactions' AND NOT is_done;
+```
+
+Fresh deployments (and deployments that went through the drop + re-import
+path) get the correct projection body from `CREATE TABLE` and do not
+need this step.
+
 ## Rollback
 
 If a re-import using the consolidated schema causes problems, revert as
@@ -292,8 +394,9 @@ docker compose --profile clickhouse down
 # Drop the consolidated table
 clickhouse client --password <your-password> -q 'DROP TABLE IF EXISTS transactions'
 
-# Check out the prior schema and import script
-git checkout <pre-PE-9059-tag> -- \
+# Check out the pre-consolidation schema and import script. Use the
+# commit immediately preceding 50029213 (the PE-9059 consolidation):
+git checkout 50029213^ -- \
   src/database/clickhouse/schema.sql \
   src/database/clickhouse/ttl-schema.sql \
   scripts/clickhouse-import

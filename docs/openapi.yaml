@@ -78,6 +78,63 @@ components:
       bearerFormat: apiToken
       description: ADMIN_API_KEY set in your .env file.
   schemas:
+    ParquetExportStatus:
+      type: object
+      description: Status record for a Parquet export job
+      properties:
+        status:
+          type: string
+          enum: [not_started, running, completed, errored]
+          description: Lifecycle state of the export job
+        jobId:
+          type: string
+          description: Server-assigned id for the job
+        outputDir:
+          type: string
+          description: Directory where Parquet files are being saved
+        startHeight:
+          type: integer
+          description: Starting block height of the export
+        endHeight:
+          type: integer
+          description: Ending block height of the export
+        maxFileRows:
+          type: integer
+          description: Maximum number of rows per Parquet file
+        heightPartitionSize:
+          type: integer
+          description: Blocks per Parquet partition
+        skipL1Transactions:
+          type: boolean
+        skipL1Tags:
+          type: boolean
+        currentPartitionStart:
+          type: integer
+          description: First height of the partition currently being exported
+        currentPartitionEnd:
+          type: integer
+          description: Last height of the partition currently being exported
+        completedPartitions:
+          type: integer
+          description: Number of partitions completed so far
+        totalPartitions:
+          type: integer
+          description: Total number of partitions for the job
+        durationInSeconds:
+          type: number
+          description: Duration of the export process in seconds
+        endTime:
+          type: string
+          format: date-time
+          description: ISO timestamp when the export completed
+        endTimestamp:
+          type: integer
+          description: Unix timestamp (ms) when the export completed
+        error:
+          type: string
+          description: Error message if the export failed
+      required:
+        - status
     Base64Url:
       type: string
       pattern: '^[A-Za-z0-9_-]+$'
@@ -120,6 +177,52 @@ components:
     Signature:
       type: string
       pattern: '^[0-9a-zA-Z_-]{1,683}$'
+    L1TransactionHeader:
+      type: object
+      description: |
+        A signed Arweave L1 transaction header (the same JSON shape returned by
+        `GET /tx/:id`). The signature is verified server-side, so every
+        consequential field (data_root, owner, target, quantity, reward,
+        last_tx, tags, data_size) is bound to the signature.
+      properties:
+        id:
+          $ref: '#/components/schemas/Base64Url43'
+          description: Transaction ID (sha256 of the signature)
+        owner:
+          $ref: '#/components/schemas/Owner'
+          description: Transaction signer's public key
+        signature:
+          $ref: '#/components/schemas/Signature'
+          description: Transaction signature
+        last_tx:
+          type: string
+          description: Anchor (a recent block hash or tx ID)
+        data_root:
+          $ref: '#/components/schemas/Base64Url43'
+          description: Merkle root of the transaction's data
+        data_size:
+          type: string
+          description: Size of the data in bytes (stringified integer)
+        format:
+          type: integer
+          description: Transaction format (2 for current data transactions)
+        target:
+          type: string
+          description: Optional recipient address
+        quantity:
+          type: string
+          description: Optional transfer amount in winston (stringified integer)
+        reward:
+          type: string
+          description: Mining reward in winston (stringified integer)
+        tags:
+          $ref: '#/components/schemas/TagList'
+          description: Optional transaction tags
+      required:
+        - id
+        - owner
+        - signature
+        - last_tx
     ByteRange:
       type: string
       pattern: '^bytes=\d*-\d*(?:,\d*-\d*)*$'
@@ -364,9 +467,13 @@ components:
         ttlSeconds:
           type: integer
           description: Time-to-live in seconds for this resolution
-        processId:
+        antId:
           type: string
-          description: AO process ID
+          description: |
+            Per-ANT identifier for the ANT that resolved this name — the
+            ANT mint's PDA (base58 pubkey). Omitted when resolution came
+            via a trusted-gateway peer that has not yet shipped the
+            X-ArNS-Ant-Id header.
         resolvedAt:
           type: integer
           description: Unix timestamp when the name was resolved
@@ -379,7 +486,6 @@ components:
       required:
         - txId
         - ttlSeconds
-        - processId
         - resolvedAt
         - index
         - limit
@@ -474,9 +580,6 @@ paths:
                       wallet:
                         $ref: '#/components/schemas/Base64Url43'
                         description: Gateway wallet address
-                      processId:
-                        $ref: '#/components/schemas/Base64Url43'
-                        description: Gateway process ID
                       ans104UnbundleFilter:
                         type: object
                         description: Configuration for ANS-104 unbundling filter
@@ -493,7 +596,6 @@ paths:
                         type: string
                         description: Gateway software release version
                     required:
-                      - processId
                       - supportedManifestVersions
                       - release
             application/octet-stream:
@@ -560,8 +662,6 @@ paths:
                   wallet:
                     $ref: '#/components/schemas/Base64Url43'
                     description: Gateway wallet address
-                  processId:
-                    $ref: '#/components/schemas/Base64Url43'
                   ans104UnbundleFilter:
                     type: object
                     description: Configuration for ANS-104 unbundling filter
@@ -813,7 +913,6 @@ paths:
                       - publicKey
                       - keyId
                 required:
-                  - processId
                   - supportedManifestVersions
                   - release
                   - bundlers
@@ -2534,10 +2633,22 @@ paths:
               schema:
                 type: string
               description: Time-to-live in seconds for this resolution
-            x-arns-process-id:
+            x-arns-ant-program-id:
               schema:
                 type: string
-              description: AO process ID
+              description: |
+                Solana program ID of the AR.IO ANT program that owns the
+                ANT mint that resolved this name. Single value across all
+                ArNS names served by this gateway. Set from
+                ARIO_ANT_PROGRAM_ID.
+            x-arns-ant-id:
+              schema:
+                type: string
+              description: |
+                Per-ANT identifier for the ANT that resolved this request —
+                the ANT mint's PDA (base58 pubkey). Omitted when resolution
+                came via a trusted-gateway peer that has not yet shipped
+                this header.
             x-arns-resolved-at:
               schema:
                 type: string
@@ -2674,7 +2785,9 @@ paths:
                     type: string
                     example: 'Data item(s) queued'
         '400':
-          description: Invalid request body
+          description: >-
+            Invalid request body, or the batch exceeds
+            QUEUE_DATA_ITEM_MAX_BATCH_SIZE (split the request).
           content:
             text/plain:
               schema:
@@ -2682,6 +2795,79 @@ paths:
                 example: 'Must provide array of data item headers'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: >-
+            Indexer saturated — backpressure. Returned when the DataItemIndexer
+            queue depth exceeds QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH. Retry after
+            the Retry-After interval.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'Data item indexer saturated (queue depth 100001 exceeds 100000); retry after backpressure clears'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  '/ar-io/admin/queue-optimistic-tx':
+    post:
+      tags: [Admin]
+      summary: Optimistically index a signed L1 transaction before it mines
+      description: |
+        Index one or more signed L1 transaction headers so the transaction is
+        resolvable (GraphQL `transaction(id)`, returning `block: null`) before it
+        is mined. Trusted/allowlist only: requires the admin bearer token AND
+        `OPTIMISTIC_TX_INDEXING_ENABLED=true` (disabled by default → 403). Every
+        transaction is cryptographically verified (`arweave.transactions.verify`),
+        so a forged id or `data_root` is rejected. The row is inserted with a NULL
+        height and promoted in place when the transaction mines; never-mined rows
+        are reclaimed by the stale-transaction GC. The data is never marked
+        `verified` while the transaction is unmined (`height IS NULL`). Accepts a single
+        transaction object or an array, up to `OPTIMISTIC_TX_MAX_BATCH_SIZE`.
+      operationId: adminQueueOptimisticTx
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/L1TransactionHeader'
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/L1TransactionHeader'
+                  minItems: 1
+      responses:
+        '200':
+          description: Transaction(s) successfully indexed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: 'Optimistic transaction(s) indexed'
+        '400':
+          description: Invalid request body, invalid signature, or batch over the size cap
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'Invalid signature for transaction <id>'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Optimistic transaction indexing is disabled (OPTIMISTIC_TX_INDEXING_ENABLED=false)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'Optimistic tx indexing is disabled'
         '500':
           $ref: '#/components/responses/ServerError'
   '/ar-io/admin/bundle-status/{id}':
@@ -2946,17 +3132,31 @@ paths:
                   message:
                     type: string
                     example: 'Parquet export started'
+                  jobId:
+                    type: string
+                    description: |
+                      Unique id for this export. Clients should poll
+                      `/ar-io/admin/export-parquet/status/{jobId}` to track
+                      outcome rather than the shared singleton endpoint,
+                      which can be overwritten by other concurrent callers.
+                    example: '2c3f4f8e-1b2d-4a4e-9e2a-6f2d2c3b4a5e'
         '400':
           description: Invalid parameters provided
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: An export is already in progress
         '500':
           $ref: '#/components/responses/ServerError'
   '/ar-io/admin/export-parquet/status':
     get:
       tags: [Admin]
-      summary: Get Parquet export status
-      description: Returns the current status of the Parquet export process
+      summary: Get latest Parquet export status (singleton)
+      description: |
+        Returns the most recently updated export status. Because the server
+        runs at most one export at a time, this endpoint reflects whichever
+        export POSTed last — it can be overwritten mid-poll if another
+        caller submits. Prefer `/status/{jobId}` for per-job tracking.
       operationId: adminExportParquetStatus
       security:
         - bearerAuth: []
@@ -2966,40 +3166,38 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                description: Current status of the export process
-                properties:
-                  status:
-                    type: string
-                    enum: [not_started, running, completed, errored]
-                    description: Current status of the export process
-                  outputDir:
-                    type: string
-                    description: Directory where Parquet files are being saved
-                  startHeight:
-                    type: integer
-                    description: Starting block height of the export
-                  endHeight:
-                    type: integer
-                    description: Ending block height of the export
-                  maxFileRows:
-                    type: integer
-                    description: Maximum number of rows per Parquet file
-                  durationInSeconds:
-                    type: number
-                    description: Duration of the export process in seconds
-                  endTime:
-                    type: string
-                    format: date-time
-                    description: ISO timestamp when the export completed
-                  endTimestamp:
-                    type: integer
-                    description: Unix timestamp when the export completed
-                  error:
-                    type: string
-                    description: Error message if the export failed
-                required:
-                  - status
+                $ref: '#/components/schemas/ParquetExportStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  '/ar-io/admin/export-parquet/status/{jobId}':
+    get:
+      tags: [Admin]
+      summary: Get Parquet export status for a specific job
+      description: |
+        Returns the status record for the export identified by `jobId`
+        (returned by `POST /ar-io/admin/export-parquet`). The server retains
+        a bounded history of recent jobs; older job ids are evicted and
+        return 404.
+      operationId: adminExportParquetStatusByJobId
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Status for the requested job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParquetExportStatus'
+        '404':
+          description: Job id is unknown or has been evicted from history
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':

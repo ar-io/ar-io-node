@@ -10,11 +10,8 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
-import { initHttpSig, saveAttestationTxId } from './lib/httpsig.js';
-import type {
-  HttpSigObserverContext,
-  HttpSigSignerContext,
-} from './lib/httpsig.js';
+import { initHttpSig } from './lib/httpsig.js';
+import type { HttpSigSignerContext } from './lib/httpsig.js';
 import { release } from './version.js';
 import logger from './log.js';
 import { verificationPriorities } from './constants.js';
@@ -25,6 +22,51 @@ import { verificationPriorities } from './constants.js';
 
 // HTTP server port
 export const PORT = +env.varOrDefault('PORT', '4000');
+
+/**
+ * Idle keep-alive timeout (ms) for core's HTTP server
+ * (`server.keepAliveTimeout`).
+ *
+ * Envoy fronts core and pools upstream connections; if core (the server)
+ * closes an idle keepalive connection before Envoy (the client) stops
+ * reusing it, Envoy can dispatch a request onto a connection core is tearing
+ * down, producing an instant reset that surfaces to clients as a 5xx with no
+ * upstream response. To avoid that race the invariant must hold:
+ *
+ *   Envoy upstream idle_timeout < HTTP_KEEP_ALIVE_TIMEOUT_MS < HTTP_HEADERS_TIMEOUT_MS
+ *
+ * Node's own defaults invert the left side (keepAliveTimeout 5s vs Envoy's
+ * 1h upstream idle default), so we raise core above Envoy's idle window here.
+ *
+ * @see ENVOY_ARIO_GATEWAY_UPSTREAM_IDLE_TIMEOUT in envoy/envoy.template.yaml
+ *   (default 55s)
+ * @default 60000 (60 seconds)
+ */
+export const HTTP_KEEP_ALIVE_TIMEOUT_MS = env.positiveIntOrDefault(
+  'HTTP_KEEP_ALIVE_TIMEOUT_MS',
+  1000 * 60, // 60 seconds
+);
+/**
+ * Headers timeout (ms) for core's HTTP server (`server.headersTimeout`).
+ *
+ * Must stay strictly greater than {@link HTTP_KEEP_ALIVE_TIMEOUT_MS} — Node
+ * requires headersTimeout to exceed keepAliveTimeout, and the inequality is
+ * enforced at startup below.
+ *
+ * @default 65000 (65 seconds)
+ */
+export const HTTP_HEADERS_TIMEOUT_MS = env.positiveIntOrDefault(
+  'HTTP_HEADERS_TIMEOUT_MS',
+  1000 * 65, // 65 seconds — must exceed HTTP_KEEP_ALIVE_TIMEOUT_MS
+);
+// Fail fast on a misconfigured override rather than handing Node an invalid
+// pairing (headersTimeout must be strictly greater than keepAliveTimeout).
+if (HTTP_HEADERS_TIMEOUT_MS <= HTTP_KEEP_ALIVE_TIMEOUT_MS) {
+  throw new Error(
+    `HTTP_HEADERS_TIMEOUT_MS (${HTTP_HEADERS_TIMEOUT_MS}) must be strictly ` +
+      `greater than HTTP_KEEP_ALIVE_TIMEOUT_MS (${HTTP_KEEP_ALIVE_TIMEOUT_MS})`,
+  );
+}
 
 // API key for accessing admin HTTP endpoints
 // It's set once in the main thread
@@ -219,6 +261,63 @@ export const STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
   1000 * 30, // 30 seconds
 );
 
+// PE-9098: when a trusted gateway answers a Range request with a full 200
+// body (e.g., nginx with proxy_cache but no `slice` module), we slice
+// locally to satisfy the consumer's region. The upstream still streams
+// the prefix bytes [0, region.offset) across the wire — bandwidth we
+// can't recover. If region.offset exceeds this threshold the bandwidth
+// cost is unacceptable, so we reject the response and let the data
+// source chain fall through to the next priority tier instead.
+// Default: 10 MiB. Parsed as a non-negative integer — a malformed env
+// value would otherwise become NaN, and `NaN > X` is false, which would
+// silently disable the cap entirely (defeats the safety purpose).
+const GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET_DEFAULT = 10 * 1024 * 1024;
+const parsedRangeAccept200MaxOffset = Number(
+  env.varOrDefault(
+    'GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET',
+    String(GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET_DEFAULT),
+  ),
+);
+export const GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET =
+  Number.isFinite(parsedRangeAccept200MaxOffset) &&
+  parsedRangeAccept200MaxOffset >= 0
+    ? Math.floor(parsedRangeAccept200MaxOffset)
+    : GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET_DEFAULT;
+
+// Wall-clock cap on a single HTTP-response stream's total time from
+// attachment to completion. Belt-and-suspenders for the
+// backpressure-pause-then-upstream-stall wedge: STREAM_STALL_TIMEOUT_MS
+// is cleared on pause, so an upstream that goes silent while we're
+// paused for backpressure can hang forever. This cap fires regardless
+// of pause state and forces a worker to give up after the configured
+// duration so the bundle is retried on a different peer. Generous
+// default — only legitimately slow transfers exceeding ~1.1 MB/s on a
+// 1 GB bundle would trip it.
+export const STREAM_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
+  'STREAM_REQUEST_TIMEOUT_MS',
+  1000 * 60 * 15, // 15 minutes
+);
+
+// Wall-clock cap on DataImporter.download() — the entire span from queue
+// dequeue through stream completion. Covers TWO failure modes that
+// STREAM_REQUEST_TIMEOUT_MS cannot:
+//   (1) Pre-stream wedge: workers blocked in `await getData()` waiting for
+//       the cascade to produce a stream (e.g., every source in
+//       BACKGROUND_RETRIEVAL_ORDER failing/timing-out serially).
+//       STREAM_REQUEST_TIMEOUT_MS is on the stream itself and never
+//       attaches in this state.
+//   (2) Belt-and-suspenders for the stream phase if a per-stream cap
+//       somehow doesn't fire.
+// Implementation propagates abort into the cascade via AbortController —
+// SequentialDataSource and each inner source (ArIO/Gateways/TxChunks)
+// already honor the signal end-to-end. Default sized comfortably above
+// STREAM_REQUEST_TIMEOUT_MS so legitimate slow downloads finish before
+// this fires.
+export const DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS = env.positiveIntOrDefault(
+  'DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS',
+  1000 * 60 * 20, // 20 minutes
+);
+
 // GraphQL root TX lookup gateways (separate from data retrieval gateways)
 export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(
@@ -253,6 +352,65 @@ export const GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS = env.positiveIntOrDefault(
 export const GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT =
   env.positiveIntOrDefault('GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT', 1);
 
+// Fan-out GraphQL upstreams (empty disables the GatewaysGqlQueryable layer).
+// Format: JSON array of URLs, e.g. '["https://arweave.net","https://ar-io.dev"]'.
+export const GATEWAYS_GQL_URLS: string[] = (() => {
+  const raw = env.varOrDefault('GATEWAYS_GQL_URLS', '[]');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`GATEWAYS_GQL_URLS must be a JSON array of URLs: ${raw}`);
+  }
+  if (!Array.isArray(parsed) || !parsed.every((v) => typeof v === 'string')) {
+    throw new Error(`GATEWAYS_GQL_URLS must be a JSON array of URLs: ${raw}`);
+  }
+  for (const url of parsed as string[]) {
+    try {
+      new URL(url);
+    } catch (error) {
+      throw new Error(`Invalid URL in GATEWAYS_GQL_URLS: ${url}`);
+    }
+  }
+  return parsed as string[];
+})();
+
+// When GATEWAYS_GQL_URLS is set, also include the local GqlQueryable in the
+// merge. Defaults to true so a gateway with its own index contributes its data
+// alongside remote upstreams.
+export const GATEWAYS_GQL_INCLUDE_LOCAL =
+  env.varOrDefault('GATEWAYS_GQL_INCLUDE_LOCAL', 'true') === 'true';
+
+// Axios request timeout. Should be slightly less than the circuit breaker
+// timeout so axios aborts with a real error before the breaker fires its
+// own timeout error.
+export const GATEWAYS_GQL_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
+  'GATEWAYS_GQL_REQUEST_TIMEOUT_MS',
+  9_500,
+);
+
+// Per-upstream circuit breaker around the GraphQL HTTP call. An open breaker
+// causes the fan-out to skip that upstream and continue with the rest.
+export const GATEWAYS_GQL_CIRCUIT_BREAKER_TIMEOUT_MS = env.positiveIntOrDefault(
+  'GATEWAYS_GQL_CIRCUIT_BREAKER_TIMEOUT_MS',
+  10_000,
+);
+export const GATEWAYS_GQL_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
+  env.positiveIntOrDefault(
+    'GATEWAYS_GQL_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
+    80,
+  );
+export const GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
+    60 * 1_000,
+  );
+export const GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
+    30 * 1_000,
+  );
+
 // GraphQL root TX lookup rate limiting
 export const GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
   'GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE',
@@ -266,6 +424,65 @@ export const GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL',
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
+
+// GraphQL root TX lookup request batching (coalesces many concurrent per-ID
+// lookups into single `transactions(ids: [...])` queries). Disabled by default;
+// when enabled, the per-batch outbound request consumes one rate-limiter token
+// (instead of one token per ID), so a page-load burst of asset lookups no
+// longer starves the bucket.
+export const GRAPHQL_ROOT_TX_BATCH_ENABLED =
+  env.varOrDefault('GRAPHQL_ROOT_TX_BATCH_ENABLED', 'false') === 'true';
+// Coalescing window: how long a forming batch waits for more IDs before it
+// flushes. A batch also flushes eagerly once it reaches the max batch size.
+export const GRAPHQL_ROOT_TX_BATCH_WINDOW_MS = env.positiveIntOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_WINDOW_MS',
+  20,
+);
+// Default max IDs per batched query. Arweave GraphQL caps `first` at 100, so
+// this should not exceed 100. Per-endpoint overrides may lower it further.
+// Must be >= 1: a value of 0 would make GraphQLRootTxBatcher.flush() drain no
+// IDs yet keep re-scheduling, spinning forever — so validate at parse time.
+export const GRAPHQL_ROOT_TX_BATCH_MAX_SIZE = env.positiveIntOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_MAX_SIZE',
+  100,
+);
+if (GRAPHQL_ROOT_TX_BATCH_MAX_SIZE > 100) {
+  throw new Error(
+    'GRAPHQL_ROOT_TX_BATCH_MAX_SIZE must not exceed 100 ' +
+      `(Arweave GraphQL caps \`first\` at 100), got: ${GRAPHQL_ROOT_TX_BATCH_MAX_SIZE}`,
+  );
+}
+// Optional per-endpoint max batch size overrides, e.g.
+// '{"http://10.84.0.83:14000": 50}'. Endpoints absent from the map use
+// GRAPHQL_ROOT_TX_BATCH_MAX_SIZE.
+export const GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL = JSON.parse(
+  env.varOrDefault('GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL', '{}'),
+) as Record<string, number>;
+Object.entries(GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL).forEach(([url, size]) => {
+  if (
+    typeof size !== 'number' ||
+    !Number.isInteger(size) ||
+    size <= 0 ||
+    size > 100
+  ) {
+    throw new Error(
+      `Invalid size in GRAPHQL_ROOT_TX_BATCH_MAX_SIZE_BY_URL for ${url}: ${size} ` +
+        '(must be an integer in [1, 100])',
+    );
+  }
+});
+// Max number of IDs that may be waiting (pending + in-flight) before new
+// lookups are shed (resolved as not-found) rather than queued unbounded.
+export const GRAPHQL_ROOT_TX_BATCH_MAX_QUEUE_DEPTH = env.positiveIntOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_MAX_QUEUE_DEPTH',
+  1000,
+);
+// Max time a batch will wait to acquire a rate-limiter token before giving up
+// (the batch's IDs then resolve as not-found rather than blocking forever).
+export const GRAPHQL_ROOT_TX_BATCH_TOKEN_MAX_WAIT_MS = env.positiveIntOrDefault(
+  'GRAPHQL_ROOT_TX_BATCH_TOKEN_MAX_WAIT_MS',
+  5000,
+);
 
 // Gateways root TX lookup URLs (for HEAD request offset discovery)
 export const GATEWAYS_ROOT_TX_URLS = JSON.parse(
@@ -309,6 +526,41 @@ export const GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL',
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
+
+// Chain-anchored chunk metadata source (offset → tx + data_root via
+// reference-peer `/chunk/{offset}/data` headers, cross-checked against
+// the chain). Fast-path replacement for the log₂(height) block binary
+// search inside CompositeTxBoundarySource. See ar-io/ar-io-node#681.
+export const CHUNK_METADATA_ANCHOR_ENABLED =
+  env.varOrDefault('CHUNK_METADATA_ANCHOR_ENABLED', 'true') === 'true';
+
+// HTTP timeout (ms) for the peer HEAD/GET against `/chunk/{offset}/data`.
+// Kept tight: a slow reference peer should fail fast and let the
+// composite fall through to the existing tx-path / chain-search source.
+// Must be > 0; a zero timeout would immediately abort every request.
+export const CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS =
+  env.positiveIntOrDefault('CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS', 5000);
+
+// LRU cache size for anchored tx metadata. Each entry is keyed by tx-id
+// and holds the chain-verified bounds; sizing for the typical working
+// set of recently-probed txs. Must be > 0 — a zero-size cache is just
+// dead code.
+export const CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE = env.positiveIntOrDefault(
+  'CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE',
+  1024,
+);
+
+// LRU TTL (seconds) for cached anchored tx metadata. Bounds the window
+// over which a single chain cross-check covers repeated chunk probes
+// against the same tx. Values are immutable for stable txs, so TTL is
+// purely an eviction knob, not a correctness one — set to 0 to disable
+// time-based eviction (lru-cache interprets `ttl: 0` as no TTL; entries
+// then only evict under size pressure).
+export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
+  env.nonNegativeIntOrDefault(
+    'CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS',
+    300,
+  );
 
 // Root TX index lookup order configuration
 export const ROOT_TX_LOOKUP_ORDER = env
@@ -814,6 +1066,20 @@ export const CHUNK_FIRST_DATA_TIMEOUT_MS = env.nonNegativeIntOrDefault(
   10000,
 );
 
+// Wall-clock deadline (ms) for serving a single chunk request
+// (/chunk/:offset and /chunk/:offset/data). The per-source timeouts in the
+// retrieval cascade are additive with no overall ceiling, and some awaited
+// operations don't honor the abort signal, so a slow serve can otherwise run
+// until the upstream proxy (nginx/envoy, ~15s observed) cuts it — yielding a
+// 504 that also leaves the in-flight work running. This bounds the whole
+// retrieval below that cap so the gateway returns promptly (a 404, matching
+// the timeout-as-not-found contract) and releases the connection itself. Must
+// stay below the proxy read timeout. 0 disables.
+export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
+  'CHUNK_SERVE_DEADLINE_MS',
+  12000,
+);
+
 // Chain fallback for chunk offset requests
 export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =
   env.varOrDefault('CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED', 'true') === 'true';
@@ -944,6 +1210,21 @@ export const CACHE_BLOCKED_MAX_AGE = env.positiveIntOrDefault(
   'CACHE_BLOCKED_MAX_AGE',
   2592000,
 );
+/**
+ * Cache-Control max-age (seconds) for `APEX_TX_ID` responses, paired with
+ * `must-revalidate`. Default: 3600 (1 hour).
+ *
+ * `APEX_TX_ID` is operator-controlled and typically rotated infrequently,
+ * but when it IS rotated upstream proxy caches would otherwise pin the
+ * previous content for the data-layer max-age (up to
+ * `CACHE_STABLE_MAX_AGE` with `immutable`). 1h with `must-revalidate`
+ * bounds the poisoning window while preserving typical caching benefits;
+ * operators who rotate more frequently can lower this. See PE-9072.
+ */
+export const CACHE_APEX_MAX_AGE = env.positiveIntOrDefault(
+  'CACHE_APEX_MAX_AGE',
+  3600,
+);
 
 // Tag response headers
 export const ARWEAVE_TAG_RESPONSE_HEADERS_ENABLED =
@@ -969,7 +1250,7 @@ export const TX_METADATA_RESOLVE_CONCURRENCY = env.positiveIntOrDefault(
 //
 
 export const HTTPSIG_ENABLED =
-  env.varOrDefault('HTTPSIG_ENABLED', 'false') === 'true';
+  env.varOrDefault('HTTPSIG_ENABLED', 'true') === 'true';
 
 export const HTTPSIG_KEY_FILE = env.varOrDefault(
   'HTTPSIG_KEY_FILE',
@@ -979,40 +1260,85 @@ export const HTTPSIG_KEY_FILE = env.varOrDefault(
 export const HTTPSIG_BIND_REQUEST =
   env.varOrDefault('HTTPSIG_BIND_REQUEST', 'true') === 'true';
 
-// Observer wallet for attestation signing
-export const OBSERVER_WALLET = env.varOrUndefined('OBSERVER_WALLET');
-export const WALLETS_PATH = env.varOrDefault('WALLETS_PATH', 'wallets');
-export const HTTPSIG_UPLOAD_ATTESTATION =
-  env.varOrDefault('HTTPSIG_UPLOAD_ATTESTATION', 'true') === 'true';
-
-let _httpSigSigner: HttpSigSignerContext | undefined;
-let _httpSigObserver: HttpSigObserverContext | undefined;
-
-if (isMainThread && HTTPSIG_ENABLED) {
-  const result = initHttpSig({
-    keyFile: HTTPSIG_KEY_FILE,
-    bindRequest: HTTPSIG_BIND_REQUEST,
-    observerWallet: OBSERVER_WALLET,
-    walletsPath: WALLETS_PATH,
-    gatewayAddress: env.varOrUndefined('AR_IO_WALLET'),
-    log: logger,
-  });
-  _httpSigSigner = result.signer;
-  _httpSigObserver = result.observer;
-}
-
-export const HTTPSIG_SIGNER = _httpSigSigner;
-export const HTTPSIG_OBSERVER = _httpSigObserver;
-
 /**
- * Record the Arweave TX ID of a successfully uploaded attestation. Mutates
- * `HTTPSIG_OBSERVER.attestationTxId` and persists it to the cache file so
- * subsequent restarts skip re-uploading.
+ * Buffered Content-Digest threshold (bytes). When > 0 and a /raw/:id
+ * response is uncached + has a known size at-or-below this threshold,
+ * the data path buffers the body to compute SHA-256 and emit
+ * Content-Digest. The header is in CO_SIGNABLE_HEADERS, so once emitted
+ * it's covered by the HTTPSIG signature — making the body verifiable
+ * end-to-end. Cached and HEAD responses are unaffected (they already
+ * emit the stored digest). Set to 0 to disable buffered emission and
+ * preserve streaming-without-digest behavior for the uncached path.
+ *
+ * Parsed strictly as a non-negative safe integer. `Number.parseInt`
+ * accepts malformed prefixes (`"1e6"` → 1, `"2MB"` → 2, `"08x"` → 8)
+ * which would silently let smaller-than-expected limits through; the
+ * `^\d+$` guard rejects those before parsing. NaN/negative/unsafe
+ * input falls back to the default — the size cap (`size > maxBytes`)
+ * and disabled-branch check (`maxBytes <= 0`) both evaluate false for
+ * NaN, so accepting bad input would let unbounded buffers through.
+ *
+ * Default: 2 MiB.
  */
-export function setHttpSigAttestationTxId(txId: string): void {
-  if (_httpSigObserver === undefined) return;
-  _httpSigObserver.attestationTxId = txId;
-  saveAttestationTxId(_httpSigObserver.keysDir, txId);
+const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT = 2 * 1024 * 1024;
+const httpSigBodyDigestBufferMaxBytesRaw = env.varOrDefault(
+  'HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES',
+  String(HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT),
+);
+const httpSigBodyDigestBufferMaxBytesParsed = /^\d+$/.test(
+  httpSigBodyDigestBufferMaxBytesRaw,
+)
+  ? Number.parseInt(httpSigBodyDigestBufferMaxBytesRaw, 10)
+  : Number.NaN;
+export const HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES =
+  Number.isSafeInteger(httpSigBodyDigestBufferMaxBytesParsed) &&
+  httpSigBodyDigestBufferMaxBytesParsed >= 0
+    ? httpSigBodyDigestBufferMaxBytesParsed
+    : HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES_DEFAULT;
+
+// Observer Solana keypair for HTTPSIG signing. When set, the observer's
+// Ed25519 key is used directly — its Solana address is registered on-chain
+// in the GAR, so verification is a simple lookup (no attestation needed).
+// When unset, falls back to an auto-generated PEM at HTTPSIG_KEY_FILE.
+export const OBSERVER_KEYPAIR_PATH = env.varOrUndefined(
+  'OBSERVER_KEYPAIR_PATH',
+);
+
+// Alternative to OBSERVER_KEYPAIR_PATH: a base58-encoded 64-byte Solana
+// secret key (the format Phantom and other browser wallets export).
+// Convenient for operators who don't already have a keypair JSON on disk.
+// Setting both OBSERVER_KEYPAIR_PATH and OBSERVER_PRIVATE_KEY is rejected
+// at HTTPSIG init as ambiguous.
+export const OBSERVER_PRIVATE_KEY = env.varOrUndefined('OBSERVER_PRIVATE_KEY');
+
+// HTTPSIG signing state. Populated by `initializeHttpSig()`, which the
+// application entry point calls explicitly during startup. Kept out of
+// module-evaluation side effects so that importing config.ts (e.g., from
+// tests) does not touch the filesystem.
+export let HTTPSIG_SIGNER: HttpSigSignerContext | undefined;
+export let HTTPSIG_INIT_ERROR: string | undefined;
+
+let _httpSigInitAttempted = false;
+
+export function initializeHttpSig(): void {
+  if (!isMainThread || !HTTPSIG_ENABLED || _httpSigInitAttempted) {
+    return;
+  }
+  _httpSigInitAttempted = true;
+
+  try {
+    HTTPSIG_SIGNER = initHttpSig({
+      keyFile: HTTPSIG_KEY_FILE,
+      observerKeypairPath: OBSERVER_KEYPAIR_PATH,
+      observerPrivateKey: OBSERVER_PRIVATE_KEY,
+      log: logger,
+    });
+  } catch (error: any) {
+    HTTPSIG_INIT_ERROR = error?.message ?? String(error);
+    logger.error('HTTPSIG initialization failed; signing disabled', {
+      error: HTTPSIG_INIT_ERROR,
+    });
+  }
 }
 
 //
@@ -1133,6 +1459,69 @@ export const ANS104_DOWNLOAD_WORKERS = +env.varOrDefault(
   getDefaultWorkerCount('5'),
 );
 
+// Wall-clock timeout (ms) for fetching bundle bytes in Ans104Parser before
+// stream processing begins. Set to `0` to disable.
+export const ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS = env.nonNegativeIntOrDefault(
+  'ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS',
+  30000,
+);
+
+// Wall-clock timeout (ms) for streaming bundle bytes to temp file in
+// Ans104Parser. This complements STREAM_STALL_TIMEOUT_MS by bounding
+// drip-feed/non-terminating streams that never go fully idle. Set to `0` to
+// disable.
+export const ANS104_UNBUNDLE_STREAM_TOTAL_TIMEOUT_MS =
+  env.nonNegativeIntOrDefault(
+    'ANS104_UNBUNDLE_STREAM_TOTAL_TIMEOUT_MS',
+    120000,
+  );
+
+// Wall-clock timeout (ms) on an in-flight parse job inside an Ans104Parser
+// worker thread. PR #746 closed the upstream getData/stream-to-disk hangs,
+// but the worker can still hang INSIDE parseBundle (e.g. on a malformed
+// bundle, an arbundles edge case, or any infinite-loop path) without
+// exiting and without posting a terminal message. When it does, every job
+// it touched stops responding; the fastq slot stays held; the unbundle
+// queue grows without draining. Observed twice in production: ~2.5 hours
+// of healthy operation, then total halt with `bundles_unbundle_in_flight`
+// pinned at the worker count and `ans104_parser_worker_exits_total` flat.
+//
+// When this timer fires we call `worker.terminate()`. That synthesizes a
+// non-zero exit, which the existing 'exit' handler picks up to reject the
+// stuck job's promise and respawn a fresh worker. The dead bundle goes
+// to `bundle-repair-worker` for retry. Default 10 minutes is comfortably
+// above the largest legitimate parse time we've observed; tighten if your
+// bundles are smaller. Set to `0` to disable.
+export const ANS104_PARSE_JOB_TIMEOUT_MS = env.nonNegativeIntOrDefault(
+  'ANS104_PARSE_JOB_TIMEOUT_MS',
+  600000,
+);
+
+/**
+ * Wall-clock cap (ms) on `Ans104Parser.parseBundle`'s `await getData()`.
+ *
+ * Promise.race fallback for the AbortSignal-based
+ * {@link ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS}: in ~99% of cases the abort
+ * wins and this never fires, but in the remaining cases the data-source
+ * cascade fails to honor AbortSignal, leaving the await permanently hung
+ * (~140 minute hangs observed on real workloads).
+ *
+ * When this cap fires, the parseBundle promise rejects with a "wall-clock
+ * cap" error and the worker is freed — the underlying cascade promise
+ * leaks (held sockets/peer-slots) until it eventually unwedges, which is
+ * acceptable given the alternative is a permanent worker stall.
+ *
+ * Default 5 minutes — 10× the
+ * {@link ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS} default of 30000ms — so it
+ * only fires for true zombies; "slow but eventually resolves" cases still
+ * win on the abort path. Set to `0` to disable.
+ */
+export const ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS =
+  env.nonNegativeIntOrDefault(
+    'ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS',
+    300000,
+  );
+
 // Whether or not to attempt to rematch old bundles using the current filter
 export const FILTER_CHANGE_REPROCESS =
   env.varOrDefault('FILTER_CHANGE_REPROCESS', 'false') === 'true';
@@ -1150,6 +1539,38 @@ export const WRITE_ANS104_DATA_ITEM_DB_SIGNATURES =
 export const WRITE_TRANSACTION_DB_SIGNATURES =
   env.varOrDefault('WRITE_TRANSACTION_DB_SIGNATURES', 'false') === 'true';
 
+// Optimistic L1 transaction indexing (corner C). When enabled, a trusted
+// poster (admin-key holder) may submit signed L1 tx headers to
+// `POST /ar-io/admin/queue-optimistic-tx` to make the tx resolvable
+// (GraphQL `transaction(id)`, with `block: null`) before it mines. The tx is
+// inserted into `new_transactions` with a NULL height; the normal block-import
+// path promotes it in place when it mines, and never-mined rows are reclaimed
+// by the existing stale-new-transaction GC. The data-verification serving
+// guard (always-on, independent of this flag) ensures an optimistic tx's data
+// is never stamped `verified` until its root tx is stable. Off by default.
+export const OPTIMISTIC_TX_INDEXING_ENABLED =
+  env.varOrDefault('OPTIMISTIC_TX_INDEXING_ENABLED', 'false') === 'true';
+
+// Grace period (seconds) before a never-mined optimistic (NULL-height)
+// transaction is reclaimed from `new_transactions` by the stale-new-data GC.
+// Must exceed worst-case mine + index latency so a legitimately-pending tx is
+// not evicted before it confirms. Default 2h matches the prior hardcoded
+// behavior; tune from observed confirmation latency.
+export const OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS = env.positiveIntOrDefault(
+  'OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS',
+  60 * 60 * 2,
+);
+
+// Maximum number of transaction headers accepted in a single
+// `POST /ar-io/admin/queue-optimistic-tx` request. Each accepted tx triggers a
+// sequential signature verification, so this caps the worst-case work a single
+// (admin-authenticated) request can schedule — the 10 MB body limit alone would
+// otherwise permit thousands of small headers.
+export const OPTIMISTIC_TX_MAX_BATCH_SIZE = env.positiveIntOrDefault(
+  'OPTIMISTIC_TX_MAX_BATCH_SIZE',
+  100,
+);
+
 // Whether or not to enable the data database WAL cleanup worker
 export const ENABLE_DATA_DB_WAL_CLEANUP =
   env.varOrDefault('ENABLE_DATA_DB_WAL_CLEANUP', 'false') === 'true';
@@ -1159,6 +1580,92 @@ export const ENABLE_DATA_DB_WAL_CLEANUP =
 export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
   'MAX_DATA_ITEM_QUEUE_SIZE',
   '100000',
+);
+
+// Hard cap on DataItemIndexer's internal queue. Items pushed when the queue
+// is at this size are dropped (and the dropped counter is incremented).
+// Bundle re-enqueue via `bundle-repair-worker` is the recovery mechanism.
+// `0` disables the cap (unbounded growth — matches pre-cap behavior).
+export const DATA_ITEM_INDEXER_QUEUE_SIZE = +env.varOrDefault(
+  'DATA_ITEM_INDEXER_QUEUE_SIZE',
+  '500000',
+);
+
+/**
+ * Fastq concurrency for `DataItemIndexer`'s `indexDataItem` worker.
+ *
+ * Default 1 matches pre-existing behavior: a single in-flight
+ * `saveDataItem` await at a time. Raising lets the main thread pipeline
+ * JS prep (event emit, metric inc, log) for the next item while the
+ * prior `saveDataItem` is in flight to the SQLite worker thread. The
+ * SQLite worker itself is single-threaded per database, so the upper
+ * bound on speedup is the gap between per-item JS work and per-item
+ * SQLite execute.
+ *
+ * @remarks
+ * Try `4` first when the failed-bundle backlog is the dominant load
+ * (large bundles, 50–500 items each); back off if main-thread CPU
+ * saturates. Validated as a strictly positive integer — `0`, negative,
+ * or non-integer values fall back to the default.
+ *
+ * @default 1
+ */
+export const DATA_ITEM_INDEXER_WORKER_COUNT = env.positiveIntOrDefault(
+  'DATA_ITEM_INDEXER_WORKER_COUNT',
+  1,
+);
+
+// queue-data-item admin endpoint hardening (corner B). Admin POSTs are
+// prioritized — they bypass the indexer's drop cap (unshift), so an
+// unthrottled bundler burst balloons the queue and starves the regular
+// unbundling pipeline rather than dropping. Cap the per-request batch and
+// apply depth-based backpressure so oversized/overload requests get a
+// retryable 4xx/503 instead of silent queue growth. Defaults are starting
+// points; tune from the load characterization.
+export const QUEUE_DATA_ITEM_MAX_BATCH_SIZE = env.positiveIntOrDefault(
+  'QUEUE_DATA_ITEM_MAX_BATCH_SIZE',
+  5000,
+);
+export const QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH = env.positiveIntOrDefault(
+  'QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH',
+  100000,
+);
+
+// Hard cap on Ans104DataIndexer's internal queue. Same semantics as
+// DATA_ITEM_INDEXER_QUEUE_SIZE: drop on full, `0` = unbounded.
+export const ANS104_DATA_INDEXER_QUEUE_SIZE = +env.varOrDefault(
+  'ANS104_DATA_INDEXER_QUEUE_SIZE',
+  '500000',
+);
+
+// Server-side hard deadline (ms) for GraphQL resolvers. Composed with the
+// caller's request signal so the resolver chain — including downstream
+// attribute fetches and arweave-client requests — is forcibly cancelled
+// after this duration even if the client connection close hasn't yet
+// surfaced. Picked slightly above the typical client/upstream 10s timeout
+// so legitimate slow fetches still complete most of the time, while
+// zombie work doesn't accumulate indefinitely. Set to `0` to disable.
+export const GRAPHQL_RESOLVER_DEADLINE_MS = env.nonNegativeIntOrDefault(
+  'GRAPHQL_RESOLVER_DEADLINE_MS',
+  12000,
+);
+
+// Number of `ANS104_DATA_ITEM_MATCHED` items to dispatch into the data-item
+// indexers per `setImmediate` drain cycle. The unbundler worker thread can
+// emit thousands of matched-item messages per second when processing large
+// bundles; doing the indexer enqueue work synchronously inside the
+// eventEmitter handler monopolizes the JS thread and starves other
+// callbacks (HTTP, GraphQL, SQLite-worker replies). Buffering items and
+// processing them in batches between event-loop turns guarantees the loop
+// makes a full cycle every batch, which lets those callbacks run.
+//
+// Larger values reduce per-batch overhead but extend the time between
+// loop turns. Smaller values yield to I/O more often at a small per-item
+// cost. 100 is a starting point — observable via the `queue_length`
+// gauge with `queue_name="matchedItemBuffer"`.
+export const BUNDLE_DATA_ITEM_DRAIN_BATCH = env.positiveIntOrDefault(
+  'BUNDLE_DATA_ITEM_DRAIN_BATCH',
+  100,
 );
 
 // The maximum number of bundles to queue for unbundling before skipping
@@ -1183,6 +1690,31 @@ export const DATA_ITEM_FLUSH_COUNT_THRESHOLD = +env.varOrDefault(
 export const MAX_FLUSH_INTERVAL_SECONDS = +env.varOrDefault(
   'MAX_FLUSH_INTERVAL_SECONDS',
   '600',
+);
+
+// Parquet export (DuckDB) resource limits. The exporter runs `COPY (... ORDER
+// BY ...) TO parquet` inside an in-memory DuckDB instance; without a spill
+// path a single ultra-dense block height (tens/hundreds of thousands of data
+// items → millions of tag rows to sort) can exhaust memory and the worker is
+// OOM-killed. Setting a memory_limit plus a temp_directory lets DuckDB process
+// the sort out-of-core (spill to disk) instead of dying. Keep the limit below
+// the core container's memory ceiling.
+export const PARQUET_EXPORT_DUCKDB_MEMORY_LIMIT = env.varOrDefault(
+  'PARQUET_EXPORT_DUCKDB_MEMORY_LIMIT',
+  '2GB',
+);
+
+// Upper bound on how much DuckDB may spill to its temp_directory for a single
+// export. Guards against a runaway sort filling the data volume.
+export const PARQUET_EXPORT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE = env.varOrDefault(
+  'PARQUET_EXPORT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE',
+  '64GB',
+);
+
+// Optional cap on DuckDB worker threads during export. Fewer threads lowers
+// peak sort memory. Unset → leave DuckDB's default (one per core).
+export const PARQUET_EXPORT_DUCKDB_THREADS = env.positiveIntOrUndefined(
+  'PARQUET_EXPORT_DUCKDB_THREADS',
 );
 
 export const BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS = +env.varOrDefault(
@@ -1210,6 +1742,29 @@ export const BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS =
 export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
   'BUNDLE_REPAIR_RETRY_BATCH_SIZE',
   '5000',
+);
+
+// Upper bound on how many times the repair loop will retry a single bundle.
+// A bundle that never finishes unbundling keeps matched_data_item_count NULL
+// forever and so can never be stamped fully-indexed; without a cap it is
+// re-selected and re-walked every cycle indefinitely. Once a bundle reaches
+// this many attempts it is dropped from the retry pool (and is the natural
+// hand-off boundary for a future dead-letter queue — keep the DLQ's selection
+// threshold in sync with this value).
+export const BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS = env.positiveIntOrDefault(
+  'BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS',
+  50,
+);
+
+// Minimum seconds between retries of the same bundle. The pre-existing
+// reprocess cooldown keys on last_queued_at, which only advances when the
+// unbundler actually processes the item — so under queue backpressure it
+// never advances and the same bundles are re-selected every cycle. This
+// cooldown keys on last_retried_at (always bumped by updateBundleRetry), so
+// it holds even when the unbundler is saturated.
+export const BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS = env.nonNegativeIntOrDefault(
+  'BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS',
+  900, // 15 minutes
 );
 
 //
@@ -1290,6 +1845,16 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
   `${1000 * 60 * 60 * 4}`, // every 4 hours
 );
 
+// Cache TTL for the SQLite worker's getDebugInfo response. The /ar-io/admin/debug
+// endpoint runs ~8 unfiltered COUNT(*) scans plus aggregation across new and
+// stable data items, which can monopolize the single debug worker thread when
+// polled frequently (e.g. by clickhouse-auto-import). Setting > 0 caches the
+// computed snapshot for this many milliseconds. Set to 0 to disable.
+export const GET_DEBUG_INFO_CACHE_TTL_MS = env.nonNegativeIntOrDefault(
+  'GET_DEBUG_INFO_CACHE_TTL_MS',
+  5 * 60 * 1000, // 5 minutes
+);
+
 //
 // GraphQL
 //
@@ -1334,6 +1899,154 @@ export const CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS = +env.varOrDefault(
   'CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS',
   '60',
 );
+
+// Timeout for ClickHouse queries. Applied both as the server-side
+// max_execution_time and as the client-side HTTP request_timeout (with a
+// small buffer so the server's timeout error surfaces before the client
+// aborts).
+export const CLICKHOUSE_QUERY_TIMEOUT_SECONDS = +env.varOrDefault(
+  'CLICKHOUSE_QUERY_TIMEOUT_SECONDS',
+  '3',
+);
+
+// Per-query `max_rows_to_read` applied to GraphQL queries against the
+// ClickHouse `transactions` table. Acts as a hard guardrail against
+// unintended full scans: if the planner falls back to a full-table scan
+// (e.g., a skip index regressed, a projection shadows the main table, or
+// a query is written without an indexable predicate), ClickHouse throws
+// `Code: 158` instead of burning through the whole table.
+export const CLICKHOUSE_GQL_MAX_ROWS_TO_READ = env.positiveIntOrDefault(
+  'CLICKHOUSE_GQL_MAX_ROWS_TO_READ',
+  10_000_000,
+);
+
+// Multiplier applied to `pageSize + 1` to size the inner LIMIT in the
+// GQL transactions query. The inner SELECT enables ClickHouse's read-
+// in-order early termination (a plain `ORDER BY pk LIMIT N` is what
+// the planner can short-circuit; an intervening `LIMIT 1 BY` blocks
+// it). The outer `LIMIT 1 BY` then dedupes unmerged
+// ReplacingMergeTree versions.
+//
+// Pagination correctness caveat: this multiplier must be at least as
+// large as the table's effective duplicate factor. If a region of the
+// table has more unmerged versions per PK than this headroom covers,
+// the deduped inner window can yield fewer than `pageSize + 1` unique
+// rows even when more unique matches exist further on — the result
+// will be a short page with `hasNextPage: false` and rows past the
+// window will be silently skipped. Regular background merges keep
+// the duplicate factor at 1-2 in practice, so 4 leaves comfortable
+// headroom; raise this if operators observe short pages (e.g. during
+// a heavy ingest that produces many unmerged parts).
+export const CLICKHOUSE_GQL_DEDUPE_HEADROOM = env.positiveIntOrDefault(
+  'CLICKHOUSE_GQL_DEDUPE_HEADROOM',
+  4,
+);
+
+// Circuit breaker around the SQLite leg of the composite GQL transactions
+// query. ClickHouse and SQLite run in parallel; an open breaker degrades
+// responses to ClickHouse-only results instead of dragging the caller down
+// with a slow or unhealthy SQLite. The ClickHouse leg is governed by its
+// own `max_execution_time` and `max_rows_to_read` and propagates errors
+// to the caller — the breaker only covers SQLite.
+export const CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS',
+    5_000,
+  );
+export const CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
+    80,
+  );
+export const CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
+    60 * 1_000,
+  );
+export const CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
+    30 * 1_000,
+  );
+
+/**
+ * Toggle the ClickHouse streaming pipeline for the unstable head. When
+ * enabled, indexed blocks / transactions / data items are streamed into
+ * `new_blocks` / `new_transactions` so the unstable head is queryable
+ * from CH directly instead of only from SQLite. The stable Parquet
+ * pipeline is unchanged — once a row stabilizes it lands in
+ * `transactions` and the unstable copy ages out via TTL.
+ *
+ * Default: false. Safe to flip without coordinating with Parquet.
+ */
+export const CLICKHOUSE_STREAMING_ENABLED =
+  env.varOrDefault('CLICKHOUSE_STREAMING_ENABLED', 'false') === 'true';
+
+/**
+ * Maximum rows buffered before the streamer issues a bulk INSERT. The
+ * time-based flush ({@link CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS})
+ * ensures rows aren't held indefinitely when ingest is slow.
+ *
+ * Default: 500.
+ */
+export const CLICKHOUSE_STREAMER_BATCH_SIZE = env.positiveIntOrDefault(
+  'CLICKHOUSE_STREAMER_BATCH_SIZE',
+  500,
+);
+
+/**
+ * Time-based flush interval (ms). Rows queued shorter than this still
+ * flush at this cadence, capping unstable-head latency at the configured
+ * value (plus the bulk-insert RTT).
+ *
+ * Default: 1000 ms.
+ */
+export const CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS = env.positiveIntOrDefault(
+  'CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS',
+  1_000,
+);
+
+/**
+ * Hard cap on the streamer's in-memory buffer. Once exceeded, the
+ * streamer drops oldest rows to keep memory bounded under sustained CH
+ * unavailability. Drops are logged + metric'd; the missing rows will
+ * land via the stable Parquet pipeline once they stabilize.
+ *
+ * Default: 10 000.
+ */
+export const CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE = env.positiveIntOrDefault(
+  'CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE',
+  10_000,
+);
+
+/**
+ * When true, the GraphQL composite layer skips the SQLite leg entirely.
+ * Pairs with {@link CLICKHOUSE_STREAMING_ENABLED} for operators who want
+ * CH to be the sole read path: streaming covers the unstable head,
+ * Parquet covers stable, and SQLite stays write-only (still feeds the
+ * Parquet export → stable pipeline). When false (default), SQLite
+ * remains as a degraded-mode fallback governed by
+ * {@link CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS}.
+ */
+export const CLICKHOUSE_GQL_SKIP_SQLITE_READS =
+  env.varOrDefault('CLICKHOUSE_GQL_SKIP_SQLITE_READS', 'false') === 'true';
+
+/**
+ * Circuit-breaker timeout (ms) for the SQLite leg when streaming is
+ * enabled. In that mode CH-unstable covers the live tip and SQLite is a
+ * last-resort fallback for outages — a tight timeout keeps GraphQL
+ * responsive when CH itself is healthy. Distinct from
+ * `CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS` (which sizes for SQLite
+ * being on the critical path) so operators running both modes on
+ * different nodes don't have to choose one envelope.
+ *
+ * Default: 250 ms.
+ */
+export const CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS =
+  env.positiveIntOrDefault(
+    'CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS',
+    250,
+  );
 
 //
 // Healthchecks
@@ -1457,11 +2170,6 @@ export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
 // The wallet for this gateway
 export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
 
-export const IO_PROCESS_ID = env.varOrDefault(
-  'IO_PROCESS_ID',
-  'qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE',
-);
-
 export const AR_IO_NODE_RELEASE = env.varOrDefault(
   'AR_IO_NODE_RELEASE',
   release,
@@ -1539,6 +2247,16 @@ export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
   '',
 );
 
+// The delay in seconds before the first contiguous data cache cleanup runs.
+// The delay gives the metadata cache time to populate so that eviction
+// decisions reflect recent access rather than cold-start defaults. When unset,
+// this falls back to CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD (see system.ts).
+// Note: this timer is not persisted, so it restarts on every process restart.
+export const CONTIGUOUS_DATA_CACHE_CLEANUP_INITIAL_DELAY = env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_CLEANUP_INITIAL_DELAY',
+  '',
+);
+
 // The threshold in seconds to cleanup data associated with prefered ArNS from
 // the filesystem contiguous data cache
 export const PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD =
@@ -1610,9 +2328,9 @@ export const ARNS_CACHE_TTL_SECONDS = +env.varOrDefault(
   `${60 * 60 * 24}`, // 24 hours
 );
 
-// The maximum amount of time to wait for resolution from AO if there is a
-// cached value that can be served. When the timeout occurs, caches will still
-// be refreshed in the background.
+// The maximum amount of time to wait for resolution from the network process
+// when a cached value can be served. When the timeout occurs, caches will
+// still be refreshed in the background.
 export const ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS = +env.varOrDefault(
   'ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS',
   '250',
@@ -1659,30 +2377,30 @@ export const ARNS_MAX_CONCURRENT_RESOLUTIONS = +env.varOrDefault(
   '1',
 );
 
-// Controls the maximum time allowed for requests to AO for ARIO process state.
-// By default, requests should resolve in less than 3 seconds, but we set to 60
-// seconds to account for the worst case scenario. If requests exceed this
-// timeout, they will be considered failed and may trigger the circuit breaker
-// if the error threshold is reached.
+// Controls the maximum time allowed for requests to the ARIO network process
+// (Solana RPC reads through `@ar.io/sdk`). By default, requests should
+// resolve in less than 3 seconds, but we set to 60 seconds to account for
+// the worst case scenario. If requests exceed this timeout, they are
+// considered failed and may trigger the circuit breaker if the error
+// threshold is reached.
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS =
   +env.varOrDefault(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS',
     `${60 * 1000}`, // 60 seconds
   );
 
-// Controls the percentage of failed requests to AO for ARIO process state that
-// will trigger the circuit breaker to open. This is set to a relatively low
-// threshold (30%) to compensate for the extended timeout (10 seconds)
-// configured above.
+// Controls the percentage of failed requests to the ARIO network process
+// that will trigger the circuit breaker to open. This is set to a relatively
+// low threshold (30%) to compensate for the extended timeout configured above.
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
   +env.varOrDefault(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
     '30', // 30% failure limit before circuit breaker opens
   );
 
-// Defines the time window for tracking errors when retrieving ARIO process
-// state from AO The circuit breaker counts failures within this rolling time
-// window to determine if the error threshold percentage has been exceeded
+// Defines the time window for tracking errors when retrieving ARIO network
+// process state. The circuit breaker counts failures within this rolling time
+// window to determine if the error threshold percentage has been exceeded.
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
   +env.varOrDefault(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
@@ -1690,9 +2408,9 @@ export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
   );
 
 // Defines how long the circuit breaker stays in the open state after being
-// triggered During this period, all requests to AO for ARIO process state will
-// be rejected immediately After this timeout expires, the circuit breaker
-// transitions to half-open state to test if AO is responsive again
+// triggered. During this period, all requests to the ARIO network process
+// are rejected immediately. After this timeout expires, the circuit breaker
+// transitions to half-open state to test if the upstream is responsive again.
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
   +env.varOrDefault(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
@@ -1908,33 +2626,32 @@ export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
 );
 
 //
-// AO
+// Solana
 //
 
-// TODO: move this
 /**
- * Removes trailing slashes from URLs
- * @param url The URL to sanitize
- * @returns The sanitized URL without trailing slashes or undefined if input was undefined
+ * Solana RPC endpoint URL. Public mainnet-beta is rate-limited;
+ * production deployments should use a dedicated provider (Helius,
+ * QuickNode, Triton). Devnet: `https://api.devnet.solana.com`.
+ * Localnet: `http://127.0.0.1:8899`.
  */
-function sanitizeUrl(url: string | undefined): string | undefined {
-  if (url === undefined) {
-    return undefined;
-  }
-  return url.replace(/\/+$/, '');
-}
-
-export const AO_MU_URL = sanitizeUrl(env.varOrUndefined('AO_MU_URL'));
-export const AO_CU_URL = sanitizeUrl(env.varOrUndefined('AO_CU_URL'));
-export const NETWORK_AO_CU_URL = sanitizeUrl(
-  env.varOrUndefined('NETWORK_AO_CU_URL') ?? AO_CU_URL,
+export const SOLANA_RPC_URL = env.varOrDefault(
+  'SOLANA_RPC_URL',
+  'https://api.mainnet-beta.solana.com',
 );
-export const ANT_AO_CU_URL = sanitizeUrl(
-  env.varOrUndefined('ANT_AO_CU_URL') ?? AO_CU_URL,
-);
-export const AO_GRAPHQL_URL = env.varOrUndefined('AO_GRAPHQL_URL');
-export const AO_GATEWAY_URL = env.varOrUndefined('AO_GATEWAY_URL');
-export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
+/**
+ * Optional program-id overrides for devnet / localnet. When unset,
+ * `@ar.io/sdk/solana` falls back to its bundled mainnet IDs (which
+ * won't resolve against other clusters). See `devnet-config.json` in
+ * the `ar-io/solana-ar-io` monorepo for canonical devnet values.
+ */
+export const ARIO_CORE_PROGRAM_ID = env.varOrUndefined('ARIO_CORE_PROGRAM_ID');
+/** See {@link ARIO_CORE_PROGRAM_ID}. */
+export const ARIO_GAR_PROGRAM_ID = env.varOrUndefined('ARIO_GAR_PROGRAM_ID');
+/** See {@link ARIO_CORE_PROGRAM_ID}. */
+export const ARIO_ARNS_PROGRAM_ID = env.varOrUndefined('ARIO_ARNS_PROGRAM_ID');
+/** See {@link ARIO_CORE_PROGRAM_ID}. */
+export const ARIO_ANT_PROGRAM_ID = env.varOrUndefined('ARIO_ANT_PROGRAM_ID');
 
 //
 // Rate Limiter
@@ -1975,6 +2692,60 @@ export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
     .varOrUndefined('RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST')
     ?.split(',')
     .map((ip) => ip.trim()) ?? [];
+
+//
+// Optimistic chunk ingest cache (POST /chunk)
+//
+
+// Master switch. When false (default), POST /chunk only relays to the network
+// (current behavior); no chunk is cached locally on ingest.
+export const CHUNK_INGEST_CACHE_ENABLED =
+  env.varOrDefault('CHUNK_INGEST_CACHE_ENABLED', 'false') === 'true';
+
+// IPs/CIDRs whose posted chunks are eligible for optimistic caching. Empty =
+// open ingest (any merkle-valid chunk is cached). When set, only these posters
+// earn caching; everyone else is still relayed (the gate is on caching, not
+// posting).
+export const CHUNK_INGEST_CACHE_ALLOWLIST =
+  env
+    .varOrUndefined('CHUNK_INGEST_CACHE_ALLOWLIST')
+    ?.split(',')
+    .map((ip) => ip.trim()) ?? [];
+
+// GC leash (seconds) for open-ingest chunks whose data_root never confirms
+// on-chain. Must exceed worst-case mine+index latency.
+export const CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS =
+  env.positiveIntOrDefault(
+    'CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS',
+    21600, // 6 hours
+  );
+
+// Longer GC leash (seconds) for allowlisted-poster chunks.
+export const CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS =
+  env.positiveIntOrDefault(
+    'CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS',
+    86400, // 24 hours
+  );
+
+// Runaway-disk backstop: when pending (unconfirmed) ingest-cached bytes exceed
+// this, the GC sweep evicts oldest-pending first. The TTL above is the primary
+// junk reclamation mechanism; this only catches pathological runaway (e.g. a
+// junk-fill flood under open ingest). Defaults to a conservative non-zero so
+// enabling caching can't silently fill the disk. Set to 0 to disable.
+export const CHUNK_INGEST_MAX_PENDING_BYTES = env.nonNegativeIntOrDefault(
+  'CHUNK_INGEST_MAX_PENDING_BYTES',
+  26843545600, // 25 GiB
+);
+
+// GC sweep interval (ms) and per-sweep batch size.
+export const CHUNK_INGEST_GC_INTERVAL_MS = env.positiveIntOrDefault(
+  'CHUNK_INGEST_GC_INTERVAL_MS',
+  300000, // 5 minutes
+);
+export const CHUNK_INGEST_GC_BATCH_SIZE = env.positiveIntOrDefault(
+  'CHUNK_INGEST_GC_BATCH_SIZE',
+  1000,
+);
 
 // ArNS names to exclude from rate limiting
 export const RATE_LIMITER_ARNS_ALLOWLIST =

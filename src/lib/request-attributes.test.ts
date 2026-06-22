@@ -416,6 +416,152 @@ describe('Request attributes functions', () => {
     });
   });
 
+  describe('retrieval-hint propagation (#A)', () => {
+    const txId = 'T3DcnZlZg_FqOQUf9MSZXQ5j7_ETc04OEqbkX-MZRnc';
+    const parentId = '8czOfZFwzg2VSsDKpEhGR7s49o1niLJFfxChEqJ58hk';
+
+    describe('generateRequestAttributes — outbound emission', () => {
+      it('emits no hint headers when no hints are populated', () => {
+        const result = generateRequestAttributes({ hops: 1 });
+        assert.ok(result !== undefined);
+        assert.strictEqual(
+          result.headers[headerNames.rootTransactionId],
+          undefined,
+        );
+        assert.strictEqual(result.headers[headerNames.rootPath], undefined);
+        assert.strictEqual(
+          result.headers[headerNames.rootItemOffset],
+          undefined,
+        );
+        assert.strictEqual(result.headers[headerNames.rootItemSize], undefined);
+      });
+
+      it('emits Root-Transaction-Id when rootTransactionIdHint is set', () => {
+        const result = generateRequestAttributes({
+          hops: 1,
+          rootTransactionIdHint: txId,
+        });
+        assert.ok(result !== undefined);
+        assert.strictEqual(result.headers[headerNames.rootTransactionId], txId);
+        assert.strictEqual(result.attributes.rootTransactionIdHint, txId);
+      });
+
+      it('emits Root-Path comma-joined when rootPathHint is set', () => {
+        const result = generateRequestAttributes({
+          hops: 1,
+          rootPathHint: [txId, parentId],
+        });
+        assert.ok(result !== undefined);
+        assert.strictEqual(
+          result.headers[headerNames.rootPath],
+          `${txId},${parentId}`,
+        );
+        assert.deepStrictEqual(result.attributes.rootPathHint, [
+          txId,
+          parentId,
+        ]);
+      });
+
+      it('omits Root-Path when rootPathHint is an empty array', () => {
+        const result = generateRequestAttributes({
+          hops: 1,
+          rootPathHint: [],
+        });
+        assert.ok(result !== undefined);
+        assert.strictEqual(result.headers[headerNames.rootPath], undefined);
+      });
+
+      it('emits Root-Item-Offset + Root-Item-Size as a pair when rootByteHint is set', () => {
+        const result = generateRequestAttributes({
+          hops: 1,
+          rootByteHint: { offset: 12345, size: 6789 },
+        });
+        assert.ok(result !== undefined);
+        assert.strictEqual(result.headers[headerNames.rootItemOffset], '12345');
+        assert.strictEqual(result.headers[headerNames.rootItemSize], '6789');
+        assert.deepStrictEqual(result.attributes.rootByteHint, {
+          offset: 12345,
+          size: 6789,
+        });
+      });
+
+      it('emits all three hint kinds together', () => {
+        const result = generateRequestAttributes({
+          hops: 1,
+          rootTransactionIdHint: txId,
+          rootPathHint: [txId, parentId],
+          rootByteHint: { offset: 100, size: 200 },
+        });
+        assert.ok(result !== undefined);
+        assert.strictEqual(result.headers[headerNames.rootTransactionId], txId);
+        assert.strictEqual(
+          result.headers[headerNames.rootPath],
+          `${txId},${parentId}`,
+        );
+        assert.strictEqual(result.headers[headerNames.rootItemOffset], '100');
+        assert.strictEqual(result.headers[headerNames.rootItemSize], '200');
+      });
+    });
+
+    describe('parseRequestAttributesHeaders — inbound parsing', () => {
+      it('parses Root-Transaction-Id into rootTransactionIdHint', () => {
+        const parsed = parseRequestAttributesHeaders({
+          headers: { [headerNames.rootTransactionId]: txId },
+        });
+        assert.strictEqual(parsed.rootTransactionIdHint, txId);
+      });
+
+      it('parses comma-separated Root-Path into rootPathHint array', () => {
+        const parsed = parseRequestAttributesHeaders({
+          headers: { [headerNames.rootPath]: ` ${txId} , ${parentId} ` },
+        });
+        assert.deepStrictEqual(parsed.rootPathHint, [txId, parentId]);
+      });
+
+      it('parses Root-Item-Offset + Root-Item-Size pair into rootByteHint', () => {
+        const parsed = parseRequestAttributesHeaders({
+          headers: {
+            [headerNames.rootItemOffset]: '12345',
+            [headerNames.rootItemSize]: '6789',
+          },
+        });
+        assert.deepStrictEqual(parsed.rootByteHint, {
+          offset: 12345,
+          size: 6789,
+        });
+      });
+
+      it('omits rootByteHint when only one of the offset/size pair is present', () => {
+        const parsed = parseRequestAttributesHeaders({
+          headers: { [headerNames.rootItemOffset]: '12345' },
+        });
+        assert.strictEqual(parsed.rootByteHint, undefined);
+      });
+    });
+
+    describe('round-trip — emit then parse', () => {
+      it('preserves all three hint kinds across one emit/parse cycle', () => {
+        const emitted = generateRequestAttributes({
+          hops: 1,
+          rootTransactionIdHint: txId,
+          rootPathHint: [txId, parentId],
+          rootByteHint: { offset: 100, size: 200 },
+        });
+        assert.ok(emitted !== undefined);
+
+        const parsed = parseRequestAttributesHeaders({
+          headers: emitted.headers,
+        });
+        assert.strictEqual(parsed.rootTransactionIdHint, txId);
+        assert.deepStrictEqual(parsed.rootPathHint, [txId, parentId]);
+        assert.deepStrictEqual(parsed.rootByteHint, {
+          offset: 100,
+          size: 200,
+        });
+      });
+    });
+  });
+
   describe('validateHopCount', () => {
     it('should throw when hops exceed maximum', () => {
       assert.throws(

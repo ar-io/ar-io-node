@@ -259,7 +259,7 @@ describe('HyperBeamRootTxIndex', () => {
 
       const index = createIndex();
 
-      (index as any)['limiter'].content = 0;
+      mock.method((index as any)['limiter'], 'tryRemoveTokens', () => false);
 
       const result = await index.getRootTx('rate-limited-item');
 

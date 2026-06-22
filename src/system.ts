@@ -7,7 +7,14 @@
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
-import { AOProcess, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
+import { Logger as ARIOLogger, SolanaARIOReadable } from '@ar.io/sdk';
+import {
+  createSolanaRpc,
+  type Address,
+  address,
+  type Rpc,
+  type SolanaRpcApi,
+} from '@solana/kit';
 import pLimit from 'p-limit';
 import postgres from 'postgres';
 
@@ -27,14 +34,17 @@ import { TxMetadataResolver } from './data/tx-metadata-resolver.js';
 import { CompositeTxBoundarySource } from './data/composite-tx-boundary-source.js';
 import { DatabaseTxBoundarySource } from './data/database-tx-boundary-source.js';
 import { ChainTxBoundarySource } from './data/chain-tx-boundary-source.js';
+import { ChunkMetadataAnchorSource } from './data/chunk-metadata-anchor-source.js';
 import { TxPathValidationSource } from './data/tx-path-validation-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
+import { GatewaysGqlQueryable } from './database/gateways-gql-queryable.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
 import { MatchTags, TagMatch } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import { DnsResolver } from './lib/dns-resolver.js';
+import { createMatchedItemBuffer } from './lib/matched-item-buffer.js';
 import {
   makeBlockStore,
   makeTxStore,
@@ -91,6 +101,8 @@ import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
 import { TransactionOffsetImporter } from './workers/transaction-offset-importer.js';
 import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
+import { createClient as createClickHouseClient } from '@clickhouse/client';
+import { ClickHouseStreamer } from './workers/clickhouse-streamer.js';
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSKvStore, createArNSResolver } from './init/resolvers.js';
 import {
@@ -105,10 +117,10 @@ import { PeerRequestLimiter } from './data/peer-request-limiter.js';
 import { ArIOChunkSource } from './data/ar-io-chunk-source.js';
 import { ArIOPeerManager } from './peers/ar-io-peer-manager.js';
 import { S3DataSource } from './data/s3-data-source.js';
-import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetchers.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
+import { ChunkIngestGcWorker } from './workers/chunk-ingest-gc.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
 import { awsClient, legacyAwsS3Client } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
@@ -155,21 +167,39 @@ process.on('uncaughtException', (error) => {
 
 const arweave = Arweave.init({});
 
-// IO/AO SDK
+// AR.IO SDK
 
 ARIOLogger.default.setLogLevel(config.AR_IO_SDK_LOG_LEVEL as any);
 
-const networkProcess = ARIO.init({
-  process: new AOProcess({
-    processId: config.IO_PROCESS_ID,
-    ao: connect({
-      // @permaweb/aoconnect defaults will be used if these are not provided
-      MU_URL: config.AO_MU_URL,
-      CU_URL: config.NETWORK_AO_CU_URL,
-      GRAPHQL_URL: config.AO_GRAPHQL_URL,
-      GATEWAY_URL: config.AO_GATEWAY_URL,
-    }),
-  }),
+/**
+ * Shared Solana JSON-RPC client. Both the {@link SolanaARIOReadable}
+ * network process and the `OnDemandArNSResolver` (via
+ * `createArNSResolver`) read from this same client to keep RPC
+ * connection management in one place.
+ */
+if (!config.SOLANA_RPC_URL) {
+  throw new Error('SOLANA_RPC_URL is required');
+}
+export const solanaRpc: Rpc<SolanaRpcApi> = createSolanaRpc(
+  config.SOLANA_RPC_URL,
+);
+
+const networkProcess = new SolanaARIOReadable({
+  rpc: solanaRpc,
+  // Optional program-id overrides for devnet / localnet. Undefined keys
+  // are dropped via spread so the SDK falls back to its bundled defaults.
+  ...(config.ARIO_CORE_PROGRAM_ID !== undefined
+    ? { coreProgramId: address(config.ARIO_CORE_PROGRAM_ID) as Address }
+    : {}),
+  ...(config.ARIO_GAR_PROGRAM_ID !== undefined
+    ? { garProgramId: address(config.ARIO_GAR_PROGRAM_ID) as Address }
+    : {}),
+  ...(config.ARIO_ARNS_PROGRAM_ID !== undefined
+    ? { arnsProgramId: address(config.ARIO_ARNS_PROGRAM_ID) as Address }
+    : {}),
+  ...(config.ARIO_ANT_PROGRAM_ID !== undefined
+    ? { antProgramId: address(config.ARIO_ANT_PROGRAM_ID) as Address }
+    : {}),
 });
 
 // Initialize DNS resolver for preferred chunk GET nodes if configured
@@ -254,6 +284,7 @@ export const db = new StandaloneSqliteDatabase({
   dataDbPath: 'data/sqlite/data.db',
   moderationDbPath: 'data/sqlite/moderation.db',
   bundlesDbPath: 'data/sqlite/bundles.db',
+  chunksDbPath: 'data/sqlite/chunks.db',
   tagSelectivity: config.TAG_SELECTIVITY,
 });
 
@@ -297,21 +328,83 @@ export const dataBlockListValidator: DataBlockListValidator = db;
 export const nameBlockListValidator: NameBlockListValidator = db;
 export const nestedDataIndexWriter: NestedDataIndexWriter = db;
 export const dataItemIndexWriter: DataItemIndexWriter = db;
+if (
+  config.CLICKHOUSE_GQL_SKIP_SQLITE_READS &&
+  !config.CLICKHOUSE_STREAMING_ENABLED
+) {
+  log.warn(
+    'CLICKHOUSE_GQL_SKIP_SQLITE_READS is set but ' +
+      'CLICKHOUSE_STREAMING_ENABLED is not — ignoring the skip flag. ' +
+      'Without streaming, SQLite is the only source for unstable-head ' +
+      'rows; skipping it would silently drop recent transactions from ' +
+      'GraphQL responses. Enable streaming alongside the skip flag, or ' +
+      'unset the skip flag to silence this warning.',
+  );
+}
+
 export const gqlQueryable: GqlQueryable = (() => {
-  if (config.CLICKHOUSE_URL !== undefined) {
-    return new CompositeClickHouseDatabase({
+  const localGql: GqlQueryable =
+    config.CLICKHOUSE_URL !== undefined
+      ? new CompositeClickHouseDatabase({
+          log,
+          gqlQueryable: db,
+          url: config.CLICKHOUSE_URL,
+          username: config.CLICKHOUSE_USER,
+          password: config.CLICKHOUSE_PASSWORD,
+          sqliteMinHeightEnabled: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED,
+          sqliteMinHeightBuffer: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER,
+          maxHeightCacheTtlSeconds:
+            config.CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS,
+          queryTimeoutSeconds: config.CLICKHOUSE_QUERY_TIMEOUT_SECONDS,
+          // Streaming mode: when enabled, the composite queries
+          // `new_transactions` as a third leg covering the unstable
+          // head, and the SQLite leg drops to a tight-timeout fallback
+          // (or is skipped entirely if SKIP_SQLITE_READS is set).
+          //
+          // skipSqliteReads is gated on streaming-enabled because
+          // without streaming, SQLite is the *only* source for the
+          // unstable head — skipping it would silently drop recent
+          // transactions from GraphQL.
+          queryUnstableHead: config.CLICKHOUSE_STREAMING_ENABLED,
+          skipSqliteReads:
+            config.CLICKHOUSE_STREAMING_ENABLED &&
+            config.CLICKHOUSE_GQL_SKIP_SQLITE_READS,
+          ...(config.CLICKHOUSE_STREAMING_ENABLED
+            ? {
+                sqliteCircuitBreakerOptions: {
+                  timeout:
+                    config.CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS,
+                  errorThresholdPercentage:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+                  rollingCountTimeout:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
+                  resetTimeout:
+                    config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
+                },
+              }
+            : {}),
+        })
+      : db;
+
+  if (config.GATEWAYS_GQL_URLS.length > 0) {
+    const merger = new GatewaysGqlQueryable({
       log,
-      gqlQueryable: db,
-      url: config.CLICKHOUSE_URL,
-      username: config.CLICKHOUSE_USER,
-      password: config.CLICKHOUSE_PASSWORD,
-      sqliteMinHeightEnabled: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_ENABLED,
-      sqliteMinHeightBuffer: config.CLICKHOUSE_SQLITE_MIN_HEIGHT_BUFFER,
-      maxHeightCacheTtlSeconds: config.CLICKHOUSE_MAX_HEIGHT_CACHE_TTL_SECONDS,
+      urls: config.GATEWAYS_GQL_URLS,
+      localGqlQueryable: config.GATEWAYS_GQL_INCLUDE_LOCAL
+        ? localGql
+        : undefined,
     });
+    // Background cursor-format probe. Do not block startup — log on
+    // misconfiguration so operators notice before silently corrupted merges.
+    void merger.probe().catch((err) => {
+      log.warn('GatewaysGqlQueryable probe failed', {
+        error: err?.message ?? String(err),
+      });
+    });
+    return merger;
   }
 
-  return db;
+  return localGql;
 })();
 
 export type PostgreSQL = postgres.Sql;
@@ -390,6 +483,53 @@ eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
   eventEmitter.emit(events.TX_INDEXED, tx);
 });
 
+// Confirm pending optimistic chunk placements whose data_root matches a
+// newly-indexed L1 transaction. TX_INDEXED covers both block-imported txs
+// (re-emitted just above) and directly-imported txs. Confirmation is pushed
+// from indexing, so no data_root->tx index is needed; placements whose
+// data_root never confirms ride the GC TTL and are evicted.
+if (config.CHUNK_INGEST_CACHE_ENABLED) {
+  eventEmitter.on(events.TX_INDEXED, (tx: { data_root?: string }) => {
+    const dataRoot = tx?.data_root;
+    if (dataRoot !== undefined && dataRoot !== '') {
+      const confirmedAt = Math.floor(Date.now() / 1000);
+      db.confirmChunkPlacements(dataRoot, confirmedAt)
+        .then((cachedAts) => {
+          if (cachedAts.length > 0) {
+            metrics.chunkIngestConfirmedCounter.inc(cachedAts.length);
+            for (const cachedAt of cachedAts) {
+              metrics.chunkIngestConfirmationLatencySeconds.observe(
+                Math.max(0, confirmedAt - cachedAt),
+              );
+            }
+          }
+        })
+        .catch((error: unknown) => {
+          log.warn('Failed to confirm chunk placements', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }
+  });
+
+  // Reorg-unconfirm is intentionally deferred (no symmetric CHAIN_REORG
+  // handler). db.unconfirmChunkPlacements() is fully plumbed and reserved for
+  // it, but there is no clean call site today: the CHAIN_REORG event carries
+  // only forkHeight, not the orphaned txs' data_roots, and chunk_placements is
+  // not height-indexed — so confirmed placements can't be mapped to a fork
+  // without a new confirming-height column (migration) or surfacing orphaned
+  // data_roots from the core reset path. A *blanket* un-confirm on reorg would
+  // be wrong: it would push legitimately-confirmed chunks (whose tx is still
+  // canonical and will NOT re-emit TX_INDEXED) back to pending and let the GC
+  // evict them. The leak from skipping it is negligible: cached bytes are
+  // merkle-valid, an orphaned tx's data is unaddressable post-reorg (no offset
+  // resolves to an unmined tx), and an orphaned Arweave tx with a valid reward
+  // typically re-mines and re-confirms. Only a tx that is orphaned AND never
+  // re-mines leaves a single valid-but-retained placement — rare and small.
+  // Wire unconfirmChunkPlacements() here once placements track their confirming
+  // height.
+}
+
 export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
   ? new FsCleanupWorker({
       log,
@@ -407,6 +547,20 @@ const contiguousDataCacheCleanupThresholdSeconds = parseInt(
   config.CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD,
 );
 
+// Initial delay before the first cleanup. Defaults to the cleanup threshold to
+// preserve historical behavior when CONTIGUOUS_DATA_CACHE_CLEANUP_INITIAL_DELAY
+// is unset. Setting it explicitly decouples the warm-up delay from the
+// retention threshold (e.g. a long threshold no longer means the first cleanup
+// is deferred for the full retention window after every restart).
+const contiguousDataCacheCleanupInitialDelaySeconds = parseInt(
+  config.CONTIGUOUS_DATA_CACHE_CLEANUP_INITIAL_DELAY,
+);
+const contiguousDataCacheCleanupInitialDelayMs = !isNaN(
+  contiguousDataCacheCleanupInitialDelaySeconds,
+)
+  ? contiguousDataCacheCleanupInitialDelaySeconds * 1000
+  : contiguousDataCacheCleanupThresholdSeconds * 1000;
+
 // Only perform cleanup if the cleanup threshold is set
 export const contiguousDataFsCacheCleanupWorker = !isNaN(
   contiguousDataCacheCleanupThresholdSeconds,
@@ -415,7 +569,7 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
       log,
       basePath: 'data/contiguous',
       dataType: 'contiguous_data',
-      initialDelay: contiguousDataCacheCleanupThresholdSeconds * 1000, // Use cleanup threshold as initial delay
+      initialDelay: contiguousDataCacheCleanupInitialDelayMs,
       // Stats are passed by the worker to avoid redundant stat calls
       shouldDelete: async (path, stats) => {
         try {
@@ -554,15 +708,8 @@ export const txOffsetRepairWorker = new TransactionOffsetRepairWorker({
   txOffsetIndexer: txOffsetImporter,
 });
 
-export const bundleRepairWorker = new BundleRepairWorker({
-  log,
-  bundleIndex,
-  txFetcher,
-  unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
-  indexFilter: config.ANS104_INDEX_FILTER_STRING,
-  shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
-  filtersChanged: config.FILTER_CHANGE_REPROCESS,
-});
+// bundleRepairWorker is defined further down — it depends on
+// ans104Unbundler which is constructed later in this file.
 
 const peerRequestLimiter = new PeerRequestLimiter(
   config.PEER_MAX_CONCURRENT_OUTBOUND,
@@ -659,18 +806,19 @@ export const chunkSource =
     : fullChunkSource;
 
 // Create stores for ChunkRetrievalService fast path (cache lookup by absoluteOffset)
-const chunkDataStore = new FsChunkDataStore({
+export const chunkDataStore = new FsChunkDataStore({
   log,
   baseDir: 'data/chunks',
 });
 
-const chunkMetadataStore = new FsChunkMetadataStore({
+export const chunkMetadataStore = new FsChunkMetadataStore({
   log,
   baseDir: 'data/chunks/metadata',
 });
 
-// Transaction boundary sources for chunk retrieval
-// Uses DB-first strategy: DB (fastest) → tx_path validation → chain (slowest)
+// Transaction boundary sources for chunk retrieval.
+// Uses DB-first strategy: DB → chunk-metadata anchor → tx_path validation
+// → chain (slowest).
 const dbBoundarySource = new DatabaseTxBoundarySource({ log, db });
 
 const txPathBoundarySource = new TxPathValidationSource({
@@ -683,9 +831,61 @@ const chainBoundarySource = config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
   ? new ChainTxBoundarySource({ log, arweaveClient })
   : undefined;
 
+// Resolve the reference-peer pool used for chunk-metadata anchoring,
+// in priority order: GATEWAYS_ROOT_TX_URLS (already populated for the
+// peer-emitted-hint-source pattern) → highest-priority TRUSTED_GATEWAYS_URLS
+// entry (the architect's original fallback). One pool key controls
+// both consumers; operators don't have to keep two lists in sync.
+//
+// TRUSTED_GATEWAYS_URLS carries a per-entry `priority` (lower number =
+// higher priority); object insertion order from JSON isn't authoritative,
+// so sort explicitly before picking the single fallback.
+const chunkAnchorPeerUrls: string[] = (() => {
+  const fromRootTx = Object.keys(config.GATEWAYS_ROOT_TX_URLS);
+  if (fromRootTx.length > 0) return fromRootTx;
+  const fromTrusted = Object.entries(config.TRUSTED_GATEWAYS_URLS).sort(
+    ([, a], [, b]) => a.priority - b.priority,
+  );
+  return fromTrusted.length > 0 ? [fromTrusted[0][0]] : [];
+})();
+
+const chunkMetadataAnchorSource =
+  config.CHUNK_METADATA_ANCHOR_ENABLED && chunkAnchorPeerUrls.length > 0
+    ? new ChunkMetadataAnchorSource({
+        log,
+        peerUrls: chunkAnchorPeerUrls,
+        requestTimeoutMs: config.CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS,
+        cacheSize: config.CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE,
+        cacheTtlMs: config.CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS * 1000,
+        // Wrap the chain client to match anchorChunkMetadata's string-typed
+        // contract — weave-scale offsets need to round-trip through BigInt
+        // without Number.MAX_SAFE_INTEGER loss.
+        fetchTxOffset: async (txId, signal) => {
+          const r = await arweaveClient.getTxOffset(txId, signal);
+          return { size: String(r.size), offset: String(r.offset) };
+        },
+        fetchTransaction: async (txId, signal) => {
+          // arweaveClient.getTx doesn't currently thread signal; the
+          // outer composite still aborts via its own throwIfAborted
+          // checks, so worst case is one extra in-flight tx fetch on
+          // cancel — bounded and harmless.
+          signal?.throwIfAborted();
+          const tx = await arweaveClient.getTx({ txId });
+          return { data_root: tx.data_root };
+        },
+      })
+    : undefined;
+
+if (config.CHUNK_METADATA_ANCHOR_ENABLED && chunkAnchorPeerUrls.length === 0) {
+  log.warn(
+    'CHUNK_METADATA_ANCHOR_ENABLED=true but no peers in GATEWAYS_ROOT_TX_URLS or TRUSTED_GATEWAYS_URLS; anchor source disabled',
+  );
+}
+
 const txBoundarySource = new CompositeTxBoundarySource({
   log,
   dbSource: dbBoundarySource,
+  anchorSource: chunkMetadataAnchorSource,
   txPathSource: txPathBoundarySource,
   chainSource: chainBoundarySource,
   chainFallbackConcurrencyLimit: config.CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY,
@@ -699,6 +899,24 @@ export const chunkRetrievalService = new ChunkRetrievalService({
   chunkDataStore,
   chunkMetadataStore,
 });
+
+// Optimistic chunk ingest GC: evicts cached chunks whose data_root never
+// confirms on-chain, plus a disk-pressure backstop. Only runs when ingest
+// caching is enabled.
+export const chunkIngestGcWorker = config.CHUNK_INGEST_CACHE_ENABLED
+  ? new ChunkIngestGcWorker({
+      log,
+      chunkDataStore,
+      chunkMetadataStore,
+      chunkPlacementIndex: db,
+    })
+  : undefined;
+if (chunkIngestGcWorker !== undefined) {
+  chunkIngestGcWorker.start();
+  registerCleanupHandler('chunkIngestGcWorker', async () => {
+    await chunkIngestGcWorker.stop();
+  });
+}
 
 // Create the base TX chunks data source
 const chunkRequestLimit = pLimit(config.CHUNK_REQUEST_CONCURRENCY);
@@ -1152,6 +1370,8 @@ export const dataItemIndexer = new DataItemIndexer({
   log,
   eventEmitter,
   indexWriter: dataItemIndexWriter,
+  maxQueueSize: config.DATA_ITEM_INDEXER_QUEUE_SIZE,
+  workerCount: config.DATA_ITEM_INDEXER_WORKER_COUNT,
 });
 metrics.registerQueueLengthGauge('dataItemIndexer', {
   length: () => dataItemIndexer.queueDepth(),
@@ -1162,6 +1382,7 @@ const ans104DataIndexer = new Ans104DataIndexer({
   eventEmitter,
   indexWriter: nestedDataIndexWriter,
   contiguousDataIndex,
+  maxQueueSize: config.ANS104_DATA_INDEXER_QUEUE_SIZE,
 });
 metrics.registerQueueLengthGauge('ans104DataIndexer', {
   length: () => ans104DataIndexer.queueDepth(),
@@ -1178,14 +1399,32 @@ const ans104Unbundler = new Ans104Unbundler({
   contiguousDataSource: backgroundContiguousDataSource,
   dataItemIndexFilterString: config.ANS104_INDEX_FILTER_STRING,
   workerCount: config.ANS104_UNBUNDLE_WORKERS,
+  getDataTimeoutMs: config.ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS,
+  streamTotalTimeoutMs: config.ANS104_UNBUNDLE_STREAM_TOTAL_TIMEOUT_MS,
+  parseJobTimeoutMs: config.ANS104_PARSE_JOB_TIMEOUT_MS,
+  getDataWallClockTimeoutMs:
+    config.ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS,
   shouldUnbundle: shouldUnbundleDataItems,
 });
 metrics.registerQueueLengthGauge('ans104Unbundler', {
   length: () => ans104Unbundler.queueDepth(),
 });
 
+// BundleRepairWorker depends on ans104Unbundler so it's constructed
+// here, after Ans104Unbundler is available.
+export const bundleRepairWorker = new BundleRepairWorker({
+  log,
+  bundleIndex,
+  ans104Unbundler,
+  unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
+  indexFilter: config.ANS104_INDEX_FILTER_STRING,
+  shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
+  filtersChanged: config.FILTER_CHANGE_REPROCESS,
+});
+
 export const verificationDataImporter = new DataImporter({
   log,
+  name: 'verificationDataImporter',
   contiguousDataSource: txChunksDataSource,
   workerCount: config.ANS104_DOWNLOAD_WORKERS,
   maxQueueSize: config.VERIFICATION_DATA_IMPORTER_QUEUE_SIZE,
@@ -1195,6 +1434,7 @@ metrics.registerQueueLengthGauge('verificationDataImporter', {
 });
 export const bundleDataImporter = new DataImporter({
   log,
+  name: 'bundleDataImporter',
   contiguousDataSource: backgroundContiguousDataSource,
   ans104Unbundler,
   workerCount: config.ANS104_DOWNLOAD_WORKERS,
@@ -1316,6 +1556,10 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
       { bundle_format: 'ans-104' },
       bundleEvent.itemCount,
     );
+    metrics.bundleDataItemCountHistogram.observe(
+      { bundle_format: 'ans-104' },
+      bundleEvent.itemCount,
+    );
     db.saveBundle({
       id: bundleEvent.parentId,
       format: 'ans-104',
@@ -1333,10 +1577,40 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
   }
 });
 
-eventEmitter.on(events.ANS104_DATA_ITEM_MATCHED, async (dataItem: any) => {
-  metrics.dataItemsQueuedCounter.inc({ bundle_format: 'ans-104' });
-  dataItemIndexer.queueDataItem(dataItem);
-  ans104DataIndexer.queueDataItem(dataItem);
+// Buffer + scheduled-drainer for `ANS104_DATA_ITEM_MATCHED`.
+//
+// The ANS-104 unbundler runs on a worker thread and posts a message
+// back per matched data item. Large (~15k-item) bundles produce
+// thousands of cross-thread messages per second. Doing `queueDataItem`
+// work synchronously in this handler monopolizes the JS thread:
+// SQLite-worker reply messages, HTTP accept callbacks, and GraphQL
+// resolvers can't be serviced, fastq can't drain (its in-flight task
+// awaits a reply that never lands), the queue grows unboundedly, and
+// the system wedges (PE-9089 incident on 2026-05-08).
+//
+// `createMatchedItemBuffer` accepts items in O(1) and dispatches them
+// to `onDrain` in batches of `BUNDLE_DATA_ITEM_DRAIN_BATCH` between
+// `setImmediate` cycles. The setImmediate boundary between batches
+// guarantees a full event-loop turn so other I/O gets serviced. The
+// drain logic, head-pointer indexing, and compaction live in the
+// dedicated module so they can be unit-tested without booting the
+// whole gateway.
+const matchedItemBufferDrainer = createMatchedItemBuffer<NormalizedDataItem>({
+  drainBatch: config.BUNDLE_DATA_ITEM_DRAIN_BATCH,
+  onDrain: (dataItem) => {
+    metrics.dataItemsQueuedCounter.inc({ bundle_format: 'ans-104' });
+    dataItemIndexer.queueDataItem(dataItem);
+    ans104DataIndexer.queueDataItem(dataItem);
+  },
+});
+
+eventEmitter.on(
+  events.ANS104_DATA_ITEM_MATCHED,
+  (dataItem: NormalizedDataItem) => matchedItemBufferDrainer.push(dataItem),
+);
+
+metrics.registerQueueLengthGauge('matchedItemBuffer', {
+  length: () => matchedItemBufferDrainer.depth(),
 });
 
 export const manifestPathResolver = new StreamingManifestPathResolver({
@@ -1370,9 +1644,10 @@ export const nameResolver = createArNSResolver({
   trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
   trustedArnsResolverHostHeader: config.TRUSTED_ARNS_RESOLVER_HOST_HEADER,
   resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
-  networkProcess: networkProcess,
+  networkProcess,
   resolutionCache: arnsResolutionCache,
   registryCache: arnsRegistryCache,
+  solanaRpc,
   overrides: {
     ttlSeconds: config.ARNS_RESOLVER_OVERRIDE_TTL_SECONDS,
     // TODO: other overrides like fallback txId if not found in resolution
@@ -1390,6 +1665,55 @@ const webhookEmitter = new WebhookEmitter({
 metrics.registerQueueLengthGauge('webhookEmitter', {
   length: () => webhookEmitter.queueDepth(),
 });
+
+// Streaming pipeline (issue #696): mirror the SQLite unstable head into
+// ClickHouse `new_blocks` / `new_transactions` so CH becomes a complete
+// read store. Opt-in; the stable Parquet pipeline is unchanged. Started
+// from app.ts via `clickhouseStreamer?.start()` so a schema-validation
+// failure surfaces at startup rather than silently in the background.
+export const clickhouseStreamer = (() => {
+  if (!config.CLICKHOUSE_STREAMING_ENABLED) {
+    return undefined;
+  }
+  // Fail fast on an explicit opt-in with missing prerequisites — silently
+  // returning undefined would let the gateway start up looking healthy
+  // while the streaming pipeline doesn't actually run.
+  if (config.CLICKHOUSE_URL === undefined) {
+    throw new Error(
+      'CLICKHOUSE_STREAMING_ENABLED=true requires CLICKHOUSE_URL to be set.',
+    );
+  }
+  const streamerClient = createClickHouseClient({
+    url: config.CLICKHOUSE_URL,
+    username: config.CLICKHOUSE_USER,
+    password: config.CLICKHOUSE_PASSWORD,
+    // Batched INSERTs inline up to BATCH_SIZE rows of tag-bearing
+    // transactions; an L1 tx or data item with many large tags can push
+    // the rendered SQL past ClickHouse's default `max_query_size` of
+    // 256 KiB, which would reject the whole batch (flush errors are
+    // swallowed best-effort, so the rejection is silent except for a
+    // log line). 1 GiB is generous headroom over any realistic batch.
+    clickhouse_settings: {
+      max_query_size: '1073741824',
+    },
+  });
+  const streamer = new ClickHouseStreamer({
+    log,
+    eventEmitter,
+    clickhouseClient: streamerClient,
+    batchSize: config.CLICKHOUSE_STREAMER_BATCH_SIZE,
+    flushIntervalMs: config.CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS,
+    maxQueueSize: config.CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE,
+  });
+  metrics.registerQueueLengthGauge('clickhouseStreamer', {
+    length: () => streamer.queueDepth(),
+  });
+  registerCleanupHandler('clickhouseStreamer', async () => {
+    await streamer.stop();
+    await streamerClient.close();
+  });
+  return streamer;
+})();
 
 export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
   ? new MempoolWatcher({

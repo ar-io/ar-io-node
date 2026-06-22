@@ -322,6 +322,31 @@ describe('ArNS 404s', { skip: true }, function () {
       assert.ok(res.data !== 'Not found');
     });
 
+    // PE-9072: ARNS_NOT_FOUND_TX_ID responses must use a short, must-revalidate
+    // Cache-Control so upstream proxies don't pin the placeholder content
+    // for the data-layer max-age (potentially CACHE_STABLE_MAX_AGE).
+    it('GET "unknownname.ar-io.localhost" returns short Cache-Control with must-revalidate', async function () {
+      const res = await axios.get('http://localhost:4000/', {
+        headers: { Host: 'unknownname.ar-io.localhost' },
+        validateStatus: () => true,
+      });
+
+      assert.match(
+        res.headers['cache-control'] ?? '',
+        /max-age=\d+, must-revalidate/,
+      );
+      // 60s default; reject any value pointing at the data-layer ladder
+      // (12h = 43200, 30d = 2592000, etc.).
+      const maxAgeMatch = (res.headers['cache-control'] ?? '').match(
+        /max-age=(\d+)/,
+      );
+      assert.ok(maxAgeMatch !== null);
+      assert.ok(
+        Number(maxAgeMatch[1]) <= 600,
+        `expected short max-age, got ${maxAgeMatch[1]}`,
+      );
+    });
+
     it('GET of a path on "unknownname.ar-io.localhost" returns an HTTP redirect to "/"', async function () {
       const res = await axios.get('http://localhost:4000/js/arconnect.js', {
         headers: { Host: 'unknownname.ar-io.localhost' },
@@ -384,5 +409,130 @@ describe('ArNS 404s', { skip: true }, function () {
       );
       assert.ok(res.data !== 'Not found');
     });
+
+    // PE-9072: same Cache-Control bounding for the ARNS_NOT_FOUND_ARNS_NAME
+    // path as for ARNS_NOT_FOUND_TX_ID.
+    it('GET "unknownname.ar-io.localhost" returns short Cache-Control with must-revalidate', async function () {
+      const res = await axios.get('http://localhost:4000/', {
+        headers: { Host: 'unknownname.ar-io.localhost' },
+        validateStatus: () => true,
+      });
+
+      assert.match(
+        res.headers['cache-control'] ?? '',
+        /max-age=\d+, must-revalidate/,
+      );
+      const maxAgeMatch = (res.headers['cache-control'] ?? '').match(
+        /max-age=(\d+)/,
+      );
+      assert.ok(maxAgeMatch !== null);
+      assert.ok(
+        Number(maxAgeMatch[1]) <= 600,
+        `expected short max-age, got ${maxAgeMatch[1]}`,
+      );
+    });
+  });
+});
+
+// PE-9072: ARNS_NOT_FOUND_ARNS_NAME defaults to 'unregistered_arns' in
+// src/config.ts, so every gateway with default config falls through to the
+// custom-404 branch on every failed ArNS resolution. Before the fix this
+// branch inherited the data-layer ladder (CACHE_UNSTABLE_TRUSTED_MAX_AGE
+// or, when the placeholder confirmed deeply, CACHE_STABLE_MAX_AGE with
+// `immutable`), poisoning upstream nginx caches with placeholder content
+// for hours-to-months. This block uses no ARNS_NOT_FOUND_* override —
+// representing a default-config gateway.
+// TODO: temporarily disabled - failures are CU-related, not code issues
+describe(
+  'ArNS resolution failure under default config',
+  { skip: true },
+  function () {
+    before(async function () {
+      await cleanDb();
+
+      compose = await composeUp({
+        START_WRITERS: 'false',
+        ARNS_ROOT_HOST: 'ar-io.localhost',
+        // Intentionally not setting ARNS_NOT_FOUND_TX_ID or
+        // ARNS_NOT_FOUND_ARNS_NAME — relying on the code default of
+        // 'unregistered_arns' for ARNS_NOT_FOUND_ARNS_NAME.
+      });
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('GET unresolvable name returns short Cache-Control with must-revalidate', async function () {
+      const res = await axios.get('http://localhost:4000/', {
+        headers: {
+          Host: 'completelynonsensicalnameXYZ123.ar-io.localhost',
+        },
+        validateStatus: () => true,
+      });
+
+      // The default-config gateway resolves the placeholder via
+      // 'unregistered_arns' and serves it with status 404 (set at line 240
+      // of arns.ts before falling through to dataHandler).
+      assert.strictEqual(res.status, 404);
+
+      // Critical: must NOT inherit CACHE_UNSTABLE_TRUSTED_MAX_AGE (43200s)
+      // or any data-layer ladder value.
+      const cacheControl = res.headers['cache-control'] ?? '';
+      assert.match(cacheControl, /must-revalidate/);
+      assert.ok(!cacheControl.includes('immutable'));
+      const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+      assert.ok(maxAgeMatch !== null);
+      assert.ok(
+        Number(maxAgeMatch[1]) <= 600,
+        `expected short max-age, got ${maxAgeMatch[1]} (cache-control=${cacheControl})`,
+      );
+    });
+  },
+);
+
+// PE-9072: APEX_TX_ID is operator-controlled and may be rotated. Without
+// CACHE_APEX_MAX_AGE the apex response inherits the data-layer ladder
+// (up to CACHE_STABLE_MAX_AGE with `immutable`), poisoning upstream caches
+// after a rotation.
+// TODO: temporarily disabled - failures are CU-related, not code issues
+describe('ArNS apex (APEX_TX_ID)', { skip: true }, function () {
+  before(async function () {
+    await cleanDb();
+
+    compose = await composeUp({
+      START_WRITERS: 'false',
+      ARNS_ROOT_HOST: 'ar-io.localhost',
+      APEX_TX_ID: 'kvhEUsIY5bXe0Wu2-YUFz20O078uYFzmQIO-7brv8qw',
+    });
+  });
+
+  after(async function () {
+    await compose.down();
+  });
+
+  it('GET "ar-io.localhost/" returns Cache-Control bounded by CACHE_APEX_MAX_AGE with must-revalidate', async function () {
+    const res = await axios.get('http://localhost:4000/', {
+      headers: { Host: 'ar-io.localhost' },
+      validateStatus: () => true,
+    });
+
+    assert.strictEqual(res.status, 200);
+    assert.match(
+      res.headers['cache-control'] ?? '',
+      /max-age=\d+, must-revalidate/,
+    );
+    // Default CACHE_APEX_MAX_AGE is 3600s. Reject any value pointing at the
+    // data-layer ladder (12h = 43200, 30d = 2592000, etc.).
+    const maxAgeMatch = (res.headers['cache-control'] ?? '').match(
+      /max-age=(\d+)/,
+    );
+    assert.ok(maxAgeMatch !== null);
+    assert.ok(
+      Number(maxAgeMatch[1]) <= 7200,
+      `expected apex max-age <= 7200, got ${maxAgeMatch[1]}`,
+    );
+    // And not `immutable` — operators must be able to rotate APEX_TX_ID.
+    assert.ok(!(res.headers['cache-control'] ?? '').includes('immutable'));
   });
 });

@@ -12,6 +12,938 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+## [Release 81] - 2026-06-20
+
+This is a **recommended release** focused on **optimistic ingest and
+data-serving reliability**. Key highlights include an optimistic chunk ingest
+cache that verifies and serves freshly-posted chunks from local storage before
+they are fetched upstream, and optimistic L1 transaction indexing that makes
+signed transactions queryable before they mine (both off by default); admission
+control — depth-based backpressure and per-request batch caps — on the admin
+ingest endpoints so a high-volume bundler gets retryable responses instead of
+overrunning the indexer; a wall-clock deadline on chunk serves so slow
+retrievals fail fast as 404s rather than hanging; and a GraphQL owner-key cache
+with in-flight request coalescing plus batched root-tx lookups to cut upstream
+rate-limiting.
+
+### Added
+
+- **Optimistic chunk ingest cache** — verify and optimistically cache chunks on
+  `POST /chunk`, then serve and unbundle them from local cache before fetching
+  upstream. Unconfirmed chunks are reclaimed by a GC sweep and bounded by a
+  synchronous pending-bytes disk cap. Off by default
+  (`CHUNK_INGEST_CACHE_ENABLED`); see the new `CHUNK_INGEST_*` env vars.
+- **Optimistic L1 transaction indexing** — new admin endpoint
+  `POST /ar-io/admin/queue-optimistic-tx` indexes signed L1 transaction headers
+  before they mine, making them queryable immediately; a serving guard withholds
+  `verified` until the transaction is mined. Off by default
+  (`OPTIMISTIC_TX_INDEXING_ENABLED`); see the new `OPTIMISTIC_TX_*` env vars and
+  MADR 004.
+- **Admission control on `POST /ar-io/admin/queue-data-item`** — a per-request
+  batch-size cap (`400`) and indexer-depth backpressure (`503` + `Retry-After`),
+  with the body limit raised to 10 MB, so a bundler burst gets a retryable
+  response instead of unbounded queue growth. New `QUEUE_DATA_ITEM_MAX_BATCH_SIZE`
+  / `QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH`; `data_item_queue_rejected_total{reason}`
+  metric.
+- **Wall-clock deadline for chunk serves** — chunk retrieval is bounded by a
+  wall-clock deadline; timeouts return `404` instead of hanging (PE-9121).
+- **GraphQL owner-key cache** — address-keyed owner-key cache with an in-flight
+  request coalescer, plus observability metrics (PE-9120).
+- **Batched GraphQL root-tx lookups** — discovery batches root-tx lookups to
+  avoid upstream rate-limit 404s (PE-9108).
+- **Parquet export resilience** — DuckDB sorts spill to disk to survive dense
+  partitions, with configurable DuckDB memory/thread limits (wired into compose)
+  and real export errors surfaced instead of swallowed.
+
+### Changed
+
+- Aligned keepalive timeouts across envoy and core to prevent mid-request
+  connection resets (PE-9122).
+- Envoy chunk-retry behavior — conservative retry on the chunk route; stop
+  retrying chunk GET/HEAD serves against a single-endpoint core (PE-9121).
+- Decoupled contiguous-cache cleanup initial delay from the cleanup threshold
+  (PE-9106).
+- Bounded unbundling retries and cooldowns to prevent runaway loops.
+- Observer now receives assessment-concurrency and log-report-sink config.
+- Updated the bundled observer image to a stable `@ar.io/sdk` (`4.0.3`) build,
+  including the Solana epoch-cranker `finalize_gone` window-eligibility fix and
+  the report-sink failure-threshold adjustment.
+
+### Fixed
+
+- Chunk-retrieval 5xx classification and terminal error handling so serve
+  failures surface cleanly (PE-9121).
+- GraphQL data-item `owner.key` misses now coerce to a NOT_FOUND sentinel
+  instead of erroring.
+- Validate numeric env vars (optimistic-tx, retry caps, root-tx batch) at parse
+  time to guard against NaN misconfiguration.
+
+## [Release 80] - 2026-06-06
+
+This is a **recommended release** focused on the **AO → Solana
+migration** of AR.IO protocol state, **Solana-native observation and
+HTTPSIG signing**, and **data-integrity hardening**. Key highlights
+include reading the Gateway Address Registry, ArNS/ANT records,
+epochs, and prescribed observers from Solana on-chain programs via
+`@ar.io/sdk` 4.0.0 (#709, #765); a Solana observer that signs and
+submits `save_observations`, uploads its report bundle, and can run
+the permissionless epoch cranker (#709); response trust headers
+signed directly with the observer's Solana key (#758); mainnet
+program IDs defaulted so a fresh mainnet deploy starts the observer
+out of the box (#766); the Solana 4.0.0 observer container wired in
+as the default image (#767); and a fix preventing L1 transactions
+with an empty/NULL `data_root` from serving unrelated content (#755).
+
+### Added
+
+- **Solana protocol backend — AO → Solana migration (#709)**: The
+  gateway now reads all AR.IO protocol state — the Gateway Address
+  Registry, ArNS names and ANT records, epochs, prescribed
+  observers, and observation status — from Solana on-chain programs
+  via `@ar.io/sdk`'s Solana backend, replacing the AO compute-unit
+  reads. Configured by `SOLANA_RPC_URL` (defaults to mainnet-beta;
+  use a dedicated provider in production) and the `ARIO_CORE_/GAR_/
+  ARNS_/ANT_PROGRAM_ID` env vars (default to the mainnet program
+  IDs). The `OnDemandArNSResolver` routes ANT lookups through
+  `SolanaANTReadable`.
+- **Solana observer, cranker, and report submission (#709)**: The
+  observer signs and submits `save_observations` from a Solana
+  keypair (`SOLANA_KEYPAIR_PATH` / `OBSERVER_KEYPAIR_PATH`), uploads
+  its report bundle to the permaweb under a separate upload identity
+  — Arweave, Ethereum, or Solana, via `ARWEAVE_UPLOAD_KEY_FILE`,
+  `ETHEREUM_UPLOAD_PRIVATE_KEY*`, or `SOLANA_UPLOAD_KEYPAIR_PATH` —
+  and optionally runs the permissionless epoch cranker
+  (`ENABLE_EPOCH_CRANKING`, default `false`).
+- **HTTPSIG signing with the Solana observer key (#758)**: Response
+  trust headers (RFC 9421) are signed directly with the observer's
+  Solana keypair; verifiers derive the Solana address from the
+  `keyId` and look it up in the on-chain GAR, so no separate
+  attestation document is needed. The key can be supplied as a file
+  (`OBSERVER_KEYPAIR_PATH`) or an inline base58 secret
+  (`OBSERVER_PRIVATE_KEY`).
+
+### Changed
+
+- **`@ar.io/sdk` → stable `4.0.0` (#765)**: Moves off the
+  `4.0.0-solana.*` prereleases (#761, #763) to the published stable
+  release, which includes the compound crank-step
+  transaction-size fix (`ar-io/ar-io-sdk#670`) that unwedges epoch
+  progression on populated networks.
+- **Mainnet program IDs by default (#766)**: `docker-compose.yaml`
+  now defaults the four `ARIO_*_PROGRAM_ID` vars to the mainnet
+  program IDs so a fresh mainnet deploy starts the observer without
+  extra configuration — the observer requires them set and will not
+  start otherwise. Operators on devnet/staging override via `.env`.
+- **Default observer image → Solana 4.0.0 container (#767)**:
+  `OBSERVER_IMAGE_TAG` now defaults to the Solana-track observer
+  build.
+- The gateway is now **Solana-only** for registry/ArNS/epoch
+  reads; the AO compute-unit dependency for protocol state has been
+  removed.
+
+### Fixed
+
+- **`attachStallTimeout` timer leak**: Unref the stall and
+  wall-clock timers so a settled stream no longer keeps the event
+  loop alive.
+- **Over-eager source-cascade abort (PE-9108)**: Abort the data
+  source cascade only on a genuine client disconnect, not on
+  internal stream transitions, so legitimate retrievals are no
+  longer cut short.
+- **Empty/NULL `data_root` could serve unrelated content (#755)**:
+  An L1 transaction with an empty or NULL `data_root` matched any
+  `data_roots` row keyed on an empty value, returning an unrelated
+  file's hash; the unguarded insert also planted such poison rows.
+  Both queries are now guarded, the insert is a no-op for empty
+  input, and a forward-only migration removes any previously
+  planted rows.
+
+## [Release 79] - 2026-05-27
+
+This is a **recommended release** focused on **ANS-104 unbundling
+hang prevention**, the **ClickHouse streaming pipeline for the
+unstable head**, and **byte-range / partial-content hardening**.
+Key highlights include four new wall-clock-cap and timeout layers
+across the unbundling pipeline (#744, #746, #748, #754) that close
+every observed AbortSignal-immune hang path — workers can no longer
+wedge permanently inside `DataImporter.download`,
+`Ans104Parser.parseBundle`'s `getData`, the stream-to-disk pipeline,
+or the worker thread itself; a new opt-in **ClickHouse streaming
+pipeline** (`CLICKHOUSE_STREAMING_ENABLED`, #699) backed by
+`new_blocks` / `new_transactions` ClickHouse tables so GraphQL
+queries against the unstable head no longer wait for the hourly
+parquet round-trip; and a **Range / 200-acceptance hardening pass**
+(PE-9098) that gives the gateway a useful fallback when upstreams
+strip Range headers, bounds overstreaming via
+`GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET`, and corrects byte-count
+recording on the sliced path. Other notable additions: configurable
+`DATA_ITEM_INDEXER_WORKER_COUNT` (#747) for indexer-bound workloads,
+a **chain-anchored chunk metadata fast path with outbound hint
+propagation** (#705), and a substantial new observability surface
+for the data-importer phase counters, bundle download
+timing/size, and bundle-repair-worker. Operationally significant
+fixes: a `ReadThroughDataCache` source-stream tee that eliminates a
+backpressure race wedging the ar-io-network backfill (#737), an
+`ar-io-data-source` limiter-slot leak on stream 'end' (#735), an
+HTTPS-SNI bug in `DnsResolver` breaking the chunks-offset-aware
+path (#729), a content-type predicate that crashed on stored
+`null` content-types (PE-9099), and GraphQL federation
+sort-order / null-height regressions (PE-9092).
+
+### Added
+
+- **ClickHouse Streaming Pipeline for the Unstable Head (#699,
+  #696)**: Opt-in pipeline that mirrors the SQLite `new_*` tables
+  into ClickHouse so GraphQL queries against the unstable head can
+  read from ClickHouse directly instead of waiting for the hourly
+  parquet round-trip. Adds `new_blocks` and `new_transactions`
+  tables (mirroring `transactions` shape, with inline `signature` /
+  `owner` and a uniform `inserted_at`-anchored TTL replacing the
+  stable table's offset/size/bloom/partition machinery). Reorgs
+  trigger bounded `ALTER TABLE ... DELETE WHERE` on the `new_*`
+  tables. Activated by `CLICKHOUSE_STREAMING_ENABLED` (default
+  `false`); tunable via `CLICKHOUSE_STREAMER_BATCH_SIZE` (default
+  500), `CLICKHOUSE_STREAMER_FLUSH_INTERVAL_MS` (default 1000),
+  `CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE`, and
+  `CLICKHOUSE_NEW_TX_TTL_MINUTES` (default 240). GraphQL gains a
+  third merge leg over `new_transactions`; the SQLite leg can be
+  reduced to a tight-timeout fallback via
+  `CLICKHOUSE_GQL_SKIP_SQLITE_READS` with the timeout governed by
+  `CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS`. Also
+  adds `HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES` (default 2 MiB) — the
+  upper bound for buffering small uncached bodies to emit a
+  `Content-Digest` header; larger bodies stream without one. When
+  `CLICKHOUSE_STREAMING_ENABLED=false` (the default), behavior is
+  identical to the pre-streaming two-leg path.
+
+- **ANS-104 Unbundling Hang Prevention (#744, #746, #748, #754)**:
+  Four cooperating layers that close every observed AbortSignal-immune
+  hang path. (1) `DATA_IMPORTER_DOWNLOAD_TIMEOUT_MS` (default 20 min,
+  #744) caps `DataImporter.download` via `Promise.race` independent
+  of AbortSignal — fixes wedges where 32 of 32 download workers
+  pinned indefinitely on backpressured streams. (2)
+  `ANS104_UNBUNDLE_GET_DATA_TIMEOUT_MS` (default 30 s) +
+  `ANS104_UNBUNDLE_STREAM_TOTAL_TIMEOUT_MS` (default 2 min) (#746)
+  bound the parser's data-fetch and stream-to-disk phases with
+  AbortSignal-based timeouts; the offset source's reader is
+  rewritten to consume via `getReader()` so stream errors and
+  aborts reject the promise instead of hanging. (3)
+  `ANS104_PARSE_JOB_TIMEOUT_MS` (default 10 min, #748) covers the
+  remaining case where a worker thread stays alive but never posts
+  a terminal message — fires `worker.terminate()` and the existing
+  `'exit'` handler reaps and respawns. (4)
+  `ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS` (default 5 min,
+  #754) is the parseBundle-level mirror of #744's
+  `Promise.race` cap, closing the ~0.4 % of cases where the
+  cascade ignores the AbortSignal. New metrics:
+  `ans104_parser_get_data_wall_clock_fires_total`,
+  `ans104_parser_job_timeouts_total`,
+  `data_importer_worker_phase_total{phase="timer_*"}`,
+  `bundles_unbundle_started_total`, `bundles_unbundle_in_flight`,
+  `ans104_parser_jobs_started_total`,
+  `ans104_parser_worker_pool_size`,
+  `ans104_parser_worker_exits_total`. Also adds `STREAM_REQUEST_TIMEOUT_MS`
+  (default 15 min) — the underlying wall-clock cap on
+  `attachStallTimeout` used by `ArIODataSource` and
+  `GatewaysDataSource` to bound paused-stream wedges.
+
+- **Chain-Anchored Chunk Metadata Fast Path (#705)**: Decodes the
+  `X-Arweave-Chunk-*` headers that peer gateways emit on
+  `/chunk/{offset}/data` into structured chunk metadata, then
+  cross-checks every field against the chain — a header that
+  disagrees throws `ChainAnchorMismatchError` and the caller falls
+  back to the canonical chain lookup, so peer headers are *hints*,
+  never silently trusted. When the hint passes anchoring, the
+  gateway skips a chain round-trip per chunk and re-emits the same
+  headers on its outbound response so downstream consumers can
+  anchor in turn. Enabled by default
+  (`CHUNK_METADATA_ANCHOR_ENABLED=true`), with
+  `CHUNK_METADATA_ANCHOR_REQUEST_TIMEOUT_MS` (default 5000),
+  `CHUNK_METADATA_ANCHOR_TX_CACHE_SIZE` (default 1024), and
+  `CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS` (default 300) as
+  tunables.
+
+- **Accept 200 for Range Requests and Slice Locally (PE-9098)**:
+  Some upstreams (most often nginx with `proxy_cache` but no
+  `slice` module) silently strip the client's `Range` header and
+  return a full 200 body. `GatewaysDataSource` previously rejected
+  these with `Expected 206`, falling through to a worse source.
+  The gateway now accepts the 200, slices locally, and bounds the
+  wire-cost via `GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET` (default
+  10 MiB) — when `region.offset` exceeds the cap, the 200 is
+  rejected and the next source tier is tried. Guarded against
+  `NaN` / negative env values.
+
+- **Configurable `DATA_ITEM_INDEXER_WORKER_COUNT` (#747)**:
+  `DataItemIndexer`'s fastq concurrency was hardcoded to 1.
+  Operators draining a large failed-bundle backlog can now raise it
+  (default 1, backward compatible) to pipeline main-thread JS work
+  while the prior `saveDataItem` is in flight to the SQLite worker.
+  Upper bound on speedup is bounded by SQLite single-writer
+  semantics.
+
+- **Caller-Supplied Content-Type Predicate with Lazy Poisoned-Cache
+  Eviction (PE-9099)**: `ContiguousDataSource.getData()` accepts an
+  optional `acceptContentType` predicate. When supplied,
+  `GatewaysDataSource` rejects upstream responses whose
+  `Content-Type` fails the predicate before any bytes are returned
+  (the cascade falls through to the next priority tier), and
+  `ReadThroughDataCache` lazily evicts cache entries whose stored
+  content-type fails: the on-disk blob is deleted and the request
+  treated as a cache miss, so the next fall-through fetch heals the
+  entry. Closes the long-standing 1134-byte `text/html`
+  bundlr-network parking-page poisoning from the Sept-2024 outage
+  that the indexer's ANS-104 parser couldn't unbundle.
+
+- **Data-Importer + Bundle-Repair Observability (#728, #736,
+  2c51ee6f, 58090309)**:
+  `bundle_download_duration_seconds{outcome}` and
+  `bundle_download_size_bytes{outcome}` (#728) correlate slow
+  downloads with payload size; `data_importer_queue_full_skips_total`
+  (#728) makes previously-silent queue-full drops scrapeable.
+  `data_importer_worker_phase_total{phase=started|got_data|stream_ended|...}`
+  (#736) pinpoints where a wedged worker is stuck (gaps between
+  phases are exactly worker-count when the pipeline locks up).
+  Bundle-repair gains `bundles_unbundling_backlog` (true backlog
+  including bundles awaiting their first unbundle, not just retries)
+  alongside the existing `bundle_repair_pending_bundles`.
+  `bundles_unbundle_skipped_total{reason="no_workers"|"high_queue_depth"|"queue_full"}`
+  (58090309) accounts for each pre-pipeline skip path at
+  `Ans104Unbundler.queueItem`.
+
+- **ClickHouse Pipeline Observability (8f9b1151)**: Two new gauges
+  make the parquet → ClickHouse staleness gap legible from Grafana.
+  `min_stable_data_item_height` exposes `MIN(height)` over
+  `stable_data_items` — flat across multiple auto-import cycles
+  means the prune is no-op-ing (typically because a backfill keeps
+  inserting rows at low heights with an `indexed_at` newer than the
+  prune threshold). `clickhouse_max_imported_height` tracks how far
+  the auto-import process has advanced — the gap against the SQLite
+  stable height is the lag operators actually care about.
+
+### Changed
+
+- **`isAcceptableBundleContentType` Widened (PE-9099)**: The
+  bundle content-type predicate now accepts `binary/octet-stream`
+  (a legacy MIME synonym of `application/octet-stream` present on
+  ~350 rows in production gateway caches) in addition to
+  `application/octet-stream`, `application/x-arweave-data`, and
+  absent / `null` content-types. Input is normalized with
+  `trim()` + `toLowerCase()` so cosmetic upstream variants
+  (`Application/Octet-Stream`, leading/trailing whitespace) no
+  longer cause spurious cache fall-through. The rejected
+  content-type metric label is also stripped of parameters
+  (`; charset=…`) to bound Prometheus cardinality.
+
+- **Bundle-Repair Routes Retries Directly to the Unbundler
+  (PE-9098)**: `BundleRepairWorker.retryBundles()` previously
+  routed every failed bundle through `TransactionFetcher.queueTxId`,
+  which is structurally wrong for BDIs (chain nodes don't index
+  BDIs) and event-driven for L1s (TX_INDEXED → unbundler
+  subscription drops retries silently when the unbundler queue is
+  full). Retries now queue directly to the unbundler, with bundles
+  that match neither path retained for the next BRW cycle.
+
+- **`selectFailedBundleIds` Skips Non-Bundle Transactions
+  (PE-9101)**: The live and backfill queue paths gate on the
+  `Bundle-Format` tag, but the admin `/ar-io/admin/queue-bundle`
+  endpoint does not (`bypassFilter` defaults to `true`). Non-bundle
+  transactions queued through admin landed in `bundles`, never set
+  `matched_data_item_count`, and were retried by `BundleRepairWorker`
+  forever — each retry failing in the ANS-104 parser with
+  `Invalid buffer`. The retry query now excludes rows whose root
+  transaction is provably non-bundle (indexed locally and lacking
+  `Bundle-Format=binary`); unknown roots stay eligible.
+
+### Fixed
+
+- **`ReadThroughDataCache` Source-Stream Tee (#737)**: On a cache
+  miss, `ReadThroughDataCache.getData()` returned the same inner
+  source stream to two consumers — the disk-cache `pipeline()` and
+  the caller (`DataImporter.download` or the HTTP handler). Pipeline
+  managed pause/resume internally; the caller called `.resume()` once
+  at startup. When the disk cache paused for a slow write, the source
+  went to recv-window-zero on its TCP socket, the peer stopped
+  sending, and the worker waited indefinitely for `'end'` /
+  `'error'` events that never came. Manifested as bundle-backfill
+  wedges 15–30 minutes into every run with
+  `BACKGROUND_RETRIEVAL_ORDER=ar-io-network,…`. Fix introduces a
+  `PassThrough` that the pipeline tees into so the source has a
+  single consumer governed entirely by the disk-pipeline's outcome,
+  not by pause/resume races on the underlying `IncomingMessage`.
+  Also fixes a `cacheStream` leak when `dataStore.finalize()` throws.
+
+- **`ar-io-data-source` Peer-Limiter Slot Release on Stream 'end'
+  (#735)**: The `streamPeerCounts` / `peerRequestLimiter` release
+  path listened only on `stream.once('close', …)`. For HTTP
+  `IncomingMessage` streams consumed via `pipeline()` under a
+  keepAlive `http.Agent`, `'close'` can fire late or not at all —
+  the socket is returned to the agent pool without the response
+  object being destroyed. Every "successful" download leaked one
+  limiter slot. After 15–30 minutes every peer hit `maxConcurrent`,
+  `executeHedgedRequest` could no longer dispatch, and 24 download
+  workers blocked silently on sources that never returned data. Now
+  listens on `'end'`, `'error'`, and `'close'`, whichever fires first.
+
+- **`DnsResolver` SNI Preservation for HTTPS URLs (#729)**: When
+  `PREFERRED_CHUNK_GET_NODE_URLS` included HTTPS endpoints (e.g.
+  `https://arweave.net`), the DNS resolver overwrote the URL
+  hostname with the resolved IP. `fetch()` then sent TLS SNI = IP
+  and `Host: IP`, mismatching the server certificate and triggering
+  `ERR_TLS_CERT_ALTNAME_INVALID`. Failures bubbled up through
+  `ArIOChunkSource` as silent zero-success rates from otherwise
+  healthy upstreams. HTTPS URLs now return unchanged from the
+  resolver; only HTTP URLs go through DNS substitution.
+
+- **`isAcceptableBundleContentType` Null Safety (PE-9099)**: Stored
+  attributes from SQLite surface `NULL` as JS `null`, not
+  `undefined`. The predicate's `undefined`-only guard missed it,
+  and `.trim()` on `null` threw `TypeError: Cannot read
+  properties of null (reading 'trim')` — every cache lookup where
+  the stored content-type was `NULL` failed, the unbundle bounced
+  back to the repair pool, and post-deploy throughput collapsed.
+  Signature widened to `string | null | undefined` with an explicit
+  null check.
+
+- **GraphQL Federation Sort-Order + Null-Height Preference
+  (PE-9092)**: Two interacting defects in the federation merge.
+  (1) `mergeEdges` could emit edges out of sort order when a richer
+  duplicate replaced an earlier emission — under `HEIGHT_DESC` the
+  merger picked null-height edges first and a later resolved
+  duplicate overwrote slot 0, yielding e.g. `[x(100), y(200)]`
+  instead of `[y(200), x(100)]`. (2) Dedup in
+  `getGqlTransaction` / `getGqlTransactions` could return a
+  null-height (optimistic) record over a fully-resolved record for
+  the same id when both were present in the peer set. Fix
+  collects emissions into a `Map` keyed by `node.id`, prefers
+  height-resolved over null-height, and always forwards the full
+  block sub-selection upstream so partial selections produce
+  consistent block field hydration.
+
+- **Range Path Consumer-Byte Recording on Sliced 200 (PE-9098)**:
+  When the 200-with-Range fallback kicks in, the stream is sliced
+  to `region.size`, but the stream-bytes total and size histogram
+  were recording the upstream `content-length`. Overcounted by up
+  to the full body minus `region.size` (e.g. 140 MB instead of
+  512 bytes for a signature fetch). Recorded counts are now the
+  consumer-visible sliced size.
+
+- **`ReadThroughDataCache` Caller Region Size Through BDI Parent
+  Resolution (PE-9098)**: When a requested item resolved via its
+  parent's cached blob, the recursive `getCacheData` call replaced
+  the caller's `region.size` with the child's full `data_size`
+  before handing the region to `FsDataStore`. For BDI-nested items
+  that meant opening an `fs.createReadStream` window spanning
+  hundreds of MB to multiple GB instead of the few hundred bytes
+  the caller wanted. Caller's region is now preserved end-to-end.
+
+- **Webhook Emitter Log Bloat (#727)**: The previous catch block
+  passed the entire `AxiosError` object to winston, which
+  serialized the underlying keep-alive agent's Timer linked list
+  until the circular guard kicked in — producing 2–4 MB log lines
+  per failed delivery. At ~30 failures/hour from a single 429
+  webhook target, the 100 MB × 5 docker log rotation budget was
+  consumed in ~10 minutes and other log lines were evicted.
+  Extracts useful fields (status, code, message, truncated body,
+  target URL) and logs a structured object; response bodies clamp
+  to 500 chars.
+
+- **`min_stable_data_item_height` Gauge Moved to Main Thread
+  (0fa21dee)**: `computeDebugInfo()` runs in a SQLite worker
+  thread, which has its own `prom-client` registry. The scrape
+  endpoint reads the main-thread registry, so a gauge set inside
+  the worker never reached it. Now set in
+  `StandaloneSqliteDatabase.getDebugInfo()` after `queueRead`
+  returns.
+
+- **Streaming Backpressure in `ReadThroughDataCache` Cache-Miss
+  Path (4c9d1d13)**: The cache-miss path piped into the disk-cache
+  write stream via `pipeline()` and also attached a `.on('data')`
+  hashing/byte-counting listener. Two consumers on the same
+  readable forced flowing mode and short-circuited pipeline
+  backpressure: `cacheStream`'s internal buffer grew beyond
+  `highWaterMark` while waiting on disk writes, holding
+  multi-MB per concurrent download. At 24+ download workers this
+  produced external-memory pressure. Hashing moved into a
+  `Transform` so backpressure is preserved end-to-end.
+
+- **`selectFailedBundleIds` Index (855ba8c3)**: The retry-loop
+  `SELECT` is now ~200× faster after correcting the index column.
+  The pre-existing `import_attempt_last_retried_idx` had been on
+  `import_attempt_count` since the Jan 2025 retry-stats refactor,
+  but the query orders by `retry_attempt_count` — a different
+  column. Replaced with `bundles_active_retry_priority_idx` on
+  `(last_fully_indexed_at, retry_attempt_count, last_retried_at)`.
+  Live measurement: 4.32 s → 20.5 ms per call.
+
+- **Shared Keep-Alive HTTP Agents in `GatewaysDataSource`
+  (f487dcaa)**: `axios.create()` was called per request without
+  agent configuration, so every request opened a fresh TCP+TLS
+  connection that closed after the response — sending sockets
+  through ~60 s TIME_WAIT. Under high `ANS104_DOWNLOAD_WORKERS`,
+  500+ closed sockets accumulated in `ss -s`. Per-gateway-URL
+  agent cache with `keepAlive: true` eliminates the churn.
+
+## [Release 78] - 2026-05-08
+
+This is a **recommended release** focused on **request-cancellation
+plumbing**, **memory-safety hardening across data fetch paths**, and
+**indexer backpressure**. Key highlights include **end-to-end
+`AbortSignal` threading through GraphQL resolvers, attribute fetchers,
+chunk fetches, and the trusted-node request queue** so client
+disconnects no longer leave zombie work pinned on shared queues; a
+**byte-range / Range-request hardening pass (PE-9081)** that closes
+multiple paths through which oversized or truncated upstream responses
+silently pinned large `Buffer`s in the external memory pool; and
+**indexer backpressure** via batched matched-item draining
+(`BUNDLE_DATA_ITEM_DRAIN_BATCH`) and hard caps on the
+`DataItemIndexer` / `Ans104DataIndexer` queues with drop-on-full
+recovery via `bundle-repair-worker`. Other notable fixes: stale ArNS
+resolution-failure caching that poisoned upstream nginx caches with
+the "unregistered" placeholder (PE-9072), a `CompositeArNSResolver`
+fast-fail fallback gap during AO/CU flaps (PE-9075), a bundles
+root-atom consistency bug that crashed the SQLite worker on optimistic
+indexing races (PE-9073), an envoy `/tx` prefix routing fix for txids
+starting with `tx` (PE-9079), an export-parquet metric-cardinality
+bloat fix (PE-9078), an `Ans104OffsetSource` stream-lifecycle leak
+(PE-9077), and a runtime dependency declaration for
+`@ardrive/turbo-sdk` (PE-9074). Adds a substantial set of new
+observability metrics for GraphQL request volume + cancellations,
+attribute-fetch source attribution, and Node.js process / event-loop
+saturation.
+
+### Added
+
+- **`CACHE_APEX_MAX_AGE` Configuration**: New environment variable that
+  bounds the `Cache-Control` `max-age` returned for `APEX_TX_ID` responses
+  (default 3600s, 1 hour) and adds the `must-revalidate` directive.
+  Operators can now rotate `APEX_TX_ID` without leaving upstream proxies
+  serving the previous content for the data-layer cache lifetime
+  (potentially up to `CACHE_STABLE_MAX_AGE` with `immutable`). See
+  PE-9072.
+
+- **GraphQL Request Cancellation + Source-Attribution Metrics
+  (PE-9087)**: A single `AbortSignal` composed from the express request
+  close event and a configurable server-side deadline is now threaded
+  through every GraphQL resolver and downstream attribute fetcher.
+  When a client disconnects (or the deadline elapses), in-flight
+  attribute fetches and `arweaveClient` requests cancel immediately
+  instead of running to completion against arweave.net while their
+  results are discarded. New env var `GRAPHQL_RESOLVER_DEADLINE_MS`
+  (default 12000ms; set to `0` to disable) caps server-side resolver
+  runtime. New metrics: `graphql_requests_total` (denominator for
+  cancellation-rate alerts), `graphql_resolver_cancellations_total`
+  with `{reason="client_disconnect"|"deadline_exceeded"}`,
+  `attribute_fetch_total` and `attribute_fetch_duration_seconds`
+  with `{kind, subject, source, outcome}` labels for end-to-end
+  source attribution of L1 attribute fetches. Also fixes a bug where
+  `getTransactionAttributes` always returned `owner: null` for L1
+  transactions even when the wallet was already cached, forcing every
+  owner query to round-trip to arweave.net.
+
+- **Indexer Backpressure: Queue Caps + Batched Matched-Item Drain
+  (PE-9089 + PE-9086)**: The unbundler's matched-item firehose now
+  buffers in-process and drains in `setImmediate` batches sized by
+  `BUNDLE_DATA_ITEM_DRAIN_BATCH` (default 100), guaranteeing
+  event-loop turns for SQLite worker replies and other I/O when
+  large bundles produce thousands of cross-thread messages per
+  second. Buffer depth is exposed as
+  `queue_length{queue_name="matchedItemBuffer"}`. The
+  `DataItemIndexer` and `Ans104DataIndexer` queues now enforce hard
+  caps (`DATA_ITEM_INDEXER_QUEUE_SIZE` and
+  `ANS104_DATA_INDEXER_QUEUE_SIZE`, both default 500000; set `0` to
+  disable). Non-prioritized items pushed at the cap are dropped and
+  counted in `data_items_dropped_total{queue_name}`; the
+  `bundle-repair-worker` recovers the dropped items on its next
+  cycle, so dropping is a backpressure release valve, not data loss.
+  Backpressure and depth checks are now O(1) tracked counters
+  instead of linked-list walks.
+
+- **Node.js Process and Event-Loop Observability Metrics**: The
+  default `prom-client` collectors are now enabled, exposing
+  `process_resident_memory_bytes`, `nodejs_heap_size_*`,
+  `nodejs_eventloop_lag_seconds`, `nodejs_gc_duration_seconds`, and
+  `nodejs_active_handles_total`. Adds a new
+  `nodejs_event_loop_utilization` gauge (0..1, sampled at scrape
+  time) — the most reliable signal for detecting main-thread
+  saturation, since lag percentiles can read near-zero while the
+  loop is fully pegged. Adds a `bundle_data_item_count` histogram
+  (buckets up to 5M items) so heap and queue spikes can be
+  correlated with the bundle size that triggered them rather than
+  with aggregate ingest throughput.
+
+### Changed
+
+- **Manifest Resolution Type Surfaced**: `ManifestResolution` now carries
+  an optional `resolutionType` field (`'path' | 'index' | 'fallback'`)
+  populated by `StreamingManifestPathResolver`. Used by the data handler
+  to apply different `Cache-Control` policies per resolution type — see
+  Fixed below. The field is optional so external implementations of
+  `ManifestPathResolver` remain compatible.
+
+### Fixed
+
+- **Stale ArNS Resolution-Failure Caching (affects all gateways by
+  default)**: `ARNS_NOT_FOUND_ARNS_NAME` defaults to `'unregistered_arns'`,
+  so on every failed ArNS resolution the middleware sets `req.dataId` to
+  the resolved placeholder and calls `dataHandler` without setting any
+  `Cache-Control`. `setDataHeaders` then applied the data-layer ladder —
+  most commonly `CACHE_UNSTABLE_TRUSTED_MAX_AGE` (default 12h, but some
+  operators run 90d). Result: the "Make this domain space yours"
+  placeholder cached upstream (nginx honors upstream `Cache-Control`)
+  and downstream long after a name actually registered. Same bug class
+  on the `ARNS_NOT_FOUND_TX_ID` and `APEX_TX_ID` branches, and on
+  manifest fallback responses where the URL → data-id binding is
+  mutable across manifest revisions.
+
+  Fixes:
+  - `ARNS_NOT_FOUND_TX_ID` and `ARNS_NOT_FOUND_ARNS_NAME` resolved-404
+    responses now emit
+    `public, max-age=${CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`
+    (default 60s).
+  - Manifest **fallback** responses emit the same short `Cache-Control`,
+    overriding any longer ANT TTL set by the ArNS middleware. Path- and
+    index-resolved manifest responses still inherit the ANT TTL.
+  - `APEX_TX_ID` responses are bounded by `CACHE_APEX_MAX_AGE` with
+    `must-revalidate` (see Added).
+  - `sendNotFound` 404 responses now emit `must-revalidate` instead of
+    `immutable`. (PE-9072)
+
+  **Operator one-time sweep:** entries already poisoned in nginx caches
+  must be evicted manually — grep cache files for the placeholder's
+  `X-AR-IO-Data-Id` (or for the resolved id of `unregistered_arns` on
+  default-config gateways) and remove matches.
+
+- **ArNS cached fallback on fast-fail (PE-9075)**:
+  `CompositeArNSResolver` previously fell back to a cached resolution
+  only when fresh resolution exceeded
+  `ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS`. When fresh resolution
+  returned `undefined` faster than the timeout (names cache miss,
+  AO/CU dry-run error swallowed to undefined), the fallback didn't
+  fire and the gateway dropped through to `ARNS_NOT_FOUND_ARNS_NAME`
+  — serving the "unregistered" placeholder for names with valid
+  cached resolutions during AO/CU flaps. Now falls back to the
+  cached resolution whenever fresh has no resolved id, matching the
+  comment-documented intent. New metric
+  `arns_cached_resolution_fallback_on_empty_total` counts how often
+  this fires.
+
+- **Byte-Range and Range-Request Hardening (PE-9081)**: Closes a set
+  of related defects across the byte-range fetch paths that allowed
+  oversized or truncated upstream responses to silently pass through
+  to consumers and pin large `Buffer`s in the external memory pool.
+  All byte-range sources now enforce a symmetric contract: the
+  upstream `content-length` must equal the requested region size, and
+  responses that exceed the requested range are truncated by a
+  bounded transform that destroys the underlying socket on close.
+  `attribute-fetchers` rejects signature/owner attributes whose size
+  is `0` or undefined, and `fetchDataFromParent` pre-allocates its
+  result buffer and aborts on the first oversize chunk (closing an
+  unbounded accumulator path). `contiguous-data-byte-range-source`
+  and `http-byte-range-source` now pass `maxContentLength` to axios
+  to bound client-side buffering, and `ar-io-data-source` /
+  `gateways-data-source` apply matching `206`-when-`Range`,
+  `content-length` guards, and per-region byte caps.
+
+- **AbortSignal Threading Through Chunk Fetches and Trusted-Node
+  Path (PE-9076)**: When a client request aborted, the cancellation
+  signal had no path into `trustedNodeRequestQueue` or the
+  bucket-wait loops, so abandoned client requests still issued HTTP
+  calls to arweave.net whose responses had nowhere to go.
+  `trustedNodeRequest` now checks `signal.throwIfAborted()` at
+  entry, after the bucket wait, and between tokens, releasing queue
+  capacity immediately on disconnect. A new `abortablePromiseRace`
+  helper isolates caller signals from the shared
+  `chunkPromiseCache`, so a cancelled caller bails out without
+  cancelling the underlying fetch for other waiters.
+
+- **ANS-104 Offsets Stream Lifecycle Repair (PE-9077)**: Parsing
+  paths in `Ans104OffsetSource` consume only a bounded prefix of the
+  stream returned by `getData` and previously dropped the reference
+  without destroying the stream. Under axios `responseType: 'stream'`
+  the unread tail stayed pinned in the `IncomingMessage` external
+  buffer pool — invisible to V8 — until the underlying socket was
+  destroyed by eventual GC or unrelated cleanup. The parsing paths
+  in `parseDataItemHeader`, `extractDataItemMeta`, and
+  `getDataItemOffset` now explicitly destroy the stream on both
+  success and error.
+
+- **Envoy `/tx` Path Routing Fix (PE-9079)**: A redundant `/tx`
+  prefix route in `envoy.template.yaml` shadowed the more specific
+  `/tx/` rule for transactions whose ids start with the literal
+  string "tx". Those requests were being routed to the
+  `trusted_arweave_nodes` cluster intended for header-prefixed
+  paths instead of the gateway data path, producing incorrect
+  cache headers and skipping peer diversity. The redundant route
+  is removed.
+
+- **Export-Parquet Job-Status Metric Cardinality
+  Normalization (PE-9078)**: The
+  `/ar-io/admin/export-parquet/status/:jobId` route was falling
+  through to the admin catch-all in the `normalizePath` helper, so
+  every `randomUUID`-generated `jobId` became a permanent label
+  value on `http_request_duration_seconds`. Combined with
+  clickhouse-auto-import's polling cadence, metric cardinality grew
+  unbounded over time and inflated scrape latency on indexer
+  deployments. The path is now explicitly normalized alongside the
+  singleton bundle-status endpoint.
+
+- **Bundles Root-Atom Consistency + Optimistic-Indexing Fix
+  (PE-9073)**: Fixes two interacting defects that caused the
+  indexer's SQLite worker to crash when the optimistic data-item
+  admin endpoint (`/ar-io/admin/queue-data-item`) raced with
+  ANS-104 unbundling. The `new_data_items` table enforces a "root
+  atom" invariant on eleven bundling-metadata fields (`parent_id`,
+  `root_transaction_id`, `root_parent_offset`, `data_offset`,
+  `offset`, `size`, `signature_offset`, `signature_size`,
+  `owner_offset`, `owner_size`, `signature_type`) — they must move
+  together or remain entirely `NULL` together. The admin endpoint
+  unconditionally nulled three of them on every re-POST, so
+  repeated admin POSTs after an unbundle regressed back-filled
+  values to `NULL` and the next flush failed `NOT NULL` checks.
+  The admin path now uses a dedicated `insertOptimisticDataItem`
+  (`INSERT` with the root atom hardcoded `NULL`) and the unbundler
+  uses `upsertNewDataItem` (atomic root-atom `UPDATE` with a
+  `COALESCE`-protected safety net). GraphQL signature/owner
+  resolvers guard against incomplete root-atom rows and return
+  `undefined` with a warning rather than throwing. The
+  `/ar-io/admin/debug` SQLite snapshot is now cached for
+  `GET_DEBUG_INFO_CACHE_TTL_MS` (default 5 min, set `0` to
+  disable), since each call runs unfiltered `COUNT(*)` scans on
+  the SQLite worker and frequent polling was monopolizing the
+  debug worker.
+
+- **`@ardrive/turbo-sdk` Moved to Runtime Dependencies (PE-9074)**:
+  `@ardrive/turbo-sdk` is required at runtime by the HTTPSIG
+  attestation upload path (`src/lib/httpsig-upload.ts`) but was
+  declared in `devDependencies`. The production Dockerfile's
+  `yarn install --production` pruned it, producing a silent
+  `MODULE_NOT_FOUND` at upload time and a fallback to the L1
+  upload path — which fails when the gateway wallet has no AR
+  balance. Now declared as a runtime dependency.
+
+## [Release 77] - 2026-04-24
+
+This is a **recommended release** focused on **cross-gateway GraphQL
+fan-out**, **ClickHouse query-path hardening**, and **composite query
+resilience**. Key highlights include **`GatewaysGqlQueryable`**, a new
+adapter that fans GraphQL queries out to configured upstream
+ar-io-node gateways and merges the results — letting a node compose
+its local index with broader upstream coverage — and a **parallelized
+composite ClickHouse/SQLite GraphQL path** protected by a SQLite
+circuit breaker that surfaces `PARTIAL_RESULT` warnings via
+`extensions.warnings` instead of silent partials. ClickHouse gets
+several query-path improvements: **dropping `FINAL` in favor of
+`LIMIT 1 BY` dedupe** to re-enable projection planning, a new
+**`owner_address` bloom with projection skipping on tag filters**, a
+**`tag_names` / `tag_values` fix for `owner_projection`**, a
+**configurable query timeout** (default 3s), and a
+**`max_rows_to_read` guardrail** that fails noisy full-scans fast. It
+also adds **per-job status tracking** to the Parquet export admin API
+and bundles an **Observer update to `ddd3a9c`** with reference-gateway
+chunk-header offset validation and continuous-observer reliability
+hardening, alongside a set of **ClickHouse auto-import reliability
+fixes**.
+
+### Added
+
+- **Fan-Out GraphQL Over Upstream Gateways (`GatewaysGqlQueryable`)**: A
+  new `GqlQueryable` adapter fans GraphQL queries out to configured
+  upstream ar-io-node gateways and merges the results, letting a node
+  act as a thin fan-out proxy or compose its local index with upstream
+  sources for broader coverage. Single-record queries use
+  first-non-null resolution; connection queries k-way merge by the
+  ar-io-node cursor tuple and dedupe by id. Per-endpoint circuit
+  breakers isolate slow or failing upstreams. Configured via
+  `GATEWAYS_GQL_URLS`; disabled by default.
+
+- **Configurable ClickHouse GraphQL Query Timeout**: The ClickHouse GQL
+  backend now applies a configurable timeout both server-side (as
+  `max_execution_time`, so ClickHouse aborts runaway queries and frees
+  resources) and client-side (as the HTTP `request_timeout`, with a 2s
+  grace window so the server-side timeout error surfaces before the
+  client aborts). Default 3s.
+
+- **`max_rows_to_read` Guardrail on ClickHouse GraphQL Queries**: Every
+  GraphQL query against the ClickHouse `transactions` table now appends
+  `SETTINGS max_rows_to_read = N`. Queries that would scan more than the
+  configured threshold throw `Code: 158: Limit for rows ... exceeded`
+  instead of silently scanning the whole table — catches
+  projection-shadowing bugs and planner regressions where a skip index
+  is bypassed. Default 10M rows (~20% of current table size); tunable
+  via `CLICKHOUSE_GQL_MAX_ROWS_TO_READ`.
+
+- **Per-Job Status Tracking for Parquet Export API**:
+  `POST /ar-io/admin/export-parquet` now returns a `jobId`, and the
+  exporter keeps a bounded per-job history (32 entries) so concurrent
+  callers can each poll their own record at
+  `GET /ar-io/admin/export-parquet/status/:jobId`. The legacy singleton
+  status endpoint is retained for back-compat and still reflects the
+  most-recent update. `scripts/parquet-export` prefers the per-job
+  endpoint when a `jobId` is returned and falls back to the
+  singleton-with-drift-detection path for older gateways.
+
+### Changed
+
+- **Observer Update to `ddd3a9c`**: Bundles two upstream PRs on top of
+  the previous `21098d2` pin.
+  - **Reference-gateway chunk-header offset validation**: The observer
+    now HEADs the reference gateway's `/chunk/{offset}/data` and anchors
+    the advertised `x-arweave-chunk-*` headers (tx id, boundaries, data
+    root) to the chain via `/tx/{id}/offset` and `/tx/{id}`, replacing
+    the block-and-tx binary search as the default offset-validation
+    path. Typical cost drops from ~20–30 node lookups per offset to one
+    HEAD plus two O(1) lookups per unique tx, with a per-tx LRU cache
+    for repeated offsets. Any header/chain mismatch or missing header
+    falls back to the legacy chain search, so older gateways keep
+    working. New metric `observer_chunk_metadata_anchor_total{result}`
+    (hit / cache_hit / metadata_missing / mismatch / error / fallback)
+    tracks the rollout. Gateways that return an HTTP error on the new
+    probe are no longer blacklisted from the shared pool — only
+    transport failures do.
+  - **Continuous observer reliability hardening**: The per-gateway
+    schedule map is replaced with a flat list of `ScheduledObservation`
+    events so duplicates, restart catch-up, and overdue retries are
+    deterministic (legacy state auto-migrates on load). An explicit
+    submission deadline (`windowEnd + submissionBufferMs`) now bounds
+    the epoch — once exceeded, the scheduler clears pending work,
+    marks the epoch `expired`, and stops issuing observations instead
+    of spinning on stale state. Finalization is gated on both the
+    window being complete and the pending queue being empty, and only
+    flips `reportSubmitted` on a successful submit so transient
+    submit failures retry. Unsubmitted prior epochs are discarded on
+    epoch transition rather than force-finalized into the wrong epoch.
+  - **Report telemetry**: Reports now record each gateway's `release`
+    field from `/ar-io/info`, a `yarn summarize` script prints
+    pass/fail counts grouped by release, and offset rendering now
+    shows `<failures>/<observed> (<pct>)` so the denominator reflects
+    the sampled subset.
+
+- **ClickHouse GraphQL query no longer uses `FINAL`**: The composite
+  ClickHouse backend previously issued `FROM transactions AS t FINAL` to
+  deduplicate unmerged `ReplacingMergeTree` versions at read time. `FINAL`
+  prevented `owner_projection` from being selected and forced a
+  `PrimaryKeyExpand` that widened the skip-index-pruned granule set by
+  ~4×. It is replaced with a `LIMIT 1 BY height, block_transaction_index,
+  is_data_item, id` clause that dedupes in-engine as a post-sort filter
+  without disabling projection planning or PREWHERE push-down. Safe
+  because Arweave transaction data is immutable: all versions of a given
+  primary key are byte-identical by construction.
+
+- **Composite ClickHouse GraphQL Parallelized With SQLite Circuit
+  Breaker**: The `CompositeClickHouseDatabase` now runs its ClickHouse
+  and SQLite legs concurrently instead of serially, and wraps the
+  SQLite leg in an opossum circuit breaker. ClickHouse errors
+  (timeout, `max_rows_to_read`) still propagate to the caller, while
+  SQLite failures degrade the response to ClickHouse-only results with
+  a `PARTIAL_RESULT` warning attached via GraphQL `extensions.warnings`
+  — ending silent partials for tip-of-chain rows and for the
+  single-record `transaction(id)` lookup, which previously returned a
+  bare `null` when SQLite was unavailable. The ClickHouse max-height
+  boundary-optimization cache is now read non-blocking from the request
+  path, with a background refresh keeping it warm. Fan-out preserves
+  warnings end-to-end: `RemoteGqlQueryable` pulls upstream
+  `extensions.warnings` off each response, `GatewaysGqlQueryable`
+  merges them across sources, and synthesizes `UPSTREAM_UNAVAILABLE` /
+  `UPSTREAM_CIRCUIT_OPEN` warnings for partially-failed aggregates that
+  were previously logged-and-dropped. New env vars under
+  `CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_*` (defaults: timeout 5000ms,
+  error threshold 80%, reset timeout 60000ms, rolling window 30000ms).
+
+- **ClickHouse `owner_address` Bloom + Skip Projection on Tag Filters**:
+  ClickHouse projections cannot carry inline skip indexes, so
+  owner+tag GraphQL queries that routed through `owner_projection`
+  scanned every granule within the owner range. An `owner_address`
+  bloom filter is now defined on the main `transactions` table, and
+  the per-query `optimize_use_projections = 0` guard is extended to
+  tag filters. Owner-only queries still benefit from
+  `owner_projection`'s sort order; owner+tag queries now fall back to
+  the main table where `id_bloom` / `tag_names_bloom` /
+  `tag_values_bloom` / `owner_address_bloom` can prune granules across
+  all three dimensions. Existing deployments get the index registered
+  via an idempotent `ALTER TABLE ... ADD INDEX IF NOT EXISTS` on the
+  next `clickhouse-import` cycle; a manual
+  `MATERIALIZE INDEX owner_address_bloom` is required to populate the
+  index on existing parts.
+
+- **Parquet Export Defaults to Include L1 Transactions and Tags**:
+  `ParquetExporter.export()` defaults now align with the
+  `scripts/parquet-export` CLI wrapper and the auto-verify harness,
+  both of which already included L1 by default. Callers that want
+  L2-only output must now pass `skipL1Transactions` /
+  `skipL1Tags` explicitly.
+
+### Fixed
+
+- **ClickHouse `owner_projection` now usable for tag-filtered owner queries**:
+  The projection was previously defined with `SELECT *`, which in ClickHouse
+  excludes `MATERIALIZED` columns — so `tag_names` and `tag_values` were
+  absent from the projection and the optimizer rejected it for any query
+  with predicates on those columns (which includes all tag-filtered GraphQL
+  queries). The projection body is now `SELECT *, tag_names, tag_values`, so
+  the optimizer picks `owner_projection` for owner-scoped queries and reads
+  orders of magnitude fewer granules. Existing deployments need a one-time
+  manual migration (`DROP PROJECTION` / `ADD PROJECTION` / `MATERIALIZE
+  PROJECTION`) — see the inline comment in
+  `src/database/clickhouse/schema.sql`. Fresh deployments get the corrected
+  projection from the `CREATE TABLE` body with no operator action required.
+
+- **GraphQL `Block.timestamp` Non-Nullable Field Error**: Addresses a
+  "Cannot return null for non-nullable field Block.timestamp" error
+  that could surface when resolving blocks with incomplete data.
+
+- **GraphQL Data Item Signature Fetch Falls Back to `NOT_FOUND`**: The
+  data-item path in `resolveTxSignature` returned the fetcher result
+  directly, so an `undefined` from
+  `SignatureFetcher.getDataItemSignature` (e.g., missing attributes or
+  a stream failure reading from the parent bundle) would trigger a
+  "Cannot return null for non-nullable field" error on the `String!`
+  signature field. The data-item path now mirrors the transaction
+  path and falls back to `NOT_FOUND`.
+
+- **`clickhouse-auto-import` Honors `SQLITE_DATA_PATH`**: The
+  `clickhouse-auto-import` container had its SQLite bind mount
+  hardcoded to `./data/sqlite`, while `core` used
+  `${SQLITE_DATA_PATH:-./data/sqlite}`. When `SQLITE_DATA_PATH` was
+  set, the two containers diverged: the daemon's `batch_has_data`
+  pre-check resolved to a missing path and silently failed open, so
+  empty height ranges were still sent through the full export/import
+  pipeline. The mount is now consistent with core.
+
+- **Fail-Fast on ClickHouse GraphQL Rejection**: Awaiting
+  `Promise.allSettled` gated ClickHouse errors on the SQLite leg's
+  breaker timeout. The composite flow now awaits ClickHouse first and
+  rethrows immediately, absorbing SQLite rejections eagerly so bailing
+  out early does not emit an unhandled rejection.
+
+- **Reject Concurrent Parquet Exports + Skip Empty ETL Ranges**: The
+  auto-import loop previously wasted cycles (and logged spurious
+  "Input directory does not exist" / "Parquet file too short" errors)
+  on batches that either collided with a still-running export or
+  spanned empty height ranges. The admin endpoint now returns `409`
+  instead of swallowing the rejection, the exporter script surfaces a
+  clear error when the singleton status is stale, and batches with no
+  source rows short-circuit via a `sqlite3` pre-check.
+
+- **Hive-Layout ClickHouse Importer Requires `blocks` and
+  `transactions` Files**: The Hive-layout importer iterated a
+  per-table glob; when no files matched, bash left the literal pattern
+  string in the loop variable and the `-f` check silently
+  short-circuited, so the partition reported success even though zero
+  required files were imported — combined with export races that
+  produced empty staging dirs, this was silently dropping data. The
+  `matched_count` validation from the flat-dir path is now ported so
+  `blocks` and `transactions` each must contribute at least one file;
+  `tags` may still be empty.
+
+- **GraphQL Boundary Skips `minHeight` on SQLite "New" Tables**: The
+  ClickHouse/SQLite GraphQL boundary raises `minHeight` to route
+  historical queries away from SQLite. Applied to `new_transactions` /
+  `new_data_items`, the resulting `height >= :minHeight` silently
+  dropped pending rows whose height is `NULL`. Because the "new"
+  tables only hold unstable/recent data that ClickHouse never covers,
+  the predicate is now skipped entirely for those sources.
+
 ## [Release 76] - 2026-04-17
 
 This is a **recommended release** focused on **response signing**,

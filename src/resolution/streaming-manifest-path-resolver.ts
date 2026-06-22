@@ -41,12 +41,21 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
     path: string | undefined,
   ): Promise<ManifestResolution> {
     this.log.info('Resolving manifest path from data...', { id, path });
-    const resolvedId = await resolveManifestStreamPath(data.stream, path);
-    this.log.info('Resolved manifest path from data', { id, path, resolvedId });
+    const { id: resolvedId, resolutionType } = await resolveManifestStreamPath(
+      data.stream,
+      path,
+    );
+    this.log.info('Resolved manifest path from data', {
+      id,
+      path,
+      resolvedId,
+      resolutionType,
+    });
     return {
       id,
       resolvedId,
       complete: true,
+      resolutionType,
     };
   }
 }

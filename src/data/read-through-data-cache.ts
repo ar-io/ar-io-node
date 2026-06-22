@@ -4,31 +4,31 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { Span } from '@opentelemetry/api';
 import crypto from 'node:crypto';
 import * as EventEmitter from 'node:events';
-import { Readable, pipeline } from 'node:stream';
+import { PassThrough, Readable, Transform, pipeline } from 'node:stream';
 import winston from 'winston';
 
+import { PREFERRED_ARNS_BASE_NAMES, PREFERRED_ARNS_NAMES } from '../config.js';
+import { verificationPriorities } from '../constants.js';
 import * as events from '../events.js';
-import { currentUnixTimestamp } from '../lib/time.js';
-import { Semaphore } from '../lib/semaphore.js';
-import { startChildSpan } from '../tracing.js';
-import { Span } from '@opentelemetry/api';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { Semaphore } from '../lib/semaphore.js';
+import { currentUnixTimestamp } from '../lib/time.js';
+import * as metrics from '../metrics.js';
 import { KvJsonStore } from '../store/kv-attributes-store.js';
+import { startChildSpan } from '../tracing.js';
 import {
   ContiguousData,
+  ContiguousDataAttributesStore,
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
-  ContiguousDataAttributesStore,
-  RequestAttributes,
   ContiguousMetadata,
+  RequestAttributes,
 } from '../types.js';
-import * as metrics from '../metrics.js';
 import { DataContentAttributeImporter } from '../workers/data-content-attribute-importer.js';
-import { PREFERRED_ARNS_NAMES, PREFERRED_ARNS_BASE_NAMES } from '../config.js';
-import { verificationPriorities } from '../constants.js';
 
 const MAX_MRU_ARNS_NAMES_LENGTH = 10;
 
@@ -421,7 +421,13 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         size,
         {
           offset: (region?.offset ?? 0) + parentData.offset,
-          size,
+          // Preserve the caller's requested slice size. Falling back to
+          // the child's full data size here (the previous behavior) made
+          // FsDataStore open the parent file with end=start+child_size-1
+          // and emit up to that many bytes — for BDI-nested items that's
+          // hundreds of MB per request, which then trips strict size
+          // checks in callers like fetchDataFromParent (PE-9098).
+          size: region?.size ?? size,
         },
       );
     }
@@ -435,6 +441,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     region,
     parentSpan,
     signal,
+    acceptContentType,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
@@ -444,6 +451,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     };
     parentSpan?: Span;
     signal?: AbortSignal;
+    acceptContentType?: (contentType: string | undefined) => boolean;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'ReadThroughDataCache.getData',
@@ -468,7 +476,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // Check for abort before starting
       signal?.throwIfAborted();
       // Get data attributes
-      const attributes = await this.dataAttributesStore.getDataAttributes(id);
+      let attributes = await this.dataAttributesStore.getDataAttributes(id);
 
       if (attributes) {
         span.setAttributes({
@@ -478,6 +486,50 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           'data.verified': attributes.verified,
           'data.content_type': attributes.contentType,
         });
+      }
+
+      // PE-9099: lazy poison eviction. If the caller supplied a
+      // content-type predicate and the cached attributes record a
+      // content-type the caller refuses (e.g., text/html for a
+      // request that expects an ANS-104 bundle, a known footprint of
+      // legacy gateway S3 caches poisoned with `gateway.bundlr.network`
+      // parking pages), drop the on-disk blob and treat this request
+      // as a cache miss. The next successful cache write (after a
+      // fall-through to a clean source) will overwrite the stale
+      // attributes with the correct content-type, healing the entry
+      // for future requests.
+      if (
+        acceptContentType !== undefined &&
+        attributes !== undefined &&
+        !acceptContentType(attributes.contentType)
+      ) {
+        span.addEvent('Evicting poisoned cache entry', {
+          'cache.evicted.id': id,
+          'cache.evicted.hash': attributes.hash,
+          'cache.evicted.content_type': attributes.contentType,
+        });
+        this.log.warn('Evicting poisoned cache entry', {
+          id,
+          hash: attributes.hash,
+          contentType: attributes.contentType,
+        });
+        metrics.poisonedCacheEvictionsTotal.inc({
+          content_type: attributes.contentType ?? 'unknown',
+        });
+        if (attributes.hash !== undefined) {
+          try {
+            await this.dataStore.delete(attributes.hash);
+          } catch (err: any) {
+            this.log.warn('Failed to delete poisoned cache blob', {
+              id,
+              hash: attributes.hash,
+              message: err?.message,
+            });
+          }
+        }
+        // Clear attributes so the rest of getData() falls through
+        // as if this were a cold cache miss.
+        attributes = undefined;
       }
 
       if (attributes?.hash !== undefined) {
@@ -607,6 +659,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         region,
         parentSpan: span,
         signal,
+        acceptContentType,
       });
       const upstreamDuration = Date.now() - upstreamStart;
 
@@ -627,8 +680,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         'data.trusted': data.trusted,
       });
 
-      data.stream.setMaxListeners(Infinity); // Suppress listener leak warnings
-
       // Skip caching when serving regions to avoid persisting data fragments
       // and (more importantly) writing invalid ID to hash relationships in the
       // DB, and when data size is zero to avoid unnecessary storage operations
@@ -640,209 +691,276 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
 
-        pipeline(data.stream, cacheStream, async (error: any) => {
-          const cachingDuration = Date.now() - cachingStart;
-          if (error !== undefined) {
-            // Handle abort errors specially - just log at debug level
-            if (error.name === 'AbortError') {
-              span.addEvent('Caching aborted due to client disconnect', {
+        // Tee the upstream stream so the cache pipeline and downstream
+        // consumers (DataImporter, HTTP /raw/ responses) operate on
+        // independent stream objects.
+        //
+        // The wedge this fixes: returning the inner `data.stream` directly
+        // gave it two consumers — `pipeline(data.stream, ...)` below AND the
+        // caller's listeners. The pipeline pauses the source for backpressure
+        // when cacheStream is slow; the caller (e.g., DataImporter) calls
+        // `.resume()` once and walks away expecting `'end'`/`'error'`. After
+        // a backpressure pause neither side re-resumes (pipeline only
+        // resumes from its own 'drain' listener, which can stall on slow
+        // disk; the caller has no resume loop). The underlying TCP
+        // IncomingMessage halts on socket recv-window-zero, the peer goes
+        // idle, and the worker is wedged forever — `'end'` never fires
+        // because the upstream never sent FIN, `'error'` never fires
+        // because no party times out the socket. PR #734's wall-clock cap
+        // on `attachStallTimeout` was supposed to be a safety net but its
+        // cleanup is triggered by pipeline's 'close', cancelling the timer
+        // before it can fire.
+        //
+        // Fix: pipeline is the sole consumer of the source IncomingMessage.
+        // A `PassThrough` (`consumerStream`) becomes the new `data.stream`
+        // returned to callers. The hashing Transform writes each chunk to
+        // both its normal output (→ cacheStream) AND consumerStream — a
+        // synchronous fan-out — and the pipeline callback signals
+        // completion on consumerStream via `.end()` / `.destroy(error)`.
+        // Backpressure now isolates: cache write speed can't starve the
+        // caller, and a stalled consumer can't pause the source.
+        const consumerStream = new PassThrough();
+
+        // Hash + byte-count chunks inside a Transform so backpressure flows
+        // end-to-end on the cache branch (data.stream → hashingStream →
+        // cacheStream). Tee the same chunk to consumerStream synchronously.
+        // We deliberately ignore consumerStream.write()'s return value: a
+        // slow consumer buffers in memory rather than backpressuring the
+        // shared pipeline. For DataImporter (which `.resume()`s and
+        // discards), the buffer stays empty. For HTTP `/raw/` clients,
+        // short slow periods buffer briefly on a single bundle's worth of
+        // bytes — bounded by `data.size`.
+        const hashingStream = new Transform({
+          transform(chunk: Buffer, _encoding, callback) {
+            bytesReceived += chunk.length;
+            hasher.update(chunk);
+            consumerStream.write(chunk);
+            callback(null, chunk);
+          },
+        });
+
+        pipeline(
+          data.stream,
+          hashingStream,
+          cacheStream,
+          async (error: any) => {
+            const cachingDuration = Date.now() - cachingStart;
+            if (error !== undefined) {
+              // Handle abort errors specially - just log at debug level
+              if (error.name === 'AbortError') {
+                span.addEvent('Caching aborted due to client disconnect', {
+                  'cache.duration_ms': cachingDuration,
+                });
+                this.log.debug('Caching aborted due to client disconnect', {
+                  id,
+                });
+                await this.dataStore.cleanup(cacheStream);
+                return;
+              }
+
+              span.addEvent('Cache storage failed', {
                 'cache.duration_ms': cachingDuration,
+                'error.message': error.message,
               });
-              this.log.debug('Caching aborted due to client disconnect', {
+              span.setAttribute('cache.operation.storage_error', true);
+              this.log.error('Error streaming or caching data:', {
                 id,
+                message: error.message,
+                stack: error.stack,
               });
+              // Only cleanup cacheStream - pipeline handles stream destruction
               await this.dataStore.cleanup(cacheStream);
-              return;
-            }
+            } else {
+              if (cacheStream !== undefined) {
+                const hash = hasher.digest('base64url');
 
-            span.addEvent('Cache storage failed', {
-              'cache.duration_ms': cachingDuration,
-              'error.message': error.message,
-            });
-            span.setAttribute('cache.operation.storage_error', true);
-            this.log.error('Error streaming or caching data:', {
-              id,
-              message: error.message,
-              stack: error.stack,
-            });
-            // Only cleanup cacheStream - pipeline handles stream destruction
-            await this.dataStore.cleanup(cacheStream);
-          } else {
-            if (cacheStream !== undefined) {
-              const hash = hasher.digest('base64url');
+                try {
+                  if (bytesReceived !== data.size) {
+                    span.addEvent('Skipping cache storage - size mismatch', {
+                      'data.expected_size': data.size,
+                      'data.received_size': bytesReceived,
+                    });
+                    span.setAttribute('cache.operation.size_mismatch', true);
+                    this.log.warn('Stream size mismatch - not caching', {
+                      id,
+                      expectedSize: data.size,
+                      receivedSize: bytesReceived,
+                    });
+                    await this.dataStore.cleanup(cacheStream);
+                  } else if (data.trusted === true) {
+                    // Trusted source: finalize, save with trusted: true
+                    await this.dataStore.finalize(cacheStream, hash);
+                    span.addEvent('Data cached successfully', {
+                      'cache.duration_ms': cachingDuration,
+                      'data.computed_hash': hash,
+                      'data.trusted': data.trusted,
+                    });
+                    span.setAttribute('cache.operation.stored', true);
 
-              try {
-                if (bytesReceived !== data.size) {
-                  span.addEvent('Skipping cache storage - size mismatch', {
-                    'data.expected_size': data.size,
-                    'data.received_size': bytesReceived,
-                  });
-                  span.setAttribute('cache.operation.size_mismatch', true);
-                  this.log.warn('Stream size mismatch - not caching', {
-                    id,
-                    expectedSize: data.size,
-                    receivedSize: bytesReceived,
-                  });
-                  await this.dataStore.cleanup(cacheStream);
-                } else if (data.trusted === true) {
-                  // Trusted source: finalize, save with trusted: true
-                  await this.dataStore.finalize(cacheStream, hash);
-                  span.addEvent('Data cached successfully', {
-                    'cache.duration_ms': cachingDuration,
-                    'data.computed_hash': hash,
-                    'data.trusted': data.trusted,
-                  });
-                  span.setAttribute('cache.operation.stored', true);
+                    this.log.info('Successfully cached data', { id, hash });
 
-                  this.log.info('Successfully cached data', { id, hash });
+                    this.eventEmitter?.emit(events.DATA_CACHED, {
+                      id,
+                      hash,
+                      dataSize: data.size,
+                      contentType: data.sourceContentType,
+                      cachedAt: currentUnixTimestamp(),
+                    });
 
-                  this.eventEmitter?.emit(events.DATA_CACHED, {
-                    id,
-                    hash,
-                    dataSize: data.size,
-                    contentType: data.sourceContentType,
-                    cachedAt: currentUnixTimestamp(),
-                  });
+                    try {
+                      const verificationPriority =
+                        this.calculateVerificationPriority(requestAttributes);
 
-                  try {
-                    const verificationPriority =
-                      this.calculateVerificationPriority(requestAttributes);
+                      // Fetch attributes again to get any updates (like root offsets)
+                      // that were set by the upstream data source during getData
+                      const updatedAttributes =
+                        await this.dataAttributesStore.getDataAttributes(id);
 
-                    // Fetch attributes again to get any updates (like root offsets)
-                    // that were set by the upstream data source during getData
-                    const updatedAttributes =
-                      await this.dataAttributesStore.getDataAttributes(id);
+                      this.dataContentAttributeImporter.queueDataContentAttributes(
+                        {
+                          id,
+                          dataRoot: updatedAttributes?.dataRoot,
+                          hash,
+                          dataSize: data.size,
+                          contentType: data.sourceContentType,
+                          cachedAt: currentUnixTimestamp(),
+                          verified: data.verified,
+                          verificationPriority,
+                          rootTransactionId:
+                            updatedAttributes?.rootTransactionId,
+                          rootDataItemOffset:
+                            updatedAttributes?.rootDataItemOffset,
+                          rootDataOffset: updatedAttributes?.rootDataOffset,
+                          dataItemSize: updatedAttributes?.itemSize,
+                          trusted: true,
+                        },
+                      );
 
-                    this.dataContentAttributeImporter.queueDataContentAttributes(
-                      {
-                        id,
-                        dataRoot: updatedAttributes?.dataRoot,
+                      // Update the in-memory cache with the hash so subsequent requests can find it
+                      // This prevents cache misses due to stale cache entries with offsets but no hash
+                      await this.dataAttributesStore.setDataAttributes(id, {
                         hash,
-                        dataSize: data.size,
+                        size: data.size,
                         contentType: data.sourceContentType,
-                        cachedAt: currentUnixTimestamp(),
-                        verified: data.verified,
-                        verificationPriority,
-                        rootTransactionId: updatedAttributes?.rootTransactionId,
-                        rootDataItemOffset:
-                          updatedAttributes?.rootDataItemOffset,
-                        rootDataOffset: updatedAttributes?.rootDataOffset,
-                        dataItemSize: updatedAttributes?.itemSize,
                         trusted: true,
-                      },
-                    );
-
-                    // Update the in-memory cache with the hash so subsequent requests can find it
-                    // This prevents cache misses due to stale cache entries with offsets but no hash
-                    await this.dataAttributesStore.setDataAttributes(id, {
-                      hash,
-                      size: data.size,
-                      contentType: data.sourceContentType,
-                      trusted: true,
-                    });
-                  } catch (error: any) {
-                    this.log.error('Error saving data content attributes:', {
-                      id,
-                      message: error.message,
-                      stack: error.stack,
-                    });
-                  }
-                } else if (attributes?.hash === hash) {
-                  // Untrusted source, hash matches existing: finalize but
-                  // don't update trust status
-                  await this.dataStore.finalize(cacheStream, hash);
-                  span.addEvent('Data cached successfully', {
-                    'cache.duration_ms': cachingDuration,
-                    'data.computed_hash': hash,
-                    'data.trusted': data.trusted,
-                  });
-                  span.setAttribute('cache.operation.stored', true);
-                  this.log.info(
-                    'Successfully cached untrusted data matching local hash',
-                    { id, hash },
-                  );
-                } else if (attributes?.hash === undefined) {
-                  // Untrusted source, no local hash: optimistic cache
-                  await this.dataStore.finalize(cacheStream, hash);
-                  span.addEvent('Data cached optimistically (untrusted)', {
-                    'cache.duration_ms': cachingDuration,
-                    'data.computed_hash': hash,
-                  });
-                  span.setAttribute('cache.operation.stored', true);
-
-                  this.log.info('Optimistically cached untrusted data', {
-                    id,
-                    hash,
-                  });
-                  try {
-                    const verificationPriority =
-                      this.calculateVerificationPriority(requestAttributes);
-
-                    this.dataContentAttributeImporter.queueDataContentAttributes(
-                      {
+                      });
+                    } catch (error: any) {
+                      this.log.error('Error saving data content attributes:', {
                         id,
-                        dataRoot: attributes?.dataRoot,
+                        message: error.message,
+                        stack: error.stack,
+                      });
+                    }
+                  } else if (attributes?.hash === hash) {
+                    // Untrusted source, hash matches existing: finalize but
+                    // don't update trust status
+                    await this.dataStore.finalize(cacheStream, hash);
+                    span.addEvent('Data cached successfully', {
+                      'cache.duration_ms': cachingDuration,
+                      'data.computed_hash': hash,
+                      'data.trusted': data.trusted,
+                    });
+                    span.setAttribute('cache.operation.stored', true);
+                    this.log.info(
+                      'Successfully cached untrusted data matching local hash',
+                      { id, hash },
+                    );
+                  } else if (attributes?.hash === undefined) {
+                    // Untrusted source, no local hash: optimistic cache
+                    await this.dataStore.finalize(cacheStream, hash);
+                    span.addEvent('Data cached optimistically (untrusted)', {
+                      'cache.duration_ms': cachingDuration,
+                      'data.computed_hash': hash,
+                    });
+                    span.setAttribute('cache.operation.stored', true);
+
+                    this.log.info('Optimistically cached untrusted data', {
+                      id,
+                      hash,
+                    });
+                    try {
+                      const verificationPriority =
+                        this.calculateVerificationPriority(requestAttributes);
+
+                      this.dataContentAttributeImporter.queueDataContentAttributes(
+                        {
+                          id,
+                          dataRoot: attributes?.dataRoot,
+                          hash,
+                          dataSize: data.size,
+                          contentType: data.sourceContentType,
+                          cachedAt: currentUnixTimestamp(),
+                          verified: false,
+                          verificationPriority,
+                          rootTransactionId: attributes?.rootTransactionId,
+                          rootDataItemOffset: attributes?.rootDataItemOffset,
+                          rootDataOffset: attributes?.rootDataOffset,
+                          dataItemSize: attributes?.itemSize,
+                          trusted: false,
+                        },
+                      );
+
+                      await this.dataAttributesStore.setDataAttributes(id, {
                         hash,
-                        dataSize: data.size,
+                        size: data.size,
                         contentType: data.sourceContentType,
-                        cachedAt: currentUnixTimestamp(),
-                        verified: false,
-                        verificationPriority,
-                        rootTransactionId: attributes?.rootTransactionId,
-                        rootDataItemOffset: attributes?.rootDataItemOffset,
-                        rootDataOffset: attributes?.rootDataOffset,
-                        dataItemSize: attributes?.itemSize,
                         trusted: false,
+                      });
+                    } catch (error: any) {
+                      this.log.error('Error saving data content attributes:', {
+                        id,
+                        message: error.message,
+                        stack: error.stack,
+                      });
+                    }
+                  } else {
+                    // Untrusted source, hash mismatch: don't cache
+                    span.addEvent('Skipping cache storage - hash mismatch', {
+                      'data.trusted_hash': attributes?.hash,
+                      'data.computed_hash': hash,
+                    });
+                    span.setAttribute('cache.operation.stored', false);
+                    this.log.debug(
+                      'Skipping caching of untrusted data with hash that does not match local hash',
+                      {
+                        trustedHash: attributes?.hash,
+                        streamedHash: hash,
                       },
                     );
-
-                    await this.dataAttributesStore.setDataAttributes(id, {
-                      hash,
-                      size: data.size,
-                      contentType: data.sourceContentType,
-                      trusted: false,
-                    });
-                  } catch (error: any) {
-                    this.log.error('Error saving data content attributes:', {
-                      id,
-                      message: error.message,
-                      stack: error.stack,
-                    });
+                    await this.dataStore.cleanup(cacheStream);
                   }
-                } else {
-                  // Untrusted source, hash mismatch: don't cache
-                  span.addEvent('Skipping cache storage - hash mismatch', {
-                    'data.trusted_hash': attributes?.hash,
-                    'data.computed_hash': hash,
+                } catch (error: any) {
+                  span.addEvent('Cache finalization failed', {
+                    'error.message': error.message,
                   });
-                  span.setAttribute('cache.operation.stored', false);
-                  this.log.debug(
-                    'Skipping caching of untrusted data with hash that does not match local hash',
-                    {
-                      trustedHash: attributes?.hash,
-                      streamedHash: hash,
-                    },
-                  );
+                  this.log.error('Error finalizing data in cache:', {
+                    id,
+                    message: error.message,
+                    stack: error.stack,
+                  });
                   await this.dataStore.cleanup(cacheStream);
                 }
-              } catch (error: any) {
-                span.addEvent('Cache finalization failed', {
-                  'error.message': error.message,
-                });
-                this.log.error('Error finalizing data in cache:', {
-                  id,
-                  message: error.message,
-                  stack: error.stack,
-                });
               }
             }
-          }
-        });
 
-        data.stream.on('data', (chunk) => {
-          bytesReceived += chunk.length;
-          hasher.update(chunk);
-        });
+            // Signal the consumer side of the tee. End-of-data fires after
+            // the cache finalize logic above so callers don't see 'end'
+            // before the cache write is durable. On error, propagate via
+            // destroy(err) — DataImporter's reject() handler picks it up
+            // and the worker promptly fails-and-retries instead of wedging.
+            if (error !== undefined) {
+              consumerStream.destroy(error);
+            } else {
+              consumerStream.end();
+            }
+          },
+        );
+
+        // Replace `data.stream` with the consumer-side tee branch so
+        // downstream callers (the metric listeners below, DataImporter,
+        // HTTP /raw/ pipes) only see the PassThrough — never the inner
+        // IncomingMessage that the pipeline now owns exclusively.
+        data.stream = consumerStream;
       } else {
         // Log why caching was skipped
         const reasons = [];

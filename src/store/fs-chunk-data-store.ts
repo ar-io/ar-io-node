@@ -106,6 +106,21 @@ export class FsChunkDataStore implements ChunkDataStore {
     }
   }
 
+  async del(dataRoot: string, relativeOffset: number): Promise<void> {
+    try {
+      await fs.promises.unlink(
+        this.chunkDataRootPath(dataRoot, relativeOffset),
+      );
+    } catch (error: any) {
+      // ENOENT = already gone (success). Propagate anything else so the GC
+      // caller leaves the placement row intact and retries on the next sweep
+      // rather than orphaning the on-disk bytes.
+      if (error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
   async set(
     dataRoot: string,
     relativeOffset: number,

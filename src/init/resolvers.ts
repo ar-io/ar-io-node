@@ -8,12 +8,13 @@ import { Logger } from 'winston';
 import { OnDemandArNSResolver } from '../resolution/on-demand-arns-resolver.js';
 import { TrustedGatewayArNSResolver } from '../resolution/trusted-gateway-arns-resolver.js';
 import { KVBufferStore, NameResolver } from '../types.js';
-import { AoARIORead } from '@ar.io/sdk';
+import { ARIORead } from '@ar.io/sdk';
 import { CompositeArNSResolver } from '../resolution/composite-arns-resolver.js';
 import { RedisKvStore } from '../store/redis-kv-store.js';
 import { NodeKvStore } from '../store/node-kv-store.js';
 import { KvArNSRegistryStore } from '../store/kv-arns-base-name-store.js';
 import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js';
+import { type Rpc, type SolanaRpcApi } from '@solana/kit';
 
 const supportedResolvers = ['on-demand', 'gateway'] as const;
 export type ArNSResolverType = (typeof supportedResolvers)[number];
@@ -51,6 +52,13 @@ export const createArNSKvStore = ({
   return new NodeKvStore({ ttlSeconds, maxKeys });
 };
 
+/**
+ * Build the composite ArNS resolver chain from configured resolvers.
+ *
+ * @param solanaRpc - Shared Solana JSON-RPC client; consumed by
+ *   `OnDemandArNSResolver` for ANT lookups via `SolanaANTReadable`.
+ *   Pass through from `system.ts`'s exported `solanaRpc`.
+ */
 export const createArNSResolver = ({
   log,
   resolutionCache,
@@ -60,6 +68,7 @@ export const createArNSResolver = ({
   trustedArnsResolverHostHeader,
   networkProcess,
   overrides,
+  solanaRpc,
 }: {
   log: Logger;
   resolutionCache: KvArNSResolutionStore;
@@ -67,14 +76,16 @@ export const createArNSResolver = ({
   registryCache: KvArNSRegistryStore;
   trustedGatewayUrl?: string;
   trustedArnsResolverHostHeader?: string;
-  networkProcess?: AoARIORead;
+  networkProcess: ARIORead;
   overrides?: {
     ttlSeconds?: number;
   };
+  solanaRpc: Rpc<SolanaRpcApi>;
 }): NameResolver => {
   const resolverMap: Record<ArNSResolverType, NameResolver | undefined> = {
     'on-demand': new OnDemandArNSResolver({
       log,
+      solanaRpc,
     }),
     gateway:
       trustedGatewayUrl !== undefined

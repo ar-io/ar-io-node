@@ -20,6 +20,64 @@ import {
 import winston from 'winston';
 import { toB64Url } from '../lib/encoding.js';
 import { isEmptyString } from '../lib/string.js';
+import * as metrics from '../metrics.js';
+import { startChildSpan } from '../tracing.js';
+import { isAcceptableBundleContentType } from '../lib/ans-104.js';
+
+type AttributeKind = 'owner' | 'signature';
+type AttributeSubject = 'data_item' | 'transaction';
+type AttributeSource =
+  | 'store'
+  // Owner-key store hits split by which key served them (PE-9120):
+  // `store_address` is the shared owner_address key (cross-item reuse),
+  // `store_id` is the per-item / admin-written key.
+  | 'store_address'
+  | 'store_id'
+  | 'attributes'
+  | 'parent_data'
+  | 'chain'
+  | 'derived'
+  | 'incomplete_root';
+type AttributeOutcome = 'hit' | 'aborted' | 'error' | 'not_found';
+// Which owner_store key served a cache hit (PE-9120). Subset of AttributeSource.
+type OwnerCacheSource = 'store_address' | 'store_id';
+
+/**
+ * Classify a thrown error into an `AttributeOutcome` for the metric label.
+ * Cancellation paths (express request close, server-side deadline, axios
+ * cancel) all surface as `aborted`; everything else lands in `error`.
+ */
+const outcomeForError = (
+  error: unknown,
+  signal: AbortSignal | undefined,
+): AttributeOutcome => {
+  if (signal?.aborted === true) return 'aborted';
+  const e = error as { name?: string; message?: string; code?: string };
+  if (
+    e?.name === 'AbortError' ||
+    e?.code === 'ERR_CANCELED' ||
+    (typeof e?.message === 'string' &&
+      (e.message.includes('Client disconnected') ||
+        e.message.includes('deadline')))
+  ) {
+    return 'aborted';
+  }
+  return 'error';
+};
+
+const recordAttributeFetch = (
+  kind: AttributeKind,
+  subject: AttributeSubject,
+  source: AttributeSource,
+  outcome: AttributeOutcome,
+  startMs: number,
+): void => {
+  metrics.attributeFetchCounter.inc({ kind, subject, source, outcome });
+  metrics.attributeFetchDurationHistogram.observe(
+    { kind, subject, source },
+    (Date.now() - startMs) / 1000,
+  );
+};
 
 export abstract class AttributeFetchers {
   protected log: winston.Logger;
@@ -52,29 +110,190 @@ export abstract class AttributeFetchers {
     parentId,
     offset,
     size,
+    signal,
   }: {
     parentId: string;
     offset: number;
     size: number;
+    signal?: AbortSignal;
   }): Promise<string> {
     const log = this.log.child({ method: 'fetchDataFromParent' });
+
+    // Validate inputs. A `size` of 0 or negative cannot produce a meaningful
+    // signature/owner range, and historically caused the upstream Range
+    // header to be malformed (`bytes=0--1`) — most data sources then
+    // returned the FULL parent bundle as a 200 response, which the previous
+    // implementation silently accumulated into a multi-hundred-MB Buffer
+    // pinned in this async function's saved register frame across the
+    // upstream stall. (PE-9081.)
+    if (!Number.isFinite(size) || size <= 0) {
+      throw new Error(
+        `fetchDataFromParent: invalid size ${size} (parentId=${parentId}, offset=${offset})`,
+      );
+    }
+    if (!Number.isFinite(offset) || offset < 0) {
+      throw new Error(
+        `fetchDataFromParent: invalid offset ${offset} (parentId=${parentId}, size=${size})`,
+      );
+    }
+
+    // Bail before any allocation if the caller already aborted.
+    signal?.throwIfAborted();
+
     log.debug('Fetching data from parent', { parentId, offset, size });
 
-    const { stream } = await this.dataSource.getData({
-      id: parentId,
-      region: {
-        offset,
-        size,
+    // Investigation span (PE-9098): wraps the upstream fetch + drain so
+    // SequentialDataSource / ReadThroughDataCache child spans nest under
+    // this attempt and identify which source served the response when the
+    // overage forensics fire below.
+    const span = startChildSpan('AttributeFetchers.fetchDataFromParent', {
+      attributes: {
+        'data.id': parentId,
+        'data.region.offset': offset,
+        'data.region.size': size,
       },
     });
 
-    let buffer = Buffer.alloc(0);
+    try {
+      const data = await this.dataSource.getData({
+        id: parentId,
+        region: {
+          offset,
+          size,
+        },
+        parentSpan: span,
+        signal,
+        // PE-9099: refuse parent-bundle responses whose content-type
+        // can't plausibly be a raw ANS-104 bundle. Defends against the
+        // in-range silent-corruption case for small bundles where the
+        // requested signature/owner offset would otherwise fall within
+        // a poisoned cache's 1134-byte parking-page payload — we'd
+        // silently store HTML bytes as cryptographic material in the
+        // attribute store. With the predicate the cache/gateway layer
+        // throws and the source chain falls through to chunks.
+        acceptContentType: isAcceptableBundleContentType,
+      });
+      const { stream } = data;
+      span.setAttributes({
+        'data.cached': data.cached,
+        'data.trusted': data.trusted,
+        'data.upstream_size': data.size,
+        'data.upstream_total_size': data.totalSize,
+      });
 
-    for await (const chunk of stream) {
-      buffer = Buffer.concat([buffer, chunk]);
+      // Pre-allocated, fixed-size buffer with offset writes. Avoids the
+      // O(N²) Buffer.concat-per-chunk shape and removes the slot-8 pinned-
+      // accumulator leak. If upstream emits more bytes than requested,
+      // destroy the stream and throw — do not silently buffer past `size`.
+      // If the caller aborts mid-stream we tear down the upstream stream
+      // and rethrow the AbortError so callers can clean up promptly.
+      const buffer = Buffer.alloc(size);
+      let bytesRead = 0;
+      // Forensic capture: first 32 bytes of the FIRST emitted chunk. Used
+      // only by the overage log path to distinguish "upstream honored
+      // offset but ignored size" (prefix looks like signature/owner bytes)
+      // from "upstream ignored region entirely" (prefix looks like a
+      // bundle header — leading zeros + small item count + 64-byte item
+      // headers).
+      let firstChunkPrefixHex: string | undefined;
+      let firstChunkLength: number | undefined;
+
+      const onAbort = () => {
+        if (
+          typeof (stream as { destroy?: () => void }).destroy === 'function'
+        ) {
+          (stream as { destroy: (err?: Error) => void }).destroy(
+            signal?.reason instanceof Error
+              ? signal.reason
+              : new Error('Aborted'),
+          );
+        }
+      };
+      if (signal !== undefined) {
+        if (signal.aborted) {
+          onAbort();
+          throw signal.reason ?? new Error('Aborted');
+        }
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      try {
+        for await (const chunk of stream) {
+          if (firstChunkPrefixHex === undefined) {
+            firstChunkLength = chunk.length;
+            firstChunkPrefixHex = chunk
+              .subarray(0, Math.min(32, chunk.length))
+              .toString('hex');
+          }
+          if (bytesRead + chunk.length > size) {
+            if (
+              typeof (stream as { destroy?: () => void }).destroy === 'function'
+            ) {
+              (stream as { destroy: () => void }).destroy();
+            }
+            // Investigation log (PE-9098): emit forensic context on
+            // overage BEFORE re-throwing so the source can be identified
+            // from the nested OTel span + the hex prefix tells us whether
+            // the source ignored `region` entirely or just ignored `size`.
+            log.warn('fetchDataFromParent overage forensics', {
+              parentId,
+              requestedOffset: offset,
+              requestedSize: size,
+              bytesAtOverage: bytesRead + chunk.length,
+              firstChunkLength,
+              firstChunkPrefixHex,
+              upstreamCached: data.cached,
+              upstreamTrusted: data.trusted,
+              upstreamSize: data.size,
+              upstreamTotalSize: data.totalSize,
+            });
+            span.setAttributes({
+              'overage.bytes_at_overage': bytesRead + chunk.length,
+              'overage.first_chunk_length': firstChunkLength,
+              'overage.first_chunk_prefix_hex': firstChunkPrefixHex,
+            });
+            throw new Error(
+              `fetchDataFromParent: upstream returned more bytes than requested ` +
+                `(parentId=${parentId}, requestedSize=${size}, ` +
+                `bytesAtOverage=${bytesRead + chunk.length})`,
+            );
+          }
+          chunk.copy(buffer, bytesRead);
+          bytesRead += chunk.length;
+        }
+      } catch (error) {
+        // Ensure the buffer reference can be GC'd promptly even when the
+        // for-await yields back to a still-pending Promise. Forward the
+        // caught error to destroy() so the abort reason is preserved when
+        // upstream is being torn down due to AbortSignal — otherwise the
+        // first destroy(reason) from the abort handler would be overwritten
+        // by a no-arg destroy() here.
+        const s = stream as {
+          destroy?: (err?: Error) => void;
+          destroyed?: boolean;
+        };
+        if (typeof s.destroy === 'function' && s.destroyed !== true) {
+          s.destroy(error as Error);
+        }
+        throw error;
+      } finally {
+        signal?.removeEventListener('abort', onAbort);
+      }
+
+      if (bytesRead !== size) {
+        throw new Error(
+          `fetchDataFromParent: short read from upstream ` +
+            `(parentId=${parentId}, requestedSize=${size}, actualSize=${bytesRead})`,
+        );
+      }
+
+      return toB64Url(buffer);
+    } catch (error) {
+      span.recordException(error as Error);
+      throw error;
+    } finally {
+      span.end();
     }
-
-    return toB64Url(buffer);
   }
 
   protected async getDataItemAttributes(
@@ -158,18 +377,22 @@ export class SignatureFetcher
     parentId,
     signatureSize,
     signatureOffset,
+    signal,
   }: {
     id: string;
     parentId?: string;
     signatureSize?: number;
     signatureOffset?: number;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getDataItemSignature' });
+    const start = Date.now();
     log.debug('Fetching data item signature', { id });
     const signature = await this.signatureStore.get(id);
 
     if (signature !== undefined) {
       log.debug('Data item signature fetched from store', { id });
+      recordAttributeFetch('signature', 'data_item', 'store', 'hit', start);
       return signature;
     }
 
@@ -183,12 +406,25 @@ export class SignatureFetcher
 
         if (dataItemAttributes === undefined) {
           this.log.warn('No attributes found for data item', { id });
+          recordAttributeFetch(
+            'signature',
+            'data_item',
+            'attributes',
+            'not_found',
+            start,
+          );
           return undefined;
         }
 
         if (typeof dataItemAttributes.signature === 'string') {
           await this.signatureStore.set(id, dataItemAttributes.signature);
-
+          recordAttributeFetch(
+            'signature',
+            'data_item',
+            'attributes',
+            'hit',
+            start,
+          );
           return dataItemAttributes.signature;
         }
 
@@ -197,37 +433,88 @@ export class SignatureFetcher
         signatureOffset = dataItemAttributes.signatureOffset;
       }
 
+      // Incomplete-root-atom guard. Two failure modes converge here:
+      //   - PE-9073: rows produced by an admin POST that arrived before the
+      //     unbundle path can have a populated parent_id but NULL
+      //     signature_offset / signature_size. Coercing those NULLs into
+      //     FsDataStore.get yields a degenerate read range
+      //     (end = offset + size - 1 = -1) and throws RangeError.
+      //   - PE-9081: a 0 / negative signatureSize would produce a malformed
+      //     Range request; upstreams that ignore malformed Range return the
+      //     full parent bundle, which fetchDataFromParent previously
+      //     accumulated into a multi-hundred-MB Buffer.
+      // Both are downstream symptoms of the same data-integrity problem
+      // (incomplete root atom). Bail out with a warning instead.
+      // `== null` catches both null (from DB rows) and undefined.
+      if (
+        parentId == null ||
+        signatureSize == null ||
+        signatureSize <= 0 ||
+        signatureOffset == null ||
+        signatureOffset < 0
+      ) {
+        log.warn(
+          'Skipping signature fetch — data item has incomplete root atom (likely a shadow row pending repair, see PE-9073 follow-up)',
+          { id, parentId, signatureSize, signatureOffset },
+        );
+        recordAttributeFetch(
+          'signature',
+          'data_item',
+          'incomplete_root',
+          'not_found',
+          start,
+        );
+        return undefined;
+      }
+
       const signature = await this.fetchDataFromParent({
         parentId,
         offset: signatureOffset,
         size: signatureSize,
+        signal,
       });
 
       await this.signatureStore.set(id, signature);
-
+      recordAttributeFetch(
+        'signature',
+        'data_item',
+        'parent_data',
+        'hit',
+        start,
+      );
       return signature;
     } catch (error) {
       log.error('Error fetching data item signature', {
         id,
         error: (error as Error).message,
       });
-
+      recordAttributeFetch(
+        'signature',
+        'data_item',
+        'parent_data',
+        outcomeForError(error, signal),
+        start,
+      );
       return undefined;
     }
   }
 
   async getTransactionSignature({
     id,
+    signal,
   }: {
     id: string;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getTransactionSignature' });
+    const start = Date.now();
     log.debug('Fetching transaction signature', { id });
 
     const signature = await this.signatureStore.get(id);
 
     if (signature !== undefined) {
       log.debug('Transaction signature fetched from store', { id });
+      recordAttributeFetch('signature', 'transaction', 'store', 'hit', start);
       return signature;
     }
 
@@ -240,28 +527,48 @@ export class SignatureFetcher
 
       if (typeof transactionAttributes?.signature === 'string') {
         await this.signatureStore.set(id, transactionAttributes.signature);
-
+        recordAttributeFetch(
+          'signature',
+          'transaction',
+          'attributes',
+          'hit',
+          start,
+        );
         return transactionAttributes.signature;
       }
 
       const signatureFromChain = await this.chainSource.getTxField(
         id,
         'signature',
+        signal,
       );
 
       if (typeof signatureFromChain === 'string') {
         await this.signatureStore.set(id, signatureFromChain);
-
+        recordAttributeFetch('signature', 'transaction', 'chain', 'hit', start);
         return signatureFromChain;
       }
 
+      recordAttributeFetch(
+        'signature',
+        'transaction',
+        'chain',
+        'not_found',
+        start,
+      );
       return undefined;
     } catch (error) {
       log.error('Error fetching transaction signature', {
         id,
         error: (error as Error).message,
       });
-
+      recordAttributeFetch(
+        'signature',
+        'transaction',
+        'chain',
+        outcomeForError(error, signal),
+        start,
+      );
       return undefined;
     }
   }
@@ -299,26 +606,155 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
     this.ownerStore = ownerStore;
   }
 
+  // Dedup concurrent owner fetches for the same owner address (PE-9120): a
+  // GraphQL page of N items by one owner resolves owner.key concurrently, so
+  // without coalescing the first page would fire N identical fetches before
+  // any of them populates the cache.
+  private readonly inFlightOwnerByAddress = new Map<
+    string,
+    Promise<string | undefined>
+  >();
+
+  /**
+   * Read the cached owner key. owner_address = sha256(owner_key), so the key is
+   * identical for every item by an owner; we cache by address for cross-item
+   * reuse and fall back to the item id for legacy / admin-written entries. The
+   * two reads race — the first hit wins (PE-9120).
+   */
+  private async readCachedOwner(
+    ownerAddress: string | undefined,
+    id: string,
+  ): Promise<{ owner: string; source: OwnerCacheSource } | undefined> {
+    const hitOrThrow = async (
+      key: string,
+      source: OwnerCacheSource,
+    ): Promise<{ owner: string; source: OwnerCacheSource }> => {
+      const value = await this.ownerStore.get(key);
+      if (value === undefined) {
+        throw new Error('owner-store miss');
+      }
+      return { owner: value, source };
+    };
+    const reads: Promise<{ owner: string; source: OwnerCacheSource }>[] = [];
+    if (ownerAddress !== undefined && ownerAddress.length > 0) {
+      reads.push(hitOrThrow(ownerAddress, 'store_address'));
+    }
+    reads.push(hitOrThrow(id, 'store_id'));
+    try {
+      return await Promise.any(reads);
+    } catch {
+      // Both reads missed (or errored) — fall through to a fresh fetch.
+      return undefined;
+    }
+  }
+
+  /**
+   * Cache an owner key under both its address (shared across the owner's items)
+   * and the item id (so legacy id-keyed reads stay warm during migration).
+   */
+  private async cacheOwner(
+    ownerAddress: string | undefined,
+    id: string,
+    owner: string | undefined,
+  ): Promise<void> {
+    if (owner === undefined) {
+      return;
+    }
+    await this.ownerStore.set(id, owner);
+    if (ownerAddress !== undefined && ownerAddress.length > 0) {
+      await this.ownerStore.set(ownerAddress, owner);
+    }
+  }
+
+  /** Collapse concurrent fetches for one owner address to a single in-flight call. */
+  private coalesceOwnerFetch(
+    ownerAddress: string | undefined,
+    subject: AttributeSubject,
+    fetch: () => Promise<string | undefined>,
+  ): Promise<string | undefined> {
+    if (ownerAddress === undefined || ownerAddress.length === 0) {
+      return fetch();
+    }
+    const existing = this.inFlightOwnerByAddress.get(ownerAddress);
+    if (existing !== undefined) {
+      // Reuse the in-flight leader only if it SUCCEEDS. A leader abort or a
+      // per-item miss (items share an owner_address but have different
+      // parent_id/offset, so retrievability can differ) must not be fanned out
+      // to concurrent callers that could resolve on their own — they fall back
+      // to their own fetch instead of inheriting the leader's failure.
+      return existing.then(
+        (leaderResult) => {
+          if (leaderResult !== undefined) {
+            metrics.ownerFetchCoalescedCounter.inc({ subject });
+            return leaderResult;
+          }
+          return fetch();
+        },
+        () => fetch(),
+      );
+    }
+    const promise = fetch().finally(() => {
+      this.inFlightOwnerByAddress.delete(ownerAddress);
+    });
+    this.inFlightOwnerByAddress.set(ownerAddress, promise);
+    return promise;
+  }
+
   async getDataItemOwner({
     id,
     parentId,
     ownerSize,
     ownerOffset,
+    ownerAddress,
+    signal,
   }: {
     id: string;
     parentId?: string;
     ownerSize?: number;
     ownerOffset?: number;
+    ownerAddress?: string;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getDataItemOwner' });
-    log.debug('Fetching data item owner', { id });
+    const start = Date.now();
+    log.debug('Fetching data item owner', { id, ownerAddress });
 
-    const owner = await this.ownerStore.get(id);
-
-    if (owner !== undefined) {
+    const cached = await this.readCachedOwner(ownerAddress, id);
+    if (cached !== undefined) {
       log.debug('Data item owner fetched from store', { id });
-      return owner;
+      recordAttributeFetch('owner', 'data_item', cached.source, 'hit', start);
+      return cached.owner;
     }
+
+    return this.coalesceOwnerFetch(ownerAddress, 'data_item', () =>
+      this.fetchDataItemOwnerFromParent({
+        id,
+        parentId,
+        ownerSize,
+        ownerOffset,
+        ownerAddress,
+        signal,
+      }),
+    );
+  }
+
+  private async fetchDataItemOwnerFromParent({
+    id,
+    parentId,
+    ownerSize,
+    ownerOffset,
+    ownerAddress,
+    signal,
+  }: {
+    id: string;
+    parentId?: string;
+    ownerSize?: number;
+    ownerOffset?: number;
+    ownerAddress?: string;
+    signal?: AbortSignal;
+  }): Promise<string | undefined> {
+    const log = this.log.child({ method: 'getDataItemOwner' });
+    const start = Date.now();
 
     try {
       if (
@@ -330,6 +766,13 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
 
         if (dataItemAttributes === undefined) {
           this.log.warn('No attributes found for data item', { id });
+          recordAttributeFetch(
+            'owner',
+            'data_item',
+            'attributes',
+            'not_found',
+            start,
+          );
           return undefined;
         }
 
@@ -338,39 +781,95 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         ownerOffset = dataItemAttributes.ownerOffset;
       }
 
+      // Incomplete-root-atom guard. See getDataItemSignature for the full
+      // rationale (shadow-row RangeError + malformed-Range memory leak).
+      if (
+        parentId == null ||
+        ownerSize == null ||
+        ownerSize <= 0 ||
+        ownerOffset == null ||
+        ownerOffset < 0
+      ) {
+        log.warn(
+          'Skipping owner fetch — data item has incomplete root atom (likely a shadow row pending repair, see PE-9073 follow-up)',
+          { id, parentId, ownerSize, ownerOffset },
+        );
+        recordAttributeFetch(
+          'owner',
+          'data_item',
+          'incomplete_root',
+          'not_found',
+          start,
+        );
+        return undefined;
+      }
+
       const owner = await this.fetchDataFromParent({
         parentId,
         offset: ownerOffset,
         size: ownerSize,
+        signal,
       });
 
-      await this.ownerStore.set(id, owner);
+      await this.cacheOwner(ownerAddress, id, owner);
+      recordAttributeFetch('owner', 'data_item', 'parent_data', 'hit', start);
       return owner;
     } catch (error) {
       log.error('Error fetching data item owner', {
         id,
         error: (error as Error).message,
       });
-
+      recordAttributeFetch(
+        'owner',
+        'data_item',
+        'parent_data',
+        outcomeForError(error, signal),
+        start,
+      );
       return undefined;
     }
   }
 
   async getTransactionOwner({
     id,
+    ownerAddress,
+    signal,
   }: {
     id: string;
+    ownerAddress?: string;
+    signal?: AbortSignal;
   }): Promise<string | undefined> {
     const log = this.log.child({ method: 'getTransactionOwner' });
-    log.debug('Fetching transaction owner', { id });
+    const start = Date.now();
+    log.debug('Fetching transaction owner', { id, ownerAddress });
 
-    const owner = await this.ownerStore.get(id);
-
-    if (owner !== undefined) {
+    const cached = await this.readCachedOwner(ownerAddress, id);
+    if (cached !== undefined) {
       log.debug('Transaction owner fetched from store', { id });
-      return owner;
+      recordAttributeFetch('owner', 'transaction', cached.source, 'hit', start);
+      return cached.owner;
     }
 
+    return this.coalesceOwnerFetch(ownerAddress, 'transaction', () =>
+      this.fetchTransactionOwnerFromChain({ id, ownerAddress, signal }),
+    );
+  }
+
+  private async fetchTransactionOwnerFromChain({
+    id,
+    ownerAddress,
+    signal,
+  }: {
+    id: string;
+    ownerAddress?: string;
+    signal?: AbortSignal;
+  }): Promise<string | undefined> {
+    const log = this.log.child({ method: 'getTransactionOwner' });
+    const start = Date.now();
+
+    // Track the source we are currently attempting so the catch block can
+    // attribute errors/aborts to the correct upstream layer.
+    let attemptSource: AttributeSource = 'attributes';
     try {
       const transactionAttributes = await this.getTransactionAttributes(id);
 
@@ -378,16 +877,28 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         transactionAttributes !== undefined &&
         typeof transactionAttributes.owner === 'string'
       ) {
-        await this.ownerStore.set(id, transactionAttributes.owner);
-
+        await this.cacheOwner(ownerAddress, id, transactionAttributes.owner);
+        recordAttributeFetch(
+          'owner',
+          'transaction',
+          'attributes',
+          'hit',
+          start,
+        );
         return transactionAttributes.owner;
       }
 
       this.log.warn('No attributes found for transaction', { id });
 
       let ownerFromChain;
+      let resolvedSource: AttributeSource;
 
-      const ownerChainField = await this.chainSource.getTxField(id, 'owner');
+      attemptSource = 'chain';
+      const ownerChainField = await this.chainSource.getTxField(
+        id,
+        'owner',
+        signal,
+      );
 
       // Arweave supports transactions where the owner field is an empty string.
       // This is possible because the public owner key can be derived from the signature payload.
@@ -399,25 +910,55 @@ export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
         !isEmptyString(ownerChainField)
       ) {
         ownerFromChain = ownerChainField;
+        resolvedSource = 'chain';
       } else {
+        attemptSource = 'derived';
+        // ChainSource.getTx() does not yet accept an AbortSignal — the
+        // implementation shares an in-flight promise cache across callers,
+        // so adding per-call cancellation requires reasoning about cache
+        // semantics that's out of scope here. Bail before entering the
+        // slow path if the caller has already aborted; the in-progress
+        // upstream fetch can still complete in the background and warm
+        // the cache for the next caller.
+        signal?.throwIfAborted();
         const chainTransaction = await this.chainSource.getTx({ txId: id });
         ownerFromChain = chainTransaction.owner;
+        resolvedSource = 'derived';
       }
 
       if (ownerFromChain === undefined) {
         this.log.warn('No owner found for transaction', { id });
+        recordAttributeFetch(
+          'owner',
+          'transaction',
+          resolvedSource,
+          'not_found',
+          start,
+        );
         return undefined;
       }
 
-      await this.ownerStore.set(id, ownerFromChain);
-
+      await this.cacheOwner(ownerAddress, id, ownerFromChain);
+      recordAttributeFetch(
+        'owner',
+        'transaction',
+        resolvedSource,
+        'hit',
+        start,
+      );
       return ownerFromChain;
     } catch (error) {
-      log.error('Error fetching transaction signature', {
+      log.error('Error fetching transaction owner', {
         id,
         error: (error as Error).message,
       });
-
+      recordAttributeFetch(
+        'owner',
+        'transaction',
+        attemptSource,
+        outcomeForError(error, signal),
+        start,
+      );
       return undefined;
     }
   }

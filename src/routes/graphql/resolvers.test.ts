@@ -5,11 +5,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
+import { GraphQLResolveInfo, OperationDefinitionNode, parse } from 'graphql';
 
 import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
+  extractTransactionNodeSelection,
+  extractTransactionsNodeSelection,
   getPageSize,
   resolveTxData,
   resolveTxFee,
@@ -18,8 +21,10 @@ import {
   resolveTxQuantity,
   resolveTxRecipient,
   resolveTxSignature,
+  resolvers,
 } from './resolvers.js';
 import { GqlTransaction } from '../../types.js';
+import { ownerFetcher } from '../../system.js';
 
 const GQL_TX = {
   id: 'LXCrfCRLHB7YyLGAeQoio00qb7LwT3UO3a-2TSDli8Q',
@@ -127,12 +132,155 @@ describe('resolveTxOwnerKey', () => {
     );
     await first;
   });
+
+  it('returns the NOT_FOUND sentinel (never null) when the data-item owner fetch misses/aborts', async () => {
+    // owner.key is `String!` in the schema. getDataItemOwner resolves to
+    // undefined on a miss/abort/error; without the sentinel coercion this
+    // throws "Cannot return null for non-nullable field Owner.key" and nulls
+    // the whole node (and the entire list for plural `transactions`).
+    mock.method(ownerFetcher, 'getDataItemOwner', () =>
+      Promise.resolve(undefined),
+    );
+    try {
+      const key = await resolveTxOwnerKey({
+        tx: {
+          id: 'data-item-id',
+          ownerKey: null,
+          parentId: 'parent-bundle-id',
+          ownerSize: '512',
+          ownerOffset: '100',
+        } as unknown as GqlTransaction,
+      });
+      assert.equal(key, '<not-found>');
+    } finally {
+      mock.restoreAll();
+    }
+  });
+});
+
+function infoForTopLevelField(
+  query: string,
+  topLevelFieldName: string,
+): GraphQLResolveInfo {
+  const doc = parse(query);
+  const op = doc.definitions[0] as OperationDefinitionNode;
+  const field = op.selectionSet.selections.find(
+    (s) => s.kind === 'Field' && s.name.value === topLevelFieldName,
+  );
+  if (field === undefined) {
+    throw new Error(`missing top-level field ${topLevelFieldName}`);
+  }
+  return { fieldNodes: [field] } as unknown as GraphQLResolveInfo;
+}
+
+function topLevelFieldNames(info: GraphQLResolveInfo | undefined): string[] {
+  const names: string[] = [];
+  for (const sel of info?.fieldNodes[0]?.selectionSet?.selections ?? []) {
+    if (sel.kind === 'Field') names.push(sel.name.value);
+  }
+  return names;
+}
+
+describe('extractTransactionsNodeSelection', () => {
+  it('returns the node sub-selection from a transactions query', () => {
+    const info = infoForTopLevelField(
+      `{ transactions { edges { node { id anchor } } } }`,
+      'transactions',
+    );
+    const node = extractTransactionsNodeSelection(info);
+    assert.notEqual(node, undefined);
+    const names = (node?.selections ?? [])
+      .filter((s) => s.kind === 'Field')
+      .map((s) => (s as { name: { value: string } }).name.value);
+    assert.deepEqual(names, ['id', 'anchor']);
+  });
+
+  it('returns undefined when node selection is absent', () => {
+    const info = infoForTopLevelField(
+      `{ transactions { pageInfo { hasNextPage } } }`,
+      'transactions',
+    );
+    assert.equal(extractTransactionsNodeSelection(info), undefined);
+  });
+});
+
+describe('extractTransactionNodeSelection', () => {
+  it('returns the top-level selection for transaction(id: ...)', () => {
+    const info = infoForTopLevelField(
+      `{ transaction(id: "x") { id anchor } }`,
+      'transaction',
+    );
+    const sel = extractTransactionNodeSelection(info);
+    assert.notEqual(sel, undefined);
+    const names = (sel?.selections ?? [])
+      .filter((s) => s.kind === 'Field')
+      .map((s) => (s as { name: { value: string } }).name.value);
+    assert.deepEqual(names, ['id', 'anchor']);
+  });
+});
+
+// Smoke test for the helper itself so tests above don't drift silently.
+describe('topLevelFieldNames helper', () => {
+  it('extracts names from a synthetic GraphQLResolveInfo', () => {
+    const info = infoForTopLevelField(
+      `{ transaction(id: "x") { id anchor } }`,
+      'transaction',
+    );
+    assert.deepEqual(topLevelFieldNames(info), ['id', 'anchor']);
+  });
+});
+
+describe('Transaction.block resolver', () => {
+  // The resolver is defined inline on the exported resolvers object; cast so
+  // we can call it directly with just the parent arg.
+  const blockResolver = (
+    resolvers.Transaction as { block: (p: GqlTransaction) => unknown }
+  ).block;
+
+  it('returns null for an unmined data item even when height is populated', () => {
+    // Scenario: header enqueued via admin API before its bundle/parent tx is
+    // on chain. No block row exists, so blockIndepHash/blockTimestamp/
+    // blockPreviousBlock are null. `height` may still be populated (from a
+    // cursor, a decoded header, or a ClickHouse row). Returning a partial
+    // Block here would violate the non-nullable schema on Block.timestamp.
+    const tx = {
+      ...GQL_TX,
+      blockIndepHash: null,
+      blockTimestamp: null,
+      height: 834713,
+      blockPreviousBlock: null,
+    };
+    assert.equal(blockResolver(tx as unknown as GqlTransaction), null);
+  });
+
+  it('returns a fully populated Block when the tx is mined', () => {
+    assert.deepEqual(blockResolver(GQL_TX as unknown as GqlTransaction), {
+      id: 'CT075juenGfi1wKif0Af-6Y9KJ2tR7kqPkeALB99eJUJnrWafqG8uq0kN4cpAN3I',
+      timestamp: 1639925391,
+      height: 834713,
+      previous:
+        '-WmnSux8p6DccMRwGh-jq3_wv_deZc0XsgpZnzt0WhPVpA5GmmBW14zhRMT3DbiT',
+    });
+  });
+
+  it('returns null when all block fields are null', () => {
+    const tx = {
+      ...GQL_TX,
+      blockIndepHash: null,
+      blockTimestamp: null,
+      height: null,
+      blockPreviousBlock: null,
+    };
+    assert.equal(blockResolver(tx as unknown as GqlTransaction), null);
+  });
 });
 
 describe('resolveTxSignature', () => {
   it('should return signature', async () => {
     const signature = await resolveTxSignature(
       GQL_TX as unknown as GqlTransaction,
+      {},
+      {},
     );
     assert.equal(
       signature,

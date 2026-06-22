@@ -11,22 +11,22 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import bs58 from 'bs58';
+
 import {
   TRIGGER_HEADERS,
   CO_SIGNABLE_HEADERS,
   isSignableHeader,
   isTriggerHeader,
   loadOrGenerateKey,
+  loadSolanaKeypair,
+  loadSolanaKeypairFromBase58,
   deriveKeyId,
   getPublicKeyBase64Url,
   buildSignatureBase,
   formatSignatureInput,
   getSolanaAddress,
-  loadWalletJwk,
-  createAttestation,
-  loadOrCreateAttestation,
-  saveAttestationTxId,
-  jwkToArweaveAddress,
+  initHttpSig,
 } from './httpsig.js';
 
 describe('httpsig lib', () => {
@@ -146,6 +146,87 @@ describe('httpsig lib', () => {
     });
   });
 
+  describe('loadSolanaKeypair', () => {
+    /** Write a Solana-format keypair file (64-byte JSON array). */
+    function writeSolanaKeypair(dir: string): {
+      filePath: string;
+      publicKey: Buffer;
+    } {
+      const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+      const seed = privateKey
+        .export({ type: 'pkcs8', format: 'der' })
+        .subarray(16); // 16-byte PKCS8 prefix
+      const rawPub = publicKey
+        .export({ type: 'spki', format: 'der' })
+        .subarray(12); // 12-byte SPKI prefix
+      const bytes = Buffer.concat([seed, rawPub]);
+      const filePath = path.join(dir, 'keypair.json');
+      fs.writeFileSync(filePath, JSON.stringify(Array.from(bytes)));
+      return { filePath, publicKey: rawPub };
+    }
+
+    it('loads a valid Solana keypair and returns Ed25519 private key', () => {
+      const dir = makeTmpDir();
+      const { filePath } = writeSolanaKeypair(dir);
+
+      const key = loadSolanaKeypair(filePath);
+
+      assert.equal(key.type, 'private');
+      assert.equal(key.asymmetricKeyType, 'ed25519');
+    });
+
+    it('produces the correct public key', () => {
+      const dir = makeTmpDir();
+      const { filePath, publicKey: expectedPub } = writeSolanaKeypair(dir);
+
+      const key = loadSolanaKeypair(filePath);
+      const pub = crypto.createPublicKey(key);
+      const actualPub = getPublicKeyBase64Url(pub);
+      const expectedB64 = expectedPub.toString('base64url');
+
+      assert.equal(actualPub, expectedB64);
+    });
+
+    it('can sign and verify', () => {
+      const dir = makeTmpDir();
+      const { filePath } = writeSolanaKeypair(dir);
+
+      const privateKey = loadSolanaKeypair(filePath);
+      const publicKey = crypto.createPublicKey(privateKey);
+      const data = Buffer.from('test message');
+
+      const sig = crypto.sign(null, data, privateKey);
+      const valid = crypto.verify(null, data, publicKey, sig);
+      assert.equal(valid, true);
+    });
+
+    it('throws on missing file', () => {
+      assert.throws(() => loadSolanaKeypair('/nonexistent/keypair.json'), {
+        message: /not found/,
+      });
+    });
+
+    it('throws on invalid JSON', () => {
+      const dir = makeTmpDir();
+      const filePath = path.join(dir, 'bad.json');
+      fs.writeFileSync(filePath, 'not json');
+
+      assert.throws(() => loadSolanaKeypair(filePath), {
+        message: /Invalid Solana keypair JSON/,
+      });
+    });
+
+    it('throws on wrong byte length', () => {
+      const dir = makeTmpDir();
+      const filePath = path.join(dir, 'short.json');
+      fs.writeFileSync(filePath, JSON.stringify([1, 2, 3]));
+
+      assert.throws(() => loadSolanaKeypair(filePath), {
+        message: /expected 64 bytes/,
+      });
+    });
+  });
+
   describe('deriveKeyId', () => {
     it('produces a self-contained ed25519:<base64url> key ID', () => {
       const { publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -189,6 +270,22 @@ describe('httpsig lib', () => {
 
       assert.equal(b64.length, 43);
       assert.match(b64, /^[A-Za-z0-9_-]+$/);
+    });
+  });
+
+  describe('getSolanaAddress', () => {
+    it('returns a base58 string', () => {
+      const { publicKey } = crypto.generateKeyPairSync('ed25519');
+      const addr = getSolanaAddress(publicKey);
+
+      // Solana addresses are 32-44 chars base58
+      assert.ok(addr.length >= 32 && addr.length <= 44);
+      assert.match(addr, /^[1-9A-HJ-NP-Za-km-z]+$/);
+    });
+
+    it('is stable across calls', () => {
+      const { publicKey } = crypto.generateKeyPairSync('ed25519');
+      assert.equal(getSolanaAddress(publicKey), getSolanaAddress(publicKey));
     });
   });
 
@@ -410,342 +507,195 @@ describe('httpsig lib', () => {
     });
   });
 
-  // --- Phase 2: Attestation tests ---
+  describe('initHttpSig', () => {
+    const noopLog = {
+      info: () => {},
+      warn: () => {},
+    };
 
-  /** Generate a test RSA-4096 JWK (Arweave wallet format). */
-  function generateTestRsaJwk(): crypto.JsonWebKey {
-    const { privateKey } = crypto.generateKeyPairSync('rsa', {
-      modulusLength: 4096,
-      publicExponent: 65537,
-    });
-    return privateKey.export({ format: 'jwk' }) as crypto.JsonWebKey;
-  }
-
-  describe('getSolanaAddress', () => {
-    it('returns a base58 string', () => {
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-      const addr = getSolanaAddress(publicKey);
-
-      // Solana addresses are 32-44 chars base58
-      assert.ok(addr.length >= 32 && addr.length <= 44);
-      assert.match(addr, /^[1-9A-HJ-NP-Za-km-z]+$/);
-    });
-
-    it('is stable across calls', () => {
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-      assert.equal(getSolanaAddress(publicKey), getSolanaAddress(publicKey));
-    });
-  });
-
-  describe('loadWalletJwk', () => {
-    it('loads a valid RSA JWK from file', () => {
+    it('falls back to auto-generated PEM when no keypair path', () => {
       const dir = makeTmpDir();
-      const walletFile = path.join(dir, 'test-wallet.json');
-      const jwk = generateTestRsaJwk();
-      fs.writeFileSync(walletFile, JSON.stringify(jwk));
+      const keyFile = path.join(dir, 'httpsig.pem');
 
-      const loaded = loadWalletJwk(walletFile);
-      assert.equal(loaded.kty, 'RSA');
-      assert.ok(loaded.n !== undefined);
-      assert.ok(loaded.d !== undefined);
-    });
-
-    it('throws on missing file', () => {
-      assert.throws(() => loadWalletJwk('/nonexistent/wallet.json'), {
-        message: /not found/,
+      const signer = initHttpSig({
+        keyFile,
+        observerKeypairPath: undefined,
+        observerPrivateKey: undefined,
+        log: noopLog,
       });
+
+      assert.ok(signer.keyId.startsWith('ed25519:'));
+      assert.ok(signer.solanaAddress.length >= 32);
+      assert.ok(fs.existsSync(keyFile));
     });
 
-    it('throws on invalid JSON', () => {
+    it('propagates errors when keyFile path is unwritable', () => {
+      // dirname(keyFile) points at a regular file, so mkdirSync fails with
+      // ENOTDIR. This mirrors the EACCES failure from a root-owned data/keys/
+      // dir — both surface as a throw out of loadOrGenerateKey, which is what
+      // config.ts's `initializeHttpSig` catches.
       const dir = makeTmpDir();
-      const walletFile = path.join(dir, 'bad.json');
-      fs.writeFileSync(walletFile, 'not json');
+      const blockingFile = path.join(dir, 'not-a-dir');
+      fs.writeFileSync(blockingFile, 'blocking');
 
-      assert.throws(() => loadWalletJwk(walletFile), {
-        message: /Invalid wallet JSON/,
-      });
-    });
-
-    it('throws on missing required RSA fields', () => {
-      const dir = makeTmpDir();
-      const walletFile = path.join(dir, 'incomplete.json');
-      fs.writeFileSync(walletFile, JSON.stringify({ kty: 'RSA', n: 'abc' }));
-
-      assert.throws(() => loadWalletJwk(walletFile), {
-        message: /missing required field/,
-      });
-    });
-  });
-
-  describe('jwkToArweaveAddress', () => {
-    it('returns a base64url string', () => {
-      const jwk = generateTestRsaJwk();
-      const addr = jwkToArweaveAddress(jwk);
-      assert.match(addr, /^[A-Za-z0-9_-]+$/);
-      assert.equal(addr.length, 43); // SHA-256 = 32 bytes = 43 base64url chars
-    });
-
-    it('is stable across calls', () => {
-      const jwk = generateTestRsaJwk();
-      assert.equal(jwkToArweaveAddress(jwk), jwkToArweaveAddress(jwk));
-    });
-  });
-
-  describe('createAttestation', () => {
-    it('returns payload, signature, and rsaPublicKey', () => {
-      const observerJwk = generateTestRsaJwk();
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-
-      const att = createAttestation({
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: 'test-gateway-address',
-      });
-
-      assert.ok(att.payload.length > 0);
-      assert.ok(att.signature.length > 0);
-      assert.ok(att.rsaPublicKey.length > 0);
-    });
-
-    it('payload is valid canonical JSON with expected fields', () => {
-      const observerJwk = generateTestRsaJwk();
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-
-      const att = createAttestation({
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: 'gw-addr',
-      });
-
-      const parsed = JSON.parse(att.payload);
-      assert.equal(parsed.type, 'ar-io-gateway-key-attestation');
-      assert.equal(parsed.version, 1);
-      assert.equal(parsed.purpose, 'http-response-signing');
-      assert.equal(parsed.gatewayAddress, 'gw-addr');
-      assert.equal(parsed.ed25519PublicKey, getPublicKeyBase64Url(publicKey));
-      assert.equal(parsed.solanaAddress, getSolanaAddress(publicKey));
-      assert.equal(parsed.keyId, deriveKeyId(publicKey));
-      assert.ok(parsed.observerAddress !== undefined);
-      assert.ok(parsed.issuedAt !== undefined);
-    });
-
-    it('signature is verifiable with the RSA public key', () => {
-      const observerJwk = generateTestRsaJwk();
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-
-      const att = createAttestation({
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: undefined,
-      });
-
-      // Reconstruct RSA public key from exported DER
-      const rsaPubKey = crypto.createPublicKey({
-        key: Buffer.from(att.rsaPublicKey, 'base64url'),
-        format: 'der',
-        type: 'spki',
-      });
-
-      const valid = crypto.verify(
-        'sha256',
-        Buffer.from(att.payload, 'utf8'),
-        {
-          key: rsaPubKey,
-          padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-          saltLength: 0,
-        },
-        Buffer.from(att.signature, 'base64url'),
+      assert.throws(() =>
+        initHttpSig({
+          keyFile: path.join(blockingFile, 'httpsig.pem'),
+          observerKeypairPath: undefined,
+          observerPrivateKey: undefined,
+          log: noopLog,
+        }),
       );
-
-      assert.equal(valid, true);
     });
 
-    it('observerAddress matches SHA-256 of RSA public key modulus', () => {
-      const observerJwk = generateTestRsaJwk();
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-
-      const att = createAttestation({
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: undefined,
-      });
-
-      const parsed = JSON.parse(att.payload);
-      const expectedAddress = jwkToArweaveAddress(observerJwk);
-      assert.equal(parsed.observerAddress, expectedAddress);
-    });
-  });
-
-  describe('loadOrCreateAttestation', () => {
-    it('creates and caches a new attestation', () => {
+    it('uses Solana keypair when path is provided', () => {
       const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
 
-      const result = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: undefined,
-      });
-
-      assert.equal(result.cached, false);
-      assert.ok(result.payload.length > 0);
-      assert.ok(fs.existsSync(path.join(dir, 'httpsig-attestation.json')));
-    });
-
-    it('loads cached attestation when Ed25519 key unchanged', () => {
-      const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-
-      const first = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: undefined,
-      });
-
-      const second = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: undefined,
-      });
-
-      assert.equal(first.cached, false);
-      assert.equal(second.cached, true);
-      assert.equal(first.signature, second.signature);
-    });
-
-    it('recreates attestation when Ed25519 key changes', () => {
-      const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
-      const { publicKey: pub1 } = crypto.generateKeyPairSync('ed25519');
-      const { publicKey: pub2 } = crypto.generateKeyPairSync('ed25519');
-
-      const first = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk,
-        ed25519PublicKey: pub1,
-        gatewayAddress: undefined,
-      });
-
-      const second = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk,
-        ed25519PublicKey: pub2,
-        gatewayAddress: undefined,
-      });
-
-      assert.equal(first.cached, false);
-      assert.equal(second.cached, false);
-      assert.notEqual(first.signature, second.signature);
-    });
-
-    it('returns persisted txId from cache', () => {
-      const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-
-      // Create attestation
-      loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: undefined,
-      });
-
-      // Persist txId
-      saveAttestationTxId(dir, 'arweave-tx-123');
-
-      // Reload — should return the txId
-      const result = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: undefined,
-      });
-
-      assert.equal(result.cached, true);
-      assert.equal(result.txId, 'arweave-tx-123');
-    });
-
-    it('recreates attestation when observer wallet changes', () => {
-      const dir = makeTmpDir();
-      const observerJwk1 = generateTestRsaJwk();
-      const observerJwk2 = generateTestRsaJwk();
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-
-      const first = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk: observerJwk1,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: undefined,
-      });
-
-      const second = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk: observerJwk2,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: undefined,
-      });
-
-      assert.equal(first.cached, false);
-      assert.equal(second.cached, false);
-      assert.notEqual(first.signature, second.signature);
-    });
-
-    it('recreates attestation when gateway address changes', () => {
-      const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-
-      const first = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: 'gateway-1',
-      });
-
-      const second = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: 'gateway-2',
-      });
-
-      assert.equal(first.cached, false);
-      assert.equal(second.cached, false);
-    });
-
-    it('handles corrupt cache file gracefully', () => {
-      const dir = makeTmpDir();
-      const observerJwk = generateTestRsaJwk();
-      const { publicKey } = crypto.generateKeyPairSync('ed25519');
-
-      // Write corrupt cache
+      // Generate a Solana keypair file
+      const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+      const seed = privateKey
+        .export({ type: 'pkcs8', format: 'der' })
+        .subarray(16);
+      const rawPub = publicKey
+        .export({ type: 'spki', format: 'der' })
+        .subarray(12);
+      const keypairPath = path.join(dir, 'observer.json');
       fs.writeFileSync(
-        path.join(dir, 'httpsig-attestation.json'),
-        'not valid json{{{',
+        keypairPath,
+        JSON.stringify(Array.from(Buffer.concat([seed, rawPub]))),
       );
 
-      // Should recreate without throwing
-      const result = loadOrCreateAttestation({
-        keysDir: dir,
-        observerJwk,
-        ed25519PublicKey: publicKey,
-        gatewayAddress: undefined,
+      const signer = initHttpSig({
+        keyFile: path.join(dir, 'httpsig.pem'),
+        observerKeypairPath: keypairPath,
+        observerPrivateKey: undefined,
+        log: noopLog,
       });
 
-      assert.equal(result.cached, false);
-      assert.ok(result.payload.length > 0);
+      // Should use the Solana keypair, not generate a PEM
+      assert.ok(!fs.existsSync(path.join(dir, 'httpsig.pem')));
+      assert.equal(signer.publicKeyB64Url, getPublicKeyBase64Url(publicKey));
     });
 
-    it('saveAttestationTxId is no-op when cache file missing', () => {
+    it('uses OBSERVER_PRIVATE_KEY (base58) and skips file I/O', () => {
+      // No keypair file on disk; key flows in via the env-string path.
       const dir = makeTmpDir();
-      // Should not throw
-      saveAttestationTxId(dir, 'some-tx-id');
+      const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+      const seed = privateKey
+        .export({ type: 'pkcs8', format: 'der' })
+        .subarray(16);
+      const rawPub = publicKey
+        .export({ type: 'spki', format: 'der' })
+        .subarray(12);
+      const base58Secret = bs58.encode(Buffer.concat([seed, rawPub]));
+
+      const signer = initHttpSig({
+        keyFile: path.join(dir, 'httpsig.pem'),
+        observerKeypairPath: undefined,
+        observerPrivateKey: base58Secret,
+        log: noopLog,
+      });
+
+      // Same identity as the path-based loader for the same bytes.
+      assert.equal(signer.publicKeyB64Url, getPublicKeyBase64Url(publicKey));
+      // No PEM auto-generated.
+      assert.ok(!fs.existsSync(path.join(dir, 'httpsig.pem')));
+    });
+
+    it('rejects setting both OBSERVER_KEYPAIR_PATH and OBSERVER_PRIVATE_KEY', () => {
+      const dir = makeTmpDir();
+      const { privateKey } = crypto.generateKeyPairSync('ed25519');
+      const seed = privateKey
+        .export({ type: 'pkcs8', format: 'der' })
+        .subarray(16);
+      // We don't need a real keypair file on disk — the ambiguity check
+      // throws before any loader runs.
+      const fakePath = path.join(dir, 'observer.json');
+      fs.writeFileSync(fakePath, '[]');
+
+      assert.throws(
+        () =>
+          initHttpSig({
+            keyFile: path.join(dir, 'httpsig.pem'),
+            observerKeypairPath: fakePath,
+            observerPrivateKey: bs58.encode(
+              Buffer.concat([seed, Buffer.alloc(32)]),
+            ),
+            log: noopLog,
+          }),
+        {
+          message:
+            /Set exactly one of OBSERVER_KEYPAIR_PATH or OBSERVER_PRIVATE_KEY/,
+        },
+      );
+    });
+
+    it('treats empty-string envs as unset (falls through to PEM auto-gen)', () => {
+      // Some env loaders surface unset values as '' rather than undefined.
+      const dir = makeTmpDir();
+      const keyFile = path.join(dir, 'httpsig.pem');
+
+      const signer = initHttpSig({
+        keyFile,
+        observerKeypairPath: '',
+        observerPrivateKey: '',
+        log: noopLog,
+      });
+
+      assert.ok(signer.keyId.startsWith('ed25519:'));
+      assert.ok(fs.existsSync(keyFile));
+    });
+  });
+
+  describe('loadSolanaKeypairFromBase58', () => {
+    /** Build a valid 64-byte base58 secret-key payload for tests. */
+    function freshBase58Secret(): { base58: string; pub: Buffer } {
+      const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+      const seed = privateKey
+        .export({ type: 'pkcs8', format: 'der' })
+        .subarray(16);
+      const pub = publicKey
+        .export({ type: 'spki', format: 'der' })
+        .subarray(12);
+      return { base58: bs58.encode(Buffer.concat([seed, pub])), pub };
+    }
+
+    it('decodes a valid 64-byte base58 secret into the matching public key', () => {
+      const { base58, pub } = freshBase58Secret();
+
+      const key = loadSolanaKeypairFromBase58(base58, 'OBSERVER_PRIVATE_KEY');
+
+      assert.equal(key.type, 'private');
+      assert.equal(key.asymmetricKeyType, 'ed25519');
+      const derivedPub = crypto.createPublicKey(key);
+      assert.equal(
+        getPublicKeyBase64Url(derivedPub),
+        pub.toString('base64url'),
+      );
+    });
+
+    it('throws on a 32-byte (secret-only) payload with the env name in the message', () => {
+      const secretOnly = bs58.encode(Buffer.alloc(32));
+      assert.throws(
+        () => loadSolanaKeypairFromBase58(secretOnly, 'OBSERVER_PRIVATE_KEY'),
+        {
+          message: /OBSERVER_PRIVATE_KEY.*decoded 32 bytes.*expected 64/,
+        },
+      );
+    });
+
+    it('throws on non-base58 input with a friendly error', () => {
+      // `0` is not a base58 character — bs58.decode rejects it.
+      assert.throws(
+        () =>
+          loadSolanaKeypairFromBase58(
+            '0xdeadbeefdeadbeef',
+            'OBSERVER_PRIVATE_KEY',
+          ),
+        {
+          message: /OBSERVER_PRIVATE_KEY.*not a valid base58/,
+        },
+      );
     });
   });
 });

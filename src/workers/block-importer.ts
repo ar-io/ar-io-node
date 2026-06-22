@@ -109,6 +109,9 @@ export class BlockImporter {
           },
         );
         this.chainIndex.resetToHeight(previousHeight - 1);
+        this.eventEmitter.emit(events.CHAIN_REORG, {
+          forkHeight: previousHeight - 1,
+        });
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       } else if (block.previous_block !== previousDbBlockHash) {
         // Only increment the fork counter once per fork
@@ -128,6 +131,9 @@ export class BlockImporter {
           },
         );
         this.chainIndex.resetToHeight(previousHeight - 1);
+        this.eventEmitter.emit(events.CHAIN_REORG, {
+          forkHeight: previousHeight - 1,
+        });
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       }
     }

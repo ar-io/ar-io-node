@@ -9,11 +9,12 @@ import express from 'express';
 import { Server } from 'node:http';
 import * as config from './config.js';
 import log from './log.js';
+import * as metrics from './metrics.js';
 import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
 import { createRequestIdMiddleware } from './middleware/request-id.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
+import { createErrorHandlerMiddleware } from './middleware/error-handler.js';
 import { createHttpSigMiddleware } from './middleware/httpsig.js';
-import { uploadAttestation } from './lib/httpsig-upload.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
@@ -48,34 +49,14 @@ system.contiguousDataFsCacheCleanupWorker?.start();
 
 system.chunkDataFsCacheCleanupWorker?.start();
 
-// Upload HTTPSIG attestation to Arweave (non-blocking, non-fatal).
-// Skip if the txId is already persisted from a prior successful upload.
-if (
-  config.HTTPSIG_ENABLED &&
-  config.HTTPSIG_UPLOAD_ATTESTATION &&
-  config.HTTPSIG_SIGNER !== undefined &&
-  config.HTTPSIG_OBSERVER !== undefined &&
-  config.HTTPSIG_OBSERVER.attestationTxId === undefined
-) {
-  const signer = config.HTTPSIG_SIGNER;
-  const observer = config.HTTPSIG_OBSERVER;
-  uploadAttestation({
-    jwk: observer.jwk,
-    attestation: observer.attestation,
-    gatewayAddress: config.AR_IO_WALLET,
-    observerAddress: observer.address,
-    ed25519PublicKey: signer.publicKeyB64Url,
-    keyId: signer.keyId,
-    log,
-  })
-    .then((txId) => {
-      config.setHttpSigAttestationTxId(txId);
-    })
-    .catch((error: any) => {
-      log.warn('HTTPSIG attestation upload failed', {
-        error: error?.message,
-      });
-    });
+// ClickHouse streaming pipeline (issue #696). Started before writers so
+// listeners are registered before any BLOCK_INDEXED / BLOCK_TX_INDEXED /
+// ANS104_DATA_ITEM_INDEXED events fire, otherwise early unstable-head
+// events would be missed during boot. Started here (rather than inside
+// system.ts) so a schema-validation failure aborts startup with a clear
+// error rather than silently failing in the background.
+if (system.clickhouseStreamer !== undefined) {
+  await system.clickhouseStreamer.start();
 }
 
 // Allow starting without writers to support SQLite replication
@@ -109,6 +90,10 @@ app.use(createAbortSignalMiddleware());
 
 // HTTPSIG response signing — must be before cache-control so the writeHead
 // LIFO order ensures signing runs AFTER cache-control has set default headers.
+config.initializeHttpSig();
+if (config.HTTPSIG_INIT_ERROR !== undefined) {
+  metrics.httpSigInitFailedTotal.inc();
+}
 if (config.HTTPSIG_ENABLED && config.HTTPSIG_SIGNER !== undefined) {
   app.use(
     createHttpSigMiddleware({
@@ -181,8 +166,22 @@ apolloServerInstanceGql.start().then(() => {
     app,
     path: '/graphql',
   });
+
+  // Terminal error handler — must be registered after every router and the
+  // GraphQL middleware so it catches anything they let escape. Replaces
+  // Express's default finalhandler (silent, generic 500s).
+  app.use(createErrorHandlerMiddleware({ log }));
+
   server = app.listen(config.PORT, () => {
     log.info(`Listening on port ${config.PORT}`);
+
+    // Keep core's keepalive idle window wider than Envoy's upstream
+    // idle_timeout so Envoy always recycles a pooled connection before core
+    // closes it — otherwise Envoy races a request onto a connection core is
+    // tearing down and the client sees an instant reset/5xx. headersTimeout
+    // must stay strictly greater than keepAliveTimeout (Node requirement).
+    server.keepAliveTimeout = config.HTTP_KEEP_ALIVE_TIMEOUT_MS;
+    server.headersTimeout = config.HTTP_HEADERS_TIMEOUT_MS;
 
     // Register server cleanup handler with system shutdown registry
     system.registerCleanupHandler('http-server', async () => {

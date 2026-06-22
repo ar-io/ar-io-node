@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# ClickHouse GraphQL Testing Tool
+#
+# Compares the local AR.IO node GraphQL endpoint against arweave.net for
+# Drive-Id and owner-address queries, and runs database-level integrity
+# checks against the local ClickHouse instance. Generates HTML, JSON, and
+# CSV reports under test-results/runs/<timestamp>/.
+#
+# Usage: ./tools/test-clickhouse-graphql [options]
+# Run with --help for all options.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+env_file_args=()
+if [ -f .env ]; then
+  env_file_args=(--env-file=.env)
+fi
+
+exec node "${env_file_args[@]}" --import ./register.js tools/lib/test-clickhouse-graphql.ts "$@"

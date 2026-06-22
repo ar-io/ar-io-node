@@ -79,6 +79,7 @@ describe('ReadThroughDataCache', function () {
       },
       cleanup: async (_) => Promise.resolve(),
       finalize: async (_, __) => Promise.resolve(),
+      delete: async (_) => Promise.resolve(),
     };
 
     mockContiguousDataIndex = {
@@ -278,6 +279,49 @@ describe('ReadThroughDataCache', function () {
 
       assert.deepEqual(result?.stream, mockStream);
       assert.deepEqual(result?.size, 20);
+    });
+
+    it('should preserve caller region.size through parent-data resolution (PE-9098)', async function () {
+      // Regression: when an item resolves via its parent's cached blob, the
+      // recursive getCacheData call must keep the caller's requested slice
+      // size, not replace it with the child's full data size. The previous
+      // behavior asked FsDataStore to open a 1.55 GB window when the
+      // attribute-fetcher only wanted 512 bytes of signature data.
+      let regionPassedToDataStore: { offset: number; size: number } | undefined;
+      const mockStream = new Readable();
+      mockStream.push('cached data');
+      mockStream.push(null);
+      mock.method(
+        mockContiguousDataStore,
+        'get',
+        (hash: string, region?: { offset: number; size: number }) => {
+          if (hash === 'test-parent-hash') {
+            regionPassedToDataStore = region;
+            return Promise.resolve(mockStream);
+          }
+          return Promise.resolve(undefined);
+        },
+      );
+      mock.method(mockContiguousDataIndex, 'getDataParent', () => {
+        return Promise.resolve({
+          parentId: 'test-parent-id',
+          parentHash: 'test-parent-hash',
+          offset: 2766,
+          size: 1545359648, // child's full data size (1.55 GB)
+        });
+      });
+
+      await readThroughDataCache.getCacheData(
+        'test-id',
+        'test-hash',
+        1545359648,
+        { offset: 1690, size: 512 },
+      );
+
+      assert.deepEqual(regionPassedToDataStore, {
+        offset: 2766 + 1690,
+        size: 512, // caller's requested slice — NOT 1545359648
+      });
     });
   });
 
@@ -2020,6 +2064,232 @@ describe('ReadThroughDataCache', function () {
           }),
         /backgroundCacheRangeConcurrency must be a positive finite number/,
       );
+    });
+  });
+
+  describe('acceptContentType lazy poison eviction (PE-9099)', () => {
+    it('evicts the on-disk blob and falls through when stored content-type fails the predicate', async () => {
+      // Cache holds a poisoned text/html entry (the production scenario:
+      // 1134-byte bundlr.network parking page cached as bundle bytes).
+      // Caller asks for bundle bytes via acceptContentType predicate.
+      // Expect: blob is deleted, request falls through to upstream.
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () =>
+        Promise.resolve({
+          hash: 'poisoned-hash',
+          size: 1134,
+          contentType: 'text/html; charset=utf-8',
+          isManifest: false,
+          stable: false,
+          verified: false,
+          signature: null,
+        }),
+      );
+
+      let deletedHash: string | undefined;
+      mock.method(mockContiguousDataStore, 'delete', (hash: string) => {
+        deletedHash = hash;
+        return Promise.resolve();
+      });
+
+      let upstreamCalled = false;
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        upstreamCalled = true;
+        return Promise.resolve({
+          stream: Readable.from([Buffer.alloc(64, 'A')]),
+          size: 64,
+          verified: false,
+          trusted: true,
+          cached: false,
+          sourceContentType: 'application/octet-stream',
+        });
+      });
+      mock.method(mockContiguousDataStore, 'createWriteStream', () =>
+        Promise.resolve(
+          new Writable({
+            write(_chunk, _enc, cb) {
+              cb();
+            },
+          }),
+        ),
+      );
+
+      const result = await readThroughDataCache.getData({
+        id: 'poisoned-id',
+        requestAttributes,
+        acceptContentType: (ct) =>
+          ct === undefined || ct.startsWith('application/octet-stream'),
+      });
+
+      assert.equal(
+        deletedHash,
+        'poisoned-hash',
+        'poisoned blob should have been deleted by hash',
+      );
+      assert.equal(
+        upstreamCalled,
+        true,
+        'upstream should have been called after eviction (treat as cache miss)',
+      );
+      assert.equal(
+        result.cached,
+        false,
+        'returned data should not be from cache',
+      );
+
+      // Drain
+      for await (const _ of result.stream) {
+        // discard
+      }
+    });
+
+    it('does NOT evict when no predicate is supplied (back-compat)', async () => {
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () =>
+        Promise.resolve({
+          hash: 'html-hash',
+          size: 1134,
+          contentType: 'text/html; charset=utf-8',
+          isManifest: false,
+          stable: false,
+          verified: false,
+          signature: null,
+        }),
+      );
+
+      let deleteCalled = false;
+      mock.method(mockContiguousDataStore, 'delete', () => {
+        deleteCalled = true;
+        return Promise.resolve();
+      });
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(
+          new Readable({
+            read() {
+              this.push(Buffer.alloc(1134, 0x3c));
+              this.push(null);
+            },
+          }),
+        ),
+      );
+
+      const result = await readThroughDataCache.getData({
+        id: 'html-id',
+        requestAttributes,
+        // no acceptContentType
+      });
+
+      assert.equal(
+        deleteCalled,
+        false,
+        'no predicate → no eviction (back-compat)',
+      );
+      assert.equal(result.cached, true);
+      assert.equal(result.sourceContentType, 'text/html; charset=utf-8');
+
+      // Drain
+      for await (const _ of result.stream) {
+        // discard
+      }
+    });
+
+    it('does NOT evict when stored content-type passes the predicate', async () => {
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () =>
+        Promise.resolve({
+          hash: 'clean-hash',
+          size: 64,
+          contentType: 'application/octet-stream',
+          isManifest: false,
+          stable: false,
+          verified: false,
+          signature: null,
+        }),
+      );
+
+      let deleteCalled = false;
+      mock.method(mockContiguousDataStore, 'delete', () => {
+        deleteCalled = true;
+        return Promise.resolve();
+      });
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(
+          new Readable({
+            read() {
+              this.push(Buffer.alloc(64));
+              this.push(null);
+            },
+          }),
+        ),
+      );
+
+      const result = await readThroughDataCache.getData({
+        id: 'clean-id',
+        requestAttributes,
+        acceptContentType: (ct) =>
+          ct === undefined || ct.startsWith('application/octet-stream'),
+      });
+
+      assert.equal(
+        deleteCalled,
+        false,
+        'acceptable content-type → no eviction',
+      );
+      assert.equal(result.cached, true);
+
+      // Drain
+      for await (const _ of result.stream) {
+        // discard
+      }
+    });
+
+    it('forwards acceptContentType to the upstream data source on cache miss', async () => {
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataIndex, 'getDataParent', () =>
+        Promise.resolve(undefined),
+      );
+
+      let upstreamReceivedPredicate:
+        | ((ct: string | undefined) => boolean)
+        | undefined;
+      mock.method(mockContiguousDataSource, 'getData', (args: any) => {
+        upstreamReceivedPredicate = args.acceptContentType;
+        return Promise.resolve({
+          stream: Readable.from([Buffer.alloc(64, 'A')]),
+          size: 64,
+          verified: false,
+          trusted: true,
+          cached: false,
+        });
+      });
+      mock.method(mockContiguousDataStore, 'createWriteStream', () =>
+        Promise.resolve(
+          new Writable({
+            write(_chunk, _enc, cb) {
+              cb();
+            },
+          }),
+        ),
+      );
+
+      const myPredicate = (ct: string | undefined) =>
+        ct === undefined || ct.startsWith('application/octet-stream');
+
+      const result = await readThroughDataCache.getData({
+        id: 'uncached-id',
+        requestAttributes,
+        acceptContentType: myPredicate,
+      });
+
+      assert.strictEqual(
+        upstreamReceivedPredicate,
+        myPredicate,
+        'predicate must flow through to upstream getData() so the upstream source can reject too',
+      );
+
+      // Drain
+      for await (const _ of result.stream) {
+        // discard
+      }
     });
   });
 });

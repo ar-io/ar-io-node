@@ -76,6 +76,12 @@ yarn service:start / stop / restart / status / logs
   for content retrieval with its own cache, rate limiter, and blocklist. Routes
   mount before ArNS in `app.ts`. See `docs/ipfs-integration.md`.
 - Responses include trust headers indicating verification status.
+- HTTPSIG signs response headers (RFC 9421); `Content-Digest` is in
+  `CO_SIGNABLE_HEADERS` so when present it binds the body to the signature.
+  Cached and HEAD responses always emit it from the stored hash; small
+  uncached responses (≤ `HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES`, default 2 MiB)
+  buffer + hash to emit it. Larger uncached bodies stream without a body
+  digest. Chunks are bounded at 256 KiB so they always carry one.
 
 ## Gotchas
 
@@ -130,6 +136,18 @@ Five coordinated edits are required:
 - Run `./test/dump-test-schemas` after applying migrations so the test SQL
   files stay current. Down migrations go in `migrations/down/` with the same
   filename.
+
+### Auto-verify source adapters
+
+Schema changes to SQLite `stable_*` tables, the Parquet export, or the
+ClickHouse `transactions` table must be reflected in the corresponding
+adapter under `src/tests/auto-verify/sources/` and in the canonical types
+in `src/tests/auto-verify/types.ts`. The adapters project each source into
+a shared canonical shape for comparison, so a silent divergence shows up
+as `field_mismatch` / `missing_in_source` discrepancies rather than a
+build error. Also re-check the staging/final table list in
+`gateway-control.ts`'s `cleanClickHouseTables` when tables are added or
+removed. See `docs/auto-verify.md`.
 
 ### Upload dry-run
 

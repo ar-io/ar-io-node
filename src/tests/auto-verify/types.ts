@@ -50,6 +50,75 @@ export interface CanonicalTransaction {
   tags: CanonicalTag[];
 }
 
+/**
+ * Sibling of {@link CanonicalDataItem} for the unstable-head pipeline
+ * (ClickHouse `new_transactions` / SQLite `new_data_items`).
+ *
+ * The unstable head writes data items before the offset family is known —
+ * `dataOffset`, `offset`, `size`, `ownerOffset`, `ownerSize`,
+ * `signatureOffset`, `signatureSize`, and `rootParentOffset` are stable-pipeline
+ * artifacts produced by unbundling and post-processing, so they're omitted
+ * here. In their place the unstable row carries the `signature` and `owner`
+ * (RSA modulus) inline, plus the three denormalized block fields
+ * (`blockIndepHash`, `blockTimestamp`, `blockPreviousBlock`) that are
+ * snapshotted on each row to bound the orphan-filter join.
+ *
+ * Field-by-field comparison only makes sense within the unstable pass
+ * (sibling-vs-sibling). Comparing against {@link CanonicalDataItem} would
+ * surface noise from these intentional shape differences.
+ */
+export interface CanonicalUnstableDataItem {
+  id: string; // base64url
+  parentId: string; // base64url
+  rootTransactionId: string; // base64url
+  height: number;
+  blockTransactionIndex: number;
+  ownerAddress: string; // base64url (SHA-256 of owner pubkey)
+  target: string; // base64url, empty string if none
+  anchor: string; // base64url
+  dataSize: number;
+  contentType: string | null;
+  signatureType: number | null;
+  signature: string | null; // base64url, INLINE
+  owner: string; // base64url RSA modulus, INLINE
+  blockIndepHash: string; // base64url
+  blockTimestamp: number;
+  blockPreviousBlock: string; // base64url
+  tags: CanonicalTag[];
+}
+
+/**
+ * Sibling of {@link CanonicalTransaction} for the unstable-head pipeline
+ * (ClickHouse `new_transactions` / SQLite `new_transactions`).
+ *
+ * Like {@link CanonicalUnstableDataItem}, this omits the offset family
+ * (`offset` and friends are stable-pipeline artifacts) and adds inline
+ * `signature` / `owner` plus the denormalized block fields carried on each
+ * unstable row. Field-by-field comparison is sibling-vs-sibling only —
+ * comparing against {@link CanonicalTransaction} would surface noise from
+ * these intentional shape differences rather than real divergence.
+ */
+export interface CanonicalUnstableTransaction {
+  id: string; // base64url
+  height: number;
+  blockTransactionIndex: number;
+  target: string; // base64url, empty string if none
+  quantity: string; // decimal string
+  reward: string; // decimal string
+  anchor: string; // base64url (last_tx)
+  dataSize: number;
+  contentType: string | null;
+  format: number;
+  ownerAddress: string; // base64url (SHA-256 of owner pubkey)
+  dataRoot: string; // base64url, empty string if none
+  signature: string | null; // base64url, INLINE
+  owner: string; // base64url RSA modulus, INLINE
+  blockIndepHash: string; // base64url
+  blockTimestamp: number;
+  blockPreviousBlock: string; // base64url
+  tags: CanonicalTag[];
+}
+
 export interface CanonicalBlock {
   indepHash: string; // base64url
   height: number;
@@ -104,4 +173,12 @@ export interface SourceAdapter {
     startHeight: number,
     endHeight: number,
   ): Promise<CanonicalTransaction[]>;
+  getUnstableDataItems?(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<CanonicalUnstableDataItem[]>;
+  getUnstableTransactions?(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<CanonicalUnstableTransaction[]>;
 }

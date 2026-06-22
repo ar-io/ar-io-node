@@ -783,7 +783,22 @@ st
       });
 
       describe('X-AR-IO-Digest/Etag', () => {
-        it("shouldn't return digest/etag when hash is not available", async () => {
+        // Contract change (2026): the buffered-digest helper
+        // (src/routes/data/buffered-digest.ts) emits Content-Digest/Etag for
+        // small uncached responses too — so the gateway's signed response
+        // binds the body cryptographically end-to-end. Old tests that asserted
+        // "no digest for uncached" no longer reflect the new behavior; the
+        // assertions now expect the computed digest of the served body.
+        // The "no digest" branch is exercised in buffered-digest.test.ts
+        // (size_too_large, size_unknown, disabled).
+        const EXPECTED_TESTING_DIGEST_B64URL =
+          'rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q';
+        const EXPECTED_TESTING_CONTENT_DIGEST = `sha-256=:rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5++TfXcNws7Q=:`;
+
+        it('computes digest/etag from the buffered body when no stored hash is available', async () => {
+          // dataAttributesSource returns undefined (no stored hash).
+          // dataSource returns 10 bytes ('testing...') with size=10, under
+          // the 2 MiB buffer threshold, so the helper buffers + hashes.
           app.get(
             '/:id',
             createDataHandler({
@@ -799,13 +814,26 @@ st
             .get('/not-a-real-id')
             .expect(200)
             .then((res: any) => {
-              assert.equal(res.headers['x-ar-io-digest'], undefined);
-              assert.equal(res.headers['content-digest'], undefined);
-              assert.equal(res.headers['etag'], undefined);
+              assert.equal(
+                res.headers['x-ar-io-digest'],
+                EXPECTED_TESTING_DIGEST_B64URL,
+              );
+              assert.equal(
+                res.headers['content-digest'],
+                EXPECTED_TESTING_CONTENT_DIGEST,
+              );
+              assert.equal(
+                res.headers['etag'],
+                `"${EXPECTED_TESTING_DIGEST_B64URL}"`,
+              );
             });
         });
 
-        it("shouldn't return digest/etag when hash is available AND data is not cached", async () => {
+        it('computes digest/etag from the buffered body when uncached even if a stored hash exists', async () => {
+          // Stored hash is 'hash' but data is not cached. Old behavior was to
+          // skip Content-Digest entirely; new behavior is to compute the
+          // digest from the actual served body so the response is verifiable.
+          // The computed digest reflects the served bytes, not the stored hash.
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'hash',
@@ -832,7 +860,70 @@ st
             .get('/not-a-real-id')
             .expect(200)
             .then((res: any) => {
-              assert.equal(res.headers['x-ar-io-digest'], undefined);
+              assert.equal(
+                res.headers['x-ar-io-digest'],
+                EXPECTED_TESTING_DIGEST_B64URL,
+              );
+              assert.equal(
+                res.headers['content-digest'],
+                EXPECTED_TESTING_CONTENT_DIGEST,
+              );
+              assert.equal(
+                res.headers['etag'],
+                `"${EXPECTED_TESTING_DIGEST_B64URL}"`,
+              );
+            });
+        });
+
+        it('emits X-AR-IO-Digest from chain index for uncached LARGE responses (above buffer threshold) but no Content-Digest/ETag', async () => {
+          // Body is larger than HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES (2 MiB
+          // default) and uncached, so the buffered helper skips digest
+          // computation. Pre-Option-A: no digest headers at all.
+          // Post-Option-A: X-AR-IO-Digest is set from the chain hash as an
+          // informational/advisory header, but Content-Digest and ETag stay
+          // omitted because we haven't verified the bytes ourselves.
+          const HASH = 'chain-hash-large-body';
+          const LARGE_SIZE = 3 * 1024 * 1024; // 3 MiB > 2 MiB threshold
+          const largeBody = Buffer.alloc(LARGE_SIZE, 0x5a);
+
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              hash: HASH,
+              size: LARGE_SIZE,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: false,
+              signature: null,
+            });
+          dataSource.getData = async () => ({
+            stream: Readable.from(largeBody),
+            size: LARGE_SIZE,
+            sourceContentType: 'application/octet-stream',
+            verified: false,
+            cached: false, // NOT cached
+            trusted: true,
+          });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/some-large-id')
+            .expect(200)
+            .then((res: any) => {
+              // The advisory header IS now emitted from the chain hash.
+              assert.equal(res.headers['x-ar-io-digest'], HASH);
+              // But the committed-to representation headers are NOT emitted
+              // for uncached responses we haven't verified.
               assert.equal(res.headers['content-digest'], undefined);
               assert.equal(res.headers['etag'], undefined);
             });
@@ -1001,6 +1092,105 @@ st
                 res.headers['x-ar-io-root-transaction-id'],
                 'root-tx',
               );
+            });
+        });
+      });
+
+      describe('X-AR-IO-Root-Path', () => {
+        it('emits [rootTransactionId] for single-level data items (parentId === rootTransactionId)', async () => {
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              rootTransactionId: 'root-tx',
+              parentId: 'root-tx', // single-level: parent IS the root
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-root-path'], 'root-tx');
+            });
+        });
+
+        it('omits the header for multi-level data items (parentId !== rootTransactionId)', async () => {
+          // navigatePathAndFind would throw on a missing intermediate
+          // bundle, so emitting `[root, parent]` is strictly worse than
+          // not emitting. Receiving gateway falls back to linear search.
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              rootTransactionId: 'root-tx',
+              parentId: 'intermediate-bundle', // multi-level
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-root-path'], undefined);
+            });
+        });
+
+        it('omits the header for L1 transactions (no parentId, no rootTransactionId)', async () => {
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-root-path'], undefined);
             });
         });
       });
@@ -1241,8 +1431,14 @@ st
             });
         });
 
-        it('should not return 304 when ETag is not set', async () => {
-          // No hash means no ETag
+        it('returns 200 with buffered-digest ETag when If-None-Match does not match', async () => {
+          // Contract change (2026): the buffered-digest helper now computes
+          // and sets ETag for small uncached responses. This test covers the
+          // non-match path — request sends a wrong If-None-Match, so the 304
+          // short-circuit is skipped and we get the 200 + body + ETag from the
+          // computed buffered digest. (The old test asserted "no ETag therefore
+          // 200" — that case now requires a body > buffer threshold, which is
+          // exercised in buffered-digest.test.ts.)
           dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
@@ -1264,14 +1460,68 @@ st
             }),
           );
 
+          // Send a non-matching If-None-Match — ETag from buffered digest
+          // won't match, so we get 200 with the body.
           return request(app)
             .get('/not-a-real-id')
-            .set('If-None-Match', '"some-hash"')
+            .set('If-None-Match', '"some-other-hash"')
             .expect(200)
             .then((res: any) => {
-              assert.equal(res.headers['etag'], undefined);
+              assert.equal(
+                res.headers['etag'],
+                `"rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q"`,
+              );
               assert.equal(res.body.toString(), 'testing...');
             });
+        });
+
+        it('returns 304 when If-None-Match matches the cached-digest ETag', async () => {
+          // The 304 short-circuit fires *before* sendBodyWithOptionalDigest
+          // runs (handlers.ts handleIfNoneMatch path), so it can only match
+          // when an ETag was set earlier — i.e. when the cached/HEAD digest
+          // path (setDigestStableVerifiedHeaders) populated ETag from
+          // dataAttributes.hash. That gate requires data.cached === true OR
+          // a HEAD request, so we override the data source to return cached.
+          dataAttributesSource.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+          dataSource.getData = (_params?: any) =>
+            Promise.resolve({
+              hash: 'rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q',
+              stream: Readable.from(Buffer.from('testing...')),
+              size: 10,
+              sourceContentType: 'application/octet-stream',
+              verified: true,
+              trusted: true,
+              cached: true,
+              requestAttributes: { hops: 0 },
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .set(
+              'If-None-Match',
+              '"rH97YzYj4XAQhOYHRljfHw1lLl1XTQP5--TfXcNws7Q"',
+            )
+            .expect(304);
         });
 
         it('should return 304 for range request when If-None-Match matches ETag', async () => {
@@ -2669,6 +2919,279 @@ st
           .expect(200)
           .then((res: any) => {
             assert.equal(res.headers['cache-control'], 'public, max-age=7200');
+          });
+      });
+    });
+
+    describe('Cache-Control: manifest fallback override (PE-9072)', () => {
+      // Helper: install a middleware that simulates ArNS pre-setting a long
+      // ANT TTL Cache-Control header before the data handler runs. The fix
+      // must override this for fallback resolutions, but preserve it for
+      // path/index resolutions.
+      const withSimulatedArnsTtl =
+        (ttl: number) => (req: any, res: any, next: any) => {
+          res.setHeader('Cache-Control', `public, max-age=${ttl}`);
+          next();
+        };
+
+      // Helper: build a manifest-shaped data attributes / data source pair
+      // that flows through sendManifestResponse with a given resolutionType.
+      const setupManifestFlow = (
+        resolutionType: 'path' | 'index' | 'fallback',
+      ) => {
+        const resolvedId = 'resolved-inner-id';
+
+        // First lookup: outer manifest is stable+trusted (worst-case TTL).
+        // Second lookup: inner resolved id is also stable+trusted.
+        dataAttributesSource.getDataAttributes = (id: string) => {
+          if (id === resolvedId) {
+            return Promise.resolve({
+              hash: 'inner-hash',
+              size: 10,
+              contentType: 'text/html',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+          }
+          return Promise.resolve({
+            hash: 'manifest-hash',
+            size: 100,
+            contentType: 'application/x.arweave-manifest+json',
+            isManifest: true,
+            stable: true,
+            verified: true,
+            signature: null,
+          });
+        };
+
+        dataSource.getData = (params: any) => {
+          if (params?.id === resolvedId) {
+            return Promise.resolve({
+              stream: Readable.from(Buffer.from('inner-content')),
+              size: 13,
+              verified: true,
+              trusted: true,
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            });
+          }
+          // Outer manifest body — content doesn't matter, resolveFromData
+          // is mocked.
+          return Promise.resolve({
+            stream: Readable.from(Buffer.from('{}')),
+            size: 2,
+            verified: true,
+            trusted: true,
+            cached: true,
+            sourceContentType: 'application/x.arweave-manifest+json',
+            requestAttributes: {
+              origin: 'node-url',
+              hops: 0,
+              clientIps: [],
+            },
+          });
+        };
+
+        manifestPathResolver = {
+          resolveFromIndex: () =>
+            Promise.resolve({
+              id: 'manifest-id',
+              resolvedId: undefined,
+              complete: false,
+            }),
+          resolveFromData: () =>
+            Promise.resolve({
+              id: 'manifest-id',
+              resolvedId,
+              complete: true,
+              resolutionType,
+            }),
+        };
+      };
+
+      it('should override pre-set ArNS Cache-Control with short TTL on fallback resolutions', async () => {
+        setupManifestFlow('fallback');
+
+        app.get(
+          '/:id/*',
+          withSimulatedArnsTtl(86400),
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/manifest-id/missing/path')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+            );
+          });
+      });
+
+      it('should preserve pre-set ArNS Cache-Control on path resolutions', async () => {
+        setupManifestFlow('path');
+
+        app.get(
+          '/:id/*',
+          withSimulatedArnsTtl(86400),
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/manifest-id/some/path')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(res.headers['cache-control'], 'public, max-age=86400');
+          });
+      });
+
+      it('should preserve pre-set ArNS Cache-Control on index resolutions', async () => {
+        setupManifestFlow('index');
+
+        app.get(
+          '/:id/*',
+          withSimulatedArnsTtl(86400),
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/manifest-id/')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(res.headers['cache-control'], 'public, max-age=86400');
+          });
+      });
+
+      it('should override pre-set ArNS Cache-Control with short TTL on fallback range requests', async () => {
+        setupManifestFlow('fallback');
+
+        app.get(
+          '/:id/*',
+          withSimulatedArnsTtl(86400),
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/manifest-id/missing/path')
+          .set('Range', 'bytes=0-4')
+          .expect(206)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+            );
+          });
+      });
+
+      it('should fall back to data-layer TTL when no Cache-Control was pre-set and resolution is path', async () => {
+        setupManifestFlow('path');
+
+        app.get(
+          '/:id/*',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        // Inner resolved id is stable+trusted → 30-day immutable.
+        return request(app)
+          .get('/manifest-id/some/path')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              'public, max-age=2592000, immutable',
+            );
+          });
+      });
+
+      it('should still apply short TTL on fallback even when no ArNS Cache-Control was pre-set', async () => {
+        setupManifestFlow('fallback');
+
+        app.get(
+          '/:id/*',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/manifest-id/missing/path')
+          .expect(200)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+            );
+          });
+      });
+    });
+
+    describe('Cache-Control: 404 directives (PE-9072)', () => {
+      it('should use must-revalidate (not immutable) on sendNotFound 404', async () => {
+        // Force a 404 by failing data retrieval.
+        dataAttributesSource.getDataAttributes = () =>
+          Promise.resolve(undefined);
+        dataSource.getData = () => Promise.reject(new Error('not found'));
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/missing-id')
+          .expect(404)
+          .then((res: any) => {
+            assert.equal(
+              res.headers['cache-control'],
+              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+            );
           });
       });
     });

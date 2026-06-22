@@ -317,6 +317,158 @@ describe('GatewaysRootTxIndex', () => {
       assert.equal(mockAxiosInstance.head.mock.calls.length, 1);
     });
 
+    describe('HEAD→range-GET fallback', () => {
+      it('falls back to range-GET when HEAD returns 405 Method Not Allowed', async () => {
+        // Some peers (especially behind CDNs/proxies) reject HEAD on
+        // /raw/:id even when the upstream gateway would handle it.
+        const dataItemId = 'test-data-item-123';
+        const rootTxId = 'root-tx-456';
+
+        const mockAxiosInstance = {
+          head: mock.fn(() =>
+            Promise.reject({
+              response: { status: 405 },
+              message: 'Method Not Allowed',
+            }),
+          ),
+          get: mock.fn(() =>
+            Promise.resolve({
+              status: 206,
+              headers: {
+                'x-ar-io-root-transaction-id': rootTxId,
+                'x-ar-io-root-data-item-offset': '1000',
+                'x-ar-io-root-data-offset': '1500',
+                'content-type': 'text/plain',
+                'content-length': '5000',
+              },
+            }),
+          ),
+          defaults: { raxConfig: {} },
+          interceptors: {
+            request: { use: mock.fn(), eject: mock.fn() },
+            response: { use: mock.fn(), eject: mock.fn() },
+          },
+        };
+
+        mock.method(axios, 'create', () => mockAxiosInstance);
+
+        const gatewaysIndex = new GatewaysRootTxIndex({
+          log,
+          trustedGatewaysUrls: { 'https://gateway.example.com': 1 },
+          rateLimitBurstSize: 1000,
+          rateLimitTokensPerInterval: 1000,
+          rateLimitInterval: 'second',
+        });
+        for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
+          limiter.content = limiter.bucketSize;
+        }
+
+        const result = await gatewaysIndex.getRootTx(dataItemId);
+
+        assert(result !== undefined);
+        assert.equal(result.rootTxId, rootTxId);
+        assert.equal(mockAxiosInstance.head.mock.calls.length, 1);
+        assert.equal(mockAxiosInstance.get.mock.calls.length, 1);
+        // GET must request the smallest legal range so we get headers
+        // back without pulling the body.
+        const getCall = mockAxiosInstance.get.mock.calls[0];
+        assert.deepEqual((getCall.arguments[1] as any).headers, {
+          Range: 'bytes=0-0',
+        });
+      });
+
+      it('falls back to range-GET when HEAD throws a network error', async () => {
+        const dataItemId = 'test-data-item-123';
+        const rootTxId = 'root-tx-456';
+
+        const mockAxiosInstance = {
+          head: mock.fn(() =>
+            Promise.reject(
+              Object.assign(new Error('connect ECONNREFUSED'), {
+                code: 'ECONNREFUSED',
+              }),
+            ),
+          ),
+          get: mock.fn(() =>
+            Promise.resolve({
+              status: 206,
+              headers: {
+                'x-ar-io-root-transaction-id': rootTxId,
+                'x-ar-io-root-data-item-offset': '1000',
+                'x-ar-io-root-data-offset': '1500',
+              },
+            }),
+          ),
+          defaults: { raxConfig: {} },
+          interceptors: {
+            request: { use: mock.fn(), eject: mock.fn() },
+            response: { use: mock.fn(), eject: mock.fn() },
+          },
+        };
+
+        mock.method(axios, 'create', () => mockAxiosInstance);
+
+        const gatewaysIndex = new GatewaysRootTxIndex({
+          log,
+          trustedGatewaysUrls: { 'https://gateway.example.com': 1 },
+          rateLimitBurstSize: 1000,
+          rateLimitTokensPerInterval: 1000,
+          rateLimitInterval: 'second',
+        });
+        for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
+          limiter.content = limiter.bucketSize;
+        }
+
+        const result = await gatewaysIndex.getRootTx(dataItemId);
+
+        assert(result !== undefined);
+        assert.equal(result.rootTxId, rootTxId);
+        assert.equal(mockAxiosInstance.get.mock.calls.length, 1);
+      });
+
+      it('does NOT fall back to GET on 404 (peer says item does not exist)', async () => {
+        // 404 is a definitive answer; falling back to GET would just
+        // hit the same 404 (or worse, mask a real not-found case).
+        const dataItemId = 'does-not-exist-123';
+
+        const mockAxiosInstance = {
+          head: mock.fn(() =>
+            Promise.reject({
+              response: { status: 404 },
+              message: 'Not found',
+            }),
+          ),
+          get: mock.fn(() => {
+            throw new Error('GET should not be called for 404');
+          }),
+          defaults: { raxConfig: {} },
+          interceptors: {
+            request: { use: mock.fn(), eject: mock.fn() },
+            response: { use: mock.fn(), eject: mock.fn() },
+          },
+        };
+
+        mock.method(axios, 'create', () => mockAxiosInstance);
+
+        const gatewaysIndex = new GatewaysRootTxIndex({
+          log,
+          trustedGatewaysUrls: { 'https://gateway.example.com': 1 },
+          rateLimitBurstSize: 1000,
+          rateLimitTokensPerInterval: 1000,
+          rateLimitInterval: 'second',
+        });
+        for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
+          limiter.content = limiter.bucketSize;
+        }
+
+        const result = await gatewaysIndex.getRootTx(dataItemId);
+
+        assert.equal(result, undefined);
+        assert.equal(mockAxiosInstance.head.mock.calls.length, 1);
+        assert.equal(mockAxiosInstance.get.mock.calls.length, 0);
+      });
+    });
+
     it('should fallback to next gateway on error', async () => {
       const dataItemId = 'test-data-item-123';
       const rootTxId = 'root-tx-456';

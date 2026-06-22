@@ -119,6 +119,58 @@ UPDATE SET
   filter_id = IFNULL(@filter_id, filter_id),
   last_indexed_at = @indexed_at
 
+/*
+ * Root atom (consistency tuple): the fields describing a data item's
+ * placement within an L1 bundling. They must move together. Two writer
+ * contracts express this:
+ *
+ *   - insertOptimisticDataItem — used by the admin queue-data-item
+ *     route, which has no tuple knowledge. INSERT carries NULL for
+ *     every root-atom field; on conflict, the statement does nothing.
+ *     Never touches the tuple, never alters always-known fields like
+ *     signature/owner/tags (those are immutable per data-item id).
+ *     Safe to call repeatedly for the same id.
+ *
+ *   - upsertNewDataItem — used by the unbundle path and the on-demand
+ *     metadata resolver, both of which know the full root atom. INSERT
+ *     carries the full tuple; on conflict, every root-atom field is
+ *     updated atomically (COALESCE protects against the rare partial
+ *     write — see note below). Height is IFNULL'd because it lives on
+ *     a different timeline than the bundling (set by chain ingestion
+ *     via updateNewDataItemHeights).
+ *
+ * The COALESCE on the root-atom UPDATE columns is a safety net for
+ * callers that don't actually have full tuple knowledge yet (e.g., a
+ * partially-resolved metadata fetch). It is NOT a license to write
+ * partial tuples — callers in the unbundle path are expected to
+ * provide all eleven fields together.
+ */
+
+-- insertOptimisticDataItem
+--
+-- The eleven root-atom columns are hardcoded to NULL here, even though
+-- the prepared-statement bindings could supply them. This enforces the
+-- "no tuple knowledge" contract at the SQL layer: a future caller that
+-- accidentally binds non-NULL values for parent_id / root_transaction_id
+-- / the offset/size fields cannot recreate the shadow-row class this
+-- statement exists to prevent. The TS dispatch via the isOptimistic
+-- flag is the first line of defense; this is the second.
+-- height stays bound — it's not part of the root atom and is written
+-- on a separate timeline by chain ingestion.
+INSERT INTO new_data_items (
+  id, parent_id, root_transaction_id, height, signature, anchor,
+  owner_address, target, data_offset, data_size, content_type,
+  tag_count, indexed_at, signature_type, offset, size, owner_offset,
+  owner_size, signature_offset, signature_size, content_encoding,
+  root_parent_offset
+) VALUES (
+  @id, NULL, NULL, @height, @signature, @anchor,
+  @owner_address, @target, NULL, @data_size, @content_type,
+  @tag_count, @indexed_at, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, @content_encoding,
+  NULL
+) ON CONFLICT DO NOTHING
+
 -- upsertNewDataItem
 INSERT INTO new_data_items (
   id, parent_id, root_transaction_id, height, signature, anchor,
@@ -134,7 +186,15 @@ INSERT INTO new_data_items (
   @root_parent_offset
 ) ON CONFLICT DO
 UPDATE SET
-  height = IFNULL(@height, height),
-  root_transaction_id = @root_transaction_id,
-  parent_id = @parent_id,
-  data_offset = @data_offset
+  height              = IFNULL(@height,                height),
+  parent_id           = COALESCE(@parent_id,           parent_id),
+  root_transaction_id = COALESCE(@root_transaction_id, root_transaction_id),
+  data_offset         = COALESCE(@data_offset,         data_offset),
+  root_parent_offset  = COALESCE(@root_parent_offset,  root_parent_offset),
+  offset              = COALESCE(@offset,              offset),
+  size                = COALESCE(@size,                size),
+  signature_offset    = COALESCE(@signature_offset,    signature_offset),
+  signature_size      = COALESCE(@signature_size,      signature_size),
+  owner_offset        = COALESCE(@owner_offset,        owner_offset),
+  owner_size          = COALESCE(@owner_size,          owner_size),
+  signature_type      = COALESCE(@signature_type,      signature_type)

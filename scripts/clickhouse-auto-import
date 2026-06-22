@@ -29,6 +29,109 @@ staging_dir="${ETL_STAGING_PATH:-./data/etl/staging}"
 sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hour by default
 height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
 max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
+idle_wait_timeout_s=${CLICKHOUSE_AUTO_IMPORT_IDLE_WAIT_TIMEOUT_S:-600}
+export_retry_max=${CLICKHOUSE_AUTO_IMPORT_EXPORT_MAX_RETRIES:-3}
+export_retry_delay_s=${CLICKHOUSE_AUTO_IMPORT_EXPORT_RETRY_DELAY_S:-5}
+core_db_path="${CORE_DB_PATH:-data/sqlite/core.db}"
+bundles_db_path="${BUNDLES_DB_PATH:-data/sqlite/bundles.db}"
+
+# sqlite3 powers the pre-batch empty-range check below. If it's missing we
+# disable the skip optimization rather than failing — the pipeline still
+# works, it just spends time exporting empty ranges the way it used to.
+skip_empty_batches=true
+if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "Warning: sqlite3 not available; empty-range skip optimization disabled." >&2
+    skip_empty_batches=false
+fi
+
+# Returns 0 when any of the three source tables has at least one row in
+# [start, end]; 1 otherwise. Every error path — missing DB file, query
+# failure, or corrupted output — fails open by returning 0 so the batch
+# still runs. Silently skipping a populated range is far worse than
+# wasting an export on an empty one.
+missing_db_warned_core=""
+missing_db_warned_bundles=""
+batch_has_data() {
+    local start=$1
+    local end=$2
+    local found rc
+
+    if [ ! -f "$core_db_path" ]; then
+        if [ -z "$missing_db_warned_core" ]; then
+            echo "Warning: core DB not found at $core_db_path; empty-range skip will fail open (assume data present)." >&2
+            missing_db_warned_core=1
+        fi
+        return 0
+    fi
+
+    found=$(sqlite3 "$core_db_path" \
+        "SELECT 1 FROM stable_blocks WHERE height >= $start AND height <= $end LIMIT 1;" 2>/dev/null)
+    rc=$?
+    if [ $rc -ne 0 ]; then return 0; fi
+    [ "$found" = "1" ] && return 0
+
+    found=$(sqlite3 "$core_db_path" \
+        "SELECT 1 FROM stable_transactions WHERE height >= $start AND height <= $end LIMIT 1;" 2>/dev/null)
+    rc=$?
+    if [ $rc -ne 0 ]; then return 0; fi
+    [ "$found" = "1" ] && return 0
+
+    if [ ! -f "$bundles_db_path" ]; then
+        if [ -z "$missing_db_warned_bundles" ]; then
+            echo "Warning: bundles DB not found at $bundles_db_path; empty-range skip will fail open (assume data present)." >&2
+            missing_db_warned_bundles=1
+        fi
+        return 0
+    fi
+
+    found=$(sqlite3 "$bundles_db_path" \
+        "SELECT 1 FROM stable_data_items WHERE height >= $start AND height <= $end LIMIT 1;" 2>/dev/null)
+    rc=$?
+    if [ $rc -ne 0 ]; then return 0; fi
+    [ "$found" = "1" ] && return 0
+
+    return 1
+}
+
+# Block until the gateway's parquet-export singleton is no longer 'running',
+# so a new POST doesn't immediately 409. This guards against: (a) the
+# prior batch's script bailing out early while the server-side worker
+# keeps churning, (b) the gateway restart / not_started race where the
+# singleton is mid-export for a different job than we think, and
+# (c) external callers racing the orchestrator. Returns 0 when idle,
+# 1 if the timeout expires.
+wait_for_export_idle() {
+    local timeout_s=${1:-600}
+    local start elapsed
+    local status_body status_val reported_output
+    start=$(date +%s)
+
+    while true; do
+        status_body="$(curl -s --fail --show-error \
+            -H "Authorization: Bearer $ADMIN_API_KEY" \
+            "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet/status" 2>/dev/null)"
+
+        if [ -n "$status_body" ]; then
+            status_val="$(echo "$status_body" | jq -r '.status // ""' 2>/dev/null)"
+            if [ "$status_val" != "running" ]; then
+                return 0
+            fi
+            reported_output="$(echo "$status_body" | jq -r '.outputDir // ""' 2>/dev/null)"
+            elapsed=$(( $(date +%s) - start ))
+            echo "Waiting for prior export to finish (outputDir=$reported_output, elapsed=${elapsed}s/${timeout_s}s)..."
+        else
+            elapsed=$(( $(date +%s) - start ))
+            echo "Warning: status endpoint unreachable while waiting for idle (elapsed=${elapsed}s)." >&2
+        fi
+
+        elapsed=$(( $(date +%s) - start ))
+        if [ "$elapsed" -ge "$timeout_s" ]; then
+            echo "Warning: Gave up waiting for server idle after ${timeout_s}s; proceeding anyway." >&2
+            return 1
+        fi
+        sleep 5
+    done
+}
 
 # Check critical preconditions
 if [ -z "${ADMIN_API_KEY:-}" ]; then
@@ -65,6 +168,7 @@ while true; do
     cycle_prune_failed=0
     cycle_prune_unverified=0
     cycle_debug_failed=0
+    cycle_skipped_empty=0
 
     # Refresh operator TTL rules before importing new partitions. The loader
     # exits 0 for missing/malformed files and leaves any previously loaded
@@ -173,36 +277,101 @@ while true; do
             continue
         fi
 
-        # Generate job staging directory for this batch
-        job_id="$(date +%Y%m%d_%H%M%S)_$$"
-        job_staging_dir="$staging_dir/job-${current_height}-${end_height}-${job_id}"
-        
-        # Step 1: Export to Parquet format in staging
-        echo "Starting Parquet export..."
+        # Skip ranges with no source rows. With sparse backfills most
+        # buckets between min/maxStableDataItem are empty, and attempting
+        # export/import for them just produces "Input directory does not
+        # exist" noise or 0-byte parquet files. Nothing in an empty range
+        # needs pruning either, so skipping is safe.
+        if [ "$skip_empty_batches" = true ] && ! batch_has_data "$current_height" "$end_height"; then
+            echo "Skipping empty range $current_height-$end_height (no blocks, transactions, or data items)."
+            batch_result="skipped_empty"
+            cycle_batches=$((cycle_batches + 1))
+            cycle_skipped_empty=$((cycle_skipped_empty + 1))
+            echo "METRIC batch_result range=${current_height}-${end_height} export=skipped import=skipped prune=skipped post_prune_min_stable= result=skipped_empty duration_s=$(( $(date +%s) - batch_start_time ))"
+            current_height=$((end_height + 1))
+            continue
+        fi
+
+        # Step 1: Export to Parquet format in staging.
+        #
+        # Exit code 2 from parquet-export means a retryable race: 409 from a
+        # concurrent caller winning between our wait_for_export_idle and POST,
+        # status-singleton drift, or a mid-submission gateway restart. We burn
+        # a few attempts here before giving up so one transient race doesn't
+        # cost a whole 10k-height batch to the next cycle.
+        #
+        # Each attempt gets a fresh job_staging_dir so a partial tree from a
+        # previous attempt can't confuse the importer. wait_for_export_idle is
+        # called before each attempt because it's exactly the "server is
+        # running someone else's job" state we're trying to out-wait.
         export_start_time=$(date +%s)
-        
-        # Run parquet-export script with staging-based workflow
-        # Note: L2 transactions (data items) are included by default, only L1 needs explicit inclusion
-        ./scripts/parquet-export \
-            --start-height "$current_height" \
-            --end-height "$end_height" \
-            --height-partition-size "$height_interval" \
-            --staging-job-dir "$job_staging_dir" \
-            --output-dir "$dataset_dir" \
-            --max-file-rows "$max_rows_per_file" \
-            --api-host "$ar_io_host" \
-            --api-port "$ar_io_port"
-        
-        export_status=$?
+        export_attempt=1
+        export_status=2
+        job_staging_dir=""
+        while [ "$export_attempt" -le $((export_retry_max + 1)) ]; do
+            # On retries only, drop the previous attempt's (likely empty or
+            # partial) staging dir so the importer sees a clean tree. First
+            # attempt has nothing to clean; previous batches' dirs are
+            # managed by their own success/failure paths below.
+            if [ -n "$job_staging_dir" ]; then
+                rm -rf "$job_staging_dir" 2>/dev/null || true
+            fi
+            job_id="$(date +%Y%m%d_%H%M%S)_$$_${export_attempt}"
+            job_staging_dir="$staging_dir/job-${current_height}-${end_height}-${job_id}"
+
+            wait_for_export_idle "$idle_wait_timeout_s"
+
+            if [ "$export_attempt" -eq 1 ]; then
+                echo "Starting Parquet export..."
+            else
+                echo "Starting Parquet export (retry ${export_attempt}/$((export_retry_max + 1)))..."
+            fi
+
+            # Note: L2 transactions (data items) are included by default, only L1 needs explicit inclusion
+            ./scripts/parquet-export \
+                --start-height "$current_height" \
+                --end-height "$end_height" \
+                --height-partition-size "$height_interval" \
+                --staging-job-dir "$job_staging_dir" \
+                --output-dir "$dataset_dir" \
+                --max-file-rows "$max_rows_per_file" \
+                --api-host "$ar_io_host" \
+                --api-port "$ar_io_port"
+            export_status=$?
+
+            if [ $export_status -ne 2 ]; then
+                break
+            fi
+
+            if [ "$export_attempt" -ge $((export_retry_max + 1)) ]; then
+                echo "Warning: Parquet export still contending after ${export_retry_max} retries for range $current_height-$end_height"
+                break
+            fi
+
+            echo "Export contention detected; retrying in ${export_retry_delay_s}s..."
+            sleep "$export_retry_delay_s"
+            export_attempt=$((export_attempt + 1))
+        done
         export_complete_time=$(date +%s)
         
         if [ $export_status -eq 0 ]; then
-            echo "Parquet export completed successfully."
-            log_timing "Export to parquet" "$export_start_time" "$export_complete_time"
-            export_success=true
-            export_stage="ok"
+            # The parquet-export script now verifies OUTPUT_DIR exists before
+            # exiting 0, but double-check here in case an older script version
+            # is in use.
+            if [ ! -d "$job_staging_dir" ]; then
+                echo "Warning: Parquet export reported success but staging dir is missing: $job_staging_dir"
+                echo "         This usually indicates a concurrent export race or an aborted worker."
+                log_timing "Export to parquet (missing dir)" "$export_start_time" "$export_complete_time"
+                export_success=false
+                export_stage="failed"
+            else
+                echo "Parquet export completed successfully."
+                log_timing "Export to parquet" "$export_start_time" "$export_complete_time"
+                export_success=true
+                export_stage="ok"
+            fi
         else
-            echo "Warning: Parquet export failed with status $export_status"
+            echo "Warning: Parquet export failed with exit status $export_status for range $current_height-$end_height"
             log_timing "Export to parquet (failed)" "$export_start_time" "$export_complete_time"
             export_success=false
             export_stage="failed"
@@ -303,7 +472,7 @@ while true; do
         if [ "$import_success" = true ]; then
             echo "Pruning stable data items from height $current_height to $end_height..."
             prune_start_time=$(date +%s)
-            curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
+            curl -s --fail --show-error -o /dev/null -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
                 -H "Authorization: Bearer $ADMIN_API_KEY" \
                 -H "Content-Type: application/json" \
                 -d "{
@@ -391,7 +560,7 @@ while true; do
     loop_end_time=$(date +%s)
     log_timing "Complete import cycle" "$loop_start_time" "$loop_end_time"
 
-    echo "METRIC cycle_summary batches=${cycle_batches} ok=${cycle_ok} export_failed=${cycle_export_failed} import_failed=${cycle_import_failed} prune_failed=${cycle_prune_failed} prune_unverified=${cycle_prune_unverified} debug_failed=${cycle_debug_failed} duration_s=$((loop_end_time - loop_start_time))"
+    echo "METRIC cycle_summary batches=${cycle_batches} ok=${cycle_ok} skipped_empty=${cycle_skipped_empty} export_failed=${cycle_export_failed} import_failed=${cycle_import_failed} prune_failed=${cycle_prune_failed} prune_unverified=${cycle_prune_unverified} debug_failed=${cycle_debug_failed} duration_s=$((loop_end_time - loop_start_time))"
 
     echo "Sleeping for $sleep_interval seconds..."
     sleep "$sleep_interval"

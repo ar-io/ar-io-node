@@ -27,7 +27,17 @@ export class DnsResolver {
   }
 
   /**
-   * Resolve a single URL to its IP addresses
+   * Resolve a URL's hostname to IP addresses.
+   *
+   * DNS lookup runs for both protocols, but the returned `resolvedUrl`
+   * differs by protocol:
+   * - HTTPS: `resolvedUrl === originalUrl`. The hostname is preserved so
+   *   TLS SNI/Host stay valid (otherwise `ERR_TLS_CERT_ALTNAME_INVALID`).
+   *   DNS is used only for the in-memory cache and change-detection logs.
+   * - HTTP: the first resolved IP is substituted into `resolvedUrl`, so
+   *   `resolvedUrl !== originalUrl`.
+   *
+   * Callers must not assume `resolvedUrl !== originalUrl`.
    */
   async resolveUrl(urlString: string): Promise<ResolvedUrl> {
     const log = this.log.child({ method: 'resolveUrl', url: urlString });
@@ -94,15 +104,32 @@ export class DnsResolver {
         throw new Error(`No IP addresses found for hostname: ${hostname}`);
       }
 
-      // Use the first IP address
-      const selectedIp = ips[0];
-      // IPv6 addresses need brackets when setting hostname
-      if (selectedIp.includes(':')) {
-        url.hostname = `[${selectedIp}]`;
+      // For HTTPS URLs, do NOT substitute the hostname with an IP. fetch()
+      // would otherwise set TLS SNI and Host to the IP, which mismatches the
+      // server certificate (cert is for the hostname, not the IP) and trips
+      // ERR_TLS_CERT_ALTNAME_INVALID. The DNS resolution still runs so
+      // change-detection logging and the IP cache stay accurate; we just
+      // return the original URL and let Node's native DNS resolve it at
+      // request time with the correct hostname for SNI.
+      let resolvedUrl: string;
+      let selectedIp: string | undefined;
+      if (url.protocol === 'https:') {
+        resolvedUrl = urlString;
+        log.debug('Preserving hostname for HTTPS URL to maintain SNI', {
+          hostname,
+          resolvedIps: ips.length,
+        });
       } else {
-        url.hostname = selectedIp;
+        // Use the first IP address
+        selectedIp = ips[0];
+        // IPv6 addresses need brackets when setting hostname
+        if (selectedIp.includes(':')) {
+          url.hostname = `[${selectedIp}]`;
+        } else {
+          url.hostname = selectedIp;
+        }
+        resolvedUrl = url.toString();
       }
-      const resolvedUrl = url.toString();
 
       const result: ResolvedUrl = {
         hostname,
@@ -115,7 +142,7 @@ export class DnsResolver {
       this.resolvedUrls.set(hostname, result);
       log.debug('Successfully resolved URL', {
         hostname,
-        selectedIp,
+        ...(selectedIp !== undefined ? { selectedIp } : {}),
         totalIps: ips.length,
       });
 

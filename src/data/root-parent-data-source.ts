@@ -291,12 +291,14 @@ export class RootParentDataSource implements ContiguousDataSource {
     region,
     parentSpan,
     signal,
+    acceptContentType,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
     signal?: AbortSignal;
+    acceptContentType?: (contentType: string | undefined) => boolean;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'RootParentDataSource.getData',
@@ -393,6 +395,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                 region: finalRegion,
                 parentSpan: span,
                 signal,
+                acceptContentType,
               });
 
               // Cache only after successful fetch to avoid poisoning from bad hints
@@ -495,6 +498,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             region: finalRegion,
             parentSpan: span,
             signal,
+            acceptContentType,
           });
 
           // Cache only after successful fetch to avoid poisoning from bad hints
@@ -594,6 +598,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             region: finalRegion,
             parentSpan: fetchSpan,
             signal,
+            acceptContentType,
           });
 
           span.setAttributes({
@@ -734,6 +739,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             region,
             parentSpan: span,
             signal,
+            acceptContentType,
           });
         } catch (error: any) {
           span.recordException(error);
@@ -921,6 +927,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           region: finalRegion,
           parentSpan: fetchSpan,
           signal,
+          acceptContentType,
         });
 
         span.setAttributes({

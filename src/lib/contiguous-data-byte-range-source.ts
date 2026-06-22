@@ -10,19 +10,44 @@ import { ByteRangeSource } from './byte-range-source.js';
 import { ContiguousDataSource } from '../types.js';
 
 /**
- * Collects a readable stream into a single Buffer.
+ * Drain a readable stream into a single fixed-size Buffer.
+ *
+ * Pre-allocates `Buffer.alloc(size)` and copies chunks at running offset.
+ * Aborts the stream and throws if the upstream emits more bytes than
+ * requested. This avoids the O(N²) `Buffer.concat`-per-chunk shape and
+ * removes the slot-8 pinned-accumulator pattern that motivated PE-9081.
  */
-async function streamToBuffer(stream: Readable): Promise<Buffer> {
-  const chunks: Buffer[] = [];
+async function streamToBuffer(stream: Readable, size: number): Promise<Buffer> {
+  if (!Number.isFinite(size) || size <= 0) {
+    throw new Error(`streamToBuffer: invalid size ${size}`);
+  }
+  const buffer = Buffer.alloc(size);
+  let bytesRead = 0;
   try {
-    for await (const chunk of stream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    for await (const rawChunk of stream) {
+      const chunk = Buffer.isBuffer(rawChunk)
+        ? rawChunk
+        : Buffer.from(rawChunk);
+      if (bytesRead + chunk.length > size) {
+        stream.destroy();
+        throw new Error(
+          `streamToBuffer: upstream emitted more bytes than requested ` +
+            `(requestedSize=${size}, bytesAtOverage=${bytesRead + chunk.length})`,
+        );
+      }
+      chunk.copy(buffer, bytesRead);
+      bytesRead += chunk.length;
     }
-    return Buffer.concat(chunks);
   } catch (error) {
-    stream.destroy();
+    if (!stream.destroyed) stream.destroy();
     throw error;
   }
+  if (bytesRead !== size) {
+    throw new Error(
+      `streamToBuffer: short read (requestedSize=${size}, actualSize=${bytesRead})`,
+    );
+  }
+  return buffer;
 }
 
 /**
@@ -86,16 +111,10 @@ export class ContiguousDataByteRangeSource implements ByteRangeSource {
       },
     });
 
-    // Convert stream to buffer
-    const buffer = await streamToBuffer(data.stream);
-
-    if (buffer.length !== size) {
-      throw new Error(
-        `ContiguousData short read: expected ${size} bytes, got ${buffer.length}`,
-      );
-    }
-
-    return buffer;
+    // Drain to a pre-allocated buffer of exactly `size` bytes, aborting
+    // on upstream overage. Replaces the previous Buffer.concat-based
+    // accumulator that allowed unbounded memory growth (PE-9081).
+    return streamToBuffer(data.stream, size);
   }
 
   async close(): Promise<void> {

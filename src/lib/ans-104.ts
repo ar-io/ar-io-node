@@ -22,6 +22,7 @@ import * as winston from 'winston';
 import * as events from '../events.js';
 import { createFilter } from '../filters.js';
 import log from '../log.js';
+import * as metrics from '../metrics.js';
 import {
   ContiguousData,
   ContiguousDataSource,
@@ -40,6 +41,45 @@ const UNBUNDLE_COMPLETE: ParseEventName = 'unbundle-complete';
 const UNBUNDLE_ERROR: ParseEventName = 'unbundle-error';
 
 const DEFAULT_STREAM_TIMEOUT = 1000 * 30; // 30 seconds
+
+/**
+ * Predicate used by ANS-104 bundle fetches to reject upstream responses
+ * whose content-type can't plausibly be a raw bundle. The known footprint
+ * is `text/html` parking pages cached in the legacy gateway's S3 layer
+ * from a Sept-2024 outage of `gateway.bundlr.network`; rejecting them
+ * here forces the data-source chain to fall through to the next priority
+ * tier (and ultimately to `TxChunksDataSource` for fresh Arweave chunks).
+ *
+ * Accepts:
+ *   - `undefined` — many legitimate upstreams omit Content-Type for raw
+ *     bundle responses.
+ *   - `application/octet-stream` — the canonical bundle content-type.
+ *   - `application/x-arweave-data` — used by some Arweave-stack tools.
+ *   - `binary/octet-stream` — legacy MIME synonym for application/octet-stream;
+ *     ~350 such rows exist in production gateway `data.db.contiguous_data`
+ *     from older upstreams (PE-9099 investigation, 2026-05-18).
+ */
+export const isAcceptableBundleContentType = (
+  contentType: string | null | undefined,
+): boolean => {
+  // Stored attributes in SQLite surface NULL as JS `null`, not
+  // `undefined`. Treat both as "no content-type known" and accept.
+  // (A previous version handled only `undefined` and crashed on `null`
+  // when called from ReadThroughDataCache's eviction check — every
+  // bundle whose stored contentType was NULL would throw "Cannot read
+  // properties of null (reading 'trim')" and the unbundle would fail.)
+  if (contentType === undefined || contentType === null) return true;
+  // Real upstreams have been observed to send variant casings and
+  // whitespace (`Application/Octet-Stream`, ` application/octet-stream `).
+  // Normalize before prefix-matching so we don't reject valid responses
+  // on a cosmetic difference.
+  const normalized = contentType.trim().toLowerCase();
+  return (
+    normalized.startsWith('application/octet-stream') ||
+    normalized.startsWith('application/x-arweave-data') ||
+    normalized.startsWith('binary/octet-stream')
+  );
+};
 
 interface ParserMessage {
   eventName: ParseEventName;
@@ -129,6 +169,10 @@ export class Ans104Parser {
   private log: winston.Logger;
   private contiguousDataSource: ContiguousDataSource;
   private streamTimeout: number;
+  private getDataTimeoutMs: number;
+  private streamTotalTimeoutMs: number;
+  private parseJobTimeoutMs: number;
+  private getDataWallClockTimeoutMs: number;
   private workers: any[] = []; // TODO what's the type for this?
   private workQueue: any[] = []; // TODO what's the type for this?
 
@@ -139,6 +183,10 @@ export class Ans104Parser {
     dataItemIndexFilterString,
     workerCount,
     streamTimeout = DEFAULT_STREAM_TIMEOUT,
+    getDataTimeoutMs = 30000,
+    streamTotalTimeoutMs = 120000,
+    parseJobTimeoutMs = 600000,
+    getDataWallClockTimeoutMs = 300000,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
@@ -146,10 +194,18 @@ export class Ans104Parser {
     dataItemIndexFilterString: string;
     workerCount: number;
     streamTimeout?: number;
+    getDataTimeoutMs?: number;
+    streamTotalTimeoutMs?: number;
+    parseJobTimeoutMs?: number;
+    getDataWallClockTimeoutMs?: number;
   }) {
     this.log = log.child({ class: 'Ans104Parser' });
     this.contiguousDataSource = contiguousDataSource;
     this.streamTimeout = streamTimeout;
+    this.getDataTimeoutMs = getDataTimeoutMs;
+    this.streamTotalTimeoutMs = streamTotalTimeoutMs;
+    this.parseJobTimeoutMs = parseJobTimeoutMs;
+    this.getDataWallClockTimeoutMs = getDataWallClockTimeoutMs;
 
     const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
 
@@ -163,17 +219,58 @@ export class Ans104Parser {
 
       let job: any = null; // Current item from the queue
       let error: any = null; // Error that caused the worker to crash
+      // A worker can emit 'exit' without ever emitting 'online' (failed
+      // startup). Track whether it was counted so 'exit' doesn't drive the
+      // pool-size gauge negative.
+      let countedInPool = false;
+      // Per-job wall-clock timer. The parser worker thread can hang inside
+      // parseBundle without exiting and without posting any terminal
+      // message — observed in production after PR #746 closed the
+      // upstream getData/stream hangs. When this timer fires we terminate
+      // the worker; the existing 'exit' handler rejects the job and
+      // respawns. The PR #746 follow-up explicitly flagged this path.
+      let jobTimer: NodeJS.Timeout | undefined;
+
+      function clearJobTimer() {
+        if (jobTimer !== undefined) {
+          clearTimeout(jobTimer);
+          jobTimer = undefined;
+        }
+      }
 
       function takeWork() {
         if (!job && self.workQueue.length) {
           // If there's a job in the queue, send it to the worker
           job = self.workQueue.shift();
           worker.postMessage(job.message);
+          // Arm the per-job timeout. Skip for the 'terminate' control
+          // message — that's the clean shutdown path and should not be
+          // racing a wall-clock cap.
+          if (self.parseJobTimeoutMs > 0 && job.message !== 'terminate') {
+            const armedFor = job;
+            jobTimer = setTimeout(() => {
+              // Best-effort log; `armedFor.message` is the parseBundle args
+              // (parentId etc.) for the job that's been running too long.
+              self.log.error(
+                'Ans104 parser job exceeded wall-clock timeout, terminating worker',
+                {
+                  parentId: armedFor?.message?.parentId,
+                  timeoutMs: self.parseJobTimeoutMs,
+                },
+              );
+              metrics.ans104ParserJobTimeoutsCounter.inc();
+              // Terminate triggers the 'exit' handler (non-zero code),
+              // which already rejects the in-flight job and respawns.
+              worker.terminate();
+            }, self.parseJobTimeoutMs);
+          }
         }
       }
 
       worker
         .on('online', () => {
+          countedInPool = true;
+          metrics.ans104ParserWorkerPoolSizeGauge.inc();
           self.workers.push({ takeWork });
           takeWork();
         })
@@ -193,14 +290,17 @@ export class Ans104Parser {
                   dataItemIndexFilterString,
                   ...eventBody,
                 });
+                clearJobTimer();
                 job.resolve();
                 job = null;
                 break;
               case UNBUNDLE_ERROR:
+                clearJobTimer();
                 job.reject(new Error('Worker error'));
                 job = null;
                 break;
               default:
+                clearJobTimer();
                 job.reject(new Error('Unknown worker message'));
                 job = null;
                 break;
@@ -213,6 +313,16 @@ export class Ans104Parser {
           error = err;
         })
         .on('exit', (code) => {
+          // Clear before touching job — the 'exit' branch below may run
+          // job.resolve()/reject() which itself can fire downstream
+          // handlers; we don't want a pending timer to fire concurrently.
+          clearJobTimer();
+          if (countedInPool) {
+            metrics.ans104ParserWorkerPoolSizeGauge.dec();
+          }
+          metrics.ans104ParserWorkerExitsCounter.inc({
+            exit_code: String(code),
+          });
           self.workers = self.workers.filter(
             (w: any) => w.takeWork !== takeWork,
           );
@@ -281,11 +391,87 @@ export class Ans104Parser {
     return new Promise(async (resolve, reject) => {
       let bundlePath: string | undefined;
       let data: ContiguousData | undefined;
+      let streamTotalTimer: NodeJS.Timeout | undefined;
       try {
         const log = this.log.child({ parentId });
+        const getDataController = new AbortController();
+        let getDataTimer: NodeJS.Timeout | undefined;
+        if (this.getDataTimeoutMs > 0) {
+          getDataTimer = setTimeout(() => {
+            getDataController.abort(
+              new Error(
+                `Ans104Parser getData timeout after ${this.getDataTimeoutMs}ms`,
+              ),
+            );
+          }, this.getDataTimeoutMs);
+        }
 
-        // Get data stream
-        data = await this.contiguousDataSource.getData({ id: parentId });
+        // Get data stream. PE-9099: refuse responses whose content-type
+        // can't be a raw ANS-104 bundle (most notably text/html parking
+        // pages held in poisoned upstream caches). The data source chain
+        // will fall through to the next priority tier and ultimately to
+        // chunks, which fetches real bytes from Arweave network nodes.
+        //
+        // PE-9102 follow-up: `getDataController.abort()` above is the
+        // *correct* termination path — it fires at `getDataTimeoutMs` and
+        // resolves cleanly in ~99 % of cases. But ~0.4 % of attempts get
+        // wedged in the cascade indefinitely: the abort fires, no source
+        // honors it, the await never throws. Per-bundle hang times of
+        // 130+ minutes were captured in production, pinning every unbundle
+        // worker and dropping throughput to zero.
+        //
+        // Mirrors PR #744's fix for `DataImporter.download`: race the
+        // cascade promise against a wall-clock cap. When the cap wins, the
+        // underlying cascade promise is abandoned (sockets / peer slots
+        // stay held until the cascade eventually unwedges; acceptable since
+        // the alternative is a permanent worker stall). The cap default is
+        // generous (5 min, 20× the abort timer) so it only fires for true
+        // zombies — the "slow but eventually resolves" cases (observed up
+        // to 10 min) still win on the abort path.
+        let getDataWallClockTimer: NodeJS.Timeout | undefined;
+        try {
+          data = await Promise.race<ContiguousData>([
+            this.contiguousDataSource.getData({
+              id: parentId,
+              signal: getDataController.signal,
+              acceptContentType: isAcceptableBundleContentType,
+            }),
+            new Promise<never>((_, raceReject) => {
+              if (this.getDataWallClockTimeoutMs <= 0) return;
+              getDataWallClockTimer = setTimeout(() => {
+                log.error(
+                  'Ans104Parser getData wall-clock cap fired — cascade did not honor AbortSignal',
+                  {
+                    parentId,
+                    wallClockMs: this.getDataWallClockTimeoutMs,
+                  },
+                );
+                metrics.ans104ParserGetDataWallClockFiresCounter.inc();
+                // Best-effort: signal abort one more time in case the
+                // cascade can eventually clean up its socket / slot state.
+                try {
+                  getDataController.abort(
+                    new Error('Ans104Parser getData wall-clock cap'),
+                  );
+                } catch {
+                  // best-effort: we are about to reject regardless
+                }
+                raceReject(
+                  new Error(
+                    `Ans104Parser getData wall-clock cap after ${this.getDataWallClockTimeoutMs}ms (cascade did not honor AbortSignal)`,
+                  ),
+                );
+              }, this.getDataWallClockTimeoutMs);
+            }),
+          ]);
+        } finally {
+          if (getDataTimer !== undefined) {
+            clearTimeout(getDataTimer);
+          }
+          if (getDataWallClockTimer !== undefined) {
+            clearTimeout(getDataWallClockTimer);
+          }
+        }
 
         // Construct temp path for passing data to worker
         await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
@@ -302,12 +488,28 @@ export class Ans104Parser {
           data.stream,
           this.streamTimeout,
         );
+
+        // Write data stream to temp file. Created before the total-stream
+        // timer is armed so the timer callback never references it before
+        // assignment, and a createWriteStream throw can't leave the timer
+        // armed.
+        const writeStream = fs.createWriteStream(bundlePath);
+        if (this.streamTotalTimeoutMs > 0) {
+          streamTotalTimer = setTimeout(() => {
+            const timeoutError = new Error(
+              `Ans104Parser bundle stream timeout after ${this.streamTotalTimeoutMs}ms`,
+            );
+            data?.stream.destroy(timeoutError);
+            writeStream.destroy(timeoutError);
+          }, this.streamTotalTimeoutMs);
+        }
         data.stream.pause();
 
-        // Write data stream to temp file
-        const writeStream = fs.createWriteStream(bundlePath);
         pipeline(data.stream, writeStream, async (error) => {
           cleanupStallTimeout();
+          if (streamTotalTimer !== undefined) {
+            clearTimeout(streamTotalTimer);
+          }
           if (error !== undefined) {
             reject(error);
             log.error('Error writing ANS-104 bundle stream', error);
@@ -323,6 +525,7 @@ export class Ans104Parser {
             }
           } else {
             log.info('Parsing ANS-104 bundle stream...');
+            metrics.ans104ParserJobsStartedCounter.inc();
             this.workQueue.push({
               resolve,
               reject,
@@ -339,6 +542,9 @@ export class Ans104Parser {
         });
       } catch (error) {
         reject(error);
+        if (streamTotalTimer !== undefined) {
+          clearTimeout(streamTotalTimer);
+        }
         if (bundlePath !== undefined) {
           try {
             await fsPromises.unlink(bundlePath);

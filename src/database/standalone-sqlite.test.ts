@@ -24,6 +24,7 @@ import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
 import {
   bundlesDb,
   bundlesDbPath,
+  chunksDbPath,
   coreDb,
   coreDbPath,
   dataDb,
@@ -221,12 +222,14 @@ describe('StandaloneSqliteDatabase', () => {
   let dbWorker: StandaloneSqliteDatabaseWorker;
 
   before(() => {
+    process.env.GET_DEBUG_INFO_CACHE_TTL_MS = '0';
     db = new StandaloneSqliteDatabase({
       log,
       coreDbPath,
       dataDbPath,
       moderationDbPath,
       bundlesDbPath,
+      chunksDbPath,
       tagSelectivity: {},
     });
     dbWorker = new StandaloneSqliteDatabaseWorker({
@@ -235,6 +238,7 @@ describe('StandaloneSqliteDatabase', () => {
       dataDbPath,
       moderationDbPath,
       bundlesDbPath,
+      chunksDbPath,
       tagSelectivity: {},
     });
     chainSource = new ArweaveChainSourceStub();
@@ -339,6 +343,276 @@ describe('StandaloneSqliteDatabase', () => {
       // if at 201, it shouldn't return anything
       const txByOffsetResult10 = await db.getTxByOffset(201);
       assert.equal(txByOffsetResult10.id, undefined);
+    });
+  });
+
+  describe('getTransactionAttributes', () => {
+    // Regression coverage for a defect introduced in commit 0bcccf6e where
+    // the worker checked `row.owner_key` (a column the SQL never returns)
+    // instead of `row.owner`. The bug always reported owner=null even when
+    // wallets.public_modulus was populated, forcing OwnerFetcher to fall
+    // through to chainSource for every L1-tx owner query. No prior test
+    // exercised the SQL→object boundary; AttributeFetcher tests mocked the
+    // dataIndex and the resolver tests used fixtures with inline ownerKey,
+    // so the typo went undetected. Keep these tests focused on that seam.
+    const id = '_H6KgmI_ZfSdSlf9r2xzDh_ebJnvQtTYLUBQlnRjIdM';
+    const ownerAddress = Buffer.alloc(32, 0xab);
+    const publicModulus = Buffer.alloc(512, 0xcd);
+    const signature = Buffer.alloc(512, 0xef);
+
+    const insertTx = (sigValue: Buffer | null) => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, signature, quantity, reward, tag_count,
+             offset, data_size)
+           VALUES (@id, 1, 0, 2, @last_tx,
+             @owner_address, @signature, '0', '0', 0,
+             0, 0)`,
+        )
+        .run({
+          id: fromB64Url(id),
+          last_tx: Buffer.alloc(32),
+          owner_address: ownerAddress,
+          signature: sigValue,
+        });
+    };
+
+    const insertWallet = () => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO wallets (address, public_modulus)
+           VALUES (@address, @public_modulus)`,
+        )
+        .run({ address: ownerAddress, public_modulus: publicModulus });
+    };
+
+    beforeEach(() => {
+      coreDb.prepare(`DELETE FROM stable_transactions WHERE id = @id`).run({
+        id: fromB64Url(id),
+      });
+      coreDb
+        .prepare(`DELETE FROM wallets WHERE address = @address`)
+        .run({ address: ownerAddress });
+    });
+
+    it('returns the wallet public_modulus as owner when joined', () => {
+      insertTx(signature);
+      insertWallet();
+
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs?.owner, toB64Url(publicModulus));
+      assert.equal(attrs?.signature, toB64Url(signature));
+    });
+
+    it('returns owner=null when wallets.public_modulus is missing', () => {
+      // No wallet row inserted — the LEFT JOIN produces a row with
+      // owner=NULL even though the tx exists.
+      insertTx(signature);
+
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs?.owner, null);
+      assert.equal(attrs?.signature, toB64Url(signature));
+    });
+
+    it('returns signature=null when stable_transactions.signature is NULL', () => {
+      insertTx(null);
+      insertWallet();
+
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs?.signature, null);
+      assert.equal(attrs?.owner, toB64Url(publicModulus));
+    });
+
+    it('returns undefined when the transaction is unknown', () => {
+      const attrs = dbWorker.getTransactionAttributes(id);
+      assert.equal(attrs, undefined);
+    });
+  });
+
+  // Regression coverage for the empty/NULL data_root content-confusion bug.
+  // An L1 tx with an empty data_root was served unrelated content because:
+  //   - the write side (insertDataRoot) planted a poison row keyed on the
+  //     empty data_root pointing at whatever bytes were last streamed, and
+  //   - the read side (selectDataAttributes' fallback branch) matched that
+  //     poison row via `dr.data_root = :data_root` for any other
+  //     empty-data_root tx, returning the unrelated file's hash.
+  // The fix guards both queries with `:data_root IS NOT NULL AND
+  // length(:data_root) > 0`. These tests pin both halves of the fix.
+  describe('getDataAttributes — empty/NULL data_root guard', () => {
+    // Synthetic ids (32-byte buffers) — the L1 tx under test.
+    const txId = toB64Url(Buffer.alloc(32, 0x01));
+    // A *different* tx whose content planted the empty-data_root poison row.
+    const planterTxId = toB64Url(Buffer.alloc(32, 0x02));
+    const txDataSize = 393110;
+    const rogueHash = Buffer.alloc(32, 0x9a);
+    const rogueSize = 17;
+    const realHash = Buffer.alloc(32, 0x11);
+
+    const insertL1Tx = (dataRoot: Buffer | null) => {
+      // format=1 (v1 / legacy) is the real-world trigger: such txs never
+      // have a chain-side data_root, so the empty-data_root poisoning the
+      // guard fixes was hit on every v1 tx fetch. The SQL guard fires off
+      // data_root regardless of format, so the assertions hold for any tx
+      // with no data_root — but seeding the canonical case matches what
+      // operators see in production.
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type)
+           VALUES (@id, 1, 0, 1, @last_tx,
+             @owner_address, '0', '0', 0, @data_size,
+             @data_root, 'text/html')`,
+        )
+        .run({
+          id: fromB64Url(txId),
+          last_tx: Buffer.alloc(32),
+          owner_address: Buffer.alloc(32),
+          data_size: txDataSize,
+          data_root: dataRoot,
+        });
+    };
+
+    const insertContiguousData = (hash: Buffer, size: number) => {
+      dataDb
+        .prepare(
+          `INSERT OR REPLACE INTO contiguous_data
+            (hash, data_size, indexed_at) VALUES (@hash, @size, 0)`,
+        )
+        .run({ hash, size });
+    };
+
+    const insertDataId = (id: string, hash: Buffer) => {
+      dataDb
+        .prepare(
+          `INSERT OR REPLACE INTO contiguous_data_ids
+            (id, contiguous_data_hash, verified, indexed_at)
+           VALUES (@id, @hash, 1, 0)`,
+        )
+        .run({ id: fromB64Url(id), hash });
+    };
+
+    // Raw insert that bypasses the write-side guard, so we can reproduce the
+    // state a previously-unguarded build (or the migration's target) leaves.
+    const plantPoisonRow = (dataRoot: Buffer, hash: Buffer) => {
+      dataDb
+        .prepare(
+          `INSERT OR REPLACE INTO data_roots
+            (data_root, contiguous_data_hash, verified, indexed_at)
+           VALUES (@data_root, @hash, 0, 0)`,
+        )
+        .run({ data_root: dataRoot, hash });
+    };
+
+    it('returns no hash for an empty-data_root L1 tx even when a poison data_roots row exists', () => {
+      insertL1Tx(Buffer.alloc(0));
+      insertContiguousData(rogueHash, rogueSize);
+      // The poison row's hash must have a cdi row for the fallback JOIN to
+      // fire (as it did on the planter tx) — proving the guard, not a
+      // missing join, is what suppresses the match.
+      insertDataId(planterTxId, rogueHash);
+      plantPoisonRow(Buffer.alloc(0), rogueHash);
+
+      const attrs = dbWorker.getDataAttributes(txId);
+      assert.notEqual(attrs, undefined);
+      assert.equal(attrs?.hash, undefined);
+      // The tx's own declared size is still surfaced from the tx row.
+      assert.equal(attrs?.size, txDataSize);
+    });
+
+    it('returns no hash for a NULL-data_root L1 tx (guard + SQL NULL semantics)', () => {
+      insertL1Tx(null);
+      insertContiguousData(rogueHash, rogueSize);
+      insertDataId(planterTxId, rogueHash);
+      plantPoisonRow(Buffer.alloc(0), rogueHash);
+
+      const attrs = dbWorker.getDataAttributes(txId);
+      assert.notEqual(attrs, undefined);
+      assert.equal(attrs?.hash, undefined);
+    });
+
+    it('still returns the cdi-branch hash when a proper contiguous_data_ids row exists for the tx', () => {
+      insertL1Tx(Buffer.alloc(0));
+      insertContiguousData(realHash, txDataSize);
+      // Proper mapping for the tx itself (first UNION branch, cdi.id = :id).
+      insertDataId(txId, realHash);
+      // Adversarial poison row still present — must not win.
+      insertContiguousData(rogueHash, rogueSize);
+      insertDataId(planterTxId, rogueHash);
+      plantPoisonRow(Buffer.alloc(0), rogueHash);
+
+      const attrs = dbWorker.getDataAttributes(txId);
+      assert.equal(attrs?.hash, toB64Url(realHash));
+    });
+  });
+
+  describe('insertDataRoot — empty/NULL data_root guard', () => {
+    const id = toB64Url(Buffer.alloc(32, 0x01));
+    const hash = Buffer.alloc(32, 0x11);
+    const realDataRoot = Buffer.alloc(32, 0x22);
+
+    const countDataRoots = () =>
+      (dataDb.prepare(`SELECT COUNT(*) AS cnt FROM data_roots`).get() as any)
+        .cnt;
+    const countEmptyDataRoots = () =>
+      (
+        dataDb
+          .prepare(
+            `SELECT COUNT(*) AS cnt FROM data_roots
+             WHERE data_root IS NULL OR length(data_root) = 0`,
+          )
+          .get() as any
+      ).cnt;
+
+    it('is a no-op when data_root is empty', () => {
+      dbWorker.saveDataContentAttributes({
+        id,
+        dataRoot: '', // decodes to a zero-length blob
+        hash: toB64Url(hash),
+        dataSize: 17,
+      });
+      assert.equal(countEmptyDataRoots(), 0);
+    });
+
+    it('is a no-op when data_root is undefined (TS wrapper skips the insert)', () => {
+      dbWorker.saveDataContentAttributes({
+        id,
+        hash: toB64Url(hash),
+        dataSize: 17,
+      });
+      assert.equal(countDataRoots(), 0);
+    });
+
+    it('is a no-op when data_root is NULL (SQL guard, exercised directly)', () => {
+      // saveDataContentAttributes never passes NULL (it skips on undefined),
+      // so drive the actual prepared statement to pin the SQL-level guard.
+      (dbWorker as any).stmts.data.insertDataRoot.run({
+        data_root: null,
+        contiguous_data_hash: hash,
+        verified: 0,
+        indexed_at: 0,
+        verified_at: null,
+      });
+      assert.equal(countDataRoots(), 0);
+    });
+
+    it('still writes normally for a non-empty data_root', () => {
+      dbWorker.saveDataContentAttributes({
+        id,
+        dataRoot: toB64Url(realDataRoot),
+        hash: toB64Url(hash),
+        dataSize: 17,
+      });
+      const row = dataDb
+        .prepare(
+          `SELECT contiguous_data_hash FROM data_roots WHERE data_root = @data_root`,
+        )
+        .get({ data_root: realDataRoot }) as any;
+      assert.notEqual(row, undefined);
+      assert.deepEqual(row.contiguous_data_hash, hash);
     });
   });
 
@@ -1427,6 +1701,203 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('getFailedBundleIds — bundle-format gate (PE-9101)', () => {
+    // selectFailedBundleIds must retry only actual bundles. Non-bundle
+    // transactions can reach the bundles table via the admin queue-bundle
+    // endpoint, which bypasses the Bundle-Format gate the live and backfill
+    // queue paths enforce; without the gate they are retried forever.
+    // sha256-derived ids: canonical base64url (round-trip safe through
+    // fromB64Url/toB64Url) and collision-proof against other tests' rows.
+    const hashId = (seed: string): string =>
+      toB64Url(crypto.createHash('sha256').update(seed).digest());
+    const realRootId = hashId('PE-9101 realRoot');
+    const unknownRootId = hashId('PE-9101 unknownRoot');
+    const nonBundleRootId = hashId('PE-9101 nonBundleRoot');
+
+    // Bundle-Format / "binary" tag name+value hashes (see bundles/repair.sql).
+    const bundleFormatNameHash = Buffer.from(
+      'BF796ECA81CCE3FF36CEA53FA1EBB0F274A0FF29',
+      'hex',
+    );
+    const binaryValueHash = Buffer.from(
+      '7E57CFE843145135AEE1F4D0D63CEB7842093712',
+      'hex',
+    );
+
+    const insertBundleRow = (id: string, rootId: string) => {
+      bundlesDb
+        .prepare(
+          `INSERT INTO bundles (
+             id, format_id, matched_data_item_count,
+             root_transaction_id, retry_attempt_count
+           ) VALUES (@id, 1, 2, @root, 0)`,
+        )
+        .run({ id: fromB64Url(id), root: fromB64Url(rootId) });
+    };
+
+    // beforeEach (not before): the suite's global afterEach truncates
+    // every table, so fixtures must be re-seeded ahead of each test.
+    beforeEach(() => {
+      // Real bundle: root tx carries Bundle-Format=binary -> retried.
+      insertBundleRow(realRootId, realRootId);
+      coreDb
+        .prepare(
+          `INSERT INTO stable_transaction_tags (
+             tag_name_hash, tag_value_hash, height,
+             block_transaction_index, transaction_tag_index, transaction_id
+           ) VALUES (@name, @value, 1, 0, 0, @txId)`,
+        )
+        .run({
+          name: bundleFormatNameHash,
+          value: binaryValueHash,
+          txId: fromB64Url(realRootId),
+        });
+
+      // Non-bundle: root tx is indexed here but has no Bundle-Format tag
+      // -> provably not a bundle -> excluded from the retry pool.
+      insertBundleRow(nonBundleRootId, nonBundleRootId);
+      coreDb
+        .prepare(
+          `INSERT INTO stable_transactions (
+             id, height, block_transaction_index, format,
+             last_tx, owner_address, quantity, reward, tag_count
+           ) VALUES (@id, 1, 0, 2, @zero, @zero, '0', '0', 0)`,
+        )
+        .run({ id: fromB64Url(nonBundleRootId), zero: Buffer.alloc(32) });
+
+      // Unknown: root tx is not indexed on this gateway, so we cannot
+      // prove it is a non-bundle -> stays eligible for retry.
+      insertBundleRow(unknownRootId, unknownRootId);
+    });
+
+    it('retries a bundle whose root carries Bundle-Format=binary', async () => {
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(ids.includes(realRootId));
+    });
+
+    it('excludes a non-bundle whose indexed root tx has no Bundle-Format tag', async () => {
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(!ids.includes(nonBundleRootId));
+    });
+
+    it('keeps a bundle whose root tx is not indexed on this gateway', async () => {
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(ids.includes(unknownRootId));
+    });
+  });
+
+  describe('getFailedBundleIds — retry cap + cooldown', () => {
+    // Roots are left unindexed on this gateway so they pass the bundle-format
+    // gate via the "unknown root" branch; that isolates the cap/cooldown
+    // clauses from the gate. Defaults under test: BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS
+    // = 50, BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS = 900.
+    const hashId = (seed: string): string =>
+      toB64Url(crypto.createHash('sha256').update(seed).digest());
+    // Capture `now` per-test, not at suite load. The "within cooldown"
+    // assertion compares against getFailedBundleIds's real-time @retry_cutoff
+    // (now - BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS); a load-time `now` could age
+    // out of the 900s window if the suite runs long enough and flake the test.
+    let now: number;
+    beforeEach(() => {
+      now = Math.floor(Date.now() / 1000);
+    });
+
+    const insertBundleRow = (
+      id: string,
+      {
+        retryAttemptCount = 0,
+        lastRetriedAt = null,
+      }: { retryAttemptCount?: number; lastRetriedAt?: number | null },
+    ) => {
+      bundlesDb
+        .prepare(
+          `INSERT INTO bundles (
+             id, format_id, matched_data_item_count,
+             root_transaction_id, retry_attempt_count, last_retried_at
+           ) VALUES (@id, 1, NULL, @root, @retry, @lastRetried)`,
+        )
+        .run({
+          id: fromB64Url(id),
+          root: fromB64Url(id),
+          retry: retryAttemptCount,
+          lastRetried: lastRetriedAt,
+        });
+    };
+
+    it('retries a bundle just under the attempt cap', async () => {
+      const id = hashId('cap under');
+      insertBundleRow(id, { retryAttemptCount: 49 });
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(ids.includes(id));
+    });
+
+    it('drops a bundle that has reached the attempt cap', async () => {
+      const id = hashId('cap reached');
+      insertBundleRow(id, { retryAttemptCount: 50 });
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(!ids.includes(id));
+    });
+
+    it('skips a bundle retried within the cooldown window', async () => {
+      const id = hashId('cooldown recent');
+      insertBundleRow(id, { lastRetriedAt: now });
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(!ids.includes(id));
+    });
+
+    it('retries a bundle whose last retry is older than the cooldown', async () => {
+      const id = hashId('cooldown old');
+      insertBundleRow(id, { lastRetriedAt: now - 100_000 });
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(ids.includes(id));
+    });
+
+    it('retries a bundle that has never been retried (null last_retried_at)', async () => {
+      const id = hashId('cooldown null');
+      insertBundleRow(id, { lastRetriedAt: null });
+      const ids = await db.getFailedBundleIds(100_000);
+      assert.ok(ids.includes(id));
+    });
+  });
+
+  describe('getFullRepairBacklogCount (PE-9101)', () => {
+    const insertBundle = (
+      seed: string,
+      matched: number | null,
+      fullyIndexedAt: number | null,
+      skippedAt: number | null,
+    ) => {
+      bundlesDb
+        .prepare(
+          `INSERT INTO bundles (
+             id, format_id, matched_data_item_count,
+             last_fully_indexed_at, last_skipped_at
+           ) VALUES (@id, 1, @matched, @fully, @skipped)`,
+        )
+        .run({
+          id: crypto
+            .createHash('sha256')
+            .update(`PE-9101 full-backlog ${seed}`)
+            .digest(),
+          matched,
+          fully: fullyIndexedAt,
+          skipped: skippedAt,
+        });
+    };
+
+    beforeEach(() => {
+      insertBundle('never-unbundled', null, null, null); // counted
+      insertBundle('in-flight', 5, null, null); // counted
+      insertBundle('finished-zero-items', 0, null, null); // excluded
+      insertBundle('fully-indexed', 5, 1_700_000_000, null); // excluded
+      insertBundle('skipped', 5, null, 1_700_000_000); // excluded
+    });
+
+    it('counts never-unbundled + in-flight bundles, excludes finished/indexed/skipped', async () => {
+      assert.equal(await db.getFullRepairBacklogCount(), 2);
+    });
+  });
+
   describe('getVerifiableDataIds', () => {
     it("should return an empty list if there's no verifiable data ids", async () => {
       const emptyDbIds = await db.getVerifiableDataIds();
@@ -1503,6 +1974,290 @@ describe('StandaloneSqliteDatabase', () => {
 
       const result = await db.getRootTx(l1TxId);
       assert.equal(result?.rootTxId, l1TxId);
+    });
+  });
+
+  describe('getDataAttributes — parentId surfacing (PR #705)', () => {
+    // Regression: the canonical selectDataAttributes SQL didn't SELECT
+    // parent_id, so dataAttributes.parentId was always undefined. The
+    // route handler's X-AR-IO-Root-Path emission depended on it
+    // matching rootTransactionId for the single-level case. Without
+    // these rows, the header silently never fired in production. See
+    // src/database/sql/core/data-attributes.sql and
+    // src/routes/data/handlers.ts:502 for the cache-and-replay path.
+    // Use IDs distinct from DATA_ITEM_ID/dataItemRootTxId — earlier
+    // describe blocks mutate the shared `normalizedDataItem` fixture
+    // (e.g. getRootTx sets root_tx_id = null), so reusing the same
+    // IDs here would inherit polluted state under full-suite ordering.
+    //
+    // Both IDs are 43-char base64url strings ending in '0'. The last
+    // char of a 43-char b64url id encodes only the high 4 bits of a
+    // byte; the trailing 2 bits MUST be zero for the string to be
+    // canonical (round-trip stable through fromB64Url → toB64Url).
+    // '0' = 110100 has trailing '00' — canonical. Without this, the
+    // SQL row's parent_id encodes back to a different string and the
+    // assertion fails on a benign-looking single-char delta.
+    const PARENT_TEST_DATA_ITEM_ID =
+      'PrtTstParentIdSurfaceCheckPrtTstParentIdSI0';
+    const PARENT_TEST_PARENT_ID = '1111111111111111111111111111111111111111110';
+
+    it('returns parentId from a data item row', async () => {
+      const item = normalizeAns104DataItem({
+        rootTxId: PARENT_TEST_PARENT_ID,
+        parentId: PARENT_TEST_PARENT_ID,
+        parentIndex: -1,
+        index: 0,
+        ans104DataItem: { ...dataItem, id: PARENT_TEST_DATA_ITEM_ID },
+        filter: '',
+        dataHash: '',
+        rootParentOffset: 0,
+      });
+      await db.saveDataItem(item);
+
+      const attrs = await db.getDataAttributes(PARENT_TEST_DATA_ITEM_ID);
+      assert.notEqual(attrs, undefined);
+      assert.equal(attrs!.parentId, PARENT_TEST_PARENT_ID);
+      // Sanity: rootTransactionId should also be populated and equal
+      // parentId in the single-level case (parentId === rootTxId) —
+      // this is exactly what triggers X-AR-IO-Root-Path emission.
+      assert.equal(attrs!.rootTransactionId, PARENT_TEST_PARENT_ID);
+    });
+
+    it('returns parentId === undefined for an L1 transaction', async () => {
+      // L1 transactions have no parent — they ARE the root. The SQL
+      // selects null AS parent_id from the stable_transactions /
+      // new_transactions branches; the JS layer maps that to
+      // parentId === undefined (NOT null) so consumers can use the
+      // simple `!= null` guard.
+      const l1TxId = 'vYQNQruccPlvxatkcRYmoaVywIzHxS3DuBG1CPxNMPA';
+      const height = 982575;
+      const { block, txs, missingTxIds } =
+        await chainSource.getBlockAndTxsByHeight(height);
+      await db.saveBlockAndTxs(block, txs, missingTxIds);
+
+      const attrs = await db.getDataAttributes(l1TxId);
+      assert.notEqual(attrs, undefined);
+      assert.equal(attrs!.parentId, undefined);
+      // Note: L1 txs surface rootTransactionId === undefined too — the
+      // SQL selects null AS root_transaction_id from the transaction
+      // branches. The route handler's path-emit guard requires both to
+      // be non-null AND equal, so L1s correctly omit X-AR-IO-Root-Path.
+    });
+
+    it('returns undefined when the id is not in the database at all', async () => {
+      const attrs = await db.getDataAttributes(
+        'unknown-data-attributes-id-not-in-db-aaaaaaaaa',
+      );
+      assert.equal(attrs, undefined);
+    });
+  });
+
+  describe('upsertNewDataItem clobber resistance (PE-9073)', () => {
+    // Regression: after the unbundle path back-fills parent_id /
+    // root_transaction_id / data_offset on a previously-optimistic data item,
+    // a subsequent optimistic re-POST (which passes NULL for those fields)
+    // must NOT clobber the back-filled values. Without this, a follow-up
+    // flushStableDataItems would crash on stable_data_item_tags.parent_id
+    // NOT NULL.
+    const itemId = 'PE9073RegressionTestPE9073RegressionTestAAA';
+    const bundleParentId = '2222222222222222222222222222222222222222222';
+    const bundleRootTxId = '3333333333333333333333333333333333333333333';
+
+    const optimisticItem = {
+      anchor: 'YW5jaG9y',
+      data_hash: null,
+      data_offset: null,
+      data_size: 1234,
+      id: itemId,
+      index: null,
+      offset: null,
+      owner: 'b3duZXI',
+      owner_address: 'b3duZXJfYWRkcmVzcw',
+      owner_offset: null,
+      owner_size: null,
+      parent_id: null,
+      parent_index: null,
+      root_parent_offset: null,
+      root_tx_id: null,
+      signature: 'c2lnbmF0dXJl',
+      signature_offset: null,
+      signature_size: null,
+      signature_type: null,
+      size: null,
+      tags: [],
+      target: 'dGFyZ2V0',
+    } as unknown as NormalizedDataItem;
+
+    const bundleBackfillItem = {
+      ...optimisticItem,
+      data_offset: 100,
+      filter: '{"always": true}',
+      index: 0,
+      offset: 200,
+      owner_offset: 50,
+      owner_size: 32,
+      parent_id: bundleParentId,
+      parent_index: 0,
+      root_parent_offset: 300,
+      root_tx_id: bundleRootTxId,
+      signature_offset: 60,
+      signature_size: 32,
+      signature_type: 1,
+      size: 1234,
+    } as unknown as NormalizedDataItem;
+
+    it('preserves back-filled parent_id, root_transaction_id, data_offset on optimistic re-POST', async () => {
+      // 1. Optimistic POST (no tuple knowledge): row inserted with NULL
+      //    root-atom fields via insertOptimisticDataItem.
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      // 2. Unbundle back-fill (full tuple): same id, non-NULL values via
+      //    the atomic root-atom upsert.
+      await db.saveDataItem(bundleBackfillItem);
+
+      // 3. Optimistic re-POST. With the structural fix, this routes to
+      //    insertOptimisticDataItem (DO NOTHING on conflict) and cannot
+      //    touch the root atom. Pre-structural-fix this corrupted values
+      //    via the per-column COALESCE on a single shared upsert.
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      const row = bundlesDb
+        .prepare(
+          'SELECT parent_id, root_transaction_id, data_offset FROM new_data_items WHERE id = @id',
+        )
+        .get({ id: fromB64Url(itemId) }) as
+        | {
+            parent_id: Buffer | null;
+            root_transaction_id: Buffer | null;
+            data_offset: number | null;
+          }
+        | undefined;
+
+      assert.notEqual(row, undefined, 'data item row should exist');
+      assert.notEqual(
+        row!.parent_id,
+        null,
+        'parent_id must survive optimistic re-POST',
+      );
+      assert.notEqual(
+        row!.root_transaction_id,
+        null,
+        'root_transaction_id must survive optimistic re-POST',
+      );
+      assert.notEqual(
+        row!.data_offset,
+        null,
+        'data_offset must survive optimistic re-POST',
+      );
+      assert.deepEqual(row!.parent_id, fromB64Url(bundleParentId));
+      assert.deepEqual(row!.root_transaction_id, fromB64Url(bundleRootTxId));
+      assert.equal(row!.data_offset, 100);
+
+      // Now exercise the flush path that previously hit
+      // SQLITE_CONSTRAINT_NOTNULL on stable_data_item_tags.parent_id
+      // (Defect A). Force heights non-NULL on both the data item and
+      // its tag rows, then make bundleRootTxId stable so the flush JOINs
+      // match.
+      const dataItemHeight = 100;
+      bundlesDb
+        .prepare('UPDATE new_data_items SET height = @h WHERE id = @id')
+        .run({ h: dataItemHeight, id: fromB64Url(itemId) });
+      bundlesDb
+        .prepare(
+          'UPDATE new_data_item_tags SET height = @h WHERE data_item_id = @id',
+        )
+        .run({ h: dataItemHeight, id: fromB64Url(itemId) });
+      coreDb
+        .prepare(
+          `INSERT INTO stable_block_transactions (
+             block_indep_hash, transaction_id, block_transaction_index
+           ) VALUES (@hash, @tx, 0)`,
+        )
+        .run({
+          hash: crypto.randomBytes(32),
+          tx: fromB64Url(bundleRootTxId),
+        });
+
+      // Pre-fix this throws inside the worker transaction. With the fix
+      // (back-fill preserved by COALESCE; flush guarded by IS NOT NULL),
+      // it completes and the row lands in stable_data_items.
+      await db.flushStableDataItems(dataItemHeight + 1, Date.now());
+
+      const stableRow = bundlesDb
+        .prepare('SELECT id FROM stable_data_items WHERE id = @id')
+        .get({ id: fromB64Url(itemId) });
+      assert.notEqual(
+        stableRow,
+        undefined,
+        'data item should land in stable_data_items after flush',
+      );
+    });
+
+    it('heals shadow-victim offset/size fields when unbundle follows an optimistic POST', async () => {
+      // Regression for the residual half of PE-9073: pre-structural-fix
+      // the upsert's UPDATE clause only covered parent_id /
+      // root_transaction_id / data_offset / height. The remaining
+      // root-atom fields (root_parent_offset, offset, size,
+      // signature_offset, signature_size, owner_offset, owner_size,
+      // signature_type) were INSERT-only — admin-first then unbundle
+      // left them NULL on the existing row, which breaks GraphQL
+      // signature/owner resolvers (RangeError on degenerate read range
+      // from FsDataStore.get with size=0). Post-fix the unbundle path's
+      // atomic root-atom upsert lands all eleven fields together.
+      const shadowItemId = 'PE9073ShadowHealingPE9073ShadowHealingAAAAAA';
+
+      const shadowOptimistic = {
+        ...optimisticItem,
+        id: shadowItemId,
+      } as unknown as NormalizedDataItem;
+
+      const shadowBackfill = {
+        ...bundleBackfillItem,
+        id: shadowItemId,
+      } as unknown as NormalizedDataItem;
+
+      // 1. Admin POST arrives first.
+      await db.saveDataItem(shadowOptimistic, /* isOptimistic */ true);
+
+      // 2. Unbundle follows with the full root atom.
+      await db.saveDataItem(shadowBackfill);
+
+      const row = bundlesDb
+        .prepare(
+          `SELECT parent_id, root_transaction_id, data_offset,
+                  root_parent_offset, "offset", size,
+                  signature_offset, signature_size,
+                  owner_offset, owner_size, signature_type
+           FROM new_data_items WHERE id = @id`,
+        )
+        .get({ id: fromB64Url(shadowItemId) }) as {
+        parent_id: Buffer | null;
+        root_transaction_id: Buffer | null;
+        data_offset: number | null;
+        root_parent_offset: number | null;
+        offset: number | null;
+        size: number | null;
+        signature_offset: number | null;
+        signature_size: number | null;
+        owner_offset: number | null;
+        owner_size: number | null;
+        signature_type: number | null;
+      };
+
+      assert.notEqual(row, undefined, 'shadow-healed row should exist');
+      // All eleven root-atom fields should be populated by the unbundle
+      // upsert, not shadowed-NULL.
+      assert.deepEqual(row.parent_id, fromB64Url(bundleParentId));
+      assert.deepEqual(row.root_transaction_id, fromB64Url(bundleRootTxId));
+      assert.equal(row.data_offset, 100);
+      assert.equal(row.root_parent_offset, 300);
+      assert.equal(row.offset, 200);
+      assert.equal(row.size, 1234);
+      assert.equal(row.signature_offset, 60);
+      assert.equal(row.signature_size, 32);
+      assert.equal(row.owner_offset, 50);
+      assert.equal(row.owner_size, 32);
+      assert.equal(row.signature_type, 1);
     });
   });
 

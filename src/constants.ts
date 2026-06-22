@@ -62,7 +62,18 @@ export const headerNames = {
   arnsRecord: 'X-ArNS-Record',
   arnsResolvedId: 'X-ArNS-Resolved-Id',
   dataId: 'X-AR-IO-Data-Id',
-  arnsProcessId: 'X-ArNS-Process-Id',
+  /**
+   * Identifier of the Solana program that owns the ANT mint that
+   * resolved this name (i.e. the AR.IO ANT program). Lets clients verify
+   * the ANT lives under a known AR.IO program before trusting downstream
+   * metadata.
+   */
+  arnsAntProgramId: 'X-ArNS-Ant-Program-Id',
+  /**
+   * Identifier of the specific ANT (the per-name account, not the program)
+   * that resolved this request — the ANT mint's PDA (base58 pubkey).
+   */
+  arnsAntId: 'X-ArNS-Ant-Id',
   arnsResolvedAt: 'X-ArNS-Resolved-At',
   arnsLimit: 'X-ArNS-Undername-Limit',
   arnsIndex: 'X-ArNS-Record-Index',

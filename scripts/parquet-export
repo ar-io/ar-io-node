@@ -193,12 +193,32 @@ HTTP_CODE=$(curl -s -w "%{http_code}" -o "$BODY_FILE" -X POST \
 BODY=$(cat "$BODY_FILE")
 rm -f "$BODY_FILE"
 
+if [[ "$HTTP_CODE" == "409" ]]; then
+  echo "Error: A Parquet export is already in progress on the server (HTTP 409)." >&2
+  echo "       The gateway only runs one export at a time; wait for the current job to finish." >&2
+  echo "       Server response: $BODY" >&2
+  # Exit 2 signals a retryable contention — wait_for_export_idle plus a
+  # concurrent POST can still race into a 409 between idle check and submit.
+  exit 2
+fi
+
 if [[ "$HTTP_CODE" != "200" ]]; then
   echo "Error: Failed to start export (HTTP $HTTP_CODE): $BODY" >&2
   exit 1
 fi
 
-echo "Export started. Polling for completion..."
+# Capture the per-job id (new API). If the gateway is running an older
+# build that doesn't return one, fall back to polling the shared singleton
+# endpoint with drift detection below.
+JOB_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('jobId',''))" 2>/dev/null || echo "")
+
+if [[ -n "$JOB_ID" ]]; then
+  STATUS_URL="${API_BASE}/ar-io/admin/export-parquet/status/${JOB_ID}"
+  echo "Export started (jobId=$JOB_ID). Polling for completion..."
+else
+  STATUS_URL="${API_BASE}/ar-io/admin/export-parquet/status"
+  echo "Export started. Polling for completion..."
+fi
 
 # Poll for status
 while true; do
@@ -206,10 +226,18 @@ while true; do
 
   BODY_FILE=$(mktemp)
   HTTP_CODE=$(curl -s -w "%{http_code}" -o "$BODY_FILE" \
-    "${API_BASE}/ar-io/admin/export-parquet/status" \
+    "$STATUS_URL" \
     -H "Authorization: Bearer ${ADMIN_API_KEY}")
   BODY=$(cat "$BODY_FILE")
   rm -f "$BODY_FILE"
+
+  # Per-job endpoint returns 404 if the job id was evicted from the
+  # server's history (gateway restart or history rollover). That's
+  # retryable: resubmitting will start a new job.
+  if [[ "$HTTP_CODE" == "404" && -n "$JOB_ID" ]]; then
+    echo "Error: Job $JOB_ID not found on server (404). Gateway may have restarted or history rolled over." >&2
+    exit 2
+  fi
 
   if [[ "$HTTP_CODE" != "200" ]]; then
     echo "Error: Failed to get export status (HTTP $HTTP_CODE): $BODY" >&2
@@ -218,16 +246,50 @@ while true; do
 
   STATUS=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
 
+  # Drift detection only matters for the legacy singleton path. When
+  # polling per-job, the server returns our job's record directly, so
+  # there's nothing to reconcile.
+  if [[ -z "$JOB_ID" ]]; then
+    REPORTED_OUTPUT=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('outputDir',''))" 2>/dev/null || echo "")
+    # If the singleton's outputDir has drifted to a different job, we have
+    # to reason about our own export indirectly. Only treat this as success
+    # when (a) the singleton reports completed for another outputDir (which
+    # means a later POST finished after overwriting ours) AND (b) our own
+    # output directory exists on disk. status='running' with a different
+    # outputDir means the server is actively doing someone else's work,
+    # which tells us nothing about ours — bail out instead of guessing.
+    if [[ -n "$REPORTED_OUTPUT" && "$REPORTED_OUTPUT" != "$OUTPUT_DIR" ]]; then
+      if [[ "$STATUS" == "completed" && -d "$OUTPUT_DIR" ]]; then
+        echo "Export completed (status singleton has since moved to another job at '$REPORTED_OUTPUT')."
+        echo "Output directory: $OUTPUT_DIR"
+        break
+      fi
+      echo "Error: Export status is tracking a different outputDir ('$REPORTED_OUTPUT' status=${STATUS}) vs our '$OUTPUT_DIR'." >&2
+      echo "       Our export was either displaced by another POST or is still pending on the server." >&2
+      # Exit 2 signals a retryable race: caller can wait_for_export_idle and
+      # resubmit. If the displacing job was legitimately ours and eventually
+      # produces our dir, the next attempt will short-circuit via the empty-
+      # range skip or succeed outright.
+      exit 2
+    fi
+  fi
+
   case "$STATUS" in
     completed)
       DURATION=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('durationInSeconds','?'))" 2>/dev/null || echo "?")
+      if [[ ! -d "$OUTPUT_DIR" ]]; then
+        echo "Error: Export reported completed but output directory does not exist: $OUTPUT_DIR" >&2
+        echo "       The export worker may have failed before creating output files." >&2
+        exit 1
+      fi
       echo "Export completed successfully in ${DURATION}s"
       echo "Output directory: $OUTPUT_DIR"
       break
       ;;
     not_started)
       echo "Error: Export status reset to 'not_started' after submission. The core process may have restarted." >&2
-      exit 1
+      # Retryable: if the gateway is back up, resubmitting will succeed.
+      exit 2
       ;;
     errored)
       ERROR_MSG=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error','unknown'))" 2>/dev/null || echo "unknown")

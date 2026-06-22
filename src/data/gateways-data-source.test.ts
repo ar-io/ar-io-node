@@ -433,6 +433,253 @@ describe('GatewayDataSource', () => {
       assert.equal(data.sourceContentType, 'application/octet-stream');
     });
 
+    // PE-9081: Content-Length must equal region.size for Range requests.
+    // Oversize path.
+    it('should reject 206 responses whose Content-Length exceeds region.size', async () => {
+      mockedAxiosInstance.request = async () => ({
+        status: 206,
+        headers: {
+          'content-length': '999999999',
+          'content-type': 'application/octet-stream',
+        },
+        data: axiosStreamData,
+      });
+
+      const region = { offset: 0, size: 100 };
+      await assert.rejects(
+        dataSource.getData({ id: 'some-id', region }),
+        /does not match requested region size/,
+      );
+    });
+
+    // PE-9081: undersize / truncated 206. The previous-only-rejected-overage
+    // check let truncated responses through, but the consumer was told
+    // size=region.size so it would observe a stream that delivered fewer
+    // bytes than advertised — silent truncation. (CodeRabbit PR #703.)
+    it('should reject 206 responses whose Content-Length is less than region.size', async () => {
+      mockedAxiosInstance.request = async () => ({
+        status: 206,
+        headers: {
+          'content-length': '50',
+          'content-type': 'application/octet-stream',
+        },
+        data: axiosStreamData,
+      });
+
+      const region = { offset: 0, size: 100 };
+      await assert.rejects(
+        dataSource.getData({ id: 'some-id', region }),
+        /does not match requested region size/,
+      );
+    });
+
+    // PE-9081: when the consumer destroys the cappedStream early, the
+    // underlying upstream stream must also be destroyed. `pipe()` does
+    // not propagate destination destruction back to the source.
+    // (CodeRabbit PR #703.)
+    it('should destroy upstream when cappedStream is destroyed early', async () => {
+      const { PassThrough } = await import('node:stream');
+      const upstream = new PassThrough();
+      mockedAxiosInstance.request = async () => ({
+        status: 206,
+        headers: {
+          'content-length': '1000',
+          'content-type': 'application/octet-stream',
+        },
+        data: upstream,
+      });
+
+      const region = { offset: 0, size: 1000 };
+      const data = await dataSource.getData({ id: 'some-id', region });
+
+      data.stream.destroy();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(upstream.destroyed, true);
+    });
+
+    // PE-9081: ByteRangeTransform caps consumer-visible bytes to region.size
+    // even when the upstream emits more than declared.
+    it('should cap consumer-visible bytes to region.size via ByteRangeTransform', async () => {
+      const oversizedPayload = Buffer.alloc(200, 0x41);
+      mockedAxiosInstance.request = async () => ({
+        status: 206,
+        headers: {
+          'content-length': '50',
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([oversizedPayload]),
+      });
+
+      const region = { offset: 0, size: 50 };
+      const data = await dataSource.getData({ id: 'some-id', region });
+      assert.equal(data.size, 50);
+
+      let bytesReceived = 0;
+      for await (const chunk of data.stream) {
+        bytesReceived += (chunk as Buffer).length;
+      }
+      assert.equal(bytesReceived, 50);
+    });
+
+    // PE-9098: some upstreams (e.g., nginx with proxy_cache enabled but
+    // no `slice` module) silently strip the client's Range header and
+    // return a full 200 body instead of a 206. We accept that response
+    // and slice the body locally to satisfy the consumer's region.
+    it('should accept 200 response for a Range request and slice locally', async () => {
+      // Distinguishable prefix vs tail so the test verifies that the
+      // slice starts at region.offset (not at 0).
+      const fullBody = Buffer.alloc(1000);
+      fullBody.fill(0xaa, 0, 100); // prefix: should NOT appear in output
+      fullBody.fill(0xbb, 100); // tail starting at offset 100: should fill output
+
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': String(fullBody.length),
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([fullBody]),
+      });
+
+      const region = { offset: 100, size: 200 };
+      const data = await dataSource.getData({ id: 'some-id', region });
+
+      // Consumer sees region.size bytes; totalSize reflects the full body
+      // since no Content-Range header was present.
+      assert.equal(data.size, 200);
+      assert.equal(data.totalSize, 1000);
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of data.stream) {
+        chunks.push(chunk as Buffer);
+      }
+      const received = Buffer.concat(chunks);
+      assert.equal(received.length, 200);
+      assert.ok(
+        received.every((b) => b === 0xbb),
+        'expected sliced body to be all 0xbb (no prefix bytes leaked through)',
+      );
+    });
+
+    // PE-9098: a full-body 200 that doesn't actually contain the requested
+    // region must be rejected before we hand a truncated stream to the
+    // consumer.
+    it('should reject 200 response when body is smaller than requested region', async () => {
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': '150',
+          'content-type': 'application/octet-stream',
+        },
+        data: axiosStreamData,
+      });
+
+      const region = { offset: 100, size: 200 }; // requires 300 bytes
+      await assert.rejects(
+        dataSource.getData({ id: 'some-id', region }),
+        /too small for requested region/,
+      );
+    });
+
+    // PE-9098: visibility — the metric increments when an upstream answers
+    // a Range request with a full 200 body, so we can see per-gateway
+    // wasted-bandwidth volume in Prometheus. `outcome=sliced` for the
+    // accepted-and-sliced path.
+    it('should increment gatewayRangeIgnoredTotal with outcome=sliced on 200-for-Range', async () => {
+      mock.method(metrics.gatewayRangeIgnoredTotal, 'inc');
+
+      const fullBody = Buffer.alloc(500, 0x00);
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': String(fullBody.length),
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([fullBody]),
+      });
+
+      const region = { offset: 0, size: 100 };
+      await dataSource.getData({ id: 'some-id', region });
+
+      assert.equal(
+        (metrics.gatewayRangeIgnoredTotal.inc as any).mock.callCount(),
+        1,
+      );
+      const labels = (metrics.gatewayRangeIgnoredTotal.inc as any).mock.calls[0]
+        .arguments[0];
+      assert.equal(labels.gateway_url, 'https://gateway.domain');
+      assert.equal(labels.priority, '1');
+      assert.equal(labels.outcome, 'sliced');
+    });
+
+    // PE-9098: when region.offset exceeds GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET,
+    // the prefix-bandwidth cost of accepting the 200 is too high. Reject
+    // and let the data source chain fall through to the next tier. The
+    // metric records the rejection so operators can tune the cap.
+    it('should reject 200-for-Range when region.offset exceeds the configured cap', async () => {
+      mock.method(metrics.gatewayRangeIgnoredTotal, 'inc');
+
+      const fullBody = Buffer.alloc(10000, 0x00);
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': String(fullBody.length),
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([fullBody]),
+      });
+
+      // Construct a fresh data source with a small offset cap so the
+      // test doesn't depend on the production default (10 MiB).
+      const cappedDataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway.domain': { priority: 1, trusted: true },
+        },
+        rangeAccept200MaxOffset: 1024,
+      });
+
+      const region = { offset: 2048, size: 100 }; // offset > cap
+      await assert.rejects(
+        cappedDataSource.getData({ id: 'some-id', region }),
+        /exceeds GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET/,
+      );
+
+      assert.equal(
+        (metrics.gatewayRangeIgnoredTotal.inc as any).mock.callCount(),
+        1,
+      );
+      const labels = (metrics.gatewayRangeIgnoredTotal.inc as any).mock.calls[0]
+        .arguments[0];
+      assert.equal(labels.outcome, 'rejected_offset_too_high');
+    });
+
+    // PE-9098: edge of the cap — region.offset exactly equal to the cap
+    // should still be accepted (the threshold is strictly greater-than).
+    it('should accept 200-for-Range when region.offset equals the configured cap', async () => {
+      const fullBody = Buffer.alloc(10000, 0xcc);
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        headers: {
+          'content-length': String(fullBody.length),
+          'content-type': 'application/octet-stream',
+        },
+        data: Readable.from([fullBody]),
+      });
+
+      const cappedDataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway.domain': { priority: 1, trusted: true },
+        },
+        rangeAccept200MaxOffset: 2048,
+      });
+
+      const region = { offset: 2048, size: 50 }; // offset == cap
+      const data = await cappedDataSource.getData({ id: 'some-id', region });
+      assert.equal(data.size, 50);
+    });
+
     describe('ArNS query parameters', () => {
       it('should include ArNS record and basename as query parameters when provided', async () => {
         let requestParams: any;
@@ -554,6 +801,95 @@ describe('GatewayDataSource', () => {
           dataSource.getData({ id: 'empty-id', requestAttributes }),
           /Gateway response has no content-length or zero content-length/,
         );
+      });
+    });
+
+    describe('acceptContentType predicate (PE-9099)', () => {
+      it('throws when caller predicate rejects upstream content-type', async () => {
+        // Simulates the production poison: upstream returns 200/1134-byte
+        // text/html (bundlr.network parking page) for a request that the
+        // caller intends to parse as an ANS-104 bundle.
+        mockedAxiosInstance.request = async () => ({
+          status: 200,
+          data: Readable.from([Buffer.alloc(1134, 0x3c)]),
+          headers: {
+            'content-length': '1134',
+            'content-type': 'text/html; charset=utf-8',
+          },
+        });
+
+        await assert.rejects(
+          dataSource.getData({
+            id: 'poisoned-id',
+            requestAttributes,
+            acceptContentType: (ct) =>
+              ct === undefined || ct.startsWith('application/octet-stream'),
+          }),
+          /content-type "text\/html; charset=utf-8" rejected by caller predicate/,
+        );
+      });
+
+      it('accepts when caller predicate accepts upstream content-type', async () => {
+        mockedAxiosInstance.request = async () => ({
+          status: 200,
+          data: Readable.from([Buffer.alloc(128)]),
+          headers: {
+            'content-length': '128',
+            'content-type': 'application/octet-stream',
+          },
+        });
+
+        const result = await dataSource.getData({
+          id: 'binary-id',
+          requestAttributes,
+          acceptContentType: (ct) =>
+            ct === undefined || ct.startsWith('application/octet-stream'),
+        });
+
+        assert.equal(result.size, 128);
+        assert.equal(result.sourceContentType, 'application/octet-stream');
+      });
+
+      it('accepts when caller predicate allows undefined content-type', async () => {
+        // Some upstreams omit content-type for raw bundle responses; the
+        // predicate must be able to allow this.
+        mockedAxiosInstance.request = async () => ({
+          status: 200,
+          data: Readable.from([Buffer.alloc(128)]),
+          headers: {
+            'content-length': '128',
+            // no content-type at all
+          },
+        });
+
+        const result = await dataSource.getData({
+          id: 'untyped-id',
+          requestAttributes,
+          acceptContentType: (ct) => ct === undefined,
+        });
+
+        assert.equal(result.size, 128);
+      });
+
+      it('passes the response through unchanged when no predicate is supplied', async () => {
+        // Backward-compat: callers without a predicate must not see any
+        // new validation — text/html should be returned just like before.
+        mockedAxiosInstance.request = async () => ({
+          status: 200,
+          data: Readable.from([Buffer.alloc(1134, 0x3c)]),
+          headers: {
+            'content-length': '1134',
+            'content-type': 'text/html; charset=utf-8',
+          },
+        });
+
+        const result = await dataSource.getData({
+          id: 'html-id-no-predicate',
+          requestAttributes,
+        });
+
+        assert.equal(result.size, 1134);
+        assert.equal(result.sourceContentType, 'text/html; charset=utf-8');
       });
     });
 

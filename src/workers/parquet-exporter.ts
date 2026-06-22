@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { randomUUID } from 'node:crypto';
 import { Connection, Database } from 'duckdb-async';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -53,6 +54,7 @@ const ERRORED: ExportStatus = 'errored';
 
 type ExportData = {
   status: ExportStatus;
+  jobId?: string;
   outputDir?: string;
   startHeight?: number;
   endHeight?: number;
@@ -70,27 +72,111 @@ type ExportData = {
   totalPartitions?: number;
 };
 
+// Per-job history size. Sized to comfortably cover the auto-import loop's
+// in-flight batch plus recent completions that a slow poller might still
+// be reading. Oldest entries fall off first (insertion-ordered Map).
+const MAX_JOB_HISTORY = 32;
+
+/** DuckDB resource limits applied to the export connection. */
+export interface DuckDbResourceLimits {
+  /** e.g. `'2GB'`. Undefined → leave DuckDB's default. */
+  memoryLimit?: string;
+  /** Spill directory for out-of-core sorts. Undefined → no spill dir set. */
+  tempDirectory?: string;
+  /** e.g. `'64GB'`. Undefined → leave DuckDB's default. */
+  maxTempDirectorySize?: string;
+  /** Worker-thread cap. Undefined → leave DuckDB's default (one per core). */
+  threads?: number;
+}
+
+/**
+ * Apply DuckDB resource limits to an export connection so a large
+ * `COPY (... ORDER BY ...)` spills to disk instead of OOM-killing the worker.
+ *
+ * Setting `temp_directory` is what enables out-of-core processing; without it
+ * DuckDB sorts entirely in memory regardless of `memory_limit`. `memory_limit`
+ * should sit below the container's memory ceiling so DuckDB starts spilling
+ * before the cgroup OOM-killer fires. `preserve_insertion_order = false` is
+ * safe because every export query carries an explicit `ORDER BY`, and it
+ * lets large COPYs avoid the extra ordering buffer.
+ *
+ * Exported (and kept out of the worker-only block) so it is unit-testable on
+ * the main thread without spawning a worker.
+ */
+export async function applyDuckDbResourcePragmas(
+  connection: Connection,
+  limits: DuckDbResourceLimits,
+): Promise<void> {
+  const quote = (s: string): string => s.replace(/'/g, "''");
+  if (limits.tempDirectory !== undefined) {
+    await connection.exec(
+      `SET temp_directory = '${quote(limits.tempDirectory)}';`,
+    );
+  }
+  if (limits.maxTempDirectorySize !== undefined) {
+    await connection.exec(
+      `SET max_temp_directory_size = '${quote(limits.maxTempDirectorySize)}';`,
+    );
+  }
+  if (limits.memoryLimit !== undefined) {
+    await connection.exec(`SET memory_limit = '${quote(limits.memoryLimit)}';`);
+  }
+  if (limits.threads !== undefined) {
+    await connection.exec(`SET threads = ${limits.threads};`);
+  }
+  await connection.exec('SET preserve_insertion_order = false;');
+}
+
 export class ParquetExporter {
   private log: winston.Logger;
   private worker: Worker | null = null;
   private bundlesDbPath: string;
   private coreDbPath: string;
+  private duckDbLimits: DuckDbResourceLimits;
   private exportStatus: ExportData = {
     status: NOT_STARTED,
   };
+  private jobs = new Map<string, ExportData>();
 
   constructor({
     log,
     bundlesDbPath,
     coreDbPath,
+    duckDbMemoryLimit,
+    duckDbMaxTempDirectorySize,
+    duckDbThreads,
   }: {
     log: winston.Logger;
     bundlesDbPath: string;
     coreDbPath: string;
+    duckDbMemoryLimit?: string;
+    duckDbMaxTempDirectorySize?: string;
+    duckDbThreads?: number;
   }) {
     this.log = log.child({ class: 'ParquetExporter' });
     this.bundlesDbPath = bundlesDbPath;
     this.coreDbPath = coreDbPath;
+    this.duckDbLimits = {
+      memoryLimit: duckDbMemoryLimit,
+      maxTempDirectorySize: duckDbMaxTempDirectorySize,
+      threads: duckDbThreads,
+    };
+  }
+
+  // Single mutation point for exportStatus so the per-job map stays in sync
+  // with the "latest" singleton view. Every ERRORED/COMPLETED path must
+  // carry the running jobId forward so history lookups continue to work
+  // after the singleton flips to the next job.
+  private setStatus(next: ExportData): void {
+    this.exportStatus = next;
+    if (next.jobId !== undefined) {
+      this.jobs.set(next.jobId, next);
+      while (this.jobs.size > MAX_JOB_HISTORY) {
+        const oldestKey = this.jobs.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.jobs.delete(oldestKey);
+      }
+    }
   }
 
   async export({
@@ -99,8 +185,8 @@ export class ParquetExporter {
     endHeight,
     maxFileRows,
     heightPartitionSize = 1000,
-    skipL1Transactions = true,
-    skipL1Tags = true,
+    skipL1Transactions = false,
+    skipL1Tags = false,
   }: {
     outputDir: string;
     startHeight: number;
@@ -120,8 +206,13 @@ export class ParquetExporter {
       (endHeight - startHeight + 1) / heightPartitionSize,
     );
 
-    this.exportStatus = {
+    // jobId is assigned synchronously and captured in exportStatus before
+    // this function yields, so the POST handler can read exporter.status()
+    // .jobId right after calling export() and return it to the client.
+    const jobId = randomUUID();
+    this.setStatus({
       status: RUNNING,
+      jobId,
       outputDir,
       startHeight,
       endHeight,
@@ -131,11 +222,15 @@ export class ParquetExporter {
       skipL1Tags,
       completedPartitions: 0,
       totalPartitions,
-    };
+    });
 
     return new Promise((resolve, reject) => {
       const workerUrl = new URL('./parquet-exporter.js', import.meta.url);
       this.worker = new Worker(workerUrl, {
+        // Surface the worker's stderr so a native DuckDB abort (e.g. an
+        // out-of-memory crash that kills the worker before any JS catch
+        // runs) is captured instead of being reduced to a bare exit code.
+        stderr: true,
         workerData: {
           outputDir,
           startHeight,
@@ -146,10 +241,30 @@ export class ParquetExporter {
           skipL1Tags,
           bundlesDbPath: this.bundlesDbPath,
           coreDbPath: this.coreDbPath,
+          duckDbMemoryLimit: this.duckDbLimits.memoryLimit,
+          duckDbMaxTempDirectorySize: this.duckDbLimits.maxTempDirectorySize,
+          duckDbThreads: this.duckDbLimits.threads,
         },
       });
 
+      // Tracks whether a terminal outcome (completion, an EXPORT_ERROR
+      // message, or a worker 'error') has already been recorded, so the
+      // 'exit' handler doesn't overwrite a specific cause with a generic
+      // "exit code N".
+      let settled = false;
       let startTime: number;
+
+      // Bounded tail of the worker's stderr. Attached to the exit error when
+      // the worker dies without reporting a JS error (the native-crash case),
+      // so the real DuckDB message survives instead of a bare exit code.
+      let stderrTail = '';
+      this.worker.stderr.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderrTail = (stderrTail + text).slice(-4096);
+        this.log.warn('Parquet export worker stderr', {
+          output: text.replace(/\s+$/, ''),
+        });
+      });
 
       this.worker.on('online', () => {
         startTime = Date.now();
@@ -183,7 +298,7 @@ export class ParquetExporter {
             durationInSeconds,
           });
 
-          this.exportStatus = {
+          this.setStatus({
             ...this.exportStatus,
             status: COMPLETED,
             outputDir,
@@ -196,20 +311,22 @@ export class ParquetExporter {
             endTime: endTime.toISOString(),
             endTimestamp: endTime.getTime(),
             durationInSeconds,
-          };
+          });
 
+          settled = true;
           resolve();
         } else if (message.eventName === EXPORT_ERROR) {
           const endTime = new Date();
           const durationInSeconds = (endTime.getTime() - startTime) / 1000;
 
-          this.exportStatus = {
+          this.setStatus({
+            ...this.exportStatus,
             status: ERRORED,
             error: message.error,
             endTime: endTime.toISOString(),
             endTimestamp: endTime.getTime(),
             durationInSeconds,
-          };
+          });
 
           this.log.error('Parquet export error', {
             error: message.error,
@@ -217,15 +334,16 @@ export class ParquetExporter {
             durationInSeconds,
           });
 
+          settled = true;
           reject(new Error(message.error));
         } else if (message.eventName === EXPORT_PROGRESS) {
-          this.exportStatus = {
+          this.setStatus({
             ...this.exportStatus,
             currentPartitionStart: message.currentPartitionStart,
             currentPartitionEnd: message.currentPartitionEnd,
             completedPartitions: message.completedPartitions,
             totalPartitions: message.totalPartitions,
-          };
+          });
         } else if (message.eventName === TIMING_LOG) {
           this.log.debug(`Parquet export timing: ${message.timingKey}`, {
             exportStep: message.timingKey,
@@ -247,10 +365,13 @@ export class ParquetExporter {
       });
 
       this.worker.on('error', (error) => {
-        this.exportStatus = {
+        if (settled) return;
+        settled = true;
+        this.setStatus({
+          ...this.exportStatus,
           status: ERRORED,
           error: error.message,
-        };
+        });
 
         this.log.error('Worker error', error);
 
@@ -258,20 +379,38 @@ export class ParquetExporter {
       });
 
       this.worker.on('exit', (code) => {
-        if (code !== 0) {
-          this.exportStatus = {
-            status: ERRORED,
-            error: `Worker stopped with exit code ${code}`,
-          };
+        // Only act on an unexpected exit that nothing else has reported. A
+        // worker that posted EXPORT_ERROR (or emitted 'error') already
+        // carries the specific cause; don't clobber it with a generic
+        // message. When nothing was reported, fold in the captured stderr
+        // tail so a native crash isn't reduced to a bare exit code.
+        if (code === 0 || settled) return;
+        settled = true;
+        const detail =
+          stderrTail.trim() !== ''
+            ? `: ${stderrTail.trim().slice(-500)}`
+            : ' (no error reported — likely a native worker crash, e.g. OOM)';
+        const message = `Worker stopped with exit code ${code}${detail}`;
 
-          reject(new Error(`Worker stopped with exit code ${code}`));
-        }
+        this.setStatus({
+          ...this.exportStatus,
+          status: ERRORED,
+          error: message,
+        });
+
+        this.log.error(message);
+
+        reject(new Error(message));
       });
     });
   }
 
   status(): ExportData {
     return this.exportStatus;
+  }
+
+  statusByJobId(jobId: string): ExportData | undefined {
+    return this.jobs.get(jobId);
   }
 
   async stop(): Promise<void> {
@@ -544,7 +683,12 @@ CREATE TABLE IF NOT EXISTS tags (
              signature_offset::UBIGINT AS signature_offset,
              signature_size::UINTEGER AS signature_size,
              signature_type::UINTEGER AS signature_type, root_transaction_id,
-             root_parent_offset::UINTEGER AS root_parent_offset
+             -- root_parent_offset is a byte offset within the root L1 tx and
+             -- can exceed UINT32 (>4 GiB) for data items in large bundles, so
+             -- it must be UBIGINT to match the other byte offsets above and the
+             -- ClickHouse UInt64 column. UINTEGER here overflows and aborts the
+             -- export for those rows.
+             root_parent_offset::UBIGINT AS root_parent_offset
       FROM staging.transactions`,
     tags: `
       SELECT height::UBIGINT AS height, id,
@@ -630,6 +774,9 @@ CREATE TABLE IF NOT EXISTS tags (
       skipL1Tags,
       bundlesDbPath,
       coreDbPath,
+      duckDbMemoryLimit,
+      duckDbMaxTempDirectorySize,
+      duckDbThreads,
     } = data;
 
     // e.g. "20260214T120000_12345"
@@ -651,6 +798,19 @@ CREATE TABLE IF NOT EXISTS tags (
 
       await logTiming('init-duckdb', async () => {
         await connection!.exec('INSTALL sqlite; LOAD sqlite;');
+
+        // Give DuckDB a disk spill path + memory budget so a large
+        // `COPY (... ORDER BY ...)` over an ultra-dense partition sorts
+        // out-of-core instead of OOM-killing the worker. The spill dir lives
+        // under the per-job tempDir, so it's removed by the finally cleanup.
+        const duckDbSpillDir = join(tempDir!, 'duckdb-tmp');
+        mkdirSync(duckDbSpillDir, { recursive: true });
+        await applyDuckDbResourcePragmas(connection!, {
+          memoryLimit: duckDbMemoryLimit,
+          tempDirectory: duckDbSpillDir,
+          maxTempDirectorySize: duckDbMaxTempDirectorySize,
+          threads: duckDbThreads,
+        });
       });
 
       // Create temp SQLite database

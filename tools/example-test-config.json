@@ -1,0 +1,30 @@
+{
+  "clickhouse": {
+    "url": "http://localhost:8123",
+    "user": "default",
+    "password": ""
+  },
+  "endpoints": {
+    "local": "http://localhost:4000/graphql",
+    "remote": "https://arweave.net/graphql"
+  },
+  "discovery": {
+    "topDrives": 10,
+    "topOwners": 10,
+    "minTransactionCount": 100
+  },
+  "testing": {
+    "pageSize": 100,
+    "maxPagesPerTest": 100,
+    "testBothDirections": true,
+    "maxTransactionsPerEntity": 10000,
+    "allowPartialComparisons": false
+  },
+  "databaseIntegrity": {
+    "enabled": true,
+    "enableDuplicateCheck": true,
+    "enableMissingCheck": true,
+    "sampleSize": 1000,
+    "checkRemoteGraphql": true
+  }
+}

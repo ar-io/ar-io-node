@@ -41,12 +41,25 @@ Fast, offline lookups for data item to root transaction mappings.
 |----------|-------------|
 | [Filters](filters.md) | Transaction and bundle filter syntax |
 
+### Chunk Ingest Cache
+
+| Document | Description |
+|----------|-------------|
+| [Optimistic Chunk Ingest Cache](chunk-ingest-cache.md) | Validating and caching chunks posted to the gateway, with confirmation-driven cleanup |
+
 ## Data Export
 
 | Document | Description |
 |----------|-------------|
 | [Parquet and ClickHouse](parquet-and-clickhouse-usage.md) | Exporting data to Parquet format |
-| [Parquet Export with Iceberg](parquet-export-iceberg.md) | Apache Iceberg integration |
+| [ClickHouse Pipeline Architecture](clickhouse-pipeline.md) | SQLite → Parquet → ClickHouse pipeline and GraphQL routing |
+| [ClickHouse Schema and Query Optimizations](clickhouse-schema.md) | Table layout, indexes, projections, and GraphQL query shape |
+
+## Deployment
+
+| Document | Description |
+|----------|-------------|
+| [Deployment Topologies](deployment-topologies.md) | Proxy edge, shared ClickHouse, partitioning, and app-split topologies |
 
 ## Reference
 
@@ -71,6 +84,19 @@ Technical details about Arweave data structures.
 | [001 - ClickHouse GQL](madr/001-clickhouse-gql.md) | GraphQL with ClickHouse backend |
 | [002 - ArNS Cache Timing](madr/002-arns-cache-timing.md) | ArNS resolution caching strategy |
 | [003 - ArNS Undername Limits](madr/003-arns-undername-limits.md) | Undername resolution limits |
+| [004 - Optimistic L1 Transaction Indexing](madr/004-optimistic-l1-tx-indexing.md) | Index a signed L1 tx before it mines + the never-serve-as-permanent guard |
+
+## Testing
+
+| Document | Description |
+|----------|-------------|
+| [Auto-Verify](auto-verify.md) | Cross-source indexing verification (SQLite / Parquet / bundle-parser / ClickHouse) |
+
+## Developer Tools
+
+| Document | Description |
+|----------|-------------|
+| [Tools README](../tools/README.md) | CLI tools for development, debugging, and testing (fetch-with-hint, queue-missing-bundles, test-clickhouse-graphql, release/worktree tooling, etc.) |
 
 ## Processes
 

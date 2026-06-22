@@ -156,6 +156,16 @@ only sent when rate limits are exceeded.
 [data items](#data-item), and their relationships. Includes retry tracking for
 bundle processing.
 
+**Chunks Database** - SQLite database (`chunks.db`) holding `chunk_placements` —
+the chunk metadata index keyed by ([data root](#data-root), relative offset)
+that also serves as the **optimistic chunk ingest cache** ledger. When
+`CHUNK_INGEST_CACHE_ENABLED` is set, a chunk POSTed to the gateway is validated
+against its data root and write-through cached with a pending placement
+(`confirmed_at` NULL); the placement is confirmed when the chunk's
+[transaction](#transaction) is indexed, and a GC worker evicts placements whose
+data root never confirms on-chain (so the gateway never permanently keeps data
+that did not land on chain).
+
 **Core Database** - Primary SQLite database containing blocks,
 [transactions](#transaction), transaction [tags](#tags), stable/new data
 indexes, and the migrations table that tracks applied database schema changes.
@@ -173,6 +183,24 @@ policies that expire rows in the ClickHouse `transactions` table. Matches on
 YAML file loaded at the top of every import cycle; when multiple rules match
 a row the shortest TTL wins. Unmatched rows are retained indefinitely. See
 [Parquet and ClickHouse usage](./parquet-and-clickhouse-usage.md#tag-based-ttl-rules).
+
+<a id="streaming-pipeline"></a> **Streaming pipeline** - Optional path
+(opt-in via `CLICKHOUSE_STREAMING_ENABLED`) that mirrors the SQLite
+[unstable head](#unstable-head) into a separate pair of ClickHouse tables
+(`new_blocks`, `new_transactions`) in near-real time. Runs alongside — not
+in place of — the existing Parquet pipeline: stable rows still land in the
+`transactions` table via parquet-export, the unstable copy ages out via
+TTL once a row stabilizes. Enables ClickHouse to serve the live tip
+without a SQLite fallback. See [ClickHouse Pipeline § Streaming
+pipeline](./clickhouse-pipeline.md#streaming-pipeline-unstable-head).
+
+<a id="unstable-head"></a> **Unstable head** - The recent stretch of the
+chain that hasn't yet accumulated enough confirmations (~18) to be
+considered stable. Rows in this window can still be reorged out, so they
+live in the SQLite `new_*` tables (and, when streaming is enabled, in the
+ClickHouse `new_*` tables too) until they stabilize. Once stabilized, a
+row migrates to the `stable_*` tables in SQLite and the `transactions`
+table in ClickHouse via the [Parquet pipeline](./clickhouse-pipeline.md).
 
 ## CDB64 Indexing
 
@@ -222,6 +250,19 @@ verification. Higher priority items are verified first.
 
 **Verification Retry Count** - Number of failed verification attempts for a
 piece of data. Used with exponential backoff to manage retries.
+
+**Optimistic L1 Transaction Indexing** - An admin-only feature
+(`OPTIMISTIC_TX_INDEXING_ENABLED`, default off) letting a trusted poster index
+a signed L1 [transaction](#transaction) before it mines, via
+`POST /ar-io/admin/queue-optimistic-tx`. The tx is inserted into
+`new_transactions` with a NULL height so it is immediately resolvable through
+GraphQL `transaction(id)` (with `block: null`), and is promoted in place when
+its block is imported. Every submitted tx is signature-verified, and never-mined
+rows are reclaimed by the stale-new-transaction GC. The **serving guard** in
+[data verification](#data-verification) ensures such a tx's data is never marked
+`verified` until its root tx is [stable](#stable) (past fork depth) — the
+gateway never serves not-yet-permanent data as permanent. Mirrors the optimistic
+[chunk ingest cache](#chunks-database) and optimistic data-item index.
 
 ## Resolution
 
@@ -302,7 +343,7 @@ AR.IO Node uses multiple offset types to efficiently locate and retrieve data.
 `/chunk/{offset}` endpoint (base64url-encoded JSON) or `/chunk/{offset}/data`
 endpoint (raw binary with metadata in headers).
 
-**Transaction Offset** - The end position (last byte) of a
+<a id="transaction-offset"></a> **Transaction Offset** - The end position (last byte) of a
 [transaction](#transaction) in the [weave](#weave). Combined with transaction
 size to calculate start position.
 
@@ -333,6 +374,39 @@ signature bytes.
 **Data Item Offset** - The position of a [data item](#data-item) within its
 parent [bundle](#bundle), relative to the bundle's start. Used to locate
 specific items within bundled data.
+
+<a id="retrieval-hint"></a> **Retrieval Hint** - A piece of already-resolved
+parent-chain metadata that one gateway can pass to another (as request headers
+on a forwarded request, or as response headers on a served response) so the
+receiving side can skip the resolver work it would otherwise do. Three kinds
+exist today: a root [transaction ID](#transaction) (`X-AR-IO-Root-Transaction-Id`),
+a parent path of intermediate bundle IDs (`X-AR-IO-Root-Path`), and a byte
+range within the root tx pointing at the [data item](#data-item)
+(`X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size`). Hints are always
+re-validated by the receiving gateway against parsed-header IDs before serving
+bytes — a wrong hint produces a fallthrough, never wrong bytes — so emitting
+one adds no trust surface.
+
+**Naming-symmetry note**: response headers historically used the longer pair
+`X-AR-IO-Root-Data-Item-Offset` / `X-AR-IO-Root-Data-Offset`, while the
+request-side hint pair uses the shorter `X-AR-IO-Root-Item-Offset` /
+`X-AR-IO-Root-Item-Size`. As of the chunk-metadata-anchor / hint-propagation
+work, ar-io-node responses now emit BOTH the legacy pair and the aligned pair
+so cache-and-replay can copy headers between request and response without
+renaming. The legacy headers remain for backwards compatibility and will be
+removed after a deprecation window.
+
+<a id="chain-anchored-offset"></a> **Chain-Anchored Offset** - A
+[transaction offset](#transaction-offset) reported by an untrusted peer (via
+`X-Arweave-Chunk-*` response headers on `/chunk/{offset}/data`) that has been
+cross-checked against the chain's own `/tx/{id}/offset` and `/tx/{id}` and so
+is safe to feed merkle proof validation. The anchor pattern lets the gateway
+skip the log₂(height) block binary search that would otherwise be needed when
+the local DB doesn't cover an offset, replacing it with one HEAD per offset
+plus two chain lookups per unique tx (cached in an LRU keyed by tx-id). On any
+disagreement between the peer and the chain, the source returns null and the
+composite falls through to the canonical chain binary search — never trust
+the peer over the node. See ar-io/ar-io-node#681.
 
 ## Network Participation
 

@@ -516,9 +516,8 @@ export async function cleanClickHouseTables(
       'staging_transactions',
       'staging_tags',
       'transactions',
-      'id_transactions',
-      'owner_transactions',
-      'target_transactions',
+      'new_blocks',
+      'new_transactions',
     ];
 
     for (const table of tables) {

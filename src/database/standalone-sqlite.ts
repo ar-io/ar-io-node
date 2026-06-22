@@ -57,6 +57,8 @@ import {
   PartialJsonBlock,
   PartialJsonTransaction,
   TransactionAttributes,
+  ChunkPlacement,
+  ChunkPlacementRef,
 } from '../types.js';
 import * as config from '../config.js';
 import { DetailedError } from '../lib/error.js';
@@ -68,7 +70,11 @@ const MAX_WORKER_COUNT = 12;
 const MAX_WORKER_ERRORS = 100;
 
 const STABLE_FLUSH_INTERVAL = 5;
-const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
+// Grace period before a never-mined optimistic (NULL-height) transaction is
+// reclaimed by the stale-new-data GC. Configurable so operators running
+// optimistic L1 tx indexing (corner C) can tune the leash to observed
+// confirmation latency; defaults to the prior hardcoded 2h.
+const NEW_TX_CLEANUP_WAIT_SECS = config.OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS;
 const NEW_DATA_ITEM_CLEANUP_WAIT_SECS = 60 * 60 * 2;
 const BUNDLE_REPROCESS_WAIT_SECS = 60 * 15;
 
@@ -171,7 +177,8 @@ function hashTagPart(value: Buffer) {
   return crypto.createHash('sha1').update(value).digest();
 }
 
-function isContentTypeTag(tagName: Buffer) {
+/** Returns true if the decoded tag name is `content-type` (case-insensitive). */
+export function isContentTypeTag(tagName: Buffer): boolean {
   return tagName.toString('utf8').toLowerCase() === 'content-type';
 }
 
@@ -179,7 +186,8 @@ function isContentEncodingTag(tagName: Buffer) {
   return tagName.toString('utf8').toLowerCase() === 'content-encoding';
 }
 
-function ownerToAddress(owner: Buffer) {
+/** Derives the wallet-address bytes (sha256 of the owner public modulus). */
+export function ownerToAddress(owner: Buffer): Buffer {
   return crypto.createHash('sha256').update(owner).digest();
 }
 
@@ -410,17 +418,24 @@ export class StandaloneSqliteDatabaseWorker {
     data: Sqlite.Database;
     moderation: Sqlite.Database;
     bundles: Sqlite.Database;
+    chunks: Sqlite.Database;
   };
   private stmts: {
     core: { [stmtName: string]: Sqlite.Statement };
     data: { [stmtName: string]: Sqlite.Statement };
     moderation: { [stmtName: string]: Sqlite.Statement };
     bundles: { [stmtName: string]: Sqlite.Statement };
+    chunks: { [stmtName: string]: Sqlite.Statement };
   };
   private bundleFormatIds: { [filter: string]: number } = {};
   private filterIds: { [filter: string]: number } = {};
 
   private insertDataHashCache: LRUCache<string, boolean>;
+
+  private cachedDebugInfo: {
+    result: ReturnType<StandaloneSqliteDatabaseWorker['computeDebugInfo']>;
+    expiresAt: number;
+  } | null = null;
 
   private tagSelectivity: Record<string, number>;
 
@@ -429,6 +444,7 @@ export class StandaloneSqliteDatabaseWorker {
   resetCoreToHeightFn: Sqlite.Transaction;
   insertTxFn: Sqlite.Transaction;
   insertDataItemFn: Sqlite.Transaction;
+  insertOptimisticDataItemFn: Sqlite.Transaction;
   insertBlockAndTxsFn: Sqlite.Transaction;
   saveCoreStableDataFn: Sqlite.Transaction;
   saveBundlesStableDataFn: Sqlite.Transaction;
@@ -442,6 +458,7 @@ export class StandaloneSqliteDatabaseWorker {
     dataDbPath,
     moderationDbPath,
     bundlesDbPath,
+    chunksDbPath,
     tagSelectivity,
   }: {
     log: winston.Logger;
@@ -449,6 +466,7 @@ export class StandaloneSqliteDatabaseWorker {
     dataDbPath: string;
     moderationDbPath: string;
     bundlesDbPath: string;
+    chunksDbPath: string;
     tagSelectivity: Record<string, number>;
   }) {
     this.log = log;
@@ -459,6 +477,7 @@ export class StandaloneSqliteDatabaseWorker {
       data: new Sqlite(dataDbPath, { timeout }),
       moderation: new Sqlite(moderationDbPath, { timeout }),
       bundles: new Sqlite(bundlesDbPath, { timeout }),
+      chunks: new Sqlite(chunksDbPath, { timeout }),
     };
     for (const db of Object.values(this.dbs)) {
       db.pragma('journal_mode = WAL');
@@ -469,7 +488,7 @@ export class StandaloneSqliteDatabaseWorker {
     this.dbs.data.exec(`ATTACH DATABASE '${bundlesDbPath}' AS bundles`);
     this.dbs.bundles.exec(`ATTACH DATABASE '${coreDbPath}' AS core`);
 
-    this.stmts = { core: {}, data: {}, moderation: {}, bundles: {} };
+    this.stmts = { core: {}, data: {}, moderation: {}, bundles: {}, chunks: {} };
 
     for (const [stmtsKey, stmts] of Object.entries(this.stmts)) {
       const sqlUrl = new URL(`./sql/${stmtsKey}`, import.meta.url);
@@ -482,7 +501,8 @@ export class StandaloneSqliteDatabaseWorker {
             stmtsKey === 'core' ||
             stmtsKey === 'data' ||
             stmtsKey === 'moderation' ||
-            stmtsKey === 'bundles'
+            stmtsKey === 'bundles' ||
+            stmtsKey === 'chunks'
           ) {
             stmts[k] = this.dbs[stmtsKey].prepare(sql);
           } else {
@@ -554,6 +574,13 @@ export class StandaloneSqliteDatabaseWorker {
       },
     );
 
+    // Full-claim path: caller has the complete root atom (parent_id,
+    // root_transaction_id, all the offset/size fields, signature_type,
+    // root_parent_offset). Used by the unbundle pipeline and by the
+    // on-demand metadata resolver. Atomic root-atom upsert; any of the
+    // tuple fields the caller leaves NULL are preserved by COALESCE in
+    // upsertNewDataItem rather than clobbered (see the contract comment
+    // in import.sql).
     this.insertDataItemFn = this.dbs.bundles.transaction(
       (item: NormalizedDataItem, height?: number) => {
         const rows = dataItemToDbRows(item, height);
@@ -577,8 +604,6 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
         }
 
-        // We do not insert bundle data item rows for opimistically indexed
-        // data items
         if (rows.bundleDataItem) {
           this.stmts.bundles.upsertBundleDataItem.run({
             ...rows.bundleDataItem,
@@ -587,6 +612,42 @@ export class StandaloneSqliteDatabaseWorker {
         }
 
         this.stmts.bundles.upsertNewDataItem.run({
+          ...rows.newDataItem,
+          height,
+        });
+      },
+    );
+
+    // Optimistic path: caller has no tuple knowledge. Used by the admin
+    // queue-data-item route. INSERT-if-absent for the data item row;
+    // never updates the root-atom fields on conflict. Tag rows still
+    // upsert the always-known optimistic metadata. We deliberately skip
+    // the bundle_data_items write — that table records actual unbundle
+    // observations, not optimistic claims.
+    this.insertOptimisticDataItemFn = this.dbs.bundles.transaction(
+      (item: NormalizedDataItem, height?: number) => {
+        const rows = dataItemToDbRows(item, height);
+
+        for (const row of rows.tagNames) {
+          this.stmts.bundles.insertOrIgnoreTagName.run(row);
+        }
+
+        for (const row of rows.tagValues) {
+          this.stmts.bundles.insertOrIgnoreTagValue.run(row);
+        }
+
+        for (const row of rows.newDataItemTags) {
+          this.stmts.bundles.upsertNewDataItemTag.run({
+            ...row,
+            height,
+          });
+        }
+
+        for (const row of rows.wallets) {
+          this.stmts.bundles.insertOrIgnoreWallet.run(row);
+        }
+
+        this.stmts.bundles.insertOptimisticDataItem.run({
           ...rows.newDataItem,
           height,
         });
@@ -853,9 +914,22 @@ export class StandaloneSqliteDatabaseWorker {
     const rows = this.stmts.bundles.selectFailedBundleIds.all({
       limit,
       reprocess_cutoff: currentUnixTimestamp() - BUNDLE_REPROCESS_WAIT_SECS,
+      max_retry_attempts: config.BUNDLE_REPAIR_MAX_RETRY_ATTEMPTS,
+      retry_cutoff:
+        currentUnixTimestamp() - config.BUNDLE_REPAIR_RETRY_COOLDOWN_SECONDS,
     });
 
     return rows.map((row): string => toB64Url(row.id));
+  }
+
+  getRepairBacklogCount(): number {
+    const row = this.stmts.bundles.selectRepairBacklogCount.get();
+    return row?.n ?? 0;
+  }
+
+  getFullRepairBacklogCount(): number {
+    const row = this.stmts.bundles.selectFullRepairBacklogCount.get();
+    return row?.n ?? 0;
   }
 
   backfillBundles() {
@@ -909,6 +983,114 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
+  // --- Chunk placement index (chunks.db) ---
+  // BLOB-valued fields (data_root, hash, data_path, tx_path) cross the worker
+  // boundary as base64url strings, matching the rest of this class, and are
+  // converted to Buffers here.
+
+  saveChunkPlacement(placement: ChunkPlacement) {
+    this.stmts.chunks.saveChunkPlacement.run({
+      data_root: fromB64Url(placement.dataRoot),
+      relative_offset: placement.relativeOffset,
+      data_size: placement.dataSize,
+      chunk_size: placement.chunkSize,
+      hash: fromB64Url(placement.hash),
+      data_path: fromB64Url(placement.dataPath),
+      tx_path:
+        placement.txPath !== undefined ? fromB64Url(placement.txPath) : null,
+      origin: placement.origin,
+      cached_at: placement.cachedAt,
+      confirmed_at: placement.confirmedAt ?? null,
+    });
+  }
+
+  confirmChunkPlacements(dataRoot: string, confirmedAt: number): number[] {
+    const rows = this.stmts.chunks.confirmChunkPlacements.all({
+      data_root: fromB64Url(dataRoot),
+      confirmed_at: confirmedAt,
+    });
+    return rows.map((row: any) => row.cached_at as number);
+  }
+
+  // Reserved for chain-reorg recovery: returns a confirmed placement to pending
+  // so the GC can reclaim it if its (now-orphaned) tx never re-confirms. NOT yet
+  // wired — see the deferral note at the TX_INDEXED confirm subscriber in
+  // system.ts: CHAIN_REORG carries no orphaned data_roots and placements aren't
+  // height-indexed, so there's no clean call site yet. Kept plumbed (worker +
+  // queue wrapper + ChunkPlacementIndex interface) for that future hook.
+  unconfirmChunkPlacements(dataRoot: string) {
+    this.stmts.chunks.unconfirmChunkPlacements.run({
+      data_root: fromB64Url(dataRoot),
+    });
+  }
+
+  selectExpiredUnconfirmedChunkPlacements(params: {
+    originIngest: number;
+    originIngestAllowlisted: number;
+    openCutoff: number;
+    allowCutoff: number;
+    limit: number;
+  }): ChunkPlacementRef[] {
+    const rows = this.stmts.chunks.selectExpiredUnconfirmedPlacements.all({
+      origin_ingest: params.originIngest,
+      origin_ingest_allowlisted: params.originIngestAllowlisted,
+      open_cutoff: params.openCutoff,
+      allow_cutoff: params.allowCutoff,
+      limit: params.limit,
+    });
+    return rows.map((row: any) => ({
+      dataRoot: toB64Url(row.data_root),
+      relativeOffset: row.relative_offset,
+      chunkSize: row.chunk_size,
+    }));
+  }
+
+  selectOldestPendingChunkPlacements(limit: number): ChunkPlacementRef[] {
+    const rows = this.stmts.chunks.selectOldestPendingPlacements.all({ limit });
+    return rows.map((row: any) => ({
+      dataRoot: toB64Url(row.data_root),
+      relativeOffset: row.relative_offset,
+      chunkSize: row.chunk_size,
+    }));
+  }
+
+  deleteChunkPlacement(dataRoot: string, relativeOffset: number): number {
+    return this.stmts.chunks.deleteChunkPlacement.run({
+      data_root: fromB64Url(dataRoot),
+      relative_offset: relativeOffset,
+    }).changes;
+  }
+
+  getChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): ChunkPlacement | undefined {
+    const row: any = this.stmts.chunks.getChunkPlacement.get({
+      data_root: fromB64Url(dataRoot),
+      relative_offset: relativeOffset,
+    });
+    if (row === undefined) {
+      return undefined;
+    }
+    return {
+      dataRoot: toB64Url(row.data_root),
+      relativeOffset: row.relative_offset,
+      dataSize: row.data_size,
+      chunkSize: row.chunk_size,
+      hash: toB64Url(row.hash),
+      dataPath: toB64Url(row.data_path),
+      txPath: row.tx_path != null ? toB64Url(row.tx_path) : undefined,
+      origin: row.origin,
+      cachedAt: row.cached_at,
+      confirmedAt: row.confirmed_at ?? undefined,
+    };
+  }
+
+  sumPendingChunkBytes(): number {
+    const row: any = this.stmts.chunks.sumPendingChunkBytes.get();
+    return row.pending_bytes as number;
+  }
+
   getTxByOffset(offset: number): TxByOffsetResult {
     const result = this.stmts.core.selectStableTransactionOffsetById.get({
       offset,
@@ -958,7 +1140,7 @@ export class StandaloneSqliteDatabaseWorker {
     return id;
   }
 
-  saveDataItem(item: NormalizedDataItem) {
+  saveDataItem(item: NormalizedDataItem, isOptimistic = false) {
     const rootTxId = item.root_tx_id ? fromB64Url(item.root_tx_id) : null;
     const maybeTxHeight = this.stmts.bundles.selectTransactionHeight.get({
       transaction_id: rootTxId,
@@ -967,7 +1149,12 @@ export class StandaloneSqliteDatabaseWorker {
     if (config.WRITE_ANS104_DATA_ITEM_DB_SIGNATURES === false) {
       item.signature = null;
     }
-    this.insertDataItemFn(item, maybeTxHeight);
+
+    if (isOptimistic) {
+      this.insertOptimisticDataItemFn(item, maybeTxHeight);
+    } else {
+      this.insertDataItemFn(item, maybeTxHeight);
+    }
   }
 
   saveBundleRetries(rootTransactionId: string) {
@@ -1107,12 +1294,26 @@ export class StandaloneSqliteDatabaseWorker {
     const dataOffset = dataRow?.data_offset ?? txOrItemRow?.data_offset;
     const offset = dataRow?.data_item_offset ?? dataItemAttributes?.offset;
 
+    // Immediate parent bundle for data items, undefined for L1 txs.
+    // Surfaced so route handlers can detect the single-level case
+    // (parentId === rootTransactionId) and emit X-AR-IO-Root-Path.
+    // Sourced only from txOrItemRow (bundles.*_data_items.parent_id):
+    // data.db has no parent_id column on contiguous_data_ids — the
+    // parent relationship there lives in the separate
+    // contiguous_data_id_parents join table, accessed via
+    // selectDataParent.
+    const parentId =
+      txOrItemRow?.parent_id !== null && txOrItemRow?.parent_id !== undefined
+        ? toB64Url(txOrItemRow.parent_id)
+        : undefined;
+
     return {
       hash: hash ? toB64Url(hash) : undefined,
       dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
       size: txOrItemRow?.data_size ?? dataRow?.data_size,
       contentEncoding: txOrItemRow?.content_encoding,
       contentType,
+      parentId,
       rootTransactionId,
       rootParentOffset,
       dataOffset,
@@ -1135,6 +1336,11 @@ export class StandaloneSqliteDatabaseWorker {
           : undefined),
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: txOrItemRow?.stable === true,
+      // Block height of the root tx/item, or undefined when not yet mined
+      // (an optimistically-indexed tx sits in new_transactions with NULL
+      // height until its block is imported). Used by the verification serving
+      // guard to withhold `verified` from unmined data.
+      height: txOrItemRow?.height ?? undefined,
       verified: dataRow?.verified === 1,
       trusted:
         dataRow?.trusted === 1
@@ -1164,6 +1370,23 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
+  /**
+   * Fetch L1 transaction signature/owner for GraphQL resolvers.
+   *
+   * Returns `undefined` when no row exists. Otherwise returns
+   * `{ signature, owner }` where each field is a base64url string or
+   * `null` when the corresponding column is null.
+   *
+   * `owner` is sourced from the joined `wallets.public_modulus` (the
+   * underlying SQL is `selectTransactionAttributes` in
+   * src/database/sql/core/transaction-attributes.sql, projecting
+   * `w.public_modulus AS owner`) — there is no `owner_key` column.
+   * `OwnerFetcher` only falls back to `chainSource` when this returns
+   * `null`, so a missing wallet join silently forces every L1-tx owner
+   * query onto the chain path. PE-9073 follow-up fixed a gate that
+   * checked the non-existent `row.owner_key`, which had this exact
+   * effect.
+   */
   getTransactionAttributes(id: string) {
     const row = this.stmts.core.selectTransactionAttributes.get({
       id: fromB64Url(id),
@@ -1174,7 +1397,7 @@ export class StandaloneSqliteDatabaseWorker {
     }
     return {
       signature: row.signature ? toB64Url(row.signature) : null,
-      owner: row.owner_key ? toB64Url(row.owner) : null,
+      owner: row.owner ? toB64Url(row.owner) : null,
     };
   }
 
@@ -1198,9 +1421,29 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   getDebugInfo() {
+    const ttlMs = config.GET_DEBUG_INFO_CACHE_TTL_MS;
+    if (ttlMs > 0 && this.cachedDebugInfo !== null) {
+      if (Date.now() < this.cachedDebugInfo.expiresAt) {
+        return this.cachedDebugInfo.result;
+      }
+    }
+
+    const result = this.computeDebugInfo();
+
+    if (ttlMs > 0) {
+      this.cachedDebugInfo = { result, expiresAt: Date.now() + ttlMs };
+    } else {
+      this.cachedDebugInfo = null;
+    }
+
+    return result;
+  }
+
+  private computeDebugInfo() {
     const chainStats = this.stmts.core.selectChainStats.get();
     const bundleStats = this.stmts.bundles.selectBundleStats.get();
     const dataItemStats = this.stmts.bundles.selectDataItemStats.get();
+
 
     const now = currentUnixTimestamp();
 
@@ -1767,7 +2010,13 @@ export class StandaloneSqliteDatabaseWorker {
       });
     }
 
-    if (minHeight != null && minHeight > 0) {
+    // Skip minHeight on new tables: pending rows have NULL height and would
+    // be silently dropped by `height >= :minHeight`. The ClickHouse height
+    // optimization raises minHeight to route historical queries away from
+    // SQLite, but new tables only hold unstable/recent data that ClickHouse
+    // never covers, so there is nothing to skip here.
+    const applyMinHeight = source !== 'new_txs' && source !== 'new_items';
+    if (applyMinHeight && minHeight != null && minHeight > 0) {
       query.where(sql.gte(`${heightSortTableAlias}.height`, minHeight));
     }
 
@@ -2888,6 +3137,7 @@ export class StandaloneSqliteDatabase
     dataDbPath,
     moderationDbPath,
     bundlesDbPath,
+    chunksDbPath,
     tagSelectivity,
   }: {
     log: winston.Logger;
@@ -2895,6 +3145,7 @@ export class StandaloneSqliteDatabase
     dataDbPath: string;
     moderationDbPath: string;
     bundlesDbPath: string;
+    chunksDbPath: string;
     tagSelectivity: Record<string, number>;
   }) {
     this.log = log.child({ class: `${this.constructor.name}` });
@@ -2995,6 +3246,7 @@ export class StandaloneSqliteDatabase
           dataDbPath,
           moderationDbPath,
           bundlesDbPath,
+          chunksDbPath,
           tagSelectivity: tagSelectivity,
         },
       });
@@ -3215,6 +3467,14 @@ export class StandaloneSqliteDatabase
     return this.queueRead('bundles', 'getFailedBundleIds', [limit]);
   }
 
+  getRepairBacklogCount(): Promise<number> {
+    return this.queueRead('bundles', 'getRepairBacklogCount', undefined);
+  }
+
+  getFullRepairBacklogCount(): Promise<number> {
+    return this.queueRead('bundles', 'getFullRepairBacklogCount', undefined);
+  }
+
   backfillBundles() {
     return this.queueRead('bundles', 'backfillBundles', undefined);
   }
@@ -3250,13 +3510,79 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('core', 'saveTxOffset', [id, offset]);
   }
 
-  async saveDataItem(item: NormalizedDataItem): Promise<void> {
+  // --- Chunk placement index (chunks.db; routed through the `data` worker
+  // pool — chunks.db is a separate file, so it has its own WAL). ---
+
+  saveChunkPlacement(placement: ChunkPlacement): Promise<void> {
+    return this.queueWrite('data', 'saveChunkPlacement', [placement]);
+  }
+
+  confirmChunkPlacements(
+    dataRoot: string,
+    confirmedAt: number,
+  ): Promise<number[]> {
+    return this.queueWrite('data', 'confirmChunkPlacements', [
+      dataRoot,
+      confirmedAt,
+    ]);
+  }
+
+  unconfirmChunkPlacements(dataRoot: string): Promise<void> {
+    return this.queueWrite('data', 'unconfirmChunkPlacements', [dataRoot]);
+  }
+
+  selectExpiredUnconfirmedChunkPlacements(params: {
+    originIngest: number;
+    originIngestAllowlisted: number;
+    openCutoff: number;
+    allowCutoff: number;
+    limit: number;
+  }): Promise<ChunkPlacementRef[]> {
+    return this.queueRead('data', 'selectExpiredUnconfirmedChunkPlacements', [
+      params,
+    ]);
+  }
+
+  selectOldestPendingChunkPlacements(
+    limit: number,
+  ): Promise<ChunkPlacementRef[]> {
+    return this.queueRead('data', 'selectOldestPendingChunkPlacements', [limit]);
+  }
+
+  deleteChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<number> {
+    return this.queueWrite('data', 'deleteChunkPlacement', [
+      dataRoot,
+      relativeOffset,
+    ]);
+  }
+
+  getChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<ChunkPlacement | undefined> {
+    return this.queueRead('data', 'getChunkPlacement', [
+      dataRoot,
+      relativeOffset,
+    ]);
+  }
+
+  sumPendingChunkBytes(): Promise<number> {
+    return this.queueRead('data', 'sumPendingChunkBytes', undefined);
+  }
+
+  async saveDataItem(
+    item: NormalizedDataItem,
+    isOptimistic = false,
+  ): Promise<void> {
     if (this.shouldFlushDataItems()) {
       await this.flushStableDataItems();
     }
 
     this.newDataItemsCount++;
-    return this.queueWrite('bundles', 'saveDataItem', [item]);
+    return this.queueWrite('bundles', 'saveDataItem', [item, isOptimistic]);
   }
 
   saveBundleRetries(rootTransactionId: string): Promise<void> {
@@ -3363,8 +3689,27 @@ export class StandaloneSqliteDatabase
     }
   }
 
-  getDebugInfo(): Promise<DebugInfo> {
-    return this.queueRead('debug', 'getDebugInfo', undefined);
+  async getDebugInfo(): Promise<DebugInfo> {
+    const debugInfo = (await this.queueRead(
+      'debug',
+      'getDebugInfo',
+      undefined,
+    )) as DebugInfo;
+
+    // Worker threads have their own prom-client module instance, so a
+    // gauge set inside computeDebugInfo() never reaches the main-thread
+    // Prometheus registry served by `/ar-io/__gateway_metrics`. Set it
+    // here in the main thread after the worker returns.
+    const minStableHeight = debugInfo?.heights?.minStableDataItem;
+    if (
+      typeof minStableHeight === 'number' &&
+      Number.isFinite(minStableHeight) &&
+      minStableHeight >= 0
+    ) {
+      metrics.minStableDataItemHeight.set(minStableHeight);
+    }
+
+    return debugInfo;
   }
 
   saveDataContentAttributes({
@@ -3460,7 +3805,7 @@ export class StandaloneSqliteDatabase
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
-    bundledIn?: string[];
+    bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }) {
     return this.queueRead('gql', 'getGqlTransactions', [
@@ -3688,6 +4033,7 @@ if (!isMainThread) {
     dataDbPath: workerData.dataDbPath,
     moderationDbPath: workerData.moderationDbPath,
     bundlesDbPath: workerData.bundlesDbPath,
+    chunksDbPath: workerData.chunksDbPath,
     tagSelectivity: workerData.tagSelectivity,
   });
 
@@ -3714,6 +4060,12 @@ if (!isMainThread) {
         case 'getFailedBundleIds':
           const failedBundleIds = worker.getFailedBundleIds(args[0]);
           parentPort?.postMessage(failedBundleIds);
+          break;
+        case 'getRepairBacklogCount':
+          parentPort?.postMessage(worker.getRepairBacklogCount());
+          break;
+        case 'getFullRepairBacklogCount':
+          parentPort?.postMessage(worker.getFullRepairBacklogCount());
           break;
         case 'backfillBundles':
           worker.backfillBundles();
@@ -3748,8 +4100,42 @@ if (!isMainThread) {
           worker.saveTxOffset(args[0], args[1]);
           parentPort?.postMessage(null);
           break;
+        case 'saveChunkPlacement':
+          worker.saveChunkPlacement(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'confirmChunkPlacements':
+          parentPort?.postMessage(
+            worker.confirmChunkPlacements(args[0], args[1]),
+          );
+          break;
+        case 'unconfirmChunkPlacements':
+          worker.unconfirmChunkPlacements(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'selectExpiredUnconfirmedChunkPlacements':
+          parentPort?.postMessage(
+            worker.selectExpiredUnconfirmedChunkPlacements(args[0]),
+          );
+          break;
+        case 'selectOldestPendingChunkPlacements':
+          parentPort?.postMessage(
+            worker.selectOldestPendingChunkPlacements(args[0]),
+          );
+          break;
+        case 'deleteChunkPlacement':
+          parentPort?.postMessage(
+            worker.deleteChunkPlacement(args[0], args[1]),
+          );
+          break;
+        case 'getChunkPlacement':
+          parentPort?.postMessage(worker.getChunkPlacement(args[0], args[1]));
+          break;
+        case 'sumPendingChunkBytes':
+          parentPort?.postMessage(worker.sumPendingChunkBytes());
+          break;
         case 'saveDataItem':
-          worker.saveDataItem(args[0]);
+          worker.saveDataItem(args[0], args[1]);
           parentPort?.postMessage(null);
           break;
         case 'saveBundleRetries':

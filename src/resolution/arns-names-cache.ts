@@ -6,16 +6,8 @@
  */
 import winston from 'winston';
 
-import {
-  AoClient,
-  AoARIORead,
-  AOProcess,
-  ARIO,
-  AoArNSNameDataWithName,
-  PaginationResult,
-} from '@ar.io/sdk';
+import { ARIORead, ArNSNameDataWithName, PaginationResult } from '@ar.io/sdk';
 import * as config from '../config.js';
-import { connect } from '@permaweb/aoconnect';
 import { KvDebounceStore } from '../store/kv-debounce-store.js';
 import { KVBufferStore } from '../types.js';
 import * as metrics from '../metrics.js';
@@ -37,32 +29,20 @@ const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
  */
 export class ArNSNamesCache {
   private log: winston.Logger;
-  private networkProcess: AoARIORead;
+  private networkProcess: ARIORead;
   private arnsRegistryKvCache: KVBufferStore;
   private arnsDebounceCache: KvDebounceStore;
 
   constructor({
     log,
     registryCache,
-    ao = connect({
-      MU_URL: config.AO_MU_URL,
-      CU_URL: config.NETWORK_AO_CU_URL,
-      GRAPHQL_URL: config.AO_GRAPHQL_URL,
-      GATEWAY_URL: config.AO_GATEWAY_URL,
-    }),
-    networkProcess = ARIO.init({
-      process: new AOProcess({
-        processId: config.IO_PROCESS_ID,
-        ao: ao,
-      }),
-    }),
+    networkProcess,
     cacheMissDebounceTtl = DEFAULT_CACHE_MISS_DEBOUNCE_TTL,
     cacheHitDebounceTtl = DEFAULT_CACHE_HIT_DEBOUNCE_TTL,
   }: {
     log: winston.Logger;
     registryCache: KVBufferStore;
-    ao?: AoClient;
-    networkProcess?: AoARIORead;
+    networkProcess: ARIORead;
     cacheMissDebounceTtl?: number;
     cacheHitDebounceTtl?: number;
   }) {
@@ -118,7 +98,7 @@ export class ArNSNamesCache {
             const {
               items: records,
               nextCursor,
-            }: PaginationResult<AoArNSNameDataWithName> =
+            }: PaginationResult<ArNSNameDataWithName> =
               await this.networkProcess.getArNSRecords({ cursor, limit: 1000 });
 
             for (const record of records) {
@@ -212,7 +192,7 @@ export class ArNSNamesCache {
   async getCachedArNSBaseName(
     name: string,
     parentSpan?: Span,
-  ): Promise<AoArNSNameDataWithName | undefined> {
+  ): Promise<ArNSNameDataWithName | undefined> {
     const span = parentSpan
       ? tracer.startSpan(
           'ArNSNamesCache.getCachedArNSBaseName',
@@ -234,7 +214,7 @@ export class ArNSNamesCache {
       if (record) {
         metrics.arnsNameCacheHitCounter.inc();
         span.setAttributes({ 'arns.cache.hit': true });
-        return <AoArNSNameDataWithName>JSON.parse(record.toString());
+        return <ArNSNameDataWithName>JSON.parse(record.toString());
       }
       metrics.arnsNameCacheMissCounter.inc();
       span.setAttributes({ 'arns.cache.hit': false });
@@ -249,7 +229,7 @@ export class ArNSNamesCache {
    * @param name - The name to set the ArNS name data for.
    * @param record - The ArNS name data to set.
    */
-  async setCachedArNSBaseName(name: string, record: AoArNSNameDataWithName) {
+  async setCachedArNSBaseName(name: string, record: ArNSNameDataWithName) {
     return this.arnsRegistryKvCache.set(
       name,
       Buffer.from(JSON.stringify(record)),

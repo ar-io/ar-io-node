@@ -6,6 +6,7 @@
  */
 import { Router, Request, Response, default as express } from 'express';
 import promBundle from 'express-prom-bundle';
+import { default as Arweave } from 'arweave';
 
 import * as config from '../config.js';
 import * as system from '../system.js';
@@ -17,7 +18,12 @@ import { ParquetExporter } from '../workers/parquet-exporter.js';
 import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
+import { sanityCheckTx } from '../lib/validation.js';
+import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
+import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
+
+const arweave = Arweave.init({});
 
 export const arIoRouter = Router();
 export let parquetExporter: ParquetExporter | null = null;
@@ -32,6 +38,10 @@ function getParquetExporter(): ParquetExporter {
       log,
       bundlesDbPath: 'data/sqlite/bundles.db',
       coreDbPath: 'data/sqlite/core.db',
+      duckDbMemoryLimit: config.PARQUET_EXPORT_DUCKDB_MEMORY_LIMIT,
+      duckDbMaxTempDirectorySize:
+        config.PARQUET_EXPORT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE,
+      duckDbThreads: config.PARQUET_EXPORT_DUCKDB_THREADS,
     });
 
     // Register cleanup handler when exporter is first created
@@ -67,7 +77,12 @@ arIoRouter.use(
           return '/ar-io/resolver/:name';
         if (path.match(/^\/ar-io\/admin\/bundle-status\/[a-zA-Z0-9_-]{43}$/))
           return '/ar-io/admin/bundle-status/:id';
-        if (path.startsWith('/ar-io/admin/')) return path; // Keep other admin routes as-is
+        if (path.match(/^\/ar-io\/admin\/export-parquet\/status\/[^/]+$/))
+          return '/ar-io/admin/export-parquet/status/:jobId';
+        // Any new admin route with a path parameter MUST be normalized
+        // above this line, or each unique parameter value will permanently
+        // accumulate as a distinct prom-client label set.
+        if (path.startsWith('/ar-io/admin/')) return path;
         if (path.startsWith('/ar-io/')) return path; // Keep other ar-io routes as-is
       }
 
@@ -145,7 +160,6 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
  * Response (both features enabled):
  * {
  *   "wallet": "...",
- *   "processId": "...",
  *   "bundlers": [
  *     { "url": "https://turbo.ardrive.io/" }
  *   ],
@@ -170,7 +184,12 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
 export const arIoInfoHandler = (_req: Request, res: Response) => {
   const response = buildArIoInfo({
     wallet: config.AR_IO_WALLET,
-    processId: config.IO_PROCESS_ID,
+    programIds: {
+      core: config.ARIO_CORE_PROGRAM_ID,
+      gar: config.ARIO_GAR_PROGRAM_ID,
+      arns: config.ARIO_ARNS_PROGRAM_ID,
+      ant: config.ARIO_ANT_PROGRAM_ID,
+    },
     ans104UnbundleFilter: config.ANS104_UNBUNDLE_FILTER_PARSED,
     ans104IndexFilter: config.ANS104_INDEX_FILTER_PARSED,
     release,
@@ -199,22 +218,8 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
     httpsig:
       config.HTTPSIG_ENABLED && config.HTTPSIG_SIGNER !== undefined
         ? {
-            enabled: true,
             algorithm: 'ed25519',
-            publicKey: config.HTTPSIG_SIGNER.publicKeyB64Url,
-            keyId: config.HTTPSIG_SIGNER.keyId,
             solanaAddress: config.HTTPSIG_SIGNER.solanaAddress,
-            attestation:
-              config.HTTPSIG_OBSERVER !== undefined
-                ? {
-                    txId: config.HTTPSIG_OBSERVER.attestationTxId,
-                    observerAddress: config.HTTPSIG_OBSERVER.address,
-                    payload: config.HTTPSIG_OBSERVER.attestation.payload,
-                    signature: config.HTTPSIG_OBSERVER.attestation.signature,
-                    rsaPublicKey:
-                      config.HTTPSIG_OBSERVER.attestation.rsaPublicKey,
-                  }
-                : undefined,
           }
         : undefined,
     ipfs: config.IPFS_ENABLED ? { enabled: true } : undefined,
@@ -429,6 +434,100 @@ arIoRouter.post(
   },
 );
 
+// Optimistically index a signed L1 transaction so it is resolvable
+// (GraphQL `transaction(id)`, with `block: null`) before it mines. Trusted /
+// allowlist-only: gated by the `/ar-io/admin` bearer auth above AND the
+// `OPTIMISTIC_TX_INDEXING_ENABLED` master switch (default off). Unlike an
+// unaddressable junk chunk (corner A), an indexed tx is immediately queryable,
+// so this is admin-only and every tx is authenticated (`arweave.transactions
+// .verify`) — a forged id/data_root cannot be injected. The row is inserted
+// with a NULL height (pending); the normal block-import path promotes it in
+// place when it mines, and never-mined rows are reclaimed by the existing
+// stale-new-transaction GC (`OPTIMISTIC_TX_CLEANUP_WAIT_SECONDS`). The data is
+// never served as `verified`/permanent until the tx is stable — enforced,
+// independently of this endpoint, by the data-verification serving guard.
+arIoRouter.post(
+  '/ar-io/admin/queue-optimistic-tx',
+  express.json({ limit: '10mb' }),
+  async (req, res) => {
+    if (!config.OPTIMISTIC_TX_INDEXING_ENABLED) {
+      metrics.optimisticTxIngestedCounter.inc({ result: 'disabled' });
+      res.status(403).send('Optimistic tx indexing is disabled');
+      return;
+    }
+
+    try {
+      const validation = validateOptimisticTxBatch(
+        req.body,
+        config.OPTIMISTIC_TX_MAX_BATCH_SIZE,
+      );
+      if (!validation.ok) {
+        res.status(validation.status).send(validation.message);
+        return;
+      }
+
+      for (const tx of validation.txs) {
+        // Structural check (id present + well-formed).
+        try {
+          sanityCheckTx(tx);
+        } catch (e: any) {
+          metrics.optimisticTxIngestedCounter.inc({ result: 'invalid' });
+          res.status(400).send(`Invalid transaction: ${e?.message}`);
+          return;
+        }
+
+        // Cryptographic authentication: the id must bind to the signature and
+        // the signature must verify against the owner. Prevents a trusted but
+        // buggy/compromised poster injecting a forged, queryable phantom tx.
+        let isValid = false;
+        try {
+          isValid = await arweave.transactions.verify(
+            arweave.transactions.fromRaw(tx),
+          );
+        } catch (e: any) {
+          metrics.optimisticTxIngestedCounter.inc({ result: 'invalid' });
+          res
+            .status(400)
+            .send(`Could not verify transaction ${tx.id}: ${e?.message}`);
+          return;
+        }
+        if (!isValid) {
+          metrics.optimisticTxIngestedCounter.inc({ result: 'invalid' });
+          res.status(400).send(`Invalid signature for transaction ${tx.id}`);
+          return;
+        }
+
+        // Drop any inline data payload so we never hold tx bytes in memory or
+        // the tx store — we index headers only (mirrors prefetchTx).
+        delete (tx as any).data;
+
+        // Cache the signature for retrieval when signatures are not persisted
+        // to the DB (mirrors the queue-data-item path).
+        if (
+          config.WRITE_TRANSACTION_DB_SIGNATURES === false &&
+          tx.signature != null
+        ) {
+          signatureStore.set(tx.id, tx.signature);
+        }
+
+        // Optimistic insert: no missing_transactions row → saveTx inserts into
+        // new_transactions with a NULL height (pending) and adds the owner
+        // wallet row that GraphQL requires. ON CONFLICT only fills in a height
+        // later, so re-POSTs and the eventual mined import never regress it.
+        await system.db.saveTx(tx);
+        metrics.optimisticTxIngestedCounter.inc({ result: 'indexed' });
+      }
+
+      res.json({ message: 'Optimistic transaction(s) indexed' });
+    } catch (error: any) {
+      log.error('Error indexing optimistic transaction', {
+        error: error?.message,
+      });
+      res.status(500).send(error?.message);
+    }
+  },
+);
+
 /** Accepted in queue data item route fields as normalized b64 */
 export interface QueueDataItemHeaders {
   data_size: number;
@@ -460,7 +559,7 @@ export function isDataItemHeaders(
 // Queue a bundle data item for processing
 arIoRouter.post(
   '/ar-io/admin/queue-data-item',
-  express.json(),
+  express.json({ limit: '10mb' }),
   async (req, res) => {
     try {
       const dataItemHeaders: unknown[] = req.body;
@@ -475,12 +574,53 @@ arIoRouter.post(
         return;
       }
 
+      // Admission control (corner B): admin POSTs are prioritized (unshift)
+      // and bypass the indexer's drop cap, so an unthrottled burst balloons the
+      // queue and starves the regular unbundling pipeline instead of dropping.
+      // Convert oversized batches and indexer saturation into retryable HTTP
+      // responses rather than silent queue growth.
+      const admission = evaluateDataItemQueueAdmission(
+        dataItemHeaders.length,
+        system.dataItemIndexer.queueDepth(),
+        {
+          maxBatchSize: config.QUEUE_DATA_ITEM_MAX_BATCH_SIZE,
+          backpressureDepth: config.QUEUE_DATA_ITEM_BACKPRESSURE_DEPTH,
+        },
+      );
+      if (!admission.ok) {
+        metrics.dataItemQueueRejectedCounter.inc({ reason: admission.reason });
+        if (admission.retryAfterSeconds !== undefined) {
+          res.set('Retry-After', String(admission.retryAfterSeconds));
+        }
+        res.status(admission.status).send(admission.message);
+        return;
+      }
+
       for (const dataItemHeader of dataItemHeaders) {
+        // Fire-and-forget header-cache warming: never block the admin response
+        // or surface an unhandled rejection if a KV write fails.
+        const warnCacheWrite = (key: string) => (error: unknown) =>
+          log.warn('Failed to warm header cache from queue-data-item', {
+            key,
+            error: (error as Error).message,
+          });
+
         // cache signatures in signature store
         if (config.WRITE_ANS104_DATA_ITEM_DB_SIGNATURES === false) {
-          signatureStore.set(dataItemHeader.id, dataItemHeader.signature);
+          signatureStore
+            .set(dataItemHeader.id, dataItemHeader.signature)
+            .catch(warnCacheWrite(dataItemHeader.id));
         }
-        ownerStore.set(dataItemHeader.id, dataItemHeader.owner);
+        ownerStore
+          .set(dataItemHeader.id, dataItemHeader.owner)
+          .catch(warnCacheWrite(dataItemHeader.id));
+        // Dual-write by owner_address so GraphQL owner.key resolution can serve
+        // every item by this owner from one cache entry (PE-9120).
+        if (dataItemHeader.owner_address.length > 0) {
+          ownerStore
+            .set(dataItemHeader.owner_address, dataItemHeader.owner)
+            .catch(warnCacheWrite(dataItemHeader.owner_address));
+        }
 
         system.dataItemIndexer.queueDataItem(
           {
@@ -488,7 +628,13 @@ arIoRouter.post(
             tags: dataItemHeader.tags ?? [],
             target: dataItemHeader.target ?? '',
             anchor: dataItemHeader.anchor ?? '',
-            // These fields are not yet known, to be backfilled
+            // The optimistic admin path has no knowledge of this data
+            // item's bundling placement. Hardcoded NULLs flow into the
+            // insertOptimisticDataItem statement, which inserts the row
+            // if absent and never updates the root atom on conflict —
+            // so a re-POST after the unbundle path has back-filled
+            // these fields cannot regress them. See the contract
+            // comment in src/database/sql/bundles/import.sql.
             data_hash: null,
             data_offset: null,
             filter: config.ANS104_INDEX_FILTER_STRING,
@@ -506,6 +652,7 @@ arIoRouter.post(
             size: null,
           },
           true, // Prioritized
+          true, // Optimistic — no root-atom claim
         );
       }
 
@@ -568,17 +715,46 @@ arIoRouter.post(
 
       const exporter = getParquetExporter();
 
-      exporter.export({
-        outputDir,
-        startHeight,
-        endHeight,
-        maxFileRows,
-        heightPartitionSize,
-        skipL1Transactions,
-        skipL1Tags,
-      });
+      // Reject concurrent exports explicitly. Previously a fire-and-forget
+      // call would let exporter.export() throw into an unhandled rejection
+      // while this handler still returned 200; callers polling /status then
+      // saw the *prior* job's "completed" state and mistakenly believed
+      // their own export had run, leaving the requested outputDir missing.
+      const currentStatus = exporter.status();
+      if (currentStatus.status === 'running') {
+        res.status(409).json({
+          error: 'An export is already in progress',
+          currentStatus,
+        });
+        return;
+      }
 
-      res.json({ message: 'Parquet export started' });
+      exporter
+        .export({
+          outputDir,
+          startHeight,
+          endHeight,
+          maxFileRows,
+          heightPartitionSize,
+          skipL1Transactions,
+          skipL1Tags,
+        })
+        .catch((error: any) => {
+          log.error('Parquet export failed', {
+            outputDir,
+            startHeight,
+            endHeight,
+            message: error?.message,
+          });
+        });
+
+      // exporter.export() is async but has no awaits before its Promise
+      // constructor runs, so the RUNNING status (and jobId) are assigned
+      // synchronously by the time we read status() here. Clients track
+      // their own job by this jobId rather than racing the shared
+      // /status singleton, which can be overwritten by any other caller.
+      const { jobId } = exporter.status();
+      res.json({ message: 'Parquet export started', jobId });
     } catch (error: any) {
       res.status(500).send(error?.message);
     }
@@ -592,6 +768,22 @@ arIoRouter.get('/ar-io/admin/export-parquet/status', async (_, res) => {
     res.status(500).send(error?.message);
   }
 });
+
+arIoRouter.get(
+  '/ar-io/admin/export-parquet/status/:jobId',
+  async (req, res) => {
+    try {
+      const status = getParquetExporter().statusByJobId(req.params.jobId);
+      if (status === undefined) {
+        res.status(404).json({ error: 'Unknown or expired jobId' });
+        return;
+      }
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
 
 // Prune stable data items before a given timestamp and within a height range
 arIoRouter.post(

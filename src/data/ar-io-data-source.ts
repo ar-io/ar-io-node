@@ -28,7 +28,7 @@ import { headerNames } from '../constants.js';
 import { startChildSpan } from '../tracing.js';
 import { SpanStatusCode, Span } from '@opentelemetry/api';
 import { normalizeAbortError, parseContentRange } from '../lib/http-utils.js';
-import { attachStallTimeout } from '../lib/stream.js';
+import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
 import { PeerRequestLimiter } from './peer-request-limiter.js';
 import { executeHedgedRequest } from '../lib/hedged-request.js';
 
@@ -44,6 +44,7 @@ export class ArIODataSource implements ContiguousDataSource {
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
   private streamStallTimeoutMs: number;
+  private streamRequestTimeoutMs: number;
   private peerManager: ArIOPeerManager;
   private dataAttributesStore: ContiguousDataAttributesStore;
   private peerRequestLimiter?: PeerRequestLimiter;
@@ -57,6 +58,7 @@ export class ArIODataSource implements ContiguousDataSource {
     maxHopsAllowed = MAX_DATA_HOPS,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     streamStallTimeoutMs = config.STREAM_STALL_TIMEOUT_MS,
+    streamRequestTimeoutMs = config.STREAM_REQUEST_TIMEOUT_MS,
   }: {
     log: winston.Logger;
     peerManager: ArIOPeerManager;
@@ -65,11 +67,13 @@ export class ArIODataSource implements ContiguousDataSource {
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
     streamStallTimeoutMs?: number;
+    streamRequestTimeoutMs?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
     this.streamStallTimeoutMs = streamStallTimeoutMs;
+    this.streamRequestTimeoutMs = streamRequestTimeoutMs;
     this.peerManager = peerManager;
     this.dataAttributesStore = dataAttributesStore;
     this.peerRequestLimiter = peerRequestLimiter;
@@ -112,12 +116,14 @@ export class ArIODataSource implements ContiguousDataSource {
     headers,
     requestAttributesHeaders,
     signal,
+    region,
   }: {
     peerAddress: string;
     id: string;
     headers: { [key: string]: string };
     requestAttributesHeaders?: ReturnType<typeof generateRequestAttributes>;
     signal?: AbortSignal;
+    region?: Region;
   }): Promise<AxiosResponse> {
     const path = `/raw/${id}`;
 
@@ -129,7 +135,17 @@ export class ArIODataSource implements ContiguousDataSource {
       () => controller.abort(new Error('Connection timeout')),
       this.requestTimeoutMs,
     );
-    const onClientAbort = () => controller.abort(signal?.reason);
+    const onClientAbort = () => {
+      // INSTRUMENTATION (2026-05-17): trace abort-path propagation. If
+      // `optB.hedge_aborted` fires but this doesn't, AbortSignal.any
+      // isn't propagating the parent abort to per-peer attempts.
+      this.log.info('optB.peer_aborted', {
+        peer: peerAddress,
+        id,
+        reason: (signal as any)?.reason?.message,
+      });
+      controller.abort(signal?.reason);
+    };
     if (signal?.aborted) {
       onClientAbort();
     } else if (signal) {
@@ -164,12 +180,24 @@ export class ArIODataSource implements ContiguousDataSource {
         signal.removeEventListener('abort', onClientAbort);
       }
 
-      if (response.status !== 200 && response.status !== 206) {
+      // PE-9081: enforce 206-when-Range parity with GatewaysDataSource.
+      if (
+        (region !== undefined && response.status !== 206) ||
+        (region === undefined && response.status !== 200)
+      ) {
         response.data.destroy();
-        throw new Error(`Unexpected status code from peer: ${response.status}`);
+        throw new Error(
+          `Unexpected status code from peer: ${response.status}. Expected ${
+            region !== undefined ? '206' : '200'
+          }.`,
+        );
       }
 
-      attachStallTimeout(response.data, this.streamStallTimeoutMs);
+      attachStallTimeout(
+        response.data,
+        this.streamStallTimeoutMs,
+        this.streamRequestTimeoutMs,
+      );
 
       return response;
     } catch (rawError) {
@@ -292,6 +320,7 @@ export class ArIODataSource implements ContiguousDataSource {
               },
               requestAttributesHeaders,
               signal: hedgeSignal,
+              region,
             });
             const ttfb = Date.now() - requestStartTime;
             const peerRequestDuration = Date.now() - requestStartTime;
@@ -324,8 +353,26 @@ export class ArIODataSource implements ContiguousDataSource {
 
             // Defer limiter release until the stream is fully consumed so the
             // slot accurately reflects active outbound transfers.
+            //
+            // Listen on 'end', 'error', AND 'close' rather than 'close' alone:
+            // for HTTP IncomingMessage streams consumed via pipeline() under a
+            // keepAlive http.Agent, 'close' can fire late or not at all (the
+            // socket is returned to the pool without the response being
+            // destroyed). That left limiter slots leaked permanently — after
+            // ~30 min of activity every peer hit maxConcurrent, tryAcquire
+            // returned false for all candidates, and getData() stopped
+            // dispatching to any peer (download pipeline wedged with the
+            // bundleDataImporter queue pegged at its cap, no errors logged).
+            // 'end' is the canonical "data fully received" event and fires
+            // reliably for normal completion; 'error' covers explicit
+            // destroys (stall timeout, wall-clock cap, peer aborts).
+            // released guard makes the handler idempotent so multiple events
+            // do not double-release.
             streamPeerCounts.set(peer, (streamPeerCounts.get(peer) ?? 0) + 1);
-            contiguousData.stream.once('close', () => {
+            let released = false;
+            const releaseSlot = () => {
+              if (released) return;
+              released = true;
               const count = streamPeerCounts.get(peer) ?? 1;
               if (count <= 1) {
                 streamPeerCounts.delete(peer);
@@ -333,7 +380,10 @@ export class ArIODataSource implements ContiguousDataSource {
                 streamPeerCounts.set(peer, count - 1);
               }
               this.peerRequestLimiter?.release(peer);
-            });
+            };
+            contiguousData.stream.once('end', releaseSlot);
+            contiguousData.stream.once('error', releaseSlot);
+            contiguousData.stream.once('close', releaseSlot);
 
             return contiguousData;
           } catch (error: any) {
@@ -374,6 +424,7 @@ export class ArIODataSource implements ContiguousDataSource {
         hedgeDelayMs: config.PEER_HEDGE_DELAY_MS,
         maxConcurrent: config.PEER_MAX_HEDGED_REQUESTS,
         signal,
+        log: this.log,
       });
 
       return result;
@@ -447,6 +498,43 @@ export class ArIODataSource implements ContiguousDataSource {
       parseInt(response.headers['content-length'] ?? '0') || 0;
     const requestType = region ? 'range' : 'full';
 
+    // PE-9081: reject responses with missing or zero Content-Length —
+    // mirrors the b9088671 fix in `GatewaysDataSource:319-324`. Without
+    // this guard, a misbehaving peer could return headers that quietly
+    // resolve to size=0 here while emitting an arbitrary number of body
+    // bytes downstream.
+    if (contentLength === 0) {
+      stream.destroy();
+      throw new Error(
+        `Peer response has no content-length or zero content-length`,
+      );
+    }
+
+    // PE-9081: when the consumer asked for a region, the peer's
+    // Content-Length must match region.size exactly. Oversize is the
+    // leak path; undersize (a truncated 206) is just as wrong because
+    // we report `size: region.size` to downstream consumers — they
+    // would observe a stream that claims to be region.size bytes but
+    // delivers fewer, with no signal that the upstream truncated.
+    // Both directions are the same defect from the consumer's view.
+    if (region !== undefined && contentLength !== region.size) {
+      stream.destroy();
+      throw new Error(
+        `Peer Content-Length (${contentLength}) does not match requested region size (${region.size})`,
+      );
+    }
+
+    // PE-9081: defense-in-depth — wrap the body stream in a transform
+    // that hard-caps emitted bytes at `region.size`, regardless of what
+    // the upstream actually sends. ByteRangeTransform was already in
+    // `src/lib/stream.ts` and is used by Turbo*DataSource for the same
+    // purpose. We're acting as the consumer-of-the-region here, so we
+    // pass offset=0 (the upstream already sliced) and size=region.size.
+    const cappedStream =
+      region !== undefined
+        ? stream.pipe(new ByteRangeTransform(0, region.size))
+        : stream;
+
     stream.on('error', (err: any) => {
       // Don't penalize peers that were canceled by hedging
       if (err?.name !== 'AbortError') {
@@ -479,9 +567,31 @@ export class ArIODataSource implements ContiguousDataSource {
       );
     });
 
+    // PE-9081: when the cap is in effect, ensure the upstream socket is
+    // released on every cappedStream termination — natural end (consumer
+    // read to completion), close (consumer destroyed early or unpipe),
+    // and error. `pipe()` does not propagate destination-side
+    // destruction back to the source, so without these the upstream
+    // axios response can sit open after the limiter slot is already
+    // released by the consumer-side close listener (per CodeRabbit
+    // review on PR #703).
+    if (region !== undefined && cappedStream !== stream) {
+      const destroyUpstream = () => {
+        if (!stream.destroyed) {
+          stream.destroy();
+        }
+      };
+      cappedStream.once('end', destroyUpstream);
+      cappedStream.once('close', destroyUpstream);
+      cappedStream.once('error', destroyUpstream);
+    }
+
     return {
-      stream,
-      size: contentLength,
+      stream: cappedStream,
+      // When a region was requested, prefer the requested size over the
+      // upstream-declared content length for downstream consumers — the
+      // ByteRangeTransform guarantees that's what they'll actually see.
+      size: region !== undefined ? region.size : contentLength,
       totalSize: parseContentRange(response.headers['content-range'])?.total,
       verified: false,
       trusted: false,

@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { Readable, Writable } from 'node:stream';
-import { AoArNSNameDataWithName } from '@ar.io/sdk';
+import { ArNSNameDataWithName } from '@ar.io/sdk';
 import { Span } from '@opentelemetry/api';
 
 export interface B64uTag {
@@ -153,6 +153,7 @@ export interface ChunkDataStore {
     chunkData: ChunkData,
     absoluteOffset?: number,
   ): Promise<void>;
+  del(dataRoot: string, relativeOffset: number): Promise<void>;
 }
 
 export interface ChunkMetadataStore {
@@ -165,6 +166,7 @@ export interface ChunkMetadataStore {
     absoluteOffset: number,
   ): Promise<ChunkMetadata | undefined>;
   set(chunkMetadata: ChunkMetadata, absoluteOffset?: number): Promise<void>;
+  del(dataRoot: string, relativeOffset: number): Promise<void>;
 }
 
 type Region = {
@@ -190,10 +192,14 @@ export interface ChainSource {
     txId: string;
     isPendingTx?: boolean;
   }): Promise<PartialJsonTransaction>;
-  getTxOffset(txId: string): Promise<JsonTransactionOffset>;
+  getTxOffset(
+    txId: string,
+    signal?: AbortSignal,
+  ): Promise<JsonTransactionOffset>;
   getTxField<K extends keyof PartialJsonTransaction>(
     txId: string,
     field: K,
+    signal?: AbortSignal,
   ): Promise<PartialJsonTransaction[K]>;
   getBlockAndTxsByHeight(height: number): Promise<{
     block: PartialJsonBlock;
@@ -220,6 +226,65 @@ export interface ChainIndex {
 export interface ChainOffsetIndex {
   getTxIdsMissingOffsets(limit: number): Promise<string[]>;
   saveTxOffset(txId: string, offset: number): Promise<void>;
+}
+
+/**
+ * A cached chunk's placement row in chunks.db. Serves as both the chunk
+ * metadata index (keyed by data_root + relative_offset) and the optimistic
+ * ingest ledger (origin / cached_at / confirmed_at drive GC). BLOB-valued
+ * fields (dataRoot, hash, dataPath, txPath) are base64url strings at this
+ * boundary and stored as BLOBs in SQLite.
+ */
+export interface ChunkPlacement {
+  dataRoot: string;
+  relativeOffset: number;
+  dataSize: number;
+  chunkSize: number;
+  hash: string;
+  dataPath: string;
+  txPath: string | undefined;
+  origin: number;
+  cachedAt: number;
+  confirmedAt: number | undefined;
+}
+
+/** Lightweight chunk-placement reference returned by GC selection queries. */
+export interface ChunkPlacementRef {
+  dataRoot: string;
+  relativeOffset: number;
+  chunkSize: number;
+}
+
+export interface ChunkPlacementIndex {
+  saveChunkPlacement(placement: ChunkPlacement): Promise<void>;
+  confirmChunkPlacements(
+    dataRoot: string,
+    confirmedAt: number,
+  ): Promise<number[]>;
+  // Reserved for chain-reorg recovery; not yet wired (no clean reorg hook with
+  // orphaned data_roots). See the deferral note in system.ts.
+  unconfirmChunkPlacements(dataRoot: string): Promise<void>;
+  selectExpiredUnconfirmedChunkPlacements(params: {
+    originIngest: number;
+    originIngestAllowlisted: number;
+    openCutoff: number;
+    allowCutoff: number;
+    limit: number;
+  }): Promise<ChunkPlacementRef[]>;
+  selectOldestPendingChunkPlacements(
+    limit: number,
+  ): Promise<ChunkPlacementRef[]>;
+  // Returns the number of rows deleted (0 if the placement was confirmed
+  // between selection and deletion, so the caller can keep its FS bytes).
+  deleteChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<number>;
+  getChunkPlacement(
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<ChunkPlacement | undefined>;
+  sumPendingChunkBytes(): Promise<number>;
 }
 
 /**
@@ -250,6 +315,30 @@ export interface TxBoundarySource {
   ): Promise<TxBoundary | null>;
 }
 
+/**
+ * Decoded `X-Arweave-Chunk-*` response headers from a peer's
+ * `/chunk/{offset}/data` endpoint. Mirrors the headers `ar-io-node`
+ * itself emits (see `src/routes/chunk/handlers.ts` /
+ * `response-utils.ts`), so peers running the same code surface the
+ * same shape.
+ *
+ * NOTE: this is **untrusted input**. Values must be cross-checked
+ * against the chain (`/tx/{id}/offset`, `/tx/{id}`) before they may
+ * feed merkle proof validation. See {@link AnchoredChunkMetadata}
+ * for the verified shape and `lib/chunk-metadata-anchor.ts` for the
+ * cross-check.
+ */
+export interface ChunkHeaderMetadata {
+  txId: string;
+  dataRoot: string;
+  dataPath: string;
+  txPath: string;
+  txStartOffset: bigint;
+  txDataSize: bigint;
+  chunkStartOffset: bigint;
+  chunkRelativeStartOffset: bigint;
+}
+
 export interface BundleRecord {
   id: string;
   rootTransactionId?: string;
@@ -277,6 +366,20 @@ export interface BundleIndex {
   saveBundle(bundle: BundleRecord): Promise<BundleSaveResult>;
   saveBundleRetries(rootTransactionId: string): Promise<void>;
   getFailedBundleIds(limit: number): Promise<string[]>;
+  /**
+   * Count of bundles awaiting full indexing: `matched_data_item_count > 0`,
+   * `last_fully_indexed_at IS NULL`, `last_skipped_at IS NULL`. Drives the
+   * `bundle_repair_pending_bundles` gauge.
+   */
+  getRepairBacklogCount(): Promise<number>;
+  /**
+   * Count of the full unbundling backlog: every bundle still awaiting
+   * unbundling work — `last_fully_indexed_at IS NULL`, `last_skipped_at IS
+   * NULL`, and `matched_data_item_count` either NULL or > 0. Unlike
+   * `getRepairBacklogCount` this includes bundles never successfully
+   * unbundled. Drives the `bundles_unbundling_backlog` gauge.
+   */
+  getFullRepairBacklogCount(): Promise<number>;
   updateBundlesFullyIndexedAt(): Promise<void>;
   updateBundlesForFilterChange(
     unbundleFilter: string,
@@ -286,7 +389,21 @@ export interface BundleIndex {
 }
 
 export interface DataItemIndexWriter {
-  saveDataItem(item: NormalizedDataItem): Promise<void>;
+  /**
+   * Persist a data item.
+   *
+   * Set `isOptimistic` to true when the caller has no knowledge of the
+   * data item's bundling placement (the "root atom" — parent_id,
+   * root_transaction_id, the offset/size pairs, signature_type,
+   * root_parent_offset). Optimistic writes never touch the root atom
+   * on conflict; they only fill in the always-known fields if the row
+   * doesn't yet exist.
+   *
+   * Leave `isOptimistic` unset (or false) when the caller has the full
+   * root atom — e.g., the unbundle path or an on-demand metadata
+   * resolver. The implementation atomically upserts the full root atom.
+   */
+  saveDataItem(item: NormalizedDataItem, isOptimistic?: boolean): Promise<void>;
 }
 
 export interface NestedDataIndexWriter {
@@ -410,9 +527,16 @@ interface GqlTransactionEdge {
   node: GqlTransaction;
 }
 
+export interface GqlWarning {
+  code: string;
+  message: string;
+  source?: string;
+}
+
 interface GqlTransactionsResult {
   pageInfo: GqlPageInfo;
   edges: GqlTransactionEdge[];
+  warnings?: GqlWarning[];
 }
 
 interface GqlBlock {
@@ -430,6 +554,7 @@ interface GqlBlockEdge {
 interface GqlBlocksResult {
   pageInfo: GqlPageInfo;
   edges: GqlBlockEdge[];
+  warnings?: GqlWarning[];
 }
 
 export interface RequestAttributes {
@@ -463,7 +588,16 @@ export interface RequestAttributes {
 }
 
 export interface GqlQueryable {
-  getGqlTransaction(args: { id: string }): Promise<GqlTransaction | null>;
+  getGqlTransaction(args: {
+    id: string;
+    /**
+     * Caller-provided sink for warnings surfaced by the DB layer (e.g.
+     * composite SQLite degrade, partial fan-out failure). Implementations
+     * push into the array when present; the single-record return type is
+     * unchanged so non-GraphQL callers can ignore this argument.
+     */
+    warnings?: GqlWarning[];
+  }): Promise<GqlTransaction | null>;
 
   getGqlTransactions(args: {
     pageSize: number;
@@ -474,6 +608,7 @@ export interface GqlQueryable {
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
+    bundledIn?: string[] | null;
     tags: { name: string; values: string[] }[];
   }): Promise<GqlTransactionsResult>;
 
@@ -880,6 +1015,14 @@ export interface ContiguousDataAttributes {
   stable: boolean;
 
   /**
+   * Block height of the root transaction, or undefined when it is not yet
+   * mined. An optimistically-indexed transaction sits in `new_transactions`
+   * with a NULL height until its block is imported, so `height === undefined`
+   * is exactly the unmined/optimistic state.
+   */
+  height?: number;
+
+  /**
    * True if the data has been verified to exist on Arweave and is cryptographically valid.
    * Verification confirms: (1) merkle paths prove the data exists on-chain, and
    * (2) for data items, the signature is valid.
@@ -1011,19 +1154,65 @@ export interface ContiguousDataSource {
     region,
     parentSpan,
     signal,
+    acceptContentType,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
     signal?: AbortSignal;
+    /**
+     * Optional predicate the caller supplies to validate the upstream's
+     * response content-type. When provided, sources MUST reject the
+     * response if `acceptContentType(contentType)` returns false. The
+     * argument is the raw value of the upstream's `Content-Type` header
+     * (case as received) or `undefined` if absent.
+     *
+     * Use case: callers that intend to parse the bytes as a specific
+     * format (e.g., raw ANS-104 bundle) can refuse responses that are
+     * obviously not that format (e.g., `text/html` from a poisoned
+     * upstream cache returning a domain-parking page). The predicate
+     * runs before any bytes are handed back, so the caller is shielded
+     * from poison and the data-source chain can fall through to the
+     * next priority tier. PE-9099.
+     */
+    acceptContentType?: (contentType: string | undefined) => boolean;
   }): Promise<ContiguousData>;
 }
+
+/**
+ * Discriminator describing how a manifest path was resolved.
+ *
+ * - `'path'` — exact match against the manifest's `paths` map.
+ * - `'index'` — the manifest's index entry (by `path` or `id`).
+ * - `'fallback'` — v0.2.0 manifest fallback `id`, taken when no `paths` entry
+ *   matched.
+ *
+ * Mutability classes (relevant to `Cache-Control`):
+ * - `'path'` and `'index'` bindings are **immutable** for a given manifest tx.
+ * - `'fallback'` bindings are **mutable** across manifest revisions: a future
+ *   manifest revision can add the missing path, changing what the URL
+ *   resolves to.
+ *
+ * See PE-9072.
+ */
+export type ManifestResolutionType = 'path' | 'index' | 'fallback';
 
 export interface ManifestResolution {
   id: string;
   resolvedId: string | undefined;
   complete: boolean;
+  /**
+   * How the `resolvedId` was matched within the manifest.
+   *
+   * Used by the data handler to apply different `Cache-Control` policies
+   * per resolution class — see {@link ManifestResolutionType}. Optional so
+   * external `ManifestPathResolver` implementations remain compatible;
+   * undefined behaves like a non-fallback resolution (no override).
+   *
+   * See PE-9072.
+   */
+  resolutionType?: ManifestResolutionType;
 }
 
 export interface ManifestPathResolver {
@@ -1045,7 +1234,14 @@ export interface ValidNameResolution {
   resolvedId: string;
   resolvedAt: number;
   ttl: number;
-  processId: string;
+  /**
+   * Per-ANT identifier for the ANT that resolved this name — the ANT
+   * mint's PDA (base58 pubkey). Set when the resolution came from a
+   * direct SDK call (`OnDemandArNSResolver` / `ArNSNamesCache`); read
+   * off the `X-ArNS-Ant-Id` header on trusted-gateway hops when the
+   * peer emits it, `undefined` otherwise.
+   */
+  antId: string | undefined;
   limit: number;
   index: number;
 }
@@ -1057,7 +1253,7 @@ export interface MissingNameResolution {
   resolvedId: undefined;
   resolvedAt: number;
   ttl: number;
-  processId: undefined;
+  antId: undefined;
   limit: undefined;
   index: undefined;
 }
@@ -1069,7 +1265,7 @@ export interface FailedNameResolution {
   resolvedId: undefined;
   resolvedAt: undefined;
   ttl: undefined;
-  processId: undefined;
+  antId: undefined;
   limit: undefined;
   index: undefined;
 }
@@ -1088,7 +1284,7 @@ export interface NameResolver {
     name: string;
     baseArNSRecordFn?: (
       parentSpan?: Span,
-    ) => Promise<AoArNSNameDataWithName | undefined>;
+    ) => Promise<ArNSNameDataWithName | undefined>;
     signal?: AbortSignal;
   }): Promise<NameResolution>;
 }
@@ -1136,14 +1332,22 @@ export interface SignatureSource {
     parentId,
     signatureSize,
     signatureOffset,
+    signal,
   }: {
     id: string;
     parentId?: string;
     signatureSize?: number;
     signatureOffset?: number;
+    signal?: AbortSignal;
   }): Promise<string | undefined>;
 
-  getTransactionSignature({ id }: { id: string }): Promise<string | undefined>;
+  getTransactionSignature({
+    id,
+    signal,
+  }: {
+    id: string;
+    signal?: AbortSignal;
+  }): Promise<string | undefined>;
 }
 
 export interface OwnerSource {
@@ -1152,14 +1356,28 @@ export interface OwnerSource {
     parentId,
     ownerSize,
     ownerOffset,
+    ownerAddress,
+    signal,
   }: {
     id: string;
     parentId?: string;
     ownerSize?: number;
     ownerOffset?: number;
+    // owner_address (= sha256(owner_key)); when present, used as the shared
+    // cache key so all items by an owner reuse one fetch (PE-9120).
+    ownerAddress?: string;
+    signal?: AbortSignal;
   }): Promise<string | undefined>;
 
-  getTransactionOwner({ id }: { id: string }): Promise<string | undefined>;
+  getTransactionOwner({
+    id,
+    ownerAddress,
+    signal,
+  }: {
+    id: string;
+    ownerAddress?: string;
+    signal?: AbortSignal;
+  }): Promise<string | undefined>;
 }
 
 export interface WithPeers<T> {

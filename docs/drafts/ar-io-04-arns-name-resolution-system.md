@@ -1,1194 +1,194 @@
-# AR.IO Gateway ArNS Resolution: Complete Technical Documentation
+# AR.IO Gateway ArNS Resolution — Technical Overview
+
+**Status**: Draft. Supersedes the prior AO-era version (same path) in git history.
+
+The AR.IO gateway resolves human-readable names like `ardrive.permaweb.nexus`
+into Arweave transaction IDs that ultimately back the response body. Resolution
+is **Solana-native**: every authoritative lookup is a read against the
+AR.IO ANT program on a Solana cluster via `@ar.io/sdk`, with multiple cache
+tiers and a peer-fallback strategy layered on top.
 
 ## Table of Contents
 
-1. [Executive Summary](#executive-summary)
-2. [ArNS Resolution Architecture](#arns-resolution-architecture)
-3. [Name Parsing and Validation](#name-parsing-validation)
-4. [AO Network Process Integration](#ao-network-integration)
-5. [Caching Architecture](#caching-architecture)
-6. [Resolution Flow](#resolution-flow)
-7. [Record Fetching and Validation](#record-fetching)
-8. [TTL Management](#ttl-management)
-9. [Sandbox Domain Security](#sandbox-security)
-10. [Performance Optimizations](#performance-optimizations)
-11. [Configuration Reference](#configuration-reference)
-12. [Error Handling and Fallbacks](#error-handling)
-13. [Data Structures and Protocols](#data-structures)
-14. [Implementation Details](#implementation-details)
-15. [Certainty Assessment](#certainty-assessment)
+1. [Architecture](#architecture)
+2. [Resolution Flow](#resolution-flow)
+3. [Caching Tiers](#caching-tiers)
+4. [Sandbox Domain Security](#sandbox-domain-security)
+5. [Configuration Reference](#configuration-reference)
+6. [Error Handling](#error-handling)
+7. [Failure Modes](#failure-modes)
 
 ---
 
-## Executive Summary {#executive-summary}
+## Architecture
 
-The ar.io gateway implements a sophisticated ArNS (Arweave Name System) resolution system that translates human-readable names like `ardrive.arweave.net` into Arweave transaction IDs. The system features:
+### Components
 
-- **Multi-tier caching** for performance optimization
-- **Parallel resolution strategies** with fallback mechanisms
-- **AO process integration** for decentralized name records
-- **Undername support** for hierarchical naming
-- **Sandbox domain generation** for content isolation
-- **Circuit breaker protection** for resilience
+The resolution system lives under `src/resolution/` and `src/init/`:
 
-**Certainty**: 100% - Based on comprehensive code analysis
+- **`CompositeArNSResolver`** (`src/resolution/composite-arns-resolver.ts`)
+  — the orchestrator. Runs an ordered list of underlying resolvers in
+  parallel, returns the first successful resolution that meets the timeout,
+  falls back to cached values when fresh resolution misses or errors.
+- **`OnDemandArNSResolver`** (`src/resolution/on-demand-arns-resolver.ts`)
+  — direct path. Reads the ArNS record from the ANT mint's PDA via
+  `SolanaANTReadable` from `@ar.io/sdk`, fetches the latest record state
+  from `@solana/kit`, applies undername lookups.
+- **`TrustedGatewayArNSResolver`** (`src/resolution/trusted-gateway-arns-resolver.ts`)
+  — peer path. Forwards the resolution request to one or more trusted
+  AR.IO gateway peers, reads `X-ArNS-*` headers off the response.
+- **`ArNSNamesCache`** (`src/resolution/arns-names-cache.ts`)
+  — bulk-name registry cache. Periodically paginates through
+  `SolanaARIOReadable.getArNSRecords()` and writes each `{name, antId,
+  undernameLimit, type, startTimestamp, endTimestamp}` tuple to a
+  KV store. Used as the first lookup before falling through to the
+  per-name resolvers.
 
----
+### Wiring
 
-## ArNS Resolution Architecture {#arns-resolution-architecture}
+`src/init/resolvers.ts` constructs the resolver chain at process start:
 
-### Core Components
+1. `ArNSResolverType[]` is read from `ARNS_RESOLVER_PRIORITY_ORDER`
+   (default `gateway,on-demand`).
+2. Each entry maps to its concrete resolver class. Concrete instances are
+   then wrapped in `CompositeArNSResolver` with its registry + resolution
+   KV caches (Redis or in-memory `NodeKvStore`, controlled by
+   `ARNS_CACHE_TYPE`).
 
-The ArNS resolution system consists of several key components working in concert:
-
-#### CompositeArNSResolver (src/resolution/composite-arns-resolver.ts)
-
-The main orchestrator that manages multiple resolver strategies:
-
-```typescript
-export class CompositeArNSResolver implements ArNSResolver {
-  private log: winston.Logger;
-  private resolvers: ArNSResolver[];
-  private resolutionCache: ArNSResolutionStore;
-  private maxConcurrentResolutions: number;
-  private resolveLimit: pLimit.Limit;
-  
-  constructor({
-    log,
-    resolvers,
-    resolutionCache,
-    maxConcurrentResolutions = 5,
-  }: {
-    log: winston.Logger;
-    resolvers: ArNSResolver[];
-    resolutionCache: ArNSResolutionStore;
-    maxConcurrentResolutions?: number;
-  }) {
-    this.log = log.child({ class: this.constructor.name });
-    this.resolvers = resolvers;
-    this.resolutionCache = resolutionCache;
-    this.maxConcurrentResolutions = maxConcurrentResolutions;
-    this.resolveLimit = pLimit(maxConcurrentResolutions);
-  }
-}
-```
-
-**Certainty**: 100% - Direct code reference
-
-#### Resolver Types
-
-1. **OnDemandArNSResolver** (src/resolution/on-demand-arns-resolver.ts)
-   - Direct resolution via AO network processes
-   - Queries IO process for base names
-   - Queries ANT processes for undernames
-   - **Certainty**: 100%
-
-2. **TrustedGatewayArNSResolver** (src/resolution/trusted-gateway-arns-resolver.ts)
-   - Resolution via trusted gateway HTTP endpoints
-   - Fallback mechanism for network issues
-   - **Certainty**: 100%
-
-### System Initialization (src/system.ts)
-
-```typescript
-// ArNS resolver configuration
-const arnsResolvers: ArNSResolver[] = [];
-for (const resolverType of config.ARNS_RESOLVER_PRIORITY_ORDER) {
-  switch (resolverType) {
-    case 'on-demand':
-      arnsResolvers.push(
-        new OnDemandArNSResolver({
-          log,
-          networkProcess,
-          resolutionCache: arnsResolutionCache,
-          overrideTtlSeconds: config.ARNS_RESOLVER_OVERRIDE_TTL_SECONDS,
-        }),
-      );
-      break;
-    case 'gateway':
-      arnsResolvers.push(
-        new TrustedGatewayArNSResolver({
-          log,
-          resolutionCache: arnsResolutionCache,
-          trustedGatewayAxios,
-          overrideTtlSeconds: config.ARNS_RESOLVER_OVERRIDE_TTL_SECONDS,
-        }),
-      );
-      break;
-  }
-}
-
-export const arnsResolver = new CompositeArNSResolver({
-  log,
-  resolvers: arnsResolvers,
-  resolutionCache: arnsResolutionCache,
-  maxConcurrentResolutions: config.ARNS_MAX_CONCURRENT_RESOLUTIONS,
-});
-```
-
-**Certainty**: 100% - System initialization code
+The composite resolver is what `src/system.ts` injects into the request
+pipeline. From the request handler's perspective, ArNS resolution is a
+single async call returning a `NameResolution` shape.
 
 ---
 
-## Name Parsing and Validation {#name-parsing-validation}
+## Resolution Flow
 
-### Name Structure and Formats
+For a request to `ardrive.permaweb.nexus/some/path`:
 
-ArNS names follow specific patterns:
+1. **Name parse**. Envoy splits the host on the first `.`. `ardrive` is
+   the ArNS root; anything before becomes undername segments. The root
+   is validated against the regex in `src/lib/validation.ts`.
+2. **Names-cache fast path** (`ArNSNamesCache.getCachedArNSBaseName`).
+   Returns `{antId, undernameLimit, type, startTimestamp, endTimestamp}`
+   for the root if the periodic hydrator has seen it. A miss falls
+   through. A hit short-circuits the on-demand SDK call.
+3. **Composite resolution**. `CompositeArNSResolver` races the priority
+   list of resolvers against `ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS`.
+   The first resolver to return a `resolvedId` wins.
+   - **On-demand resolver**: uses the cached `antId` (or fetches it
+     fresh from the network process) to build a `SolanaANTReadable`,
+     calls `getRecord(undername)` to get the resolved tx id.
+   - **Trusted-gateway resolver**: HTTP request to each configured
+     peer; first 2xx with valid `X-ArNS-*` headers wins.
+4. **Cached fallback**. If every fresh resolver misses or the timeout
+   trips, return the resolution-cache entry (if any) instead of failing.
+   Controlled by `ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS`.
+5. **Sandbox redirect**. If the resolved tx id is requested at its
+   canonical name (not its sandbox host), respond 302 to the sandbox
+   host. See [Sandbox Domain Security](#sandbox-domain-security).
 
-1. **Base Names**: Single-level names (e.g., `ardrive`)
-   - Maximum 51 characters
-   - Alphanumeric and hyphens only
-   - **Certainty**: 100% - Enforced by IO process
-
-2. **Undernames**: Multi-level names using underscores (e.g., `docs_ardrive`)
-   - Separator: underscore (`_`)
-   - Format: `[undername]_[basename]`
-   - Multiple levels: `app_sub_docs_ardrive`
-   - **Certainty**: 100% - Based on code analysis
-
-3. **Special Record**: `@` represents the base record
-   - Used when no undername is specified
-   - **Certainty**: 100% - Documented in code
-
-### Parsing Implementation (src/middleware/arns.ts)
-
-```typescript
-export function createArNSMiddleware({
-  dataHandler,
-  arnsResolver,
-  nameResolver,
-}: {
-  dataHandler: Handler;
-  arnsResolver: ArNSResolver;
-  nameResolver: NameResolver;
-}): Handler {
-  return asyncHandler(async (req, res, next) => {
-    const rootHost = config.ARNS_ROOT_HOST;
-    
-    // Extract subdomain from hostname
-    const arnsSubdomain = req.subdomains[req.subdomains.length - 1];
-    
-    // Skip if not ArNS subdomain
-    if (!rootHost || !isArNSHostnameRequest({ req, rootHost })) {
-      return next();
-    }
-    
-    // Handle excluded subdomains
-    if (config.ARNS_SUBDOMAIN_EXCLUSION_LIST.includes(arnsSubdomain)) {
-      return next();
-    }
-    
-    // Parse undername structure
-    const nameParts = arnsSubdomain.split('_');
-    const basename = nameParts.pop();
-    const undername = nameParts.length > 0 ? nameParts.join('_') : '@';
-    
-    // Validate and resolve
-    const resolution = await arnsResolver.resolve({ name: arnsSubdomain });
-  });
-}
-```
-
-**Certainty**: 100% - Middleware implementation
-
-### Validation Rules
-
-1. **Hostname Validation**:
-   - Must be subdomain of `ARNS_ROOT_HOST`
-   - Excluded subdomains: `www` (configurable)
-   - **Certainty**: 100%
-
-2. **Length Restrictions**:
-   - Prevent collisions with sandbox URLs
-   - Base32-encoded TX IDs are ~52 characters
-   - **Certainty**: 100% - Security requirement
-
-3. **Blocked Names Check**:
-   ```typescript
-   const blockedNames = await nameResolver.getBlockedNames();
-   if (blockedNames.includes(arnsSubdomain)) {
-     return next(); // Skip resolution
-   }
-   ```
-   **Certainty**: 100% - Moderation feature
+A successful resolution writes back to **two** caches:
+- The resolution KV (per-(name + undername) → `{resolvedId, ttl, antId,
+  resolvedAt, limit, index}`)
+- The names KV (the base-name `{antId, undernameLimit, …}` payload),
+  if it was a names-cache miss.
 
 ---
 
-## AO Network Process Integration {#ao-network-integration}
+## Caching Tiers
 
-### Network Process Connection
+| Tier | Backing store | Scope | Refresh strategy |
+|---|---|---|---|
+| **Names cache** | `KvArNSRegistryStore` over Redis or in-memory KV | All base names known to the network process | Hydrator paginates `getArNSRecords()` on `ARNS_NAMES_CACHE_TTL_SECONDS` cadence + on misses |
+| **Resolution cache** | `KvArNSResolutionStore` over the same KV backing | Per-(name, undername) → `{resolvedId, antId, …}` | Refreshed on cache miss / on TTL expiry, fallback-on-empty controlled by `ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS` |
+| **Debounce cache** | `KvDebounceStore` | Hydration scheduling | Coalesces concurrent miss-driven hydrations into a single SDK round trip |
 
-The gateway connects to AO (Arweave Operating System) processes for name resolution:
+The KV layer is chosen by `ARNS_CACHE_TYPE`:
+- `node` (default): in-memory `NodeKvStore` with `ARNS_CACHE_MAX_KEYS` cap
+- `redis`: `RedisKvStore` against the gateway's Redis service
 
-```typescript
-// src/system.ts
-export const networkProcess = ARIO.init({
-  process: new AOProcess({
-    processId: config.IO_PROCESS_ID,
-    ao: connect({
-      MU_URL: config.AO_MU_URL,
-      CU_URL: config.NETWORK_AO_CU_URL,
-      GRAPHQL_URL: config.AO_GRAPHQL_URL,
-      GATEWAY_URL: config.AO_GATEWAY_URL,
-    }),
-  }),
-  cacheSize: 100,
-  cacheUrl: config.CHAIN_CACHE_TYPE === 'redis' ? config.REDIS_CACHE_URL : undefined,
-  cacheTTLSeconds: 60 * 60 * 24, // 24 hours
-  logger: log.child({ module: 'ar-io-sdk' }),
-  retryOptions: {
-    retries: 5,
-    retryDelayMs: 1000,
-    retryDelayMultiplier: 2,
-  },
-});
-```
-
-**Certainty**: 100% - System configuration
-
-### Two-Tier AO Resolution Process
-
-#### Tier 1: IO Process Query
-
-Fetches base ArNS name records from the IO network process:
-
-```typescript
-// src/resolution/on-demand-arns-resolver.ts
-private async resolveFromIO(name: string): Promise<ArNSRecord> {
-  const baseArNSRecord = await this.ao.io.getArNSRecord({ name });
-  
-  return {
-    processId: baseArNSRecord.processId,
-    undernameLimit: baseArNSRecord.undernameLimit,
-    type: baseArNSRecord.type,
-    startTimestamp: baseArNSRecord.startTimestamp,
-    endTimestamp: baseArNSRecord.endTimestamp,
-  };
-}
-```
-
-**Certainty**: 100% - Core resolution logic
-
-#### Tier 2: ANT Process Query
-
-Fetches specific undername records from ANT (Arweave Name Token) processes:
-
-```typescript
-// src/resolution/on-demand-arns-resolver.ts
-private async getAntRecord({
-  processId,
-  undername,
-}: {
-  processId: string;
-  undername: string;
-}): Promise<AntRecord | undefined> {
-  const ant = ANT.init({
-    process: new AOProcess({
-      processId,
-      ao: this.ao,
-    }),
-  });
-  
-  const antRecords = await ant.getRecords();
-  return antRecords[undername];
-}
-```
-
-**Certainty**: 100% - ANT integration
-
-### Circuit Breaker Protection
-
-```typescript
-// src/data/ao-network-process.ts
-this.aoCircuitBreaker = new CircuitBreaker(
-  async (fnName: string) => {
-    return this.io[fnName]();
-  },
-  {
-    timeout: this.circuitBreakerConfig.timeout,
-    errorThresholdPercentage: this.circuitBreakerConfig.errorThresholdPercentage,
-    rollingCountTimeout: this.circuitBreakerConfig.rollingCountTimeout,
-    resetTimeout: this.circuitBreakerConfig.resetTimeout,
-  },
-);
-```
-
-**Default Configuration**:
-- Timeout: 60000ms (60 seconds)
-- Error threshold: 30%
-- Rolling count timeout: 600000ms (10 minutes)
-- Reset timeout: 1200000ms (20 minutes)
-
-**Certainty**: 100% - Circuit breaker implementation
+Resolution TTL comes from the on-chain record itself (via the SDK), but
+the gateway can override with `ARNS_RESOLVER_OVERRIDE_TTL_SECONDS` if
+operators want a different cache horizon than the network process exposes.
 
 ---
 
-## Caching Architecture {#caching-architecture}
+## Sandbox Domain Security
 
-### Three-Tier Cache System
+Resolved transaction content is served from a **sandboxed subdomain** to
+isolate cookies / localStorage between names. The sandbox host is derived
+from the resolved tx id via a base32 encoding (see `src/lib/sandbox.ts`).
 
-#### Tier 1: KV Store (Redis/Node)
-
-Base cache implementation configurable via `ARNS_CACHE_TYPE`:
-
-```typescript
-// src/system.ts
-const createArNSKvStore = (): KVBufferStore => {
-  switch (config.ARNS_CACHE_TYPE) {
-    case 'redis':
-      return new RedisKvStore({
-        redisClient,
-        ttlSeconds: config.ARNS_CACHE_TTL_SECONDS,
-        maxKeys: config.ARNS_CACHE_MAX_KEYS,
-      });
-    default:
-      return new NodeKvStore({
-        ttlSeconds: config.ARNS_CACHE_TTL_SECONDS,
-        maxKeys: config.ARNS_CACHE_MAX_KEYS,
-      });
-  }
-};
-```
-
-**Configuration**:
-- TTL: `ARNS_CACHE_TTL_SECONDS` (default: 3600s)
-- Max keys: `ARNS_CACHE_MAX_KEYS` (default: 10000)
-- **Certainty**: 100%
-
-#### Tier 2: Resolution Cache
-
-Stores complete resolution results:
-
-```typescript
-// src/system.ts
-export const arnsResolutionCache = new KvArNSResolutionStore({
-  log,
-  hashKeyPrefix: 'arns',
-  kvBufferStore: createArNSKvStore({
-    log,
-    type: config.ARNS_CACHE_TYPE,
-    redisClient,
-    ttlSeconds: config.ARNS_CACHE_TTL_SECONDS,
-    maxKeys: config.ARNS_CACHE_MAX_KEYS,
-  }),
-});
-```
-
-**Stored Data**:
-```typescript
-interface ValidNameResolution {
-  name: string;
-  resolvedId: string;
-  resolvedAt: number;
-  ttl: number;
-  processId: string;
-  limit: number;    // Undername limit
-  index: number;    // Current undername count
-}
-```
-
-**Certainty**: 100% - Interface definition
-
-#### Tier 3: Registry Cache
-
-Stores base ArNS name registry:
-
-```typescript
-// src/system.ts
-export const arnsRegistryCache = new KvArNSRegistryStore({
-  log,
-  hashKeyPrefix: 'registry',
-  kvBufferStore: createArNSKvStore({
-    log,
-    type: config.ARNS_CACHE_TYPE,
-    redisClient,
-    ttlSeconds: config.ARNS_CACHE_TTL_SECONDS,
-    maxKeys: config.ARNS_CACHE_MAX_KEYS,
-  }),
-});
-```
-
-**Certainty**: 100% - Cache initialization
-
-### Debounce Cache Layer
-
-Prevents cache stampede on misses:
-
-```typescript
-// src/resolution/trusted-gateway-arns-resolver.ts
-const debouncedCache = new ArNSDebounceCache({
-  arnsStore: arnsCache,
-  cacheMissDebounceMs: 600 * 1000, // 10 minutes
-  cacheHitDebounceMs: 3600 * 1000, // 1 hour
-});
-```
-
-**Behavior**:
-- Cache miss: Wait 10 minutes before retry
-- Cache hit: Refresh after 1 hour
-- Background hydration of entire registry
-- **Certainty**: 100% - Debounce implementation
+If a request lands at the canonical hostname and the resolved id maps to
+a different sandbox host, the gateway issues a 302 redirect. This is
+unchanged from the AO-era implementation — the security model doesn't
+depend on the resolution backend.
 
 ---
 
-## Resolution Flow {#resolution-flow}
+## Configuration Reference
 
-### Complete Request Flow
+Defined in `src/config.ts`:
 
-#### Step 1: Middleware Interception
+| Env var | Default | Purpose |
+|---|---|---|
+| `ARNS_RESOLVER_PRIORITY_ORDER` | `gateway,on-demand` | Ordered comma-separated list of resolver strategies |
+| `ARNS_CACHE_TYPE` | `node` | `node` (in-memory) or `redis` |
+| `ARNS_CACHE_TTL_SECONDS` | `86400` (24h) | Resolution-cache entry TTL |
+| `ARNS_CACHE_MAX_KEYS` | `10000` | Node-cache eviction ceiling |
+| `ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS` | `250` | Time to wait on fresh resolution before serving from cache |
+| `ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS` | `3000` | Per-resolver time budget within the composite |
+| `ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS` | `30000` | Final resolver gets a longer budget |
+| `ARNS_NAMES_CACHE_TTL_SECONDS` | `3600` (1h) | Names-cache rehydration cadence |
+| `ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS` | `120` | Throttle for miss-driven hydration |
+| `ARNS_MAX_CONCURRENT_RESOLUTIONS` | `1` | Per-tick concurrency cap |
+| `ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT` | `true` | When true, reject undernames past the ANT's `undernameLimit` |
+| `ARNS_RESOLVER_OVERRIDE_TTL_SECONDS` | unset | Override SDK-provided TTL with a local value |
+| `ARIO_ANT_PROGRAM_ID` | unset | Devnet/localnet program-id override for the ANT program |
+| `ARIO_ARNS_PROGRAM_ID` | unset | Devnet/localnet program-id override for the ArNS registry program |
 
-```typescript
-// src/middleware/arns.ts
-// 1. Extract ArNS name from subdomain
-const arnsSubdomain = req.subdomains[req.subdomains.length - 1];
-
-// 2. Check for sandbox redirect need
-const reqSandbox = req.subdomains[0];
-const idSandbox = sandboxFromId(resolvedId);
-
-if (reqSandbox !== idSandbox) {
-  return res.redirect(302, 
-    `${protocol}://${idSandbox}.${rootHost}${req.path}${queryString}`
-  );
-}
-
-// 3. Set request attributes
-res.locals.arnsData = {
-  name: arnsSubdomain,
-  resolvedId,
-  ttl,
-  processId,
-  // ... other attributes
-};
-```
-
-**Certainty**: 100% - Middleware flow
-
-#### Step 2: Composite Resolution
-
-```typescript
-// src/resolution/composite-arns-resolver.ts
-async resolve({
-  name,
-  signal,
-}: {
-  name: string;
-  signal?: AbortSignal;
-}): Promise<NameResolution> {
-  // 1. Parse base name
-  const nameParts = name.split('_');
-  const baseName = nameParts[nameParts.length - 1];
-  
-  // 2. Create base record fetcher
-  const baseArNSRecordFn = memoize(
-    async (): Promise<ArNSRegistryEntry | undefined> => {
-      return this.arnsRegistryCache.get(baseName);
-    },
-    { primitive: true },
-  );
-  
-  // 3. Check cache with TTL validation
-  const cachedResolution = await this.resolutionCache.get(name);
-  if (cachedResolution && this.isWithinTTL(cachedResolution)) {
-    return cachedResolution;
-  }
-  
-  // 4. Parallel resolution
-  return this.resolveParallel({ name, baseArNSRecordFn, signal });
-}
-```
-
-**Certainty**: 100% - Core resolution logic
-
-#### Step 3: Parallel Resolution Strategy
-
-```typescript
-// src/resolution/composite-arns-resolver.ts
-private async resolveParallel({
-  name,
-  baseArNSRecordFn,
-  signal,
-}: {
-  name: string;
-  baseArNSRecordFn: () => Promise<ArNSRegistryEntry | undefined>;
-  signal?: AbortSignal;
-}): Promise<NameResolution> {
-  const resolverPromises = this.resolvers.map((resolver, index) =>
-    this.resolveLimit(async () => {
-      const isLastResolver = index === this.resolvers.length - 1;
-      const timeout = isLastResolver ? 30000 : 5000;
-      
-      const timeoutSignal = AbortSignal.timeout(timeout);
-      const combinedSignal = signal 
-        ? AbortSignal.any([signal, timeoutSignal])
-        : timeoutSignal;
-      
-      return resolver.resolve({
-        name,
-        signal: combinedSignal,
-        baseArNSRecordFn,
-      });
-    }),
-  );
-  
-  // First valid resolution wins
-  const resolution = await Promise.any(resolverPromises);
-  
-  // Cache successful resolution
-  if (resolution) {
-    await this.resolutionCache.set(name, resolution);
-  }
-  
-  return resolution;
-}
-```
-
-**Certainty**: 100% - Parallel execution
-
-#### Step 4: Response Headers
-
-```typescript
-// src/middleware/arns.ts
-res.header(headerNames.arnsName, arnsData.name);
-res.header(headerNames.arnsBasename, arnsData.basename);
-res.header(headerNames.arnsRecord, arnsData.undername);
-res.header(headerNames.arnsResolvedId, arnsData.resolvedId);
-res.header(headerNames.arnsTtlSeconds, arnsData.ttl);
-res.header(headerNames.arnsProcessId, arnsData.processId);
-res.header(headerNames.arnsResolvedAt, arnsData.resolvedAt);
-res.header(headerNames.arnsLimit, arnsData.limit);
-res.header(headerNames.arnsIndex, arnsData.index);
-```
-
-**Header Names** (src/constants.ts):
-- `X-ArNS-Name`
-- `X-ArNS-Basename`
-- `X-ArNS-Record`
-- `X-ArNS-Resolved-Id`
-- `X-ArNS-TTL-Seconds`
-- `X-ArNS-Process-Id`
-- `X-ArNS-Resolved-At`
-- `X-ArNS-Undername-Limit`
-- `X-ArNS-Record-Index`
-
-**Certainty**: 100% - Header constants
+A few related Solana-RPC circuit-breaker knobs (also in `src/config.ts`):
+`ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_{TIMEOUT,ERROR_THRESHOLD_PERCENTAGE,ROLLING_COUNT_TIMEOUT,RESET_TIMEOUT}_MS`.
 
 ---
 
-## Record Fetching and Validation {#record-fetching}
+## Error Handling
 
-### On-Demand Resolution Process
+Every resolver call is wrapped in a tracing span and an error classifier:
 
-#### Base Name Fetching
+- **Network process down** (Solana RPC unreachable, rate-limited 429, or
+  the program returned a known "not-yet-initialized" error): the resolver
+  records the failure on its OpenTelemetry span, returns `undefined`, and
+  the composite resolver falls back to the cached resolution if one exists.
+- **Not-found** (ANT mint PDA exists but the requested undername is not
+  in the record): returns `undefined` from the resolver. Composite tries
+  the next strategy in the priority order, then returns 404 if all miss.
+- **Past undername limit** (when `ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT`
+  is true): explicit failure surfaced to the caller as 404 — semantically
+  invalid request, not a transient error.
 
-```typescript
-// src/resolution/on-demand-arns-resolver.ts
-private async resolveBaseName(
-  name: string,
-): Promise<ArNSRegistryEntry | undefined> {
-  try {
-    const baseArNSRecord = await this.networkProcess.getArNSRecord({ name });
-    
-    return {
-      processId: baseArNSRecord.processId,
-      undernameLimit: baseArNSRecord.undernameLimit,
-      type: baseArNSRecord.type,
-      startTimestamp: baseArNSRecord.startTimestamp,
-      endTimestamp: baseArNSRecord.endTimestamp,
-    };
-  } catch (error) {
-    this.log.debug('Failed to resolve base name', { name, error });
-    return undefined;
-  }
-}
-```
-
-**Certainty**: 100% - Resolution implementation
-
-#### Undername Resolution
-
-```typescript
-// src/resolution/on-demand-arns-resolver.ts
-private async resolveUndername({
-  baseName,
-  undername,
-  baseArNSRecord,
-}: {
-  baseName: string;
-  undername: string;
-  baseArNSRecord: ArNSRegistryEntry;
-}): Promise<NameResolution> {
-  // Check undername limit
-  if (this.enforceUndernameLimits && 
-      baseArNSRecord.undernameLimit <= 0) {
-    throw new Error('Undername limit exceeded');
-  }
-  
-  // Query ANT process
-  const ant = ANT.init({
-    process: new AOProcess({
-      processId: baseArNSRecord.processId,
-      ao: this.ao,
-    }),
-  });
-  
-  const antRecords = await ant.getRecords();
-  const antRecord = antRecords[undername];
-  
-  if (!antRecord) {
-    throw new Error(`Undername ${undername} not found`);
-  }
-  
-  // Validate and return
-  if (!isValidDataId(antRecord.transactionId)) {
-    throw new Error('Invalid transaction ID in ANT record');
-  }
-  
-  return {
-    name: `${undername}_${baseName}`,
-    resolvedId: antRecord.transactionId,
-    ttl: antRecord.ttlSeconds || this.defaultTtl,
-    processId: baseArNSRecord.processId,
-    limit: baseArNSRecord.undernameLimit,
-    index: Object.keys(antRecords).length,
-    resolvedAt: Date.now(),
-  };
-}
-```
-
-**Certainty**: 100% - Undername logic
-
-### Validation Checks
-
-1. **Data ID Validation**:
-   ```typescript
-   // src/lib/validation.ts
-   export function isValidDataId(id: string): boolean {
-     return /^[a-zA-Z0-9_-]{43}$/.test(id);
-   }
-   ```
-   **Certainty**: 100% - Regex pattern
-
-2. **Undername Limit Enforcement**:
-   - Configurable via `ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT`
-   - Checks against `undernameLimit` in base record
-   - **Certainty**: 100%
-
-3. **Record Existence**:
-   - ANT record must exist for undername
-   - Base record must exist in IO process
-   - **Certainty**: 100%
+Failures are also tracked in three Prometheus counters:
+`arns_cached_resolution_fallback_on_empty_total`,
+`arns_name_cache_hydration_failures_total`,
+`arns_name_cache_hydration_retries_total`.
 
 ---
 
-## TTL Management {#ttl-management}
+## Failure Modes
 
-### TTL Priority Order
+| Scenario | Behavior |
+|---|---|
+| Solana RPC timeout | Fresh resolution fails; cached value served if available; otherwise 404. Counter increments. |
+| RPC 429 (rate-limited) | Same as timeout; the SDK retries with backoff once before failing up to the resolver. |
+| Names-cache hydrator fails repeatedly | Hydrator backs off and retries; in-flight resolutions fall through to per-name on-demand lookups. Gauge `arns_base_name_cache_entries` may go stale. |
+| ANT program-id misconfigured (`ARIO_ANT_PROGRAM_ID` pointing at the wrong cluster) | All lookups return "AccountNotInitialized"; resolutions miss; 404. Reconfigure operator. |
+| Trusted-gateway peer returns malformed `X-ArNS-Ant-Id` | Resolver discards the header, treats as a 404 for that peer, tries the next. |
 
-TTL (Time To Live) is determined by the following priority:
-
-1. **Override TTL**:
-   ```typescript
-   if (this.overrideTtlSeconds !== undefined) {
-     return this.overrideTtlSeconds;
-   }
-   ```
-   - Set via `ARNS_RESOLVER_OVERRIDE_TTL_SECONDS`
-   - **Certainty**: 100%
-
-2. **ANT Record TTL**:
-   ```typescript
-   const ttl = antRecord.ttlSeconds || this.defaultTtl;
-   ```
-   - From individual ANT records
-   - **Certainty**: 100%
-
-3. **Default TTL**:
-   ```typescript
-   private defaultTtl = 900; // 15 minutes
-   ```
-   - Fallback value
-   - **Certainty**: 100%
-
-### Cache Refresh Strategy
-
-```typescript
-// src/resolution/composite-arns-resolver.ts
-private isWithinTTL(resolution: ValidNameResolution): boolean {
-  const now = Date.now();
-  const expiresAt = resolution.resolvedAt + (resolution.ttl * 1000);
-  const timeUntilExpiry = expiresAt - now;
-  
-  // Check if within refresh window
-  const refreshWindow = ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS * 1000;
-  
-  if (timeUntilExpiry < refreshWindow) {
-    // Trigger background refresh
-    this.resolveParallel({
-      name: resolution.name,
-      baseArNSRecordFn: async () => this.arnsRegistryCache.get(resolution.name),
-    }).catch((error) => {
-      this.log.debug('Background refresh failed', { error });
-    });
-  }
-  
-  return timeUntilExpiry > 0;
-}
-```
-
-**Refresh Window**: 900 seconds (15 minutes) before expiry
-**Certainty**: 100% - TTL logic
+The classifier explicitly distinguishes **transient** (RPC, rate-limit,
+timeouts) from **terminal** (not-found, over-limit) failures so the
+composite resolver can apply the right fallback strategy.
 
 ---
 
-## Sandbox Domain Security {#sandbox-security}
-
-### Sandbox URL Generation
-
-```typescript
-// src/lib/sandbox.ts
-export function sandboxFromId(id: string): string {
-  return base32.stringify(fromB64Url(id), { pad: false }).toLowerCase();
-}
-```
-
-**Process**:
-1. Convert base64url transaction ID to buffer
-2. Encode as base32 (lowercase, no padding)
-3. Use as subdomain for content isolation
-
-**Example**: 
-- TX ID: `abc123...` (base64url)
-- Sandbox: `mfxgs23l...` (base32)
-- URL: `https://mfxgs23l.arweave.net/...`
-
-**Certainty**: 100% - Security implementation
-
-### Redirect Logic
-
-```typescript
-// src/middleware/arns.ts
-const reqSandbox = req.subdomains[0];
-const idSandbox = sandboxFromId(resolvedId);
-
-// Redirect if sandbox mismatch
-if (reqSandbox !== idSandbox) {
-  const protocol = req.secure || req.get('x-forwarded-proto') === 'https' 
-    ? 'https' 
-    : config.SANDBOX_PROTOCOL;
-    
-  const redirectUrl = `${protocol}://${idSandbox}.${rootHost}${req.path}`;
-  
-  return res.redirect(302, redirectUrl);
-}
-```
-
-**Security Benefits**:
-- Content isolation per transaction
-- Prevents ArNS/sandbox collisions
-- Protocol enforcement
-- **Certainty**: 100%
-
----
-
-## Performance Optimizations {#performance-optimizations}
-
-### Concurrency Control
-
-```typescript
-// src/resolution/composite-arns-resolver.ts
-constructor({
-  maxConcurrentResolutions = 5,
-}: {
-  maxConcurrentResolutions?: number;
-}) {
-  this.resolveLimit = pLimit(maxConcurrentResolutions);
-}
-```
-
-**Configuration**: `ARNS_MAX_CONCURRENT_RESOLUTIONS`
-**Default**: 5 concurrent resolutions
-**Certainty**: 100%
-
-### Request Deduplication
-
-```typescript
-// src/resolution/composite-arns-resolver.ts
-private pendingResolutions: Record<string, Promise<NameResolution | undefined> | undefined> = {};
-
-async resolve({ name }: { name: string }): Promise<NameResolution> {
-  // Check for pending resolution
-  if (this.pendingResolutions[name]) {
-    return this.pendingResolutions[name];
-  }
-  
-  // Create new resolution promise
-  this.pendingResolutions[name] = this.doResolve(name)
-    .finally(() => {
-      delete this.pendingResolutions[name];
-    });
-    
-  return this.pendingResolutions[name];
-}
-```
-
-**Certainty**: 100% - Deduplication pattern
-
-### Timeout Management
-
-```typescript
-// Resolver-specific timeouts
-const timeouts = {
-  compositeResolver: 5000,    // 5 seconds
-  lastResolver: 30000,        // 30 seconds
-  cachedFallback: 1000,      // 1 second
-};
-```
-
-**Behavior**:
-- Early resolvers timeout quickly
-- Last resolver gets extended timeout
-- Cached fallback for emergencies
-- **Certainty**: 100%
-
-### Background Operations
-
-1. **Registry Hydration**:
-   ```typescript
-   // Background cache warming
-   await this.hydrateCache();
-   ```
-
-2. **Near-TTL Refresh**:
-   - Automatic refresh 15 minutes before expiry
-   - Non-blocking background operation
-
-3. **Cache Updates**:
-   - Asynchronous cache writes
-   - Fire-and-forget pattern
-
-**Certainty**: 100% - Performance patterns
-
----
-
-## Configuration Reference {#configuration-reference}
-
-### Core Configuration Variables
-
-| Variable | Default | Description | Certainty |
-|----------|---------|-------------|-----------|
-| `ARNS_ROOT_HOST` | - | Base domain for ArNS (e.g., arweave.net) | 100% |
-| `ARNS_CACHE_TYPE` | `node` | Cache implementation (`redis` or `node`) | 100% |
-| `ARNS_CACHE_TTL_SECONDS` | `3600` | Cache TTL in seconds | 100% |
-| `ARNS_CACHE_MAX_KEYS` | `10000` | Maximum cached entries | 100% |
-| `ARNS_RESOLVER_PRIORITY_ORDER` | `gateway,on-demand` | Resolver order | 100% |
-| `ARNS_MAX_CONCURRENT_RESOLUTIONS` | `5` | Parallel resolution limit | 100% |
-| `ARNS_RESOLVER_OVERRIDE_TTL_SECONDS` | - | Force TTL for all resolutions | 100% |
-| `ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT` | `true` | Enforce undername limits | 100% |
-| `TRUSTED_ARNS_GATEWAY_URL` | `https://__NAME__.ar-io.net` | Gateway fallback | 100% |
-
-### AO Network Configuration
-
-| Variable | Default | Description | Certainty |
-|----------|---------|-------------|-----------|
-| `IO_PROCESS_ID` | - | AR.IO network process ID | 100% |
-| `AO_MU_URL` | - | AO Message Unit URL | 100% |
-| `NETWORK_AO_CU_URL` | - | AO Compute Unit URL | 100% |
-| `AO_GRAPHQL_URL` | - | AO GraphQL endpoint | 100% |
-| `AO_GATEWAY_URL` | - | AO Gateway URL | 100% |
-
-### Performance Configuration
-
-| Variable | Default | Description | Certainty |
-|----------|---------|-------------|-----------|
-| `ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS` | `900` | Refresh window | 100% |
-| `ARNS_SUBDOMAIN_EXCLUSION_LIST` | `["www"]` | Excluded subdomains | 100% |
-| `ARNS_NOT_FOUND_TX_ID` | - | 404 fallback TX | 100% |
-| `ARNS_NOT_FOUND_ARNS_NAME` | - | 404 fallback ArNS | 100% |
-
----
-
-## Error Handling and Fallbacks {#error-handling}
-
-### Error Cascade Strategy
-
-```typescript
-// src/resolution/composite-arns-resolver.ts
-try {
-  // Try all resolvers in parallel
-  const resolution = await Promise.any(resolverPromises);
-  return resolution;
-} catch (error) {
-  // All resolvers failed - try cache
-  const staleCache = await this.resolutionCache.get(name);
-  
-  if (staleCache) {
-    this.log.warn('Using stale cache after resolution failure', {
-      name,
-      age: Date.now() - staleCache.resolvedAt,
-    });
-    return staleCache;
-  }
-  
-  // No cache - handle 404
-  throw new ArNSResolutionError(name);
-}
-```
-
-**Certainty**: 100% - Error handling
-
-### Circuit Breaker States
-
-1. **Closed State**: Normal operation
-2. **Open State**: All requests fail immediately
-3. **Half-Open State**: Test requests allowed
-
-```typescript
-// Circuit breaker events
-circuitBreaker.on('open', () => {
-  this.log.warn('AO circuit breaker opened');
-});
-
-circuitBreaker.on('halfOpen', () => {
-  this.log.info('AO circuit breaker half-open, testing...');
-});
-```
-
-**Certainty**: 100% - Circuit breaker events
-
-### 404 Fallback Options
-
-```typescript
-// src/middleware/arns.ts
-if (config.ARNS_NOT_FOUND_TX_ID) {
-  // Direct to specific transaction
-  return dataHandler(req, res, next);
-} else if (config.ARNS_NOT_FOUND_ARNS_NAME) {
-  // Resolve fallback ArNS name
-  const fallbackResolution = await arnsResolver.resolve({
-    name: config.ARNS_NOT_FOUND_ARNS_NAME,
-  });
-  res.locals.arnsData = fallbackResolution;
-  return dataHandler(req, res, next);
-} else {
-  // Standard 404
-  return res.status(404).send('ArNS name not found');
-}
-```
-
-**Certainty**: 100% - Fallback logic
-
----
-
-## Data Structures and Protocols {#data-structures}
-
-### Core Type Definitions
-
-```typescript
-// src/types.d.ts
-export interface ValidNameResolution {
-  name: string;           // Full ArNS name (e.g., "docs_ardrive")
-  resolvedId: string;     // Target Arweave TX ID
-  resolvedAt: number;     // Resolution timestamp (ms)
-  ttl: number;           // TTL in seconds
-  processId: string;     // ANT process ID
-  limit: number;         // Undername limit
-  index: number;         // Current undername count
-}
-
-export interface ArNSRegistryEntry {
-  processId: string;              // ANT process ID
-  undernameLimit: number;         // Max undernames allowed
-  type: 'lease' | 'permanent';   // Record type
-  startTimestamp?: number;        // Lease start (ms)
-  endTimestamp?: number;          // Lease end (ms)
-}
-
-export interface AntRecord {
-  transactionId: string;  // Target TX ID
-  ttlSeconds?: number;    // Optional TTL
-}
-```
-
-**Certainty**: 100% - Type definitions
-
-### Cache Entry Formats
-
-#### Resolution Cache Entry
-```json
-{
-  "key": "docs_ardrive",
-  "value": {
-    "name": "docs_ardrive",
-    "resolvedId": "bLAgYxAdX2Ry-nt6aH2ixgvJXbpsEYm28NgJgyqfs-U",
-    "resolvedAt": 1703001234567,
-    "ttl": 3600,
-    "processId": "bh9l1cy0aksiL_x9M359faGzM_yjralacHIUo8_nQXM",
-    "limit": 10,
-    "index": 3
-  }
-}
-```
-
-#### Registry Cache Entry
-```json
-{
-  "key": "ardrive",
-  "value": {
-    "processId": "bh9l1cy0aksiL_x9M359faGzM_yjralacHIUo8_nQXM",
-    "undernameLimit": 10,
-    "type": "lease",
-    "startTimestamp": 1703001234567,
-    "endTimestamp": 1734537234567
-  }
-}
-```
-
-**Certainty**: 100% - Cache formats
-
-### HTTP Header Protocol
-
-```typescript
-// Response headers set by middleware
-const headers = {
-  'X-ArNS-Name': 'docs_ardrive',              // Full name
-  'X-ArNS-Basename': 'ardrive',               // Base name
-  'X-ArNS-Record': 'docs',                    // Undername or '@'
-  'X-ArNS-Resolved-Id': 'bLAgYx...',         // TX ID
-  'X-ArNS-TTL-Seconds': '3600',              // Cache duration
-  'X-ArNS-Process-Id': 'bh9l1c...',          // ANT process
-  'X-ArNS-Resolved-At': '1703001234567',     // Timestamp
-  'X-ArNS-Undername-Limit': '10',            // Max undernames
-  'X-ArNS-Record-Index': '3',                // Current count
-};
-```
-
-**Certainty**: 100% - Header protocol
-
----
-
-## Implementation Details {#implementation-details}
-
-### Request Processing Pipeline
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Client    │────▶│ Middleware  │────▶│  Resolver   │────▶│   Cache     │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-      │                    │                     │                    │
-      │ 1. Request         │                     │                    │
-      │  ardrive.ar.net    │                     │                    │
-      │───────────────────▶│                     │                    │
-      │                    │ 2. Parse Name       │                    │
-      │                    │───────────────────▶│                     │
-      │                    │                     │ 3. Check Cache     │
-      │                    │                     │───────────────────▶│
-      │                    │                     │◀ ─ ─ ─ ─ ─ ─ ─ ─ ─│
-      │                    │                     │   (cache miss)     │
-      │                    │                     │                    │
-      │                    │                     │ 4. Resolve         │
-      │                    │                     ├────────────┐       │
-      │                    │                     │            │       │
-      │                    │                     │   Parallel │       │
-      │                    │                     │ Resolution │       │
-      │                    │                     │            │       │
-      │                    │                     │◀───────────┘       │
-      │                    │                     │                    │
-      │                    │                     │ 5. Update Cache    │
-      │                    │                     │───────────────────▶│
-      │                    │◀────────────────────│                    │
-      │                    │ 6. Set Headers      │                    │
-      │◀───────────────────│                     │                    │
-      │ 7. Redirect/Proxy  │                     │                    │
-      ▼                    ▼                     ▼                    ▼
-```
-
-### Memoization Pattern
-
-```typescript
-// Prevent duplicate base record fetches
-const baseArNSRecordFn = memoize(
-  async (): Promise<ArNSRegistryEntry | undefined> => {
-    return this.arnsRegistryCache.get(baseName);
-  },
-  { primitive: true }, // Use primitive comparison
-);
-```
-
-**Purpose**: Avoid redundant IO process queries
-**Certainty**: 100% - Performance optimization
-
-### Abort Signal Handling
-
-```typescript
-// Graceful cancellation support
-const timeoutSignal = AbortSignal.timeout(timeout);
-const combinedSignal = signal 
-  ? AbortSignal.any([signal, timeoutSignal])
-  : timeoutSignal;
-
-resolver.resolve({
-  name,
-  signal: combinedSignal,
-  baseArNSRecordFn,
-});
-```
-
-**Use Cases**:
-- Client disconnection
-- Timeout enforcement
-- Early termination on success
-- **Certainty**: 100%
-
----
-
-## Certainty Assessment {#certainty-assessment}
-
-### High Certainty (100%)
-
-All documented features, implementations, and configurations are based on:
-- Direct code analysis
-- Configuration file examination
-- Type definitions and interfaces
-- Implementation patterns
-
-### Areas Examined
-
-1. **Source Files Analyzed**:
-   - `src/resolution/*.ts` - All resolver implementations
-   - `src/middleware/arns.ts` - Request handling
-   - `src/system.ts` - System initialization
-   - `src/types.d.ts` - Type definitions
-   - `src/constants.ts` - Constants and headers
-   - `src/config.ts` - Configuration loading
-
-2. **Implementation Verified**:
-   - Complete resolution flow
-   - Caching mechanisms
-   - Error handling
-   - Performance optimizations
-   - Security measures
-
-3. **Configuration Confirmed**:
-   - All environment variables
-   - Default values
-   - Integration points
-
-### No Uncertainties
-
-All aspects of the ArNS resolution system have been thoroughly analyzed with direct code references. No speculative or uncertain elements are included in this documentation.
-
----
-
-## Conclusion
-
-The ar.io gateway's ArNS resolution system represents a sophisticated implementation that successfully balances:
-
-- **Performance**: Multi-tier caching and parallel resolution
-- **Reliability**: Circuit breakers and fallback mechanisms
-- **Security**: Sandbox isolation and validation
-- **Scalability**: Configurable concurrency and caching
-- **Flexibility**: Multiple resolver strategies
-
-The system provides a robust foundation for human-readable naming on the Arweave network while maintaining the decentralized principles of the ecosystem through AO process integration.
+*This document reflects the `solana` branch at SDK `4.0.0-solana.14`. For
+the AO-era architecture, see git history prior to the AO sidecar removal.*

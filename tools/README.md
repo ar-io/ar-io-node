@@ -193,6 +193,80 @@ Converts Arweave storage partition files to height ranges for data analysis and 
 - Support migration and data management operations
 - Enable height-based analytics on partitioned data
 
+### `queue-missing-bundles`
+Streams a CSV of `(data_item_id, bundle_id, ...)` rows, identifies the data items missing from ClickHouse, and POSTs the associated bundles to `/ar-io/admin/queue-bundle` on a running core service. Deduplicates bundle IDs within the run, handles HTTP 429 backpressure from the bundle importer queue with exponential backoff, and streams the input so tens of millions of rows fit in bounded memory. The CSV header is optional and auto-detected; the first two columns (data item ID, bundle ID) are used and any remaining columns are ignored. Defaults for the core port, admin API key, and ClickHouse credentials are read from `.env`.
+
+Progress is checkpointed per input file to `<input>.progress.json` at each progress-log boundary (the buffered batch is flushed and the queue drained before writing, so the recorded offset reflects work that's actually complete). If the process is interrupted (SIGINT/SIGTERM, crash, or an unrecoverable POST error), the checkpoint is left in place; the next invocation on the same file resumes right after the last persisted record. The checkpoint records file size and mtime — if either has changed since the last run, the tool refuses to resume until you pass `--restart`. On successful completion the checkpoint is deleted. Stdin input is not resumable and skips checkpointing entirely.
+
+**Usage:**
+```bash
+# Defaults from .env: http://localhost:${CORE_PORT:-4000} and http://${CLICKHOUSE_HOST:-localhost}:${CLICKHOUSE_PORT_2:-8123}
+./tools/queue-missing-bundles --input data-items.csv
+
+# Dry run (check ClickHouse but don't POST)
+./tools/queue-missing-bundles --input data-items.csv --dry-run
+
+# Resume after an interrupted run picks up automatically — just re-run the
+# same command. To start over (and overwrite the existing checkpoint):
+./tools/queue-missing-bundles --input data-items.csv --restart
+
+# Read from stdin with custom endpoints / parallelism (stdin disables checkpointing)
+cat data-items.csv | ./tools/queue-missing-bundles --input - \
+  --core-url http://localhost:4000 \
+  --clickhouse-url http://localhost:8123 \
+  --batch-size 5000 --batch-pause-ms 0 --concurrency 8
+```
+
+Run `./tools/queue-missing-bundles --help` for the full flag list.
+
+### `test-clickhouse-graphql`
+Compares the local AR.IO node GraphQL endpoint against `arweave.net` for
+Drive-Id and owner-address queries, runs pagination consistency checks in both
+directions, and performs database-level integrity checks against the local
+ClickHouse instance. Generates HTML and JSON reports under
+`test-results/runs/<timestamp>/` (with a `latest` symlink). Defaults for the
+core port and ClickHouse credentials are read from `.env`; a JSON config file
+can be supplied via `--config` — see `tools/example-test-config.json` for the
+shape.
+
+**Usage:**
+```bash
+# Auto-discover top 10 drives and owners by transaction count and diff them
+./tools/test-clickhouse-graphql --auto-discover --top 10
+
+# Target a specific drive or owner
+./tools/test-clickhouse-graphql --drive-id <drive-id>
+./tools/test-clickhouse-graphql --owner <owner-address>
+
+# Config-driven run
+./tools/test-clickhouse-graphql --config tools/example-test-config.json --auto-discover
+```
+
+Run `./tools/test-clickhouse-graphql --help` for the full flag list. Open
+`test-results/latest/report.html` after a run for the interactive summary.
+
+**Interpreting results:**
+- **Duplicates** — same transaction ID appears more than once in a result set.
+- **Missing** — transaction exists in one source but not the other.
+- **Discrepancies** — same transaction has different field values between
+  sources. Severity is `critical` for core fields (id, owner, amount),
+  `minor` for non-essential differences, and `informational` for expected
+  differences (e.g. owner keys that the gateway may omit for data items).
+- **Pagination** — order violations mean results aren't sorted consistently by
+  height; cross-page duplicates mean the same transaction appears on multiple
+  pages.
+
+**Troubleshooting:**
+- **No Drive-Ids discovered** — the ClickHouse `transactions` table may not be
+  populated yet (data items are unbundled asynchronously), or lower
+  `discovery.minTransactionCount` in the config to see smaller drives.
+- **Slow queries / timeouts** — lower `pageSize` and/or `maxPagesPerTest` in
+  config, reduce `--top`, or set `--max-transactions` to cap per-entity
+  fetching.
+- **Schema note** — the tool reads directly from the ClickHouse `transactions`
+  table; there is no separate `owner_transactions` table, so owner aggregation
+  is done with `FROM transactions GROUP BY owner_address`.
+
 ## Release tools
 
 Small, composable primitives used by the release workflow. Each tool does one

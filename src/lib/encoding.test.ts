@@ -239,12 +239,15 @@ describe('Transaction message pack encoding and decoding functions', () => {
 describe('Manifest parsing', () => {
   describe('resolveManifestStreamPath', () => {
     describe('manifest v0.1.0', () => {
-      it('should return the ID for the index path', async () => {
-        const id = await resolveManifestStreamPath(exampleManifestStreamV010());
-        assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+      it('should return the ID and index resolution type for the index path', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamV010(),
+        );
+        assert.equal(result.id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.resolutionType, 'index');
       });
 
-      it('should return the ID for non-index paths', async () => {
+      it('should return the ID and path resolution type for non-index paths', async () => {
         const paths = [
           {
             path: 'css/mobile.css',
@@ -261,41 +264,45 @@ describe('Manifest parsing', () => {
         ];
 
         for (const { path, id } of paths) {
-          const resolvedId = await resolveManifestStreamPath(
+          const result = await resolveManifestStreamPath(
             exampleManifestStreamV010(),
             path,
           );
-          assert.equal(resolvedId, id);
+          assert.equal(result.id, id);
+          assert.equal(result.resolutionType, 'path');
         }
       });
 
-      it('should return undefined if the path is not found', async () => {
-        const id = await resolveManifestStreamPath(
+      it('should return undefined if the path is not found and there is no fallback', async () => {
+        const result = await resolveManifestStreamPath(
           exampleManifestStreamV010(),
           'missing',
         );
-        assert.equal(id, undefined);
+        assert.equal(result.id, undefined);
+        assert.equal(result.resolutionType, undefined);
       });
     });
 
     describe('manifest v0.1.0 with index path at end', () => {
-      it('should return the ID for the index path', async () => {
-        const id = await resolveManifestStreamPath(
+      it('should return the ID and index resolution type for the index path', async () => {
+        const result = await resolveManifestStreamPath(
           exampleManifestStreamV010IndexPathAtEnd(),
         );
-        assert.equal(id, 'hoI_WQI9_5Mf1vASBwLdqE01goxRCgC53yuCrSaUOcs');
+        assert.equal(result.id, 'hoI_WQI9_5Mf1vASBwLdqE01goxRCgC53yuCrSaUOcs');
+        assert.equal(result.resolutionType, 'index');
       });
     });
 
     describe('manifest v0.2.0 - index id', () => {
-      it('should return the ID for the index path', async () => {
-        const id = await resolveManifestStreamPath(
+      it('should return the ID and index resolution type for the index path', async () => {
+        const result = await resolveManifestStreamPath(
           exampleManifestStreamV020IndexId(),
         );
-        assert.equal(id, 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU');
+        assert.equal(result.id, 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU');
+        assert.equal(result.resolutionType, 'index');
       });
 
-      it('should return the ID for non-index paths', async () => {
+      it('should return the ID and path resolution type for non-index paths', async () => {
         const paths = [
           {
             path: 'css/mobile.css',
@@ -312,32 +319,35 @@ describe('Manifest parsing', () => {
         ];
 
         for (const { path, id } of paths) {
-          const resolvedId = await resolveManifestStreamPath(
+          const result = await resolveManifestStreamPath(
             exampleManifestStreamV020IndexId(),
             path,
           );
-          assert.equal(resolvedId, id);
+          assert.equal(result.id, id);
+          assert.equal(result.resolutionType, 'path');
         }
       });
 
-      it('should return fallback if the path is not found', async () => {
-        const id = await resolveManifestStreamPath(
+      it('should return fallback id and resolution type if the path is not found', async () => {
+        const result = await resolveManifestStreamPath(
           exampleManifestStreamV020IndexId(),
           'missing',
         );
-        assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.resolutionType, 'fallback');
       });
     });
 
     describe('manifest v0.2.0 - index path', () => {
-      it('should return the ID for the index path', async () => {
-        const id = await resolveManifestStreamPath(
+      it('should return the ID and index resolution type for the index path', async () => {
+        const result = await resolveManifestStreamPath(
           exampleManifestStreamV020IndexPath(),
         );
-        assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.resolutionType, 'index');
       });
 
-      it('should return the ID for non-index paths', async () => {
+      it('should return the ID and path resolution type for non-index paths', async () => {
         const paths = [
           {
             path: 'css/mobile.css',
@@ -354,37 +364,44 @@ describe('Manifest parsing', () => {
         ];
 
         for (const { path, id } of paths) {
-          const resolvedId = await resolveManifestStreamPath(
+          const result = await resolveManifestStreamPath(
             exampleManifestStreamV020IndexPath(),
             path,
           );
-          assert.equal(resolvedId, id);
+          assert.equal(result.id, id);
+          assert.equal(result.resolutionType, 'path');
         }
       });
 
-      it('should return fallback if the path is not found', async () => {
-        const id = await resolveManifestStreamPath(
+      it('should return fallback id and resolution type if the path is not found', async () => {
+        const result = await resolveManifestStreamPath(
           exampleManifestStreamV020IndexPath(),
           'missing',
         );
-        assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.resolutionType, 'fallback');
       });
     });
 
     describe('manifest v0.2.0 - index id and path', () => {
-      it('should return the ID for the index id', async () => {
-        const id = await resolveManifestStreamPath(
+      it('should return the ID and index resolution type for the index id', async () => {
+        const result = await resolveManifestStreamPath(
           exampleManifestStreamV020IndexIdAndPath(),
         );
-        assert.equal(id, 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU');
+        assert.equal(result.id, 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU');
+        assert.equal(result.resolutionType, 'index');
 
         const indexEnd = await resolveManifestStreamPath(
           exampleManifestStreamV020IndexAndPathAtTheEnd(),
         );
-        assert.equal(indexEnd, 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU');
+        assert.equal(
+          indexEnd.id,
+          'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU',
+        );
+        assert.equal(indexEnd.resolutionType, 'index');
       });
 
-      it('should return the ID for non-index paths', async () => {
+      it('should return the ID and path resolution type for non-index paths', async () => {
         const paths = [
           {
             path: 'css/mobile.css',
@@ -401,29 +418,32 @@ describe('Manifest parsing', () => {
         ];
 
         for (const { path, id } of paths) {
-          const resolvedId = await resolveManifestStreamPath(
+          const result = await resolveManifestStreamPath(
             exampleManifestStreamV020IndexIdAndPath(),
             path,
           );
-          assert.equal(resolvedId, id);
+          assert.equal(result.id, id);
+          assert.equal(result.resolutionType, 'path');
         }
       });
 
-      it('should return fallback if the path is not found', async () => {
-        const id = await resolveManifestStreamPath(
+      it('should return fallback id and resolution type if the path is not found', async () => {
+        const result = await resolveManifestStreamPath(
           exampleManifestStreamV020IndexIdAndPath(),
           'missing',
         );
-        assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.resolutionType, 'fallback');
 
         const fallbackEnd = await resolveManifestStreamPath(
           exampleManifestStreamV020IndexAndPathAtTheEnd(),
           'missing',
         );
         assert.equal(
-          fallbackEnd,
+          fallbackEnd.id,
           'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI',
         );
+        assert.equal(fallbackEnd.resolutionType, 'fallback');
       });
     });
   });

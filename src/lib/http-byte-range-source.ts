@@ -72,6 +72,13 @@ export class HttpByteRangeSource implements ByteRangeSource {
           Range: buildRangeHeader(offset, offset + size - 1),
         },
         responseType: 'arraybuffer',
+        // PE-9081: bound axios's pre-buffered allocation. Without these,
+        // axios will fully buffer whatever the upstream sends before any
+        // post-hoc length check fires — heap pressure is realized before
+        // we get to throw. Setting these to `size` makes axios reject the
+        // body early, before the oversized allocation completes.
+        maxContentLength: size,
+        maxBodyLength: size,
       });
 
       // Verify we got a partial content response

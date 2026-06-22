@@ -80,6 +80,43 @@ const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_TX_TIMEOUT_MS = 5000;
 const PEER_CHUNK_REQUEST_TIMEOUT_MS = 500;
 
+/**
+ * Race a shared promise against an AbortSignal so a single caller can bail
+ * out without canceling the underlying work for other concurrent waiters.
+ * Used when the promise is held by a deduplication cache and should
+ * outlive any individual caller's signal.
+ */
+function abortablePromiseRace<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(
+      signal.reason ??
+        new DOMException('The operation was aborted', 'AbortError'),
+    );
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(
+        signal.reason ??
+          new DOMException('The operation was aborted', 'AbortError'),
+      );
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 // Peer queue management types
 interface ChunkPostTask {
   peer: string;
@@ -175,7 +212,7 @@ export class ArweaveCompositeClient
 
   // Trusted node request queue
   private trustedNodeRequestQueue: queueAsPromised<
-    AxiosRequestConfig,
+    AxiosRequestConfig & { signal?: AbortSignal },
     AxiosResponse
   >;
 
@@ -661,11 +698,25 @@ export class ArweaveCompositeClient
     }
   }
 
-  async trustedNodeRequest(request: AxiosRequestConfig) {
+  async trustedNodeRequest(
+    request: AxiosRequestConfig & { signal?: AbortSignal },
+  ) {
+    // Bail out early if the caller has already aborted (e.g. fastq just
+    // dispatched a job whose originating client request has since
+    // disconnected). This prevents zombie work from running and lets queue
+    // backlog drain naturally on slow upstreams.
+    request.signal?.throwIfAborted();
+
+    // Rate-limit bucket wait. Honor the abort signal so callers don't sit
+    // here unbounded when the bucket is empty.
     while (this.trustedNodeRequestBucket <= 0) {
+      request.signal?.throwIfAborted();
       await wait(100);
     }
+    request.signal?.throwIfAborted();
     this.trustedNodeRequestBucket--;
+
+    // Pass signal through so the HTTP request itself is cancellable.
     return this.trustedNodeAxios(request);
   }
 
@@ -954,8 +1005,12 @@ export class ArweaveCompositeClient
     }
   }
 
-  async getTxOffset(txId: string): Promise<JsonTransactionOffset> {
+  async getTxOffset(
+    txId: string,
+    signal?: AbortSignal,
+  ): Promise<JsonTransactionOffset> {
     this.failureSimulator.maybeFail();
+    signal?.throwIfAborted();
 
     const response = (
       await this.trustedNodeRequestQueue.push({
@@ -963,6 +1018,7 @@ export class ArweaveCompositeClient
         url: `/tx/${txId}/offset`,
         timeout: this.chunkGeometryTimeoutMs,
         raxConfig: { retry: this.chunkGeometryRetryCount },
+        signal,
       })
     ).data;
 
@@ -982,8 +1038,10 @@ export class ArweaveCompositeClient
   async getTxField<K extends keyof PartialJsonTransaction>(
     txId: string,
     field: K,
+    signal?: AbortSignal,
   ): Promise<PartialJsonTransaction[K]> {
     this.failureSimulator.maybeFail();
+    signal?.throwIfAborted();
 
     return (
       await this.trustedNodeRequestQueue.push({
@@ -991,6 +1049,7 @@ export class ArweaveCompositeClient
         url: `/tx/${txId}/${field}`,
         timeout: this.chunkGeometryTimeoutMs,
         raxConfig: { retry: this.chunkGeometryRetryCount },
+        signal,
       })
     ).data;
   }
@@ -1379,7 +1438,10 @@ export class ArweaveCompositeClient
     }
   }
 
-  async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
+  async getChunkByAny(
+    params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
+  ): Promise<Chunk> {
     const { txSize, absoluteOffset, dataRoot, relativeOffset } = params;
 
     const span = tracer.startSpan('ArweaveCompositeClient.getChunkByAny', {
@@ -1393,6 +1455,7 @@ export class ArweaveCompositeClient
 
     try {
       this.failureSimulator.maybeFail();
+      signal?.throwIfAborted();
 
       const cacheKey = JSON.stringify({
         absoluteOffset,
@@ -1401,7 +1464,15 @@ export class ArweaveCompositeClient
         relativeOffset,
       });
 
-      const result = await this.chunkPromiseCache.get(cacheKey);
+      // The chunkPromiseCache deduplicates concurrent fetches for the same
+      // chunk. We must NOT cancel the underlying fetch when *this* caller's
+      // signal aborts, because other callers may still want the result.
+      // Instead, race this caller's await against the abort signal so only
+      // the abandoned caller bails out while the shared fetch continues.
+      const cachedPromise = this.chunkPromiseCache.get(cacheKey);
+      const result = signal
+        ? await abortablePromiseRace(cachedPromise, signal)
+        : await cachedPromise;
 
       span.setAttributes({
         'chunk.source': result.source ?? 'unknown',
@@ -1419,9 +1490,12 @@ export class ArweaveCompositeClient
 
   async getChunkDataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkData> {
-    const { hash, chunk, source, sourceHost } =
-      await this.getChunkByAny(params);
+    const { hash, chunk, source, sourceHost } = await this.getChunkByAny(
+      params,
+      signal,
+    );
     return {
       hash,
       chunk,
@@ -1432,12 +1506,13 @@ export class ArweaveCompositeClient
 
   async getChunkMetadataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkMetadata> {
     this.failureSimulator.maybeFail();
 
     // Fetch the full chunk using the existing getChunkByAny method
     // This leverages the existing chunk caching
-    const chunk = await this.getChunkByAny(params);
+    const chunk = await this.getChunkByAny(params, signal);
 
     // Extract and return only the metadata portion
     const metadata: ChunkMetadata = {
@@ -1615,21 +1690,26 @@ export class ArweaveCompositeClient
   async getData({
     id,
     region,
+    signal,
   }: {
     id: string;
     region?: Region;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
     this.failureSimulator.maybeFail();
+    signal?.throwIfAborted();
 
     try {
       const [dataResponse, dataSizeResponse] = await Promise.all([
         this.trustedNodeRequestQueue.push({
           method: 'GET',
           url: `/tx/${id}/data`,
+          signal,
         }),
         this.trustedNodeRequestQueue.push({
           method: 'GET',
           url: `/tx/${id}/data_size`,
+          signal,
         }),
       ]);
 

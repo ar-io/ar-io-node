@@ -10,6 +10,7 @@ import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
 import { Ans104Parser } from '../lib/ans-104.js';
+import * as metrics from '../metrics.js';
 import {
   ContiguousDataSource,
   ItemFilter,
@@ -57,6 +58,10 @@ export class Ans104Unbundler {
     contiguousDataSource,
     dataItemIndexFilterString,
     workerCount,
+    getDataTimeoutMs,
+    streamTotalTimeoutMs,
+    parseJobTimeoutMs,
+    getDataWallClockTimeoutMs,
     maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
     shouldUnbundle = () => true,
     ans104Parser,
@@ -67,6 +72,10 @@ export class Ans104Unbundler {
     contiguousDataSource: ContiguousDataSource;
     dataItemIndexFilterString: string;
     workerCount: number;
+    getDataTimeoutMs?: number;
+    streamTotalTimeoutMs?: number;
+    parseJobTimeoutMs?: number;
+    getDataWallClockTimeoutMs?: number;
     maxQueueSize?: number;
     shouldUnbundle?: () => boolean;
     ans104Parser?: Ans104Parser;
@@ -81,6 +90,10 @@ export class Ans104Unbundler {
         contiguousDataSource,
         workerCount,
         dataItemIndexFilterString,
+        getDataTimeoutMs,
+        streamTotalTimeoutMs,
+        parseJobTimeoutMs,
+        getDataWallClockTimeoutMs,
       });
 
     this.workerCount = workerCount;
@@ -100,11 +113,15 @@ export class Ans104Unbundler {
     const log = this.log.child({ method: 'queueItem', id: item.id });
 
     if (this.workerCount === 0) {
+      metrics.bundlesUnbundleSkippedCounter.inc({ reason: 'no_workers' });
       log.warn('Skipping data item queuing due to no workers.');
       return;
     }
 
     if (!this.shouldUnbundle() && prioritized !== true) {
+      metrics.bundlesUnbundleSkippedCounter.inc({
+        reason: 'high_queue_depth',
+      });
       log.warn('Skipping data item queuing due to high queue depth.');
       return;
     }
@@ -118,6 +135,7 @@ export class Ans104Unbundler {
       this.queue.push({ item, bypassFilter });
       log.debug('Bundle queued.');
     } else {
+      metrics.bundlesUnbundleSkippedCounter.inc({ reason: 'queue_full' });
       log.debug('Skipping unbundle, queue is full.');
     }
   }
@@ -130,6 +148,8 @@ export class Ans104Unbundler {
     bypassFilter: boolean;
   }): Promise<void> {
     const log = this.log.child({ method: 'unbundle', id: item.id });
+    metrics.bundlesUnbundleStartedCounter.inc();
+    metrics.bundlesUnbundleInFlightGauge.inc();
     try {
       let rootTxId: string | undefined;
       if ('root_tx_id' in item && item.root_tx_id !== null) {
@@ -168,6 +188,8 @@ export class Ans104Unbundler {
         message: error?.message,
         stack: error?.stack,
       });
+    } finally {
+      metrics.bundlesUnbundleInFlightGauge.dec();
     }
   }
 

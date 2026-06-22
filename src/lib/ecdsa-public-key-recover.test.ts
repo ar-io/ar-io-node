@@ -46,14 +46,18 @@ describe('secp256k1OwnerFromTx', () => {
   });
 
   it('should recover the correct owner from a signed transaction', async () => {
-    // Initialize an Arweave instance.
     const arweave = Arweave.init({
       host: 'turbo-gateway.com',
       port: 443,
       protocol: 'https',
     });
 
-    // Create a transaction with some dummy data.
+    // Stub the network calls that arweave.createTransaction would otherwise
+    // make to populate `reward` and `last_tx`. The values are irrelevant to
+    // signature recovery; we just need a signed tx.
+    arweave.transactions.getPrice = async () => '0';
+    arweave.transactions.getTransactionAnchor = async () => '';
+
     const tx = await arweave.createTransaction(
       { data: 'Test data for signature recovery' },
       testWallet1PrivateKey,

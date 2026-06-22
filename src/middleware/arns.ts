@@ -87,7 +87,15 @@ export const createArnsMiddleware = ({
       if (config.APEX_TX_ID !== undefined) {
         req.dataId = config.APEX_TX_ID;
         req.manifestPath = manifestPath;
-        // Note: Not setting req.arns or headers for apex ID
+        // Note: Not setting req.arns or headers for apex ID.
+        // APEX_TX_ID is operator-controlled and may be rotated, so cap the
+        // Cache-Control max-age to bound upstream-cache poisoning rather
+        // than letting setDataHeaders apply the data-layer ladder (which
+        // is up to CACHE_STABLE_MAX_AGE with `immutable`). See PE-9072.
+        res.setHeader(
+          'Cache-Control',
+          `public, max-age=${config.CACHE_APEX_MAX_AGE}, must-revalidate`,
+        );
         dataHandler(req, res, next);
         return;
       }
@@ -153,8 +161,7 @@ export const createArnsMiddleware = ({
         const resolution = await nameResolver.resolve({
           name: arnsSubdomain,
         });
-        const { resolvedId, ttl, processId, resolvedAt, limit, index } =
-          resolution;
+        const { resolvedId, ttl, antId, resolvedAt, limit, index } = resolution;
         end();
         const resolutionDuration = Date.now() - resolutionStart;
         span.setAttribute('arns.resolution_duration_ms', resolutionDuration);
@@ -190,7 +197,7 @@ export const createArnsMiddleware = ({
             basename,
             record,
             ttl,
-            processId,
+            antId,
             resolvedAt,
             limit,
             index,
@@ -206,8 +213,14 @@ export const createArnsMiddleware = ({
           if (ttl !== undefined) {
             res.header(headerNames.arnsTtlSeconds, ttl.toString());
           }
-          if (processId !== undefined) {
-            res.header(headerNames.arnsProcessId, processId);
+          if (config.ARIO_ANT_PROGRAM_ID !== undefined) {
+            res.header(
+              headerNames.arnsAntProgramId,
+              config.ARIO_ANT_PROGRAM_ID,
+            );
+          }
+          if (antId !== undefined) {
+            res.header(headerNames.arnsAntId, antId);
           }
           if (resolvedAt !== undefined) {
             res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
@@ -255,6 +268,16 @@ export const createArnsMiddleware = ({
             // Use custom 404 transaction ID
             req.dataId = config.ARNS_NOT_FOUND_TX_ID;
             req.manifestPath = manifestPath;
+            // ArNS resolution failed — the URL→data-id binding here is
+            // transient (a future ANT update may make this name resolve).
+            // Cap Cache-Control so upstream proxies don't pin the custom
+            // 404 placeholder. Without this, setDataHeaders falls through
+            // to the data-layer ladder (potentially CACHE_STABLE_MAX_AGE
+            // with `immutable`). See PE-9072.
+            res.setHeader(
+              'Cache-Control',
+              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+            );
           } else if (config.ARNS_NOT_FOUND_ARNS_NAME !== undefined) {
             // Resolve custom 404 ArNS name
             const custom404Resolution = await nameResolver.resolve({
@@ -263,6 +286,11 @@ export const createArnsMiddleware = ({
             if (custom404Resolution.resolvedId !== undefined) {
               req.dataId = custom404Resolution.resolvedId;
               req.manifestPath = manifestPath;
+              // Same rationale as ARNS_NOT_FOUND_TX_ID above. See PE-9072.
+              res.setHeader(
+                'Cache-Control',
+                `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+              );
             } else {
               sendNotFound(res);
               return;

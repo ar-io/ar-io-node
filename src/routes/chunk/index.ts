@@ -15,6 +15,9 @@ import log from '../../log.js';
 import {
   arweaveClient,
   chunkRetrievalService,
+  chunkDataStore,
+  chunkMetadataStore,
+  db,
   rateLimiter,
   paymentProcessor,
 } from '../../system.js';
@@ -73,6 +76,9 @@ chunkRouter.post(
   '/chunk',
   createChunkPostHandler({
     arweaveClient,
+    chunkDataStore,
+    chunkMetadataStore,
+    chunkPlacementIndex: db,
     log: log.child({ class: 'ChunkPostHandler' }),
   }),
 );

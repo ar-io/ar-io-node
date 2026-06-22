@@ -157,8 +157,7 @@ CREATE INDEX new_data_items_height_indexed_at_idx ON new_data_items (height, ind
 CREATE INDEX bundle_data_items_root_transaction_id_idx ON bundle_data_items (root_transaction_id);
 CREATE INDEX stable_data_items_indexed_at_idx ON stable_data_items (indexed_at);
 CREATE INDEX root_transaction_id_idx ON bundles (root_transaction_id);
-CREATE INDEX import_attempt_last_retried_idx ON bundles (import_attempt_count, last_retried_at)
-WHERE last_fully_indexed_at IS NULL;
+CREATE INDEX bundles_active_retry_priority_idx ON bundles (last_fully_indexed_at, retry_attempt_count, last_retried_at);
 PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 CREATE TABLE bundle_formats (
