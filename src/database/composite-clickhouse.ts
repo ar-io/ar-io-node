@@ -888,8 +888,10 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     // SQLite leg: rejection degrades same as today.
     const sqliteSettled = await sqliteSettledPromise;
     let sqliteEdges: GqlTransactionsResult['edges'] = [];
+    let sqliteHasNextPage = false;
     if (sqliteSettled.status === 'fulfilled') {
       sqliteEdges = sqliteSettled.value.edges;
+      sqliteHasNextPage = sqliteSettled.value.pageInfo.hasNextPage;
       if (
         sqliteSettled.value.warnings !== undefined &&
         sqliteSettled.value.warnings.length > 0
@@ -966,9 +968,26 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       return bufA.compare(bufB) * sortOrderModifier;
     });
 
+    // `hasNextPage` must reflect whether any leg has rows BEYOND this page,
+    // derived from each leg's RAW result before the cross-leg id-dedup above.
+    // Both ClickHouse legs fetch `pageSize + 1` rows (see buildChTransactionsSql),
+    // so a leg that comes back with more than `pageSize` rows has more matching
+    // data to give. Relying on the deduped `edges.length > pageSize` alone
+    // under-reports: when duplicate ids collapse the merged set to `pageSize` or
+    // fewer — e.g. stale rows that share an `id` but differ on
+    // `block_transaction_index`, which the SQL's full-key `LIMIT 1 BY` does not
+    // fold — the page falsely signals completeness and every later page is
+    // silently stranded. Erring toward `true` is safe: the worst case is one
+    // extra page fetch that comes back empty.
+    const hasNextPage =
+      edges.length > pageSize ||
+      stableTxs.length > pageSize ||
+      unstableTxs.length > pageSize ||
+      sqliteHasNextPage;
+
     return {
       pageInfo: {
-        hasNextPage: edges.length > pageSize,
+        hasNextPage,
       },
       edges: edges.slice(0, pageSize),
       ...(warnings.length > 0 ? { warnings } : {}),

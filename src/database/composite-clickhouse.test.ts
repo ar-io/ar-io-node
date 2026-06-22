@@ -412,6 +412,47 @@ describe('CompositeClickHouseDatabase', () => {
       assert.equal(result.edges.length, 2);
       assert.equal(result.pageInfo.hasNextPage, false);
     });
+
+    it('is true when a full leg collapses to pageSize after id-dedup (PE-9124)', async () => {
+      // A single leg returns its full `pageSize + 1` rows, but a stale
+      // duplicate (same id, different block_transaction_index — the SQL's
+      // full-key `LIMIT 1 BY` does not fold it) collapses the deduped set to
+      // exactly `pageSize`. hasNextPage MUST stay true: the leg came back full,
+      // so more matching rows exist beyond this page. Counting deduped edges
+      // alone would report `2 > 2 == false` and silently strand every later
+      // page.
+      const composite = buildComposite({
+        sqlite,
+        chRowsByLeg: {
+          stable: [
+            chRow({
+              id: id('dupitem'),
+              height: 1,
+              blockTransactionIndex: 0,
+              isDataItem: true,
+            }),
+            chRow({
+              id: id('dupitem'),
+              height: 1,
+              blockTransactionIndex: 12,
+              isDataItem: true,
+            }),
+            chRow({ id: id('itemb'), height: 2 }),
+          ],
+        },
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 2,
+        sortOrder: 'HEIGHT_ASC',
+      });
+      assert.equal(result.edges.length, 2);
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        [id('dupitem'), id('itemb')],
+      );
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
   });
 
   describe('SQLite fallback behavior', () => {
