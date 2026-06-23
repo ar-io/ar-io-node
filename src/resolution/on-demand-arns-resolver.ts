@@ -6,8 +6,7 @@
  */
 import winston from 'winston';
 
-import { isValidDataId } from '../lib/validation.js';
-import { isValidCid } from '../lib/ipfs-cid.js';
+import { classifyResolvedTarget } from './resolved-target.js';
 import { NameResolution, NameResolver } from '../types.js';
 import { ArNSNameDataWithName, SolanaANTReadable } from '@ar.io/sdk';
 import { address, type Rpc, type SolanaRpcApiMainnet } from '@solana/kit';
@@ -118,20 +117,13 @@ export class OnDemandArNSResolver implements NameResolver {
       const ttl = antRecord.ttlSeconds;
       const index = antRecord.index;
 
-      // ANT records carry a `targetProtocol` (0 = Arweave, 1 = IPFS). For
-      // IPFS records the `transactionId` field holds an IPFS CID rather than
-      // an Arweave TX ID, so validate it against the CID format instead of
-      // the 43-char Arweave-ID format. (`targetProtocol` may be absent on
-      // older ANTs, in which case it defaults to Arweave.)
-      const protocol = antRecord.targetProtocol === 1 ? 'ipfs' : 'arweave';
-
-      if (protocol === 'ipfs') {
-        if (!isValidCid(resolvedId)) {
-          throw new Error('Invalid resolved IPFS CID');
-        }
-      } else if (!isValidDataId(resolvedId)) {
-        throw new Error('Invalid resolved data ID');
-      }
+      // Classify + validate the target against the ANT record's
+      // `targetProtocol` (0 = Arweave, 1 = IPFS). Throws if the id doesn't
+      // match the format for its protocol (treated as "name didn't resolve").
+      const protocol = classifyResolvedTarget(
+        resolvedId,
+        antRecord.targetProtocol,
+      );
       return {
         name,
         resolvedId,

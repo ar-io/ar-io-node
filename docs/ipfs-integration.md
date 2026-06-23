@@ -499,6 +499,21 @@ hits), so the name->CID binding and the served bytes are both attested.
   treated as Arweave. Keep `on-demand` ahead of `gateway` in
   `ARNS_RESOLVER_PRIORITY_ORDER` for IPFS-targeted names.
 
+### Root and apex names
+
+"Root" means three different things; only two route to IPFS:
+
+- **A name's root (`@`) record** -- e.g. `my-name.gateway.tld` with no
+  undername. The `@` record is just the `'@'` undername and goes through the
+  same resolution + routing, so an IPFS `@` record serves IPFS. ✅
+- **Gateway apex via `APEX_ARNS_NAME`** -- when the bare apex host has
+  `APEX_ARNS_NAME` set, the middleware resolves that name through the normal
+  path, so if its record targets IPFS the apex serves IPFS. ✅
+- **Gateway apex via `APEX_TX_ID`** -- a fixed id served directly to the Arweave
+  data handler, bypassing resolution and protocol routing. It is Arweave-only;
+  a CID there will not serve. To serve IPFS at the apex, use `APEX_ARNS_NAME`
+  pointing at an ANT whose `@` record targets IPFS. ❌
+
 ## Differences from Arweave Data Serving
 
 | Aspect | Arweave | IPFS |
