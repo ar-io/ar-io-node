@@ -1,8 +1,10 @@
 # ClickHouse GQL `TOO_MANY_ROWS` on owner-filtered queries
 
 **Date:** 2026-06-25
-**Status:** Investigation complete; fix proposed, not yet implemented
-**Measured on:** canary gateway (gw1), ClickHouse 26.3.9, `default.transactions`
+**Status:** Implemented behind `CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED`
+(default off) and validated on a canary gateway (PR #796). The dedicated
+owner-ordered table remains deferred (see below).
+**Measured on:** a canary gateway, ClickHouse 26.3.9, `default.transactions`
 (501.8M rows, 135 GiB data + 67 GiB `owner_projection`, 92 active parts)
 
 ## Summary

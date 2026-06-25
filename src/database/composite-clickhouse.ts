@@ -618,7 +618,14 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     const entityTypeTags = tags.filter(
       (tag) => tag.name === ENTITY_TYPE_TAG_NAME,
     );
-    if (entityTypeTags.length === 0) return false;
+    // Require an Entity-Type filter and NO other tag types. An additional
+    // non-Entity-Type tag (e.g. App-Name) only narrows the result, but it's an
+    // untested shape and the agreed contract excludes owner+other-tag queries,
+    // so fall back to the default plan rather than route it through the
+    // projection.
+    if (entityTypeTags.length === 0 || entityTypeTags.length !== tags.length) {
+      return false;
+    }
     return entityTypeTags.every(
       (tag) =>
         tag.values.length > 0 &&
@@ -839,8 +846,13 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     const seen = new Set<string>();
     const descending = sortOrder === 'HEIGHT_DESC';
     // Current leading height (inclusive): top of the range for DESC, bottom
-    // for ASC.
+    // for ASC. Walks toward the trailing edge as windows are drained.
     let edge = descending ? hi : lo;
+    // Running cursor: starts at the request cursor and advances to the last
+    // row returned. A window holds at most `target` raw rows per fetch, so if
+    // it contains more matching rows than that, the advanced cursor drains the
+    // remainder across iterations instead of stranding them when we move on.
+    let runningCursor = cursor;
     let windowCount = 0;
 
     while (
@@ -862,7 +874,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       try {
         rows = await this.queryStableWindow({
           pageSize,
-          cursor,
+          cursor: runningCursor,
           sortOrder,
           ids,
           recipients,
@@ -887,9 +899,22 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         seen.add(tx.id);
         collected.push(tx);
       }
-
       windowCount += 1;
-      edge = descending ? windowLo - 1 : windowHi + 1;
+
+      // Advance the cursor to the last (lowest-priority) row so a partially
+      // consumed window resumes below it next iteration.
+      if (rows.length > 0) {
+        runningCursor = encodeTransactionGqlCursor(rows[rows.length - 1]);
+      }
+
+      // Only drop to the next window once this one is drained. A full
+      // `target`-sized batch means there may be more matching rows below the
+      // cursor in the SAME window (dedup can leave collected < target), so keep
+      // the edge and let the advanced cursor pull the rest. A short batch means
+      // the window beyond the cursor is exhausted.
+      if (rows.length < target) {
+        edge = descending ? windowLo - 1 : windowHi + 1;
+      }
     }
 
     return collected.slice(0, target);

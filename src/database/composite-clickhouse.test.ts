@@ -685,6 +685,122 @@ describe('CompositeClickHouseDatabase', () => {
       );
       assert.ok(!queries.some((q) => q.includes('optimize_read_in_order = 0')));
     });
+
+    it('excludes owner + Entity-Type + another tag (owner+other-tag)', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+      const queries: string[] = [];
+      let stableCalls = 0;
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          queries.push(sqlStr);
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          stableCalls += 1;
+          const err: any = new Error('Code: 158. TOO_MANY_ROWS');
+          err.code = '158';
+          throw err;
+        },
+      };
+
+      await assert.rejects(
+        composite.getGqlTransactions({
+          pageSize: 2,
+          owners: [id('owner')],
+          tags: [
+            { name: 'Entity-Type', values: ['drive'] },
+            { name: 'App-Name', values: ['ArDrive'] },
+          ],
+        }),
+        /158|TOO_MANY_ROWS/,
+      );
+      // An extra non-Entity-Type tag disqualifies the query: no projection
+      // settings, no windowing — it plans as it would without the feature.
+      assert.equal(stableCalls, 1);
+      assert.ok(
+        queries.some((q) => q.includes('optimize_use_projections = 0')),
+      );
+      assert.ok(!queries.some((q) => q.includes('optimize_read_in_order = 0')));
+    });
+
+    it('drains a dense window via cursor instead of stranding rows', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+      const queries: string[] = [];
+      let stableCalls = 0;
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          queries.push(sqlStr);
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          stableCalls += 1;
+          if (stableCalls === 1) {
+            const err: any = new Error('Code: 158. TOO_MANY_ROWS');
+            err.code = '158';
+            throw err;
+          }
+          if (stableCalls === 2) {
+            // A full target-sized batch (pageSize + 1 = 3) whose dedup leaves
+            // only 2 distinct ids — the old code advanced past the window here,
+            // stranding the rows below.
+            return {
+              json: async () => ({
+                data: [
+                  chRow({
+                    id: id('p'),
+                    height: 95000,
+                    blockTransactionIndex: 0,
+                  }),
+                  chRow({
+                    id: id('p'),
+                    height: 95000,
+                    blockTransactionIndex: 1,
+                  }),
+                  chRow({ id: id('q'), height: 94000 }),
+                ],
+              }),
+            };
+          }
+          // Continuation within the SAME window, below the advanced cursor.
+          return {
+            json: async () => ({
+              data: [
+                chRow({ id: id('r'), height: 93000 }),
+                chRow({ id: id('s'), height: 92000 }),
+              ],
+            }),
+          };
+        },
+      };
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 2,
+        owners: [id('owner')],
+        tags: [{ name: 'Entity-Type', values: ['drive'] }],
+        maxHeight: 100000,
+      });
+
+      // The dense first window forced a cursor-driven continuation (>=3 stable
+      // calls), and the continuation resumed BELOW the prior batch's last row
+      // (height 94000) rather than jumping to a fresh window — so the rows that
+      // would otherwise be stranded stay reachable.
+      assert.ok(stableCalls >= 3, `expected continuation, saw ${stableCalls}`);
+      const stableQs = queries.filter((q) => q.includes('FROM transactions'));
+      assert.ok(
+        stableQs.slice(1).some((q) => q.includes('94000')),
+        'expected a continuation query carrying the advanced cursor (94000)',
+      );
+      assert.equal(result.edges.length, 2);
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
   });
 
   describe('streaming-disabled (queryUnstableHead=false)', () => {
