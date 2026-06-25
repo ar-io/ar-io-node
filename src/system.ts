@@ -369,6 +369,10 @@ export const gqlQueryable: GqlQueryable = (() => {
           skipSqliteReads:
             config.CLICKHOUSE_STREAMING_ENABLED &&
             config.CLICKHOUSE_GQL_SKIP_SQLITE_READS,
+          ownerProjectionRoutingEnabled:
+            config.CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED,
+          ownerProjectionEntityTypes:
+            config.CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES,
           ...(config.CLICKHOUSE_STREAMING_ENABLED
             ? {
                 sqliteCircuitBreakerOptions: {
