@@ -2238,6 +2238,7 @@ export class ArweaveCompositeClient
     const cacheKey = `block_for_offset_${targetOffset}`;
     const cached = this.blockCache.get(cacheKey);
     if (cached) {
+      metrics.blockOffsetResolutionCounter.inc({ outcome: 'cache_hit' });
       this.log.debug('Block search cache hit', {
         targetOffset,
         cachedBlockHeight: cached.height,
@@ -2273,6 +2274,9 @@ export class ArweaveCompositeClient
             block !== null &&
             parseInt(block.weave_size) >= targetOffset
           ) {
+            metrics.blockOffsetResolutionCounter.inc({
+              outcome: 'local_index_hit',
+            });
             this.blockCache.set(cacheKey, block);
             this.log.debug('Resolved block for offset via local index', {
               targetOffset,
@@ -2281,6 +2285,22 @@ export class ArweaveCompositeClient
             });
             return block;
           }
+          // Index bracketed the offset but the fetched header no longer covers
+          // it (e.g. a reorg under the stable boundary) — don't trust it.
+          metrics.blockOffsetResolutionCounter.inc({
+            outcome: 'fallback_stale',
+          });
+        } else if (local.height === undefined) {
+          // No stable block reaches the offset (e.g. the unstable chain tip).
+          metrics.blockOffsetResolutionCounter.inc({
+            outcome: 'fallback_miss',
+          });
+        } else {
+          // Candidate found but not tightly bracketed (predecessor missing or
+          // not below the offset) — a gap could hide the true container.
+          metrics.blockOffsetResolutionCounter.inc({
+            outcome: 'fallback_untight',
+          });
         }
         this.log.debug(
           'Local block-offset index did not confidently resolve; ' +
@@ -2291,12 +2311,17 @@ export class ArweaveCompositeClient
         if (error?.name === 'AbortError') {
           throw error;
         }
+        metrics.blockOffsetResolutionCounter.inc({ outcome: 'fallback_error' });
         this.log.debug(
           'Local block-offset index lookup failed; ' +
             'falling back to chain binary search',
           { targetOffset, error: error?.message },
         );
       }
+    } else {
+      metrics.blockOffsetResolutionCounter.inc({
+        outcome: 'fallback_no_index',
+      });
     }
 
     try {
