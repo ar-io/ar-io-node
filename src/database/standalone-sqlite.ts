@@ -89,6 +89,12 @@ interface TxByOffsetResult {
   data_size: number | undefined;
 }
 
+interface BlockByWeaveOffsetResult {
+  height: number | undefined;
+  weaveSize: number | undefined;
+  prevWeaveSize: number | undefined;
+}
+
 export function encodeTransactionGqlCursor({
   height,
   blockTransactionIndex,
@@ -1108,6 +1114,24 @@ export class StandaloneSqliteDatabaseWorker {
       id: result.id ? toB64Url(result.id) : undefined,
       offset: result.offset,
       data_size: result.data_size,
+    };
+  }
+
+  getBlockByWeaveOffset(offset: number): BlockByWeaveOffsetResult {
+    const result = this.stmts.core.selectBlockHeightByWeaveOffset.get({
+      offset,
+    });
+    if (result === undefined) {
+      return {
+        height: undefined,
+        weaveSize: undefined,
+        prevWeaveSize: undefined,
+      };
+    }
+    return {
+      height: result.height ?? undefined,
+      weaveSize: result.weave_size ?? undefined,
+      prevWeaveSize: result.prev_weave_size ?? undefined,
     };
   }
 
@@ -3506,6 +3530,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getTxByOffset', [offset]);
   }
 
+  getBlockByWeaveOffset(offset: number): Promise<BlockByWeaveOffsetResult> {
+    return this.queueRead('core', 'getBlockByWeaveOffset', [offset]);
+  }
+
   saveTxOffset(id: string, offset: number) {
     return this.queueWrite('core', 'saveTxOffset', [id, offset]);
   }
@@ -4095,6 +4123,10 @@ if (!isMainThread) {
         case 'getTxByOffset':
           const tx = worker.getTxByOffset(args[0]);
           parentPort?.postMessage(tx);
+          break;
+        case 'getBlockByWeaveOffset':
+          const blockByWeaveOffset = worker.getBlockByWeaveOffset(args[0]);
+          parentPort?.postMessage(blockByWeaveOffset);
           break;
         case 'saveTxOffset':
           worker.saveTxOffset(args[0], args[1]);

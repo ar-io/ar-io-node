@@ -344,6 +344,61 @@ describe('StandaloneSqliteDatabase', () => {
       const txByOffsetResult10 = await db.getTxByOffset(201);
       assert.equal(txByOffsetResult10.id, undefined);
     });
+
+    it('resolves an absolute weave offset to its containing stable block via getBlockByWeaveOffset', async () => {
+      const insertBlock = (height: number, weaveSize: number) =>
+        coreDb
+          .prepare(
+            `INSERT INTO stable_blocks (
+               height, nonce, hash, block_timestamp, diff, last_retarget,
+               reward_pool, block_size, weave_size, tx_count, missing_tx_count
+             ) VALUES (
+               @height, @nonce, @hash, 0, '0', '0',
+               '0', 1, @weave_size, 0, 0
+             )`,
+          )
+          .run({
+            height,
+            nonce: Buffer.alloc(1),
+            hash: Buffer.alloc(1),
+            weave_size: weaveSize,
+          });
+
+      // Contiguous run: weave_size is cumulative-to-end-of-block.
+      insertBlock(10, 100);
+      insertBlock(11, 200);
+      insertBlock(12, 200); // empty block: same cumulative weave_size as 11
+      insertBlock(13, 350);
+
+      // Offset inside block 11 (100 < 150 <= 200): tightly bracketed by block 10.
+      const mid = await db.getBlockByWeaveOffset(150);
+      assert.equal(mid.height, 11);
+      assert.equal(mid.weaveSize, 200);
+      assert.equal(mid.prevWeaveSize, 100);
+
+      // Offset exactly at block 11's end boundary resolves to block 11.
+      const boundary = await db.getBlockByWeaveOffset(200);
+      assert.equal(boundary.height, 11);
+
+      // Just past block 11 lands in block 13 (block 12 added no bytes).
+      const next = await db.getBlockByWeaveOffset(201);
+      assert.equal(next.height, 13);
+      assert.equal(next.prevWeaveSize, 200);
+
+      // Gap guard: predecessor missing -> prevWeaveSize is undefined so the
+      // caller will not trust the local result and falls back to the chain.
+      insertBlock(20, 1000);
+      insertBlock(22, 1200); // height 21 intentionally absent
+      const gapped = await db.getBlockByWeaveOffset(1100);
+      assert.equal(gapped.height, 22);
+      assert.equal(gapped.prevWeaveSize, undefined);
+
+      // Offset beyond the highest indexed block returns no row.
+      const beyond = await db.getBlockByWeaveOffset(99999);
+      assert.equal(beyond.height, undefined);
+      assert.equal(beyond.weaveSize, undefined);
+      assert.equal(beyond.prevWeaveSize, undefined);
+    });
   });
 
   describe('getTransactionAttributes', () => {
