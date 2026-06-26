@@ -86,6 +86,25 @@ export const chunkServeDeadlineExceededCounter = new promClient.Counter({
   labelNames: ['method'],
 });
 
+// Outcome of resolving an absolute weave offset to its containing block in
+// ArweaveCompositeClient.binarySearchBlocks. `local_index_hit` means the local
+// stable_blocks index resolved and verified the block with no chain walk; every
+// other `outcome` value falls through to the chain binary search. During soak,
+// hit_rate = local_index_hit / (sum of all outcomes except cache_hit); the
+// fallback_* labels explain why the fast path was not taken.
+//   - cache_hit: returned from the in-memory block cache before either path
+//   - local_index_hit: local index bracketed + fetched block re-verified
+//   - fallback_miss: no stable block reaches the offset (e.g. unstable tip)
+//   - fallback_untight: candidate found but predecessor missing/not below offset
+//   - fallback_stale: fetched block no longer covers the offset (e.g. reorg)
+//   - fallback_error: index lookup failed (non-abort)
+//   - fallback_no_index: no local index wired (should not occur in production)
+export const blockOffsetResolutionCounter = new promClient.Counter({
+  name: 'block_offset_resolution_total',
+  help: 'Count of offset->block resolutions by outcome of the local stable_blocks fast path',
+  labelNames: ['outcome'],
+});
+
 //
 // GraphQL root TX lookup batching metrics
 //
