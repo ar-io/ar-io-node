@@ -62,6 +62,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private readonly fallbackToBasePath: boolean;
   private readonly maxHopsAllowed: number;
   private readonly rangeAccept200MaxOffset: number;
+  private readonly sendUntrustedParams: boolean;
   private readonly agents: Map<string, http.Agent | https.Agent> = new Map();
 
   constructor({
@@ -73,6 +74,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     fallbackToBasePath = false,
     maxHopsAllowed = MAX_DATA_HOPS,
     rangeAccept200MaxOffset = config.GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET,
+    sendUntrustedParams = config.TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
@@ -82,6 +84,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     fallbackToBasePath?: boolean;
     maxHopsAllowed?: number;
     rangeAccept200MaxOffset?: number;
+    sendUntrustedParams?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
@@ -90,6 +93,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     this.fallbackToBasePath = fallbackToBasePath;
     this.maxHopsAllowed = maxHopsAllowed;
     this.rangeAccept200MaxOffset = rangeAccept200MaxOffset;
+    this.sendUntrustedParams = sendUntrustedParams;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -135,6 +139,10 @@ export class GatewaysDataSource implements ContiguousDataSource {
    * on those unknown params. Since the header bag is a strict superset of
    * the params, this drops no provenance. Loop/hop protection and response
    * trust marking are independent of the params and unaffected.
+   *
+   * The `TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS` kill-switch (default off)
+   * reverts to the legacy behavior of sending the query params to every
+   * gateway, including untrusted ones.
    */
   async getData({
     id,
@@ -226,9 +234,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
               continue;
             }
 
-            // Gates the outbound provenance query params and marks response
-            // trust; see getData() TSDoc for the trust-dependent contract.
+            // Marks response trust and gates the outbound provenance query
+            // params; see getData() TSDoc for the trust-dependent contract.
             const gatewayTrusted = this.gatewayTrust.get(gatewayUrl) ?? true;
+            // Untrusted gateways omit the ar-io-* query params unless the
+            // kill-switch (TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS) forces the
+            // legacy always-send behavior.
+            const sendProvenanceParams =
+              gatewayTrusted || this.sendUntrustedParams;
 
             const isHttps = gatewayUrl.startsWith('https://');
             const agent = this.getAgent(gatewayUrl);
@@ -337,7 +350,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   // Trust-dependent provenance params; see getData() TSDoc.
                   // `undefined` (not `{}`) ensures axios appends no query
                   // string at all for untrusted gateways.
-                  params: gatewayTrusted
+                  params: sendProvenanceParams
                     ? {
                         'ar-io-hops': requestAttributesHeaders?.attributes.hops,
                         'ar-io-origin':

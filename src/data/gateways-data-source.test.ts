@@ -430,6 +430,43 @@ describe('GatewayDataSource', () => {
       assert.equal(data.trusted, true);
     });
 
+    it('should send ar-io-* query params to untrusted gateways when the kill-switch is set', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+          data: axiosStreamData,
+        };
+      };
+
+      // TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS=true reverts to legacy behavior.
+      const legacyDataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway.domain': { priority: 1, trusted: false },
+        },
+        sendUntrustedParams: true,
+      });
+
+      const data = await legacyDataSource.getData({
+        id: 'some-id',
+        requestAttributes,
+      });
+
+      assert.equal(
+        requestParams.params['ar-io-hops'],
+        requestAttributes.hops + 1,
+      );
+      assert.equal(
+        requestParams.params['ar-io-origin'],
+        requestAttributes.origin,
+      );
+      // Trust marking is independent of the param kill-switch.
+      assert.equal(data.trusted, false);
+    });
+
     it('should return hops 1 in the response if not provided', async () => {
       const data = await dataSource.getData({
         id: 'some-id',
