@@ -109,6 +109,13 @@ export interface SolanaProgramIds {
 }
 
 /**
+ * IPFS configuration exposed in the info endpoint.
+ */
+export interface IpfsInfo {
+  enabled: true;
+}
+
+/**
  * Complete AR.IO info endpoint response structure.
  */
 export interface ArIoInfoResponse {
@@ -122,6 +129,7 @@ export interface ArIoInfoResponse {
   rateLimiter?: RateLimiterInfo;
   x402?: X402Info;
   httpsig?: HttpsigInfo;
+  ipfs?: IpfsInfo;
 }
 
 /**
@@ -154,6 +162,9 @@ export interface ArIoInfoConfig {
   httpsig?: {
     algorithm: string;
     solanaAddress: string;
+  };
+  ipfs?: {
+    enabled: boolean;
   };
 }
 
@@ -285,6 +296,10 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
       algorithm: config.httpsig.algorithm,
       solanaAddress: config.httpsig.solanaAddress,
     };
+  }
+
+  if (config.ipfs?.enabled) {
+    response.ipfs = { enabled: true };
   }
 
   return response;

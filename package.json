@@ -59,6 +59,7 @@
     "memoizee": "^0.4.17",
     "middleware-async": "^1.4.0",
     "msgpackr": "^1.11.5",
+    "multiformats": "^13.1.0",
     "node-cache": "^5.1.2",
     "opossum": "^8.4.0",
     "opossum-prometheus": "^0.4.0",

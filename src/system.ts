@@ -1790,6 +1790,53 @@ if (dataVerificationWorker !== undefined) {
   dataVerificationWorker.start();
 }
 
+//
+// IPFS subsystem (conditionally initialized)
+//
+
+import { KuboDataSource } from './ipfs/kubo-data-source.js';
+import { IpfsFsCache } from './ipfs/ipfs-cache.js';
+import { IpfsService } from './ipfs/ipfs-service.js';
+import { createIpfsRateLimiter } from './ipfs/ipfs-rate-limiter.js';
+import { RateLimiter } from './limiter/types.js';
+
+export let ipfsService: IpfsService | undefined;
+export let ipfsRateLimiter: RateLimiter | undefined;
+
+if (config.IPFS_ENABLED) {
+  log.info('IPFS subsystem enabled, initializing...');
+
+  const kuboDataSource = new KuboDataSource({
+    log,
+    kuboUrl: config.IPFS_KUBO_URL,
+    requestTimeoutMs: config.IPFS_KUBO_REQUEST_TIMEOUT_MS,
+    streamStallTimeoutMs: config.IPFS_STREAM_STALL_TIMEOUT_MS,
+  });
+
+  const ipfsCache = new IpfsFsCache({
+    log,
+    basePath: config.IPFS_CACHE_PATH,
+    maxSizeBytes: config.IPFS_CACHE_MAX_SIZE_BYTES,
+    eventEmitter,
+  });
+
+  ipfsService = new IpfsService({
+    log,
+    dataSource: kuboDataSource,
+    cache: ipfsCache,
+    blockListValidator: dataBlockListValidator,
+    maxResponseSizeBytes: config.IPFS_MAX_RESPONSE_SIZE_BYTES,
+  });
+
+  ipfsRateLimiter = createIpfsRateLimiter();
+
+  log.info('IPFS subsystem initialized', {
+    kuboUrl: config.IPFS_KUBO_URL,
+    cachePath: config.IPFS_CACHE_PATH,
+    maxCacheSize: config.IPFS_CACHE_MAX_SIZE_BYTES,
+  });
+}
+
 export const blockedNamesCache = new BlockedNamesCache({
   log,
   cacheTTL: 3600,

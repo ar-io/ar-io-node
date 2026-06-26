@@ -1,0 +1,72 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "IPFS Requests/sec",
+      "type": "timeseries",
+      "targets": [{ "expr": "sum(rate(ipfs_requests_total[5m])) by (status)", "legendFormat": "{{status}}" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "title": "IPFS Cache Hit Rate",
+      "type": "stat",
+      "targets": [{ "expr": "sum(rate(ipfs_cache_hit_total[5m])) / clamp_min(sum(rate(ipfs_cache_hit_total[5m])) + sum(rate(ipfs_cache_miss_total[5m])), 1)", "legendFormat": "hit rate" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "title": "IPFS Request Duration (p50/p95/p99)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(ipfs_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(ipfs_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(ipfs_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "title": "IPFS Content Size Distribution",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(ipfs_content_size_bytes_bucket[5m])) by (le))", "legendFormat": "p50 size" },
+        { "expr": "histogram_quantile(0.95, sum(rate(ipfs_content_size_bytes_bucket[5m])) by (le))", "legendFormat": "p95 size" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "title": "IPFS Blocked Requests",
+      "type": "timeseries",
+      "targets": [{ "expr": "sum(rate(ipfs_blocked_total[5m]))", "legendFormat": "blocked/sec" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "title": "IPFS by Route Type",
+      "type": "timeseries",
+      "targets": [{ "expr": "sum(rate(ipfs_requests_total[5m])) by (route_type)", "legendFormat": "{{route_type}}" }]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["ipfs", "ar-io"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "AR.IO IPFS",
+  "uid": "ar-io-ipfs"
+}

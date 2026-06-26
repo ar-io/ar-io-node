@@ -43,6 +43,9 @@ export const TRIGGER_HEADERS = new Set([
   'x-arweave-chunk-data-root',
   'x-arweave-chunk-tx-id',
   'x-ar-io-chunk-source-type',
+  // IPFS headers — presence of x-ipfs-path triggers signing for IPFS responses
+  'x-ipfs-path',
+  'x-ar-io-source',
 ]);
 
 /**
@@ -63,6 +66,8 @@ export const TRIGGER_HEADERS = new Set([
 export const CO_SIGNABLE_HEADERS = new Set([
   'content-type',
   'content-digest',
+  'x-cache',
+  'etag',
   'x-ar-io-root-data-item-offset',
   'x-ar-io-root-data-offset',
   'x-ar-io-root-item-offset',

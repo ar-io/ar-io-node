@@ -2927,3 +2927,67 @@ if (ENABLE_SAMPLING_DATA_SOURCE) {
     );
   }
 }
+
+//
+// IPFS
+//
+
+export const IPFS_ENABLED =
+  env.varOrDefault('IPFS_ENABLED', 'false') === 'true';
+
+export const IPFS_KUBO_URL = env.varOrDefault(
+  'IPFS_KUBO_URL',
+  'http://kubo:8080',
+);
+
+export const IPFS_KUBO_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
+  'IPFS_KUBO_REQUEST_TIMEOUT_MS',
+  30000,
+);
+
+export const IPFS_STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
+  'IPFS_STREAM_STALL_TIMEOUT_MS',
+  30000,
+);
+
+export const IPFS_CACHE_PATH = env.varOrDefault(
+  'IPFS_CACHE_PATH',
+  'data/ipfs-cache',
+);
+
+export const IPFS_CACHE_MAX_SIZE_BYTES = env.positiveIntOrDefault(
+  'IPFS_CACHE_MAX_SIZE_BYTES',
+  10 * 1024 * 1024 * 1024, // 10 GB
+);
+
+// Reserved for future cache cleanup worker. Currently unused — LRU eviction
+// in the in-memory index handles cache bounding. After restarts, disk usage
+// may temporarily exceed IPFS_CACHE_MAX_SIZE_BYTES until the index rebuilds.
+export const IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS = env.positiveIntOrDefault(
+  'IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS',
+  3600,
+);
+
+export const IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET = env.positiveIntOrDefault(
+  'IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET',
+  100000,
+);
+
+export const IPFS_RATE_LIMITER_IP_REFILL_PER_SEC = env.positiveIntOrDefault(
+  'IPFS_RATE_LIMITER_IP_REFILL_PER_SEC',
+  20,
+);
+
+export const IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET =
+  env.positiveIntOrDefault(
+    'IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET',
+    1000000,
+  );
+
+export const IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC =
+  env.positiveIntOrDefault('IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC', 100);
+
+export const IPFS_MAX_RESPONSE_SIZE_BYTES = env.positiveIntOrDefault(
+  'IPFS_MAX_RESPONSE_SIZE_BYTES',
+  1 * 1024 * 1024 * 1024, // 1 GB
+);

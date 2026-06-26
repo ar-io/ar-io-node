@@ -26,6 +26,8 @@ import { datasetsRouter } from './routes/datasets.js';
 import * as system from './system.js';
 import { createX402Router } from './routes/x402.js';
 import { createRateLimitRouter } from './routes/rate-limit.js';
+import { createIpfsSubdomainMiddleware } from './middleware/ipfs.js';
+import { createIpfsRouter, createIpfsHandler } from './routes/ipfs.js';
 
 // Initialize DNS resolution for preferred chunk GET nodes (non-fatal on failure)
 try {
@@ -121,6 +123,25 @@ if (system.rateLimiter !== undefined) {
     }),
   );
 }
+// IPFS routes — must be before ArNS to intercept {CID}.{host} subdomains
+if (config.IPFS_ENABLED && system.ipfsService !== undefined) {
+  const ipfsHandler = createIpfsHandler({
+    log,
+    ipfsService: system.ipfsService,
+    rateLimiter: system.ipfsRateLimiter,
+    paymentProcessor: system.paymentProcessor,
+  });
+  app.use(createIpfsSubdomainMiddleware({ ipfsHandler }));
+  app.use(
+    createIpfsRouter({
+      log,
+      ipfsService: system.ipfsService,
+      rateLimiter: system.ipfsRateLimiter,
+      paymentProcessor: system.paymentProcessor,
+    }),
+  );
+}
+
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);

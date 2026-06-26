@@ -1,12 +1,50 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 AR.IO Node — Arweave gateway for accessing and indexing blockchain data, with
 caching, ANS-104 bundle unbundling, and multi-source data retrieval.
 
+## Tech stack
+
+- Node.js v20 (see `.nvmrc`), TypeScript strict mode, ESM (`"type": "module"`)
+- Test framework: **Node.js native `node:test`** (not Jest/Mocha/Vitest)
+- Transpiler: SWC (via ts-node)
+- Databases: SQLite (primary) + ClickHouse (analytics/GQL)
+- Caching: Redis, LMDB, LRU in-memory
+- HTTP: Express
+- Observability: OpenTelemetry + Prometheus + Winston
+
+## Commands
+
+```bash
+# Development
+yarn start                    # Start service (requires .env file)
+yarn watch                    # Start with nodemon (auto-restart on changes)
+yarn build                    # Clean + compile TypeScript (prod)
+
+# Testing
+yarn test                     # Run all unit tests
+yarn test:file src/path/to/file.test.ts  # Run a single test file
+yarn test:e2e                 # Run end-to-end tests (in test/ directory)
+yarn test:coverage            # Run tests with coverage report
+
+# Linting & quality
+yarn lint:check               # ESLint check
+yarn lint:fix                 # ESLint auto-fix
+yarn duplicate:check          # Detect code duplication (jscpd)
+yarn deps:check               # Detect circular dependencies (madge)
+
+# Database
+yarn db:migrate               # Run SQLite migrations
+yarn db:dump-test-schemas     # Regenerate test SQL schemas after migrations
+
+# Service management (systemd-based)
+yarn service:start / stop / restart / status / logs
+```
+
 ## Discovery points
 
-- Commands — `package.json` scripts (dev, build, service, test, lint,
-  migrations, duplicate/deps checks)
 - Documentation index — `docs/INDEX.md`
 - Env vars — `docs/envs.md` (keep this and `docker-compose.yaml` in sync when
   adding or removing env vars)
@@ -20,6 +58,8 @@ caching, ANS-104 bundle unbundling, and multi-source data retrieval.
 
 - `src/system.ts` is the central DI wiring — all services, workers, data
   sources, resolvers, and lifecycle cleanup handlers are constructed here.
+- `src/config.ts` parses all environment variables and exports typed
+  constants — this is where new env vars are added.
 - `src/data/` uses composite sources with fallback chains
   (cache → S3 → AR.IO peers → trusted gateways → Arweave nodes). Retrieval
   order is configurable via `ON_DEMAND_RETRIEVAL_ORDER` and
@@ -30,6 +70,11 @@ caching, ANS-104 bundle unbundling, and multi-source data retrieval.
 - Filters (`ANS104_UNBUNDLE_FILTER`, `ANS104_INDEX_FILTER`,
   `WEBHOOK_INDEX_FILTER`) share a composable JSON filter system — see
   `docs/filters.md`.
+- Background workers (`src/workers/`) handle block importing, data importing,
+  bundle unbundling, verification, and webhooks. Controlled by `START_WRITERS`.
+- IPFS serving (`src/ipfs/`) is opt-in via `IPFS_ENABLED`. Uses a Kubo sidecar
+  for content retrieval with its own cache, rate limiter, and blocklist. Routes
+  mount before ArNS in `app.ts`. See `docs/ipfs-integration.md`.
 - Responses include trust headers indicating verification status.
 - HTTPSIG signs response headers (RFC 9421); `Content-Digest` is in
   `CO_SIGNABLE_HEADERS` so when present it binds the body to the signature.
@@ -57,6 +102,18 @@ restart. Service logs are JSONL; OTEL spans are in `logs/otel-spans.jsonl`.
 Always use `createTestLogger()` from `test/test-logger.ts` in test files —
 never `winston.createLogger({ silent: true })`. Test output is written to
 `logs/test.log` (overwritten each run), not the console.
+
+### Test imports
+
+Tests use `node:test` and `node:assert`:
+
+```typescript
+import { describe, it, before, after, mock } from 'node:test';
+import { strict as assert } from 'node:assert';
+```
+
+Common test stubs are in `test/stubs.ts`, SQLite helpers in
+`test/sqlite-helpers.ts`.
 
 ### Adding a database method
 

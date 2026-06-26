@@ -598,3 +598,25 @@ tables are missing — operators run the import script once to bootstrap.
 | CLICKHOUSE_STREAMER_QUEUE_MAX_SIZE                         | Number  | 10000         | Hard cap on the streamer's in-memory buffer. Once exceeded, the streamer drops oldest rows to keep memory bounded under sustained CH unavailability — drops are logged and surface as a Prometheus metric. Dropped rows land via the stable Parquet pipeline once they stabilize                                                                                |
 | CLICKHOUSE_GQL_SKIP_SQLITE_READS                           | Boolean | false         | When true, GraphQL queries skip the SQLite leg entirely. Pairs with `CLICKHOUSE_STREAMING_ENABLED` for operators who want CH to be the sole read path. Has no effect on SQLite WRITES                                                                                                                                                                            |
 | CLICKHOUSE_SQLITE_FALLBACK_CIRCUIT_BREAKER_TIMEOUT_MS      | Number  | 250           | Replacement for `CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS` when streaming is enabled. In that mode CH-unstable covers the live tip and SQLite is a last-resort fallback for outages — a tight timeout keeps GraphQL responsive when CH itself is healthy. Distinct env var so operators running both modes on different nodes don't have to pick one envelope |
+
+## IPFS
+
+When enabled, the gateway can serve IPFS content via `/ipfs/{CID}` path routes
+and `{CID}.{root_host}` subdomain routes (same level as ArNS, works with
+standard `*.{host}` wildcard TLS certs). Requires a Kubo IPFS node (available
+as a Docker Compose sidecar via the `ipfs` profile).
+
+| ENV_NAME                                  | TYPE    | DEFAULT_VALUE       | DESCRIPTION                                                         |
+| ----------------------------------------- | ------- | ------------------- | ------------------------------------------------------------------- |
+| IPFS_ENABLED                              | Boolean | false               | Enable IPFS content serving                                         |
+| IPFS_KUBO_URL                             | String  | http://kubo:8080    | Kubo HTTP gateway URL                                               |
+| IPFS_KUBO_REQUEST_TIMEOUT_MS              | Number  | 30000               | Connection timeout for Kubo requests (ms)                           |
+| IPFS_STREAM_STALL_TIMEOUT_MS              | Number  | 30000               | Stall timeout — max time with no data before aborting stream (ms)   |
+| IPFS_CACHE_PATH                           | String  | data/ipfs-cache     | Directory for cached IPFS content                                   |
+| IPFS_CACHE_MAX_SIZE_BYTES                 | Number  | 10737418240 (10 GB) | Maximum cache size before LRU eviction                              |
+| IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS      | Number  | 3600                | Age in seconds before cached files become eviction candidates       |
+| IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET    | Number  | 100000              | IPFS rate limiter: max tokens per IP bucket                         |
+| IPFS_RATE_LIMITER_IP_REFILL_PER_SEC       | Number  | 20                  | IPFS rate limiter: token refill rate per second (IP bucket)         |
+| IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET | Number | 1000000           | IPFS rate limiter: max tokens per resource bucket                   |
+| IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC | Number  | 100                 | IPFS rate limiter: token refill rate per second (resource bucket)   |
+| IPFS_MAX_RESPONSE_SIZE_BYTES              | Number  | 1073741824 (1 GB)   | Maximum IPFS content size the gateway will serve                    |
