@@ -561,6 +561,35 @@ describe('ArweaveCompositeClient Binary Search', () => {
       assert.strictEqual(getHeightMock.mock.calls.length, 1);
     });
 
+    it('rethrows an AbortError from the index lookup instead of falling back', async () => {
+      client.cleanup();
+
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: height >= 50 ? '2500' : '1000',
+        txs: [],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      client.blockByOffsetIndex = {
+        getBlockByWeaveOffset: mock.fn(async () => {
+          const err = new Error('aborted');
+          err.name = 'AbortError';
+          throw err;
+        }),
+      };
+
+      await assert.rejects(
+        async () => client.binarySearchBlocks(targetOffset),
+        /aborted/,
+      );
+      // A cancellation must not silently degrade into a slow chain walk.
+      assert.strictEqual(getHeightMock.mock.calls.length, 0);
+      assert.strictEqual(getBlockMock.mock.calls.length, 0);
+    });
+
     it('falls back when the fetched block no longer covers the offset (stale index)', async () => {
       client.cleanup();
 

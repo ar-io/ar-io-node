@@ -20,5 +20,5 @@ SELECT b.height AS height,
 FROM stable_blocks b
 LEFT JOIN stable_blocks p ON p.height = b.height - 1
 WHERE b.weave_size >= @offset
-ORDER BY b.weave_size ASC
+ORDER BY b.weave_size ASC, b.height ASC
 LIMIT 1;

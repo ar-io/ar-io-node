@@ -89,6 +89,22 @@ interface TxByOffsetResult {
   data_size: number | undefined;
 }
 
+/**
+ * Result of resolving an absolute weave offset to its containing stable block.
+ *
+ * `height`/`weaveSize` describe the lowest stable block whose cumulative
+ * `weave_size` reaches the requested offset (the candidate container).
+ * `prevWeaveSize` is the immediately-preceding block's cumulative `weave_size`,
+ * present only when that predecessor is itself indexed. Callers use it to
+ * confirm the offset is tightly bracketed (`prevWeaveSize < offset <=
+ * weaveSize`) — i.e. no missing block sits between the predecessor and the
+ * candidate — before trusting the local result.
+ *
+ * All fields are `undefined` when no stable block reaches the offset (e.g. the
+ * offset lies in the not-yet-stable chain tip); `prevWeaveSize` alone is
+ * `undefined` when the predecessor is absent (a gap or the genesis block), in
+ * which case the caller must not trust the bracket and should fall back.
+ */
 interface BlockByWeaveOffsetResult {
   height: number | undefined;
   weaveSize: number | undefined;
@@ -1117,6 +1133,14 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
+  /**
+   * Resolve an absolute weave `offset` to its containing stable block via the
+   * indexed `stable_blocks.weave_size` column, avoiding the chain binary
+   * search's sequential per-block fetches. Returns the candidate block plus its
+   * predecessor's weave size for bracket validation; see
+   * {@link BlockByWeaveOffsetResult} for the `undefined` semantics. Resolves
+   * offset→block only — not offset→transaction.
+   */
   getBlockByWeaveOffset(offset: number): BlockByWeaveOffsetResult {
     const result = this.stmts.core.selectBlockHeightByWeaveOffset.get({
       offset,
@@ -3530,6 +3554,12 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getTxByOffset', [offset]);
   }
 
+  /**
+   * Queue-wrapper for the worker's {@link StandaloneSqliteDatabaseWorker.getBlockByWeaveOffset}:
+   * resolve an absolute weave `offset` to its containing stable block (with the
+   * predecessor's weave size for bracket validation). See
+   * {@link BlockByWeaveOffsetResult} for the `undefined` fallback contract.
+   */
   getBlockByWeaveOffset(offset: number): Promise<BlockByWeaveOffsetResult> {
     return this.queueRead('core', 'getBlockByWeaveOffset', [offset]);
   }
