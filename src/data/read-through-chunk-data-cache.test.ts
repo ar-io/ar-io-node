@@ -115,5 +115,33 @@ describe('ReadThroughChunkDataCache', () => {
       assert.deepEqual(chunkDataStoreSetSpy.mock.callCount(), 1);
       assert.deepEqual(networkSpy.mock.callCount(), 1);
     });
+
+    it('should reject a zero-length chunk from the source without caching it', async () => {
+      const chunkDataStoreGetSpy = mock.method(
+        chunkDataStore,
+        'get',
+        async () => undefined,
+      );
+      const chunkDataStoreSetSpy = mock.method(chunkDataStore, 'set');
+      mock.method(chunkSource, 'getChunkDataByAny', async () => ({
+        hash: Buffer.alloc(0),
+        chunk: Buffer.alloc(0),
+      }));
+
+      await assert.rejects(
+        () =>
+          chunkCache.getChunkDataByAny({
+            txSize: TX_SIZE,
+            absoluteOffset: ABSOLUTE_OFFSET,
+            dataRoot: B64_DATA_ROOT,
+            relativeOffset: 0,
+          }),
+        { message: /zero-length chunk/ },
+      );
+
+      assert.deepEqual(chunkDataStoreGetSpy.mock.callCount(), 1);
+      // The invalid empty chunk must not be persisted.
+      assert.deepEqual(chunkDataStoreSetSpy.mock.callCount(), 0);
+    });
   });
 });
