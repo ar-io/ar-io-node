@@ -833,6 +833,14 @@ export const chunkFirstDataTimeoutsTotal = new promClient.Counter({
   labelNames: ['request_type'] as const,
 });
 
+export const chunkStreamAbortsTotal = new promClient.Counter({
+  name: 'chunk_stream_aborts_total',
+  help:
+    'Count of chunk data streams aborted by a forward-progress guard ' +
+    '(zero-length chunk or chunk-count overrun)',
+  labelNames: ['reason'] as const,
+});
+
 //
 // Negative data cache metrics
 //

@@ -8,6 +8,7 @@ import { Readable } from 'node:stream';
 import { anySignal, ClearableSignal } from 'any-signal';
 import pLimit, { LimitFunction } from 'p-limit';
 import winston from 'winston';
+import { MAX_CHUNK_SIZE } from '../config.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { streamRangeData } from '../lib/stream-tx-range.js';
 import { startChildSpan } from '../tracing.js';
@@ -349,6 +350,14 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
       const streamStartTime = Date.now();
 
+      // Upper bound on the number of chunks a well-formed tx can produce: each
+      // chunk is at most MAX_CHUNK_SIZE bytes, so `size` bytes need at most
+      // ceil(size / MAX_CHUNK_SIZE) chunks. The +1 tolerates boundary
+      // rebalancing of the final chunks. This is a backstop against
+      // pathological geometry (e.g. a corrupt tx size/offset) driving an
+      // unbounded number of fetches.
+      const maxChunks = Math.ceil(size / MAX_CHUNK_SIZE) + 1;
+
       const stream = new Readable({
         autoDestroy: true,
         read: async function () {
@@ -362,6 +371,33 @@ export class TxChunksDataSource implements ContiguousDataSource {
             }
 
             const chunkData = await chunkDataPromise;
+
+            // Forward-progress guard: a zero-length chunk would not advance
+            // `bytes`, leaving `bytes < size` true forever and re-requesting
+            // the same offset indefinitely (observed as multi-million-span
+            // traces of repeated cache hits on a single offset). Abort rather
+            // than spin.
+            if (chunkData.chunk.length === 0) {
+              metrics.chunkStreamAbortsTotal.inc({
+                reason: 'zero_length_chunk',
+              });
+              throw new Error(
+                `Zero-length chunk for ${id} at relativeOffset ${bytes}; ` +
+                  `aborting to avoid a non-terminating chunk loop`,
+              );
+            }
+
+            // Backstop guard: never read more chunks than the tx size can hold.
+            if (totalChunks >= maxChunks) {
+              metrics.chunkStreamAbortsTotal.inc({
+                reason: 'chunk_count_exceeded',
+              });
+              throw new Error(
+                `Chunk count exceeded maximum ${maxChunks} for ${id} ` +
+                  `(size ${size}); aborting chunk loop`,
+              );
+            }
+
             this.push(chunkData.chunk);
             totalChunks++;
             bytes += chunkData.chunk.length;
