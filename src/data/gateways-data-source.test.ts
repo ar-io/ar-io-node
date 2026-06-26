@@ -450,19 +450,24 @@ describe('GatewayDataSource', () => {
         sendUntrustedParams: true,
       });
 
+      // Use the full provenance set so the override is verified to forward
+      // every param (via + arns), not just hops/origin.
+      const richAttributes: RequestAttributes = {
+        origin: 'node-url',
+        hops: 0,
+        via: ['upstream-node'],
+        arnsBasename: 'example',
+      };
+
       const data = await legacyDataSource.getData({
         id: 'some-id',
-        requestAttributes,
+        requestAttributes: richAttributes,
       });
 
-      assert.equal(
-        requestParams.params['ar-io-hops'],
-        requestAttributes.hops + 1,
-      );
-      assert.equal(
-        requestParams.params['ar-io-origin'],
-        requestAttributes.origin,
-      );
+      assert.equal(requestParams.params['ar-io-hops'], richAttributes.hops + 1);
+      assert.equal(requestParams.params['ar-io-origin'], richAttributes.origin);
+      assert.equal(requestParams.params['ar-io-via'], 'upstream-node');
+      assert.equal(requestParams.params['ar-io-arns-basename'], 'example');
       // Trust marking is independent of the param kill-switch.
       assert.equal(data.trusted, false);
     });
