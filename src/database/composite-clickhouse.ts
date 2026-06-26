@@ -614,15 +614,22 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     tags: { name: string; values: string[] }[],
   ): boolean {
     if (!this.ownerProjectionRoutingEnabled) return false;
-    if (owners.length === 0 || ids.length > 0) return false;
+    if (owners.length === 0) return false;
+    // Owner + ids: the id list bounds the result to at most `ids.length` rows,
+    // so seek the owner's slice via the projection and filter the ids within —
+    // regardless of any tag filters. On the main table a multi-id `id IN (...)`
+    // lights up most of id_bloom's granules (≈ a half-table scan), so even with
+    // an owner filter ~100 ids reads >10M rows and trips the cap; through the
+    // projection it's an owner-footprint read (measured ~556K rows vs 308M
+    // ids-only / 13.6M ids+owner on the main table).
+    if (ids.length > 0) return true;
+    // Owner + allowlisted Entity-Type, no ids: require an Entity-Type filter and
+    // NO other tag types. An additional non-Entity-Type tag (e.g. App-Name) only
+    // narrows the result, but it's an untested shape and the agreed contract
+    // excludes owner+other-tag queries, so fall back to the default plan.
     const entityTypeTags = tags.filter(
       (tag) => tag.name === ENTITY_TYPE_TAG_NAME,
     );
-    // Require an Entity-Type filter and NO other tag types. An additional
-    // non-Entity-Type tag (e.g. App-Name) only narrows the result, but it's an
-    // untested shape and the agreed contract excludes owner+other-tag queries,
-    // so fall back to the default plan rather than route it through the
-    // projection.
     if (entityTypeTags.length === 0 || entityTypeTags.length !== tags.length) {
       return false;
     }
@@ -1087,8 +1094,16 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         // Hack 5: an owner-filtered query that still trips max_rows_to_read
         // through owner_projection means a whale whose footprint exceeds the
         // cap. Re-run as an adaptive height-windowed walk instead of failing.
+        //
+        // Restricted to non-id queries: the windowing walk is height-ordered
+        // and relies on the cursor predicate to drain a window, but id queries
+        // carry no ORDER BY or cursor predicate (see addGqlTransactionFilters /
+        // buildTransactionOrderBy), so the walk can't make per-window progress.
+        // owner+ids only reaches the cap for whale owners (>10M footprint) — a
+        // rare case left to surface the 158, no worse than before this feature.
         if (
           this.ownerProjectionApplies(owners, ids, tags) &&
+          ids.length === 0 &&
           isClickHouseTooManyRowsError(err)
         ) {
           this.log.warn(
