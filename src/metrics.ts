@@ -833,6 +833,16 @@ export const chunkFirstDataTimeoutsTotal = new promClient.Counter({
   labelNames: ['request_type'] as const,
 });
 
+/**
+ * Counts chunk-streaming requests aborted by a `TxChunksDataSource`
+ * forward-progress guard, preventing a non-terminating chunk loop.
+ *
+ * @remarks Label `reason` is one of:
+ * - `zero_length_chunk` — a chunk returned no bytes, so the stream could not
+ *   advance and would otherwise re-request the same offset forever.
+ * - `chunk_count_exceeded` — more chunks were read than the tx size can hold
+ *   (`> ceil(size / MAX_CHUNK_SIZE) + 1`), a backstop against bad geometry.
+ */
 export const chunkStreamAbortsTotal = new promClient.Counter({
   name: 'chunk_stream_aborts_total',
   help:
@@ -841,6 +851,17 @@ export const chunkStreamAbortsTotal = new promClient.Counter({
   labelNames: ['reason'] as const,
 });
 
+/**
+ * Counts invalid zero-length chunks rejected before they can poison the chunk
+ * cache (a persisted empty chunk is served as a hit and stalls consumers).
+ *
+ * @remarks Label `stage` is one of:
+ * - `source_fetch` — a chunk source returned an empty chunk; rejected and not
+ *   cached so the retrieval cascade can fall through.
+ * - `cache_read` — an existing zero-length cache entry was read and treated as
+ *   a miss so it self-heals on the next refetch.
+ * - `cache_write` — a zero-length chunk write was refused, preventing poisoning.
+ */
 export const chunkZeroLengthTotal = new promClient.Counter({
   name: 'chunk_zero_length_total',
   help:

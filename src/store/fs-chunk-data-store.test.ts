@@ -301,6 +301,50 @@ describe('FsChunkDataStore', () => {
       // ...but get() must not serve the empty chunk.
       assert.strictEqual(await store.get(dataRoot, relativeOffset), undefined);
     });
+
+    it('should treat a pre-existing zero-length absolute-offset entry as a miss', async () => {
+      // A 0-byte file reachable via the by-absolute-offset index must also
+      // self-heal as a miss rather than returning an empty chunk.
+      const absoluteOffset = 51530681327863;
+      // by-absolute-offset/{floor(abs/1e12)}/{floor(abs/1e9)%1000}/{abs}
+      const fs = await import('node:fs');
+      const dir = join(tempDir, 'data', 'by-absolute-offset', '51', '530');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(join(dir, String(absoluteOffset)), Buffer.alloc(0));
+
+      assert.strictEqual(
+        await store.getByAbsoluteOffset(absoluteOffset),
+        undefined,
+      );
+    });
+
+    it('should not create an absolute-offset index for a zero-length chunk', async () => {
+      const dataRoot = 'zeroAbsIdxZZ2nHYgKhhI25MzveuYvH7rCd8J0WIVp4EVs';
+      const relativeOffset = 0;
+      const absoluteOffset = 51530681327863;
+      const chunkData: ChunkData = {
+        chunk: Buffer.alloc(0),
+        hash: crypto.createHash('sha256').update(Buffer.alloc(0)).digest(),
+      };
+
+      // set() refuses the zero-length write before any index is created.
+      await store.set(dataRoot, relativeOffset, chunkData, absoluteOffset);
+
+      const fs = await import('node:fs');
+      const indexPath = join(
+        tempDir,
+        'data',
+        'by-absolute-offset',
+        '51',
+        '530',
+        String(absoluteOffset),
+      );
+      assert.strictEqual(fs.existsSync(indexPath), false);
+      assert.strictEqual(
+        await store.getByAbsoluteOffset(absoluteOffset),
+        undefined,
+      );
+    });
   });
 
   describe('error handling', () => {
