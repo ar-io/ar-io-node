@@ -162,12 +162,16 @@ function buildComposite({
   sqlite,
   queryUnstableHead = false,
   skipSqliteReads = false,
+  ownerProjectionRoutingEnabled = false,
+  ownerProjectionEntityTypes = ['drive', 'folder', 'snapshot'],
   chRowsByLeg,
   chReject,
 }: {
   sqlite: GqlQueryable;
   queryUnstableHead?: boolean;
   skipSqliteReads?: boolean;
+  ownerProjectionRoutingEnabled?: boolean;
+  ownerProjectionEntityTypes?: string[];
   chRowsByLeg: { stable?: any[]; unstable?: any[] };
   chReject?: { stable?: Error; unstable?: Error };
 }): CompositeClickHouseDatabase {
@@ -177,6 +181,8 @@ function buildComposite({
     url: 'http://localhost:0',
     queryUnstableHead,
     skipSqliteReads,
+    ownerProjectionRoutingEnabled,
+    ownerProjectionEntityTypes,
     sqliteCircuitBreakerOptions: {
       // Tight breaker so a thrown error trips the breaker for this test
       // run without slowing the suite. The composite's behavior under a
@@ -412,6 +418,47 @@ describe('CompositeClickHouseDatabase', () => {
       assert.equal(result.edges.length, 2);
       assert.equal(result.pageInfo.hasNextPage, false);
     });
+
+    it('is true when a full leg collapses to pageSize after id-dedup (PE-9124)', async () => {
+      // A single leg returns its full `pageSize + 1` rows, but a stale
+      // duplicate (same id, different block_transaction_index — the SQL's
+      // full-key `LIMIT 1 BY` does not fold it) collapses the deduped set to
+      // exactly `pageSize`. hasNextPage MUST stay true: the leg came back full,
+      // so more matching rows exist beyond this page. Counting deduped edges
+      // alone would report `2 > 2 == false` and silently strand every later
+      // page.
+      const composite = buildComposite({
+        sqlite,
+        chRowsByLeg: {
+          stable: [
+            chRow({
+              id: id('dupitem'),
+              height: 1,
+              blockTransactionIndex: 0,
+              isDataItem: true,
+            }),
+            chRow({
+              id: id('dupitem'),
+              height: 1,
+              blockTransactionIndex: 12,
+              isDataItem: true,
+            }),
+            chRow({ id: id('itemb'), height: 2 }),
+          ],
+        },
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 2,
+        sortOrder: 'HEIGHT_ASC',
+      });
+      assert.equal(result.edges.length, 2);
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        [id('dupitem'), id('itemb')],
+      );
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
   });
 
   describe('SQLite fallback behavior', () => {
@@ -466,6 +513,293 @@ describe('CompositeClickHouseDatabase', () => {
       assert.equal(sqliteCalled, false);
       assert.equal(result.edges.length, 1);
       assert.equal(result.warnings, undefined);
+    });
+  });
+
+  describe('owner-window fallback (hack 5)', () => {
+    it('retries an owner-filtered query with height-windowing on Code 158', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+
+      const queries: string[] = [];
+      let stableCalls = 0;
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          queries.push(sqlStr);
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          // Stable leg. First call is the single-shot query, which we make
+          // trip max_rows_to_read; later calls are the windowed retries.
+          stableCalls += 1;
+          if (stableCalls === 1) {
+            const err: any = new Error(
+              'Code: 158. DB::Exception: Limit for rows exceeded: TOO_MANY_ROWS',
+            );
+            err.code = '158';
+            throw err;
+          }
+          return {
+            json: async () => ({
+              data: [
+                chRow({ id: id('w1'), height: 95000 }),
+                chRow({ id: id('w2'), height: 94000 }),
+                chRow({ id: id('w3'), height: 93000 }),
+              ],
+            }),
+          };
+        },
+      };
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 2,
+        owners: [id('owner')],
+        tags: [{ name: 'Entity-Type', values: ['drive'] }],
+        maxHeight: 100_000,
+      });
+
+      // The single-shot threw 158, then at least one windowed retry ran.
+      assert.ok(
+        stableCalls >= 2,
+        `expected a windowed retry after Code 158, saw ${stableCalls} stable calls`,
+      );
+      // Owner queries route through owner_projection (read-in-order disabled).
+      assert.ok(
+        queries.some((q) => q.includes('optimize_read_in_order = 0')),
+        'expected owner-projection settings on the stable query',
+      );
+      // The retry is height-bounded (a window); the single-shot is not.
+      const windowSql = queries[1];
+      assert.ok(
+        windowSql !== undefined && windowSql.includes('FROM transactions'),
+        'expected a windowed retry query',
+      );
+      assert.match(windowSql, />=\s*\d/);
+      assert.doesNotMatch(queries[0], />=\s*\d/);
+      // Page is filled from the window; hasNextPage reflects the extra row.
+      assert.equal(result.edges.length, 2);
+      assert.equal(result.pageInfo.hasNextPage, true);
+    });
+
+    it('does not window a non-owner query on Code 158 (fail-fast)', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+      let stableCalls = 0;
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          stableCalls += 1;
+          const err: any = new Error('Code: 158. TOO_MANY_ROWS');
+          err.code = '158';
+          throw err;
+        },
+      };
+
+      await assert.rejects(
+        composite.getGqlTransactions({
+          pageSize: 2,
+          tags: [{ name: 'Entity-Type', values: ['drive'] }],
+        }),
+        /158|TOO_MANY_ROWS/,
+      );
+      // No windowing retries for a tag-only (ownerless) query.
+      assert.equal(stableCalls, 1);
+    });
+
+    it('does not window when the feature is disabled (default)', async () => {
+      const composite = buildComposite({ sqlite, chRowsByLeg: {} });
+      const queries: string[] = [];
+      let stableCalls = 0;
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          queries.push(sqlStr);
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          stableCalls += 1;
+          const err: any = new Error('Code: 158. TOO_MANY_ROWS');
+          err.code = '158';
+          throw err;
+        },
+      };
+
+      await assert.rejects(
+        composite.getGqlTransactions({
+          pageSize: 2,
+          owners: [id('owner')],
+          tags: [{ name: 'Entity-Type', values: ['drive'] }],
+        }),
+        /158|TOO_MANY_ROWS/,
+      );
+      // Disabled: single-shot fails fast, no windowing, and the query plans
+      // exactly as before (projections disabled for the tag filter).
+      assert.equal(stableCalls, 1);
+      assert.ok(
+        queries.some((q) => q.includes('optimize_use_projections = 0')),
+      );
+      assert.ok(!queries.some((q) => q.includes('optimize_read_in_order = 0')));
+    });
+
+    it('excludes Entity-Type=file from the feature (allowlist)', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+      const queries: string[] = [];
+      let stableCalls = 0;
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          queries.push(sqlStr);
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          stableCalls += 1;
+          const err: any = new Error('Code: 158. TOO_MANY_ROWS');
+          err.code = '158';
+          throw err;
+        },
+      };
+
+      await assert.rejects(
+        composite.getGqlTransactions({
+          pageSize: 2,
+          owners: [id('owner')],
+          tags: [{ name: 'Entity-Type', values: ['file'] }],
+        }),
+        /158|TOO_MANY_ROWS/,
+      );
+      // `file` is not in the allowlist: no projection routing, no windowing —
+      // the query plans exactly as it does without the feature.
+      assert.equal(stableCalls, 1);
+      assert.ok(
+        queries.some((q) => q.includes('optimize_use_projections = 0')),
+      );
+      assert.ok(!queries.some((q) => q.includes('optimize_read_in_order = 0')));
+    });
+
+    it('excludes owner + Entity-Type + another tag (owner+other-tag)', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+      const queries: string[] = [];
+      let stableCalls = 0;
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          queries.push(sqlStr);
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          stableCalls += 1;
+          const err: any = new Error('Code: 158. TOO_MANY_ROWS');
+          err.code = '158';
+          throw err;
+        },
+      };
+
+      await assert.rejects(
+        composite.getGqlTransactions({
+          pageSize: 2,
+          owners: [id('owner')],
+          tags: [
+            { name: 'Entity-Type', values: ['drive'] },
+            { name: 'App-Name', values: ['ArDrive'] },
+          ],
+        }),
+        /158|TOO_MANY_ROWS/,
+      );
+      // An extra non-Entity-Type tag disqualifies the query: no projection
+      // settings, no windowing — it plans as it would without the feature.
+      assert.equal(stableCalls, 1);
+      assert.ok(
+        queries.some((q) => q.includes('optimize_use_projections = 0')),
+      );
+      assert.ok(!queries.some((q) => q.includes('optimize_read_in_order = 0')));
+    });
+
+    it('drains a dense window via cursor instead of stranding rows', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+      const queries: string[] = [];
+      let stableCalls = 0;
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          queries.push(sqlStr);
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          stableCalls += 1;
+          if (stableCalls === 1) {
+            const err: any = new Error('Code: 158. TOO_MANY_ROWS');
+            err.code = '158';
+            throw err;
+          }
+          if (stableCalls === 2) {
+            // A full target-sized batch (pageSize + 1 = 3) whose dedup leaves
+            // only 2 distinct ids — the old code advanced past the window here,
+            // stranding the rows below.
+            return {
+              json: async () => ({
+                data: [
+                  chRow({
+                    id: id('p'),
+                    height: 95000,
+                    blockTransactionIndex: 0,
+                  }),
+                  chRow({
+                    id: id('p'),
+                    height: 95000,
+                    blockTransactionIndex: 1,
+                  }),
+                  chRow({ id: id('q'), height: 94000 }),
+                ],
+              }),
+            };
+          }
+          // Continuation within the SAME window, below the advanced cursor.
+          return {
+            json: async () => ({
+              data: [
+                chRow({ id: id('r'), height: 93000 }),
+                chRow({ id: id('s'), height: 92000 }),
+              ],
+            }),
+          };
+        },
+      };
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 2,
+        owners: [id('owner')],
+        tags: [{ name: 'Entity-Type', values: ['drive'] }],
+        maxHeight: 100000,
+      });
+
+      // The dense first window forced a cursor-driven continuation (>=3 stable
+      // calls), and the continuation resumed BELOW the prior batch's last row
+      // (height 94000) rather than jumping to a fresh window — so the rows that
+      // would otherwise be stranded stay reachable.
+      assert.ok(stableCalls >= 3, `expected continuation, saw ${stableCalls}`);
+      const stableQs = queries.filter((q) => q.includes('FROM transactions'));
+      assert.ok(
+        stableQs.slice(1).some((q) => q.includes('94000')),
+        'expected a continuation query carrying the advanced cursor (94000)',
+      );
+      assert.equal(result.edges.length, 2);
+      assert.equal(result.pageInfo.hasNextPage, true);
     });
   });
 

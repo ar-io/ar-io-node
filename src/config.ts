@@ -1942,6 +1942,38 @@ export const CLICKHOUSE_GQL_DEDUPE_HEADROOM = env.positiveIntOrDefault(
   4,
 );
 
+// Gate for routing owner-filtered GraphQL `transactions` queries through
+// `owner_projection` (plus the reactive height-windowing fallback on
+// `max_rows_to_read`). The main `transactions` table is height-ordered, so a
+// sparse owner's rows scatter across millions of granules and finding a page
+// can trip the row cap; the owner-ordered projection seeks straight to the
+// owner's slice instead. Disabled by default for staged rollout — when off,
+// owner queries plan exactly as before.
+export const CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED =
+  env.varOrDefault(
+    'CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED',
+    'false',
+  ) === 'true';
+
+// Comma-separated allowlist of `Entity-Type` tag values for which owner-filtered
+// GQL queries use owner_projection routing (only consulted when
+// CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED is true). These are the
+// ArDrive entity types whose per-owner result set is small, so the projection's
+// in-memory sort (read-in-order is disabled to use the projection) is cheap. A
+// query qualifies only when it carries an `Entity-Type` filter whose values are
+// ALL in this list — so `file` (millions per owner → an expensive full sort
+// re-done every page), bare-owner queries, and owner+other-tag queries are
+// excluded and keep planning as before. Large-result queries want the dedicated
+// owner-ordered table instead.
+export const CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES = env
+  .varOrDefault(
+    'CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES',
+    'drive,folder,snapshot',
+  )
+  .split(',')
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0);
+
 // Circuit breaker around the SQLite leg of the composite GQL transactions
 // query. ClickHouse and SQLite run in parallel; an open breaker degrades
 // responses to ClickHouse-only results instead of dragging the caller down

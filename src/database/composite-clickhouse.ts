@@ -136,6 +136,42 @@ function buildGqlTransactionColumns(
 
 type SqliteGqlArgs = Parameters<GqlQueryable['getGqlTransactions']>[0];
 
+// Tag name carrying the ArDrive entity type (drive / folder / file / snapshot).
+// The owner_projection routing feature keys off this tag's values.
+const ENTITY_TYPE_TAG_NAME = 'Entity-Type';
+
+// ClickHouse `Code: 158 TOO_MANY_ROWS` — raised when a GQL query would scan
+// more than `max_rows_to_read`. The @clickhouse/client surfaces server errors
+// with a numeric `.code` (string or number) and a message of the form
+// `Code: 158. DB::Exception: ...TOO_MANY_ROWS...`.
+function isClickHouseTooManyRowsError(err: unknown): boolean {
+  const e = err as { code?: string | number; message?: string } | null;
+  if (e == null) return false;
+  if (e.code === '158' || e.code === 158) return true;
+  return /\bcode:\s*158\b|TOO_MANY_ROWS/i.test(e.message ?? '');
+}
+
+// Reactive fallback (hack 5) for owner-filtered GQL queries whose owner
+// footprint is so large it still trips `max_rows_to_read` even via
+// owner_projection (a "whale" owner). When the single-shot stable query throws
+// Code 158, we re-run it as a walk over height windows, each small enough to
+// stay under the cap, in sort order, accumulating until we have a full page.
+// See docs/drafts/2026-06-25-clickhouse-gql-owner-filter-too-many-rows.md.
+// The whole feature is gated by `ownerProjectionRoutingEnabled`
+// (config.CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED, default off). The
+// span-tuning values below are deliberately module-level constants for a first
+// cut; promote to env config (CLICKHOUSE_GQL_OWNER_WINDOW_*) if operators need
+// to tune them.
+// Number of windows the initial span aims to divide the walked range into.
+const OWNER_WINDOW_INITIAL_DIVISIONS = 8;
+// Smallest height span a window may shrink to before we stop subdividing. A
+// span this small still exceeding the cap is pathological and signals the data
+// needs the dedicated owner-ordered table rather than reactive windowing.
+const OWNER_WINDOW_MIN_SPAN = 10_000;
+// Safety cap on total windows per fallback so a sparse-/no-match whale walk
+// can't scan the whole chain unbounded.
+const OWNER_WINDOW_MAX_WINDOWS = 256;
+
 // Pre-encoded SQL literal forms shared across the two CH legs in
 // `getGqlTransactions`. Built once by `prepareGqlFilterEncodings` and
 // passed into `addGqlTransactionFilters` so each leg doesn't redo the
@@ -177,6 +213,15 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
   // effect on SQLite WRITES; the indexer still feeds SQLite for the
   // Parquet export pipeline.
   private skipSqliteReads: boolean;
+  // When true, owner-filtered GQL queries are routed through
+  // `owner_projection` and gain the reactive height-windowing fallback on
+  // `max_rows_to_read`. Off by default — see
+  // config.CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED.
+  private ownerProjectionRoutingEnabled: boolean;
+  // Allowlist of `Entity-Type` values eligible for owner_projection routing
+  // (e.g. drive/folder/snapshot). `file` is intentionally absent — see
+  // ownerProjectionApplies and config.CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES.
+  private ownerProjectionEntityTypes: Set<string>;
 
   constructor({
     log,
@@ -190,6 +235,8 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     queryTimeoutSeconds = 3,
     queryUnstableHead = false,
     skipSqliteReads = false,
+    ownerProjectionRoutingEnabled = false,
+    ownerProjectionEntityTypes = [],
     sqliteCircuitBreakerOptions = {
       timeout: config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS,
       errorThresholdPercentage:
@@ -210,6 +257,8 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     queryTimeoutSeconds?: number;
     queryUnstableHead?: boolean;
     skipSqliteReads?: boolean;
+    ownerProjectionRoutingEnabled?: boolean;
+    ownerProjectionEntityTypes?: string[];
     sqliteCircuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log;
@@ -233,6 +282,8 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     this.maxHeightCacheTtlMs = maxHeightCacheTtlSeconds * 1000;
     this.queryUnstableHead = queryUnstableHead;
     this.skipSqliteReads = skipSqliteReads;
+    this.ownerProjectionRoutingEnabled = ownerProjectionRoutingEnabled;
+    this.ownerProjectionEntityTypes = new Set(ownerProjectionEntityTypes);
 
     this.sqliteBreaker = new CircuitBreaker(
       (args: SqliteGqlArgs) => this.gqlQueryable.getGqlTransactions(args),
@@ -550,6 +601,38 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
   // LIMIT 1 BY collapses unmerged ReplacingMergeTree versions. The
   // result is shape-identical across stable and unstable legs, so
   // mapTransactionRow handles either leg's rows without branching.
+  // Whether a GQL transactions query is eligible for owner_projection routing
+  // (and its 158 windowing fallback). Requires the feature enabled, an
+  // `owners` filter, no `ids` filter (id lookups have their own selective
+  // path), and an `Entity-Type` tag filter whose values are ALL in the
+  // configured allowlist. The Entity-Type gate is what excludes `file`
+  // (large per-owner result → an expensive full sort per page under
+  // read-in-order=0) as well as bare-owner and owner+other-tag queries.
+  private ownerProjectionApplies(
+    owners: string[],
+    ids: string[],
+    tags: { name: string; values: string[] }[],
+  ): boolean {
+    if (!this.ownerProjectionRoutingEnabled) return false;
+    if (owners.length === 0 || ids.length > 0) return false;
+    const entityTypeTags = tags.filter(
+      (tag) => tag.name === ENTITY_TYPE_TAG_NAME,
+    );
+    // Require an Entity-Type filter and NO other tag types. An additional
+    // non-Entity-Type tag (e.g. App-Name) only narrows the result, but it's an
+    // untested shape and the agreed contract excludes owner+other-tag queries,
+    // so fall back to the default plan rather than route it through the
+    // projection.
+    if (entityTypeTags.length === 0 || entityTypeTags.length !== tags.length) {
+      return false;
+    }
+    return entityTypeTags.every(
+      (tag) =>
+        tag.values.length > 0 &&
+        tag.values.every((value) => this.ownerProjectionEntityTypes.has(value)),
+    );
+  }
+
   private buildChTransactionsSql({
     innerSql,
     pageSize,
@@ -596,7 +679,33 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     const settings: string[] = [
       `max_rows_to_read = ${config.CLICKHOUSE_GQL_MAX_ROWS_TO_READ}`,
     ];
-    if (ids.length > 0 || tags.length > 0) {
+    // Owner-filtered queries (the dominant ArDrive access pattern, e.g.
+    // `owners:[x], tags:[Entity-Type=drive]`) are routed through
+    // `owner_projection`, the owner-ordered copy of the data. The main
+    // `transactions` table is height-ordered, so a sparse owner's rows are
+    // smeared ~8-per-granule across the full height range; finding a page
+    // there scans tens of millions of rows and trips `max_rows_to_read`
+    // (measured: an owner with 22k total rows / 46 drives forced a 12.1M-row
+    // read → Code 158). The projection seeks straight to the owner's
+    // contiguous slice (measured 451K rows for the same query). ClickHouse
+    // won't route a top-N `ORDER BY ... LIMIT` to a normal projection while
+    // read-in-order is enabled, so it's disabled here; the matched set is
+    // small (bounded by the owner's footprint) and sorted in memory instead.
+    //
+    // Scoped to owner-without-id queries and applied uniformly across tag
+    // values (no per-`Entity-Type` special-casing):
+    //  - id lookups have their own selective `id_bloom` path on the main
+    //    table; the owner ordering doesn't help them.
+    //  - tag-/recipient-only queries (no owner) have nothing to seek on in
+    //    the owner-ordered projection, so enabling it there forces a full
+    //    projection scan — which is why projections stay disabled for those.
+    // Harmless on the unstable leg (`new_transactions` has no projection).
+    if (this.ownerProjectionApplies(owners, ids, tags)) {
+      settings.push(
+        'optimize_use_projections = 1',
+        'optimize_read_in_order = 0',
+      );
+    } else if (ids.length > 0 || tags.length > 0) {
       settings.push('optimize_use_projections = 0');
     }
     const settingsClause = ` SETTINGS ${settings.join(', ')}`;
@@ -605,6 +714,210 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       `${outerOrderByClause} ${dedupByPk} LIMIT ${pageSize + 1}` +
       settingsClause
     );
+  }
+
+  // Runs one window of the owner-window fallback: the standard stable-leg
+  // query restricted to a `[windowMinHeight, windowMaxHeight]` slice. Reuses
+  // the normal filter + wrapper builders, so the owner_projection settings and
+  // `max_rows_to_read` cap apply per window (a window that still exceeds the
+  // cap throws Code 158, which the walk catches and subdivides).
+  private async queryStableWindow({
+    pageSize,
+    cursor,
+    sortOrder,
+    ids,
+    recipients,
+    owners,
+    windowMinHeight,
+    windowMaxHeight,
+    bundledIn,
+    tags,
+    encoded,
+  }: {
+    pageSize: number;
+    cursor?: string;
+    sortOrder: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids: string[];
+    recipients: string[];
+    owners: string[];
+    windowMinHeight: number;
+    windowMaxHeight: number;
+    bundledIn?: string[] | null;
+    tags: { name: string; values: string[] }[];
+    encoded: EncodedGqlFilters;
+  }): Promise<GqlTransactionsResult['edges'][0]['node'][]> {
+    const query = this.getGqlTransactionsBaseSql();
+    this.addGqlTransactionFilters({
+      query,
+      cursor,
+      sortOrder,
+      ids,
+      recipients,
+      owners,
+      minHeight: windowMinHeight,
+      maxHeight: windowMaxHeight,
+      bundledIn,
+      tags,
+      encoded,
+    });
+    const windowSql = this.buildChTransactionsSql({
+      innerSql: query.toString(),
+      pageSize,
+      sortOrder,
+      recipients,
+      owners,
+      ids,
+      tags,
+    });
+    const row = await this.clickhouseClient.query({ query: windowSql });
+    const jsonRow = await row.json();
+    return (jsonRow.data as any[]).map((tx: any) => this.mapTransactionRow(tx));
+  }
+
+  /**
+   * Reactive fallback (hack 5) for an owner-filtered stable-leg query that
+   * tripped `max_rows_to_read` (Code 158) — i.e. a whale owner whose footprint
+   * exceeds the cap even through owner_projection. Walks the requested height
+   * range in windows small enough to stay under the cap, in `sortOrder`,
+   * accumulating up to `pageSize + 1` rows so the caller's `hasNextPage` logic
+   * is unchanged. Window span adapts: a window that still trips 158 is halved
+   * and retried at the same leading edge.
+   *
+   * The returned rows are re-sorted with the other legs in `getGqlTransactions`,
+   * so the walk only needs to find the correct *set* of top rows, not emit them
+   * in perfect order. Windows are disjoint height ranges walked from the
+   * leading edge, so once `pageSize + 1` rows are collected the remaining
+   * (further-from-leading-edge) windows cannot contain a higher-priority row.
+   */
+  private async queryStableTransactionsWindowed({
+    pageSize,
+    cursor,
+    sortOrder,
+    ids,
+    recipients,
+    owners,
+    minHeight,
+    maxHeight,
+    bundledIn,
+    tags,
+    encoded,
+  }: {
+    pageSize: number;
+    cursor?: string;
+    sortOrder: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids: string[];
+    recipients: string[];
+    owners: string[];
+    minHeight: number;
+    maxHeight: number;
+    bundledIn?: string[] | null;
+    tags: { name: string; values: string[] }[];
+    encoded: EncodedGqlFilters;
+  }): Promise<GqlTransactionsResult['edges'][0]['node'][]> {
+    const target = pageSize + 1;
+
+    // Resolve concrete [lo, hi] height bounds for the walk. The caller's
+    // min/max and the cached CH max height bound the range; the cursor (when
+    // present) tightens the leading edge.
+    let lo = minHeight > 0 ? minHeight : 0;
+    let hi = maxHeight >= 0 ? maxHeight : await this.getClickHouseMaxHeight();
+    if (hi == null) {
+      // No upper bound to size windows against — surface the failure.
+      throw new Error(
+        'owner-window fallback: unable to resolve ClickHouse max height',
+      );
+    }
+    const { height: cursorHeight } = decodeTransactionGqlCursor(cursor);
+    if (cursorHeight != null) {
+      if (sortOrder === 'HEIGHT_DESC') {
+        hi = Math.min(hi, cursorHeight);
+      } else {
+        lo = Math.max(lo, cursorHeight);
+      }
+    }
+    if (hi < lo) return [];
+
+    let span = Math.max(
+      OWNER_WINDOW_MIN_SPAN,
+      Math.ceil((hi - lo + 1) / OWNER_WINDOW_INITIAL_DIVISIONS),
+    );
+
+    const collected: GqlTransactionsResult['edges'][0]['node'][] = [];
+    const seen = new Set<string>();
+    const descending = sortOrder === 'HEIGHT_DESC';
+    // Current leading height (inclusive): top of the range for DESC, bottom
+    // for ASC. Walks toward the trailing edge as windows are drained.
+    let edge = descending ? hi : lo;
+    // Running cursor: starts at the request cursor and advances to the last
+    // row returned. A window holds at most `target` raw rows per fetch, so if
+    // it contains more matching rows than that, the advanced cursor drains the
+    // remainder across iterations instead of stranding them when we move on.
+    let runningCursor = cursor;
+    let windowCount = 0;
+
+    while (
+      collected.length < target &&
+      (descending ? edge >= lo : edge <= hi)
+    ) {
+      if (windowCount >= OWNER_WINDOW_MAX_WINDOWS) {
+        throw new Error(
+          `owner-window fallback exceeded ${OWNER_WINDOW_MAX_WINDOWS} windows ` +
+            'without filling a page; this owner footprint needs the dedicated ' +
+            'owner-ordered table',
+        );
+      }
+
+      const windowLo = descending ? Math.max(lo, edge - span + 1) : edge;
+      const windowHi = descending ? edge : Math.min(hi, edge + span - 1);
+
+      let rows: GqlTransactionsResult['edges'][0]['node'][];
+      try {
+        rows = await this.queryStableWindow({
+          pageSize,
+          cursor: runningCursor,
+          sortOrder,
+          ids,
+          recipients,
+          owners,
+          windowMinHeight: windowLo,
+          windowMaxHeight: windowHi,
+          bundledIn,
+          tags,
+          encoded,
+        });
+      } catch (err) {
+        // Window still too dense: halve the span and retry the same edge.
+        if (isClickHouseTooManyRowsError(err) && span > OWNER_WINDOW_MIN_SPAN) {
+          span = Math.max(OWNER_WINDOW_MIN_SPAN, Math.floor(span / 2));
+          continue;
+        }
+        throw err;
+      }
+
+      for (const tx of rows) {
+        if (seen.has(tx.id)) continue;
+        seen.add(tx.id);
+        collected.push(tx);
+      }
+      windowCount += 1;
+
+      // Advance the cursor to the last (lowest-priority) row so a partially
+      // consumed window resumes below it next iteration.
+      if (rows.length > 0) {
+        runningCursor = encodeTransactionGqlCursor(rows[rows.length - 1]);
+      }
+
+      // Only drop to the next window once this one is drained. A full
+      // `target`-sized batch means there may be more matching rows below the
+      // cursor in the SAME window (dedup can leave collected < target), so keep
+      // the edge and let the advanced cursor pull the rest. A short batch means
+      // the window beyond the cursor is exhausted.
+      if (rows.length < target) {
+        edge = descending ? windowLo - 1 : windowHi + 1;
+      }
+    }
+
+    return collected.slice(0, target);
   }
 
   // Maps a CH row from either the stable or unstable transactions table
@@ -672,10 +985,12 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
    * Set-based dedup with stable > unstable > sqlite precedence handles
    * the stabilization-overlap window where the same `id` briefly lives
    * in both `transactions` and `new_transactions` until TTL drops the
-   * unstable copy. JS-side sort + slice produces a deterministic page;
-   * `hasNextPage` is computed against the deduped edge list (not the
-   * raw concatenation) so cross-leg duplicates that collapse the page
-   * don't falsely advertise more results.
+   * unstable copy. JS-side sort + slice produces a deterministic page.
+   * `hasNextPage` is derived from each leg's raw result *before*
+   * cross-leg id-dedup: a leg returning more than `pageSize` rows has
+   * more matching data to give. Computing it against the deduped edge
+   * count instead would falsely signal completeness whenever duplicate
+   * ids collapse the merged page to `pageSize` or fewer (see PE-9124).
    *
    * See `clickhouse-pipeline.md` and PR #699 for the design rationale.
    */
@@ -764,9 +1079,39 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     }
 
     const chStablePromise = (async () => {
-      const row = await this.clickhouseClient.query({ query: stableSql });
-      const jsonRow = await row.json();
-      return jsonRow.data.map((tx: any) => this.mapTransactionRow(tx));
+      try {
+        const row = await this.clickhouseClient.query({ query: stableSql });
+        const jsonRow = await row.json();
+        return jsonRow.data.map((tx: any) => this.mapTransactionRow(tx));
+      } catch (err) {
+        // Hack 5: an owner-filtered query that still trips max_rows_to_read
+        // through owner_projection means a whale whose footprint exceeds the
+        // cap. Re-run as an adaptive height-windowed walk instead of failing.
+        if (
+          this.ownerProjectionApplies(owners, ids, tags) &&
+          isClickHouseTooManyRowsError(err)
+        ) {
+          this.log.warn(
+            'Stable GQL leg tripped max_rows_to_read on an owner-filtered ' +
+              'query; retrying with adaptive height-windowing',
+            { owners, tags, minHeight, maxHeight },
+          );
+          return this.queryStableTransactionsWindowed({
+            pageSize,
+            cursor,
+            sortOrder,
+            ids,
+            recipients,
+            owners,
+            minHeight,
+            maxHeight,
+            bundledIn,
+            tags,
+            encoded: encodedFilters,
+          });
+        }
+        throw err;
+      }
     })();
 
     // UNSTABLE LEG — `new_transactions` joined against `new_blocks` for
@@ -888,8 +1233,10 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     // SQLite leg: rejection degrades same as today.
     const sqliteSettled = await sqliteSettledPromise;
     let sqliteEdges: GqlTransactionsResult['edges'] = [];
+    let sqliteHasNextPage = false;
     if (sqliteSettled.status === 'fulfilled') {
       sqliteEdges = sqliteSettled.value.edges;
+      sqliteHasNextPage = sqliteSettled.value.pageInfo.hasNextPage;
       if (
         sqliteSettled.value.warnings !== undefined &&
         sqliteSettled.value.warnings.length > 0
@@ -966,9 +1313,26 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       return bufA.compare(bufB) * sortOrderModifier;
     });
 
+    // `hasNextPage` must reflect whether any leg has rows BEYOND this page,
+    // derived from each leg's RAW result before the cross-leg id-dedup above.
+    // Both ClickHouse legs fetch `pageSize + 1` rows (see buildChTransactionsSql),
+    // so a leg that comes back with more than `pageSize` rows has more matching
+    // data to give. Relying on the deduped `edges.length > pageSize` alone
+    // under-reports: when duplicate ids collapse the merged set to `pageSize` or
+    // fewer — e.g. stale rows that share an `id` but differ on
+    // `block_transaction_index`, which the SQL's full-key `LIMIT 1 BY` does not
+    // fold — the page falsely signals completeness and every later page is
+    // silently stranded. Erring toward `true` is safe: the worst case is one
+    // extra page fetch that comes back empty.
+    const hasNextPage =
+      edges.length > pageSize ||
+      stableTxs.length > pageSize ||
+      unstableTxs.length > pageSize ||
+      sqliteHasNextPage;
+
     return {
       pageInfo: {
-        hasNextPage: edges.length > pageSize,
+        hasNextPage,
       },
       edges: edges.slice(0, pageSize),
       ...(warnings.length > 0 ? { warnings } : {}),
