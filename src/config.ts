@@ -256,6 +256,16 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+// Kill-switch for the untrusted-gateway provenance-param omission. By default
+// (false) the `ar-io-*` query params are NOT sent to untrusted gateways
+// (`trusted: false`), because CDN-fronted gateways such as arweave.net (behind
+// CDN77) return 502 on those param names — provenance still travels via
+// X-AR-IO-* headers. Set to `true` to revert to the legacy behavior of sending
+// the params to every gateway (rollback lever; not normally needed).
+export const TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS =
+  env.varOrDefault('TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS', 'false') ===
+  'true';
+
 export const STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
   'STREAM_STALL_TIMEOUT_MS',
   1000 * 30, // 30 seconds

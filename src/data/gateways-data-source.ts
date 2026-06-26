@@ -62,6 +62,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private readonly fallbackToBasePath: boolean;
   private readonly maxHopsAllowed: number;
   private readonly rangeAccept200MaxOffset: number;
+  private readonly sendUntrustedParams: boolean;
   private readonly agents: Map<string, http.Agent | https.Agent> = new Map();
 
   constructor({
@@ -73,6 +74,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     fallbackToBasePath = false,
     maxHopsAllowed = MAX_DATA_HOPS,
     rangeAccept200MaxOffset = config.GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET,
+    sendUntrustedParams = config.TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
@@ -82,6 +84,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     fallbackToBasePath?: boolean;
     maxHopsAllowed?: number;
     rangeAccept200MaxOffset?: number;
+    sendUntrustedParams?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
@@ -90,6 +93,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     this.fallbackToBasePath = fallbackToBasePath;
     this.maxHopsAllowed = maxHopsAllowed;
     this.rangeAccept200MaxOffset = rangeAccept200MaxOffset;
+    this.sendUntrustedParams = sendUntrustedParams;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -122,6 +126,24 @@ export class GatewaysDataSource implements ContiguousDataSource {
     return agent;
   }
 
+  /**
+   * Fetch contiguous data for `id`, trying each configured gateway in
+   * priority order with fallback.
+   *
+   * **Provenance propagation is trust-dependent.** Request provenance
+   * (hops, origin, arns context, via chain) is always sent as `X-AR-IO-*`
+   * request headers. It is *additionally* sent as `ar-io-*` query params
+   * **only to trusted gateways**. Untrusted gateways (`trusted: false` in
+   * `TRUSTED_GATEWAYS_URLS`) receive headers only — the query params are
+   * omitted because CDN-fronted gateways such as `arweave.net` return 502
+   * on those unknown params. Since the header bag is a strict superset of
+   * the params, this drops no provenance. Loop/hop protection and response
+   * trust marking are independent of the params and unaffected.
+   *
+   * The `TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS` kill-switch (default off)
+   * reverts to the legacy behavior of sending the query params to every
+   * gateway, including untrusted ones.
+   */
   async getData({
     id,
     requestAttributes,
@@ -211,6 +233,15 @@ export class GatewaysDataSource implements ContiguousDataSource {
               });
               continue;
             }
+
+            // Marks response trust and gates the outbound provenance query
+            // params; see getData() TSDoc for the trust-dependent contract.
+            const gatewayTrusted = this.gatewayTrust.get(gatewayUrl) ?? true;
+            // Untrusted gateways omit the ar-io-* query params unless the
+            // kill-switch (TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS) forces the
+            // legacy always-send behavior.
+            const sendProvenanceParams =
+              gatewayTrusted || this.sendUntrustedParams;
 
             const isHttps = gatewayUrl.startsWith('https://');
             const agent = this.getAgent(gatewayUrl);
@@ -316,18 +347,25 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   },
                   url: path,
                   responseType: 'stream',
-                  params: {
-                    'ar-io-hops': requestAttributesHeaders?.attributes.hops,
-                    'ar-io-origin': requestAttributesHeaders?.attributes.origin,
-                    'ar-io-origin-release':
-                      requestAttributesHeaders?.attributes.originNodeRelease,
-                    'ar-io-arns-record':
-                      requestAttributesHeaders?.attributes.arnsRecord,
-                    'ar-io-arns-basename':
-                      requestAttributesHeaders?.attributes.arnsBasename,
-                    'ar-io-via':
-                      requestAttributesHeaders?.attributes.via?.join(', '),
-                  },
+                  // Trust-dependent provenance params; see getData() TSDoc.
+                  // `undefined` (not `{}`) ensures axios appends no query
+                  // string at all for untrusted gateways.
+                  params: sendProvenanceParams
+                    ? {
+                        'ar-io-hops': requestAttributesHeaders?.attributes.hops,
+                        'ar-io-origin':
+                          requestAttributesHeaders?.attributes.origin,
+                        'ar-io-origin-release':
+                          requestAttributesHeaders?.attributes
+                            .originNodeRelease,
+                        'ar-io-arns-record':
+                          requestAttributesHeaders?.attributes.arnsRecord,
+                        'ar-io-arns-basename':
+                          requestAttributesHeaders?.attributes.arnsBasename,
+                        'ar-io-via':
+                          requestAttributesHeaders?.attributes.via?.join(', '),
+                      }
+                    : undefined,
                 });
 
                 const gatewayRequestDuration = Date.now() - gatewayRequestStart;
@@ -515,9 +553,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   this.streamStallTimeoutMs,
                   this.streamRequestTimeoutMs,
                 );
-
-                const gatewayTrusted =
-                  this.gatewayTrust.get(gatewayUrl) ?? true;
 
                 span.setAttributes({
                   'gateway.successful_url': gatewayUrl,
