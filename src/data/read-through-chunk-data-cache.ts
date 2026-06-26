@@ -7,6 +7,7 @@
 import winston from 'winston';
 import { tracer } from '../tracing.js';
 import { isValidationParams } from '../lib/validation.js';
+import * as metrics from '../metrics.js';
 
 import {
   ChunkData,
@@ -121,6 +122,19 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
         signal,
       );
       const sourceDuration = Date.now() - sourceStart;
+
+      // Reject invalid empty chunks at the cache boundary: never cache them
+      // (which would poison this offset) and surface an error so the caller's
+      // retrieval cascade can fall through to another source instead of
+      // looping on a non-advancing chunk.
+      if (chunkData.chunk.length === 0) {
+        metrics.chunkZeroLengthTotal.inc({ stage: 'source_fetch' });
+        span.setAttribute('chunk.zero_length_source', true);
+        throw new Error(
+          `Chunk source returned a zero-length chunk for dataRoot ${dataRoot} ` +
+            `relativeOffset ${relativeOffset}`,
+        );
+      }
 
       span.setAttributes({
         'chunk.source_fetch_duration_ms': sourceDuration,

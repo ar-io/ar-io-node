@@ -190,6 +190,86 @@ describe('TxChunksDataSource', () => {
     });
   });
 
+  describe('forward-progress guards', () => {
+    it('should abort the stream when a zero-length chunk is returned', async () => {
+      mock.method(metrics.chunkStreamAbortsTotal, 'inc');
+      // A chunk that returns no bytes would never advance the byte counter,
+      // re-requesting the same offset forever. The guard must surface an
+      // error instead of spinning.
+      mock.method(chunkSource, 'getChunkDataByAny', async () => ({
+        hash: Buffer.alloc(0),
+        chunk: Buffer.alloc(0),
+      }));
+
+      const data = await txChunkRetriever.getData({
+        id: TX_ID,
+        requestAttributes,
+      });
+
+      await assert.rejects(
+        (async () => {
+          for await (const _chunk of data.stream) {
+            // consume
+          }
+        })(),
+        { message: /Zero-length chunk/ },
+      );
+
+      assert.equal(
+        (metrics.chunkStreamAbortsTotal.inc as any).mock.callCount(),
+        1,
+      );
+      assert.equal(
+        (metrics.chunkStreamAbortsTotal.inc as any).mock.calls[0].arguments[0]
+          .reason,
+        'zero_length_chunk',
+      );
+    });
+
+    it('should abort the stream when the chunk count exceeds the tx size bound', async () => {
+      mock.method(metrics.chunkStreamAbortsTotal, 'inc');
+      // size is 256000 bytes (maxChunks = ceil(256000 / 262144) + 1 = 2).
+      // Returning a single byte per chunk would otherwise require 256000
+      // fetches; the backstop must abort once the count bound is hit.
+      mock.method(chunkSource, 'getChunkDataByAny', async () => ({
+        hash: Buffer.alloc(0),
+        chunk: Buffer.from([1]),
+      }));
+
+      const data = await txChunkRetriever.getData({
+        id: TX_ID,
+        requestAttributes,
+      });
+
+      let received = 0;
+      await assert.rejects(
+        (async () => {
+          for await (const _chunk of data.stream) {
+            received++;
+          }
+        })(),
+        { message: /Chunk count exceeded maximum/ },
+      );
+
+      // The exact count the consumer observes is timing-dependent (destroy()
+      // discards any buffered-but-unconsumed chunk), but it must abort near the
+      // bound rather than running the full size/1-byte = 256000 iterations.
+      assert.ok(
+        received <= 2,
+        `should abort near the chunk bound, emitted ${received}`,
+      );
+      assert.equal(
+        (metrics.chunkStreamAbortsTotal.inc as any).mock.callCount(),
+        1,
+      );
+      assert.equal(
+        (metrics.chunkStreamAbortsTotal.inc as any).mock.calls[0].arguments[0]
+          .reason,
+        'chunk_count_exceeded',
+      );
+    });
+  });
+
   describe('range requests', () => {
     it('should stream a range within a single chunk', async () => {
       // Mock range-specific metrics
