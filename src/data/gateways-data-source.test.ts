@@ -376,7 +376,7 @@ describe('GatewayDataSource', () => {
         },
       });
 
-      await untrustedDataSource.getData({
+      const data = await untrustedDataSource.getData({
         id: 'some-id',
         requestAttributes,
       });
@@ -392,6 +392,8 @@ describe('GatewayDataSource', () => {
         requestParams.headers['X-AR-IO-Origin'],
         requestAttributes.origin,
       );
+      // The same trust flag still marks the response as untrusted.
+      assert.equal(data.trusted, false);
     });
 
     it('should still send ar-io-* query params for trusted gateways', async () => {
@@ -405,20 +407,27 @@ describe('GatewayDataSource', () => {
         };
       };
 
+      // Exercise the full provenance param set (via + arns) so every
+      // serialized param line is covered, not just hops/origin.
+      const richAttributes: RequestAttributes = {
+        origin: 'node-url',
+        hops: 0,
+        via: ['upstream-node'],
+        arnsBasename: 'example',
+      };
+
       // dataSource from beforeEach is configured with trusted: true.
-      await dataSource.getData({
+      const data = await dataSource.getData({
         id: 'some-id',
-        requestAttributes,
+        requestAttributes: richAttributes,
       });
 
-      assert.equal(
-        requestParams.params['ar-io-hops'],
-        requestAttributes.hops + 1,
-      );
-      assert.equal(
-        requestParams.params['ar-io-origin'],
-        requestAttributes.origin,
-      );
+      assert.equal(requestParams.params['ar-io-hops'], richAttributes.hops + 1);
+      assert.equal(requestParams.params['ar-io-origin'], richAttributes.origin);
+      assert.equal(requestParams.params['ar-io-via'], 'upstream-node');
+      assert.equal(requestParams.params['ar-io-arns-basename'], 'example');
+      // The same trust flag still marks the response as trusted.
+      assert.equal(data.trusted, true);
     });
 
     it('should return hops 1 in the response if not provided', async () => {

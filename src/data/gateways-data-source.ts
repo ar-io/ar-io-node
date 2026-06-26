@@ -122,6 +122,20 @@ export class GatewaysDataSource implements ContiguousDataSource {
     return agent;
   }
 
+  /**
+   * Fetch contiguous data for `id`, trying each configured gateway in
+   * priority order with fallback.
+   *
+   * **Provenance propagation is trust-dependent.** Request provenance
+   * (hops, origin, arns context, via chain) is always sent as `X-AR-IO-*`
+   * request headers. It is *additionally* sent as `ar-io-*` query params
+   * **only to trusted gateways**. Untrusted gateways (`trusted: false` in
+   * `TRUSTED_GATEWAYS_URLS`) receive headers only — the query params are
+   * omitted because CDN-fronted gateways such as `arweave.net` return 502
+   * on those unknown params. Since the header bag is a strict superset of
+   * the params, this drops no provenance. Loop/hop protection and response
+   * trust marking are independent of the params and unaffected.
+   */
   async getData({
     id,
     requestAttributes,
@@ -212,10 +226,8 @@ export class GatewaysDataSource implements ContiguousDataSource {
               continue;
             }
 
-            // trusted:false gateways are typically external/CDN-fronted
-            // endpoints (e.g. arweave.net behind CDN77) that 502 on unknown
-            // ar-io-* query params. We gate the outbound provenance params on
-            // this flag below; the same value also marks response trust.
+            // Gates the outbound provenance query params and marks response
+            // trust; see getData() TSDoc for the trust-dependent contract.
             const gatewayTrusted = this.gatewayTrust.get(gatewayUrl) ?? true;
 
             const isHttps = gatewayUrl.startsWith('https://');
@@ -322,14 +334,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   },
                   url: path,
                   responseType: 'stream',
-                  // Provenance is sent as both X-AR-IO-* headers (always, via
-                  // requestAttributesHeaders?.headers above) and query params.
-                  // The header bag is a strict superset of these params, so
-                  // omitting the params for untrusted gateways loses no
-                  // provenance — it only avoids the query string that
-                  // CDN-fronted gateways (arweave.net) reject with a 502.
+                  // Trust-dependent provenance params; see getData() TSDoc.
                   // `undefined` (not `{}`) ensures axios appends no query
-                  // string at all.
+                  // string at all for untrusted gateways.
                   params: gatewayTrusted
                     ? {
                         'ar-io-hops': requestAttributesHeaders?.attributes.hops,
