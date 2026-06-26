@@ -212,6 +212,12 @@ export class GatewaysDataSource implements ContiguousDataSource {
               continue;
             }
 
+            // trusted:false gateways are typically external/CDN-fronted
+            // endpoints (e.g. arweave.net behind CDN77) that 502 on unknown
+            // ar-io-* query params. We gate the outbound provenance params on
+            // this flag below; the same value also marks response trust.
+            const gatewayTrusted = this.gatewayTrust.get(gatewayUrl) ?? true;
+
             const isHttps = gatewayUrl.startsWith('https://');
             const agent = this.getAgent(gatewayUrl);
             const gatewayAxios = axios.create({
@@ -316,18 +322,30 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   },
                   url: path,
                   responseType: 'stream',
-                  params: {
-                    'ar-io-hops': requestAttributesHeaders?.attributes.hops,
-                    'ar-io-origin': requestAttributesHeaders?.attributes.origin,
-                    'ar-io-origin-release':
-                      requestAttributesHeaders?.attributes.originNodeRelease,
-                    'ar-io-arns-record':
-                      requestAttributesHeaders?.attributes.arnsRecord,
-                    'ar-io-arns-basename':
-                      requestAttributesHeaders?.attributes.arnsBasename,
-                    'ar-io-via':
-                      requestAttributesHeaders?.attributes.via?.join(', '),
-                  },
+                  // Provenance is sent as both X-AR-IO-* headers (always, via
+                  // requestAttributesHeaders?.headers above) and query params.
+                  // The header bag is a strict superset of these params, so
+                  // omitting the params for untrusted gateways loses no
+                  // provenance — it only avoids the query string that
+                  // CDN-fronted gateways (arweave.net) reject with a 502.
+                  // `undefined` (not `{}`) ensures axios appends no query
+                  // string at all.
+                  params: gatewayTrusted
+                    ? {
+                        'ar-io-hops': requestAttributesHeaders?.attributes.hops,
+                        'ar-io-origin':
+                          requestAttributesHeaders?.attributes.origin,
+                        'ar-io-origin-release':
+                          requestAttributesHeaders?.attributes
+                            .originNodeRelease,
+                        'ar-io-arns-record':
+                          requestAttributesHeaders?.attributes.arnsRecord,
+                        'ar-io-arns-basename':
+                          requestAttributesHeaders?.attributes.arnsBasename,
+                        'ar-io-via':
+                          requestAttributesHeaders?.attributes.via?.join(', '),
+                      }
+                    : undefined,
                 });
 
                 const gatewayRequestDuration = Date.now() - gatewayRequestStart;
@@ -515,9 +533,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   this.streamStallTimeoutMs,
                   this.streamRequestTimeoutMs,
                 );
-
-                const gatewayTrusted =
-                  this.gatewayTrust.get(gatewayUrl) ?? true;
 
                 span.setAttributes({
                   'gateway.successful_url': gatewayUrl,

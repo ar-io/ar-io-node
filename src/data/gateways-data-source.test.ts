@@ -358,6 +358,69 @@ describe('GatewayDataSource', () => {
       assert.equal(requestParams.params['ar-io-origin'], undefined);
     });
 
+    it('should omit ar-io-* query params for untrusted gateways but still send provenance headers', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+          data: axiosStreamData,
+        };
+      };
+
+      const untrustedDataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway.domain': { priority: 1, trusted: false },
+        },
+      });
+
+      await untrustedDataSource.getData({
+        id: 'some-id',
+        requestAttributes,
+      });
+
+      // No query string is appended (CDN-fronted gateways 502 on these).
+      assert.equal(requestParams.params, undefined);
+      // Provenance still rides along as headers.
+      assert.equal(
+        requestParams.headers['X-AR-IO-Hops'],
+        (requestAttributes.hops + 1).toString(),
+      );
+      assert.equal(
+        requestParams.headers['X-AR-IO-Origin'],
+        requestAttributes.origin,
+      );
+    });
+
+    it('should still send ar-io-* query params for trusted gateways', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+          data: axiosStreamData,
+        };
+      };
+
+      // dataSource from beforeEach is configured with trusted: true.
+      await dataSource.getData({
+        id: 'some-id',
+        requestAttributes,
+      });
+
+      assert.equal(
+        requestParams.params['ar-io-hops'],
+        requestAttributes.hops + 1,
+      );
+      assert.equal(
+        requestParams.params['ar-io-origin'],
+        requestAttributes.origin,
+      );
+    });
+
     it('should return hops 1 in the response if not provided', async () => {
       const data = await dataSource.getData({
         id: 'some-id',
