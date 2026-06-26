@@ -377,7 +377,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
             // the same offset indefinitely (observed as multi-million-span
             // traces of repeated cache hits on a single offset). Abort rather
             // than spin.
-            if (chunkData.chunk.length === 0) {
+            if (size > 0 && chunkData.chunk.length === 0) {
               metrics.chunkStreamAbortsTotal.inc({
                 reason: 'zero_length_chunk',
               });

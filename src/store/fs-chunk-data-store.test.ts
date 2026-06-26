@@ -268,7 +268,7 @@ describe('FsChunkDataStore', () => {
       assert.deepEqual(retrieved.chunk, chunkData.chunk);
     });
 
-    it('should handle empty chunk data', async () => {
+    it('should refuse to cache zero-length chunk data', async () => {
       const dataRoot = 'tne4Fh9gC2AYX_ZUO5fV_ppKe0pwCwjOK4uTtg1OIjk';
       const relativeOffset = 0;
       const chunkData: ChunkData = {
@@ -276,11 +276,30 @@ describe('FsChunkDataStore', () => {
         hash: crypto.createHash('sha256').update(Buffer.alloc(0)).digest(),
       };
 
+      // A zero-length chunk is invalid and would poison the cache, so set()
+      // must drop it rather than persist it.
       await store.set(dataRoot, relativeOffset, chunkData);
-      const retrieved = await store.get(dataRoot, relativeOffset);
 
-      assert.ok(retrieved);
-      assert.strictEqual(retrieved.chunk.length, 0);
+      assert.strictEqual(await store.has(dataRoot, relativeOffset), false);
+      assert.strictEqual(await store.get(dataRoot, relativeOffset), undefined);
+    });
+
+    it('should treat a pre-existing zero-length chunk file as a miss', async () => {
+      // Simulates a cache entry poisoned before this guard existed: a 0-byte
+      // file on disk must self-heal by reading as a miss (so the caller
+      // refetches and overwrites it) rather than a valid empty chunk.
+      const dataRoot = 'Pois0nedZZZ2nHYgKhhI25MzveuYvH7rCd8J0WIVp4EVs';
+      const relativeOffset = 0;
+
+      const fs = await import('node:fs');
+      const dir = join(tempDir, 'data', 'by-dataroot', 'Po', 'is', dataRoot);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(join(dir, '0'), Buffer.alloc(0));
+
+      // has() still reports the file exists...
+      assert.strictEqual(await store.has(dataRoot, relativeOffset), true);
+      // ...but get() must not serve the empty chunk.
+      assert.strictEqual(await store.get(dataRoot, relativeOffset), undefined);
     });
   });
 

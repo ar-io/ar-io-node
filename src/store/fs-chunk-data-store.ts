@@ -10,6 +10,7 @@ import path from 'node:path';
 import winston from 'winston';
 
 import { ChunkData, ChunkDataStore } from '../types.js';
+import * as metrics from '../metrics.js';
 
 export class FsChunkDataStore implements ChunkDataStore {
   private log: winston.Logger;
@@ -62,6 +63,20 @@ export class FsChunkDataStore implements ChunkDataStore {
       if (await this.has(dataRoot, relativeOffset)) {
         const chunkPath = this.chunkDataRootPath(dataRoot, relativeOffset);
         const chunk = await fs.promises.readFile(chunkPath);
+
+        // Self-heal poisoned cache entries: a zero-length chunk file is never
+        // valid and, if served, would stall consumers that advance by chunk
+        // length (re-requesting the same offset forever). Treat it as a miss
+        // so the caller refetches and overwrites it.
+        if (chunk.length === 0) {
+          metrics.chunkZeroLengthTotal.inc({ stage: 'cache_read' });
+          this.log.warn('Ignoring zero-length cached chunk; treating as miss', {
+            dataRoot,
+            relativeOffset,
+          });
+          return undefined;
+        }
+
         const hash = crypto.createHash('sha256').update(chunk).digest();
 
         return {
@@ -87,6 +102,18 @@ export class FsChunkDataStore implements ChunkDataStore {
     try {
       const symlinkPath = this.absoluteOffsetIndexPath(absoluteOffset);
       const chunk = await fs.promises.readFile(symlinkPath); // Follows symlink
+
+      // Self-heal poisoned entries (see get()): treat a zero-length chunk as a
+      // miss so the caller refetches rather than serving invalid empty data.
+      if (chunk.length === 0) {
+        metrics.chunkZeroLengthTotal.inc({ stage: 'cache_read' });
+        this.log.warn(
+          'Ignoring zero-length cached chunk by absolute offset; treating as miss',
+          { absoluteOffset },
+        );
+        return undefined;
+      }
+
       const hash = crypto.createHash('sha256').update(chunk).digest();
 
       return {
@@ -127,6 +154,19 @@ export class FsChunkDataStore implements ChunkDataStore {
     chunkData: ChunkData,
     absoluteOffset?: number,
   ): Promise<void> {
+    // Never persist a zero-length chunk: it is invalid data and poisons the
+    // cache, since has() would report a hit and get() would return an empty
+    // buffer that stalls chunk-streaming consumers.
+    if (chunkData.chunk.length === 0) {
+      metrics.chunkZeroLengthTotal.inc({ stage: 'cache_write' });
+      this.log.warn('Refusing to cache zero-length chunk', {
+        dataRoot,
+        relativeOffset,
+        absoluteOffset,
+      });
+      return;
+    }
+
     try {
       const chunkDataRootDir = this.chunkDataRootDir(dataRoot);
       await fs.promises.mkdir(chunkDataRootDir, { recursive: true });

@@ -841,6 +841,14 @@ export const chunkStreamAbortsTotal = new promClient.Counter({
   labelNames: ['reason'] as const,
 });
 
+export const chunkZeroLengthTotal = new promClient.Counter({
+  name: 'chunk_zero_length_total',
+  help:
+    'Count of invalid zero-length chunks rejected, by pipeline stage ' +
+    '(source_fetch, cache_read, cache_write)',
+  labelNames: ['stage'] as const,
+});
+
 //
 // Negative data cache metrics
 //
