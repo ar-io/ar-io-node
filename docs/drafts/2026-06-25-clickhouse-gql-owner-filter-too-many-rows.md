@@ -206,6 +206,41 @@ Justified only if heavy-owner `file` deep pagination shows up hot in profiling
    re-sort), then **drop `owner_projection`** to offset its ~67 GiB / write /
    merge cost.
 
+## Extension: `owners + ids` (the dominant 158 class)
+
+Follow-up after the merge: a 7-day `query_log` audit on a canary showed that
+**multi-id `transactions(ids:[...])` queries are ~99% of all `TOO_MANY_ROWS`
+failures** (~1,670/day), dominated by 100-id batch fetches — far more than the
+owner+tag class the initial fix addressed (~34/7d). Root cause is the same
+`id_bloom` leakiness documented elsewhere: `id` is the *last* sort-key column, so
+`id IN (...)` has no seek and relies on the bloom, which lights up most granules.
+
+Measured on a canary for one owner, 100 real ids:
+
+| query | rows to read | granules |
+|-------|-------------:|---------:|
+| ids only (no owner) | **308,254,234** | 37,703 |
+| ids + owner, main table | **13,572,231** | 1,660 |
+| ids + owner, **projection** | **555,663** | 70 |
+
+So an owner filter alone isn't enough (13.6M still trips the cap for ~100 ids —
+the bloom already selected most granules), but seeking the owner via the
+projection drops it to ~556K. The eligibility check
+(`ownerProjectionApplies`) therefore routes **`owners + ids`** through the
+projection regardless of tags (the id list bounds the result), gated by the same
+`CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED` flag.
+
+Notes / limits:
+- `read_in_order = 0` is a no-op here (id queries carry no `ORDER BY`); the win
+  is purely `optimize_use_projections = 1` doing the owner seek.
+- The height-windowing fallback is **disabled for id queries** — it's
+  height-ordered and needs the cursor predicate, which id queries don't carry. A
+  whale owner (>10M footprint) + ids still surfaces the 158 (rare, no worse than
+  before).
+- This only reduces live failures once **clients add `owners:[x]`** to their id
+  queries; genuinely ownerless batches still need the schema-level `id_bloom` /
+  id-ordered-table fix.
+
 ## Overhead
 
 **Key framing:** the owner-ordered copy already exists as the 67 GiB

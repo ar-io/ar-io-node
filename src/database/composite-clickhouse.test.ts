@@ -727,6 +727,109 @@ describe('CompositeClickHouseDatabase', () => {
       assert.ok(!queries.some((q) => q.includes('optimize_read_in_order = 0')));
     });
 
+    it('routes owner + ids through the projection', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+      const queries: string[] = [];
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          queries.push(sqlStr);
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          return {
+            json: async () => ({
+              data: [
+                chRow({ id: id('a'), height: 100 }),
+                chRow({ id: id('b'), height: 99 }),
+              ],
+            }),
+          };
+        },
+      };
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 100,
+        owners: [id('owner')],
+        ids: [id('a'), id('b'), id('c')],
+      });
+
+      // owner+ids is bounded by the id list, so it routes through the
+      // projection regardless of tags (no Entity-Type allowlist gate).
+      const stableQ = queries.find((q) => q.includes('FROM transactions'));
+      assert.ok(
+        stableQ !== undefined &&
+          stableQ.includes('optimize_use_projections = 1'),
+        'owner+ids should route through the projection',
+      );
+      assert.equal(result.edges.length, 2);
+    });
+
+    it('does not window owner+ids on 158 (fails fast)', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+      let stableCalls = 0;
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          stableCalls += 1;
+          const err: any = new Error('Code: 158. TOO_MANY_ROWS');
+          err.code = '158';
+          throw err;
+        },
+      };
+
+      await assert.rejects(
+        composite.getGqlTransactions({
+          pageSize: 100,
+          owners: [id('owner')],
+          ids: [id('a'), id('b')],
+        }),
+        /158|TOO_MANY_ROWS/,
+      );
+      // Height-windowing is height-ordered and needs a cursor predicate, which
+      // id queries don't carry — so owner+ids does NOT window; the 158 surfaces.
+      assert.equal(stableCalls, 1);
+    });
+
+    it('does not route ids without an owner', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+      const queries: string[] = [];
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          queries.push(sqlStr);
+          return { json: async () => ({ data: [] }) };
+        },
+      };
+
+      await composite.getGqlTransactions({
+        pageSize: 100,
+        ids: [id('a'), id('b')],
+      });
+
+      // Ownerless id queries have nothing to seek on — they stay on the
+      // id_bloom main-table path (projections off), unchanged by the feature.
+      const stableQ = queries.find((q) => q.includes('FROM transactions'));
+      assert.ok(
+        stableQ !== undefined &&
+          stableQ.includes('optimize_use_projections = 0'),
+        'ids without an owner should use the id_bloom main-table path',
+      );
+      assert.ok(!queries.some((q) => q.includes('optimize_read_in_order = 0')));
+    });
+
     it('drains a dense window via cursor instead of stranding rows', async () => {
       const composite = buildComposite({
         sqlite,
