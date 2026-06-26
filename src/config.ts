@@ -873,35 +873,6 @@ export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
 // Maximum raw chunk size (256 KiB) - used for raw binary chunk endpoint rate limiting
 export const MAX_CHUNK_SIZE = 256 * 1024;
 
-// Arweave network peer post success goal
-// setting to 0 means this behaviour is disabled.
-export const ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
-  'ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT',
-  '2',
-);
-
-// The maximum number of peers to attempt to POST to before giving up
-export const ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT = +env.varOrDefault(
-  'ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT',
-  '5',
-);
-
-if (
-  ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT <
-  ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT
-) {
-  throw new Error(
-    'ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT must be greater than or equal to ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT',
-  );
-}
-
-// If ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT is set non-zero, this
-// value defines how many chunks to post to peers in parallel.
-export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
-  'ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT',
-  '3',
-);
-
 // The maximum number of peers to attempt when fetching a chunk via GET
 export const ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT =
   env.positiveIntOrDefault('ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT', 5);
