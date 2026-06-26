@@ -338,6 +338,26 @@ for (const range of ranges) {
 1. **Direct Chunk Access**: Using absolute offsets allows O(1) chunk lookup
 2. **Minimal Data Transfer**: Only fetch chunks containing requested bytes
 3. **Streaming Support**: Process chunks as they arrive without buffering all
+4. **Local offset→block resolution**: When data is retrieved by absolute offset
+   (the cold-data chunk-by-offset path), the gateway must first find the block
+   containing the offset. Rather than walking the chain with ~log₂(height)
+   sequential `GET /block/height/{h}` requests, the Arweave client first
+   consults a local index over `stable_blocks.weave_size`
+   (`getBlockByWeaveOffset`, backed by `stable_blocks_weave_size_idx`): the
+   containing block is the lowest block whose cumulative `weave_size` reaches
+   the offset. The local result is only trusted when the immediately-preceding
+   block is also present and ends before the offset (a tight bracket, so no
+   missing block can hide the true container); otherwise — and for offsets in
+   the not-yet-stable chain tip — it falls back to the chain binary search.
+   This only changes how the block is *found*; the block returned is identical.
+
+   Note this resolves offset→**block** only. Resolving offset→**transaction**
+   within that block cannot be done from local block/transaction columns,
+   because per-transaction offsets follow the block's binary tx-ID sort order
+   (see [Transaction Order vs Offset Order](#transaction-order-vs-offset-order))
+   and a transaction's true weave contribution is not always captured by
+   `data_size` (e.g. v1 inline data). Per-transaction offsets are therefore
+   taken from the chain's authoritative `/tx/{id}/offset` endpoint.
 
 ### Edge Cases
 

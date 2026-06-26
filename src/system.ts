@@ -288,6 +288,12 @@ export const db = new StandaloneSqliteDatabase({
   tagSelectivity: config.TAG_SELECTIVITY,
 });
 
+// Let the Arweave client resolve chunk offset->block lookups against the local
+// stable-block index instead of sequential upstream block fetches. Wired here
+// (not via the constructor) because the database is constructed after the
+// client. See ArweaveCompositeClient.binarySearchBlocks.
+arweaveClient.blockByOffsetIndex = db;
+
 export const dataAttributesStore: ContiguousDataAttributesStore =
   new CompositeDataAttributesSource({
     log,

@@ -63,6 +63,22 @@ import {
 import { MAX_FORK_DEPTH } from './constants.js';
 import { BlockOffsetMapping } from './block-offset-mapping.js';
 
+/**
+ * Local index that resolves an absolute weave offset to its containing block
+ * without per-block upstream fetches. Implemented by the SQLite database over
+ * the indexed `stable_blocks.weave_size` column and injected post-construction
+ * (see {@link ArweaveCompositeClient.blockByOffsetIndex} and system.ts). When
+ * absent or unable to confidently bracket the offset, the client falls back to
+ * the chain binary search, so behavior is unchanged — only the lookup path.
+ */
+export interface BlockByOffsetIndex {
+  getBlockByWeaveOffset(offset: number): Promise<{
+    height: number | undefined;
+    weaveSize: number | undefined;
+    prevWeaveSize: number | undefined;
+  }>;
+}
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 const DEFAULT_REQUEST_RETRY_COUNT = 5;
 const DEFAULT_MAX_REQUESTS_PER_SECOND = 5;
@@ -184,6 +200,12 @@ export class ArweaveCompositeClient
 
   // Static offset-to-block mapping for optimizing binary search
   private blockOffsetMapping?: BlockOffsetMapping;
+
+  // Optional local index resolving an absolute weave offset to its containing
+  // block, avoiding ~log2(height) sequential upstream block fetches. Set
+  // post-construction in system.ts once the database is available, because the
+  // database is constructed after this client. See binarySearchBlocks.
+  public blockByOffsetIndex?: BlockByOffsetIndex;
 
   // Chunk GET retry settings
   private chunkGetRetryCount: number;
@@ -2216,12 +2238,90 @@ export class ArweaveCompositeClient
     const cacheKey = `block_for_offset_${targetOffset}`;
     const cached = this.blockCache.get(cacheKey);
     if (cached) {
+      metrics.blockOffsetResolutionCounter.inc({ outcome: 'cache_hit' });
       this.log.debug('Block search cache hit', {
         targetOffset,
         cachedBlockHeight: cached.height,
         cachedBlockOffset: cached.weave_size,
       });
       return cached;
+    }
+
+    // Fast path: resolve the containing block from the local stable-block index,
+    // collapsing the ~log2(height) sequential upstream block fetches of the
+    // chain binary search below into a single indexed lookup plus one block
+    // fetch. Only trusted when the index tightly brackets the offset (the
+    // immediately-preceding block is present and ends before the offset), which
+    // rules out a missing block hiding the true container; the fetched block's
+    // weave_size is re-checked before returning. Any miss, gap, abort-free
+    // error, or offset in the unstable tip falls through to the chain binary
+    // search. This never changes which block is returned, only how it's found.
+    if (this.blockByOffsetIndex !== undefined) {
+      try {
+        const local =
+          await this.blockByOffsetIndex.getBlockByWeaveOffset(targetOffset);
+        if (
+          local.height !== undefined &&
+          local.weaveSize !== undefined &&
+          local.weaveSize >= targetOffset &&
+          local.prevWeaveSize !== undefined &&
+          local.prevWeaveSize < targetOffset
+        ) {
+          signal?.throwIfAborted();
+          const block = await this.getBlockByHeight(local.height);
+          if (
+            block !== undefined &&
+            block !== null &&
+            parseInt(block.weave_size) >= targetOffset
+          ) {
+            metrics.blockOffsetResolutionCounter.inc({
+              outcome: 'local_index_hit',
+            });
+            this.blockCache.set(cacheKey, block);
+            this.log.debug('Resolved block for offset via local index', {
+              targetOffset,
+              height: local.height,
+              blockOffset: block.weave_size,
+            });
+            return block;
+          }
+          // Index bracketed the offset but the fetched header no longer covers
+          // it (e.g. a reorg under the stable boundary) — don't trust it.
+          metrics.blockOffsetResolutionCounter.inc({
+            outcome: 'fallback_stale',
+          });
+        } else if (local.height === undefined) {
+          // No stable block reaches the offset (e.g. the unstable chain tip).
+          metrics.blockOffsetResolutionCounter.inc({
+            outcome: 'fallback_miss',
+          });
+        } else {
+          // Candidate found but not tightly bracketed (predecessor missing or
+          // not below the offset) — a gap could hide the true container.
+          metrics.blockOffsetResolutionCounter.inc({
+            outcome: 'fallback_untight',
+          });
+        }
+        this.log.debug(
+          'Local block-offset index did not confidently resolve; ' +
+            'falling back to chain binary search',
+          { targetOffset, local },
+        );
+      } catch (error: any) {
+        if (error?.name === 'AbortError') {
+          throw error;
+        }
+        metrics.blockOffsetResolutionCounter.inc({ outcome: 'fallback_error' });
+        this.log.debug(
+          'Local block-offset index lookup failed; ' +
+            'falling back to chain binary search',
+          { targetOffset, error: error?.message },
+        );
+      }
+    } else {
+      metrics.blockOffsetResolutionCounter.inc({
+        outcome: 'fallback_no_index',
+      });
     }
 
     try {
