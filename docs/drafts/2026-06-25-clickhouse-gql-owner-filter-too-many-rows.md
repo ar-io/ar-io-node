@@ -164,20 +164,24 @@ behind a feature flag, no schema change. A dedicated owner-ordered table
    optimizer seeks `owner_projection` and sorts the small matched set in memory
    (12.1M → 451K rows for the example owner). Otherwise the existing
    `optimize_use_projections = 0` (id/tag lookups) is preserved unchanged.
-2. **Eligibility predicate (`ownerProjectionApplies`).** A query qualifies only
-   when the feature is enabled, `owners` is present, `ids` is absent, and the
-   query carries an `Entity-Type` tag filter whose values are **all** in a
-   configurable allowlist (`CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES`,
-   default `drive,folder,snapshot`). This deliberately **excludes
+2. **Eligibility predicate (`ownerProjectionApplies`).** With the feature
+   enabled and `owners` present, two shapes qualify: (a) **`owners + ids`** —
+   the id list bounds the result, so it routes regardless of tags (see
+   "Extension: owners + ids" below); (b) **`owners` without `ids`** — requires an
+   `Entity-Type` tag filter whose values are **all** in a configurable allowlist
+   (`CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES`, default
+   `drive,folder,snapshot`). The no-id path deliberately **excludes
    `Entity-Type=file`** (millions of rows per owner → an expensive full sort of
    the matched set, re-done every page because read-in-order is off), as well as
    bare-owner and owner+other-tag queries. Those keep planning as today.
-3. **Reactive windowing fallback (hack 5).** When an *eligible* query still
-   trips `max_rows_to_read` (a whale whose footprint exceeds the cap even via
-   the projection), the stable leg catches Code 158 and retries via
+3. **Reactive windowing fallback (hack 5).** When an *eligible* **no-id** query
+   still trips `max_rows_to_read` (a whale whose footprint exceeds the cap even
+   via the projection), the stable leg catches Code 158 and retries via
    `queryStableTransactionsWindowed` — an adaptive height-window walk (halves
    the span on repeated 158, caps at 256 windows) accumulating `pageSize + 1`
-   rows so the existing merge / `hasNextPage` logic is untouched.
+   rows so the existing merge / `hasNextPage` logic is untouched. The walk is
+   height-ordered and needs the cursor predicate, so it is **not** used for
+   `owners + ids` (a whale owner + ids surfaces the 158 instead).
 4. **Master gate.** Everything is off unless
    `CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED=true`. When off, behavior is
    byte-identical to before. Window-span tuning lives in module-level
