@@ -156,6 +156,20 @@ interface PeerChunkQueue {
   totalSuccesses: number;
 }
 
+/**
+ * Stable memo key for the chunk-POST peer-sort cache. Identifies the *set* of
+ * eligible peers independent of order, so two different peer sets of equal
+ * length no longer collide on a shared cached ordering (the prior length-only
+ * key did, narrowing seeding diversity within the cache window).
+ *
+ * Cheap by design: one sort + join over the bounded postChunk peer set, far
+ * less work than the weighted selection the memo guards. Does not mutate the
+ * caller's array (`slice` before `sort`).
+ */
+export function chunkPostPeersCacheKey(peers: readonly string[]): string {
+  return peers.slice().sort().join(',');
+}
+
 export class ArweaveCompositeClient
   implements
     ChainSource,
@@ -311,11 +325,13 @@ export class ArweaveCompositeClient
       },
       {
         maxAge: config.CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS,
-        // Use array length as cache key for O(1) performance. This means different
-        // peer lists of the same length will share cached results, which is acceptable
-        // because: 1) peer weights change gradually, 2) the cache duration is short (10s),
-        // and 3) this avoids expensive operations on every chunk POST request.
-        normalizer: (args) => args[0].length.toString(),
+        // Key by the *set* of eligible peers (order-independent), not its length.
+        // The prior length-only key collided distinct peer sets of equal size onto
+        // one cached ordering for the full 10s window, quietly narrowing seeding
+        // diversity. This key is still cheap — a sort+join over the bounded
+        // postChunk peer set, far less than the weighted selection it guards — and
+        // the 10s maxAge still absorbs gradual weight drift.
+        normalizer: (args) => chunkPostPeersCacheKey(args[0]),
       },
     );
 
