@@ -95,6 +95,9 @@ class MockChunkBroadcaster implements ChunkBroadcaster {
     successCount: 1,
     preferredSuccessCount: 0,
     failureCount: 0,
+    distinctDomainCount: 1,
+    preferredEligibleCount: 0,
+    succeeded: true,
     results: [
       {
         peer: 'http://mock-peer',
@@ -151,7 +154,11 @@ class MockChunkBroadcaster implements ChunkBroadcaster {
     this.broadcastPromise = null;
     this.result = {
       successCount: 1,
+      preferredSuccessCount: 0,
       failureCount: 0,
+      distinctDomainCount: 1,
+      preferredEligibleCount: 0,
+      succeeded: true,
       results: [
         {
           peer: 'http://mock-peer',
@@ -379,7 +386,11 @@ describe('RebroadcastingChunkSource', () => {
     it('should not cache when success count below threshold', async () => {
       mockBroadcaster.result = {
         successCount: 0,
+        preferredSuccessCount: 0,
         failureCount: 1,
+        distinctDomainCount: 0,
+        preferredEligibleCount: 0,
+        succeeded: false,
         results: [
           {
             peer: 'http://mock-peer',
@@ -406,7 +417,11 @@ describe('RebroadcastingChunkSource', () => {
       // Fix broadcaster result
       mockBroadcaster.result = {
         successCount: 1,
+        preferredSuccessCount: 0,
         failureCount: 0,
+        distinctDomainCount: 1,
+        preferredEligibleCount: 0,
+        succeeded: true,
         results: [
           {
             peer: 'http://mock-peer',
@@ -473,6 +488,9 @@ describe('RebroadcastingChunkSource', () => {
             successCount: 1,
             preferredSuccessCount: 0,
             failureCount: 0,
+            distinctDomainCount: 1,
+            preferredEligibleCount: 0,
+            succeeded: true,
             results: [
               {
                 peer: 'http://mock-peer',

@@ -804,6 +804,24 @@ export const CHUNK_POST_PEER_CONCURRENCY = +env.varOrDefault(
   String(CHUNK_POST_MIN_SUCCESS_COUNT),
 );
 
+// Minimum number of distinct fault domains (IP /24 for v4, /48 for v6) a chunk
+// POST must land on among its successes. 0 = disabled (fault-domain-blind, the
+// legacy behavior). Soft: degrades gracefully if the eligible peer set cannot
+// supply this many distinct domains (never hard-fails on domain scarcity).
+export const CHUNK_POST_MIN_DISTINCT_DOMAINS = +env.varOrDefault(
+  'CHUNK_POST_MIN_DISTINCT_DOMAINS',
+  '0',
+);
+
+// When true, a chunk POST may meet quorum via a strong distinct-domain quorum of
+// discovered peers when NO preferred (tip) peer was even eligible — i.e. the tips
+// are down/over-queue. Removes the single-fault-domain tips SPOF. Default false
+// preserves the hard preferred-success requirement.
+export const CHUNK_POST_PREFERRED_SOFT_FALLBACK =
+  env
+    .varOrDefault('CHUNK_POST_PREFERRED_SOFT_FALLBACK', 'false')
+    .toLowerCase() === 'true';
+
 // Maximum consecutive 4xx failures before stopping broadcast (0 to disable)
 export const CHUNK_POST_MAX_CONSECUTIVE_FAILURES = +env.varOrDefault(
   'CHUNK_POST_MAX_CONSECUTIVE_FAILURES',
