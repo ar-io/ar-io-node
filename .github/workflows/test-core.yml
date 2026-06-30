@@ -8,6 +8,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # Backstop against a hung E2E harness (see build-core.yml).
+    timeout-minutes: 30
 
     steps:
       # Setup
@@ -31,6 +33,7 @@ jobs:
         run: docker build -t core .
       - name: Run E2E tests
         if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 20
         run: yarn test:e2e
         env:
           TEST_SKIP_TAGS: flaky

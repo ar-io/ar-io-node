@@ -8,6 +8,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # Backstop against a hung E2E harness (a leaked compose env can otherwise
+    # wedge the run until GitHub's 360-minute default). Normal run is ~18 min.
+    timeout-minutes: 30
     permissions:
       checks: write
       contents: read
@@ -37,6 +40,9 @@ jobs:
         run: docker build -t core .
       - name: Run E2E tests
         if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
+        # Tighter cap on just the E2E step so a stuck suite fails fast instead
+        # of consuming the whole job budget.
+        timeout-minutes: 20
         run: yarn test:e2e
         env:
           TEST_SKIP_TAGS: flaky
