@@ -8,6 +8,7 @@ import Sqlite, { Database } from 'better-sqlite3';
 import {
   DockerComposeEnvironment,
   GenericContainer,
+  StartedDockerComposeEnvironment,
   Wait,
 } from 'testcontainers';
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container';
@@ -28,6 +29,23 @@ export const getCoreContainer = async (): Promise<GenericContainer> => {
 };
 
 const DEFAULT_TIMEOUT = 60000;
+
+// Bound how long a compose environment may take to become healthy so a stuck
+// startup fails fast (the chain binary search of a wedged core, a container
+// that never binds its port, etc.) instead of hanging the whole run.
+const COMPOSE_STARTUP_TIMEOUT_MS = 120_000;
+// Grace period (ms) passed to `docker compose down -t`; testcontainers converts
+// it to seconds. Bounds teardown so a slow stop can't wedge the next suite.
+const COMPOSE_DOWN_TIMEOUT_MS = 60_000;
+
+// E2E suites run serially in a single process and each one stands up the
+// production docker-compose.yaml, which would otherwise reuse a single fixed
+// docker network name. If one suite's teardown is slow or partial, the next
+// suite's `up()` collides ("a network with name ar-io-network exists but was
+// not created for project ..."). Giving every environment a unique network and
+// project name makes that collision impossible regardless of teardown timing.
+let composeInstanceCount = 0;
+const nextComposeInstanceId = () => `${process.pid}-${++composeInstanceCount}`;
 
 export const cleanDb = (sqlitePath = `${process.cwd()}/data/sqlite`) =>
   rimraf(`${sqlitePath}/*.db*`, { glob: true });
@@ -131,28 +149,67 @@ export const composeUp = async ({
   if (ENVIRONMENT.SKIP_CLEAN_DB !== 'true') {
     await cleanDb();
   }
+
+  const instanceId = nextComposeInstanceId();
   let compose = new DockerComposeEnvironment(
     process.cwd(),
     'docker-compose.yaml',
-  ).withEnvironment({
-    START_HEIGHT,
-    STOP_HEIGHT,
-    ANS104_UNBUNDLE_FILTER,
-    ANS104_INDEX_FILTER,
-    ADMIN_API_KEY,
-    TRUSTED_NODE_URL,
-    TRUSTED_GATEWAYS_URLS,
-    BACKGROUND_RETRIEVAL_ORDER,
-    ...ENVIRONMENT,
-  });
+  )
+    // Note: testcontainers already assigns a unique random project name per
+    // up(); only the docker network name is fixed in docker-compose.yaml, so
+    // overriding DOCKER_NETWORK_NAME below is what actually prevents collisions.
+    .withEnvironment({
+      START_HEIGHT,
+      STOP_HEIGHT,
+      ANS104_UNBUNDLE_FILTER,
+      ANS104_INDEX_FILTER,
+      ADMIN_API_KEY,
+      TRUSTED_NODE_URL,
+      TRUSTED_GATEWAYS_URLS,
+      BACKGROUND_RETRIEVAL_ORDER,
+      ...ENVIRONMENT,
+      // Harness-managed; always unique so serial suites can't collide on the
+      // docker-compose.yaml network name. Set last so it can't be overridden.
+      DOCKER_NETWORK_NAME: `ar-io-e2e-${instanceId}`,
+    });
 
   if (!USE_PREBUILT_IMAGE) {
     compose = compose.withBuild();
   }
 
   return compose
+    .withStartupTimeout(COMPOSE_STARTUP_TIMEOUT_MS)
     .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
     .up(['core']);
+};
+
+/**
+ * Tear down a compose environment defensively. Intended for every e2e
+ * `after()`/`afterEach()` hook in place of a bare `compose.down()`:
+ *
+ * - bounds the teardown (`timeout`) so a slow/stuck stop can't hang the run;
+ * - removes volumes so no state leaks into the next suite;
+ * - swallows and logs errors so a teardown failure never masks the test result
+ *   or aborts sibling suites.
+ *
+ * Safe to call with `undefined` (e.g. when `up()` threw before assignment).
+ */
+export const composeDown = async (
+  compose: StartedDockerComposeEnvironment | undefined,
+) => {
+  if (compose === undefined) {
+    return;
+  }
+  try {
+    await compose.down({
+      timeout: COMPOSE_DOWN_TIMEOUT_MS,
+      removeVolumes: true,
+    });
+  } catch (error) {
+    // Teardown failures must not fail the suite or block the next one; the
+    // unique per-environment network name already prevents collisions.
+    console.error('E2E compose teardown failed (continuing):', error);
+  }
 };
 
 const waitFor = <T>({

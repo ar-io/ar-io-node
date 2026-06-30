@@ -9,7 +9,7 @@ import axios from 'axios';
 import { describe, before, after, it } from 'node:test';
 import { StartedDockerComposeEnvironment } from 'testcontainers';
 import wait from '../../src/lib/wait.js';
-import { cleanDb, composeUp } from './utils.js';
+import { cleanDb, composeDown, composeUp } from './utils.js';
 import { isTestFiltered } from '../utils.js';
 
 const adminApiKey = 'admin-api-key';
@@ -34,7 +34,7 @@ describe('Moderation', function () {
   });
 
   after(async function () {
-    await compose.down();
+    await composeDown(compose);
   });
 
   describe('Block name', function () {

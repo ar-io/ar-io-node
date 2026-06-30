@@ -14,6 +14,7 @@ import crypto from 'node:crypto';
 import { b64UrlToUtf8, toB64Url, fromB64Url } from '../../src/lib/encoding.js';
 import {
   cleanDb,
+  composeDown,
   composeUp,
   getMaxHeight,
   waitForBlocks,
@@ -115,7 +116,7 @@ describe('Indexing', function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying if blocks were indexed correctly in the database', async function () {
@@ -144,7 +145,7 @@ describe('Indexing', function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying if blocks were indexed correctly in the database', async function () {
@@ -205,7 +206,7 @@ describe('Indexing', function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying if all DataItems were indexed', async function () {
@@ -273,7 +274,7 @@ describe('Indexing', function () {
     });
 
     afterEach(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying if nested data items are not indexed when isNestedBundles is not set', async function () {
@@ -495,7 +496,7 @@ describe('Indexing', function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying if pending transactions were indexed', async function () {
@@ -587,7 +588,7 @@ describe('Indexing', function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it(
@@ -667,7 +668,7 @@ describe('Indexing', function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying if bundle was unbundled and indexed, ignoring any filter by default', async function () {
@@ -838,7 +839,7 @@ describe('Indexing', function () {
     );
 
     it('Verifying if unbundling when trying to unbundle the same bundle using different filters', async function () {
-      await compose.down();
+      await composeDown(compose);
       compose = await composeUp({
         ANS104_UNBUNDLE_FILTER:
           '{ "attributes": { "owner": "8jNb-iG3a3XByFuZnZ_MWMQSZE0zvxPMaMMBNMYegY4" } }',
@@ -900,7 +901,7 @@ describe('Indexing', function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying if data item headers were indexed', async function () {
@@ -1002,7 +1003,7 @@ describe('Indexing', function () {
     );
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('should verify unverified data', async () => {
@@ -1055,7 +1056,7 @@ describe('Indexing', function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying if transaction content-encoding was indexed', async function () {
@@ -1120,7 +1121,7 @@ describe('Indexing', function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying if secp256k1TxId signed tx has correct owner', async function () {
@@ -1177,7 +1178,7 @@ describe('Indexing', function () {
 
     afterEach(async function () {
       bundlesDb.close();
-      await compose.down();
+      await composeDown(compose);
     });
 
     it(
@@ -1204,7 +1205,7 @@ describe('Indexing', function () {
         bundlesDb.close();
 
         // Change filters and trigger update
-        await compose.down();
+        await composeDown(compose);
         compose = await composeUp({
           ANS104_UNBUNDLE_FILTER: '{"always": true}',
           ANS104_INDEX_FILTER:
@@ -1247,7 +1248,7 @@ describe('Indexing', function () {
         await waitForBundleToBeIndexed({ id: bundleId });
 
         // Change filters
-        await compose.down();
+        await composeDown(compose);
         compose = await composeUp({
           ANS104_UNBUNDLE_FILTER: '{"attributes": {"owner": "new-owner"}}',
           ANS104_INDEX_FILTER: '{"attributes": {"owner": "new-owner"}}',

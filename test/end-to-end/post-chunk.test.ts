@@ -9,7 +9,7 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
-import { cleanDb, composeUp } from './utils.js';
+import { cleanDb, composeDown, composeUp } from './utils.js';
 
 const chunk = readFileSync('test/mock_files/chunks/random-chunk.json', 'utf8');
 
@@ -26,7 +26,7 @@ describe.skip('Post Chunk', () => {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying that chunk was uploaded successfully', async () => {
@@ -78,7 +78,7 @@ describe.skip('Post Chunk', () => {
     });
 
     afterEach(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying that chunk upload aborted', async () => {
@@ -140,7 +140,7 @@ describe.skip('Post Chunk', () => {
     });
 
     afterEach(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying that chunk was uploaded successfully', async () => {

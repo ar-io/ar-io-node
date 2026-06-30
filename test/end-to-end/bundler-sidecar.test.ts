@@ -22,9 +22,15 @@ import { createData, ArweaveSigner } from '@dha-team/arbundles';
 import Arweave from 'arweave';
 import { JWKInterface } from 'arweave/node/lib/wallet.js';
 import { isTestFiltered } from '../utils.js';
+import { composeDown } from './utils.js';
 
 const projectRootPath = process.cwd();
 const USE_PREBUILT_IMAGE = process.env.USE_PREBUILT_IMAGE === 'true';
+
+// Unique per-environment docker network name so this suite can't collide with
+// the shared docker-compose network used by the other e2e suites (see
+// composeDown / composeUp in ./utils.ts).
+let bundlerComposeCount = 0;
 
 const cleanDb = () =>
   rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
@@ -46,6 +52,7 @@ const composeUp = async ({
 }: Environment = {}) => {
   await cleanDb();
 
+  const instanceId = `${process.pid}-bundler-${++bundlerComposeCount}`;
   let compose = new DockerComposeEnvironment(
     projectRootPath,
     'docker-compose.yaml',
@@ -65,6 +72,9 @@ const composeUp = async ({
     AWS_ENDPOINT,
     TESTCONTAINERS_HOST_OVERRIDE: 'localhost',
     ...ENVIRONMENT,
+    // Harness-managed; always unique so this suite can't collide on the
+    // docker-compose.yaml network name. Set last so it can't be overridden.
+    DOCKER_NETWORK_NAME: `ar-io-e2e-${instanceId}`,
   });
 
   if (!USE_PREBUILT_IMAGE) {
@@ -113,7 +123,7 @@ describe('Bundler Sidecar', { skip: isTestFiltered(['flaky']) }, () => {
   });
 
   after(async () => {
-    await compose.down();
+    await composeDown(compose);
     bundlesDb.close();
   });
 

@@ -9,7 +9,7 @@ import { after, before, describe, it } from 'node:test';
 import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
-import { cleanDb, composeUp, waitForBlocks } from './utils.js';
+import { cleanDb, composeDown, composeUp, waitForBlocks } from './utils.js';
 import { isTestFiltered } from '../utils.js';
 
 type Metric = {
@@ -109,7 +109,7 @@ describe('Metrics', { skip: isTestFiltered(['flaky']) }, function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying arweave_tx_fetch_total metrics', async function () {

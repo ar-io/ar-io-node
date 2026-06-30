@@ -19,6 +19,7 @@ import { createServer } from 'node:http';
 import axios from 'axios';
 import {
   cleanDb,
+  composeDown,
   composeUp,
   getCoreContainer,
   queueBundle,
@@ -62,7 +63,7 @@ describe('Data', function () {
   });
 
   after(async function () {
-    await compose.down();
+    await composeDown(compose);
   });
 
   it(
@@ -281,7 +282,7 @@ describe('X-Cache header', { skip: isTestFiltered(['flaky']) }, function () {
   });
 
   after(async function () {
-    await compose.down();
+    await composeDown(compose);
   });
 
   it('Verifying x-cache header when no cache available', async function () {
@@ -327,7 +328,7 @@ describe('ANS-104 Bundles', function () {
   });
 
   after(async function () {
-    await compose.down();
+    await composeDown(compose);
   });
 
   describe('Root Transaction Headers', function () {
@@ -466,7 +467,7 @@ describe('X-AR-IO headers', function () {
       });
 
       after(async function () {
-        await compose.down();
+        await composeDown(compose);
       });
 
       it('Verifying that /raw/<id> returns expected response', async function () {
@@ -586,7 +587,7 @@ describe('X-AR-IO headers', function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('Verifying that /raw/<id> returns expected response', async function () {
@@ -820,7 +821,7 @@ describe('x402 Payments', { skip: true }, function () {
   });
 
   after(async function () {
-    await compose.down();
+    await composeDown(compose);
     facilitator.close();
   });
 

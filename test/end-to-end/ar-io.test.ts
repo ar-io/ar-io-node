@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import { after, before, describe, it } from 'node:test';
 import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
-import { cleanDb, composeUp } from './utils.js';
+import { cleanDb, composeDown, composeUp } from './utils.js';
 
 let compose: StartedDockerComposeEnvironment;
 
@@ -21,7 +21,7 @@ before(async function () {
 });
 
 after(async function () {
-  await compose.down();
+  await composeDown(compose);
 });
 
 describe('ArIO', function () {

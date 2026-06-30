@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import { after, before, describe, it } from 'node:test';
 import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
-import { cleanDb, composeUp } from './utils.js';
+import { cleanDb, composeDown, composeUp } from './utils.js';
 
 let compose: StartedDockerComposeEnvironment;
 
@@ -24,7 +24,7 @@ describe('ArNS', { skip: true }, function () {
   });
 
   after(async function () {
-    await compose.down();
+    await composeDown(compose);
   });
 
   describe('Subdomain resolution', function () {
@@ -305,7 +305,7 @@ describe('ArNS 404s', { skip: true }, function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('GET "unknownname.ar-io.localhost" returns an HTTP 404 with the expected transaction ID data', async function () {
@@ -393,7 +393,7 @@ describe('ArNS 404s', { skip: true }, function () {
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('GET "unknownname.ar-io.localhost" returns an HTTP 404 with the expected transaction ID data', async function () {
@@ -460,7 +460,7 @@ describe(
     });
 
     after(async function () {
-      await compose.down();
+      await composeDown(compose);
     });
 
     it('GET unresolvable name returns short Cache-Control with must-revalidate', async function () {
@@ -508,7 +508,7 @@ describe('ArNS apex (APEX_TX_ID)', { skip: true }, function () {
   });
 
   after(async function () {
-    await compose.down();
+    await composeDown(compose);
   });
 
   it('GET "ar-io.localhost/" returns Cache-Control bounded by CACHE_APEX_MAX_AGE with must-revalidate', async function () {
