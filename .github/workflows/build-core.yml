@@ -9,8 +9,10 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     # Backstop against a hung E2E harness (a leaked compose env can otherwise
-    # wedge the run until GitHub's 360-minute default). Normal run is ~18 min.
-    timeout-minutes: 30
+    # wedge the run until GitHub's 360-minute default). Sized above the docker
+    # build (~13 min) plus the 20-min E2E step cap so the step timeout is what
+    # bounds a hang, not the job; the E2E suite itself runs ~10-15 min.
+    timeout-minutes: 45
     permissions:
       checks: write
       contents: read

@@ -9,7 +9,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     # Backstop against a hung E2E harness (see build-core.yml).
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       # Setup
