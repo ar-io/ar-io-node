@@ -203,3 +203,4 @@ CREATE INDEX new_transactions_target_id_idx ON new_transactions (target, id);
 CREATE INDEX new_transactions_owner_address_id_idx ON new_transactions (owner_address, id);
 CREATE INDEX new_transactions_height_indexed_at_idx ON new_transactions (height, indexed_at);
 CREATE INDEX stable_blocks_weave_size_idx ON stable_blocks (weave_size);
+CREATE INDEX new_blocks_weave_size_idx ON new_blocks (weave_size);
