@@ -188,6 +188,7 @@
     "test:auto-verify:indexing": "node --no-deprecation --import ./register.js src/tests/auto-verify/run.ts",
     "lint:check": "eslint src test",
     "lint:fix": "eslint --fix src test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "duplicate:check": "jscpd src",
     "duplicate:report": "jscpd src --reporters html,console",
     "duplicate:ci": "jscpd src --reporters console --exitCode 1",
