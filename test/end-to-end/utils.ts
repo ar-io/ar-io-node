@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { execFileSync } from 'node:child_process';
 import Sqlite, { Database } from 'better-sqlite3';
 import {
   DockerComposeEnvironment,
@@ -46,6 +47,43 @@ const COMPOSE_DOWN_TIMEOUT_MS = 60_000;
 // project name makes that collision impossible regardless of teardown timing.
 let composeInstanceCount = 0;
 const nextComposeInstanceId = () => `${process.pid}-${++composeInstanceCount}`;
+
+// A suite that exceeds its timeout is cancelled by the test runner, which skips
+// its after()/composeDown hook and leaves its core container still holding the
+// gateway host port -- so the next suite's up() fails with "port 4000 already
+// allocated" even though its network is unique. Defend the *next* startup
+// rather than trust the previous teardown: before standing a new environment
+// up, force-remove any leaked testcontainers-managed container still publishing
+// the port. Scoped to the `org.testcontainers` label so it can never touch a
+// real gateway (a production core carries com.docker.compose.* labels but not
+// that one); best-effort, never throws.
+const GATEWAY_HOST_PORT = 4000;
+const reapLeakedGatewayContainers = () => {
+  try {
+    const ids = execFileSync(
+      'docker',
+      [
+        'ps',
+        '-aq',
+        '--filter',
+        'label=org.testcontainers=true',
+        '--filter',
+        `publish=${GATEWAY_HOST_PORT}`,
+      ],
+      { encoding: 'utf8' },
+    ).trim();
+    if (ids.length > 0) {
+      execFileSync('docker', ['rm', '-f', ...ids.split('\n')], {
+        stdio: 'ignore',
+      });
+      console.warn(
+        `Reaped ${ids.split('\n').length} leaked e2e container(s) holding port ${GATEWAY_HOST_PORT}`,
+      );
+    }
+  } catch {
+    // Best-effort: docker may be unavailable, or there may be nothing to reap.
+  }
+};
 
 export const cleanDb = (sqlitePath = `${process.cwd()}/data/sqlite`) =>
   rimraf(`${sqlitePath}/*.db*`, { glob: true });
@@ -149,6 +187,10 @@ export const composeUp = async ({
   if (ENVIRONMENT.SKIP_CLEAN_DB !== 'true') {
     await cleanDb();
   }
+
+  // Clear any container a previously-cancelled suite leaked on the host port
+  // before we try to bind it again.
+  reapLeakedGatewayContainers();
 
   const instanceId = nextComposeInstanceId();
   let compose = new DockerComposeEnvironment(
