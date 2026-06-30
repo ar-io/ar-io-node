@@ -66,16 +66,23 @@ import { BlockOffsetMapping } from './block-offset-mapping.js';
 /**
  * Local index that resolves an absolute weave offset to its containing block
  * without per-block upstream fetches. Implemented by the SQLite database over
- * the indexed `stable_blocks.weave_size` column and injected post-construction
- * (see {@link ArweaveCompositeClient.blockByOffsetIndex} and system.ts). When
- * absent or unable to confidently bracket the offset, the client falls back to
- * the chain binary search, so behavior is unchanged — only the lookup path.
+ * the indexed `weave_size` columns of `stable_blocks` and `new_blocks` and
+ * injected post-construction (see {@link ArweaveCompositeClient.blockByOffsetIndex}
+ * and system.ts). Querying both tables means offsets in the not-yet-stable tip
+ * resolve locally too, not just stable offsets. When absent or unable to
+ * confidently bracket the offset, the client falls back to the chain binary
+ * search, so behavior is unchanged — only the lookup path.
+ *
+ * `zone` reports whether the candidate came from the stable chain or the
+ * unstable tip; it is optional so callers/mocks that predate the tip extension
+ * still satisfy the interface (treated as stable when absent).
  */
 export interface BlockByOffsetIndex {
   getBlockByWeaveOffset(offset: number): Promise<{
     height: number | undefined;
     weaveSize: number | undefined;
     prevWeaveSize: number | undefined;
+    zone?: 'stable' | 'unstable';
   }>;
 }
 
@@ -2247,15 +2254,19 @@ export class ArweaveCompositeClient
       return cached;
     }
 
-    // Fast path: resolve the containing block from the local stable-block index,
+    // Fast path: resolve the containing block from the local block-offset index,
     // collapsing the ~log2(height) sequential upstream block fetches of the
     // chain binary search below into a single indexed lookup plus one block
-    // fetch. Only trusted when the index tightly brackets the offset (the
-    // immediately-preceding block is present and ends before the offset), which
-    // rules out a missing block hiding the true container; the fetched block's
-    // weave_size is re-checked before returning. Any miss, gap, abort-free
-    // error, or offset in the unstable tip falls through to the chain binary
-    // search. This never changes which block is returned, only how it's found.
+    // fetch. The index spans both the stable chain and the not-yet-stable tip
+    // (stable_blocks ∪ new_blocks), so offsets in the unstable tip resolve here
+    // too instead of falling through. Only trusted when the index tightly
+    // brackets the offset (the immediately-preceding block is present and ends
+    // before the offset), which rules out a missing block hiding the true
+    // container; the fetched block's weave_size is re-checked before returning.
+    // The re-fetch by height returns the canonical block, so a stale or forked
+    // tip hit degrades to a fallback, never to a wrong block. Any miss, gap, or
+    // abort-free error falls through to the chain binary search. This never
+    // changes which block is returned, only how it's found.
     if (this.blockByOffsetIndex !== undefined) {
       try {
         const local =
@@ -2274,24 +2285,34 @@ export class ArweaveCompositeClient
             block !== null &&
             parseInt(block.weave_size) >= targetOffset
           ) {
+            // Distinguish tip hits so the win over the chain search is
+            // observable: the unstable tip is where the old slow path used to
+            // 504, so this outcome should absorb the former fallback_miss
+            // volume.
             metrics.blockOffsetResolutionCounter.inc({
-              outcome: 'local_index_hit',
+              outcome:
+                local.zone === 'unstable'
+                  ? 'local_index_hit_unstable'
+                  : 'local_index_hit',
             });
             this.blockCache.set(cacheKey, block);
             this.log.debug('Resolved block for offset via local index', {
               targetOffset,
               height: local.height,
               blockOffset: block.weave_size,
+              zone: local.zone,
             });
             return block;
           }
           // Index bracketed the offset but the fetched header no longer covers
-          // it (e.g. a reorg under the stable boundary) — don't trust it.
+          // it (e.g. a reorg, or a forked tip block that lost weave under the
+          // canonical chain) — don't trust it.
           metrics.blockOffsetResolutionCounter.inc({
             outcome: 'fallback_stale',
           });
         } else if (local.height === undefined) {
-          // No stable block reaches the offset (e.g. the unstable chain tip).
+          // No block reaches the offset at all (the offset is beyond the
+          // current chain tip).
           metrics.blockOffsetResolutionCounter.inc({
             outcome: 'fallback_miss',
           });

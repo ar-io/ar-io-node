@@ -90,9 +90,10 @@ interface TxByOffsetResult {
 }
 
 /**
- * Result of resolving an absolute weave offset to its containing stable block.
+ * Result of resolving an absolute weave offset to its containing block.
  *
- * `height`/`weaveSize` describe the lowest stable block whose cumulative
+ * `height`/`weaveSize` describe the lowest block — across the stable chain
+ * (`stable_blocks`) and the not-yet-stable tip (`new_blocks`) — whose cumulative
  * `weave_size` reaches the requested offset (the candidate container).
  * `prevWeaveSize` is the immediately-preceding block's cumulative `weave_size`,
  * present only when that predecessor is itself indexed. Callers use it to
@@ -100,15 +101,21 @@ interface TxByOffsetResult {
  * weaveSize`) — i.e. no missing block sits between the predecessor and the
  * candidate — before trusting the local result.
  *
- * All fields are `undefined` when no stable block reaches the offset (e.g. the
- * offset lies in the not-yet-stable chain tip); `prevWeaveSize` alone is
- * `undefined` when the predecessor is absent (a gap or the genesis block), in
- * which case the caller must not trust the bracket and should fall back.
+ * `zone` reports whether the candidate came from the stable chain (`'stable'`)
+ * or the unstable tip (`'unstable'`), letting the caller attribute the
+ * resolution to the right zone in metrics. A block present in both tables (just
+ * stabilized) is reported as `'stable'`.
+ *
+ * All fields are `undefined` when no block reaches the offset (an offset beyond
+ * the chain tip); `prevWeaveSize` alone is `undefined` when the predecessor is
+ * absent (a gap or the genesis block), in which case the caller must not trust
+ * the bracket and should fall back.
  */
 interface BlockByWeaveOffsetResult {
   height: number | undefined;
   weaveSize: number | undefined;
   prevWeaveSize: number | undefined;
+  zone: 'stable' | 'unstable' | undefined;
 }
 
 export function encodeTransactionGqlCursor({
@@ -1134,12 +1141,13 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   /**
-   * Resolve an absolute weave `offset` to its containing stable block via the
-   * indexed `stable_blocks.weave_size` column, avoiding the chain binary
-   * search's sequential per-block fetches. Returns the candidate block plus its
-   * predecessor's weave size for bracket validation; see
-   * {@link BlockByWeaveOffsetResult} for the `undefined` semantics. Resolves
-   * offset→block only — not offset→transaction.
+   * Resolve an absolute weave `offset` to its containing block via the indexed
+   * `weave_size` columns of `stable_blocks` and `new_blocks`, avoiding the chain
+   * binary search's sequential per-block fetches. Querying both tables lets
+   * offsets in the not-yet-stable tip resolve locally too. Returns the candidate
+   * block plus its predecessor's weave size for bracket validation and the zone
+   * it was found in; see {@link BlockByWeaveOffsetResult} for the `undefined`
+   * semantics. Resolves offset→block only — not offset→transaction.
    */
   getBlockByWeaveOffset(offset: number): BlockByWeaveOffsetResult {
     const result = this.stmts.core.selectBlockHeightByWeaveOffset.get({
@@ -1150,12 +1158,14 @@ export class StandaloneSqliteDatabaseWorker {
         height: undefined,
         weaveSize: undefined,
         prevWeaveSize: undefined,
+        zone: undefined,
       };
     }
     return {
       height: result.height ?? undefined,
       weaveSize: result.weave_size ?? undefined,
       prevWeaveSize: result.prev_weave_size ?? undefined,
+      zone: result.is_unstable ? 'unstable' : 'stable',
     };
   }
 
