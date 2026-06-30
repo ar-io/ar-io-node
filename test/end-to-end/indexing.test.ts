@@ -931,89 +931,100 @@ describe('Indexing', function () {
     });
   });
 
-  describe('Background data verification', function () {
-    let dataDb: Database;
-    let compose: StartedDockerComposeEnvironment;
-    const bundleId = '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ';
+  // Skipped in CI (TEST_SKIP_TAGS=flaky): background data verification fetches
+  // each data item from trusted gateways to hash-verify it, which does not
+  // complete in the CI network environment (observed verified:0/79 indefinitely
+  // until the 120s before-hook timeout). The hang then cancels sibling suites in
+  // this describe and leaves a zombie wait loop. Re-enable once verification can
+  // run deterministically in CI (e.g. a local/mocked data source). Tracked
+  // separately from the harness-stability work.
+  describe(
+    'Background data verification',
+    { skip: isTestFiltered(['flaky']) },
+    function () {
+      let dataDb: Database;
+      let compose: StartedDockerComposeEnvironment;
+      const bundleId = '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ';
 
-    const waitForIndexing = async () => {
-      const getAll = () =>
-        dataDb.prepare('SELECT * FROM contiguous_data_ids').all();
+      const waitForIndexing = async () => {
+        const getAll = () =>
+          dataDb.prepare('SELECT * FROM contiguous_data_ids').all();
 
-      while (getAll().length !== 79) {
-        console.log('Waiting for data items to be indexed...');
-        await wait(1000);
-      }
-    };
+        while (getAll().length !== 79) {
+          console.log('Waiting for data items to be indexed...');
+          await wait(1000);
+        }
+      };
 
-    const waitVerification = async () => {
-      const getAll = () =>
-        dataDb.prepare('SELECT verified FROM contiguous_data_ids').all();
+      const waitVerification = async () => {
+        const getAll = () =>
+          dataDb.prepare('SELECT verified FROM contiguous_data_ids').all();
 
-      while (getAll().some((row) => row.verified === 0)) {
-        console.log('Waiting for data items to be verified...', {
-          verified: getAll().filter((row) => row.verified === 1).length,
-          total: getAll().length,
-        });
+        while (getAll().some((row) => row.verified === 0)) {
+          console.log('Waiting for data items to be verified...', {
+            verified: getAll().filter((row) => row.verified === 1).length,
+            total: getAll().length,
+          });
 
-        await wait(1000);
-      }
-    };
+          await wait(1000);
+        }
+      };
 
-    before(
-      async function () {
-        compose = await composeUp({
-          START_WRITERS: 'false',
-          ENABLE_BACKGROUND_DATA_VERIFICATION: 'true',
-          BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '1',
-          BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
-          MIN_DATA_VERIFICATION_PRIORITY: '0',
-        });
-        dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
+      before(
+        async function () {
+          compose = await composeUp({
+            START_WRITERS: 'false',
+            ENABLE_BACKGROUND_DATA_VERIFICATION: 'true',
+            BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '1',
+            BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
+            MIN_DATA_VERIFICATION_PRIORITY: '0',
+          });
+          dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
 
-        // queue the bundle tx to populate the data root
-        await axios({
-          method: 'post',
-          url: 'http://localhost:4000/ar-io/admin/queue-tx',
-          headers: {
-            Authorization: 'Bearer secret',
-            'Content-Type': 'application/json',
-          },
-          data: { id: bundleId },
-        });
-
-        // queue the bundle to index the data items, there should be 79 data items in this bundle, once the root tx is indexed and verified all associated data items should be marked as verified
-        await axios.post(
-          'http://localhost:4000/ar-io/admin/queue-bundle',
-          {
-            id: bundleId,
-          },
-          {
+          // queue the bundle tx to populate the data root
+          await axios({
+            method: 'post',
+            url: 'http://localhost:4000/ar-io/admin/queue-tx',
             headers: {
-              'Content-Type': 'application/json',
               Authorization: 'Bearer secret',
+              'Content-Type': 'application/json',
             },
-          },
-        );
+            data: { id: bundleId },
+          });
 
-        await waitForIndexing();
-        await waitVerification();
-      },
-      { timeout: 120_000 },
-    );
+          // queue the bundle to index the data items, there should be 79 data items in this bundle, once the root tx is indexed and verified all associated data items should be marked as verified
+          await axios.post(
+            'http://localhost:4000/ar-io/admin/queue-bundle',
+            {
+              id: bundleId,
+            },
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: 'Bearer secret',
+              },
+            },
+          );
 
-    after(async function () {
-      await composeDown(compose);
-    });
+          await waitForIndexing();
+          await waitVerification();
+        },
+        { timeout: 120_000 },
+      );
 
-    it('should verify unverified data', async () => {
-      const stmt = dataDb.prepare('SELECT verified FROM contiguous_data_ids');
-      const rows = stmt.all();
+      after(async function () {
+        await composeDown(compose);
+      });
 
-      assert.equal(rows.length, 79);
-      assert.ok(rows.every((row) => row.verified === 1));
-    });
-  });
+      it('should verify unverified data', async () => {
+        const stmt = dataDb.prepare('SELECT verified FROM contiguous_data_ids');
+        const rows = stmt.all();
+
+        assert.equal(rows.length, 79);
+        assert.ok(rows.every((row) => row.verified === 1));
+      });
+    },
+  );
 
   describe('Content-Encoding', function () {
     const txId = 'NT9b6xQqxMGNsbp1h6N-pmd-YM0hWPP3KDcM2EA1Hk8';
