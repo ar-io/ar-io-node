@@ -19,7 +19,13 @@ import {
   utf8ToB64Url,
 } from '../lib/encoding.js';
 import * as metrics from '../metrics.js';
-import { GqlTransactionsResult, GqlQueryable, GqlWarning } from '../types.js';
+import {
+  GqlTransactionsResult,
+  GqlQueryable,
+  GqlWarning,
+  ItemFilter,
+} from '../types.js';
+import { isL1OnlyQuery } from './gql-l1-routing.js';
 
 export function encodeTransactionGqlCursor({
   height,
@@ -222,6 +228,11 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
   // (e.g. drive/folder/snapshot). `file` is intentionally absent — see
   // ownerProjectionApplies and config.CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES.
   private ownerProjectionEntityTypes: Set<string>;
+  // When set, GQL `transactions` queries provably confined to L1 by this
+  // (monotone) filter are served from the L1-only SQLite index, skipping
+  // ClickHouse entirely — see gql-l1-routing.ts and
+  // config.GQL_L1_ONLY_ROUTING_FILTER.
+  private l1OnlyRoutingFilter: ItemFilter | undefined;
 
   constructor({
     log,
@@ -237,6 +248,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     skipSqliteReads = false,
     ownerProjectionRoutingEnabled = false,
     ownerProjectionEntityTypes = [],
+    l1OnlyRoutingFilter,
     sqliteCircuitBreakerOptions = {
       timeout: config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS,
       errorThresholdPercentage:
@@ -259,6 +271,9 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     skipSqliteReads?: boolean;
     ownerProjectionRoutingEnabled?: boolean;
     ownerProjectionEntityTypes?: string[];
+    // Monotone filter classifying L1-only-routable queries. Omit (or pass a
+    // NeverMatch) to disable routing.
+    l1OnlyRoutingFilter?: ItemFilter;
     sqliteCircuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log;
@@ -284,6 +299,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     this.skipSqliteReads = skipSqliteReads;
     this.ownerProjectionRoutingEnabled = ownerProjectionRoutingEnabled;
     this.ownerProjectionEntityTypes = new Set(ownerProjectionEntityTypes);
+    this.l1OnlyRoutingFilter = l1OnlyRoutingFilter;
 
     this.sqliteBreaker = new CircuitBreaker(
       (args: SqliteGqlArgs) => this.gqlQueryable.getGqlTransactions(args),
@@ -1024,6 +1040,41 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }): Promise<GqlTransactionsResult> {
+    // L1-only routing: when the operator-configured filter provably confines
+    // this query to base-layer transactions, serve it from the L1 SQLite index
+    // alone — a tag-name+value PK seek that sidesteps ClickHouse's row-scan cap
+    // — and skip ClickHouse entirely. The original `minHeight` is used (not the
+    // ClickHouse-boundary-adjusted one) so the L1 index serves the full history.
+    if (
+      this.l1OnlyRoutingFilter !== undefined &&
+      isL1OnlyQuery({
+        filter: this.l1OnlyRoutingFilter,
+        ids,
+        owners,
+        recipients,
+        tags,
+      })
+    ) {
+      this.log.debug('Routing GQL transactions query to L1-only SQLite index', {
+        owners,
+        recipients,
+        tags,
+      });
+      return this.gqlQueryable.getGqlTransactions({
+        pageSize,
+        cursor,
+        sortOrder,
+        ids,
+        recipients,
+        owners,
+        minHeight,
+        maxHeight,
+        bundledIn,
+        tags,
+        l1Only: true,
+      });
+    }
+
     // Encode id/recipient/owner/bundledIn lists and per-tag bytes
     // once and share across both CH legs — the work is the same per
     // leg and shows up on tag-heavy queries when streaming is on.

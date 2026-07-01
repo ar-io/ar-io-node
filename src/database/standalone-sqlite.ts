@@ -2246,6 +2246,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight = -1,
     bundledIn,
     tags = [],
+    l1Only = false,
   }: {
     pageSize: number;
     cursor?: string;
@@ -2257,6 +2258,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
+    l1Only?: boolean;
   }): GqlTransaction[] {
     const txsQuery = this.getGqlNewTransactionsBaseSql();
 
@@ -2298,14 +2300,19 @@ export class StandaloneSqliteDatabaseWorker {
     const itemsFinalSql = `${itemsSql} LIMIT ${pageSize + 1}`;
 
     const sqlSortOrder = sortOrder === 'HEIGHT_DESC' ? 'DESC' : 'ASC';
+    // `l1Only` forces the base-layer (transactions) leg only, dropping the
+    // bundled data-item leg regardless of `bundledIn`.
+    const includeTxs = l1Only || bundledIn === undefined || bundledIn === null;
+    const includeItems =
+      !l1Only && (bundledIn === undefined || Array.isArray(bundledIn));
     const sqlParts = [];
-    if (bundledIn === undefined || bundledIn === null) {
+    if (includeTxs) {
       sqlParts.push(`SELECT * FROM (${txsFinalSql})`);
     }
-    if (bundledIn === undefined) {
+    if (includeTxs && includeItems) {
       sqlParts.push('UNION');
     }
-    if (bundledIn === undefined || Array.isArray(bundledIn)) {
+    if (includeItems) {
       sqlParts.push(`SELECT * FROM (${itemsFinalSql})`);
     }
 
@@ -2314,7 +2321,11 @@ export class StandaloneSqliteDatabaseWorker {
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
-    const sqliteParams = toSqliteParams(itemsQueryParams);
+    // The txs and items legs carry identical param sequences; bind from a leg
+    // that is actually present so every placeholder is covered.
+    const sqliteParams = toSqliteParams(
+      includeItems ? itemsQueryParams : txsQueryParams,
+    );
 
     this.log.debug('Querying new transactions...', { sql, sqliteParams });
 
@@ -2368,6 +2379,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight = -1,
     bundledIn,
     tags = [],
+    l1Only = false,
   }: {
     pageSize: number;
     cursor?: string;
@@ -2379,6 +2391,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
+    l1Only?: boolean;
   }): GqlTransaction[] {
     const txsQuery = this.getGqlStableTransactionsBaseSql();
 
@@ -2421,14 +2434,19 @@ export class StandaloneSqliteDatabaseWorker {
     const itemsFinalSql = `${itemsSql} LIMIT ${pageSize + 1}`;
 
     const sqlSortOrder = sortOrder === 'HEIGHT_DESC' ? 'DESC' : 'ASC';
+    // `l1Only` forces the base-layer (transactions) leg only, dropping the
+    // bundled data-item leg regardless of `bundledIn`.
+    const includeTxs = l1Only || bundledIn === undefined || bundledIn === null;
+    const includeItems =
+      !l1Only && (bundledIn === undefined || Array.isArray(bundledIn));
     const sqlParts = [];
-    if (bundledIn === undefined || bundledIn === null) {
+    if (includeTxs) {
       sqlParts.push(`SELECT * FROM (${txsFinalSql})`);
     }
-    if (bundledIn === undefined) {
+    if (includeTxs && includeItems) {
       sqlParts.push('UNION');
     }
-    if (bundledIn === undefined || Array.isArray(bundledIn)) {
+    if (includeItems) {
       sqlParts.push(`SELECT * FROM (${itemsFinalSql})`);
     }
     sqlParts.push(
@@ -2436,7 +2454,11 @@ export class StandaloneSqliteDatabaseWorker {
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
-    const sqliteParams = toSqliteParams(itemsQueryParams);
+    // The txs and items legs carry identical param sequences; bind from a leg
+    // that is actually present so every placeholder is covered.
+    const sqliteParams = toSqliteParams(
+      includeItems ? itemsQueryParams : txsQueryParams,
+    );
 
     this.log.debug('Querying stable transactions...', { sql, sqliteParams });
 
@@ -2486,6 +2508,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight = -1,
     bundledIn,
     tags = [],
+    l1Only = false,
   }: {
     pageSize: number;
     cursor?: string;
@@ -2497,6 +2520,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
+    l1Only?: boolean;
   }) {
     let txs: GqlTransaction[] = [];
 
@@ -2512,6 +2536,7 @@ export class StandaloneSqliteDatabaseWorker {
         maxHeight,
         bundledIn,
         tags,
+        l1Only,
       });
 
       if (txs.length < pageSize) {
@@ -2529,6 +2554,7 @@ export class StandaloneSqliteDatabaseWorker {
               txs.length > 0 && lastTxHeight ? lastTxHeight - 1 : maxHeight,
             bundledIn,
             tags,
+            l1Only,
           }),
         );
       }
@@ -2544,6 +2570,7 @@ export class StandaloneSqliteDatabaseWorker {
         maxHeight,
         bundledIn,
         tags,
+        l1Only,
       });
 
       if (txs.length < pageSize) {
@@ -2561,6 +2588,7 @@ export class StandaloneSqliteDatabaseWorker {
             maxHeight,
             bundledIn,
             tags,
+            l1Only,
           }),
         );
       }
@@ -3864,6 +3892,7 @@ export class StandaloneSqliteDatabase
     maxHeight = -1,
     bundledIn,
     tags = [],
+    l1Only = false,
   }: {
     pageSize: number;
     cursor?: string;
@@ -3875,6 +3904,7 @@ export class StandaloneSqliteDatabase
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
+    l1Only?: boolean;
   }) {
     return this.queueRead('gql', 'getGqlTransactions', [
       {
@@ -3888,6 +3918,7 @@ export class StandaloneSqliteDatabase
         maxHeight,
         bundledIn,
         tags,
+        l1Only,
       },
     ]);
   }
