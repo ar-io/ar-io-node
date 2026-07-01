@@ -137,6 +137,19 @@ export const graphqlRootTxBatchTokenWaitTimeoutTotal = new promClient.Counter({
 });
 
 //
+// GraphQL L1-only routing metrics
+//
+
+// Incremented each time a GraphQL `transactions` query is provably confined to
+// L1 by GQL_L1_ONLY_ROUTING_FILTER and served from the L1-only SQLite index
+// instead of ClickHouse. Tracks feature usage over time; stays flat at 0 when
+// routing is disabled (the default).
+export const graphqlL1OnlyRoutingCounter = new promClient.Counter({
+  name: 'graphql_l1_only_routing_total',
+  help: 'Count of GraphQL transactions queries routed to the L1-only SQLite index (bypassing ClickHouse)',
+});
+
+//
 // Optimistic chunk ingest cache metrics
 //
 
