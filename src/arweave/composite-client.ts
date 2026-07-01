@@ -192,10 +192,12 @@ export interface ChunkBroadcastVerdictInput {
   preferredSuccessCount: number;
   /** Distinct fault domains among successful posts. */
   distinctDomainCount: number;
-  /** How many preferred (tip) peers were eligible; 0 ⇒ tips unavailable. */
+  /**
+   * How many preferred (tip) peers were eligible. Used only to LABEL the
+   * shortfall reason (tips_unavailable vs tips_failed) — it no longer gates the
+   * fallback (see evaluateChunkBroadcastVerdict).
+   */
   preferredEligibleCount: number;
-  /** Distinct fault domains available across the eligible peer set. */
-  domainsAvailable: number;
   minSuccessCount: number;
   minPreferredSuccessCount: number;
   /** CHUNK_POST_MIN_DISTINCT_DOMAINS (0 = feature off). */
@@ -207,7 +209,7 @@ export interface ChunkBroadcastVerdictInput {
 export interface ChunkBroadcastVerdict {
   succeeded: boolean;
   preferredShortfall: 'none' | 'tips_unavailable' | 'tips_failed';
-  domainShortfall: 'none' | 'unmet' | 'degraded';
+  domainShortfall: 'none' | 'below_target';
 }
 
 /**
@@ -234,27 +236,38 @@ export function evaluateChunkBroadcastVerdict(
   const meetsSuccess = i.successCount >= i.minSuccessCount;
   const meetsPreferred = i.preferredSuccessCount >= i.minPreferredSuccessCount;
 
-  // Soft-preferred fallback: only when tips were genuinely unavailable (none
-  // eligible) and a strong distinct-domain discovered quorum stands in for them.
+  // Soft-preferred fallback: fire whenever the preferred quorum falls short
+  // (tips down OR eligible-but-failing) and a strong distinct-domain discovered
+  // quorum stands in for them.
+  //
+  // NOTE: previously gated on `preferredEligibleCount === 0`, which only holds
+  // when the tip per-peer queues saturate past the depth threshold (or no tips
+  // are configured). A real tip partition leaves them eligible-but-failing, so
+  // the fallback never fired for the exact outage it was built for — and any one
+  // surviving preferred node in another domain kept eligibleCount ≥ 1 forever.
+  // The live soak on #812 caught this. `!meetsPreferred` is the right trigger:
+  // it can only be true after we genuinely could not reach the preferred quorum
+  // (tips are dispatched first, so a healthy tip set meets it via the normal
+  // path before this is consulted).
   const fallbackTarget = Math.max(
     i.minPreferredSuccessCount,
     i.minDistinctDomains,
   );
   const meetsFallback =
     i.preferredSoftFallback &&
-    i.preferredEligibleCount === 0 &&
     meetsSuccess &&
+    !meetsPreferred &&
     i.distinctDomainCount >= fallbackTarget;
 
-  const meetsPreferredOrFallback =
-    (meetsSuccess && meetsPreferred) || meetsFallback;
-
-  // Distinct-domain soft target: degrade gracefully if the eligible set can't
-  // supply N. domainTarget is 0 when the feature is off ⇒ always met.
-  const domainTarget = Math.min(i.minDistinctDomains, i.domainsAvailable);
-  const meetsDomainTarget = i.distinctDomainCount >= domainTarget;
-
-  const succeeded = meetsPreferredOrFallback && meetsDomainTarget;
+  // The distinct-domain target is a best-effort diversity GOAL, not a hard gate
+  // on success. Fresh chunks can only land on the preferred (upload-oriented)
+  // nodes until the tx's data_root propagates — discovered peers reject an
+  // unknown data_root — so gating success on N distinct domains would hard-fail
+  // legitimate first-posts during that race. Instead the target drives fan-out
+  // breadth (early termination) and a shortfall metric; broader diversity
+  // accrues over the seeding lifecycle (re-posts as the tx propagates), not on a
+  // single POST.
+  const succeeded = meetsSuccess && (meetsPreferred || meetsFallback);
 
   let preferredShortfall: ChunkBroadcastVerdict['preferredShortfall'] = 'none';
   if (!meetsPreferred) {
@@ -262,14 +275,10 @@ export function evaluateChunkBroadcastVerdict(
       i.preferredEligibleCount === 0 ? 'tips_unavailable' : 'tips_failed';
   }
 
-  let domainShortfall: ChunkBroadcastVerdict['domainShortfall'] = 'none';
-  if (
-    i.minDistinctDomains > 0 &&
-    i.distinctDomainCount < i.minDistinctDomains
-  ) {
-    domainShortfall =
-      i.minDistinctDomains > i.domainsAvailable ? 'degraded' : 'unmet';
-  }
+  const domainShortfall: ChunkBroadcastVerdict['domainShortfall'] =
+    i.minDistinctDomains > 0 && i.distinctDomainCount < i.minDistinctDomains
+      ? 'below_target'
+      : 'none';
 
   return { succeeded, preferredShortfall, domainShortfall };
 }
@@ -2014,12 +2023,13 @@ export class ArweaveCompositeClient
       );
       const shuffledPeers = [...shuffleArray(preferred), ...nonPreferred];
 
-      // Fault-domain accounting (B). `preferredEligibleCount === 0` is the
-      // tips-down signal the soft-preferred fallback keys on; `domainsAvailable`
-      // bounds the distinct-domain target so it degrades instead of hard-failing.
+      // Fault-domain accounting (B). `preferredEligibleCount` labels the
+      // shortfall reason; `successDomains` tracks the distinct fault domains a
+      // chunk actually landed on; `preferredAttempted` lets the fallback early-
+      // terminate only after every tip has had its shot (so a healthy tip set is
+      // never skipped, but a tips outage doesn't force a walk of the whole peer
+      // list — the latency half of the soak feedback).
       const preferredEligibleCount = preferred.length;
-      const domainsAvailable = new Set(eligiblePeers.map(chunkPostPeerDomain))
-        .size;
       const successDomains = new Set<string>();
 
       // 3. Broadcast in parallel with concurrency limit
@@ -2032,10 +2042,18 @@ export class ArweaveCompositeClient
       // counts may also be slightly inaccurate; use the results array for precise values.
       let successCount = 0;
       let preferredSuccessCount = 0;
+      let preferredAttempted = 0;
       let failureCount = 0;
       let consecutive4xxFailures = 0;
       let hasAnySuccess = false;
       const results: BroadcastChunkResponses[] = [];
+
+      // Fallback quorum used for early termination (mirrors the verdict's
+      // fallbackTarget). Only relevant when the soft-preferred fallback is on.
+      const earlyFallbackTarget = Math.max(
+        chunkPostMinPreferredSuccessCount,
+        config.CHUNK_POST_MIN_DISTINCT_DOMAINS,
+      );
 
       this.log.debug('Starting chunk broadcast', {
         eligiblePeers: eligiblePeers.length,
@@ -2050,15 +2068,28 @@ export class ArweaveCompositeClient
       // Create promises for all peers
       const peerPromises = shuffledPeers.map((peer) =>
         peerConcurrencyLimit(async () => {
-          // Skip if we already have enough successes (overall, preferred, and —
-          // when enabled — distinct fault domains). The distinct-domain term is
-          // 0 by default, so this reduces to the legacy condition unless the
-          // operator opts in.
-          if (
+          // Terminate early if the broadcast is already satisfied, by EITHER:
+          //  (a) the normal quorum — overall + preferred + (opt-in) distinct
+          //      domains. The distinct-domain term is 0 by default, so this
+          //      reduces to the legacy condition unless the operator opts in; OR
+          //  (b) the soft-preferred fallback — every tip has been attempted and
+          //      the preferred quorum still fell short, but we already have the
+          //      overall + distinct-domain fallback quorum. Without this, a tips
+          //      outage can never early-terminate (preferred quorum is
+          //      unreachable) and every POST walks the whole peer list (~12s in
+          //      the soak). Gated on preferredAttempted so a healthy tip set is
+          //      never skipped.
+          const normalQuorumMet =
             successCount >= chunkPostMinSuccessCount &&
             preferredSuccessCount >= chunkPostMinPreferredSuccessCount &&
-            successDomains.size >= config.CHUNK_POST_MIN_DISTINCT_DOMAINS
-          ) {
+            successDomains.size >= config.CHUNK_POST_MIN_DISTINCT_DOMAINS;
+          const fallbackQuorumMet =
+            config.CHUNK_POST_PREFERRED_SOFT_FALLBACK &&
+            preferredAttempted >= preferred.length &&
+            preferredSuccessCount < chunkPostMinPreferredSuccessCount &&
+            successCount >= chunkPostMinSuccessCount &&
+            successDomains.size >= earlyFallbackTarget;
+          if (normalQuorumMet || fallbackQuorumMet) {
             this.log.debug('Skipping peer due to success threshold reached', {
               peer,
             });
@@ -2095,6 +2126,14 @@ export class ArweaveCompositeClient
               skipped: true,
               skipReason: 'consecutive_failures' as const,
             };
+          }
+
+          // Count this as a preferred attempt (success or failure) so the
+          // fallback early-termination only engages once every tip has had its
+          // shot. Counted here — past the skip guards — so skipped peers don't.
+          const isPreferred = this.peerManager.isPreferredChunkPostPeer(peer);
+          if (isPreferred) {
+            preferredAttempted++;
           }
 
           try {
@@ -2192,7 +2231,6 @@ export class ArweaveCompositeClient
         preferredSuccessCount,
         distinctDomainCount,
         preferredEligibleCount,
-        domainsAvailable,
         minSuccessCount: chunkPostMinSuccessCount,
         minPreferredSuccessCount: chunkPostMinPreferredSuccessCount,
         minDistinctDomains: config.CHUNK_POST_MIN_DISTINCT_DOMAINS,

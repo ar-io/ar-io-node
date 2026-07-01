@@ -576,11 +576,12 @@ export const chunkPostPreferredShortfallCounter = new promClient.Counter({
 });
 
 // Distinct-domain target not met (only when CHUNK_POST_MIN_DISTINCT_DOMAINS > 0).
-//   reason=unmet    -> target was achievable but not reached
-//   reason=degraded -> eligible peer set could not supply the target (soft-capped)
+// The target is best-effort — it never fails a POST (see
+// evaluateChunkBroadcastVerdict) — so this is a pure diversity signal.
+//   reason=below_target -> landed on fewer distinct domains than the target
 export const chunkPostDomainShortfallCounter = new promClient.Counter({
   name: 'chunk_post_domain_shortfall_total',
-  help: 'Chunk POSTs that missed the distinct-fault-domain target',
+  help: 'Chunk POSTs that landed on fewer distinct fault domains than the target (advisory)',
   labelNames: ['reason'],
 });
 

@@ -483,7 +483,6 @@ describe('evaluateChunkBroadcastVerdict', () => {
     preferredSuccessCount: 0,
     distinctDomainCount: 0,
     preferredEligibleCount: 5,
-    domainsAvailable: 5,
     minSuccessCount: 3,
     minPreferredSuccessCount: 2,
     minDistinctDomains: 0,
@@ -539,7 +538,7 @@ describe('evaluateChunkBroadcastVerdict', () => {
       const v = evaluateChunkBroadcastVerdict({
         ...base,
         preferredSoftFallback: true,
-        preferredEligibleCount: 0, // tips unavailable
+        preferredEligibleCount: 0, // tips unavailable (ineligible)
         successCount: 4,
         preferredSuccessCount: 0,
         distinctDomainCount: 3, // >= max(minPreferred=2, minDomains=0)
@@ -548,16 +547,19 @@ describe('evaluateChunkBroadcastVerdict', () => {
       assert.equal(v.preferredShortfall, 'tips_unavailable');
     });
 
-    it('does NOT fire when tips were eligible but merely failed', () => {
+    it('ALSO fires when tips are eligible-but-failing (the soak trace)', () => {
+      // Regression for the #812 soak finding: tip /24 blocked, one surviving
+      // preferred node in another domain (preferredEligibleCount>0,
+      // preferredSuccessCount=1<2), 14 independent domains seeded -> must SUCCEED.
       const v = evaluateChunkBroadcastVerdict({
         ...base,
         preferredSoftFallback: true,
-        preferredEligibleCount: 5, // tips were up, just didn't ack
-        successCount: 4,
-        preferredSuccessCount: 0,
-        distinctDomainCount: 4,
+        preferredEligibleCount: 5, // tips eligible, just partitioned/failing
+        successCount: 19,
+        preferredSuccessCount: 1,
+        distinctDomainCount: 14,
       });
-      assert.equal(v.succeeded, false);
+      assert.equal(v.succeeded, true);
       assert.equal(v.preferredShortfall, 'tips_failed');
     });
 
@@ -565,12 +567,25 @@ describe('evaluateChunkBroadcastVerdict', () => {
       const v = evaluateChunkBroadcastVerdict({
         ...base,
         preferredSoftFallback: true,
-        preferredEligibleCount: 0,
+        preferredEligibleCount: 5,
         successCount: 4,
         preferredSuccessCount: 0,
         distinctDomainCount: 1, // one /24 -> not a real stand-in for the tips
       });
       assert.equal(v.succeeded, false);
+    });
+
+    it('does not fire when the preferred quorum is actually met', () => {
+      // Healthy tips: normal path succeeds, fallback is irrelevant.
+      const v = evaluateChunkBroadcastVerdict({
+        ...base,
+        preferredSoftFallback: true,
+        successCount: 3,
+        preferredSuccessCount: 2,
+        distinctDomainCount: 1,
+      });
+      assert.equal(v.succeeded, true);
+      assert.equal(v.preferredShortfall, 'none');
     });
 
     it('stays off unless the flag is set', () => {
@@ -585,44 +600,43 @@ describe('evaluateChunkBroadcastVerdict', () => {
     });
   });
 
-  describe('distinct-domain target', () => {
-    it('fails an otherwise-good POST that lacks domain diversity', () => {
+  describe('distinct-domain target is best-effort (never hard-fails)', () => {
+    it('does NOT fail a POST that meets base quorum but misses the domain target', () => {
+      // Fresh-chunk propagation race: only preferred domains accept. Must still
+      // succeed (gating on the target would hard-fail legitimate first-posts) —
+      // but the shortfall is surfaced as a metric.
       const v = evaluateChunkBroadcastVerdict({
         ...base,
         minDistinctDomains: 3,
-        domainsAvailable: 5,
         successCount: 3,
         preferredSuccessCount: 2,
-        distinctDomainCount: 2, // below target, but achievable
-      });
-      assert.equal(v.succeeded, false);
-      assert.equal(v.domainShortfall, 'unmet');
-    });
-
-    it('soft-degrades (succeeds) when the eligible set cannot supply the target', () => {
-      const v = evaluateChunkBroadcastVerdict({
-        ...base,
-        minDistinctDomains: 5,
-        domainsAvailable: 2, // network only offers 2 domains
-        successCount: 3,
-        preferredSuccessCount: 2,
-        distinctDomainCount: 2, // met what's available
+        distinctDomainCount: 2, // below target
       });
       assert.equal(v.succeeded, true);
-      assert.equal(v.domainShortfall, 'degraded');
+      assert.equal(v.domainShortfall, 'below_target');
     });
 
-    it('succeeds when the target is met', () => {
+    it('reports no shortfall when the target is met', () => {
       const v = evaluateChunkBroadcastVerdict({
         ...base,
         minDistinctDomains: 3,
-        domainsAvailable: 5,
         successCount: 4,
         preferredSuccessCount: 2,
         distinctDomainCount: 3,
       });
       assert.equal(v.succeeded, true);
       assert.equal(v.domainShortfall, 'none');
+    });
+
+    it('still fails when the BASE quorum is not met, regardless of domains', () => {
+      const v = evaluateChunkBroadcastVerdict({
+        ...base,
+        minDistinctDomains: 3,
+        successCount: 2, // below min success
+        preferredSuccessCount: 2,
+        distinctDomainCount: 5,
+      });
+      assert.equal(v.succeeded, false);
     });
   });
 });
