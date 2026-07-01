@@ -10,6 +10,7 @@ import { default as Arweave } from 'arweave';
 
 import {
   ArweaveCompositeClient,
+  chunkPostPeersCacheKey,
   chunkPostPeerDomain,
   evaluateChunkBroadcastVerdict,
   type ChunkBroadcastVerdictInput,
@@ -412,6 +413,37 @@ describe('ArweaveCompositeClient', () => {
 
       // Restore original method
       (client as any).peerGetChunk = originalPeerGetChunk;
+    });
+  });
+
+  describe('chunkPostPeersCacheKey', () => {
+    it('distinguishes different peer sets of equal length', () => {
+      // The bug this fixes: a length-only key collided these onto one cached
+      // ordering for the full cache window, narrowing seeding diversity.
+      const a = ['http://a:1984', 'http://b:1984', 'http://c:1984'];
+      const b = ['http://x:1984', 'http://y:1984', 'http://z:1984'];
+      assert.equal(a.length, b.length);
+      assert.notEqual(chunkPostPeersCacheKey(a), chunkPostPeersCacheKey(b));
+    });
+
+    it('is order-independent for the same set (set identity)', () => {
+      const ordered = ['http://a:1984', 'http://b:1984', 'http://c:1984'];
+      const shuffled = ['http://c:1984', 'http://a:1984', 'http://b:1984'];
+      assert.equal(
+        chunkPostPeersCacheKey(ordered),
+        chunkPostPeersCacheKey(shuffled),
+      );
+    });
+
+    it('does not mutate the input array', () => {
+      const peers = ['http://c:1984', 'http://a:1984', 'http://b:1984'];
+      const snapshot = [...peers];
+      chunkPostPeersCacheKey(peers);
+      assert.deepEqual(peers, snapshot);
+    });
+
+    it('handles the empty set', () => {
+      assert.equal(chunkPostPeersCacheKey([]), '');
     });
   });
 });
