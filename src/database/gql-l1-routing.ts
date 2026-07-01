@@ -137,13 +137,21 @@ export function isL1OnlyQuery({
   owners = [],
   recipients = [],
   tags = [],
+  bundledIn,
 }: {
   filter: ItemFilter;
   ids?: string[];
   owners?: string[];
   recipients?: string[];
   tags?: { name: string; values: string[] }[];
+  bundledIn?: string[] | null;
 }): boolean {
+  // A `bundledIn: [...]` filter targets bundled data items by definition — the
+  // opposite of L1. Routing it to the L1-only path would drop the data-item leg
+  // and return wrong/empty results, so never reroute it. (`null`/`undefined`
+  // are not data-item filters and remain eligible.)
+  if (Array.isArray(bundledIn)) return false;
+
   // Id lookups have their own selective path and pin results to specific items
   // whose tags we cannot enumerate here — never reroute them.
   if (ids.length > 0) return false;

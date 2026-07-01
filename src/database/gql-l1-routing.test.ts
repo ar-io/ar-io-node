@@ -118,6 +118,28 @@ describe('isL1OnlyQuery', () => {
     assert.equal(isL1OnlyQuery({ filter: swaFilter }), false);
   });
 
+  it('never routes bundledIn queries (they target bundled data items)', () => {
+    // Even though the tags entail the filter, a bundledIn array asks for
+    // bundled data items — routing to L1-only would drop them.
+    assert.equal(
+      isL1OnlyQuery({
+        filter: swaFilter,
+        tags: [{ name: 'App-Name', values: ['SmartWeaveAction'] }],
+        bundledIn: ['someParentBundleId'],
+      }),
+      false,
+    );
+    // `null`/`undefined` bundledIn are not data-item filters — still eligible.
+    assert.equal(
+      isL1OnlyQuery({
+        filter: swaFilter,
+        tags: [{ name: 'App-Name', values: ['SmartWeaveAction'] }],
+        bundledIn: null,
+      }),
+      true,
+    );
+  });
+
   it('never routes id lookups', () => {
     assert.equal(
       isL1OnlyQuery({

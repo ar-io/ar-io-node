@@ -1053,6 +1053,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         owners,
         recipients,
         tags,
+        bundledIn,
       })
     ) {
       this.log.debug('Routing GQL transactions query to L1-only SQLite index', {

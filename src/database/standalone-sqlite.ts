@@ -2260,6 +2260,13 @@ export class StandaloneSqliteDatabaseWorker {
     tags?: { name: string; values: string[] }[];
     l1Only?: boolean;
   }): GqlTransaction[] {
+    // `l1Only` (base-layer only) and `bundledIn: [...]` (bundled data items
+    // only) are contradictory — no row can satisfy both. The composite router
+    // already avoids emitting this combination; guard defensively so a direct
+    // caller can't get silently wrong results.
+    if (l1Only && Array.isArray(bundledIn)) {
+      return [];
+    }
     const txsQuery = this.getGqlNewTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
@@ -2393,6 +2400,13 @@ export class StandaloneSqliteDatabaseWorker {
     tags?: { name: string; values: string[] }[];
     l1Only?: boolean;
   }): GqlTransaction[] {
+    // `l1Only` (base-layer only) and `bundledIn: [...]` (bundled data items
+    // only) are contradictory — no row can satisfy both. The composite router
+    // already avoids emitting this combination; guard defensively so a direct
+    // caller can't get silently wrong results.
+    if (l1Only && Array.isArray(bundledIn)) {
+      return [];
+    }
     const txsQuery = this.getGqlStableTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
