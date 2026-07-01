@@ -240,6 +240,13 @@ export function evaluateChunkBroadcastVerdict(
   // (tips down OR eligible-but-failing) and a strong distinct-domain discovered
   // quorum stands in for them.
   //
+  // Note this softens the preferred requirement in STEADY STATE too, not only
+  // during a full outage: with the flag on, the effective quorum is
+  //   preferred >= minPreferred  OR  (success >= minSuccess AND domains >= fallbackTarget).
+  // A normal POST where only one tip acks but several independent discovered
+  // peers land will pass — the intended availability win; the unconditional
+  // "minPreferred tips" guarantee no longer holds when the flag is on.
+  //
   // NOTE: previously gated on `preferredEligibleCount === 0`, which only holds
   // when the tip per-peer queues saturate past the depth threshold (or no tips
   // are configured). A real tip partition leaves them eligible-but-failing, so
