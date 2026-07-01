@@ -8,7 +8,12 @@ import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import { default as Arweave } from 'arweave';
 
-import { ArweaveCompositeClient } from './composite-client.js';
+import {
+  ArweaveCompositeClient,
+  chunkPostPeerDomain,
+  evaluateChunkBroadcastVerdict,
+  type ChunkBroadcastVerdictInput,
+} from './composite-client.js';
 import { UniformFailureSimulator } from '../lib/chaos.js';
 import { ArweavePeerManager } from '../peers/arweave-peer-manager.js';
 import log from '../log.js';
@@ -407,6 +412,185 @@ describe('ArweaveCompositeClient', () => {
 
       // Restore original method
       (client as any).peerGetChunk = originalPeerGetChunk;
+    });
+  });
+});
+
+describe('chunkPostPeerDomain', () => {
+  it('buckets IP-literal peers by /24', () => {
+    assert.equal(
+      chunkPostPeerDomain('http://38.29.227.74:1984'),
+      '38.29.227.0/24',
+    );
+  });
+
+  it('collapses the resolved tip nodes into one domain', () => {
+    const tips = [
+      'http://38.29.227.74:1984',
+      'http://38.29.227.75:1984',
+      'http://38.29.227.70:1984',
+    ];
+    assert.equal(new Set(tips.map(chunkPostPeerDomain)).size, 1);
+  });
+
+  it('handles bracketed IPv6 hosts', () => {
+    assert.equal(
+      chunkPostPeerDomain('http://[2001:db8:abcd:1234::1]:1984'),
+      '2001:0db8:abcd::/48',
+    );
+  });
+
+  it('falls back to the peer string for unparseable input', () => {
+    assert.equal(chunkPostPeerDomain('not a url'), 'not a url');
+  });
+});
+
+describe('evaluateChunkBroadcastVerdict', () => {
+  const base: ChunkBroadcastVerdictInput = {
+    successCount: 0,
+    preferredSuccessCount: 0,
+    distinctDomainCount: 0,
+    preferredEligibleCount: 5,
+    domainsAvailable: 5,
+    minSuccessCount: 3,
+    minPreferredSuccessCount: 2,
+    minDistinctDomains: 0,
+    preferredSoftFallback: false,
+  };
+
+  describe('defaults reduce to legacy behavior', () => {
+    it('succeeds exactly when success>=min AND preferred>=minPreferred', () => {
+      // Meets both -> succeeded
+      assert.equal(
+        evaluateChunkBroadcastVerdict({
+          ...base,
+          successCount: 3,
+          preferredSuccessCount: 2,
+        }).succeeded,
+        true,
+      );
+      // Preferred short -> fails (legacy hard requirement preserved)
+      assert.equal(
+        evaluateChunkBroadcastVerdict({
+          ...base,
+          successCount: 5,
+          preferredSuccessCount: 1,
+        }).succeeded,
+        false,
+      );
+      // Success short -> fails
+      assert.equal(
+        evaluateChunkBroadcastVerdict({
+          ...base,
+          successCount: 2,
+          preferredSuccessCount: 2,
+        }).succeeded,
+        false,
+      );
+    });
+
+    it('does not apply the domain target when feature is off', () => {
+      assert.equal(
+        evaluateChunkBroadcastVerdict({
+          ...base,
+          successCount: 3,
+          preferredSuccessCount: 2,
+          distinctDomainCount: 1, // all one /24, but feature off -> fine
+        }).succeeded,
+        true,
+      );
+    });
+  });
+
+  describe('soft-preferred fallback', () => {
+    it('rescues a tips-down POST via a strong distinct-domain quorum', () => {
+      const v = evaluateChunkBroadcastVerdict({
+        ...base,
+        preferredSoftFallback: true,
+        preferredEligibleCount: 0, // tips unavailable
+        successCount: 4,
+        preferredSuccessCount: 0,
+        distinctDomainCount: 3, // >= max(minPreferred=2, minDomains=0)
+      });
+      assert.equal(v.succeeded, true);
+      assert.equal(v.preferredShortfall, 'tips_unavailable');
+    });
+
+    it('does NOT fire when tips were eligible but merely failed', () => {
+      const v = evaluateChunkBroadcastVerdict({
+        ...base,
+        preferredSoftFallback: true,
+        preferredEligibleCount: 5, // tips were up, just didn't ack
+        successCount: 4,
+        preferredSuccessCount: 0,
+        distinctDomainCount: 4,
+      });
+      assert.equal(v.succeeded, false);
+      assert.equal(v.preferredShortfall, 'tips_failed');
+    });
+
+    it('requires a sufficiently diverse fallback quorum', () => {
+      const v = evaluateChunkBroadcastVerdict({
+        ...base,
+        preferredSoftFallback: true,
+        preferredEligibleCount: 0,
+        successCount: 4,
+        preferredSuccessCount: 0,
+        distinctDomainCount: 1, // one /24 -> not a real stand-in for the tips
+      });
+      assert.equal(v.succeeded, false);
+    });
+
+    it('stays off unless the flag is set', () => {
+      const v = evaluateChunkBroadcastVerdict({
+        ...base,
+        preferredSoftFallback: false,
+        preferredEligibleCount: 0,
+        successCount: 4,
+        distinctDomainCount: 4,
+      });
+      assert.equal(v.succeeded, false);
+    });
+  });
+
+  describe('distinct-domain target', () => {
+    it('fails an otherwise-good POST that lacks domain diversity', () => {
+      const v = evaluateChunkBroadcastVerdict({
+        ...base,
+        minDistinctDomains: 3,
+        domainsAvailable: 5,
+        successCount: 3,
+        preferredSuccessCount: 2,
+        distinctDomainCount: 2, // below target, but achievable
+      });
+      assert.equal(v.succeeded, false);
+      assert.equal(v.domainShortfall, 'unmet');
+    });
+
+    it('soft-degrades (succeeds) when the eligible set cannot supply the target', () => {
+      const v = evaluateChunkBroadcastVerdict({
+        ...base,
+        minDistinctDomains: 5,
+        domainsAvailable: 2, // network only offers 2 domains
+        successCount: 3,
+        preferredSuccessCount: 2,
+        distinctDomainCount: 2, // met what's available
+      });
+      assert.equal(v.succeeded, true);
+      assert.equal(v.domainShortfall, 'degraded');
+    });
+
+    it('succeeds when the target is met', () => {
+      const v = evaluateChunkBroadcastVerdict({
+        ...base,
+        minDistinctDomains: 3,
+        domainsAvailable: 5,
+        successCount: 4,
+        preferredSuccessCount: 2,
+        distinctDomainCount: 3,
+      });
+      assert.equal(v.succeeded, true);
+      assert.equal(v.domainShortfall, 'none');
     });
   });
 });

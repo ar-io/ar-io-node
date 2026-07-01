@@ -46,6 +46,9 @@ export const headerNames = {
   chunkTxPath: 'X-Arweave-Chunk-Tx-Path',
   chunkTxId: 'X-Arweave-Chunk-Tx-Id',
   chunkTxStartOffset: 'X-Arweave-Chunk-Tx-Start-Offset',
+  // Placement-evidence contract: distinct fault domains (IP /24·/48) a POSTed
+  // chunk landed on, surfaced on the POST /chunk response for the poster.
+  chunkPlacementDomains: 'X-AR-IO-Chunk-Placement-Domains',
   rootTransactionId: 'X-AR-IO-Root-Transaction-Id',
   rootPath: 'X-AR-IO-Root-Path',
   rootItemOffset: 'X-AR-IO-Root-Item-Offset',

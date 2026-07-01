@@ -870,18 +870,25 @@ export const createChunkPostHandler = ({
           parentSpan: span,
         });
 
-        // Set common broadcast span attributes
-        const meetsSuccessThreshold =
-          result.successCount >= CHUNK_POST_MIN_SUCCESS_COUNT &&
-          result.preferredSuccessCount >=
-            CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT;
+        // The broadcaster owns the quorum verdict (success/preferred/distinct-
+        // domain + soft-preferred fallback) — read it, don't recompute it here.
+        const meetsSuccessThreshold = result.succeeded;
         span.setAttributes({
           'chunk.broadcast.success': meetsSuccessThreshold,
           'chunk.broadcast.success_count': result.successCount,
           'chunk.broadcast.preferred_success_count':
             result.preferredSuccessCount,
+          'chunk.broadcast.distinct_domains': result.distinctDomainCount,
           'chunk.broadcast.failure_count': result.failureCount,
         });
+
+        // Placement-evidence contract: surface the distinct-fault-domain count
+        // so a caller (the bundler) can read where the chunk landed without
+        // parsing the body. The full result is also returned in the body below.
+        res.setHeader(
+          headerNames.chunkPlacementDomains,
+          String(result.distinctDomainCount),
+        );
 
         if (meetsSuccessThreshold) {
           span.setAttribute('http.status_code', 200);

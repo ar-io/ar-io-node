@@ -556,6 +556,34 @@ export const arweaveChunkBroadcastCounter = new promClient.Counter({
   labelNames: ['status'],
 });
 
+// Distinct fault domains (IP /24 v4, /48 v6) a chunk landed on per broadcast —
+// the placement-diversity signal. Buckets chosen to make "all successes in one
+// network block" (1) clearly distinguishable from healthy spread.
+export const chunkPostDistinctDomainsHistogram = new promClient.Histogram({
+  name: 'chunk_post_distinct_domains',
+  help: 'Distinct fault domains (IP /24·/48) among successful chunk POSTs per broadcast',
+  buckets: [0, 1, 2, 3, 4, 5, 6, 8, 10],
+});
+
+// Preferred (tip) quorum fell short. Emitted even when the soft fallback makes
+// the POST succeed, so an arweave.xyz tips outage stays visible.
+//   reason=tips_unavailable -> no tip peer was eligible (down/over-queue)
+//   reason=tips_failed      -> tips were eligible but did not reach the threshold
+export const chunkPostPreferredShortfallCounter = new promClient.Counter({
+  name: 'chunk_post_preferred_shortfall_total',
+  help: 'Chunk POSTs whose preferred (tip) success count fell below the threshold',
+  labelNames: ['reason'],
+});
+
+// Distinct-domain target not met (only when CHUNK_POST_MIN_DISTINCT_DOMAINS > 0).
+//   reason=unmet    -> target was achievable but not reached
+//   reason=degraded -> eligible peer set could not supply the target (soft-capped)
+export const chunkPostDomainShortfallCounter = new promClient.Counter({
+  name: 'chunk_post_domain_shortfall_total',
+  help: 'Chunk POSTs that missed the distinct-fault-domain target',
+  labelNames: ['reason'],
+});
+
 export const arweavePeerChunkQueuesGauge = new promClient.Gauge({
   name: 'arweave_peer_chunk_queues_size',
   help: 'Number of peer chunk queues in memory',
