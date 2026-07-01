@@ -1377,7 +1377,7 @@
         {
           "datasource": "${datasource}",
           "editorMode": "code",
-          "expr": "sum(rate(arweave_chunk_broadcast_total{status=\"success\"}[$__rate_interval]))/clamp_min(sum(rate(arweave_chunk_broadcast_total[$__rate_interval])),0.0001)",
+          "expr": "sum(rate(arweave_chunk_broadcast_total{status=\"success\"}[$__rate_interval])) / sum(rate(arweave_chunk_broadcast_total[$__rate_interval]))",
           "instant": false,
           "legendFormat": "success ratio",
           "range": true,

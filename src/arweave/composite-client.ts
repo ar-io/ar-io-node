@@ -2086,6 +2086,15 @@ export class ArweaveCompositeClient
           //      unreachable) and every POST walks the whole peer list (~12s in
           //      the soak). Gated on preferredAttempted so a healthy tip set is
           //      never skipped.
+          //
+          // This intentionally does NOT reuse evaluateChunkBroadcastVerdict:
+          // both branches here are STRICTER than the verdict's success rule
+          // (normal keeps the distinct-domain term the verdict dropped, to drive
+          // diversity-seeking breadth when MIN_DISTINCT_DOMAINS > 0; fallback
+          // adds the preferredAttempted gate). Each branch provably implies
+          // verdict.succeeded, so we never terminate before the POST would
+          // succeed — we only (deliberately) keep seeding for breadth past it.
+          // Mirroring the verdict here would remove the breadth-seeking feature.
           const normalQuorumMet =
             successCount >= chunkPostMinSuccessCount &&
             preferredSuccessCount >= chunkPostMinPreferredSuccessCount &&

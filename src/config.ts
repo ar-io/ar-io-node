@@ -804,13 +804,15 @@ export const CHUNK_POST_PEER_CONCURRENCY = +env.varOrDefault(
   String(CHUNK_POST_MIN_SUCCESS_COUNT),
 );
 
-// Minimum number of distinct fault domains (IP /24 for v4, /48 for v6) a chunk
-// POST must land on among its successes. 0 = disabled (fault-domain-blind, the
-// legacy behavior). Soft: degrades gracefully if the eligible peer set cannot
-// supply this many distinct domains (never hard-fails on domain scarcity).
-export const CHUNK_POST_MIN_DISTINCT_DOMAINS = +env.varOrDefault(
+// Best-effort distinct-fault-domain target (IP /24 v4, /48 v6) for a chunk POST.
+// 0 = disabled (fault-domain-blind, the legacy behavior). It drives fan-out
+// breadth + a shortfall metric but never fails a POST — see
+// evaluateChunkBroadcastVerdict. Parsed as a non-negative integer so a bad env
+// value (NaN/negative/fraction) can't leak into the verdict and skew the
+// threshold.
+export const CHUNK_POST_MIN_DISTINCT_DOMAINS = env.nonNegativeIntOrDefault(
   'CHUNK_POST_MIN_DISTINCT_DOMAINS',
-  '0',
+  0,
 );
 
 // When true, a chunk POST may meet quorum via a strong distinct-domain quorum of
