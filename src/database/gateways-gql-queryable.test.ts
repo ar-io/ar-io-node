@@ -920,3 +920,159 @@ describe('RemoteGqlQueryable circuit breaker', () => {
     );
   });
 });
+
+describe('GatewaysGqlQueryable soft deadline', () => {
+  class DelayedTxQueryable extends FakeQueryable {
+    constructor(
+      data: { transactions?: GqlTransaction[]; throws?: Error },
+      private readonly delayMs: number,
+    ) {
+      super(data);
+    }
+    async getGqlTransactions(args: {
+      pageSize: number;
+      cursor?: string;
+      sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    }): Promise<GqlTransactionsResult> {
+      await new Promise((r) => setTimeout(r, this.delayMs));
+      return super.getGqlTransactions(args);
+    }
+  }
+
+  const fastSource = () =>
+    new FakeQueryable({ transactions: [txAt({ id: 'fast', height: 100 })] });
+
+  it('returns the fast source without waiting for a laggard, with a warning', async () => {
+    const merger = GatewaysGqlQueryable.forTesting({
+      log,
+      sources: [
+        fastSource(),
+        new DelayedTxQueryable(
+          { transactions: [txAt({ id: 'slow', height: 99 })] },
+          10_000,
+        ),
+      ],
+      labels: ['<local>', 'http://slow.example'],
+      softDeadlineEnabled: true,
+      softDeadlineMs: 30,
+    });
+
+    const started = Date.now();
+    const result = await merger.getGqlTransactions({
+      pageSize: 10,
+      sortOrder: 'HEIGHT_DESC',
+      tags: [],
+    });
+    const elapsed = Date.now() - started;
+
+    assert.deepEqual(
+      result.edges.map((e) => e.node.id),
+      ['fast'],
+    );
+    assert.ok(
+      elapsed < 5_000,
+      `expected to return before the 10s laggard, took ${elapsed}ms`,
+    );
+    const warnings = result.warnings ?? [];
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].code, 'UPSTREAM_SOFT_DEADLINE');
+    assert.equal(warnings[0].source, 'http://slow.example');
+  });
+
+  it('waits for the laggard and omits the warning when disabled (default)', async () => {
+    const merger = GatewaysGqlQueryable.forTesting({
+      log,
+      sources: [
+        fastSource(),
+        new DelayedTxQueryable(
+          { transactions: [txAt({ id: 'slow', height: 99 })] },
+          40,
+        ),
+      ],
+      // softDeadlineEnabled defaults to false -> prior behavior
+    });
+    const result = await merger.getGqlTransactions({
+      pageSize: 10,
+      sortOrder: 'HEIGHT_DESC',
+      tags: [],
+    });
+    assert.deepEqual(
+      result.edges.map((e) => e.node.id),
+      ['fast', 'slow'],
+    );
+    assert.equal(result.warnings, undefined);
+  });
+
+  it('arms the deadline only after the first result, so an all-slow moment is not a failure', async () => {
+    // Both sources take ~30ms; the deadline is 15ms. Armed at call time this
+    // would cut both and throw "all sources failed". Armed after the first
+    // fulfillment, both results are captured.
+    const merger = GatewaysGqlQueryable.forTesting({
+      log,
+      sources: [
+        new DelayedTxQueryable(
+          { transactions: [txAt({ id: 'a', height: 100 })] },
+          30,
+        ),
+        new DelayedTxQueryable(
+          { transactions: [txAt({ id: 'b', height: 99 })] },
+          30,
+        ),
+      ],
+      softDeadlineEnabled: true,
+      softDeadlineMs: 15,
+    });
+    const result = await merger.getGqlTransactions({
+      pageSize: 10,
+      sortOrder: 'HEIGHT_DESC',
+      tags: [],
+    });
+    assert.deepEqual(
+      result.edges.map((e) => e.node.id),
+      ['a', 'b'],
+    );
+    assert.equal(result.warnings, undefined);
+  });
+
+  it('applies the soft deadline to block queries too', async () => {
+    class DelayedBlockQueryable extends FakeQueryable {
+      constructor(
+        data: { blocks?: GqlBlock[] },
+        private readonly delayMs: number,
+      ) {
+        super(data);
+      }
+      async getGqlBlocks(args: {
+        pageSize: number;
+        sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+      }): Promise<GqlBlocksResult> {
+        await new Promise((r) => setTimeout(r, this.delayMs));
+        return super.getGqlBlocks(args);
+      }
+    }
+    const merger = GatewaysGqlQueryable.forTesting({
+      log,
+      sources: [
+        new FakeQueryable({
+          blocks: [{ id: 'b100', height: 100, timestamp: 0, previous: '' }],
+        }),
+        new DelayedBlockQueryable(
+          { blocks: [{ id: 'b99', height: 99, timestamp: 0, previous: '' }] },
+          10_000,
+        ),
+      ],
+      labels: ['<local>', 'http://slow.example'],
+      softDeadlineEnabled: true,
+      softDeadlineMs: 30,
+    });
+    const result = await merger.getGqlBlocks({
+      pageSize: 10,
+      sortOrder: 'HEIGHT_DESC',
+    });
+    assert.deepEqual(
+      result.edges.map((e) => e.node.id),
+      ['b100'],
+    );
+    assert.equal((result.warnings ?? [])[0]?.code, 'UPSTREAM_SOFT_DEADLINE');
+  });
+});
