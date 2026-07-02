@@ -949,7 +949,10 @@ describe('GatewaysGqlQueryable soft deadline', () => {
         fastSource(),
         new DelayedTxQueryable(
           { transactions: [txAt({ id: 'slow', height: 99 })] },
-          10_000,
+          // Abandoned laggard: kept short (not multi-second) so its still-ref'd
+          // timer can't leave the process hanging at exit, but well above the
+          // 30ms deadline so the assertion proves we returned via the deadline.
+          500,
         ),
       ],
       labels: ['<local>', 'http://slow.example'],
@@ -970,8 +973,8 @@ describe('GatewaysGqlQueryable soft deadline', () => {
       ['fast'],
     );
     assert.ok(
-      elapsed < 5_000,
-      `expected to return before the 10s laggard, took ${elapsed}ms`,
+      elapsed < 300,
+      `expected to return via the 30ms soft deadline, not wait for the 500ms laggard, took ${elapsed}ms`,
     );
     const warnings = result.warnings ?? [];
     assert.equal(warnings.length, 1);
@@ -1004,23 +1007,28 @@ describe('GatewaysGqlQueryable soft deadline', () => {
   });
 
   it('arms the deadline only after the first result, so an all-slow moment is not a failure', async () => {
-    // Both sources take ~30ms; the deadline is 15ms. Armed at call time this
-    // would cut both and throw "all sources failed". Armed after the first
-    // fulfillment, both results are captured.
+    // Both sources take ~200ms; the deadline is 100ms. Armed at call time the
+    // 100ms deadline would fire before either source (200ms) responds, cut
+    // both, and throw "all sources failed". Armed after the first fulfillment
+    // it fires at ~300ms, well after the second source (~200ms) settles, so
+    // both results are captured. The deadline must stay below the source delay
+    // — that gap is what distinguishes the two arming strategies — while the
+    // ~100ms slack between the second source and the timer keeps the test
+    // robust against CI scheduling jitter.
     const merger = GatewaysGqlQueryable.forTesting({
       log,
       sources: [
         new DelayedTxQueryable(
           { transactions: [txAt({ id: 'a', height: 100 })] },
-          30,
+          200,
         ),
         new DelayedTxQueryable(
           { transactions: [txAt({ id: 'b', height: 99 })] },
-          30,
+          200,
         ),
       ],
       softDeadlineEnabled: true,
-      softDeadlineMs: 15,
+      softDeadlineMs: 100,
     });
     const result = await merger.getGqlTransactions({
       pageSize: 10,
@@ -1058,7 +1066,8 @@ describe('GatewaysGqlQueryable soft deadline', () => {
         }),
         new DelayedBlockQueryable(
           { blocks: [{ id: 'b99', height: 99, timestamp: 0, previous: '' }] },
-          10_000,
+          // Abandoned laggard kept short so its ref'd timer can't hang exit.
+          500,
         ),
       ],
       labels: ['<local>', 'http://slow.example'],
@@ -1073,6 +1082,9 @@ describe('GatewaysGqlQueryable soft deadline', () => {
       result.edges.map((e) => e.node.id),
       ['b100'],
     );
-    assert.equal((result.warnings ?? [])[0]?.code, 'UPSTREAM_SOFT_DEADLINE');
+    const warnings = result.warnings ?? [];
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].code, 'UPSTREAM_SOFT_DEADLINE');
+    assert.equal(warnings[0].source, 'http://slow.example');
   });
 });

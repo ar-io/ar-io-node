@@ -1269,6 +1269,13 @@ export class GatewaysGqlQueryable
   }
 }
 
+/**
+ * Map a settled-source rejection reason to the GraphQL warning code surfaced
+ * to callers: an open circuit breaker becomes `UPSTREAM_CIRCUIT_OPEN`, a soft
+ * deadline cut (`SoftDeadlineExceededError`) becomes `UPSTREAM_SOFT_DEADLINE`,
+ * and anything else (a real upstream error or request timeout) becomes
+ * `UPSTREAM_UNAVAILABLE`.
+ */
 function warningCodeForReason(reason: unknown): string {
   const code = (reason as { code?: unknown } | null | undefined)?.code;
   switch (code) {
