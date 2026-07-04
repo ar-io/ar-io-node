@@ -1034,8 +1034,18 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   confirmChunkPlacements(dataRoot: string, confirmedAt: number): number[] {
+    const dataRootBuf = fromB64Url(dataRoot);
     const rows = this.stmts.chunks.confirmChunkPlacements.all({
-      data_root: fromB64Url(dataRoot),
+      data_root: dataRootBuf,
+      confirmed_at: confirmedAt,
+    });
+    // Record the data_root as confirmed so chunks ingested AFTER this one-shot
+    // UPDATE still confirm at ingest and are retained past the TTL (see
+    // cache.sql markDataRootConfirmed / saveChunkPlacement inheritance /
+    // selectExpiredUnconfirmedPlacements). Gated on EXISTS in chunk_placements,
+    // so it is a no-op for indexed txs whose chunks we never ingested.
+    this.stmts.chunks.markDataRootConfirmed.run({
+      data_root: dataRootBuf,
       confirmed_at: confirmedAt,
     });
     return rows.map((row: any) => row.cached_at as number);

@@ -51,9 +51,26 @@ egress IP/CIDR and point the bundler's chunk-post endpoint at this gateway.
    invalid chunk is rejected and not cached.
 2. Valid → the bytes are written to the chunk store and a **pending** row is
    recorded in `chunks.db` → `chunk_placements` (`confirmed_at` NULL). This is
-   fire-and-forget and never blocks the broadcast response.
+   fire-and-forget and never blocks the broadcast response. If the `data_root` is
+   *already* confirmed (marker present, or a confirmed sibling exists), the new
+   row inherits its `confirmed_at` on the spot (see "sticky confirmation" below).
 3. When a transaction with that `data_root` is indexed, the `TX_INDEXED` event
    sets `confirmed_at` and records `chunk_ingest_confirmation_latency_seconds`.
+   This is a **one-shot** update: it only touches placements that already exist
+   at that instant. **Sticky confirmation** carries the result forward. The same
+   event records the `data_root` in `confirmed_data_roots` (gated on there being
+   at least one ingested chunk, so the table stays bounded by ingested bundles),
+   and that marker makes confirmation persistent:
+   - `saveChunkPlacement` inherits `confirmed_at` from the marker, so every chunk
+     ingested *after* the confirm event self-confirms at ingest; and
+   - the GC TTL sweep skips any `data_root` in `confirmed_data_roots`, so a
+     confirmed bundle is never partially evicted regardless of per-row state.
+
+   Without this, a large multi-GB bundle (thousands of chunks streamed in over a
+   window longer than one confirm event) leaves most chunks unconfirmed; they
+   then TTL-evict and leave a gappy, unservable set (e.g. `relative_offset` 0
+   missing → range streaming from offset 0 misses and the whole bundle fails to
+   serve/unbundle until it re-propagates from peers).
 4. A GC worker evicts placements whose `data_root` never confirms on-chain
    (tiered TTL by origin) plus a disk-pressure backstop.
 

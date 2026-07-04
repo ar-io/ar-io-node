@@ -4,7 +4,33 @@ INSERT INTO chunk_placements (
   data_path, tx_path, origin, cached_at, confirmed_at
 ) VALUES (
   @data_root, @relative_offset, @data_size, @chunk_size, @hash,
-  @data_path, @tx_path, @origin, @cached_at, @confirmed_at
+  @data_path, @tx_path, @origin, @cached_at,
+  -- Sticky confirmation: inherit confirmed_at when the data_root is already
+  -- confirmed. Confirmation is triggered ONCE per data_root by the TX_INDEXED
+  -- event (a one-shot UPDATE that only touches placements present at that
+  -- instant). A large multi-GB bundle streams its chunks in over a window far
+  -- longer than that single event, so most arrive AFTER it and — without this —
+  -- stay unconfirmed and get TTL-evicted, leaving a gappy, unservable set (e.g.
+  -- relative_offset 0 missing -> retrieval streams from 0, misses, and fails).
+  -- Prefer the `confirmed_data_roots` marker (set at confirm time, persists
+  -- independently of which chunks were present then); fall back to a confirmed
+  -- sibling for robustness. An explicit @confirmed_at (caller already knows)
+  -- always wins.
+  COALESCE(
+    @confirmed_at,
+    (
+      SELECT confirmed_at
+      FROM confirmed_data_roots
+      WHERE data_root = @data_root
+    ),
+    (
+      SELECT sibling.confirmed_at
+      FROM chunk_placements AS sibling
+      WHERE sibling.data_root = @data_root
+        AND sibling.confirmed_at IS NOT NULL
+      LIMIT 1
+    )
+  )
 )
 ON CONFLICT (data_root, relative_offset) DO UPDATE SET
   data_size = excluded.data_size,
@@ -12,7 +38,8 @@ ON CONFLICT (data_root, relative_offset) DO UPDATE SET
   hash = excluded.hash,
   data_path = excluded.data_path,
   tx_path = COALESCE(excluded.tx_path, chunk_placements.tx_path),
-  -- Never reset an existing confirmation back to NULL on re-ingest.
+  -- Never reset an existing confirmation back to NULL on re-ingest; and pick up a
+  -- sibling-inherited confirmation carried in via excluded.confirmed_at.
   confirmed_at = COALESCE(chunk_placements.confirmed_at, excluded.confirmed_at)
 
 -- confirmChunkPlacements
@@ -22,15 +49,37 @@ WHERE data_root = @data_root
   AND confirmed_at IS NULL
 RETURNING cached_at
 
+-- markDataRootConfirmed
+-- Record the data_root as confirmed so chunks ingested AFTER the one-shot
+-- confirmation still confirm (via saveChunkPlacement's inheritance) and are
+-- retained (via the GC's exclusion). Gated on EXISTS in chunk_placements so the
+-- marker table only holds data_roots we have actually ingested chunks for,
+-- keeping it bounded by ingested bundles rather than the whole tx index. First
+-- confirmation wins (DO NOTHING on conflict).
+INSERT INTO confirmed_data_roots (data_root, confirmed_at)
+SELECT @data_root, @confirmed_at
+WHERE EXISTS (
+  SELECT 1 FROM chunk_placements WHERE data_root = @data_root
+)
+ON CONFLICT (data_root) DO NOTHING
+
 -- unconfirmChunkPlacements
 UPDATE chunk_placements
 SET confirmed_at = NULL
 WHERE data_root = @data_root
 
 -- selectExpiredUnconfirmedPlacements
+-- Never TTL-evict a chunk whose data_root is confirmed, even if this individual
+-- row is still marked pending: once a bundle is confirmed we keep the WHOLE set
+-- so it stays servable/unbundlable. This guards against a straggler chunk that
+-- was ingested but hasn't picked up confirmation for any reason.
 SELECT data_root, relative_offset, chunk_size
 FROM chunk_placements
 WHERE confirmed_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM confirmed_data_roots c
+    WHERE c.data_root = chunk_placements.data_root
+  )
   AND (
     (origin = @origin_ingest AND cached_at < @open_cutoff)
     OR (origin = @origin_ingest_allowlisted AND cached_at < @allow_cutoff)

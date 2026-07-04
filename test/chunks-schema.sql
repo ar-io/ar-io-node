@@ -15,3 +15,7 @@ CREATE INDEX chunk_placements_hash_idx
   ON chunk_placements (hash);
 CREATE INDEX chunk_placements_gc_idx
   ON chunk_placements (confirmed_at, cached_at);
+CREATE TABLE confirmed_data_roots (
+  data_root    BLOB    PRIMARY KEY,
+  confirmed_at INTEGER NOT NULL
+);
