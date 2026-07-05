@@ -38,6 +38,7 @@ export class ChunkIngestGcWorker {
   private confirmationTimeoutSeconds: number;
   private allowlistConfirmationTimeoutSeconds: number;
   private maxPendingBytes: number;
+  private confirmedRootRetentionSeconds: number;
   private timer: NodeJS.Timeout | undefined;
   private sweeping = false;
 
@@ -51,6 +52,7 @@ export class ChunkIngestGcWorker {
     confirmationTimeoutSeconds = config.CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS,
     allowlistConfirmationTimeoutSeconds = config.CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS,
     maxPendingBytes = config.CHUNK_INGEST_MAX_PENDING_BYTES,
+    confirmedRootRetentionSeconds = config.CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS,
   }: {
     log: Logger;
     chunkDataStore: ChunkDataStore;
@@ -61,6 +63,7 @@ export class ChunkIngestGcWorker {
     confirmationTimeoutSeconds?: number;
     allowlistConfirmationTimeoutSeconds?: number;
     maxPendingBytes?: number;
+    confirmedRootRetentionSeconds?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.chunkDataStore = chunkDataStore;
@@ -72,6 +75,7 @@ export class ChunkIngestGcWorker {
     this.allowlistConfirmationTimeoutSeconds =
       allowlistConfirmationTimeoutSeconds;
     this.maxPendingBytes = maxPendingBytes;
+    this.confirmedRootRetentionSeconds = confirmedRootRetentionSeconds;
   }
 
   start(): void {
@@ -144,6 +148,13 @@ export class ChunkIngestGcWorker {
       // Resync the synchronous ingest-side guard to the authoritative total so
       // it self-corrects as placements confirm or are evicted.
       resyncPendingBytesEstimate(accuratePending);
+
+      // 3. Prune stale confirmed-data-root markers to keep the table bounded. A
+      // marker only bridges the confirm->seed gap; well after that window it is
+      // redundant (ingested chunks carry their own confirmed_at).
+      await this.chunkPlacementIndex.pruneConfirmedDataRoots(
+        now - this.confirmedRootRetentionSeconds,
+      );
     } catch (error: unknown) {
       this.log.warn('Chunk ingest GC sweep failed', {
         message: error instanceof Error ? error.message : String(error),

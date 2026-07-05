@@ -52,16 +52,32 @@ RETURNING cached_at
 -- markDataRootConfirmed
 -- Record the data_root as confirmed so chunks ingested AFTER the one-shot
 -- confirmation still confirm (via saveChunkPlacement's inheritance) and are
--- retained (via the GC's exclusion). Gated on EXISTS in chunk_placements so the
--- marker table only holds data_roots we have actually ingested chunks for,
--- keeping it bounded by ingested bundles rather than the whole tx index. First
--- confirmation wins (DO NOTHING on conflict).
+-- retained (via the GC's exclusion).
+--
+-- Recorded UNCONDITIONALLY (no EXISTS-in-chunk_placements gate). The confirming
+-- TX_INDEXED event frequently fires BEFORE any of the bundle's chunks are
+-- ingested: with the bundler's TX-confirmation broadcast gate, chunk seeding
+-- waits for network confirmation, and the gateway imports that same block first
+-- — so the confirm event routinely wins the race and finds zero chunks present.
+-- An EXISTS gate would then skip the marker and every later-seeded chunk would
+-- stay pending and TTL-evict (proven end-to-end: confirm fired ~2s before the
+-- first chunk, all 1025 chunks evicted, offset 0 lost). Marking unconditionally
+-- bridges the race in both orderings. The marker table is kept bounded by an
+-- age-based prune in the GC sweep (see pruneConfirmedDataRoots); it only needs to
+-- outlive the confirm->seed gap (seconds), not the chunk TTL. First confirmation
+-- wins (DO NOTHING on conflict). This event only fires for txs with a non-empty
+-- data_root (data txs), and only while chunk ingest is enabled.
 INSERT INTO confirmed_data_roots (data_root, confirmed_at)
-SELECT @data_root, @confirmed_at
-WHERE EXISTS (
-  SELECT 1 FROM chunk_placements WHERE data_root = @data_root
-)
+VALUES (@data_root, @confirmed_at)
 ON CONFLICT (data_root) DO NOTHING
+
+-- pruneConfirmedDataRoots
+-- Bound the marker table: a marker only needs to bridge the gap between a tx
+-- confirming and its chunks being seeded (seconds to a couple of minutes). Once a
+-- chunk is ingested it carries its own confirmed_at, so the marker is redundant
+-- after that. Delete markers older than the caller's cutoff.
+DELETE FROM confirmed_data_roots
+WHERE confirmed_at < @cutoff
 
 -- unconfirmChunkPlacements
 UPDATE chunk_placements

@@ -1042,13 +1042,23 @@ export class StandaloneSqliteDatabaseWorker {
     // Record the data_root as confirmed so chunks ingested AFTER this one-shot
     // UPDATE still confirm at ingest and are retained past the TTL (see
     // cache.sql markDataRootConfirmed / saveChunkPlacement inheritance /
-    // selectExpiredUnconfirmedPlacements). Gated on EXISTS in chunk_placements,
-    // so it is a no-op for indexed txs whose chunks we never ingested.
+    // selectExpiredUnconfirmedPlacements). Recorded unconditionally: the confirm
+    // event routinely fires before any chunk is seeded, so an EXISTS gate would
+    // miss exactly the case this protects. The marker table is bounded by
+    // pruneConfirmedDataRoots in the GC sweep.
     this.stmts.chunks.markDataRootConfirmed.run({
       data_root: dataRootBuf,
       confirmed_at: confirmedAt,
     });
     return rows.map((row: any) => row.cached_at as number);
+  }
+
+  // Prune confirmed-data-root markers older than `cutoff` (unix seconds). Keeps
+  // the marker table bounded; a marker only needs to bridge the gap between a tx
+  // confirming and its chunks being seeded. Returns the number of rows deleted.
+  pruneConfirmedDataRoots(cutoff: number): number {
+    const result = this.stmts.chunks.pruneConfirmedDataRoots.run({ cutoff });
+    return result.changes;
   }
 
   // Reserved for chain-reorg recovery: returns a confirmed placement to pending
@@ -3609,6 +3619,10 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'unconfirmChunkPlacements', [dataRoot]);
   }
 
+  pruneConfirmedDataRoots(cutoff: number): Promise<number> {
+    return this.queueWrite('data', 'pruneConfirmedDataRoots', [cutoff]);
+  }
+
   selectExpiredUnconfirmedChunkPlacements(params: {
     originIngest: number;
     originIngestAllowlisted: number;
@@ -4194,6 +4208,9 @@ if (!isMainThread) {
         case 'unconfirmChunkPlacements':
           worker.unconfirmChunkPlacements(args[0]);
           parentPort?.postMessage(null);
+          break;
+        case 'pruneConfirmedDataRoots':
+          parentPort?.postMessage(worker.pruneConfirmedDataRoots(args[0]));
           break;
         case 'selectExpiredUnconfirmedChunkPlacements':
           parentPort?.postMessage(

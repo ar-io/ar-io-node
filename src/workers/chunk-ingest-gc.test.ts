@@ -22,6 +22,7 @@ type Recorder = {
   dataDel: Array<[string, number]>;
   metaDel: Array<[string, number]>;
   placementDel: Array<[string, number]>;
+  prunedBefore: number[];
 };
 
 const ref = (
@@ -43,7 +44,12 @@ function makeDeps({
   // confirmation landing between the sweep's SELECT and the DELETE.
   confirmedKeys?: Set<string>;
 }) {
-  const rec: Recorder = { dataDel: [], metaDel: [], placementDel: [] };
+  const rec: Recorder = {
+    dataDel: [],
+    metaDel: [],
+    placementDel: [],
+    prunedBefore: [],
+  };
   const chunkDataStore = {
     async del(dr: string, ro: number) {
       rec.dataDel.push([dr, ro]);
@@ -67,6 +73,10 @@ function makeDeps({
     },
     async sumPendingChunkBytes() {
       return pendingBytes;
+    },
+    async pruneConfirmedDataRoots(cutoff: number) {
+      rec.prunedBefore.push(cutoff);
+      return 0;
     },
   } as unknown as ChunkPlacementIndex;
   return { rec, chunkDataStore, chunkMetadataStore, chunkPlacementIndex };

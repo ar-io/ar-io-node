@@ -288,21 +288,68 @@ describe('chunk_placements (chunks.db) worker methods', () => {
       assert.ok(!expired.some((e) => e.dataRoot === dataRoot));
     });
 
-    it('does not mark (or inherit for) a data_root with no ingested chunks', () => {
+    // The confirm event (TX_INDEXED) commonly fires BEFORE any of a bundle's
+    // chunks are seeded — with the bundler's TX-confirmation broadcast gate,
+    // seeding waits for network confirmation and the gateway imports that block
+    // first. The marker must therefore be recorded even when no chunk exists yet,
+    // so the later-seeded chunks inherit it. (End-to-end, the earlier EXISTS-gated
+    // version let confirm fire ~2s before the first chunk, set no marker, and all
+    // 1025 chunks TTL-evicted with offset 0 lost.)
+    it('marks a confirmed data_root even with no chunks yet, so later chunks inherit it', () => {
       const dataRoot = toB64Url(Buffer.alloc(32, 45));
-      // A tx is indexed for a data_root we never ingested a chunk for: the marker
-      // is gated on EXISTS in chunk_placements, so nothing is recorded and the
-      // table stays bounded by ingested bundles.
+      // Confirm fires first, before any chunk of this bundle is ingested.
       worker.confirmChunkPlacements(dataRoot, 7000);
 
-      // A later chunk therefore does NOT inherit a phantom confirmation.
+      // Chunks stream in afterwards, unconfirmed…
       worker.saveChunkPlacement(
         basePlacement({ dataRoot, relativeOffset: 0, confirmedAt: undefined }),
       );
+      worker.saveChunkPlacement(
+        basePlacement({
+          dataRoot,
+          relativeOffset: 256,
+          confirmedAt: undefined,
+        }),
+      );
+
+      // …and inherit the marker's confirmation at ingest.
+      assert.equal(worker.getChunkPlacement(dataRoot, 0)?.confirmedAt, 7000);
+      assert.equal(worker.getChunkPlacement(dataRoot, 256)?.confirmedAt, 7000);
+
+      // And are shielded from TTL eviction.
+      const expired = worker.selectExpiredUnconfirmedChunkPlacements({
+        originIngest: 1,
+        originIngestAllowlisted: 2,
+        openCutoff: 100000,
+        allowCutoff: 100000,
+        limit: 100,
+      });
+      assert.ok(!expired.some((e) => e.dataRoot === dataRoot));
+    });
+
+    it('prunes markers older than the cutoff (keeps the table bounded)', () => {
+      const oldRoot = toB64Url(Buffer.alloc(32, 46));
+      const freshRoot = toB64Url(Buffer.alloc(32, 47));
+      worker.confirmChunkPlacements(oldRoot, 1000);
+      worker.confirmChunkPlacements(freshRoot, 9000);
+
+      const deleted = worker.pruneConfirmedDataRoots(5000);
+      assert.ok(deleted >= 1);
+
+      // The old marker is gone: a later chunk under it does NOT inherit.
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot: oldRoot, relativeOffset: 0 }),
+      );
       assert.equal(
-        worker.getChunkPlacement(dataRoot, 0)?.confirmedAt,
+        worker.getChunkPlacement(oldRoot, 0)?.confirmedAt,
         undefined,
       );
+
+      // The fresh marker survives: a later chunk under it DOES inherit.
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot: freshRoot, relativeOffset: 0 }),
+      );
+      assert.equal(worker.getChunkPlacement(freshRoot, 0)?.confirmedAt, 9000);
     });
   });
 });
