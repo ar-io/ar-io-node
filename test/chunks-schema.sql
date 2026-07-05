@@ -19,3 +19,6 @@ CREATE TABLE confirmed_data_roots (
   data_root    BLOB    PRIMARY KEY,
   confirmed_at INTEGER NOT NULL
 );
+CREATE INDEX chunk_placements_confirmed_sibling_idx
+  ON chunk_placements (data_root)
+  WHERE confirmed_at IS NOT NULL;

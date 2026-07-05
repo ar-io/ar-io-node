@@ -13,9 +13,12 @@
 --   * the GC TTL sweep skips any data_root present here, so a confirmed bundle is
 --     never partially evicted regardless of per-row confirmed_at.
 --
--- It is populated by confirmChunkPlacements ONLY for data_roots we have actually
--- ingested chunks for (gated on EXISTS in chunk_placements), so it stays bounded
--- by ingested bundles rather than growing to the size of the whole tx index.
+-- It is populated UNCONDITIONALLY by confirmChunkPlacements at confirm time (the
+-- confirm event routinely fires before any of a bundle's chunks are seeded, so an
+-- EXISTS-in-chunk_placements gate would miss exactly the case this protects). The
+-- table is kept bounded by an age-based prune in the GC sweep
+-- (CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS); a marker only needs to outlive
+-- the confirm->seed gap.
 CREATE TABLE IF NOT EXISTS confirmed_data_roots (
   data_root    BLOB    PRIMARY KEY,
   confirmed_at INTEGER NOT NULL
