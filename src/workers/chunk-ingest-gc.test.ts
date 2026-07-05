@@ -78,6 +78,9 @@ function makeDeps({
       rec.prunedBefore.push(cutoff);
       return 0;
     },
+    async countConfirmedDataRoots() {
+      return 0;
+    },
   } as unknown as ChunkPlacementIndex;
   return { rec, chunkDataStore, chunkMetadataStore, chunkPlacementIndex };
 }

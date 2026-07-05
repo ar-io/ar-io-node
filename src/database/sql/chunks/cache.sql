@@ -79,6 +79,9 @@ ON CONFLICT (data_root) DO NOTHING
 DELETE FROM confirmed_data_roots
 WHERE confirmed_at < @cutoff
 
+-- countConfirmedDataRoots
+SELECT COUNT(*) AS count FROM confirmed_data_roots
+
 -- unconfirmChunkPlacements
 UPDATE chunk_placements
 SET confirmed_at = NULL

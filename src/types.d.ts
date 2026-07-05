@@ -267,6 +267,8 @@ export interface ChunkPlacementIndex {
   // Prune confirmed-data-root markers older than `cutoff` (unix seconds); keeps
   // the marker table bounded. Returns the number of rows deleted.
   pruneConfirmedDataRoots(cutoff: number): Promise<number>;
+  // Current row count of the confirmed_data_roots marker table (observability).
+  countConfirmedDataRoots(): Promise<number>;
   selectExpiredUnconfirmedChunkPlacements(params: {
     originIngest: number;
     originIngestAllowlisted: number;

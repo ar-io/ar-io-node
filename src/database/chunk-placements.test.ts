@@ -351,5 +351,12 @@ describe('chunk_placements (chunks.db) worker methods', () => {
       );
       assert.equal(worker.getChunkPlacement(freshRoot, 0)?.confirmedAt, 9000);
     });
+
+    it('counts marker rows (observability gauge source)', () => {
+      const before = worker.countConfirmedDataRoots();
+      worker.confirmChunkPlacements(toB64Url(Buffer.alloc(32, 48)), 1000);
+      worker.confirmChunkPlacements(toB64Url(Buffer.alloc(32, 49)), 1000);
+      assert.equal(worker.countConfirmedDataRoots(), before + 2);
+    });
   });
 });

@@ -152,8 +152,15 @@ export class ChunkIngestGcWorker {
       // 3. Prune stale confirmed-data-root markers to keep the table bounded. A
       // marker only bridges the confirm->seed gap; well after that window it is
       // redundant (ingested chunks carry their own confirmed_at).
-      await this.chunkPlacementIndex.pruneConfirmedDataRoots(
-        now - this.confirmedRootRetentionSeconds,
+      const prunedRoots =
+        await this.chunkPlacementIndex.pruneConfirmedDataRoots(
+          now - this.confirmedRootRetentionSeconds,
+        );
+      if (prunedRoots > 0) {
+        metrics.chunkIngestConfirmedRootsPrunedTotal.inc(prunedRoots);
+      }
+      metrics.chunkIngestConfirmedRootsGauge.set(
+        await this.chunkPlacementIndex.countConfirmedDataRoots(),
       );
     } catch (error: unknown) {
       this.log.warn('Chunk ingest GC sweep failed', {

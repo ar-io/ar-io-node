@@ -152,3 +152,5 @@ All at `/ar-io/__gateway_metrics`:
 | `chunk_ingest_confirmation_latency_seconds` | POST→confirm latency histogram (use to tune the TTLs). |
 | `chunk_ingest_evicted_total{reason}` | GC evictions: `ttl`, `disk_pressure`. |
 | `chunk_ingest_pending_bytes` | Estimated bytes held by pending (unconfirmed) placements. Refreshed on the GC sweep, so it can lag writes by up to one sweep interval — use `chunk_ingest_cache_total` for live confirmation. |
+| `chunk_ingest_confirmed_roots` | Rows in the `confirmed_data_roots` marker table. Should stay bounded (roughly: confirmed data-txs within `CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS`); a steadily-growing value means the prune is not keeping up. |
+| `chunk_ingest_confirmed_roots_pruned_total` | Count of markers pruned by the GC sweep. |

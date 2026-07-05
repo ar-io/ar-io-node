@@ -1061,6 +1061,13 @@ export class StandaloneSqliteDatabaseWorker {
     return result.changes;
   }
 
+  countConfirmedDataRoots(): number {
+    const row = this.stmts.chunks.countConfirmedDataRoots.get() as {
+      count: number;
+    };
+    return row.count;
+  }
+
   // Reserved for chain-reorg recovery: returns a confirmed placement to pending
   // so the GC can reclaim it if its (now-orphaned) tx never re-confirms. NOT yet
   // wired — see the deferral note at the TX_INDEXED confirm subscriber in
@@ -3623,6 +3630,10 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'pruneConfirmedDataRoots', [cutoff]);
   }
 
+  countConfirmedDataRoots(): Promise<number> {
+    return this.queueRead('data', 'countConfirmedDataRoots', undefined);
+  }
+
   selectExpiredUnconfirmedChunkPlacements(params: {
     originIngest: number;
     originIngestAllowlisted: number;
@@ -4232,6 +4243,9 @@ if (!isMainThread) {
           break;
         case 'sumPendingChunkBytes':
           parentPort?.postMessage(worker.sumPendingChunkBytes());
+          break;
+        case 'countConfirmedDataRoots':
+          parentPort?.postMessage(worker.countConfirmedDataRoots());
           break;
         case 'saveDataItem':
           worker.saveDataItem(args[0], args[1]);
