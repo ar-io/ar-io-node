@@ -428,6 +428,24 @@ other gateways in the network.
 **Observer Wallet** - A wallet used to sign and submit observation reports about
 other gateways in the network, enabling decentralized monitoring.
 
+**Chunk Fan-out (Broadcast)** - When a chunk is posted to the gateway
+(`POST /chunk`), it is relayed ("fanned out") in parallel to multiple Arweave
+peers so it spreads toward miners. A quorum of successful posts marks the chunk
+seeded. The gateway is a seeding *relay*; durability is owned by the uploader,
+which re-verifies permanence and re-seeds. See
+[Chunk Fan-out Seeding](chunk-fanout-seeding.md).
+
+**Fault Domain** - A grouping of peers by shared failure risk, approximated by IP
+subnet (`/24` for IPv4, `/48` for IPv6). Peers in the same fault domain can fail
+together (same operator, rack, or network block), so counting *distinct* fault
+domains — not raw peer successes — measures genuine seeding redundancy.
+
+**Tip Node (Preferred Chunk-Post Node)** - A preferred, mining-adjacent node the
+gateway posts chunks to first (default `tip-1..5.arweave.xyz`), the on-ramp to
+miners' mempools. Note the defaults all share one fault domain
+(`38.29.227.0/24`), which is why fault-domain-aware fan-out treats them as a
+single point of failure.
+
 ## Additional Terms
 
 **Base64URL** - URL-safe base64 encoding used throughout Arweave for IDs, data

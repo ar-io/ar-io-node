@@ -40,6 +40,7 @@ Fast, offline lookups for data item to root transaction mappings.
 | Document | Description |
 |----------|-------------|
 | [Optimistic Chunk Ingest Cache](chunk-ingest-cache.md) | Validating and caching chunks posted to the gateway, with confirmation-driven cleanup |
+| [Chunk Fan-out Seeding](chunk-fanout-seeding.md) | Fault-domain-aware chunk broadcast — operator setup, safety model (why it can't lose data), monitoring, and rollback |
 
 ## Data Export
 
