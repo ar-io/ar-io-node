@@ -157,10 +157,12 @@ function isClickHouseTooManyRowsError(err: unknown): boolean {
   return /\bcode:\s*158\b|TOO_MANY_ROWS/i.test(e.message ?? '');
 }
 
-// Low-cardinality descriptor of which filter families a GQL query used, for
-// the `filter` label on `clickhouse_gql_too_many_rows_total`. Bounded to the
-// 32 combinations of the five filter families (plus `none`), so it's safe as a
-// Prometheus label. The paired warn log carries the concrete filter values.
+/**
+ * Low-cardinality descriptor of which filter families a GQL query used, for
+ * the `filter` label on `clickhouse_gql_too_many_rows_total`. Bounded to the
+ * 32 combinations of the five filter families (plus `none`), so it's safe as a
+ * Prometheus label. The paired warn log carries the concrete filter values.
+ */
 function describeGqlFilterShape(args: {
   ids: string[];
   owners: string[];
@@ -178,13 +180,15 @@ function describeGqlFilterShape(args: {
   return families.length > 0 ? families.join('+') : 'none';
 }
 
-// Coarse id-count bucket for the `id_count` label on
-// `clickhouse_gql_too_many_rows_total`. The dominant 158 source is multi-id
-// `transactions(ids:[...])` lookups whose id_bloom scatter scales ~linearly
-// with id count (each id ≈ 1% of granules as false positives), so the number
-// of ids is the load-bearing dimension — but the raw count is too
-// high-cardinality for a label. Buckets chosen around the observed
-// max_rows_to_read boundary (single-id safe, ~2 marginal, 3+ over the cap).
+/**
+ * Coarse id-count bucket for the `id_count` label on
+ * `clickhouse_gql_too_many_rows_total`. The dominant 158 source is multi-id
+ * `transactions(ids:[...])` lookups whose id_bloom scatter scales ~linearly
+ * with id count (each id ≈ 1% of granules as false positives), so the number
+ * of ids is the load-bearing dimension — but the raw count is too
+ * high-cardinality for a label. Buckets chosen around the observed
+ * max_rows_to_read boundary (single-id safe, ~2 marginal, 3+ over the cap).
+ */
 function bucketIdCount(n: number): string {
   if (n === 0) return '0';
   if (n === 1) return '1';
@@ -1214,9 +1218,9 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
             'ClickHouse GQL stable query tripped max_rows_to_read ' +
               '(Code 158 TOO_MANY_ROWS)',
             {
-              recovery: willRetryWindowed
-                ? 'adaptive-height-windowing'
-                : 'none',
+              // Same vocabulary as the counter's `recovery` label so logs and
+              // the metric correlate directly (grep `recovery="windowed"`).
+              recovery: willRetryWindowed ? 'windowed' : 'none',
               maxRowsToRead: config.CLICKHOUSE_GQL_MAX_ROWS_TO_READ,
               idCount: ids.length,
               ids,

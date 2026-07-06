@@ -681,6 +681,19 @@ describe('CompositeClickHouseDatabase', () => {
         1,
         'expected the 158 counter to increment with id_count="3-5"',
       );
+      // The same increment carries filter="ids" from describeGqlFilterShape.
+      const series = (
+        await metrics.clickhouseGqlTooManyRowsTotal.get()
+      ).values.find(
+        (v) =>
+          v.labels.filter === 'ids' &&
+          v.labels.recovery === 'none' &&
+          v.labels.id_count === '3-5',
+      );
+      assert.ok(
+        series !== undefined && series.value >= 1,
+        'expected the 158 counter series to carry filter="ids"',
+      );
     });
 
     it('does not window when the feature is disabled (default)', async () => {
