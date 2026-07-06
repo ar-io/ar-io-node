@@ -9,6 +9,7 @@ import { isMainThread } from 'node:worker_threads';
 import { existsSync, readFileSync } from 'node:fs';
 
 import { createFilter } from './filters.js';
+import { assertMonotoneFilter } from './database/gql-l1-routing.js';
 import * as env from './lib/env.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
@@ -1410,6 +1411,29 @@ export const ANS104_INDEX_FILTER = createFilter(
   JSON.parse(ANS104_INDEX_FILTER_STRING),
   logger,
 );
+
+// Filter classifying which GraphQL `transactions` queries may be served
+// exclusively from the L1 (base-layer) SQLite index, bypassing ClickHouse.
+// Uses the same composable filter DSL as the indexing filters, but restricted
+// to its monotone subset (tags/attributes/and/or/always/never) so the
+// query-entailment decision is sound — see `assertMonotoneFilter` /
+// `isL1OnlyQuery` in database/gql-l1-routing.ts. Default `{"never": true}`
+// leaves routing off (all queries continue to hit ClickHouse). The filter is
+// an operator ASSERTION that queries it entails are L1-only; any bundled
+// matches are intentionally excluded from routed queries.
+export const GQL_L1_ONLY_ROUTING_FILTER_PARSED = JSON.parse(
+  env.varOrDefault('GQL_L1_ONLY_ROUTING_FILTER', '{"never": true}'),
+);
+assertMonotoneFilter(GQL_L1_ONLY_ROUTING_FILTER_PARSED);
+export const GQL_L1_ONLY_ROUTING_FILTER_STRING = canonicalize(
+  GQL_L1_ONLY_ROUTING_FILTER_PARSED,
+);
+export const GQL_L1_ONLY_ROUTING_FILTER = createFilter(
+  JSON.parse(GQL_L1_ONLY_ROUTING_FILTER_STRING),
+  logger,
+);
+export const GQL_L1_ONLY_ROUTING_ENABLED =
+  GQL_L1_ONLY_ROUTING_FILTER.constructor.name !== 'NeverMatch';
 
 // Auto-enable workers when verification is enabled (even if unbundle filter is "never")
 const getDefaultWorkerCount = (defaultCount: string) => {

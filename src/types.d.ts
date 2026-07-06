@@ -610,6 +610,10 @@ export interface GqlQueryable {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags: { name: string; values: string[] }[];
+    // When true, restrict the query to L1 (base-layer) transactions only,
+    // skipping the bundled data-item legs. Used by the composite's L1-only
+    // routing to serve entailed queries from the L1 index alone.
+    l1Only?: boolean;
   }): Promise<GqlTransactionsResult>;
 
   getGqlBlock(args: { id: string }): Promise<GqlBlock | undefined>;
