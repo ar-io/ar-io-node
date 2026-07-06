@@ -673,6 +673,21 @@ export const clickhouseMaxImportedHeight = new promClient.Gauge({
   help: 'Max height present in the ClickHouse `transactions` table (refreshed lazily).',
 });
 
+// Count of GQL stable-leg queries that tripped ClickHouse `max_rows_to_read`
+// (Code 158 TOO_MANY_ROWS). `filter` is a low-cardinality descriptor of which
+// filter families the query used (e.g. `owners+tags`, `ids`, `none`),
+// `recovery` is `windowed` when the owner-projection height-windowing fallback
+// re-ran it or `none` when the 158 surfaced to the caller, and `id_count` is a
+// coarse bucket of the id-list size (`0`,`1`,`2`,`3-5`,`6-20`,`21+`) — the
+// dominant 158 source is multi-id `transactions(ids:[...])` lookups whose
+// id_bloom scatter scales with id count. The paired per-query warn log carries
+// the full query shape for post-hoc audits.
+export const clickhouseGqlTooManyRowsTotal = new promClient.Counter({
+  name: 'clickhouse_gql_too_many_rows_total',
+  help: 'Count of GQL stable queries that tripped ClickHouse max_rows_to_read (Code 158).',
+  labelNames: ['filter', 'recovery', 'id_count'] as const,
+});
+
 //
 // Redis Cache Metrics
 //

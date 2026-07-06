@@ -157,6 +157,43 @@ function isClickHouseTooManyRowsError(err: unknown): boolean {
   return /\bcode:\s*158\b|TOO_MANY_ROWS/i.test(e.message ?? '');
 }
 
+// Low-cardinality descriptor of which filter families a GQL query used, for
+// the `filter` label on `clickhouse_gql_too_many_rows_total`. Bounded to the
+// 32 combinations of the five filter families (plus `none`), so it's safe as a
+// Prometheus label. The paired warn log carries the concrete filter values.
+function describeGqlFilterShape(args: {
+  ids: string[];
+  owners: string[];
+  recipients: string[];
+  bundledIn?: string[] | null;
+  tags: { name: string; values: string[] }[];
+}): string {
+  const families: string[] = [];
+  if (args.ids.length > 0) families.push('ids');
+  if (args.owners.length > 0) families.push('owners');
+  if (args.recipients.length > 0) families.push('recipients');
+  if (args.bundledIn != null && args.bundledIn.length > 0)
+    families.push('bundledIn');
+  if (args.tags.length > 0) families.push('tags');
+  return families.length > 0 ? families.join('+') : 'none';
+}
+
+// Coarse id-count bucket for the `id_count` label on
+// `clickhouse_gql_too_many_rows_total`. The dominant 158 source is multi-id
+// `transactions(ids:[...])` lookups whose id_bloom scatter scales ~linearly
+// with id count (each id ≈ 1% of granules as false positives), so the number
+// of ids is the load-bearing dimension — but the raw count is too
+// high-cardinality for a label. Buckets chosen around the observed
+// max_rows_to_read boundary (single-id safe, ~2 marginal, 3+ over the cap).
+function bucketIdCount(n: number): string {
+  if (n === 0) return '0';
+  if (n === 1) return '1';
+  if (n === 2) return '2';
+  if (n <= 5) return '3-5';
+  if (n <= 20) return '6-20';
+  return '21+';
+}
+
 // Reactive fallback (hack 5) for owner-filtered GQL queries whose owner
 // footprint is so large it still trips `max_rows_to_read` even via
 // owner_projection (a "whale" owner). When the single-shot stable query throws
@@ -1144,39 +1181,70 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         const jsonRow = await row.json();
         return jsonRow.data.map((tx: any) => this.mapTransactionRow(tx));
       } catch (err) {
-        // Hack 5: an owner-filtered query that still trips max_rows_to_read
-        // through owner_projection means a whale whose footprint exceeds the
-        // cap. Re-run as an adaptive height-windowed walk instead of failing.
-        //
-        // Restricted to non-id queries: the windowing walk is height-ordered
-        // and relies on the cursor predicate to drain a window, but id queries
-        // carry no ORDER BY or cursor predicate (see addGqlTransactionFilters /
-        // buildTransactionOrderBy), so the walk can't make per-window progress.
-        // owner+ids only reaches the cap for whale owners (>10M footprint) — a
-        // rare case left to surface the 158, no worse than before this feature.
-        if (
-          this.ownerProjectionApplies(owners, ids, tags) &&
-          ids.length === 0 &&
-          isClickHouseTooManyRowsError(err)
-        ) {
-          this.log.warn(
-            'Stable GQL leg tripped max_rows_to_read on an owner-filtered ' +
-              'query; retrying with adaptive height-windowing',
-            { owners, tags, minHeight, maxHeight },
-          );
-          return this.queryStableTransactionsWindowed({
-            pageSize,
-            cursor,
-            sortOrder,
-            ids,
-            recipients,
-            owners,
-            minHeight,
-            maxHeight,
-            bundledIn,
-            tags,
-            encoded: encodedFilters,
+        // Every stable-leg Code 158 (TOO_MANY_ROWS) is recorded here — at the
+        // origin, for both the recovered and the failing path — so operators can
+        // audit which query shapes trip `max_rows_to_read`. The counter carries a
+        // low-cardinality filter descriptor; the warn carries the concrete query
+        // shape needed to reproduce it.
+        if (isClickHouseTooManyRowsError(err)) {
+          // Hack 5: an owner-filtered query that still trips max_rows_to_read
+          // through owner_projection means a whale whose footprint exceeds the
+          // cap. Re-run as an adaptive height-windowed walk instead of failing.
+          //
+          // Restricted to non-id queries: the windowing walk is height-ordered
+          // and relies on the cursor predicate to drain a window, but id queries
+          // carry no ORDER BY or cursor predicate (see addGqlTransactionFilters /
+          // buildTransactionOrderBy), so the walk can't make per-window progress.
+          // owner+ids only reaches the cap for whale owners (>10M footprint) — a
+          // rare case left to surface the 158, no worse than before this feature.
+          const willRetryWindowed =
+            this.ownerProjectionApplies(owners, ids, tags) && ids.length === 0;
+          metrics.clickhouseGqlTooManyRowsTotal.inc({
+            filter: describeGqlFilterShape({
+              ids,
+              owners,
+              recipients,
+              bundledIn,
+              tags,
+            }),
+            recovery: willRetryWindowed ? 'windowed' : 'none',
+            id_count: bucketIdCount(ids.length),
           });
+          this.log.warn(
+            'ClickHouse GQL stable query tripped max_rows_to_read ' +
+              '(Code 158 TOO_MANY_ROWS)',
+            {
+              recovery: willRetryWindowed
+                ? 'adaptive-height-windowing'
+                : 'none',
+              maxRowsToRead: config.CLICKHOUSE_GQL_MAX_ROWS_TO_READ,
+              idCount: ids.length,
+              ids,
+              owners,
+              recipients,
+              bundledIn,
+              tags,
+              minHeight,
+              maxHeight,
+              pageSize,
+              sortOrder,
+            },
+          );
+          if (willRetryWindowed) {
+            return this.queryStableTransactionsWindowed({
+              pageSize,
+              cursor,
+              sortOrder,
+              ids,
+              recipients,
+              owners,
+              minHeight,
+              maxHeight,
+              bundledIn,
+              tags,
+              encoded: encodedFilters,
+            });
+          }
         }
         throw err;
       }
