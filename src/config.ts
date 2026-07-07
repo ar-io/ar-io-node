@@ -2951,3 +2951,36 @@ if (ENABLE_SAMPLING_DATA_SOURCE) {
     );
   }
 }
+
+//
+// StandaloneSqlite worker pools
+//
+
+// Number of reader worker threads for the core SQLite pool. Reads are
+// serialized within a single worker thread, so raising this adds read
+// concurrency for the core DB (WAL mode supports concurrent readers). Writers
+// stay single because SQLite permits only one writer at a time.
+//
+// @default 1
+export const CORE_SQLITE_READ_WORKER_COUNT = env.positiveIntOrDefault(
+  'CORE_SQLITE_READ_WORKER_COUNT',
+  1,
+);
+
+// Number of reader worker threads for the data SQLite pool.
+//
+// @default 2
+export const DATA_SQLITE_READ_WORKER_COUNT = env.positiveIntOrDefault(
+  'DATA_SQLITE_READ_WORKER_COUNT',
+  2,
+);
+
+// Operations whose total time (queue wait + service) meets or exceeds this
+// threshold are logged at `warn` with a queue/service breakdown and a bounded
+// argument summary, to pinpoint which method is responsible during a jam.
+//
+// @default 1000 (1 second)
+export const SQLITE_SLOW_QUERY_LOG_THRESHOLD_MS = env.positiveIntOrDefault(
+  'SQLITE_SLOW_QUERY_LOG_THRESHOLD_MS',
+  1000,
+);

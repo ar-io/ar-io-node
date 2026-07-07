@@ -605,6 +605,41 @@ export const sqliteInFlightOps = new promClient.Gauge({
   labelNames: ['worker', 'role'],
 });
 
+// Number of ops enqueued but not yet dispatched to a worker thread. A rising
+// value indicates the worker pool for that (worker, role) is saturated.
+export const sqliteQueuedOps = new promClient.Gauge({
+  name: 'sqlite_queued_ops',
+  help: 'Number of SQLite operations enqueued but not yet dispatched to a worker',
+  labelNames: ['worker', 'role'],
+});
+
+// The existing `standalone_sqlite_method_duration_seconds` summary measures
+// enqueue -> completion, which conflates queue wait, worker execution, and
+// main-thread reply scheduling. These two histograms split that:
+//   queue_wait: enqueue -> dispatch (time spent waiting for a free worker)
+//   service:    dispatch -> reply received (worker execution + reply
+//               scheduling on the main event loop)
+// A jam dominated by queue_wait points at worker-pool serialization (raise the
+// read pool size); one dominated by service with fast underlying queries points
+// at main-event-loop saturation.
+const SQLITE_LATENCY_BUCKETS = [
+  0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60,
+];
+
+export const sqliteMethodQueueWaitSeconds = new promClient.Histogram({
+  name: 'standalone_sqlite_method_queue_wait_seconds',
+  help: 'Time a StandaloneSqlite op waited in the queue before dispatch to a worker',
+  labelNames: ['worker', 'role', 'method'],
+  buckets: SQLITE_LATENCY_BUCKETS,
+});
+
+export const sqliteMethodServiceSeconds = new promClient.Histogram({
+  name: 'standalone_sqlite_method_service_seconds',
+  help: 'Time from worker dispatch to reply received (worker execution + reply scheduling)',
+  labelNames: ['worker', 'role', 'method'],
+  buckets: SQLITE_LATENCY_BUCKETS,
+});
+
 //
 // Block importer metrics
 //

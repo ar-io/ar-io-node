@@ -8,6 +8,7 @@ import { ValidationError } from 'apollo-server-express';
 import Sqlite from 'better-sqlite3';
 import crypto from 'node:crypto';
 import os from 'node:os';
+import { performance } from 'node:perf_hooks';
 import {
   Worker,
   isMainThread,
@@ -517,7 +518,13 @@ export class StandaloneSqliteDatabaseWorker {
     this.dbs.data.exec(`ATTACH DATABASE '${bundlesDbPath}' AS bundles`);
     this.dbs.bundles.exec(`ATTACH DATABASE '${coreDbPath}' AS core`);
 
-    this.stmts = { core: {}, data: {}, moderation: {}, bundles: {}, chunks: {} };
+    this.stmts = {
+      core: {},
+      data: {},
+      moderation: {},
+      bundles: {},
+      chunks: {},
+    };
 
     for (const [stmtsKey, stmts] of Object.entries(this.stmts)) {
       const sqlUrl = new URL(`./sql/${stmtsKey}`, import.meta.url);
@@ -1336,9 +1343,9 @@ export class StandaloneSqliteDatabaseWorker {
       dataRow?.root_transaction_id !== undefined
         ? toB64Url(dataRow.root_transaction_id)
         : txOrItemRow?.root_transaction_id !== null &&
-          txOrItemRow?.root_transaction_id !== undefined
-        ? toB64Url(txOrItemRow.root_transaction_id)
-        : undefined;
+            txOrItemRow?.root_transaction_id !== undefined
+          ? toB64Url(txOrItemRow.root_transaction_id)
+          : undefined;
 
     let dataItemAttributes;
     if (rootTransactionId !== undefined) {
@@ -1348,7 +1355,8 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     // Calculate resolved offset values for reuse
-    const rootParentOffset = dataRow?.root_parent_offset ?? txOrItemRow?.root_parent_offset;
+    const rootParentOffset =
+      dataRow?.root_parent_offset ?? txOrItemRow?.root_parent_offset;
     const dataOffset = dataRow?.data_offset ?? txOrItemRow?.data_offset;
     const offset = dataRow?.data_item_offset ?? dataItemAttributes?.offset;
 
@@ -1404,8 +1412,8 @@ export class StandaloneSqliteDatabaseWorker {
         dataRow?.trusted === 1
           ? true
           : dataRow?.trusted === 0
-          ? false
-          : undefined,
+            ? false
+            : undefined,
     };
   }
 
@@ -1501,7 +1509,6 @@ export class StandaloneSqliteDatabaseWorker {
     const chainStats = this.stmts.core.selectChainStats.get();
     const bundleStats = this.stmts.bundles.selectBundleStats.get();
     const dataItemStats = this.stmts.bundles.selectDataItemStats.get();
-
 
     const now = currentUnixTimestamp();
 
@@ -1651,7 +1658,9 @@ export class StandaloneSqliteDatabaseWorker {
       verified: isVerified,
       verified_at: currentTimestamp,
       verification_priority: verificationPriority ?? null,
-      root_transaction_id: rootTransactionId ? fromB64Url(rootTransactionId) : null,
+      root_transaction_id: rootTransactionId
+        ? fromB64Url(rootTransactionId)
+        : null,
       root_parent_offset: rootParentOffset ?? null,
       data_offset: dataOffset ?? null,
       data_size: dataSize ?? null,
@@ -3153,13 +3162,38 @@ type WorkerPoolSizes = {
   [key in WorkerPoolName]: { [key in WorkerRoleName]: number };
 };
 const WORKER_POOL_SIZES: WorkerPoolSizes = {
-  core: { read: 1, write: 1 },
-  data: { read: 2, write: 1 },
+  core: { read: config.CORE_SQLITE_READ_WORKER_COUNT, write: 1 },
+  data: { read: config.DATA_SQLITE_READ_WORKER_COUNT, write: 1 },
   gql: { read: Math.min(CPU_COUNT, MAX_WORKER_COUNT), write: 0 },
   debug: { read: 1, write: 0 },
   moderation: { read: 1, write: 1 },
   bundles: { read: 1, write: 1 },
 };
+
+/**
+ * Produces a compact, log-safe summary of a worker method's args for slow-op
+ * logging: scalars are passed through, long strings and binary blobs are
+ * replaced with a length marker, and containers are collapsed. Prevents dumping
+ * large buffers or row payloads into the logs.
+ */
+function summarizeSqliteArg(arg: unknown): unknown {
+  if (arg === null || arg === undefined) return arg;
+  if (typeof arg === 'number' || typeof arg === 'boolean') return arg;
+  if (typeof arg === 'string') {
+    return arg.length <= 64 ? arg : `<string:${arg.length}>`;
+  }
+  if (Buffer.isBuffer(arg) || arg instanceof Uint8Array) {
+    return `<bytes:${arg.length}>`;
+  }
+  if (Array.isArray(arg)) return `<array:${arg.length}>`;
+  if (typeof arg === 'object') return '<object>';
+  return typeof arg;
+}
+
+function summarizeSqliteArgs(args: unknown): unknown[] {
+  if (!Array.isArray(args)) return [];
+  return args.slice(0, 6).map(summarizeSqliteArg);
+}
 
 export class StandaloneSqliteDatabase
   implements
@@ -3358,6 +3392,24 @@ export class StandaloneSqliteDatabase
         if (!job && self.workQueues[pool][role].length) {
           // If there's a job in the queue, send it to the worker
           job = self.workQueues[pool][role].shift();
+
+          // Split timing: record how long this op waited in the queue before
+          // dispatch, and stamp the dispatch time so the reply handler can
+          // measure service time.
+          const dispatchedAt = performance.now();
+          const method = job.message.method;
+          const queueWaitSeconds =
+            job.enqueuedAt !== undefined
+              ? (dispatchedAt - job.enqueuedAt) / 1000
+              : 0;
+          job.dispatchedAt = dispatchedAt;
+          job.queueWaitSeconds = queueWaitSeconds;
+          metrics.sqliteQueuedOps.dec({ worker: pool, role });
+          metrics.sqliteMethodQueueWaitSeconds.observe(
+            { worker: pool, role, method },
+            queueWaitSeconds,
+          );
+
           worker.postMessage(job.message);
         }
       }
@@ -3368,6 +3420,34 @@ export class StandaloneSqliteDatabase
           takeWork();
         })
         .on('message', async (result) => {
+          // Service time: dispatch -> reply received (worker execution plus
+          // reply scheduling on the main event loop). Combined with queue wait
+          // this isolates worker-pool serialization from event-loop saturation.
+          if (job?.dispatchedAt !== undefined) {
+            const method = job.message.method;
+            const serviceSeconds =
+              (performance.now() - job.dispatchedAt) / 1000;
+            const queueWaitSeconds = job.queueWaitSeconds ?? 0;
+            metrics.sqliteMethodServiceSeconds.observe(
+              { worker: pool, role, method },
+              serviceSeconds,
+            );
+
+            const totalMs = (queueWaitSeconds + serviceSeconds) * 1000;
+            if (totalMs >= config.SQLITE_SLOW_QUERY_LOG_THRESHOLD_MS) {
+              self.log.warn('Slow SQLite operation', {
+                worker: pool,
+                role,
+                method,
+                queueWaitMs: Math.round(queueWaitSeconds * 1000),
+                serviceMs: Math.round(serviceSeconds * 1000),
+                totalMs: Math.round(totalMs),
+                queueDepth: self.workQueues[pool][role].length,
+                args: summarizeSqliteArgs(job.message.args),
+              });
+            }
+          }
+
           if (result && result.stack) {
             job.reject(DetailedError.fromJSON(result));
           } else {
@@ -3476,6 +3556,7 @@ export class StandaloneSqliteDatabase
     const executeWithRetry = async (retryCount = 0): Promise<any> => {
       try {
         return await new Promise((resolve, reject) => {
+          metrics.sqliteQueuedOps.inc({ worker: workerName, role });
           this.workQueues[workerName][role].push({
             resolve,
             reject,
@@ -3483,6 +3564,7 @@ export class StandaloneSqliteDatabase
               method,
               args,
             },
+            enqueuedAt: performance.now(),
           });
           this.drainQueue();
         });
@@ -3656,7 +3738,9 @@ export class StandaloneSqliteDatabase
   selectOldestPendingChunkPlacements(
     limit: number,
   ): Promise<ChunkPlacementRef[]> {
-    return this.queueRead('data', 'selectOldestPendingChunkPlacements', [limit]);
+    return this.queueRead('data', 'selectOldestPendingChunkPlacements', [
+      limit,
+    ]);
   }
 
   deleteChunkPlacement(
@@ -4076,7 +4160,9 @@ export class StandaloneSqliteDatabase
 
   async getRootTx(id: string) {
     // First try to get from data DB
-    const rootTxFromData = await this.queueRead('data', 'getRootTxFromData', [id]);
+    const rootTxFromData = await this.queueRead('data', 'getRootTxFromData', [
+      id,
+    ]);
     if (rootTxFromData) {
       return rootTxFromData;
     }
