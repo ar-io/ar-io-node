@@ -39,17 +39,15 @@ import {
 
 const MAX_DATA_HOPS = 3;
 
-// Shared keep-alive agent pool, one entry per gateway URL. Reusing TCP+TLS
-// connections across requests avoids per-request handshake cost, slashes
-// kernel TIME_WAIT churn, and gives upstream connections a chance to settle
-// into stable buffer sizes (which matters at high ANS104_DOWNLOAD_WORKERS).
-// maxSockets caps concurrent connections per gateway so a burst of retry
-// traffic doesn't open hundreds of sockets simultaneously.
+// Base keep-alive agent options shared by every per-gateway agent. Reusing
+// TCP+TLS connections across requests avoids per-request handshake cost, slashes
+// kernel TIME_WAIT churn, and gives upstream connections a chance to settle into
+// stable buffer sizes (which matters at high ANS104_DOWNLOAD_WORKERS).
+// maxSockets / maxFreeSockets are set per agent in getAgent() so trusted peers
+// and untrusted (CDN-fronted) gateways can be capped independently.
 const AGENT_OPTIONS = {
   keepAlive: true,
   keepAliveMsecs: 30_000,
-  maxSockets: 16,
-  maxFreeSockets: 4,
   // Idle-socket timeout: must stay strictly below the peer gateway's server
   // keep-alive timeout (HTTP_KEEP_ALIVE_TIMEOUT_MS, default 60s) so this client
   // retires an idle keep-alive socket before the peer closes it. Equal timeouts
@@ -125,9 +123,20 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private getAgent(gatewayUrl: string): http.Agent | https.Agent {
     let agent = this.agents.get(gatewayUrl);
     if (agent === undefined) {
+      // Untrusted gateways (e.g. arweave.net, CDN-fronted) get their own socket
+      // cap so they can be throttled independently of trusted internal peers,
+      // which are safe to run with a higher concurrency.
+      const isUntrusted = this.gatewayTrust.get(gatewayUrl) === false;
+      const agentOptions = {
+        ...AGENT_OPTIONS,
+        maxSockets: isUntrusted
+          ? config.GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST
+          : config.GATEWAY_MAX_SOCKETS_PER_HOST,
+        maxFreeSockets: config.GATEWAY_MAX_FREE_SOCKETS_PER_HOST,
+      };
       agent = gatewayUrl.startsWith('https://')
-        ? new https.Agent(AGENT_OPTIONS)
-        : new http.Agent(AGENT_OPTIONS);
+        ? new https.Agent(agentOptions)
+        : new http.Agent(agentOptions);
       this.instrumentAgent(agent, gatewayUrl);
       this.agents.set(gatewayUrl, agent);
     }

@@ -281,6 +281,34 @@ export const GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS =
     1000,
   );
 
+// Max concurrent sockets per TRUSTED gateway host (internal peer gateways). The
+// keep-alive agent queues requests once this many sockets to a host are busy; on
+// a healthy but busy node the default (16) can leave inter-gateway requests
+// queued for seconds waiting for a slot (visible as high
+// gateway_socket_acquisition_seconds). Trusted peers are low-risk to raise.
+export const GATEWAY_MAX_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'GATEWAY_MAX_SOCKETS_PER_HOST',
+  16,
+);
+
+// Max concurrent sockets per UNTRUSTED gateway host (e.g. arweave.net, behind a
+// CDN). Defaults to GATEWAY_MAX_SOCKETS_PER_HOST; set it lower to avoid
+// overwhelming a CDN-fronted upstream, which can throttle or 502 under high
+// concurrency.
+export const GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST',
+  GATEWAY_MAX_SOCKETS_PER_HOST,
+);
+
+// Max idle keep-alive sockets kept warm per gateway host. A low value forces new
+// TCP/TLS connections under bursty load (adding connect latency and churn);
+// raise it toward the max-sockets value when raising GATEWAY_MAX_SOCKETS_PER_HOST
+// so idle capacity is reused instead of reopened.
+export const GATEWAY_MAX_FREE_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'GATEWAY_MAX_FREE_SOCKETS_PER_HOST',
+  4,
+);
+
 // Kill-switch for the untrusted-gateway provenance-param omission. By default
 // (false) the `ar-io-*` query params are NOT sent to untrusted gateways
 // (`trusted: false`), because CDN-fronted gateways such as arweave.net (behind
