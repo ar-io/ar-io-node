@@ -123,16 +123,24 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private getAgent(gatewayUrl: string): http.Agent | https.Agent {
     let agent = this.agents.get(gatewayUrl);
     if (agent === undefined) {
-      // Untrusted gateways (e.g. arweave.net, CDN-fronted) get their own socket
-      // cap so they can be throttled independently of trusted internal peers,
-      // which are safe to run with a higher concurrency.
+      // Untrusted gateways (e.g. arweave.net, CDN-fronted) resolve their cap from
+      // a separate setting so they can be throttled independently of trusted
+      // internal peers. Each setting is a bare number or a per-host map.
       const isUntrusted = this.gatewayTrust.get(gatewayUrl) === false;
       const agentOptions = {
         ...AGENT_OPTIONS,
-        maxSockets: isUntrusted
-          ? config.GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST
-          : config.GATEWAY_MAX_SOCKETS_PER_HOST,
-        maxFreeSockets: config.GATEWAY_MAX_FREE_SOCKETS_PER_HOST,
+        maxSockets: config.resolvePerHostNumber(
+          isUntrusted
+            ? config.GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST
+            : config.GATEWAY_MAX_SOCKETS_PER_HOST,
+          gatewayUrl,
+          16,
+        ),
+        maxFreeSockets: config.resolvePerHostNumber(
+          config.GATEWAY_MAX_FREE_SOCKETS_PER_HOST,
+          gatewayUrl,
+          4,
+        ),
       };
       agent = gatewayUrl.startsWith('https://')
         ? new https.Agent(agentOptions)
