@@ -3393,22 +3393,26 @@ export class StandaloneSqliteDatabase
           // If there's a job in the queue, send it to the worker
           job = self.workQueues[pool][role].shift();
 
-          // Split timing: record how long this op waited in the queue before
-          // dispatch, and stamp the dispatch time so the reply handler can
-          // measure service time.
-          const dispatchedAt = performance.now();
-          const method = job.message.method;
-          const queueWaitSeconds =
-            job.enqueuedAt !== undefined
-              ? (dispatchedAt - job.enqueuedAt) / 1000
-              : 0;
-          job.dispatchedAt = dispatchedAt;
-          job.queueWaitSeconds = queueWaitSeconds;
-          metrics.sqliteQueuedOps.dec({ worker: pool, role });
-          metrics.sqliteMethodQueueWaitSeconds.observe(
-            { worker: pool, role, method },
-            queueWaitSeconds,
-          );
+          // Only queueWork()-enqueued jobs are metric-tracked: they carry
+          // `enqueuedAt` and were counted into `sqliteQueuedOps`. Internal
+          // control jobs such as the `terminate` message pushed directly by
+          // stop() are not, so skip the split-timing instrumentation for them —
+          // this keeps the gauge balanced (no dec() without a matching inc())
+          // and avoids a spurious `terminate` latency series. Leaving
+          // `dispatchedAt` unset also makes the reply handler skip its
+          // service-time instrumentation for these jobs.
+          if (job.enqueuedAt !== undefined) {
+            const dispatchedAt = performance.now();
+            const method = job.message.method;
+            const queueWaitSeconds = (dispatchedAt - job.enqueuedAt) / 1000;
+            job.dispatchedAt = dispatchedAt;
+            job.queueWaitSeconds = queueWaitSeconds;
+            metrics.sqliteQueuedOps.dec({ worker: pool, role });
+            metrics.sqliteMethodQueueWaitSeconds.observe(
+              { worker: pool, role, method },
+              queueWaitSeconds,
+            );
+          }
 
           worker.postMessage(job.message);
         }
