@@ -174,7 +174,13 @@ export class GatewaysDataSource implements ContiguousDataSource {
         }
         if (isNewSocket) {
           const connectStartedAt = performance.now();
-          socket.once('connect', () => {
+          // For TLS gateways (https://, e.g. arweave.net) the full handshake
+          // completes at 'secureConnect', not 'connect' — measure to that so the
+          // metric reflects TCP + TLS rather than TCP alone.
+          const connectEvent = gatewayUrl.startsWith('https://')
+            ? 'secureConnect'
+            : 'connect';
+          socket.once(connectEvent, () => {
             metrics.gatewaySocketConnectSeconds.observe(
               { gateway_url: gatewayUrl },
               (performance.now() - connectStartedAt) / 1000,
