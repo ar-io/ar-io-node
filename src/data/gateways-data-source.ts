@@ -49,7 +49,13 @@ const AGENT_OPTIONS = {
   keepAliveMsecs: 30_000,
   maxSockets: 16,
   maxFreeSockets: 4,
-  timeout: 60_000,
+  // Idle-socket timeout: must stay strictly below the peer gateway's server
+  // keep-alive timeout (HTTP_KEEP_ALIVE_TIMEOUT_MS, default 60s) so this client
+  // retires an idle keep-alive socket before the peer closes it. Equal timeouts
+  // race — the client reuses a socket the server is simultaneously FIN-closing —
+  // stalling the request until the teardown resolves. See
+  // GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS in config.ts.
+  timeout: config.GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS,
 } as const;
 
 export class GatewaysDataSource implements ContiguousDataSource {

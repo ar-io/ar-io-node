@@ -257,6 +257,20 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+// Idle-socket timeout (ms) for the outbound trusted-gateway keep-alive agent.
+// MUST be strictly less than the peer gateway's server keep-alive timeout
+// (HTTP_KEEP_ALIVE_TIMEOUT_MS, default 60000). Equal timeouts cause a keep-alive
+// reuse race: the client reuses an idle socket at the same moment the server
+// sends its idle-close FIN, and the request stalls until the teardown resolves
+// (observed as ~8-10s peer stalls that sometimes exceed
+// TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS and are canceled before the request is
+// ever sent). Keeping the client's idle timeout below the server's guarantees
+// the client retires a socket before the server closes it.
+export const GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS = env.positiveIntOrDefault(
+  'GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS',
+  50_000,
+);
+
 // Kill-switch for the untrusted-gateway provenance-param omission. By default
 // (false) the `ar-io-*` query params are NOT sent to untrusted gateways
 // (`trusted: false`), because CDN-fronted gateways such as arweave.net (behind
