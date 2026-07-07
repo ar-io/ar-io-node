@@ -281,14 +281,24 @@ export const GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS =
     1000,
   );
 
-// A socket-cap setting: either a single positive integer applied to every host,
-// or a JSON object mapping an exact gateway URL to a per-host value, with an
-// optional `default` key for hosts not listed. Resolve with
-// resolvePerHostNumber().
+/**
+ * A socket-cap setting: either a single positive integer applied to every host,
+ * or a JSON object mapping an exact gateway URL to a per-host value, with an
+ * optional `default` key for hosts not listed. Resolve with
+ * {@link resolvePerHostNumber}.
+ */
 export type PerHostNumber = number | Record<string, number>;
 
-// Parses a socket-cap env var that may be a bare positive integer or a JSON
-// object of `{ "<gatewayUrl>": positiveInt, ..., "default": positiveInt }`.
+/**
+ * Parses a socket-cap env var that may be a bare positive integer or a JSON
+ * object of `{ "<gatewayUrl>": positiveInt, ..., "default": positiveInt }`.
+ *
+ * @param envVarName - Name of the environment variable to read.
+ * @param defaultValue - Value returned when the variable is unset or empty.
+ * @returns A number (applies to all hosts) or a validated per-host map.
+ * @throws If the value is neither a positive integer nor a JSON object whose
+ *   entries are all positive integers.
+ */
 function parsePerHostNumber(
   envVarName: string,
   defaultValue: number,
@@ -336,9 +346,16 @@ function parsePerHostNumber(
   return parsed as Record<string, number>;
 }
 
-// Resolves a PerHostNumber for a specific gateway URL: a bare number applies to
-// all hosts; an object prefers an exact-host entry, then its `default` key, then
-// the built-in fallback.
+/**
+ * Resolves a {@link PerHostNumber} for a specific gateway URL: a bare number
+ * applies to all hosts; an object prefers an exact-host entry, then its
+ * `default` key, then the built-in fallback.
+ *
+ * @param cfg - The parsed number-or-per-host setting.
+ * @param host - The exact gateway URL to resolve for.
+ * @param fallback - Value used when an object has no matching host or `default`.
+ * @returns The resolved socket cap for `host`.
+ */
 export function resolvePerHostNumber(
   cfg: PerHostNumber,
   host: string,
