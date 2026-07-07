@@ -8,6 +8,7 @@ import { Span } from '@opentelemetry/api';
 import { default as axios } from 'axios';
 import http from 'node:http';
 import https from 'node:https';
+import { performance } from 'node:perf_hooks';
 import winston from 'winston';
 
 import * as config from '../config.js';
@@ -127,9 +128,62 @@ export class GatewaysDataSource implements ContiguousDataSource {
       agent = gatewayUrl.startsWith('https://')
         ? new https.Agent(AGENT_OPTIONS)
         : new http.Agent(AGENT_OPTIONS);
+      this.instrumentAgent(agent, gatewayUrl);
       this.agents.set(gatewayUrl, agent);
     }
     return agent;
+  }
+
+  // Instruments an agent's socket lifecycle so we can see outbound-side stalls
+  // that never reach the wire. Node calls `Agent.addRequest` when a
+  // ClientRequest needs a socket; the request's 'socket' event fires once a
+  // socket is assigned (immediately when one is available, or after a wait when
+  // the pool is at capacity or a reused socket is being torn down). Timing
+  // addRequest -> 'socket' isolates the keep-alive pool/reuse phase from the
+  // request/response phase; connect time is measured separately for new sockets.
+  private instrumentAgent(
+    agent: http.Agent | https.Agent,
+    gatewayUrl: string,
+  ): void {
+    const log = this.log;
+    const slowThresholdMs =
+      config.GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS;
+    // `addRequest` is not in the public type surface; wrap it on the instance.
+    const agentAny = agent as unknown as {
+      addRequest: (req: http.ClientRequest, ...rest: unknown[]) => void;
+    };
+    const originalAddRequest = agentAny.addRequest.bind(agent);
+    agentAny.addRequest = function (
+      req: http.ClientRequest,
+      ...rest: unknown[]
+    ): void {
+      const requestedAt = performance.now();
+      req.once('socket', (socket: import('node:net').Socket) => {
+        const acquisitionSeconds = (performance.now() - requestedAt) / 1000;
+        const isNewSocket = socket.connecting === true;
+        metrics.gatewaySocketAcquisitionSeconds.observe(
+          { gateway_url: gatewayUrl, reused: String(!isNewSocket) },
+          acquisitionSeconds,
+        );
+        if (acquisitionSeconds * 1000 >= slowThresholdMs) {
+          log.warn('Slow gateway socket acquisition', {
+            gatewayUrl,
+            acquisitionMs: Math.round(acquisitionSeconds * 1000),
+            reused: !isNewSocket,
+          });
+        }
+        if (isNewSocket) {
+          const connectStartedAt = performance.now();
+          socket.once('connect', () => {
+            metrics.gatewaySocketConnectSeconds.observe(
+              { gateway_url: gatewayUrl },
+              (performance.now() - connectStartedAt) / 1000,
+            );
+          });
+        }
+      });
+      return originalAddRequest(req, ...rest);
+    };
   }
 
   /**

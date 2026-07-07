@@ -271,6 +271,16 @@ export const GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS = env.positiveIntOrDefault(
   50_000,
 );
 
+// Outbound gateway socket acquisitions (time from a request needing a socket to
+// a socket being assigned) at or above this threshold are logged at `warn`.
+// Surfaces keep-alive pool waits and socket-reuse stalls that are invisible in
+// request/response timing (the request hasn't hit the wire yet).
+export const GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS =
+  env.positiveIntOrDefault(
+    'GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS',
+    1000,
+  );
+
 // Kill-switch for the untrusted-gateway provenance-param omission. By default
 // (false) the `ar-io-*` query params are NOT sent to untrusted gateways
 // (`trusted: false`), because CDN-fronted gateways such as arweave.net (behind

@@ -872,6 +872,28 @@ export const gatewayContentTypeRejectedTotal = new promClient.Counter({
   labelNames: ['gateway_url', 'priority', 'content_type'] as const,
 });
 
+// Time from an outbound gateway request needing a socket (Agent.addRequest) to a
+// socket being assigned (the request's 'socket' event). This is the phase BEFORE
+// bytes hit the wire, so it surfaces keep-alive pool waits and socket-reuse
+// stalls (e.g. reusing a socket the peer is idle-closing) that are invisible in
+// request/response timing. `reused` distinguishes a pooled keep-alive socket
+// from a freshly opened one.
+export const gatewaySocketAcquisitionSeconds = new promClient.Histogram({
+  name: 'gateway_socket_acquisition_seconds',
+  help: 'Time from an outbound gateway request needing a socket to a socket being assigned',
+  labelNames: ['gateway_url', 'reused'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+});
+
+// TCP/TLS connect time for newly opened outbound gateway sockets (socket
+// assigned -> 'connect'). Reused keep-alive sockets do not contribute.
+export const gatewaySocketConnectSeconds = new promClient.Histogram({
+  name: 'gateway_socket_connect_seconds',
+  help: 'TCP/TLS connect time for newly opened outbound gateway sockets',
+  labelNames: ['gateway_url'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5],
+});
+
 // PE-9099: count of local on-disk cache entries evicted by the lazy
 // poison-detection in ReadThroughDataCache when a caller's
 // `acceptContentType` predicate refuses the stored content-type. The
