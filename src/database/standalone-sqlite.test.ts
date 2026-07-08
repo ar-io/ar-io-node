@@ -6,6 +6,7 @@
  */
 import { strict as assert } from 'node:assert';
 import { after, before, beforeEach, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { ValidationError } from 'apollo-server-express';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -419,7 +420,9 @@ describe('StandaloneSqliteDatabase', () => {
 
       // Plan assertion: the statement must probe stable_transactions via the
       // partial offset index, never scan the table
-      const offsetsSqlDir = new URL('./sql/core', import.meta.url).pathname;
+      const offsetsSqlDir = fileURLToPath(
+        new URL('./sql/core', import.meta.url),
+      );
       const stmt = loadSql(offsetsSqlDir)['selectStableTransactionOffsetById'];
       assert.ok(
         stmt !== undefined,
