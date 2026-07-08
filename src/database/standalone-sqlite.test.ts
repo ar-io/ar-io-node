@@ -33,6 +33,7 @@ import {
 } from '../../test/sqlite-helpers.js';
 import { ArweaveChainSourceStub, stubAns104Bundle } from '../../test/stubs.js';
 import { normalizeAns104DataItem } from '../lib/ans-104.js';
+import loadSql from './sql-loader.js';
 import log from '../log.js';
 import { BundleRecord } from '../types.js';
 import { processBundleStream } from '../lib/bundles.js';
@@ -343,6 +344,99 @@ describe('StandaloneSqliteDatabase', () => {
       // if at 201, it shouldn't return anything
       const txByOffsetResult10 = await db.getTxByOffset(201);
       assert.equal(txByOffsetResult10.id, undefined);
+    });
+
+    it('getTxByOffset misses resolve via a single partial-index probe (no scan past the candidate row)', async () => {
+      // Regression test for the miss-scan pathology: the previous form of
+      // selectStableTransactionOffsetById kept the span predicate
+      // ((offset - data_size) < @offset) inside the index scan, so an offset in
+      // a coverage gap walked stable_transactions_offset_idx from @offset to
+      // the end of the table (tens of seconds on a production-sized DB) before
+      // returning empty. The rewritten statement fetches only the first
+      // candidate row and applies the span check outside. Timing is
+      // meaningless on a tiny test DB, so this asserts the two things that
+      // guarantee the behavior instead: (1) miss semantics stay correct, and
+      // (2) the plan uses the partial index — which requires the inner query
+      // to repeat the index's WHERE predicates (format = 2 AND data_size > 0)
+      // verbatim; hoisting either one out silently degrades to a table scan.
+      const f2id = 'iCXp6wqDLcpdOWJd6oTVz4CTS9QI9wsJp6g6oRVvv0E';
+      const f1id = 'Epr8mLUZDBiTprrN1tyuKu4Ct1nkFrVzL4NBmXtj4jQ';
+
+      const baseValues = {
+        height: 124,
+        block_transaction_index: 0,
+        last_tx: Buffer.alloc(32),
+        owner_address: Buffer.alloc(32),
+        quantity: '0',
+        reward: '0',
+        tag_count: 0,
+      };
+      const insertSql = `
+        INSERT INTO stable_transactions (
+          id, height, block_transaction_index, format, last_tx, owner_address,
+          quantity, reward, tag_count, offset, data_size
+        ) VALUES (
+          @id, @height, @block_transaction_index, @format, @last_tx,
+          @owner_address, @quantity, @reward, @tag_count, @offset, @data_size
+        )
+      `;
+
+      // format-2 tx spanning [451, 500]
+      coreDb.prepare(insertSql).run({
+        ...baseValues,
+        id: fromB64Url(f2id),
+        format: 2,
+        offset: 500,
+        data_size: 50,
+      });
+      // format-1 tx spanning [551, 600]: not in the partial index, must never
+      // be returned, and offsets inside it are misses
+      coreDb.prepare(insertSql).run({
+        ...baseValues,
+        id: fromB64Url(f1id),
+        format: 1,
+        offset: 600,
+        data_size: 50,
+      });
+
+      // Hit within the format-2 tx
+      const hit = await db.getTxByOffset(475);
+      assert.equal(hit.id, f2id);
+
+      // Miss in the gap before the format-2 tx: the first candidate row
+      // (offset 500) fails the span check and the lookup must stop there
+      const gapMiss = await db.getTxByOffset(300);
+      assert.equal(gapMiss.id, undefined);
+
+      // Miss inside the format-1 tx's region: the spanning tx is format-1, so
+      // there is no format-2 spanner and the result is empty
+      const f1Miss = await db.getTxByOffset(575);
+      assert.equal(f1Miss.id, undefined);
+
+      // Miss beyond the highest indexed offset
+      const beyondEndMiss = await db.getTxByOffset(1_000_000);
+      assert.equal(beyondEndMiss.id, undefined);
+
+      // Plan assertion: the statement must probe stable_transactions via the
+      // partial offset index, never scan the table
+      const offsetsSqlDir = new URL('./sql/core', import.meta.url).pathname;
+      const stmt = loadSql(offsetsSqlDir)['selectStableTransactionOffsetById'];
+      assert.ok(
+        stmt !== undefined,
+        'selectStableTransactionOffsetById statement not found',
+      );
+      const plan = coreDb
+        .prepare(`EXPLAIN QUERY PLAN ${stmt}`)
+        .all({ offset: 300 }) as { detail: string }[];
+      const details = plan.map((row) => row.detail).join('\n');
+      assert.ok(
+        details.includes('stable_transactions_offset_idx'),
+        `plan must use stable_transactions_offset_idx, got:\n${details}`,
+      );
+      assert.ok(
+        !/SCAN stable_transactions/.test(details),
+        `plan must not scan stable_transactions, got:\n${details}`,
+      );
     });
 
     it('resolves an absolute weave offset to its containing stable block via getBlockByWeaveOffset', async () => {
