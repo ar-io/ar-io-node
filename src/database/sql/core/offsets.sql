@@ -1,12 +1,33 @@
 -- selectStableTransactionOffsetById
+-- Resolve an absolute weave offset to the stable format-2 transaction that
+-- spans it. `offset` is the tx's END offset, and tx data regions never overlap,
+-- so the FIRST format-2, data_size > 0 row (by offset ASC) with
+-- offset >= @offset is the only possible spanner: any other tx whose region
+-- ends at or past @offset starts after the spanner's region ends. The inner
+-- query fetches exactly that one row, and only the span predicate is applied
+-- outside. Keeping the span predicate inside the scan (the previous form) made
+-- a MISS -- an offset in a coverage gap (format-1 tx, unpopulated region) --
+-- walk the index from @offset to the end of the table looking for a match that
+-- cannot exist (tens of seconds on a large DB, pinning a core read worker);
+-- with this form a miss costs the same single index probe as a hit and returns
+-- empty.
+--
+-- IMPORTANT: stable_transactions_offset_idx is a PARTIAL index
+-- (WHERE format = 2 AND data_size > 0). Both predicates must stay inside the
+-- inner query verbatim -- SQLite only uses a partial index when the query's
+-- WHERE clause implies the index's WHERE clause; hoisting either predicate out
+-- silently degrades this to a full table scan.
 SELECT id, data_root, offset, data_size
-FROM stable_transactions
-WHERE offset >= @offset
-  AND (offset - data_size) < @offset
-  AND format = 2
-  AND data_size > 0
-ORDER BY offset ASC
-LIMIT 1;
+FROM (
+  SELECT id, data_root, offset, data_size
+  FROM stable_transactions
+  WHERE offset >= @offset
+    AND format = 2
+    AND data_size > 0
+  ORDER BY offset ASC
+  LIMIT 1
+)
+WHERE (offset - data_size) < @offset;
 
 -- selectBlockHeightByWeaveOffset
 -- Resolve an absolute weave offset to its containing block: the lowest block
