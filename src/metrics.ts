@@ -605,6 +605,41 @@ export const sqliteInFlightOps = new promClient.Gauge({
   labelNames: ['worker', 'role'],
 });
 
+// Number of ops enqueued but not yet dispatched to a worker thread. A rising
+// value indicates the worker pool for that (worker, role) is saturated.
+export const sqliteQueuedOps = new promClient.Gauge({
+  name: 'sqlite_queued_ops',
+  help: 'Number of SQLite operations enqueued but not yet dispatched to a worker',
+  labelNames: ['worker', 'role'],
+});
+
+// The existing `standalone_sqlite_method_duration_seconds` summary measures
+// enqueue -> completion, which conflates queue wait, worker execution, and
+// main-thread reply scheduling. These two histograms split that:
+//   queue_wait: enqueue -> dispatch (time spent waiting for a free worker)
+//   service:    dispatch -> reply received (worker execution + reply
+//               scheduling on the main event loop)
+// A jam dominated by queue_wait points at worker-pool serialization (raise the
+// read pool size); one dominated by service with fast underlying queries points
+// at main-event-loop saturation.
+const SQLITE_LATENCY_BUCKETS = [
+  0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60,
+];
+
+export const sqliteMethodQueueWaitSeconds = new promClient.Histogram({
+  name: 'standalone_sqlite_method_queue_wait_seconds',
+  help: 'Time a StandaloneSqlite op waited in the queue before dispatch to a worker',
+  labelNames: ['worker', 'role', 'method'],
+  buckets: SQLITE_LATENCY_BUCKETS,
+});
+
+export const sqliteMethodServiceSeconds = new promClient.Histogram({
+  name: 'standalone_sqlite_method_service_seconds',
+  help: 'Time from worker dispatch to reply received (worker execution + reply scheduling)',
+  labelNames: ['worker', 'role', 'method'],
+  buckets: SQLITE_LATENCY_BUCKETS,
+});
+
 //
 // Block importer metrics
 //
@@ -835,6 +870,28 @@ export const gatewayContentTypeRejectedTotal = new promClient.Counter({
   name: 'gateway_content_type_rejected_total',
   help: 'Count of upstream responses rejected by the caller-supplied content-type predicate (e.g., text/html when expecting bundle bytes).',
   labelNames: ['gateway_url', 'priority', 'content_type'] as const,
+});
+
+// Time from an outbound gateway request needing a socket (Agent.addRequest) to a
+// socket being assigned (the request's 'socket' event). This is the phase BEFORE
+// bytes hit the wire, so it surfaces keep-alive pool waits and socket-reuse
+// stalls (e.g. reusing a socket the peer is idle-closing) that are invisible in
+// request/response timing. `reused` distinguishes a pooled keep-alive socket
+// from a freshly opened one.
+export const gatewaySocketAcquisitionSeconds = new promClient.Histogram({
+  name: 'gateway_socket_acquisition_seconds',
+  help: 'Time from an outbound gateway request needing a socket to a socket being assigned',
+  labelNames: ['gateway_url', 'reused'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+});
+
+// TCP/TLS connect time for newly opened outbound gateway sockets (socket
+// assigned -> 'connect'). Reused keep-alive sockets do not contribute.
+export const gatewaySocketConnectSeconds = new promClient.Histogram({
+  name: 'gateway_socket_connect_seconds',
+  help: 'TCP/TLS connect time for newly opened outbound gateway sockets',
+  labelNames: ['gateway_url'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5],
 });
 
 // PE-9099: count of local on-disk cache entries evicted by the lazy

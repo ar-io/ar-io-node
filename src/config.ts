@@ -257,6 +257,146 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+// Idle-socket timeout (ms) for the outbound trusted-gateway keep-alive agent.
+// MUST be strictly less than the peer gateway's server keep-alive timeout
+// (HTTP_KEEP_ALIVE_TIMEOUT_MS, default 60000). Equal timeouts cause a keep-alive
+// reuse race: the client reuses an idle socket at the same moment the server
+// sends its idle-close FIN, and the request stalls until the teardown resolves
+// (observed as ~8-10s peer stalls that sometimes exceed
+// TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS and are canceled before the request is
+// ever sent). Keeping the client's idle timeout below the server's guarantees
+// the client retires a socket before the server closes it.
+export const GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS = env.positiveIntOrDefault(
+  'GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS',
+  50_000,
+);
+
+// Outbound gateway socket acquisitions (time from a request needing a socket to
+// a socket being assigned) at or above this threshold are logged at `warn`.
+// Surfaces keep-alive pool waits and socket-reuse stalls that are invisible in
+// request/response timing (the request hasn't hit the wire yet).
+export const GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS =
+  env.positiveIntOrDefault(
+    'GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS',
+    1000,
+  );
+
+/**
+ * A socket-cap setting: either a single positive integer applied to every host,
+ * or a JSON object mapping an exact gateway URL to a per-host value, with an
+ * optional `default` key for hosts not listed. Resolve with
+ * {@link resolvePerHostNumber}.
+ */
+export type PerHostNumber = number | Record<string, number>;
+
+/**
+ * Parses a socket-cap env var that may be a bare positive integer or a JSON
+ * object of `{ "<gatewayUrl>": positiveInt, ..., "default": positiveInt }`.
+ *
+ * @param envVarName - Name of the environment variable to read.
+ * @param defaultValue - Value returned when the variable is unset or empty.
+ * @returns A number (applies to all hosts) or a validated per-host map.
+ * @throws If the value is neither a positive integer nor a JSON object whose
+ *   entries are all positive integers.
+ */
+function parsePerHostNumber(
+  envVarName: string,
+  defaultValue: number,
+): PerHostNumber {
+  const raw = env.varOrUndefined(envVarName);
+  if (raw === undefined) {
+    return defaultValue;
+  }
+  const trimmed = raw.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const value = Number(trimmed);
+    if (value > 0) {
+      return value;
+    }
+    throw new Error(
+      `${envVarName} must be a positive integer, got: ${trimmed}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(
+      `${envVarName} must be a positive integer or a JSON object of {"<gatewayUrl>": number}, got: ${trimmed}`,
+    );
+  }
+  if (typeof parsed === 'number') {
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+    throw new Error(`${envVarName} must be a positive integer, got: ${parsed}`);
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `${envVarName} must be a positive integer or a JSON object of {"<gatewayUrl>": number}`,
+    );
+  }
+  for (const [host, value] of Object.entries(parsed)) {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+      throw new Error(
+        `${envVarName} entry "${host}" must be a positive integer, got: ${value}`,
+      );
+    }
+  }
+  return parsed as Record<string, number>;
+}
+
+/**
+ * Resolves a {@link PerHostNumber} for a specific gateway URL: a bare number
+ * applies to all hosts; an object prefers an exact-host entry, then its
+ * `default` key, then the built-in fallback.
+ *
+ * @param cfg - The parsed number-or-per-host setting.
+ * @param host - The exact gateway URL to resolve for.
+ * @param fallback - Value used when an object has no matching host or `default`.
+ * @returns The resolved socket cap for `host`.
+ */
+export function resolvePerHostNumber(
+  cfg: PerHostNumber,
+  host: string,
+  fallback: number,
+): number {
+  if (typeof cfg === 'number') {
+    return cfg;
+  }
+  return cfg[host] ?? cfg['default'] ?? fallback;
+}
+
+// Max concurrent sockets per TRUSTED gateway host (internal peer gateways). The
+// keep-alive agent queues requests once this many sockets to a host are busy; on
+// a healthy but busy node the default (16) can leave inter-gateway requests
+// queued for seconds waiting for a slot (visible as high
+// gateway_socket_acquisition_seconds). Trusted peers are low-risk to raise.
+// Accepts a bare integer or a per-host JSON object (see PerHostNumber).
+export const GATEWAY_MAX_SOCKETS_PER_HOST = parsePerHostNumber(
+  'GATEWAY_MAX_SOCKETS_PER_HOST',
+  16,
+);
+
+// Max concurrent sockets per UNTRUSTED gateway host (e.g. arweave.net, behind a
+// CDN). Defaults to GATEWAY_MAX_SOCKETS_PER_HOST when unset; set it lower to
+// avoid overwhelming a CDN-fronted upstream, which can throttle or 502 under
+// high concurrency. Accepts a bare integer or a per-host JSON object.
+export const GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST: PerHostNumber =
+  env.varOrUndefined('GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST') !== undefined
+    ? parsePerHostNumber('GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST', 16)
+    : GATEWAY_MAX_SOCKETS_PER_HOST;
+
+// Max idle keep-alive sockets kept warm per gateway host. A low value forces new
+// TCP/TLS connections under bursty load (adding connect latency and churn);
+// raise it toward the max-sockets value when raising GATEWAY_MAX_SOCKETS_PER_HOST
+// so idle capacity is reused instead of reopened. Accepts a bare integer or a
+// per-host JSON object.
+export const GATEWAY_MAX_FREE_SOCKETS_PER_HOST = parsePerHostNumber(
+  'GATEWAY_MAX_FREE_SOCKETS_PER_HOST',
+  4,
+);
+
 // Kill-switch for the untrusted-gateway provenance-param omission. By default
 // (false) the `ar-io-*` query params are NOT sent to untrusted gateways
 // (`trusted: false`), because CDN-fronted gateways such as arweave.net (behind
@@ -2951,3 +3091,36 @@ if (ENABLE_SAMPLING_DATA_SOURCE) {
     );
   }
 }
+
+//
+// StandaloneSqlite worker pools
+//
+
+// Number of reader worker threads for the core SQLite pool. Reads are
+// serialized within a single worker thread, so raising this adds read
+// concurrency for the core DB (WAL mode supports concurrent readers). Writers
+// stay single because SQLite permits only one writer at a time.
+//
+// @default 1
+export const CORE_SQLITE_READ_WORKER_COUNT = env.positiveIntOrDefault(
+  'CORE_SQLITE_READ_WORKER_COUNT',
+  1,
+);
+
+// Number of reader worker threads for the data SQLite pool.
+//
+// @default 2
+export const DATA_SQLITE_READ_WORKER_COUNT = env.positiveIntOrDefault(
+  'DATA_SQLITE_READ_WORKER_COUNT',
+  2,
+);
+
+// Operations whose total time (queue wait + service) meets or exceeds this
+// threshold are logged at `warn` with a queue/service breakdown and a bounded
+// argument summary, to pinpoint which method is responsible during a jam.
+//
+// @default 1000 (1 second)
+export const SQLITE_SLOW_QUERY_LOG_THRESHOLD_MS = env.positiveIntOrDefault(
+  'SQLITE_SLOW_QUERY_LOG_THRESHOLD_MS',
+  1000,
+);

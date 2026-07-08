@@ -11,6 +11,7 @@ import {
   ARNS_ROOT_HOSTS,
   ARNS_ROOT_HOST,
   matchArnsRootHost,
+  resolvePerHostNumber,
 } from './config.js';
 
 describe('ARNS_ROOT_HOSTS parsing', () => {
@@ -201,5 +202,27 @@ describe('matchArnsRootHost with apexName', () => {
 
     assert.equal(matchArnsRootHost('has-apex.com', sorted)?.apexName, 'myname');
     assert.equal(matchArnsRootHost('no-apex.com', sorted)?.apexName, undefined);
+  });
+});
+
+describe('resolvePerHostNumber', () => {
+  it('returns a bare number for every host', () => {
+    assert.equal(resolvePerHostNumber(64, 'http://10.84.0.82:4000', 16), 64);
+    assert.equal(resolvePerHostNumber(64, 'https://arweave.net', 16), 64);
+  });
+
+  it('prefers an exact per-host entry', () => {
+    const cfg = { 'http://10.84.0.82:4000': 128, default: 64 };
+    assert.equal(resolvePerHostNumber(cfg, 'http://10.84.0.82:4000', 16), 128);
+  });
+
+  it('falls back to the default key for unlisted hosts', () => {
+    const cfg = { 'http://10.84.0.82:4000': 128, default: 64 };
+    assert.equal(resolvePerHostNumber(cfg, 'https://arweave.net', 16), 64);
+  });
+
+  it('falls back to the built-in fallback with no matching entry or default', () => {
+    const cfg = { 'http://10.84.0.82:4000': 128 };
+    assert.equal(resolvePerHostNumber(cfg, 'https://arweave.net', 16), 16);
   });
 });
