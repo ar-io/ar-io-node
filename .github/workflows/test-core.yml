@@ -25,6 +25,10 @@ jobs:
       - run: yarn --immutable --immutable-cache
       - run: yarn build
       - run: yarn lint:check
+      # Typecheck including test files. `yarn build` uses tsconfig.prod.json,
+      # which excludes **/*.test.ts, and `yarn test` runs via a type-stripping
+      # loader — so without this, type errors in test code reach no CI gate.
+      - run: yarn typecheck
       - run: yarn test:ci
       - name: Build core Docker image
         if: matrix.os == 'ubuntu-latest'
