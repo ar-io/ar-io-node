@@ -68,6 +68,7 @@ describe('ArweaveCompositeClient', () => {
         }
         return [];
       }),
+      isPreferredChunkPostPeer: mock.fn(() => false),
       reportSuccess: mock.fn(),
       reportFailure: mock.fn(),
       startAutoRefresh: mock.fn(),
@@ -482,6 +483,106 @@ describe('ArweaveCompositeClient', () => {
       const result = await post(client);
       assert.equal(result.success, false);
       assert.equal(result.statusCode, 500);
+      client.cleanup();
+    });
+  });
+
+  // Verifies the CHUNK_POST_CONTINUE_PAST_THRESHOLD behavior against real
+  // loopback peers: by default the broadcast stops once the success threshold is
+  // met, and with continuePastThreshold it keeps posting to every peer.
+  describe('broadcastChunk propagation width', () => {
+    let servers: http.Server[] = [];
+    let urls: string[] = [];
+
+    const startServers = async (count: number, status = 200) => {
+      servers = [];
+      urls = [];
+      for (let i = 0; i < count; i++) {
+        const s = http.createServer((_req, res) => res.writeHead(status).end());
+        await new Promise<void>((resolve) =>
+          s.listen(0, '127.0.0.1', () => resolve()),
+        );
+        const { port } = s.address() as AddressInfo;
+        servers.push(s);
+        urls.push(`http://127.0.0.1:${port}`);
+      }
+      mockPeerManager.getPeerUrls = mock.fn(() => urls);
+      mockPeerManager.selectPeers = mock.fn(() => urls);
+      mockPeerManager.isPreferredChunkPostPeer = mock.fn(() => false);
+    };
+
+    afterEach(async () => {
+      await Promise.all(
+        servers.map(
+          (s) => new Promise<void>((resolve) => s.close(() => resolve())),
+        ),
+      );
+    });
+
+    const broadcast = (client: any, continuePastThreshold: boolean) =>
+      client.broadcastChunk({
+        chunk: {} as any,
+        originAndHopsHeaders: {},
+        chunkPostMinSuccessCount: 2,
+        chunkPostMinPreferredSuccessCount: 0,
+        continuePastThreshold,
+      });
+
+    it('stops at the success threshold by default (fewer than all peers)', async () => {
+      await startServers(6, 200);
+      const client = createTestClient();
+      const result = await broadcast(client, false);
+      assert.ok(
+        result.successCount >= 2,
+        `expected at least the threshold, got ${result.successCount}`,
+      );
+      assert.ok(
+        result.successCount < urls.length,
+        `expected fewer than all ${urls.length} peers, got ${result.successCount}`,
+      );
+      client.cleanup();
+    });
+
+    it('posts to every peer when continuePastThreshold is true', async () => {
+      await startServers(6, 200);
+      const client = createTestClient();
+      const result = await broadcast(client, true);
+      assert.equal(result.successCount, urls.length);
+      client.cleanup();
+    });
+
+    it('bails out of the dead peer tail in continuePastThreshold mode', async () => {
+      // Allocate ports then close them so connecting is refused immediately.
+      const deadUrls: string[] = [];
+      for (let i = 0; i < 25; i++) {
+        const s = http.createServer();
+        await new Promise<void>((resolve) =>
+          s.listen(0, '127.0.0.1', () => resolve()),
+        );
+        const { port } = s.address() as AddressInfo;
+        await new Promise<void>((resolve) => s.close(() => resolve()));
+        deadUrls.push(`http://127.0.0.1:${port}`);
+      }
+      // Three live peers first, then a long dead tail.
+      await startServers(3, 200);
+      const live = [...urls];
+      urls = [...live, ...deadUrls];
+      mockPeerManager.getPeerUrls = mock.fn(() => urls);
+      mockPeerManager.selectPeers = mock.fn(() => urls);
+
+      const client = createTestClient();
+      const result = await broadcast(client, true);
+
+      // All live peers were posted to...
+      assert.equal(result.successCount, live.length);
+      // ...but the dead tail was bailed out of rather than fully attempted.
+      // CHUNK_POST_MAX_CONSECUTIVE_FAILURES defaults to 5, so only a small
+      // number of dead peers are hit before the broadcast stops (plus a little
+      // slop from in-flight concurrency), never the full 25.
+      assert.ok(
+        result.failureCount < deadUrls.length,
+        `expected to bail before attempting all ${deadUrls.length} dead peers, got ${result.failureCount}`,
+      );
       client.cleanup();
     });
   });

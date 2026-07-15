@@ -1850,6 +1850,9 @@ export class ArweaveCompositeClient
    * @param originAndHopsHeaders - Headers to propagate for request tracing
    * @param chunkPostMinSuccessCount - Minimum successful posts to consider broadcast complete
    * @param chunkPostMinPreferredSuccessCount - Minimum successful preferred peer posts required
+   * @param continuePastThreshold - When true, keep posting to every selected peer
+   *   after the success threshold is met (maximize propagation) instead of
+   *   stopping early. Defaults to config.CHUNK_POST_CONTINUE_PAST_THRESHOLD.
    * @param parentSpan - Optional parent span for distributed tracing
    * @returns Results including success/failure counts and per-peer response details
    */
@@ -1860,6 +1863,7 @@ export class ArweaveCompositeClient
     originAndHopsHeaders,
     chunkPostMinSuccessCount,
     chunkPostMinPreferredSuccessCount = 0,
+    continuePastThreshold = config.CHUNK_POST_CONTINUE_PAST_THRESHOLD,
     parentSpan,
   }: {
     chunk: JsonChunkPost;
@@ -1868,6 +1872,7 @@ export class ArweaveCompositeClient
     originAndHopsHeaders: Record<string, string | undefined>;
     chunkPostMinSuccessCount: number;
     chunkPostMinPreferredSuccessCount?: number;
+    continuePastThreshold?: boolean;
     parentSpan?: Span;
   }): Promise<BroadcastChunkResult> {
     const span = tracer.startSpan(
@@ -1929,6 +1934,13 @@ export class ArweaveCompositeClient
       let preferredSuccessCount = 0;
       let failureCount = 0;
       let consecutive4xxFailures = 0;
+      // Tracks a run of unreachable/broken peers (timeouts, connection errors,
+      // 5xx). Peers are attempted live-first, so a sustained run signals we've
+      // reached the dead tail of the peer list. Unlike consecutive4xxFailures,
+      // this bounds the broadcast even after we already have successes — which
+      // is what keeps CHUNK_POST_CONTINUE_PAST_THRESHOLD from grinding every
+      // dead peer once the success threshold is met.
+      let consecutiveConnFailures = 0;
       let hasAnySuccess = false;
       const results: BroadcastChunkResponses[] = [];
 
@@ -1945,8 +1957,11 @@ export class ArweaveCompositeClient
       // Create promises for all peers
       const peerPromises = shuffledPeers.map((peer) =>
         peerConcurrencyLimit(async () => {
-          // Skip if we already have enough successes (both overall and preferred)
+          // Skip if we already have enough successes (both overall and
+          // preferred), unless configured to keep broadcasting past the
+          // threshold to maximize propagation.
           if (
+            !continuePastThreshold &&
             successCount >= chunkPostMinSuccessCount &&
             preferredSuccessCount >= chunkPostMinPreferredSuccessCount
           ) {
@@ -1961,6 +1976,40 @@ export class ArweaveCompositeClient
               timedOut: false,
               skipped: true,
               skipReason: 'success_threshold' as const,
+            };
+          }
+
+          // Skip remaining peers once we've hit a sustained run of
+          // unreachable/broken peers (the dead tail). This only applies in
+          // continue-past-threshold mode: it is what bounds the broadcast once
+          // the success threshold no longer stops it. Peers are attempted
+          // live-first, so by the time a run of connection failures accumulates
+          // the live peers are exhausted and the remaining (dead) peers would
+          // receive nothing anyway, so skipping them loses no propagation. In
+          // the default mode the success-threshold check above already bounds
+          // the broadcast, so this guard is intentionally not applied there to
+          // avoid changing default fan-out on a transient run of timeouts.
+          if (
+            continuePastThreshold &&
+            config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES > 0 &&
+            consecutiveConnFailures >=
+              config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES
+          ) {
+            this.log.debug(
+              'Skipping peer due to consecutive connection failures threshold',
+              {
+                peer,
+                consecutiveConnFailures,
+              },
+            );
+            return {
+              peer,
+              success: false,
+              statusCode: 0,
+              canceled: false,
+              timedOut: false,
+              skipped: true,
+              skipReason: 'connection_failures' as const,
             };
           }
 
@@ -2007,6 +2056,7 @@ export class ArweaveCompositeClient
               }
               hasAnySuccess = true;
               consecutive4xxFailures = 0;
+              consecutiveConnFailures = 0;
               this.log.debug('Chunk POST succeeded', {
                 peer,
                 successCount,
@@ -2014,16 +2064,22 @@ export class ArweaveCompositeClient
               });
             } else {
               failureCount++;
-              // Only count 4xx responses toward consecutive failures
+              // A 4xx means the peer is reachable but rejected the chunk; a 5xx
+              // or missing status means the peer is broken/unreachable. Track
+              // the two separately: 4xx feeds the "everyone is rejecting this
+              // chunk" guard, connection failures feed the dead-tail guard.
               if (statusCode >= 400 && statusCode < 500) {
                 consecutive4xxFailures++;
+                consecutiveConnFailures = 0;
               } else {
                 consecutive4xxFailures = 0;
+                consecutiveConnFailures++;
               }
               this.log.debug('Chunk POST failed', {
                 peer,
                 statusCode,
                 consecutive4xxFailures,
+                consecutiveConnFailures,
                 error: result.error,
               });
             }
@@ -2037,10 +2093,13 @@ export class ArweaveCompositeClient
             };
           } catch (error: any) {
             failureCount++;
-            // Network errors reset the consecutive 4xx counter
+            // A thrown error is a network/timeout failure: reset the 4xx guard
+            // and feed the dead-tail (connection failures) guard.
             consecutive4xxFailures = 0;
+            consecutiveConnFailures++;
             this.log.debug('Chunk POST errored', {
               peer,
+              consecutiveConnFailures,
               error: error.message,
             });
 
@@ -2091,11 +2150,21 @@ export class ArweaveCompositeClient
         !hasAnySuccess &&
         consecutive4xxFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES;
 
+      // The dead-tail guard only runs in continue-past-threshold mode, where it
+      // can stop a broadcast that already has successes; it is therefore
+      // reported independently of hasAnySuccess.
+      const terminatedDueToConnectionFailures =
+        continuePastThreshold &&
+        config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES > 0 &&
+        consecutiveConnFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES;
+
       const earlyTerminationReason = succeeded
         ? 'success_threshold'
         : terminatedDueToConsecutiveFailures
           ? 'consecutive_failures'
-          : 'completed';
+          : terminatedDueToConnectionFailures
+            ? 'connection_failures'
+            : 'completed';
       span.setAttribute(
         'chunk.broadcast.early_termination_reason',
         earlyTerminationReason,
@@ -2105,6 +2174,10 @@ export class ArweaveCompositeClient
         span.addEvent('Broadcast threshold reached');
       } else if (earlyTerminationReason === 'consecutive_failures') {
         span.addEvent('Broadcast stopped due to consecutive 4xx failures');
+      } else if (earlyTerminationReason === 'connection_failures') {
+        span.addEvent(
+          'Broadcast stopped due to consecutive connection failures',
+        );
       }
 
       this.log.debug('Chunk broadcast complete', {

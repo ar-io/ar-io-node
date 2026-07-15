@@ -961,6 +961,18 @@ export const CHUNK_POST_MAX_CONSECUTIVE_FAILURES = +env.varOrDefault(
   '5',
 );
 
+// When true, keep broadcasting a chunk to every selected peer even after the
+// success threshold has been met, maximizing propagation/redundancy instead of
+// stopping early. The success threshold still governs the result reported to
+// the uploader; this only controls how widely we keep posting. The dead-peer
+// tail stays bounded by CHUNK_POST_MAX_CONSECUTIVE_FAILURES (a sustained run of
+// unreachable/broken peers still stops the broadcast). Defaults to false to
+// preserve the efficient stop-at-threshold behavior.
+export const CHUNK_POST_CONTINUE_PAST_THRESHOLD =
+  env
+    .varOrDefault('CHUNK_POST_CONTINUE_PAST_THRESHOLD', 'false')
+    .toLowerCase() === 'true';
+
 // Maximum number of concurrent chunk posts per node
 export const CHUNK_POST_PER_NODE_CONCURRENCY = +env.varOrDefault(
   'CHUNK_POST_PER_NODE_CONCURRENCY',

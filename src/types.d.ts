@@ -798,7 +798,10 @@ type BroadcastChunkResponses = {
   canceled: boolean;
   timedOut: boolean;
   skipped?: boolean;
-  skipReason?: 'success_threshold' | 'consecutive_failures';
+  skipReason?:
+    | 'success_threshold'
+    | 'consecutive_failures'
+    | 'connection_failures';
 };
 
 interface BroadcastChunkResult {
@@ -816,6 +819,7 @@ export interface ChunkBroadcaster {
     originAndHopsHeaders,
     chunkPostMinSuccessCount,
     chunkPostMinPreferredSuccessCount,
+    continuePastThreshold,
     parentSpan,
   }: {
     chunk: JsonChunkPost;
@@ -824,6 +828,7 @@ export interface ChunkBroadcaster {
     originAndHopsHeaders: Record<string, string | undefined>;
     chunkPostMinSuccessCount: number;
     chunkPostMinPreferredSuccessCount?: number;
+    continuePastThreshold?: boolean;
     parentSpan?: Span;
   }): Promise<BroadcastChunkResult>;
 }
