@@ -155,6 +155,10 @@ interface ChunkPostResult {
   error?: string;
   canceled?: boolean;
   timedOut?: boolean;
+  // True when the peer accepted the chunk with HTTP 303 ("temporary"): it
+  // validated and persisted the chunk into its disk pool but is not the
+  // long-term home for that offset. Still a successful propagation.
+  temporary?: boolean;
 }
 
 interface PeerChunkQueue {
@@ -612,17 +616,32 @@ export class ArweaveCompositeClient
         signal: AbortSignal.timeout(task.abortTimeout),
         timeout: task.responseTimeout,
         headers: task.headers,
-        validateStatus: (status) => status === 200,
+        // An arweave node returns 200 when it will store the chunk long-term and
+        // 303 ("temporary") when it validated and persisted the chunk into its
+        // disk pool but is not the long-term home for that offset (e.g. it has no
+        // storage module covering it). Both outcomes mean the chunk was accepted
+        // and stored — a successful propagation. Treating 303 as a failure
+        // silently drops the tip/ingress nodes (which return 303 by design) from
+        // our success accounting. The 303 carries no Location, so there is
+        // nothing to follow. See ar_disk_pool:add_chunk/6 -> `temporary` ->
+        // {303, #{}, <<>>} in the arweave node source.
+        validateStatus: (status) => status === 200 || status === 303,
       });
+
+      const temporary = response.status === 303;
 
       metrics.arweaveChunkPostCounter.inc({
         endpoint: task.peer,
         status: 'success',
       });
+      if (temporary) {
+        metrics.arweaveChunkPostTemporaryCounter.inc({ endpoint: task.peer });
+      }
 
       return {
         success: true,
         statusCode: response.status,
+        temporary,
       };
     } catch (error: any) {
       let canceled = false;

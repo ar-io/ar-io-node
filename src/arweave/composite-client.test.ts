@@ -6,6 +6,8 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
+import http from 'node:http';
+import { AddressInfo } from 'node:net';
 import { default as Arweave } from 'arweave';
 
 import { ArweaveCompositeClient } from './composite-client.js';
@@ -407,6 +409,80 @@ describe('ArweaveCompositeClient', () => {
 
       // Restore original method
       (client as any).peerGetChunk = originalPeerGetChunk;
+    });
+  });
+
+  // Exercises the real axios POST path (no mocking) against a loopback server so
+  // the validateStatus wiring is covered end-to-end. An arweave node replies 200
+  // when it will store the chunk long-term and 303 ("temporary") when it accepted
+  // and persisted the chunk into its disk pool but is not the long-term home for
+  // that offset. Both are successful propagations; everything else is a failure.
+  describe('postChunkToPeer status handling', () => {
+    let server: http.Server;
+    let baseUrl: string;
+    let respond: (res: http.ServerResponse) => void;
+
+    beforeEach(async () => {
+      respond = (res) => res.writeHead(200).end();
+      server = http.createServer((_req, res) => respond(res));
+      await new Promise<void>((resolve) =>
+        server.listen(0, '127.0.0.1', () => resolve()),
+      );
+      const { port } = server.address() as AddressInfo;
+      baseUrl = `http://127.0.0.1:${port}`;
+    });
+
+    afterEach(async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    const post = (client: any) =>
+      client.postChunkToPeer({
+        peer: baseUrl,
+        chunk: {} as any,
+        abortTimeout: 1000,
+        responseTimeout: 1000,
+        headers: {},
+      });
+
+    it('treats HTTP 200 as a successful, non-temporary post', async () => {
+      respond = (res) => res.writeHead(200).end();
+      const client = createTestClient();
+      const result = await post(client);
+      assert.equal(result.success, true);
+      assert.equal(result.statusCode, 200);
+      assert.equal(result.temporary, false);
+      client.cleanup();
+    });
+
+    it('treats HTTP 303 ("temporary") as a successful post flagged temporary', async () => {
+      // 303 with no Location header, mirroring ar_disk_pool:add_chunk/6 ->
+      // {303, #{}, <<>>} (there is nothing to redirect to).
+      respond = (res) => res.writeHead(303).end();
+      const client = createTestClient();
+      const result = await post(client);
+      assert.equal(result.success, true);
+      assert.equal(result.statusCode, 303);
+      assert.equal(result.temporary, true);
+      client.cleanup();
+    });
+
+    it('treats HTTP 400 as a failed post', async () => {
+      respond = (res) => res.writeHead(400).end();
+      const client = createTestClient();
+      const result = await post(client);
+      assert.equal(result.success, false);
+      assert.equal(result.statusCode, 400);
+      client.cleanup();
+    });
+
+    it('treats HTTP 500 as a failed post', async () => {
+      respond = (res) => res.writeHead(500).end();
+      const client = createTestClient();
+      const result = await post(client);
+      assert.equal(result.success, false);
+      assert.equal(result.statusCode, 500);
+      client.cleanup();
     });
   });
 });

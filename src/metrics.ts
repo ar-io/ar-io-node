@@ -566,6 +566,17 @@ export const arweaveChunkPostCounter = new promClient.Counter({
   labelNames: ['endpoint', 'status', 'role'],
 });
 
+// A 303 ("temporary") response means the peer validated and persisted the chunk
+// into its disk pool but is not the long-term home for that offset. These are
+// counted as status="success" in arweave_chunk_post_total (the chunk was stored
+// and propagated); this counter tracks the temporary subset so the split between
+// long-term (200) and temporary (303) acceptances stays observable.
+export const arweaveChunkPostTemporaryCounter = new promClient.Counter({
+  name: 'arweave_chunk_post_temporary_total',
+  help: 'Counts chunk POSTs accepted with HTTP 303 (stored temporarily in the peer disk pool); a subset of arweave_chunk_post_total{status="success"}',
+  labelNames: ['endpoint'],
+});
+
 export const arweaveChunkBroadcastCounter = new promClient.Counter({
   name: 'arweave_chunk_broadcast_total',
   help: 'Counts successful broadcast accounting for min threshold count etc',
