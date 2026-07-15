@@ -20,10 +20,14 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
     this.baseDir = baseDir;
   }
 
-  // The full data root MUST be part of the path (not just its prefix) —
-  // different data roots sharing a 4-character prefix would otherwise share
-  // metadata slots and serve each other's merkle proofs, which fail
-  // validation downstream. Mirrors the FsChunkDataStore by-dataroot layout.
+  /**
+   * Returns the directory that holds cached metadata for a data root.
+   *
+   * The full data root MUST be part of the path (not just its prefix) —
+   * different data roots sharing a 4-character prefix would otherwise share
+   * metadata slots and serve each other's merkle proofs, which fail
+   * validation downstream. Mirrors the FsChunkDataStore by-dataroot layout.
+   */
   private chunkMetadataDir(dataRoot: string) {
     const dataRootPrefix = `${dataRoot.substring(0, 2)}/${dataRoot.substring(
       2,
@@ -68,16 +72,20 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
           this.chunkMetadataPath(dataRoot, relativeOffset),
         );
         const chunkMetadata = fromMsgpack(msgpack) as ChunkMetadata;
-        // Never serve metadata whose data root doesn't match the request — a
-        // mismatch means the entry is corrupt or was written under another
-        // transaction's key, and its data_path would fail proof validation.
-        // Drop it and treat the read as a miss so it gets refetched.
-        if (toB64Url(chunkMetadata.data_root) !== dataRoot) {
+        // Never serve metadata whose data root is absent or doesn't match the
+        // request — a mismatch means the entry is corrupt or was written
+        // under another transaction's key, and its data_path would fail proof
+        // validation. Drop it and treat the read as a miss so it gets
+        // refetched.
+        const cachedDataRoot = Buffer.isBuffer(chunkMetadata?.data_root)
+          ? toB64Url(chunkMetadata.data_root)
+          : undefined;
+        if (cachedDataRoot !== dataRoot) {
           this.log.warn(
             'Cached chunk metadata data root mismatch, discarding entry',
             {
               dataRoot,
-              cachedDataRoot: toB64Url(chunkMetadata.data_root),
+              cachedDataRoot,
               relativeOffset,
             },
           );

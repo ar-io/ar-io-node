@@ -25,6 +25,11 @@ import { createTestLogger } from '../../test/test-logger.js';
 const DATA_ROOT_A = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
 const DATA_ROOT_B = 'wRq63Q4N4df6jD6pPsS8PBmeGRbQUVwKVS91BB8rR90';
 
+/**
+ * Builds a ChunkMetadata fixture for the given data root. `dataPathFill`
+ * seeds the data_path and hash buffers so entries for different data roots
+ * are distinguishable in assertions.
+ */
 function makeChunkMetadata({
   dataRoot,
   offset = 0,
@@ -128,6 +133,21 @@ describe('FsChunkMetadataStore', () => {
 
       assert.equal(retrieved, undefined);
       assert.ok(!existsSync(poisonedPath));
+    });
+
+    it('should discard a corrupt entry missing data_root', async () => {
+      const corruptDir = join(tempDir, 'wR', 'q6', DATA_ROOT_A, 'metadata');
+      await fsPromises.mkdir(corruptDir, { recursive: true });
+      const corruptPath = join(corruptDir, '0');
+      await fsPromises.writeFile(
+        corruptPath,
+        toMsgpack({ unexpected: 'shape' }),
+      );
+
+      const retrieved = await store.get(DATA_ROOT_A, 0);
+
+      assert.equal(retrieved, undefined);
+      assert.ok(!existsSync(corruptPath));
     });
   });
 
