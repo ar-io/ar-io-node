@@ -1980,17 +1980,22 @@ export class ArweaveCompositeClient
           }
 
           // Skip remaining peers once we've hit a sustained run of
-          // unreachable/broken peers (the dead tail). This only applies in
-          // continue-past-threshold mode: it is what bounds the broadcast once
-          // the success threshold no longer stops it. Peers are attempted
-          // live-first, so by the time a run of connection failures accumulates
-          // the live peers are exhausted and the remaining (dead) peers would
-          // receive nothing anyway, so skipping them loses no propagation. In
-          // the default mode the success-threshold check above already bounds
-          // the broadcast, so this guard is intentionally not applied there to
-          // avoid changing default fan-out on a transient run of timeouts.
+          // unreachable/broken peers (the dead tail). This only bounds the
+          // *extra* propagation past the success threshold: it applies only in
+          // continue-past-threshold mode AND only once both success thresholds
+          // are already met. Before the thresholds are met the required seeding
+          // is not done, so we must keep trying peers (a run of dead peers early
+          // in the list must not stop us from reaching healthy peers later that
+          // could satisfy the threshold). Once seeding is done, a sustained run
+          // of connection failures means the live peers are exhausted and the
+          // remaining (dead) peers would receive nothing anyway, so skipping
+          // them loses no propagation. In default mode the success-threshold
+          // check above already bounds the broadcast, so this guard does not
+          // apply there.
           if (
             continuePastThreshold &&
+            successCount >= chunkPostMinSuccessCount &&
+            preferredSuccessCount >= chunkPostMinPreferredSuccessCount &&
             config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES > 0 &&
             consecutiveConnFailures >=
               config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES
@@ -2150,21 +2155,17 @@ export class ArweaveCompositeClient
         !hasAnySuccess &&
         consecutive4xxFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES;
 
-      // The dead-tail guard only runs in continue-past-threshold mode, where it
-      // can stop a broadcast that already has successes; it is therefore
-      // reported independently of hasAnySuccess.
-      const terminatedDueToConnectionFailures =
-        continuePastThreshold &&
-        config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES > 0 &&
-        consecutiveConnFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES;
-
+      // Note: the dead-tail (connection-failure) guard only skips peers once
+      // both success thresholds are already met, so whenever it fires the
+      // broadcast has succeeded and the reason below is 'success_threshold'.
+      // There is therefore no separate 'connection_failures' broadcast-level
+      // termination reason; the guard is a per-peer skip, surfaced via the
+      // 'connection_failures' skipReason and the debug log.
       const earlyTerminationReason = succeeded
         ? 'success_threshold'
         : terminatedDueToConsecutiveFailures
           ? 'consecutive_failures'
-          : terminatedDueToConnectionFailures
-            ? 'connection_failures'
-            : 'completed';
+          : 'completed';
       span.setAttribute(
         'chunk.broadcast.early_termination_reason',
         earlyTerminationReason,
@@ -2174,10 +2175,6 @@ export class ArweaveCompositeClient
         span.addEvent('Broadcast threshold reached');
       } else if (earlyTerminationReason === 'consecutive_failures') {
         span.addEvent('Broadcast stopped due to consecutive 4xx failures');
-      } else if (earlyTerminationReason === 'connection_failures') {
-        span.addEvent(
-          'Broadcast stopped due to consecutive connection failures',
-        );
       }
 
       this.log.debug('Chunk broadcast complete', {

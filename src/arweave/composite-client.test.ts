@@ -528,6 +528,21 @@ describe('ArweaveCompositeClient', () => {
         continuePastThreshold,
       });
 
+    // Allocate ports then close them so connecting is refused immediately.
+    const makeDeadUrls = async (count: number) => {
+      const dead: string[] = [];
+      for (let i = 0; i < count; i++) {
+        const s = http.createServer();
+        await new Promise<void>((resolve) =>
+          s.listen(0, '127.0.0.1', () => resolve()),
+        );
+        const { port } = s.address() as AddressInfo;
+        await new Promise<void>((resolve) => s.close(() => resolve()));
+        dead.push(`http://127.0.0.1:${port}`);
+      }
+      return dead;
+    };
+
     it('stops at the success threshold by default (fewer than all peers)', async () => {
       await startServers(6, 200);
       const client = createTestClient();
@@ -552,17 +567,7 @@ describe('ArweaveCompositeClient', () => {
     });
 
     it('bails out of the dead peer tail in continuePastThreshold mode', async () => {
-      // Allocate ports then close them so connecting is refused immediately.
-      const deadUrls: string[] = [];
-      for (let i = 0; i < 25; i++) {
-        const s = http.createServer();
-        await new Promise<void>((resolve) =>
-          s.listen(0, '127.0.0.1', () => resolve()),
-        );
-        const { port } = s.address() as AddressInfo;
-        await new Promise<void>((resolve) => s.close(() => resolve()));
-        deadUrls.push(`http://127.0.0.1:${port}`);
-      }
+      const deadUrls = await makeDeadUrls(25);
       // Three live peers first, then a long dead tail.
       await startServers(3, 200);
       const live = [...urls];
@@ -583,6 +588,31 @@ describe('ArweaveCompositeClient', () => {
         result.failureCount < deadUrls.length,
         `expected to bail before attempting all ${deadUrls.length} dead peers, got ${result.failureCount}`,
       );
+      client.cleanup();
+    });
+
+    it('still seeds through a dead prefix before the threshold is met', async () => {
+      // Dead peers FIRST, then live peers. The dead-tail guard must NOT bail
+      // before the success threshold is reached, otherwise a run of dead peers
+      // early in the list would stop us from reaching healthy peers that can
+      // satisfy the threshold. (Regression guard for the CodeRabbit finding.)
+      const deadUrls = await makeDeadUrls(8);
+      await startServers(3, 200);
+      const live = [...urls];
+      urls = [...deadUrls, ...live];
+      mockPeerManager.getPeerUrls = mock.fn(() => urls);
+      mockPeerManager.selectPeers = mock.fn(() => urls);
+
+      const client = createTestClient();
+      const result = await broadcast(client, true);
+
+      // Despite 8 dead peers ahead of them, all live peers were reached and the
+      // threshold (2) was satisfied — the guard did not bail during seeding.
+      assert.ok(
+        result.successCount >= 2,
+        `expected the threshold to be met through the dead prefix, got ${result.successCount}`,
+      );
+      assert.equal(result.successCount, live.length);
       client.cleanup();
     });
   });
