@@ -13,6 +13,7 @@ import { default as Arweave } from 'arweave';
 import { ArweaveCompositeClient } from './composite-client.js';
 import { UniformFailureSimulator } from '../lib/chaos.js';
 import { ArweavePeerManager } from '../peers/arweave-peer-manager.js';
+import * as config from '../config.js';
 import log from '../log.js';
 
 describe('ArweaveCompositeClient', () => {
@@ -23,12 +24,14 @@ describe('ArweaveCompositeClient', () => {
   let arweave: Arweave;
   let originalSetInterval: typeof setInterval;
   let mockSetInterval: any;
+  let createdClients: ArweaveCompositeClient[];
 
   beforeEach(() => {
     // Mock setInterval to prevent timers from starting
     originalSetInterval = global.setInterval;
     mockSetInterval = mock.fn(() => ({ unref: mock.fn() }));
     global.setInterval = mockSetInterval;
+    createdClients = [];
 
     mockBlockStore = {
       get: mock.fn(),
@@ -83,16 +86,26 @@ describe('ArweaveCompositeClient', () => {
   });
 
   afterEach(() => {
+    // Guarantee client teardown even when an assertion throws before an
+    // explicit cleanup, so timers/queues never leak into later tests.
+    for (const client of createdClients) {
+      try {
+        client.cleanup();
+      } catch {
+        // best-effort teardown
+      }
+    }
     // Restore setInterval
     global.setInterval = originalSetInterval;
     mock.restoreAll();
   });
 
-  // Helper function to create a client with mocked network dependencies
+  // Helper function to create a client with mocked network dependencies.
+  // Every client is registered for teardown in afterEach.
   const createTestClient = (
     options: { preferredChunkGetUrls?: string[] } = {},
   ) => {
-    return new ArweaveCompositeClient({
+    const client = new ArweaveCompositeClient({
       log,
       arweave,
       trustedNodeUrl: 'https://test.example.com',
@@ -104,6 +117,8 @@ describe('ArweaveCompositeClient', () => {
       maxConcurrentRequests: 1,
       ...options,
     });
+    createdClients.push(client);
+    return client;
   };
 
   describe('AbortSignal threading', () => {
@@ -453,7 +468,6 @@ describe('ArweaveCompositeClient', () => {
       assert.equal(result.success, true);
       assert.equal(result.statusCode, 200);
       assert.equal(result.temporary, false);
-      client.cleanup();
     });
 
     it('treats HTTP 303 ("temporary") as a successful post flagged temporary', async () => {
@@ -465,7 +479,6 @@ describe('ArweaveCompositeClient', () => {
       assert.equal(result.success, true);
       assert.equal(result.statusCode, 303);
       assert.equal(result.temporary, true);
-      client.cleanup();
     });
 
     it('treats HTTP 400 as a failed post', async () => {
@@ -474,7 +487,6 @@ describe('ArweaveCompositeClient', () => {
       const result = await post(client);
       assert.equal(result.success, false);
       assert.equal(result.statusCode, 400);
-      client.cleanup();
     });
 
     it('treats HTTP 500 as a failed post', async () => {
@@ -483,7 +495,6 @@ describe('ArweaveCompositeClient', () => {
       const result = await post(client);
       assert.equal(result.success, false);
       assert.equal(result.statusCode, 500);
-      client.cleanup();
     });
   });
 
@@ -492,6 +503,7 @@ describe('ArweaveCompositeClient', () => {
   // met, and with continuePastThreshold it keeps posting to every peer.
   describe('broadcastChunk propagation width', () => {
     let servers: http.Server[] = [];
+    let deadServers: http.Server[] = [];
     let urls: string[] = [];
 
     const startServers = async (count: number, status = 200) => {
@@ -513,10 +525,11 @@ describe('ArweaveCompositeClient', () => {
 
     afterEach(async () => {
       await Promise.all(
-        servers.map(
+        [...servers, ...deadServers].map(
           (s) => new Promise<void>((resolve) => s.close(() => resolve())),
         ),
       );
+      deadServers = [];
     });
 
     const broadcast = (client: any, continuePastThreshold: boolean) =>
@@ -528,16 +541,21 @@ describe('ArweaveCompositeClient', () => {
         continuePastThreshold,
       });
 
-    // Allocate ports then close them so connecting is refused immediately.
+    // Reserve real ports with listeners that immediately drop every connection,
+    // so a POST to them fails fast (ECONNRESET) while the port stays bound.
+    // (Closing the listener to "free" the port would let the OS reassign it to a
+    // subsequently-created live server, silently turning a dead peer live.)
+    // The listeners are tracked in deadServers and closed in afterEach.
     const makeDeadUrls = async (count: number) => {
       const dead: string[] = [];
       for (let i = 0; i < count; i++) {
         const s = http.createServer();
+        s.on('connection', (socket) => socket.destroy());
         await new Promise<void>((resolve) =>
           s.listen(0, '127.0.0.1', () => resolve()),
         );
         const { port } = s.address() as AddressInfo;
-        await new Promise<void>((resolve) => s.close(() => resolve()));
+        deadServers.push(s);
         dead.push(`http://127.0.0.1:${port}`);
       }
       return dead;
@@ -555,7 +573,6 @@ describe('ArweaveCompositeClient', () => {
         result.successCount < urls.length,
         `expected fewer than all ${urls.length} peers, got ${result.successCount}`,
       );
-      client.cleanup();
     });
 
     it('posts to every peer when continuePastThreshold is true', async () => {
@@ -563,7 +580,6 @@ describe('ArweaveCompositeClient', () => {
       const client = createTestClient();
       const result = await broadcast(client, true);
       assert.equal(result.successCount, urls.length);
-      client.cleanup();
     });
 
     it('bails out of the dead peer tail in continuePastThreshold mode', async () => {
@@ -580,15 +596,19 @@ describe('ArweaveCompositeClient', () => {
 
       // All live peers were posted to...
       assert.equal(result.successCount, live.length);
-      // ...but the dead tail was bailed out of rather than fully attempted.
-      // CHUNK_POST_MAX_CONSECUTIVE_FAILURES defaults to 5, so only a small
-      // number of dead peers are hit before the broadcast stops (plus a little
-      // slop from in-flight concurrency), never the full 25.
+      // ...but the dead tail was bailed out of after roughly the configured
+      // consecutive-failure limit, not merely "fewer than all 25". The bound is
+      // CHUNK_POST_MAX_CONSECUTIVE_FAILURES plus at most (concurrency - 1) peers
+      // already in flight when the guard trips.
+      const maxDeadAttempts =
+        config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES +
+        config.CHUNK_POST_PEER_CONCURRENCY;
       assert.ok(
-        result.failureCount < deadUrls.length,
-        `expected to bail before attempting all ${deadUrls.length} dead peers, got ${result.failureCount}`,
+        result.failureCount <= maxDeadAttempts,
+        `expected to bail within ${maxDeadAttempts} dead attempts (limit ` +
+          `${config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES} + concurrency ` +
+          `${config.CHUNK_POST_PEER_CONCURRENCY}), got ${result.failureCount}`,
       );
-      client.cleanup();
     });
 
     it('still seeds through a dead prefix before the threshold is met', async () => {
@@ -613,7 +633,6 @@ describe('ArweaveCompositeClient', () => {
         `expected the threshold to be met through the dead prefix, got ${result.successCount}`,
       );
       assert.equal(result.successCount, live.length);
-      client.cleanup();
     });
   });
 });
