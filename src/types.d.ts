@@ -805,6 +805,15 @@ interface BroadcastChunkResult {
   successCount: number;
   preferredSuccessCount: number;
   failureCount: number;
+  // Number of distinct fault domains (IP /24 v4, /48 v6) among successful posts.
+  // Part of the placement-evidence contract surfaced on the POST /chunk response.
+  distinctDomainCount: number;
+  // Number of preferred (tip) peers that were eligible for this broadcast. 0 means
+  // the tips were down/over-queue — the condition the soft-preferred fallback uses.
+  preferredEligibleCount: number;
+  // Centralized quorum verdict (success/preferred/distinct-domain + soft fallback).
+  // The handler reads this instead of recomputing the thresholds.
+  succeeded: boolean;
   results: BroadcastChunkResponses[];
 }
 

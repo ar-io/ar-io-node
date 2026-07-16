@@ -230,6 +230,102 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
 }
 
 /**
+ * Expand an IPv6 address to its 8 zero-padded 16-bit hex groups, or undefined if
+ * it cannot be parsed. Handles `::` zero-compression. ip-utils otherwise only
+ * does basic IPv6 validation; this is the minimum needed for prefix bucketing
+ * (see {@link ipFaultDomain}).
+ */
+export function expandIpv6(ip: string): string[] | undefined {
+  if (!ip.includes(':')) return undefined;
+  const halves = ip.split('::');
+  if (halves.length > 2) return undefined; // at most one `::`
+
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+
+  let groups: string[];
+  if (halves.length === 2) {
+    const missing = 8 - (head.length + tail.length);
+    if (missing < 0) return undefined;
+    groups = [...head, ...Array(missing).fill('0'), ...tail];
+  } else {
+    groups = head;
+  }
+  if (groups.length !== 8) return undefined;
+
+  const out: string[] = [];
+  for (const g of groups) {
+    if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return undefined;
+    out.push(parseInt(g, 16).toString(16).padStart(4, '0'));
+  }
+  return out;
+}
+
+/**
+ * Reduce a peer host to a stable "fault domain" bucket key — the network block
+ * an address belongs to — for seeding-diversity accounting. Two peers in the
+ * same bucket count as one fault domain (e.g. the five `tip-*.arweave.xyz` nodes
+ * all resolve into `38.29.227.0/24`).
+ *
+ * - IPv4 (incl. IPv4-mapped IPv6): masked to /`v4Bits` (default 24) → `"a.b.c.0/24"`.
+ * - IPv6: expanded + truncated to the first `v6Bits` (default 48) → `"2001:db8:abcd::/48"`.
+ * - Not a valid IP (e.g. an unresolved hostname): returned verbatim, so it counts
+ *   as its own domain rather than silently collapsing distinct hosts.
+ *
+ * Pure and hot-path cheap; performs no DNS. Callers pass the already-resolved
+ * peer host (the chunk-POST peer list is IP-literal after DNS resolution).
+ */
+export function ipFaultDomain(
+  host: string,
+  { v4Bits = 24, v6Bits = 48 }: { v4Bits?: number; v6Bits?: number } = {},
+): string {
+  const normalized = normalizeIpv4MappedIpv6(host.trim());
+
+  // IPv4
+  const ipv4Segment = '(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)';
+  const ipv4Regex = new RegExp(
+    `^${ipv4Segment}\\.${ipv4Segment}\\.${ipv4Segment}\\.${ipv4Segment}$`,
+  );
+  if (ipv4Regex.test(normalized)) {
+    const bits = Math.max(0, Math.min(32, v4Bits));
+    const ipInt =
+      normalized
+        .split('.')
+        .reduce((acc, oct) => (acc << 8) + parseInt(oct, 10), 0) >>> 0;
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    const net = (ipInt & mask) >>> 0;
+    const octets = [
+      (net >>> 24) & 0xff,
+      (net >>> 16) & 0xff,
+      (net >>> 8) & 0xff,
+      net & 0xff,
+    ].join('.');
+    return `${octets}/${bits}`;
+  }
+
+  // IPv6
+  if (normalized.includes(':')) {
+    const groups = expandIpv6(normalized);
+    if (groups !== undefined) {
+      const bits = Math.max(0, Math.min(128, v6Bits));
+      const keptGroups = Math.ceil(bits / 16);
+      const masked = groups.slice(0, keptGroups).map((g, i) => {
+        const groupHigh = (i + 1) * 16;
+        if (groupHigh <= bits) return g; // group fully inside the prefix
+        const groupBits = bits - i * 16; // partial group: 1..15 bits kept
+        const m = groupBits === 0 ? 0 : (0xffff << (16 - groupBits)) & 0xffff;
+        return ((parseInt(g, 16) & m) >>> 0).toString(16).padStart(4, '0');
+      });
+      const prefix = masked.join(':');
+      return keptGroups < 8 ? `${prefix}::/${bits}` : `${prefix}/${bits}`;
+    }
+  }
+
+  // Not a parseable IP (unresolved hostname, garbage): its own domain.
+  return host.trim();
+}
+
+/**
  * Check if any IP in a list matches any entry in an allowlist (supports CIDR)
  * @param clientIps - Array of client IP addresses to check
  * @param allowlist - Array of allowed IPs or CIDR ranges

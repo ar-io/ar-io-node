@@ -15,6 +15,8 @@ import {
   isIpInCidr,
   isAnyIpAllowlisted,
   isAnyIpBlocked,
+  expandIpv6,
+  ipFaultDomain,
 } from './ip-utils.js';
 
 describe('IP Utilities', () => {
@@ -386,6 +388,87 @@ describe('IP Utilities', () => {
         isAnyIpBlocked(['203.0.113.5'], ['foo/0']),
         false,
         'Malformed CIDR foo/0 should not block IPs',
+      );
+    });
+  });
+
+  describe('expandIpv6', () => {
+    it('expands full and compressed forms to 8 padded groups', () => {
+      assert.deepEqual(expandIpv6('2001:db8::1'), [
+        '2001',
+        '0db8',
+        '0000',
+        '0000',
+        '0000',
+        '0000',
+        '0000',
+        '0001',
+      ]);
+      assert.deepEqual(expandIpv6('::'), Array(8).fill('0000'));
+      assert.deepEqual(expandIpv6('::1'), [...Array(7).fill('0000'), '0001']);
+    });
+
+    it('returns undefined for non-IPv6 / malformed input', () => {
+      assert.equal(expandIpv6('1.2.3.4'), undefined);
+      assert.equal(expandIpv6('2001::db8::1'), undefined); // two `::`
+      assert.equal(expandIpv6('2001:db8:zz::1'), undefined); // bad hex
+    });
+  });
+
+  describe('ipFaultDomain', () => {
+    it('collapses all five tip nodes into one /24', () => {
+      const tips = [
+        '38.29.227.74',
+        '38.29.227.75',
+        '38.29.227.76',
+        '38.29.227.69',
+        '38.29.227.70',
+      ];
+      const domains = new Set(tips.map((ip) => ipFaultDomain(ip)));
+      assert.equal(domains.size, 1);
+      assert.equal([...domains][0], '38.29.227.0/24');
+    });
+
+    it('keeps distinct /24s distinct', () => {
+      assert.notEqual(
+        ipFaultDomain('38.29.227.74'),
+        ipFaultDomain('38.29.228.74'),
+      );
+    });
+
+    it('normalizes IPv4-mapped IPv6 to the IPv4 /24', () => {
+      assert.equal(ipFaultDomain('::ffff:38.29.227.74'), '38.29.227.0/24');
+    });
+
+    it('buckets IPv6 to /48 by default', () => {
+      assert.equal(
+        ipFaultDomain('2001:db8:abcd:1234::1'),
+        '2001:0db8:abcd::/48',
+      );
+      // same /48, different lower bits -> same bucket
+      assert.equal(
+        ipFaultDomain('2001:db8:abcd:9999::abcd'),
+        ipFaultDomain('2001:db8:abcd:1234::1'),
+      );
+      // different /48 -> different bucket
+      assert.notEqual(
+        ipFaultDomain('2001:db8:abce::1'),
+        ipFaultDomain('2001:db8:abcd::1'),
+      );
+    });
+
+    it('honors custom prefix widths', () => {
+      assert.equal(
+        ipFaultDomain('38.29.227.74', { v4Bits: 16 }),
+        '38.29.0.0/16',
+      );
+    });
+
+    it('treats an unresolved hostname as its own domain', () => {
+      assert.equal(ipFaultDomain('tip-1.arweave.xyz'), 'tip-1.arweave.xyz');
+      assert.notEqual(
+        ipFaultDomain('tip-1.arweave.xyz'),
+        ipFaultDomain('tip-2.arweave.xyz'),
       );
     });
   });
