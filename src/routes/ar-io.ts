@@ -312,19 +312,30 @@ arIoRouter.put('/ar-io/admin/block-data', express.json(), async (req, res) => {
 });
 
 // Unblock previously blocked data by id or hash
-arIoRouter.put('/ar-io/admin/unblock-data', express.json(), async (req, res) => {
-  try {
-    const { id, hash } = req.body;
-    if (id === undefined && hash === undefined) {
-      res.status(400).send("Must provide 'id' or 'hash'");
-      return;
+arIoRouter.put(
+  '/ar-io/admin/unblock-data',
+  express.json(),
+  async (req, res) => {
+    try {
+      const { id, hash } = req.body;
+      if (id === undefined && hash === undefined) {
+        res.status(400).send("Must provide 'id' or 'hash'");
+        return;
+      }
+      if (
+        (id !== undefined && typeof id !== 'string') ||
+        (hash !== undefined && typeof hash !== 'string')
+      ) {
+        res.status(400).send("'id' and 'hash' must be strings");
+        return;
+      }
+      await system.db.unblockData({ id, hash });
+      res.json({ message: 'Content unblocked' });
+    } catch (error: any) {
+      res.status(500).send(error?.message);
     }
-    await system.db.unblockData({ id, hash });
-    res.json({ message: 'Content unblocked' });
-  } catch (error: any) {
-    res.status(500).send(error?.message);
-  }
-});
+  },
+);
 
 // Block resolution of ArNS name
 arIoRouter.put('/ar-io/admin/block-name', express.json(), async (req, res) => {
