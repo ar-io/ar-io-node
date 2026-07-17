@@ -6,11 +6,14 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
+import http from 'node:http';
+import { AddressInfo } from 'node:net';
 import { default as Arweave } from 'arweave';
 
 import { ArweaveCompositeClient } from './composite-client.js';
 import { UniformFailureSimulator } from '../lib/chaos.js';
 import { ArweavePeerManager } from '../peers/arweave-peer-manager.js';
+import * as config from '../config.js';
 import log from '../log.js';
 
 describe('ArweaveCompositeClient', () => {
@@ -21,12 +24,14 @@ describe('ArweaveCompositeClient', () => {
   let arweave: Arweave;
   let originalSetInterval: typeof setInterval;
   let mockSetInterval: any;
+  let createdClients: ArweaveCompositeClient[];
 
   beforeEach(() => {
     // Mock setInterval to prevent timers from starting
     originalSetInterval = global.setInterval;
     mockSetInterval = mock.fn(() => ({ unref: mock.fn() }));
     global.setInterval = mockSetInterval;
+    createdClients = [];
 
     mockBlockStore = {
       get: mock.fn(),
@@ -66,6 +71,7 @@ describe('ArweaveCompositeClient', () => {
         }
         return [];
       }),
+      isPreferredChunkPostPeer: mock.fn(() => false),
       reportSuccess: mock.fn(),
       reportFailure: mock.fn(),
       startAutoRefresh: mock.fn(),
@@ -80,16 +86,26 @@ describe('ArweaveCompositeClient', () => {
   });
 
   afterEach(() => {
+    // Guarantee client teardown even when an assertion throws before an
+    // explicit cleanup, so timers/queues never leak into later tests.
+    for (const client of createdClients) {
+      try {
+        client.cleanup();
+      } catch {
+        // best-effort teardown
+      }
+    }
     // Restore setInterval
     global.setInterval = originalSetInterval;
     mock.restoreAll();
   });
 
-  // Helper function to create a client with mocked network dependencies
+  // Helper function to create a client with mocked network dependencies.
+  // Every client is registered for teardown in afterEach.
   const createTestClient = (
     options: { preferredChunkGetUrls?: string[] } = {},
   ) => {
-    return new ArweaveCompositeClient({
+    const client = new ArweaveCompositeClient({
       log,
       arweave,
       trustedNodeUrl: 'https://test.example.com',
@@ -101,6 +117,8 @@ describe('ArweaveCompositeClient', () => {
       maxConcurrentRequests: 1,
       ...options,
     });
+    createdClients.push(client);
+    return client;
   };
 
   describe('AbortSignal threading', () => {
@@ -407,6 +425,214 @@ describe('ArweaveCompositeClient', () => {
 
       // Restore original method
       (client as any).peerGetChunk = originalPeerGetChunk;
+    });
+  });
+
+  // Exercises the real axios POST path (no mocking) against a loopback server so
+  // the validateStatus wiring is covered end-to-end. An arweave node replies 200
+  // when it will store the chunk long-term and 303 ("temporary") when it accepted
+  // and persisted the chunk into its disk pool but is not the long-term home for
+  // that offset. Both are successful propagations; everything else is a failure.
+  describe('postChunkToPeer status handling', () => {
+    let server: http.Server;
+    let baseUrl: string;
+    let respond: (res: http.ServerResponse) => void;
+
+    beforeEach(async () => {
+      respond = (res) => res.writeHead(200).end();
+      server = http.createServer((_req, res) => respond(res));
+      await new Promise<void>((resolve) =>
+        server.listen(0, '127.0.0.1', () => resolve()),
+      );
+      const { port } = server.address() as AddressInfo;
+      baseUrl = `http://127.0.0.1:${port}`;
+    });
+
+    afterEach(async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    const post = (client: any) =>
+      client.postChunkToPeer({
+        peer: baseUrl,
+        chunk: {} as any,
+        abortTimeout: 1000,
+        responseTimeout: 1000,
+        headers: {},
+      });
+
+    it('treats HTTP 200 as a successful, non-temporary post', async () => {
+      respond = (res) => res.writeHead(200).end();
+      const client = createTestClient();
+      const result = await post(client);
+      assert.equal(result.success, true);
+      assert.equal(result.statusCode, 200);
+      assert.equal(result.temporary, false);
+    });
+
+    it('treats HTTP 303 ("temporary") as a successful post flagged temporary', async () => {
+      // 303 with no Location header, mirroring ar_disk_pool:add_chunk/6 ->
+      // {303, #{}, <<>>} (there is nothing to redirect to).
+      respond = (res) => res.writeHead(303).end();
+      const client = createTestClient();
+      const result = await post(client);
+      assert.equal(result.success, true);
+      assert.equal(result.statusCode, 303);
+      assert.equal(result.temporary, true);
+    });
+
+    it('treats HTTP 400 as a failed post', async () => {
+      respond = (res) => res.writeHead(400).end();
+      const client = createTestClient();
+      const result = await post(client);
+      assert.equal(result.success, false);
+      assert.equal(result.statusCode, 400);
+    });
+
+    it('treats HTTP 500 as a failed post', async () => {
+      respond = (res) => res.writeHead(500).end();
+      const client = createTestClient();
+      const result = await post(client);
+      assert.equal(result.success, false);
+      assert.equal(result.statusCode, 500);
+    });
+  });
+
+  // Verifies the CHUNK_POST_CONTINUE_PAST_THRESHOLD behavior against real
+  // loopback peers: by default the broadcast stops once the success threshold is
+  // met, and with continuePastThreshold it keeps posting to every peer.
+  describe('broadcastChunk propagation width', () => {
+    let servers: http.Server[] = [];
+    let deadServers: http.Server[] = [];
+    let urls: string[] = [];
+
+    const startServers = async (count: number, status = 200) => {
+      servers = [];
+      urls = [];
+      for (let i = 0; i < count; i++) {
+        const s = http.createServer((_req, res) => res.writeHead(status).end());
+        await new Promise<void>((resolve) =>
+          s.listen(0, '127.0.0.1', () => resolve()),
+        );
+        const { port } = s.address() as AddressInfo;
+        servers.push(s);
+        urls.push(`http://127.0.0.1:${port}`);
+      }
+      mockPeerManager.getPeerUrls = mock.fn(() => urls);
+      mockPeerManager.selectPeers = mock.fn(() => urls);
+      mockPeerManager.isPreferredChunkPostPeer = mock.fn(() => false);
+    };
+
+    afterEach(async () => {
+      await Promise.all(
+        [...servers, ...deadServers].map(
+          (s) => new Promise<void>((resolve) => s.close(() => resolve())),
+        ),
+      );
+      deadServers = [];
+    });
+
+    const broadcast = (client: any, continuePastThreshold: boolean) =>
+      client.broadcastChunk({
+        chunk: {} as any,
+        originAndHopsHeaders: {},
+        chunkPostMinSuccessCount: 2,
+        chunkPostMinPreferredSuccessCount: 0,
+        continuePastThreshold,
+      });
+
+    // Reserve real ports with listeners that immediately drop every connection,
+    // so a POST to them fails fast (ECONNRESET) while the port stays bound.
+    // (Closing the listener to "free" the port would let the OS reassign it to a
+    // subsequently-created live server, silently turning a dead peer live.)
+    // The listeners are tracked in deadServers and closed in afterEach.
+    const makeDeadUrls = async (count: number) => {
+      const dead: string[] = [];
+      for (let i = 0; i < count; i++) {
+        const s = http.createServer();
+        s.on('connection', (socket) => socket.destroy());
+        await new Promise<void>((resolve) =>
+          s.listen(0, '127.0.0.1', () => resolve()),
+        );
+        const { port } = s.address() as AddressInfo;
+        deadServers.push(s);
+        dead.push(`http://127.0.0.1:${port}`);
+      }
+      return dead;
+    };
+
+    it('stops at the success threshold by default (fewer than all peers)', async () => {
+      await startServers(6, 200);
+      const client = createTestClient();
+      const result = await broadcast(client, false);
+      assert.ok(
+        result.successCount >= 2,
+        `expected at least the threshold, got ${result.successCount}`,
+      );
+      assert.ok(
+        result.successCount < urls.length,
+        `expected fewer than all ${urls.length} peers, got ${result.successCount}`,
+      );
+    });
+
+    it('posts to every peer when continuePastThreshold is true', async () => {
+      await startServers(6, 200);
+      const client = createTestClient();
+      const result = await broadcast(client, true);
+      assert.equal(result.successCount, urls.length);
+    });
+
+    it('bails out of the dead peer tail in continuePastThreshold mode', async () => {
+      const deadUrls = await makeDeadUrls(25);
+      // Three live peers first, then a long dead tail.
+      await startServers(3, 200);
+      const live = [...urls];
+      urls = [...live, ...deadUrls];
+      mockPeerManager.getPeerUrls = mock.fn(() => urls);
+      mockPeerManager.selectPeers = mock.fn(() => urls);
+
+      const client = createTestClient();
+      const result = await broadcast(client, true);
+
+      // All live peers were posted to...
+      assert.equal(result.successCount, live.length);
+      // ...but the dead tail was bailed out of after roughly the configured
+      // consecutive-failure limit, not merely "fewer than all 25". The bound is
+      // CHUNK_POST_MAX_CONSECUTIVE_FAILURES plus at most (concurrency - 1) peers
+      // already in flight when the guard trips.
+      const maxDeadAttempts =
+        config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES +
+        config.CHUNK_POST_PEER_CONCURRENCY;
+      assert.ok(
+        result.failureCount <= maxDeadAttempts,
+        `expected to bail within ${maxDeadAttempts} dead attempts (limit ` +
+          `${config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES} + concurrency ` +
+          `${config.CHUNK_POST_PEER_CONCURRENCY}), got ${result.failureCount}`,
+      );
+    });
+
+    it('still seeds through a dead prefix before the threshold is met', async () => {
+      // Dead peers FIRST, then live peers. The dead-tail guard must NOT bail
+      // before the success threshold is reached, otherwise a run of dead peers
+      // early in the list would stop us from reaching healthy peers that can
+      // satisfy the threshold. (Regression guard for the CodeRabbit finding.)
+      const deadUrls = await makeDeadUrls(8);
+      await startServers(3, 200);
+      const live = [...urls];
+      urls = [...deadUrls, ...live];
+      mockPeerManager.getPeerUrls = mock.fn(() => urls);
+      mockPeerManager.selectPeers = mock.fn(() => urls);
+
+      const client = createTestClient();
+      const result = await broadcast(client, true);
+
+      // Despite 8 dead peers ahead of them, all live peers were reached and the
+      // threshold (2) was satisfied — the guard did not bail during seeding.
+      assert.ok(
+        result.successCount >= 2,
+        `expected the threshold to be met through the dead prefix, got ${result.successCount}`,
+      );
+      assert.equal(result.successCount, live.length);
     });
   });
 });

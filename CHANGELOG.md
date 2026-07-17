@@ -8,9 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Opt-in chunk over-propagation** — `CHUNK_POST_CONTINUE_PAST_THRESHOLD`
+  (default `false`) keeps broadcasting a chunk to every selected peer after the
+  success threshold is met, maximizing redundancy instead of stopping early. The
+  dead-peer tail stays bounded by `CHUNK_POST_MAX_CONSECUTIVE_FAILURES`; pair it
+  with a higher `CHUNK_POST_PEER_CONCURRENCY` so broadcasts complete promptly. A
+  new `arweave_chunk_post_temporary_total` metric exposes the 200-vs-303
+  acceptance split (#819).
+
 ### Changed
 
+- **Chunk-post fan-out narrows to the configured threshold** — now that HTTP 303
+  counts as a successful (temporary) acceptance (see Fixed), broadcasts stop at
+  `CHUNK_POST_MIN_SUCCESS_COUNT` as intended instead of grinding the full peer
+  list. Operators who relied on the prior 303-handling bug's accidental wide
+  spread can restore it with `CHUNK_POST_CONTINUE_PAST_THRESHOLD=true` (#819).
+
 ### Fixed
+
+- **Chunk POST treats HTTP 303 ("temporary") as success** — Arweave tip/ingress
+  nodes return 303 when they validate and persist a chunk into their disk pool
+  without being its long-term home (`ar_disk_pool:add_chunk/6 -> temporary`).
+  Previously counted as a failure, which returned spurious errors to uploaders,
+  undercounted broadcast success, and (since 303 is not a 4xx) defeated the
+  consecutive-failure early exit — grinding the full non-preferred peer list
+  (p95 ~33s). 303 now counts toward the overall and preferred success
+  thresholds (#819).
 
 ## [Release 81] - 2026-06-20
 
