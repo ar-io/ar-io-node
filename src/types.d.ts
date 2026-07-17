@@ -264,6 +264,11 @@ export interface ChunkPlacementIndex {
   // Reserved for chain-reorg recovery; not yet wired (no clean reorg hook with
   // orphaned data_roots). See the deferral note in system.ts.
   unconfirmChunkPlacements(dataRoot: string): Promise<void>;
+  // Prune confirmed-data-root markers older than `cutoff` (unix seconds); keeps
+  // the marker table bounded. Returns the number of rows deleted.
+  pruneConfirmedDataRoots(cutoff: number): Promise<number>;
+  // Current row count of the confirmed_data_roots marker table (observability).
+  countConfirmedDataRoots(): Promise<number>;
   selectExpiredUnconfirmedChunkPlacements(params: {
     originIngest: number;
     originIngestAllowlisted: number;

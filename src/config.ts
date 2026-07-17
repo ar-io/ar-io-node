@@ -2937,6 +2937,17 @@ export const CHUNK_INGEST_GC_BATCH_SIZE = env.positiveIntOrDefault(
   'CHUNK_INGEST_GC_BATCH_SIZE',
   1000,
 );
+// How long a confirmed-data-root marker is retained before the GC prunes it. A
+// marker only needs to bridge the gap between a tx confirming on-chain and its
+// chunks being seeded to this gateway (seconds to a couple of minutes); once a
+// chunk is ingested it carries its own confirmed_at. One hour is comfortably
+// longer than any real confirm->seed gap while keeping the marker table bounded
+// to recent confirmations.
+export const CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS =
+  env.positiveIntOrDefault(
+    'CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS',
+    3600, // 1 hour
+  );
 
 // ArNS names to exclude from rate limiting
 export const RATE_LIMITER_ARNS_ALLOWLIST =

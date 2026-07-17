@@ -184,6 +184,16 @@ export const chunkIngestPendingBytesGauge = new promClient.Gauge({
   help: 'Estimated bytes held by pending (unconfirmed) ingest-cached chunks',
 });
 
+export const chunkIngestConfirmedRootsGauge = new promClient.Gauge({
+  name: 'chunk_ingest_confirmed_roots',
+  help: 'Rows in the confirmed_data_roots sticky-confirmation marker table (should stay bounded by the age-based prune)',
+});
+
+export const chunkIngestConfirmedRootsPrunedTotal = new promClient.Counter({
+  name: 'chunk_ingest_confirmed_roots_pruned_total',
+  help: 'Count of confirmed_data_roots markers pruned by the GC sweep',
+});
+
 //
 // Global bundle metrics
 //

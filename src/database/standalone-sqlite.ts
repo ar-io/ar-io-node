@@ -1041,11 +1041,38 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   confirmChunkPlacements(dataRoot: string, confirmedAt: number): number[] {
+    const dataRootBuf = fromB64Url(dataRoot);
     const rows = this.stmts.chunks.confirmChunkPlacements.all({
-      data_root: fromB64Url(dataRoot),
+      data_root: dataRootBuf,
+      confirmed_at: confirmedAt,
+    });
+    // Record the data_root as confirmed so chunks ingested AFTER this one-shot
+    // UPDATE still confirm at ingest and are retained past the TTL (see
+    // cache.sql markDataRootConfirmed / saveChunkPlacement inheritance /
+    // selectExpiredUnconfirmedPlacements). Recorded unconditionally: the confirm
+    // event routinely fires before any chunk is seeded, so an EXISTS gate would
+    // miss exactly the case this protects. The marker table is bounded by
+    // pruneConfirmedDataRoots in the GC sweep.
+    this.stmts.chunks.markDataRootConfirmed.run({
+      data_root: dataRootBuf,
       confirmed_at: confirmedAt,
     });
     return rows.map((row: any) => row.cached_at as number);
+  }
+
+  // Prune confirmed-data-root markers older than `cutoff` (unix seconds). Keeps
+  // the marker table bounded; a marker only needs to bridge the gap between a tx
+  // confirming and its chunks being seeded. Returns the number of rows deleted.
+  pruneConfirmedDataRoots(cutoff: number): number {
+    const result = this.stmts.chunks.pruneConfirmedDataRoots.run({ cutoff });
+    return result.changes;
+  }
+
+  countConfirmedDataRoots(): number {
+    const row = this.stmts.chunks.countConfirmedDataRoots.get() as {
+      count: number;
+    };
+    return row.count;
   }
 
   // Reserved for chain-reorg recovery: returns a confirmed placement to pending
@@ -3738,6 +3765,14 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'unconfirmChunkPlacements', [dataRoot]);
   }
 
+  pruneConfirmedDataRoots(cutoff: number): Promise<number> {
+    return this.queueWrite('data', 'pruneConfirmedDataRoots', [cutoff]);
+  }
+
+  countConfirmedDataRoots(): Promise<number> {
+    return this.queueRead('data', 'countConfirmedDataRoots', undefined);
+  }
+
   selectExpiredUnconfirmedChunkPlacements(params: {
     originIngest: number;
     originIngestAllowlisted: number;
@@ -4341,6 +4376,9 @@ if (!isMainThread) {
           worker.unconfirmChunkPlacements(args[0]);
           parentPort?.postMessage(null);
           break;
+        case 'pruneConfirmedDataRoots':
+          parentPort?.postMessage(worker.pruneConfirmedDataRoots(args[0]));
+          break;
         case 'selectExpiredUnconfirmedChunkPlacements':
           parentPort?.postMessage(
             worker.selectExpiredUnconfirmedChunkPlacements(args[0]),
@@ -4361,6 +4399,9 @@ if (!isMainThread) {
           break;
         case 'sumPendingChunkBytes':
           parentPort?.postMessage(worker.sumPendingChunkBytes());
+          break;
+        case 'countConfirmedDataRoots':
+          parentPort?.postMessage(worker.countConfirmedDataRoots());
           break;
         case 'saveDataItem':
           worker.saveDataItem(args[0], args[1]);
