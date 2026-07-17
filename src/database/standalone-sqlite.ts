@@ -2993,6 +2993,17 @@ export class StandaloneSqliteDatabaseWorker {
     this.stmts.moderation.deleteBlockedName.run({ name });
   }
 
+  unblockData({ id, hash }: { id?: string; hash?: string }) {
+    // Remove both the id- and hash-keyed block if present so content blocked
+    // by either key is fully released. DELETE of a missing row is a no-op.
+    if (id !== undefined) {
+      this.stmts.moderation.deleteBlockedId.run({ id: fromB64Url(id) });
+    }
+    if (hash !== undefined) {
+      this.stmts.moderation.deleteBlockedHash.run({ hash: fromB64Url(hash) });
+    }
+  }
+
   async saveNestedDataId({
     id,
     parentId,
@@ -4119,6 +4130,16 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('moderation', 'unblockName', [{ name }]);
   }
 
+  async unblockData({
+    id,
+    hash,
+  }: {
+    id?: string;
+    hash?: string;
+  }): Promise<void> {
+    return this.queueWrite('moderation', 'unblockData', [{ id, hash }]);
+  }
+
   async saveNestedDataId({
     id,
     parentId,
@@ -4448,6 +4469,10 @@ if (!isMainThread) {
           break;
         case 'unblockName':
           worker.unblockName(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'unblockData':
+          worker.unblockData(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'saveNestedDataId':

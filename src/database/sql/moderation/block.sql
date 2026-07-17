@@ -26,3 +26,11 @@ ON CONFLICT DO NOTHING
 -- deleteBlockedName
 DELETE FROM blocked_names
 WHERE name = @name;
+
+-- deleteBlockedId
+DELETE FROM blocked_ids
+WHERE id = @id;
+
+-- deleteBlockedHash
+DELETE FROM blocked_hashes
+WHERE hash = @hash;
