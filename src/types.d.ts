@@ -828,6 +828,11 @@ export interface ChunkBroadcaster {
     originAndHopsHeaders: Record<string, string | undefined>;
     chunkPostMinSuccessCount: number;
     chunkPostMinPreferredSuccessCount?: number;
+    /**
+     * When true, keep posting to every selected peer after the success
+     * threshold is met (maximize propagation) instead of stopping early.
+     * Defaults to `config.CHUNK_POST_CONTINUE_PAST_THRESHOLD`.
+     */
     continuePastThreshold?: boolean;
     parentSpan?: Span;
   }): Promise<BroadcastChunkResult>;

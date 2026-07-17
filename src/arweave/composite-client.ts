@@ -155,9 +155,11 @@ interface ChunkPostResult {
   error?: string;
   canceled?: boolean;
   timedOut?: boolean;
-  // True when the peer accepted the chunk with HTTP 303 ("temporary"): it
-  // validated and persisted the chunk into its disk pool but is not the
-  // long-term home for that offset. Still a successful propagation.
+  /**
+   * True when the peer accepted the chunk with HTTP 303 ("temporary"): it
+   * validated and persisted the chunk into its disk pool but is not the
+   * long-term home for that offset. Still a successful propagation.
+   */
   temporary?: boolean;
 }
 
