@@ -2456,6 +2456,41 @@ export const PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD =
     `${60 * 60 * 24 * 30}`, // 30 days
   );
 
+// Disk-pressure watermarks for the contiguous data cache cleanup worker. All are
+// opt-in: with the defaults below the worker behaves exactly as before (pure
+// age-based TTL). Percentages are of the filesystem holding the cache.
+//
+// Below the low watermark the worker skips cleanup entirely so the cache can grow
+// to fill available disk. Between the watermarks it runs normal age-based cleanup.
+// At/above the high watermark (or when free space drops below the min-free floor)
+// it progressively tightens the effective TTL until usage falls back below the
+// low watermark, never evicting data younger than the aggressive min-age floor.
+export const CONTIGUOUS_DATA_CACHE_LOW_WATERMARK_PERCENT = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_LOW_WATERMARK_PERCENT',
+  '0',
+);
+
+export const CONTIGUOUS_DATA_CACHE_HIGH_WATERMARK_PERCENT = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_HIGH_WATERMARK_PERCENT',
+  '0',
+);
+
+// Hard guardrail: if free bytes on the cache filesystem fall below this, force
+// maximum-pressure cleanup regardless of the watermark percentages. Protects the
+// shared volume (SQLite DBs/WAL/logs) from ENOSPC. 0 disables the guardrail.
+export const CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES',
+  '0',
+);
+
+// Absolute floor (seconds) for aggressive cleanup: never evict data younger than
+// this even under maximum disk pressure. Protects freshly written / hot data.
+export const CONTIGUOUS_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS =
+  +env.varOrDefault(
+    'CONTIGUOUS_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS',
+    `${60 * 60}`, // 1 hour
+  );
+
 // The set of full (not base or undernames) ArNS names to preferentially cache
 export const PREFERRED_ARNS_NAMES = new Set(
   env.varOrDefault('PREFERRED_ARNS_NAMES', '').split(','),

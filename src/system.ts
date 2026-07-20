@@ -586,8 +586,14 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
       basePath: 'data/contiguous',
       dataType: 'contiguous_data',
       initialDelay: contiguousDataCacheCleanupInitialDelayMs,
+      // Disk-pressure watermarks (all opt-in; 0 => pure age-based cleanup)
+      lowWatermarkPercent: config.CONTIGUOUS_DATA_CACHE_LOW_WATERMARK_PERCENT,
+      highWatermarkPercent: config.CONTIGUOUS_DATA_CACHE_HIGH_WATERMARK_PERCENT,
+      minFreeBytes: config.CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES,
+      aggressiveMinAgeSeconds:
+        config.CONTIGUOUS_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
       // Stats are passed by the worker to avoid redundant stat calls
-      shouldDelete: async (path, stats) => {
+      shouldDelete: async (path, stats, ctx) => {
         try {
           const hash = path.split('/').pop() ?? '';
           const metadata = await contiguousMetadataStore.get(hash);
@@ -616,11 +622,20 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
             );
           }
 
-          // Preferred ArNS names have a different cleanup threshold
-          const cleanupThresholdMs =
-            (isPreferredArnsName
-              ? config.PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD
-              : contiguousDataCacheCleanupThresholdSeconds) * 1000;
+          // Preferred ArNS names have a different (longer) base threshold.
+          const baseThresholdSeconds = isPreferredArnsName
+            ? config.PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD
+            : contiguousDataCacheCleanupThresholdSeconds;
+
+          // Under disk pressure ctx.thresholdScale (< 1) tightens retention,
+          // floored at ctx.minAgeSeconds so hot/fresh data is never evicted.
+          // With watermarks disabled ctx is the normal context (scale 1, floor
+          // 0), so this is exactly the base threshold.
+          const effectiveThresholdSeconds = Math.max(
+            baseThresholdSeconds * ctx.thresholdScale,
+            ctx.minAgeSeconds,
+          );
+          const cleanupThresholdMs = effectiveThresholdSeconds * 1000;
 
           const mostRecentTimeMs =
             metadata?.accessTimestampMs ??

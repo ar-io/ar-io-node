@@ -1175,6 +1175,18 @@ export const cacheSizeBytes = new promClient.Gauge({
   labelNames: ['store_type', 'data_type'] as const,
 });
 
+export const cacheCleanupDiskUsedPercent = new promClient.Gauge({
+  name: 'cache_cleanup_disk_used_percent',
+  help: 'Filesystem used percent observed by the cache cleanup worker',
+  labelNames: ['data_type'] as const,
+});
+
+export const cacheCleanupRegime = new promClient.Gauge({
+  name: 'cache_cleanup_regime',
+  help: 'Active cache cleanup regime (0=skip, 1=normal, 2=aggressive)',
+  labelNames: ['data_type'] as const,
+});
+
 //
 // Circuit breaker metrics
 //

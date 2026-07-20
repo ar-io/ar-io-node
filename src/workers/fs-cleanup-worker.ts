@@ -14,11 +14,51 @@ import * as metrics from '../metrics.js';
 // Limit concurrent delete operations to avoid file descriptor exhaustion
 const DELETE_CONCURRENCY = 50;
 
+// Under maximum disk pressure the sweep runs harder: up to this many times the
+// configured batch size, with pauses shortened toward this floor.
+const AGGRESSIVE_MAX_BATCH_MULTIPLIER = 4;
+const AGGRESSIVE_MIN_PAUSE_DURATION_MS = 250;
+
+/**
+ * Per-batch cleanup context passed to a worker's `shouldDelete` policy so it can
+ * scale its age thresholds with disk pressure. With watermarks disabled (the
+ * default) every batch runs with {@link NORMAL_CONTEXT}, i.e. unchanged behavior.
+ */
+export interface CleanupContext {
+  // Multiplier applied to age thresholds. 1 = normal retention; values < 1
+  // tighten retention as disk pressure rises.
+  thresholdScale: number;
+  // Absolute floor (seconds): never delete data younger than this, even under
+  // maximum pressure. `shouldDelete` should apply it as
+  // `effective = max(baseThreshold * thresholdScale, minAgeSeconds)`.
+  minAgeSeconds: number;
+  regime: 'normal' | 'aggressive';
+}
+
+export const NORMAL_CONTEXT: CleanupContext = {
+  thresholdScale: 1,
+  minAgeSeconds: 0,
+  regime: 'normal',
+};
+
+type CleanupDecision =
+  | { action: 'skip'; usedPercent: number }
+  | {
+      action: 'clean';
+      ctx: CleanupContext;
+      batchSize: number;
+      pauseMs: number;
+    };
+
 export class FsCleanupWorker {
   // Dependencies
   private log: winston.Logger;
   // Callback receives stats to avoid double-stat (worker stats once, passes to callback)
-  private shouldDelete: (path: string, stats: fs.Stats) => Promise<boolean>;
+  private shouldDelete: (
+    path: string,
+    stats: fs.Stats,
+    ctx: CleanupContext,
+  ) => Promise<boolean>;
   private deleteCallback: (path: string) => Promise<void>;
 
   private basePath: string;
@@ -27,6 +67,14 @@ export class FsCleanupWorker {
   private pauseDuration: number;
   private restartPauseDuration: number;
   private initialDelay: number;
+
+  // Disk-pressure watermarks (all opt-in; disabled => pure age-based cleanup)
+  private usagePath: string;
+  private lowWatermarkPercent: number;
+  private highWatermarkPercent: number;
+  private minFreeBytes: number;
+  private aggressiveMinAgeSeconds: number;
+  private watermarksEnabled: boolean;
 
   private shouldRun = true;
   private lastPath: string | null = null;
@@ -45,21 +93,40 @@ export class FsCleanupWorker {
     pauseDuration = config.FS_CLEANUP_WORKER_BATCH_PAUSE_DURATION,
     restartPauseDuration = config.FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION,
     initialDelay = 0,
+    usagePath,
+    lowWatermarkPercent = 0,
+    highWatermarkPercent = 0,
+    minFreeBytes = 0,
+    aggressiveMinAgeSeconds = 0,
   }: {
     log: winston.Logger;
     basePath: string;
     dataType: string;
     // Stats are passed to avoid redundant stat calls - use them instead of calling stat again
-    shouldDelete?: (path: string, stats: fs.Stats) => Promise<boolean>;
+    shouldDelete?: (
+      path: string,
+      stats: fs.Stats,
+      ctx: CleanupContext,
+    ) => Promise<boolean>;
     deleteCallback?: (path: string) => Promise<void>;
     batchSize?: number;
     pauseDuration?: number;
     restartPauseDuration?: number;
     initialDelay?: number;
+    // Filesystem to measure for disk pressure (defaults to basePath)
+    usagePath?: string;
+    // Skip cleanup while filesystem usage is below this percent (0 disables)
+    lowWatermarkPercent?: number;
+    // Escalate to aggressive cleanup at/above this percent (0 disables)
+    highWatermarkPercent?: number;
+    // Force aggressive cleanup when free bytes drop below this (0 disables)
+    minFreeBytes?: number;
+    // Never evict data younger than this under aggressive cleanup
+    aggressiveMinAgeSeconds?: number;
   }) {
     this.log = log.child({ class: this.constructor.name, dataType });
     this.shouldDelete =
-      shouldDelete ?? ((_path, _stats) => Promise.resolve(true));
+      shouldDelete ?? ((_path, _stats, _ctx) => Promise.resolve(true));
     this.deleteCallback =
       deleteCallback ?? ((file: string) => fs.promises.unlink(file));
 
@@ -70,6 +137,14 @@ export class FsCleanupWorker {
     this.pauseDuration = pauseDuration;
     this.restartPauseDuration = restartPauseDuration;
     this.initialDelay = initialDelay;
+
+    this.usagePath = usagePath ?? basePath;
+    this.lowWatermarkPercent = lowWatermarkPercent;
+    this.highWatermarkPercent = highWatermarkPercent;
+    this.minFreeBytes = minFreeBytes;
+    this.aggressiveMinAgeSeconds = aggressiveMinAgeSeconds;
+    this.watermarksEnabled =
+      lowWatermarkPercent > 0 || highWatermarkPercent > 0 || minFreeBytes > 0;
   }
 
   async start(): Promise<void> {
@@ -91,8 +166,19 @@ export class FsCleanupWorker {
     this.log.info('Starting worker');
     while (this.shouldRun) {
       try {
-        await this.processBatch();
-        await new Promise((resolve) => setTimeout(resolve, this.pauseDuration));
+        const decision = await this.decideCleanup();
+        if (decision.action === 'skip') {
+          this.log.debug('Below low watermark; skipping cleanup cycle', {
+            usedPercent: decision.usedPercent,
+            lowWatermarkPercent: this.lowWatermarkPercent,
+          });
+          await new Promise((resolve) =>
+            setTimeout(resolve, this.pauseDuration),
+          );
+          continue;
+        }
+        await this.processBatch(decision.ctx, decision.batchSize);
+        await new Promise((resolve) => setTimeout(resolve, decision.pauseMs));
       } catch (error: any) {
         this.log.error('Error processing batch', {
           error: error?.message,
@@ -102,15 +188,117 @@ export class FsCleanupWorker {
     }
   }
 
+  /**
+   * Decide whether and how aggressively to clean this batch based on filesystem
+   * usage. With watermarks disabled this always returns a normal-regime decision
+   * (no statfs call), preserving pure age-based cleanup.
+   */
+  async decideCleanup(): Promise<CleanupDecision> {
+    if (!this.watermarksEnabled) {
+      return {
+        action: 'clean',
+        ctx: NORMAL_CONTEXT,
+        batchSize: this.batchSize,
+        pauseMs: this.pauseDuration,
+      };
+    }
+
+    let usedPercent: number;
+    let freeBytes: number;
+    try {
+      const stats = await fs.promises.statfs(this.usagePath);
+      const total = stats.blocks;
+      const avail = stats.bavail;
+      usedPercent = total > 0 ? ((total - avail) / total) * 100 : 0;
+      freeBytes = stats.bavail * stats.bsize;
+    } catch (error: any) {
+      // If usage can't be read, fall back to normal age-based cleanup rather
+      // than skipping (which could let the disk fill unbounded).
+      this.log.warn('Failed to read filesystem usage; using normal cleanup', {
+        usagePath: this.usagePath,
+        error: error?.message,
+      });
+      return {
+        action: 'clean',
+        ctx: NORMAL_CONTEXT,
+        batchSize: this.batchSize,
+        pauseMs: this.pauseDuration,
+      };
+    }
+
+    metrics.cacheCleanupDiskUsedPercent.set(
+      { data_type: this.dataType },
+      usedPercent,
+    );
+
+    const belowMinFree = this.minFreeBytes > 0 && freeBytes < this.minFreeBytes;
+
+    // Skip regime: plenty of headroom, let the cache grow.
+    if (
+      !belowMinFree &&
+      this.lowWatermarkPercent > 0 &&
+      usedPercent < this.lowWatermarkPercent
+    ) {
+      metrics.cacheCleanupRegime.set({ data_type: this.dataType }, 0);
+      return { action: 'skip', usedPercent };
+    }
+
+    // Aggressive regime: over the high watermark or under the free-space floor.
+    const aggressive =
+      belowMinFree ||
+      (this.highWatermarkPercent > 0 &&
+        usedPercent >= this.highWatermarkPercent);
+    if (aggressive) {
+      // Ramp pressure from 0 at the high watermark to 1 at a full disk; a
+      // breached free-space floor forces maximum pressure.
+      const span = Math.max(1, 100 - this.highWatermarkPercent);
+      const pressure = belowMinFree
+        ? 1
+        : Math.min(1, (usedPercent - this.highWatermarkPercent) / span);
+      metrics.cacheCleanupRegime.set({ data_type: this.dataType }, 2);
+      return {
+        action: 'clean',
+        ctx: {
+          // 1 -> 0 as the disk fills; minAgeSeconds is the hard floor.
+          thresholdScale: 1 - pressure,
+          minAgeSeconds: this.aggressiveMinAgeSeconds,
+          regime: 'aggressive',
+        },
+        batchSize: Math.round(
+          this.batchSize *
+            (1 + pressure * (AGGRESSIVE_MAX_BATCH_MULTIPLIER - 1)),
+        ),
+        pauseMs: Math.max(
+          AGGRESSIVE_MIN_PAUSE_DURATION_MS,
+          Math.round(this.pauseDuration * (1 - pressure)),
+        ),
+      };
+    }
+
+    // Normal regime: between the watermarks.
+    metrics.cacheCleanupRegime.set({ data_type: this.dataType }, 1);
+    return {
+      action: 'clean',
+      ctx: NORMAL_CONTEXT,
+      batchSize: this.batchSize,
+      pauseMs: this.pauseDuration,
+    };
+  }
+
   async stop(): Promise<void> {
     this.log.info('Stopping worker');
     this.shouldRun = false;
   }
 
-  async processBatch(): Promise<void> {
+  async processBatch(
+    ctx: CleanupContext = NORMAL_CONTEXT,
+    batchSize: number = this.batchSize,
+  ): Promise<void> {
     const { batch, keptFileCount, keptFileSize } = await this.getBatch(
       this.basePath,
       this.lastPath,
+      ctx,
+      batchSize,
     );
 
     // Add to running totals
@@ -155,6 +343,8 @@ export class FsCleanupWorker {
   async getBatch(
     basePath: string,
     lastPath: string | null,
+    ctx: CleanupContext = NORMAL_CONTEXT,
+    batchSize: number = this.batchSize,
   ): Promise<{
     batch: string[];
     keptFileCount: number;
@@ -184,7 +374,7 @@ export class FsCleanupWorker {
       files.sort((a, b) => a.name.localeCompare(b.name));
 
       for (const file of files) {
-        if (totalFilesProcessed >= this.batchSize) break;
+        if (totalFilesProcessed >= batchSize) break;
 
         const fullPath = path.join(dir, file.name);
 
@@ -205,7 +395,7 @@ export class FsCleanupWorker {
               // Stat once and reuse for both shouldDelete check and metrics
               try {
                 const stats = await fs.promises.stat(fullPath);
-                if (await this.shouldDelete(fullPath, stats)) {
+                if (await this.shouldDelete(fullPath, stats, ctx)) {
                   batch.push(fullPath);
                   totalFilesProcessed++;
                 } else {
