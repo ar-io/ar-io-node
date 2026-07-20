@@ -75,6 +75,10 @@ export class FsCleanupWorker {
   private minFreeBytes: number;
   private aggressiveMinAgeSeconds: number;
   private watermarksEnabled: boolean;
+  // Hysteresis latch: true once the high watermark (or free-space floor) has
+  // triggered aggressive cleanup, cleared only after usage recovers below the
+  // low watermark.
+  private draining = false;
 
   private shouldRun = true;
   private lastPath: string | null = null;
@@ -233,9 +237,31 @@ export class FsCleanupWorker {
 
     const belowMinFree = this.minFreeBytes > 0 && freeBytes < this.minFreeBytes;
 
-    // Skip regime: plenty of headroom, let the cache grow.
+    // Hysteresis: enter the draining (aggressive) state at the high watermark or
+    // free-space floor, and stay there until usage recovers below the low
+    // watermark. This produces a sawtooth between the watermarks instead of
+    // flapping between normal and aggressive around the high watermark. Without
+    // a low watermark configured there is no drain target, so it reverts as soon
+    // as usage falls below the high watermark.
+    if (
+      this.draining &&
+      !belowMinFree &&
+      (this.lowWatermarkPercent <= 0 || usedPercent < this.lowWatermarkPercent)
+    ) {
+      this.draining = false;
+    }
+    if (
+      belowMinFree ||
+      (this.highWatermarkPercent > 0 &&
+        usedPercent >= this.highWatermarkPercent)
+    ) {
+      this.draining = true;
+    }
+
+    // Skip regime: plenty of headroom and not draining.
     if (
       !belowMinFree &&
+      !this.draining &&
       this.lowWatermarkPercent > 0 &&
       usedPercent < this.lowWatermarkPercent
     ) {
@@ -243,18 +269,18 @@ export class FsCleanupWorker {
       return { action: 'skip', usedPercent };
     }
 
-    // Aggressive regime: over the high watermark or under the free-space floor.
-    const aggressive =
-      belowMinFree ||
-      (this.highWatermarkPercent > 0 &&
-        usedPercent >= this.highWatermarkPercent);
-    if (aggressive) {
-      // Ramp pressure from 0 at the high watermark to 1 at a full disk; a
-      // breached free-space floor forces maximum pressure.
+    // Aggressive regime: draining toward the low watermark. Pressure ramps from
+    // 0 at the high watermark to 1 at a full disk (a breached free-space floor
+    // forces maximum pressure); it is clamped to 0 while draining below the high
+    // watermark, where cleanup runs at the normal threshold but does not skip.
+    if (this.draining) {
       const span = Math.max(1, 100 - this.highWatermarkPercent);
       const pressure = belowMinFree
         ? 1
-        : Math.min(1, (usedPercent - this.highWatermarkPercent) / span);
+        : Math.max(
+            0,
+            Math.min(1, (usedPercent - this.highWatermarkPercent) / span),
+          );
       metrics.cacheCleanupRegime.set({ data_type: this.dataType }, 2);
       return {
         action: 'clean',
@@ -275,7 +301,7 @@ export class FsCleanupWorker {
       };
     }
 
-    // Normal regime: between the watermarks.
+    // Normal regime: between the watermarks and not draining.
     metrics.cacheCleanupRegime.set({ data_type: this.dataType }, 1);
     return {
       action: 'clean',

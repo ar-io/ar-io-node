@@ -104,6 +104,40 @@ describe('FsCleanupWorker.decideCleanup', () => {
     }
   });
 
+  it('stays aggressive until usage recovers below the low watermark (hysteresis)', async () => {
+    let usage = 90;
+    mock.method(fs.promises, 'statfs', async () =>
+      fakeStatfs(usage, Number.MAX_SAFE_INTEGER),
+    );
+    const worker = makeWorker({
+      lowWatermarkPercent: 50,
+      highWatermarkPercent: 80,
+      aggressiveMinAgeSeconds: 3600,
+    });
+
+    // Above the high watermark: aggressive.
+    let decision = await worker.decideCleanup();
+    assert.equal(decision.action, 'clean');
+    assert.equal(
+      decision.action === 'clean' && decision.ctx.regime,
+      'aggressive',
+    );
+
+    // Back between the watermarks: still draining, so still aggressive (no flap).
+    usage = 65;
+    decision = await worker.decideCleanup();
+    assert.equal(decision.action, 'clean');
+    assert.equal(
+      decision.action === 'clean' && decision.ctx.regime,
+      'aggressive',
+    );
+
+    // Recovered below the low watermark: drain complete, resume skipping.
+    usage = 40;
+    decision = await worker.decideCleanup();
+    assert.equal(decision.action, 'skip');
+  });
+
   it('forces maximum pressure when free space is below the floor, even below the low watermark', async () => {
     mockStatfs(10, 500); // usage low, but only 500 free bytes
     const worker = makeWorker({
