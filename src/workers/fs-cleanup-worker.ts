@@ -357,7 +357,7 @@ export class FsCleanupWorker {
     await Promise.all(
       batch.map((file) =>
         limit(async () => {
-          metrics.filesCleanedTotal.inc();
+          metrics.filesCleanedTotal.inc({ data_type: this.dataType });
           return this.deleteCallback(file);
         }),
       ),
