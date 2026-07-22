@@ -595,6 +595,29 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
       // Stats are passed by the worker to avoid redundant stat calls
       shouldDelete: async (path, stats, ctx) => {
         try {
+          // Age-gate before the (per-file, Redis-backed) metadata lookup.
+          // The non-preferred threshold is the shortest retention any tier can
+          // have, so a file younger than it cannot be deleted regardless of
+          // whether it turns out to be preferred. In that case skip the
+          // metadata lookup entirely — this keeps the cleanup walk stat-bound
+          // (not one Redis round-trip per file) for the bulk of a live cache,
+          // which is what lets it keep pace on very large caches.
+          //
+          // This only ever short-circuits to "keep", never to "delete", so it
+          // cannot cause over-eviction. The single behavioral difference vs.
+          // the full check is the rare case where a file's recorded
+          // accessTimestampMs predates its filesystem atime/mtime (e.g. a
+          // non-cache-serve read bumped atime): there the full check might have
+          // deleted it and the gate retains it — the safe direction.
+          const nonPreferredThresholdSeconds = Math.max(
+            contiguousDataCacheCleanupThresholdSeconds * ctx.thresholdScale,
+            ctx.minAgeSeconds,
+          );
+          const statTimeMs = Math.max(stats.atimeMs, stats.mtimeMs);
+          if (statTimeMs > Date.now() - nonPreferredThresholdSeconds * 1000) {
+            return false;
+          }
+
           const hash = path.split('/').pop() ?? '';
           const metadata = await contiguousMetadataStore.get(hash);
 

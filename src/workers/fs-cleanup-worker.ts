@@ -19,6 +19,11 @@ const DELETE_CONCURRENCY = 50;
 const AGGRESSIVE_MAX_BATCH_MULTIPLIER = 4;
 const AGGRESSIVE_MIN_PAUSE_DURATION_MS = 250;
 
+// Emit a walk-progress heartbeat at most this often so a long first pass over a
+// very large cache is observable (visited/kept/deletable + current position)
+// rather than a silent multi-minute black box.
+const PROGRESS_LOG_INTERVAL_MS = 30_000;
+
 /**
  * Per-batch cleanup context passed to a worker's `shouldDelete` policy so it can
  * scale its age thresholds with disk pressure. With watermarks disabled (the
@@ -380,6 +385,8 @@ export class FsCleanupWorker {
     let totalFilesProcessed = 0;
     let keptFileCount = 0;
     let keptFileSize = 0;
+    let visitedFileCount = 0;
+    let lastProgressLogMs = Date.now();
 
     const walk = async (dir: string) => {
       let files;
@@ -418,6 +425,20 @@ export class FsCleanupWorker {
         } else {
           if (lastPath === null || fullPath > lastPath) {
             if (file.isFile()) {
+              visitedFileCount++;
+              const nowMs = Date.now();
+              if (
+                visitedFileCount % 1000 === 0 &&
+                nowMs - lastProgressLogMs >= PROGRESS_LOG_INTERVAL_MS
+              ) {
+                lastProgressLogMs = nowMs;
+                this.log.info('Cleanup walk progress', {
+                  visited: visitedFileCount,
+                  deletable: totalFilesProcessed,
+                  kept: keptFileCount,
+                  currentPath: fullPath,
+                });
+              }
               // Stat once and reuse for both shouldDelete check and metrics
               try {
                 const stats = await fs.promises.stat(fullPath);
