@@ -293,6 +293,28 @@ export interface ChunkPlacementIndex {
 }
 
 /**
+ * Cleanup index for the contiguous data cache. A dedicated per-blob table so the
+ * disk-pressure evictor can query "oldest N in tier T" from the (SSD-backed) DB
+ * instead of walking the HDD-backed cache directory tree. Implemented by
+ * StandaloneSqliteDatabase; the raw bytes live in the FsDataStore keyed by hash.
+ */
+export interface ContiguousDataCacheIndex {
+  saveContiguousDataCacheEntry(entry: {
+    hash: string;
+    size: number;
+    cachedAt: number;
+    tier: number;
+  }): Promise<void>;
+  sumContiguousDataCacheBytes(): Promise<number>;
+  countContiguousDataCacheEntries(): Promise<number>;
+  selectContiguousDataCacheEvictionCandidates(
+    limit: number,
+  ): Promise<{ hash: string; size: number }[]>;
+  // Returns the number of rows deleted (0 if already gone).
+  deleteContiguousDataCacheEntry(hash: string): Promise<number>;
+}
+
+/**
  * Transaction boundary information for a given offset.
  * Contains the essential data needed to locate and validate a chunk
  * within a transaction.

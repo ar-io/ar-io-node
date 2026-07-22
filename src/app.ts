@@ -45,6 +45,8 @@ system.headerFsCacheCleanupWorker?.start();
 
 system.contiguousDataFsCacheCleanupWorker?.start();
 
+system.contiguousDataCacheEvictor?.start();
+
 system.chunkDataFsCacheCleanupWorker?.start();
 
 // ClickHouse streaming pipeline (issue #696). Started before writers so

@@ -22,6 +22,7 @@ import { startChildSpan } from '../tracing.js';
 import {
   ContiguousData,
   ContiguousDataAttributesStore,
+  ContiguousDataCacheIndex,
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
@@ -65,6 +66,10 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private contiguousDataIndex: ContiguousDataIndex;
   private dataAttributesStore: ContiguousDataAttributesStore;
   private dataContentAttributeImporter: DataContentAttributeImporter;
+  // Optional cleanup index: when present, each cache write records its
+  // {hash, size, cachedAt, tier} so the index-driven evictor can reclaim
+  // without a filesystem walk (PE-9131).
+  private contiguousDataCacheIndex?: ContiguousDataCacheIndex;
   private skipCache: boolean;
   private eventEmitter?: EventEmitter;
   private untrustedCacheRetryRate: number;
@@ -82,6 +87,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     contiguousDataIndex,
     dataAttributesStore,
     dataContentAttributeImporter,
+    contiguousDataCacheIndex,
     skipCache = false,
     eventEmitter,
     untrustedCacheRetryRate = 0,
@@ -96,6 +102,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     contiguousDataIndex: ContiguousDataIndex;
     dataAttributesStore: ContiguousDataAttributesStore;
     dataContentAttributeImporter: DataContentAttributeImporter;
+    contiguousDataCacheIndex?: ContiguousDataCacheIndex;
     skipCache?: boolean;
     eventEmitter?: EventEmitter;
     untrustedCacheRetryRate?: number;
@@ -110,6 +117,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.contiguousDataIndex = contiguousDataIndex;
     this.dataAttributesStore = dataAttributesStore;
     this.dataContentAttributeImporter = dataContentAttributeImporter;
+    this.contiguousDataCacheIndex = contiguousDataCacheIndex;
     this.skipCache = skipCache;
     this.eventEmitter = eventEmitter;
     this.untrustedCacheRetryRate = untrustedCacheRetryRate;
@@ -168,6 +176,34 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     }
 
     return undefined;
+  }
+
+  // Record a freshly-cached blob in the cleanup index (best-effort). Tier 1 =
+  // preferred ArNS (evicted last), tier 0 = general. No-op when the index is
+  // not wired (feature disabled).
+  private recordCacheIndexEntry(
+    hash: string,
+    size: number,
+    requestAttributes?: RequestAttributes,
+  ): void {
+    if (this.contiguousDataCacheIndex === undefined) {
+      return;
+    }
+    const priority = this.calculateVerificationPriority(requestAttributes);
+    const tier = priority === verificationPriorities.preferredArns ? 1 : 0;
+    this.contiguousDataCacheIndex
+      .saveContiguousDataCacheEntry({
+        hash,
+        size,
+        cachedAt: currentUnixTimestamp(),
+        tier,
+      })
+      .catch((error: any) => {
+        this.log.debug('Failed to record cache index entry', {
+          hash,
+          message: error?.message,
+        });
+      });
   }
 
   private async updateMetadataCache({
@@ -798,6 +834,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     span.setAttribute('cache.operation.stored', true);
 
                     this.log.info('Successfully cached data', { id, hash });
+                    this.recordCacheIndexEntry(
+                      hash,
+                      data.size,
+                      requestAttributes,
+                    );
 
                     this.eventEmitter?.emit(events.DATA_CACHED, {
                       id,
@@ -878,6 +919,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                       id,
                       hash,
                     });
+                    this.recordCacheIndexEntry(
+                      hash,
+                      data.size,
+                      requestAttributes,
+                    );
                     try {
                       const verificationPriority =
                         this.calculateVerificationPriority(requestAttributes);

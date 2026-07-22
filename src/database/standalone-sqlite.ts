@@ -1154,6 +1154,46 @@ export class StandaloneSqliteDatabaseWorker {
     return row.pending_bytes as number;
   }
 
+  // --- Contiguous data cache cleanup index (data.db) ---
+
+  saveContiguousDataCacheEntry(entry: {
+    hash: string;
+    size: number;
+    cachedAt: number;
+    tier: number;
+  }) {
+    this.stmts.data.saveContiguousDataCacheEntry.run({
+      hash: entry.hash,
+      size: entry.size,
+      cached_at: entry.cachedAt,
+      tier: entry.tier,
+    });
+  }
+
+  sumContiguousDataCacheBytes(): number {
+    const row: any = this.stmts.data.sumContiguousDataCacheBytes.get();
+    return row.total_bytes as number;
+  }
+
+  countContiguousDataCacheEntries(): number {
+    const row: any = this.stmts.data.countContiguousDataCacheEntries.get();
+    return row.count as number;
+  }
+
+  selectContiguousDataCacheEvictionCandidates(
+    limit: number,
+  ): { hash: string; size: number }[] {
+    const rows =
+      this.stmts.data.selectContiguousDataCacheEvictionCandidates.all({
+        limit,
+      });
+    return rows.map((row: any) => ({ hash: row.hash, size: row.size }));
+  }
+
+  deleteContiguousDataCacheEntry(hash: string): number {
+    return this.stmts.data.deleteContiguousDataCacheEntry.run({ hash }).changes;
+  }
+
   getTxByOffset(offset: number): TxByOffsetResult {
     const result = this.stmts.core.selectStableTransactionOffsetById.get({
       offset,
@@ -3817,6 +3857,37 @@ export class StandaloneSqliteDatabase
     return this.queueRead('data', 'sumPendingChunkBytes', undefined);
   }
 
+  saveContiguousDataCacheEntry(entry: {
+    hash: string;
+    size: number;
+    cachedAt: number;
+    tier: number;
+  }): Promise<void> {
+    return this.queueWrite('data', 'saveContiguousDataCacheEntry', [entry]);
+  }
+
+  sumContiguousDataCacheBytes(): Promise<number> {
+    return this.queueRead('data', 'sumContiguousDataCacheBytes', undefined);
+  }
+
+  countContiguousDataCacheEntries(): Promise<number> {
+    return this.queueRead('data', 'countContiguousDataCacheEntries', undefined);
+  }
+
+  selectContiguousDataCacheEvictionCandidates(
+    limit: number,
+  ): Promise<{ hash: string; size: number }[]> {
+    return this.queueRead(
+      'data',
+      'selectContiguousDataCacheEvictionCandidates',
+      [limit],
+    );
+  }
+
+  deleteContiguousDataCacheEntry(hash: string): Promise<number> {
+    return this.queueWrite('data', 'deleteContiguousDataCacheEntry', [hash]);
+  }
+
   async saveDataItem(
     item: NormalizedDataItem,
     isOptimistic = false,
@@ -4399,6 +4470,26 @@ if (!isMainThread) {
           break;
         case 'sumPendingChunkBytes':
           parentPort?.postMessage(worker.sumPendingChunkBytes());
+          break;
+        case 'saveContiguousDataCacheEntry':
+          worker.saveContiguousDataCacheEntry(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'sumContiguousDataCacheBytes':
+          parentPort?.postMessage(worker.sumContiguousDataCacheBytes());
+          break;
+        case 'countContiguousDataCacheEntries':
+          parentPort?.postMessage(worker.countContiguousDataCacheEntries());
+          break;
+        case 'selectContiguousDataCacheEvictionCandidates':
+          parentPort?.postMessage(
+            worker.selectContiguousDataCacheEvictionCandidates(args[0]),
+          );
+          break;
+        case 'deleteContiguousDataCacheEntry':
+          parentPort?.postMessage(
+            worker.deleteContiguousDataCacheEntry(args[0]),
+          );
           break;
         case 'countConfirmedDataRoots':
           parentPort?.postMessage(worker.countConfirmedDataRoots());

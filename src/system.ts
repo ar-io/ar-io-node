@@ -80,6 +80,7 @@ import {
   DataItemRootIndex,
   ChainIndex,
   ChainOffsetIndex,
+  ContiguousDataCacheIndex,
   ContiguousDataIndex,
   ContiguousDataSource,
   DataItemIndexWriter,
@@ -96,6 +97,7 @@ import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
 import { SymlinkCleanupWorker } from './workers/symlink-cleanup-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
 import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
+import { ContiguousDataCacheEvictor } from './workers/contiguous-data-cache-evictor.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
@@ -1373,6 +1375,12 @@ const contiguousDataStore = new FsDataStore({
   baseDir: 'data/contiguous',
 });
 
+// Cleanup index handle (the SQLite db) wired into the caches only when the
+// index feature is enabled (PE-9131). db structurally satisfies
+// ContiguousDataCacheIndex via the cache-index methods.
+const contiguousDataCacheIndex: ContiguousDataCacheIndex | undefined =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX ? db : undefined;
+
 export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource:
@@ -1395,6 +1403,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   contiguousDataIndex,
   dataAttributesStore,
   dataContentAttributeImporter,
+  contiguousDataCacheIndex,
   skipCache: config.SKIP_DATA_CACHE,
   eventEmitter,
   untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
@@ -1414,11 +1423,26 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   contiguousDataIndex,
   dataAttributesStore,
   dataContentAttributeImporter,
+  contiguousDataCacheIndex,
   skipCache: config.SKIP_DATA_CACHE,
   eventEmitter,
   untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
   trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
 });
+
+// Index-driven contiguous cache evictor (PE-9131): reclaims by querying the
+// SQLite cleanup index for the oldest blobs under disk pressure, instead of
+// walking the (HDD-backed) cache directory tree. Uses the same watermark
+// thresholds as the filesystem cleanup worker.
+export const contiguousDataCacheEvictor =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX
+    ? new ContiguousDataCacheEvictor({
+        log,
+        dataStore: contiguousDataStore,
+        cacheIndex: db,
+        usagePath: 'data/contiguous',
+      })
+    : undefined;
 
 export const dataItemIndexer = new DataItemIndexer({
   log,
@@ -1887,6 +1911,7 @@ export const shutdown = async (exitCode = 0) => {
     await webhookEmitter.stop();
     await headerFsCacheCleanupWorker?.stop();
     await contiguousDataFsCacheCleanupWorker?.stop();
+    await contiguousDataCacheEvictor?.stop();
     await chunkDataFsCacheCleanupWorker?.stop();
     symlinkCleanupWorker?.stop();
     await dataVerificationWorker?.stop();

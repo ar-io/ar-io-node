@@ -1188,6 +1188,27 @@ export const cacheCleanupRegime = new promClient.Gauge({
   labelNames: ['data_type'] as const,
 });
 
+export const cacheIndexEvictedTotal = new promClient.Counter({
+  name: 'cache_index_evicted_total',
+  help: 'Blobs evicted by the index-driven contiguous cache evictor',
+  labelNames: ['reason'] as const,
+});
+
+export const cacheIndexEvictedBytesTotal = new promClient.Counter({
+  name: 'cache_index_evicted_bytes_total',
+  help: 'Bytes reclaimed by the index-driven contiguous cache evictor',
+});
+
+export const cacheIndexEntriesGauge = new promClient.Gauge({
+  name: 'cache_index_entries',
+  help: 'Current row count of the contiguous data cache cleanup index',
+});
+
+export const cacheIndexBytesGauge = new promClient.Gauge({
+  name: 'cache_index_bytes',
+  help: 'Sum of blob sizes tracked by the contiguous data cache cleanup index',
+});
+
 //
 // Circuit breaker metrics
 //

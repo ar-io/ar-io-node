@@ -2500,6 +2500,26 @@ export const CONTIGUOUS_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS =
     `${60 * 60}`, // 1 hour
   );
 
+// Contiguous data cache cleanup INDEX (PE-9131). When enabled, each cached blob
+// records {hash, size, cached_at, tier} in a SQLite index (data.db) at cache
+// time, and a disk-pressure evictor reclaims by querying "oldest N in tier T"
+// from the (SSD-backed) DB instead of walking the HDD-backed cache tree. Uses
+// the same LOW/HIGH_WATERMARK_PERCENT + MIN_FREE_BYTES thresholds above.
+// Complements/replaces the filesystem-walk cleanup worker on large HDD caches.
+export const ENABLE_CONTIGUOUS_DATA_CACHE_INDEX =
+  env.varOrDefault('ENABLE_CONTIGUOUS_DATA_CACHE_INDEX', 'false') === 'true';
+
+// How often the index-driven evictor checks disk pressure (ms).
+export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
+  +env.varOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS',
+    '60000',
+  );
+
+// Max index rows evicted (and blobs unlinked) per batch within a sweep.
+export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
+  +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', '1000');
+
 // The set of full (not base or undernames) ArNS names to preferentially cache
 export const PREFERRED_ARNS_NAMES = new Set(
   env.varOrDefault('PREFERRED_ARNS_NAMES', '').split(','),
