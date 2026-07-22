@@ -373,6 +373,24 @@ static_resources:
                             retry_policy:
                               retry_on: 'reset'
                               num_retries: 1
+                        #! /raw/<id> serves data inline on the apex host (it is
+                        #! never sandbox-redirected, unlike bare /<id>) and can
+                        #! stream GiB-scale objects. It is the same core data
+                        #! served by the ARNS/sandbox vhost's '/' route, just on
+                        #! a different host, so mirror that route exactly — same
+                        #! timeout and retry policy. timeout: 0s disables Envoy's
+                        #! default 15s route timeout, an absolute cap on total
+                        #! request time that otherwise RSTs large downloads
+                        #! mid-stream (curl 92 / HTTP2 CANCEL). The '/' catch-all
+                        #! below keeps the finite default as a safety cap for
+                        #! redirects and small app endpoints.
+                        - match: { prefix: '/raw/' }
+                          route:
+                            cluster: ario_gateways
+                            timeout: 0s
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              num_retries: 5
                         - match: { prefix: '/' }
                           route:
                             cluster: ario_gateways
