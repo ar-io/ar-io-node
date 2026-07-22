@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { before, describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 
 import { createTestLogger } from '../../test/test-logger.js';
 import { ContiguousDataCacheIndex } from '../types.js';
@@ -22,6 +22,10 @@ const HASH_C = 'C'.repeat(43);
 
 describe('ContiguousDataCacheReconciler', () => {
   let baseDir: string;
+
+  after(async () => {
+    await fs.promises.rm(baseDir, { recursive: true, force: true });
+  });
 
   before(async () => {
     baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'fscw-recon-'));

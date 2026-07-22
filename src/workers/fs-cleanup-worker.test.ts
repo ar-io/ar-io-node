@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, before, describe, it, mock } from 'node:test';
+import { after, afterEach, before, describe, it, mock } from 'node:test';
 
 import { createTestLogger } from '../../test/test-logger.js';
 import { CleanupContext, FsCleanupWorker } from './fs-cleanup-worker.js';
@@ -176,6 +176,10 @@ describe('FsCleanupWorker.getBatch', () => {
     await fs.promises.writeFile(path.join(dir, 'file-a'), 'hello');
   });
 
+  after(async () => {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  });
+
   afterEach(() => {
     mock.restoreAll();
   });
@@ -202,6 +206,10 @@ describe('FsCleanupWorker.getBatch', () => {
 describe('FsCleanupWorker.getBatch parallel walk', () => {
   let root: string;
   let files: string[];
+
+  after(async () => {
+    await fs.promises.rm(root, { recursive: true, force: true });
+  });
 
   before(async () => {
     root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'fscw-par-'));
