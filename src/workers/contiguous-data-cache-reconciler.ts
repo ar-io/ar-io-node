@@ -38,6 +38,9 @@ export class ContiguousDataCacheReconciler {
   private baseDir: string;
   private batchSize: number;
   private walkConcurrency: number;
+  // Durable resume checkpoint: the name of the last fully-completed top-level
+  // shard directory. Survives restarts so a bounce re-does at most one shard.
+  private checkpointPath: string;
 
   private running = false;
   private buffer: {
@@ -56,18 +59,68 @@ export class ContiguousDataCacheReconciler {
     baseDir,
     batchSize = config.CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE,
     walkConcurrency = config.FS_CLEANUP_WORKER_WALK_CONCURRENCY,
+    checkpointPath,
   }: {
     log: Logger;
     cacheIndex: ContiguousDataCacheIndex;
     baseDir: string;
     batchSize?: number;
     walkConcurrency?: number;
+    checkpointPath?: string;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.cacheIndex = cacheIndex;
     this.baseDir = baseDir;
     this.batchSize = Math.max(1, batchSize);
     this.walkConcurrency = Math.max(1, walkConcurrency);
+    // Default beside (not under) baseDir so the checkpoint file is never itself
+    // walked/indexed.
+    this.checkpointPath =
+      checkpointPath ??
+      path.join(baseDir, '..', '.cache-index-backfill-checkpoint');
+  }
+
+  private async loadCheckpoint(): Promise<string | null> {
+    try {
+      const value = (
+        await fs.promises.readFile(this.checkpointPath, 'utf8')
+      ).trim();
+      return value.length > 0 ? value : null;
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') {
+        this.log.debug('Backfill: could not read checkpoint', {
+          path: this.checkpointPath,
+          error: error?.message,
+        });
+      }
+      return null;
+    }
+  }
+
+  private async saveCheckpoint(name: string): Promise<void> {
+    // Atomic write (temp + rename) so a crash can't leave a torn checkpoint.
+    const tmp = `${this.checkpointPath}.tmp`;
+    try {
+      await fs.promises.writeFile(tmp, name);
+      await fs.promises.rename(tmp, this.checkpointPath);
+    } catch (error: any) {
+      this.log.debug('Backfill: could not persist checkpoint', {
+        name,
+        error: error?.message,
+      });
+    }
+  }
+
+  private async clearCheckpoint(): Promise<void> {
+    try {
+      await fs.promises.unlink(this.checkpointPath);
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') {
+        this.log.debug('Backfill: could not clear checkpoint', {
+          error: error?.message,
+        });
+      }
+    }
   }
 
   async stop(): Promise<void> {
@@ -183,12 +236,65 @@ export class ContiguousDataCacheReconciler {
     };
 
     try {
-      await walk(this.baseDir);
+      const resumeFrom = await this.loadCheckpoint();
+      if (resumeFrom !== null) {
+        this.log.info('Resuming cache index backfill from checkpoint', {
+          resumeFrom,
+        });
+      }
+
+      // Top-level shard directories are the checkpoint granularity: each is
+      // walked (in parallel) to completion, then recorded, so a restart re-does
+      // at most one shard instead of the whole tree. Only the top level needs a
+      // stable order for the resume comparison; within a shard, order is
+      // irrelevant. Use codepoint comparison consistently for both sort and skip.
+      let shards: fs.Dirent[];
+      try {
+        shards = (
+          await fs.promises.readdir(this.baseDir, { withFileTypes: true })
+        )
+          .filter((entry) => entry.isDirectory())
+          .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      } catch (error: any) {
+        this.log.warn('Backfill: base dir not accessible', {
+          baseDir: this.baseDir,
+          code: error?.code,
+        });
+        return;
+      }
+
+      let completed = true;
+      for (const shard of shards) {
+        if (!this.running) {
+          completed = false;
+          break;
+        }
+        // Skip shards already completed in a prior run.
+        if (resumeFrom !== null && shard.name <= resumeFrom) {
+          continue;
+        }
+        await walk(path.join(this.baseDir, shard.name));
+        // Flush this shard's remaining rows, then advance the checkpoint — but
+        // only if the shard finished cleanly (not aborted mid-walk by stop()),
+        // so we never record a partially-processed shard as done.
+        await this.flush();
+        if (this.running) {
+          await this.saveCheckpoint(shard.name);
+        } else {
+          completed = false;
+        }
+      }
+
       await this.flush();
+      if (completed && this.running) {
+        // Full pass done: clear the checkpoint so a future enable starts fresh.
+        await this.clearCheckpoint();
+      }
       this.log.info('Cache index backfill complete', {
         visited: this.visited,
         backfilled: this.backfilled,
         aborted: !this.running,
+        completed,
       });
     } catch (error: any) {
       this.log.warn('Cache index backfill failed', { error: error?.message });

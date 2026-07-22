@@ -25,6 +25,7 @@ describe('ContiguousDataCacheReconciler', () => {
 
   after(async () => {
     await fs.promises.rm(baseDir, { recursive: true, force: true });
+    await fs.promises.rm(`${baseDir}.ckpt`, { force: true });
   });
 
   before(async () => {
@@ -67,7 +68,9 @@ describe('ContiguousDataCacheReconciler', () => {
     return { cacheIndex, inserted, batches };
   }
 
-  it('backfills every on-disk blob and ignores non-hash files', async () => {
+  const checkpointPath = () => `${baseDir}.ckpt`;
+
+  it('backfills every on-disk blob, ignores non-hash files, and clears the checkpoint on completion', async () => {
     const { cacheIndex, inserted, batches } = makeIndex();
     const reconciler = new ContiguousDataCacheReconciler({
       log,
@@ -75,6 +78,7 @@ describe('ContiguousDataCacheReconciler', () => {
       baseDir,
       batchSize: 2, // force multiple flushes
       walkConcurrency: 4,
+      checkpointPath: checkpointPath(),
     });
     await reconciler.run();
 
@@ -90,5 +94,28 @@ describe('ContiguousDataCacheReconciler', () => {
     }
     // batchSize=2 with 3 blobs -> flushed in more than one batch.
     assert.ok(batches.length >= 2, `batches=${JSON.stringify(batches)}`);
+    // A fully-completed pass clears its checkpoint.
+    assert.equal(fs.existsSync(checkpointPath()), false);
+  });
+
+  it('resumes from a checkpoint, skipping already-completed shards', async () => {
+    // Pretend shard "AA" completed in a prior run.
+    await fs.promises.writeFile(checkpointPath(), 'AA');
+    const { cacheIndex, inserted } = makeIndex();
+    const reconciler = new ContiguousDataCacheReconciler({
+      log,
+      cacheIndex,
+      baseDir,
+      batchSize: 2,
+      walkConcurrency: 4,
+      checkpointPath: checkpointPath(),
+    });
+    await reconciler.run();
+
+    // AA/* (HASH_A, HASH_B) skipped; only BB/* (HASH_C) is backfilled.
+    assert.deepEqual(
+      inserted.map((e) => e.hash),
+      [HASH_C],
+    );
   });
 });
