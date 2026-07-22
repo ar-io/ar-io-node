@@ -198,3 +198,70 @@ describe('FsCleanupWorker.getBatch', () => {
     assert.deepEqual(seen, ctx);
   });
 });
+
+describe('FsCleanupWorker.getBatch parallel walk', () => {
+  let root: string;
+  let files: string[];
+
+  before(async () => {
+    root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'fscw-par-'));
+    await fs.promises.mkdir(path.join(root, 'aa'));
+    await fs.promises.mkdir(path.join(root, 'bb'));
+    await fs.promises.writeFile(path.join(root, 'aa', 'f1'), 'x');
+    await fs.promises.writeFile(path.join(root, 'aa', 'f2'), 'x');
+    await fs.promises.writeFile(path.join(root, 'bb', 'f3'), 'x');
+    await fs.promises.writeFile(path.join(root, 'bb', 'f4'), 'x');
+    await fs.promises.writeFile(path.join(root, 'zz'), 'x'); // file at root level
+    files = [
+      path.join(root, 'aa', 'f1'),
+      path.join(root, 'aa', 'f2'),
+      path.join(root, 'bb', 'f3'),
+      path.join(root, 'bb', 'f4'),
+      path.join(root, 'zz'),
+    ];
+  });
+
+  const deleteAll = async () => true;
+
+  it('returns deletables in sorted order across the tree (concurrency > 1)', async () => {
+    const worker = makeWorker({
+      basePath: root,
+      shouldDelete: deleteAll,
+      walkConcurrency: 4,
+    });
+    const { batch } = await worker.getBatch(root, root);
+    assert.deepEqual(batch, files);
+  });
+
+  it('respects the batchSize budget', async () => {
+    const worker = makeWorker({
+      basePath: root,
+      shouldDelete: deleteAll,
+      walkConcurrency: 4,
+    });
+    const { batch } = await worker.getBatch(root, root, undefined, 3);
+    assert.deepEqual(batch, files.slice(0, 3));
+  });
+
+  it('resumes after lastPath without skipping or repeating', async () => {
+    const worker = makeWorker({
+      basePath: root,
+      shouldDelete: deleteAll,
+      walkConcurrency: 4,
+    });
+    // Resume just after the 3rd file (bb/f3) -> should return exactly f4, zz.
+    const { batch } = await worker.getBatch(root, files[2]);
+    assert.deepEqual(batch, files.slice(3));
+  });
+
+  it('counts kept files when nothing is deletable', async () => {
+    const worker = makeWorker({
+      basePath: root,
+      shouldDelete: async () => false,
+      walkConcurrency: 4,
+    });
+    const { batch, keptFileCount } = await worker.getBatch(root, root);
+    assert.equal(batch.length, 0);
+    assert.equal(keptFileCount, files.length);
+  });
+});

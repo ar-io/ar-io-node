@@ -72,6 +72,7 @@ export class FsCleanupWorker {
   private pauseDuration: number;
   private restartPauseDuration: number;
   private initialDelay: number;
+  private walkConcurrency: number;
 
   // Disk-pressure watermarks (all opt-in; disabled => pure age-based cleanup)
   private usagePath: string;
@@ -102,6 +103,7 @@ export class FsCleanupWorker {
     pauseDuration = config.FS_CLEANUP_WORKER_BATCH_PAUSE_DURATION,
     restartPauseDuration = config.FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION,
     initialDelay = 0,
+    walkConcurrency = config.FS_CLEANUP_WORKER_WALK_CONCURRENCY,
     usagePath,
     lowWatermarkPercent = 0,
     highWatermarkPercent = 0,
@@ -122,6 +124,8 @@ export class FsCleanupWorker {
     pauseDuration?: number;
     restartPauseDuration?: number;
     initialDelay?: number;
+    // Max concurrent readdir/stat syscalls during the tree walk
+    walkConcurrency?: number;
     // Filesystem to measure for disk pressure (defaults to basePath)
     usagePath?: string;
     // Skip cleanup while filesystem usage is below this percent (0 disables)
@@ -146,6 +150,7 @@ export class FsCleanupWorker {
     this.pauseDuration = pauseDuration;
     this.restartPauseDuration = restartPauseDuration;
     this.initialDelay = initialDelay;
+    this.walkConcurrency = Math.max(1, walkConcurrency);
 
     this.usagePath = usagePath ?? basePath;
     this.lowWatermarkPercent = lowWatermarkPercent;
@@ -381,91 +386,122 @@ export class FsCleanupWorker {
     keptFileCount: number;
     keptFileSize: number;
   }> {
-    const batch: string[] = [];
-    let totalFilesProcessed = 0;
     let keptFileCount = 0;
     let keptFileSize = 0;
     let visitedFileCount = 0;
     let lastProgressLogMs = Date.now();
 
-    const walk = async (dir: string) => {
-      let files;
+    // Shared limiter caps total concurrent readdir/stat syscalls across the
+    // entire (recursive) walk, so parallel traversal hides per-directory I/O
+    // latency on large, deeply-sharded caches without overwhelming the
+    // filesystem or exhausting file descriptors.
+    const limit = pLimit(this.walkConcurrency);
+
+    // Walk a subtree and return its deletable file paths in sorted order, up to
+    // `budget` entries. Kept-file accounting accumulates via closure. Ordering
+    // is preserved end to end — entries are sorted, sibling work is committed in
+    // sorted order, and each subtree's results are spliced in at its position —
+    // so the caller's lastPath resume (batch[last] = greatest deletable) stays
+    // correct despite the concurrency.
+    const walk = async (dir: string, budget: number): Promise<string[]> => {
+      let entries: fs.Dirent[];
       try {
-        files = await fs.promises.readdir(dir, { withFileTypes: true });
+        entries = await limit(() =>
+          fs.promises.readdir(dir, { withFileTypes: true }),
+        );
       } catch (error: any) {
-        // Directory doesn't exist or isn't accessible - skip silently
-        if (error.code === 'ENOENT' || error.code === 'EACCES') {
-          this.log.debug('Directory not accessible, skipping', {
-            dir,
-            code: error.code,
-          });
-          return;
-        }
-        throw error;
+        // A single unreadable directory must not abort the whole parallel sweep.
+        this.log.debug('Directory not accessible, skipping', {
+          dir,
+          code: error.code,
+        });
+        return [];
       }
 
-      files.sort((a, b) => a.name.localeCompare(b.name));
+      entries.sort((a, b) => a.name.localeCompare(b.name));
 
-      for (const file of files) {
-        if (totalFilesProcessed >= batchSize) break;
+      const del: string[] = [];
+      // Process the sorted entries in windows so we can stop early once the
+      // budget is met instead of launching work for the entire (possibly huge)
+      // directory. Actual syscall concurrency is governed by the shared limiter.
+      for (
+        let i = 0;
+        i < entries.length && del.length < budget;
+        i += this.walkConcurrency
+      ) {
+        const remaining = budget - del.length;
+        const window = entries.slice(i, i + this.walkConcurrency);
+        const results = await Promise.all(
+          window.map(
+            async (file): Promise<{ del?: string[]; keptSize?: number }> => {
+              if (file.name === '.gitkeep') return {};
+              const fullPath = path.join(dir, file.name);
 
-        const fullPath = path.join(dir, file.name);
-
-        // Skip .gitkeep files
-        if (file.name === '.gitkeep') {
-          continue;
-        }
-
-        if (
-          lastPath !== null &&
-          (lastPath.startsWith(fullPath) || fullPath >= lastPath) &&
-          file.isDirectory()
-        ) {
-          await walk(fullPath);
-        } else {
-          if (lastPath === null || fullPath > lastPath) {
-            if (file.isFile()) {
-              visitedFileCount++;
-              const nowMs = Date.now();
               if (
-                visitedFileCount % 1000 === 0 &&
-                nowMs - lastProgressLogMs >= PROGRESS_LOG_INTERVAL_MS
+                lastPath !== null &&
+                (lastPath.startsWith(fullPath) || fullPath >= lastPath) &&
+                file.isDirectory()
               ) {
-                lastProgressLogMs = nowMs;
-                this.log.info('Cleanup walk progress', {
-                  visited: visitedFileCount,
-                  deletable: totalFilesProcessed,
-                  kept: keptFileCount,
-                  currentPath: fullPath,
-                });
+                return { del: await walk(fullPath, remaining) };
               }
-              // Stat once and reuse for both shouldDelete check and metrics
-              try {
-                const stats = await fs.promises.stat(fullPath);
-                if (await this.shouldDelete(fullPath, stats, ctx)) {
-                  batch.push(fullPath);
-                  totalFilesProcessed++;
-                } else {
-                  // Track kept files using already-fetched stats
-                  keptFileCount++;
-                  keptFileSize += stats.size;
-                }
-              } catch (error: any) {
-                // File may have been deleted between readdir and stat, skip
-                if (error.code !== 'ENOENT') {
-                  this.log.debug('Error checking file', {
-                    path: fullPath,
-                    error: error.message,
-                  });
+
+              if ((lastPath === null || fullPath > lastPath) && file.isFile()) {
+                try {
+                  const stats = await limit(() => fs.promises.stat(fullPath));
+                  visitedFileCount++;
+                  const nowMs = Date.now();
+                  if (
+                    visitedFileCount % 1000 === 0 &&
+                    nowMs - lastProgressLogMs >= PROGRESS_LOG_INTERVAL_MS
+                  ) {
+                    lastProgressLogMs = nowMs;
+                    this.log.info('Cleanup walk progress', {
+                      visited: visitedFileCount,
+                      deletable: del.length,
+                      kept: keptFileCount,
+                      currentPath: fullPath,
+                    });
+                  }
+                  if (await this.shouldDelete(fullPath, stats, ctx)) {
+                    return { del: [fullPath] };
+                  }
+                  return { keptSize: stats.size };
+                } catch (error: any) {
+                  // File may have been deleted between readdir and stat, skip
+                  if (error.code !== 'ENOENT') {
+                    this.log.debug('Error checking file', {
+                      path: fullPath,
+                      error: error.message,
+                    });
+                  }
+                  return {};
                 }
               }
-            }
+
+              return {};
+            },
+          ),
+        );
+
+        // Commit in sorted (window) order to preserve the global ordering.
+        for (const r of results) {
+          if (r.del !== undefined && r.del.length > 0) {
+            del.push(...r.del);
+          } else if (r.keptSize !== undefined) {
+            keptFileCount++;
+            keptFileSize += r.keptSize;
           }
         }
       }
+
+      return del.length > budget ? del.slice(0, budget) : del;
     };
 
-    await walk(basePath);
+    const deletables = await walk(basePath, batchSize);
+    const batch =
+      deletables.length > batchSize
+        ? deletables.slice(0, batchSize)
+        : deletables;
 
     return { batch, keptFileCount, keptFileSize };
   }

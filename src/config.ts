@@ -2004,6 +2004,15 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
   `${1000 * 60 * 60 * 4}`, // every 4 hours
 );
 
+// Max concurrent readdir/stat syscalls during the cleanup tree walk. The walk is
+// dominated by directory-traversal I/O latency on large, deeply-sharded caches;
+// raising this hides that latency (parallel traversal) at the cost of more
+// concurrent filesystem load. Lower it if the walk contends with request I/O.
+export const FS_CLEANUP_WORKER_WALK_CONCURRENCY = +env.varOrDefault(
+  'FS_CLEANUP_WORKER_WALK_CONCURRENCY',
+  '64',
+);
+
 // Cache TTL for the SQLite worker's getDebugInfo response. The /ar-io/admin/debug
 // endpoint runs ~8 unfiltered COUNT(*) scans plus aggregation across new and
 // stable data items, which can monopolize the single debug worker thread when
