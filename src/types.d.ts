@@ -305,6 +305,10 @@ export interface ContiguousDataCacheIndex {
     cachedAt: number;
     tier: number;
   }): Promise<void>;
+  // Batch backfill: insert rows only if absent (never clobbers live entries).
+  insertContiguousDataCacheEntriesIfAbsent(
+    entries: { hash: string; size: number; cachedAt: number; tier: number }[],
+  ): Promise<void>;
   sumContiguousDataCacheBytes(): Promise<number>;
   countContiguousDataCacheEntries(): Promise<number>;
   selectContiguousDataCacheEvictionCandidates(

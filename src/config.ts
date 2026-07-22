@@ -2520,6 +2520,19 @@ export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
 export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
   +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', '1000');
 
+// One-time backfill/reconciler: on startup, walk the existing on-disk cache
+// once and seed index rows for blobs not already tracked (insert-if-absent, so
+// live entries are untouched). Needed to adopt a pre-existing cache that
+// predates the index; enable once, then disable. The walk is HDD-bound and runs
+// in the background without blocking startup.
+export const ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL =
+  env.varOrDefault('ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL', 'false') ===
+  'true';
+
+// Rows buffered per backfill insert transaction.
+export const CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE =
+  +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE', '2000');
+
 // The set of full (not base or undernames) ArNS names to preferentially cache
 export const PREFERRED_ARNS_NAMES = new Set(
   env.varOrDefault('PREFERRED_ARNS_NAMES', '').split(','),

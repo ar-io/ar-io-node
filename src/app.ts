@@ -47,6 +47,9 @@ system.contiguousDataFsCacheCleanupWorker?.start();
 
 system.contiguousDataCacheEvictor?.start();
 
+// One-time cache index backfill (background; does not block startup).
+void system.contiguousDataCacheReconciler?.run();
+
 system.chunkDataFsCacheCleanupWorker?.start();
 
 // ClickHouse streaming pipeline (issue #696). Started before writers so

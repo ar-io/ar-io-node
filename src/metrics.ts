@@ -1209,6 +1209,11 @@ export const cacheIndexBytesGauge = new promClient.Gauge({
   help: 'Sum of blob sizes tracked by the contiguous data cache cleanup index',
 });
 
+export const cacheIndexBackfilledTotal = new promClient.Counter({
+  name: 'cache_index_backfilled_total',
+  help: 'On-disk blobs seeded into the cache cleanup index by the reconciler',
+});
+
 //
 // Circuit breaker metrics
 //

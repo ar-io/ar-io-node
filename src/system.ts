@@ -98,6 +98,7 @@ import { SymlinkCleanupWorker } from './workers/symlink-cleanup-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
 import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
 import { ContiguousDataCacheEvictor } from './workers/contiguous-data-cache-evictor.js';
+import { ContiguousDataCacheReconciler } from './workers/contiguous-data-cache-reconciler.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
@@ -1444,6 +1445,20 @@ export const contiguousDataCacheEvictor =
       })
     : undefined;
 
+// One-time backfill/reconciler to adopt a pre-existing on-disk cache into the
+// index. Runs (in the background) only when both the index and backfill flags
+// are set. The blob tree lives at data/contiguous/data (FsDataStore shards
+// blobs under baseDir/data/<hh>/<hh>/<hash>).
+export const contiguousDataCacheReconciler =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX &&
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL
+    ? new ContiguousDataCacheReconciler({
+        log,
+        cacheIndex: db,
+        baseDir: 'data/contiguous/data',
+      })
+    : undefined;
+
 export const dataItemIndexer = new DataItemIndexer({
   log,
   eventEmitter,
@@ -1912,6 +1927,7 @@ export const shutdown = async (exitCode = 0) => {
     await headerFsCacheCleanupWorker?.stop();
     await contiguousDataFsCacheCleanupWorker?.stop();
     await contiguousDataCacheEvictor?.stop();
+    await contiguousDataCacheReconciler?.stop();
     await chunkDataFsCacheCleanupWorker?.stop();
     symlinkCleanupWorker?.stop();
     await dataVerificationWorker?.stop();

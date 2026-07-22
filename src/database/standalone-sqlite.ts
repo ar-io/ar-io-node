@@ -1170,6 +1170,27 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
+  insertContiguousDataCacheEntriesIfAbsent(
+    entries: { hash: string; size: number; cachedAt: number; tier: number }[],
+  ) {
+    const stmt = this.stmts.data.insertContiguousDataCacheEntryIfAbsent;
+    const txn = this.dbs.data.transaction(
+      (
+        rows: { hash: string; size: number; cachedAt: number; tier: number }[],
+      ) => {
+        for (const row of rows) {
+          stmt.run({
+            hash: row.hash,
+            size: row.size,
+            cached_at: row.cachedAt,
+            tier: row.tier,
+          });
+        }
+      },
+    );
+    txn(entries);
+  }
+
   sumContiguousDataCacheBytes(): number {
     const row: any = this.stmts.data.sumContiguousDataCacheBytes.get();
     return row.total_bytes as number;
@@ -3866,6 +3887,14 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'saveContiguousDataCacheEntry', [entry]);
   }
 
+  insertContiguousDataCacheEntriesIfAbsent(
+    entries: { hash: string; size: number; cachedAt: number; tier: number }[],
+  ): Promise<void> {
+    return this.queueWrite('data', 'insertContiguousDataCacheEntriesIfAbsent', [
+      entries,
+    ]);
+  }
+
   sumContiguousDataCacheBytes(): Promise<number> {
     return this.queueRead('data', 'sumContiguousDataCacheBytes', undefined);
   }
@@ -4473,6 +4502,10 @@ if (!isMainThread) {
           break;
         case 'saveContiguousDataCacheEntry':
           worker.saveContiguousDataCacheEntry(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'insertContiguousDataCacheEntriesIfAbsent':
+          worker.insertContiguousDataCacheEntriesIfAbsent(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'sumContiguousDataCacheBytes':
