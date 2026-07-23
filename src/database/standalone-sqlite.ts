@@ -1170,6 +1170,18 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
+  touchContiguousDataCacheEntry(
+    hash: string,
+    lastAccess: number,
+    tier: number,
+  ) {
+    this.stmts.data.touchContiguousDataCacheEntry.run({
+      hash,
+      last_access: lastAccess,
+      tier,
+    });
+  }
+
   insertContiguousDataCacheEntriesIfAbsent(
     entries: { hash: string; size: number; cachedAt: number; tier: number }[],
   ) {
@@ -3887,6 +3899,18 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'saveContiguousDataCacheEntry', [entry]);
   }
 
+  touchContiguousDataCacheEntry(
+    hash: string,
+    lastAccess: number,
+    tier: number,
+  ): Promise<void> {
+    return this.queueWrite('data', 'touchContiguousDataCacheEntry', [
+      hash,
+      lastAccess,
+      tier,
+    ]);
+  }
+
   insertContiguousDataCacheEntriesIfAbsent(
     entries: { hash: string; size: number; cachedAt: number; tier: number }[],
   ): Promise<void> {
@@ -4502,6 +4526,10 @@ if (!isMainThread) {
           break;
         case 'saveContiguousDataCacheEntry':
           worker.saveContiguousDataCacheEntry(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'touchContiguousDataCacheEntry':
+          worker.touchContiguousDataCacheEntry(args[0], args[1], args[2]);
           parentPort?.postMessage(null);
           break;
         case 'insertContiguousDataCacheEntriesIfAbsent':

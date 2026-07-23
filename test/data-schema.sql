@@ -44,6 +44,6 @@ CREATE TABLE contiguous_data_cache (
   size       INTEGER NOT NULL,
   cached_at  INTEGER NOT NULL,
   tier       INTEGER NOT NULL
-);
+, last_access INTEGER);
 CREATE INDEX contiguous_data_cache_eviction_idx
-  ON contiguous_data_cache (tier, cached_at);
+  ON contiguous_data_cache (tier, last_access);

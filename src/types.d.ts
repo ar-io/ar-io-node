@@ -305,6 +305,13 @@ export interface ContiguousDataCacheIndex {
     cachedAt: number;
     tier: number;
   }): Promise<void>;
+  // Cache-hit refresh: update last_access and raise the tier (MAX, never demotes)
+  // — pass tier 1 for a preferred-ArNS read to promote it, 0 otherwise.
+  touchContiguousDataCacheEntry(
+    hash: string,
+    lastAccess: number,
+    tier: number,
+  ): Promise<void>;
   // Batch backfill: insert rows only if absent (never clobbers live entries).
   insertContiguousDataCacheEntriesIfAbsent(
     entries: { hash: string; size: number; cachedAt: number; tier: number }[],

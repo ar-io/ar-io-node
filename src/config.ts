@@ -2520,6 +2520,14 @@ export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
 export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
   +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', '1000');
 
+// Whether to refresh a cache entry's last_access (and promote its tier on a
+// preferred-ArNS read) on cache HITS. On => LRU eviction; off => FIFO by
+// cache-write time. Operators without an edge cache see every read at the core,
+// so they may set this off to avoid the extra index writes and accept FIFO.
+export const CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ =
+  env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ', 'true') ===
+  'true';
+
 // One-time backfill/reconciler: on startup, walk the existing on-disk cache
 // once and seed index rows for blobs not already tracked (insert-if-absent, so
 // live entries are untouched). Needed to adopt a pre-existing cache that

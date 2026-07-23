@@ -10,7 +10,11 @@ import * as EventEmitter from 'node:events';
 import { PassThrough, Readable, Transform, pipeline } from 'node:stream';
 import winston from 'winston';
 
-import { PREFERRED_ARNS_BASE_NAMES, PREFERRED_ARNS_NAMES } from '../config.js';
+import {
+  CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ,
+  PREFERRED_ARNS_BASE_NAMES,
+  PREFERRED_ARNS_NAMES,
+} from '../config.js';
 import { verificationPriorities } from '../constants.js';
 import * as events from '../events.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
@@ -200,6 +204,31 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       })
       .catch((error: any) => {
         this.log.debug('Failed to record cache index entry', {
+          hash,
+          message: error?.message,
+        });
+      });
+  }
+
+  // Refresh a cached blob's recency (and promote its tier on a preferred-ArNS
+  // read) in the cleanup index on a cache hit. No-op when the index isn't wired
+  // or update-on-read is disabled (FIFO mode). Best-effort.
+  private touchCacheIndexEntry(
+    hash: string,
+    requestAttributes?: RequestAttributes,
+  ): void {
+    if (
+      this.contiguousDataCacheIndex === undefined ||
+      !CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ
+    ) {
+      return;
+    }
+    const priority = this.calculateVerificationPriority(requestAttributes);
+    const tier = priority === verificationPriorities.preferredArns ? 1 : 0;
+    this.contiguousDataCacheIndex
+      .touchContiguousDataCacheEntry(hash, currentUnixTimestamp(), tier)
+      .catch((error: any) => {
+        this.log.debug('Failed to touch cache index entry', {
           hash,
           message: error?.message,
         });
@@ -607,6 +636,12 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         const requestType = region ? 'range' : 'full';
 
         metrics.contiguousDataCacheHitTotal.inc({ request_type: requestType });
+
+        // Refresh recency (and promote tier on preferred-ArNS reads) in the
+        // cleanup index so eviction is LRU rather than FIFO.
+        if (attributes?.hash !== undefined) {
+          this.touchCacheIndexEntry(attributes.hash, requestAttributes);
+        }
 
         cacheData.stream.once('error', () => {
           metrics.getDataStreamErrorsTotal.inc({
