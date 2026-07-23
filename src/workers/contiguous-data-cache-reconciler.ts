@@ -248,13 +248,11 @@ export class ContiguousDataCacheReconciler {
       // at most one shard instead of the whole tree. Only the top level needs a
       // stable order for the resume comparison; within a shard, order is
       // irrelevant. Use codepoint comparison consistently for both sort and skip.
-      let shards: fs.Dirent[];
+      let topEntries: fs.Dirent[];
       try {
-        shards = (
-          await fs.promises.readdir(this.baseDir, { withFileTypes: true })
-        )
-          .filter((entry) => entry.isDirectory())
-          .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+        topEntries = await fs.promises.readdir(this.baseDir, {
+          withFileTypes: true,
+        });
       } catch (error: any) {
         this.log.warn('Backfill: base dir not accessible', {
           baseDir: this.baseDir,
@@ -262,6 +260,40 @@ export class ContiguousDataCacheReconciler {
         });
         return;
       }
+
+      // FsDataStore always shards blobs under baseDir/<hh>/<hh>/<hash>, but an
+      // older layout or a corrupted tree could leave a hash-named file directly
+      // at baseDir. The shard loop below only descends into directories, so
+      // sweep those loose top-level files here first. Not checkpointed (it's a
+      // one-shot pass over a small top-level set, re-run cheaply each start).
+      for (const entry of topEntries) {
+        if (!this.running) break;
+        if (!entry.isFile() || !HASH_NAME_RE.test(entry.name)) continue;
+        const fullPath = path.join(this.baseDir, entry.name);
+        try {
+          const stats = await fs.promises.stat(fullPath);
+          this.buffer.push({
+            hash: entry.name,
+            size: stats.size,
+            cachedAt: Math.floor(Math.max(stats.atimeMs, stats.mtimeMs) / 1000),
+            tier: 0,
+          });
+          this.visited++;
+          if (this.buffer.length >= this.batchSize) await this.flush();
+        } catch (error: any) {
+          if (error?.code !== 'ENOENT') {
+            this.log.debug('Backfill: error statting top-level file', {
+              path: fullPath,
+              error: error?.message,
+            });
+          }
+        }
+      }
+      await this.flush();
+
+      const shards = topEntries
+        .filter((entry) => entry.isDirectory())
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
       let completed = true;
       for (const shard of shards) {

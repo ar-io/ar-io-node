@@ -19,6 +19,7 @@ const log = createTestLogger();
 const HASH_A = 'A'.repeat(43);
 const HASH_B = 'B'.repeat(43);
 const HASH_C = 'C'.repeat(43);
+const HASH_D = 'D'.repeat(43); // loose file directly at baseDir (old layout)
 
 describe('ContiguousDataCacheReconciler', () => {
   let baseDir: string;
@@ -43,6 +44,9 @@ describe('ContiguousDataCacheReconciler', () => {
       path.join(baseDir, 'BB', 'BB', HASH_C),
       'cccccc',
     );
+    // A hash-named file directly at baseDir (not inside a shard) must still be
+    // indexed by the top-level loose-file pass.
+    await fs.promises.writeFile(path.join(baseDir, HASH_D), 'dddddddd');
     // Non-hash files must be ignored.
     await fs.promises.writeFile(
       path.join(baseDir, 'AA', 'AA', 'notahash'),
@@ -83,7 +87,7 @@ describe('ContiguousDataCacheReconciler', () => {
     await reconciler.run();
 
     const hashes = inserted.map((e) => e.hash).sort();
-    assert.deepEqual(hashes, [HASH_A, HASH_B, HASH_C].sort());
+    assert.deepEqual(hashes, [HASH_A, HASH_B, HASH_C, HASH_D].sort());
     // Sizes come from the files; tier is general (0); cached_at is set.
     const byHash = new Map(inserted.map((e) => [e.hash, e]));
     assert.equal(byHash.get(HASH_A)!.size, 4);
@@ -112,10 +116,11 @@ describe('ContiguousDataCacheReconciler', () => {
     });
     await reconciler.run();
 
-    // AA/* (HASH_A, HASH_B) skipped; only BB/* (HASH_C) is backfilled.
+    // AA/* (HASH_A, HASH_B) skipped; BB/* (HASH_C) processed, and the loose
+    // top-level file (HASH_D) is always re-swept (not checkpointed).
     assert.deepEqual(
-      inserted.map((e) => e.hash),
-      [HASH_C],
+      inserted.map((e) => e.hash).sort(),
+      [HASH_C, HASH_D].sort(),
     );
   });
 });
