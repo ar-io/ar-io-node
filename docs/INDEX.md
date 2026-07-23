@@ -41,6 +41,12 @@ Fast, offline lookups for data item to root transaction mappings.
 |----------|-------------|
 | [Optimistic Chunk Ingest Cache](chunk-ingest-cache.md) | Validating and caching chunks posted to the gateway, with confirmation-driven cleanup |
 
+### Data Cache Cleanup
+
+| Document | Description |
+|----------|-------------|
+| [Contiguous Data Cache Cleanup](cache-cleanup.md) | The two disk-pressure reclaimers (filesystem-walk worker vs. index evictor), shared watermark semantics, LRU/tiering, and backfill |
+
 ## Data Export
 
 | Document | Description |
