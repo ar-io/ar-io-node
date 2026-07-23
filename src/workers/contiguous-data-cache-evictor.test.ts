@@ -42,12 +42,16 @@ function makeHarness(opts: {
     countContiguousDataCacheEntries: async () => remaining.size,
     selectContiguousDataCacheEvictionCandidates: async (limit: number) =>
       Array.from(remaining.values()).slice(0, limit),
-    deleteContiguousDataCacheEntry: async (hash: string) => {
-      if (opts.deleteReturnsZeroFor?.has(hash)) return 0;
-      if (!remaining.has(hash)) return 0;
-      remaining.delete(hash);
-      state.used = Math.max(0, state.used - opts.freePerEvict);
-      return 1;
+    deleteContiguousDataCacheEntries: async (hashes: string[]) => {
+      const deleted: string[] = [];
+      for (const hash of hashes) {
+        if (opts.deleteReturnsZeroFor?.has(hash)) continue;
+        if (!remaining.has(hash)) continue;
+        remaining.delete(hash);
+        state.used = Math.max(0, state.used - opts.freePerEvict);
+        deleted.push(hash);
+      }
+      return deleted;
     },
   } as unknown as ContiguousDataCacheIndex;
 
@@ -105,9 +109,16 @@ describe('ContiguousDataCacheEvictor', () => {
     await makeEvictor(h).sweep();
     assert.ok(h.state.used < 60, `expected recovery, used=${h.state.used}`);
     assert.ok(h.unlinked.length >= 7, `evicted ${h.unlinked.length}`);
-    // Oldest evicted first, and every deleted row was also unlinked.
-    assert.equal(h.unlinked[0], 'h0000');
-    assert.deepEqual([...h.unlinked].sort(), h.unlinked); // ascending == oldest-first
+    // Eviction is oldest-first: every evicted hash is older (lower) than every
+    // one still in the index. (Unlink order itself is now parallel/unordered.)
+    const evictedMax = [...h.unlinked].sort().at(-1)!;
+    assert.equal([...h.unlinked].sort()[0], 'h0000'); // the oldest went first
+    for (const [hash] of h.remaining) {
+      assert.ok(
+        hash > evictedMax,
+        `remaining ${hash} should be newer than all evicted (<= ${evictedMax})`,
+      );
+    }
   });
 
   it('stops (and warns) when the index drains while still over pressure', async () => {

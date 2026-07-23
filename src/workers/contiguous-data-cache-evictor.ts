@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import fs from 'node:fs';
+import pLimit from 'p-limit';
 import { Logger } from 'winston';
 
 import * as config from '../config.js';
@@ -14,6 +15,11 @@ import { ContiguousDataCacheIndex, ContiguousDataStore } from '../types.js';
 // Bound work per sweep so a large backlog is reclaimed over several sweeps
 // rather than one unbounded pass; the next sweep resumes.
 const MAX_BATCHES_PER_SWEEP = 50;
+
+// Concurrent blob unlinks per batch. The index row deletes are already batched
+// into one transaction; the unlinks are the remaining (HDD-bound) cost, so run
+// them in parallel to saturate the disk instead of one seek at a time.
+const UNLINK_CONCURRENCY = 50;
 
 /**
  * Disk-pressure evictor for the contiguous data cache, driven by the SQLite
@@ -176,27 +182,38 @@ export class ContiguousDataCacheEvictor {
           break;
         }
 
-        for (const { hash, size } of candidates) {
-          // Delete the index row first; only unlink bytes if we owned the row,
-          // so a concurrent delete can't double-count or race a re-cache.
-          const deleted =
-            await this.cacheIndex.deleteContiguousDataCacheEntry(hash);
-          if (deleted === 0) {
-            continue;
-          }
-          try {
-            await this.dataStore.delete(hash);
-          } catch (error: any) {
-            this.log.debug('Failed to unlink evicted blob', {
-              hash,
-              error: error?.message,
-            });
-          }
+        // Delete all the index rows in one transaction; it returns the hashes
+        // actually removed (guards against a row deleted/re-cached between the
+        // select and now), and only those get unlinked.
+        const sizeByHash = new Map(candidates.map((c) => [c.hash, c.size]));
+        const deletedHashes =
+          await this.cacheIndex.deleteContiguousDataCacheEntries(
+            candidates.map((c) => c.hash),
+          );
+
+        // Account metrics on the (authoritative) deleted rows, then unlink the
+        // blobs in parallel — best-effort; a failed/ENOENT unlink still counts,
+        // since the row is gone and the FS reconciler can heal any orphan.
+        for (const hash of deletedHashes) {
+          const size = sizeByHash.get(hash) ?? 0;
           evicted++;
           bytesFreed += size;
           metrics.cacheIndexEvictedTotal.inc({ reason: 'disk_pressure' });
           metrics.cacheIndexEvictedBytesTotal.inc(size);
         }
+        const unlinkLimit = pLimit(UNLINK_CONCURRENCY);
+        await Promise.all(
+          deletedHashes.map((hash) =>
+            unlinkLimit(() =>
+              this.dataStore.delete(hash).catch((error: any) => {
+                this.log.debug('Failed to unlink evicted blob', {
+                  hash,
+                  error: error?.message,
+                });
+              }),
+            ),
+          ),
+        );
 
         usage = await this.diskUsage();
         if (usage === undefined) {

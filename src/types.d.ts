@@ -323,6 +323,9 @@ export interface ContiguousDataCacheIndex {
   ): Promise<{ hash: string; size: number }[]>;
   // Returns the number of rows deleted (0 if already gone).
   deleteContiguousDataCacheEntry(hash: string): Promise<number>;
+  // Batch delete: removes many rows in one transaction and returns the hashes
+  // that were actually deleted (so the caller unlinks only those).
+  deleteContiguousDataCacheEntries(hashes: string[]): Promise<string[]>;
 }
 
 /**

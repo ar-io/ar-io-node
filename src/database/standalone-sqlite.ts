@@ -1227,6 +1227,20 @@ export class StandaloneSqliteDatabaseWorker {
     return this.stmts.data.deleteContiguousDataCacheEntry.run({ hash }).changes;
   }
 
+  deleteContiguousDataCacheEntries(hashes: string[]): string[] {
+    const stmt = this.stmts.data.deleteContiguousDataCacheEntry;
+    const txn = this.dbs.data.transaction((rows: string[]): string[] => {
+      const deleted: string[] = [];
+      for (const hash of rows) {
+        if (stmt.run({ hash }).changes > 0) {
+          deleted.push(hash);
+        }
+      }
+      return deleted;
+    });
+    return txn(hashes);
+  }
+
   getTxByOffset(offset: number): TxByOffsetResult {
     const result = this.stmts.core.selectStableTransactionOffsetById.get({
       offset,
@@ -3941,6 +3955,12 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'deleteContiguousDataCacheEntry', [hash]);
   }
 
+  deleteContiguousDataCacheEntries(hashes: string[]): Promise<string[]> {
+    return this.queueWrite('data', 'deleteContiguousDataCacheEntries', [
+      hashes,
+    ]);
+  }
+
   async saveDataItem(
     item: NormalizedDataItem,
     isOptimistic = false,
@@ -4550,6 +4570,11 @@ if (!isMainThread) {
         case 'deleteContiguousDataCacheEntry':
           parentPort?.postMessage(
             worker.deleteContiguousDataCacheEntry(args[0]),
+          );
+          break;
+        case 'deleteContiguousDataCacheEntries':
+          parentPort?.postMessage(
+            worker.deleteContiguousDataCacheEntries(args[0]),
           );
           break;
         case 'countConfirmedDataRoots':
