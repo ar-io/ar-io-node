@@ -97,6 +97,22 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
     }
   }
 
+  /**
+   * Resolves a data item ID to its root transaction, probing the configured
+   * indexes in order and returning the first *actionable* result — one the
+   * caller can proceed on without consulting the remaining (often remote and
+   * expensive) sources. A result is actionable when it has complete offsets,
+   * is a definitive L1 root (`rootTxId === id`), carries `rootOffset` +
+   * `rootDataOffset`, or carries a non-empty traversal path.
+   *
+   * A bare `rootTxId` (no path/offsets, not an L1 root) is not actionable: it
+   * is retained as a fallback while later indexes are probed for something
+   * richer. If no source is actionable, the saved fallback is returned, or
+   * `undefined` when nothing resolved.
+   *
+   * @param id - base64url data item / transaction ID to resolve.
+   * @returns The root transaction info, or `undefined` if unresolved.
+   */
   async getRootTx(id: string): Promise<
     | {
         rootTxId: string;

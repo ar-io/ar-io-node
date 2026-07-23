@@ -25,9 +25,14 @@ const stableBreakerOptions = {
   rollingCountTimeout: 5000,
 };
 
-// Builds a DataItemRootIndex stub with a distinct constructor name (the
-// composite keys its per-source circuit breakers on constructor.name, so each
-// source must be uniquely named) and a call counter.
+/**
+ * Builds a `DataItemRootIndex` stub with a distinct constructor name and a call
+ * counter. The composite keys its per-source circuit breakers on
+ * `constructor.name`, so each stub must be uniquely named to avoid collisions.
+ *
+ * @param name - unique class name for the stub (drives the breaker key).
+ * @param result - the value (or async factory) returned by `getRootTx`.
+ */
 function makeIndex(
   name: string,
   result: RootTxResult | (() => Promise<RootTxResult>),
