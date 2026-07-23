@@ -116,6 +116,27 @@ Multiple CDB64 sources are searched in configuration order. First match wins:
 CDB64_ROOT_TX_INDEX_SOURCES=/local/indexes/,https://cdn.example.com/index.cdb,ArweaveTxId
 ```
 
+### Lookup Short-Circuiting
+
+The composite root TX index (`ROOT_TX_LOOKUP_ORDER`) stops probing sources as soon as one returns an **actionable** result, so a CDB64 hit early in the order avoids the remaining (often remote and expensive) sources such as GraphQL. A result is actionable when the caller can proceed without further lookups:
+
+| Exit reason | Condition | Notes |
+|-------------|-----------|-------|
+| `complete_offsets` | `rootOffset` + `rootDataOffset` + `size` + `dataSize` | Full offsets; no header parse needed |
+| `l1_root` | `rootTxId === id` | Definitive L1 root; passthrough |
+| `offsets` | `rootOffset` + `rootDataOffset` present | The CDB64 case; size is read from the item header |
+| `path` | non-empty `path` | Enables path-guided bundle navigation |
+
+A bare `rootTxId` with no path or offsets is **not** actionable — it is saved as a fallback and the search continues, so a later source (e.g. CDB64) can supply a path or offsets. If no source is actionable, the saved fallback is returned (`fallback`), or `undefined` if nothing resolved (`not_found`).
+
+CDB64 values carry offsets (`rootOffset`/`rootDataOffset`) but not `size`, so CDB64 hits terminate with the `offsets` (or `path`) reason rather than `complete_offsets`.
+
+Observability (per-node Prometheus metrics):
+
+- `composite_root_tx_exit_reason_total{reason,winning_source}` — one increment per lookup, labelled with the exit reason above. A healthy CDB64 deployment shows most CDB64-won lookups exiting on `offsets`/`path`.
+- `composite_root_tx_sources_probed` — summary of how many sources were queried before returning. Effective short-circuiting keeps this low.
+- `root_tx_lookup_total{source="graphql"}` — total GraphQL probes; falls sharply once early local sources (db/cdb) short-circuit.
+
 ### Partitioned Indexes
 
 For large datasets, indexes can be split into 256 partitions by key prefix:

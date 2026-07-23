@@ -1448,6 +1448,24 @@ export const compositeRootTxLookupDurationSummary = new promClient.Summary({
   help: 'Total duration of composite root TX lookups',
 });
 
+// Records why the composite stopped probing: which condition let it return
+// early ('complete_offsets', 'l1_root', 'offsets', 'path') vs. exhausting the
+// chain ('fallback' = returned a saved incomplete result, 'not_found' = no
+// source resolved). Proves the short-circuit gate is firing and by what reason.
+export const compositeRootTxExitReasonTotal = new promClient.Counter({
+  name: 'composite_root_tx_exit_reason_total',
+  help: 'Composite root TX lookups by termination reason',
+  labelNames: ['reason', 'winning_source'] as const,
+});
+
+// Number of sources actually queried (circuit fired) before the composite
+// returned. Lower is better: a short-circuit avoids probing the remaining
+// (often expensive, e.g. GraphQL) sources in the chain.
+export const compositeRootTxSourcesProbedSummary = new promClient.Summary({
+  name: 'composite_root_tx_sources_probed',
+  help: 'Number of sources queried per composite root TX lookup before returning',
+});
+
 //
 // Root TX Semaphore metrics
 //
