@@ -293,6 +293,42 @@ export interface ChunkPlacementIndex {
 }
 
 /**
+ * Cleanup index for the contiguous data cache. A dedicated per-blob table so the
+ * disk-pressure evictor can query "oldest N in tier T" from the (SSD-backed) DB
+ * instead of walking the HDD-backed cache directory tree. Implemented by
+ * StandaloneSqliteDatabase; the raw bytes live in the FsDataStore keyed by hash.
+ */
+export interface ContiguousDataCacheIndex {
+  saveContiguousDataCacheEntry(entry: {
+    hash: string;
+    size: number;
+    cachedAt: number;
+    tier: number;
+  }): Promise<void>;
+  // Cache-hit refresh: update last_access and raise the tier (MAX, never demotes)
+  // — pass tier 1 for a preferred-ArNS read to promote it, 0 otherwise.
+  touchContiguousDataCacheEntry(
+    hash: string,
+    lastAccess: number,
+    tier: number,
+  ): Promise<void>;
+  // Batch backfill: insert rows only if absent (never clobbers live entries).
+  insertContiguousDataCacheEntriesIfAbsent(
+    entries: { hash: string; size: number; cachedAt: number; tier: number }[],
+  ): Promise<void>;
+  sumContiguousDataCacheBytes(): Promise<number>;
+  countContiguousDataCacheEntries(): Promise<number>;
+  selectContiguousDataCacheEvictionCandidates(
+    limit: number,
+  ): Promise<{ hash: string; size: number }[]>;
+  // Returns the number of rows deleted (0 if already gone).
+  deleteContiguousDataCacheEntry(hash: string): Promise<number>;
+  // Batch delete: removes many rows in one transaction and returns the hashes
+  // that were actually deleted (so the caller unlinks only those).
+  deleteContiguousDataCacheEntries(hashes: string[]): Promise<string[]>;
+}
+
+/**
  * Transaction boundary information for a given offset.
  * Contains the essential data needed to locate and validate a chunk
  * within a transaction.

@@ -1135,6 +1135,7 @@ export const queueLengthGauge = new Gauge({
 export const filesCleanedTotal = new promClient.Counter({
   name: 'files_cleaned_total',
   help: 'Count of files deleted by the filesystem cleanup worker',
+  labelNames: ['data_type'] as const,
 });
 
 //
@@ -1173,6 +1174,44 @@ export const cacheSizeBytes = new promClient.Gauge({
   name: 'cache_size_bytes',
   help: 'Current cache size in bytes',
   labelNames: ['store_type', 'data_type'] as const,
+});
+
+export const cacheCleanupDiskUsedPercent = new promClient.Gauge({
+  name: 'cache_cleanup_disk_used_percent',
+  help: 'Filesystem used percent observed by the cache cleanup worker',
+  labelNames: ['data_type'] as const,
+});
+
+export const cacheCleanupRegime = new promClient.Gauge({
+  name: 'cache_cleanup_regime',
+  help: 'Active cache cleanup regime (0=skip, 1=normal, 2=aggressive)',
+  labelNames: ['data_type'] as const,
+});
+
+export const cacheIndexEvictedTotal = new promClient.Counter({
+  name: 'cache_index_evicted_total',
+  help: 'Blobs evicted by the index-driven contiguous cache evictor',
+  labelNames: ['reason'] as const,
+});
+
+export const cacheIndexEvictedBytesTotal = new promClient.Counter({
+  name: 'cache_index_evicted_bytes_total',
+  help: 'Bytes reclaimed by the index-driven contiguous cache evictor',
+});
+
+export const cacheIndexEntriesGauge = new promClient.Gauge({
+  name: 'cache_index_entries',
+  help: 'Current row count of the contiguous data cache cleanup index',
+});
+
+export const cacheIndexBytesGauge = new promClient.Gauge({
+  name: 'cache_index_bytes',
+  help: 'Sum of blob sizes tracked by the contiguous data cache cleanup index',
+});
+
+export const cacheIndexBackfilledTotal = new promClient.Counter({
+  name: 'cache_index_backfilled_total',
+  help: 'On-disk blobs seeded into the cache cleanup index by the reconciler',
 });
 
 //

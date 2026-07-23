@@ -80,6 +80,7 @@ import {
   DataItemRootIndex,
   ChainIndex,
   ChainOffsetIndex,
+  ContiguousDataCacheIndex,
   ContiguousDataIndex,
   ContiguousDataSource,
   DataItemIndexWriter,
@@ -96,6 +97,8 @@ import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
 import { SymlinkCleanupWorker } from './workers/symlink-cleanup-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
 import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
+import { ContiguousDataCacheEvictor } from './workers/contiguous-data-cache-evictor.js';
+import { ContiguousDataCacheReconciler } from './workers/contiguous-data-cache-reconciler.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
@@ -586,9 +589,38 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
       basePath: 'data/contiguous',
       dataType: 'contiguous_data',
       initialDelay: contiguousDataCacheCleanupInitialDelayMs,
+      // Disk-pressure watermarks (all opt-in; 0 => pure age-based cleanup)
+      lowWatermarkPercent: config.CONTIGUOUS_DATA_CACHE_LOW_WATERMARK_PERCENT,
+      highWatermarkPercent: config.CONTIGUOUS_DATA_CACHE_HIGH_WATERMARK_PERCENT,
+      minFreeBytes: config.CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES,
+      aggressiveMinAgeSeconds:
+        config.CONTIGUOUS_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
       // Stats are passed by the worker to avoid redundant stat calls
-      shouldDelete: async (path, stats) => {
+      shouldDelete: async (path, stats, ctx) => {
         try {
+          // Age-gate before the (per-file, Redis-backed) metadata lookup.
+          // The non-preferred threshold is the shortest retention any tier can
+          // have, so a file younger than it cannot be deleted regardless of
+          // whether it turns out to be preferred. In that case skip the
+          // metadata lookup entirely — this keeps the cleanup walk stat-bound
+          // (not one Redis round-trip per file) for the bulk of a live cache,
+          // which is what lets it keep pace on very large caches.
+          //
+          // This only ever short-circuits to "keep", never to "delete", so it
+          // cannot cause over-eviction. The single behavioral difference vs.
+          // the full check is the rare case where a file's recorded
+          // accessTimestampMs predates its filesystem atime/mtime (e.g. a
+          // non-cache-serve read bumped atime): there the full check might have
+          // deleted it and the gate retains it — the safe direction.
+          const nonPreferredThresholdSeconds = Math.max(
+            contiguousDataCacheCleanupThresholdSeconds * ctx.thresholdScale,
+            ctx.minAgeSeconds,
+          );
+          const statTimeMs = Math.max(stats.atimeMs, stats.mtimeMs);
+          if (statTimeMs > Date.now() - nonPreferredThresholdSeconds * 1000) {
+            return false;
+          }
+
           const hash = path.split('/').pop() ?? '';
           const metadata = await contiguousMetadataStore.get(hash);
 
@@ -616,11 +648,20 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
             );
           }
 
-          // Preferred ArNS names have a different cleanup threshold
-          const cleanupThresholdMs =
-            (isPreferredArnsName
-              ? config.PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD
-              : contiguousDataCacheCleanupThresholdSeconds) * 1000;
+          // Preferred ArNS names have a different (longer) base threshold.
+          const baseThresholdSeconds = isPreferredArnsName
+            ? config.PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD
+            : contiguousDataCacheCleanupThresholdSeconds;
+
+          // Under disk pressure ctx.thresholdScale (< 1) tightens retention,
+          // floored at ctx.minAgeSeconds so hot/fresh data is never evicted.
+          // With watermarks disabled ctx is the normal context (scale 1, floor
+          // 0), so this is exactly the base threshold.
+          const effectiveThresholdSeconds = Math.max(
+            baseThresholdSeconds * ctx.thresholdScale,
+            ctx.minAgeSeconds,
+          );
+          const cleanupThresholdMs = effectiveThresholdSeconds * 1000;
 
           const mostRecentTimeMs =
             metadata?.accessTimestampMs ??
@@ -1335,6 +1376,12 @@ const contiguousDataStore = new FsDataStore({
   baseDir: 'data/contiguous',
 });
 
+// Cleanup index handle (the SQLite db) wired into the caches only when the
+// index feature is enabled (PE-9131). db structurally satisfies
+// ContiguousDataCacheIndex via the cache-index methods.
+const contiguousDataCacheIndex: ContiguousDataCacheIndex | undefined =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX ? db : undefined;
+
 export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource:
@@ -1357,6 +1404,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   contiguousDataIndex,
   dataAttributesStore,
   dataContentAttributeImporter,
+  contiguousDataCacheIndex,
   skipCache: config.SKIP_DATA_CACHE,
   eventEmitter,
   untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
@@ -1376,11 +1424,40 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   contiguousDataIndex,
   dataAttributesStore,
   dataContentAttributeImporter,
+  contiguousDataCacheIndex,
   skipCache: config.SKIP_DATA_CACHE,
   eventEmitter,
   untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
   trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
 });
+
+// Index-driven contiguous cache evictor (PE-9131): reclaims by querying the
+// SQLite cleanup index for the oldest blobs under disk pressure, instead of
+// walking the (HDD-backed) cache directory tree. Uses the same watermark
+// thresholds as the filesystem cleanup worker.
+export const contiguousDataCacheEvictor =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX
+    ? new ContiguousDataCacheEvictor({
+        log,
+        dataStore: contiguousDataStore,
+        cacheIndex: db,
+        usagePath: 'data/contiguous',
+      })
+    : undefined;
+
+// One-time backfill/reconciler to adopt a pre-existing on-disk cache into the
+// index. Runs (in the background) only when both the index and backfill flags
+// are set. The blob tree lives at data/contiguous/data (FsDataStore shards
+// blobs under baseDir/data/<hh>/<hh>/<hash>).
+export const contiguousDataCacheReconciler =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX &&
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL
+    ? new ContiguousDataCacheReconciler({
+        log,
+        cacheIndex: db,
+        baseDir: 'data/contiguous/data',
+      })
+    : undefined;
 
 export const dataItemIndexer = new DataItemIndexer({
   log,
@@ -1849,6 +1926,8 @@ export const shutdown = async (exitCode = 0) => {
     await webhookEmitter.stop();
     await headerFsCacheCleanupWorker?.stop();
     await contiguousDataFsCacheCleanupWorker?.stop();
+    await contiguousDataCacheEvictor?.stop();
+    await contiguousDataCacheReconciler?.stop();
     await chunkDataFsCacheCleanupWorker?.stop();
     symlinkCleanupWorker?.stop();
     await dataVerificationWorker?.stop();

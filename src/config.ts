@@ -2004,6 +2004,15 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
   `${1000 * 60 * 60 * 4}`, // every 4 hours
 );
 
+// Max concurrent readdir/stat syscalls during the cleanup tree walk. The walk is
+// dominated by directory-traversal I/O latency on large, deeply-sharded caches;
+// raising this hides that latency (parallel traversal) at the cost of more
+// concurrent filesystem load. Lower it if the walk contends with request I/O.
+export const FS_CLEANUP_WORKER_WALK_CONCURRENCY = +env.varOrDefault(
+  'FS_CLEANUP_WORKER_WALK_CONCURRENCY',
+  '64',
+);
+
 // Cache TTL for the SQLite worker's getDebugInfo response. The /ar-io/admin/debug
 // endpoint runs ~8 unfiltered COUNT(*) scans plus aggregation across new and
 // stable data items, which can monopolize the single debug worker thread when
@@ -2455,6 +2464,82 @@ export const PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD =
     'PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD',
     `${60 * 60 * 24 * 30}`, // 30 days
   );
+
+// Disk-pressure watermarks for the contiguous data cache cleanup worker. All are
+// opt-in: with the defaults below the worker behaves exactly as before (pure
+// age-based TTL). Percentages are of the filesystem holding the cache.
+//
+// Below the low watermark the worker skips cleanup entirely so the cache can grow
+// to fill available disk. Between the watermarks it runs normal age-based cleanup.
+// At/above the high watermark (or when free space drops below the min-free floor)
+// it progressively tightens the effective TTL until usage falls back below the
+// low watermark, never evicting data younger than the aggressive min-age floor.
+export const CONTIGUOUS_DATA_CACHE_LOW_WATERMARK_PERCENT = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_LOW_WATERMARK_PERCENT',
+  '0',
+);
+
+export const CONTIGUOUS_DATA_CACHE_HIGH_WATERMARK_PERCENT = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_HIGH_WATERMARK_PERCENT',
+  '0',
+);
+
+// Hard guardrail: if free bytes on the cache filesystem fall below this, force
+// maximum-pressure cleanup regardless of the watermark percentages. Protects the
+// shared volume (SQLite DBs/WAL/logs) from ENOSPC. 0 disables the guardrail.
+export const CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES',
+  '0',
+);
+
+// Absolute floor (seconds) for aggressive cleanup: never evict data younger than
+// this even under maximum disk pressure. Protects freshly written / hot data.
+export const CONTIGUOUS_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS =
+  +env.varOrDefault(
+    'CONTIGUOUS_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS',
+    `${60 * 60}`, // 1 hour
+  );
+
+// Contiguous data cache cleanup INDEX (PE-9131). When enabled, each cached blob
+// records {hash, size, cached_at, tier} in a SQLite index (data.db) at cache
+// time, and a disk-pressure evictor reclaims by querying "oldest N in tier T"
+// from the (SSD-backed) DB instead of walking the HDD-backed cache tree. Uses
+// the same LOW/HIGH_WATERMARK_PERCENT + MIN_FREE_BYTES thresholds above.
+// Complements/replaces the filesystem-walk cleanup worker on large HDD caches.
+export const ENABLE_CONTIGUOUS_DATA_CACHE_INDEX =
+  env.varOrDefault('ENABLE_CONTIGUOUS_DATA_CACHE_INDEX', 'false') === 'true';
+
+// How often the index-driven evictor checks disk pressure (ms).
+export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
+  +env.varOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS',
+    '60000',
+  );
+
+// Max index rows evicted (and blobs unlinked) per batch within a sweep.
+export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
+  +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', '1000');
+
+// Whether to refresh a cache entry's last_access (and promote its tier on a
+// preferred-ArNS read) on cache HITS. On => LRU eviction; off => FIFO by
+// cache-write time. Operators without an edge cache see every read at the core,
+// so they may set this off to avoid the extra index writes and accept FIFO.
+export const CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ =
+  env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ', 'true') ===
+  'true';
+
+// One-time backfill/reconciler: on startup, walk the existing on-disk cache
+// once and seed index rows for blobs not already tracked (insert-if-absent, so
+// live entries are untouched). Needed to adopt a pre-existing cache that
+// predates the index; enable once, then disable. The walk is HDD-bound and runs
+// in the background without blocking startup.
+export const ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL =
+  env.varOrDefault('ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL', 'false') ===
+  'true';
+
+// Rows buffered per backfill insert transaction.
+export const CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE =
+  +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE', '2000');
 
 // The set of full (not base or undernames) ArNS names to preferentially cache
 export const PREFERRED_ARNS_NAMES = new Set(
