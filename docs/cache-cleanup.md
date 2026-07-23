@@ -20,13 +20,16 @@ disk is actually full.
 - **How it reclaims:** periodically walks the sharded blob tree and deletes
   files older than an effective TTL.
 - **Watermarks tune the TTL (dynamic TTL):**
-  - Below `LOW_WATERMARK_PERCENT` → cleanup is **skipped entirely**; the cache
-    grows to fill the disk.
-  - At/above `HIGH_WATERMARK_PERCENT` → cleanup runs **aggressively**; the
-    effective TTL is progressively tightened from the base threshold (at the high
-    watermark) toward `AGGRESSIVE_MIN_AGE_SECONDS` (at a full disk). Hysteresis:
+  - Below `LOW_WATERMARK_PERCENT` → cleanup is **skipped entirely** and the cache
+    grows to fill the disk — **unless** free space is below `MIN_FREE_BYTES`,
+    which independently forces aggressive cleanup regardless of usage percent
+    (see below).
+  - At/above `HIGH_WATERMARK_PERCENT` (or below `MIN_FREE_BYTES`) → cleanup runs
+    **aggressively**; the effective TTL is progressively tightened from the base
+    threshold (at the high watermark) toward `AGGRESSIVE_MIN_AGE_SECONDS` (at a
+    full disk, or immediately when the free-space floor is breached). Hysteresis:
     once aggressive, it keeps draining until usage recovers below the low
-    watermark.
+    watermark **and** free space is back above `MIN_FREE_BYTES`.
   - `AGGRESSIVE_MIN_AGE_SECONDS` is an absolute floor — data younger than this is
     never deleted, even at 100% full.
 - **Cost:** a full walk of `data/contiguous` is `O(files)` random-access I/O. On
@@ -45,8 +48,9 @@ disk is actually full.
 - **Watermarks are a pressure trigger + drain target (no TTL):**
   - At/above `HIGH_WATERMARK_PERCENT` (or below `MIN_FREE_BYTES`) → eviction is
     **triggered**.
-  - Eviction runs until usage falls **below** `LOW_WATERMARK_PERCENT` (the
-    drain-down-to target) or the index is drained.
+  - Eviction runs until usage falls **below** `LOW_WATERMARK_PERCENT` **and**
+    free space is back above `MIN_FREE_BYTES` (the drain-down-to target), or the
+    index is drained.
   - `AGGRESSIVE_MIN_AGE_SECONDS` is **ignored** — the evictor has no age floor.
 - **Eviction order:** `ORDER BY tier ASC, last_access ASC` — general-tier blobs
   before preferred-tier, oldest-accessed first within a tier (LRU).

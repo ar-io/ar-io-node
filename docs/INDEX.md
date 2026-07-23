@@ -45,7 +45,7 @@ Fast, offline lookups for data item to root transaction mappings.
 
 | Document | Description |
 |----------|-------------|
-| [Contiguous Data Cache Cleanup](cache-cleanup.md) | The two disk-pressure reclaimers (filesystem-walk worker vs. index evictor), shared watermark semantics, LRU/tiering, and backfill |
+| [Contiguous Data Cache Cleanup](cache-cleanup.md) | The two disk-pressure reclaimers (filesystem-walk worker vs. index evictor) and their shared watermark semantics; plus the index evictor's LRU ordering, tier promotion, and backfill |
 
 ## Data Export
 
