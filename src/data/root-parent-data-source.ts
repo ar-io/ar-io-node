@@ -19,6 +19,7 @@ import {
 import { startChildSpan } from '../tracing.js';
 import { Ans104OffsetSource } from './ans104-offset-source.js';
 import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
+import * as metrics from '../metrics.js';
 
 /**
  * Data source that resolves data items to their root bundles before fetching data.
@@ -101,6 +102,85 @@ export class RootParentDataSource implements ContiguousDataSource {
     }
 
     return finalRegion;
+  }
+
+  /**
+   * Recovers a data item's offset after the local bundle-header scan missed
+   * (the item is nested beyond the root bundle's direct children). Re-queries
+   * the root index with the default actionable acceptance — which may consult
+   * remote sources such as GraphQL — and derives the offset from its path or
+   * direct offsets. Runs under its own span so this slow path's latency is
+   * visible in traces, separate from the cheap local scan.
+   *
+   * @returns The resolved offset (or `null` if unresolved) and the method used.
+   */
+  private async resolveRemoteFallbackOffset(
+    id: string,
+    parentSpan: Span,
+    signal?: AbortSignal,
+  ): Promise<{
+    result: {
+      itemOffset: number;
+      dataOffset: number;
+      itemSize: number;
+      dataSize: number;
+      contentType?: string;
+    } | null;
+    method:
+      | 'linear_then_path_fallback'
+      | 'linear_then_offsets_fallback'
+      | 'linear_search';
+  }> {
+    const span = startChildSpan(
+      'RootParentDataSource.remoteFallbackOffset',
+      { attributes: { 'data.id': id } },
+      parentSpan,
+    );
+    try {
+      const actionable = await this.dataItemRootTxIndex.getRootTx(id);
+
+      if (actionable?.path && actionable.path.length > 0) {
+        const result = await this.ans104OffsetSource.getDataItemOffsetWithPath(
+          id,
+          actionable.path,
+          signal,
+        );
+        span.setAttributes({
+          'offset.method': 'linear_then_path_fallback',
+          'offset.path_length': actionable.path.length,
+          'offset.found': result !== null,
+        });
+        return { result, method: 'linear_then_path_fallback' };
+      }
+
+      if (
+        actionable?.rootOffset !== undefined &&
+        actionable?.rootDataOffset !== undefined &&
+        actionable?.dataSize !== undefined
+      ) {
+        // Direct offsets are absolute within the root TX, so they serve
+        // regardless of nesting.
+        span.setAttributes({ 'offset.method': 'linear_then_offsets_fallback' });
+        return {
+          result: {
+            itemOffset: actionable.rootOffset,
+            dataOffset: actionable.rootDataOffset,
+            itemSize: actionable.size ?? actionable.dataSize,
+            dataSize: actionable.dataSize,
+            contentType: actionable.contentType,
+          },
+          method: 'linear_then_offsets_fallback',
+        };
+      }
+
+      span.setAttributes({
+        'offset.method': 'linear_search',
+        'offset.found': false,
+      });
+      return { result: null, method: 'linear_search' };
+    } finally {
+      span.end();
+    }
   }
 
   /**
@@ -670,7 +750,14 @@ export class RootParentDataSource implements ContiguousDataSource {
       let rootTxId: string | undefined;
       let rootResult: any;
       try {
-        rootResult = await this.dataItemRootTxIndex.getRootTx(id);
+        // Local-first: accept any result carrying a rootTxId so the lookup
+        // short-circuits on a local source (db/cdb) instead of probing remote
+        // sources (e.g. GraphQL) for a path shortcut. Offsets are resolved
+        // below from the bundle header — bytes we must read to serve the item
+        // anyway — and a path lookup is only issued if that local scan misses.
+        rootResult = await this.dataItemRootTxIndex.getRootTx(id, {
+          accept: (r) => r.rootTxId != null,
+        });
         rootTxId = rootResult?.rootTxId;
         rootTxLookupSpan.setAttributes({
           'root.tx_id': rootTxId ?? 'not_found',
@@ -821,15 +908,38 @@ export class RootParentDataSource implements ContiguousDataSource {
               'offset.path_length': rootResult.path.length,
             });
           } else {
-            // Fallback to linear search when path is not available
+            // No path from the local-first lookup: try a cheap linear scan of
+            // the root bundle header, which resolves shallow items (direct
+            // children of the root bundle) with no remote lookup.
             bundleParseResult = await this.ans104OffsetSource.getDataItemOffset(
               id,
               rootTxId,
               signal,
             );
-            offsetParseSpan.setAttributes({
-              'offset.method': 'linear_search',
-            });
+
+            if (bundleParseResult !== null) {
+              metrics.rootTxLocalResolveTotal.inc({ outcome: 'local' });
+              offsetParseSpan.setAttributes({
+                'offset.method': 'linear_search',
+              });
+            } else {
+              // Local scan missed — the item is nested beyond the root
+              // bundle's direct children. Recover via a full lookup (which may
+              // consult remote sources such as GraphQL).
+              const fallback = await this.resolveRemoteFallbackOffset(
+                id,
+                span,
+                signal,
+              );
+              bundleParseResult = fallback.result;
+              offsetParseSpan.setAttributes({
+                'offset.method': fallback.method,
+              });
+              metrics.rootTxLocalResolveTotal.inc({
+                outcome:
+                  bundleParseResult !== null ? 'remote_fallback' : 'unresolved',
+              });
+            }
           }
           offsetParseSpan.setAttributes({
             'offset.found': bundleParseResult !== null,
