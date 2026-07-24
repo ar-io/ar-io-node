@@ -136,6 +136,12 @@ export const graphqlRootTxBatchTokenWaitTimeoutTotal = new promClient.Counter({
   labelNames: ['endpoint'],
 });
 
+export const gatewaysGqlSoftDeadlineSourceCutTotal = new promClient.Counter({
+  name: 'gateways_gql_soft_deadline_source_cut_total',
+  help: 'Count of fan-out GraphQL upstreams dropped from a list-query merge because they had not responded by the soft deadline, by source',
+  labelNames: ['source'],
+});
+
 //
 // GraphQL L1-only routing metrics
 //

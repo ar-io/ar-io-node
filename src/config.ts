@@ -562,6 +562,24 @@ export const GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
     30 * 1_000,
   );
 
+// Soft deadline for the GraphQL fan-out list queries (transactions/blocks).
+// When enabled, once at least one upstream has returned a usable result the
+// merge waits at most this long for the remaining upstreams, then returns a
+// partial merge with an `UPSTREAM_SOFT_DEADLINE` warning for each source that
+// had not yet responded. The abandoned requests keep running in the
+// background so the per-upstream circuit breaker still observes their true
+// outcome (a real success or timeout). The deadline is only armed after the
+// first usable result, so an all-slow moment never turns a would-succeed
+// query into a failure. When disabled (the default), the fan-out waits for
+// every upstream to settle (bounded by GATEWAYS_GQL_REQUEST_TIMEOUT_MS),
+// preserving the prior behavior.
+export const GATEWAYS_GQL_SOFT_DEADLINE_ENABLED =
+  env.varOrDefault('GATEWAYS_GQL_SOFT_DEADLINE_ENABLED', 'false') === 'true';
+export const GATEWAYS_GQL_SOFT_DEADLINE_MS = env.positiveIntOrDefault(
+  'GATEWAYS_GQL_SOFT_DEADLINE_MS',
+  2_000,
+);
+
 // GraphQL root TX lookup rate limiting
 export const GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
   'GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE',
