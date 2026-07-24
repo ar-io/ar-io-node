@@ -17,6 +17,17 @@ import {
   DataItemRootIndex,
 } from '../types.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import * as metrics from '../metrics.js';
+
+// Reads the current value of root_tx_local_resolve_total for a given outcome
+// label so tests can assert the increment (the counter is process-global, so
+// assert deltas rather than absolute values).
+async function readLocalResolve(outcome: string): Promise<number> {
+  const metric = await metrics.rootTxLocalResolveTotal.get();
+  return (
+    metric.values.find((v: any) => v.labels.outcome === outcome)?.value ?? 0
+  );
+}
 
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
@@ -2362,7 +2373,9 @@ describe('RootParentDataSource', () => {
         cached: false,
       }));
 
+      const before = await readLocalResolve('local');
       await rootParentDataSource.getData({ id: dataItemId });
+      assert.strictEqual((await readLocalResolve('local')) - before, 1);
 
       // Exactly one root-tx lookup: the local scan succeeded, so no remote
       // fallback lookup was issued.
@@ -2418,7 +2431,12 @@ describe('RootParentDataSource', () => {
         cached: false,
       }));
 
+      const before = await readLocalResolve('remote_fallback');
       await rootParentDataSource.getData({ id: dataItemId });
+      assert.strictEqual(
+        (await readLocalResolve('remote_fallback')) - before,
+        1,
+      );
 
       // Two lookups: local-first, then the remote fallback after the miss.
       assert.strictEqual(
@@ -2443,6 +2461,102 @@ describe('RootParentDataSource', () => {
           .arguments[1],
         [rootTxId, 'parent-nested'],
       );
+    });
+
+    it('resolves via direct offsets when the fallback lookup has no path', async () => {
+      const dataItemId = 'nested-offsets-item';
+      const rootTxId = 'root-tx-offsets';
+      (ans104OffsetSource as any).getDataItemOffsetWithPath = mock.fn();
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      // First lookup: bare rootTxId. Fallback: direct offsets, no path.
+      let call = 0;
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => {
+          call += 1;
+          return call === 1
+            ? { rootTxId }
+            : {
+                rootTxId,
+                rootOffset: 900,
+                rootDataOffset: 1000,
+                size: 600,
+                dataSize: 500,
+                contentType: 'text/plain',
+              };
+        },
+      );
+      // Local scan misses.
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => null,
+      );
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('x')]),
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      const before = await readLocalResolve('remote_fallback');
+      await rootParentDataSource.getData({ id: dataItemId });
+      assert.strictEqual(
+        (await readLocalResolve('remote_fallback')) - before,
+        1,
+      );
+
+      // Resolved from the fallback's direct offsets — no path navigation.
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        2,
+      );
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffsetWithPath as any).mock.calls.length,
+        0,
+      );
+      // Data was served using the recovered offsets (dataOffset 1000).
+      assert.strictEqual(
+        (dataSource.getData as any).mock.calls[0].arguments[0].region.offset,
+        1000,
+      );
+    });
+
+    it('records unresolved when both the local scan and the fallback miss', async () => {
+      const dataItemId = 'truly-missing-item';
+      const rootTxId = 'root-tx-missing';
+      (ans104OffsetSource as any).getDataItemOffsetWithPath = mock.fn();
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      // Both lookups return a bare rootTxId (no path/offsets).
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
+      );
+      // Local scan misses; the fallback lookup also yields nothing usable.
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => null,
+      );
+
+      const before = await readLocalResolve('unresolved');
+      await assert.rejects(
+        async () => {
+          await rootParentDataSource.getData({ id: dataItemId });
+        },
+        {
+          message: `Data item ${dataItemId} not found in root bundle ${rootTxId}`,
+        },
+      );
+      assert.strictEqual((await readLocalResolve('unresolved')) - before, 1);
+
+      // No path navigation and no data fetch on a genuine miss.
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffsetWithPath as any).mock.calls.length,
+        0,
+      );
+      assert.strictEqual((dataSource.getData as any).mock.calls.length, 0);
     });
   });
 });

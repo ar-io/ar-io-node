@@ -105,6 +105,85 @@ export class RootParentDataSource implements ContiguousDataSource {
   }
 
   /**
+   * Recovers a data item's offset after the local bundle-header scan missed
+   * (the item is nested beyond the root bundle's direct children). Re-queries
+   * the root index with the default actionable acceptance — which may consult
+   * remote sources such as GraphQL — and derives the offset from its path or
+   * direct offsets. Runs under its own span so this slow path's latency is
+   * visible in traces, separate from the cheap local scan.
+   *
+   * @returns The resolved offset (or `null` if unresolved) and the method used.
+   */
+  private async resolveRemoteFallbackOffset(
+    id: string,
+    parentSpan: Span,
+    signal?: AbortSignal,
+  ): Promise<{
+    result: {
+      itemOffset: number;
+      dataOffset: number;
+      itemSize: number;
+      dataSize: number;
+      contentType?: string;
+    } | null;
+    method:
+      | 'linear_then_path_fallback'
+      | 'linear_then_offsets_fallback'
+      | 'linear_search';
+  }> {
+    const span = startChildSpan(
+      'RootParentDataSource.remoteFallbackOffset',
+      { attributes: { 'data.id': id } },
+      parentSpan,
+    );
+    try {
+      const actionable = await this.dataItemRootTxIndex.getRootTx(id);
+
+      if (actionable?.path && actionable.path.length > 0) {
+        const result = await this.ans104OffsetSource.getDataItemOffsetWithPath(
+          id,
+          actionable.path,
+          signal,
+        );
+        span.setAttributes({
+          'offset.method': 'linear_then_path_fallback',
+          'offset.path_length': actionable.path.length,
+          'offset.found': result !== null,
+        });
+        return { result, method: 'linear_then_path_fallback' };
+      }
+
+      if (
+        actionable?.rootOffset !== undefined &&
+        actionable?.rootDataOffset !== undefined &&
+        actionable?.dataSize !== undefined
+      ) {
+        // Direct offsets are absolute within the root TX, so they serve
+        // regardless of nesting.
+        span.setAttributes({ 'offset.method': 'linear_then_offsets_fallback' });
+        return {
+          result: {
+            itemOffset: actionable.rootOffset,
+            dataOffset: actionable.rootDataOffset,
+            itemSize: actionable.size ?? actionable.dataSize,
+            dataSize: actionable.dataSize,
+            contentType: actionable.contentType,
+          },
+          method: 'linear_then_offsets_fallback',
+        };
+      }
+
+      span.setAttributes({
+        'offset.method': 'linear_search',
+        'offset.found': false,
+      });
+      return { result: null, method: 'linear_search' };
+    } finally {
+      span.end();
+    }
+  }
+
+  /**
    * Attempts to cache data attributes, logging a warning on failure.
    * Never throws — storage failures should not block data retrieval.
    */
@@ -844,46 +923,18 @@ export class RootParentDataSource implements ContiguousDataSource {
                 'offset.method': 'linear_search',
               });
             } else {
-              // Local scan missed — the item is nested beyond the root bundle's
-              // direct children. Recover the richer result the local-first
-              // lookup skipped by re-querying with the default actionable
-              // acceptance (which may consult remote sources such as GraphQL),
-              // then retry with its path or direct offsets.
-              const actionable = await this.dataItemRootTxIndex.getRootTx(id);
-              if (actionable?.path && actionable.path.length > 0) {
-                bundleParseResult =
-                  await this.ans104OffsetSource.getDataItemOffsetWithPath(
-                    id,
-                    actionable.path,
-                    signal,
-                  );
-                offsetParseSpan.setAttributes({
-                  'offset.method': 'linear_then_path_fallback',
-                  'offset.path_length': actionable.path.length,
-                });
-              } else if (
-                actionable?.rootOffset !== undefined &&
-                actionable?.rootDataOffset !== undefined &&
-                actionable?.dataSize !== undefined
-              ) {
-                // A source supplied direct offsets (absolute within the root
-                // TX), which serve regardless of nesting.
-                bundleParseResult = {
-                  itemOffset: actionable.rootOffset,
-                  dataOffset: actionable.rootDataOffset,
-                  itemSize: actionable.size ?? actionable.dataSize,
-                  dataSize: actionable.dataSize,
-                  contentType: actionable.contentType,
-                };
-                offsetParseSpan.setAttributes({
-                  'offset.method': 'linear_then_offsets_fallback',
-                });
-              } else {
-                offsetParseSpan.setAttributes({
-                  'offset.method': 'linear_search',
-                });
-              }
-
+              // Local scan missed — the item is nested beyond the root
+              // bundle's direct children. Recover via a full lookup (which may
+              // consult remote sources such as GraphQL).
+              const fallback = await this.resolveRemoteFallbackOffset(
+                id,
+                span,
+                signal,
+              );
+              bundleParseResult = fallback.result;
+              offsetParseSpan.setAttributes({
+                'offset.method': fallback.method,
+              });
               metrics.rootTxLocalResolveTotal.inc({
                 outcome:
                   bundleParseResult !== null ? 'remote_fallback' : 'unresolved',

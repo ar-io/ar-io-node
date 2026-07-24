@@ -1466,16 +1466,9 @@ export const compositeRootTxSourcesProbedSummary = new promClient.Summary({
   help: 'Number of sources queried per composite root TX lookup before returning',
 });
 
-// Outcome of the local-first data item offset resolution in RootParentDataSource
-// (only counted for bare-rootTxId results, where the optimization applies):
-//   - local: resolved to an offset by a local bundle-header scan, avoiding a
-//     remote path/offsets lookup (e.g. GraphQL)
-//   - remote_fallback: the local scan missed (nested item) and a full lookup
-//     (possibly remote) recovered a path or direct offsets
-//   - unresolved: neither the local scan nor the fallback lookup found the item
 export const rootTxLocalResolveTotal = new promClient.Counter({
   name: 'root_tx_local_resolve_total',
-  help: 'Outcome of local-first data item offset resolution by RootParentDataSource',
+  help: 'Outcome of RootParentDataSource local-first offset resolution for bare-rootTxId results: local (resolved by a local bundle-header scan, remote lookup avoided), remote_fallback (local scan missed and a full lookup recovered a path or direct offsets), or unresolved (neither found the item)',
   labelNames: ['outcome'] as const,
 });
 
