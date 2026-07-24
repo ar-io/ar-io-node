@@ -6,7 +6,7 @@
  */
 import winston from 'winston';
 import CircuitBreaker from 'opossum';
-import { DataItemRootIndex } from '../types.js';
+import { DataItemRootIndex, GetRootTxOptions } from '../types.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
@@ -110,10 +110,21 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
    * richer. If no source is actionable, the saved fallback is returned, or
    * `undefined` when nothing resolved.
    *
+   * Callers can override the acceptance decision via `opts.accept` — a
+   * predicate that returns `true` to short-circuit on a given result. This
+   * lets a caller that only needs (say) a `rootTxId` stop as soon as any
+   * source supplies one, rather than probing remote sources for richer
+   * metadata it will derive locally. When omitted, the default actionable
+   * acceptance above applies.
+   *
    * @param id - base64url data item / transaction ID to resolve.
+   * @param opts - optional lookup options; see {@link GetRootTxOptions}.
    * @returns The root transaction info, or `undefined` if unresolved.
    */
-  async getRootTx(id: string): Promise<
+  async getRootTx(
+    id: string,
+    opts?: GetRootTxOptions,
+  ): Promise<
     | {
         rootTxId: string;
         path?: string[];
@@ -200,13 +211,18 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
             has_offsets: hasCompleteOffsets ? 'true' : 'false',
           });
 
-          // Decide whether this result is actionable enough to stop the search.
-          // Requiring all four offset fields (hasCompleteOffsets) is too strict:
-          // no locally-configured source (db, cdb) ever supplies `size`, so the
-          // search never short-circuited and every lookup fell through to the
-          // expensive downstream sources (e.g. GraphQL) even when db/cdb had
-          // already answered. A result is actionable when the caller can proceed
-          // without probing the remaining sources:
+          // Decide whether this result is sufficient to stop the search.
+          //
+          // When the caller supplies opts.accept, it fully governs the
+          // decision (exit reason `caller_accept`) — e.g. "any rootTxId is
+          // enough, I'll resolve offsets locally" avoids probing remote
+          // sources. Otherwise the default "actionable" acceptance applies:
+          // requiring all four offset fields (hasCompleteOffsets) is too
+          // strict — no locally-configured source (db, cdb) ever supplies
+          // `size`, so the search never short-circuited and every lookup fell
+          // through to the expensive downstream sources (e.g. GraphQL) even
+          // when db/cdb had already answered. A result is actionable when the
+          // caller can proceed without probing the remaining sources:
           //   - complete_offsets: full offsets + size (skip even a header parse)
           //   - l1_root: rootTxId === id, a definitive L1 root (passthrough)
           //   - offsets: rootOffset + rootDataOffset present (serve via a cheap
@@ -217,8 +233,13 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
             | 'l1_root'
             | 'offsets'
             | 'path'
+            | 'caller_accept'
             | undefined;
-          if (hasCompleteOffsets) {
+          if (opts?.accept !== undefined) {
+            if (opts.accept(result)) {
+              exitReason = 'caller_accept';
+            }
+          } else if (hasCompleteOffsets) {
             exitReason = 'complete_offsets';
           } else if (result.rootTxId === id) {
             exitReason = 'l1_root';

@@ -1186,20 +1186,37 @@ export interface ContiguousDataIndex {
   saveVerificationPriority(id: string, priority: number): Promise<void>;
 }
 
+export interface RootTxLookupResult {
+  rootTxId: string;
+  /** Path from root TX to immediate parent bundle [root, ..., parent] */
+  path?: string[];
+  rootOffset?: number;
+  rootDataOffset?: number;
+  contentType?: string;
+  size?: number;
+  dataSize?: number;
+}
+
+export interface GetRootTxOptions {
+  /**
+   * Predicate deciding whether a source's result is sufficient for the caller,
+   * letting the composite short-circuit as soon as it is satisfied. Return
+   * `true` to accept (stop probing further sources) or `false` to keep probing.
+   *
+   * When omitted, the composite applies its default "actionable" acceptance
+   * (complete offsets, an L1 root, `rootOffset` + `rootDataOffset`, or a
+   * non-empty path). Callers that can proceed from less — e.g. a bare
+   * `rootTxId` they will resolve offsets from locally — can pass a looser
+   * predicate to avoid probing remote sources such as GraphQL.
+   */
+  accept?: (result: RootTxLookupResult) => boolean;
+}
+
 export interface DataItemRootIndex {
-  getRootTx(id: string): Promise<
-    | {
-        rootTxId: string;
-        /** Path from root TX to immediate parent bundle [root, ..., parent] */
-        path?: string[];
-        rootOffset?: number;
-        rootDataOffset?: number;
-        contentType?: string;
-        size?: number;
-        dataSize?: number;
-      }
-    | undefined
-  >;
+  getRootTx(
+    id: string,
+    opts?: GetRootTxOptions,
+  ): Promise<RootTxLookupResult | undefined>;
 }
 
 export interface ContiguousDataSource {
