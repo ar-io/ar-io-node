@@ -135,6 +135,7 @@ result is actionable when the caller can proceed without further lookups:
 | `l1_root`          | `rootTxId === id`                                     | Definitive L1 root; passthrough                   |
 | `offsets`          | `rootOffset` + `rootDataOffset` present               | The CDB64 case; size is read from the item header |
 | `path`             | non-empty `path`                                      | Enables path-guided bundle navigation             |
+| `caller_accept`    | `opts.accept(result) === true`                        | Caller-provided predicate accepted the result     |
 
 A caller may override this decision by passing an `accept` predicate to
 `getRootTx` (short-circuiting on whatever it deems sufficient — e.g. any

@@ -266,4 +266,29 @@ describe('CompositeRootTxIndex', () => {
     assert.equal(db.calls, 1);
     assert.equal(cdb.calls, 1);
   });
+
+  it('propagates exceptions from opts.accept instead of swallowing them as a source error', async () => {
+    const db = makeIndex('StandaloneSqlite', { rootTxId: 'root-9' });
+    const cdb = makeIndex('Cdb64RootTxIndex', { rootTxId: 'root-9' });
+
+    const composite = new CompositeRootTxIndex({
+      log,
+      indexes: [db, cdb],
+      circuitBreakerOptions: stableBreakerOptions,
+    });
+
+    await assert.rejects(
+      () =>
+        composite.getRootTx(ID, {
+          accept: () => {
+            throw new Error('predicate boom');
+          },
+        }),
+      /predicate boom/,
+    );
+    // The predicate throws on db's result; the error must surface immediately,
+    // not be misattributed to db and cause cdb to be probed as a fallback.
+    assert.equal(db.calls, 1);
+    assert.equal(cdb.calls, 0);
+  });
 });

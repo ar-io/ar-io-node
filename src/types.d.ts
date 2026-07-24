@@ -1186,14 +1186,30 @@ export interface ContiguousDataIndex {
   saveVerificationPriority(id: string, priority: number): Promise<void>;
 }
 
+/**
+ * Root transaction location for a data item, as resolved by a
+ * {@link DataItemRootIndex}. All offsets and sizes are byte values relative to
+ * the root L1 transaction's data. Fields beyond `rootTxId` are best-effort:
+ * different sources populate different subsets, and consumers derive whatever
+ * is missing (e.g. by parsing the bundle header).
+ */
 export interface RootTxLookupResult {
+  /** base64url ID of the root L1 transaction containing the data item. */
   rootTxId: string;
-  /** Path from root TX to immediate parent bundle [root, ..., parent] */
+  /**
+   * Bundle traversal path from root to the immediate parent bundle
+   * `[root, ..., parent]`; omitted when the path is unknown.
+   */
   path?: string[];
+  /** Byte offset of the data item header within the root TX data. */
   rootOffset?: number;
+  /** Byte offset of the data item's payload within the root TX data. */
   rootDataOffset?: number;
+  /** Content type of the data item, when known to the source. */
   contentType?: string;
+  /** Total size of the data item in bytes, including its header. */
   size?: number;
+  /** Size of the data item's payload in bytes, excluding its header. */
   dataSize?: number;
 }
 
@@ -1212,7 +1228,19 @@ export interface GetRootTxOptions {
   accept?: (result: RootTxLookupResult) => boolean;
 }
 
+/**
+ * A source that resolves a data item ID to its root transaction location.
+ * Implemented by individual index backends (local DB, CDB64, gateways,
+ * GraphQL, etc.) and by the composite that probes them in order.
+ */
 export interface DataItemRootIndex {
+  /**
+   * Resolves `id` to its root transaction location, or `undefined` if the
+   * source cannot resolve it.
+   *
+   * @param id - base64url data item / transaction ID to resolve.
+   * @param opts - optional lookup options; see {@link GetRootTxOptions}.
+   */
   getRootTx(
     id: string,
     opts?: GetRootTxOptions,
