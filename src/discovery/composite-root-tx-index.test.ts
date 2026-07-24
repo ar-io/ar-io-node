@@ -192,4 +192,103 @@ describe('CompositeRootTxIndex', () => {
     const result = await composite.getRootTx(ID);
     assert.equal(result, undefined);
   });
+
+  it('opts.accept short-circuits on a bare rootTxId the default would reject', async () => {
+    // db misses; cdb returns a bare rootTxId (no path/offsets, not an L1 root).
+    // Default acceptance would keep probing GraphQL; a rootTxId-only predicate
+    // stops at cdb.
+    const db = makeIndex('StandaloneSqlite', undefined);
+    const cdb = makeIndex('Cdb64RootTxIndex', { rootTxId: 'root-6' });
+    const graphql = makeIndex('GraphQLRootTxIndex', {
+      rootTxId: 'root-6',
+      path: ['root-6', 'parent-6'],
+    });
+
+    const composite = new CompositeRootTxIndex({
+      log,
+      indexes: [db, cdb, graphql],
+      circuitBreakerOptions: stableBreakerOptions,
+    });
+
+    const result = await composite.getRootTx(ID, {
+      accept: (r) => r.rootTxId !== undefined,
+    });
+    assert.equal(result?.rootTxId, 'root-6');
+    assert.equal(cdb.calls, 1);
+    assert.equal(
+      graphql.calls,
+      0,
+      'predicate satisfied at cdb; GraphQL skipped',
+    );
+  });
+
+  it('opts.accept returning false keeps probing until satisfied', async () => {
+    // A stricter predicate (require a path) rejects the bare db/cdb results and
+    // forces the search to reach GraphQL, which supplies the path.
+    const db = makeIndex('StandaloneSqlite', { rootTxId: 'root-7' });
+    const cdb = makeIndex('Cdb64RootTxIndex', { rootTxId: 'root-7' });
+    const graphql = makeIndex('GraphQLRootTxIndex', {
+      rootTxId: 'root-7',
+      path: ['root-7', 'parent-7'],
+    });
+
+    const composite = new CompositeRootTxIndex({
+      log,
+      indexes: [db, cdb, graphql],
+      circuitBreakerOptions: stableBreakerOptions,
+    });
+
+    const result = await composite.getRootTx(ID, {
+      accept: (r) => (r.path?.length ?? 0) > 0,
+    });
+    assert.deepEqual(result?.path, ['root-7', 'parent-7']);
+    assert.equal(db.calls, 1);
+    assert.equal(cdb.calls, 1);
+    assert.equal(graphql.calls, 1);
+  });
+
+  it('opts.accept falls back to the first result when nothing is accepted', async () => {
+    // No source satisfies the predicate -> the saved fallback (first result) is
+    // returned, matching default fallback semantics.
+    const db = makeIndex('StandaloneSqlite', { rootTxId: 'root-8' });
+    const cdb = makeIndex('Cdb64RootTxIndex', { rootTxId: 'root-8' });
+
+    const composite = new CompositeRootTxIndex({
+      log,
+      indexes: [db, cdb],
+      circuitBreakerOptions: stableBreakerOptions,
+    });
+
+    const result = await composite.getRootTx(ID, {
+      accept: (r) => (r.path?.length ?? 0) > 0,
+    });
+    assert.equal(result?.rootTxId, 'root-8');
+    assert.equal(db.calls, 1);
+    assert.equal(cdb.calls, 1);
+  });
+
+  it('propagates exceptions from opts.accept instead of swallowing them as a source error', async () => {
+    const db = makeIndex('StandaloneSqlite', { rootTxId: 'root-9' });
+    const cdb = makeIndex('Cdb64RootTxIndex', { rootTxId: 'root-9' });
+
+    const composite = new CompositeRootTxIndex({
+      log,
+      indexes: [db, cdb],
+      circuitBreakerOptions: stableBreakerOptions,
+    });
+
+    await assert.rejects(
+      () =>
+        composite.getRootTx(ID, {
+          accept: () => {
+            throw new Error('predicate boom');
+          },
+        }),
+      /predicate boom/,
+    );
+    // The predicate throws on db's result; the error must surface immediately,
+    // not be misattributed to db and cause cdb to be probed as a fallback.
+    assert.equal(db.calls, 1);
+    assert.equal(cdb.calls, 0);
+  });
 });
