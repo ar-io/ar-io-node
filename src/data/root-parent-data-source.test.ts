@@ -403,9 +403,12 @@ describe('RootParentDataSource', () => {
         },
       );
 
+      // Two root-tx lookups: the local-first lookup (bare rootTxId), then the
+      // remote fallback after the local scan misses — which also can't resolve
+      // it here, so the not-found error is thrown.
       assert.strictEqual(
         (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
-        1,
+        2,
       );
       assert.strictEqual(
         (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
@@ -2325,6 +2328,120 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(
         (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
         1,
+      );
+    });
+  });
+
+  describe('local-first offset resolution', () => {
+    it('resolves a bare rootTxId via local scan without a second (remote) lookup', async () => {
+      const dataItemId = 'local-first-item';
+      const rootTxId = 'root-tx-local';
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      // Bare rootTxId only (no path/offsets) — the CDB case.
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
+      );
+      // Local header scan resolves it (shallow item).
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
+      );
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('x')]),
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      await rootParentDataSource.getData({ id: dataItemId });
+
+      // Exactly one root-tx lookup: the local scan succeeded, so no remote
+      // fallback lookup was issued.
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        1,
+      );
+      // The lookup opted into rootId-only acceptance.
+      const accept = (dataItemRootTxIndex.getRootTx as any).mock.calls[0]
+        .arguments[1]?.accept;
+      assert.strictEqual(typeof accept, 'function');
+      assert.strictEqual(accept({ rootTxId: 'anything' }), true);
+      assert.strictEqual(accept({}), false);
+    });
+
+    it('falls back to a path lookup when the local scan misses', async () => {
+      const dataItemId = 'nested-item';
+      const rootTxId = 'root-tx-nested';
+      (ans104OffsetSource as any).getDataItemOffsetWithPath = mock.fn();
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      // First lookup: bare rootTxId. Second lookup (fallback): supplies a path.
+      let call = 0;
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => {
+          call += 1;
+          return call === 1
+            ? { rootTxId }
+            : { rootTxId, path: [rootTxId, 'parent-nested'] };
+        },
+      );
+      // Local scan misses (nested item).
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => null,
+      );
+      // Path-guided navigation resolves it.
+      (
+        ans104OffsetSource.getDataItemOffsetWithPath as any
+      ).mock.mockImplementation(async () => ({
+        itemOffset: 10,
+        dataOffset: 20,
+        itemSize: 60,
+        dataSize: 50,
+        contentType: 'text/plain',
+      }));
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('x')]),
+        size: 50,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      await rootParentDataSource.getData({ id: dataItemId });
+
+      // Two lookups: local-first, then the remote fallback after the miss.
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        2,
+      );
+      // The fallback lookup used the default (no accept override).
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls[1].arguments[1],
+        undefined,
+      );
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        1,
+      );
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffsetWithPath as any).mock.calls.length,
+        1,
+      );
+      assert.deepStrictEqual(
+        (ans104OffsetSource.getDataItemOffsetWithPath as any).mock.calls[0]
+          .arguments[1],
+        [rootTxId, 'parent-nested'],
       );
     });
   });
