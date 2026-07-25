@@ -16,12 +16,13 @@ import { db, signatureStore, ownerStore } from '../system.js';
 import log from '../log.js';
 import { ParquetExporter } from '../workers/parquet-exporter.js';
 import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
-import { DATA_PATH_REGEX } from '../constants.js';
+import { DATA_PATH_REGEX, DIGEST_DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
 import { sanityCheckTx } from '../lib/validation.js';
 import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
 import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
+import { digestDataHandler } from './data/index.js';
 
 const arweave = Arweave.init({});
 
@@ -227,6 +228,11 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
   res.status(200).send(response);
 };
 arIoRouter.get('/ar-io/info', arIoInfoHandler);
+
+// Content-addressed data: serve bytes by their SHA-256 digest (the value
+// emitted as X-AR-IO-Digest). GET registration also answers HEAD. Local
+// content store only — see createDigestDataHandler.
+arIoRouter.get(DIGEST_DATA_PATH_REGEX, digestDataHandler);
 
 // peer list
 arIoRouter.get('/ar-io/peers', async (_req, res) => {

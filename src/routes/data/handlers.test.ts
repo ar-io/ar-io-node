@@ -6,6 +6,7 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
+import crypto from 'node:crypto';
 import express from 'express';
 import { Readable } from 'node:stream';
 import { default as request } from 'supertest';
@@ -26,10 +27,12 @@ import {
 } from '../../types.js';
 import {
   createDataHandler,
+  createDigestDataHandler,
   getRequestAttributes,
   matchContentTypePattern,
   shouldUsePrivateCacheControl,
 } from './handlers.js';
+import { ByHashDataSource } from '../../types.js';
 import { MemoryRateLimiter } from '../../limiter/memory-rate-limiter.js';
 import type {
   PaymentProcessor,
@@ -3362,6 +3365,185 @@ st
           );
         });
       });
+    });
+  });
+
+  describe('createDigestDataHandler', () => {
+    const CONTENT = Buffer.from('digest-addressed test content');
+    const DIGEST = crypto
+      .createHash('sha256')
+      .update(CONTENT)
+      .digest('base64url');
+    // A representative 43-char base64url id that resolves to the digest.
+    const REPRESENTATIVE_ID = crypto
+      .createHash('sha256')
+      .update('representative-id')
+      .digest('base64url');
+
+    let app: express.Express;
+    let dataAttributesSource: DataAttributesSource;
+    let dataSource: ByHashDataSource;
+    let dataBlockListValidator: DataBlockListValidator;
+
+    // The handler reads req.params[0]; a regex route populates it.
+    const route = /^\/ar-io\/digest\/(.+)$/;
+
+    const build = () =>
+      createDigestDataHandler({
+        log,
+        dataSource,
+        dataAttributesSource,
+        dataBlockListValidator,
+      });
+
+    beforeEach(() => {
+      app = express();
+      dataAttributesSource = {
+        getDataAttributes: () =>
+          Promise.resolve({
+            hash: 'stale-hash-should-be-overridden',
+            size: CONTENT.length,
+            offset: 0,
+            contentType: 'text/plain',
+            stable: true,
+            verified: false,
+          } as any),
+      };
+      dataSource = {
+        getDataByHash: (hash: string, region?: any) => {
+          if (hash !== DIGEST) {
+            return Promise.reject(new Error('No content for hash'));
+          }
+          let body = CONTENT;
+          if (region) {
+            body = CONTENT.subarray(region.offset, region.offset + region.size);
+          }
+          return Promise.resolve({
+            hash: DIGEST,
+            stream: Readable.from(body),
+            size: region ? region.size : CONTENT.length,
+            totalSize: CONTENT.length,
+            sourceContentType: 'text/plain',
+            verified: true,
+            trusted: true,
+            cached: true,
+            representativeId: REPRESENTATIVE_ID,
+          });
+        },
+      };
+      dataBlockListValidator = {
+        isIdBlocked: () => Promise.resolve(false),
+        isHashBlocked: () => Promise.resolve(false),
+      };
+    });
+
+    afterEach(() => {
+      mock.restoreAll();
+    });
+
+    it('serves bytes with full signed headers (digest, data-id, verified)', async () => {
+      app.get(route, build());
+
+      return request(app)
+        .get(`${'/ar-io/digest/'}${DIGEST}`)
+        .expect(200)
+        .then((res: any) => {
+          assert.equal(res.text, CONTENT.toString());
+          assert.equal(res.headers[headerNames.digest.toLowerCase()], DIGEST);
+          assert.equal(res.headers['etag'], `"${DIGEST}"`);
+          assert.equal(res.headers[headerNames.verified.toLowerCase()], 'true');
+          assert.equal(res.headers[headerNames.trusted.toLowerCase()], 'true');
+          // Data id (a TRIGGER_HEADER) drives HTTPSIG signing.
+          assert.equal(
+            res.headers[headerNames.dataId.toLowerCase()],
+            REPRESENTATIVE_ID,
+          );
+          // Content-addressed → immutable.
+          assert.ok(res.headers['cache-control'].includes('immutable'));
+          assert.equal(
+            res.headers['content-type'],
+            'text/plain; charset=utf-8',
+          );
+          assert.equal(res.headers['content-length'], String(CONTENT.length));
+        });
+    });
+
+    it('responds to HEAD with headers and no body', async () => {
+      app.get(route, build());
+
+      return request(app)
+        .head(`/ar-io/digest/${DIGEST}`)
+        .expect(200)
+        .then((res: any) => {
+          assert.deepEqual(res.body, {});
+          assert.equal(res.headers[headerNames.digest.toLowerCase()], DIGEST);
+          assert.equal(res.headers['etag'], `"${DIGEST}"`);
+        });
+    });
+
+    it('returns 206 and partial bytes for a range request', async () => {
+      app.get(route, build());
+
+      return request(app)
+        .get(`/ar-io/digest/${DIGEST}`)
+        .set('Range', 'bytes=0-3')
+        .expect(206)
+        .then((res: any) => {
+          assert.equal(res.text, CONTENT.subarray(0, 4).toString());
+          assert.equal(
+            res.headers['content-range'],
+            `bytes 0-3/${CONTENT.length}`,
+          );
+        });
+    });
+
+    it('returns 404 for a digest with no content in the store', async () => {
+      const unknown = crypto
+        .createHash('sha256')
+        .update('not-stored')
+        .digest('base64url');
+      app.get(route, build());
+
+      return request(app).get(`/ar-io/digest/${unknown}`).expect(404);
+    });
+
+    it('returns 451 when the content hash is blocked', async () => {
+      dataBlockListValidator.isHashBlocked = () => Promise.resolve(true);
+      app.get(route, build());
+
+      return request(app).get(`/ar-io/digest/${DIGEST}`).expect(451);
+    });
+
+    it('returns 400 for a malformed (non-43-char) digest', async () => {
+      app.get(route, build());
+
+      return request(app).get('/ar-io/digest/too-short').expect(400);
+    });
+
+    it('still serves (200) when no representative id is indexed', async () => {
+      // getDataByHash resolves the bytes but yields no representative id.
+      dataSource.getDataByHash = () =>
+        Promise.resolve({
+          hash: DIGEST,
+          stream: Readable.from(CONTENT),
+          size: CONTENT.length,
+          totalSize: CONTENT.length,
+          sourceContentType: 'text/plain',
+          verified: true,
+          trusted: true,
+          cached: true,
+          // no representativeId
+        });
+      app.get(route, build());
+
+      return request(app)
+        .get(`/ar-io/digest/${DIGEST}`)
+        .expect(200)
+        .then((res: any) => {
+          assert.equal(res.text, CONTENT.toString());
+          assert.equal(res.headers[headerNames.digest.toLowerCase()], DIGEST);
+          assert.equal(res.headers[headerNames.verified.toLowerCase()], 'true');
+        });
     });
   });
 });

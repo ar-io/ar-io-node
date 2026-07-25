@@ -243,6 +243,18 @@ implementations including filesystem and S3.
 **Contiguous Data Store** - Storage backend for complete transaction data.
 Manages both data files and verification metadata.
 
+<a id="content-digest"></a> **Content Digest (ar-io-digest)** - The SHA-256
+hash of a piece of contiguous data, base64url-encoded. It is emitted on data
+responses as the `X-AR-IO-Digest` header and is the key under which the
+[contiguous data store](#contiguous-data-store) addresses bytes on disk
+(`data/<h0:2>/<h2:4>/<hash>`). Because the same value identifies content
+across the cache, the index, and the response header, it doubles as a stable
+content address. The `GET /ar-io/digest/{digest}` endpoint serves bytes
+directly by this value; such responses are inherently self-verifying (the
+bytes provably hash to the requested digest) and immutable, but local-cache
+only — there is no on-demand fetch by content hash, since Arweave addresses
+data by [item ID](#item-id), not by content hash.
+
 ## Data Verification
 
 **Data Verification** - The process of cryptographically verifying data

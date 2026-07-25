@@ -2297,6 +2297,76 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('getDataAttributesByHash', () => {
+    // Canonical (round-trip-stable) 43-char base64url values.
+    const HASH = crypto
+      .createHash('sha256')
+      .update('by-hash-content')
+      .digest('base64url');
+    const ID = crypto
+      .createHash('sha256')
+      .update('by-hash-representative-id')
+      .digest('base64url');
+
+    it('resolves size and a representative id from the content hash', async () => {
+      await db.saveDataContentAttributes({
+        id: ID,
+        hash: HASH,
+        dataSize: 4321,
+        verified: true,
+      });
+
+      const attrs = await db.getDataAttributesByHash(HASH);
+      assert.notEqual(attrs, undefined);
+      assert.equal(attrs!.hash, HASH);
+      assert.equal(attrs!.size, 4321);
+      assert.equal(attrs!.id, ID);
+    });
+
+    it('returns undefined for a hash with no content indexed', async () => {
+      const unknown = crypto
+        .createHash('sha256')
+        .update('never-stored')
+        .digest('base64url');
+      const attrs = await db.getDataAttributesByHash(unknown);
+      assert.equal(attrs, undefined);
+    });
+
+    it('deterministically prefers a verified id when several share a hash', async () => {
+      // Two distinct ids with byte-identical content → same hash. The
+      // representative must deterministically be the verified one, not
+      // whichever the index happens to yield first.
+      const sharedHash = crypto
+        .createHash('sha256')
+        .update('shared-by-two-ids')
+        .digest('base64url');
+      const unverifiedId = crypto
+        .createHash('sha256')
+        .update('dup-unverified')
+        .digest('base64url');
+      const verifiedId = crypto
+        .createHash('sha256')
+        .update('dup-verified')
+        .digest('base64url');
+
+      await db.saveDataContentAttributes({
+        id: unverifiedId,
+        hash: sharedHash,
+        dataSize: 99,
+        verified: false,
+      });
+      await db.saveDataContentAttributes({
+        id: verifiedId,
+        hash: sharedHash,
+        dataSize: 99,
+        verified: true,
+      });
+
+      const attrs = await db.getDataAttributesByHash(sharedHash);
+      assert.equal(attrs!.id, verifiedId);
+    });
+  });
+
   describe('upsertNewDataItem clobber resistance (PE-9073)', () => {
     // Regression: after the unbundle path back-fills parent_id /
     // root_transaction_id / data_offset on a previously-optimistic data item,

@@ -50,6 +50,7 @@ import {
   ContiguousDataIndex,
   DataAttributesSource,
   ContiguousDataParent,
+  DataAttributesByHash,
   DataItemAttributes,
   GqlQueryable,
   GqlTransaction,
@@ -1528,6 +1529,23 @@ export class StandaloneSqliteDatabaseWorker {
           : dataRow?.trusted === 0
             ? false
             : undefined,
+    };
+  }
+
+  getDataAttributesByHash(hash: string) {
+    const row = this.stmts.data.selectDataAttributesByHash.get({
+      hash: fromB64Url(hash),
+    });
+
+    if (row === undefined) {
+      return undefined;
+    }
+
+    return {
+      hash: row.hash ? toB64Url(row.hash) : hash,
+      size: row.data_size,
+      contentType: row.original_source_content_type ?? undefined,
+      id: row.id ? toB64Url(row.id) : undefined,
     };
   }
 
@@ -3375,6 +3393,11 @@ export class StandaloneSqliteDatabase
     Awaited<ReturnType<StandaloneSqliteDatabase['getDataAttributes']>>
   >;
 
+  private getDataAttributesByHashCircuitBreaker: CircuitBreaker<
+    Parameters<StandaloneSqliteDatabase['getDataAttributesByHash']>,
+    Awaited<ReturnType<StandaloneSqliteDatabase['getDataAttributesByHash']>>
+  >;
+
   private getDataItemAttributesCircuitBreaker: CircuitBreaker<
     Parameters<StandaloneSqliteDatabase['getDataItemAttributes']>,
     Awaited<ReturnType<StandaloneSqliteDatabase['getDataItemAttributes']>>
@@ -3440,6 +3463,16 @@ export class StandaloneSqliteDatabase
       },
     );
 
+    this.getDataAttributesByHashCircuitBreaker = new CircuitBreaker(
+      (hash: string) => {
+        return this.queueRead('data', `getDataAttributesByHash`, [hash]);
+      },
+      {
+        name: 'getDataAttributesByHash',
+        ...dataIndexCircuitBreakerOptions,
+      },
+    );
+
     this.getDataItemAttributesCircuitBreaker = new CircuitBreaker(
       (id: string) => {
         return this.queueRead('bundles', `getDataItemAttributes`, [id]);
@@ -3464,12 +3497,14 @@ export class StandaloneSqliteDatabase
     metrics.circuitBreakerMetrics.add([
       this.getDataParentCircuitBreaker,
       this.getDataAttributesCircuitBreaker,
+      this.getDataAttributesByHashCircuitBreaker,
       this.getDataItemAttributesCircuitBreaker,
       this.getTransactionAttributesCircuitBreaker,
     ]);
     Object.entries({
       'get-data-parent': this.getDataParentCircuitBreaker,
       'get-data-attributes': this.getDataAttributesCircuitBreaker,
+      'get-data-attributes-by-hash': this.getDataAttributesByHashCircuitBreaker,
       'get-data-item-attributes': this.getDataItemAttributesCircuitBreaker,
       'get-transaction-attributes': this.getTransactionAttributesCircuitBreaker,
     } satisfies Partial<Record<metrics.BreakerSource, CircuitBreaker>>).forEach(
@@ -4049,6 +4084,16 @@ export class StandaloneSqliteDatabase
     }
   }
 
+  async getDataAttributesByHash(
+    hash: string,
+  ): Promise<DataAttributesByHash | undefined> {
+    try {
+      return await this.getDataAttributesByHashCircuitBreaker.fire(hash);
+    } catch (_) {
+      return undefined;
+    }
+  }
+
   async getDataItemAttributes(
     id: string,
   ): Promise<DataItemAttributes | undefined> {
@@ -4618,6 +4663,10 @@ if (!isMainThread) {
         case 'getDataAttributes':
           const dataAttributes = worker.getDataAttributes(args[0]);
           parentPort?.postMessage(dataAttributes);
+          break;
+        case 'getDataAttributesByHash':
+          const dataAttributesByHash = worker.getDataAttributesByHash(args[0]);
+          parentPort?.postMessage(dataAttributesByHash);
           break;
         case 'getDataItemAttributes':
           const dataItemAttributes = worker.getDataItemAttributes(args[0]);
