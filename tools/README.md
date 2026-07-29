@@ -144,6 +144,47 @@ File Descriptor Tracking (PID: 12345):
 - Stress test gateway configuration limits
 - Monitor resource usage during load tests
 
+### `chunk-seeding-report`
+Reports how much of an L1 Arweave transaction's data is actually **seeded** (retrievable as chunks) on the network. Resolves the transaction's absolute weave byte range via `/tx/<id>/offset`, probes `GET /chunk/<offset>` across that range on one or more nodes, and coalesces the results into contiguous **found / missing** byte ranges with an ANSI bar and range table. Useful for diagnosing bundles that never fully index because their payload was only partially propagated (e.g. an abandoned ArDrive-Web upload).
+
+The analysis core (`analyzeSeeding` in `tools/lib/chunk-seeding-report.ts`) is decoupled from the console renderer and returns a JSON-serialisable `SeedingReport`, so it can also back a frontend visualisation.
+
+**Usage:**
+```bash
+# Default: sample up to 400 chunks against arweave.net, print a table
+./tools/chunk-seeding-report <txID>
+
+# Count a chunk as found if ANY listed node serves it
+./tools/chunk-seeding-report <txID> --nodes https://arweave.net,https://permagate.io
+
+# Higher resolution + exact boundary refinement (binary search)
+./tools/chunk-seeding-report <txID> --samples 800 --refine
+
+# Exhaustively probe every chunk (slow for large txs)
+./tools/chunk-seeding-report <txID> --full
+
+# Machine-readable output for tooling / a frontend
+./tools/chunk-seeding-report <txID> --json > report.json
+```
+
+**Options:**
+- `--nodes <urls>` - Comma-separated chunk-serving nodes; found if any has it (default: `https://arweave.net`)
+- `--info-node <url>` - Node for the `/offset` lookup (default: first `--nodes`)
+- `--samples <n>` - Chunk probe budget for large txs (default: 400)
+- `--full` - Probe every chunk (exhaustive)
+- `--refine` - Binary-search exact byte boundaries between found/missing samples
+- `--concurrency <n>` - Parallel probes (default: 4; keep low for `arweave.net`)
+- `--timeout <s>` / `--retries <n>` - Per-request timeout / retries on 429/5xx (default: 20s / 3)
+- `--size <n>` / `--end-offset <n>` - Skip the `/offset` lookup by supplying the range directly
+- `--json` / `--no-color` / `--quiet` - Output format toggles
+- `--help` - Show help message
+
+**Notes:**
+- Each probe pulls up to one 256 KiB chunk over the wire (stream + discard).
+- `missing` means "not served by the queried node(s)" — the bytes may still exist on other peers. Use `./tools/find-chunk-peer.sh <offset>` to deep-search the peer graph for a specific gap.
+- Data items nested inside a bundle have no `/offset`; pass the **L1 root** txID.
+- Exit codes: `0` fully seeded, `1` partial/not-seeded, `2` error, `3` indeterminate.
+
 ### `generate-offset-mapping`
 Generates a static offset-to-block mapping file that maps Arweave weave byte offsets to approximate block heights. This mapping is used to optimize binary search when looking up transactions by offset, reducing the search space from the entire blockchain to a much smaller range.
 

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Chunk Seeding Report
+#
+# Reports how much of an L1 Arweave transaction's data is actually seeded
+# (retrievable as chunks) on the network, as found/missing byte ranges.
+#
+# Usage:
+#   ./tools/chunk-seeding-report <txID>
+#   ./tools/chunk-seeding-report <txID> --nodes https://arweave.net,https://permagate.io
+#   ./tools/chunk-seeding-report <txID> --samples 800 --refine
+#   ./tools/chunk-seeding-report <txID> --json > report.json
+#
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PROJECT_ROOT}"
+exec node --import ./register.js tools/lib/chunk-seeding-report-cli.ts "$@"
