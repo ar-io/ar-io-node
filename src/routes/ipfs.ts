@@ -8,14 +8,12 @@ import { Router, Request, Response, Handler } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
 import winston from 'winston';
 
+import url from 'node:url';
+
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
-import {
-  cidToV1Base32,
-  isValidCid,
-  parseCid,
-  isCidV0,
-} from '../lib/ipfs-cid.js';
+import { cidToV1Base32, isValidCid } from '../lib/ipfs-cid.js';
+import { getRequestSandbox } from '../middleware/sandbox.js';
 import { IpfsService } from '../ipfs/ipfs-service.js';
 import {
   IpfsBlockedError,
@@ -107,20 +105,32 @@ function createIpfsPathHandler({
       return;
     }
 
-    // Redirect CIDv0 to CIDv1 subdomain if ArNS root hosts are configured.
-    // Uses {CID}.{host} (same level as ArNS names) — no .ipfs. label needed
-    // since CIDv1 base32 is always >51 chars (won't collide with ArNS names)
-    // and works with standard *.{host} wildcard TLS certificates.
-    const cid = parseCid(cidString);
-    if (cid !== null && isCidV0(cid) && config.ARNS_ROOT_HOSTS.length > 0) {
+    // Origin isolation. A path-style /ipfs/{CID} request must not serve active
+    // content on the shared gateway origin — that would let one CID's HTML/JS
+    // run in the gateway's origin (same XSS/same-origin risk the Arweave data
+    // path avoids). Redirect to the per-CID sandbox subdomain
+    // {CIDv1base32}.{host}, the same isolation sandbox.ts gives Arweave /{txid},
+    // unless the request already arrived on that subdomain. This subsumes the
+    // CIDv0 case: cidToV1Base32 normalizes v0 to its case-insensitive,
+    // DNS/TLS-safe v1 base32 form (>51 chars, so it never collides with an ArNS
+    // name and works with *.{host} wildcard certs). ArNS-served IPFS is already
+    // isolated on the name's own origin and reaches the handler directly, not
+    // this route.
+    if (config.ARNS_ROOT_HOSTS.length > 0) {
       const v1Base32 = cidToV1Base32(cidString);
-      const rootHost = config.ARNS_ROOT_HOSTS[0].host;
-      const pathSuffix = path !== undefined ? `/${path}` : '';
-      res.redirect(
-        302,
-        `${config.SANDBOX_PROTOCOL ?? req.protocol}://${v1Base32}.${rootHost}${pathSuffix}`,
-      );
-      return;
+      if (getRequestSandbox(req) !== v1Base32) {
+        const rootHost =
+          req.matchedArnsRootHost ?? config.ARNS_ROOT_HOSTS[0].host;
+        const pathSuffix = path !== undefined ? `/${path}` : '';
+        const queryString = url.parse(req.originalUrl).query;
+        res.redirect(
+          302,
+          `${config.SANDBOX_PROTOCOL ?? req.protocol}://${v1Base32}.${rootHost}${pathSuffix}${
+            queryString !== null && queryString !== '' ? `?${queryString}` : ''
+          }`,
+        );
+        return;
+      }
     }
 
     await handleIpfsRequest({

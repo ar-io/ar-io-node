@@ -11,7 +11,7 @@ import { base32 } from 'rfc4648';
 import * as config from '../config.js';
 import { fromB64Url } from '../lib/encoding.js';
 
-function getRequestSandbox(req: Request): string | undefined {
+export function getRequestSandbox(req: Request): string | undefined {
   const matched = config.matchArnsRootHost(req.hostname);
   if (
     matched !== undefined &&
