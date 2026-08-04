@@ -1,0 +1,18 @@
+{
+  "manifest": "arweave/paths",
+  "version": "0.2.0",
+  "index": {
+    "id": "too-short"
+  },
+  "fallback": {
+    "id": "alsoinvalid"
+  },
+  "paths": {
+    "good.txt": {
+      "id": "cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI"
+    },
+    "bad.txt": {
+      "id": "not-a-valid-id"
+    }
+  }
+}
