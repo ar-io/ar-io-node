@@ -8,7 +8,7 @@ import { default as axios } from 'axios';
 import winston from 'winston';
 import { headerNames } from '../constants.js';
 
-import { isValidDataId } from '../lib/validation.js';
+import { classifyResolvedTarget } from './resolved-target.js';
 import { NameResolution, NameResolver } from '../types.js';
 
 export const DEFAULT_ARNS_TTL_SECONDS = 60 * 15; // 15 minutes
@@ -84,27 +84,50 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       const index =
         parseInt(response.headers[headerNames.arnsIndex.toLowerCase()]) ||
         DEFAULT_ARNS_UNDERNAME_INDEX;
-      if (isValidDataId(resolvedId)) {
-        this.log.info('Resolved name', { name, nameUrl, resolvedId, ttl });
-        return {
-          name,
-          statusCode: response.status,
-          resolvedId,
-          resolvedAt: Date.now(),
-          antId,
-          ttl,
-          limit,
-          index,
-        };
+      // Protocol of the upstream resolution (arweave | ipfs). Older peers that
+      // predate multi-protocol resolution omit X-ArNS-Protocol; an absent header
+      // defaults to arweave, preserving prior behavior. We validate resolvedId
+      // against the protocol the peer claims (a CID for ipfs, a 43-char id for
+      // arweave) via the shared classifier, so a mislabeled or malformed target
+      // is rejected here rather than mis-served downstream.
+      const protocolHeader =
+        response.headers[headerNames.arnsProtocol.toLowerCase()];
+      const targetProtocol = protocolHeader === 'ipfs' ? 1 : 0;
+      if (typeof resolvedId === 'string') {
+        try {
+          const protocol = classifyResolvedTarget(resolvedId, targetProtocol);
+          this.log.info('Resolved name', {
+            name,
+            nameUrl,
+            resolvedId,
+            protocol,
+            ttl,
+          });
+          return {
+            name,
+            statusCode: response.status,
+            resolvedId,
+            resolvedAt: Date.now(),
+            antId,
+            ttl,
+            limit,
+            index,
+            protocol,
+          };
+        } catch (error: any) {
+          this.log.warn('Invalid resolved target for protocol', {
+            name,
+            nameUrl,
+            resolvedId,
+            protocol: protocolHeader ?? 'arweave',
+            ttl,
+            limit,
+            index,
+            message: error.message,
+          });
+        }
       } else {
-        this.log.warn('Invalid resolved data ID', {
-          name,
-          nameUrl,
-          resolvedId,
-          ttl,
-          limit,
-          index,
-        });
+        this.log.warn('Missing resolved data ID', { name, nameUrl });
       }
     } catch (error: any) {
       this.log.warn('Unable to resolve name:', {
