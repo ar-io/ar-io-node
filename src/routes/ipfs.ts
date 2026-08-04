@@ -52,6 +52,10 @@ export function createIpfsRouter({
 
   router.get('/ipfs/:cid', handler);
   router.get('/ipfs/:cid/*', handler);
+  // HEAD returns the same headers with no body — for metadata probes and media
+  // players that HEAD before ranging. Same handler; the body is skipped below.
+  router.head('/ipfs/:cid', handler);
+  router.head('/ipfs/:cid/*', handler);
 
   return router;
 }
@@ -169,6 +173,7 @@ async function handleIpfsRequest({
   routeType: 'path' | 'subdomain';
 }): Promise<void> {
   const startTime = Date.now();
+  const isHead = req.method === 'HEAD';
   const ipfsPath = path !== undefined ? `${cidString}/${path}` : cidString;
 
   parentLog.debug('Handling IPFS request', { cidString, path, routeType });
@@ -253,8 +258,14 @@ async function handleIpfsRequest({
       metrics.ipfsContentSizeHistogram.observe(result.size);
     }
 
-    // Pipe stream to response
-    result.stream.pipe(res);
+    // Pipe stream to response. HEAD returns headers only — release the
+    // upstream/cache stream and end without a body.
+    if (isHead) {
+      result.stream.destroy();
+      res.end();
+    } else {
+      result.stream.pipe(res);
+    }
 
     // Adjust rate limiter tokens after response completes
     res.on('finish', () => {
@@ -266,7 +277,7 @@ async function handleIpfsRequest({
 
       adjustRateLimitTokens({
         req,
-        responseSize: result.size > 0 ? result.size : contentSize,
+        responseSize: isHead ? 0 : result.size > 0 ? result.size : contentSize,
         initialResult: limitCheck,
         rateLimiter,
       }).catch((error) => {
@@ -311,6 +322,13 @@ async function handleIpfsRequest({
         route_type: routeType,
         status: 'not_found',
       });
+      // Cache-dampen repeated 404s the way the Arweave path does (sendNotFound),
+      // so an absent CID isn't re-fetched from Kubo on every retry through
+      // upstream/edge caches.
+      res.setHeader(
+        'Cache-Control',
+        `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+      );
       res.status(404).json({ error: 'IPFS content not found' });
       return;
     }

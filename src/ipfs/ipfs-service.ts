@@ -104,6 +104,21 @@ export class IpfsService {
       // Check cache
       const cached = await this.cache.get(normalizedCid, path);
       if (cached) {
+        // Content-hash moderation. The cache stores the base64url SHA-256 of the
+        // served bytes (the same format as Arweave's data hash), so once content
+        // is cached we honor a block-by-hash entry too — matching the Arweave
+        // path's isHashBlocked enforcement — not just block-by-CID. This catches
+        // the same bytes blocked under an Arweave id or another identifier.
+        if (
+          cached.digest !== undefined &&
+          (await this.blockListValidator.isHashBlocked(cached.digest))
+        ) {
+          cached.stream.destroy();
+          metrics.ipfsBlockedTotal.inc();
+          span.setAttribute('ipfs.blocked', true);
+          span.end();
+          throw new IpfsBlockedError(`Content hash is blocked: ${normalizedCid}`);
+        }
         this.log.debug('IPFS cache hit', { cid: normalizedCid, path });
         metrics.ipfsCacheHitTotal.inc();
         span.setAttributes({
