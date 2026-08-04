@@ -9,6 +9,24 @@
 > - Docs: `/programs/ar-io-docs/content/learn/oip/*.mdx`
 > - SDK: `/programs/ar-io-sdk/src`; live gateway at `localhost:4000`
 
+> **Reconciliation update (2026-08-04).** This report's findings were verified
+> line-by-line against live source and carried into the implementation plan in
+> `observer-ipfs-adjustments-spec.md`. Two points evolved with the decision to make
+> **IPFS a first-class citizen with zero smart-contract changes**:
+> 1. **No on-chain capability bit is needed.** §3(d)/§4.1 float a `GatewaySettings`
+>    "supports IPFS" bit. Superseded: the gateway already self-advertises
+>    `ipfs.enabled` in `/ar-io/info`, and the observer already reads that exact
+>    response in `assessOwnership` (`observer.ts:262`). Capability-gating is
+>    therefore observer-only (~5 lines), no contract change.
+> 2. **Framing is first-class, not "mandatory-vs-optional."** The §4 MUST #1
+>    decision is reframed as an *adoption ramp*: IPFS names are verified as a
+>    normal, expected dimension; names on a not-yet-enabled gateway score *neutral*
+>    during rollout, converging to "IPFS expected of every gateway." Because
+>    prescription and reward accounting are already content-agnostic (§1, §2c), this
+>    needs no contract change.
+>
+> The report body below is preserved as the original research deliverable.
+
 ---
 
 ## 1. How observation works today

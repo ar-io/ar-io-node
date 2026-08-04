@@ -130,3 +130,10 @@ Still David's phase 2 (not built): CAR→Arweave permapinning, chain-anchored
 proofs, folding IPFS into the `src/data/` composite source, libp2p/Bitswap. And
 the OIP §5 win — the **observer verifying CID→bytes** instead of trusting
 reference gateways — remains a separate (ar-io-observer) track.
+
+> **Now specced (2026-08-04):** the §5 observer win is written up in
+> `observer-ipfs-adjustments-spec.md` as trustless CID verification — and it lands
+> with **zero smart-contract changes** (prescription and reward accounting are
+> already content-agnostic). That doc makes named IPFS a first-class, trustlessly
+> verified dimension, which is exactly David's "verify, don't trust" posture on the
+> serving/observation axis, achieved now without his storage-dependent Stages 0–2.
