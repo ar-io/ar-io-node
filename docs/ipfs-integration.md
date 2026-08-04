@@ -452,6 +452,10 @@ All environment variables are opt-in. The feature is disabled by default.
 | `IPFS_KUBO_REQUEST_TIMEOUT_MS` | Number | `30000` | Connection timeout in milliseconds for Kubo requests (time to receive response headers). |
 | `IPFS_STREAM_STALL_TIMEOUT_MS` | Number | `30000` | Stall timeout in milliseconds for streaming responses from Kubo. Stream is aborted if no data is received for this duration. Actively-streaming transfers are not affected. |
 | `IPFS_KUBO_MAX_CONCURRENT_REQUESTS` | Number | `100` | Maximum concurrent in-flight fetches to Kubo. Bounds upstream/DHT amplification from cheap-to-issue requests (HEAD, tiny Range) that force a fetch before rate limiting is evaluated; requests over the cap fail fast with `502`. `0` disables the cap. |
+| `IPFS_KUBO_API_URL` | String | `http://kubo:5001` | Kubo **RPC API** base (distinct from the read-only gateway on 8080). Used only for pinning. The RPC API is powerful — keep it internal to the sidecar, never exposed to the host/internet. |
+| `IPFS_PIN_ARNS_CONTENT` | Boolean | `false` | Pin the CIDs that ArNS names resolve to, so named content this gateway serves stays retrievable in read-only mode instead of being GC'd by Kubo. |
+| `IPFS_PIN_MAX` | Number | `10000` | Max distinct CIDs the pinner holds this process; oldest are unpinned (FIFO) beyond this to bound local storage. |
+| `IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES` | Number | `262144` | Rate-limit reserve for a response whose size Kubo doesn't declare up front (CAR / chunked). The full `IPFS_MAX_RESPONSE_SIZE_BYTES` would exceed the token buckets and reject every such request; actual bytes are still bounded mid-stream by `IPFS_MAX_RESPONSE_SIZE_BYTES`. |
 | `IPFS_CACHE_PATH` | String | `data/ipfs-cache` | Directory for the IPFS filesystem cache. Relative paths are resolved from the gateway's working directory. |
 | `IPFS_CACHE_MAX_SIZE_BYTES` | Number | `10737418240` (10 GB) | Maximum total size of the IPFS cache directory. LRU eviction begins when this limit is exceeded. |
 | `IPFS_CACHE_CLEANUP_THRESHOLD` | Number | `3600` | Interval in seconds between cache eviction scans. |
@@ -533,6 +537,53 @@ hits), so the name->CID binding and the served bytes are both attested.
   data handler, bypassing resolution and protocol routing. It is Arweave-only;
   a CID there will not serve. To serve IPFS at the apex, use `APEX_ARNS_NAME`
   pointing at an ANT whose `@` record targets IPFS. ❌
+
+## Read-only mode: trust posture, trustless retrieval, and pinning
+
+This integration is a **read-only IPFS mode**: the gateway serves IPFS content
+that lives on the public IPFS network (via the Kubo sidecar). It does **not**
+store IPFS content on Arweave — permapinning to Arweave (CAR ingest, content-
+addressed indexing, chain-anchored proofs) is a separate, larger phase. In this
+mode the gateway is a caching proxy with an optional client-verifiable path; the
+durability of named content depends on it being pinned somewhere, not on Arweave
+permanence.
+
+### Two trust postures (and an honest header)
+
+- **Trusted proxy (UnixFS path).** A plain `/ipfs/{CID}` or a name→CID request is
+  reassembled by Kubo and served (and, if signing is on, HTTPSIG-signed). The
+  signature attests *"a registered gateway served these bytes"* — it is **not** a
+  content proof. The response carries `X-Ar-Io-Trustless: false`.
+- **Trustless (verifiable) retrieval.** `GET /ipfs/{CID}?format=raw` returns a
+  single verifiable block (`application/vnd.ipld.raw`); `?format=car` returns a
+  verifiable DAG archive (`application/vnd.ipld.car`). Equivalent IPLD `Accept`
+  types work too. These are forwarded to Kubo and relayed with
+  `Content-Disposition: attachment`, `ETag` = the CID, and
+  `X-Ar-Io-Trustless: true`. The **client** hashes the bytes and checks them
+  against the CID — the gateway is not a trust root. This is the
+  [IPFS Trustless Gateway](https://specs.ipfs.tech/http-gateways/trustless-gateway/)
+  shape. Format responses bypass the UnixFS cache; a mid-stream size guard bounds
+  large CARs, and the rate-limit reserve for unknown-size responses is
+  `IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES`.
+
+Clients that need to *verify* content should request `?format=raw|car` and check
+the CID; the UnixFS path is a convenience for browsers and is explicitly
+gateway-trusted.
+
+### Named-content pinning (availability)
+
+Because read-only content lives on the public network and Kubo runs with GC, an
+unpinned CID can disappear and an ArNS name pointing at it will `404`. With
+`IPFS_PIN_ARNS_CONTENT=true` the gateway pins (via the Kubo RPC API) the CIDs that
+ArNS names resolve to, so the *named* content it is responsible for stays
+retrievable. Pinning is best-effort and fire-and-forget (never blocks a
+response), bounded to `IPFS_PIN_MAX` distinct CIDs (oldest unpinned FIFO), and
+scoped to ArNS-resolved content — not arbitrary `/ipfs/{CID}` traffic.
+
+This is also the substrate an incentive layer would build on: rewarding gateways
+for serving named IPFS data gives the fleet a reason to pin it, turning the AR.IO
+gateway network into a durability layer for named IPFS content without Arweave
+storage.
 
 ## Parity with the Arweave Data Path
 

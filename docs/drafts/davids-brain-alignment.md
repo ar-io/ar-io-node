@@ -105,3 +105,28 @@ without a rewrite:
   **not** HTTPSIG-attest it as verified (client verifies).
 - Stop implying verification on the UnixFS path — document `X-Ar-Io-Source: ipfs`
   as *trusted-proxy*, and don't let the signed envelope read as a content proof.
+
+## Update — read-only phase alignment (implemented)
+
+The scope was deliberately set to a **read-only IPFS mode** (no uploading to
+Arweave — that stays phase 2). David's storage-dependent items (CAR→Arweave,
+chain anchor, composite-source, libp2p) are correctly deferred. The
+storage-*independent* parts of his posture were adopted now:
+
+- **Trustless retrieval added:** `?format=raw|car` (and IPLD `Accept` types) are
+  forwarded to Kubo and relayed as verifiable block/CAR responses the client
+  checks against the CID (`X-Ar-Io-Trustless: true`, `Content-Disposition:
+  attachment`, `ETag`=CID). This is his Trustless-Gateway shape, on public-IPFS
+  content instead of Arweave-stored content.
+- **Honest trust posture:** the UnixFS proxy path is marked
+  `X-Ar-Io-Trustless: false` and documented as gateway-attested, not a content
+  proof — addressing the §3 "don't pretend to be verified" critique.
+- **Availability via pinning:** `IPFS_PIN_ARNS_CONTENT` pins named CIDs so
+  read-only named content doesn't vanish — and it's the substrate an OIP "reward
+  serving named IPFS data" incentive builds on (a fleet-pinning durability layer
+  without Arweave storage).
+
+Still David's phase 2 (not built): CAR→Arweave permapinning, chain-anchored
+proofs, folding IPFS into the `src/data/` composite source, libp2p/Bitswap. And
+the OIP §5 win — the **observer verifying CID→bytes** instead of trusting
+reference gateways — remains a separate (ar-io-observer) track.

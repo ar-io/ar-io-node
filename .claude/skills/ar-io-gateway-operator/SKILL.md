@@ -124,6 +124,9 @@ Pipeline diagnostic: a single `curl -sf .../ar-io/__gateway_metrics | grep -E 'q
 - **HEAD, Range/`206`, and per-CID sandbox origin isolation** (`/ipfs/{CID}` → `{CID}.{root_host}`) work as on the Arweave path. `IPFS_KUBO_MAX_CONCURRENT_REQUESTS` caps in-flight Kubo fetches (amplification guard); `IPFS_MAX_RESPONSE_SIZE_BYTES` caps a single response.
 - **Verify it's live**: `GET /ar-io/info` shows `ipfs.enabled: true`; `docker exec <kubo container> ipfs swarm peers` should list peers.
 - **Troubleshooting**: a name that resolves on viewblock but `404`s here with `IPFS_ENABLED` off means the CID is being misrouted to the Arweave data path — enable IPFS + Kubo. `/ipfs/{CID}` returning `502`/`504` points at the Kubo sidecar (down, no peers, or unpinned/cold content); check swarm peers first.
+- **Read-only, not permanent.** This is a read-only proxy to the *public* IPFS network — content is **not** stored on Arweave here. Durability of a named CID depends on it being pinned somewhere; there is no Arweave permanence in this mode.
+- **Pin named content for availability**: `IPFS_PIN_ARNS_CONTENT=true` pins (via the Kubo RPC API, `IPFS_KUBO_API_URL`, default `http://kubo:5001`) the CIDs that ArNS names resolve to, so named content this gateway serves isn't GC'd out from under a name (bounded by `IPFS_PIN_MAX`, FIFO). Inspect with `docker exec <kubo> ipfs pin ls --type=recursive`. The RPC API is powerful — keep 5001 on the internal docker network only, never host/internet.
+- **Trustless retrieval**: `GET /ipfs/{CID}?format=raw` (single verifiable block) and `?format=car` (verifiable DAG) let a client check the bytes against the CID itself — the gateway isn't a trust root. Responses carry `X-Ar-Io-Trustless: true`; the reassembled UnixFS path carries `X-Ar-Io-Trustless: false` (gateway-attested, not client-verified).
 
 ### Network identity, observer, and incentives
 

@@ -635,6 +635,10 @@ as a Docker Compose sidecar via the `ipfs` profile).
 | IPFS_KUBO_REQUEST_TIMEOUT_MS              | Number  | 30000               | Connection timeout for Kubo requests (ms)                           |
 | IPFS_STREAM_STALL_TIMEOUT_MS              | Number  | 30000               | Stall timeout — max time with no data before aborting stream (ms)   |
 | IPFS_KUBO_MAX_CONCURRENT_REQUESTS         | Number  | 100                 | Max concurrent in-flight Kubo fetches; excess fail fast with 502. 0 disables |
+| IPFS_KUBO_API_URL                         | String  | http://kubo:5001    | Kubo RPC API base (pinning only). Keep internal to the sidecar — the RPC API is powerful |
+| IPFS_PIN_ARNS_CONTENT                     | Boolean | false               | Pin the CIDs that ArNS names resolve to, so named content stays retrievable (read-only availability) |
+| IPFS_PIN_MAX                              | Number  | 10000               | Max distinct CIDs the pinner holds this process; oldest are unpinned (FIFO) beyond this |
+| IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES        | Number  | 262144              | Rate-limit reserve for a response of unknown size (CAR / chunked); actual bytes are still bounded by IPFS_MAX_RESPONSE_SIZE_BYTES |
 | IPFS_CACHE_PATH                           | String  | data/ipfs-cache     | Directory for cached IPFS content                                   |
 | IPFS_CACHE_MAX_SIZE_BYTES                 | Number  | 10737418240 (10 GB) | Maximum cache size before LRU eviction                              |
 | IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS      | Number  | 3600                | Age in seconds before cached files become eviction candidates       |
