@@ -224,3 +224,50 @@ Everything in §4 (Phases 1–4) ships without touching these.
    self-asserted); trustless verification proves *correctness*, not *who persists*.
 4. **Prescription capacity.** The ≤ 2-name cap makes per-protocol stratification
    statistically thin; enlarging it is the `Epoch`-layout migration in §7.
+
+---
+
+## 9. Provisioning & operating cost
+
+**Verdict:** the observer changes are near-zero; the only real new cost is running
+an IPFS node. First-class means that is **on by default** — but each gateway can
+either run a bundled Kubo sidecar **or** point at a shared/third-party node, so
+per-gateway cost is a deployment choice, not a fixed floor.
+
+**Today vs. first-class default.** Currently `IPFS_ENABLED=false` and the `kubo`
+service sits behind an opt-in compose profile. First-class = flip the shipped
+default to IPFS-on. Both Kubo endpoints are plain env vars
+(`IPFS_KUBO_URL` → gateway :8080, `IPFS_KUBO_API_URL` → RPC :5001), so the default
+can be satisfied three ways:
+
+| Mode | What runs | Per-gateway cost | Notes |
+|---|---|---|---|
+| **A — Bundled Kubo sidecar** (compose default) | Each gateway runs its own Kubo | +1 container (~0.5–2 GB RAM), ~10 GB cache disk, swarm port 4001, DHT bandwidth | Self-sufficient; no external dependency; can pin |
+| **B1 — Shared self-hosted Kubo** | Many gateways → one Kubo you run | ≈ 0 per gateway; cost centralizes on one node | A node to scale/secure; pinning available (you control the RPC) |
+| **B2 — Third-party IPFS gateway (reads)** | `IPFS_KUBO_URL` → a provider / public trustless gateway | ≈ 0 infra | Provider dependency; no pinning (RPC :5001 is privileged, not exposed) |
+
+Trustless verification is client-side (the client checks bytes against the CID via
+`?format=raw`), so it is unaffected by *where* Kubo runs — mode B doesn't weaken
+the trust story.
+
+**Component cost (mode A, the heaviest):**
+- **Container** `ipfs/kubo v0.32.1`, co-located — no new host. RAM ~0.5–2 GB, modest
+  CPU (spikes on GC / DHT provides).
+- **Disk** is bounded: 10 GB read cache (`IPFS_CACHE_MAX_SIZE_BYTES`, LRU) + Kubo
+  datastore; `--enable-gc` prevents unpinned growth. Pinning is **off by default**;
+  if enabled it's capped at 10,000 CIDs (`IPFS_PIN_MAX`) × content size.
+- **Bandwidth** is the only always-on new cost, in two parts: (a) serving content
+  (demand-driven, cache-absorbed) and (b) DHT participation. The compose default
+  `IPFS_PROFILE=server` makes Kubo a DHT server (background traffic even at idle);
+  `dhtclient` / `lowpower` cuts it to near-nothing. The idle floor is a dial.
+- **No SaaS / per-GB fees** — self-hosted.
+
+**Observer side:** no new infrastructure; request *count* is unchanged (IPFS names
+are already sampled today). Trustless verification fetches the raw **root block**
+(often *fewer* bytes than today's 1 MiB digest sample); block sampling is off by
+default. Net: a rounding error per gateway per epoch.
+
+**The real future cost lever — persistence.** Pinning named content fleet-wide so
+it can't vanish is where recurring storage cost would live. That is deferred
+(pinning off by default, capped) and is a separate governance/incentive decision —
+not part of first-class *serving* and *verification*.
