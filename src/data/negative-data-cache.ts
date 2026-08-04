@@ -31,6 +31,10 @@ export class NegativeDataCache {
   private healthWindowMs: number;
   private unhealthyThreshold: number;
   private minSampleSize: number;
+  // Distinguishes this instance's gauge series from any sibling instance (e.g.
+  // the separate Arweave vs IPFS caches) so their updateGauges() calls don't
+  // clobber the same unlabelled metric.
+  private metricsSource: string;
 
   constructor({
     log,
@@ -45,6 +49,7 @@ export class NegativeDataCache {
     healthWindowMs = 60_000,
     unhealthyThreshold = 0.8,
     minSampleSize = 10,
+    metricsSource = 'arweave',
     now = Date.now,
   }: {
     log: Logger;
@@ -59,9 +64,11 @@ export class NegativeDataCache {
     healthWindowMs?: number;
     unhealthyThreshold?: number;
     minSampleSize?: number;
+    metricsSource?: string;
     now?: () => number;
   }) {
     this.log = log;
+    this.metricsSource = metricsSource;
     this.enabled = enabled;
     this.missCountThreshold = missCountThreshold;
     this.missDurationMs = missDurationMs;
@@ -210,8 +217,9 @@ export class NegativeDataCache {
   }
 
   private updateGauges(): void {
-    metrics.negativeCacheSize.set(this.negativeCache.size);
-    metrics.missTrackerSize.set(this.missTracker.size);
-    metrics.promotionHistorySize.set(this.promotionHistory.size);
+    const source = this.metricsSource;
+    metrics.negativeCacheSize.set({ source }, this.negativeCache.size);
+    metrics.missTrackerSize.set({ source }, this.missTracker.size);
+    metrics.promotionHistorySize.set({ source }, this.promotionHistory.size);
   }
 }

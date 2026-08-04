@@ -1029,11 +1029,13 @@ export const negativeCacheEvictionsTotal = new promClient.Counter({
 export const negativeCacheSize = new promClient.Gauge({
   name: 'negative_cache_size',
   help: 'Current number of entries in the negative cache',
+  labelNames: ['source'],
 });
 
 export const missTrackerSize = new promClient.Gauge({
   name: 'miss_tracker_size',
   help: 'Current number of entries in the miss tracker',
+  labelNames: ['source'],
 });
 
 export const negativeCacheRePromotionsTotal = new promClient.Counter({
@@ -1044,6 +1046,7 @@ export const negativeCacheRePromotionsTotal = new promClient.Counter({
 export const promotionHistorySize = new promClient.Gauge({
   name: 'promotion_history_size',
   help: 'Current number of entries in promotion history tracker',
+  labelNames: ['source'],
 });
 
 export const negativeCachePromotionsSuppressedTotal = new promClient.Counter({

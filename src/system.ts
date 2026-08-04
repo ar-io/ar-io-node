@@ -1926,6 +1926,9 @@ if (config.IPFS_ENABLED) {
     healthWindowMs: config.NEGATIVE_CACHE_HEALTH_WINDOW_MS,
     unhealthyThreshold: config.NEGATIVE_CACHE_UNHEALTHY_THRESHOLD,
     minSampleSize: config.NEGATIVE_CACHE_HEALTH_MIN_SAMPLE_SIZE,
+    // Distinct gauge series so IPFS and Arweave negative-cache sizes don't
+    // clobber each other's unlabelled metric.
+    metricsSource: 'ipfs',
   });
 
   ipfsService = new IpfsService({
