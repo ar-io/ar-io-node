@@ -3012,7 +3012,11 @@ paths:
               properties:
                 id:
                   type: string
-                  description: TX ID for a transaction you want to block.
+                  description: >-
+                    Identifier of the content to block: an Arweave TX ID or
+                    data-item ID (43-char base64url), an IPFS CIDv1 (base32), or
+                    a sha-256 content hash. Blocked content is served as HTTP 451
+                    by the data/IPFS endpoints.
                 notes:
                   type: string
                   description: Any notes or comments related to the block data. Documentation purposes only.

@@ -28,6 +28,7 @@ export class KuboDataSource {
   private requestTimeoutMs: number;
   private streamStallTimeoutMs: number;
   private maxConcurrent: number;
+  private maxRequestMs: number;
   private inFlight = 0;
 
   constructor({
@@ -36,18 +37,21 @@ export class KuboDataSource {
     requestTimeoutMs,
     streamStallTimeoutMs,
     maxConcurrent = 0,
+    maxRequestMs = 0,
   }: {
     log: winston.Logger;
     kuboUrl: string;
     requestTimeoutMs: number;
     streamStallTimeoutMs: number;
     maxConcurrent?: number;
+    maxRequestMs?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.kuboUrl = kuboUrl.replace(/\/$/, '');
     this.requestTimeoutMs = requestTimeoutMs;
     this.streamStallTimeoutMs = streamStallTimeoutMs;
     this.maxConcurrent = maxConcurrent;
+    this.maxRequestMs = maxRequestMs;
   }
 
   async getContent({
@@ -198,7 +202,7 @@ export class KuboDataSource {
         response.headers['content-type'] ?? 'application/octet-stream';
 
       // Switch from connection timeout to stall timeout
-      attachStallTimeout(stream, this.streamStallTimeoutMs);
+      attachStallTimeout(stream, this.streamStallTimeoutMs, this.maxRequestMs);
 
       span.setAttributes({
         'ipfs.content_length': contentLength,
@@ -235,6 +239,13 @@ export class KuboDataSource {
       release();
       clearTimeout(connectionTimer);
       signal?.removeEventListener('abort', onClientAbort);
+      // axios rejects for 5xx (validateStatus accepts <500 or 504). With
+      // responseType 'stream', error.response.data is an open Readable — destroy
+      // it so the socket/fd isn't leaked while Kubo returns 500/502/503.
+      const errStream = error?.response?.data;
+      if (errStream !== undefined && typeof errStream.destroy === 'function') {
+        errStream.destroy();
+      }
 
       if (error.name !== 'AbortError') {
         span.recordException(error);

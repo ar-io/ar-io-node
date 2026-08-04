@@ -273,7 +273,16 @@ async function handleIpfsRequest({
     if (result.size > 0) {
       res.setHeader('Content-Length', result.size);
     }
-    res.setHeader('ETag', `"${cidToV1Base32(cidString)}"`);
+    // ETag must distinguish every representation that can differ under the
+    // `immutable` Cache-Control: sub-path and response format. (Range is
+    // deliberately excluded so a 206 shares the full entity's validator, which
+    // is what If-Range compares against.) Without this a shared cache could
+    // serve one sub-path/format's body for another.
+    const etag =
+      cidToV1Base32(cidString) +
+      (path !== undefined ? `/${path}` : '') +
+      (format !== undefined ? `+${format}` : '');
+    res.setHeader('ETag', `"${etag}"`);
     res.setHeader('X-Ipfs-Path', `/ipfs/${ipfsPath}`);
     res.setHeader(headerNames.arIoSource, 'ipfs');
 

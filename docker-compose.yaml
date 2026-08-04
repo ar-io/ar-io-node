@@ -54,6 +54,10 @@ services:
       - ${HEADERS_DATA_PATH:-./data/headers}:/app/data/headers
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
       - ${DUCKDB_DATA_PATH:-./data/duckdb}:/app/data/duckdb
+      # The container target must match core's IPFS_CACHE_PATH (default
+      # data/ipfs-cache -> /app/data/ipfs-cache). If you change IPFS_CACHE_PATH,
+      # point it inside this mount, or the cache is written to an unmounted path
+      # and is lost when the container is recreated.
       - ${IPFS_CACHE_DATA_PATH:-./data/ipfs-cache}:/app/data/ipfs-cache
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
@@ -158,6 +162,7 @@ services:
       - IPFS_KUBO_REQUEST_TIMEOUT_MS=${IPFS_KUBO_REQUEST_TIMEOUT_MS:-}
       - IPFS_STREAM_STALL_TIMEOUT_MS=${IPFS_STREAM_STALL_TIMEOUT_MS:-}
       - IPFS_KUBO_MAX_CONCURRENT_REQUESTS=${IPFS_KUBO_MAX_CONCURRENT_REQUESTS:-}
+      - IPFS_KUBO_MAX_REQUEST_MS=${IPFS_KUBO_MAX_REQUEST_MS:-}
       - IPFS_KUBO_API_URL=${IPFS_KUBO_API_URL:-}
       - IPFS_PIN_ARNS_CONTENT=${IPFS_PIN_ARNS_CONTENT:-}
       - IPFS_PIN_MAX=${IPFS_PIN_MAX:-}

@@ -460,10 +460,10 @@ All environment variables are opt-in. The feature is disabled by default.
 | `IPFS_CACHE_MAX_SIZE_BYTES` | Number | `10737418240` (10 GB) | Maximum total size of the IPFS cache directory. LRU eviction begins when this limit is exceeded. |
 | `IPFS_CACHE_CLEANUP_THRESHOLD` | Number | `3600` | Interval in seconds between cache eviction scans. |
 | `IPFS_BLOCKLIST_PATH` | String | `data/ipfs-blocklist.txt` | Path to the CID blocklist file. The file is watched for changes and reloaded automatically. |
-| `IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET` | Number | `50000` | Maximum tokens (bytes) per IP bucket. |
-| `IPFS_RATE_LIMITER_IP_REFILL_PER_SEC` | Number | `5` | Tokens added to each IP bucket per second. |
-| `IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET` | Number | `200000` | Maximum tokens (bytes) per resource (CID) bucket. |
-| `IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC` | Number | `20` | Tokens added to each resource bucket per second. |
+| `IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET` | Number | `100000` | Maximum tokens (bytes) per IP bucket. |
+| `IPFS_RATE_LIMITER_IP_REFILL_PER_SEC` | Number | `20` | Tokens added to each IP bucket per second. |
+| `IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET` | Number | `1000000` | Maximum tokens (bytes) per resource (CID) bucket. |
+| `IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC` | Number | `100` | Tokens added to each resource bucket per second. |
 | `IPFS_MAX_RESPONSE_SIZE_BYTES` | Number | `1073741824` (1 GB) | Maximum response size for a single IPFS request. Requests exceeding this are rejected. |
 
 ## Phase 2: ArNS to IPFS Resolution

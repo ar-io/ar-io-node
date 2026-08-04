@@ -3233,6 +3233,16 @@ export const IPFS_KUBO_MAX_CONCURRENT_REQUESTS = env.positiveIntOrDefault(
   100,
 );
 
+// Hard wall-clock cap on a single Kubo fetch. The per-chunk stall timer can't
+// see the case where a stream is paused for downstream backpressure and then
+// stalls upstream (the pause clears the stall timer); this bounds that wedge so
+// it can't hold a concurrency slot + socket indefinitely. Generous so it doesn't
+// cut legitimately-slow large transfers; 0 disables it.
+export const IPFS_KUBO_MAX_REQUEST_MS = env.positiveIntOrDefault(
+  'IPFS_KUBO_MAX_REQUEST_MS',
+  1_200_000,
+);
+
 // Kubo RPC API base (distinct from the read-only gateway on 8080). Used only for
 // pinning; the powerful admin API should not be exposed beyond the sidecar.
 export const IPFS_KUBO_API_URL = env.varOrDefault(

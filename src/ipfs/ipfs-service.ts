@@ -110,6 +110,12 @@ export class IpfsService {
       // Normalize CID to v1 base32 for consistent caching
       const normalizedCid = cidToV1Base32(cidString);
       span.setAttribute('ipfs.cid_normalized', normalizedCid);
+      // Negative-cache identity must match the content cache's (CID + path), not
+      // just the CID — otherwise one missing sub-path (e.g. a bad link) would
+      // negatively cache the whole CID and 404 every other path, including the
+      // root, for the TTL.
+      const negKey =
+        path !== undefined ? `${normalizedCid}/${path}` : normalizedCid;
 
       // Check blocklist (uses the same admin API as Arweave data moderation)
       if (await this.blockListValidator.isIdBlocked(normalizedCid)) {
@@ -155,7 +161,7 @@ export class IpfsService {
       // (absent or unpinned) so they don't re-hit Kubo on every request
       // (latency / DoS amplification) — mirrors the Arweave path's negative data
       // cache. Only trips after repeated misses (count + duration thresholds).
-      if (this.negativeCache?.isNegativelyCached(normalizedCid) === true) {
+      if (this.negativeCache?.isNegativelyCached(negKey) === true) {
         span.setAttribute('ipfs.negative_cache', 'hit');
         span.end();
         throw new IpfsNotFoundError(
@@ -192,7 +198,7 @@ export class IpfsService {
         // Content is available — clear any negative-cache entry and record a
         // success so a transiently-unavailable CID that later pins isn't kept in
         // a negative-cache blackout, and IPFS health isn't skewed miss-only.
-        this.negativeCache?.evict(normalizedCid);
+        this.negativeCache?.evict(negKey);
         this.negativeCache?.recordSuccess();
         this.log.debug('IPFS cache hit', { cid: normalizedCid, path });
         metrics.ipfsCacheHitTotal.inc();
@@ -227,7 +233,7 @@ export class IpfsService {
         })
         .catch((err) => {
           if (err instanceof IpfsNotFoundError) {
-            this.negativeCache?.recordMiss(normalizedCid);
+            this.negativeCache?.recordMiss(negKey);
           }
           throw err;
         });
@@ -251,7 +257,7 @@ export class IpfsService {
 
       // A successful fetch means the content is available — clear any
       // negative-cache entry and record health (see the cache-hit path).
-      this.negativeCache?.evict(normalizedCid);
+      this.negativeCache?.evict(negKey);
       this.negativeCache?.recordSuccess();
 
       // Stream directly to the client while writing to a temp file on disk for
@@ -342,6 +348,14 @@ export class IpfsService {
    * Buffers early chunks in memory until the write stream is ready,
    * then flushes them to disk.
    */
+  // NOTE (load-bearing): this tee relies on `stream` NOT being in flowing mode
+  // when it's attached — KuboDataSource calls `attachStallTimeout`, which
+  // `pause()`s the stream, so these 'data' listeners don't start draining it
+  // before the route reaches `result.stream.pipe(res)` (after its async payment/
+  // rate-limit check). If that upstream `pause()` is ever removed, the cache
+  // writer would consume chunks before the client pipe attaches and clients
+  // would get truncated bodies. There is e2e coverage for the await-before-pipe
+  // gap; keep it.
   private streamToCache(
     cidString: string,
     path: string | undefined,
@@ -411,7 +425,14 @@ export class IpfsService {
       }
 
       hash.update(chunk);
-      writeStream.write(chunk);
+      // Honor disk backpressure: if the write buffer is full, pause the source
+      // until it drains so a disk slower than the upstream can't grow the write
+      // stream's buffer without bound (the client pipe alone only throttles to
+      // the client's rate, not the disk's).
+      if (!writeStream.write(chunk)) {
+        stream.pause();
+        writeStream.once('drain', () => stream.resume());
+      }
     });
 
     stream.on('end', () => {

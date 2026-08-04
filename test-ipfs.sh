@@ -39,7 +39,9 @@ test_body_contains() {
   local url="$3"
 
   local body
-  body=$(curl -s --max-time 30 "$url" 2>&1)
+  # -L: a path-style /ipfs/{CID} 302-redirects to its sandbox subdomain when
+  # ARNS_ROOT_HOSTS is set; without following, we'd match the redirect body.
+  body=$(curl -sL --max-time 30 "$url" 2>&1)
   local status=$?
 
   if echo "$body" | grep -q "$expected_text"; then
@@ -61,7 +63,10 @@ test_header() {
   local actual
   actual=$(curl -s -I --max-time 30 "$url" 2>&1 | grep -i "^$header:" | head -1 | sed 's/^[^:]*: //' | tr -d '\r')
 
-  if echo "$actual" | grep -qi "$expected_value"; then
+  # An empty expected_value means "header must be present" — grep -qi "" would
+  # match anything (even a missing header), so require a non-empty actual value.
+  if { [ -z "$expected_value" ] && [ -n "$actual" ]; } ||
+    { [ -n "$expected_value" ] && echo "$actual" | grep -qi "$expected_value"; }; then
     echo -e "  ${GREEN}PASS${NC} $name ($actual)"
     ((pass++))
   else

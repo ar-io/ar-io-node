@@ -63,12 +63,24 @@ export class IpfsPinner {
       await this.rpc('pin/add', cid);
       this.pinned.add(cid);
       this.log.debug('Pinned named IPFS CID', { cid });
-      // Bound local storage: unpin oldest beyond the cap.
+      // Bound local storage: unpin oldest beyond the cap. Only drop it from the
+      // tracked set once Kubo confirms the unpin — otherwise a failed pin/rm
+      // would leave the CID pinned but untracked, and the real pin count could
+      // drift above `max`. Stop on the first failure to avoid spinning against
+      // an unhealthy Kubo; the entry is retried on the next eviction.
       while (this.pinned.size > this.max) {
         const oldest = this.pinned.values().next().value;
         if (oldest === undefined) break;
-        this.pinned.delete(oldest);
-        this.rpc('pin/rm', oldest).catch(() => {});
+        try {
+          await this.rpc('pin/rm', oldest);
+          this.pinned.delete(oldest);
+        } catch (error: any) {
+          this.log.warn('Failed to unpin evicted CID; will retry later', {
+            cid: oldest,
+            message: error?.message,
+          });
+          break;
+        }
       }
     } catch (error: any) {
       this.log.warn('Failed to pin named IPFS CID', {

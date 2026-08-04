@@ -92,7 +92,15 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       // is rejected here rather than mis-served downstream.
       const protocolHeader =
         response.headers[headerNames.arnsProtocol.toLowerCase()];
-      const targetProtocol = protocolHeader === 'ipfs' ? 1 : 0;
+      // Default to arweave only when the header is absent (older peers). An
+      // explicit value other than arweave/ipfs is mapped to an unsupported code
+      // so classifyResolvedTarget rejects it rather than mis-serving as arweave.
+      const targetProtocol =
+        protocolHeader === undefined || protocolHeader === 'arweave'
+          ? 0
+          : protocolHeader === 'ipfs'
+            ? 1
+            : -1;
       if (typeof resolvedId === 'string') {
         try {
           const protocol = classifyResolvedTarget(resolvedId, targetProtocol);

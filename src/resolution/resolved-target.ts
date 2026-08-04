@@ -30,7 +30,17 @@ export function classifyResolvedTarget(
   resolvedId: string,
   targetProtocol: number | undefined,
 ): ResolvedProtocol {
-  const protocol: ResolvedProtocol = targetProtocol === 1 ? 'ipfs' : 'arweave';
+  // Only an absent protocol (or an explicit 0) is a legacy Arweave record.
+  // Reject any other explicit value rather than silently serving a future/
+  // invalid protocol through the Arweave data path.
+  let protocol: ResolvedProtocol;
+  if (targetProtocol === undefined || targetProtocol === 0) {
+    protocol = 'arweave';
+  } else if (targetProtocol === 1) {
+    protocol = 'ipfs';
+  } else {
+    throw new Error(`Unsupported targetProtocol: ${targetProtocol}`);
+  }
 
   if (protocol === 'ipfs') {
     if (!isValidCid(resolvedId)) {

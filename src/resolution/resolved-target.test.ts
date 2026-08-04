@@ -23,8 +23,11 @@ describe('classifyResolvedTarget', () => {
       assert.equal(classifyResolvedTarget(ARWEAVE_ID, undefined), 'arweave');
     });
 
-    it('treats unknown protocol numbers as arweave (fail-closed)', () => {
-      assert.equal(classifyResolvedTarget(ARWEAVE_ID, 2), 'arweave');
+    it('rejects an unknown protocol number rather than mis-serving as arweave', () => {
+      assert.throws(
+        () => classifyResolvedTarget(ARWEAVE_ID, 2),
+        /Unsupported targetProtocol/,
+      );
     });
 
     it('rejects a non-Arweave id under an Arweave protocol', () => {
