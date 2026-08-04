@@ -225,9 +225,19 @@ export function winstonToAr(amount: string) {
 export const MANIFEST_CONTENT_TYPE = 'application/x.arweave-manifest+json';
 
 // Arweave transaction/data-item ids are 32-byte values, base64url-encoded to
-// exactly 43 characters. Manifest entries pointing at anything else are
-// malformed; reject them rather than attempting a data retrieval on garbage.
+// exactly 43 characters.
 const MANIFEST_ID_REGEX = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * Type guard for a well-formed Arweave data/transaction id.
+ *
+ * Manifest entries can reference arbitrary strings; anything that is not an
+ * exactly-43-character base64url id is malformed and must not be used to
+ * attempt a data retrieval.
+ *
+ * @param id - Candidate value taken from a parsed manifest.
+ * @returns `true` if `id` is a 43-character base64url string.
+ */
 const isValidManifestId = (id: unknown): id is string =>
   typeof id === 'string' && MANIFEST_ID_REGEX.test(id);
 

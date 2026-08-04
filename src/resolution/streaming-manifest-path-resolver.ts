@@ -32,8 +32,17 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
     this.cache = new LRUCache<string, ManifestResolution>({ max: cacheSize });
   }
 
-  // Key on the trailing-slash-normalized path so `/foo` and `/foo/` share an
-  // entry, matching resolveManifestStreamPath's own normalization.
+  /**
+   * Build the cache key for a manifest path resolution.
+   *
+   * The path is trailing-slash-normalized so `/foo` and `/foo/` share an
+   * entry, matching resolveManifestStreamPath's own normalization, and a NUL
+   * separator keeps the manifest id and path boundary unambiguous.
+   *
+   * @param id - Manifest transaction id.
+   * @param path - Requested sub-path, or undefined for the manifest root.
+   * @returns A cache key unique to the (manifest, normalized path) pair.
+   */
   private cacheKey(id: string, path: string | undefined): string {
     return `${id}\0${(path ?? '').replace(/\/+$/g, '')}`;
   }
