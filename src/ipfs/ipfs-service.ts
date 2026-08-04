@@ -145,7 +145,9 @@ export class IpfsService {
           metrics.ipfsBlockedTotal.inc();
           span.setAttribute('ipfs.blocked', true);
           span.end();
-          throw new IpfsBlockedError(`Content hash is blocked: ${normalizedCid}`);
+          throw new IpfsBlockedError(
+            `Content hash is blocked: ${normalizedCid}`,
+          );
         }
       }
 
@@ -183,7 +185,9 @@ export class IpfsService {
           metrics.ipfsBlockedTotal.inc();
           span.setAttribute('ipfs.blocked', true);
           span.end();
-          throw new IpfsBlockedError(`Content hash is blocked: ${normalizedCid}`);
+          throw new IpfsBlockedError(
+            `Content hash is blocked: ${normalizedCid}`,
+          );
         }
         // Content is available — clear any negative-cache entry and record a
         // success so a transiently-unavailable CID that later pins isn't kept in
@@ -253,7 +257,11 @@ export class IpfsService {
       // Stream directly to the client while writing to a temp file on disk for
       // caching. No memory buffering — handles files of any size. Partial (206)
       // responses are NOT cached — only full objects.
-      if (range === undefined && format === undefined && result.statusCode === 200) {
+      if (
+        range === undefined &&
+        format === undefined &&
+        result.statusCode === 200
+      ) {
         this.streamToCache(
           normalizedCid,
           path,
@@ -274,9 +282,7 @@ export class IpfsService {
         // mid-stream size check, and their size is often unknown up front — guard
         // the stream so a large DAG can't stream unbounded.
         stream:
-          format !== undefined
-            ? this.guardSize(result.stream)
-            : result.stream,
+          format !== undefined ? this.guardSize(result.stream) : result.stream,
         size: result.size,
         contentType: result.contentType,
         cached: false,

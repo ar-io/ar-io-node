@@ -216,12 +216,19 @@ async function handleIpfsRequest({
   // and relaying it alongside our own Content-Length would be inconsistent.
   const rawRange = req.headers.range;
   const rangeForKubo =
-    typeof rawRange === 'string' && !rawRange.includes(',') ? rawRange : undefined;
+    typeof rawRange === 'string' && !rawRange.includes(',')
+      ? rawRange
+      : undefined;
   // Trustless format takes precedence over Range: verifiable block/CAR retrieval.
   const format = parseIpfsFormat(req);
   const ipfsPath = path !== undefined ? `${cidString}/${path}` : cidString;
 
-  parentLog.debug('Handling IPFS request', { cidString, path, routeType, format });
+  parentLog.debug('Handling IPFS request', {
+    cidString,
+    path,
+    routeType,
+    format,
+  });
 
   try {
     const result = await ipfsService.getContent({
@@ -236,9 +243,7 @@ async function handleIpfsRequest({
     // When Content-Length is unknown (chunked), use a conservative estimate
     // that gets corrected in the token adjustment after streaming.
     const contentSize =
-      result.size > 0
-        ? result.size
-        : config.IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES;
+      result.size > 0 ? result.size : config.IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES;
     const limitCheck = await checkPaymentAndRateLimits({
       req,
       res,

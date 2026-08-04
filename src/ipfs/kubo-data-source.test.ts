@@ -141,7 +141,8 @@ describe('KuboDataSource', () => {
       });
 
       await assert.rejects(
-        () => kuboDataSource.getContent({ cidString: CID, range: 'bytes=9e9-' }),
+        () =>
+          kuboDataSource.getContent({ cidString: CID, range: 'bytes=9e9-' }),
         (error: any) => {
           assert.equal(error.name, 'IpfsRangeNotSatisfiableError');
           return true;
