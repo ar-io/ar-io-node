@@ -1709,6 +1709,7 @@ metrics.registerQueueLengthGauge('matchedItemBuffer', {
 export const manifestPathResolver = new StreamingManifestPathResolver({
   log,
   cacheSize: config.MANIFEST_RESOLUTION_CACHE_SIZE,
+  store: db,
 });
 
 export const arnsResolutionCache = new KvArNSResolutionStore({
