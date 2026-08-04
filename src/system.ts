@@ -1909,6 +1909,9 @@ if (config.IPFS_ENABLED) {
     cache: ipfsCache,
     blockListValidator: dataBlockListValidator,
     maxResponseSizeBytes: config.IPFS_MAX_RESPONSE_SIZE_BYTES,
+    // Reuse the shared negative cache so absent/unpinned CIDs short-circuit
+    // repeat Kubo fetches, as they do for absent Arweave ids.
+    negativeCache: negativeDataCache,
   });
 
   ipfsRateLimiter = createIpfsRateLimiter();

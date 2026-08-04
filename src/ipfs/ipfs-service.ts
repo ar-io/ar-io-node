@@ -14,6 +14,7 @@ import { cidToV1Base32 } from '../lib/ipfs-cid.js';
 import { startChildSpan } from '../tracing.js';
 import { IpfsFsCache } from './ipfs-cache.js';
 import { DataBlockListValidator } from '../types.js';
+import { NegativeDataCache } from '../data/negative-data-cache.js';
 import {
   KuboDataSource,
   IpfsBlockedError,
@@ -41,6 +42,7 @@ export class IpfsService {
   private cache: IpfsFsCache;
   private blockListValidator: DataBlockListValidator;
   private maxResponseSizeBytes: number;
+  private negativeCache?: NegativeDataCache;
 
   constructor({
     log,
@@ -48,18 +50,21 @@ export class IpfsService {
     cache,
     blockListValidator,
     maxResponseSizeBytes,
+    negativeCache,
   }: {
     log: winston.Logger;
     dataSource: KuboDataSource;
     cache: IpfsFsCache;
     blockListValidator: DataBlockListValidator;
     maxResponseSizeBytes: number;
+    negativeCache?: NegativeDataCache;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
     this.cache = cache;
     this.blockListValidator = blockListValidator;
     this.maxResponseSizeBytes = maxResponseSizeBytes;
+    this.negativeCache = negativeCache;
   }
 
   async getContent({
@@ -101,6 +106,18 @@ export class IpfsService {
         throw new IpfsNotFoundError('Invalid IPFS path');
       }
 
+      // Negative cache: short-circuit CIDs we've repeatedly failed to fetch
+      // (absent or unpinned) so they don't re-hit Kubo on every request
+      // (latency / DoS amplification) — mirrors the Arweave path's negative data
+      // cache. Only trips after repeated misses (count + duration thresholds).
+      if (this.negativeCache?.isNegativelyCached(normalizedCid) === true) {
+        span.setAttribute('ipfs.negative_cache', 'hit');
+        span.end();
+        throw new IpfsNotFoundError(
+          `CID not found (negatively cached): ${normalizedCid}`,
+        );
+      }
+
       // Check cache
       const cached = await this.cache.get(normalizedCid, path);
       if (cached) {
@@ -138,13 +155,21 @@ export class IpfsService {
       metrics.ipfsCacheMissTotal.inc();
       span.setAttribute('ipfs.cache', 'miss');
 
-      // Fetch from Kubo
-      const result = await this.dataSource.getContent({
-        cidString: normalizedCid,
-        path,
-        signal,
-        parentSpan: span,
-      });
+      // Fetch from Kubo. Record absent/unpinned CIDs in the negative cache so
+      // repeat requests short-circuit above instead of re-hitting Kubo.
+      const result = await this.dataSource
+        .getContent({
+          cidString: normalizedCid,
+          path,
+          signal,
+          parentSpan: span,
+        })
+        .catch((err) => {
+          if (err instanceof IpfsNotFoundError) {
+            this.negativeCache?.recordMiss(normalizedCid);
+          }
+          throw err;
+        });
 
       span.setAttributes({
         'ipfs.size': result.size,
