@@ -224,6 +224,13 @@ export function winstonToAr(amount: string) {
 
 export const MANIFEST_CONTENT_TYPE = 'application/x.arweave-manifest+json';
 
+// Arweave transaction/data-item ids are 32-byte values, base64url-encoded to
+// exactly 43 characters. Manifest entries pointing at anything else are
+// malformed; reject them rather than attempting a data retrieval on garbage.
+const MANIFEST_ID_REGEX = /^[A-Za-z0-9_-]{43}$/;
+const isValidManifestId = (id: unknown): id is string =>
+  typeof id === 'string' && MANIFEST_ID_REGEX.test(id);
+
 export function parseManifestStream(stream: Readable): EventEmitter {
   const emitter = new EventEmitter();
   let currentKey: string | undefined;
@@ -268,8 +275,33 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   });
 
   pipeline.on('endObject', () => {
+    // Resolve the manifest index only once the whole `index` object has been
+    // parsed, so `index.id` deterministically wins over `index.path`
+    // regardless of JSON key order (per the Arweave manifest spec). The
+    // depth/name guard (length === 1) matches the top-level `index` object and
+    // excludes a `paths` entry that happens to be keyed "index".
+    const closingIndexObject = keyPath.length === 1 && keyPath[0] === 'index';
+
     if (keyPath.length > 0) {
       keyPath.pop();
+    }
+
+    if (closingIndexObject) {
+      if (isManifestV2 && indexProps.id !== undefined) {
+        emitter.emit('index', { id: indexProps.id, type: 'index' });
+        paths = {};
+      } else if (
+        indexProps.path !== undefined &&
+        paths[indexProps.path] !== undefined
+      ) {
+        emitter.emit('index', { id: paths[indexProps.path], type: 'index' });
+        paths = {};
+      } else {
+        // The index path (if any) points at a `paths` entry not yet seen;
+        // leave indexProps.path so the later `paths` handler resolves it, and
+        // drop the accumulated map since it is no longer needed.
+        paths = {};
+      }
     }
   });
 
@@ -296,27 +328,18 @@ export function parseManifestStream(stream: Readable): EventEmitter {
     }
 
     // Index path - { "index": { "path": "index.html" } }
+    // Capture only; resolution is deferred to the `index` object's endObject
+    // so `index.id` can take precedence regardless of key order.
     if (
       keyPath.length === 1 &&
       keyPath[0] === 'index' &&
       currentKey === 'path'
     ) {
       indexProps.path = data;
-      // Resolve if the path id is already known
-      if (
-        indexProps.id === undefined &&
-        indexProps.path !== undefined &&
-        paths[indexProps.path] !== undefined
-      ) {
-        emitter.emit('index', {
-          id: paths[indexProps.path],
-          type: 'index',
-        });
-      }
-      paths = {};
     }
 
     // Index id - { "index": { "id": "<data-id>" } }
+    // Capture only; emitted at the `index` object's endObject (see above).
     if (
       keyPath.length === 1 &&
       keyPath[0] === 'index' &&
@@ -324,11 +347,6 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       currentKey === 'id'
     ) {
       indexProps.id = data;
-      emitter.emit('index', {
-        id: data,
-        type: 'index',
-      });
-      paths = {};
     }
 
     // Fallback - { "fallback": { "id": "<data-id>" } }
@@ -410,20 +428,24 @@ export function resolveManifestStreamPath(
     });
 
     emitter.on('index', (data) => {
-      if (sanitizedPath === '') {
+      if (sanitizedPath === '' && isValidManifestId(data.id)) {
         resolve({ id: data.id, resolutionType: data.type });
       }
     });
 
     emitter.on('fallback', (data) => {
-      if (data.id !== undefined) {
+      if (isValidManifestId(data.id)) {
         resolve({ id: data.id, resolutionType: data.type });
       }
     });
 
     emitter.on('path', (data) => {
       const trimmedDataPath = data.path.replace(/\/+$/g, '');
-      if (sanitizedPath !== '' && trimmedDataPath === sanitizedPath) {
+      if (
+        sanitizedPath !== '' &&
+        trimmedDataPath === sanitizedPath &&
+        isValidManifestId(data.id)
+      ) {
         resolve({ id: data.id, resolutionType: data.type });
       }
     });

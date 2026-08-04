@@ -56,6 +56,17 @@ export const exampleManifestStreamV020IndexAndPathAtTheEnd = (): Readable => {
     './test/mock_files/manifests/example_manifest_v0.2.0_at_the_end.json',
   );
 };
+export const exampleManifestStreamV020PathsBeforeIndexPathFirst =
+  (): Readable => {
+    return fs.createReadStream(
+      './test/mock_files/manifests/example_manifest_v0.2.0_paths_before_index_path_first.json',
+    );
+  };
+export const exampleManifestStreamInvalidIds = (): Readable => {
+  return fs.createReadStream(
+    './test/mock_files/manifests/example_manifest_invalid_ids.json',
+  );
+};
 
 export class ArweaveChainSourceStub implements ChainSource {
   private height = 10000000;
