@@ -172,6 +172,43 @@ describe('KuboDataSource', () => {
     });
   });
 
+  describe('trustless format', () => {
+    const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+    let interceptorId: number;
+    afterEach(() => axios.interceptors.request.eject(interceptorId));
+
+    it('forwards ?format=raw and the IPLD Accept type to Kubo', async () => {
+      let captured: any;
+      interceptorId = axios.interceptors.request.use((config) => {
+        captured = config;
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: { 'content-type': 'application/vnd.ipld.raw' },
+            config,
+            data: Readable.from([Buffer.alloc(10)]),
+          });
+        return config;
+      });
+
+      const result = await kuboDataSource.getContent({
+        cidString: CID,
+        format: 'raw',
+      });
+
+      assert.match(captured.url, /\/ipfs\/.*\?format=raw$/);
+      const accept =
+        typeof captured.headers?.get === 'function'
+          ? captured.headers.get('Accept')
+          : captured.headers?.Accept;
+      assert.equal(accept, 'application/vnd.ipld.raw');
+      assert.equal(result.contentType, 'application/vnd.ipld.raw');
+      assert.equal(result.statusCode, 200);
+      result.stream.destroy();
+    });
+  });
+
   describe('error types', () => {
     it('IpfsNotFoundError has correct name', () => {
       const error = new IpfsNotFoundError('not found');

@@ -7,7 +7,7 @@
 import { default as axios } from 'axios';
 import winston from 'winston';
 
-import { cidToV1Base32 } from '../lib/ipfs-cid.js';
+import { cidToV1Base32, isValidCid } from '../lib/ipfs-cid.js';
 
 /**
  * Best-effort pinner for "named" IPFS content — the CIDs that ArNS names resolve
@@ -46,11 +46,12 @@ export class IpfsPinner {
 
   /** Fire-and-forget pin of a named CID. Never throws; never blocks. */
   pin(cidString: string): void {
+    if (!isValidCid(cidString)) return;
     let cid: string;
     try {
       cid = cidToV1Base32(cidString);
     } catch {
-      return; // not a valid CID — nothing to pin
+      return; // defensive — should not happen after isValidCid
     }
     if (this.pinned.has(cid) || this.inFlight.has(cid)) return;
     this.inFlight.add(cid);
