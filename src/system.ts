@@ -1907,15 +1907,34 @@ if (config.IPFS_ENABLED) {
     eventEmitter,
   });
 
+  // Dedicated negative cache for IPFS. It short-circuits absent/unpinned CIDs
+  // like the Arweave one does, but MUST be a separate instance: the negative
+  // cache also tracks a rolling success/failure health window that gates
+  // promotions, and mixing IPFS traffic into the Arweave window would let one
+  // upstream's health mask or suppress the other's (a Kubo 404 flood suppressing
+  // legit Arweave promotions, or healthy IPFS traffic hiding an Arweave outage).
+  const ipfsNegativeCache = new NegativeDataCache({
+    log,
+    enabled: config.NEGATIVE_CACHE_ENABLED,
+    maxSize: config.NEGATIVE_CACHE_MAX_SIZE,
+    ttlMs: config.NEGATIVE_CACHE_TTL_MS,
+    missCountThreshold: config.NEGATIVE_CACHE_MISS_COUNT_THRESHOLD,
+    missDurationMs: config.NEGATIVE_CACHE_MISS_THRESHOLD_MS,
+    missTrackerTtlMs: config.NEGATIVE_CACHE_MISS_TRACKER_TTL_MS,
+    maxTtlMs: config.NEGATIVE_CACHE_MAX_TTL_MS,
+    promotionHistoryTtlMs: config.NEGATIVE_CACHE_PROMOTION_HISTORY_TTL_MS,
+    healthWindowMs: config.NEGATIVE_CACHE_HEALTH_WINDOW_MS,
+    unhealthyThreshold: config.NEGATIVE_CACHE_UNHEALTHY_THRESHOLD,
+    minSampleSize: config.NEGATIVE_CACHE_HEALTH_MIN_SAMPLE_SIZE,
+  });
+
   ipfsService = new IpfsService({
     log,
     dataSource: kuboDataSource,
     cache: ipfsCache,
     blockListValidator: dataBlockListValidator,
     maxResponseSizeBytes: config.IPFS_MAX_RESPONSE_SIZE_BYTES,
-    // Reuse the shared negative cache so absent/unpinned CIDs short-circuit
-    // repeat Kubo fetches, as they do for absent Arweave ids.
-    negativeCache: negativeDataCache,
+    negativeCache: ipfsNegativeCache,
   });
 
   ipfsRateLimiter = createIpfsRateLimiter();

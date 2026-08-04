@@ -7,6 +7,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { Readable } from 'node:stream';
+import { once } from 'node:events';
 import axios from 'axios';
 
 import { createTestLogger } from '../../test/test-logger.js';
@@ -207,6 +208,55 @@ describe('KuboDataSource', () => {
       assert.equal(result.contentType, 'application/vnd.ipld.raw');
       assert.equal(result.statusCode, 200);
       result.stream.destroy();
+    });
+  });
+
+  describe('concurrency slot release', () => {
+    const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+    let interceptorId: number;
+    afterEach(() => axios.interceptors.request.eject(interceptorId));
+
+    const ok200 = () => {
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: { 'content-length': '4', 'content-type': 'text/plain' },
+            config,
+            data: new Readable({ read() {} }), // stays open until destroyed
+          });
+        return config;
+      });
+    };
+
+    it('frees the slot when the response stream is destroyed, so later fetches proceed', async () => {
+      const ds = new KuboDataSource({
+        log,
+        kuboUrl: 'http://localhost:8080',
+        requestTimeoutMs: 5000,
+        streamStallTimeoutMs: 5000,
+        maxConcurrent: 1,
+      });
+      ok200();
+
+      // First fetch takes the only slot and holds it (stream left unconsumed).
+      const r1 = await ds.getContent({ cidString: CID });
+
+      // A second concurrent fetch must fail fast while the slot is held.
+      await assert.rejects(
+        () => ds.getContent({ cidString: CID }),
+        (e: any) => e.name === 'IpfsUnavailableError',
+      );
+
+      // Destroying the stream emits 'close', which releases the slot (and ends
+      // the span) — a subsequent fetch then succeeds.
+      r1.stream.destroy();
+      await once(r1.stream, 'close');
+
+      const r3 = await ds.getContent({ cidString: CID });
+      assert.equal(r3.statusCode, 200);
+      r3.stream.destroy();
     });
   });
 

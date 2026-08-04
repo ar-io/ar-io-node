@@ -276,11 +276,22 @@ export class IpfsService {
         );
       }
 
-      // End span when stream completes
-      result.stream.on('end', () => span.end());
+      // End span when the stream terminates. 'close' is included because the
+      // destroy()-without-error paths (HEAD, rate-limited teardown, guardSize
+      // abort) emit only 'close' — not 'end'/'error' — so without it those spans
+      // would never end or export. endSpan() is idempotent so a normal
+      // 'end'-then-'close' sequence ends exactly once.
+      let spanEnded = false;
+      const endSpan = () => {
+        if (spanEnded) return;
+        spanEnded = true;
+        span.end();
+      };
+      result.stream.on('end', endSpan);
+      result.stream.on('close', endSpan);
       result.stream.on('error', (err) => {
         span.recordException(err);
-        span.end();
+        endSpan();
       });
 
       return {
@@ -329,6 +340,13 @@ export class IpfsService {
     });
     stream.on('error', (e) => guard.destroy(e));
     guard.on('error', () => stream.destroy());
+    // A plain destroy() of the returned guard (a HEAD releasing the body, or a
+    // rate-limit/client-abort teardown) emits 'close', not 'error', and pipe()
+    // does not propagate a destroy upstream — so tear down the source here too,
+    // otherwise its Kubo socket + concurrency slot leak until the wall-clock cap.
+    guard.on('close', () => {
+      if (!stream.destroyed) stream.destroy();
+    });
     return stream.pipe(guard);
   }
 

@@ -217,16 +217,29 @@ export class KuboDataSource {
         contentType,
       });
 
-      // End span when stream finishes or errors
-      stream.on('end', () => span.end());
+      // End span when the stream terminates. 'close' is included because a
+      // destroy()-without-error (HEAD, rate-limited teardown, client abort) emits
+      // only 'close' — not 'end'/'error' — so without it the span never
+      // ends/exports. endSpan() is idempotent so a normal 'end'-then-'close'
+      // sequence ends exactly once.
+      let spanEnded = false;
+      const endSpan = () => {
+        if (spanEnded) return;
+        spanEnded = true;
+        span.end();
+      };
+      stream.on('end', endSpan);
       stream.on('error', (err) => {
         span.recordException(err);
-        span.end();
+        endSpan();
       });
 
-      // Release the concurrency slot when the response stream is fully consumed
-      // or destroyed (covers success, client abort, and downstream errors).
-      stream.once('close', release);
+      // Release the concurrency slot and end the span when the response stream is
+      // fully consumed or destroyed (covers success, client abort, and errors).
+      stream.once('close', () => {
+        endSpan();
+        release();
+      });
 
       return {
         stream,

@@ -9,6 +9,7 @@ import { default as asyncHandler } from 'express-async-handler';
 import winston from 'winston';
 
 import url from 'node:url';
+import { Transform } from 'node:stream';
 
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
@@ -285,16 +286,26 @@ async function handleIpfsRequest({
     res.setHeader('ETag', `"${etag}"`);
     res.setHeader('X-Ipfs-Path', `/ipfs/${ipfsPath}`);
     res.setHeader(headerNames.arIoSource, 'ipfs');
+    // The representation is content-negotiated: the same URL yields a UnixFS
+    // proxy body, a raw block, or a CAR depending on the Accept header (see
+    // parseIpfsFormat). Tell shared caches to key on Accept so they don't serve
+    // one representation to a client that asked for another.
+    res.setHeader('Vary', 'Accept');
 
     if (format !== undefined) {
       // Trustless retrieval: the body IS the CID's content-addressed bytes (a raw
       // block or a CAR), which the CLIENT verifies against the CID. The gateway
       // is not a trust root here — mark it so nothing downstream reads the
-      // response as a gateway-attested content proof. Content-addressed, so the
-      // bytes are immutable regardless of any ArNS binding.
+      // response as a gateway-attested content proof.
       res.setHeader('Content-Disposition', 'attachment');
       res.setHeader('X-Ar-Io-Trustless', 'true');
-      res.setHeader('Cache-Control', 'public, max-age=29030400, immutable');
+      // The bytes are content-addressed and immutable, but a cache entry served
+      // over an ArNS name is keyed by the NAME (a mutable binding), not the CID —
+      // the ArNS middleware already set a TTL-bounded Cache-Control, so don't
+      // override it here (same PE-9072 guard as the proxy branch below).
+      if ((req as Request & { arns?: unknown }).arns === undefined) {
+        res.setHeader('Cache-Control', 'public, max-age=29030400, immutable');
+      }
     } else {
       // UnixFS proxy path: Kubo reassembles and the gateway serves (and may sign)
       // the bytes. This is TRUSTED-PROXY, not client-verifiable — the signed
@@ -333,29 +344,52 @@ async function handleIpfsRequest({
       pinner.pin(cidString);
     }
 
-    // Track metrics
+    // Track metrics. Cache hit/miss counters are incremented inside
+    // IpfsService.getContent (the single source of truth for the cache
+    // decision), so they are NOT re-incremented here — doing both double-counted
+    // them and desynced them from ipfsRequestsTotal.
     const cacheStatus = result.cached ? 'hit' : 'miss';
     metrics.ipfsRequestsTotal.inc({ route_type: routeType, status: 'success' });
-    if (result.cached) {
-      metrics.ipfsCacheHitTotal.inc();
-    } else {
-      metrics.ipfsCacheMissTotal.inc();
-    }
     if (result.size > 0) {
       metrics.ipfsContentSizeHistogram.observe(result.size);
     }
 
     // Pipe stream to response. HEAD returns headers only — release the
     // upstream/cache stream and end without a body.
+    let bytesStreamed = 0;
     if (isHead) {
       result.stream.destroy();
       res.end();
     } else {
-      result.stream.pipe(res);
+      // Count the bytes actually delivered to the client so the rate limiter can
+      // reconcile against the reserved estimate — the reserve is only a guess for
+      // unknown-size (chunked/CAR) responses, which can stream far more than the
+      // 256 KB placeholder.
+      const counter = new Transform({
+        transform(chunk: Buffer, _enc, cb) {
+          bytesStreamed += chunk.length;
+          cb(null, chunk);
+        },
+      });
+      result.stream.pipe(counter).pipe(res);
+      // A client disconnect mid-download unpipes but does NOT destroy the source,
+      // so the Kubo socket, its concurrency slot, and the cache temp-fd would be
+      // held until the wall-clock cap. Destroy the source on client close so they
+      // release immediately (writableFinished => the body already completed).
+      res.on('close', () => {
+        if (!res.writableFinished && !result.stream.destroyed) {
+          result.stream.destroy();
+        }
+      });
     }
 
-    // Adjust rate limiter tokens after response completes
-    res.on('finish', () => {
+    // Reconcile rate-limiter tokens and record duration once the response settles.
+    // Fires on 'finish' (completed) OR 'close' (client aborted) — whichever comes
+    // first — so aborted large transfers are still charged and measured.
+    let settled = false;
+    const onResponseSettled = () => {
+      if (settled) return;
+      settled = true;
       const durationSec = (Date.now() - startTime) / 1000;
       metrics.ipfsRequestDurationHistogram.observe(
         { route_type: routeType, cache_status: cacheStatus },
@@ -364,7 +398,13 @@ async function handleIpfsRequest({
 
       adjustRateLimitTokens({
         req,
-        responseSize: isHead ? 0 : result.size > 0 ? result.size : contentSize,
+        // Use the real streamed byte count; fall back to the known size only when
+        // nothing streamed (shouldn't happen for a non-HEAD success).
+        responseSize: isHead
+          ? 0
+          : bytesStreamed > 0
+            ? bytesStreamed
+            : result.size,
         initialResult: limitCheck,
         rateLimiter,
       }).catch((error) => {
@@ -372,7 +412,9 @@ async function handleIpfsRequest({
           message: error.message,
         });
       });
-    });
+    };
+    res.on('finish', onResponseSettled);
+    res.on('close', onResponseSettled);
 
     result.stream.on('error', (error) => {
       parentLog.error('IPFS stream error', {

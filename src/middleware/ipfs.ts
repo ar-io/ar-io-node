@@ -82,9 +82,14 @@ export function createIpfsSubdomainMiddleware({
           const targetCid = cidToV1Base32(pathCid);
           const rootHost = matchedEntry.host;
           const pathSuffix = remainder !== undefined ? `/${remainder}` : '/';
+          // Preserve the query string (e.g. ?format=raw) across the redirect so
+          // the requested representation isn't silently dropped — matching the
+          // path-route redirect in routes/ipfs.ts.
+          const qIdx = req.originalUrl.indexOf('?');
+          const queryString = qIdx >= 0 ? req.originalUrl.slice(qIdx) : '';
           res.redirect(
             302,
-            `${config.SANDBOX_PROTOCOL ?? req.protocol}://${targetCid}.${rootHost}${pathSuffix}`,
+            `${config.SANDBOX_PROTOCOL ?? req.protocol}://${targetCid}.${rootHost}${pathSuffix}${queryString}`,
           );
           return;
         } catch {

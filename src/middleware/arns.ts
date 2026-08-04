@@ -206,7 +206,12 @@ export const createArnsMiddleware = ({
           if (arnsProtocol === 'ipfs' && ipfsHandler !== undefined) {
             serveViaIpfs = true;
             (req as any).ipfsCid = resolvedId;
-            (req as any).ipfsPath = manifestPath;
+            // Normalize an empty root path to undefined to match the IPFS
+            // subdomain middleware's contract — otherwise a root request keys the
+            // content/negative caches and ETag as `${cid}/` here but `${cid}` via
+            // the subdomain path, double-fetching and double-storing the same CID.
+            (req as any).ipfsPath =
+              manifestPath === '' ? undefined : manifestPath;
             span.setAttribute('arns.protocol', 'ipfs');
           }
 
