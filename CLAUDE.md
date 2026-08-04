@@ -80,8 +80,14 @@ yarn service:start / stop / restart / status / logs
   first-class field on `NameResolution` set by the on-demand resolver and
   propagated across a trusted-gateway hop via the signed `X-ArNS-Protocol`
   header (`src/resolution/`). The IPFS path is held to Arweave-path parity
-  (moderation, caching, HEAD/Range, sandbox origin isolation, HTTPSIG). See
-  `docs/ipfs-integration.md` ("Parity with the Arweave Data Path").
+  (moderation, caching, HEAD/Range, sandbox origin isolation, HTTPSIG). This is a
+  **read-only** proxy to the public IPFS network — it does not store content on
+  Arweave. Two trust postures: the UnixFS path is a trusted proxy
+  (`X-Ar-Io-Trustless: false`), while `?format=raw|car` relays verifiable
+  block/CAR bytes the client checks against the CID (`true`). Optional
+  named-content pinning (`IPFS_PIN_ARNS_CONTENT`, `src/ipfs/ipfs-pinner.ts`) pins
+  the CIDs ArNS names resolve to. Uploading/permapinning IPFS content to Arweave
+  is a deliberate phase 2. See `docs/ipfs-integration.md`.
 - Responses include trust headers indicating verification status.
 - HTTPSIG signs response headers (RFC 9421); `Content-Digest` is in
   `CO_SIGNABLE_HEADERS` so when present it binds the body to the signature.
