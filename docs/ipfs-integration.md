@@ -144,15 +144,20 @@ label in the hostname distinguishes IPFS requests from ArNS name resolution,
 preventing collisions. For example, `my-app.arweave.dev` resolves as an ArNS
 name, while `bafybeig...arweave.dev` resolves as an IPFS CID.
 
-### CIDv0 to CIDv1 Redirect
+### Path-style origin isolation (and CIDv0 → CIDv1)
 
-CIDv0 identifiers (base58, starting with `Qm`) cannot be used in subdomains
-because they are case-sensitive and DNS is case-insensitive. When a CIDv0 is
-detected in a subdomain request, the gateway issues a 301 redirect to the
-equivalent CIDv1 (base32) subdomain URL.
+A path-style `/ipfs/{CID}` request is redirected (302) to the per-CID sandbox
+subdomain `{CIDv1base32}.{root_host}`, giving each CID its own browser origin —
+the same isolation the Arweave data path gets for `/{txid}` via the sandbox
+middleware. This prevents one CID's HTML/JS from executing in the shared gateway
+origin. The redirect is skipped when the request already arrived on that
+subdomain (no loop), and ArNS-served IPFS is already isolated on the name's own
+origin (so it reaches the handler directly, not this route).
 
-For path-based requests, both CIDv0 and CIDv1 are accepted directly without
-redirection.
+CIDv0 identifiers (base58, starting with `Qm`) are case-sensitive and cannot be
+used in subdomains, so they are normalized to their DNS-safe CIDv1 base32 form as
+part of the same redirect. Requests already on the correct `{CID}.{root_host}`
+subdomain are served directly.
 
 ## Components
 
@@ -207,6 +212,11 @@ A file-based blocklist for content moderation:
   notifications. Additions and removals take effect without restarting the
   gateway.
 - **Response**: Blocked CIDs return HTTP 451 (Unavailable For Legal Reasons).
+- **Block by content hash too**: moderation uses the same admin API and store as
+  Arweave (`isIdBlocked` on the CID, and `isHashBlocked` on the served bytes'
+  base64url SHA-256). Because the SHA-256 is known once content is cached, a
+  block-by-content-hash entry stops an IPFS CID serving those same bytes, not
+  only a block-by-CID — matching the Arweave data path.
 
 ### `src/ipfs/ipfs-rate-limiter.ts` -- Rate Limiter
 
@@ -251,11 +261,14 @@ Express middleware that intercepts requests based on the `Host` header:
 
 Express route handlers for path-based IPFS access:
 
-- `GET /ipfs/:cid` and `GET /ipfs/:cid/*` routes.
+- `GET` and `HEAD` `/ipfs/:cid` and `/ipfs/:cid/*` routes.
 - Validates the CID parameter, delegates to the IPFS service, and streams the
-  response with appropriate headers.
-- Sets `Cache-Control`, `ETag`, and `X-Ipfs-Path` headers on successful
-  responses.
+  response with appropriate headers. `HEAD` returns the full header set with no
+  body (and bills zero egress).
+- Sets `Cache-Control`, `ETag`, `X-Ipfs-Path`, and `Accept-Ranges: bytes`. A
+  client `Range` header is forwarded to Kubo and relayed as `206 Partial
+  Content` + `Content-Range`; an unsatisfiable range returns `416`. Partial
+  (206) responses are streamed straight from Kubo and are never cached.
 
 ## Data Flow
 
@@ -292,10 +305,12 @@ The complete lifecycle of an IPFS request:
 
    | Header | Value | Purpose |
    |--------|-------|---------|
-   | `Cache-Control` | `public, max-age=31536000, immutable` | CID content never changes |
+   | `Cache-Control` | `public, max-age=31536000, immutable` (direct CID) / ArNS TTL (via a name) | CID content never changes; a name→CID binding is mutable |
    | `ETag` | `"{CID}"` | Content-addressed deduplication |
    | `X-Ipfs-Path` | `/ipfs/{CID}/{path}` | IPFS ecosystem interop |
    | `Content-Type` | Detected by Kubo or from `.meta` | Standard MIME typing |
+   | `Accept-Ranges` | `bytes` | Advertises Range support; a `Range` request yields `206` + `Content-Range` |
+   | `Content-Digest` | RFC 9530 SHA-256 (cache hits / HEAD) | Signed body binding when the hash is known |
 
 ## Caching Strategy
 
@@ -314,6 +329,7 @@ no revalidation needed.
 | **Metadata** | Companion `.meta` JSON files store content type, size, and original CID |
 | **Cleanup** | Eviction scans run every `IPFS_CACHE_CLEANUP_THRESHOLD` seconds (default 3600) |
 | **Permanence** | No TTL-based expiration; entries are valid forever unless evicted for space |
+| **Negative cache** | Absent/unpinned CIDs are recorded (shared `NegativeDataCache`, count+duration thresholds) so repeat requests short-circuit instead of re-hitting Kubo — as for absent Arweave ids. `404` responses also carry `Cache-Control` (`CACHE_NOT_FOUND_MAX_AGE`, `must-revalidate`). |
 
 ### Why a Separate Cache
 
@@ -493,11 +509,14 @@ hits), so the name->CID binding and the served bytes are both attested.
   a single ANT record update (target + `targetProtocol`).
 - **Caching and moderation apply.** All Phase 1 protections (blocklist, rate
   limits, cache) apply to ArNS-resolved IPFS content.
-- **Resolver scope.** Protocol awareness lives in the on-demand resolver. The
-  trusted-gateway resolver does not yet propagate `targetProtocol` across
-  gateway hops, so a name whose resolution falls through to that path would be
-  treated as Arweave. Keep `on-demand` ahead of `gateway` in
-  `ARNS_RESOLVER_PRIORITY_ORDER` for IPFS-targeted names.
+- **Resolver scope.** Protocol propagates across resolvers, including a
+  trusted-gateway hop: the trusted-gateway resolver reads the signed
+  `X-ArNS-Protocol` header and validates the resolved id per protocol (a CID for
+  `ipfs`, a 43-char id for `arweave`), so an IPFS resolution survives a gateway
+  hop and `ARNS_RESOLVER_PRIORITY_ORDER` no longer has to keep `on-demand` ahead
+  of `gateway` for IPFS-targeted names. An upstream gateway that predates this
+  still omits the header, which the reader defaults to `arweave` — so upgrade the
+  upstream first for full IPFS coverage across a hop.
 
 ### Root and apex names
 
