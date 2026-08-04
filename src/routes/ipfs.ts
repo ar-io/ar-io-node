@@ -16,6 +16,7 @@ import { headerNames } from '../constants.js';
 import { cidToV1Base32, isValidCid } from '../lib/ipfs-cid.js';
 import { getRequestSandbox } from '../middleware/sandbox.js';
 import { IpfsService } from '../ipfs/ipfs-service.js';
+import { IpfsPinner } from '../ipfs/ipfs-pinner.js';
 import {
   IpfsBlockedError,
   IpfsNotFoundError,
@@ -33,16 +34,36 @@ import { PaymentProcessor } from '../payments/types.js';
 import { extractAllClientIPs } from '../lib/ip-utils.js';
 import { formatContentDigest } from '../lib/digest.js';
 
+// Trustless response format (?format=raw|car or an IPLD Accept type). When set,
+// the client receives verifiable bytes (a single block or a CAR) and checks them
+// against the CID — the gateway neither reassembles nor attests content.
+function parseIpfsFormat(req: Request): 'raw' | 'car' | undefined {
+  const q = req.query.format;
+  const fromQuery = typeof q === 'string' ? q.toLowerCase() : undefined;
+  const accept = (
+    typeof req.headers.accept === 'string' ? req.headers.accept : ''
+  ).toLowerCase();
+  if (fromQuery === 'raw' || accept.includes('application/vnd.ipld.raw')) {
+    return 'raw';
+  }
+  if (fromQuery === 'car' || accept.includes('application/vnd.ipld.car')) {
+    return 'car';
+  }
+  return undefined;
+}
+
 export function createIpfsRouter({
   log,
   ipfsService,
   rateLimiter,
   paymentProcessor,
+  pinner,
 }: {
   log: winston.Logger;
   ipfsService: IpfsService;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
+  pinner?: IpfsPinner;
 }): Router {
   const router = Router();
   const handler = createIpfsPathHandler({
@@ -50,6 +71,7 @@ export function createIpfsRouter({
     ipfsService,
     rateLimiter,
     paymentProcessor,
+    pinner,
   });
 
   router.get('/ipfs/:cid', handler);
@@ -67,11 +89,13 @@ export function createIpfsHandler({
   ipfsService,
   rateLimiter,
   paymentProcessor,
+  pinner,
 }: {
   log: winston.Logger;
   ipfsService: IpfsService;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
+  pinner?: IpfsPinner;
 }): Handler {
   return asyncHandler(async (req: Request, res: Response) => {
     const cidString = (req as any).ipfsCid as string;
@@ -85,6 +109,7 @@ export function createIpfsHandler({
       ipfsService,
       rateLimiter,
       paymentProcessor,
+      pinner,
       routeType: 'subdomain',
     });
   });
@@ -95,11 +120,13 @@ function createIpfsPathHandler({
   ipfsService,
   rateLimiter,
   paymentProcessor,
+  pinner,
 }: {
   log: winston.Logger;
   ipfsService: IpfsService;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
+  pinner?: IpfsPinner;
 }): Handler {
   return asyncHandler(async (req: Request, res: Response) => {
     const cidString = req.params.cid;
@@ -153,6 +180,7 @@ function createIpfsPathHandler({
       ipfsService,
       rateLimiter,
       paymentProcessor,
+      pinner,
       routeType: 'path',
     });
   });
@@ -167,6 +195,7 @@ async function handleIpfsRequest({
   ipfsService,
   rateLimiter,
   paymentProcessor,
+  pinner,
   routeType,
 }: {
   req: Request;
@@ -177,6 +206,7 @@ async function handleIpfsRequest({
   ipfsService: IpfsService;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
+  pinner?: IpfsPinner;
   routeType: 'path' | 'subdomain';
 }): Promise<void> {
   const startTime = Date.now();
@@ -187,23 +217,28 @@ async function handleIpfsRequest({
   const rawRange = req.headers.range;
   const rangeForKubo =
     typeof rawRange === 'string' && !rawRange.includes(',') ? rawRange : undefined;
+  // Trustless format takes precedence over Range: verifiable block/CAR retrieval.
+  const format = parseIpfsFormat(req);
   const ipfsPath = path !== undefined ? `${cidString}/${path}` : cidString;
 
-  parentLog.debug('Handling IPFS request', { cidString, path, routeType });
+  parentLog.debug('Handling IPFS request', { cidString, path, routeType, format });
 
   try {
     const result = await ipfsService.getContent({
       cidString,
       path,
       signal: req.signal,
-      range: rangeForKubo,
+      range: format !== undefined ? undefined : rangeForKubo,
+      format,
     });
 
     // Check payment and rate limits (x402 + rate limiting in one call).
     // When Content-Length is unknown (chunked), use a conservative estimate
     // that gets corrected in the token adjustment after streaming.
     const contentSize =
-      result.size > 0 ? result.size : config.IPFS_MAX_RESPONSE_SIZE_BYTES;
+      result.size > 0
+        ? result.size
+        : config.IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES;
     const limitCheck = await checkPaymentAndRateLimits({
       req,
       res,
@@ -228,44 +263,60 @@ async function handleIpfsRequest({
       return;
     }
 
-    // Set response headers
+    // Common headers (both the trustless and the UnixFS-proxy paths).
     res.setHeader('Content-Type', result.contentType);
     if (result.size > 0) {
       res.setHeader('Content-Length', result.size);
-    }
-    // Advertise range support, and relay a partial (206) response from Kubo.
-    res.setHeader('Accept-Ranges', 'bytes');
-    if (result.statusCode === 206) {
-      res.status(206);
-      if (result.contentRange !== undefined) {
-        res.setHeader('Content-Range', result.contentRange);
-      }
-    }
-    // A direct /ipfs/{CID} or {CID}.host request is content-addressed and thus
-    // immutable. But when the request arrived via an ArNS name, the name->CID
-    // binding is MUTABLE and the ArNS middleware already set a TTL-bounded
-    // Cache-Control — don't override it with `immutable`, or a record update
-    // would be pinned in browsers/edge caches for ~a year (cf. PE-9072).
-    if ((req as Request & { arns?: unknown }).arns === undefined) {
-      res.setHeader('Cache-Control', 'public, max-age=29030400, immutable');
     }
     res.setHeader('ETag', `"${cidToV1Base32(cidString)}"`);
     res.setHeader('X-Ipfs-Path', `/ipfs/${ipfsPath}`);
     res.setHeader(headerNames.arIoSource, 'ipfs');
 
-    // Body binding (RFC 9530 Content-Digest). When a SHA-256 of the served
-    // bytes is known (computed at cache-write time, returned on cache hits),
-    // emit it — it's in CO_SIGNABLE_HEADERS, so HTTPSIG binds the body to the
-    // signature. Cache hits carry it for free; misses stream without it (the
-    // signed ETag=CID still attests content identity).
-    if (result.digest !== undefined) {
-      res.setHeader('Content-Digest', formatContentDigest(result.digest));
+    if (format !== undefined) {
+      // Trustless retrieval: the body IS the CID's content-addressed bytes (a raw
+      // block or a CAR), which the CLIENT verifies against the CID. The gateway
+      // is not a trust root here — mark it so nothing downstream reads the
+      // response as a gateway-attested content proof. Content-addressed, so the
+      // bytes are immutable regardless of any ArNS binding.
+      res.setHeader('Content-Disposition', 'attachment');
+      res.setHeader('X-Ar-Io-Trustless', 'true');
+      res.setHeader('Cache-Control', 'public, max-age=29030400, immutable');
+    } else {
+      // UnixFS proxy path: Kubo reassembles and the gateway serves (and may sign)
+      // the bytes. This is TRUSTED-PROXY, not client-verifiable — the signed
+      // envelope attests "a registered gateway served this", not a content proof.
+      // Clients that want to verify should request ?format=raw|car.
+      res.setHeader('X-Ar-Io-Trustless', 'false');
+      // Advertise range support, and relay a partial (206) response from Kubo.
+      res.setHeader('Accept-Ranges', 'bytes');
+      if (result.statusCode === 206) {
+        res.status(206);
+        if (result.contentRange !== undefined) {
+          res.setHeader('Content-Range', result.contentRange);
+        }
+      }
+      // Direct CID content is content-addressed and immutable; via an ArNS name
+      // the binding is MUTABLE and the ArNS middleware already set a TTL-bounded
+      // Cache-Control — don't override it (cf. PE-9072).
+      if ((req as Request & { arns?: unknown }).arns === undefined) {
+        res.setHeader('Cache-Control', 'public, max-age=29030400, immutable');
+      }
+      // RFC 9530 Content-Digest when the SHA-256 is known (cache hits); signed
+      // via CO_SIGNABLE_HEADERS.
+      if (result.digest !== undefined) {
+        res.setHeader('Content-Digest', formatContentDigest(result.digest));
+      }
+      res.setHeader('X-Cache', result.cached ? 'HIT' : 'MISS');
     }
 
-    if (result.cached) {
-      res.setHeader('X-Cache', 'HIT');
-    } else {
-      res.setHeader('X-Cache', 'MISS');
+    // Pin named (ArNS-resolved) content so it stays retrievable in read-only IPFS
+    // mode — best-effort, fire-and-forget, bounded. Only "named" content (an ArNS
+    // resolution), not arbitrary /ipfs/{CID} traffic.
+    if (
+      pinner !== undefined &&
+      (req as Request & { arns?: unknown }).arns !== undefined
+    ) {
+      pinner.pin(cidString);
     }
 
     // Track metrics

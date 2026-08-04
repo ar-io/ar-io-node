@@ -1880,11 +1880,13 @@ if (dataVerificationWorker !== undefined) {
 import { KuboDataSource } from './ipfs/kubo-data-source.js';
 import { IpfsFsCache } from './ipfs/ipfs-cache.js';
 import { IpfsService } from './ipfs/ipfs-service.js';
+import { IpfsPinner } from './ipfs/ipfs-pinner.js';
 import { createIpfsRateLimiter } from './ipfs/ipfs-rate-limiter.js';
 import { RateLimiter } from './limiter/types.js';
 
 export let ipfsService: IpfsService | undefined;
 export let ipfsRateLimiter: RateLimiter | undefined;
+export let ipfsPinner: IpfsPinner | undefined;
 
 if (config.IPFS_ENABLED) {
   log.info('IPFS subsystem enabled, initializing...');
@@ -1916,6 +1918,14 @@ if (config.IPFS_ENABLED) {
   });
 
   ipfsRateLimiter = createIpfsRateLimiter();
+
+  if (config.IPFS_PIN_ARNS_CONTENT) {
+    ipfsPinner = new IpfsPinner({
+      log,
+      apiUrl: config.IPFS_KUBO_API_URL,
+      max: config.IPFS_PIN_MAX,
+    });
+  }
 
   log.info('IPFS subsystem initialized', {
     kuboUrl: config.IPFS_KUBO_URL,

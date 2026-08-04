@@ -56,12 +56,16 @@ export class KuboDataSource {
     signal,
     parentSpan,
     range,
+    format,
   }: {
     cidString: string;
     path?: string;
     signal?: AbortSignal;
     parentSpan?: Span;
     range?: string;
+    // Trustless response format passed through to Kubo: a single verifiable
+    // block (`raw`) or a verifiable DAG archive (`car`). Absent = UnixFS proxy.
+    format?: 'raw' | 'car';
   }): Promise<IpfsContentResult> {
     signal?.throwIfAborted();
 
@@ -93,7 +97,9 @@ export class KuboDataSource {
         : undefined;
     const ipfsPath =
       encodedPath !== undefined ? `${cidString}/${encodedPath}` : cidString;
-    const url = `${this.kuboUrl}/ipfs/${ipfsPath}`;
+    const url = `${this.kuboUrl}/ipfs/${ipfsPath}${
+      format !== undefined ? `?format=${format}` : ''
+    }`;
 
     const span = startChildSpan(
       'KuboDataSource.getContent',
@@ -137,6 +143,11 @@ export class KuboDataSource {
           // returns 206 + Content-Range). Enables media seeking and the
           // observer's ranged sampling of large content.
           ...(range !== undefined ? { Range: range } : {}),
+          // Trustless retrieval: ask Kubo for a raw block or CAR by IPLD media
+          // type (belt-and-suspenders with the ?format= query above).
+          ...(format !== undefined
+            ? { Accept: `application/vnd.ipld.${format}` }
+            : {}),
         },
         maxRedirects: 5,
         // Accept non-2xx so we can handle 404/408/504 ourselves

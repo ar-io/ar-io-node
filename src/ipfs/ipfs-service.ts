@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import winston from 'winston';
 import { Span } from '@opentelemetry/api';
 
@@ -86,12 +86,14 @@ export class IpfsService {
     signal,
     parentSpan,
     range,
+    format,
   }: {
     cidString: string;
     path?: string;
     signal?: AbortSignal;
     parentSpan?: Span;
     range?: string;
+    format?: 'raw' | 'car';
   }): Promise<IpfsGetContentResult> {
     const span = startChildSpan(
       'IpfsService.getContent',
@@ -164,7 +166,9 @@ export class IpfsService {
       // partial body — they're forwarded straight to Kubo (which supports Range)
       // below.
       const cached =
-        range === undefined ? await this.cache.get(normalizedCid, path) : null;
+        range === undefined && format === undefined
+          ? await this.cache.get(normalizedCid, path)
+          : null;
       if (cached) {
         // Content-hash moderation. The cache stores the base64url SHA-256 of the
         // served bytes (the same format as Arweave's data hash), so once content
@@ -215,6 +219,7 @@ export class IpfsService {
           signal,
           parentSpan: span,
           range,
+          format,
         })
         .catch((err) => {
           if (err instanceof IpfsNotFoundError) {
@@ -248,7 +253,7 @@ export class IpfsService {
       // Stream directly to the client while writing to a temp file on disk for
       // caching. No memory buffering — handles files of any size. Partial (206)
       // responses are NOT cached — only full objects.
-      if (range === undefined && result.statusCode === 200) {
+      if (range === undefined && format === undefined && result.statusCode === 200) {
         this.streamToCache(
           normalizedCid,
           path,
@@ -265,7 +270,13 @@ export class IpfsService {
       });
 
       return {
-        stream: result.stream,
+        // Trustless format responses (CAR especially) bypass the cache and its
+        // mid-stream size check, and their size is often unknown up front — guard
+        // the stream so a large DAG can't stream unbounded.
+        stream:
+          format !== undefined
+            ? this.guardSize(result.stream)
+            : result.stream,
         size: result.size,
         contentType: result.contentType,
         cached: false,
@@ -279,6 +290,34 @@ export class IpfsService {
       span.end();
       throw error;
     }
+  }
+
+  /**
+   * Pipe a stream through a size-enforcing transform: abort once the response
+   * exceeds maxResponseSizeBytes. Used for format (raw/car) responses, which
+   * bypass streamToCache's mid-stream size check.
+   */
+  private guardSize(stream: Readable): Readable {
+    const limit = this.maxResponseSizeBytes;
+    if (limit <= 0) return stream;
+    let seen = 0;
+    const guard = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        seen += chunk.length;
+        if (seen > limit) {
+          cb(
+            new IpfsSizeLimitError(
+              `IPFS response exceeds limit during streaming: ${seen} > ${limit}`,
+            ),
+          );
+          return;
+        }
+        cb(null, chunk);
+      },
+    });
+    stream.on('error', (e) => guard.destroy(e));
+    guard.on('error', () => stream.destroy());
+    return stream.pipe(guard);
   }
 
   /** Remember a CID whose bytes are hash-blocked (bounded, FIFO-evicted). */

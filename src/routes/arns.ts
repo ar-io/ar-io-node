@@ -29,6 +29,7 @@ const ipfsHandler =
         ipfsService: system.ipfsService,
         rateLimiter: system.ipfsRateLimiter,
         paymentProcessor: system.paymentProcessor,
+        pinner: system.ipfsPinner,
       })
     : undefined;
 

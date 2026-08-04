@@ -135,6 +135,7 @@ if (config.IPFS_ENABLED && system.ipfsService !== undefined) {
     ipfsService: system.ipfsService,
     rateLimiter: system.ipfsRateLimiter,
     paymentProcessor: system.paymentProcessor,
+    pinner: system.ipfsPinner,
   });
   app.use(createIpfsSubdomainMiddleware({ ipfsHandler }));
   app.use(
@@ -143,6 +144,7 @@ if (config.IPFS_ENABLED && system.ipfsService !== undefined) {
       ipfsService: system.ipfsService,
       rateLimiter: system.ipfsRateLimiter,
       paymentProcessor: system.paymentProcessor,
+      pinner: system.ipfsPinner,
     }),
   );
 }

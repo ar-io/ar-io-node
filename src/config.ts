@@ -3233,6 +3233,32 @@ export const IPFS_KUBO_MAX_CONCURRENT_REQUESTS = env.positiveIntOrDefault(
   100,
 );
 
+// Kubo RPC API base (distinct from the read-only gateway on 8080). Used only for
+// pinning; the powerful admin API should not be exposed beyond the sidecar.
+export const IPFS_KUBO_API_URL = env.varOrDefault(
+  'IPFS_KUBO_API_URL',
+  'http://kubo:5001',
+);
+
+// Pin the IPFS CIDs that ArNS names resolve to, so named content this gateway
+// serves stays retrievable (read-only availability) instead of being GC'd from
+// Kubo when unpinned network-wide. Bounded set of "named" content only.
+export const IPFS_PIN_ARNS_CONTENT =
+  env.varOrDefault('IPFS_PIN_ARNS_CONTENT', 'false') === 'true';
+
+// Max distinct CIDs the pinner tracks/holds this process; oldest are unpinned
+// (FIFO) beyond this to bound local storage.
+export const IPFS_PIN_MAX = env.positiveIntOrDefault('IPFS_PIN_MAX', 10000);
+
+// Rate-limit reserve for a response whose size Kubo doesn't declare up front
+// (CAR / chunked). Reserving the full IPFS_MAX_RESPONSE_SIZE_BYTES would exceed
+// the token buckets and reject every such request; actual bytes are still bounded
+// mid-stream by IPFS_MAX_RESPONSE_SIZE_BYTES.
+export const IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES = env.positiveIntOrDefault(
+  'IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES',
+  262144,
+);
+
 export const IPFS_CACHE_PATH = env.varOrDefault(
   'IPFS_CACHE_PATH',
   'data/ipfs-cache',
