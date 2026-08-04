@@ -66,16 +66,23 @@ import { BlockOffsetMapping } from './block-offset-mapping.js';
 /**
  * Local index that resolves an absolute weave offset to its containing block
  * without per-block upstream fetches. Implemented by the SQLite database over
- * the indexed `stable_blocks.weave_size` column and injected post-construction
- * (see {@link ArweaveCompositeClient.blockByOffsetIndex} and system.ts). When
- * absent or unable to confidently bracket the offset, the client falls back to
- * the chain binary search, so behavior is unchanged — only the lookup path.
+ * the indexed `weave_size` columns of `stable_blocks` and `new_blocks` and
+ * injected post-construction (see {@link ArweaveCompositeClient.blockByOffsetIndex}
+ * and system.ts). Querying both tables means offsets in the not-yet-stable tip
+ * resolve locally too, not just stable offsets. When absent or unable to
+ * confidently bracket the offset, the client falls back to the chain binary
+ * search, so behavior is unchanged — only the lookup path.
+ *
+ * `zone` reports whether the candidate came from the stable chain or the
+ * unstable tip; it is optional so callers/mocks that predate the tip extension
+ * still satisfy the interface (treated as stable when absent).
  */
 export interface BlockByOffsetIndex {
   getBlockByWeaveOffset(offset: number): Promise<{
     height: number | undefined;
     weaveSize: number | undefined;
     prevWeaveSize: number | undefined;
+    zone?: 'stable' | 'unstable';
   }>;
 }
 
@@ -148,6 +155,12 @@ interface ChunkPostResult {
   error?: string;
   canceled?: boolean;
   timedOut?: boolean;
+  /**
+   * True when the peer accepted the chunk with HTTP 303 ("temporary"): it
+   * validated and persisted the chunk into its disk pool but is not the
+   * long-term home for that offset. Still a successful propagation.
+   */
+  temporary?: boolean;
 }
 
 interface PeerChunkQueue {
@@ -605,17 +618,32 @@ export class ArweaveCompositeClient
         signal: AbortSignal.timeout(task.abortTimeout),
         timeout: task.responseTimeout,
         headers: task.headers,
-        validateStatus: (status) => status === 200,
+        // An arweave node returns 200 when it will store the chunk long-term and
+        // 303 ("temporary") when it validated and persisted the chunk into its
+        // disk pool but is not the long-term home for that offset (e.g. it has no
+        // storage module covering it). Both outcomes mean the chunk was accepted
+        // and stored — a successful propagation. Treating 303 as a failure
+        // silently drops the tip/ingress nodes (which return 303 by design) from
+        // our success accounting. The 303 carries no Location, so there is
+        // nothing to follow. See ar_disk_pool:add_chunk/6 -> `temporary` ->
+        // {303, #{}, <<>>} in the arweave node source.
+        validateStatus: (status) => status === 200 || status === 303,
       });
+
+      const temporary = response.status === 303;
 
       metrics.arweaveChunkPostCounter.inc({
         endpoint: task.peer,
         status: 'success',
       });
+      if (temporary) {
+        metrics.arweaveChunkPostTemporaryCounter.inc({ endpoint: task.peer });
+      }
 
       return {
         success: true,
         statusCode: response.status,
+        temporary,
       };
     } catch (error: any) {
       let canceled = false;
@@ -1824,6 +1852,9 @@ export class ArweaveCompositeClient
    * @param originAndHopsHeaders - Headers to propagate for request tracing
    * @param chunkPostMinSuccessCount - Minimum successful posts to consider broadcast complete
    * @param chunkPostMinPreferredSuccessCount - Minimum successful preferred peer posts required
+   * @param continuePastThreshold - When true, keep posting to every selected peer
+   *   after the success threshold is met (maximize propagation) instead of
+   *   stopping early. Defaults to config.CHUNK_POST_CONTINUE_PAST_THRESHOLD.
    * @param parentSpan - Optional parent span for distributed tracing
    * @returns Results including success/failure counts and per-peer response details
    */
@@ -1834,6 +1865,7 @@ export class ArweaveCompositeClient
     originAndHopsHeaders,
     chunkPostMinSuccessCount,
     chunkPostMinPreferredSuccessCount = 0,
+    continuePastThreshold = config.CHUNK_POST_CONTINUE_PAST_THRESHOLD,
     parentSpan,
   }: {
     chunk: JsonChunkPost;
@@ -1842,6 +1874,7 @@ export class ArweaveCompositeClient
     originAndHopsHeaders: Record<string, string | undefined>;
     chunkPostMinSuccessCount: number;
     chunkPostMinPreferredSuccessCount?: number;
+    continuePastThreshold?: boolean;
     parentSpan?: Span;
   }): Promise<BroadcastChunkResult> {
     const span = tracer.startSpan(
@@ -1903,6 +1936,13 @@ export class ArweaveCompositeClient
       let preferredSuccessCount = 0;
       let failureCount = 0;
       let consecutive4xxFailures = 0;
+      // Tracks a run of unreachable/broken peers (timeouts, connection errors,
+      // 5xx). Peers are attempted live-first, so a sustained run signals we've
+      // reached the dead tail of the peer list. Unlike consecutive4xxFailures,
+      // this bounds the broadcast even after we already have successes — which
+      // is what keeps CHUNK_POST_CONTINUE_PAST_THRESHOLD from grinding every
+      // dead peer once the success threshold is met.
+      let consecutiveConnFailures = 0;
       let hasAnySuccess = false;
       const results: BroadcastChunkResponses[] = [];
 
@@ -1919,8 +1959,11 @@ export class ArweaveCompositeClient
       // Create promises for all peers
       const peerPromises = shuffledPeers.map((peer) =>
         peerConcurrencyLimit(async () => {
-          // Skip if we already have enough successes (both overall and preferred)
+          // Skip if we already have enough successes (both overall and
+          // preferred), unless configured to keep broadcasting past the
+          // threshold to maximize propagation.
           if (
+            !continuePastThreshold &&
             successCount >= chunkPostMinSuccessCount &&
             preferredSuccessCount >= chunkPostMinPreferredSuccessCount
           ) {
@@ -1935,6 +1978,45 @@ export class ArweaveCompositeClient
               timedOut: false,
               skipped: true,
               skipReason: 'success_threshold' as const,
+            };
+          }
+
+          // Skip remaining peers once we've hit a sustained run of
+          // unreachable/broken peers (the dead tail). This only bounds the
+          // *extra* propagation past the success threshold: it applies only in
+          // continue-past-threshold mode AND only once both success thresholds
+          // are already met. Before the thresholds are met the required seeding
+          // is not done, so we must keep trying peers (a run of dead peers early
+          // in the list must not stop us from reaching healthy peers later that
+          // could satisfy the threshold). Once seeding is done, a sustained run
+          // of connection failures means the live peers are exhausted and the
+          // remaining (dead) peers would receive nothing anyway, so skipping
+          // them loses no propagation. In default mode the success-threshold
+          // check above already bounds the broadcast, so this guard does not
+          // apply there.
+          if (
+            continuePastThreshold &&
+            successCount >= chunkPostMinSuccessCount &&
+            preferredSuccessCount >= chunkPostMinPreferredSuccessCount &&
+            config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES > 0 &&
+            consecutiveConnFailures >=
+              config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES
+          ) {
+            this.log.debug(
+              'Skipping peer due to consecutive connection failures threshold',
+              {
+                peer,
+                consecutiveConnFailures,
+              },
+            );
+            return {
+              peer,
+              success: false,
+              statusCode: 0,
+              canceled: false,
+              timedOut: false,
+              skipped: true,
+              skipReason: 'connection_failures' as const,
             };
           }
 
@@ -1981,6 +2063,7 @@ export class ArweaveCompositeClient
               }
               hasAnySuccess = true;
               consecutive4xxFailures = 0;
+              consecutiveConnFailures = 0;
               this.log.debug('Chunk POST succeeded', {
                 peer,
                 successCount,
@@ -1988,16 +2071,22 @@ export class ArweaveCompositeClient
               });
             } else {
               failureCount++;
-              // Only count 4xx responses toward consecutive failures
+              // A 4xx means the peer is reachable but rejected the chunk; a 5xx
+              // or missing status means the peer is broken/unreachable. Track
+              // the two separately: 4xx feeds the "everyone is rejecting this
+              // chunk" guard, connection failures feed the dead-tail guard.
               if (statusCode >= 400 && statusCode < 500) {
                 consecutive4xxFailures++;
+                consecutiveConnFailures = 0;
               } else {
                 consecutive4xxFailures = 0;
+                consecutiveConnFailures++;
               }
               this.log.debug('Chunk POST failed', {
                 peer,
                 statusCode,
                 consecutive4xxFailures,
+                consecutiveConnFailures,
                 error: result.error,
               });
             }
@@ -2011,10 +2100,13 @@ export class ArweaveCompositeClient
             };
           } catch (error: any) {
             failureCount++;
-            // Network errors reset the consecutive 4xx counter
+            // A thrown error is a network/timeout failure: reset the 4xx guard
+            // and feed the dead-tail (connection failures) guard.
             consecutive4xxFailures = 0;
+            consecutiveConnFailures++;
             this.log.debug('Chunk POST errored', {
               peer,
+              consecutiveConnFailures,
               error: error.message,
             });
 
@@ -2065,6 +2157,12 @@ export class ArweaveCompositeClient
         !hasAnySuccess &&
         consecutive4xxFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES;
 
+      // Note: the dead-tail (connection-failure) guard only skips peers once
+      // both success thresholds are already met, so whenever it fires the
+      // broadcast has succeeded and the reason below is 'success_threshold'.
+      // There is therefore no separate 'connection_failures' broadcast-level
+      // termination reason; the guard is a per-peer skip, surfaced via the
+      // 'connection_failures' skipReason and the debug log.
       const earlyTerminationReason = succeeded
         ? 'success_threshold'
         : terminatedDueToConsecutiveFailures
@@ -2247,15 +2345,19 @@ export class ArweaveCompositeClient
       return cached;
     }
 
-    // Fast path: resolve the containing block from the local stable-block index,
+    // Fast path: resolve the containing block from the local block-offset index,
     // collapsing the ~log2(height) sequential upstream block fetches of the
     // chain binary search below into a single indexed lookup plus one block
-    // fetch. Only trusted when the index tightly brackets the offset (the
-    // immediately-preceding block is present and ends before the offset), which
-    // rules out a missing block hiding the true container; the fetched block's
-    // weave_size is re-checked before returning. Any miss, gap, abort-free
-    // error, or offset in the unstable tip falls through to the chain binary
-    // search. This never changes which block is returned, only how it's found.
+    // fetch. The index spans both the stable chain and the not-yet-stable tip
+    // (stable_blocks ∪ new_blocks), so offsets in the unstable tip resolve here
+    // too instead of falling through. Only trusted when the index tightly
+    // brackets the offset (the immediately-preceding block is present and ends
+    // before the offset), which rules out a missing block hiding the true
+    // container; the fetched block's weave_size is re-checked before returning.
+    // The re-fetch by height returns the canonical block, so a stale or forked
+    // tip hit degrades to a fallback, never to a wrong block. Any miss, gap, or
+    // abort-free error falls through to the chain binary search. This never
+    // changes which block is returned, only how it's found.
     if (this.blockByOffsetIndex !== undefined) {
       try {
         const local =
@@ -2274,24 +2376,34 @@ export class ArweaveCompositeClient
             block !== null &&
             parseInt(block.weave_size) >= targetOffset
           ) {
+            // Distinguish tip hits so the win over the chain search is
+            // observable: the unstable tip is where the old slow path used to
+            // 504, so this outcome should absorb the former fallback_miss
+            // volume.
             metrics.blockOffsetResolutionCounter.inc({
-              outcome: 'local_index_hit',
+              outcome:
+                local.zone === 'unstable'
+                  ? 'local_index_hit_unstable'
+                  : 'local_index_hit',
             });
             this.blockCache.set(cacheKey, block);
             this.log.debug('Resolved block for offset via local index', {
               targetOffset,
               height: local.height,
               blockOffset: block.weave_size,
+              zone: local.zone,
             });
             return block;
           }
           // Index bracketed the offset but the fetched header no longer covers
-          // it (e.g. a reorg under the stable boundary) — don't trust it.
+          // it (e.g. a reorg, or a forked tip block that lost weave under the
+          // canonical chain) — don't trust it.
           metrics.blockOffsetResolutionCounter.inc({
             outcome: 'fallback_stale',
           });
         } else if (local.height === undefined) {
-          // No stable block reaches the offset (e.g. the unstable chain tip).
+          // No block reaches the offset at all (the offset is beyond the
+          // current chain tip).
           metrics.blockOffsetResolutionCounter.inc({
             outcome: 'fallback_miss',
           });

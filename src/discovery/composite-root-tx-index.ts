@@ -6,7 +6,11 @@
  */
 import winston from 'winston';
 import CircuitBreaker from 'opossum';
-import { DataItemRootIndex } from '../types.js';
+import {
+  DataItemRootIndex,
+  GetRootTxOptions,
+  RootTxLookupResult,
+} from '../types.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
@@ -97,7 +101,34 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
     }
   }
 
-  async getRootTx(id: string): Promise<
+  /**
+   * Resolves a data item ID to its root transaction, probing the configured
+   * indexes in order and returning the first *actionable* result — one the
+   * caller can proceed on without consulting the remaining (often remote and
+   * expensive) sources. A result is actionable when it has complete offsets,
+   * is a definitive L1 root (`rootTxId === id`), carries `rootOffset` +
+   * `rootDataOffset`, or carries a non-empty traversal path.
+   *
+   * A bare `rootTxId` (no path/offsets, not an L1 root) is not actionable: it
+   * is retained as a fallback while later indexes are probed for something
+   * richer. If no source is actionable, the saved fallback is returned, or
+   * `undefined` when nothing resolved.
+   *
+   * Callers can override the acceptance decision via `opts.accept` — a
+   * predicate that returns `true` to short-circuit on a given result. This
+   * lets a caller that only needs (say) a `rootTxId` stop as soon as any
+   * source supplies one, rather than probing remote sources for richer
+   * metadata it will derive locally. When omitted, the default actionable
+   * acceptance above applies.
+   *
+   * @param id - base64url data item / transaction ID to resolve.
+   * @param opts - optional lookup options; see {@link GetRootTxOptions}.
+   * @returns The root transaction info, or `undefined` if unresolved.
+   */
+  async getRootTx(
+    id: string,
+    opts?: GetRootTxOptions,
+  ): Promise<
     | {
         rootTxId: string;
         path?: string[];
@@ -126,6 +157,10 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
       | undefined;
     let fallbackSourceName: string | undefined;
     let winningSourceName: string | undefined;
+    // Number of sources actually queried (circuit-open sources are skipped and
+    // do not count). Emitted so we can measure how much of the chain a
+    // short-circuit avoids.
+    let probedCount = 0;
 
     for (let i = 0; i < this.indexes.length; i++) {
       const index = this.indexes[i];
@@ -149,6 +184,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
       }
 
       const lookupStartTime = Date.now();
+      let result: RootTxLookupResult | undefined;
       try {
         log.debug('Trying index', {
           indexNumber: i + 1,
@@ -158,78 +194,8 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
         });
 
         // Execute with circuit breaker protection
-        const result = await circuitBreaker.fire(id);
-        const lookupDuration = Date.now() - lookupStartTime;
-        metrics.rootTxLookupDurationSummary.observe(
-          { source: sourceName },
-          lookupDuration,
-        );
-
-        if (result !== undefined) {
-          // Check if result has complete offset information
-          // If offsets are missing, try next index (e.g., Turbo) for complete data
-          const hasCompleteOffsets =
-            result.rootOffset !== undefined &&
-            result.rootDataOffset !== undefined &&
-            result.size !== undefined &&
-            result.dataSize !== undefined;
-
-          metrics.rootTxLookupTotal.inc({
-            source: sourceName,
-            status: 'found',
-            has_offsets: hasCompleteOffsets ? 'true' : 'false',
-          });
-
-          if (hasCompleteOffsets) {
-            log.debug('Found root TX ID with complete offsets', {
-              rootTxId: result.rootTxId,
-              indexNumber: i + 1,
-              indexClass: indexName,
-            });
-            winningSourceName = sourceName;
-
-            // Record composite lookup metrics
-            metrics.compositeRootTxLookupTotal.inc({
-              status: 'found',
-              winning_source: winningSourceName,
-              has_complete_offsets: 'true',
-            });
-            metrics.compositeRootTxLookupDurationSummary.observe(
-              Date.now() - compositeStartTime,
-            );
-
-            return result;
-          } else {
-            // Save as fallback if we don't have one yet
-            if (fallbackResult === undefined) {
-              fallbackResult = result;
-              fallbackSourceName = sourceName;
-              log.debug(
-                'Found root TX ID but missing offsets, saving as fallback',
-                {
-                  rootTxId: result.rootTxId,
-                  indexNumber: i + 1,
-                  indexClass: indexName,
-                  hasRootOffset: result.rootOffset !== undefined,
-                  hasRootDataOffset: result.rootDataOffset !== undefined,
-                  hasSize: result.size !== undefined,
-                  hasDataSize: result.dataSize !== undefined,
-                },
-              );
-            }
-            // Continue to next index for complete data
-          }
-        } else {
-          metrics.rootTxLookupTotal.inc({
-            source: sourceName,
-            status: 'not_found',
-            has_offsets: 'false',
-          });
-          log.debug('Index returned undefined', {
-            indexNumber: i + 1,
-            indexClass: indexName,
-          });
-        }
+        probedCount++;
+        result = await circuitBreaker.fire(id);
       } catch (error: any) {
         const lookupDuration = Date.now() - lookupStartTime;
         metrics.rootTxLookupDurationSummary.observe(
@@ -248,6 +214,124 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
           circuitState: circuitBreaker.opened ? 'OPEN' : 'CLOSED',
         });
         // Continue to next index
+        continue;
+      }
+
+      // Result classification runs OUTSIDE the source-lookup try/catch above so
+      // that an exception thrown by a caller-supplied opts.accept predicate
+      // propagates to the caller instead of being misattributed as a source
+      // failure — which would swallow the bug and silently return a fallback or
+      // later result.
+      const lookupDuration = Date.now() - lookupStartTime;
+      metrics.rootTxLookupDurationSummary.observe(
+        { source: sourceName },
+        lookupDuration,
+      );
+
+      if (result !== undefined) {
+        // Check if result has complete offset information
+        const hasCompleteOffsets =
+          result.rootOffset !== undefined &&
+          result.rootDataOffset !== undefined &&
+          result.size !== undefined &&
+          result.dataSize !== undefined;
+
+        metrics.rootTxLookupTotal.inc({
+          source: sourceName,
+          status: 'found',
+          has_offsets: hasCompleteOffsets ? 'true' : 'false',
+        });
+
+        // Decide whether this result is sufficient to stop the search.
+        //
+        // When the caller supplies opts.accept, it fully governs the decision
+        // (exit reason `caller_accept`) — e.g. "any rootTxId is enough, I'll
+        // resolve offsets locally" avoids probing remote sources. Otherwise the
+        // default "actionable" acceptance applies: requiring all four offset
+        // fields (hasCompleteOffsets) is too strict — no locally-configured
+        // source (db, cdb) ever supplies `size`, so the search never
+        // short-circuited and every lookup fell through to the expensive
+        // downstream sources (e.g. GraphQL) even when db/cdb had already
+        // answered. A result is actionable when the caller can proceed without
+        // probing the remaining sources:
+        //   - complete_offsets: full offsets + size (skip even a header parse)
+        //   - l1_root: rootTxId === id, a definitive L1 root (passthrough)
+        //   - offsets: rootOffset + rootDataOffset present (serve via a cheap
+        //     header parse for size; the CDB case)
+        //   - path: a bundle traversal path (path-guided navigation)
+        let exitReason:
+          | 'complete_offsets'
+          | 'l1_root'
+          | 'offsets'
+          | 'path'
+          | 'caller_accept'
+          | undefined;
+        if (opts?.accept !== undefined) {
+          if (opts.accept(result)) {
+            exitReason = 'caller_accept';
+          }
+        } else if (hasCompleteOffsets) {
+          exitReason = 'complete_offsets';
+        } else if (result.rootTxId === id) {
+          exitReason = 'l1_root';
+        } else if (
+          result.rootOffset !== undefined &&
+          result.rootDataOffset !== undefined
+        ) {
+          exitReason = 'offsets';
+        } else if (result.path !== undefined && result.path.length > 0) {
+          exitReason = 'path';
+        }
+
+        if (exitReason !== undefined) {
+          winningSourceName = sourceName;
+          log.debug('Found actionable root TX result, short-circuiting', {
+            rootTxId: result.rootTxId,
+            indexNumber: i + 1,
+            indexClass: indexName,
+            exitReason,
+            sourcesProbed: probedCount,
+            sourcesSkipped: this.indexes.length - i - 1,
+          });
+
+          metrics.compositeRootTxLookupTotal.inc({
+            status: 'found',
+            winning_source: winningSourceName,
+            has_complete_offsets: hasCompleteOffsets ? 'true' : 'false',
+          });
+          metrics.compositeRootTxExitReasonTotal.inc({
+            reason: exitReason,
+            winning_source: winningSourceName,
+          });
+          metrics.compositeRootTxSourcesProbedSummary.observe(probedCount);
+          metrics.compositeRootTxLookupDurationSummary.observe(
+            Date.now() - compositeStartTime,
+          );
+
+          return result;
+        }
+
+        // Not actionable (bare rootTxId: no path, no offsets, not an L1 root).
+        // Save as a fallback and keep probing for something better.
+        if (fallbackResult === undefined) {
+          fallbackResult = result;
+          fallbackSourceName = sourceName;
+          log.debug('Found root TX ID but not actionable, saving as fallback', {
+            rootTxId: result.rootTxId,
+            indexNumber: i + 1,
+            indexClass: indexName,
+          });
+        }
+      } else {
+        metrics.rootTxLookupTotal.inc({
+          source: sourceName,
+          status: 'not_found',
+          has_offsets: 'false',
+        });
+        log.debug('Index returned undefined', {
+          indexNumber: i + 1,
+          indexClass: indexName,
+        });
       }
     }
 
@@ -266,6 +350,11 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
         winning_source: fallbackSourceName ?? 'fallback',
         has_complete_offsets: 'false',
       });
+      metrics.compositeRootTxExitReasonTotal.inc({
+        reason: 'fallback',
+        winning_source: fallbackSourceName ?? 'fallback',
+      });
+      metrics.compositeRootTxSourcesProbedSummary.observe(probedCount);
       metrics.compositeRootTxLookupDurationSummary.observe(
         Date.now() - compositeStartTime,
       );
@@ -284,6 +373,11 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
       winning_source: 'none',
       has_complete_offsets: 'false',
     });
+    metrics.compositeRootTxExitReasonTotal.inc({
+      reason: 'not_found',
+      winning_source: 'none',
+    });
+    metrics.compositeRootTxSourcesProbedSummary.observe(probedCount);
     metrics.compositeRootTxLookupDurationSummary.observe(
       Date.now() - compositeStartTime,
     );

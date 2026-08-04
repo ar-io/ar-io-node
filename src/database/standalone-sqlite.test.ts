@@ -6,6 +6,7 @@
  */
 import { strict as assert } from 'node:assert';
 import { after, before, beforeEach, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { ValidationError } from 'apollo-server-express';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -33,6 +34,7 @@ import {
 } from '../../test/sqlite-helpers.js';
 import { ArweaveChainSourceStub, stubAns104Bundle } from '../../test/stubs.js';
 import { normalizeAns104DataItem } from '../lib/ans-104.js';
+import loadSql from './sql-loader.js';
 import log from '../log.js';
 import { BundleRecord } from '../types.js';
 import { processBundleStream } from '../lib/bundles.js';
@@ -345,6 +347,101 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(txByOffsetResult10.id, undefined);
     });
 
+    it('getTxByOffset misses resolve via a single partial-index probe (no scan past the candidate row)', async () => {
+      // Regression test for the miss-scan pathology: the previous form of
+      // selectStableTransactionOffsetById kept the span predicate
+      // ((offset - data_size) < @offset) inside the index scan, so an offset in
+      // a coverage gap walked stable_transactions_offset_idx from @offset to
+      // the end of the table (tens of seconds on a production-sized DB) before
+      // returning empty. The rewritten statement fetches only the first
+      // candidate row and applies the span check outside. Timing is
+      // meaningless on a tiny test DB, so this asserts the two things that
+      // guarantee the behavior instead: (1) miss semantics stay correct, and
+      // (2) the plan uses the partial index — which requires the inner query
+      // to repeat the index's WHERE predicates (format = 2 AND data_size > 0)
+      // verbatim; hoisting either one out silently degrades to a table scan.
+      const f2id = 'iCXp6wqDLcpdOWJd6oTVz4CTS9QI9wsJp6g6oRVvv0E';
+      const f1id = 'Epr8mLUZDBiTprrN1tyuKu4Ct1nkFrVzL4NBmXtj4jQ';
+
+      const baseValues = {
+        height: 124,
+        block_transaction_index: 0,
+        last_tx: Buffer.alloc(32),
+        owner_address: Buffer.alloc(32),
+        quantity: '0',
+        reward: '0',
+        tag_count: 0,
+      };
+      const insertSql = `
+        INSERT INTO stable_transactions (
+          id, height, block_transaction_index, format, last_tx, owner_address,
+          quantity, reward, tag_count, offset, data_size
+        ) VALUES (
+          @id, @height, @block_transaction_index, @format, @last_tx,
+          @owner_address, @quantity, @reward, @tag_count, @offset, @data_size
+        )
+      `;
+
+      // format-2 tx spanning [451, 500]
+      coreDb.prepare(insertSql).run({
+        ...baseValues,
+        id: fromB64Url(f2id),
+        format: 2,
+        offset: 500,
+        data_size: 50,
+      });
+      // format-1 tx spanning [551, 600]: not in the partial index, must never
+      // be returned, and offsets inside it are misses
+      coreDb.prepare(insertSql).run({
+        ...baseValues,
+        id: fromB64Url(f1id),
+        format: 1,
+        offset: 600,
+        data_size: 50,
+      });
+
+      // Hit within the format-2 tx
+      const hit = await db.getTxByOffset(475);
+      assert.equal(hit.id, f2id);
+
+      // Miss in the gap before the format-2 tx: the first candidate row
+      // (offset 500) fails the span check and the lookup must stop there
+      const gapMiss = await db.getTxByOffset(300);
+      assert.equal(gapMiss.id, undefined);
+
+      // Miss inside the format-1 tx's region: the spanning tx is format-1, so
+      // there is no format-2 spanner and the result is empty
+      const f1Miss = await db.getTxByOffset(575);
+      assert.equal(f1Miss.id, undefined);
+
+      // Miss beyond the highest indexed offset
+      const beyondEndMiss = await db.getTxByOffset(1_000_000);
+      assert.equal(beyondEndMiss.id, undefined);
+
+      // Plan assertion: the statement must probe stable_transactions via the
+      // partial offset index, never scan the table
+      const offsetsSqlDir = fileURLToPath(
+        new URL('./sql/core', import.meta.url),
+      );
+      const stmt = loadSql(offsetsSqlDir)['selectStableTransactionOffsetById'];
+      assert.ok(
+        stmt !== undefined,
+        'selectStableTransactionOffsetById statement not found',
+      );
+      const plan = coreDb
+        .prepare(`EXPLAIN QUERY PLAN ${stmt}`)
+        .all({ offset: 300 }) as { detail: string }[];
+      const details = plan.map((row) => row.detail).join('\n');
+      assert.ok(
+        details.includes('stable_transactions_offset_idx'),
+        `plan must use stable_transactions_offset_idx, got:\n${details}`,
+      );
+      assert.ok(
+        !/SCAN stable_transactions/.test(details),
+        `plan must not scan stable_transactions, got:\n${details}`,
+      );
+    });
+
     it('resolves an absolute weave offset to its containing stable block via getBlockByWeaveOffset', async () => {
       const insertBlock = (height: number, weaveSize: number) =>
         coreDb
@@ -398,6 +495,99 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(beyond.height, undefined);
       assert.equal(beyond.weaveSize, undefined);
       assert.equal(beyond.prevWeaveSize, undefined);
+    });
+
+    it('resolves offsets in the not-yet-stable tip (new_blocks) across the stable boundary', async () => {
+      const insertStableBlock = (height: number, weaveSize: number) =>
+        coreDb
+          .prepare(
+            `INSERT INTO stable_blocks (
+               height, nonce, hash, block_timestamp, diff, last_retarget,
+               reward_pool, block_size, weave_size, tx_count, missing_tx_count
+             ) VALUES (
+               @height, @nonce, @hash, 0, '0', '0',
+               '0', 1, @weave_size, 0, 0
+             )`,
+          )
+          .run({
+            height,
+            nonce: Buffer.alloc(1),
+            hash: Buffer.alloc(1),
+            weave_size: weaveSize,
+          });
+
+      const insertNewBlock = (
+        height: number,
+        weaveSize: number,
+        indepHashByte: number,
+      ) =>
+        coreDb
+          .prepare(
+            `INSERT INTO new_blocks (
+               indep_hash, height, nonce, hash, block_timestamp, diff,
+               last_retarget, reward_pool, block_size, weave_size, tx_count,
+               missing_tx_count
+             ) VALUES (
+               @indep_hash, @height, @nonce, @hash, 0, '0',
+               '0', '0', 1, @weave_size, 0, 0
+             )`,
+          )
+          .run({
+            indep_hash: Buffer.from([indepHashByte]),
+            height,
+            nonce: Buffer.alloc(1),
+            hash: Buffer.alloc(1),
+            weave_size: weaveSize,
+          });
+
+      // Use a high, isolated offset range so the rows inserted by the previous
+      // test (heights 10–22, weave_size ≤ 1200) can never become candidates.
+      // Stable chain ends at height 1003; the tip lives in new_blocks.
+      insertStableBlock(1000, 10_000);
+      insertStableBlock(1001, 20_000);
+      insertStableBlock(1002, 20_000); // empty block, same cumulative weave_size
+      insertStableBlock(1003, 35_000); // last stable block
+      insertNewBlock(1004, 50_000, 0xa1); // first unstable block
+      insertNewBlock(1005, 60_000, 0xa2);
+
+      // Offset still inside the stable chain resolves as before, tagged stable.
+      // 15_000 falls in block 1001 (10_000 < 15_000 <= 20_000).
+      const stableHit = await db.getBlockByWeaveOffset(15_000);
+      assert.equal(stableHit.height, 1001);
+      assert.equal(stableHit.weaveSize, 20_000);
+      assert.equal(stableHit.prevWeaveSize, 10_000); // from stable_blocks(1000)
+      assert.equal(stableHit.zone, 'stable');
+
+      // Boundary case: the FIRST new block (1004). Its predecessor is the last
+      // STABLE block (1003), so prev_weave_size must come across the UNION.
+      const firstTip = await db.getBlockByWeaveOffset(45_000);
+      assert.equal(firstTip.height, 1004);
+      assert.equal(firstTip.weaveSize, 50_000);
+      assert.equal(firstTip.prevWeaveSize, 35_000); // from stable_blocks(1003)
+      assert.equal(firstTip.zone, 'unstable');
+
+      // A deeper tip offset resolves entirely within new_blocks.
+      const deeperTip = await db.getBlockByWeaveOffset(55_000);
+      assert.equal(deeperTip.height, 1005);
+      assert.equal(deeperTip.weaveSize, 60_000);
+      assert.equal(deeperTip.prevWeaveSize, 50_000); // from new_blocks(1004)
+      assert.equal(deeperTip.zone, 'unstable');
+
+      // Reorg safety: new_blocks can transiently hold a non-canonical fork at a
+      // height already occupied. Add a fork of the predecessor height (1004)
+      // claiming an inflated cumulative weave_size that overshoots the offset.
+      // prev_weave_size takes the MAX across rows at height-1, so the bracket is
+      // no longer tight (prev >= offset) and the caller must fall back rather
+      // than risk trusting a forked tip — the conservative direction.
+      insertNewBlock(1004, 70_000, 0xb1); // fork at height 1004
+      const forked = await db.getBlockByWeaveOffset(55_000);
+      assert.equal(forked.height, 1005);
+      assert.equal(forked.weaveSize, 60_000);
+      assert.equal(forked.prevWeaveSize, 70_000); // MAX(50_000, 70_000) at 1004
+      assert.ok(
+        forked.prevWeaveSize !== undefined && forked.prevWeaveSize >= 55_000,
+        'forked predecessor breaks the tight bracket so the caller falls back',
+      );
     });
   });
 

@@ -165,4 +165,198 @@ describe('chunk_placements (chunks.db) worker methods', () => {
     assert.ok(got);
     assert.equal(got.confirmedAt, 5000);
   });
+
+  // Sticky confirmation: confirmation is triggered once per data_root by the
+  // one-shot TX_INDEXED UPDATE, but a large bundle streams its chunks in over a
+  // long window. A chunk ingested AFTER that event must inherit the data_root's
+  // confirmation so it is retained instead of being TTL-evicted.
+  describe('sticky confirmation (sibling inheritance)', () => {
+    it('inherits confirmed_at from an already-confirmed sibling at ingest', () => {
+      const dataRoot = toB64Url(Buffer.alloc(32, 40));
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot, relativeOffset: 0, confirmedAt: 5000 }),
+      );
+
+      // A later chunk of the same bundle arrives unconfirmed…
+      worker.saveChunkPlacement(
+        basePlacement({
+          dataRoot,
+          relativeOffset: 256,
+          confirmedAt: undefined,
+        }),
+      );
+
+      // …and comes back confirmed via the sibling.
+      assert.equal(worker.getChunkPlacement(dataRoot, 256)?.confirmedAt, 5000);
+    });
+
+    it('leaves a chunk unconfirmed when no sibling is confirmed', () => {
+      const dataRoot = toB64Url(Buffer.alloc(32, 41));
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot, relativeOffset: 0, confirmedAt: undefined }),
+      );
+      worker.saveChunkPlacement(
+        basePlacement({
+          dataRoot,
+          relativeOffset: 256,
+          confirmedAt: undefined,
+        }),
+      );
+
+      assert.equal(
+        worker.getChunkPlacement(dataRoot, 256)?.confirmedAt,
+        undefined,
+      );
+    });
+
+    it('auto-confirms and retains chunks ingested after the one-shot confirm (regression)', () => {
+      const dataRoot = toB64Url(Buffer.alloc(32, 42));
+
+      // First chunks of the bundle arrive and are confirmed once by TX_INDEXED.
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot, relativeOffset: 0, cachedAt: 100 }),
+      );
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot, relativeOffset: 256, cachedAt: 100 }),
+      );
+      worker.confirmChunkPlacements(dataRoot, 7000);
+
+      // The remaining chunks stream in long after (these are the ones that used
+      // to stay pending and get TTL-evicted).
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot, relativeOffset: 512, cachedAt: 200 }),
+      );
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot, relativeOffset: 768, cachedAt: 300 }),
+      );
+
+      assert.equal(worker.getChunkPlacement(dataRoot, 512)?.confirmedAt, 7000);
+      assert.equal(worker.getChunkPlacement(dataRoot, 768)?.confirmedAt, 7000);
+
+      // Now well past the TTL cutoff, none of this bundle's chunks are evictable.
+      const expired = worker.selectExpiredUnconfirmedChunkPlacements({
+        originIngest: 1,
+        originIngestAllowlisted: 2,
+        openCutoff: 100000,
+        allowCutoff: 100000,
+        limit: 100,
+      });
+      assert.ok(!expired.some((e) => e.dataRoot === dataRoot));
+    });
+
+    it('lets an explicit confirmed_at win over a sibling value', () => {
+      const dataRoot = toB64Url(Buffer.alloc(32, 43));
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot, relativeOffset: 0, confirmedAt: 5000 }),
+      );
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot, relativeOffset: 256, confirmedAt: 8000 }),
+      );
+
+      assert.equal(worker.getChunkPlacement(dataRoot, 256)?.confirmedAt, 8000);
+    });
+  });
+
+  // The confirmed_data_roots marker generalizes sticky confirmation beyond a live
+  // confirmed sibling: it is set once at confirm time and then (a) confirms
+  // later-ingested chunks and (b) shields the whole data_root from TTL eviction.
+  describe('confirmed_data_roots marker', () => {
+    it('shields a data_root from TTL eviction once confirmed, even if a row is pending', () => {
+      const dataRoot = toB64Url(Buffer.alloc(32, 44));
+      worker.saveChunkPlacement(
+        basePlacement({
+          dataRoot,
+          relativeOffset: 0,
+          origin: 1,
+          cachedAt: 100,
+        }),
+      );
+      // Confirmation records the marker (a chunk exists for this data_root).
+      worker.confirmChunkPlacements(dataRoot, 7000);
+      // Force the row back to pending (mirrors a straggler that never picked up
+      // confirmation) — the marker remains.
+      worker.unconfirmChunkPlacements(dataRoot);
+
+      const expired = worker.selectExpiredUnconfirmedChunkPlacements({
+        originIngest: 1,
+        originIngestAllowlisted: 2,
+        openCutoff: 100000,
+        allowCutoff: 100000,
+        limit: 100,
+      });
+      // Pending + old, but its data_root is confirmed -> not evictable.
+      assert.ok(!expired.some((e) => e.dataRoot === dataRoot));
+    });
+
+    // The confirm event (TX_INDEXED) commonly fires BEFORE any of a bundle's
+    // chunks are seeded — with the bundler's TX-confirmation broadcast gate,
+    // seeding waits for network confirmation and the gateway imports that block
+    // first. The marker must therefore be recorded even when no chunk exists yet,
+    // so the later-seeded chunks inherit it. (End-to-end, the earlier EXISTS-gated
+    // version let confirm fire ~2s before the first chunk, set no marker, and all
+    // 1025 chunks TTL-evicted with offset 0 lost.)
+    it('marks a confirmed data_root even with no chunks yet, so later chunks inherit it', () => {
+      const dataRoot = toB64Url(Buffer.alloc(32, 45));
+      // Confirm fires first, before any chunk of this bundle is ingested.
+      worker.confirmChunkPlacements(dataRoot, 7000);
+
+      // Chunks stream in afterwards, unconfirmed…
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot, relativeOffset: 0, confirmedAt: undefined }),
+      );
+      worker.saveChunkPlacement(
+        basePlacement({
+          dataRoot,
+          relativeOffset: 256,
+          confirmedAt: undefined,
+        }),
+      );
+
+      // …and inherit the marker's confirmation at ingest.
+      assert.equal(worker.getChunkPlacement(dataRoot, 0)?.confirmedAt, 7000);
+      assert.equal(worker.getChunkPlacement(dataRoot, 256)?.confirmedAt, 7000);
+
+      // And are shielded from TTL eviction.
+      const expired = worker.selectExpiredUnconfirmedChunkPlacements({
+        originIngest: 1,
+        originIngestAllowlisted: 2,
+        openCutoff: 100000,
+        allowCutoff: 100000,
+        limit: 100,
+      });
+      assert.ok(!expired.some((e) => e.dataRoot === dataRoot));
+    });
+
+    it('prunes markers older than the cutoff (keeps the table bounded)', () => {
+      const oldRoot = toB64Url(Buffer.alloc(32, 46));
+      const freshRoot = toB64Url(Buffer.alloc(32, 47));
+      worker.confirmChunkPlacements(oldRoot, 1000);
+      worker.confirmChunkPlacements(freshRoot, 9000);
+
+      const deleted = worker.pruneConfirmedDataRoots(5000);
+      assert.ok(deleted >= 1);
+
+      // The old marker is gone: a later chunk under it does NOT inherit.
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot: oldRoot, relativeOffset: 0 }),
+      );
+      assert.equal(
+        worker.getChunkPlacement(oldRoot, 0)?.confirmedAt,
+        undefined,
+      );
+
+      // The fresh marker survives: a later chunk under it DOES inherit.
+      worker.saveChunkPlacement(
+        basePlacement({ dataRoot: freshRoot, relativeOffset: 0 }),
+      );
+      assert.equal(worker.getChunkPlacement(freshRoot, 0)?.confirmedAt, 9000);
+    });
+
+    it('counts marker rows (observability gauge source)', () => {
+      const before = worker.countConfirmedDataRoots();
+      worker.confirmChunkPlacements(toB64Url(Buffer.alloc(32, 48)), 1000);
+      worker.confirmChunkPlacements(toB64Url(Buffer.alloc(32, 49)), 1000);
+      assert.equal(worker.countConfirmedDataRoots(), before + 2);
+    });
+  });
 });

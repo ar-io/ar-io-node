@@ -39,3 +39,11 @@ CREATE TABLE contiguous_data_id_parents (
 CREATE INDEX contiguous_data_ids_verification_priority_retry_idx 
 ON contiguous_data_ids (verification_priority DESC, verification_retry_count ASC, id ASC) 
 WHERE verified = FALSE;
+CREATE TABLE contiguous_data_cache (
+  hash       TEXT    NOT NULL PRIMARY KEY,
+  size       INTEGER NOT NULL,
+  cached_at  INTEGER NOT NULL,
+  tier       INTEGER NOT NULL
+, last_access INTEGER);
+CREATE INDEX contiguous_data_cache_eviction_idx
+  ON contiguous_data_cache (tier, last_access);

@@ -8,6 +8,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach } from 'node:test';
 
 import { createTestLogger } from '../../test/test-logger.js';
+import * as metrics from '../metrics.js';
 import {
   GqlQueryable,
   GqlTransaction,
@@ -21,6 +22,24 @@ import {
 import { NEW_TRANSACTION_COLUMNS } from '../workers/clickhouse-streamer.js';
 
 const log = createTestLogger({ suite: 'CompositeClickHouseDatabase' });
+
+// Sum of the `clickhouse_gql_too_many_rows_total` counter for a given
+// `recovery` label (optionally narrowed to an `id_count` bucket). Used to
+// assert the 158-audit counter fires with the right recovery outcome and
+// id-count bucket on the windowed and fail-fast paths.
+const tooManyRowsCount = async (
+  recovery: 'windowed' | 'none',
+  idCount?: string,
+): Promise<number> => {
+  const out = await metrics.clickhouseGqlTooManyRowsTotal.get();
+  return out.values
+    .filter(
+      (v) =>
+        v.labels.recovery === recovery &&
+        (idCount === undefined || v.labels.id_count === idCount),
+    )
+    .reduce((sum, v) => sum + v.value, 0);
+};
 
 // Canonicalize a test label into a base64url id that round-trips cleanly
 // through `b64UrlToHex` / `hexToB64Url`. The composite's CH mapper goes
@@ -554,6 +573,7 @@ describe('CompositeClickHouseDatabase', () => {
         },
       };
 
+      const beforeWindowed = await tooManyRowsCount('windowed');
       const result = await composite.getGqlTransactions({
         pageSize: 2,
         owners: [id('owner')],
@@ -561,6 +581,13 @@ describe('CompositeClickHouseDatabase', () => {
         maxHeight: 100_000,
       });
 
+      // The 158 audit counter fires with recovery=windowed for the recovered
+      // (owner-projection) path.
+      assert.equal(
+        (await tooManyRowsCount('windowed')) - beforeWindowed,
+        1,
+        'expected clickhouse_gql_too_many_rows_total{recovery="windowed"} to increment',
+      );
       // The single-shot threw 158, then at least one windowed retry ran.
       assert.ok(
         stableCalls >= 2,
@@ -603,6 +630,7 @@ describe('CompositeClickHouseDatabase', () => {
         },
       };
 
+      const beforeNone = await tooManyRowsCount('none');
       await assert.rejects(
         composite.getGqlTransactions({
           pageSize: 2,
@@ -612,6 +640,60 @@ describe('CompositeClickHouseDatabase', () => {
       );
       // No windowing retries for a tag-only (ownerless) query.
       assert.equal(stableCalls, 1);
+      // The 158 audit counter fires with recovery=none for the fail-fast path,
+      // even though the error still surfaces to the caller.
+      assert.equal(
+        (await tooManyRowsCount('none')) - beforeNone,
+        1,
+        'expected clickhouse_gql_too_many_rows_total{recovery="none"} to increment',
+      );
+    });
+
+    it('buckets id-count on the 158 counter for a multi-id fail-fast query', async () => {
+      const composite = buildComposite({
+        sqlite,
+        ownerProjectionRoutingEnabled: true,
+        chRowsByLeg: {},
+      });
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          if (sqlStr.includes('FROM new_transactions')) {
+            return { json: async () => ({ data: [] }) };
+          }
+          const err: any = new Error('Code: 158. TOO_MANY_ROWS');
+          err.code = '158';
+          throw err;
+        },
+      };
+
+      // 4 ids → the `3-5` bucket. Ids-only (no owner) → fail-fast (recovery=none).
+      const before = await tooManyRowsCount('none', '3-5');
+      await assert.rejects(
+        composite.getGqlTransactions({
+          pageSize: 2,
+          ids: [id('a'), id('b'), id('c'), id('d')],
+          tags: [],
+        }),
+        /158|TOO_MANY_ROWS/,
+      );
+      assert.equal(
+        (await tooManyRowsCount('none', '3-5')) - before,
+        1,
+        'expected the 158 counter to increment with id_count="3-5"',
+      );
+      // The same increment carries filter="ids" from describeGqlFilterShape.
+      const series = (
+        await metrics.clickhouseGqlTooManyRowsTotal.get()
+      ).values.find(
+        (v) =>
+          v.labels.filter === 'ids' &&
+          v.labels.recovery === 'none' &&
+          v.labels.id_count === '3-5',
+      );
+      assert.ok(
+        series !== undefined && series.value >= 1,
+        'expected the 158 counter series to carry filter="ids"',
+      );
     });
 
     it('does not window when the feature is disabled (default)', async () => {

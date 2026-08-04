@@ -40,6 +40,7 @@ served until its tx mines.
 | `CHUNK_INGEST_MAX_PENDING_BYTES` | `26843545600` (25 GiB) | Runaway-disk backstop; oldest pending evicted first above this. `0` disables. |
 | `CHUNK_INGEST_GC_INTERVAL_MS` | `300000` (5m) | GC sweep interval. |
 | `CHUNK_INGEST_GC_BATCH_SIZE` | `1000` | Max evictions per sweep. |
+| `CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS` | `3600` (1h) | How long a `confirmed_data_roots` marker is kept before the GC prunes it. Only needs to bridge the confirm→seed gap. |
 
 For a bundler integration, set `CHUNK_INGEST_CACHE_ALLOWLIST` to the bundler's
 egress IP/CIDR and point the bundler's chunk-post endpoint at this gateway.
@@ -51,9 +52,41 @@ egress IP/CIDR and point the bundler's chunk-post endpoint at this gateway.
    invalid chunk is rejected and not cached.
 2. Valid → the bytes are written to the chunk store and a **pending** row is
    recorded in `chunks.db` → `chunk_placements` (`confirmed_at` NULL). This is
-   fire-and-forget and never blocks the broadcast response.
+   fire-and-forget and never blocks the broadcast response. If the `data_root` is
+   *already* confirmed (marker present, or a confirmed sibling exists), the new
+   row inherits its `confirmed_at` on the spot (see "sticky confirmation" below).
 3. When a transaction with that `data_root` is indexed, the `TX_INDEXED` event
    sets `confirmed_at` and records `chunk_ingest_confirmation_latency_seconds`.
+   This is a **one-shot** update: it only touches placements that already exist
+   at that instant. **Sticky confirmation** carries the result forward. The same
+   event records the `data_root` in `confirmed_data_roots` (**unconditionally** —
+   see below), and that marker makes confirmation persistent:
+   - `saveChunkPlacement` inherits `confirmed_at` from the marker, so every chunk
+     ingested *after* the confirm event self-confirms at ingest; and
+   - the GC TTL sweep skips any `data_root` in `confirmed_data_roots`, so a
+     confirmed bundle is never partially evicted regardless of per-row state.
+
+   The marker is written **even when no chunk of the bundle has been ingested
+   yet**. This is essential, not an optimization: with the bundler's
+   TX-confirmation broadcast gate, chunk seeding only starts *after* the tx
+   confirms network-wide, and the gateway typically imports that same block
+   first — so the confirm event routinely fires **before** any chunk arrives. An
+   `EXISTS`-gated marker would be skipped in exactly that case, and every
+   later-seeded chunk would stay pending and TTL-evict (observed end-to-end:
+   confirm fired ~2 s before the first chunk, all 1025 chunks of a 256 MB bundle
+   evicted, `relative_offset` 0 lost). Marking unconditionally bridges the race
+   in both orderings.
+
+   Without sticky confirmation, a large bundle (thousands of chunks streamed in
+   over a window longer than — or entirely after — the one confirm event) leaves
+   most chunks unconfirmed; they then TTL-evict and leave a gappy, unservable set
+   (e.g. `relative_offset` 0 missing → range streaming from offset 0 misses and
+   the whole bundle fails to serve/unbundle until it re-propagates from peers).
+
+   The `confirmed_data_roots` table is kept bounded by an age-based prune in the
+   GC sweep (`CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS`, default 1 h): a
+   marker only needs to outlive the confirm→seed gap (seconds to minutes), after
+   which any ingested chunk already carries its own `confirmed_at`.
 4. A GC worker evicts placements whose `data_root` never confirms on-chain
    (tiered TTL by origin) plus a disk-pressure backstop.
 
@@ -119,3 +152,5 @@ All at `/ar-io/__gateway_metrics`:
 | `chunk_ingest_confirmation_latency_seconds` | POST→confirm latency histogram (use to tune the TTLs). |
 | `chunk_ingest_evicted_total{reason}` | GC evictions: `ttl`, `disk_pressure`. |
 | `chunk_ingest_pending_bytes` | Estimated bytes held by pending (unconfirmed) placements. Refreshed on the GC sweep, so it can lag writes by up to one sweep interval — use `chunk_ingest_cache_total` for live confirmation. |
+| `chunk_ingest_confirmed_roots` | Rows in the `confirmed_data_roots` marker table. Should stay bounded (roughly: confirmed data-txs within `CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS`); a steadily-growing value means the prune is not keeping up. |
+| `chunk_ingest_confirmed_roots_pruned_total` | Count of markers pruned by the GC sweep. |

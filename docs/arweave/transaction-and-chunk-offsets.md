@@ -342,14 +342,26 @@ for (const range of ranges) {
    (the cold-data chunk-by-offset path), the gateway must first find the block
    containing the offset. Rather than walking the chain with ~log₂(height)
    sequential `GET /block/height/{h}` requests, the Arweave client first
-   consults a local index over `stable_blocks.weave_size`
-   (`getBlockByWeaveOffset`, backed by `stable_blocks_weave_size_idx`): the
-   containing block is the lowest block whose cumulative `weave_size` reaches
-   the offset. The local result is only trusted when the immediately-preceding
-   block is also present and ends before the offset (a tight bracket, so no
-   missing block can hide the true container); otherwise — and for offsets in
-   the not-yet-stable chain tip — it falls back to the chain binary search.
-   This only changes how the block is *found*; the block returned is identical.
+   consults a local index over the `weave_size` columns of both `stable_blocks`
+   and the not-yet-stable tip table `new_blocks` (`getBlockByWeaveOffset`, backed
+   by `stable_blocks_weave_size_idx` / `new_blocks_weave_size_idx`): the
+   containing block is the lowest block — in either table — whose cumulative
+   `weave_size` reaches the offset. Spanning both tables means offsets in the
+   recent tip (mined but not yet stable), which are exactly the cold-data
+   requests that used to time out on the chain walk, also resolve locally.
+
+   The local result is only trusted when the immediately-preceding block is also
+   present and ends before the offset (a tight bracket, so no missing block can
+   hide the true container) **and** the candidate block, re-fetched by height, is
+   re-confirmed to still cover the offset. `new_blocks` can transiently hold
+   non-canonical fork blocks (its `weave_size` is not guaranteed unique or
+   monotonic), so this re-validation is the safety net: a stale or forked local
+   hit degrades to a fall-back to the chain binary search, never to a wrong
+   block. The predecessor's `weave_size` is taken as the MAX across any rows at
+   the preceding height, so a fork that overshoots the offset conservatively
+   breaks the bracket and forces the fall-back. Any miss, gap, or error also
+   falls back. This only changes how the block is *found*; the block returned is
+   identical.
 
    Note this resolves offset→**block** only. Resolving offset→**transaction**
    within that block cannot be done from local block/transaction columns,

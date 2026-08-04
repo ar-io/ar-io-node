@@ -358,6 +358,120 @@ describe('GatewayDataSource', () => {
       assert.equal(requestParams.params['ar-io-origin'], undefined);
     });
 
+    it('should omit ar-io-* query params for untrusted gateways but still send provenance headers', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+          data: axiosStreamData,
+        };
+      };
+
+      const untrustedDataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway.domain': { priority: 1, trusted: false },
+        },
+      });
+
+      const data = await untrustedDataSource.getData({
+        id: 'some-id',
+        requestAttributes,
+      });
+
+      // No query string is appended (CDN-fronted gateways 502 on these).
+      assert.equal(requestParams.params, undefined);
+      // Provenance still rides along as headers.
+      assert.equal(
+        requestParams.headers['X-AR-IO-Hops'],
+        (requestAttributes.hops + 1).toString(),
+      );
+      assert.equal(
+        requestParams.headers['X-AR-IO-Origin'],
+        requestAttributes.origin,
+      );
+      // The same trust flag still marks the response as untrusted.
+      assert.equal(data.trusted, false);
+    });
+
+    it('should still send ar-io-* query params for trusted gateways', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+          data: axiosStreamData,
+        };
+      };
+
+      // Exercise the full provenance param set (via + arns) so every
+      // serialized param line is covered, not just hops/origin.
+      const richAttributes: RequestAttributes = {
+        origin: 'node-url',
+        hops: 0,
+        via: ['upstream-node'],
+        arnsBasename: 'example',
+      };
+
+      // dataSource from beforeEach is configured with trusted: true.
+      const data = await dataSource.getData({
+        id: 'some-id',
+        requestAttributes: richAttributes,
+      });
+
+      assert.equal(requestParams.params['ar-io-hops'], richAttributes.hops + 1);
+      assert.equal(requestParams.params['ar-io-origin'], richAttributes.origin);
+      assert.equal(requestParams.params['ar-io-via'], 'upstream-node');
+      assert.equal(requestParams.params['ar-io-arns-basename'], 'example');
+      // The same trust flag still marks the response as trusted.
+      assert.equal(data.trusted, true);
+    });
+
+    it('should send ar-io-* query params to untrusted gateways when the kill-switch is set', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+          data: axiosStreamData,
+        };
+      };
+
+      // TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS=true reverts to legacy behavior.
+      const legacyDataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway.domain': { priority: 1, trusted: false },
+        },
+        sendUntrustedParams: true,
+      });
+
+      // Use the full provenance set so the override is verified to forward
+      // every param (via + arns), not just hops/origin.
+      const richAttributes: RequestAttributes = {
+        origin: 'node-url',
+        hops: 0,
+        via: ['upstream-node'],
+        arnsBasename: 'example',
+      };
+
+      const data = await legacyDataSource.getData({
+        id: 'some-id',
+        requestAttributes: richAttributes,
+      });
+
+      assert.equal(requestParams.params['ar-io-hops'], richAttributes.hops + 1);
+      assert.equal(requestParams.params['ar-io-origin'], richAttributes.origin);
+      assert.equal(requestParams.params['ar-io-via'], 'upstream-node');
+      assert.equal(requestParams.params['ar-io-arns-basename'], 'example');
+      // Trust marking is independent of the param kill-switch.
+      assert.equal(data.trusted, false);
+    });
+
     it('should return hops 1 in the response if not provided', async () => {
       const data = await dataSource.getData({
         id: 'some-id',

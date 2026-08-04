@@ -264,6 +264,11 @@ export interface ChunkPlacementIndex {
   // Reserved for chain-reorg recovery; not yet wired (no clean reorg hook with
   // orphaned data_roots). See the deferral note in system.ts.
   unconfirmChunkPlacements(dataRoot: string): Promise<void>;
+  // Prune confirmed-data-root markers older than `cutoff` (unix seconds); keeps
+  // the marker table bounded. Returns the number of rows deleted.
+  pruneConfirmedDataRoots(cutoff: number): Promise<number>;
+  // Current row count of the confirmed_data_roots marker table (observability).
+  countConfirmedDataRoots(): Promise<number>;
   selectExpiredUnconfirmedChunkPlacements(params: {
     originIngest: number;
     originIngestAllowlisted: number;
@@ -285,6 +290,42 @@ export interface ChunkPlacementIndex {
     relativeOffset: number,
   ): Promise<ChunkPlacement | undefined>;
   sumPendingChunkBytes(): Promise<number>;
+}
+
+/**
+ * Cleanup index for the contiguous data cache. A dedicated per-blob table so the
+ * disk-pressure evictor can query "oldest N in tier T" from the (SSD-backed) DB
+ * instead of walking the HDD-backed cache directory tree. Implemented by
+ * StandaloneSqliteDatabase; the raw bytes live in the FsDataStore keyed by hash.
+ */
+export interface ContiguousDataCacheIndex {
+  saveContiguousDataCacheEntry(entry: {
+    hash: string;
+    size: number;
+    cachedAt: number;
+    tier: number;
+  }): Promise<void>;
+  // Cache-hit refresh: update last_access and raise the tier (MAX, never demotes)
+  // — pass tier 1 for a preferred-ArNS read to promote it, 0 otherwise.
+  touchContiguousDataCacheEntry(
+    hash: string,
+    lastAccess: number,
+    tier: number,
+  ): Promise<void>;
+  // Batch backfill: insert rows only if absent (never clobbers live entries).
+  insertContiguousDataCacheEntriesIfAbsent(
+    entries: { hash: string; size: number; cachedAt: number; tier: number }[],
+  ): Promise<void>;
+  sumContiguousDataCacheBytes(): Promise<number>;
+  countContiguousDataCacheEntries(): Promise<number>;
+  selectContiguousDataCacheEvictionCandidates(
+    limit: number,
+  ): Promise<{ hash: string; size: number }[]>;
+  // Returns the number of rows deleted (0 if already gone).
+  deleteContiguousDataCacheEntry(hash: string): Promise<number>;
+  // Batch delete: removes many rows in one transaction and returns the hashes
+  // that were actually deleted (so the caller unlinks only those).
+  deleteContiguousDataCacheEntries(hashes: string[]): Promise<string[]>;
 }
 
 /**
@@ -610,6 +651,10 @@ export interface GqlQueryable {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags: { name: string; values: string[] }[];
+    // When true, restrict the query to L1 (base-layer) transactions only,
+    // skipping the bundled data-item legs. Used by the composite's L1-only
+    // routing to serve entailed queries from the L1 index alone.
+    l1Only?: boolean;
   }): Promise<GqlTransactionsResult>;
 
   getGqlBlock(args: { id: string }): Promise<GqlBlock | undefined>;
@@ -794,7 +839,10 @@ type BroadcastChunkResponses = {
   canceled: boolean;
   timedOut: boolean;
   skipped?: boolean;
-  skipReason?: 'success_threshold' | 'consecutive_failures';
+  skipReason?:
+    | 'success_threshold'
+    | 'consecutive_failures'
+    | 'connection_failures';
 };
 
 interface BroadcastChunkResult {
@@ -812,6 +860,7 @@ export interface ChunkBroadcaster {
     originAndHopsHeaders,
     chunkPostMinSuccessCount,
     chunkPostMinPreferredSuccessCount,
+    continuePastThreshold,
     parentSpan,
   }: {
     chunk: JsonChunkPost;
@@ -820,6 +869,12 @@ export interface ChunkBroadcaster {
     originAndHopsHeaders: Record<string, string | undefined>;
     chunkPostMinSuccessCount: number;
     chunkPostMinPreferredSuccessCount?: number;
+    /**
+     * When true, keep posting to every selected peer after the success
+     * threshold is met (maximize propagation) instead of stopping early.
+     * Defaults to `config.CHUNK_POST_CONTINUE_PAST_THRESHOLD`.
+     */
+    continuePastThreshold?: boolean;
     parentSpan?: Span;
   }): Promise<BroadcastChunkResult>;
 }
@@ -1131,20 +1186,65 @@ export interface ContiguousDataIndex {
   saveVerificationPriority(id: string, priority: number): Promise<void>;
 }
 
+/**
+ * Root transaction location for a data item, as resolved by a
+ * {@link DataItemRootIndex}. All offsets and sizes are byte values relative to
+ * the root L1 transaction's data. Fields beyond `rootTxId` are best-effort:
+ * different sources populate different subsets, and consumers derive whatever
+ * is missing (e.g. by parsing the bundle header).
+ */
+export interface RootTxLookupResult {
+  /** base64url ID of the root L1 transaction containing the data item. */
+  rootTxId: string;
+  /**
+   * Bundle traversal path from root to the immediate parent bundle
+   * `[root, ..., parent]`; omitted when the path is unknown.
+   */
+  path?: string[];
+  /** Byte offset of the data item header within the root TX data. */
+  rootOffset?: number;
+  /** Byte offset of the data item's payload within the root TX data. */
+  rootDataOffset?: number;
+  /** Content type of the data item, when known to the source. */
+  contentType?: string;
+  /** Total size of the data item in bytes, including its header. */
+  size?: number;
+  /** Size of the data item's payload in bytes, excluding its header. */
+  dataSize?: number;
+}
+
+export interface GetRootTxOptions {
+  /**
+   * Predicate deciding whether a source's result is sufficient for the caller,
+   * letting the composite short-circuit as soon as it is satisfied. Return
+   * `true` to accept (stop probing further sources) or `false` to keep probing.
+   *
+   * When omitted, the composite applies its default "actionable" acceptance
+   * (complete offsets, an L1 root, `rootOffset` + `rootDataOffset`, or a
+   * non-empty path). Callers that can proceed from less — e.g. a bare
+   * `rootTxId` they will resolve offsets from locally — can pass a looser
+   * predicate to avoid probing remote sources such as GraphQL.
+   */
+  accept?: (result: RootTxLookupResult) => boolean;
+}
+
+/**
+ * A source that resolves a data item ID to its root transaction location.
+ * Implemented by individual index backends (local DB, CDB64, gateways,
+ * GraphQL, etc.) and by the composite that probes them in order.
+ */
 export interface DataItemRootIndex {
-  getRootTx(id: string): Promise<
-    | {
-        rootTxId: string;
-        /** Path from root TX to immediate parent bundle [root, ..., parent] */
-        path?: string[];
-        rootOffset?: number;
-        rootDataOffset?: number;
-        contentType?: string;
-        size?: number;
-        dataSize?: number;
-      }
-    | undefined
-  >;
+  /**
+   * Resolves `id` to its root transaction location, or `undefined` if the
+   * source cannot resolve it.
+   *
+   * @param id - base64url data item / transaction ID to resolve.
+   * @param opts - optional lookup options; see {@link GetRootTxOptions}.
+   */
+  getRootTx(
+    id: string,
+    opts?: GetRootTxOptions,
+  ): Promise<RootTxLookupResult | undefined>;
 }
 
 export interface ContiguousDataSource {

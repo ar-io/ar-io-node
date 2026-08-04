@@ -166,6 +166,16 @@ against its data root and write-through cached with a pending placement
 data root never confirms on-chain (so the gateway never permanently keeps data
 that did not land on chain).
 
+**Sticky confirmation** - The mechanism that keeps a whole bundle's ingested
+chunks confirmed even though confirmation is a one-shot event and the chunks
+stream in over a window (often *after* the confirm event). When a
+[transaction](#transaction) is indexed, its data root is recorded in the
+`confirmed_data_roots` marker table; any chunk ingested for a marked data root
+inherits the confirmation at write time, and the GC never TTL-evicts a marked
+data root's chunks. Without it, a large bundle's late-arriving chunks stay
+pending and evict, leaving a gappy, unservable set. The marker table is bounded
+by an age-based prune (`CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS`).
+
 **Core Database** - Primary SQLite database containing blocks,
 [transactions](#transaction), transaction [tags](#tags), stable/new data
 indexes, and the migrations table that tracks applied database schema changes.

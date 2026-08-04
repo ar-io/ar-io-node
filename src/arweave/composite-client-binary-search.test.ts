@@ -10,6 +10,16 @@ import * as assert from 'node:assert';
 import { ArweaveCompositeClient } from './composite-client.js';
 import { Arweave } from 'arweave';
 import * as winston from 'winston';
+import * as metrics from '../metrics.js';
+
+// Read the current value of block_offset_resolution_total for a given outcome.
+// The counter is process-global and accumulates across tests, so assertions
+// compare a before/after delta rather than an absolute value.
+const outcomeCount = async (outcome: string): Promise<number> => {
+  const metric = await metrics.blockOffsetResolutionCounter.get();
+  const entry = metric.values.find((v: any) => v.labels.outcome === outcome);
+  return entry?.value ?? 0;
+};
 
 describe('ArweaveCompositeClient Binary Search', () => {
   let client: ArweaveCompositeClient;
@@ -616,6 +626,79 @@ describe('ArweaveCompositeClient Binary Search', () => {
       const result = await client.binarySearchBlocks(targetOffset);
       assert.strictEqual(getHeightMock.mock.calls.length, 1);
       assert.strictEqual(result.height, 60);
+    });
+
+    it('resolves an unstable-tip block via the local index with a single fetch and records the unstable outcome', async () => {
+      client.cleanup();
+
+      const before = await outcomeCount('local_index_hit_unstable');
+
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: '2500',
+        txs: ['tx'],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      // Candidate resolved from new_blocks (the not-yet-stable tip).
+      const indexMock = mock.fn(async () => ({
+        height: 50,
+        weaveSize: 2500,
+        prevWeaveSize: 1000,
+        zone: 'unstable' as const,
+      }));
+      client.blockByOffsetIndex = { getBlockByWeaveOffset: indexMock };
+
+      const result = await client.binarySearchBlocks(targetOffset);
+
+      assert.strictEqual(result.height, 50);
+      // Exactly one block fetched — the single re-validation getBlockByHeight,
+      // not the ~log2(height) chain walk.
+      assert.strictEqual(getBlockMock.mock.calls.length, 1);
+      assert.strictEqual(getBlockMock.mock.calls[0].arguments[0], 50);
+      // The chain binary search (which calls getHeight) is skipped entirely.
+      assert.strictEqual(getHeightMock.mock.calls.length, 0);
+      // The tip resolution is attributed to the distinct unstable outcome.
+      const after = await outcomeCount('local_index_hit_unstable');
+      assert.strictEqual(after - before, 1);
+    });
+
+    it('falls back to the chain search when an unstable candidate no longer covers the offset (forked tip)', async () => {
+      client.cleanup();
+
+      const before = await outcomeCount('fallback_stale');
+
+      // The index bracketed the offset from new_blocks, but the re-fetched
+      // canonical block at that height reports a smaller weave_size (the tip
+      // block was a fork that lost weave under the canonical chain). Must not
+      // trust it — fall back to the chain search and return the correct block,
+      // never wrong bytes.
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: height >= 60 ? '2500' : '1000',
+        txs: [],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      client.blockByOffsetIndex = {
+        getBlockByWeaveOffset: mock.fn(async () => ({
+          height: 50,
+          weaveSize: 2500,
+          prevWeaveSize: 1000,
+          zone: 'unstable' as const,
+        })),
+      };
+
+      const result = await client.binarySearchBlocks(targetOffset);
+      // Re-validation fetched height 50 (weave 1000 < 1500) -> stale -> fall back.
+      assert.strictEqual(getHeightMock.mock.calls.length, 1);
+      assert.strictEqual(result.height, 60);
+      const after = await outcomeCount('fallback_stale');
+      assert.strictEqual(after - before, 1);
     });
   });
 
