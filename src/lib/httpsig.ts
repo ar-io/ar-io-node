@@ -67,6 +67,9 @@ export const TRIGGER_HEADERS = new Set([
 export const CO_SIGNABLE_HEADERS = new Set([
   'content-type',
   'content-digest',
+  // Bind the served byte range into the signature on a 206, so a partial
+  // response can't be passed off as the full object under a signed ETag=CID.
+  'content-range',
   'x-cache',
   'etag',
   'x-ar-io-root-data-item-offset',

@@ -124,8 +124,13 @@ function createIpfsPathHandler({
     if (config.ARNS_ROOT_HOSTS.length > 0) {
       const v1Base32 = cidToV1Base32(cidString);
       if (getRequestSandbox(req) !== v1Base32) {
+        // Derive the root host from the request directly. req.matchedArnsRootHost
+        // is set by the ArNS middleware, which is mounted AFTER this IPFS path
+        // router, so it is always undefined here — resolve it ourselves so a
+        // multi-root-host gateway redirects to the host the request arrived on.
         const rootHost =
-          req.matchedArnsRootHost ?? config.ARNS_ROOT_HOSTS[0].host;
+          config.matchArnsRootHost(req.hostname)?.host ??
+          config.ARNS_ROOT_HOSTS[0].host;
         const pathSuffix = path !== undefined ? `/${path}` : '';
         const queryString = url.parse(req.originalUrl).query;
         res.redirect(

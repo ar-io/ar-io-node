@@ -160,6 +160,32 @@ export class IpfsFsCache {
     return undefined;
   }
 
+  /**
+   * Returns the cached content's base64url SHA-256 digest without opening the
+   * data stream (in-memory index / .meta only). Used to enforce block-by-hash
+   * on range requests, which bypass the positive read cache.
+   */
+  async getDigest(
+    cidString: string,
+    path?: string,
+  ): Promise<string | undefined> {
+    const key = this.cacheKey(cidString, path);
+    let entry = this.index.get(key);
+    if (!entry) {
+      try {
+        await fs.promises.access(this.dataPath(key), fs.constants.F_OK);
+        const meta = await this.readMeta(key);
+        if (meta) {
+          this.index.set(key, meta);
+          entry = meta;
+        }
+      } catch {
+        // Not cached
+      }
+    }
+    return entry?.digest;
+  }
+
   async put(
     cidString: string,
     stream: Readable,
