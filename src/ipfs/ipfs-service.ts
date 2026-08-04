@@ -34,6 +34,10 @@ export interface IpfsGetContentResult {
    * misses (the body streams straight from Kubo without being hashed inline).
    */
   digest?: string;
+  // 200 for a full response, 206 for a partial (Range) response.
+  statusCode: number;
+  // Present on 206 responses: the upstream Content-Range header value.
+  contentRange?: string;
 }
 
 export class IpfsService {
@@ -72,11 +76,13 @@ export class IpfsService {
     path,
     signal,
     parentSpan,
+    range,
   }: {
     cidString: string;
     path?: string;
     signal?: AbortSignal;
     parentSpan?: Span;
+    range?: string;
   }): Promise<IpfsGetContentResult> {
     const span = startChildSpan(
       'IpfsService.getContent',
@@ -118,8 +124,12 @@ export class IpfsService {
         );
       }
 
-      // Check cache
-      const cached = await this.cache.get(normalizedCid, path);
+      // Check cache. Range requests bypass the positive cache: we don't serve a
+      // partial from a full cached object here, and we must never cache a
+      // partial body — they're forwarded straight to Kubo (which supports Range)
+      // below.
+      const cached =
+        range === undefined ? await this.cache.get(normalizedCid, path) : null;
       if (cached) {
         // Content-hash moderation. The cache stores the base64url SHA-256 of the
         // served bytes (the same format as Arweave's data hash), so once content
@@ -149,6 +159,7 @@ export class IpfsService {
           contentType: cached.contentType,
           cached: true,
           digest: cached.digest,
+          statusCode: 200,
         };
       }
 
@@ -163,6 +174,7 @@ export class IpfsService {
           path,
           signal,
           parentSpan: span,
+          range,
         })
         .catch((err) => {
           if (err instanceof IpfsNotFoundError) {
@@ -188,14 +200,17 @@ export class IpfsService {
         );
       }
 
-      // Stream directly to the client while writing to a temp file on disk
-      // for caching. No memory buffering — handles files of any size.
-      this.streamToCache(
-        normalizedCid,
-        path,
-        result.stream,
-        result.contentType,
-      );
+      // Stream directly to the client while writing to a temp file on disk for
+      // caching. No memory buffering — handles files of any size. Partial (206)
+      // responses are NOT cached — only full objects.
+      if (range === undefined && result.statusCode === 200) {
+        this.streamToCache(
+          normalizedCid,
+          path,
+          result.stream,
+          result.contentType,
+        );
+      }
 
       // End span when stream completes
       result.stream.on('end', () => span.end());
@@ -209,6 +224,8 @@ export class IpfsService {
         size: result.size,
         contentType: result.contentType,
         cached: false,
+        statusCode: result.statusCode,
+        contentRange: result.contentRange,
       };
     } catch (error: any) {
       if (error.name !== 'AbortError') {

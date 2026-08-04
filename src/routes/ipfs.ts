@@ -18,6 +18,7 @@ import { IpfsService } from '../ipfs/ipfs-service.js';
 import {
   IpfsBlockedError,
   IpfsNotFoundError,
+  IpfsRangeNotSatisfiableError,
   IpfsSizeLimitError,
   IpfsTimeoutError,
   IpfsUnavailableError,
@@ -183,6 +184,7 @@ async function handleIpfsRequest({
       cidString,
       path,
       signal: req.signal,
+      range: req.headers.range,
     });
 
     // Check payment and rate limits (x402 + rate limiting in one call).
@@ -218,6 +220,14 @@ async function handleIpfsRequest({
     res.setHeader('Content-Type', result.contentType);
     if (result.size > 0) {
       res.setHeader('Content-Length', result.size);
+    }
+    // Advertise range support, and relay a partial (206) response from Kubo.
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (result.statusCode === 206) {
+      res.status(206);
+      if (result.contentRange !== undefined) {
+        res.setHeader('Content-Range', result.contentRange);
+      }
     }
     // A direct /ipfs/{CID} or {CID}.host request is content-addressed and thus
     // immutable. But when the request arrived via an ArNS name, the name->CID
@@ -357,6 +367,15 @@ async function handleIpfsRequest({
         status: 'size_exceeded',
       });
       res.status(413).json({ error: 'Content exceeds size limit' });
+      return;
+    }
+
+    if (error instanceof IpfsRangeNotSatisfiableError) {
+      metrics.ipfsRequestsTotal.inc({
+        route_type: routeType,
+        status: 'range_not_satisfiable',
+      });
+      res.status(416).json({ error: 'Range not satisfiable' });
       return;
     }
 

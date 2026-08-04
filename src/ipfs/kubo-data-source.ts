@@ -16,6 +16,10 @@ export interface IpfsContentResult {
   stream: Readable;
   size: number;
   contentType: string;
+  // 200 for a full response, 206 for a partial (Range) response.
+  statusCode: number;
+  // Present on 206 responses: the upstream Content-Range header value.
+  contentRange?: string;
 }
 
 export class KuboDataSource {
@@ -46,11 +50,13 @@ export class KuboDataSource {
     path,
     signal,
     parentSpan,
+    range,
   }: {
     cidString: string;
     path?: string;
     signal?: AbortSignal;
     parentSpan?: Span;
+    range?: string;
   }): Promise<IpfsContentResult> {
     signal?.throwIfAborted();
 
@@ -104,6 +110,10 @@ export class KuboDataSource {
         signal: controller.signal,
         headers: {
           'Accept-Encoding': 'identity',
+          // Forward a client Range to Kubo (its gateway supports Range and
+          // returns 206 + Content-Range). Enables media seeking and the
+          // observer's ranged sampling of large content.
+          ...(range !== undefined ? { Range: range } : {}),
         },
         maxRedirects: 5,
         // Accept non-2xx so we can handle 404/408/504 ourselves
@@ -127,7 +137,14 @@ export class KuboDataSource {
         );
       }
 
-      if (response.status !== 200) {
+      if (response.status === 416) {
+        (response.data as Readable).destroy();
+        throw new IpfsRangeNotSatisfiableError(
+          `Range not satisfiable for /ipfs/${ipfsPath}`,
+        );
+      }
+
+      if (response.status !== 200 && response.status !== 206) {
         const stream = response.data as Readable;
         stream.destroy();
         throw new Error(
@@ -173,6 +190,8 @@ export class KuboDataSource {
         stream,
         size: contentLength,
         contentType,
+        statusCode: response.status,
+        contentRange: response.headers['content-range'],
       };
     } catch (error: any) {
       clearTimeout(connectionTimer);
@@ -185,6 +204,7 @@ export class KuboDataSource {
 
       if (error instanceof IpfsNotFoundError) throw error;
       if (error instanceof IpfsTimeoutError) throw error;
+      if (error instanceof IpfsRangeNotSatisfiableError) throw error;
 
       if (error.name === 'AbortError' || error.code === 'ERR_CANCELED') {
         if (signal?.aborted) {
@@ -236,6 +256,13 @@ export class IpfsBlockedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'IpfsBlockedError';
+  }
+}
+
+export class IpfsRangeNotSatisfiableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IpfsRangeNotSatisfiableError';
   }
 }
 
