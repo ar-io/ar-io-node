@@ -27,22 +27,27 @@ export class KuboDataSource {
   private kuboUrl: string;
   private requestTimeoutMs: number;
   private streamStallTimeoutMs: number;
+  private maxConcurrent: number;
+  private inFlight = 0;
 
   constructor({
     log,
     kuboUrl,
     requestTimeoutMs,
     streamStallTimeoutMs,
+    maxConcurrent = 0,
   }: {
     log: winston.Logger;
     kuboUrl: string;
     requestTimeoutMs: number;
     streamStallTimeoutMs: number;
+    maxConcurrent?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.kuboUrl = kuboUrl.replace(/\/$/, '');
     this.requestTimeoutMs = requestTimeoutMs;
     this.streamStallTimeoutMs = streamStallTimeoutMs;
+    this.maxConcurrent = maxConcurrent;
   }
 
   async getContent({
@@ -59,6 +64,24 @@ export class KuboDataSource {
     range?: string;
   }): Promise<IpfsContentResult> {
     signal?.throwIfAborted();
+
+    // Concurrency cap: bound in-flight Kubo fetches so cheap-to-issue requests
+    // (HEAD, tiny Range) can't amplify into unbounded upstream/DHT load — excess
+    // requests fail fast instead of piling onto Kubo. The slot is released when
+    // the returned stream closes (below) or on any error (catch).
+    if (this.maxConcurrent > 0 && this.inFlight >= this.maxConcurrent) {
+      throw new IpfsUnavailableError(
+        `Too many concurrent IPFS fetches (${this.inFlight}/${this.maxConcurrent})`,
+      );
+    }
+    this.inFlight++;
+    let released = false;
+    const release = () => {
+      if (!released) {
+        released = true;
+        this.inFlight--;
+      }
+    };
 
     // URL-encode path segments to prevent breaking the upstream request
     const encodedPath =
@@ -186,6 +209,10 @@ export class KuboDataSource {
         span.end();
       });
 
+      // Release the concurrency slot when the response stream is fully consumed
+      // or destroyed (covers success, client abort, and downstream errors).
+      stream.once('close', release);
+
       return {
         stream,
         size: contentLength,
@@ -194,6 +221,7 @@ export class KuboDataSource {
         contentRange: response.headers['content-range'],
       };
     } catch (error: any) {
+      release();
       clearTimeout(connectionTimer);
       signal?.removeEventListener('abort', onClientAbort);
 

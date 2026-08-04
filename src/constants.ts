@@ -26,6 +26,9 @@
  */
 export const headerNames = {
   hops: 'X-AR-IO-Hops',
+  // Which retrieval source served the body (e.g. 'ipfs'). Declared centrally so
+  // it's referenced consistently and is a candidate for HTTPSIG trigger headers.
+  arIoSource: 'X-Ar-Io-Source',
   origin: 'X-AR-IO-Origin',
   originNodeRelease: 'X-AR-IO-Origin-Node-Release',
   digest: 'X-AR-IO-Digest',

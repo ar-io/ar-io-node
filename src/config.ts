@@ -3224,6 +3224,15 @@ export const IPFS_STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
   30000,
 );
 
+// Max concurrent in-flight fetches to the Kubo gateway. Bounds Kubo/DHT
+// amplification from cheap-to-issue requests (HEAD, tiny Range) that each force
+// an upstream fetch before rate limiting is evaluated; excess requests fail fast
+// with 502 rather than piling onto Kubo. 0 disables the cap.
+export const IPFS_KUBO_MAX_CONCURRENT_REQUESTS = env.positiveIntOrDefault(
+  'IPFS_KUBO_MAX_CONCURRENT_REQUESTS',
+  100,
+);
+
 export const IPFS_CACHE_PATH = env.varOrDefault(
   'IPFS_CACHE_PATH',
   'data/ipfs-cache',

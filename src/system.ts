@@ -1894,6 +1894,7 @@ if (config.IPFS_ENABLED) {
     kuboUrl: config.IPFS_KUBO_URL,
     requestTimeoutMs: config.IPFS_KUBO_REQUEST_TIMEOUT_MS,
     streamStallTimeoutMs: config.IPFS_STREAM_STALL_TIMEOUT_MS,
+    maxConcurrent: config.IPFS_KUBO_MAX_CONCURRENT_REQUESTS,
   });
 
   const ipfsCache = new IpfsFsCache({

@@ -12,6 +12,7 @@ import url from 'node:url';
 
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
+import { headerNames } from '../constants.js';
 import { cidToV1Base32, isValidCid } from '../lib/ipfs-cid.js';
 import { getRequestSandbox } from '../middleware/sandbox.js';
 import { IpfsService } from '../ipfs/ipfs-service.js';
@@ -180,6 +181,12 @@ async function handleIpfsRequest({
 }): Promise<void> {
   const startTime = Date.now();
   const isHead = req.method === 'HEAD';
+  // Single-range only. A multi-range request (`bytes=0-1,5-6`) is served in full
+  // (200) rather than forwarded — Kubo doesn't reliably emit multipart/byteranges
+  // and relaying it alongside our own Content-Length would be inconsistent.
+  const rawRange = req.headers.range;
+  const rangeForKubo =
+    typeof rawRange === 'string' && !rawRange.includes(',') ? rawRange : undefined;
   const ipfsPath = path !== undefined ? `${cidString}/${path}` : cidString;
 
   parentLog.debug('Handling IPFS request', { cidString, path, routeType });
@@ -189,7 +196,7 @@ async function handleIpfsRequest({
       cidString,
       path,
       signal: req.signal,
-      range: req.headers.range,
+      range: rangeForKubo,
     });
 
     // Check payment and rate limits (x402 + rate limiting in one call).
@@ -244,7 +251,7 @@ async function handleIpfsRequest({
     }
     res.setHeader('ETag', `"${cidToV1Base32(cidString)}"`);
     res.setHeader('X-Ipfs-Path', `/ipfs/${ipfsPath}`);
-    res.setHeader('X-Ar-Io-Source', 'ipfs');
+    res.setHeader(headerNames.arIoSource, 'ipfs');
 
     // Body binding (RFC 9530 Content-Digest). When a SHA-256 of the served
     // bytes is known (computed at cache-write time, returned on cache hits),
