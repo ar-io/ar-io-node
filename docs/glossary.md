@@ -406,6 +406,18 @@ so cache-and-replay can copy headers between request and response without
 renaming. The legacy headers remain for backwards compatibility and will be
 removed after a deprecation window.
 
+<a id="offsets-endpoint"></a> **Offsets Endpoint** - `GET /ar-io/offsets/:id`,
+which serves a [data item's](#data-item) location within its root
+[transaction](#transaction) directly from the node's index, as JSON. It carries
+the same values a [retrieval hint](#retrieval-hint) does, but as a first-class
+lookup rather than a byproduct of serving bytes: `HEAD /raw/:id` only emits the
+`X-AR-IO-Root-*` headers after a *successful data retrieval*, so on a cache miss
+it runs the node's whole `ON_DEMAND_RETRIEVAL_ORDER` cascade first. The offsets
+endpoint performs a single indexed read and never touches contiguous data, so a
+miss costs the same as a hit. Consumed by the `peers` entry in
+`ROOT_TX_LOOKUP_ORDER`, which supersedes the header-scraping `gateways` entry
+for peers that serve it.
+
 <a id="chain-anchored-offset"></a> **Chain-Anchored Offset** - A
 [transaction offset](#transaction-offset) reported by an untrusted peer (via
 `X-Arweave-Chunk-*` response headers on `/chunk/{offset}/data`) that has been

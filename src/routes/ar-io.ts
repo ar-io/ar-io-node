@@ -18,7 +18,8 @@ import { ParquetExporter } from '../workers/parquet-exporter.js';
 import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
-import { sanityCheckTx } from '../lib/validation.js';
+import { isValidDataId, sanityCheckTx } from '../lib/validation.js';
+import { buildRootTxOffsets } from './ar-io-offsets-builder.js';
 import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
 import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
@@ -227,6 +228,63 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
   res.status(200).send(response);
 };
 arIoRouter.get('/ar-io/info', arIoInfoHandler);
+
+/**
+ * Root transaction offsets for a data item, served straight from the local
+ * index.
+ *
+ * This is the cheap counterpart to probing a peer with `HEAD /raw/:id`. That
+ * route emits the same offsets in `X-AR-IO-Root-*` headers, but only as a side
+ * effect of a *successful data retrieval* — on a cache miss it drags the peer
+ * through its entire `ON_DEMAND_RETRIEVAL_ORDER` cascade (trusted gateways,
+ * chunks, ANS-104 offset scanning) before answering. This endpoint performs a
+ * single indexed lookup and never reads contiguous data, so a miss costs a
+ * SQLite read rather than a retrieval cascade.
+ *
+ * Consumed by `PeersRootTxIndex` via the `peers` entry in
+ * `ROOT_TX_LOOKUP_ORDER`.
+ */
+arIoRouter.get('/ar-io/offsets/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  if (!isValidDataId(id)) {
+    res.status(400).send('Must provide a valid data ID');
+    return;
+  }
+
+  try {
+    const offsets = buildRootTxOffsets(
+      await system.dataAttributesStore.getDataAttributes(id),
+    );
+
+    if (offsets === undefined) {
+      // Not an error: this node simply cannot place the ID inside a root
+      // transaction. Kept revalidatable — the answer changes once the
+      // containing bundle is unbundled and indexed.
+      res.setHeader(
+        'Cache-Control',
+        `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+      );
+      res.status(404).send('Offsets not found');
+      return;
+    }
+
+    // Offsets are a property of the bundle's byte layout, so they never change
+    // once known.
+    res.setHeader(
+      'Cache-Control',
+      `public, max-age=${config.CACHE_DEFAULT_MAX_AGE}`,
+    );
+    res.json(offsets);
+  } catch (error: any) {
+    log.error('Failed to resolve root TX offsets', {
+      id,
+      message: error?.message,
+      stack: error?.stack,
+    });
+    setNoStore(res);
+    res.status(500).send('Failed to resolve offsets');
+  }
+});
 
 // peer list
 arIoRouter.get('/ar-io/peers', async (_req, res) => {
