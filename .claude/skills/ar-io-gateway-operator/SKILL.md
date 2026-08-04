@@ -109,9 +109,21 @@ Pipeline diagnostic: a single `curl -sf .../ar-io/__gateway_metrics | grep -E 'q
 
 ### ArNS resolution
 
-`CompositeArNSResolver` walks resolvers in order: `TrustedGatewayArNSResolver` (asks `TRUSTED_ARNS_GATEWAY_URL`, default `https://__NAME__.turbo-gateway.com`), then `OnDemandArNSResolver` (queries the on-chain `ario-arns` and `ario-ant` programs directly via `SOLANA_RPC_URL`). The base name set is paginated into an in-memory `ArNSNamesCache` at boot and refreshed on a debounce. Resolved IDs may be Arweave TXs (route to data path) or, on the streaming-head branch, IPFS CIDs (route to `/ipfs/<cid>` via the Kubo sidecar). Unknown names log `Unable to resolve name against all resolvers` — that's normal user-error traffic, not a service failure.
+`CompositeArNSResolver` walks resolvers in order: `TrustedGatewayArNSResolver` (asks `TRUSTED_ARNS_GATEWAY_URL`, default `https://__NAME__.turbo-gateway.com`), then `OnDemandArNSResolver` (queries the on-chain `ario-arns` and `ario-ant` programs directly via `SOLANA_RPC_URL`). The base name set is paginated into an in-memory `ArNSNamesCache` at boot and refreshed on a debounce. Resolved IDs may be Arweave TXs (route to the data path) or IPFS CIDs when the ANT record sets `targetProtocol: ipfs` (route to `/ipfs/<cid>` via the Kubo sidecar; see "IPFS serving" below). The `protocol` is carried on the resolution and across a trusted-gateway hop via `X-ArNS-Protocol`. Unknown names log `Unable to resolve name against all resolvers` — that's normal user-error traffic, not a service failure.
 
 `/<name>` and `/<name>/<path>` requests carry `X-ArNS-*` trust headers in the response. Manifest path resolution still uses `StreamingManifestPathResolver`; the "from index" path is not implemented yet (logs warn `not implemented` then falls back to data-side resolution, which works).
+
+### IPFS serving (opt-in Kubo sidecar)
+
+`IPFS_ENABLED=true` adds a Kubo sidecar (`docker compose --profile ipfs up -d`, or a compose override that adds the `kubo` service) and turns on IPFS serving. The gateway proxies, caches, moderates, and signs IPFS content alongside Arweave data, held to the same operational bar (`docs/ipfs-integration.md` → "Parity with the Arweave Data Path").
+
+- **Two entry points**: direct `/ipfs/{CID}` (and `{CID}.{root_host}` subdomains), and ArNS names whose ANT record sets `targetProtocol: ipfs` — the resolved id is a CID, surfaced as `X-ArNS-Protocol: ipfs` and served via Kubo. `protocol` propagates across a trusted-gateway hop, so a name→CID binding survives even with `gateway` ahead of `on-demand` in `ARNS_RESOLVER_PRIORITY_ORDER`.
+- **The node fetches from the local Kubo gateway** (`IPFS_KUBO_URL`, default `http://kubo:8080`) — it does not join the DHT itself. Availability depends on Kubo finding/holding the blocks; Kubo runs `--enable-gc`, so **unpinned content can disappear** (no on-chain permanence like Arweave). This is the key operational difference from Arweave data.
+- **Caching** is a bounded LRU separate from the Arweave content cache (`IPFS_CACHE_*`); absent/unpinned CIDs are negative-cached; hash-blocked bytes are never persisted.
+- **Moderation** uses the same admin API (see Block/unblock below): `PUT /ar-io/admin/block-data {"id":"<CIDv1>"}`. CID-blocking is the deterministic pre-serve primitive for IPFS (content is CID-addressed); hash-blocking also applies once a CID's served-byte SHA-256 is known.
+- **HEAD, Range/`206`, and per-CID sandbox origin isolation** (`/ipfs/{CID}` → `{CID}.{root_host}`) work as on the Arweave path. `IPFS_KUBO_MAX_CONCURRENT_REQUESTS` caps in-flight Kubo fetches (amplification guard); `IPFS_MAX_RESPONSE_SIZE_BYTES` caps a single response.
+- **Verify it's live**: `GET /ar-io/info` shows `ipfs.enabled: true`; `docker exec <kubo container> ipfs swarm peers` should list peers.
+- **Troubleshooting**: a name that resolves on viewblock but `404`s here with `IPFS_ENABLED` off means the CID is being misrouted to the Arweave data path — enable IPFS + Kubo. `/ipfs/{CID}` returning `502`/`504` points at the Kubo sidecar (down, no peers, or unpinned/cold content); check swarm peers first.
 
 ### Network identity, observer, and incentives
 

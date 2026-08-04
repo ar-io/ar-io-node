@@ -634,6 +634,7 @@ as a Docker Compose sidecar via the `ipfs` profile).
 | IPFS_KUBO_URL                             | String  | http://kubo:8080    | Kubo HTTP gateway URL                                               |
 | IPFS_KUBO_REQUEST_TIMEOUT_MS              | Number  | 30000               | Connection timeout for Kubo requests (ms)                           |
 | IPFS_STREAM_STALL_TIMEOUT_MS              | Number  | 30000               | Stall timeout — max time with no data before aborting stream (ms)   |
+| IPFS_KUBO_MAX_CONCURRENT_REQUESTS         | Number  | 100                 | Max concurrent in-flight Kubo fetches; excess fail fast with 502. 0 disables |
 | IPFS_CACHE_PATH                           | String  | data/ipfs-cache     | Directory for cached IPFS content                                   |
 | IPFS_CACHE_MAX_SIZE_BYTES                 | Number  | 10737418240 (10 GB) | Maximum cache size before LRU eviction                              |
 | IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS      | Number  | 3600                | Age in seconds before cached files become eviction candidates       |

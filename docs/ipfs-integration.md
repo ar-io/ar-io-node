@@ -451,6 +451,7 @@ All environment variables are opt-in. The feature is disabled by default.
 | `IPFS_KUBO_URL` | String | `http://kubo:8080` | Base URL of the local Kubo HTTP Gateway. In Docker, this is the container name. For local development, use `http://localhost:8080`. |
 | `IPFS_KUBO_REQUEST_TIMEOUT_MS` | Number | `30000` | Connection timeout in milliseconds for Kubo requests (time to receive response headers). |
 | `IPFS_STREAM_STALL_TIMEOUT_MS` | Number | `30000` | Stall timeout in milliseconds for streaming responses from Kubo. Stream is aborted if no data is received for this duration. Actively-streaming transfers are not affected. |
+| `IPFS_KUBO_MAX_CONCURRENT_REQUESTS` | Number | `100` | Maximum concurrent in-flight fetches to Kubo. Bounds upstream/DHT amplification from cheap-to-issue requests (HEAD, tiny Range) that force a fetch before rate limiting is evaluated; requests over the cap fail fast with `502`. `0` disables the cap. |
 | `IPFS_CACHE_PATH` | String | `data/ipfs-cache` | Directory for the IPFS filesystem cache. Relative paths are resolved from the gateway's working directory. |
 | `IPFS_CACHE_MAX_SIZE_BYTES` | Number | `10737418240` (10 GB) | Maximum total size of the IPFS cache directory. LRU eviction begins when this limit is exceeded. |
 | `IPFS_CACHE_CLEANUP_THRESHOLD` | Number | `3600` | Interval in seconds between cache eviction scans. |
@@ -532,6 +533,33 @@ hits), so the name->CID binding and the served bytes are both attested.
   data handler, bypassing resolution and protocol routing. It is Arweave-only;
   a CID there will not serve. To serve IPFS at the apex, use `APEX_ARNS_NAME`
   pointing at an ANT whose `@` record targets IPFS. ❌
+
+## Parity with the Arweave Data Path
+
+The IPFS path is held to the same operational bar as the Arweave data path;
+cross-cutting behaviors are shared or matched:
+
+| Concern | Arweave path | IPFS path |
+|---------|--------------|-----------|
+| **Moderation** | `PUT /ar-io/admin/block-data` (id + hash) → `451` | Same admin API/store; `isIdBlocked(CID)` pre-serve, plus `isHashBlocked` once a CID's served-byte SHA-256 is known; CID-blocking is the deterministic pre-serve primitive |
+| **Name blocking** | blocked ArNS name → `451` before serving | same middleware gate runs before IPFS dispatch |
+| **Caching** | read-through content cache | bounded LRU IPFS cache; hash-blocked bytes are never persisted |
+| **Negative cache** | absent ids short-circuit repeat lookups | absent/unpinned CIDs short-circuit (shared `NegativeDataCache`, with `evict`/`recordSuccess` on availability) |
+| **HEAD / Range** | HEAD; `206`/`416`/`Accept-Ranges` | HEAD (no body); single-range `206` + `Content-Range` + `Accept-Ranges`; `416` on unsatisfiable |
+| **Origin isolation** | `/{txid}` → per-id sandbox subdomain | `/ipfs/{CID}` → per-CID sandbox subdomain |
+| **Rate limiting** | token bucket + IP/CIDR allowlist | separate IPFS token pools, same allowlist; Kubo concurrency cap bounds amplification |
+| **HTTPSIG** | signed trust/envelope headers + `Content-Digest` | signed `X-ArNS-*` / `X-Ipfs-Path` / `X-Ar-Io-Source` / `ETag`; `Content-Range` bound on `206`; `Content-Digest` when the hash is known |
+| **Protocol resolution** | — | `protocol` propagates across resolvers including a trusted-gateway hop (`X-ArNS-Protocol`) |
+| **Observability** | Prometheus, OTEL, structured logs | dedicated IPFS metrics + OTEL spans + structured logs |
+| **Error semantics** | `404`/`5xx` with cache-control | `404` (cache-controlled) / `451` / `413` / `416` / `502` / `504` |
+
+**Inherent differences** (by design, not gaps): IPFS content is
+content-addressed — the CID is its integrity proof and the gateway delegates
+block verification to Kubo — and pinning-dependent (it can disappear if
+unpinned), whereas Arweave data is permanent and Merkle-verified against its
+signed `data_root`. The first, uncached fetch of never-seen content also cannot
+be hash-blocked pre-serve (the SHA-256 is only known after streaming); use
+CID-level blocking for deterministic pre-serve moderation of IPFS content.
 
 ## Differences from Arweave Data Serving
 
