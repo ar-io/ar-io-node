@@ -4,13 +4,16 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import { strict as assert } from 'node:assert';
+import { Readable } from 'node:stream';
+import axios from 'axios';
 
 import { createTestLogger } from '../../test/test-logger.js';
 import {
   KuboDataSource,
   IpfsNotFoundError,
+  IpfsRangeNotSatisfiableError,
   IpfsTimeoutError,
   IpfsUnavailableError,
 } from './kubo-data-source.js';
@@ -85,6 +88,90 @@ describe('KuboDataSource', () => {
     });
   });
 
+  describe('range requests', () => {
+    const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+    let interceptorId: number;
+    afterEach(() => axios.interceptors.request.eject(interceptorId));
+
+    const readRange = (h: any): string | undefined =>
+      typeof h?.get === 'function' ? h.get('Range') : (h?.Range ?? h?.range);
+
+    it('forwards Range to Kubo and relays 206 + Content-Range', async () => {
+      let captured: any;
+      interceptorId = axios.interceptors.request.use((config) => {
+        captured = config;
+        config.adapter = () =>
+          Promise.resolve({
+            status: 206,
+            statusText: 'Partial Content',
+            headers: {
+              'content-range': 'bytes 0-99/119762',
+              'content-length': '100',
+              'content-type': 'image/jpeg',
+            },
+            config,
+            data: Readable.from([Buffer.alloc(100)]),
+          });
+        return config;
+      });
+
+      const result = await kuboDataSource.getContent({
+        cidString: CID,
+        range: 'bytes=0-99',
+      });
+
+      assert.equal(readRange(captured.headers), 'bytes=0-99');
+      assert.equal(result.statusCode, 206);
+      assert.equal(result.contentRange, 'bytes 0-99/119762');
+      assert.equal(result.size, 100);
+      result.stream.destroy();
+    });
+
+    it('maps a Kubo 416 to IpfsRangeNotSatisfiableError', async () => {
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 416,
+            statusText: 'Range Not Satisfiable',
+            headers: {},
+            config,
+            data: Readable.from([]),
+          });
+        return config;
+      });
+
+      await assert.rejects(
+        () => kuboDataSource.getContent({ cidString: CID, range: 'bytes=9e9-' }),
+        (error: any) => {
+          assert.equal(error.name, 'IpfsRangeNotSatisfiableError');
+          return true;
+        },
+      );
+    });
+
+    it('returns statusCode 200 and no Content-Range for a full response', async () => {
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {
+              'content-length': '119762',
+              'content-type': 'image/jpeg',
+            },
+            config,
+            data: Readable.from([Buffer.alloc(10)]),
+          });
+        return config;
+      });
+
+      const result = await kuboDataSource.getContent({ cidString: CID });
+      assert.equal(result.statusCode, 200);
+      assert.equal(result.contentRange, undefined);
+      result.stream.destroy();
+    });
+  });
+
   describe('error types', () => {
     it('IpfsNotFoundError has correct name', () => {
       const error = new IpfsNotFoundError('not found');
@@ -100,6 +187,11 @@ describe('KuboDataSource', () => {
     it('IpfsUnavailableError has correct name', () => {
       const error = new IpfsUnavailableError('unavailable');
       assert.equal(error.name, 'IpfsUnavailableError');
+    });
+
+    it('IpfsRangeNotSatisfiableError has correct name', () => {
+      const error = new IpfsRangeNotSatisfiableError('range');
+      assert.equal(error.name, 'IpfsRangeNotSatisfiableError');
     });
   });
 });
