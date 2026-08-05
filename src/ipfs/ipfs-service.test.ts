@@ -147,6 +147,10 @@ describe('IpfsService', () => {
       const recordMiss = (negativeCache.recordMiss as any).mock;
       assert.equal(recordMiss.calls.length, 1);
       assert.equal(recordMiss.calls[0].arguments[0], CID);
+      // A timeout MUST be recorded as a soft miss (short, self-healing TTL, no
+      // escalation) — a regression to a hard miss would restore the multi-hour
+      // blackhole of recovering content.
+      assert.deepEqual(recordMiss.calls[0].arguments[1], { softMiss: true });
     });
 
     it('does NOT negatively cache an IpfsUnavailableError (Kubo itself down)', async () => {

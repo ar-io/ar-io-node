@@ -705,6 +705,9 @@ services:
       # the .env value — see ar-io-observer src/config.ts.
       - GATEWAY_ASSESSMENT_CONCURRENCY=${GATEWAY_ASSESSMENT_CONCURRENCY:-}
       - NAME_ASSESSMENT_CONCURRENCY=${NAME_ASSESSMENT_CONCURRENCY:-}
+      # Deadline for the observer's trustless IPFS `?format=raw` fetch when
+      # assessing IPFS-target ArNS names (>= the gateway's IPFS retrieval budget).
+      - IPFS_ASSESSMENT_TIMEOUT_MS=${IPFS_ASSESSMENT_TIMEOUT_MS:-}
       # Enable the LogReportSink — logs full per-gateway assessment detail at
       # info level (off by default).
       - ENABLE_LOG_REPORT_SINK=${ENABLE_LOG_REPORT_SINK:-}
