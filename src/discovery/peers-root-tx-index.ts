@@ -11,6 +11,7 @@ import { TokenBucket } from 'limiter';
 import { DataItemRootIndex, RootTxLookupResult } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import { isValidDataId } from '../lib/validation.js';
+import { createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
@@ -118,6 +119,7 @@ export class PeersRootTxIndex implements DataItemRootIndex {
 
     this.axiosInstance = axios.create({
       timeout: requestTimeoutMs,
+      ...createAgentPair({ client: 'PeersRootTxIndex', log: this.log }),
       // Peers are configured, but their *redirect targets* are not. Following
       // one would let a peer point this request at an arbitrary host — including
       // the node's own internal endpoints — outside the configured allowlist.

@@ -10,6 +10,7 @@ import winston from 'winston';
 import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
+import { createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 import { isValidTxId } from '../lib/validation.js';
@@ -80,6 +81,7 @@ export class TurboRootTxIndex implements DataItemRootIndex {
     // Initialize axios instance with retry configuration
     this.axiosInstance = axios.create({
       timeout: requestTimeoutMs,
+      ...createAgentPair({ client: 'TurboRootTxIndex', log: this.log }),
       headers: {
         'Content-Type': 'application/json',
         'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
