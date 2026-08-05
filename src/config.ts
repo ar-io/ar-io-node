@@ -2935,8 +2935,14 @@ export const ARNS_CACHE_MAX_KEYS = +env.varOrDefault(
   '10000',
 );
 
+// Resolve ArNS names authoritatively from chain first (on-demand ANT lookups),
+// falling back to a trusted-gateway hop only if the on-demand resolver fails.
+// This makes each gateway self-sufficient rather than a client of a few trusted
+// gateways (more decentralized) and reads the source of truth (the ANT record)
+// instead of another gateway's possibly-stale cached answer. Operators can revert
+// to the previous behavior with ARNS_RESOLVER_PRIORITY_ORDER=gateway,on-demand.
 export const ARNS_RESOLVER_PRIORITY_ORDER = env
-  .varOrDefault('ARNS_RESOLVER_PRIORITY_ORDER', 'gateway,on-demand')
+  .varOrDefault('ARNS_RESOLVER_PRIORITY_ORDER', 'on-demand,gateway')
   .split(',');
 
 export const ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS = +env.varOrDefault(

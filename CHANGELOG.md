@@ -282,6 +282,19 @@ disk and take down every container on the host.
 
 ### Changed
 
+- **ArNS resolves on-demand (from chain) by default** — the default
+  `ARNS_RESOLVER_PRIORITY_ORDER` is now `on-demand,gateway` (was
+  `gateway,on-demand`). Each gateway resolves ArNS names authoritatively from the
+  ANT record itself, falling back to a trusted-gateway hop only if the on-demand
+  resolver fails. This makes gateways self-sufficient rather than clients of a few
+  trusted gateways (more decentralized) and reads the source of truth instead of
+  another gateway's possibly-stale cached answer. On-demand adds a chain read per
+  cache-miss resolution (cheap on Solana RPC; heavier as an AO CU dryrun) — set
+  `ARNS_RESOLVER_PRIORITY_ORDER=gateway,on-demand` to restore the prior behavior.
+  The bundled observer now references this node's own gateway
+  (`ARNS_ROOT_HOST`) by default, so its reference resolution is authoritative and
+  local.
+
 - **Untrusted gateways no longer receive `ar-io-*` provenance query params** —
   gateways configured with `"trusted": false` in `TRUSTED_GATEWAYS_URLS` now get
   provenance via `X-AR-IO-*` headers only. Required for CDN-fronted gateways
