@@ -130,7 +130,14 @@ export class NegativeDataCache {
     this.recentSuccesses++;
   }
 
-  recordMiss(id: string): void {
+  /**
+   * @param opts.softMiss a soft miss is a transient availability failure (e.g.
+   *   an IPFS retrieval timeout — no live provider) rather than a definitive
+   *   "absent" (a 404). Soft misses NEVER use the single-miss re-promotion fast
+   *   path, so one transient timeout can't instantly re-blackhole a recovering id;
+   *   they always require the full miss count/duration threshold.
+   */
+  recordMiss(id: string, opts?: { softMiss?: boolean }): void {
     if (!this.enabled) {
       return;
     }
@@ -152,8 +159,9 @@ export class NegativeDataCache {
     }
 
     const priorPromotions = this.promotionHistory.get(id) ?? 0;
-    const effectiveCount = priorPromotions > 0 ? 1 : this.missCountThreshold;
-    const effectiveDuration = priorPromotions > 0 ? 0 : this.missDurationMs;
+    const usePromotionFastPath = priorPromotions > 0 && opts?.softMiss !== true;
+    const effectiveCount = usePromotionFastPath ? 1 : this.missCountThreshold;
+    const effectiveDuration = usePromotionFastPath ? 0 : this.missDurationMs;
 
     if (
       entry.count >= effectiveCount &&

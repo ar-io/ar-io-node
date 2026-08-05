@@ -244,11 +244,15 @@ export class IpfsService {
           // blackhole legit-but-slow content. NOT cached: IpfsUnavailableError /
           // ECONNREFUSED — those mean Kubo itself is down, not the content, and
           // caching them would blackhole content once Kubo recovers.
-          if (
-            err instanceof IpfsNotFoundError ||
-            err instanceof IpfsTimeoutError
-          ) {
+          if (err instanceof IpfsNotFoundError) {
             this.negativeCache?.recordMiss(negKey);
+          } else if (err instanceof IpfsTimeoutError) {
+            // A timeout is an availability failure (likely no live provider),
+            // not a definitive "absent". Record it as a SOFT miss so a single
+            // cold-DHT timeout can't re-blackhole a previously-promoted CID via
+            // the negative cache's single-miss re-promotion fast path — it still
+            // needs repeated timeouts over the window to trip.
+            this.negativeCache?.recordMiss(negKey, { softMiss: true });
           }
           throw err;
         });
