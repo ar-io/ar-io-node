@@ -34,6 +34,7 @@ import {
   exampleManifestStreamV020IndexAndPathAtTheEnd,
   exampleManifestStreamV020IndexId,
   exampleManifestStreamV020IndexIdAndPath,
+  exampleManifestStreamV020FallbackFirst,
   exampleManifestStreamV020IndexPath,
   exampleManifestStreamV020PathsBeforeIndexPathFirst,
 } from '../../test/stubs.js';
@@ -461,6 +462,37 @@ describe('Manifest parsing', () => {
         );
         assert.equal(result.id, 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU');
         assert.equal(result.resolutionType, 'index');
+      });
+    });
+
+    describe('manifest v0.2.0 - fallback declared before index/paths', () => {
+      // The `fallback` event is emitted only at stream end (after all index and
+      // path events), so a fallback that appears first in the JSON must never
+      // preempt the index or a matching path.
+      it('returns the index for the root, not the fallback', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamV020FallbackFirst(),
+        );
+        assert.equal(result.id, 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU');
+        assert.equal(result.resolutionType, 'index');
+      });
+
+      it('returns a matching path, not the fallback', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamV020FallbackFirst(),
+          'css/mobile.css',
+        );
+        assert.equal(result.id, 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ');
+        assert.equal(result.resolutionType, 'path');
+      });
+
+      it('returns the fallback only when nothing else matches', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamV020FallbackFirst(),
+          'missing',
+        );
+        assert.equal(result.id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.resolutionType, 'fallback');
       });
     });
 

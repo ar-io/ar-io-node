@@ -3761,17 +3761,18 @@ export class StandaloneSqliteDatabase
       }
     };
 
-    const ret = executeWithRetry();
-
-    ret.finally(() => {
+    // Return the finally-chained promise (not the bare `ret`). `.finally()`
+    // creates a derived promise that settles the same as `ret`; returning it
+    // ensures a rejection is delivered to the caller's handler instead of
+    // leaving the derived promise orphaned and unhandled. `.finally()` passes
+    // the settlement through unchanged, so caller behavior is preserved.
+    return executeWithRetry().finally(() => {
       metrics.sqliteInFlightOps.dec({
         worker: workerName,
         role,
       });
       end();
     });
-
-    return ret;
   }
 
   queueRead(

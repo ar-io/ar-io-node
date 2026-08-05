@@ -67,6 +67,11 @@ export const exampleManifestStreamInvalidIds = (): Readable => {
     './test/mock_files/manifests/example_manifest_invalid_ids.json',
   );
 };
+export const exampleManifestStreamV020FallbackFirst = (): Readable => {
+  return fs.createReadStream(
+    './test/mock_files/manifests/example_manifest_v0.2.0_fallback_first.json',
+  );
+};
 
 export class ArweaveChainSourceStub implements ChainSource {
   private height = 10000000;
