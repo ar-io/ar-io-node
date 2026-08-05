@@ -11,6 +11,11 @@ import * as metrics from '../../metrics.js';
 import { ManifestResolution } from '../../types.js';
 import { recordManifestResolutionMetrics } from './handlers.js';
 
+/**
+ * Read a counter/gauge sample value from a prom-client metric. Counter and
+ * gauge samples have no `metricName` (only histogram bucket/sum/count samples
+ * do), so those are filtered out. Returns 0 when no sample matches `labels`.
+ */
 const counterValue = async (
   metric: { get: () => Promise<any> },
   labels: Record<string, string> = {},
@@ -24,6 +29,10 @@ const counterValue = async (
   return match?.value ?? 0;
 };
 
+/**
+ * Read a histogram's observation count (the `<name>_count` sample) for the
+ * given `labels`. Returns 0 when no matching sample exists.
+ */
 const histogramCount = async (
   metric: { get: () => Promise<any> },
   labels: Record<string, string>,
@@ -38,6 +47,10 @@ const histogramCount = async (
   return match?.value ?? 0;
 };
 
+/**
+ * Build a ManifestResolution, defaulting to a resolved root index resolution;
+ * pass `overrides` to vary individual fields (e.g. an unresolved result).
+ */
 const resolution = (
   overrides: Partial<ManifestResolution> = {},
 ): ManifestResolution => ({

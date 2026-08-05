@@ -1381,9 +1381,19 @@ export const createRawDataHandler = ({
   });
 };
 
-// Record Prometheus metrics for a manifest path resolution. `source` is
-// `index` when the persistent/cached index produced the outcome, or `data`
-// when the manifest body was parsed on demand. Exported for testing.
+/**
+ * Record Prometheus metrics for a single manifest path resolution.
+ *
+ * Exported for testing.
+ *
+ * @param source - `index` when the persistent/cached index produced the
+ *   outcome, or `data` when the manifest body was parsed on demand.
+ * @param resolution - The resolution result; `resolvedId`/`resolutionType`
+ *   drive the `resolution_type` label (`unresolved` when nothing matched).
+ * @param manifestPath - The requested sub-path (undefined/empty is the root);
+ *   an unresolved root increments `manifest_unresolved_root_total`.
+ * @param durationMs - Resolution wall-clock time, in milliseconds.
+ */
 export const recordManifestResolutionMetrics = ({
   source,
   resolution,
