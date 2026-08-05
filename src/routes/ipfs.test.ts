@@ -38,14 +38,17 @@ function makeInfiniteStream(): Readable {
 function makeApp({
   service,
   setArns = false,
+  paymentProcessor,
 }: {
   service: Partial<IpfsService>;
   setArns?: boolean;
+  paymentProcessor?: any;
 }): express.Express {
   const app = express();
   const handler = createIpfsHandler({
     log,
     ipfsService: service as IpfsService,
+    paymentProcessor,
   });
   const setCtx: express.Handler = (req, _res, next) => {
     (req as any).ipfsCid = (req.params as any).cid;
@@ -63,6 +66,18 @@ async function counterValue(counter: {
 }): Promise<number> {
   const m = await counter.get();
   return m.values.reduce((sum, v) => sum + v.value, 0);
+}
+
+async function labeledCounter(
+  counter: { get: () => Promise<{ values: { labels: any; value: number }[] }> },
+  labels: Record<string, string>,
+): Promise<number> {
+  const m = await counter.get();
+  return m.values
+    .filter((v) =>
+      Object.entries(labels).every(([k, val]) => v.labels[k] === val),
+    )
+    .reduce((sum, v) => sum + v.value, 0);
 }
 
 const waitFor = async (pred: () => boolean, ms = 2000) => {
@@ -219,6 +234,112 @@ describe('IPFS route handler', () => {
       await waitFor(() => source.destroyed);
       assert.equal(source.destroyed, true);
       await new Promise<void>((r) => server.close(() => r()));
+    });
+  });
+
+  describe('local-only serve mode', () => {
+    it('threads localOnly:true and nulls Range from the X-Ar-Io-Local-Only header, echoing the marker on a hit', async () => {
+      const getContent = mock.fn(async () => okResult());
+      const hitBefore = await labeledCounter(metrics.ipfsLocalOnlyServeTotal, {
+        result: 'hit',
+      });
+      const res = await request(makeApp({ service: { getContent } }))
+        .get(`/c/${CID}`)
+        .set('X-Ar-Io-Local-Only', 'true')
+        .set('Range', 'bytes=0-9')
+        .expect(200);
+
+      const args = getContent.mock.calls[0].arguments[0] as any;
+      assert.equal(args.localOnly, true);
+      // Range is not honored under local-only.
+      assert.equal(args.range, undefined);
+      // The marker is echoed so a peer/observer can assert the mode was honored.
+      assert.equal(res.headers['x-ar-io-local-only'], 'true');
+      // A local-only hit is metered.
+      assert.equal(
+        (await labeledCounter(metrics.ipfsLocalOnlyServeTotal, {
+          result: 'hit',
+        })) - hitBefore,
+        1,
+      );
+    });
+
+    it('accepts ?local=1 as a local-only trigger', async () => {
+      const getContent = mock.fn(async () => okResult());
+      await request(makeApp({ service: { getContent } }))
+        .get(`/c/${CID}?local=1`)
+        .expect(200);
+
+      assert.equal(
+        (getContent.mock.calls[0].arguments[0] as any).localOnly,
+        true,
+      );
+    });
+
+    it('returns 404 on a local miss with no fallback, metering the miss', async () => {
+      const service = {
+        getContent: mock.fn(async () => {
+          throw new IpfsNotFoundError('not held locally');
+        }),
+      };
+      const missBefore = await labeledCounter(metrics.ipfsLocalOnlyServeTotal, {
+        result: 'miss',
+      });
+      await request(makeApp({ service }))
+        .get(`/c/${CID}`)
+        .set('X-Ar-Io-Local-Only', 'true')
+        .expect(404);
+      assert.equal(
+        (await labeledCounter(metrics.ipfsLocalOnlyServeTotal, {
+          result: 'miss',
+        })) - missBefore,
+        1,
+      );
+    });
+
+    it('does not set localOnly or echo the marker for a normal request', async () => {
+      const getContent = mock.fn(async () => okResult());
+      const res = await request(makeApp({ service: { getContent } }))
+        .get(`/c/${CID}`)
+        .expect(200);
+
+      assert.equal(
+        (getContent.mock.calls[0].arguments[0] as any).localOnly,
+        false,
+      );
+      assert.equal(res.headers['x-ar-io-local-only'], undefined);
+    });
+
+    it('bypasses payment for local-only but still consults it for a normal request', async () => {
+      const paymentProcessor = {
+        isBrowserRequest: mock.fn(() => false),
+        calculateRequirements: mock.fn(() => ({ maxAmountRequired: '0' })),
+        extractPayment: mock.fn(() => undefined),
+      };
+
+      // Normal request: the payment processor IS consulted.
+      await request(
+        makeApp({
+          service: { getContent: mock.fn(async () => okResult()) },
+          paymentProcessor,
+        }),
+      )
+        .get(`/c/${CID}`)
+        .expect(200);
+      assert.ok(paymentProcessor.calculateRequirements.mock.calls.length >= 1);
+
+      // Local-only request: the processor is passed undefined, so it is bypassed.
+      paymentProcessor.calculateRequirements.mock.resetCalls();
+      await request(
+        makeApp({
+          service: { getContent: mock.fn(async () => okResult()) },
+          paymentProcessor,
+        }),
+      )
+        .get(`/c/${CID}`)
+        .set('X-Ar-Io-Local-Only', 'true')
+        .expect(200);
+      assert.equal(paymentProcessor.calculateRequirements.mock.calls.length, 0);
     });
   });
 });

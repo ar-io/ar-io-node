@@ -3321,6 +3321,44 @@ export const IPFS_MAX_RESPONSE_SIZE_BYTES = env.positiveIntOrDefault(
 );
 
 //
+// IPFS peer-fetch (fleet durability layer)
+//
+
+// Master switch for peer-fetch. Ships dark: when false the IPFS composite is a
+// pure passthrough to Kubo (zero behavior change). Enable only after the
+// multi-node integration test passes.
+export const IPFS_PEER_FETCH_ENABLED =
+  env.varOrDefault('IPFS_PEER_FETCH_ENABLED', 'false') === 'true';
+
+// Peers to try per CID before falling through to public IPFS.
+export const IPFS_PEER_FETCH_COUNT = env.positiveIntOrDefault(
+  'IPFS_PEER_FETCH_COUNT',
+  3,
+);
+
+// Overall deadline for the whole peer-fetch attempt (kept short — public IPFS is
+// the patient fallback).
+export const IPFS_PEER_FETCH_TIMEOUT_MS = env.positiveIntOrDefault(
+  'IPFS_PEER_FETCH_TIMEOUT_MS',
+  5000,
+);
+
+// Max CAR bytes accepted from a peer; above this, skip peers → public IPFS.
+export const IPFS_PEER_FETCH_MAX_CAR_BYTES = env.positiveIntOrDefault(
+  'IPFS_PEER_FETCH_MAX_CAR_BYTES',
+  100 * 1024 * 1024, // 100 MB
+);
+
+// Optional deterministic peer override (comma-separated gateway base URLs) for
+// private fleets and integration tests; when unset, peers come from the GAR via
+// ArIOPeerManager.
+export const IPFS_PEER_FETCH_STATIC_PEERS = env
+  .varOrDefault('IPFS_PEER_FETCH_STATIC_PEERS', '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+//
 // StandaloneSqlite worker pools
 //
 

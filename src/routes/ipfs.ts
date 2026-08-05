@@ -222,6 +222,12 @@ async function handleIpfsRequest({
       : undefined;
   // Trustless format takes precedence over Range: verifiable block/CAR retrieval.
   const format = parseIpfsFormat(req);
+  // Local-only serve mode: resolve ONLY from the local blockstore, never public
+  // IPFS. Used by peer gateways (peer-fetch recursion guard) and the observer
+  // holding-probe. `?local=1` is accepted as a testing convenience.
+  const localOnly =
+    req.headers[headerNames.ipfsLocalOnly.toLowerCase()] === 'true' ||
+    req.query.local === '1';
   const ipfsPath = path !== undefined ? `${cidString}/${path}` : cidString;
 
   parentLog.debug('Handling IPFS request', {
@@ -229,6 +235,7 @@ async function handleIpfsRequest({
     path,
     routeType,
     format,
+    localOnly,
   });
 
   try {
@@ -236,8 +243,11 @@ async function handleIpfsRequest({
       cidString,
       path,
       signal: req.signal,
-      range: format !== undefined ? undefined : rangeForKubo,
+      // Range is not honored under local-only (the offline RPC path serves the
+      // full object); none of the local-only consumers combine Range with it.
+      range: format !== undefined || localOnly ? undefined : rangeForKubo,
       format,
+      localOnly,
     });
 
     // Check payment and rate limits (x402 + rate limiting in one call).
@@ -256,7 +266,10 @@ async function handleIpfsRequest({
         clientIps: extractAllClientIPs(req).clientIps,
       },
       rateLimiter,
-      paymentProcessor,
+      // Local-only requests are intra-fleet (peers) / observation traffic and
+      // bypass payment (402); rate limiting still applies (passing undefined
+      // disables only the payment check, mirroring the no-payment config).
+      paymentProcessor: localOnly ? undefined : paymentProcessor,
     });
 
     if (!limitCheck.allowed) {
@@ -286,6 +299,12 @@ async function handleIpfsRequest({
     res.setHeader('ETag', `"${etag}"`);
     res.setHeader('X-Ipfs-Path', `/ipfs/${ipfsPath}`);
     res.setHeader(headerNames.arIoSource, 'ipfs');
+    // Echo the local-only marker on a hit so a peer/observer can assert the
+    // server honored the mode (a proxy would have 404'd on a local miss).
+    if (localOnly) {
+      res.setHeader(headerNames.ipfsLocalOnly, 'true');
+      metrics.ipfsLocalOnlyServeTotal.inc({ result: 'hit' });
+    }
     // The representation is content-negotiated: the same URL yields a UnixFS
     // proxy body, a raw block, or a CAR depending on the Accept header (see
     // parseIpfsFormat). Tell shared caches to key on Accept so they don't serve
@@ -447,6 +466,11 @@ async function handleIpfsRequest({
     }
 
     if (error instanceof IpfsNotFoundError) {
+      // A local-only miss is the "gateway does not hold this" signal (the
+      // observer's holding probe / a peer's local-only fetch).
+      if (localOnly) {
+        metrics.ipfsLocalOnlyServeTotal.inc({ result: 'miss' });
+      }
       metrics.ipfsRequestsTotal.inc({
         route_type: routeType,
         status: 'not_found',

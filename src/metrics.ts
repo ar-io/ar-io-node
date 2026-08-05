@@ -1715,6 +1715,31 @@ export const ipfsBlockedTotal = new promClient.Counter({
   help: 'IPFS requests blocked by CID blocklist',
 });
 
+// Peer-fetch (fleet durability layer) metrics.
+export const ipfsPeerFetchTotal = new promClient.Counter({
+  name: 'ipfs_peer_fetch_total',
+  help: 'IPFS peer-fetch outcomes: a CID acquired from a fleet peer, or a miss',
+  labelNames: ['result'] as const, // 'success' | 'miss'
+});
+
+export const ipfsPeerFetchPeerAttemptsTotal = new promClient.Counter({
+  name: 'ipfs_peer_fetch_peer_attempts_total',
+  help: 'Per-peer IPFS peer-fetch attempts by outcome',
+  // 'success' | 'import_verify_failed' | 'peer_error'
+  labelNames: ['result'] as const,
+});
+
+export const ipfsPeerFetchCarBytesTotal = new promClient.Counter({
+  name: 'ipfs_peer_fetch_car_bytes_total',
+  help: 'Total CAR bytes imported into local Kubo via IPFS peer-fetch',
+});
+
+export const ipfsLocalOnlyServeTotal = new promClient.Counter({
+  name: 'ipfs_local_only_serve_total',
+  help: 'Inbound local-only IPFS serve outcomes (holding probes / peer serves)',
+  labelNames: ['result'] as const, // 'hit' | 'miss'
+});
+
 //
 // Chunk metadata anchor (offset → tx + data_root via reference peer
 // `/chunk/{offset}/data` headers, cross-checked against the chain).

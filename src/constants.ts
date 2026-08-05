@@ -29,6 +29,11 @@ export const headerNames = {
   // Which retrieval source served the body (e.g. 'ipfs'). Declared centrally so
   // it's referenced consistently and is a candidate for HTTPSIG trigger headers.
   arIoSource: 'X-Ar-Io-Source',
+  // IPFS local-only serve mode: on a request, "serve only from the local
+  // blockstore, never touch public IPFS/DHT" (peer-fetch recursion guard +
+  // trustless holding probe); echoed on a local-only hit so a caller/observer
+  // can assert the server honored the mode.
+  ipfsLocalOnly: 'X-Ar-Io-Local-Only',
   origin: 'X-AR-IO-Origin',
   originNodeRelease: 'X-AR-IO-Origin-Node-Release',
   digest: 'X-AR-IO-Digest',

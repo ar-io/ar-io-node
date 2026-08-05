@@ -171,6 +171,103 @@ describe('IpfsService', () => {
     });
   });
 
+  describe('local-only (holding primitive) is isolated from the negative cache', () => {
+    it('threads localOnly to the data source and does NOT record a negative-cache miss on a local miss', async () => {
+      const getContent = mock.fn(async () => {
+        throw new IpfsNotFoundError('not held locally');
+      });
+      dataSource = { getContent } as unknown as KuboDataSource;
+
+      const service = buildService();
+      await assert.rejects(
+        () =>
+          service.getContent({
+            cidString: CID,
+            format: 'raw',
+            localOnly: true,
+          }),
+        (e: any) => e instanceof IpfsNotFoundError,
+      );
+
+      // localOnly is passed through to the source...
+      assert.equal(getContent.mock.calls[0].arguments[0].localOnly, true);
+      // ...and a local miss must NOT poison the negative cache (which would
+      // blackhole the CID for the normal peer/public fallback path).
+      assert.equal((negativeCache.recordMiss as any).mock.calls.length, 0);
+    });
+
+    it('ignores an existing negative-cache entry under local-only (reflects true current local state)', async () => {
+      negativeCache.isNegativelyCached = mock.fn(() => true) as any;
+      const getContent = mock.fn(async () => ({
+        stream: makeInfiniteStream(),
+        size: 8,
+        contentType: 'application/vnd.ipld.raw',
+        statusCode: 200,
+      }));
+      dataSource = { getContent } as unknown as KuboDataSource;
+
+      const service = buildService();
+      const result = await service.getContent({
+        cidString: CID,
+        format: 'raw',
+        localOnly: true,
+      });
+
+      // Reached the data source despite the negative-cache entry.
+      assert.equal(getContent.mock.calls.length, 1);
+      result.stream.destroy();
+    });
+
+    it('does NOT write the on-disk cache under local-only (avoids persisting the octet-stream default)', async () => {
+      const source = makeInfiniteStream();
+      dataSource = {
+        getContent: mock.fn(async () => ({
+          stream: source,
+          size: 8,
+          // no format => this would normally be tee'd to the on-disk cache
+          contentType: 'application/octet-stream',
+          statusCode: 200,
+        })),
+      } as unknown as KuboDataSource;
+
+      const service = buildService();
+      const result = await service.getContent({
+        cidString: CID,
+        localOnly: true,
+      });
+      result.stream.destroy();
+
+      assert.equal((cache.putFromFile as any).mock.calls.length, 0);
+    });
+
+    it('serves an on-disk cache hit as a local hold and leaves the negative cache untouched', async () => {
+      cache.get = mock.fn(async () => ({
+        stream: makeInfiniteStream(),
+        size: 8,
+        contentType: 'image/png',
+        digest: undefined,
+      })) as any;
+      dataSource = {
+        getContent: mock.fn(async () => {
+          throw new Error('must not reach the data source on a cache hit');
+        }),
+      } as unknown as KuboDataSource;
+
+      const service = buildService();
+      const result = await service.getContent({
+        cidString: CID,
+        localOnly: true,
+      });
+
+      assert.equal(result.cached, true);
+      assert.equal(result.contentType, 'image/png');
+      // Negative-cache health is not touched under local-only.
+      assert.equal((negativeCache.evict as any).mock.calls.length, 0);
+      assert.equal((negativeCache.recordSuccess as any).mock.calls.length, 0);
+      result.stream.destroy();
+    });
+  });
+
   describe('L1: cache hit/miss counters increment once, in the service', () => {
     it('increments the miss counter exactly once per uncached fetch', async () => {
       dataSource = {

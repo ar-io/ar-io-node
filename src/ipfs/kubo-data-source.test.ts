@@ -260,6 +260,160 @@ describe('KuboDataSource', () => {
     });
   });
 
+  describe('local-only (offline RPC)', () => {
+    const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+    let interceptorId: number;
+    afterEach(() => axios.interceptors.request.eject(interceptorId));
+
+    const offlineDs = () =>
+      new KuboDataSource({
+        log,
+        kuboUrl: 'http://localhost:8080',
+        kuboApiUrl: 'http://localhost:5001',
+        requestTimeoutMs: 5000,
+        streamStallTimeoutMs: 5000,
+      });
+
+    // Stub the Kubo RPC: capture the request config and return `status` with an
+    // optional body. `body` is a string (error JSON) or a Buffer (content).
+    const stubRpc = (
+      status: number,
+      body: string | Buffer,
+      headers: Record<string, string> = {},
+    ) => {
+      let captured: any;
+      interceptorId = axios.interceptors.request.use((config) => {
+        captured = config;
+        config.adapter = () =>
+          Promise.resolve({
+            status,
+            statusText: '',
+            headers,
+            config,
+            data: Readable.from([
+              typeof body === 'string' ? Buffer.from(body) : body,
+            ]),
+          });
+        return config;
+      });
+      return () => captured;
+    };
+
+    it('raw local-only issues block/get with offline=true', async () => {
+      const get = stubRpc(200, Buffer.alloc(8));
+      const result = await offlineDs().getContent({
+        cidString: CID,
+        format: 'raw',
+        localOnly: true,
+      });
+
+      const cfg = get();
+      assert.equal(cfg.method, 'post');
+      assert.match(cfg.url, /\/api\/v0\/block\/get$/);
+      assert.equal(cfg.params.arg, CID);
+      assert.equal(cfg.params.offline, true);
+      assert.equal(result.statusCode, 200);
+      assert.equal(result.contentType, 'application/vnd.ipld.raw');
+      result.stream.destroy();
+    });
+
+    it('car local-only issues dag/export with offline=true', async () => {
+      const get = stubRpc(200, Buffer.alloc(8));
+      const result = await offlineDs().getContent({
+        cidString: CID,
+        format: 'car',
+        localOnly: true,
+      });
+
+      const cfg = get();
+      assert.match(cfg.url, /\/api\/v0\/dag\/export$/);
+      assert.equal(cfg.params.offline, true);
+      assert.equal(result.contentType, 'application/vnd.ipld.car');
+      result.stream.destroy();
+    });
+
+    it('no-format local-only issues cat with offline=true and encodes the path into arg', async () => {
+      const get = stubRpc(200, Buffer.alloc(8));
+      const result = await offlineDs().getContent({
+        cidString: CID,
+        path: 'images/logo one.png',
+        localOnly: true,
+      });
+
+      const cfg = get();
+      assert.match(cfg.url, /\/api\/v0\/cat$/);
+      assert.equal(cfg.params.arg, `${CID}/images/logo%20one.png`);
+      assert.equal(cfg.params.offline, true);
+      assert.equal(result.contentType, 'application/octet-stream');
+      result.stream.destroy();
+    });
+
+    it('maps an offline local miss (500 + "not found locally") to IpfsNotFoundError', async () => {
+      stubRpc(
+        500,
+        JSON.stringify({
+          Message: `block was not found locally (offline): ipld: could not find ${CID}`,
+          Code: 0,
+          Type: 'error',
+        }),
+      );
+
+      await assert.rejects(
+        () =>
+          offlineDs().getContent({
+            cidString: CID,
+            format: 'raw',
+            localOnly: true,
+          }),
+        (error: any) => {
+          assert.equal(error.name, 'IpfsNotFoundError');
+          return true;
+        },
+      );
+    });
+
+    it('maps a non-miss 500 to IpfsUnavailableError (a real Kubo fault is not masked as a benign miss)', async () => {
+      stubRpc(
+        500,
+        JSON.stringify({
+          Message: 'datastore io error',
+          Code: 0,
+          Type: 'error',
+        }),
+      );
+
+      await assert.rejects(
+        () =>
+          offlineDs().getContent({
+            cidString: CID,
+            format: 'raw',
+            localOnly: true,
+          }),
+        (error: any) => {
+          assert.equal(error.name, 'IpfsUnavailableError');
+          return true;
+        },
+      );
+    });
+
+    it('throws IpfsUnavailableError when the RPC API URL is not configured', async () => {
+      const ds = new KuboDataSource({
+        log,
+        kuboUrl: 'http://localhost:8080',
+        requestTimeoutMs: 5000,
+        streamStallTimeoutMs: 5000,
+      });
+
+      await assert.rejects(
+        () => ds.getContent({ cidString: CID, format: 'raw', localOnly: true }),
+        (error: any) => {
+          assert.equal(error.name, 'IpfsUnavailableError');
+          return true;
+        },
+      );
+    });
+  });
+
   describe('error types', () => {
     it('IpfsNotFoundError has correct name', () => {
       const error = new IpfsNotFoundError('not found');
