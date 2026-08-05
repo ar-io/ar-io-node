@@ -163,3 +163,153 @@ Who does B ask, and how does it find who *holds* `X`?
   local-only + CID verification (+ leaf sampling); OIP adds a reward category for
   holding named IPFS. This is the contract-level piece.
 - **2 — CAR → Arweave** (David): true permanence, composed on top of the above.
+
+---
+
+## The holistic lifecycle (gateway + observer + incentive as one system)
+
+The three systems compose into a single flywheel for a named IPFS name `foo → CID X`:
+
+```
+ register        replicate                serve                 verify holding            reward
+ ────────        ─────────                ─────                 ──────────────            ──────
+ ANT record      gateways that opt to     any gateway serves    observer probes each      OIP distributes to
+ foo → X,        hold X pull it from      X: local pin → peer    gateway local-only,       gateways proven to be
+ protocol=ipfs   peers (CAR+verify) and   gateways (verified)    verifies bytes vs X,      HOLDING named CIDs
+ (on-chain)      pin it                   → public IPFS          samples leaves            (new reward category)
+      │               │                        │                       │                        │
+      └── chain is ───┘                        └── trustless ──────────┘                        │
+          the binding                              (CID = proof)                                 │
+                                                                                                 ▼
+                                          more gateways hold X  ◄─── incentive pulls replication ┘
+```
+
+Two properties make it self-reinforcing:
+
+1. **Everything is content-addressed, so nothing needs trust.** The binding (`foo→X`)
+   is chain-authoritative (on-demand resolution). The bytes are CID-verified
+   (Kubo import, observer probe). No gateway — serving, peering, or being observed —
+   is ever a trust root.
+2. **The reward pulls replication.** Rewarding *holding* named content makes gateways
+   want to pin it; peer-fetch makes acquiring it cheap and verified; the observer
+   makes holding measurable. Durability rises with participation, without anyone
+   uploading to Arweave.
+
+## Incentive integration (OIP) in detail
+
+**The whole durability layer can ship with ZERO smart-contract changes.** Gateways
+are *already* incentivized to serve whatever ArNS points to: the observer assesses
+prescribed + chosen names and rewards passing gateways through the existing
+distribution, and that machinery is content-agnostic (the chain only ever gets a
+per-gateway pass/fail bitmap). So:
+
+- **Peer-fetch (1.5a)** is a gateway-side change to *how* content is acquired —
+  invisible to the contract.
+- **Rewarding holding** folds into the EXISTING name assessment: make the observer
+  probe IPFS names **local-only**, so a gateway passes a name only if it actually
+  *holds* the content. Holding is then rewarded exactly like passing any name — no
+  new on-chain field, no `ario-gar` change.
+
+The one subtlety is a **policy choice, not a contract choice**: today's assessment
+rewards *serving* (a proxy passes while public IPFS still has the content), whereas
+local-only probing rewards *holding* (a proxy returns 404 and fails). Moving from
+serving→holding is the durability lever, and it should be **ramped** like the
+IPFS-capability ramp (neutral for not-yet-holding gateways during rollout) so honest
+gateways aren't abruptly failed. Both modes are zero-contract.
+
+The **only** thing that would touch the contract is rewarding holding *beyond the
+sampled names* — a dedicated holding weight (option (b) below). That's optional and
+future; the primary path needs no contract change.
+
+**What the observer measures (trustless, un-gameable):**
+- **Holds-it:** `GET {name}.{gw}/?format=raw` (or `?format=car`) with
+  `X-Ar-Io-Local-Only: true` → 200 + bytes that verify against `X` ⇒ the gateway
+  holds `X` locally (it served without touching public IPFS). A proxy returns 404.
+- **Holds the whole thing (not just the root):** for a UnixFS DAG, sample K random
+  **leaf** CIDs from the DAG (reachable via `?format=car` / the root's links) and
+  local-only-verify each — the IPFS analog of the Arweave chunk/offset proof
+  (Phase 3). This stops "pin the tiny root, collect the reward."
+
+**What reaches chain (minimal):** the existing pass/fail bitmap is content-agnostic
+and already covers *serving*. A **holding** reward needs one new signal — e.g. a
+per-gateway "held-set" measure the contract can reward. Design options, cheapest
+first:
+- **(a) Fold into the name score.** If "holding a prescribed/chosen IPFS name" is
+  simply part of passing that name, no new on-chain field is needed — holding is
+  rewarded through the existing distribution (like any name). Simplest; ties holding
+  to the sampled names only.
+- **(b) A dedicated holding weight.** A new per-gateway scalar (count/bytes of named
+  CIDs proven held) added to the weight computation — a real `ario-gar` change and
+  an `Epoch`/report-shape addition. More expressive (rewards holding beyond the
+  sampled set) but heavier; a governance decision.
+
+Recommend starting with **(a)** — it needs no contract change and still creates the
+pull toward replication, then graduating to **(b)** if the network wants to reward
+holding at scale beyond the sampled names.
+
+**Gaming resistance:** holding is proven by CID verification (can't fake bytes);
+leaf sampling stops root-only pinning; local-only stops "front someone else's copy"
+(a proxy fails the local-only probe); and the reward is bounded by the same
+prescribed/chosen sampling and >½-observer majority the rest of the protocol uses.
+
+## Content routing in depth (the real scaling question)
+
+Blind-asking a GAR subset is fine at small fleet size (bounded by the local-only
+fast-404), but doesn't scale. The who-holds-what problem has three tractable answers,
+usable in combination:
+
+1. **Reuse the IPFS DHT, filtered.** Gateways that pin already advertise as
+   providers. A gateway resolves providers for `X` and prefers those whose peer-ids
+   map to AR.IO gateways (GAR-registered), then fetches via the trustless HTTP
+   endpoint (faster/verified) rather than Bitswap. Zero new infra; leans on IPFS's
+   own routing.
+2. **Announce named holdings.** Because holdings are *named* (ArNS), the set is
+   small and enumerable. A gateway can publish "I hold {CIDs} for {names}" — via a
+   lightweight signed announce, or simply exposed at a well-known endpoint
+   (`/ar-io/ipfs/held`) that peers/observers scrape. The observer already visits
+   every gateway; it can build a fleet-wide holdings map as a byproduct of
+   assessment and expose it as a routing hint.
+3. **Deterministic assignment (later).** Rendezvous-hash named CIDs to a subset of
+   gateways so replication is planned, not incidental — the network can guarantee N
+   replicas per name. This is the strongest durability guarantee and the most work;
+   it composes with the incentive (reward the assigned holders).
+
+Start with (1)+(2): DHT-filtered discovery plus an observer-built holdings hint.
+
+## Concrete 1.5a implementation plan (gateway, no contract change)
+
+The minimal shippable slice — peer-fetch as a verified fallback source:
+
+**New / changed components (ar-io-node):**
+- **Local-only serve mode.** `routes/ipfs.ts`: honor `X-Ar-Io-Local-Only: true` (or
+  `?local=1`) — resolve/serve **only** from the local cache + Kubo pin, never from
+  public IPFS. Return 404 fast on a miss. This is the load-bearing primitive (peers
+  and the observer both use it).
+- **`IpfsPeerDataSource`** (new, mirrors `KuboDataSource`'s interface): given a CID +
+  a peer list, `GET https://{peer}/ipfs/{CID}?format=car` local-only from a bounded,
+  short-deadline subset; on the first 200, `POST {IPFS_KUBO_API_URL}/api/v0/dag/import`
+  (same RPC path as `pin/add`) — **Kubo verifies blocks against the CID on import**;
+  reject+next-peer on import/verify failure. Returns the now-local content.
+- **IPFS composite source.** Wrap `[localCache, IpfsPeerDataSource, KuboDataSource]`
+  in a sequential source (mirroring the Arweave `SequentialDataSource`); `IpfsService`
+  consumes the composite instead of `KuboDataSource` directly.
+- **Peer set:** the GAR (already read by the node) → a bounded random/weighted subset;
+  DHT-filtered discovery is a follow-up (routing §1).
+
+**Config (new):**
+- `IPFS_PEER_FETCH_ENABLED` (default false initially, then true once proven).
+- `IPFS_PEER_FETCH_COUNT` (peers to try, e.g. 3), `IPFS_PEER_FETCH_TIMEOUT_MS`
+  (short), `IPFS_PEER_FETCH_MAX_CAR_BYTES` (cap; fall back to public IPFS above it).
+
+**Safety (reuses hardening we already did):** the peer fetch is bounded (deadline +
+size cap), never recurses (local-only), verified (Kubo import), and rate-limited on
+the serve side; a failing/lying peer is skipped, not trusted. Content-blocking/
+moderation applies to imported content exactly as to Kubo-fetched content.
+
+**Testable trustlessly end-to-end:** two gateways, one holding CID X; the other
+peer-fetches X, imports+verifies, serves it — with X's public-IPFS providers offline,
+proving fleet-durability independent of public IPFS. Byte-tamper a peer's CAR → import
+fails → next peer.
+
+1.5a ships value on its own (fleet durability + faster serving) with **no contract
+change**; 1.5b (routing) and 1.5c (incentive) build on the same local-only primitive.
