@@ -3269,6 +3269,15 @@ export const IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES = env.positiveIntOrDefault(
   262144,
 );
 
+// Short, non-escalating negative-cache TTL for IPFS retrieval TIMEOUTS (soft
+// misses). Keeps a repeatedly-timing-out CID from re-hammering Kubo without
+// blackholing recovering-but-slow content for hours — it self-heals after this
+// window. Distinct from the (long, escalating) TTL used for definitive 404s.
+export const IPFS_TIMEOUT_NEGATIVE_CACHE_TTL_MS = env.positiveIntOrDefault(
+  'IPFS_TIMEOUT_NEGATIVE_CACHE_TTL_MS',
+  60000,
+);
+
 export const IPFS_CACHE_PATH = env.varOrDefault(
   'IPFS_CACHE_PATH',
   'data/ipfs-cache',

@@ -24,6 +24,7 @@ export class NegativeDataCache {
   private missDurationMs: number;
   private baseTtlMs: number;
   private maxTtlMs: number;
+  private softMissTtlMs: number;
   private now: () => number;
   private recentSuccesses: number = 0;
   private recentFailures: number = 0;
@@ -45,6 +46,7 @@ export class NegativeDataCache {
     missDurationMs,
     missTrackerTtlMs,
     maxTtlMs,
+    softMissTtlMs,
     promotionHistoryTtlMs,
     healthWindowMs = 60_000,
     unhealthyThreshold = 0.8,
@@ -60,6 +62,7 @@ export class NegativeDataCache {
     missDurationMs: number;
     missTrackerTtlMs?: number;
     maxTtlMs?: number;
+    softMissTtlMs?: number;
     promotionHistoryTtlMs?: number;
     healthWindowMs?: number;
     unhealthyThreshold?: number;
@@ -74,6 +77,10 @@ export class NegativeDataCache {
     this.missDurationMs = missDurationMs;
     this.baseTtlMs = ttlMs;
     this.maxTtlMs = maxTtlMs ?? ttlMs;
+    // Soft (timeout-origin) blackholes use a short, non-escalating TTL so a
+    // recovering-but-slow id self-heals quickly instead of being blackholed for
+    // hours. Defaults to ttlMs so callers that never pass softMiss are unaffected.
+    this.softMissTtlMs = softMissTtlMs ?? ttlMs;
     this.now = now;
     this.healthWindowMs = healthWindowMs;
     this.unhealthyThreshold = unhealthyThreshold;
@@ -173,15 +180,24 @@ export class NegativeDataCache {
         return;
       }
 
-      const ttl = Math.min(
-        this.baseTtlMs * 2 ** Math.min(priorPromotions, 30),
-        this.maxTtlMs,
-      );
+      // A soft (timeout) promotion gets a short, fixed TTL and does NOT build the
+      // escalation/re-promotion history — so a transient-but-recovering id can't
+      // be blackholed for hours (or escalate toward maxTtlMs). A hard (definitive
+      // 404) promotion keeps the exponential-backoff TTL and history.
+      const soft = opts?.softMiss === true;
+      const ttl = soft
+        ? this.softMissTtlMs
+        : Math.min(
+            this.baseTtlMs * 2 ** Math.min(priorPromotions, 30),
+            this.maxTtlMs,
+          );
       this.negativeCache.set(id, true, { ttl });
-      this.promotionHistory.set(id, priorPromotions + 1);
+      if (!soft) {
+        this.promotionHistory.set(id, priorPromotions + 1);
+      }
       this.missTracker.delete(id);
       metrics.negativeCachePromotionsTotal.inc();
-      if (priorPromotions > 0) {
+      if (!soft && priorPromotions > 0) {
         metrics.negativeCacheRePromotionsTotal.inc();
       }
       this.log.info('ID promoted to negative cache', {

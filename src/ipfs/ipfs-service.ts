@@ -239,11 +239,13 @@ export class IpfsService {
           // out). Without caching the timeout, every repeat request for a dead
           // CID re-runs the full IPFS_KUBO_REQUEST_TIMEOUT_MS search and holds a
           // concurrency slot, so a single unresolvable CID under load can pin all
-          // slots and 502 healthy traffic. The negative cache only trips after
-          // repeated misses over a window, so transient cold-DHT slowness won't
-          // blackhole legit-but-slow content. NOT cached: IpfsUnavailableError /
-          // ECONNREFUSED — those mean Kubo itself is down, not the content, and
-          // caching them would blackhole content once Kubo recovers.
+          // slots and 502 healthy traffic. Timeouts trip only after repeated
+          // misses over the window AND are blackholed for just a short,
+          // non-escalating window (IPFS_TIMEOUT_NEGATIVE_CACHE_TTL_MS, ~60s), so
+          // recovering-but-slow content self-heals quickly rather than being
+          // cached-out for hours. NOT cached: IpfsUnavailableError / ECONNREFUSED
+          // — those mean Kubo itself is down, not the content, and caching them
+          // would blackhole content once Kubo recovers.
           if (err instanceof IpfsNotFoundError) {
             this.negativeCache?.recordMiss(negKey);
           } else if (err instanceof IpfsTimeoutError) {

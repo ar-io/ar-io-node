@@ -1922,6 +1922,9 @@ if (config.IPFS_ENABLED) {
     missDurationMs: config.NEGATIVE_CACHE_MISS_THRESHOLD_MS,
     missTrackerTtlMs: config.NEGATIVE_CACHE_MISS_TRACKER_TTL_MS,
     maxTtlMs: config.NEGATIVE_CACHE_MAX_TTL_MS,
+    // IPFS retrieval timeouts are soft misses: short, non-escalating blackhole so
+    // recovering-but-slow content self-heals instead of being cached-out for hours.
+    softMissTtlMs: config.IPFS_TIMEOUT_NEGATIVE_CACHE_TTL_MS,
     promotionHistoryTtlMs: config.NEGATIVE_CACHE_PROMOTION_HISTORY_TTL_MS,
     healthWindowMs: config.NEGATIVE_CACHE_HEALTH_WINDOW_MS,
     unhealthyThreshold: config.NEGATIVE_CACHE_UNHEALTHY_THRESHOLD,
