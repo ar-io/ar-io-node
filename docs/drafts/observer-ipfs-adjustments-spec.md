@@ -19,6 +19,66 @@ Verified sources:
 
 ---
 
+## 0. As shipped — final design (supersedes the phased proposal below)
+
+The plan below was implemented in `ar-io-observer` PR #112 and then hardened
+through **five multi-agent adversarial-review passes**. The shipped design differs
+from the original proposal in a few important ways; this section is the source of
+truth, and the phased sections that follow are kept for the rationale.
+
+**Where it runs.** The logic lives in a shared `assessIpfsNameTrustless()` in
+`observer.ts`, called by BOTH the one-shot `Observer` and the **live**
+`ContinuousObserver → GatewayAssessor` path (the original proposal targeted only
+`Observer`, which the running service does not use). Both paths route through the
+same function so scoring cannot diverge. `REPORT_FORMAT_VERSION` is bumped 2 → 3
+(adds `protocol` + a tri-state `outcome`); on-chain submission is unchanged.
+
+**Routing (which names get the IPFS path).** A name is assessed via the trustless
+IPFS path iff its (reference-resolved) `resolvedId` is a **valid CID** —
+`isIpfsAssessable()`. We do **not** route on the `x-arns-protocol` header: it is
+not part of reference consensus and older gateways may omit it. The CID form is the
+ground truth (Arweave names resolve to a 43-char tx id, not a CID), and it also
+blocks a poisoned reference from flipping an Arweave name onto the IPFS path.
+
+**Scoring (per IPFS name).** The observer fetches the target gateway's
+`?format=raw` block and verifies it against the reference-bound CID:
+- **PASS** — served 200 `application/vnd.ipld.raw` bytes that hash to the CID.
+- **FAIL** — served 200 bytes that do NOT hash to the CID (a *proven-wrong*
+  answer). The fail/neutral decision never trusts the gateway's own
+  `x-arns-resolved-id` — a gateway controls both the bytes and that header, so a
+  self-minted CID proves nothing. (Consistent with the Arweave path, which also
+  fails on a reference `resolvedId` mismatch.)
+- **NEUTRAL** (excluded from the pass/fail denominator) — anything that is not a
+  clean pass or a proven-wrong answer: not served / non-200 / timeout / non-raw
+  `Content-Type` / empty body / a multihash we can't verify (non-sha2-256). So a
+  gateway is **never failed for availability**, and participating in IPFS is never
+  riskier than abstaining. **Capability is judged behaviorally** — a non-IPFS
+  gateway 404s its Arweave path → neutral. (This replaces the original
+  self-reported `/ar-io/info` `ipfs.enabled` capability gate, which a malicious
+  operator could flip to exempt itself.)
+
+**Neutral is excluded everywhere** — `namesPass`, the ArNS metrics, the
+report-selection failure rate, and the `GatewayAssessor` pass rate — via a shared
+`arnsNameOutcome()`, so a neutral name can never move a gateway's on-chain result.
+
+**Timeouts.** The raw-block fetch has an explicit `IPFS_ASSESSMENT_TIMEOUT_MS`
+(default 35s, ≥ the gateway's 30s IPFS budget) with the socket-idle timeout
+overridden, and never hangs (all errors resolve as not-served → neutral).
+
+**Recommended reference topology (see the on-demand default, ar-io-node PR #836).**
+Point the observer's reference at **its own co-located gateway** (`ARNS_ROOT_HOST`)
+with that gateway resolving ArNS **on-demand** (from chain). Then the name→CID
+binding is authoritative (chain-derived via your own gateway's resolver — no
+re-implementation, no external-gateway or header trust) and more decentralized;
+the network still aggregates observers by majority.
+
+**Still deferred (Phase 3).** A dag-pb/UnixFS `PASS` proves possession of the DAG
+**root block** only; leaf/assembled-path verification is the IPFS block-sampling
+analog of the Arweave chunk/offset proof and is not built. Contract-level items
+(stratified prescription, pinning incentives) remain out of scope (§7).
+
+---
+
 ## 1. Why any change is needed (the safety problem)
 
 IPFS-target ArNS names (`AntRecord.target_protocol = 1`) are **already eligible**

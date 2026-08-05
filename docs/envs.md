@@ -640,6 +640,7 @@ as a Docker Compose sidecar via the `ipfs` profile).
 | IPFS_PIN_ARNS_CONTENT                     | Boolean | false               | Pin the CIDs that ArNS names resolve to, so named content stays retrievable (read-only availability) |
 | IPFS_PIN_MAX                              | Number  | 10000               | Max distinct CIDs the pinner holds this process; oldest are unpinned (FIFO) beyond this |
 | IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES        | Number  | 262144              | Rate-limit reserve for a response of unknown size (CAR / chunked); actual bytes are still bounded by IPFS_MAX_RESPONSE_SIZE_BYTES |
+| IPFS_TIMEOUT_NEGATIVE_CACHE_TTL_MS        | Number  | 60000               | Short, non-escalating negative-cache TTL for IPFS retrieval TIMEOUTS (a CID with no live provider). Repeatedly-timing-out CIDs short-circuit for this window instead of re-searching Kubo, then self-heal — distinct from the long, escalating TTL used for definitive 404s |
 | IPFS_CACHE_PATH                           | String  | data/ipfs-cache     | Directory for cached IPFS content                                   |
 | IPFS_CACHE_MAX_SIZE_BYTES                 | Number  | 10737418240 (10 GB) | Maximum cache size before LRU eviction                              |
 | IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS      | Number  | 3600                | Age in seconds before cached files become eviction candidates       |
