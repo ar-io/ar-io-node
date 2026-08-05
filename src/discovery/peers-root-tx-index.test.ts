@@ -47,26 +47,18 @@ function notFound() {
   return Promise.reject(error);
 }
 
-// `limiter`'s TokenBucket starts empty and only accrues tokens over time, so
-// tests must prime it or every request is skipped as rate-limited.
-function primeLimiters(index: PeersRootTxIndex, tokens?: number) {
-  for (const [, limiter] of (index as any)['limiters']) {
-    limiter.content = tokens ?? limiter.bucketSize;
-  }
-  return index;
-}
-
+// No limiter priming here on purpose: the index seeds each TokenBucket at
+// burst capacity on construction, so a freshly built index can spend
+// immediately. If that regresses, every request-making test below fails.
 function createIndex(overrides: Record<string, any> = {}) {
-  return primeLimiters(
-    new PeersRootTxIndex({
-      log,
-      peerUrls: { 'http://peer-a:4000': 1 },
-      rateLimitBurstSize: 1000,
-      rateLimitTokensPerInterval: 1000,
-      rateLimitInterval: 'second' as const,
-      ...overrides,
-    }),
-  );
+  return new PeersRootTxIndex({
+    log,
+    peerUrls: { 'http://peer-a:4000': 1 },
+    rateLimitBurstSize: 1000,
+    rateLimitTokensPerInterval: 1000,
+    rateLimitInterval: 'second' as const,
+    ...overrides,
+  });
 }
 
 describe('PeersRootTxIndex', () => {
@@ -85,6 +77,31 @@ describe('PeersRootTxIndex', () => {
         () => createIndex({ peerUrls: {} }),
         /At least one peer URL must be provided/,
       );
+    });
+
+    it('seeds each rate limiter at burst capacity so boot-time lookups go out', () => {
+      const index = createIndex({
+        peerUrls: { 'http://peer-a:4000': 1, 'http://peer-b:4000': 2 },
+        rateLimitBurstSize: 7,
+      });
+
+      const limiters = [...(index as any)['limiters'].values()];
+      assert.equal(limiters.length, 2);
+      for (const limiter of limiters) {
+        assert.equal(limiter.content, 7);
+      }
+    });
+
+    it('refuses to follow peer-supplied redirects', () => {
+      const created: any[] = [];
+      mock.method(axios, 'create', (cfg: any) => {
+        created.push(cfg);
+        return createMockAxiosInstance(Promise.resolve({ data: okBody() }));
+      });
+
+      createIndex();
+
+      assert.equal(created[0].maxRedirects, 0);
     });
   });
 
@@ -247,14 +264,12 @@ describe('PeersRootTxIndex', () => {
       );
       mock.method(axios, 'create', () => mockAxios);
 
-      const index = primeLimiters(
-        createIndex({
-          rateLimitBurstSize: 1,
-          rateLimitTokensPerInterval: 1,
-          rateLimitInterval: 'hour' as const,
-        }),
-        1,
-      );
+      // Seeded at burst capacity (1), so exactly one request is affordable.
+      const index = createIndex({
+        rateLimitBurstSize: 1,
+        rateLimitTokensPerInterval: 1,
+        rateLimitInterval: 'hour' as const,
+      });
 
       await index.getRootTx(DATA_ITEM_ID);
       const second = await index.getRootTx(DATA_ITEM_ID);

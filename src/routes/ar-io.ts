@@ -78,6 +78,11 @@ arIoRouter.use(
           return '/ar-io/resolver/:name';
         if (path.match(/^\/ar-io\/admin\/bundle-status\/[a-zA-Z0-9_-]{43}$/))
           return '/ar-io/admin/bundle-status/:id';
+        // Matched on prefix rather than a well-formed-ID regex: this route is
+        // public and answers 400 on a malformed ID, so anchoring to
+        // `[a-zA-Z0-9_-]{43}` would let arbitrary junk paths fall through to
+        // the catch-all below and accumulate as distinct label sets.
+        if (path.startsWith('/ar-io/offsets/')) return '/ar-io/offsets/:id';
         if (path.match(/^\/ar-io\/admin\/export-parquet\/status\/[^/]+$/))
           return '/ar-io/admin/export-parquet/status/:jobId';
         // Any new admin route with a path parameter MUST be normalized

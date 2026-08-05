@@ -93,14 +93,18 @@ export class PeersRootTxIndex implements DataItemRootIndex {
     // Initialize per-peer rate limiters
     this.limiters = new Map();
     for (const url of Object.keys(peerUrls)) {
-      this.limiters.set(
-        url,
-        new TokenBucket({
-          bucketSize: rateLimitBurstSize,
-          tokensPerInterval: rateLimitTokensPerInterval,
-          interval: rateLimitInterval,
-        }),
-      );
+      const limiter = new TokenBucket({
+        bucketSize: rateLimitBurstSize,
+        tokensPerInterval: rateLimitTokensPerInterval,
+        interval: rateLimitInterval,
+      });
+      // TokenBucket constructs empty and only accrues tokens over time, so a
+      // freshly started node would silently skip peer lookups until the bucket
+      // drips full enough to spend. Seed at burst capacity: the limiter exists
+      // to bound sustained load on a peer, not to throttle the first request
+      // after boot.
+      limiter.content = rateLimitBurstSize;
+      this.limiters.set(url, limiter);
     }
 
     // lower number = higher priority
@@ -114,6 +118,11 @@ export class PeersRootTxIndex implements DataItemRootIndex {
 
     this.axiosInstance = axios.create({
       timeout: requestTimeoutMs,
+      // Peers are configured, but their *redirect targets* are not. Following
+      // one would let a peer point this request at an arbitrary host — including
+      // the node's own internal endpoints — outside the configured allowlist.
+      // The offsets route never redirects, so refusing costs nothing.
+      maxRedirects: 0,
       headers: {
         'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
       },
