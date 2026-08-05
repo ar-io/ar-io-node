@@ -137,3 +137,37 @@ reference gateways — remains a separate (ar-io-observer) track.
 > already content-agnostic). That doc makes named IPFS a first-class, trustlessly
 > verified dimension, which is exactly David's "verify, don't trust" posture on the
 > serving/observation axis, achieved now without his storage-dependent Stages 0–2.
+
+## Update 2 — the §5 win is now IMPLEMENTED (2026-08-05)
+
+Two of the three original call-outs are resolved; the third is out of scope by
+design (it's the uploading axis):
+
+- **Call-out #1 (trustless gateway) — DONE.** `?format=raw|car` returns
+  client-verifiable bytes marked `X-Ar-Io-Trustless: true`; the UnixFS proxy path
+  is honestly marked `X-Ar-Io-Trustless: false`. This is David's Trustless-Gateway
+  shape and his §3 "don't imply verified."
+- **§5 observer verify-don't-trust — DONE (ar-io-observer PR #112).** The observer
+  no longer trusts a reference gateway's bytes for IPFS names: it fetches
+  `?format=raw` and verifies the block against the CID's multihash. FAIL only on a
+  *proven-wrong* answer; availability is neutral; the gateway's self-reported
+  `resolvedId` is never trusted. On the IPFS axis this is now **more trustless than
+  the Arweave name check** (which still uses reference-digest comparison).
+- **"The gateway is not a trust root" for RESOLUTION — DONE (ar-io-node PR #836).**
+  The default resolver is now `on-demand,gateway`: read the ANT binding from
+  **chain** first, hop to a trusted gateway only as a fallback. The bundled
+  observer references its own on-demand gateway, so the name→CID binding is
+  chain-derived, not oracle-trusted.
+
+- **Call-out #2/#3 (CAR→Arweave storage, composite-source, chain-anchored proof
+  headers) — out of scope by design.** These are all the *uploading/storage* axis
+  (David's Stages 0–2). Read-only IPFS deliberately excludes them; the parallel
+  Kubo stack is the *correct* architecture when there is no Arweave offset to index.
+
+**Net:** on every axis David cares about that does not involve uploading — trust
+model, client/observer verification, protocol-independent addressing, service
+boundary, decentralized (chain-authoritative) resolution — the shipped work is now
+strongly aligned, and closes the two gaps he would most have flagged. The residual
+divergences are entirely the storage/upload axis (deferred phase 2) plus the
+inherent read-only durability trade-off (public-IPFS content can be GC'd), which is
+documented and is the substrate for a future pinning/persistence incentive.
