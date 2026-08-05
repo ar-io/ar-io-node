@@ -68,6 +68,18 @@ async function counterValue(counter: {
   return m.values.reduce((sum, v) => sum + v.value, 0);
 }
 
+async function labeledCounter(
+  counter: { get: () => Promise<{ values: { labels: any; value: number }[] }> },
+  labels: Record<string, string>,
+): Promise<number> {
+  const m = await counter.get();
+  return m.values
+    .filter((v) =>
+      Object.entries(labels).every(([k, val]) => v.labels[k] === val),
+    )
+    .reduce((sum, v) => sum + v.value, 0);
+}
+
 const waitFor = async (pred: () => boolean, ms = 2000) => {
   const start = Date.now();
   while (!pred() && Date.now() - start < ms) {
@@ -228,6 +240,9 @@ describe('IPFS route handler', () => {
   describe('local-only serve mode', () => {
     it('threads localOnly:true and nulls Range from the X-Ar-Io-Local-Only header, echoing the marker on a hit', async () => {
       const getContent = mock.fn(async () => okResult());
+      const hitBefore = await labeledCounter(metrics.ipfsLocalOnlyServeTotal, {
+        result: 'hit',
+      });
       const res = await request(makeApp({ service: { getContent } }))
         .get(`/c/${CID}`)
         .set('X-Ar-Io-Local-Only', 'true')
@@ -240,6 +255,13 @@ describe('IPFS route handler', () => {
       assert.equal(args.range, undefined);
       // The marker is echoed so a peer/observer can assert the mode was honored.
       assert.equal(res.headers['x-ar-io-local-only'], 'true');
+      // A local-only hit is metered.
+      assert.equal(
+        (await labeledCounter(metrics.ipfsLocalOnlyServeTotal, {
+          result: 'hit',
+        })) - hitBefore,
+        1,
+      );
     });
 
     it('accepts ?local=1 as a local-only trigger', async () => {
@@ -254,16 +276,25 @@ describe('IPFS route handler', () => {
       );
     });
 
-    it('returns 404 on a local miss with no fallback', async () => {
+    it('returns 404 on a local miss with no fallback, metering the miss', async () => {
       const service = {
         getContent: mock.fn(async () => {
           throw new IpfsNotFoundError('not held locally');
         }),
       };
+      const missBefore = await labeledCounter(metrics.ipfsLocalOnlyServeTotal, {
+        result: 'miss',
+      });
       await request(makeApp({ service }))
         .get(`/c/${CID}`)
         .set('X-Ar-Io-Local-Only', 'true')
         .expect(404);
+      assert.equal(
+        (await labeledCounter(metrics.ipfsLocalOnlyServeTotal, {
+          result: 'miss',
+        })) - missBefore,
+        1,
+      );
     });
 
     it('does not set localOnly or echo the marker for a normal request', async () => {

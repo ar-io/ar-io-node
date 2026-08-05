@@ -16,8 +16,22 @@ import {
 } from './ipfs-peer-data-source.js';
 import { KuboDataSource } from './kubo-data-source.js';
 import { ArIOPeerManager } from '../peers/ar-io-peer-manager.js';
+import * as metrics from '../metrics.js';
 
 const CID = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+
+// Sum a labeled Prometheus counter's value for a specific label set.
+const labeledCounter = async (
+  counter: { get: () => Promise<{ values: { labels: any; value: number }[] }> },
+  labels: Record<string, string>,
+): Promise<number> => {
+  const m = await counter.get();
+  return m.values
+    .filter((v) =>
+      Object.entries(labels).every(([k, val]) => v.labels[k] === val),
+    )
+    .reduce((sum, v) => sum + v.value, 0);
+};
 
 describe('IpfsPeerDataSource', () => {
   const log = createTestLogger({ suite: 'IpfsPeerDataSource' });
@@ -116,9 +130,19 @@ describe('IpfsPeerDataSource', () => {
     stub({ importResults: [okImport] });
     const src = build(['http://peer-a:3000']);
 
+    const successBefore = await labeledCounter(metrics.ipfsPeerFetchTotal, {
+      result: 'success',
+    });
     const result = await src.getContent({ cidString: CID });
 
     assert.equal(result.statusCode, 200);
+    // Success metric incremented.
+    assert.equal(
+      (await labeledCounter(metrics.ipfsPeerFetchTotal, {
+        result: 'success',
+      })) - successBefore,
+      1,
+    );
     // Re-served via the local Kubo (gateway) after import.
     assert.equal((kuboDataSource.getContent as any).mock.calls.length, 1);
     const reportSuccess = (peerManager.reportSuccess as any).mock;
@@ -133,9 +157,21 @@ describe('IpfsPeerDataSource', () => {
     stub({ importResults: [tamperImport, okImport] });
     const src = build(['http://peer-a:3000', 'http://peer-b:3000']);
 
+    const verifyFailedBefore = await labeledCounter(
+      metrics.ipfsPeerFetchPeerAttemptsTotal,
+      { result: 'import_verify_failed' },
+    );
     const result = await src.getContent({ cidString: CID });
 
     assert.equal(result.statusCode, 200);
+    // The lying peer's tampered CAR was metered as a verify failure.
+    assert.ok(
+      (await labeledCounter(metrics.ipfsPeerFetchPeerAttemptsTotal, {
+        result: 'import_verify_failed',
+      })) -
+        verifyFailedBefore >=
+        1,
+    );
     // The lying peer was reported failed; the good peer reported success.
     const fail = (peerManager.reportFailure as any).mock;
     const ok = (peerManager.reportSuccess as any).mock;

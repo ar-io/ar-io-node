@@ -303,6 +303,7 @@ async function handleIpfsRequest({
     // server honored the mode (a proxy would have 404'd on a local miss).
     if (localOnly) {
       res.setHeader(headerNames.ipfsLocalOnly, 'true');
+      metrics.ipfsLocalOnlyServeTotal.inc({ result: 'hit' });
     }
     // The representation is content-negotiated: the same URL yields a UnixFS
     // proxy body, a raw block, or a CAR depending on the Accept header (see
@@ -465,6 +466,11 @@ async function handleIpfsRequest({
     }
 
     if (error instanceof IpfsNotFoundError) {
+      // A local-only miss is the "gateway does not hold this" signal (the
+      // observer's holding probe / a peer's local-only fetch).
+      if (localOnly) {
+        metrics.ipfsLocalOnlyServeTotal.inc({ result: 'miss' });
+      }
       metrics.ipfsRequestsTotal.inc({
         route_type: routeType,
         status: 'not_found',

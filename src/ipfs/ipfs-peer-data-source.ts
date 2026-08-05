@@ -12,6 +12,7 @@ import winston from 'winston';
 import { headerNames } from '../constants.js';
 import { ArIOPeerManager } from '../peers/ar-io-peer-manager.js';
 import { startChildSpan } from '../tracing.js';
+import * as metrics from '../metrics.js';
 import {
   IpfsContentSource,
   IpfsContentSourceOptions,
@@ -125,7 +126,14 @@ export class IpfsPeerDataSource implements IpfsContentSource {
         }
 
         try {
-          await this.fetchAndImport(peer, cidString, signal, deadline);
+          const carBytes = await this.fetchAndImport(
+            peer,
+            cidString,
+            signal,
+            deadline,
+          );
+          metrics.ipfsPeerFetchPeerAttemptsTotal.inc({ result: 'success' });
+          metrics.ipfsPeerFetchCarBytesTotal.inc(carBytes);
           this.peerManager.reportSuccess(IPFS_PEER_CATEGORY, peer);
           this.log.debug('IPFS peer-fetch import verified', {
             cidString,
@@ -143,6 +151,7 @@ export class IpfsPeerDataSource implements IpfsContentSource {
             range,
             format,
           });
+          metrics.ipfsPeerFetchTotal.inc({ result: 'success' });
           span.end();
           return result;
         } catch (err: any) {
@@ -150,6 +159,14 @@ export class IpfsPeerDataSource implements IpfsContentSource {
           if (err?.name === 'AbortError' && signal?.aborted) {
             throw err;
           }
+          metrics.ipfsPeerFetchPeerAttemptsTotal.inc({
+            // A failed block-integrity check (a lying/tampered peer) vs. a
+            // transport/non-200/cap error — operators want these separated.
+            result:
+              err?.verifyFailed === true
+                ? 'import_verify_failed'
+                : 'peer_error',
+          });
           this.peerManager.reportFailure(IPFS_PEER_CATEGORY, peer);
           this.log.debug('IPFS peer-fetch attempt failed, trying next peer', {
             cidString,
@@ -161,6 +178,7 @@ export class IpfsPeerDataSource implements IpfsContentSource {
 
       // No peer held it (or all lied / timed out / exceeded the cap). The
       // composite falls through to public IPFS (tier 3).
+      metrics.ipfsPeerFetchTotal.inc({ result: 'miss' });
       throw new IpfsNotFoundError(`no fleet peer holds ${cidString}`);
     } catch (error: any) {
       if (error?.name !== 'AbortError') {
@@ -203,7 +221,7 @@ export class IpfsPeerDataSource implements IpfsContentSource {
     cidString: string,
     signal: AbortSignal | undefined,
     deadline: number,
-  ): Promise<void> {
+  ): Promise<number> {
     const remainingMs = Math.max(0, deadline - Date.now());
     const peerUrl = `${peer.replace(/\/$/, '')}/ipfs/${cidString}?format=car`;
 
@@ -229,7 +247,12 @@ export class IpfsPeerDataSource implements IpfsContentSource {
 
     // 2) Byte-cap the CAR (a too-large file falls through to public IPFS) and
     //    stream it into dag/import as multipart/form-data.
-    const cappedCar = capStream(carResponse.data as Readable, this.maxCarBytes);
+    const carBytes = { value: 0 };
+    const cappedCar = capStream(
+      carResponse.data as Readable,
+      this.maxCarBytes,
+      carBytes,
+    );
     const form = new FormData();
     form.append('file', cappedCar, {
       filename: `${cidString}.car`,
@@ -257,9 +280,13 @@ export class IpfsPeerDataSource implements IpfsContentSource {
     //    in an NDJSON line with HTTP 200).
     const body = String(importResponse.data ?? '');
     if (IMPORT_ERROR_RE.test(body)) {
-      throw new Error(
+      // Tag block-integrity failures so the caller can meter a lying/tampered
+      // peer distinctly from a transport error.
+      const err = new Error(
         `dag/import verification failed for ${cidString}: ${body.slice(0, 200)}`,
       );
+      (err as Error & { verifyFailed?: boolean }).verifyFailed = true;
+      throw err;
     }
     if (importResponse.status !== 200) {
       throw new Error(
@@ -271,18 +298,24 @@ export class IpfsPeerDataSource implements IpfsContentSource {
         `dag/import reported no root for ${cidString}: ${body.slice(0, 200)}`,
       );
     }
+    return carBytes.value;
   }
 }
 
 // Cap a stream at maxBytes, erroring (and tearing down the source) once
-// exceeded. maxBytes <= 0 disables the cap.
-function capStream(src: Readable, maxBytes: number): Readable {
-  if (maxBytes <= 0) return src;
+// exceeded, while tallying the bytes seen into `counter`. maxBytes <= 0 disables
+// the cap but still counts (for the imported-bytes metric).
+function capStream(
+  src: Readable,
+  maxBytes: number,
+  counter: { value: number },
+): Readable {
   let seen = 0;
   const guard = new Transform({
     transform(chunk: Buffer, _enc, cb) {
       seen += chunk.length;
-      if (seen > maxBytes) {
+      counter.value = seen;
+      if (maxBytes > 0 && seen > maxBytes) {
         cb(new Error(`CAR exceeds max size ${maxBytes} bytes`));
         return;
       }
