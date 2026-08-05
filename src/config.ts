@@ -407,9 +407,18 @@ export const OUTBOUND_MAX_SOCKETS_PER_HOST = env.positiveIntOrDefault(
   'OUTBOUND_MAX_SOCKETS_PER_HOST',
   16,
 );
+// Defaults to the same value as OUTBOUND_MAX_SOCKETS_PER_HOST, deliberately.
+// maxFreeSockets bounds *idle* sockets: any concurrency above it means the
+// excess sockets are destroyed once they go idle and reopened on the next
+// request — and every reopen is a fresh `dns.lookup()`, the exact cost this
+// pooling exists to avoid. The data path caps free sockets well below max
+// because its objective is throughput management against many hosts; here the
+// objective is maximizing reuse across a handful of upstreams, so holding the
+// full set idle is the point. Cost is a few idle sockets per origin, retired
+// anyway by the agent's idle timeout.
 export const OUTBOUND_MAX_FREE_SOCKETS_PER_HOST = env.positiveIntOrDefault(
   'OUTBOUND_MAX_FREE_SOCKETS_PER_HOST',
-  4,
+  OUTBOUND_MAX_SOCKETS_PER_HOST,
 );
 
 // Kill-switch for the untrusted-gateway provenance-param omission. By default
