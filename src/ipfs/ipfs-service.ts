@@ -88,6 +88,7 @@ export class IpfsService {
     parentSpan,
     range,
     format,
+    localOnly = false,
   }: {
     cidString: string;
     path?: string;
@@ -95,6 +96,14 @@ export class IpfsService {
     parentSpan?: Span;
     range?: string;
     format?: 'raw' | 'car';
+    // Serve only from local Kubo (offline) — the fleet-durability / holding
+    // primitive. Local-only requests bypass the negative cache entirely (read
+    // AND write) so a probe reflects true current local state and can never
+    // poison a normal request's later peer/public fallback, and they do NOT
+    // write the on-disk cache (an offline UnixFS body lacks a sniffed
+    // Content-Type; the normal :8080 path populates the cache properly). They
+    // DO read the on-disk cache — a cached object is a legitimate local hold.
+    localOnly?: boolean;
   }): Promise<IpfsGetContentResult> {
     const span = startChildSpan(
       'IpfsService.getContent',
@@ -102,6 +111,7 @@ export class IpfsService {
         attributes: {
           'ipfs.cid': cidString,
           'ipfs.path': path ?? '',
+          'ipfs.local_only': localOnly,
         },
       },
       parentSpan,
@@ -162,7 +172,10 @@ export class IpfsService {
       // (absent or unpinned) so they don't re-hit Kubo on every request
       // (latency / DoS amplification) — mirrors the Arweave path's negative data
       // cache. Only trips after repeated misses (count + duration thresholds).
-      if (this.negativeCache?.isNegativelyCached(negKey) === true) {
+      if (
+        !localOnly &&
+        this.negativeCache?.isNegativelyCached(negKey) === true
+      ) {
         span.setAttribute('ipfs.negative_cache', 'hit');
         span.end();
         throw new IpfsNotFoundError(
@@ -199,8 +212,11 @@ export class IpfsService {
         // Content is available — clear any negative-cache entry and record a
         // success so a transiently-unavailable CID that later pins isn't kept in
         // a negative-cache blackout, and IPFS health isn't skewed miss-only.
-        this.negativeCache?.evict(negKey);
-        this.negativeCache?.recordSuccess();
+        // (Skipped under local-only, which is isolated from the negative cache.)
+        if (!localOnly) {
+          this.negativeCache?.evict(negKey);
+          this.negativeCache?.recordSuccess();
+        }
         this.log.debug('IPFS cache hit', { cid: normalizedCid, path });
         metrics.ipfsCacheHitTotal.inc();
         span.setAttributes({
@@ -231,8 +247,15 @@ export class IpfsService {
           parentSpan: span,
           range,
           format,
+          localOnly,
         })
         .catch((err) => {
+          // Local-only is isolated from the negative cache: a miss here just
+          // means "not held locally right now" and must not blackhole the CID
+          // for the normal peer/public fallback path.
+          if (localOnly) {
+            throw err;
+          }
           // Record a negative-cache miss for content Kubo could not retrieve:
           // a 404, or a retrieval TIMEOUT (the "no provider on the network"
           // case — Kubo never returns 404 for absent network content, it times
@@ -278,16 +301,23 @@ export class IpfsService {
 
       // A successful fetch means the content is available — clear any
       // negative-cache entry and record health (see the cache-hit path).
-      this.negativeCache?.evict(negKey);
-      this.negativeCache?.recordSuccess();
+      // (Skipped under local-only, which is isolated from the negative cache.)
+      if (!localOnly) {
+        this.negativeCache?.evict(negKey);
+        this.negativeCache?.recordSuccess();
+      }
 
       // Stream directly to the client while writing to a temp file on disk for
       // caching. No memory buffering — handles files of any size. Partial (206)
-      // responses are NOT cached — only full objects.
+      // responses are NOT cached — only full objects. Local-only responses are
+      // NOT cached either: an offline UnixFS body carries no sniffed
+      // Content-Type (defaults to octet-stream), so persisting it would poison
+      // the cache — the normal :8080 path caches it with the correct type.
       if (
         range === undefined &&
         format === undefined &&
-        result.statusCode === 200
+        result.statusCode === 200 &&
+        !localOnly
       ) {
         this.streamToCache(
           normalizedCid,

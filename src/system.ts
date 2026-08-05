@@ -1894,6 +1894,9 @@ if (config.IPFS_ENABLED) {
   const kuboDataSource = new KuboDataSource({
     log,
     kuboUrl: config.IPFS_KUBO_URL,
+    // RPC API base — required for local-only (offline) reads; the read-only
+    // :8080 gateway has no per-request offline flag.
+    kuboApiUrl: config.IPFS_KUBO_API_URL,
     requestTimeoutMs: config.IPFS_KUBO_REQUEST_TIMEOUT_MS,
     streamStallTimeoutMs: config.IPFS_STREAM_STALL_TIMEOUT_MS,
     maxConcurrent: config.IPFS_KUBO_MAX_CONCURRENT_REQUESTS,
