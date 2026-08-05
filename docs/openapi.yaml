@@ -636,6 +636,88 @@ paths:
                   - status
                   - uptime
                   - date
+  '/ar-io/offsets/{id}':
+    get:
+      tags: [Gateway]
+      summary: Get root transaction offsets for a data item
+      description: |
+        Returns the location of a data item within its root L1 transaction,
+        read directly from this node's index.
+
+        This is the cheap counterpart to `HEAD /raw/{id}`, which exposes the
+        same values in `X-AR-IO-Root-*` headers but only as a side effect of a
+        successful data retrieval — on a cache miss that route runs the node's
+        entire retrieval cascade before answering. This endpoint performs a
+        single indexed lookup and never reads contiguous data, so a miss is as
+        cheap as a hit.
+
+        Offsets resolve for any data item this node has unbundled and indexed,
+        even when none of its bytes are cached locally.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The 43-character base64url data item or transaction ID.
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9_-]{43}$'
+      responses:
+        '200':
+          description: Offsets resolved from the local index
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rootTxId:
+                    type: string
+                    description: base64url ID of the root L1 transaction containing the data item.
+                  path:
+                    type: array
+                    items:
+                      type: string
+                    description: |
+                      Bundle traversal path from root to the immediate parent
+                      bundle. Only emitted when derivable from the index —
+                      currently the single-level case, where the parent is the
+                      root bundle.
+                  rootOffset:
+                    type: integer
+                    description: Byte offset of the data item header within the root transaction's data.
+                  rootDataOffset:
+                    type: integer
+                    description: Byte offset of the data item's payload within the root transaction's data.
+                  contentType:
+                    type: string
+                    description: Content type of the data item, when known.
+                  size:
+                    type: integer
+                    description: Total size of the data item in bytes, including its header.
+                  dataSize:
+                    type: integer
+                    description: Size of the data item's payload in bytes, excluding its header.
+                required:
+                  - rootTxId
+        '400':
+          description: Invalid data ID
+          content:
+            text/plain:
+              schema:
+                type: string
+        '404':
+          description: |
+            This node cannot place the ID inside a root transaction — either the
+            ID is unknown to it, or it has no indexed root parent.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '500':
+          description: Failed to resolve offsets
+          content:
+            text/plain:
+              schema:
+                type: string
   '/ar-io/info':
     get:
       tags: [Gateway]

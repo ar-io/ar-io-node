@@ -678,6 +678,54 @@ export const GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
 
+// Peer AR.IO nodes queried for root TX offsets via `GET /ar-io/offsets/:id`.
+// Same `{ url: priority }` shape as GATEWAYS_ROOT_TX_URLS (lower number =
+// higher priority). Defaults to empty: unlike the header-based `gateways`
+// source, this endpoint only exists on nodes running a release that serves it,
+// so peers are opted in explicitly rather than guessed at.
+export const PEERS_ROOT_TX_URLS = JSON.parse(
+  env.varOrDefault('PEERS_ROOT_TX_URLS', '{}'),
+) as Record<string, number>;
+
+// Validate peer root TX URLs and priorities
+Object.entries(PEERS_ROOT_TX_URLS).forEach(([url, priority]) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in PEERS_ROOT_TX_URLS: ${url}`);
+  }
+  if (typeof priority !== 'number' || priority <= 0) {
+    throw new Error(
+      `Invalid priority in PEERS_ROOT_TX_URLS for ${url}: ${priority}`,
+    );
+  }
+});
+
+// Peer root TX lookup request configuration. The default is aggressive
+// relative to the `gateways` source (10s) because this endpoint is a single
+// indexed read on the peer — a slow response means the peer is unhealthy, not
+// that the work is genuinely expensive, so failing over quickly is correct.
+export const PEERS_ROOT_TX_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+  'PEERS_ROOT_TX_REQUEST_TIMEOUT_MS',
+  '2000',
+);
+
+// Peer root TX lookup rate limiting. Far more permissive than the `gateways`
+// source for the same reason: the peer answers from its index, so this is not
+// a probe that needs throttling to protect the remote node.
+export const PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '100',
+);
+export const PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL = +env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+  '600', // 600 per minute = 10 per second
+);
+export const PEERS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
+
 // Chain-anchored chunk metadata source (offset → tx + data_root via
 // reference-peer `/chunk/{offset}/data` headers, cross-checked against
 // the chain). Fast-path replacement for the log₂(height) block binary
@@ -713,7 +761,15 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
     300,
   );
 
-// Root TX index lookup order configuration
+// Root TX index lookup order configuration.
+// Available sources: 'db', 'peers', 'gateways', 'graphql', 'hyperbeam', 'cdb',
+// 'turbo'. Sources are probed in order and the first actionable result wins.
+// - 'peers':    GET /ar-io/offsets/:id against peer AR.IO nodes. One indexed
+//               read on the peer; cheap whether it hits or misses.
+// - 'gateways': HEAD /raw/:id against peer AR.IO gateways, harvesting
+//               X-AR-IO-Root-* headers. Works against any release, but a miss
+//               costs the peer a full retrieval cascade — list it *after*
+//               'peers' so it only serves peers that lack the endpoint.
 export const ROOT_TX_LOOKUP_ORDER = env
   .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql,hyperbeam,cdb')
   .split(',')

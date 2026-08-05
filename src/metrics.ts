@@ -1228,6 +1228,7 @@ const breakerSourceNames = [
   'get-transaction-attributes',
   'graphql-root-tx-index',
   'hyperbeam-root-tx-index',
+  'peers-root-tx-index',
   'turbo-root-tx-index',
   'turbo_dynamodb',
   'turbo_elasticache',

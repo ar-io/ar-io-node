@@ -57,6 +57,8 @@ import {
   CompositeRootTxIndex,
   GatewaysRootTxIndex,
   CachedGatewayOffsets,
+  PeersRootTxIndex,
+  CachedPeerOffsets,
   GraphQLRootTxIndex,
   TurboRootTxIndex,
   CachedTurboOffsets,
@@ -319,6 +321,12 @@ const turboOffsetsCache = new LRUCache<string, CachedTurboOffsets>({
 
 // Create separate cache for gateway offsets
 const gatewayOffsetsCache = new LRUCache<string, CachedGatewayOffsets>({
+  max: config.ROOT_TX_CACHE_MAX_SIZE,
+  ttl: config.ROOT_TX_CACHE_TTL_MS,
+});
+
+// Create separate cache for peer offsets
+const peerOffsetsCache = new LRUCache<string, CachedPeerOffsets>({
   max: config.ROOT_TX_CACHE_MAX_SIZE,
   ttl: config.ROOT_TX_CACHE_TTL_MS,
 });
@@ -1057,6 +1065,27 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
           cache: turboOffsetsCache,
         }),
       );
+      break;
+
+    case 'peers':
+      if (Object.keys(config.PEERS_ROOT_TX_URLS).length > 0) {
+        rootTxIndexes.push(
+          new PeersRootTxIndex({
+            log,
+            peerUrls: config.PEERS_ROOT_TX_URLS,
+            requestTimeoutMs: config.PEERS_ROOT_TX_REQUEST_TIMEOUT_MS,
+            rateLimitBurstSize: config.PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE,
+            rateLimitTokensPerInterval:
+              config.PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
+            rateLimitInterval: config.PEERS_ROOT_TX_RATE_LIMIT_INTERVAL,
+            cache: peerOffsetsCache,
+          }),
+        );
+      } else {
+        log.warn(
+          'Peers root TX source configured but PEERS_ROOT_TX_URLS is empty',
+        );
+      }
       break;
 
     case 'gateways':
