@@ -13,7 +13,10 @@ import { default as request } from 'supertest';
 
 import { createTestLogger } from '../../test/test-logger.js';
 import { createIpfsHandler } from './ipfs.js';
-import { IpfsNotFoundError } from '../ipfs/kubo-data-source.js';
+import {
+  IpfsNotFoundError,
+  IpfsTimeoutError,
+} from '../ipfs/kubo-data-source.js';
 import type { IpfsService } from '../ipfs/ipfs-service.js';
 import * as metrics from '../metrics.js';
 
@@ -176,6 +179,18 @@ describe('IPFS route handler', () => {
       const res = await request(makeApp({ service }))
         .get(`/c/${CID}`)
         .expect(404);
+      assert.match(res.headers['cache-control'] ?? '', /max-age=\d+/);
+    });
+
+    it('maps IpfsTimeoutError to a 504 with retry-dampening Cache-Control', async () => {
+      const service = {
+        getContent: mock.fn(async () => {
+          throw new IpfsTimeoutError('no provider');
+        }),
+      };
+      const res = await request(makeApp({ service }))
+        .get(`/c/${CID}`)
+        .expect(504);
       assert.match(res.headers['cache-control'] ?? '', /max-age=\d+/);
     });
   });

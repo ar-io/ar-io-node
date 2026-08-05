@@ -20,6 +20,7 @@ import {
   IpfsBlockedError,
   IpfsNotFoundError,
   IpfsSizeLimitError,
+  IpfsTimeoutError,
 } from './kubo-data-source.js';
 import * as metrics from '../metrics.js';
 
@@ -232,7 +233,21 @@ export class IpfsService {
           format,
         })
         .catch((err) => {
-          if (err instanceof IpfsNotFoundError) {
+          // Record a negative-cache miss for content Kubo could not retrieve:
+          // a 404, or a retrieval TIMEOUT (the "no provider on the network"
+          // case — Kubo never returns 404 for absent network content, it times
+          // out). Without caching the timeout, every repeat request for a dead
+          // CID re-runs the full IPFS_KUBO_REQUEST_TIMEOUT_MS search and holds a
+          // concurrency slot, so a single unresolvable CID under load can pin all
+          // slots and 502 healthy traffic. The negative cache only trips after
+          // repeated misses over a window, so transient cold-DHT slowness won't
+          // blackhole legit-but-slow content. NOT cached: IpfsUnavailableError /
+          // ECONNREFUSED — those mean Kubo itself is down, not the content, and
+          // caching them would blackhole content once Kubo recovers.
+          if (
+            err instanceof IpfsNotFoundError ||
+            err instanceof IpfsTimeoutError
+          ) {
             this.negativeCache?.recordMiss(negKey);
           }
           throw err;

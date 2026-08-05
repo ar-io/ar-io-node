@@ -11,7 +11,12 @@ import { once } from 'node:events';
 
 import { createTestLogger } from '../../test/test-logger.js';
 import { IpfsService } from './ipfs-service.js';
-import { KuboDataSource, IpfsNotFoundError } from './kubo-data-source.js';
+import {
+  KuboDataSource,
+  IpfsNotFoundError,
+  IpfsTimeoutError,
+  IpfsUnavailableError,
+} from './kubo-data-source.js';
 import { IpfsFsCache } from './ipfs-cache.js';
 import { DataBlockListValidator } from '../types.js';
 import { NegativeDataCache } from '../data/negative-data-cache.js';
@@ -122,6 +127,43 @@ describe('IpfsService', () => {
       // The bare-CID (root) key must be untouched, so a bad sub-path can't
       // blackhole the whole site.
       assert.notEqual(recordMiss.calls[0].arguments[0], CID);
+    });
+  });
+
+  describe('negative cache records unretrievable content (no-provider defaults)', () => {
+    it('records a miss on a retrieval TIMEOUT (the no-provider case)', async () => {
+      dataSource = {
+        getContent: mock.fn(async () => {
+          throw new IpfsTimeoutError('kubo timed out');
+        }),
+      } as unknown as KuboDataSource;
+
+      const service = buildService();
+      await assert.rejects(
+        () => service.getContent({ cidString: CID }),
+        (e: any) => e instanceof IpfsTimeoutError,
+      );
+
+      const recordMiss = (negativeCache.recordMiss as any).mock;
+      assert.equal(recordMiss.calls.length, 1);
+      assert.equal(recordMiss.calls[0].arguments[0], CID);
+    });
+
+    it('does NOT negatively cache an IpfsUnavailableError (Kubo itself down)', async () => {
+      dataSource = {
+        getContent: mock.fn(async () => {
+          throw new IpfsUnavailableError('kubo down');
+        }),
+      } as unknown as KuboDataSource;
+
+      const service = buildService();
+      await assert.rejects(
+        () => service.getContent({ cidString: CID }),
+        (e: any) => e instanceof IpfsUnavailableError,
+      );
+
+      const recordMiss = (negativeCache.recordMiss as any).mock;
+      assert.equal(recordMiss.calls.length, 0);
     });
   });
 

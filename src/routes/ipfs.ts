@@ -467,6 +467,14 @@ async function handleIpfsRequest({
         route_type: routeType,
         status: 'timeout',
       });
+      // Briefly dampen retries at the edge/CDN so a burst of requests for an
+      // unretrievable CID doesn't re-run the full Kubo search each time (the
+      // negative cache handles the in-process short-circuit; this covers hops
+      // in front of the gateway). Short max-age since a timeout may be transient.
+      res.setHeader(
+        'Cache-Control',
+        `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+      );
       res.status(504).json({ error: 'IPFS request timed out' });
       return;
     }
