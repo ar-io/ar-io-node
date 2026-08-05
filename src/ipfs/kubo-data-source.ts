@@ -124,6 +124,35 @@ export class KuboDataSource {
     }
   }
 
+  // Cheap offline presence check: is the ROOT block of this CID in the local
+  // blockstore? Uses the RPC `block/stat?offline=true` (fast; never a DHT walk).
+  // The composite uses it to decide "serve locally via the gateway" vs "acquire
+  // from a fleet peer" WITHOUT first triggering a public-IPFS walk. Best-effort
+  // and root-only (a full-DAG guarantee would need `cat --offline`), which is
+  // sufficient for routing; returns false on any error or if the RPC API is
+  // unconfigured.
+  async isHeldLocally(
+    cidString: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (this.kuboApiUrl === undefined) return false;
+    try {
+      const response = await axios.post(
+        `${this.kuboApiUrl}/api/v0/block/stat`,
+        undefined,
+        {
+          params: { arg: cidString, offline: true },
+          signal,
+          timeout: this.requestTimeoutMs,
+          validateStatus: () => true,
+        },
+      );
+      return response.status === 200;
+    } catch {
+      return false;
+    }
+  }
+
   // Reserve a concurrency slot; returns an idempotent release fn.
   private acquireSlot(): () => void {
     if (this.maxConcurrent > 0 && this.inFlight >= this.maxConcurrent) {

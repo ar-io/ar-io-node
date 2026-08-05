@@ -15,8 +15,8 @@ import { startChildSpan } from '../tracing.js';
 import { IpfsFsCache } from './ipfs-cache.js';
 import { DataBlockListValidator } from '../types.js';
 import { NegativeDataCache } from '../data/negative-data-cache.js';
+import { IpfsContentSource } from './ipfs-content-source.js';
 import {
-  KuboDataSource,
   IpfsBlockedError,
   IpfsNotFoundError,
   IpfsSizeLimitError,
@@ -43,7 +43,7 @@ export interface IpfsGetContentResult {
 
 export class IpfsService {
   private log: winston.Logger;
-  private dataSource: KuboDataSource;
+  private dataSource: IpfsContentSource;
   private cache: IpfsFsCache;
   private blockListValidator: DataBlockListValidator;
   private maxResponseSizeBytes: number;
@@ -67,7 +67,7 @@ export class IpfsService {
     negativeCache,
   }: {
     log: winston.Logger;
-    dataSource: KuboDataSource;
+    dataSource: IpfsContentSource;
     cache: IpfsFsCache;
     blockListValidator: DataBlockListValidator;
     maxResponseSizeBytes: number;

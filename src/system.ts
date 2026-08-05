@@ -1882,6 +1882,8 @@ import { IpfsFsCache } from './ipfs/ipfs-cache.js';
 import { IpfsService } from './ipfs/ipfs-service.js';
 import { IpfsPinner } from './ipfs/ipfs-pinner.js';
 import { createIpfsRateLimiter } from './ipfs/ipfs-rate-limiter.js';
+import { IpfsPeerDataSource } from './ipfs/ipfs-peer-data-source.js';
+import { SequentialIpfsSource } from './ipfs/sequential-ipfs-source.js';
 import { RateLimiter } from './limiter/types.js';
 
 export let ipfsService: IpfsService | undefined;
@@ -1937,9 +1939,33 @@ if (config.IPFS_ENABLED) {
     metricsSource: 'ipfs',
   });
 
+  // Peer-fetch durability layer (tier 2). Built only when enabled; otherwise the
+  // composite below is a pure passthrough to Kubo (zero behavior change).
+  const ipfsPeerDataSource = config.IPFS_PEER_FETCH_ENABLED
+    ? new IpfsPeerDataSource({
+        log,
+        peerManager: arIOPeerManager,
+        kuboApiUrl: config.IPFS_KUBO_API_URL,
+        kuboDataSource,
+        peerCount: config.IPFS_PEER_FETCH_COUNT,
+        requestTimeoutMs: config.IPFS_PEER_FETCH_TIMEOUT_MS,
+        maxCarBytes: config.IPFS_PEER_FETCH_MAX_CAR_BYTES,
+        pinRoots: config.IPFS_PIN_ARNS_CONTENT,
+        staticPeers: config.IPFS_PEER_FETCH_STATIC_PEERS,
+      })
+    : undefined;
+
+  // Composite: local Kubo (offline) → fleet peers (verified CAR import) → public
+  // IPFS. Local-only requests run tier 1 only.
+  const ipfsCompositeSource = new SequentialIpfsSource({
+    log,
+    kuboDataSource,
+    peerDataSource: ipfsPeerDataSource,
+  });
+
   ipfsService = new IpfsService({
     log,
-    dataSource: kuboDataSource,
+    dataSource: ipfsCompositeSource,
     cache: ipfsCache,
     blockListValidator: dataBlockListValidator,
     maxResponseSizeBytes: config.IPFS_MAX_RESPONSE_SIZE_BYTES,
