@@ -80,6 +80,19 @@ failing; the intended end-state is **IPFS expected of every gateway**. Flipping
 change, identical mechanism. *When the ramp ends is the one governance call (§8 Q1);
 the code defaults safe during rollout so no gateway is wrongly failed mid-adoption.*
 
+> **Enforcement caveat (important).** Neutral scoring is enforced at the
+> **observer level**, not in the contract — the chain only receives a per-gateway
+> pass/fail bitmap and tallies a **> ½-of-observers majority**; it has no concept
+> of names, protocols, or "neutral" (this is *why* it needs no contract change,
+> §2/D4). Consequently, neutral only actually protects a non-IPFS gateway once a
+> **majority of the observer fleet runs this updated observer**. The > ½ majority
+> rule is the backstop that makes the rollout safe even when uneven: a lagging
+> minority still running the old protocol-blind code cannot fail a non-IPFS
+> gateway on an IPFS name, because it is outvoted. The rollout task is therefore
+> "ship the observer update and get it adopted by the observer majority" — a
+> software release, **not** a contract deploy, and **no action is required from
+> gateway operators** (not-running-IPFS is self-evident via `/ar-io/info`).
+
 **D2 — Trustless verification for IPFS, replacing reference-digest trust.** For an
 IPFS name the `resolvedId` **is** a content hash, so served bytes are verified
 against the CID's multihash directly. The reference gateway is still used to
