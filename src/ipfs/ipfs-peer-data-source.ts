@@ -274,8 +274,8 @@ export class IpfsPeerDataSource implements IpfsContentSource {
       },
     );
 
-    // 3) Verify the import outcome. Kubo verifies blocks against the CID on
-    //    import; a tampered/lying CAR yields an error body (and HTTP 500), which
+    // 3) Verify the import outcome. Kubo verifies every block against its CID on
+    //    import; a tampered/lying CAR yields an error body (and HTTP 500) which
     //    we detect from the BODY (robust even if a future Kubo streams the error
     //    in an NDJSON line with HTTP 200).
     const body = String(importResponse.data ?? '');
@@ -293,9 +293,15 @@ export class IpfsPeerDataSource implements IpfsContentSource {
         `dag/import HTTP ${importResponse.status} for ${cidString}: ${body.slice(0, 200)}`,
       );
     }
-    if (!/"Root"/.test(body)) {
+    // Confirm the requested root is now held locally. We do NOT parse the
+    // response for a Root CID: dag/import returns 200 with an EMPTY body when
+    // pin-roots is false (the default) — it only echoes the Root when pinning.
+    // An offline block/stat is the authoritative success signal and, crucially,
+    // also rejects a peer that returned a VALID CAR of the WRONG content (all
+    // blocks hash correctly, but the requested root isn't among them).
+    if (!(await this.kuboDataSource.isHeldLocally(cidString, signal))) {
       throw new Error(
-        `dag/import reported no root for ${cidString}: ${body.slice(0, 200)}`,
+        `imported CAR did not yield the requested root ${cidString}`,
       );
     }
     return carBytes.value;

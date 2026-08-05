@@ -58,6 +58,8 @@ describe('IpfsPeerDataSource', () => {
     kuboDataSource = {
       // The re-serve after a verified import.
       getContent: mock.fn(async () => reServed),
+      // Post-import presence confirmation (offline block/stat). Defaults to held.
+      isHeldLocally: mock.fn(async () => true),
     } as unknown as KuboDataSource;
   });
 
@@ -121,6 +123,9 @@ describe('IpfsPeerDataSource', () => {
     status: 200,
     body: `{"Root":{"Cid":{"/":"${CID}"},"PinErrorMsg":""}}`,
   };
+  // Kubo returns 200 with an EMPTY body when pin-roots is false (the default) —
+  // it only echoes the Root when pinning. Success is confirmed via block/stat.
+  const emptyImport = { status: 200, body: '' };
   const tamperImport = {
     status: 500,
     body: `{"Message":"import failed: mismatch in content integrity, expected: ${CID}, got: bafkOther","Type":"error"}`,
@@ -150,6 +155,34 @@ describe('IpfsPeerDataSource', () => {
     assert.equal(reportSuccess.calls[0].arguments[0], IPFS_PEER_CATEGORY);
     assert.equal(reportSuccess.calls[0].arguments[1], 'http://peer-a:3000');
     result.stream.destroy();
+  });
+
+  it('treats an empty 200 dag/import body (pin-roots=false) as success when the root is now held', async () => {
+    // Regression: dag/import with pin-roots=false returns 200 + empty body.
+    // Success must be confirmed by presence (block/stat), not by parsing "Root".
+    stub({ importResults: [emptyImport] });
+    const src = build(['http://peer-a:3000']);
+
+    const result = await src.getContent({ cidString: CID });
+
+    assert.equal(result.statusCode, 200);
+    assert.equal((peerManager.reportSuccess as any).mock.calls.length, 1);
+    assert.equal((kuboDataSource.isHeldLocally as any).mock.calls.length, 1);
+  });
+
+  it('rejects a valid CAR whose root is NOT actually held after import (wrong-content peer)', async () => {
+    // A peer could return a CAR whose blocks all hash correctly but that does
+    // not contain the requested root. block/stat then reports the root absent.
+    kuboDataSource.isHeldLocally = mock.fn(async () => false) as any;
+    stub({ importResults: [emptyImport] });
+    const src = build(['http://peer-a:3000']);
+
+    await assert.rejects(
+      () => src.getContent({ cidString: CID }),
+      (e: any) => e.name === 'IpfsNotFoundError',
+    );
+    assert.equal((peerManager.reportFailure as any).mock.calls.length, 1);
+    assert.equal((peerManager.reportSuccess as any).mock.calls.length, 0);
   });
 
   it('tamper: a CAR that fails Kubo verification is rejected and the next peer is tried', async () => {
