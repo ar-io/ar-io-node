@@ -42,6 +42,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
     StandaloneSqlite: 'db',
     Cdb64RootTxIndex: 'cdb64',
     HyperBeamRootTxIndex: 'hyperbeam',
+    PeersRootTxIndex: 'peers',
   };
 
   private getSourceName(className: string): string {
