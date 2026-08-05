@@ -29,7 +29,7 @@ import {
 } from '../lib/validation.js';
 import { secp256k1OwnerFromTx } from '../lib/ecdsa-public-key-recover.js';
 import * as metrics from '../metrics.js';
-import { createAgentPair } from '../lib/http-agent.js';
+import { AgentPair, createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import { tracer } from '../tracing.js';
 import {
@@ -191,6 +191,8 @@ export class ArweaveCompositeClient
   // Trusted node
   private trustedNodeUrl: string;
   private trustedNodeAxios;
+  // Keep-alive agents owned by this client; torn down in cleanup().
+  private trustedNodeAgents: AgentPair;
 
   // Peer management
   public peerManager: ArweavePeerManager;
@@ -391,10 +393,14 @@ export class ArweaveCompositeClient
     });
 
     // Initialize trusted node Axios with automatic retries
+    this.trustedNodeAgents = createAgentPair({
+      client: 'ArweaveCompositeClient',
+      log: this.log,
+    });
     this.trustedNodeAxios = axios.create({
       baseURL: this.trustedNodeUrl,
       timeout: requestTimeout,
-      ...createAgentPair({ client: 'ArweaveCompositeClient', log: this.log }),
+      ...this.trustedNodeAgents,
       headers: {
         'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
       },
@@ -2840,6 +2846,12 @@ export class ArweaveCompositeClient
    * Should be called when the client is no longer needed (e.g., in tests)
    */
   cleanup(): void {
+    // Destroy the keep-alive agents this client owns. They hold idle sockets
+    // open until their idle timeout, so a client discarded without this leaves
+    // its pool lingering past the lifecycle.
+    this.trustedNodeAgents.httpAgent.destroy();
+    this.trustedNodeAgents.httpsAgent.destroy();
+
     // Clear the bucket filler interval
     if (this.bucketFillerInterval) {
       clearInterval(this.bucketFillerInterval);

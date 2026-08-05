@@ -153,3 +153,33 @@ describe('instrumentAgent', () => {
     });
   });
 });
+
+describe('agent ownership', () => {
+  it('destroys agents it created when the source closes', async () => {
+    const { HttpByteRangeSource } = await import('./http-byte-range-source.js');
+    const source = new HttpByteRangeSource({ url: 'http://127.0.0.1:1/' });
+    const owned = (source as any)['ownedAgents'];
+
+    assert.ok(owned !== undefined, 'expected self-created agents to be owned');
+    await source.close();
+
+    assert.equal((source as any)['ownedAgents'], undefined);
+    assert.equal((owned.httpAgent as any).destroyed ?? true, true);
+  });
+
+  it('leaves an injected client’s agents alone', async () => {
+    const { HttpByteRangeSource } = await import('./http-byte-range-source.js');
+    const shared = axios.create({
+      ...createAgentPair({ client: 'SharedInjected', log }),
+    });
+    const source = new HttpByteRangeSource({
+      url: 'http://127.0.0.1:1/',
+      httpClient: shared,
+    });
+
+    // Nothing owned, so close() must not reach into the caller's pool.
+    assert.equal((source as any)['ownedAgents'], undefined);
+    await source.close();
+    assert.equal((shared.defaults.httpAgent as any).destroyed ?? false, false);
+  });
+});
