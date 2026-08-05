@@ -1328,6 +1328,25 @@ export interface ManifestPathResolver {
   ): Promise<ManifestResolution>;
 }
 
+/**
+ * Persistent store of resolved manifest index/fallback ids, keyed by manifest
+ * transaction id. A manifest transaction is immutable, so these values never
+ * change once computed; the store lets a manifest root/index be served without
+ * re-fetching or re-parsing the manifest body.
+ */
+export interface ManifestResolutionStore {
+  getManifestResolution(
+    id: string,
+  ): Promise<{ indexId?: string; fallbackId?: string } | undefined>;
+
+  saveManifestResolution(args: {
+    id: string;
+    indexId?: string;
+    fallbackId?: string;
+    resolvedAt: number;
+  }): Promise<void>;
+}
+
 export interface ValidNameResolution {
   name: string;
   statusCode?: number;

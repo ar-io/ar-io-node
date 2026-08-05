@@ -49,6 +49,7 @@ import {
   ContiguousDataAttributes,
   ContiguousDataIndex,
   DataAttributesSource,
+  ManifestResolutionStore,
   ContiguousDataParent,
   DataItemAttributes,
   GqlQueryable,
@@ -1810,6 +1811,38 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
+  getManifestResolution(id: string) {
+    const row = this.stmts.data.selectManifestResolution.get({
+      manifest_id: fromB64Url(id),
+    });
+    if (row === undefined) {
+      return undefined;
+    }
+    return {
+      indexId: row.index_id ? toB64Url(row.index_id) : undefined,
+      fallbackId: row.fallback_id ? toB64Url(row.fallback_id) : undefined,
+    };
+  }
+
+  saveManifestResolution({
+    id,
+    indexId,
+    fallbackId,
+    resolvedAt,
+  }: {
+    id: string;
+    indexId?: string;
+    fallbackId?: string;
+    resolvedAt: number;
+  }) {
+    this.stmts.data.upsertManifestResolution.run({
+      manifest_id: fromB64Url(id),
+      index_id: indexId ? fromB64Url(indexId) : null,
+      fallback_id: fallbackId ? fromB64Url(fallbackId) : null,
+      resolved_at: resolvedAt,
+    });
+  }
+
   getBundle(id: string) {
     const bundle = this.stmts.bundles.selectBundleAttributes.get({
       id: fromB64Url(id),
@@ -3329,6 +3362,7 @@ export class StandaloneSqliteDatabase
     ChainOffsetIndex,
     ContiguousDataIndex,
     DataAttributesSource,
+    ManifestResolutionStore,
     GqlQueryable,
     NestedDataIndexWriter
 {
@@ -3727,17 +3761,18 @@ export class StandaloneSqliteDatabase
       }
     };
 
-    const ret = executeWithRetry();
-
-    ret.finally(() => {
+    // Return the finally-chained promise (not the bare `ret`). `.finally()`
+    // creates a derived promise that settles the same as `ret`; returning it
+    // ensures a rejection is delivered to the caller's handler instead of
+    // leaving the derived promise orphaned and unhandled. `.finally()` passes
+    // the settlement through unchanged, so caller behavior is preserved.
+    return executeWithRetry().finally(() => {
       metrics.sqliteInFlightOps.dec({
         worker: workerName,
         role,
       });
       end();
     });
-
-    return ret;
   }
 
   queueRead(
@@ -4047,6 +4082,21 @@ export class StandaloneSqliteDatabase
     } catch (_) {
       return undefined;
     }
+  }
+
+  getManifestResolution(
+    id: string,
+  ): Promise<{ indexId?: string; fallbackId?: string } | undefined> {
+    return this.queueRead('data', 'getManifestResolution', [id]);
+  }
+
+  saveManifestResolution(args: {
+    id: string;
+    indexId?: string;
+    fallbackId?: string;
+    resolvedAt: number;
+  }): Promise<void> {
+    return this.queueWrite('data', 'saveManifestResolution', [args]);
   }
 
   async getDataItemAttributes(
@@ -4639,6 +4689,14 @@ if (!isMainThread) {
           break;
         case 'saveDataContentAttributes':
           worker.saveDataContentAttributes(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'getManifestResolution':
+          const manifestResolution = worker.getManifestResolution(args[0]);
+          parentPort?.postMessage(manifestResolution);
+          break;
+        case 'saveManifestResolution':
+          worker.saveManifestResolution(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'getBundle':

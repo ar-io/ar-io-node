@@ -1,0 +1,15 @@
+{
+  "manifest": "arweave/paths",
+  "version": "0.2.0",
+  "fallback": {
+    "id": "cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI"
+  },
+  "index": {
+    "id": "QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU"
+  },
+  "paths": {
+    "css/mobile.css": {
+      "id": "fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ"
+    }
+  }
+}
