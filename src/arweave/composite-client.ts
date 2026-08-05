@@ -29,6 +29,7 @@ import {
 } from '../lib/validation.js';
 import { secp256k1OwnerFromTx } from '../lib/ecdsa-public-key-recover.js';
 import * as metrics from '../metrics.js';
+import { createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import { tracer } from '../tracing.js';
 import {
@@ -393,6 +394,7 @@ export class ArweaveCompositeClient
     this.trustedNodeAxios = axios.create({
       baseURL: this.trustedNodeUrl,
       timeout: requestTimeout,
+      ...createAgentPair({ client: 'ArweaveCompositeClient', log: this.log }),
       headers: {
         'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
       },

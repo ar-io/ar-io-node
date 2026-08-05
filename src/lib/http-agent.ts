@@ -130,7 +130,9 @@ export function instrumentAgent({
  * the calling component (not the destination host).
  *
  * @param client - stable component name used as the metric label.
- * @param log - logger used to warn on slow socket acquisition.
+ * @param log - optional logger for the slow-acquisition warning. Omit it where
+ *   the call site has no logger in scope; metrics are emitted either way and
+ *   they, not the log line, are the primary signal.
  * @param options - per-origin socket caps; sensible defaults when omitted.
  */
 export function createAgentPair({
@@ -139,7 +141,7 @@ export function createAgentPair({
   options = {},
 }: {
   client: string;
-  log: winston.Logger;
+  log?: winston.Logger;
   options?: AgentPairOptions;
 }): AgentPair {
   const agentOptions = {
@@ -174,7 +176,7 @@ export function createAgentPair({
           acquisitionSeconds,
         );
         if (acquisitionSeconds * 1000 >= slowThresholdMs) {
-          log.warn('Slow outbound socket acquisition', {
+          log?.warn('Slow outbound socket acquisition', {
             client,
             acquisitionMs: Math.round(acquisitionSeconds * 1000),
             reused,

@@ -7,6 +7,7 @@
 
 import { default as axios, AxiosInstance } from 'axios';
 import { ByteRangeSource } from './byte-range-source.js';
+import { createAgentPair } from './http-agent.js';
 import { buildRangeHeader } from './http-utils.js';
 import { Semaphore } from './semaphore.js';
 
@@ -53,6 +54,7 @@ export class HttpByteRangeSource implements ByteRangeSource {
       httpClient ??
       axios.create({
         timeout,
+        ...createAgentPair({ client: 'HttpByteRangeSource' }),
         // Disable automatic response transformation
         transformResponse: [],
         // Don't follow redirects automatically for range requests
