@@ -16,6 +16,7 @@ import {
   ChainAnchorMismatchError,
   anchorChunkMetadata,
 } from '../lib/chunk-metadata-anchor.js';
+import { createAgentPair } from '../lib/http-agent.js';
 import { normalizeAbortError } from '../lib/http-utils.js';
 
 // Largest absolute weave offset this source will probe via the
@@ -137,6 +138,10 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       axiosInstance ??
       axios.create({
         timeout: requestTimeoutMs,
+        ...createAgentPair({
+          client: 'ChunkMetadataAnchorSource',
+          log: this.log,
+        }),
         // Don't throw on 4xx/5xx — let the parser decide whether the
         // headers are usable. Some peers may return 200 + headers even
         // when the chunk body itself is unavailable.

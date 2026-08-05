@@ -7,6 +7,7 @@
 
 import { default as axios, AxiosInstance } from 'axios';
 import { ByteRangeSource } from './byte-range-source.js';
+import { AgentPair, createAgentPair } from './http-agent.js';
 import { buildRangeHeader } from './http-utils.js';
 import { Semaphore } from './semaphore.js';
 
@@ -27,6 +28,12 @@ export class HttpByteRangeSource implements ByteRangeSource {
   private opened = true;
   private semaphore: Semaphore | undefined;
   private semaphoreTimeoutMs: number | undefined;
+  /**
+   * Agents this instance created and therefore owns. Undefined when an axios
+   * instance was injected — those agents belong to the caller and destroying
+   * them here would tear down a shared pool.
+   */
+  private ownedAgents: AgentPair | undefined;
 
   constructor({
     url,
@@ -49,10 +56,14 @@ export class HttpByteRangeSource implements ByteRangeSource {
     this.url = url;
     this.semaphore = semaphore;
     this.semaphoreTimeoutMs = semaphoreTimeoutMs;
+    if (httpClient === undefined) {
+      this.ownedAgents = createAgentPair({ client: 'HttpByteRangeSource' });
+    }
     this.httpClient =
       httpClient ??
       axios.create({
         timeout,
+        ...this.ownedAgents,
         // Disable automatic response transformation
         transformResponse: [],
         // Don't follow redirects automatically for range requests
@@ -106,6 +117,12 @@ export class HttpByteRangeSource implements ByteRangeSource {
 
   async close(): Promise<void> {
     this.opened = false;
+    // Keep-alive agents hold idle sockets open until their idle timeout. These
+    // sources are created per remote CDB source, so without an explicit
+    // teardown a discarded source leaves its pool lingering.
+    this.ownedAgents?.httpAgent.destroy();
+    this.ownedAgents?.httpsAgent.destroy();
+    this.ownedAgents = undefined;
   }
 
   isOpen(): boolean {

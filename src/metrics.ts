@@ -934,6 +934,26 @@ export const gatewaySocketConnectSeconds = new promClient.Histogram({
   buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5],
 });
 
+// Socket lifecycle for the non-data outbound clients (root TX discovery
+// sources, GraphQL fan-out). Deliberately labelled by CLIENT rather than
+// destination host: these clients each talk to a handful of upstreams and a
+// per-host label would be unbounded for anything reading a configurable peer
+// list. `reused=false` rising is the signal that pooling has stopped working —
+// every un-reused socket is a fresh `getaddrinfo` back on the libuv threadpool.
+export const outboundSocketAcquisitionSeconds = new promClient.Histogram({
+  name: 'outbound_socket_acquisition_seconds',
+  help: 'Time from an outbound client request needing a socket to a socket being assigned',
+  labelNames: ['client', 'reused'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+});
+
+export const outboundSocketConnectSeconds = new promClient.Histogram({
+  name: 'outbound_socket_connect_seconds',
+  help: 'TCP/TLS connect time for newly opened outbound client sockets',
+  labelNames: ['client'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5],
+});
+
 // PE-9099: count of local on-disk cache entries evicted by the lazy
 // poison-detection in ReadThroughDataCache when a caller's
 // `acceptContentType` predicate refuses the stored content-type. The

@@ -397,6 +397,30 @@ export const GATEWAY_MAX_FREE_SOCKETS_PER_HOST = parsePerHostNumber(
   4,
 );
 
+// Socket caps for the non-data outbound clients — root TX discovery sources and
+// the GraphQL fan-out. These are low-volume metadata lookups against a handful
+// of upstreams, so the caps are modest; the point of pooling here is not
+// throughput but avoiding a per-request `dns.lookup()`, which queues on the
+// libuv threadpool behind filesystem I/O (see src/lib/http-agent.ts). Node's
+// Agent keys its pool by host:port, so these apply per origin.
+export const OUTBOUND_MAX_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'OUTBOUND_MAX_SOCKETS_PER_HOST',
+  16,
+);
+// Defaults to the same value as OUTBOUND_MAX_SOCKETS_PER_HOST, deliberately.
+// maxFreeSockets bounds *idle* sockets: any concurrency above it means the
+// excess sockets are destroyed once they go idle and reopened on the next
+// request — and every reopen is a fresh `dns.lookup()`, the exact cost this
+// pooling exists to avoid. The data path caps free sockets well below max
+// because its objective is throughput management against many hosts; here the
+// objective is maximizing reuse across a handful of upstreams, so holding the
+// full set idle is the point. Cost is a few idle sockets per origin, retired
+// anyway by the agent's idle timeout.
+export const OUTBOUND_MAX_FREE_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'OUTBOUND_MAX_FREE_SOCKETS_PER_HOST',
+  OUTBOUND_MAX_SOCKETS_PER_HOST,
+);
+
 // Kill-switch for the untrusted-gateway provenance-param omission. By default
 // (false) the `ar-io-*` query params are NOT sent to untrusted gateways
 // (`trusted: false`), because CDN-fronted gateways such as arweave.net (behind

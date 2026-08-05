@@ -12,6 +12,7 @@ import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import { parseNonNegativeInt } from '../lib/http-utils.js';
+import { createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
@@ -138,6 +139,7 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
     // Initialize axios instance with retry configuration
     this.axiosInstance = axios.create({
       timeout: requestTimeoutMs,
+      ...createAgentPair({ client: 'GraphQLRootTxIndex', log: this.log }),
       headers: {
         'Content-Type': 'application/json',
         'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
