@@ -1827,3 +1827,41 @@ export const optimisticTxVerificationBlockedCounter = new promClient.Counter({
   name: 'optimistic_tx_verification_blocked_total',
   help: 'Count of verification attempts withheld because the root tx is not yet mined (optimistic / NULL height)',
 });
+
+//
+// Manifest path resolution
+//
+
+/**
+ * Count of manifest path resolutions, split by `source` — `index` (served from
+ * the persistent/cached index without parsing the body) vs `data` (on-demand
+ * body parse) — and by how the path resolved (`resolution_type`:
+ * path / index / fallback / unresolved). The index-vs-data ratio is the
+ * effectiveness signal for the resolution index and cache.
+ */
+export const manifestResolutionsTotal = new promClient.Counter({
+  name: 'manifest_resolutions_total',
+  help: 'Manifest path resolutions, by source (index vs on-demand data parse) and resolution type',
+  labelNames: ['source', 'resolution_type'] as const,
+});
+
+/**
+ * Count of manifest root/index requests that resolved to nothing. A rising
+ * value points at malformed manifests (e.g. an `index.path` with no matching
+ * `paths` entry and no fallback) being served from the gateway.
+ */
+export const manifestUnresolvedRootTotal = new promClient.Counter({
+  name: 'manifest_unresolved_root_total',
+  help: 'Manifest root/index requests that resolved to nothing (likely a malformed manifest)',
+});
+
+/**
+ * Manifest path resolution latency, by `source`. `data` resolutions parse the
+ * (potentially large) manifest body; `index` resolutions are a bounded lookup.
+ */
+export const manifestResolutionDurationSeconds = new promClient.Histogram({
+  name: 'manifest_resolution_duration_seconds',
+  help: 'Manifest path resolution latency, by source',
+  labelNames: ['source'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.025, 0.1, 0.5, 2],
+});
