@@ -7,6 +7,11 @@ envoy/
 # Data
 *.db*
 data/
+logs/
+
+# Git worktrees (./tools/wt add) - tens of GB; see PR #844.
+# Keep locally until that merges, or a local build can ENOSPC the daemon.
+wt/
 
 # Node
 node_modules/

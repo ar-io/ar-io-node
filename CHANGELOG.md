@@ -23,6 +23,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `CHUNK_POST_MIN_SUCCESS_COUNT` as intended instead of grinding the full peer
   list. Operators who relied on the prior 303-handling bug's accidental wide
   spread can restore it with `CHUNK_POST_CONTINUE_PAST_THRESHOLD=true` (#819).
+- **Default observer image bumped to `4d1ab036`** — `OBSERVER_IMAGE_TAG` moves
+  from `308b6777` (2026-06-20) to the current `ar-io-observer` release build,
+  picking up the full ArNS lease lifecycle in the epoch cranker, adaptive
+  cranker poll/cleanup intervals derived from epoch duration, the
+  `LeaveWindowNotExpired` (6079) not-ready classification, failed-gateway
+  summary attribution fixes, and `@ar.io/sdk` 4.1.0 (stable, mainnet).
+  `CRANK_POLL_INTERVAL_MS` and `CLEANUP_MIN_INTERVAL_MS` are now optional in
+  the observer — when unset the cranker derives them from the epoch duration;
+  an explicit value still wins. Both are now forwarded to the observer
+  container so that explicit value can actually be set from `.env`; leaving
+  them empty keeps the derived default. Operators who pin `OBSERVER_IMAGE_TAG`
+  in `.env` must update it there too, since that shadows the compose default.
 
 ### Fixed
 
