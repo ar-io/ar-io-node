@@ -640,6 +640,13 @@ services:
       # Cranker (Solana-only). When unset, observer skips cranking.
       - ENABLE_EPOCH_CRANKING=${ENABLE_EPOCH_CRANKING:-}
       - ENABLE_CLEANUP=${ENABLE_CLEANUP:-}
+      # Cranker cadence. Both are optional: left empty the observer derives
+      # them from the epoch duration (see the observer's
+      # `src/epoch/adaptive-intervals.ts`); an explicit value always wins.
+      # Empty is safe — the observer's `varOrUndefined` treats a blank env
+      # var as unset rather than feeding '' to the positive-integer check.
+      - CRANK_POLL_INTERVAL_MS=${CRANK_POLL_INTERVAL_MS:-}
+      - CLEANUP_MIN_INTERVAL_MS=${CLEANUP_MIN_INTERVAL_MS:-}
       # Solana wallet identities (operator/observer/upload). All four
       # supported configurations are documented in the observer's
       # `src/wallet-config.ts`. Each role accepts EITHER a JSON-file path

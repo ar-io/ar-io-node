@@ -31,8 +31,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   summary attribution fixes, and `@ar.io/sdk` 4.1.0 (stable, mainnet).
   `CRANK_POLL_INTERVAL_MS` and `CLEANUP_MIN_INTERVAL_MS` are now optional in
   the observer — when unset the cranker derives them from the epoch duration;
-  an explicit value still wins. Operators who pin `OBSERVER_IMAGE_TAG` in
-  `.env` must update it there too, since that shadows the compose default.
+  an explicit value still wins. Both are now forwarded to the observer
+  container so that explicit value can actually be set from `.env`; leaving
+  them empty keeps the derived default. Operators who pin `OBSERVER_IMAGE_TAG`
+  in `.env` must update it there too, since that shadows the compose default.
 
 ### Fixed
 
