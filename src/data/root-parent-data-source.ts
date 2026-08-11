@@ -218,8 +218,13 @@ export class RootParentDataSource implements ContiguousDataSource {
    * of a chunk-source round trip across peers that cannot succeed.
    *
    * Returns `fromPreComputed: false` only when the chain was fully resolved to
-   * an L1 transaction, so the caller persists corrected values but never a root
+   * an L1 transaction, so the caller caches corrected values but never a root
    * that is still bundled.
+   *
+   * NOTE: that caching is in-process only. `CompositeDataAttributesSource`
+   * .setDataAttributes writes to its LRU and does not write through to the
+   * database, so the stored row remains mis-rooted and this walk repeats after
+   * an eviction or a restart. Repairing rows requires a separate backfill.
    */
   private async rebaseStoredRootIfBundled(
     dataItemId: string,
