@@ -1493,6 +1493,12 @@ export const rootTxLocalResolveTotal = new promClient.Counter({
   labelNames: ['outcome'] as const,
 });
 
+export const rootTxStoredRootRebasedTotal = new promClient.Counter({
+  name: 'root_tx_stored_root_rebased_total',
+  help: "Data items whose stored root transaction ID was an intermediate bundle rather than an L1 transaction, and whose offsets were rebased onto the real root: resolved (reached an L1 transaction, corrected values persisted), incomplete (ran out of nesting hops, corrected values used for this request only). A non-zero rate means mis-rooted rows are still being read; a rising 'resolved' count during a backfill is expected.",
+  labelNames: ['outcome'] as const,
+});
+
 //
 // Root TX Semaphore metrics
 //
