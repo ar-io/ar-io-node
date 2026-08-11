@@ -243,11 +243,18 @@ export class RootParentDataSource implements ContiguousDataSource {
 
     const visited = new Set<string>([dataItemId]);
     let hops = 0;
-    let resolvedToL1 = false;
+    let outcome: 'resolved' | 'incomplete' | 'lookup_failed' | undefined;
+    let cycleDetected = false;
+    // True once some ancestor is proven bundled, i.e. the stored root really
+    // was wrong. Distinguishes a genuine mis-root from the healthy path, so the
+    // counter is not inflated by every well-formed item.
+    let bundlingConfirmed = false;
 
     while (hops < MAX_BUNDLE_NESTING_DEPTH) {
       if (visited.has(rootTxId)) {
         log.warn('Cycle detected while validating stored root', { rootTxId });
+        cycleDetected = true;
+        outcome = 'incomplete';
         break;
       }
       visited.add(rootTxId);
@@ -261,6 +268,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           rootTxId,
           error: error.message,
         });
+        outcome = 'lookup_failed';
         break;
       }
 
@@ -274,9 +282,11 @@ export class RootParentDataSource implements ContiguousDataSource {
         parentRootTxId.trim().length === 0 ||
         parentRootTxId === rootTxId
       ) {
-        resolvedToL1 = true;
+        outcome = 'resolved';
         break;
       }
+
+      bundlingConfirmed = true;
 
       // The root is demonstrably bundled, so it is not an L1 transaction.
       // Without its payload offset we cannot rebase, and emitting a corrected
@@ -287,6 +297,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           'Stored root is bundled but has no payload offset; cannot rebase',
           { rootTxId, parentRootTxId },
         );
+        outcome = 'incomplete';
         break;
       }
 
@@ -296,13 +307,31 @@ export class RootParentDataSource implements ContiguousDataSource {
       hops += 1;
     }
 
-    if (hops === 0) {
+    // Ran out of nesting depth without reaching an L1 transaction.
+    if (outcome === undefined) {
+      outcome = 'incomplete';
+    }
+
+    // A cycle means the chain is corrupt, and the walk has already advanced
+    // past the offending hop — the accumulated offsets are paired with an ID we
+    // have seen before, possibly the data item itself. Discard the partial
+    // rebase and keep the stored pair, as the missing-payload-offset branch
+    // does. A half-rebased root is worse than an uncorrected one.
+    if (cycleDetected) {
+      metrics.rootTxStoredRootRebasedTotal.inc({ outcome });
       return { ...stored, fromPreComputed: true };
     }
 
-    metrics.rootTxStoredRootRebasedTotal.inc({
-      outcome: resolvedToL1 ? 'resolved' : 'incomplete',
-    });
+    if (hops === 0) {
+      // Nothing was rebased. Count only when the stored root was actually shown
+      // to be bundled, or when the check itself failed.
+      if (bundlingConfirmed || outcome === 'lookup_failed') {
+        metrics.rootTxStoredRootRebasedTotal.inc({ outcome });
+      }
+      return { ...stored, fromPreComputed: true };
+    }
+
+    metrics.rootTxStoredRootRebasedTotal.inc({ outcome });
 
     log.info('Rebased stored root onto its L1 transaction', {
       dataItemId,
@@ -311,7 +340,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       storedRootDataOffset: stored.rootDataOffset,
       rebasedRootDataOffset: rootDataOffset,
       hops,
-      resolvedToL1,
+      outcome,
     });
 
     return {
@@ -322,7 +351,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       // Persist only a fully resolved chain. A chain that ran out of hops is
       // closer to correct but still bundled; storing it would recreate the
       // defect this method exists to correct.
-      fromPreComputed: !resolvedToL1,
+      fromPreComputed: outcome !== 'resolved',
     };
   }
 

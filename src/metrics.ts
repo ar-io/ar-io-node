@@ -1495,7 +1495,7 @@ export const rootTxLocalResolveTotal = new promClient.Counter({
 
 export const rootTxStoredRootRebasedTotal = new promClient.Counter({
   name: 'root_tx_stored_root_rebased_total',
-  help: "Data items whose stored root transaction ID was an intermediate bundle rather than an L1 transaction, and whose offsets were rebased onto the real root: resolved (reached an L1 transaction, corrected values persisted), incomplete (ran out of nesting hops, corrected values used for this request only). A non-zero rate means mis-rooted rows are still being read; a rising 'resolved' count during a backfill is expected.",
+  help: "Data items whose stored root transaction ID was shown to be an intermediate bundle rather than an L1 transaction: resolved (walked to an L1 transaction, corrected values persisted), incomplete (bundling confirmed but the chain could not be fully resolved — no payload offset on an ancestor, nesting depth exhausted, or a cycle; the stored or partially rebased values are used for this request only and never persisted), lookup_failed (the validating attribute read threw, so nothing could be determined). Any non-zero rate means mis-rooted rows are still being read. Correctly rooted items do not increment this counter.",
   labelNames: ['outcome'] as const,
 });
 

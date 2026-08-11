@@ -29,6 +29,14 @@ async function readLocalResolve(outcome: string): Promise<number> {
   );
 }
 
+// Same deal for the stored-root rebase counter: assert deltas, not absolutes.
+async function readRebased(outcome: string): Promise<number> {
+  const metric = await metrics.rootTxStoredRootRebasedTotal.get();
+  return (
+    metric.values.find((v: any) => v.labels.outcome === outcome)?.value ?? 0
+  );
+}
+
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
   let dataSource: ContiguousDataSource;
@@ -2615,6 +2623,7 @@ describe('RootParentDataSource', () => {
         },
       );
       stubDataFetch();
+      const before = await readRebased('resolved');
 
       await rootParentDataSource.getData({ id: ITEM });
 
@@ -2625,6 +2634,7 @@ describe('RootParentDataSource', () => {
         'must fetch from the L1 root, not the intermediate bundle',
       );
       assert.deepStrictEqual(dataCall.region, { offset: 2999200, size: 94 });
+      assert.strictEqual((await readRebased('resolved')) - before, 1);
     });
 
     it('persists the corrected root and offsets', async () => {
@@ -2662,6 +2672,10 @@ describe('RootParentDataSource', () => {
     });
 
     it('leaves a correctly rooted item untouched', async () => {
+      const rebasedBefore: Record<string, number> = {};
+      for (const outcome of ['resolved', 'incomplete', 'lookup_failed']) {
+        rebasedBefore[outcome] = await readRebased(outcome);
+      }
       (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === ITEM) return { ...itemAttributes, rootTransactionId: L1 };
@@ -2682,6 +2696,15 @@ describe('RootParentDataSource', () => {
         0,
         'a valid root must not be rewritten',
       );
+      // The counter measures mis-rooted reads, so the healthy path must leave
+      // every label untouched.
+      for (const outcome of ['resolved', 'incomplete', 'lookup_failed']) {
+        assert.strictEqual(
+          (await readRebased(outcome)) - (rebasedBefore[outcome] ?? 0),
+          0,
+          `correctly rooted item must not increment ${outcome}`,
+        );
+      }
     });
 
     it('walks more than one level of nesting', async () => {
@@ -2722,6 +2745,7 @@ describe('RootParentDataSource', () => {
         },
       );
       stubDataFetch();
+      const before = await readRebased('incomplete');
 
       await rootParentDataSource.getData({ id: ITEM });
 
@@ -2736,9 +2760,11 @@ describe('RootParentDataSource', () => {
         (dataAttributesStore.setDataAttributes as any).mock.calls.length,
         0,
       );
+      // hops === 0, but bundling was confirmed, so this must still be counted.
+      assert.strictEqual((await readRebased('incomplete')) - before, 1);
     });
 
-    it('stops on a cycle in the stored root chain', async () => {
+    it('discards a partial rebase when the stored root chain cycles', async () => {
       (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === ITEM) return itemAttributes;
@@ -2749,13 +2775,22 @@ describe('RootParentDataSource', () => {
         },
       );
       stubDataFetch();
+      const before = await readRebased('incomplete');
 
       await rootParentDataSource.getData({ id: ITEM });
 
-      // ITEM is already visited, so the walk halts rather than looping.
+      // The walk advances past the offending hop before it notices the cycle,
+      // so the accumulated offsets end up paired with the data item ID itself.
+      // That pair must be thrown away, not served: fall back to the stored
+      // root and offsets, which are at least in one consistent frame.
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
-      assert.strictEqual(dataCall.id, ITEM);
-      assert.deepStrictEqual(dataCall.region, { offset: 1419, size: 94 });
+      assert.strictEqual(dataCall.id, MID);
+      assert.deepStrictEqual(dataCall.region, { offset: 1409, size: 94 });
+      assert.strictEqual(
+        (dataAttributesStore.setDataAttributes as any).mock.calls.length,
+        0,
+      );
+      assert.strictEqual((await readRebased('incomplete')) - before, 1);
     });
   });
 });
