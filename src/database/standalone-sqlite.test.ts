@@ -2143,6 +2143,62 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('saveDataContentAttributes dedupe', () => {
+    // The write dedupe is keyed on the root coordinates, not the ID alone.
+    // Keyed on the ID, the first writer inside the 7-minute TTL won: a
+    // retrieval resolving before RootParentDataSource re-persisted the item's
+    // existing root and claimed the slot, so a corrected root arriving in the
+    // same window was dropped and the row stayed mis-rooted.
+    // 43-char base64url: the final character carries only 2 significant bits,
+    // so it must be canonical or the value will not survive a decode/encode
+    // round trip through the index.
+    const ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0';
+    const INTERMEDIATE = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0';
+    const L1_ROOT = 'cccccccccccccccccccccccccccccccccccccccccc0';
+
+    it('lets a corrected root through inside the dedupe window', async () => {
+      await db.saveDataContentAttributes({
+        id: ID,
+        hash: 'hash',
+        dataSize: 94,
+        rootTransactionId: INTERMEDIATE,
+        rootDataItemOffset: 160,
+        rootDataOffset: 1409,
+      });
+
+      // Same values again: nothing changes, so this should be suppressed.
+      await db.saveDataContentAttributes({
+        id: ID,
+        hash: 'hash',
+        dataSize: 94,
+        rootTransactionId: INTERMEDIATE,
+        rootDataItemOffset: 160,
+        rootDataOffset: 1409,
+      });
+
+      assert.equal(
+        (await db.getDataAttributes(ID))?.rootTransactionId,
+        INTERMEDIATE,
+      );
+
+      // A rebase onto the real L1 root, well inside the TTL. Keyed on the ID
+      // this was dropped; it must land.
+      await db.saveDataContentAttributes({
+        id: ID,
+        hash: 'hash',
+        dataSize: 94,
+        rootTransactionId: L1_ROOT,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+      });
+
+      const corrected = await db.getDataAttributes(ID);
+      assert.equal(corrected?.rootTransactionId, L1_ROOT);
+      assert.equal(corrected?.rootDataItemOffset, 2997951);
+      assert.equal(corrected?.rootDataOffset, 2999200);
+    });
+  });
+
   describe('getVerifiableDataIds', () => {
     it("should return an empty list if there's no verifiable data ids", async () => {
       const emptyDbIds = await db.getVerifiableDataIds();

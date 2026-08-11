@@ -4137,14 +4137,33 @@ export class StandaloneSqliteDatabase
     rootDataOffset?: number;
     trusted?: boolean;
   }) {
-    if (this.saveDataContentAttributesCache.get(id)) {
+    // Dedupe on the root coordinates rather than the ID alone. Keying on the ID
+    // made the first writer within the TTL win: a retrieval that resolved
+    // before RootParentDataSource would re-persist the item's existing root,
+    // claim the slot, and a corrected root from the rebase walk arriving inside
+    // the same window was silently dropped. Including the root fields keeps
+    // suppressing writes that would change nothing, while letting a write that
+    // actually moves the item's root coordinates through every time.
+    //
+    // This can only admit writes the ID-only key would have suppressed, never
+    // suppress ones it allowed, and the extra writes are limited to genuine
+    // corrections — so the protection this cache exists to give the write
+    // queue is preserved.
+    const dedupeKey = [
+      id,
+      rootTransactionId ?? '',
+      rootDataItemOffset ?? '',
+      rootDataOffset ?? '',
+    ].join('|');
+
+    if (this.saveDataContentAttributesCache.get(dedupeKey)) {
       metrics.sqliteMethodDuplicateCallsCounter.inc({
         method: 'saveDataContentAttributes',
       });
       return Promise.resolve();
     }
 
-    this.saveDataContentAttributesCache.set(id, true);
+    this.saveDataContentAttributesCache.set(dedupeKey, true);
 
     return this.queueWrite('data', 'saveDataContentAttributes', [
       {
