@@ -1493,6 +1493,12 @@ export const rootTxLocalResolveTotal = new promClient.Counter({
   labelNames: ['outcome'] as const,
 });
 
+export const rootTxStoredRootRebasedTotal = new promClient.Counter({
+  name: 'root_tx_stored_root_rebased_total',
+  help: "Data items whose stored root transaction ID was shown to be an intermediate bundle rather than an L1 transaction: resolved (walked to an L1 transaction and served from it), incomplete (bundling confirmed but the chain could not be fully resolved — no payload offset on an ancestor, nesting depth exhausted, or a cycle), lookup_failed (the validating attribute read threw, so nothing could be determined). Correctly rooted items do not increment this counter. A 'resolved' rebase is normally written back to the row: ReadThroughDataCache re-reads attributes after retrieval and queues them for persistence, so an item repairs itself on a cold fetch. The write is skipped when another saveDataContentAttributes for the same ID landed in the previous 7 minutes (the StandaloneSqlite dedupe window), in which case the correction applies to this request only and the row is repaired on a later fetch. Rows never requested are never repaired.",
+  labelNames: ['outcome'] as const,
+});
+
 //
 // Root TX Semaphore metrics
 //

@@ -203,6 +203,172 @@ export class RootParentDataSource implements ContiguousDataSource {
   }
 
   /**
+   * Validates a stored root transaction ID and, when it turns out to be an
+   * intermediate bundle rather than an L1 transaction, rebases the offsets onto
+   * the real root.
+   *
+   * A data item's stored offsets are correct *relative to the recorded root*.
+   * When that root is itself a bundled data item, the true offsets come from
+   * adding the parent's own payload offset (`rootDataOffset`). It must be the
+   * payload offset and not `rootDataItemOffset`, because a child's offsets are
+   * measured from the start of the parent bundle's payload, not from the
+   * parent's header.
+   *
+   * Every lookup is local, so an incorrect root costs microseconds here instead
+   * of a chunk-source round trip across peers that cannot succeed.
+   *
+   * Returns `fromPreComputed: false` only when the chain was fully resolved to
+   * an L1 transaction, so the caller caches corrected values but never a root
+   * that is still bundled.
+   *
+   * `CompositeDataAttributesSource.setDataAttributes` writes only to its LRU,
+   * but that is not the end of the story: `ReadThroughDataCache` re-reads
+   * attributes after a successful retrieval and queues them through
+   * `DataContentAttributeImporter`, so a corrected root is normally written
+   * back to the row and the item repairs itself on a cold fetch.
+   *
+   * Two cases leave the row unrepaired. `StandaloneSqlite` skips the write when
+   * another `saveDataContentAttributes` for the same ID landed within its
+   * 7-minute dedupe window, so a correction can be deferred to a later fetch.
+   * And an item that is never requested is never repaired, which is why a
+   * backfill is still needed for rows that must be correct for consumers that
+   * read them directly rather than through this source.
+   */
+  private async rebaseStoredRootIfBundled(
+    dataItemId: string,
+    stored: {
+      rootTxId: string;
+      totalOffset: number;
+      rootDataOffset: number;
+      size: number;
+    },
+    log: winston.Logger,
+  ): Promise<{
+    rootTxId: string;
+    totalOffset: number;
+    rootDataOffset: number;
+    size: number;
+    fromPreComputed: boolean;
+  }> {
+    let rootTxId = stored.rootTxId;
+    let totalOffset = stored.totalOffset;
+    let rootDataOffset = stored.rootDataOffset;
+
+    const visited = new Set<string>([dataItemId]);
+    let hops = 0;
+    let outcome: 'resolved' | 'incomplete' | 'lookup_failed' | undefined;
+    let cycleDetected = false;
+    // True once some ancestor is proven bundled, i.e. the stored root really
+    // was wrong. Distinguishes a genuine mis-root from the healthy path, so the
+    // counter is not inflated by every well-formed item.
+    let bundlingConfirmed = false;
+
+    while (hops < MAX_BUNDLE_NESTING_DEPTH) {
+      if (visited.has(rootTxId)) {
+        log.warn('Cycle detected while validating stored root', { rootTxId });
+        cycleDetected = true;
+        outcome = 'incomplete';
+        break;
+      }
+      visited.add(rootTxId);
+
+      let rootAttributes: ContiguousDataAttributes | undefined;
+      try {
+        rootAttributes =
+          await this.dataAttributesStore.getDataAttributes(rootTxId);
+      } catch (error: any) {
+        log.debug('Failed to load attributes while validating stored root', {
+          rootTxId,
+          error: error.message,
+        });
+        outcome = 'lookup_failed';
+        break;
+      }
+
+      // Either we have no record of this root, or it carries no root of its
+      // own. Both mean we cannot show it is bundled, so treat it as L1 and
+      // keep what we have — this is the overwhelmingly common path.
+      const parentRootTxId = rootAttributes?.rootTransactionId;
+      if (
+        rootAttributes === undefined ||
+        parentRootTxId === undefined ||
+        parentRootTxId.trim().length === 0 ||
+        parentRootTxId === rootTxId
+      ) {
+        outcome = 'resolved';
+        break;
+      }
+
+      bundlingConfirmed = true;
+
+      // The root is demonstrably bundled, so it is not an L1 transaction.
+      // Without its payload offset we cannot rebase, and emitting a corrected
+      // root beside uncorrected offsets would mix two coordinate frames. Keep
+      // the stored pair instead.
+      if (rootAttributes.rootDataOffset === undefined) {
+        log.warn(
+          'Stored root is bundled but has no payload offset; cannot rebase',
+          { rootTxId, parentRootTxId },
+        );
+        outcome = 'incomplete';
+        break;
+      }
+
+      totalOffset += rootAttributes.rootDataOffset;
+      rootDataOffset += rootAttributes.rootDataOffset;
+      rootTxId = parentRootTxId;
+      hops += 1;
+    }
+
+    // Ran out of nesting depth without reaching an L1 transaction.
+    if (outcome === undefined) {
+      outcome = 'incomplete';
+    }
+
+    // A cycle means the chain is corrupt, and the walk has already advanced
+    // past the offending hop — the accumulated offsets are paired with an ID we
+    // have seen before, possibly the data item itself. Discard the partial
+    // rebase and keep the stored pair, as the missing-payload-offset branch
+    // does. A half-rebased root is worse than an uncorrected one.
+    if (cycleDetected) {
+      metrics.rootTxStoredRootRebasedTotal.inc({ outcome });
+      return { ...stored, fromPreComputed: true };
+    }
+
+    if (hops === 0) {
+      // Nothing was rebased. Count only when the stored root was actually shown
+      // to be bundled, or when the check itself failed.
+      if (bundlingConfirmed || outcome === 'lookup_failed') {
+        metrics.rootTxStoredRootRebasedTotal.inc({ outcome });
+      }
+      return { ...stored, fromPreComputed: true };
+    }
+
+    metrics.rootTxStoredRootRebasedTotal.inc({ outcome });
+
+    log.info('Rebased stored root onto its L1 transaction', {
+      dataItemId,
+      storedRootTxId: stored.rootTxId,
+      rebasedRootTxId: rootTxId,
+      storedRootDataOffset: stored.rootDataOffset,
+      rebasedRootDataOffset: rootDataOffset,
+      hops,
+      outcome,
+    });
+
+    return {
+      rootTxId,
+      totalOffset,
+      rootDataOffset,
+      size: stored.size,
+      // Persist only a fully resolved chain. A chain that ran out of hops is
+      // closer to correct but still bundled; storing it would recreate the
+      // defect this method exists to correct.
+      fromPreComputed: outcome !== 'resolved',
+    };
+  }
+
+  /**
    * Traverses the parent chain using data attributes to find the root transaction.
    * Returns null if traversal is incomplete due to missing attributes.
    */
@@ -215,6 +381,13 @@ export class RootParentDataSource implements ContiguousDataSource {
     rootDataOffset: number;
     size: number;
     fromPreComputed: boolean;
+    /**
+     * True when the root was inferred from an ancestor we hold no attributes
+     * for. Such a root is usable for this request but must not be persisted:
+     * "parent not indexed yet" is indistinguishable here from "this is the L1
+     * root", and storing the guess is what mis-roots items permanently.
+     */
+    provisional?: boolean;
   } | null> {
     const log = this.log.child({
       method: 'traverseToRootUsingAttributes',
@@ -248,13 +421,22 @@ export class RootParentDataSource implements ContiguousDataSource {
         size: initialAttributes.size,
       });
 
-      return {
-        rootTxId: initialAttributes.rootTransactionId,
-        totalOffset: initialAttributes.rootDataItemOffset,
-        rootDataOffset: initialAttributes.rootDataOffset,
-        size: initialAttributes.size,
-        fromPreComputed: true,
-      };
+      // A stored root is not automatically an L1 transaction. If the parent
+      // chain was incomplete when these offsets were computed, an intermediate
+      // bundle can be recorded as the root. Chunk retrieval requires an L1
+      // transaction, so a non-L1 root sends TxChunksDataSource after chunks
+      // that cannot exist — it discovers this by polling peers, which is slow.
+      // Rebase onto the real root using purely local lookups instead.
+      return this.rebaseStoredRootIfBundled(
+        dataItemId,
+        {
+          rootTxId: initialAttributes.rootTransactionId,
+          totalOffset: initialAttributes.rootDataItemOffset,
+          rootDataOffset: initialAttributes.rootDataOffset,
+          size: initialAttributes.size,
+        },
+        log,
+      );
     }
 
     log.debug('Root offsets not available, traversing parent chain');
@@ -285,8 +467,12 @@ export class RootParentDataSource implements ContiguousDataSource {
       const attributes = currentAttributes;
 
       if (attributes === null || attributes === undefined) {
-        // If we've traversed to this item via parent links, it's the root
-        log.debug('Reached root transaction (no attributes after traversal)', {
+        // We hold no attributes for this ancestor. That may mean it is the L1
+        // root, or only that we have not indexed it yet — the two are
+        // indistinguishable from here. Serve the request with this root, but
+        // mark it provisional so it is not written back; persisting the guess
+        // is what leaves items permanently rooted at an intermediate bundle.
+        log.debug('Reached presumed root transaction (no attributes)', {
           rootTxId: currentId,
           totalOffset,
           traversalPath,
@@ -298,6 +484,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
           size: originalItemSize!,
           fromPreComputed: false,
+          provisional: true,
         };
       }
 
@@ -614,8 +801,14 @@ export class RootParentDataSource implements ContiguousDataSource {
       );
 
       if (attributesTraversal) {
-        const { rootTxId, totalOffset, rootDataOffset, size, fromPreComputed } =
-          attributesTraversal;
+        const {
+          rootTxId,
+          totalOffset,
+          rootDataOffset,
+          size,
+          fromPreComputed,
+          provisional,
+        } = attributesTraversal;
 
         this.log.debug('Successfully traversed using attributes', {
           id,
@@ -632,8 +825,9 @@ export class RootParentDataSource implements ContiguousDataSource {
           'data.item.size': size,
         });
 
-        // Only store if traversal actually computed new offsets
-        if (!fromPreComputed) {
+        // Only store if traversal actually computed new offsets, and never
+        // store a root that was merely presumed (see `provisional`).
+        if (!fromPreComputed && provisional !== true) {
           await this.tryCacheAttributes(
             id,
             {

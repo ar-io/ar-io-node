@@ -29,6 +29,14 @@ async function readLocalResolve(outcome: string): Promise<number> {
   );
 }
 
+// Same deal for the stored-root rebase counter: assert deltas, not absolutes.
+async function readRebased(outcome: string): Promise<number> {
+  const metric = await metrics.rootTxStoredRootRebasedTotal.get();
+  return (
+    metric.values.find((v: any) => v.labels.outcome === outcome)?.value ?? 0
+  );
+}
+
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
   let dataSource: ContiguousDataSource;
@@ -783,10 +791,13 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.size, 500);
       assert.strictEqual(result.stream, dataStream);
 
-      // Should have called getDataAttributes once (reused by traversal for pre-computed check)
+      // Two attribute reads: the item's own (reused by traversal for the
+      // pre-computed check) plus one local lookup of the stored root, which
+      // confirms the root is an L1 transaction and not an intermediate bundle.
+      // Both are local; no parent chain is walked.
       assert.strictEqual(
         (dataAttributesStore.getDataAttributes as any).mock.calls.length,
-        1,
+        2,
       );
 
       // Should NOT have traversed parents (optimization worked!)
@@ -2557,6 +2568,229 @@ describe('RootParentDataSource', () => {
         0,
       );
       assert.strictEqual((dataSource.getData as any).mock.calls.length, 0);
+    });
+  });
+
+  // A stored root transaction ID is not automatically an L1 transaction. If the
+  // parent chain was incomplete when the offsets were computed, an intermediate
+  // bundle gets recorded as the root. The offsets stored beside it are correct
+  // *in that bundle's frame*, so a rebase must add the parent's payload offset
+  // rather than simply swapping the root.
+  //
+  // Figures below are from a real mis-rooted item observed in production:
+  //   item   rootDataItemOffset=160      rootDataOffset=1409   size=94
+  //   parent rootDataOffset=2997791  ->  L1 root
+  //   rebased: 2997791+160=2997951, 2997791+1409=2999200 (verified end to end)
+  describe('stored root validation', () => {
+    const ITEM = 'bzKh-item';
+    const MID = 'jVtj-intermediate-bundle';
+    const L1 = 'WRjL-l1-root';
+
+    const itemAttributes = {
+      size: 94,
+      offset: 160,
+      dataOffset: 1409,
+      parentId: MID,
+      contentType: 'application/json',
+      rootTransactionId: MID,
+      rootDataItemOffset: 160,
+      rootDataOffset: 1409,
+    };
+
+    const stubDataFetch = () => {
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('x'.repeat(94))]),
+        size: 94,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+    };
+
+    it('rebases offsets onto the L1 root when the stored root is bundled', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return itemAttributes;
+          if (id === MID) {
+            return {
+              size: 2803,
+              rootTransactionId: L1,
+              rootDataItemOffset: 2996625,
+              rootDataOffset: 2997791,
+            };
+          }
+          return undefined;
+        },
+      );
+      stubDataFetch();
+      const before = await readRebased('resolved');
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(
+        dataCall.id,
+        L1,
+        'must fetch from the L1 root, not the intermediate bundle',
+      );
+      assert.deepStrictEqual(dataCall.region, { offset: 2999200, size: 94 });
+      assert.strictEqual((await readRebased('resolved')) - before, 1);
+    });
+
+    it('persists the corrected root and offsets', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return itemAttributes;
+          if (id === MID) {
+            return {
+              size: 2803,
+              rootTransactionId: L1,
+              rootDataOffset: 2997791,
+            };
+          }
+          return undefined;
+        },
+      );
+      stubDataFetch();
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      const setCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      assert.strictEqual(
+        setCalls.length,
+        1,
+        'correction should be written back',
+      );
+      assert.strictEqual(setCalls[0].arguments[0], ITEM);
+      assert.deepStrictEqual(setCalls[0].arguments[1], {
+        rootTransactionId: L1,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+        size: 94,
+      });
+    });
+
+    it('leaves a correctly rooted item untouched', async () => {
+      const rebasedBefore: Record<string, number> = {};
+      for (const outcome of ['resolved', 'incomplete', 'lookup_failed']) {
+        rebasedBefore[outcome] = await readRebased(outcome);
+      }
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return { ...itemAttributes, rootTransactionId: L1 };
+          // The L1 root carries no root of its own.
+          if (id === L1) return { size: 3098422 };
+          return undefined;
+        },
+      );
+      stubDataFetch();
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, L1);
+      assert.deepStrictEqual(dataCall.region, { offset: 1409, size: 94 });
+      assert.strictEqual(
+        (dataAttributesStore.setDataAttributes as any).mock.calls.length,
+        0,
+        'a valid root must not be rewritten',
+      );
+      // The counter measures mis-rooted reads, so the healthy path must leave
+      // every label untouched.
+      for (const outcome of ['resolved', 'incomplete', 'lookup_failed']) {
+        assert.strictEqual(
+          (await readRebased(outcome)) - (rebasedBefore[outcome] ?? 0),
+          0,
+          `correctly rooted item must not increment ${outcome}`,
+        );
+      }
+    });
+
+    it('walks more than one level of nesting', async () => {
+      const OUTER = 'outer-bundle';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return itemAttributes;
+          if (id === MID) {
+            return {
+              size: 2803,
+              rootTransactionId: OUTER,
+              rootDataOffset: 1000,
+            };
+          }
+          if (id === OUTER) {
+            return { size: 50000, rootTransactionId: L1, rootDataOffset: 7000 };
+          }
+          return undefined;
+        },
+      );
+      stubDataFetch();
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, L1);
+      // 1409 + 1000 + 7000
+      assert.deepStrictEqual(dataCall.region, { offset: 9409, size: 94 });
+    });
+
+    it('keeps the stored pair when the parent has no payload offset', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return itemAttributes;
+          // Known to be bundled, but not rebasable.
+          if (id === MID) return { size: 2803, rootTransactionId: L1 };
+          return undefined;
+        },
+      );
+      stubDataFetch();
+      const before = await readRebased('incomplete');
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(
+        dataCall.id,
+        MID,
+        'must not emit a corrected root beside uncorrected offsets',
+      );
+      assert.deepStrictEqual(dataCall.region, { offset: 1409, size: 94 });
+      assert.strictEqual(
+        (dataAttributesStore.setDataAttributes as any).mock.calls.length,
+        0,
+      );
+      // hops === 0, but bundling was confirmed, so this must still be counted.
+      assert.strictEqual((await readRebased('incomplete')) - before, 1);
+    });
+
+    it('discards a partial rebase when the stored root chain cycles', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return itemAttributes;
+          if (id === MID) {
+            return { size: 2803, rootTransactionId: ITEM, rootDataOffset: 10 };
+          }
+          return undefined;
+        },
+      );
+      stubDataFetch();
+      const before = await readRebased('incomplete');
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      // The walk advances past the offending hop before it notices the cycle,
+      // so the accumulated offsets end up paired with the data item ID itself.
+      // That pair must be thrown away, not served: fall back to the stored
+      // root and offsets, which are at least in one consistent frame.
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, MID);
+      assert.deepStrictEqual(dataCall.region, { offset: 1409, size: 94 });
+      assert.strictEqual(
+        (dataAttributesStore.setDataAttributes as any).mock.calls.length,
+        0,
+      );
+      assert.strictEqual((await readRebased('incomplete')) - before, 1);
     });
   });
 });
