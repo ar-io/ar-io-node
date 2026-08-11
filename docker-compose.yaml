@@ -647,6 +647,7 @@ services:
       # var as unset rather than feeding '' to the positive-integer check.
       - CRANK_POLL_INTERVAL_MS=${CRANK_POLL_INTERVAL_MS:-}
       - CLEANUP_MIN_INTERVAL_MS=${CLEANUP_MIN_INTERVAL_MS:-}
+      - CLEANUP_TO_RETURNED_TXS_PER_CYCLE=${CLEANUP_TO_RETURNED_TXS_PER_CYCLE:-}
       # Solana wallet identities (operator/observer/upload). All four
       # supported configurations are documented in the observer's
       # `src/wallet-config.ts`. Each role accepts EITHER a JSON-file path
