@@ -2214,11 +2214,8 @@ describe('StandaloneSqliteDatabase', () => {
       };
 
       await db.saveDataContentAttributes(attrs);
-      assert.notEqual(
-        (await db.getDataAttributes(EVICTED))?.hash,
-        undefined,
-        'hash should be set',
-      );
+      const initialHash = (await db.getDataAttributes(EVICTED))?.hash;
+      assert.notEqual(initialHash, undefined, 'hash should be set');
 
       // Cache re-verification found a mismatch and evicted the blob.
       await db.clearDataHash(EVICTED);
@@ -2233,10 +2230,10 @@ describe('StandaloneSqliteDatabase', () => {
       // ID would miss them and this write would be suppressed, stranding the
       // row with a null hash until the window expired.
       await db.saveDataContentAttributes(attrs);
-      assert.notEqual(
+      assert.equal(
         (await db.getDataAttributes(EVICTED))?.hash,
-        undefined,
-        'hash must be restored: the dedupe entry should have been invalidated',
+        initialHash,
+        'the original hash must be restored: the dedupe entry should have been invalidated',
       );
     });
   });
