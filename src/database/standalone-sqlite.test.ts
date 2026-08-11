@@ -2197,6 +2197,48 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(corrected?.rootDataItemOffset, 2997951);
       assert.equal(corrected?.rootDataOffset, 2999200);
     });
+
+    it('lets an identical re-save through after clearDataHash', async () => {
+      const EVICTED = 'dddddddddddddddddddddddddddddddddddddddddd0';
+      const attrs = {
+        id: EVICTED,
+        // A hash unique to this test. `insertDataHashCache` is an in-process
+        // LRU that outlives the per-test database reset, so reusing a hash
+        // another test already wrote makes insertDataHash a no-op here and the
+        // contiguous_data row never appears.
+        hash: 'clearDataHashRegression',
+        dataSize: 94,
+        rootTransactionId: L1_ROOT,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+      };
+
+      await db.saveDataContentAttributes(attrs);
+      assert.notEqual(
+        (await db.getDataAttributes(EVICTED))?.hash,
+        undefined,
+        'hash should be set',
+      );
+
+      // Cache re-verification found a mismatch and evicted the blob.
+      await db.clearDataHash(EVICTED);
+      assert.equal(
+        (await db.getDataAttributes(EVICTED))?.hash,
+        undefined,
+        'hash should be cleared',
+      );
+
+      // The re-save carries identical root coordinates and lands inside the
+      // dedupe TTL. Because the keys embed those coordinates, clearing by bare
+      // ID would miss them and this write would be suppressed, stranding the
+      // row with a null hash until the window expired.
+      await db.saveDataContentAttributes(attrs);
+      assert.notEqual(
+        (await db.getDataAttributes(EVICTED))?.hash,
+        undefined,
+        'hash must be restored: the dedupe entry should have been invalidated',
+      );
+    });
   });
 
   describe('getVerifiableDataIds', () => {

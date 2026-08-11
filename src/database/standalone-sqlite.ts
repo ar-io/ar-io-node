@@ -4100,6 +4100,21 @@ export class StandaloneSqliteDatabase
     return debugInfo;
   }
 
+  /**
+   * Queues an item's content attributes — hash, size, content type, and its
+   * position within the root transaction — for persistence.
+   *
+   * Writes are deduped over a {@link DEDUPE_CACHE_TTL_MS} window keyed on the
+   * item ID **and its root coordinates** (`rootTransactionId`,
+   * `rootDataItemOffset`, `rootDataOffset`). A repeat write carrying the same
+   * coordinates is dropped, which is what the cache exists for; a write that
+   * moves the item to a different root always reaches the queue. Keying on the
+   * ID alone let whichever retrieval finished first inside the window win, so a
+   * corrected root arriving behind an unchanged write was silently discarded.
+   *
+   * Callers that invalidate an item must clear every dedupe entry for it, not
+   * just the bare ID — see {@link clearDataHash}.
+   */
   saveDataContentAttributes({
     id,
     parentId,
@@ -4393,8 +4408,25 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getRootTxFromCoreAndBundles', [id]);
   }
 
+  /**
+   * Clears an item's cached data hash, used when cache re-verification finds a
+   * mismatch and the blob is evicted.
+   *
+   * Also drops every `saveDataContentAttributes` dedupe entry for the item.
+   * Those keys carry the item's root coordinates, so deleting the bare ID would
+   * match nothing and the re-save that must follow an eviction would be
+   * suppressed until the TTL expired — leaving the row with a null hash. The
+   * scan is over a cache bounded at {@link DEDUPE_CACHE_MAX_SIZE}, and this
+   * path only runs on a verification mismatch, so the cost is not on any hot
+   * route. `|` cannot appear in a base64url ID, so the prefix is unambiguous.
+   */
   async clearDataHash(id: string) {
-    this.saveDataContentAttributesCache.delete(id);
+    const prefix = `${id}|`;
+    for (const key of [...this.saveDataContentAttributesCache.keys()]) {
+      if (key === id || key.startsWith(prefix)) {
+        this.saveDataContentAttributesCache.delete(key);
+      }
+    }
     return this.queueWrite('data', 'clearDataHash', [id]);
   }
 
