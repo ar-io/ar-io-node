@@ -221,10 +221,18 @@ export class RootParentDataSource implements ContiguousDataSource {
    * an L1 transaction, so the caller caches corrected values but never a root
    * that is still bundled.
    *
-   * NOTE: that caching is in-process only. `CompositeDataAttributesSource`
-   * .setDataAttributes writes to its LRU and does not write through to the
-   * database, so the stored row remains mis-rooted and this walk repeats after
-   * an eviction or a restart. Repairing rows requires a separate backfill.
+   * `CompositeDataAttributesSource.setDataAttributes` writes only to its LRU,
+   * but that is not the end of the story: `ReadThroughDataCache` re-reads
+   * attributes after a successful retrieval and queues them through
+   * `DataContentAttributeImporter`, so a corrected root is normally written
+   * back to the row and the item repairs itself on a cold fetch.
+   *
+   * Two cases leave the row unrepaired. `StandaloneSqlite` skips the write when
+   * another `saveDataContentAttributes` for the same ID landed within its
+   * 7-minute dedupe window, so a correction can be deferred to a later fetch.
+   * And an item that is never requested is never repaired, which is why a
+   * backfill is still needed for rows that must be correct for consumers that
+   * read them directly rather than through this source.
    */
   private async rebaseStoredRootIfBundled(
     dataItemId: string,
