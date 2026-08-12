@@ -975,6 +975,9 @@ describe('Indexing', function () {
           BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '1',
           BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
           MIN_DATA_VERIFICATION_PRIORITY: '0',
+          // DIAGNOSTIC: the verification worker logs its decisions at debug.
+          // Needed to see 'Withholding verification: root tx not yet mined'.
+          LOG_LEVEL: 'debug',
         });
         dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
 
@@ -1003,10 +1006,52 @@ describe('Indexing', function () {
           },
         );
 
-        await withCoreLogsOnFailure(compose, async () => {
-          await waitForIndexing();
-          await waitVerification();
-        });
+        await withCoreLogsOnFailure(
+          compose,
+          async () => {
+            await waitForIndexing();
+            try {
+              await waitVerification();
+            } catch (error) {
+              // DIAGNOSTIC: verification is withheld when the root tx has no
+              // height (data-verification.ts:207 reads NULL height as
+              // "not yet mined"). START_WRITERS is false here, so the block
+              // importer never fills it. Read the height directly, independent
+              // of log levels.
+              //
+              // A diagnostic must never replace the error it exists to
+              // explain, so failures here are reported and swallowed, and the
+              // handle always closes.
+              let coreDb: Database | undefined;
+              try {
+                coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
+                const idBuffer = fromB64Url(bundleId);
+                console.log('===== root tx height diagnostic =====', {
+                  bundleId,
+                  newTransactions: coreDb
+                    .prepare('SELECT height FROM new_transactions WHERE id = ?')
+                    .all(idBuffer),
+                  stableTransactions: coreDb
+                    .prepare(
+                      'SELECT height FROM stable_transactions WHERE id = ?',
+                    )
+                    .all(idBuffer),
+                });
+              } catch (diagnosticError) {
+                console.log(
+                  'root tx height diagnostic failed:',
+                  diagnosticError,
+                );
+              } finally {
+                coreDb?.close();
+              }
+              throw error;
+            }
+          },
+          // Debug logging is verbose; take a bigger tail so the verification
+          // lines are not crowded out by unrelated workers.
+          { tailLines: 1500 },
+        );
       },
       { timeout: 120_000 },
     );

@@ -323,11 +323,12 @@ export const dumpCoreLogs = async (
 export const withCoreLogsOnFailure = async <T>(
   compose: StartedDockerComposeEnvironment,
   fn: () => Promise<T>,
+  opts?: Parameters<typeof dumpCoreLogs>[1],
 ): Promise<T> => {
   try {
     return await fn();
   } catch (error) {
-    await dumpCoreLogs(compose);
+    await dumpCoreLogs(compose, opts);
     throw error;
   }
 };
