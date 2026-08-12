@@ -98,7 +98,10 @@ import { BlockImporter } from './workers/block-importer.js';
 import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
 import { SymlinkCleanupWorker } from './workers/symlink-cleanup-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
-import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
+import {
+  FsCleanupWorker,
+  scaledThresholdSeconds,
+} from './workers/fs-cleanup-worker.js';
 import { ContiguousDataCacheEvictor } from './workers/contiguous-data-cache-evictor.js';
 import { ContiguousDataCacheReconciler } from './workers/contiguous-data-cache-reconciler.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
@@ -1344,22 +1347,34 @@ export const chunkDataFsCacheCleanupWorker =
         log,
         basePath: 'data/chunks',
         dataType: 'chunk_data',
+        // Disk-pressure watermarks (all opt-in; 0 => pure age-based cleanup)
+        lowWatermarkPercent: config.CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT,
+        highWatermarkPercent: config.CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT,
+        minFreeBytes: config.CHUNK_DATA_CACHE_MIN_FREE_BYTES,
+        aggressiveMinAgeSeconds:
+          config.CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
         // Stats are passed by the worker to avoid redundant stat calls
-        shouldDelete: async (_path, stats) => {
+        shouldDelete: async (_path, stats, ctx) => {
           // Use the more recent of atime or mtime, matching contiguous data cleanup pattern
           const mostRecentTimeMs =
             stats.atime > stats.mtime ? stats.atimeMs : stats.mtimeMs;
           const ageInSeconds = (Date.now() - mostRecentTimeMs) / 1000;
 
-          // Delete if file is older than threshold
-          if (
-            config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD > 0 &&
-            ageInSeconds > config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD
-          ) {
-            return true;
+          if (config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD <= 0) {
+            return false;
           }
 
-          return false;
+          // Under disk pressure ctx.thresholdScale (< 1) tightens retention,
+          // floored at ctx.minAgeSeconds so hot/fresh chunks are never evicted.
+          // With watermarks disabled ctx is the normal context (scale 1, floor
+          // 0), so this is exactly the base threshold — unchanged behavior.
+          return (
+            ageInSeconds >
+            scaledThresholdSeconds(
+              config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD,
+              ctx,
+            )
+          );
         },
       })
     : undefined;

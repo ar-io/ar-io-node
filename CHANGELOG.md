@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Disk-pressure watermarks for the chunk data cache** —
+  `CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT`,
+  `CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT`,
+  `CHUNK_DATA_CACHE_MIN_FREE_BYTES` and
+  `CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS` bring the chunk cache cleanup
+  walk in line with the contiguous data cache, which already had them. With a
+  low watermark set the walk is skipped entirely while the filesystem has
+  headroom, instead of running unconditionally. This matters on large caches
+  atop spinning storage: the walk is metadata-bound, so a tree with tens of
+  millions of inodes cannot be traversed within
+  `FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION` — a pass never completes and the
+  device stays saturated even with terabytes free. Previously the only escape
+  was `ENABLE_CHUNK_DATA_CACHE_CLEANUP=false`, which stops reclamation
+  altogether and lets the cache grow unbounded. All four default to the
+  existing behavior, so nothing changes unless they are set.
+
 ### Changed
 
 ### Fixed

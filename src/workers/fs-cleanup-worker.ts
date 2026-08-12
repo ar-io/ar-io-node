@@ -46,6 +46,22 @@ export const NORMAL_CONTEXT: CleanupContext = {
   regime: 'normal',
 };
 
+/**
+ * Apply a cleanup context to a base retention threshold.
+ *
+ * Disk pressure tightens retention via `thresholdScale` (< 1), floored at
+ * `minAgeSeconds` so freshly-written data is never evicted however full the
+ * disk gets. Under {@link NORMAL_CONTEXT} (scale 1, floor 0) this returns the
+ * base threshold unchanged, which is what keeps watermark-disabled callers on
+ * exactly their previous behavior.
+ */
+export function scaledThresholdSeconds(
+  baseSeconds: number,
+  ctx: CleanupContext,
+): number {
+  return Math.max(baseSeconds * ctx.thresholdScale, ctx.minAgeSeconds);
+}
+
 type CleanupDecision =
   | { action: 'skip'; usedPercent: number }
   | {

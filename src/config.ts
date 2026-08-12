@@ -2531,6 +2531,46 @@ export const CHUNK_DATA_CACHE_CLEANUP_THRESHOLD = +env.varOrDefault(
   `${60 * 60 * 4}`, // 4 hours by default
 );
 
+// Disk-pressure watermarks for the chunk data cache cleanup walk. All opt-in
+// and 0 by default, which keeps the pure age-based behavior: the worker only
+// consults filesystem usage when at least one of these is set.
+//
+// Without them the walk runs unconditionally, which on a large cache atop
+// spinning storage means it never stops: a tree with tens of millions of
+// inodes cannot be traversed within FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION,
+// so a pass never completes and the device stays saturated even when the
+// filesystem has ample free space. Mirrors the equivalent settings on the
+// contiguous data cache.
+
+// Skip the cleanup walk entirely while usage is below this percent (0 disables
+// skipping, i.e. always walk). This is the setting that lets a healthy disk
+// avoid the walk altogether.
+export const CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT = +env.varOrDefault(
+  'CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT',
+  '0',
+);
+
+// Escalate to aggressive cleanup at/above this percent, draining back to the
+// low watermark (0 disables).
+export const CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT = +env.varOrDefault(
+  'CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT',
+  '0',
+);
+
+// Force aggressive cleanup when free space drops below this many bytes,
+// regardless of percent watermarks (0 disables).
+export const CHUNK_DATA_CACHE_MIN_FREE_BYTES = +env.varOrDefault(
+  'CHUNK_DATA_CACHE_MIN_FREE_BYTES',
+  '0',
+);
+
+// Hard floor under aggressive cleanup: never evict chunk data younger than
+// this, however tight disk pressure gets.
+export const CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS = +env.varOrDefault(
+  'CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS',
+  `${60 * 60}`, // 1 hour
+);
+
 // Whether or not to cleanup dead symlinks in chunk cache directories
 export const ENABLE_CHUNK_SYMLINK_CLEANUP =
   env.varOrDefault('ENABLE_CHUNK_SYMLINK_CLEANUP', 'true') === 'true';
