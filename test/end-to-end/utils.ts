@@ -120,7 +120,12 @@ export const composeUp = async ({
   ANS104_UNBUNDLE_FILTER = '{"always": true}',
   ANS104_INDEX_FILTER = '{"always": true}',
   ADMIN_API_KEY = 'secret',
-  TRUSTED_NODE_URL = 'https://arweave.net',
+  // arweave.net sits behind a CDN that rate-limits CI egress IPs. A 429 with a
+  // large Retry-After stalls the block importer past the test timeout, so the
+  // chain source points at an Arweave node instead. Override with
+  // E2E_TRUSTED_NODE_URL to repoint without a code change.
+  TRUSTED_NODE_URL = process.env.E2E_TRUSTED_NODE_URL ??
+    'http://peers.arweave.xyz:1984',
   TRUSTED_GATEWAYS_URLS = '{"https://arweave.net": 1, "https://turbo-gateway.com": 2}',
   BACKGROUND_RETRIEVAL_ORDER = 'trusted-gateways',
   ...ENVIRONMENT

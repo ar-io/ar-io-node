@@ -41,6 +41,17 @@ jobs:
         env:
           TEST_SKIP_TAGS: flaky
           USE_PREBUILT_IMAGE: 'true'
+      # E2E failures give no upstream detail without the container logs.
+      # Testcontainers randomizes the compose project name, so enumerate
+      # whatever containers survive instead of naming a project.
+      - name: Dump container logs on E2E failure
+        if: failure() && github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
+        run: |
+          docker ps -a || true
+          for c in $(docker ps -aq); do
+            echo "===== $(docker inspect -f '{{.Name}} {{.Config.Image}}' "$c") ====="
+            docker logs --tail 300 "$c" 2>&1 || true
+          done
 
       # Codecov report
       - name: Upload coverage reports to Codecov
