@@ -29,6 +29,21 @@ describe('DataVerificationWorker', () => {
   let saveVerificationStatusMock: any;
   let getDataMock: any;
   let contiguousDataSource: ContiguousDataSource;
+  let extraWorkers: DataVerificationWorker[] = [];
+
+  // Build a worker with an explicit optimistic-indexing setting, registered for
+  // teardown in afterEach.
+  const workerWithOptimisticIndexing = (enabled: boolean) => {
+    const worker = new DataVerificationWorker({
+      log,
+      contiguousDataIndex,
+      dataItemRootTxIndex: contiguousDataIndex,
+      contiguousDataSource,
+      optimisticTxIndexingEnabled: enabled,
+    });
+    extraWorkers.push(worker);
+    return worker;
+  };
 
   // Matching data root for the 'testing...' fixture below. A mined root tx
   // (height set) is the default fixture — the serving guard only withholds
@@ -75,6 +90,11 @@ describe('DataVerificationWorker', () => {
   });
 
   afterEach(async () => {
+    // Each worker owns a DataRootComputer, which spawns worker threads. Any
+    // worker built inside a test must be stopped or the test process never
+    // exits.
+    await Promise.all(extraWorkers.map((worker) => worker.stop()));
+    extraWorkers = [];
     mock.restoreAll();
     incrementVerificationRetryCountMock.mock.resetCalls();
     saveVerificationStatusMock.mock.resetCalls();
@@ -180,7 +200,9 @@ describe('DataVerificationWorker', () => {
       // no height → unmined / optimistic (new_transactions row with NULL height)
     });
 
-    const verified = await dataVerificationWorker.verifyDataRoot({
+    // The guard only applies when optimistic indexing is the thing creating
+    // NULL-height rows.
+    const verified = await workerWithOptimisticIndexing(true).verifyDataRoot({
       rootTxId: 'optimistic-tx',
       dataIds: ['optimistic-tx'],
     });
@@ -196,6 +218,29 @@ describe('DataVerificationWorker', () => {
     // the guard short-circuits before computeDataRoot so an unmined item is
     // skipped cheaply instead of recomputed every sweep.
     assert.equal(getDataMock.mock.calls.length, 0);
+  });
+
+  // With optimistic indexing off, a NULL height means only that this gateway
+  // has not imported the tx's block — routine for txs indexed via
+  // admin/queue-tx, backfills, or a selectively synced deployment. Withholding
+  // there strands long-mined data forever: withholding burns no retry, so the
+  // item never ages out, and the guard's log is debug-level, so nothing
+  // surfaces. Verification must proceed on the data root alone.
+  it('should verify an unmined-looking root tx when optimistic indexing is disabled', async () => {
+    (contiguousDataIndex as any).getDataAttributes = async () => ({
+      dataRoot: MATCHING_DATA_ROOT,
+      // no height, and no optimistic indexing to explain it
+    });
+
+    const verified = await workerWithOptimisticIndexing(false).verifyDataRoot({
+      rootTxId: 'queued-tx',
+      dataIds: ['queued-tx'],
+    });
+
+    assert.equal(verified, true);
+    assert.equal(saveVerificationStatusMock.mock.calls.length, 1);
+    // The data root WAS computed — the guard did not short-circuit.
+    assert.ok(getDataMock.mock.calls.length >= 1);
   });
 
   it('should verify and stamp when the root tx is mined', async () => {
