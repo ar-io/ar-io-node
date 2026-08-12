@@ -1018,22 +1018,33 @@ describe('Indexing', function () {
               // "not yet mined"). START_WRITERS is false here, so the block
               // importer never fills it. Read the height directly, independent
               // of log levels.
-              const coreDb = new Sqlite(
-                `${projectRootPath}/data/sqlite/core.db`,
-              );
-              const idBuffer = fromB64Url(bundleId);
-              console.log('===== root tx height diagnostic =====', {
-                bundleId,
-                newTransactions: coreDb
-                  .prepare('SELECT height FROM new_transactions WHERE id = ?')
-                  .all(idBuffer),
-                stableTransactions: coreDb
-                  .prepare(
-                    'SELECT height FROM stable_transactions WHERE id = ?',
-                  )
-                  .all(idBuffer),
-              });
-              coreDb.close();
+              //
+              // A diagnostic must never replace the error it exists to
+              // explain, so failures here are reported and swallowed, and the
+              // handle always closes.
+              let coreDb: Database | undefined;
+              try {
+                coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
+                const idBuffer = fromB64Url(bundleId);
+                console.log('===== root tx height diagnostic =====', {
+                  bundleId,
+                  newTransactions: coreDb
+                    .prepare('SELECT height FROM new_transactions WHERE id = ?')
+                    .all(idBuffer),
+                  stableTransactions: coreDb
+                    .prepare(
+                      'SELECT height FROM stable_transactions WHERE id = ?',
+                    )
+                    .all(idBuffer),
+                });
+              } catch (diagnosticError) {
+                console.log(
+                  'root tx height diagnostic failed:',
+                  diagnosticError,
+                );
+              } finally {
+                coreDb?.close();
+              }
               throw error;
             }
           },
