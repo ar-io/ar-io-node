@@ -22,6 +22,7 @@ import {
   waitForDataItemToBeIndexed,
   waitForLogMessage,
   waitForTxToBeIndexed,
+  withCoreLogsOnFailure,
 } from './utils.js';
 import { isTestFiltered } from '../utils.js';
 
@@ -207,7 +208,9 @@ describe('Indexing', function () {
         },
       });
 
-      await waitForContiguousDataIds({ dataDb, length: 19 });
+      await withCoreLogsOnFailure(compose, () =>
+        waitForContiguousDataIds({ dataDb, length: 19 }),
+      );
     });
 
     after(async function () {
@@ -997,8 +1000,10 @@ describe('Indexing', function () {
           },
         );
 
-        await waitForIndexing();
-        await waitVerification();
+        await withCoreLogsOnFailure(compose, async () => {
+          await waitForIndexing();
+          await waitVerification();
+        });
       },
       { timeout: 120_000 },
     );
