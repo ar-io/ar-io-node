@@ -977,7 +977,7 @@ describe('Indexing', function () {
           MIN_DATA_VERIFICATION_PRIORITY: '0',
           // DIAGNOSTIC: the verification worker logs its decisions at debug.
           // Needed to see 'Withholding verification: root tx not yet mined'.
-          LOG_LEVEL: 'debug',
+          CORE_LOG_LEVEL: 'debug',
         });
         dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
 
