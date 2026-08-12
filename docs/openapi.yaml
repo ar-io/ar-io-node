@@ -77,6 +77,55 @@ components:
       scheme: bearer
       bearerFormat: apiToken
       description: ADMIN_API_KEY set in your .env file.
+  parameters:
+    RootTransactionIdHint:
+      name: X-AR-IO-Root-Transaction-Id
+      in: header
+      required: false
+      schema:
+        $ref: '#/components/schemas/Base64Url43'
+      description: |
+        Optional retrieval hint identifying the root L1 transaction that contains
+        the requested ANS-104 data item. The data item ID remains the path
+        parameter. The gateway validates this hint and falls back to its normal
+        lookup process when the hint is unusable.
+      example: '283VjqeZG65tPI6V0e-gucoHCaEBPL41_cI8rXVRbMc'
+    RootPathHint:
+      name: X-AR-IO-Root-Path
+      in: header
+      required: false
+      schema:
+        type: string
+      description: |
+        Optional comma-separated traversal path of transaction IDs from the root
+        L1 transaction through each parent bundle to the requested ANS-104 data
+        item's immediate parent. Use this when the item is nested in multiple
+        bundles. Every value must be a 43-character base64url transaction ID.
+      example: '283VjqeZG65tPI6V0e-gucoHCaEBPL41_cI8rXVRbMc,hs48Pj6C9TqAk7W7D3T8F5kWg3q5W7K3m9Gf2L4n8Ps'
+    RootItemOffsetHint:
+      name: X-AR-IO-Root-Item-Offset
+      in: header
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+      description: |
+        Optional byte offset of the complete ANS-104 data item, including its
+        header, from the start of the root transaction's data. This header is
+        only used when X-AR-IO-Root-Item-Size is also provided.
+      example: 2048
+    RootItemSizeHint:
+      name: X-AR-IO-Root-Item-Size
+      in: header
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+      description: |
+        Optional size of the complete ANS-104 data item, including its header,
+        in bytes. This header is only used when X-AR-IO-Root-Item-Offset is also
+        provided.
+      example: 2092
   schemas:
     ParquetExportStatus:
       type: object
@@ -1133,6 +1182,10 @@ paths:
           schema:
             $ref: '#/components/schemas/ByteRange'
           description: Byte range(s) to retrieve
+        - $ref: '#/components/parameters/RootTransactionIdHint'
+        - $ref: '#/components/parameters/RootPathHint'
+        - $ref: '#/components/parameters/RootItemOffsetHint'
+        - $ref: '#/components/parameters/RootItemSizeHint'
       responses:
         '200':
           description: Successful response
@@ -1405,6 +1458,10 @@ paths:
           schema:
             $ref: '#/components/schemas/ByteRange'
           description: Byte range(s) to check
+        - $ref: '#/components/parameters/RootTransactionIdHint'
+        - $ref: '#/components/parameters/RootPathHint'
+        - $ref: '#/components/parameters/RootItemOffsetHint'
+        - $ref: '#/components/parameters/RootItemSizeHint'
       responses:
         '200':
           description: Successful response
@@ -1478,6 +1535,10 @@ paths:
           schema:
             $ref: '#/components/schemas/ByteRange'
           description: Byte range(s) to retrieve
+        - $ref: '#/components/parameters/RootTransactionIdHint'
+        - $ref: '#/components/parameters/RootPathHint'
+        - $ref: '#/components/parameters/RootItemOffsetHint'
+        - $ref: '#/components/parameters/RootItemSizeHint'
       responses:
         '200':
           description: Successful response
@@ -1754,6 +1815,10 @@ paths:
           schema:
             $ref: '#/components/schemas/ByteRange'
           description: Byte range(s) to check
+        - $ref: '#/components/parameters/RootTransactionIdHint'
+        - $ref: '#/components/parameters/RootPathHint'
+        - $ref: '#/components/parameters/RootItemOffsetHint'
+        - $ref: '#/components/parameters/RootItemSizeHint'
       responses:
         '200':
           description: Successful response
