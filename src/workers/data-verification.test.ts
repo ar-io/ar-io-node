@@ -29,21 +29,14 @@ describe('DataVerificationWorker', () => {
   let saveVerificationStatusMock: any;
   let getDataMock: any;
   let contiguousDataSource: ContiguousDataSource;
-  let extraWorkers: DataVerificationWorker[] = [];
-
-  // Build a worker with an explicit optimistic-indexing setting, registered for
-  // teardown in afterEach.
-  const workerWithOptimisticIndexing = (enabled: boolean) => {
-    const worker = new DataVerificationWorker({
-      log,
-      contiguousDataIndex,
-      dataItemRootTxIndex: contiguousDataIndex,
-      contiguousDataSource,
-      optimisticTxIndexingEnabled: enabled,
-    });
-    extraWorkers.push(worker);
-    return worker;
-  };
+  // Workers with an explicit optimistic-indexing setting. Built once in
+  // `before` and torn down in `after`, NOT per test: each worker owns a
+  // DataRootComputer whose threads only register for termination once they
+  // emit 'online'. A worker created and stopped inside a fast test (the guard
+  // short-circuits in ~2ms) would be stopped before its thread registers, and
+  // the orphan would keep the test process alive forever.
+  let guardOnWorker: DataVerificationWorker;
+  let guardOffWorker: DataVerificationWorker;
 
   // Matching data root for the 'testing...' fixture below. A mined root tx
   // (height set) is the default fixture — the serving guard only withholds
@@ -87,14 +80,25 @@ describe('DataVerificationWorker', () => {
       dataItemRootTxIndex: contiguousDataIndex,
       contiguousDataSource,
     });
+
+    guardOnWorker = new DataVerificationWorker({
+      log,
+      contiguousDataIndex,
+      dataItemRootTxIndex: contiguousDataIndex,
+      contiguousDataSource,
+      optimisticTxIndexingEnabled: true,
+    });
+
+    guardOffWorker = new DataVerificationWorker({
+      log,
+      contiguousDataIndex,
+      dataItemRootTxIndex: contiguousDataIndex,
+      contiguousDataSource,
+      optimisticTxIndexingEnabled: false,
+    });
   });
 
   afterEach(async () => {
-    // Each worker owns a DataRootComputer, which spawns worker threads. Any
-    // worker built inside a test must be stopped or the test process never
-    // exits.
-    await Promise.all(extraWorkers.map((worker) => worker.stop()));
-    extraWorkers = [];
     mock.restoreAll();
     incrementVerificationRetryCountMock.mock.resetCalls();
     saveVerificationStatusMock.mock.resetCalls();
@@ -106,6 +110,8 @@ describe('DataVerificationWorker', () => {
 
   after(async () => {
     await dataVerificationWorker.stop();
+    await guardOnWorker.stop();
+    await guardOffWorker.stop();
   });
 
   it('should verify data root correctly', async () => {
@@ -202,7 +208,7 @@ describe('DataVerificationWorker', () => {
 
     // The guard only applies when optimistic indexing is the thing creating
     // NULL-height rows.
-    const verified = await workerWithOptimisticIndexing(true).verifyDataRoot({
+    const verified = await guardOnWorker.verifyDataRoot({
       rootTxId: 'optimistic-tx',
       dataIds: ['optimistic-tx'],
     });
@@ -232,7 +238,7 @@ describe('DataVerificationWorker', () => {
       // no height, and no optimistic indexing to explain it
     });
 
-    const verified = await workerWithOptimisticIndexing(false).verifyDataRoot({
+    const verified = await guardOffWorker.verifyDataRoot({
       rootTxId: 'queued-tx',
       dataIds: ['queued-tx'],
     });
