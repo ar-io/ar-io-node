@@ -35,9 +35,17 @@ jobs:
       - run: yarn lint:check
       - run: yarn test:ci
       # Run E2E tests if pushing to develop branch
+      # Two tags for one build. `core` is what the GenericContainer suites
+      # ask for; the ghcr tag is what docker-compose.yaml resolves via
+      # CORE_IMAGE_TAG. Without the second one, compose pulls the published
+      # `latest` and the compose-based suites test a different build than the
+      # commit under test.
       - name: Build core Docker image
         if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
-        run: docker build -t core .
+        run: |
+          docker build \
+            -t core \
+            -t ghcr.io/ar-io/ar-io-core:ci-${{ github.sha }} .
       - name: Run E2E tests
         id: e2e
         if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
@@ -45,6 +53,7 @@ jobs:
         env:
           TEST_SKIP_TAGS: flaky
           USE_PREBUILT_IMAGE: 'true'
+          CORE_IMAGE_TAG: ci-${{ github.sha }}
       # E2E failures give no upstream detail without the container logs.
       # Testcontainers randomizes the compose project name, so enumerate
       # whatever containers survive instead of naming a project.

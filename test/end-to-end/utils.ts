@@ -8,6 +8,7 @@ import Sqlite, { Database } from 'better-sqlite3';
 import {
   DockerComposeEnvironment,
   GenericContainer,
+  StartedDockerComposeEnvironment,
   Wait,
 } from 'testcontainers';
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container';
@@ -128,6 +129,11 @@ export const composeUp = async ({
     'http://peers.arweave.xyz:1984',
   TRUSTED_GATEWAYS_URLS = '{"https://arweave.net": 1, "https://turbo-gateway.com": 2}',
   BACKGROUND_RETRIEVAL_ORDER = 'trusted-gateways',
+  // Passed explicitly rather than left to process env inheritance so the
+  // compose suites run the same image the job just built. Defaulting to
+  // `latest` makes compose pull the published image, which is a different
+  // build than the commit under test.
+  CORE_IMAGE_TAG = process.env.CORE_IMAGE_TAG ?? 'latest',
   ...ENVIRONMENT
 }: Environment = {}) => {
   // disable .env file read
@@ -148,6 +154,7 @@ export const composeUp = async ({
     TRUSTED_NODE_URL,
     TRUSTED_GATEWAYS_URLS,
     BACKGROUND_RETRIEVAL_ORDER,
+    CORE_IMAGE_TAG,
     ...ENVIRONMENT,
   });
 
@@ -244,6 +251,73 @@ export const waitForBlocks = ({
     waitingMessage: (height) =>
       `Waiting for blocks to import... Current height: ${height}, Target: ${stopHeight}`,
   });
+};
+
+/**
+ * Print the core container's recent logs.
+ *
+ * The workflow's job-level dump cannot see these. Testcontainers reaps each
+ * suite's containers as it goes, so by the time a job-level step runs, the
+ * container that actually failed is long gone. This runs inside the failing
+ * hook, while the container is still up.
+ */
+export const dumpCoreLogs = async (
+  compose: StartedDockerComposeEnvironment,
+  {
+    serviceName = 'core-1',
+    collectMs = 3000,
+    tailLines = 200,
+  }: { serviceName?: string; collectMs?: number; tailLines?: number } = {},
+) => {
+  try {
+    const stream = await compose.getContainer(serviceName).logs();
+    const chunks: string[] = [];
+
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        stream.destroy();
+        resolve();
+      };
+      // logs() follows the stream, so stop after a bounded window rather
+      // than waiting for an end event that only arrives on container exit.
+      const timer = setTimeout(finish, collectMs);
+
+      stream.on('data', (chunk) => chunks.push(chunk.toString('utf8')));
+      stream.on('end', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      stream.on('error', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+
+    const tail = chunks.join('').split('\n').slice(-tailLines).join('\n');
+    console.log(
+      `===== ${serviceName} logs (last ${tailLines} lines) =====\n${tail}\n===== end ${serviceName} logs =====`,
+    );
+  } catch (error) {
+    console.log(`Could not capture ${serviceName} logs:`, error);
+  }
+};
+
+/**
+ * Run `fn`, dumping the core container's logs if it throws, then rethrow.
+ *
+ * Wrap the waits in a `before` hook with this so a timeout arrives with the
+ * upstream detail attached instead of a bare message.
+ */
+export const withCoreLogsOnFailure = async <T>(
+  compose: StartedDockerComposeEnvironment,
+  fn: () => Promise<T>,
+): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error) {
+    await dumpCoreLogs(compose);
+    throw error;
+  }
 };
 
 export const waitForLogMessage = ({
