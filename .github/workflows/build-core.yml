@@ -36,11 +36,23 @@ jobs:
         if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
         run: docker build -t core .
       - name: Run E2E tests
+        id: e2e
         if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
         run: yarn test:e2e
         env:
           TEST_SKIP_TAGS: flaky
           USE_PREBUILT_IMAGE: 'true'
+      # E2E failures give no upstream detail without the container logs.
+      # Testcontainers randomizes the compose project name, so enumerate
+      # whatever containers survive instead of naming a project.
+      - name: Dump container logs on E2E failure
+        if: failure() && steps.e2e.conclusion == 'failure'
+        run: |
+          docker ps -a || true
+          for c in $(docker ps -aq); do
+            echo "===== $(docker inspect -f '{{.Name}} {{.Config.Image}}' "$c") ====="
+            docker logs --tail 300 "$c" 2>&1 || true
+          done
 
       # Codecov report
       - name: Upload coverage reports to Codecov
