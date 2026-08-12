@@ -208,8 +208,11 @@ describe('Indexing', function () {
         },
       });
 
+      // A cold priority-2 gateway fetch can take most of
+      // TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS before the recursive unbundle
+      // even starts, so the 60s default leaves no room.
       await withCoreLogsOnFailure(compose, () =>
-        waitForContiguousDataIds({ dataDb, length: 19 }),
+        waitForContiguousDataIds({ dataDb, length: 19, timeout: 120_000 }),
       );
     });
 
