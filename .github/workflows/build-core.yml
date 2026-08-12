@@ -36,6 +36,7 @@ jobs:
         if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
         run: docker build -t core .
       - name: Run E2E tests
+        id: e2e
         if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
         run: yarn test:e2e
         env:
@@ -45,7 +46,7 @@ jobs:
       # Testcontainers randomizes the compose project name, so enumerate
       # whatever containers survive instead of naming a project.
       - name: Dump container logs on E2E failure
-        if: failure() && github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
+        if: failure() && steps.e2e.conclusion == 'failure'
         run: |
           docker ps -a || true
           for c in $(docker ps -aq); do
