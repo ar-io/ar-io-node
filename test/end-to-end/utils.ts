@@ -129,6 +129,13 @@ export const composeUp = async ({
     'http://peers.arweave.xyz:1984',
   TRUSTED_GATEWAYS_URLS = '{"https://arweave.net": 1, "https://turbo-gateway.com": 2}',
   BACKGROUND_RETRIEVAL_ORDER = 'trusted-gateways',
+  // The 10s production default is too short for this cascade. arweave.net
+  // (priority 1) intermittently rate-limits CI egress with a 429, and the
+  // priority 2 gateways need more than 30s to serve an object that is not
+  // already in their cache. A timed-out request still warms them, so the
+  // fetch completes; it just needs more room than 10s. Measured: >30s cold,
+  // ~1.2s once warm.
+  TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = '45000',
   // Passed explicitly rather than left to process env inheritance so the
   // compose suites run the same image the job just built. Defaulting to
   // `latest` makes compose pull the published image, which is a different
@@ -154,6 +161,7 @@ export const composeUp = async ({
     TRUSTED_NODE_URL,
     TRUSTED_GATEWAYS_URLS,
     BACKGROUND_RETRIEVAL_ORDER,
+    TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
     CORE_IMAGE_TAG,
     ...ENVIRONMENT,
   });
@@ -270,7 +278,12 @@ export const dumpCoreLogs = async (
   }: { serviceName?: string; collectMs?: number; tailLines?: number } = {},
 ) => {
   try {
-    const stream = await compose.getContainer(serviceName).logs();
+    // Ask Docker for the tail. Without this, logs() replays the stream from
+    // the container's first line, so a bounded collection window returns
+    // startup output rather than whatever happened just before the failure.
+    const stream = await compose
+      .getContainer(serviceName)
+      .logs({ tail: tailLines });
     const chunks: string[] = [];
 
     await new Promise<void>((resolve) => {
@@ -293,9 +306,8 @@ export const dumpCoreLogs = async (
       });
     });
 
-    const tail = chunks.join('').split('\n').slice(-tailLines).join('\n');
     console.log(
-      `===== ${serviceName} logs (last ${tailLines} lines) =====\n${tail}\n===== end ${serviceName} logs =====`,
+      `===== ${serviceName} logs (last ${tailLines} lines) =====\n${chunks.join('')}\n===== end ${serviceName} logs =====`,
     );
   } catch (error) {
     console.log(`Could not capture ${serviceName} logs:`, error);

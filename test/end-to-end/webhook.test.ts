@@ -81,6 +81,8 @@ describe('WebhookEmitter', { skip: isTestFiltered(['flaky']) }, () => {
         TRUSTED_GATEWAYS_URLS:
           '{"https://arweave.net": 1, "https://turbo-gateway.com": 2}',
         BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
+        // Matches the composeUp default; see the note there.
+        TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS: '45000',
       })
       .withExposedPorts(4000)
       .withWaitStrategy(Wait.forHttp('/ar-io/info', 4000))
