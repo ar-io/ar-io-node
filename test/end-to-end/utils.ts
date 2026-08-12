@@ -160,7 +160,15 @@ export const composeUp = async ({
     .up(['core']);
 };
 
-const waitFor = <T>({
+/**
+ * Poll `check` until `validate` passes or `timeout` elapses.
+ *
+ * `timeoutMessage` and `waitingMessage` accept a function so they can report
+ * the value actually observed. Passing a plain string builds the message once,
+ * before polling starts, which makes it stale for anything that changes while
+ * waiting.
+ */
+export const waitFor = <T>({
   check,
   validate,
   timeout = DEFAULT_TIMEOUT,
@@ -172,8 +180,8 @@ const waitFor = <T>({
   validate: (result: T) => boolean;
   timeout?: number;
   interval?: number;
-  timeoutMessage: string;
-  waitingMessage?: string;
+  timeoutMessage: string | ((lastResult: T) => string);
+  waitingMessage?: string | ((lastResult: T) => string);
 }): Promise<T> => {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
@@ -187,11 +195,21 @@ const waitFor = <T>({
         }
 
         if (waitingMessage !== undefined) {
-          console.log(waitingMessage);
+          console.log(
+            typeof waitingMessage === 'function'
+              ? waitingMessage(result)
+              : waitingMessage,
+          );
         }
 
         if (Date.now() - startTime >= timeout) {
-          reject(new Error(timeoutMessage));
+          reject(
+            new Error(
+              typeof timeoutMessage === 'function'
+                ? timeoutMessage(result)
+                : timeoutMessage,
+            ),
+          );
           return;
         }
 
@@ -221,8 +239,10 @@ export const waitForBlocks = ({
     validate: (height) => height === stopHeight,
     timeout,
     interval,
-    timeoutMessage: `Timeout waiting for blocks to reach height ${stopHeight}`,
-    waitingMessage: `Waiting for blocks to import... Current height: ${getMaxHeight(coreDb)['MAX(height)']}, Target: ${stopHeight}`,
+    timeoutMessage: (height) =>
+      `Timeout waiting for blocks to reach height ${stopHeight}. Current height: ${height}`,
+    waitingMessage: (height) =>
+      `Waiting for blocks to import... Current height: ${height}, Target: ${stopHeight}`,
   });
 };
 

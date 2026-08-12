@@ -16,6 +16,7 @@ import {
   cleanDb,
   composeUp,
   getMaxHeight,
+  waitFor,
   waitForBlocks,
   waitForBundleToBeIndexed,
   waitForDataItemToBeIndexed,
@@ -83,17 +84,22 @@ async function fetchGqlHeight(): Promise<number | undefined> {
 const waitForContiguousDataIds = async ({
   dataDb,
   length,
+  timeout,
 }: {
   dataDb: Database;
   length: number;
+  timeout?: number;
 }) => {
-  const getAll = () =>
-    dataDb.prepare('SELECT * FROM contiguous_data_ids').all();
-
-  while (getAll().length !== length) {
-    console.log('Waiting for data items to be indexed...');
-    await wait(1000);
-  }
+  return waitFor({
+    check: () =>
+      dataDb.prepare('SELECT * FROM contiguous_data_ids').all().length,
+    validate: (count) => count === length,
+    timeout,
+    timeoutMessage: (count) =>
+      `Timeout waiting for data items to be indexed. Expected ${length}, saw ${count}`,
+    waitingMessage: (count) =>
+      `Waiting for data items to be indexed... ${count}/${length}`,
+  });
 };
 
 describe('Indexing', function () {
@@ -473,13 +479,14 @@ describe('Indexing', function () {
     let compose: StartedDockerComposeEnvironment;
 
     const waitForIndexing = async () => {
-      const getAll = () =>
-        coreDb.prepare('SELECT * FROM new_transactions').all();
-
-      while (getAll().length === 0) {
-        console.log('Waiting for pending txs to be indexed...');
-        await wait(1000);
-      }
+      return waitFor({
+        check: () =>
+          coreDb.prepare('SELECT * FROM new_transactions').all().length,
+        validate: (count) => count > 0,
+        timeoutMessage: () =>
+          'Timeout waiting for pending txs to be indexed. None were indexed',
+        waitingMessage: 'Waiting for pending txs to be indexed...',
+      });
     };
 
     before(async function () {
@@ -511,13 +518,14 @@ describe('Indexing', function () {
     let compose: StartedDockerComposeEnvironment;
 
     const waitForIndexing = async () => {
-      const getAll = () =>
-        coreDb.prepare('SELECT * FROM new_transactions').all();
-
-      while (getAll().length === 0) {
-        console.log('Waiting for pending txs to be indexed...');
-        await wait(1000);
-      }
+      return waitFor({
+        check: () =>
+          coreDb.prepare('SELECT * FROM new_transactions').all().length,
+        validate: (count) => count > 0,
+        timeoutMessage: () =>
+          'Timeout waiting for pending txs to be indexed. None were indexed',
+        waitingMessage: 'Waiting for pending txs to be indexed...',
+      });
     };
 
     const fetchGqlTxs = async () => {
@@ -935,28 +943,22 @@ describe('Indexing', function () {
     let compose: StartedDockerComposeEnvironment;
     const bundleId = '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ';
 
-    const waitForIndexing = async () => {
-      const getAll = () =>
-        dataDb.prepare('SELECT * FROM contiguous_data_ids').all();
-
-      while (getAll().length !== 79) {
-        console.log('Waiting for data items to be indexed...');
-        await wait(1000);
-      }
-    };
+    // Budgets fit inside the before hook's 120s timeout so the message below
+    // wins over a bare hook abort.
+    const waitForIndexing = async () =>
+      waitForContiguousDataIds({ dataDb, length: 79, timeout: 55_000 });
 
     const waitVerification = async () => {
-      const getAll = () =>
-        dataDb.prepare('SELECT verified FROM contiguous_data_ids').all();
-
-      while (getAll().some((row) => row.verified === 0)) {
-        console.log('Waiting for data items to be verified...', {
-          verified: getAll().filter((row) => row.verified === 1).length,
-          total: getAll().length,
-        });
-
-        await wait(1000);
-      }
+      return waitFor({
+        check: () =>
+          dataDb.prepare('SELECT verified FROM contiguous_data_ids').all(),
+        validate: (rows) => rows.every((row) => row.verified !== 0),
+        timeout: 55_000,
+        timeoutMessage: (rows) =>
+          `Timeout waiting for data items to be verified. Verified ${rows.filter((row) => row.verified === 1).length}/${rows.length}`,
+        waitingMessage: (rows) =>
+          `Waiting for data items to be verified... ${rows.filter((row) => row.verified === 1).length}/${rows.length}`,
+      });
     };
 
     before(
