@@ -4,22 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
-
-### Fixed
-
-- **Observer cranker settings reachable from `.env`** — `CRANK_BATCH_SIZE`,
-  `CRANK_CLOSE_EPOCHS`, `CRANK_EPOCH_RETENTION`, `CRANK_WARN_BALANCE_SOL`,
-  `CRANK_CRITICAL_BALANCE_SOL`, `CLEANUP_BATCH_SIZE`,
-  `CLEANUP_FAILURE_THRESHOLD`, `MAX_CLEANUP_TXS_PER_CYCLE`,
-  `ALT_RECLAIM_SCAN_LIMIT` and `OBSERVED_GATEWAY_HOSTS` are read by the observer
-  but were never passed into its container, so setting them in `.env` had no
-  effect. Forwarded with the established empty-default pattern and documented,
-  completing what #842 (poll/cleanup intervals) and #846 (prune budget) started.
-  An empty value resolves to each setting's existing default, so nothing changes
-  unless an operator sets one.
-
-## [Release 82] - 2026-08-11
+## [Release 82] - 2026-08-13
 
 This is a **recommended release** focused on **data-retrieval correctness and
 outbound connection health**. Key highlights include a new
@@ -198,6 +183,27 @@ disk and take down every container on the host.
 
 ### Fixed
 
+- **Background verification no longer withholds unmined data when optimistic
+  indexing is off** — the serving guard withheld verification whenever the root
+  transaction had a `NULL` height, reading that as "optimistically indexed, not
+  yet mined". That meaning only holds when optimistic L1 transaction indexing is
+  what creates `NULL`-height rows. With `OPTIMISTIC_TX_INDEXING_ENABLED` false
+  (the default), a `NULL` height means only that this node has not imported the
+  transaction's block — routine for transactions indexed via
+  `admin/queue-tx`, backfills, or any selectively synced deployment. The result
+  was permanent, silent starvation: withholding burns no retry, so the item
+  never aged out, and the log is debug-level, so nothing surfaced. The guard is
+  now gated on the feature that justifies it (#855).
+- **Observer cranker settings reachable from `.env`** — `CRANK_BATCH_SIZE`,
+  `CRANK_CLOSE_EPOCHS`, `CRANK_EPOCH_RETENTION`, `CRANK_WARN_BALANCE_SOL`,
+  `CRANK_CRITICAL_BALANCE_SOL`, `CLEANUP_BATCH_SIZE`,
+  `CLEANUP_FAILURE_THRESHOLD`, `MAX_CLEANUP_TXS_PER_CYCLE`,
+  `ALT_RECLAIM_SCAN_LIMIT` and `OBSERVED_GATEWAY_HOSTS` are read by the observer
+  but were never passed into its container, so setting them in `.env` had no
+  effect. Forwarded with the established empty-default pattern and documented,
+  completing what #842 (poll/cleanup intervals) and #846 (prune budget) started.
+  An empty value resolves to each setting's existing default, so nothing changes
+  unless an operator sets one (#857).
 - **Chunk POST treats HTTP 303 ("temporary") as success** — Arweave tip/ingress
   nodes return 303 when they validate and persist a chunk into their disk pool
   without being its long-term home (`ar_disk_pool:add_chunk/6 -> temporary`).
