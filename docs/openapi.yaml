@@ -96,6 +96,7 @@ components:
       required: false
       schema:
         type: string
+        pattern: '^[0-9a-zA-Z_-]{43}(\s*,\s*[0-9a-zA-Z_-]{43})*$'
       description: |
         Optional comma-separated traversal path of transaction IDs from the root
         L1 transaction through each parent bundle to the requested ANS-104 data
@@ -120,7 +121,7 @@ components:
       required: false
       schema:
         type: integer
-        minimum: 0
+        minimum: 1
       description: |
         Optional size of the complete ANS-104 data item, including its header,
         in bytes. This header is only used when X-AR-IO-Root-Item-Offset is also
