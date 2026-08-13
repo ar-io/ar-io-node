@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Observer cranker settings reachable from `.env`** — `CRANK_BATCH_SIZE`,
+  `CRANK_CLOSE_EPOCHS`, `CRANK_EPOCH_RETENTION`, `CRANK_WARN_BALANCE_SOL`,
+  `CRANK_CRITICAL_BALANCE_SOL`, `CLEANUP_BATCH_SIZE`,
+  `CLEANUP_FAILURE_THRESHOLD`, `MAX_CLEANUP_TXS_PER_CYCLE`,
+  `ALT_RECLAIM_SCAN_LIMIT` and `OBSERVED_GATEWAY_HOSTS` are read by the observer
+  but were never passed into its container, so setting them in `.env` had no
+  effect. Forwarded with the established empty-default pattern and documented,
+  completing what #842 (poll/cleanup intervals) and #846 (prune budget) started.
+  An empty value resolves to each setting's existing default, so nothing changes
+  unless an operator sets one.
+
 ## [Release 82] - 2026-08-11
 
 This is a **recommended release** focused on **data-retrieval correctness and
