@@ -8,6 +8,7 @@ import { ValidationError } from 'apollo-server-express';
 import Sqlite from 'better-sqlite3';
 import crypto from 'node:crypto';
 import os from 'node:os';
+import { performance } from 'node:perf_hooks';
 import {
   Worker,
   isMainThread,
@@ -87,6 +88,35 @@ interface TxByOffsetResult {
   id: string | undefined;
   offset: number | undefined;
   data_size: number | undefined;
+}
+
+/**
+ * Result of resolving an absolute weave offset to its containing block.
+ *
+ * `height`/`weaveSize` describe the lowest block — across the stable chain
+ * (`stable_blocks`) and the not-yet-stable tip (`new_blocks`) — whose cumulative
+ * `weave_size` reaches the requested offset (the candidate container).
+ * `prevWeaveSize` is the immediately-preceding block's cumulative `weave_size`,
+ * present only when that predecessor is itself indexed. Callers use it to
+ * confirm the offset is tightly bracketed (`prevWeaveSize < offset <=
+ * weaveSize`) — i.e. no missing block sits between the predecessor and the
+ * candidate — before trusting the local result.
+ *
+ * `zone` reports whether the candidate came from the stable chain (`'stable'`)
+ * or the unstable tip (`'unstable'`), letting the caller attribute the
+ * resolution to the right zone in metrics. A block present in both tables (just
+ * stabilized) is reported as `'stable'`.
+ *
+ * All fields are `undefined` when no block reaches the offset (an offset beyond
+ * the chain tip); `prevWeaveSize` alone is `undefined` when the predecessor is
+ * absent (a gap or the genesis block), in which case the caller must not trust
+ * the bracket and should fall back.
+ */
+interface BlockByWeaveOffsetResult {
+  height: number | undefined;
+  weaveSize: number | undefined;
+  prevWeaveSize: number | undefined;
+  zone: 'stable' | 'unstable' | undefined;
 }
 
 export function encodeTransactionGqlCursor({
@@ -488,7 +518,13 @@ export class StandaloneSqliteDatabaseWorker {
     this.dbs.data.exec(`ATTACH DATABASE '${bundlesDbPath}' AS bundles`);
     this.dbs.bundles.exec(`ATTACH DATABASE '${coreDbPath}' AS core`);
 
-    this.stmts = { core: {}, data: {}, moderation: {}, bundles: {}, chunks: {} };
+    this.stmts = {
+      core: {},
+      data: {},
+      moderation: {},
+      bundles: {},
+      chunks: {},
+    };
 
     for (const [stmtsKey, stmts] of Object.entries(this.stmts)) {
       const sqlUrl = new URL(`./sql/${stmtsKey}`, import.meta.url);
@@ -1005,11 +1041,38 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   confirmChunkPlacements(dataRoot: string, confirmedAt: number): number[] {
+    const dataRootBuf = fromB64Url(dataRoot);
     const rows = this.stmts.chunks.confirmChunkPlacements.all({
-      data_root: fromB64Url(dataRoot),
+      data_root: dataRootBuf,
+      confirmed_at: confirmedAt,
+    });
+    // Record the data_root as confirmed so chunks ingested AFTER this one-shot
+    // UPDATE still confirm at ingest and are retained past the TTL (see
+    // cache.sql markDataRootConfirmed / saveChunkPlacement inheritance /
+    // selectExpiredUnconfirmedPlacements). Recorded unconditionally: the confirm
+    // event routinely fires before any chunk is seeded, so an EXISTS gate would
+    // miss exactly the case this protects. The marker table is bounded by
+    // pruneConfirmedDataRoots in the GC sweep.
+    this.stmts.chunks.markDataRootConfirmed.run({
+      data_root: dataRootBuf,
       confirmed_at: confirmedAt,
     });
     return rows.map((row: any) => row.cached_at as number);
+  }
+
+  // Prune confirmed-data-root markers older than `cutoff` (unix seconds). Keeps
+  // the marker table bounded; a marker only needs to bridge the gap between a tx
+  // confirming and its chunks being seeded. Returns the number of rows deleted.
+  pruneConfirmedDataRoots(cutoff: number): number {
+    const result = this.stmts.chunks.pruneConfirmedDataRoots.run({ cutoff });
+    return result.changes;
+  }
+
+  countConfirmedDataRoots(): number {
+    const row = this.stmts.chunks.countConfirmedDataRoots.get() as {
+      count: number;
+    };
+    return row.count;
   }
 
   // Reserved for chain-reorg recovery: returns a confirmed placement to pending
@@ -1091,6 +1154,93 @@ export class StandaloneSqliteDatabaseWorker {
     return row.pending_bytes as number;
   }
 
+  // --- Contiguous data cache cleanup index (data.db) ---
+
+  saveContiguousDataCacheEntry(entry: {
+    hash: string;
+    size: number;
+    cachedAt: number;
+    tier: number;
+  }) {
+    this.stmts.data.saveContiguousDataCacheEntry.run({
+      hash: entry.hash,
+      size: entry.size,
+      cached_at: entry.cachedAt,
+      tier: entry.tier,
+    });
+  }
+
+  touchContiguousDataCacheEntry(
+    hash: string,
+    lastAccess: number,
+    tier: number,
+  ) {
+    this.stmts.data.touchContiguousDataCacheEntry.run({
+      hash,
+      last_access: lastAccess,
+      tier,
+    });
+  }
+
+  insertContiguousDataCacheEntriesIfAbsent(
+    entries: { hash: string; size: number; cachedAt: number; tier: number }[],
+  ) {
+    const stmt = this.stmts.data.insertContiguousDataCacheEntryIfAbsent;
+    const txn = this.dbs.data.transaction(
+      (
+        rows: { hash: string; size: number; cachedAt: number; tier: number }[],
+      ) => {
+        for (const row of rows) {
+          stmt.run({
+            hash: row.hash,
+            size: row.size,
+            cached_at: row.cachedAt,
+            tier: row.tier,
+          });
+        }
+      },
+    );
+    txn(entries);
+  }
+
+  sumContiguousDataCacheBytes(): number {
+    const row: any = this.stmts.data.sumContiguousDataCacheBytes.get();
+    return row.total_bytes as number;
+  }
+
+  countContiguousDataCacheEntries(): number {
+    const row: any = this.stmts.data.countContiguousDataCacheEntries.get();
+    return row.count as number;
+  }
+
+  selectContiguousDataCacheEvictionCandidates(
+    limit: number,
+  ): { hash: string; size: number }[] {
+    const rows =
+      this.stmts.data.selectContiguousDataCacheEvictionCandidates.all({
+        limit,
+      });
+    return rows.map((row: any) => ({ hash: row.hash, size: row.size }));
+  }
+
+  deleteContiguousDataCacheEntry(hash: string): number {
+    return this.stmts.data.deleteContiguousDataCacheEntry.run({ hash }).changes;
+  }
+
+  deleteContiguousDataCacheEntries(hashes: string[]): string[] {
+    const stmt = this.stmts.data.deleteContiguousDataCacheEntry;
+    const txn = this.dbs.data.transaction((rows: string[]): string[] => {
+      const deleted: string[] = [];
+      for (const hash of rows) {
+        if (stmt.run({ hash }).changes > 0) {
+          deleted.push(hash);
+        }
+      }
+      return deleted;
+    });
+    return txn(hashes);
+  }
+
   getTxByOffset(offset: number): TxByOffsetResult {
     const result = this.stmts.core.selectStableTransactionOffsetById.get({
       offset,
@@ -1108,6 +1258,35 @@ export class StandaloneSqliteDatabaseWorker {
       id: result.id ? toB64Url(result.id) : undefined,
       offset: result.offset,
       data_size: result.data_size,
+    };
+  }
+
+  /**
+   * Resolve an absolute weave `offset` to its containing block via the indexed
+   * `weave_size` columns of `stable_blocks` and `new_blocks`, avoiding the chain
+   * binary search's sequential per-block fetches. Querying both tables lets
+   * offsets in the not-yet-stable tip resolve locally too. Returns the candidate
+   * block plus its predecessor's weave size for bracket validation and the zone
+   * it was found in; see {@link BlockByWeaveOffsetResult} for the `undefined`
+   * semantics. Resolves offset→block only — not offset→transaction.
+   */
+  getBlockByWeaveOffset(offset: number): BlockByWeaveOffsetResult {
+    const result = this.stmts.core.selectBlockHeightByWeaveOffset.get({
+      offset,
+    });
+    if (result === undefined) {
+      return {
+        height: undefined,
+        weaveSize: undefined,
+        prevWeaveSize: undefined,
+        zone: undefined,
+      };
+    }
+    return {
+      height: result.height ?? undefined,
+      weaveSize: result.weave_size ?? undefined,
+      prevWeaveSize: result.prev_weave_size ?? undefined,
+      zone: result.is_unstable ? 'unstable' : 'stable',
     };
   }
 
@@ -1278,9 +1457,9 @@ export class StandaloneSqliteDatabaseWorker {
       dataRow?.root_transaction_id !== undefined
         ? toB64Url(dataRow.root_transaction_id)
         : txOrItemRow?.root_transaction_id !== null &&
-          txOrItemRow?.root_transaction_id !== undefined
-        ? toB64Url(txOrItemRow.root_transaction_id)
-        : undefined;
+            txOrItemRow?.root_transaction_id !== undefined
+          ? toB64Url(txOrItemRow.root_transaction_id)
+          : undefined;
 
     let dataItemAttributes;
     if (rootTransactionId !== undefined) {
@@ -1290,7 +1469,8 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     // Calculate resolved offset values for reuse
-    const rootParentOffset = dataRow?.root_parent_offset ?? txOrItemRow?.root_parent_offset;
+    const rootParentOffset =
+      dataRow?.root_parent_offset ?? txOrItemRow?.root_parent_offset;
     const dataOffset = dataRow?.data_offset ?? txOrItemRow?.data_offset;
     const offset = dataRow?.data_item_offset ?? dataItemAttributes?.offset;
 
@@ -1346,8 +1526,8 @@ export class StandaloneSqliteDatabaseWorker {
         dataRow?.trusted === 1
           ? true
           : dataRow?.trusted === 0
-          ? false
-          : undefined,
+            ? false
+            : undefined,
     };
   }
 
@@ -1443,7 +1623,6 @@ export class StandaloneSqliteDatabaseWorker {
     const chainStats = this.stmts.core.selectChainStats.get();
     const bundleStats = this.stmts.bundles.selectBundleStats.get();
     const dataItemStats = this.stmts.bundles.selectDataItemStats.get();
-
 
     const now = currentUnixTimestamp();
 
@@ -1593,7 +1772,9 @@ export class StandaloneSqliteDatabaseWorker {
       verified: isVerified,
       verified_at: currentTimestamp,
       verification_priority: verificationPriority ?? null,
-      root_transaction_id: rootTransactionId ? fromB64Url(rootTransactionId) : null,
+      root_transaction_id: rootTransactionId
+        ? fromB64Url(rootTransactionId)
+        : null,
       root_parent_offset: rootParentOffset ?? null,
       data_offset: dataOffset ?? null,
       data_size: dataSize ?? null,
@@ -2188,6 +2369,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight = -1,
     bundledIn,
     tags = [],
+    l1Only = false,
   }: {
     pageSize: number;
     cursor?: string;
@@ -2199,7 +2381,15 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
+    l1Only?: boolean;
   }): GqlTransaction[] {
+    // `l1Only` (base-layer only) and `bundledIn: [...]` (bundled data items
+    // only) are contradictory — no row can satisfy both. The composite router
+    // already avoids emitting this combination; guard defensively so a direct
+    // caller can't get silently wrong results.
+    if (l1Only && Array.isArray(bundledIn)) {
+      return [];
+    }
     const txsQuery = this.getGqlNewTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
@@ -2240,14 +2430,19 @@ export class StandaloneSqliteDatabaseWorker {
     const itemsFinalSql = `${itemsSql} LIMIT ${pageSize + 1}`;
 
     const sqlSortOrder = sortOrder === 'HEIGHT_DESC' ? 'DESC' : 'ASC';
+    // `l1Only` forces the base-layer (transactions) leg only, dropping the
+    // bundled data-item leg regardless of `bundledIn`.
+    const includeTxs = l1Only || bundledIn === undefined || bundledIn === null;
+    const includeItems =
+      !l1Only && (bundledIn === undefined || Array.isArray(bundledIn));
     const sqlParts = [];
-    if (bundledIn === undefined || bundledIn === null) {
+    if (includeTxs) {
       sqlParts.push(`SELECT * FROM (${txsFinalSql})`);
     }
-    if (bundledIn === undefined) {
+    if (includeTxs && includeItems) {
       sqlParts.push('UNION');
     }
-    if (bundledIn === undefined || Array.isArray(bundledIn)) {
+    if (includeItems) {
       sqlParts.push(`SELECT * FROM (${itemsFinalSql})`);
     }
 
@@ -2256,7 +2451,11 @@ export class StandaloneSqliteDatabaseWorker {
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
-    const sqliteParams = toSqliteParams(itemsQueryParams);
+    // The txs and items legs carry identical param sequences; bind from a leg
+    // that is actually present so every placeholder is covered.
+    const sqliteParams = toSqliteParams(
+      includeItems ? itemsQueryParams : txsQueryParams,
+    );
 
     this.log.debug('Querying new transactions...', { sql, sqliteParams });
 
@@ -2310,6 +2509,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight = -1,
     bundledIn,
     tags = [],
+    l1Only = false,
   }: {
     pageSize: number;
     cursor?: string;
@@ -2321,7 +2521,15 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
+    l1Only?: boolean;
   }): GqlTransaction[] {
+    // `l1Only` (base-layer only) and `bundledIn: [...]` (bundled data items
+    // only) are contradictory — no row can satisfy both. The composite router
+    // already avoids emitting this combination; guard defensively so a direct
+    // caller can't get silently wrong results.
+    if (l1Only && Array.isArray(bundledIn)) {
+      return [];
+    }
     const txsQuery = this.getGqlStableTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
@@ -2363,14 +2571,19 @@ export class StandaloneSqliteDatabaseWorker {
     const itemsFinalSql = `${itemsSql} LIMIT ${pageSize + 1}`;
 
     const sqlSortOrder = sortOrder === 'HEIGHT_DESC' ? 'DESC' : 'ASC';
+    // `l1Only` forces the base-layer (transactions) leg only, dropping the
+    // bundled data-item leg regardless of `bundledIn`.
+    const includeTxs = l1Only || bundledIn === undefined || bundledIn === null;
+    const includeItems =
+      !l1Only && (bundledIn === undefined || Array.isArray(bundledIn));
     const sqlParts = [];
-    if (bundledIn === undefined || bundledIn === null) {
+    if (includeTxs) {
       sqlParts.push(`SELECT * FROM (${txsFinalSql})`);
     }
-    if (bundledIn === undefined) {
+    if (includeTxs && includeItems) {
       sqlParts.push('UNION');
     }
-    if (bundledIn === undefined || Array.isArray(bundledIn)) {
+    if (includeItems) {
       sqlParts.push(`SELECT * FROM (${itemsFinalSql})`);
     }
     sqlParts.push(
@@ -2378,7 +2591,11 @@ export class StandaloneSqliteDatabaseWorker {
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
-    const sqliteParams = toSqliteParams(itemsQueryParams);
+    // The txs and items legs carry identical param sequences; bind from a leg
+    // that is actually present so every placeholder is covered.
+    const sqliteParams = toSqliteParams(
+      includeItems ? itemsQueryParams : txsQueryParams,
+    );
 
     this.log.debug('Querying stable transactions...', { sql, sqliteParams });
 
@@ -2428,6 +2645,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight = -1,
     bundledIn,
     tags = [],
+    l1Only = false,
   }: {
     pageSize: number;
     cursor?: string;
@@ -2439,6 +2657,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
+    l1Only?: boolean;
   }) {
     let txs: GqlTransaction[] = [];
 
@@ -2454,6 +2673,7 @@ export class StandaloneSqliteDatabaseWorker {
         maxHeight,
         bundledIn,
         tags,
+        l1Only,
       });
 
       if (txs.length < pageSize) {
@@ -2471,6 +2691,7 @@ export class StandaloneSqliteDatabaseWorker {
               txs.length > 0 && lastTxHeight ? lastTxHeight - 1 : maxHeight,
             bundledIn,
             tags,
+            l1Only,
           }),
         );
       }
@@ -2486,6 +2707,7 @@ export class StandaloneSqliteDatabaseWorker {
         maxHeight,
         bundledIn,
         tags,
+        l1Only,
       });
 
       if (txs.length < pageSize) {
@@ -2503,6 +2725,7 @@ export class StandaloneSqliteDatabaseWorker {
             maxHeight,
             bundledIn,
             tags,
+            l1Only,
           }),
         );
       }
@@ -2884,6 +3107,17 @@ export class StandaloneSqliteDatabaseWorker {
     this.stmts.moderation.deleteBlockedName.run({ name });
   }
 
+  unblockData({ id, hash }: { id?: string; hash?: string }) {
+    // Remove both the id- and hash-keyed block if present so content blocked
+    // by either key is fully released. DELETE of a missing row is a no-op.
+    if (id !== undefined) {
+      this.stmts.moderation.deleteBlockedId.run({ id: fromB64Url(id) });
+    }
+    if (hash !== undefined) {
+      this.stmts.moderation.deleteBlockedHash.run({ hash: fromB64Url(hash) });
+    }
+  }
+
   async saveNestedDataId({
     id,
     parentId,
@@ -3053,13 +3287,38 @@ type WorkerPoolSizes = {
   [key in WorkerPoolName]: { [key in WorkerRoleName]: number };
 };
 const WORKER_POOL_SIZES: WorkerPoolSizes = {
-  core: { read: 1, write: 1 },
-  data: { read: 2, write: 1 },
+  core: { read: config.CORE_SQLITE_READ_WORKER_COUNT, write: 1 },
+  data: { read: config.DATA_SQLITE_READ_WORKER_COUNT, write: 1 },
   gql: { read: Math.min(CPU_COUNT, MAX_WORKER_COUNT), write: 0 },
   debug: { read: 1, write: 0 },
   moderation: { read: 1, write: 1 },
   bundles: { read: 1, write: 1 },
 };
+
+/**
+ * Produces a compact, log-safe summary of a worker method's args for slow-op
+ * logging: scalars are passed through, long strings and binary blobs are
+ * replaced with a length marker, and containers are collapsed. Prevents dumping
+ * large buffers or row payloads into the logs.
+ */
+function summarizeSqliteArg(arg: unknown): unknown {
+  if (arg === null || arg === undefined) return arg;
+  if (typeof arg === 'number' || typeof arg === 'boolean') return arg;
+  if (typeof arg === 'string') {
+    return arg.length <= 64 ? arg : `<string:${arg.length}>`;
+  }
+  if (Buffer.isBuffer(arg) || arg instanceof Uint8Array) {
+    return `<bytes:${arg.length}>`;
+  }
+  if (Array.isArray(arg)) return `<array:${arg.length}>`;
+  if (typeof arg === 'object') return '<object>';
+  return typeof arg;
+}
+
+function summarizeSqliteArgs(args: unknown): unknown[] {
+  if (!Array.isArray(args)) return [];
+  return args.slice(0, 6).map(summarizeSqliteArg);
+}
 
 export class StandaloneSqliteDatabase
   implements
@@ -3258,6 +3517,28 @@ export class StandaloneSqliteDatabase
         if (!job && self.workQueues[pool][role].length) {
           // If there's a job in the queue, send it to the worker
           job = self.workQueues[pool][role].shift();
+
+          // Only queueWork()-enqueued jobs are metric-tracked: they carry
+          // `enqueuedAt` and were counted into `sqliteQueuedOps`. Internal
+          // control jobs such as the `terminate` message pushed directly by
+          // stop() are not, so skip the split-timing instrumentation for them —
+          // this keeps the gauge balanced (no dec() without a matching inc())
+          // and avoids a spurious `terminate` latency series. Leaving
+          // `dispatchedAt` unset also makes the reply handler skip its
+          // service-time instrumentation for these jobs.
+          if (job.enqueuedAt !== undefined) {
+            const dispatchedAt = performance.now();
+            const method = job.message.method;
+            const queueWaitSeconds = (dispatchedAt - job.enqueuedAt) / 1000;
+            job.dispatchedAt = dispatchedAt;
+            job.queueWaitSeconds = queueWaitSeconds;
+            metrics.sqliteQueuedOps.dec({ worker: pool, role });
+            metrics.sqliteMethodQueueWaitSeconds.observe(
+              { worker: pool, role, method },
+              queueWaitSeconds,
+            );
+          }
+
           worker.postMessage(job.message);
         }
       }
@@ -3268,6 +3549,34 @@ export class StandaloneSqliteDatabase
           takeWork();
         })
         .on('message', async (result) => {
+          // Service time: dispatch -> reply received (worker execution plus
+          // reply scheduling on the main event loop). Combined with queue wait
+          // this isolates worker-pool serialization from event-loop saturation.
+          if (job?.dispatchedAt !== undefined) {
+            const method = job.message.method;
+            const serviceSeconds =
+              (performance.now() - job.dispatchedAt) / 1000;
+            const queueWaitSeconds = job.queueWaitSeconds ?? 0;
+            metrics.sqliteMethodServiceSeconds.observe(
+              { worker: pool, role, method },
+              serviceSeconds,
+            );
+
+            const totalMs = (queueWaitSeconds + serviceSeconds) * 1000;
+            if (totalMs >= config.SQLITE_SLOW_QUERY_LOG_THRESHOLD_MS) {
+              self.log.warn('Slow SQLite operation', {
+                worker: pool,
+                role,
+                method,
+                queueWaitMs: Math.round(queueWaitSeconds * 1000),
+                serviceMs: Math.round(serviceSeconds * 1000),
+                totalMs: Math.round(totalMs),
+                queueDepth: self.workQueues[pool][role].length,
+                args: summarizeSqliteArgs(job.message.args),
+              });
+            }
+          }
+
           if (result && result.stack) {
             job.reject(DetailedError.fromJSON(result));
           } else {
@@ -3376,6 +3685,7 @@ export class StandaloneSqliteDatabase
     const executeWithRetry = async (retryCount = 0): Promise<any> => {
       try {
         return await new Promise((resolve, reject) => {
+          metrics.sqliteQueuedOps.inc({ worker: workerName, role });
           this.workQueues[workerName][role].push({
             resolve,
             reject,
@@ -3383,6 +3693,7 @@ export class StandaloneSqliteDatabase
               method,
               args,
             },
+            enqueuedAt: performance.now(),
           });
           this.drainQueue();
         });
@@ -3506,6 +3817,16 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getTxByOffset', [offset]);
   }
 
+  /**
+   * Queue-wrapper for the worker's {@link StandaloneSqliteDatabaseWorker.getBlockByWeaveOffset}:
+   * resolve an absolute weave `offset` to its containing stable block (with the
+   * predecessor's weave size for bracket validation). See
+   * {@link BlockByWeaveOffsetResult} for the `undefined` fallback contract.
+   */
+  getBlockByWeaveOffset(offset: number): Promise<BlockByWeaveOffsetResult> {
+    return this.queueRead('core', 'getBlockByWeaveOffset', [offset]);
+  }
+
   saveTxOffset(id: string, offset: number) {
     return this.queueWrite('core', 'saveTxOffset', [id, offset]);
   }
@@ -3531,6 +3852,14 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'unconfirmChunkPlacements', [dataRoot]);
   }
 
+  pruneConfirmedDataRoots(cutoff: number): Promise<number> {
+    return this.queueWrite('data', 'pruneConfirmedDataRoots', [cutoff]);
+  }
+
+  countConfirmedDataRoots(): Promise<number> {
+    return this.queueRead('data', 'countConfirmedDataRoots', undefined);
+  }
+
   selectExpiredUnconfirmedChunkPlacements(params: {
     originIngest: number;
     originIngestAllowlisted: number;
@@ -3546,7 +3875,9 @@ export class StandaloneSqliteDatabase
   selectOldestPendingChunkPlacements(
     limit: number,
   ): Promise<ChunkPlacementRef[]> {
-    return this.queueRead('data', 'selectOldestPendingChunkPlacements', [limit]);
+    return this.queueRead('data', 'selectOldestPendingChunkPlacements', [
+      limit,
+    ]);
   }
 
   deleteChunkPlacement(
@@ -3571,6 +3902,63 @@ export class StandaloneSqliteDatabase
 
   sumPendingChunkBytes(): Promise<number> {
     return this.queueRead('data', 'sumPendingChunkBytes', undefined);
+  }
+
+  saveContiguousDataCacheEntry(entry: {
+    hash: string;
+    size: number;
+    cachedAt: number;
+    tier: number;
+  }): Promise<void> {
+    return this.queueWrite('data', 'saveContiguousDataCacheEntry', [entry]);
+  }
+
+  touchContiguousDataCacheEntry(
+    hash: string,
+    lastAccess: number,
+    tier: number,
+  ): Promise<void> {
+    return this.queueWrite('data', 'touchContiguousDataCacheEntry', [
+      hash,
+      lastAccess,
+      tier,
+    ]);
+  }
+
+  insertContiguousDataCacheEntriesIfAbsent(
+    entries: { hash: string; size: number; cachedAt: number; tier: number }[],
+  ): Promise<void> {
+    return this.queueWrite('data', 'insertContiguousDataCacheEntriesIfAbsent', [
+      entries,
+    ]);
+  }
+
+  sumContiguousDataCacheBytes(): Promise<number> {
+    return this.queueRead('data', 'sumContiguousDataCacheBytes', undefined);
+  }
+
+  countContiguousDataCacheEntries(): Promise<number> {
+    return this.queueRead('data', 'countContiguousDataCacheEntries', undefined);
+  }
+
+  selectContiguousDataCacheEvictionCandidates(
+    limit: number,
+  ): Promise<{ hash: string; size: number }[]> {
+    return this.queueRead(
+      'data',
+      'selectContiguousDataCacheEvictionCandidates',
+      [limit],
+    );
+  }
+
+  deleteContiguousDataCacheEntry(hash: string): Promise<number> {
+    return this.queueWrite('data', 'deleteContiguousDataCacheEntry', [hash]);
+  }
+
+  deleteContiguousDataCacheEntries(hashes: string[]): Promise<string[]> {
+    return this.queueWrite('data', 'deleteContiguousDataCacheEntries', [
+      hashes,
+    ]);
   }
 
   async saveDataItem(
@@ -3712,6 +4100,21 @@ export class StandaloneSqliteDatabase
     return debugInfo;
   }
 
+  /**
+   * Queues an item's content attributes — hash, size, content type, and its
+   * position within the root transaction — for persistence.
+   *
+   * Writes are deduped over a {@link DEDUPE_CACHE_TTL_MS} window keyed on the
+   * item ID **and its root coordinates** (`rootTransactionId`,
+   * `rootDataItemOffset`, `rootDataOffset`). A repeat write carrying the same
+   * coordinates is dropped, which is what the cache exists for; a write that
+   * moves the item to a different root always reaches the queue. Keying on the
+   * ID alone let whichever retrieval finished first inside the window win, so a
+   * corrected root arriving behind an unchanged write was silently discarded.
+   *
+   * Callers that invalidate an item must clear every dedupe entry for it, not
+   * just the bare ID — see {@link clearDataHash}.
+   */
   saveDataContentAttributes({
     id,
     parentId,
@@ -3749,14 +4152,33 @@ export class StandaloneSqliteDatabase
     rootDataOffset?: number;
     trusted?: boolean;
   }) {
-    if (this.saveDataContentAttributesCache.get(id)) {
+    // Dedupe on the root coordinates rather than the ID alone. Keying on the ID
+    // made the first writer within the TTL win: a retrieval that resolved
+    // before RootParentDataSource would re-persist the item's existing root,
+    // claim the slot, and a corrected root from the rebase walk arriving inside
+    // the same window was silently dropped. Including the root fields keeps
+    // suppressing writes that would change nothing, while letting a write that
+    // actually moves the item's root coordinates through every time.
+    //
+    // This can only admit writes the ID-only key would have suppressed, never
+    // suppress ones it allowed, and the extra writes are limited to genuine
+    // corrections — so the protection this cache exists to give the write
+    // queue is preserved.
+    const dedupeKey = [
+      id,
+      rootTransactionId ?? '',
+      rootDataItemOffset ?? '',
+      rootDataOffset ?? '',
+    ].join('|');
+
+    if (this.saveDataContentAttributesCache.get(dedupeKey)) {
       metrics.sqliteMethodDuplicateCallsCounter.inc({
         method: 'saveDataContentAttributes',
       });
       return Promise.resolve();
     }
 
-    this.saveDataContentAttributesCache.set(id, true);
+    this.saveDataContentAttributesCache.set(dedupeKey, true);
 
     return this.queueWrite('data', 'saveDataContentAttributes', [
       {
@@ -3796,6 +4218,7 @@ export class StandaloneSqliteDatabase
     maxHeight = -1,
     bundledIn,
     tags = [],
+    l1Only = false,
   }: {
     pageSize: number;
     cursor?: string;
@@ -3807,6 +4230,7 @@ export class StandaloneSqliteDatabase
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
+    l1Only?: boolean;
   }) {
     return this.queueRead('gql', 'getGqlTransactions', [
       {
@@ -3820,6 +4244,7 @@ export class StandaloneSqliteDatabase
         maxHeight,
         bundledIn,
         tags,
+        l1Only,
       },
     ]);
   }
@@ -3918,6 +4343,16 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('moderation', 'unblockName', [{ name }]);
   }
 
+  async unblockData({
+    id,
+    hash,
+  }: {
+    id?: string;
+    hash?: string;
+  }): Promise<void> {
+    return this.queueWrite('moderation', 'unblockData', [{ id, hash }]);
+  }
+
   async saveNestedDataId({
     id,
     parentId,
@@ -3963,7 +4398,9 @@ export class StandaloneSqliteDatabase
 
   async getRootTx(id: string) {
     // First try to get from data DB
-    const rootTxFromData = await this.queueRead('data', 'getRootTxFromData', [id]);
+    const rootTxFromData = await this.queueRead('data', 'getRootTxFromData', [
+      id,
+    ]);
     if (rootTxFromData) {
       return rootTxFromData;
     }
@@ -3971,8 +4408,25 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getRootTxFromCoreAndBundles', [id]);
   }
 
+  /**
+   * Clears an item's cached data hash, used when cache re-verification finds a
+   * mismatch and the blob is evicted.
+   *
+   * Also drops every `saveDataContentAttributes` dedupe entry for the item.
+   * Those keys carry the item's root coordinates, so deleting the bare ID would
+   * match nothing and the re-save that must follow an eviction would be
+   * suppressed until the TTL expired — leaving the row with a null hash. The
+   * scan is over a cache bounded at {@link DEDUPE_CACHE_MAX_SIZE}, and this
+   * path only runs on a verification mismatch, so the cost is not on any hot
+   * route. `|` cannot appear in a base64url ID, so the prefix is unambiguous.
+   */
   async clearDataHash(id: string) {
-    this.saveDataContentAttributesCache.delete(id);
+    const prefix = `${id}|`;
+    for (const key of [...this.saveDataContentAttributesCache.keys()]) {
+      if (key === id || key.startsWith(prefix)) {
+        this.saveDataContentAttributesCache.delete(key);
+      }
+    }
     return this.queueWrite('data', 'clearDataHash', [id]);
   }
 
@@ -4096,6 +4550,10 @@ if (!isMainThread) {
           const tx = worker.getTxByOffset(args[0]);
           parentPort?.postMessage(tx);
           break;
+        case 'getBlockByWeaveOffset':
+          const blockByWeaveOffset = worker.getBlockByWeaveOffset(args[0]);
+          parentPort?.postMessage(blockByWeaveOffset);
+          break;
         case 'saveTxOffset':
           worker.saveTxOffset(args[0], args[1]);
           parentPort?.postMessage(null);
@@ -4112,6 +4570,9 @@ if (!isMainThread) {
         case 'unconfirmChunkPlacements':
           worker.unconfirmChunkPlacements(args[0]);
           parentPort?.postMessage(null);
+          break;
+        case 'pruneConfirmedDataRoots':
+          parentPort?.postMessage(worker.pruneConfirmedDataRoots(args[0]));
           break;
         case 'selectExpiredUnconfirmedChunkPlacements':
           parentPort?.postMessage(
@@ -4133,6 +4594,42 @@ if (!isMainThread) {
           break;
         case 'sumPendingChunkBytes':
           parentPort?.postMessage(worker.sumPendingChunkBytes());
+          break;
+        case 'saveContiguousDataCacheEntry':
+          worker.saveContiguousDataCacheEntry(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'touchContiguousDataCacheEntry':
+          worker.touchContiguousDataCacheEntry(args[0], args[1], args[2]);
+          parentPort?.postMessage(null);
+          break;
+        case 'insertContiguousDataCacheEntriesIfAbsent':
+          worker.insertContiguousDataCacheEntriesIfAbsent(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'sumContiguousDataCacheBytes':
+          parentPort?.postMessage(worker.sumContiguousDataCacheBytes());
+          break;
+        case 'countContiguousDataCacheEntries':
+          parentPort?.postMessage(worker.countContiguousDataCacheEntries());
+          break;
+        case 'selectContiguousDataCacheEvictionCandidates':
+          parentPort?.postMessage(
+            worker.selectContiguousDataCacheEvictionCandidates(args[0]),
+          );
+          break;
+        case 'deleteContiguousDataCacheEntry':
+          parentPort?.postMessage(
+            worker.deleteContiguousDataCacheEntry(args[0]),
+          );
+          break;
+        case 'deleteContiguousDataCacheEntries':
+          parentPort?.postMessage(
+            worker.deleteContiguousDataCacheEntries(args[0]),
+          );
+          break;
+        case 'countConfirmedDataRoots':
+          parentPort?.postMessage(worker.countConfirmedDataRoots());
           break;
         case 'saveDataItem':
           worker.saveDataItem(args[0], args[1]);
@@ -4241,6 +4738,10 @@ if (!isMainThread) {
           break;
         case 'unblockName':
           worker.unblockName(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'unblockData':
+          worker.unblockData(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'saveNestedDataId':

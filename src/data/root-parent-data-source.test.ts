@@ -17,6 +17,25 @@ import {
   DataItemRootIndex,
 } from '../types.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import * as metrics from '../metrics.js';
+
+// Reads the current value of root_tx_local_resolve_total for a given outcome
+// label so tests can assert the increment (the counter is process-global, so
+// assert deltas rather than absolute values).
+async function readLocalResolve(outcome: string): Promise<number> {
+  const metric = await metrics.rootTxLocalResolveTotal.get();
+  return (
+    metric.values.find((v: any) => v.labels.outcome === outcome)?.value ?? 0
+  );
+}
+
+// Same deal for the stored-root rebase counter: assert deltas, not absolutes.
+async function readRebased(outcome: string): Promise<number> {
+  const metric = await metrics.rootTxStoredRootRebasedTotal.get();
+  return (
+    metric.values.find((v: any) => v.labels.outcome === outcome)?.value ?? 0
+  );
+}
 
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
@@ -403,9 +422,12 @@ describe('RootParentDataSource', () => {
         },
       );
 
+      // Two root-tx lookups: the local-first lookup (bare rootTxId), then the
+      // remote fallback after the local scan misses — which also can't resolve
+      // it here, so the not-found error is thrown.
       assert.strictEqual(
         (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
-        1,
+        2,
       );
       assert.strictEqual(
         (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
@@ -769,10 +791,13 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.size, 500);
       assert.strictEqual(result.stream, dataStream);
 
-      // Should have called getDataAttributes once (reused by traversal for pre-computed check)
+      // Two attribute reads: the item's own (reused by traversal for the
+      // pre-computed check) plus one local lookup of the stored root, which
+      // confirms the root is an L1 transaction and not an intermediate bundle.
+      // Both are local; no parent chain is walked.
       assert.strictEqual(
         (dataAttributesStore.getDataAttributes as any).mock.calls.length,
-        1,
+        2,
       );
 
       // Should NOT have traversed parents (optimization worked!)
@@ -2326,6 +2351,446 @@ describe('RootParentDataSource', () => {
         (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
         1,
       );
+    });
+  });
+
+  describe('local-first offset resolution', () => {
+    it('resolves a bare rootTxId via local scan without a second (remote) lookup', async () => {
+      const dataItemId = 'local-first-item';
+      const rootTxId = 'root-tx-local';
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      // Bare rootTxId only (no path/offsets) — the CDB case.
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
+      );
+      // Local header scan resolves it (shallow item).
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
+      );
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('x')]),
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      const before = await readLocalResolve('local');
+      await rootParentDataSource.getData({ id: dataItemId });
+      assert.strictEqual((await readLocalResolve('local')) - before, 1);
+
+      // Exactly one root-tx lookup: the local scan succeeded, so no remote
+      // fallback lookup was issued.
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        1,
+      );
+      // The lookup opted into rootId-only acceptance.
+      const accept = (dataItemRootTxIndex.getRootTx as any).mock.calls[0]
+        .arguments[1]?.accept;
+      assert.strictEqual(typeof accept, 'function');
+      assert.strictEqual(accept({ rootTxId: 'anything' }), true);
+      assert.strictEqual(accept({}), false);
+    });
+
+    it('falls back to a path lookup when the local scan misses', async () => {
+      const dataItemId = 'nested-item';
+      const rootTxId = 'root-tx-nested';
+      (ans104OffsetSource as any).getDataItemOffsetWithPath = mock.fn();
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      // First lookup: bare rootTxId. Second lookup (fallback): supplies a path.
+      let call = 0;
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => {
+          call += 1;
+          return call === 1
+            ? { rootTxId }
+            : { rootTxId, path: [rootTxId, 'parent-nested'] };
+        },
+      );
+      // Local scan misses (nested item).
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => null,
+      );
+      // Path-guided navigation resolves it.
+      (
+        ans104OffsetSource.getDataItemOffsetWithPath as any
+      ).mock.mockImplementation(async () => ({
+        itemOffset: 10,
+        dataOffset: 20,
+        itemSize: 60,
+        dataSize: 50,
+        contentType: 'text/plain',
+      }));
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('x')]),
+        size: 50,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      const before = await readLocalResolve('remote_fallback');
+      await rootParentDataSource.getData({ id: dataItemId });
+      assert.strictEqual(
+        (await readLocalResolve('remote_fallback')) - before,
+        1,
+      );
+
+      // Two lookups: local-first, then the remote fallback after the miss.
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        2,
+      );
+      // The fallback lookup used the default (no accept override).
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls[1].arguments[1],
+        undefined,
+      );
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        1,
+      );
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffsetWithPath as any).mock.calls.length,
+        1,
+      );
+      assert.deepStrictEqual(
+        (ans104OffsetSource.getDataItemOffsetWithPath as any).mock.calls[0]
+          .arguments[1],
+        [rootTxId, 'parent-nested'],
+      );
+    });
+
+    it('resolves via direct offsets when the fallback lookup has no path', async () => {
+      const dataItemId = 'nested-offsets-item';
+      const rootTxId = 'root-tx-offsets';
+      (ans104OffsetSource as any).getDataItemOffsetWithPath = mock.fn();
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      // First lookup: bare rootTxId. Fallback: direct offsets, no path.
+      let call = 0;
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => {
+          call += 1;
+          return call === 1
+            ? { rootTxId }
+            : {
+                rootTxId,
+                rootOffset: 900,
+                rootDataOffset: 1000,
+                size: 600,
+                dataSize: 500,
+                contentType: 'text/plain',
+              };
+        },
+      );
+      // Local scan misses.
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => null,
+      );
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('x')]),
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      const before = await readLocalResolve('remote_fallback');
+      await rootParentDataSource.getData({ id: dataItemId });
+      assert.strictEqual(
+        (await readLocalResolve('remote_fallback')) - before,
+        1,
+      );
+
+      // Resolved from the fallback's direct offsets — no path navigation.
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        2,
+      );
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffsetWithPath as any).mock.calls.length,
+        0,
+      );
+      // Data was served using the recovered offsets (dataOffset 1000).
+      assert.strictEqual(
+        (dataSource.getData as any).mock.calls[0].arguments[0].region.offset,
+        1000,
+      );
+    });
+
+    it('records unresolved when both the local scan and the fallback miss', async () => {
+      const dataItemId = 'truly-missing-item';
+      const rootTxId = 'root-tx-missing';
+      (ans104OffsetSource as any).getDataItemOffsetWithPath = mock.fn();
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      // Both lookups return a bare rootTxId (no path/offsets).
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
+      );
+      // Local scan misses; the fallback lookup also yields nothing usable.
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => null,
+      );
+
+      const before = await readLocalResolve('unresolved');
+      await assert.rejects(
+        async () => {
+          await rootParentDataSource.getData({ id: dataItemId });
+        },
+        {
+          message: `Data item ${dataItemId} not found in root bundle ${rootTxId}`,
+        },
+      );
+      assert.strictEqual((await readLocalResolve('unresolved')) - before, 1);
+
+      // No path navigation and no data fetch on a genuine miss.
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffsetWithPath as any).mock.calls.length,
+        0,
+      );
+      assert.strictEqual((dataSource.getData as any).mock.calls.length, 0);
+    });
+  });
+
+  // A stored root transaction ID is not automatically an L1 transaction. If the
+  // parent chain was incomplete when the offsets were computed, an intermediate
+  // bundle gets recorded as the root. The offsets stored beside it are correct
+  // *in that bundle's frame*, so a rebase must add the parent's payload offset
+  // rather than simply swapping the root.
+  //
+  // Figures below are from a real mis-rooted item observed in production:
+  //   item   rootDataItemOffset=160      rootDataOffset=1409   size=94
+  //   parent rootDataOffset=2997791  ->  L1 root
+  //   rebased: 2997791+160=2997951, 2997791+1409=2999200 (verified end to end)
+  describe('stored root validation', () => {
+    const ITEM = 'bzKh-item';
+    const MID = 'jVtj-intermediate-bundle';
+    const L1 = 'WRjL-l1-root';
+
+    const itemAttributes = {
+      size: 94,
+      offset: 160,
+      dataOffset: 1409,
+      parentId: MID,
+      contentType: 'application/json',
+      rootTransactionId: MID,
+      rootDataItemOffset: 160,
+      rootDataOffset: 1409,
+    };
+
+    const stubDataFetch = () => {
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('x'.repeat(94))]),
+        size: 94,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+    };
+
+    it('rebases offsets onto the L1 root when the stored root is bundled', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return itemAttributes;
+          if (id === MID) {
+            return {
+              size: 2803,
+              rootTransactionId: L1,
+              rootDataItemOffset: 2996625,
+              rootDataOffset: 2997791,
+            };
+          }
+          return undefined;
+        },
+      );
+      stubDataFetch();
+      const before = await readRebased('resolved');
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(
+        dataCall.id,
+        L1,
+        'must fetch from the L1 root, not the intermediate bundle',
+      );
+      assert.deepStrictEqual(dataCall.region, { offset: 2999200, size: 94 });
+      assert.strictEqual((await readRebased('resolved')) - before, 1);
+    });
+
+    it('persists the corrected root and offsets', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return itemAttributes;
+          if (id === MID) {
+            return {
+              size: 2803,
+              rootTransactionId: L1,
+              rootDataOffset: 2997791,
+            };
+          }
+          return undefined;
+        },
+      );
+      stubDataFetch();
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      const setCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      assert.strictEqual(
+        setCalls.length,
+        1,
+        'correction should be written back',
+      );
+      assert.strictEqual(setCalls[0].arguments[0], ITEM);
+      assert.deepStrictEqual(setCalls[0].arguments[1], {
+        rootTransactionId: L1,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+        size: 94,
+      });
+    });
+
+    it('leaves a correctly rooted item untouched', async () => {
+      const rebasedBefore: Record<string, number> = {};
+      for (const outcome of ['resolved', 'incomplete', 'lookup_failed']) {
+        rebasedBefore[outcome] = await readRebased(outcome);
+      }
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return { ...itemAttributes, rootTransactionId: L1 };
+          // The L1 root carries no root of its own.
+          if (id === L1) return { size: 3098422 };
+          return undefined;
+        },
+      );
+      stubDataFetch();
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, L1);
+      assert.deepStrictEqual(dataCall.region, { offset: 1409, size: 94 });
+      assert.strictEqual(
+        (dataAttributesStore.setDataAttributes as any).mock.calls.length,
+        0,
+        'a valid root must not be rewritten',
+      );
+      // The counter measures mis-rooted reads, so the healthy path must leave
+      // every label untouched.
+      for (const outcome of ['resolved', 'incomplete', 'lookup_failed']) {
+        assert.strictEqual(
+          (await readRebased(outcome)) - (rebasedBefore[outcome] ?? 0),
+          0,
+          `correctly rooted item must not increment ${outcome}`,
+        );
+      }
+    });
+
+    it('walks more than one level of nesting', async () => {
+      const OUTER = 'outer-bundle';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return itemAttributes;
+          if (id === MID) {
+            return {
+              size: 2803,
+              rootTransactionId: OUTER,
+              rootDataOffset: 1000,
+            };
+          }
+          if (id === OUTER) {
+            return { size: 50000, rootTransactionId: L1, rootDataOffset: 7000 };
+          }
+          return undefined;
+        },
+      );
+      stubDataFetch();
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, L1);
+      // 1409 + 1000 + 7000
+      assert.deepStrictEqual(dataCall.region, { offset: 9409, size: 94 });
+    });
+
+    it('keeps the stored pair when the parent has no payload offset', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return itemAttributes;
+          // Known to be bundled, but not rebasable.
+          if (id === MID) return { size: 2803, rootTransactionId: L1 };
+          return undefined;
+        },
+      );
+      stubDataFetch();
+      const before = await readRebased('incomplete');
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(
+        dataCall.id,
+        MID,
+        'must not emit a corrected root beside uncorrected offsets',
+      );
+      assert.deepStrictEqual(dataCall.region, { offset: 1409, size: 94 });
+      assert.strictEqual(
+        (dataAttributesStore.setDataAttributes as any).mock.calls.length,
+        0,
+      );
+      // hops === 0, but bundling was confirmed, so this must still be counted.
+      assert.strictEqual((await readRebased('incomplete')) - before, 1);
+    });
+
+    it('discards a partial rebase when the stored root chain cycles', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === ITEM) return itemAttributes;
+          if (id === MID) {
+            return { size: 2803, rootTransactionId: ITEM, rootDataOffset: 10 };
+          }
+          return undefined;
+        },
+      );
+      stubDataFetch();
+      const before = await readRebased('incomplete');
+
+      await rootParentDataSource.getData({ id: ITEM });
+
+      // The walk advances past the offending hop before it notices the cycle,
+      // so the accumulated offsets end up paired with the data item ID itself.
+      // That pair must be thrown away, not served: fall back to the stored
+      // root and offsets, which are at least in one consistent frame.
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, MID);
+      assert.deepStrictEqual(dataCall.region, { offset: 1409, size: 94 });
+      assert.strictEqual(
+        (dataAttributesStore.setDataAttributes as any).mock.calls.length,
+        0,
+      );
+      assert.strictEqual((await readRebased('incomplete')) - before, 1);
     });
   });
 });

@@ -22,6 +22,7 @@ type Recorder = {
   dataDel: Array<[string, number]>;
   metaDel: Array<[string, number]>;
   placementDel: Array<[string, number]>;
+  prunedBefore: number[];
 };
 
 const ref = (
@@ -43,7 +44,12 @@ function makeDeps({
   // confirmation landing between the sweep's SELECT and the DELETE.
   confirmedKeys?: Set<string>;
 }) {
-  const rec: Recorder = { dataDel: [], metaDel: [], placementDel: [] };
+  const rec: Recorder = {
+    dataDel: [],
+    metaDel: [],
+    placementDel: [],
+    prunedBefore: [],
+  };
   const chunkDataStore = {
     async del(dr: string, ro: number) {
       rec.dataDel.push([dr, ro]);
@@ -68,6 +74,13 @@ function makeDeps({
     async sumPendingChunkBytes() {
       return pendingBytes;
     },
+    async pruneConfirmedDataRoots(cutoff: number) {
+      rec.prunedBefore.push(cutoff);
+      return 0;
+    },
+    async countConfirmedDataRoots() {
+      return 0;
+    },
   } as unknown as ChunkPlacementIndex;
   return { rec, chunkDataStore, chunkMetadataStore, chunkPlacementIndex };
 }
@@ -77,13 +90,17 @@ describe('ChunkIngestGcWorker', () => {
     const { rec, ...deps } = makeDeps({
       expired: [ref('root-a', 0, 100), ref('root-b', 256, 200)],
     });
+    const confirmedRootRetentionSeconds = 3600;
     const worker = new ChunkIngestGcWorker({
       log,
       ...deps,
       maxPendingBytes: 0, // disable disk-cap so only TTL eviction runs
+      confirmedRootRetentionSeconds,
     });
 
+    const before = Math.floor(Date.now() / 1000);
     await worker.sweep();
+    const after = Math.floor(Date.now() / 1000);
 
     assert.deepEqual(rec.dataDel, [
       ['root-a', 0],
@@ -97,6 +114,11 @@ describe('ChunkIngestGcWorker', () => {
       ['root-a', 0],
       ['root-b', 256],
     ]);
+    // Each sweep also prunes stale confirmed-data-root markers once, using a
+    // cutoff of now - retention.
+    assert.equal(rec.prunedBefore.length, 1);
+    assert.ok(rec.prunedBefore[0] >= before - confirmedRootRetentionSeconds);
+    assert.ok(rec.prunedBefore[0] <= after - confirmedRootRetentionSeconds);
   });
 
   it('keeps a placement (and its FS bytes) confirmed between select and delete', async () => {

@@ -57,6 +57,8 @@ import {
   CompositeRootTxIndex,
   GatewaysRootTxIndex,
   CachedGatewayOffsets,
+  PeersRootTxIndex,
+  CachedPeerOffsets,
   GraphQLRootTxIndex,
   TurboRootTxIndex,
   CachedTurboOffsets,
@@ -80,6 +82,7 @@ import {
   DataItemRootIndex,
   ChainIndex,
   ChainOffsetIndex,
+  ContiguousDataCacheIndex,
   ContiguousDataIndex,
   ContiguousDataSource,
   DataItemIndexWriter,
@@ -96,6 +99,8 @@ import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
 import { SymlinkCleanupWorker } from './workers/symlink-cleanup-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
 import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
+import { ContiguousDataCacheEvictor } from './workers/contiguous-data-cache-evictor.js';
+import { ContiguousDataCacheReconciler } from './workers/contiguous-data-cache-reconciler.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
@@ -122,7 +127,7 @@ import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetchers.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { ChunkIngestGcWorker } from './workers/chunk-ingest-gc.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
-import { awsClient, legacyAwsS3Client } from './aws-client.js';
+import { awsClient, legacyAwsS3Client, turboAwsClient } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { ChunkRetrievalService } from './data/chunk-retrieval-service.js';
@@ -288,6 +293,12 @@ export const db = new StandaloneSqliteDatabase({
   tagSelectivity: config.TAG_SELECTIVITY,
 });
 
+// Let the Arweave client resolve chunk offset->block lookups against the local
+// stable-block index instead of sequential upstream block fetches. Wired here
+// (not via the constructor) because the database is constructed after the
+// client. See ArweaveCompositeClient.binarySearchBlocks.
+arweaveClient.blockByOffsetIndex = db;
+
 export const dataAttributesStore: ContiguousDataAttributesStore =
   new CompositeDataAttributesSource({
     log,
@@ -310,6 +321,12 @@ const turboOffsetsCache = new LRUCache<string, CachedTurboOffsets>({
 
 // Create separate cache for gateway offsets
 const gatewayOffsetsCache = new LRUCache<string, CachedGatewayOffsets>({
+  max: config.ROOT_TX_CACHE_MAX_SIZE,
+  ttl: config.ROOT_TX_CACHE_TTL_MS,
+});
+
+// Create separate cache for peer offsets
+const peerOffsetsCache = new LRUCache<string, CachedPeerOffsets>({
   max: config.ROOT_TX_CACHE_MAX_SIZE,
   ttl: config.ROOT_TX_CACHE_TTL_MS,
 });
@@ -369,6 +386,16 @@ export const gqlQueryable: GqlQueryable = (() => {
           skipSqliteReads:
             config.CLICKHOUSE_STREAMING_ENABLED &&
             config.CLICKHOUSE_GQL_SKIP_SQLITE_READS,
+          ownerProjectionRoutingEnabled:
+            config.CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED,
+          ownerProjectionEntityTypes:
+            config.CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES,
+          // L1-only routing: serve filter-entailed base-layer queries from the
+          // SQLite L1 index instead of ClickHouse. Disabled unless the filter
+          // is set to something other than the default NeverMatch.
+          l1OnlyRoutingFilter: config.GQL_L1_ONLY_ROUTING_ENABLED
+            ? config.GQL_L1_ONLY_ROUTING_FILTER
+            : undefined,
           ...(config.CLICKHOUSE_STREAMING_ENABLED
             ? {
                 sqliteCircuitBreakerOptions: {
@@ -570,9 +597,38 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
       basePath: 'data/contiguous',
       dataType: 'contiguous_data',
       initialDelay: contiguousDataCacheCleanupInitialDelayMs,
+      // Disk-pressure watermarks (all opt-in; 0 => pure age-based cleanup)
+      lowWatermarkPercent: config.CONTIGUOUS_DATA_CACHE_LOW_WATERMARK_PERCENT,
+      highWatermarkPercent: config.CONTIGUOUS_DATA_CACHE_HIGH_WATERMARK_PERCENT,
+      minFreeBytes: config.CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES,
+      aggressiveMinAgeSeconds:
+        config.CONTIGUOUS_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
       // Stats are passed by the worker to avoid redundant stat calls
-      shouldDelete: async (path, stats) => {
+      shouldDelete: async (path, stats, ctx) => {
         try {
+          // Age-gate before the (per-file, Redis-backed) metadata lookup.
+          // The non-preferred threshold is the shortest retention any tier can
+          // have, so a file younger than it cannot be deleted regardless of
+          // whether it turns out to be preferred. In that case skip the
+          // metadata lookup entirely — this keeps the cleanup walk stat-bound
+          // (not one Redis round-trip per file) for the bulk of a live cache,
+          // which is what lets it keep pace on very large caches.
+          //
+          // This only ever short-circuits to "keep", never to "delete", so it
+          // cannot cause over-eviction. The single behavioral difference vs.
+          // the full check is the rare case where a file's recorded
+          // accessTimestampMs predates its filesystem atime/mtime (e.g. a
+          // non-cache-serve read bumped atime): there the full check might have
+          // deleted it and the gate retains it — the safe direction.
+          const nonPreferredThresholdSeconds = Math.max(
+            contiguousDataCacheCleanupThresholdSeconds * ctx.thresholdScale,
+            ctx.minAgeSeconds,
+          );
+          const statTimeMs = Math.max(stats.atimeMs, stats.mtimeMs);
+          if (statTimeMs > Date.now() - nonPreferredThresholdSeconds * 1000) {
+            return false;
+          }
+
           const hash = path.split('/').pop() ?? '';
           const metadata = await contiguousMetadataStore.get(hash);
 
@@ -600,11 +656,20 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
             );
           }
 
-          // Preferred ArNS names have a different cleanup threshold
-          const cleanupThresholdMs =
-            (isPreferredArnsName
-              ? config.PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD
-              : contiguousDataCacheCleanupThresholdSeconds) * 1000;
+          // Preferred ArNS names have a different (longer) base threshold.
+          const baseThresholdSeconds = isPreferredArnsName
+            ? config.PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD
+            : contiguousDataCacheCleanupThresholdSeconds;
+
+          // Under disk pressure ctx.thresholdScale (< 1) tightens retention,
+          // floored at ctx.minAgeSeconds so hot/fresh data is never evicted.
+          // With watermarks disabled ctx is the normal context (scale 1, floor
+          // 0), so this is exactly the base threshold.
+          const effectiveThresholdSeconds = Math.max(
+            baseThresholdSeconds * ctx.thresholdScale,
+            ctx.minAgeSeconds,
+          );
+          const cleanupThresholdMs = effectiveThresholdSeconds * 1000;
 
           const mostRecentTimeMs =
             metadata?.accessTimestampMs ??
@@ -1002,6 +1067,27 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
       );
       break;
 
+    case 'peers':
+      if (Object.keys(config.PEERS_ROOT_TX_URLS).length > 0) {
+        rootTxIndexes.push(
+          new PeersRootTxIndex({
+            log,
+            peerUrls: config.PEERS_ROOT_TX_URLS,
+            requestTimeoutMs: config.PEERS_ROOT_TX_REQUEST_TIMEOUT_MS,
+            rateLimitBurstSize: config.PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE,
+            rateLimitTokensPerInterval:
+              config.PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
+            rateLimitInterval: config.PEERS_ROOT_TX_RATE_LIMIT_INTERVAL,
+            cache: peerOffsetsCache,
+          }),
+        );
+      } else {
+        log.warn(
+          'Peers root TX source configured but PEERS_ROOT_TX_URLS is empty',
+        );
+      }
+      break;
+
     case 'gateways':
       if (Object.keys(config.GATEWAYS_ROOT_TX_URLS).length > 0) {
         rootTxIndexes.push(
@@ -1151,14 +1237,14 @@ const s3DataSource =
     : undefined;
 
 const turboS3DataSource =
-  awsClient !== undefined &&
+  turboAwsClient !== undefined &&
   config.AWS_S3_TURBO_CONTIGUOUS_DATA_BUCKET !== undefined
     ? new S3DataSource({
         log,
-        s3Client: awsClient.S3,
+        s3Client: turboAwsClient.S3,
         s3Bucket: config.AWS_S3_TURBO_CONTIGUOUS_DATA_BUCKET,
         s3Prefix: config.AWS_S3_TURBO_CONTIGUOUS_DATA_PREFIX,
-        awsClient,
+        awsClient: turboAwsClient,
       })
     : undefined;
 
@@ -1319,6 +1405,12 @@ const contiguousDataStore = new FsDataStore({
   baseDir: 'data/contiguous',
 });
 
+// Cleanup index handle (the SQLite db) wired into the caches only when the
+// index feature is enabled (PE-9131). db structurally satisfies
+// ContiguousDataCacheIndex via the cache-index methods.
+const contiguousDataCacheIndex: ContiguousDataCacheIndex | undefined =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX ? db : undefined;
+
 export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource:
@@ -1341,6 +1433,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   contiguousDataIndex,
   dataAttributesStore,
   dataContentAttributeImporter,
+  contiguousDataCacheIndex,
   skipCache: config.SKIP_DATA_CACHE,
   eventEmitter,
   untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
@@ -1360,11 +1453,40 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   contiguousDataIndex,
   dataAttributesStore,
   dataContentAttributeImporter,
+  contiguousDataCacheIndex,
   skipCache: config.SKIP_DATA_CACHE,
   eventEmitter,
   untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
   trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
 });
+
+// Index-driven contiguous cache evictor (PE-9131): reclaims by querying the
+// SQLite cleanup index for the oldest blobs under disk pressure, instead of
+// walking the (HDD-backed) cache directory tree. Uses the same watermark
+// thresholds as the filesystem cleanup worker.
+export const contiguousDataCacheEvictor =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX
+    ? new ContiguousDataCacheEvictor({
+        log,
+        dataStore: contiguousDataStore,
+        cacheIndex: db,
+        usagePath: 'data/contiguous',
+      })
+    : undefined;
+
+// One-time backfill/reconciler to adopt a pre-existing on-disk cache into the
+// index. Runs (in the background) only when both the index and backfill flags
+// are set. The blob tree lives at data/contiguous/data (FsDataStore shards
+// blobs under baseDir/data/<hh>/<hh>/<hash>).
+export const contiguousDataCacheReconciler =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX &&
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL
+    ? new ContiguousDataCacheReconciler({
+        log,
+        cacheIndex: db,
+        baseDir: 'data/contiguous/data',
+      })
+    : undefined;
 
 export const dataItemIndexer = new DataItemIndexer({
   log,
@@ -1833,6 +1955,8 @@ export const shutdown = async (exitCode = 0) => {
     await webhookEmitter.stop();
     await headerFsCacheCleanupWorker?.stop();
     await contiguousDataFsCacheCleanupWorker?.stop();
+    await contiguousDataCacheEvictor?.stop();
+    await contiguousDataCacheReconciler?.stop();
     await chunkDataFsCacheCleanupWorker?.stop();
     symlinkCleanupWorker?.stop();
     await dataVerificationWorker?.stop();

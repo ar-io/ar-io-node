@@ -74,9 +74,15 @@ describe('WebhookEmitter', { skip: isTestFiltered(['flaky']) }, () => {
         WEBHOOK_INDEX_FILTER: '{"always": true}',
         WEBHOOK_TARGET_SERVERS: 'http://host.testcontainers.internal:4001',
         WEBHOOK_BLOCK_FILTER: '{"always": true}',
+        // This suite imports block 1, so it needs the same non-rate-limited
+        // chain source that composeUp uses.
+        TRUSTED_NODE_URL:
+          process.env.E2E_TRUSTED_NODE_URL ?? 'http://peers.arweave.xyz:1984',
         TRUSTED_GATEWAYS_URLS:
           '{"https://arweave.net": 1, "https://turbo-gateway.com": 2}',
         BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
+        // Matches the composeUp default; see the note there.
+        TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS: '45000',
       })
       .withExposedPorts(4000)
       .withWaitStrategy(Wait.forHttp('/ar-io/info', 4000))

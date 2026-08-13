@@ -166,6 +166,16 @@ against its data root and write-through cached with a pending placement
 data root never confirms on-chain (so the gateway never permanently keeps data
 that did not land on chain).
 
+**Sticky confirmation** - The mechanism that keeps a whole bundle's ingested
+chunks confirmed even though confirmation is a one-shot event and the chunks
+stream in over a window (often *after* the confirm event). When a
+[transaction](#transaction) is indexed, its data root is recorded in the
+`confirmed_data_roots` marker table; any chunk ingested for a marked data root
+inherits the confirmation at write time, and the GC never TTL-evicts a marked
+data root's chunks. Without it, a large bundle's late-arriving chunks stay
+pending and evict, leaving a gappy, unservable set. The marker table is bounded
+by an age-based prune (`CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS`).
+
 **Core Database** - Primary SQLite database containing blocks,
 [transactions](#transaction), transaction [tags](#tags), stable/new data
 indexes, and the migrations table that tracks applied database schema changes.
@@ -395,6 +405,18 @@ work, ar-io-node responses now emit BOTH the legacy pair and the aligned pair
 so cache-and-replay can copy headers between request and response without
 renaming. The legacy headers remain for backwards compatibility and will be
 removed after a deprecation window.
+
+<a id="offsets-endpoint"></a> **Offsets Endpoint** - `GET /ar-io/offsets/:id`,
+which serves a [data item's](#data-item) location within its root
+[transaction](#transaction) directly from the node's index, as JSON. It carries
+the same values a [retrieval hint](#retrieval-hint) does, but as a first-class
+lookup rather than a byproduct of serving bytes: `HEAD /raw/:id` only emits the
+`X-AR-IO-Root-*` headers after a *successful data retrieval*, so on a cache miss
+it runs the node's whole `ON_DEMAND_RETRIEVAL_ORDER` cascade first. The offsets
+endpoint performs a single indexed read and never touches contiguous data, so a
+miss costs the same as a hit. Consumed by the `peers` entry in
+`ROOT_TX_LOOKUP_ORDER`, which supersedes the header-scraping `gateways` entry
+for peers that serve it.
 
 <a id="chain-anchored-offset"></a> **Chain-Anchored Offset** - A
 [transaction offset](#transaction-offset) reported by an untrusted peer (via

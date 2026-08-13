@@ -10,6 +10,16 @@ import * as assert from 'node:assert';
 import { ArweaveCompositeClient } from './composite-client.js';
 import { Arweave } from 'arweave';
 import * as winston from 'winston';
+import * as metrics from '../metrics.js';
+
+// Read the current value of block_offset_resolution_total for a given outcome.
+// The counter is process-global and accumulates across tests, so assertions
+// compare a before/after delta rather than an absolute value.
+const outcomeCount = async (outcome: string): Promise<number> => {
+  const metric = await metrics.blockOffsetResolutionCounter.get();
+  const entry = metric.values.find((v: any) => v.labels.outcome === outcome);
+  return entry?.value ?? 0;
+};
 
 describe('ArweaveCompositeClient Binary Search', () => {
   let client: ArweaveCompositeClient;
@@ -446,6 +456,249 @@ describe('ArweaveCompositeClient Binary Search', () => {
         // Clean up mocks for next iteration
         mock.restoreAll();
       }
+    });
+  });
+
+  describe('binarySearchBlocks local index fast path', () => {
+    const targetOffset = 1500;
+
+    it('resolves the containing block via the local index with a single block fetch and no chain walk', async () => {
+      client.cleanup();
+
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: '2500',
+        txs: ['tx'],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      const indexMock = mock.fn(async () => ({
+        height: 50,
+        weaveSize: 2500,
+        prevWeaveSize: 1000,
+      }));
+      client.blockByOffsetIndex = { getBlockByWeaveOffset: indexMock };
+
+      const result = await client.binarySearchBlocks(targetOffset);
+
+      assert.strictEqual(result.height, 50);
+      // Index consulted once with the target offset.
+      assert.strictEqual(indexMock.mock.calls.length, 1);
+      assert.strictEqual(indexMock.mock.calls[0].arguments[0], targetOffset);
+      // Exactly one block fetched (the confirmed block) — no log2(height) walk.
+      assert.strictEqual(getBlockMock.mock.calls.length, 1);
+      assert.strictEqual(getBlockMock.mock.calls[0].arguments[0], 50);
+      // The chain binary search (which calls getHeight) is skipped entirely.
+      assert.strictEqual(getHeightMock.mock.calls.length, 0);
+    });
+
+    it('falls back to the chain binary search when the index misses', async () => {
+      client.cleanup();
+
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: height >= 50 ? '2500' : '1000',
+        txs: [],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      // Index has no row for this offset.
+      client.blockByOffsetIndex = {
+        getBlockByWeaveOffset: mock.fn(async () => ({
+          height: undefined,
+          weaveSize: undefined,
+          prevWeaveSize: undefined,
+        })),
+      };
+
+      const result = await client.binarySearchBlocks(targetOffset);
+
+      assert.strictEqual(result.height, 50);
+      // Fell through to the chain walk: getHeight is consulted there.
+      assert.strictEqual(getHeightMock.mock.calls.length, 1);
+      assert.ok(getBlockMock.mock.calls.length > 1);
+    });
+
+    it('falls back when the offset is not tightly bracketed (possible missing block)', async () => {
+      client.cleanup();
+
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: height >= 50 ? '2500' : '1000',
+        txs: [],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      // Predecessor block absent from the index -> cannot trust the bracket.
+      client.blockByOffsetIndex = {
+        getBlockByWeaveOffset: mock.fn(async () => ({
+          height: 50,
+          weaveSize: 2500,
+          prevWeaveSize: undefined,
+        })),
+      };
+
+      await client.binarySearchBlocks(targetOffset);
+      assert.strictEqual(getHeightMock.mock.calls.length, 1);
+    });
+
+    it('falls back when the index lookup throws, without surfacing the error', async () => {
+      client.cleanup();
+
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: height >= 50 ? '2500' : '1000',
+        txs: [],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      client.blockByOffsetIndex = {
+        getBlockByWeaveOffset: mock.fn(async () => {
+          throw new Error('db unavailable');
+        }),
+      };
+
+      const result = await client.binarySearchBlocks(targetOffset);
+      assert.strictEqual(result.height, 50);
+      assert.strictEqual(getHeightMock.mock.calls.length, 1);
+    });
+
+    it('rethrows an AbortError from the index lookup instead of falling back', async () => {
+      client.cleanup();
+
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: height >= 50 ? '2500' : '1000',
+        txs: [],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      client.blockByOffsetIndex = {
+        getBlockByWeaveOffset: mock.fn(async () => {
+          const err = new Error('aborted');
+          err.name = 'AbortError';
+          throw err;
+        }),
+      };
+
+      await assert.rejects(
+        async () => client.binarySearchBlocks(targetOffset),
+        /aborted/,
+      );
+      // A cancellation must not silently degrade into a slow chain walk.
+      assert.strictEqual(getHeightMock.mock.calls.length, 0);
+      assert.strictEqual(getBlockMock.mock.calls.length, 0);
+    });
+
+    it('falls back when the fetched block no longer covers the offset (stale index)', async () => {
+      client.cleanup();
+
+      // Index points at height 50, but the freshly fetched block reports a
+      // smaller weave_size than the index claimed (e.g. a reorg). Must not
+      // trust it; fall through to the chain search.
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: height >= 60 ? '2500' : '1000',
+        txs: [],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      client.blockByOffsetIndex = {
+        getBlockByWeaveOffset: mock.fn(async () => ({
+          height: 50,
+          weaveSize: 2500,
+          prevWeaveSize: 1000,
+        })),
+      };
+
+      const result = await client.binarySearchBlocks(targetOffset);
+      assert.strictEqual(getHeightMock.mock.calls.length, 1);
+      assert.strictEqual(result.height, 60);
+    });
+
+    it('resolves an unstable-tip block via the local index with a single fetch and records the unstable outcome', async () => {
+      client.cleanup();
+
+      const before = await outcomeCount('local_index_hit_unstable');
+
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: '2500',
+        txs: ['tx'],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      // Candidate resolved from new_blocks (the not-yet-stable tip).
+      const indexMock = mock.fn(async () => ({
+        height: 50,
+        weaveSize: 2500,
+        prevWeaveSize: 1000,
+        zone: 'unstable' as const,
+      }));
+      client.blockByOffsetIndex = { getBlockByWeaveOffset: indexMock };
+
+      const result = await client.binarySearchBlocks(targetOffset);
+
+      assert.strictEqual(result.height, 50);
+      // Exactly one block fetched — the single re-validation getBlockByHeight,
+      // not the ~log2(height) chain walk.
+      assert.strictEqual(getBlockMock.mock.calls.length, 1);
+      assert.strictEqual(getBlockMock.mock.calls[0].arguments[0], 50);
+      // The chain binary search (which calls getHeight) is skipped entirely.
+      assert.strictEqual(getHeightMock.mock.calls.length, 0);
+      // The tip resolution is attributed to the distinct unstable outcome.
+      const after = await outcomeCount('local_index_hit_unstable');
+      assert.strictEqual(after - before, 1);
+    });
+
+    it('falls back to the chain search when an unstable candidate no longer covers the offset (forked tip)', async () => {
+      client.cleanup();
+
+      const before = await outcomeCount('fallback_stale');
+
+      // The index bracketed the offset from new_blocks, but the re-fetched
+      // canonical block at that height reports a smaller weave_size (the tip
+      // block was a fork that lost weave under the canonical chain). Must not
+      // trust it — fall back to the chain search and return the correct block,
+      // never wrong bytes.
+      const getBlockMock = mock.fn(async (height: number) => ({
+        height,
+        weave_size: height >= 60 ? '2500' : '1000',
+        txs: [],
+      }));
+      client.getBlockByHeight = getBlockMock;
+      const getHeightMock = mock.fn(async () => 100);
+      client.getHeight = getHeightMock;
+
+      client.blockByOffsetIndex = {
+        getBlockByWeaveOffset: mock.fn(async () => ({
+          height: 50,
+          weaveSize: 2500,
+          prevWeaveSize: 1000,
+          zone: 'unstable' as const,
+        })),
+      };
+
+      const result = await client.binarySearchBlocks(targetOffset);
+      // Re-validation fetched height 50 (weave 1000 < 1500) -> stale -> fall back.
+      assert.strictEqual(getHeightMock.mock.calls.length, 1);
+      assert.strictEqual(result.height, 60);
+      const after = await outcomeCount('fallback_stale');
+      assert.strictEqual(after - before, 1);
     });
   });
 

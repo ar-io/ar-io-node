@@ -86,6 +86,28 @@ export const chunkServeDeadlineExceededCounter = new promClient.Counter({
   labelNames: ['method'],
 });
 
+// Outcome of resolving an absolute weave offset to its containing block in
+// ArweaveCompositeClient.binarySearchBlocks. The `local_index_hit*` outcomes
+// mean the local index (stable_blocks ∪ new_blocks) resolved and verified the
+// block with no chain walk; every other `outcome` value falls through to the
+// chain binary search. During soak, hit_rate = (local_index_hit +
+// local_index_hit_unstable) / (sum of all outcomes except cache_hit); the
+// fallback_* labels explain why the fast path was not taken.
+//   - cache_hit: returned from the in-memory block cache before either path
+//   - local_index_hit: stable-zone index bracketed + fetched block re-verified
+//   - local_index_hit_unstable: as above, candidate from the not-yet-stable tip
+//     (new_blocks) — absorbs offsets that previously fell to fallback_miss
+//   - fallback_miss: no block reaches the offset (beyond the current chain tip)
+//   - fallback_untight: candidate found but predecessor missing/not below offset
+//   - fallback_stale: fetched block no longer covers the offset (e.g. reorg)
+//   - fallback_error: index lookup failed (non-abort)
+//   - fallback_no_index: no local index wired (should not occur in production)
+export const blockOffsetResolutionCounter = new promClient.Counter({
+  name: 'block_offset_resolution_total',
+  help: 'Count of offset->block resolutions by outcome of the local block-offset fast path',
+  labelNames: ['outcome'],
+});
+
 //
 // GraphQL root TX lookup batching metrics
 //
@@ -112,6 +134,19 @@ export const graphqlRootTxBatchTokenWaitTimeoutTotal = new promClient.Counter({
   name: 'graphql_root_tx_batch_token_wait_timeout_total',
   help: 'Count of batches that gave up waiting for a rate-limit token, by endpoint',
   labelNames: ['endpoint'],
+});
+
+//
+// GraphQL L1-only routing metrics
+//
+
+// Incremented each time a GraphQL `transactions` query is provably confined to
+// L1 by GQL_L1_ONLY_ROUTING_FILTER and served from the L1-only SQLite index
+// instead of ClickHouse. Tracks feature usage over time; stays flat at 0 when
+// routing is disabled (the default).
+export const graphqlL1OnlyRoutingCounter = new promClient.Counter({
+  name: 'graphql_l1_only_routing_total',
+  help: 'Count of GraphQL transactions queries routed to the L1-only SQLite index (bypassing ClickHouse)',
 });
 
 //
@@ -147,6 +182,16 @@ export const chunkIngestEvictedCounter = new promClient.Counter({
 export const chunkIngestPendingBytesGauge = new promClient.Gauge({
   name: 'chunk_ingest_pending_bytes',
   help: 'Estimated bytes held by pending (unconfirmed) ingest-cached chunks',
+});
+
+export const chunkIngestConfirmedRootsGauge = new promClient.Gauge({
+  name: 'chunk_ingest_confirmed_roots',
+  help: 'Rows in the confirmed_data_roots sticky-confirmation marker table (should stay bounded by the age-based prune)',
+});
+
+export const chunkIngestConfirmedRootsPrunedTotal = new promClient.Counter({
+  name: 'chunk_ingest_confirmed_roots_pruned_total',
+  help: 'Count of confirmed_data_roots markers pruned by the GC sweep',
 });
 
 //
@@ -531,6 +576,19 @@ export const arweaveChunkPostCounter = new promClient.Counter({
   labelNames: ['endpoint', 'status', 'role'],
 });
 
+/**
+ * A 303 ("temporary") response means the peer validated and persisted the chunk
+ * into its disk pool but is not the long-term home for that offset. These are
+ * counted as status="success" in arweave_chunk_post_total (the chunk was stored
+ * and propagated); this counter tracks the temporary subset so the split between
+ * long-term (200) and temporary (303) acceptances stays observable.
+ */
+export const arweaveChunkPostTemporaryCounter = new promClient.Counter({
+  name: 'arweave_chunk_post_temporary_total',
+  help: 'Counts chunk POSTs accepted with HTTP 303 (stored temporarily in the peer disk pool); a subset of arweave_chunk_post_total{status="success"}',
+  labelNames: ['endpoint'],
+});
+
 export const arweaveChunkBroadcastCounter = new promClient.Counter({
   name: 'arweave_chunk_broadcast_total',
   help: 'Counts successful broadcast accounting for min threshold count etc',
@@ -568,6 +626,41 @@ export const sqliteInFlightOps = new promClient.Gauge({
   name: 'sqlite_in_flight_ops',
   help: 'Number of in-flight SQLite operations',
   labelNames: ['worker', 'role'],
+});
+
+// Number of ops enqueued but not yet dispatched to a worker thread. A rising
+// value indicates the worker pool for that (worker, role) is saturated.
+export const sqliteQueuedOps = new promClient.Gauge({
+  name: 'sqlite_queued_ops',
+  help: 'Number of SQLite operations enqueued but not yet dispatched to a worker',
+  labelNames: ['worker', 'role'],
+});
+
+// The existing `standalone_sqlite_method_duration_seconds` summary measures
+// enqueue -> completion, which conflates queue wait, worker execution, and
+// main-thread reply scheduling. These two histograms split that:
+//   queue_wait: enqueue -> dispatch (time spent waiting for a free worker)
+//   service:    dispatch -> reply received (worker execution + reply
+//               scheduling on the main event loop)
+// A jam dominated by queue_wait points at worker-pool serialization (raise the
+// read pool size); one dominated by service with fast underlying queries points
+// at main-event-loop saturation.
+const SQLITE_LATENCY_BUCKETS = [
+  0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60,
+];
+
+export const sqliteMethodQueueWaitSeconds = new promClient.Histogram({
+  name: 'standalone_sqlite_method_queue_wait_seconds',
+  help: 'Time a StandaloneSqlite op waited in the queue before dispatch to a worker',
+  labelNames: ['worker', 'role', 'method'],
+  buckets: SQLITE_LATENCY_BUCKETS,
+});
+
+export const sqliteMethodServiceSeconds = new promClient.Histogram({
+  name: 'standalone_sqlite_method_service_seconds',
+  help: 'Time from worker dispatch to reply received (worker execution + reply scheduling)',
+  labelNames: ['worker', 'role', 'method'],
+  buckets: SQLITE_LATENCY_BUCKETS,
 });
 
 //
@@ -636,6 +729,23 @@ export const minStableDataItemHeight = new promClient.Gauge({
 export const clickhouseMaxImportedHeight = new promClient.Gauge({
   name: 'clickhouse_max_imported_height',
   help: 'Max height present in the ClickHouse `transactions` table (refreshed lazily).',
+});
+
+/**
+ * Count of GQL stable-leg queries that tripped ClickHouse `max_rows_to_read`
+ * (Code 158 TOO_MANY_ROWS). `filter` is a low-cardinality descriptor of which
+ * filter families the query used (e.g. `owners+tags`, `ids`, `none`),
+ * `recovery` is `windowed` when the owner-projection height-windowing fallback
+ * re-ran it or `none` when the 158 surfaced to the caller, and `id_count` is a
+ * coarse bucket of the id-list size (`0`,`1`,`2`,`3-5`,`6-20`,`21+`) — the
+ * dominant 158 source is multi-id `transactions(ids:[...])` lookups whose
+ * id_bloom scatter scales with id count. The paired per-query warn log carries
+ * the full query shape for post-hoc audits.
+ */
+export const clickhouseGqlTooManyRowsTotal = new promClient.Counter({
+  name: 'clickhouse_gql_too_many_rows_total',
+  help: 'Count of GQL stable queries that tripped ClickHouse max_rows_to_read (Code 158).',
+  labelNames: ['filter', 'recovery', 'id_count'] as const,
 });
 
 //
@@ -802,6 +912,48 @@ export const gatewayContentTypeRejectedTotal = new promClient.Counter({
   labelNames: ['gateway_url', 'priority', 'content_type'] as const,
 });
 
+// Time from an outbound gateway request needing a socket (Agent.addRequest) to a
+// socket being assigned (the request's 'socket' event). This is the phase BEFORE
+// bytes hit the wire, so it surfaces keep-alive pool waits and socket-reuse
+// stalls (e.g. reusing a socket the peer is idle-closing) that are invisible in
+// request/response timing. `reused` distinguishes a pooled keep-alive socket
+// from a freshly opened one.
+export const gatewaySocketAcquisitionSeconds = new promClient.Histogram({
+  name: 'gateway_socket_acquisition_seconds',
+  help: 'Time from an outbound gateway request needing a socket to a socket being assigned',
+  labelNames: ['gateway_url', 'reused'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+});
+
+// TCP/TLS connect time for newly opened outbound gateway sockets (socket
+// assigned -> 'connect'). Reused keep-alive sockets do not contribute.
+export const gatewaySocketConnectSeconds = new promClient.Histogram({
+  name: 'gateway_socket_connect_seconds',
+  help: 'TCP/TLS connect time for newly opened outbound gateway sockets',
+  labelNames: ['gateway_url'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5],
+});
+
+// Socket lifecycle for the non-data outbound clients (root TX discovery
+// sources, GraphQL fan-out). Deliberately labelled by CLIENT rather than
+// destination host: these clients each talk to a handful of upstreams and a
+// per-host label would be unbounded for anything reading a configurable peer
+// list. `reused=false` rising is the signal that pooling has stopped working —
+// every un-reused socket is a fresh `getaddrinfo` back on the libuv threadpool.
+export const outboundSocketAcquisitionSeconds = new promClient.Histogram({
+  name: 'outbound_socket_acquisition_seconds',
+  help: 'Time from an outbound client request needing a socket to a socket being assigned',
+  labelNames: ['client', 'reused'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+});
+
+export const outboundSocketConnectSeconds = new promClient.Histogram({
+  name: 'outbound_socket_connect_seconds',
+  help: 'TCP/TLS connect time for newly opened outbound client sockets',
+  labelNames: ['client'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5],
+});
+
 // PE-9099: count of local on-disk cache entries evicted by the lazy
 // poison-detection in ReadThroughDataCache when a caller's
 // `acceptContentType` predicate refuses the stored content-type. The
@@ -831,6 +983,43 @@ export const chunkFirstDataTimeoutsTotal = new promClient.Counter({
   name: 'chunk_first_data_timeouts_total',
   help: 'Count of first-data timeouts in TxChunksDataSource',
   labelNames: ['request_type'] as const,
+});
+
+/**
+ * Counts chunk-streaming requests aborted by a `TxChunksDataSource`
+ * forward-progress guard, preventing a non-terminating chunk loop.
+ *
+ * @remarks Label `reason` is one of:
+ * - `zero_length_chunk` — a chunk returned no bytes, so the stream could not
+ *   advance and would otherwise re-request the same offset forever.
+ * - `chunk_count_exceeded` — more chunks were read than the tx size can hold
+ *   (`> ceil(size / MAX_CHUNK_SIZE) + 1`), a backstop against bad geometry.
+ */
+export const chunkStreamAbortsTotal = new promClient.Counter({
+  name: 'chunk_stream_aborts_total',
+  help:
+    'Count of chunk data streams aborted by a forward-progress guard ' +
+    '(zero-length chunk or chunk-count overrun)',
+  labelNames: ['reason'] as const,
+});
+
+/**
+ * Counts invalid zero-length chunks rejected before they can poison the chunk
+ * cache (a persisted empty chunk is served as a hit and stalls consumers).
+ *
+ * @remarks Label `stage` is one of:
+ * - `source_fetch` — a chunk source returned an empty chunk; rejected and not
+ *   cached so the retrieval cascade can fall through.
+ * - `cache_read` — an existing zero-length cache entry was read and treated as
+ *   a miss so it self-heals on the next refetch.
+ * - `cache_write` — a zero-length chunk write was refused, preventing poisoning.
+ */
+export const chunkZeroLengthTotal = new promClient.Counter({
+  name: 'chunk_zero_length_total',
+  help:
+    'Count of invalid zero-length chunks rejected, by pipeline stage ' +
+    '(source_fetch, cache_read, cache_write)',
+  labelNames: ['stage'] as const,
 });
 
 //
@@ -966,6 +1155,7 @@ export const queueLengthGauge = new Gauge({
 export const filesCleanedTotal = new promClient.Counter({
   name: 'files_cleaned_total',
   help: 'Count of files deleted by the filesystem cleanup worker',
+  labelNames: ['data_type'] as const,
 });
 
 //
@@ -1006,6 +1196,44 @@ export const cacheSizeBytes = new promClient.Gauge({
   labelNames: ['store_type', 'data_type'] as const,
 });
 
+export const cacheCleanupDiskUsedPercent = new promClient.Gauge({
+  name: 'cache_cleanup_disk_used_percent',
+  help: 'Filesystem used percent observed by the cache cleanup worker',
+  labelNames: ['data_type'] as const,
+});
+
+export const cacheCleanupRegime = new promClient.Gauge({
+  name: 'cache_cleanup_regime',
+  help: 'Active cache cleanup regime (0=skip, 1=normal, 2=aggressive)',
+  labelNames: ['data_type'] as const,
+});
+
+export const cacheIndexEvictedTotal = new promClient.Counter({
+  name: 'cache_index_evicted_total',
+  help: 'Blobs evicted by the index-driven contiguous cache evictor',
+  labelNames: ['reason'] as const,
+});
+
+export const cacheIndexEvictedBytesTotal = new promClient.Counter({
+  name: 'cache_index_evicted_bytes_total',
+  help: 'Bytes reclaimed by the index-driven contiguous cache evictor',
+});
+
+export const cacheIndexEntriesGauge = new promClient.Gauge({
+  name: 'cache_index_entries',
+  help: 'Current row count of the contiguous data cache cleanup index',
+});
+
+export const cacheIndexBytesGauge = new promClient.Gauge({
+  name: 'cache_index_bytes',
+  help: 'Sum of blob sizes tracked by the contiguous data cache cleanup index',
+});
+
+export const cacheIndexBackfilledTotal = new promClient.Counter({
+  name: 'cache_index_backfilled_total',
+  help: 'On-disk blobs seeded into the cache cleanup index by the reconciler',
+});
+
 //
 // Circuit breaker metrics
 //
@@ -1020,6 +1248,7 @@ const breakerSourceNames = [
   'get-transaction-attributes',
   'graphql-root-tx-index',
   'hyperbeam-root-tx-index',
+  'peers-root-tx-index',
   'turbo-root-tx-index',
   'turbo_dynamodb',
   'turbo_elasticache',
@@ -1238,6 +1467,36 @@ export const compositeRootTxLookupTotal = new promClient.Counter({
 export const compositeRootTxLookupDurationSummary = new promClient.Summary({
   name: 'composite_root_tx_lookup_duration_ms',
   help: 'Total duration of composite root TX lookups',
+});
+
+// Records why the composite stopped probing: which condition let it return
+// early ('complete_offsets', 'l1_root', 'offsets', 'path') vs. exhausting the
+// chain ('fallback' = returned a saved incomplete result, 'not_found' = no
+// source resolved). Proves the short-circuit gate is firing and by what reason.
+export const compositeRootTxExitReasonTotal = new promClient.Counter({
+  name: 'composite_root_tx_exit_reason_total',
+  help: 'Composite root TX lookups by termination reason',
+  labelNames: ['reason', 'winning_source'] as const,
+});
+
+// Number of sources actually queried (circuit fired) before the composite
+// returned. Lower is better: a short-circuit avoids probing the remaining
+// (often expensive, e.g. GraphQL) sources in the chain.
+export const compositeRootTxSourcesProbedSummary = new promClient.Summary({
+  name: 'composite_root_tx_sources_probed',
+  help: 'Number of sources queried per composite root TX lookup before returning',
+});
+
+export const rootTxLocalResolveTotal = new promClient.Counter({
+  name: 'root_tx_local_resolve_total',
+  help: 'Outcome of RootParentDataSource local-first offset resolution for bare-rootTxId results: local (resolved by a local bundle-header scan, remote lookup avoided), remote_fallback (local scan missed and a full lookup recovered a path or direct offsets), or unresolved (neither found the item)',
+  labelNames: ['outcome'] as const,
+});
+
+export const rootTxStoredRootRebasedTotal = new promClient.Counter({
+  name: 'root_tx_stored_root_rebased_total',
+  help: "Data items whose stored root transaction ID was shown to be an intermediate bundle rather than an L1 transaction: resolved (walked to an L1 transaction and served from it), incomplete (bundling confirmed but the chain could not be fully resolved — no payload offset on an ancestor, nesting depth exhausted, or a cycle), lookup_failed (the validating attribute read threw, so nothing could be determined). Correctly rooted items do not increment this counter. A 'resolved' rebase is normally written back to the row: ReadThroughDataCache re-reads attributes after retrieval and queues them for persistence, so an item repairs itself on a cold fetch. The write is skipped when another saveDataContentAttributes for the same ID landed in the previous 7 minutes (the StandaloneSqlite dedupe window), in which case the correction applies to this request only and the row is repaired on a later fetch. Rows never requested are never repaired.",
+  labelNames: ['outcome'] as const,
 });
 
 //
@@ -1573,4 +1832,42 @@ export const optimisticTxIngestedCounter = new promClient.Counter({
 export const optimisticTxVerificationBlockedCounter = new promClient.Counter({
   name: 'optimistic_tx_verification_blocked_total',
   help: 'Count of verification attempts withheld because the root tx is not yet mined (optimistic / NULL height)',
+});
+
+//
+// Manifest path resolution
+//
+
+/**
+ * Count of manifest path resolutions, split by `source` — `index` (served from
+ * the persistent/cached index without parsing the body) vs `data` (on-demand
+ * body parse) — and by how the path resolved (`resolution_type`:
+ * path / index / fallback / unresolved). The index-vs-data ratio is the
+ * effectiveness signal for the resolution index and cache.
+ */
+export const manifestResolutionsTotal = new promClient.Counter({
+  name: 'manifest_resolutions_total',
+  help: 'Manifest path resolutions, by source (index vs on-demand data parse) and resolution type',
+  labelNames: ['source', 'resolution_type'] as const,
+});
+
+/**
+ * Count of manifest root/index requests that resolved to nothing. A rising
+ * value points at malformed manifests (e.g. an `index.path` with no matching
+ * `paths` entry and no fallback) being served from the gateway.
+ */
+export const manifestUnresolvedRootTotal = new promClient.Counter({
+  name: 'manifest_unresolved_root_total',
+  help: 'Manifest root/index requests that resolved to nothing (likely a malformed manifest)',
+});
+
+/**
+ * Manifest path resolution latency, by `source`. `data` resolutions parse the
+ * (potentially large) manifest body; `index` resolutions are a bounded lookup.
+ */
+export const manifestResolutionDurationSeconds = new promClient.Histogram({
+  name: 'manifest_resolution_duration_seconds',
+  help: 'Manifest path resolution latency, by source',
+  labelNames: ['source'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.025, 0.1, 0.5, 2],
 });

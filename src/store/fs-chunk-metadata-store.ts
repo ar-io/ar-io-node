@@ -20,12 +20,20 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
     this.baseDir = baseDir;
   }
 
+  /**
+   * Returns the directory that holds cached metadata for a data root.
+   *
+   * The full data root MUST be part of the path (not just its prefix) —
+   * different data roots sharing a 4-character prefix would otherwise share
+   * metadata slots and serve each other's merkle proofs, which fail
+   * validation downstream. Mirrors the FsChunkDataStore by-dataroot layout.
+   */
   private chunkMetadataDir(dataRoot: string) {
     const dataRootPrefix = `${dataRoot.substring(0, 2)}/${dataRoot.substring(
       2,
       4,
     )}`;
-    return `${this.baseDir}/${dataRootPrefix}/metadata/`;
+    return `${this.baseDir}/${dataRootPrefix}/${dataRoot}/metadata`;
   }
 
   private chunkMetadataPath(dataRoot: string, relativeOffset: number) {
@@ -63,7 +71,28 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
         const msgpack = await fs.promises.readFile(
           this.chunkMetadataPath(dataRoot, relativeOffset),
         );
-        return fromMsgpack(msgpack) as ChunkMetadata;
+        const chunkMetadata = fromMsgpack(msgpack) as ChunkMetadata;
+        // Never serve metadata whose data root is absent or doesn't match the
+        // request — a mismatch means the entry is corrupt or was written
+        // under another transaction's key, and its data_path would fail proof
+        // validation. Drop it and treat the read as a miss so it gets
+        // refetched.
+        const cachedDataRoot = Buffer.isBuffer(chunkMetadata?.data_root)
+          ? toB64Url(chunkMetadata.data_root)
+          : undefined;
+        if (cachedDataRoot !== dataRoot) {
+          this.log.warn(
+            'Cached chunk metadata data root mismatch, discarding entry',
+            {
+              dataRoot,
+              cachedDataRoot,
+              relativeOffset,
+            },
+          );
+          await this.del(dataRoot, relativeOffset);
+          return undefined;
+        }
+        return chunkMetadata;
       }
     } catch (error: any) {
       this.log.error('Failed to fetch chunk data from cache', {

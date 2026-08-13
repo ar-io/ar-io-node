@@ -18,6 +18,7 @@ import {
   parseContentLength,
   parseContentRange,
 } from '../lib/http-utils.js';
+import { BASE_AGENT_OPTIONS, instrumentAgent } from '../lib/http-agent.js';
 import { shuffleArray } from '../lib/random.js';
 import {
   detectLoopInViaChain,
@@ -38,19 +39,13 @@ import {
 
 const MAX_DATA_HOPS = 3;
 
-// Shared keep-alive agent pool, one entry per gateway URL. Reusing TCP+TLS
-// connections across requests avoids per-request handshake cost, slashes
-// kernel TIME_WAIT churn, and gives upstream connections a chance to settle
-// into stable buffer sizes (which matters at high ANS104_DOWNLOAD_WORKERS).
-// maxSockets caps concurrent connections per gateway so a burst of retry
-// traffic doesn't open hundreds of sockets simultaneously.
-const AGENT_OPTIONS = {
-  keepAlive: true,
-  keepAliveMsecs: 30_000,
-  maxSockets: 16,
-  maxFreeSockets: 4,
-  timeout: 60_000,
-} as const;
+// Keep-alive options come from the shared outbound-agent module so this data
+// path and the metadata clients (root TX discovery, GraphQL fan-out) cannot
+// drift apart on the idle-timeout invariant. maxSockets / maxFreeSockets are
+// still set per agent in getAgent() below, so trusted peers and untrusted
+// (CDN-fronted) gateways can be capped independently — a distinction the
+// metadata clients don't need.
+const AGENT_OPTIONS = BASE_AGENT_OPTIONS;
 
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -62,6 +57,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private readonly fallbackToBasePath: boolean;
   private readonly maxHopsAllowed: number;
   private readonly rangeAccept200MaxOffset: number;
+  private readonly sendUntrustedParams: boolean;
   private readonly agents: Map<string, http.Agent | https.Agent> = new Map();
 
   constructor({
@@ -73,6 +69,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     fallbackToBasePath = false,
     maxHopsAllowed = MAX_DATA_HOPS,
     rangeAccept200MaxOffset = config.GATEWAYS_RANGE_ACCEPT_200_MAX_OFFSET,
+    sendUntrustedParams = config.TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, TrustedGatewayConfig>;
@@ -82,6 +79,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     fallbackToBasePath?: boolean;
     maxHopsAllowed?: number;
     rangeAccept200MaxOffset?: number;
+    sendUntrustedParams?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.requestTimeoutMs = requestTimeoutMs;
@@ -90,6 +88,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
     this.fallbackToBasePath = fallbackToBasePath;
     this.maxHopsAllowed = maxHopsAllowed;
     this.rangeAccept200MaxOffset = rangeAccept200MaxOffset;
+    this.sendUntrustedParams = sendUntrustedParams;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -114,14 +113,93 @@ export class GatewaysDataSource implements ContiguousDataSource {
   private getAgent(gatewayUrl: string): http.Agent | https.Agent {
     let agent = this.agents.get(gatewayUrl);
     if (agent === undefined) {
+      // Untrusted gateways (e.g. arweave.net, CDN-fronted) resolve their cap from
+      // a separate setting so they can be throttled independently of trusted
+      // internal peers. Each setting is a bare number or a per-host map.
+      const isUntrusted = this.gatewayTrust.get(gatewayUrl) === false;
+      const agentOptions = {
+        ...AGENT_OPTIONS,
+        maxSockets: config.resolvePerHostNumber(
+          isUntrusted
+            ? config.GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST
+            : config.GATEWAY_MAX_SOCKETS_PER_HOST,
+          gatewayUrl,
+          16,
+        ),
+        maxFreeSockets: config.resolvePerHostNumber(
+          config.GATEWAY_MAX_FREE_SOCKETS_PER_HOST,
+          gatewayUrl,
+          4,
+        ),
+      };
       agent = gatewayUrl.startsWith('https://')
-        ? new https.Agent(AGENT_OPTIONS)
-        : new http.Agent(AGENT_OPTIONS);
+        ? new https.Agent(agentOptions)
+        : new http.Agent(agentOptions);
+      this.instrumentAgent(agent, gatewayUrl);
       this.agents.set(gatewayUrl, agent);
     }
     return agent;
   }
 
+  // Wraps the shared socket-lifecycle instrumentation, mapping its samples onto
+  // this data path's per-gateway metrics. The per-URL label is affordable here
+  // because the gateway list is a small, operator-configured set; the metadata
+  // clients label by component instead.
+  //
+  // For TLS gateways (https://, e.g. arweave.net) connect time is measured to
+  // 'secureConnect' rather than 'connect', so it reflects TCP + TLS.
+  private instrumentAgent(
+    agent: http.Agent | https.Agent,
+    gatewayUrl: string,
+  ): void {
+    const log = this.log;
+    const slowThresholdMs =
+      config.GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS;
+
+    instrumentAgent({
+      agent,
+      isTls: gatewayUrl.startsWith('https://'),
+      observe: ({ acquisitionSeconds, reused, connectSeconds }) => {
+        if (connectSeconds !== undefined) {
+          metrics.gatewaySocketConnectSeconds.observe(
+            { gateway_url: gatewayUrl },
+            connectSeconds,
+          );
+          return;
+        }
+        metrics.gatewaySocketAcquisitionSeconds.observe(
+          { gateway_url: gatewayUrl, reused: String(reused) },
+          acquisitionSeconds,
+        );
+        if (acquisitionSeconds * 1000 >= slowThresholdMs) {
+          log.warn('Slow gateway socket acquisition', {
+            gatewayUrl,
+            acquisitionMs: Math.round(acquisitionSeconds * 1000),
+            reused,
+          });
+        }
+      },
+    });
+  }
+
+  /**
+   * Fetch contiguous data for `id`, trying each configured gateway in
+   * priority order with fallback.
+   *
+   * **Provenance propagation is trust-dependent.** Request provenance
+   * (hops, origin, arns context, via chain) is always sent as `X-AR-IO-*`
+   * request headers. It is *additionally* sent as `ar-io-*` query params
+   * **only to trusted gateways**. Untrusted gateways (`trusted: false` in
+   * `TRUSTED_GATEWAYS_URLS`) receive headers only — the query params are
+   * omitted because CDN-fronted gateways such as `arweave.net` return 502
+   * on those unknown params. Since the header bag is a strict superset of
+   * the params, this drops no provenance. Loop/hop protection and response
+   * trust marking are independent of the params and unaffected.
+   *
+   * The `TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS` kill-switch (default off)
+   * reverts to the legacy behavior of sending the query params to every
+   * gateway, including untrusted ones.
+   */
   async getData({
     id,
     requestAttributes,
@@ -211,6 +289,15 @@ export class GatewaysDataSource implements ContiguousDataSource {
               });
               continue;
             }
+
+            // Marks response trust and gates the outbound provenance query
+            // params; see getData() TSDoc for the trust-dependent contract.
+            const gatewayTrusted = this.gatewayTrust.get(gatewayUrl) ?? true;
+            // Untrusted gateways omit the ar-io-* query params unless the
+            // kill-switch (TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS) forces the
+            // legacy always-send behavior.
+            const sendProvenanceParams =
+              gatewayTrusted || this.sendUntrustedParams;
 
             const isHttps = gatewayUrl.startsWith('https://');
             const agent = this.getAgent(gatewayUrl);
@@ -316,18 +403,25 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   },
                   url: path,
                   responseType: 'stream',
-                  params: {
-                    'ar-io-hops': requestAttributesHeaders?.attributes.hops,
-                    'ar-io-origin': requestAttributesHeaders?.attributes.origin,
-                    'ar-io-origin-release':
-                      requestAttributesHeaders?.attributes.originNodeRelease,
-                    'ar-io-arns-record':
-                      requestAttributesHeaders?.attributes.arnsRecord,
-                    'ar-io-arns-basename':
-                      requestAttributesHeaders?.attributes.arnsBasename,
-                    'ar-io-via':
-                      requestAttributesHeaders?.attributes.via?.join(', '),
-                  },
+                  // Trust-dependent provenance params; see getData() TSDoc.
+                  // `undefined` (not `{}`) ensures axios appends no query
+                  // string at all for untrusted gateways.
+                  params: sendProvenanceParams
+                    ? {
+                        'ar-io-hops': requestAttributesHeaders?.attributes.hops,
+                        'ar-io-origin':
+                          requestAttributesHeaders?.attributes.origin,
+                        'ar-io-origin-release':
+                          requestAttributesHeaders?.attributes
+                            .originNodeRelease,
+                        'ar-io-arns-record':
+                          requestAttributesHeaders?.attributes.arnsRecord,
+                        'ar-io-arns-basename':
+                          requestAttributesHeaders?.attributes.arnsBasename,
+                        'ar-io-via':
+                          requestAttributesHeaders?.attributes.via?.join(', '),
+                      }
+                    : undefined,
                 });
 
                 const gatewayRequestDuration = Date.now() - gatewayRequestStart;
@@ -515,9 +609,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   this.streamStallTimeoutMs,
                   this.streamRequestTimeoutMs,
                 );
-
-                const gatewayTrusted =
-                  this.gatewayTrust.get(gatewayUrl) ?? true;
 
                 span.setAttributes({
                   'gateway.successful_url': gatewayUrl,

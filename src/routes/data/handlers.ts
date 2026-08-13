@@ -20,6 +20,7 @@ import { Span } from '@opentelemetry/api';
 import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { extractAllClientIPs } from '../../lib/ip-utils.js';
+import * as metrics from '../../metrics.js';
 import {
   parseViaHeader,
   detectLoopInViaChain,
@@ -33,6 +34,7 @@ import {
   ContiguousDataSource,
   DataAttributesSource,
   ManifestPathResolver,
+  ManifestResolution,
   RequestAttributes,
 } from '../../types.js';
 import { RateLimiter } from '../../limiter/types.js';
@@ -1379,6 +1381,48 @@ export const createRawDataHandler = ({
   });
 };
 
+/**
+ * Record Prometheus metrics for a single manifest path resolution.
+ *
+ * Exported for testing.
+ *
+ * @param source - `index` when the persistent/cached index produced the
+ *   outcome, or `data` when the manifest body was parsed on demand.
+ * @param resolution - The resolution result; `resolvedId`/`resolutionType`
+ *   drive the `resolution_type` label (`unresolved` when nothing matched).
+ * @param manifestPath - The requested sub-path (undefined/empty is the root);
+ *   an unresolved root increments `manifest_unresolved_root_total`.
+ * @param durationMs - Resolution wall-clock time, in milliseconds.
+ */
+export const recordManifestResolutionMetrics = ({
+  source,
+  resolution,
+  manifestPath,
+  durationMs,
+}: {
+  source: 'index' | 'data';
+  resolution: ManifestResolution;
+  manifestPath: string | undefined;
+  durationMs: number;
+}): void => {
+  const resolutionType =
+    resolution.resolvedId !== undefined && resolution.resolutionType
+      ? resolution.resolutionType
+      : 'unresolved';
+  metrics.manifestResolutionsTotal.inc({
+    source,
+    resolution_type: resolutionType,
+  });
+  metrics.manifestResolutionDurationSeconds.observe(
+    { source },
+    durationMs / 1000,
+  );
+  const isRoot = (manifestPath ?? '').replace(/\/+$/g, '') === '';
+  if (isRoot && resolution.resolvedId === undefined) {
+    metrics.manifestUnresolvedRootTotal.inc();
+  }
+};
+
 const sendManifestResponse = async ({
   log,
   req,
@@ -1758,6 +1802,17 @@ export const createDataHandler = ({
             'manifest.resolution_duration_ms',
             manifestDuration,
           );
+          // Only count `index` when the index actually determined the outcome
+          // (complete). A miss (`complete: false`) falls through and is counted
+          // at the data-parse site below.
+          if (manifestResolution.complete) {
+            recordManifestResolutionMetrics({
+              source: 'index',
+              resolution: manifestResolution,
+              manifestPath,
+              durationMs: manifestDuration,
+            });
+          }
           if (
             manifestResolution.resolvedId !== undefined &&
             manifestResolution.resolvedId !== ''
@@ -1899,6 +1954,12 @@ export const createDataHandler = ({
             'manifest.resolution_from_data_duration_ms',
             manifestDuration,
           );
+          recordManifestResolutionMetrics({
+            source: 'data',
+            resolution: manifestResolution,
+            manifestPath,
+            durationMs: manifestDuration,
+          });
 
           // The original stream is no longer needed after path resolution
           data.stream.destroy();

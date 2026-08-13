@@ -9,6 +9,7 @@ import { isMainThread } from 'node:worker_threads';
 import { existsSync, readFileSync } from 'node:fs';
 
 import { createFilter } from './filters.js';
+import { assertMonotoneFilter } from './database/gql-l1-routing.js';
 import * as env from './lib/env.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
@@ -255,6 +256,180 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   'TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS',
   '10000',
 );
+
+// Idle-socket timeout (ms) for the outbound trusted-gateway keep-alive agent.
+// MUST be strictly less than the peer gateway's server keep-alive timeout
+// (HTTP_KEEP_ALIVE_TIMEOUT_MS, default 60000). Equal timeouts cause a keep-alive
+// reuse race: the client reuses an idle socket at the same moment the server
+// sends its idle-close FIN, and the request stalls until the teardown resolves
+// (observed as ~8-10s peer stalls that sometimes exceed
+// TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS and are canceled before the request is
+// ever sent). Keeping the client's idle timeout below the server's guarantees
+// the client retires a socket before the server closes it.
+export const GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS = env.positiveIntOrDefault(
+  'GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS',
+  50_000,
+);
+
+// Outbound gateway socket acquisitions (time from a request needing a socket to
+// a socket being assigned) at or above this threshold are logged at `warn`.
+// Surfaces keep-alive pool waits and socket-reuse stalls that are invisible in
+// request/response timing (the request hasn't hit the wire yet).
+export const GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS =
+  env.positiveIntOrDefault(
+    'GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS',
+    1000,
+  );
+
+/**
+ * A socket-cap setting: either a single positive integer applied to every host,
+ * or a JSON object mapping an exact gateway URL to a per-host value, with an
+ * optional `default` key for hosts not listed. Resolve with
+ * {@link resolvePerHostNumber}.
+ */
+export type PerHostNumber = number | Record<string, number>;
+
+/**
+ * Parses a socket-cap env var that may be a bare positive integer or a JSON
+ * object of `{ "<gatewayUrl>": positiveInt, ..., "default": positiveInt }`.
+ *
+ * @param envVarName - Name of the environment variable to read.
+ * @param defaultValue - Value returned when the variable is unset or empty.
+ * @returns A number (applies to all hosts) or a validated per-host map.
+ * @throws If the value is neither a positive integer nor a JSON object whose
+ *   entries are all positive integers.
+ */
+function parsePerHostNumber(
+  envVarName: string,
+  defaultValue: number,
+): PerHostNumber {
+  const raw = env.varOrUndefined(envVarName);
+  if (raw === undefined) {
+    return defaultValue;
+  }
+  const trimmed = raw.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const value = Number(trimmed);
+    if (value > 0) {
+      return value;
+    }
+    throw new Error(
+      `${envVarName} must be a positive integer, got: ${trimmed}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(
+      `${envVarName} must be a positive integer or a JSON object of {"<gatewayUrl>": number}, got: ${trimmed}`,
+    );
+  }
+  if (typeof parsed === 'number') {
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+    throw new Error(`${envVarName} must be a positive integer, got: ${parsed}`);
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `${envVarName} must be a positive integer or a JSON object of {"<gatewayUrl>": number}`,
+    );
+  }
+  for (const [host, value] of Object.entries(parsed)) {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+      throw new Error(
+        `${envVarName} entry "${host}" must be a positive integer, got: ${value}`,
+      );
+    }
+  }
+  return parsed as Record<string, number>;
+}
+
+/**
+ * Resolves a {@link PerHostNumber} for a specific gateway URL: a bare number
+ * applies to all hosts; an object prefers an exact-host entry, then its
+ * `default` key, then the built-in fallback.
+ *
+ * @param cfg - The parsed number-or-per-host setting.
+ * @param host - The exact gateway URL to resolve for.
+ * @param fallback - Value used when an object has no matching host or `default`.
+ * @returns The resolved socket cap for `host`.
+ */
+export function resolvePerHostNumber(
+  cfg: PerHostNumber,
+  host: string,
+  fallback: number,
+): number {
+  if (typeof cfg === 'number') {
+    return cfg;
+  }
+  return cfg[host] ?? cfg['default'] ?? fallback;
+}
+
+// Max concurrent sockets per TRUSTED gateway host (internal peer gateways). The
+// keep-alive agent queues requests once this many sockets to a host are busy; on
+// a healthy but busy node the default (16) can leave inter-gateway requests
+// queued for seconds waiting for a slot (visible as high
+// gateway_socket_acquisition_seconds). Trusted peers are low-risk to raise.
+// Accepts a bare integer or a per-host JSON object (see PerHostNumber).
+export const GATEWAY_MAX_SOCKETS_PER_HOST = parsePerHostNumber(
+  'GATEWAY_MAX_SOCKETS_PER_HOST',
+  16,
+);
+
+// Max concurrent sockets per UNTRUSTED gateway host (e.g. arweave.net, behind a
+// CDN). Defaults to GATEWAY_MAX_SOCKETS_PER_HOST when unset; set it lower to
+// avoid overwhelming a CDN-fronted upstream, which can throttle or 502 under
+// high concurrency. Accepts a bare integer or a per-host JSON object.
+export const GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST: PerHostNumber =
+  env.varOrUndefined('GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST') !== undefined
+    ? parsePerHostNumber('GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST', 16)
+    : GATEWAY_MAX_SOCKETS_PER_HOST;
+
+// Max idle keep-alive sockets kept warm per gateway host. A low value forces new
+// TCP/TLS connections under bursty load (adding connect latency and churn);
+// raise it toward the max-sockets value when raising GATEWAY_MAX_SOCKETS_PER_HOST
+// so idle capacity is reused instead of reopened. Accepts a bare integer or a
+// per-host JSON object.
+export const GATEWAY_MAX_FREE_SOCKETS_PER_HOST = parsePerHostNumber(
+  'GATEWAY_MAX_FREE_SOCKETS_PER_HOST',
+  4,
+);
+
+// Socket caps for the non-data outbound clients — root TX discovery sources and
+// the GraphQL fan-out. These are low-volume metadata lookups against a handful
+// of upstreams, so the caps are modest; the point of pooling here is not
+// throughput but avoiding a per-request `dns.lookup()`, which queues on the
+// libuv threadpool behind filesystem I/O (see src/lib/http-agent.ts). Node's
+// Agent keys its pool by host:port, so these apply per origin.
+export const OUTBOUND_MAX_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'OUTBOUND_MAX_SOCKETS_PER_HOST',
+  16,
+);
+// Defaults to the same value as OUTBOUND_MAX_SOCKETS_PER_HOST, deliberately.
+// maxFreeSockets bounds *idle* sockets: any concurrency above it means the
+// excess sockets are destroyed once they go idle and reopened on the next
+// request — and every reopen is a fresh `dns.lookup()`, the exact cost this
+// pooling exists to avoid. The data path caps free sockets well below max
+// because its objective is throughput management against many hosts; here the
+// objective is maximizing reuse across a handful of upstreams, so holding the
+// full set idle is the point. Cost is a few idle sockets per origin, retired
+// anyway by the agent's idle timeout.
+export const OUTBOUND_MAX_FREE_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'OUTBOUND_MAX_FREE_SOCKETS_PER_HOST',
+  OUTBOUND_MAX_SOCKETS_PER_HOST,
+);
+
+// Kill-switch for the untrusted-gateway provenance-param omission. By default
+// (false) the `ar-io-*` query params are NOT sent to untrusted gateways
+// (`trusted: false`), because CDN-fronted gateways such as arweave.net (behind
+// CDN77) return 502 on those param names — provenance still travels via
+// X-AR-IO-* headers. Set to `true` to revert to the legacy behavior of sending
+// the params to every gateway (rollback lever; not normally needed).
+export const TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS =
+  env.varOrDefault('TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS', 'false') ===
+  'true';
 
 export const STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
   'STREAM_STALL_TIMEOUT_MS',
@@ -527,6 +702,54 @@ export const GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
 
+// Peer AR.IO nodes queried for root TX offsets via `GET /ar-io/offsets/:id`.
+// Same `{ url: priority }` shape as GATEWAYS_ROOT_TX_URLS (lower number =
+// higher priority). Defaults to empty: unlike the header-based `gateways`
+// source, this endpoint only exists on nodes running a release that serves it,
+// so peers are opted in explicitly rather than guessed at.
+export const PEERS_ROOT_TX_URLS = JSON.parse(
+  env.varOrDefault('PEERS_ROOT_TX_URLS', '{}'),
+) as Record<string, number>;
+
+// Validate peer root TX URLs and priorities
+Object.entries(PEERS_ROOT_TX_URLS).forEach(([url, priority]) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in PEERS_ROOT_TX_URLS: ${url}`);
+  }
+  if (typeof priority !== 'number' || priority <= 0) {
+    throw new Error(
+      `Invalid priority in PEERS_ROOT_TX_URLS for ${url}: ${priority}`,
+    );
+  }
+});
+
+// Peer root TX lookup request configuration. The default is aggressive
+// relative to the `gateways` source (10s) because this endpoint is a single
+// indexed read on the peer — a slow response means the peer is unhealthy, not
+// that the work is genuinely expensive, so failing over quickly is correct.
+export const PEERS_ROOT_TX_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+  'PEERS_ROOT_TX_REQUEST_TIMEOUT_MS',
+  '2000',
+);
+
+// Peer root TX lookup rate limiting. Far more permissive than the `gateways`
+// source for the same reason: the peer answers from its index, so this is not
+// a probe that needs throttling to protect the remote node.
+export const PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '100',
+);
+export const PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL = +env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+  '600', // 600 per minute = 10 per second
+);
+export const PEERS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
+
 // Chain-anchored chunk metadata source (offset → tx + data_root via
 // reference-peer `/chunk/{offset}/data` headers, cross-checked against
 // the chain). Fast-path replacement for the log₂(height) block binary
@@ -562,7 +785,15 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
     300,
   );
 
-// Root TX index lookup order configuration
+// Root TX index lookup order configuration.
+// Available sources: 'db', 'peers', 'gateways', 'graphql', 'hyperbeam', 'cdb',
+// 'turbo'. Sources are probed in order and the first actionable result wins.
+// - 'peers':    GET /ar-io/offsets/:id against peer AR.IO nodes. One indexed
+//               read on the peer; cheap whether it hits or misses.
+// - 'gateways': HEAD /raw/:id against peer AR.IO gateways, harvesting
+//               X-AR-IO-Root-* headers. Works against any release, but a miss
+//               costs the peer a full retrieval cascade — list it *after*
+//               'peers' so it only serves peers that lack the endpoint.
 export const ROOT_TX_LOOKUP_ORDER = env
   .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql,hyperbeam,cdb')
   .split(',')
@@ -810,6 +1041,20 @@ export const CHUNK_POST_MAX_CONSECUTIVE_FAILURES = +env.varOrDefault(
   '5',
 );
 
+/**
+ * When true, keep broadcasting a chunk to every selected peer even after the
+ * success threshold has been met, maximizing propagation/redundancy instead of
+ * stopping early. The success threshold still governs the result reported to
+ * the uploader; this only controls how widely we keep posting. The dead-peer
+ * tail stays bounded by CHUNK_POST_MAX_CONSECUTIVE_FAILURES (a sustained run of
+ * unreachable/broken peers still stops the broadcast). Defaults to false to
+ * preserve the efficient stop-at-threshold behavior.
+ */
+export const CHUNK_POST_CONTINUE_PAST_THRESHOLD =
+  env
+    .varOrDefault('CHUNK_POST_CONTINUE_PAST_THRESHOLD', 'false')
+    .toLowerCase() === 'true';
+
 // Maximum number of concurrent chunk posts per node
 export const CHUNK_POST_PER_NODE_CONCURRENCY = +env.varOrDefault(
   'CHUNK_POST_PER_NODE_CONCURRENCY',
@@ -872,35 +1117,6 @@ export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
 
 // Maximum raw chunk size (256 KiB) - used for raw binary chunk endpoint rate limiting
 export const MAX_CHUNK_SIZE = 256 * 1024;
-
-// Arweave network peer post success goal
-// setting to 0 means this behaviour is disabled.
-export const ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
-  'ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT',
-  '2',
-);
-
-// The maximum number of peers to attempt to POST to before giving up
-export const ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT = +env.varOrDefault(
-  'ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT',
-  '5',
-);
-
-if (
-  ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT <
-  ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT
-) {
-  throw new Error(
-    'ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT must be greater than or equal to ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT',
-  );
-}
-
-// If ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT is set non-zero, this
-// value defines how many chunks to post to peers in parallel.
-export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
-  'ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT',
-  '3',
-);
 
 // The maximum number of peers to attempt when fetching a chunk via GET
 export const ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT =
@@ -1430,6 +1646,29 @@ export const ANS104_INDEX_FILTER = createFilter(
   logger,
 );
 
+// Filter classifying which GraphQL `transactions` queries may be served
+// exclusively from the L1 (base-layer) SQLite index, bypassing ClickHouse.
+// Uses the same composable filter DSL as the indexing filters, but restricted
+// to its monotone subset (tags/attributes/and/or/always/never) so the
+// query-entailment decision is sound — see `assertMonotoneFilter` /
+// `isL1OnlyQuery` in database/gql-l1-routing.ts. Default `{"never": true}`
+// leaves routing off (all queries continue to hit ClickHouse). The filter is
+// an operator ASSERTION that queries it entails are L1-only; any bundled
+// matches are intentionally excluded from routed queries.
+export const GQL_L1_ONLY_ROUTING_FILTER_PARSED = JSON.parse(
+  env.varOrDefault('GQL_L1_ONLY_ROUTING_FILTER', '{"never": true}'),
+);
+assertMonotoneFilter(GQL_L1_ONLY_ROUTING_FILTER_PARSED);
+export const GQL_L1_ONLY_ROUTING_FILTER_STRING = canonicalize(
+  GQL_L1_ONLY_ROUTING_FILTER_PARSED,
+);
+export const GQL_L1_ONLY_ROUTING_FILTER = createFilter(
+  JSON.parse(GQL_L1_ONLY_ROUTING_FILTER_STRING),
+  logger,
+);
+export const GQL_L1_ONLY_ROUTING_ENABLED =
+  GQL_L1_ONLY_ROUTING_FILTER.constructor.name !== 'NeverMatch';
+
 // Auto-enable workers when verification is enabled (even if unbundle filter is "never")
 const getDefaultWorkerCount = (defaultCount: string) => {
   const isNeverMatch = ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch';
@@ -1845,6 +2084,15 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
   `${1000 * 60 * 60 * 4}`, // every 4 hours
 );
 
+// Max concurrent readdir/stat syscalls during the cleanup tree walk. The walk is
+// dominated by directory-traversal I/O latency on large, deeply-sharded caches;
+// raising this hides that latency (parallel traversal) at the cost of more
+// concurrent filesystem load. Lower it if the walk contends with request I/O.
+export const FS_CLEANUP_WORKER_WALK_CONCURRENCY = +env.varOrDefault(
+  'FS_CLEANUP_WORKER_WALK_CONCURRENCY',
+  '64',
+);
+
 // Cache TTL for the SQLite worker's getDebugInfo response. The /ar-io/admin/debug
 // endpoint runs ~8 unfiltered COUNT(*) scans plus aggregation across new and
 // stable data items, which can monopolize the single debug worker thread when
@@ -1941,6 +2189,38 @@ export const CLICKHOUSE_GQL_DEDUPE_HEADROOM = env.positiveIntOrDefault(
   'CLICKHOUSE_GQL_DEDUPE_HEADROOM',
   4,
 );
+
+// Gate for routing owner-filtered GraphQL `transactions` queries through
+// `owner_projection` (plus the reactive height-windowing fallback on
+// `max_rows_to_read`). The main `transactions` table is height-ordered, so a
+// sparse owner's rows scatter across millions of granules and finding a page
+// can trip the row cap; the owner-ordered projection seeks straight to the
+// owner's slice instead. Disabled by default for staged rollout — when off,
+// owner queries plan exactly as before.
+export const CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED =
+  env.varOrDefault(
+    'CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED',
+    'false',
+  ) === 'true';
+
+// Comma-separated allowlist of `Entity-Type` tag values for which owner-filtered
+// GQL queries use owner_projection routing (only consulted when
+// CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED is true). These are the
+// ArDrive entity types whose per-owner result set is small, so the projection's
+// in-memory sort (read-in-order is disabled to use the projection) is cheap. A
+// query qualifies only when it carries an `Entity-Type` filter whose values are
+// ALL in this list — so `file` (millions per owner → an expensive full sort
+// re-done every page), bare-owner queries, and owner+other-tag queries are
+// excluded and keep planning as before. Large-result queries want the dedicated
+// owner-ordered table instead.
+export const CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES = env
+  .varOrDefault(
+    'CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES',
+    'drive,folder,snapshot',
+  )
+  .split(',')
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0);
 
 // Circuit breaker around the SQLite leg of the composite GQL transactions
 // query. ClickHouse and SQLite run in parallel; an open breaker degrades
@@ -2264,6 +2544,82 @@ export const PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD =
     'PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD',
     `${60 * 60 * 24 * 30}`, // 30 days
   );
+
+// Disk-pressure watermarks for the contiguous data cache cleanup worker. All are
+// opt-in: with the defaults below the worker behaves exactly as before (pure
+// age-based TTL). Percentages are of the filesystem holding the cache.
+//
+// Below the low watermark the worker skips cleanup entirely so the cache can grow
+// to fill available disk. Between the watermarks it runs normal age-based cleanup.
+// At/above the high watermark (or when free space drops below the min-free floor)
+// it progressively tightens the effective TTL until usage falls back below the
+// low watermark, never evicting data younger than the aggressive min-age floor.
+export const CONTIGUOUS_DATA_CACHE_LOW_WATERMARK_PERCENT = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_LOW_WATERMARK_PERCENT',
+  '0',
+);
+
+export const CONTIGUOUS_DATA_CACHE_HIGH_WATERMARK_PERCENT = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_HIGH_WATERMARK_PERCENT',
+  '0',
+);
+
+// Hard guardrail: if free bytes on the cache filesystem fall below this, force
+// maximum-pressure cleanup regardless of the watermark percentages. Protects the
+// shared volume (SQLite DBs/WAL/logs) from ENOSPC. 0 disables the guardrail.
+export const CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES',
+  '0',
+);
+
+// Absolute floor (seconds) for aggressive cleanup: never evict data younger than
+// this even under maximum disk pressure. Protects freshly written / hot data.
+export const CONTIGUOUS_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS =
+  +env.varOrDefault(
+    'CONTIGUOUS_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS',
+    `${60 * 60}`, // 1 hour
+  );
+
+// Contiguous data cache cleanup INDEX (PE-9131). When enabled, each cached blob
+// records {hash, size, cached_at, tier} in a SQLite index (data.db) at cache
+// time, and a disk-pressure evictor reclaims by querying "oldest N in tier T"
+// from the (SSD-backed) DB instead of walking the HDD-backed cache tree. Uses
+// the same LOW/HIGH_WATERMARK_PERCENT + MIN_FREE_BYTES thresholds above.
+// Complements/replaces the filesystem-walk cleanup worker on large HDD caches.
+export const ENABLE_CONTIGUOUS_DATA_CACHE_INDEX =
+  env.varOrDefault('ENABLE_CONTIGUOUS_DATA_CACHE_INDEX', 'false') === 'true';
+
+// How often the index-driven evictor checks disk pressure (ms).
+export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
+  +env.varOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS',
+    '60000',
+  );
+
+// Max index rows evicted (and blobs unlinked) per batch within a sweep.
+export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
+  +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', '1000');
+
+// Whether to refresh a cache entry's last_access (and promote its tier on a
+// preferred-ArNS read) on cache HITS. On => LRU eviction; off => FIFO by
+// cache-write time. Operators without an edge cache see every read at the core,
+// so they may set this off to avoid the extra index writes and accept FIFO.
+export const CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ =
+  env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ', 'true') ===
+  'true';
+
+// One-time backfill/reconciler: on startup, walk the existing on-disk cache
+// once and seed index rows for blobs not already tracked (insert-if-absent, so
+// live entries are untouched). Needed to adopt a pre-existing cache that
+// predates the index; enable once, then disable. The walk is HDD-bound and runs
+// in the background without blocking startup.
+export const ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL =
+  env.varOrDefault('ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL', 'false') ===
+  'true';
+
+// Rows buffered per backfill insert transaction.
+export const CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE =
+  +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE', '2000');
 
 // The set of full (not base or undernames) ArNS names to preferentially cache
 export const PREFERRED_ARNS_NAMES = new Set(
@@ -2746,6 +3102,17 @@ export const CHUNK_INGEST_GC_BATCH_SIZE = env.positiveIntOrDefault(
   'CHUNK_INGEST_GC_BATCH_SIZE',
   1000,
 );
+// How long a confirmed-data-root marker is retained before the GC prunes it. A
+// marker only needs to bridge the gap between a tx confirming on-chain and its
+// chunks being seeded to this gateway (seconds to a couple of minutes); once a
+// chunk is ingested it carries its own confirmed_at. One hour is comfortably
+// longer than any real confirm->seed gap while keeping the marker table bounded
+// to recent confirmations.
+export const CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS =
+  env.positiveIntOrDefault(
+    'CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS',
+    3600, // 1 hour
+  );
 
 // ArNS names to exclude from rate limiting
 export const RATE_LIMITER_ARNS_ALLOWLIST =
@@ -2914,3 +3281,36 @@ if (ENABLE_SAMPLING_DATA_SOURCE) {
     );
   }
 }
+
+//
+// StandaloneSqlite worker pools
+//
+
+// Number of reader worker threads for the core SQLite pool. Reads are
+// serialized within a single worker thread, so raising this adds read
+// concurrency for the core DB (WAL mode supports concurrent readers). Writers
+// stay single because SQLite permits only one writer at a time.
+//
+// @default 1
+export const CORE_SQLITE_READ_WORKER_COUNT = env.positiveIntOrDefault(
+  'CORE_SQLITE_READ_WORKER_COUNT',
+  1,
+);
+
+// Number of reader worker threads for the data SQLite pool.
+//
+// @default 2
+export const DATA_SQLITE_READ_WORKER_COUNT = env.positiveIntOrDefault(
+  'DATA_SQLITE_READ_WORKER_COUNT',
+  2,
+);
+
+// Operations whose total time (queue wait + service) meets or exceeds this
+// threshold are logged at `warn` with a queue/service breakdown and a bounded
+// argument summary, to pinpoint which method is responsible during a jam.
+//
+// @default 1000 (1 second)
+export const SQLITE_SLOW_QUERY_LOG_THRESHOLD_MS = env.positiveIntOrDefault(
+  'SQLITE_SLOW_QUERY_LOG_THRESHOLD_MS',
+  1000,
+);

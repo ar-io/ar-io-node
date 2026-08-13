@@ -183,5 +183,63 @@ describe('Moderation', function () {
         `Expected 404 or 451, got ${res.status}`,
       );
     });
+
+    it('Should return unauthorized if the api key is incorrect for /ar-io/admin/unblock-data', async function () {
+      const res = await axios.put(
+        'http://localhost:4000/ar-io/admin/unblock-data',
+        { id: txId },
+        {
+          headers: {
+            Authorization: `Bearer incorrect-api-key`,
+            'Content-Type': 'application/json',
+          },
+          validateStatus: () => true,
+        },
+      );
+      assert.strictEqual(res.status, 401);
+    });
+
+    it('Should unblock a previously blocked transaction', async function () {
+      // Ensure the tx is blocked first.
+      await axios.put(
+        'http://localhost:4000/ar-io/admin/block-data',
+        { id: txId, source: 'Public Block list' },
+        {
+          headers: {
+            Authorization: `Bearer ${adminApiKey}`,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+
+      const unblockRes = await axios.put(
+        'http://localhost:4000/ar-io/admin/unblock-data',
+        { id: txId },
+        {
+          headers: {
+            Authorization: `Bearer ${adminApiKey}`,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+      assert.strictEqual(unblockRes.status, 200);
+
+      // wait for the cache to be refreshed
+      await wait(500);
+
+      const res = await axios.get(`http://localhost:4000/${txId}`, {
+        headers: {
+          Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
+        },
+        validateStatus: () => true,
+      });
+      // The block is lifted: the tx is no longer forbidden (may 200 if the
+      // data is available, or 404 if not, but never 451).
+      assert.notStrictEqual(
+        res.status,
+        451,
+        `Expected content to be unblocked (not 451), got ${res.status}`,
+      );
+    });
   });
 });

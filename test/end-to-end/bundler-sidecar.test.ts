@@ -13,7 +13,7 @@ import {
   StartedDockerComposeEnvironment,
   Wait,
 } from 'testcontainers';
-import wait from '../../src/lib/wait.js';
+import { waitFor } from './utils.js';
 import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
 import { fromB64Url, sha256B64Url, toB64Url } from '../../src/lib/encoding.js';
@@ -92,13 +92,14 @@ describe('Bundler Sidecar', { skip: isTestFiltered(['flaky']) }, () => {
   let compose: StartedDockerComposeEnvironment;
 
   const waitForIndexing = async () => {
-    const getAll = () =>
-      bundlesDb.prepare('SELECT * FROM new_data_items').all();
-
-    while (getAll().length === 0) {
-      console.log('Waiting for data items to be indexed...');
-      await wait(5000);
-    }
+    return waitFor({
+      check: () => bundlesDb.prepare('SELECT * FROM new_data_items').all(),
+      validate: (rows) => rows.length > 0,
+      interval: 5000,
+      timeoutMessage: () =>
+        'Timeout waiting for data items to be indexed. None were indexed',
+      waitingMessage: 'Waiting for data items to be indexed...',
+    });
   };
 
   let jwk: JWKInterface;
