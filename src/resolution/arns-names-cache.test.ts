@@ -586,7 +586,7 @@ describe('ArNSNamesCache', () => {
       networkProcess: {
         getArNSRecords: async ({ cursor }: { cursor?: string }) => {
           callCount++;
-          const start = cursor ? parseInt(cursor, 10) : 0;
+          const start = cursor !== undefined ? parseInt(cursor, 10) : 0;
           const end = Math.min(start + SERVER_CAP, TOTAL);
           return {
             items: Array.from({ length: end - start }, (_, i) => ({
