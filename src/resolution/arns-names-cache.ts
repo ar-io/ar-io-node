@@ -62,6 +62,22 @@ export class ArNSNamesCache {
     pageSize?: number;
     maxRetries?: number;
   }) {
+    // Both values come from `+env.varOrDefault(...)`, so a malformed env var
+    // arrives here as NaN. Fail loudly at construction rather than degrading
+    // silently: pageSize < 1 makes `paginate` return an empty page while
+    // still reporting hasMore, so the hydration loop never terminates; and
+    // maxRetries < 1 skips the fetch entirely and reports a successful
+    // hydration with an empty cache.
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1) {
+      throw new Error(
+        `ArNSNamesCache: pageSize must be a positive integer, got ${pageSize}`,
+      );
+    }
+    if (!Number.isSafeInteger(maxRetries) || maxRetries < 1) {
+      throw new Error(
+        `ArNSNamesCache: maxRetries must be a positive integer, got ${maxRetries}`,
+      );
+    }
     this.pageSize = pageSize;
     this.maxRetries = maxRetries;
     this.log = log.child({

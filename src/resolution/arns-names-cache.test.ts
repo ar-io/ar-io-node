@@ -629,4 +629,44 @@ describe('ArNSNamesCache', () => {
     // one attempt, not the default three
     assert.equal(callCount, 1);
   });
+
+  /**
+   * Guard the hydration options. Both arrive from `+env.varOrDefault(...)`,
+   * so a typo'd env var reaches the constructor as NaN.
+   *
+   *  - pageSize < 1: `paginate` returns an empty page but still reports
+   *    hasMore with an unchanged cursor -> the do/while never terminates.
+   *  - maxRetries < 1: the inner while never runs, the loop exits on the
+   *    first pass and hydration reports success with an empty cache.
+   */
+  it('rejects non-positive or non-integer hydration options', async () => {
+    const networkProcess = {
+      getArNSRecords: async () => ({ items: [], nextCursor: undefined }),
+    } as unknown as ARIORead;
+
+    for (const bad of [0, -1, 1.5, NaN, Infinity]) {
+      assert.throws(
+        () =>
+          new ArNSNamesCache({
+            log,
+            registryCache,
+            networkProcess,
+            pageSize: bad,
+          }),
+        /pageSize must be a positive integer/,
+        `pageSize=${bad} should be rejected`,
+      );
+      assert.throws(
+        () =>
+          new ArNSNamesCache({
+            log,
+            registryCache,
+            networkProcess,
+            maxRetries: bad,
+          }),
+        /maxRetries must be a positive integer/,
+        `maxRetries=${bad} should be rejected`,
+      );
+    }
+  });
 });
