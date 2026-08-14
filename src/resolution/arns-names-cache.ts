@@ -18,6 +18,16 @@ const DEFAULT_CACHE_MISS_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS * 1000;
 const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS * 1000;
+const DEFAULT_PAGE_SIZE = config.ARNS_NAME_LIST_PAGE_SIZE;
+/**
+ * Per-page attempts made here, on top of whatever the `ARIORead`
+ * implementation already does internally. The Solana reader wraps every call
+ * in the SDK's `withRetry` (3 attempts), so the effective worst case is
+ * `maxRetries * 3` requests for a single page -- each one a full registry
+ * scan. Kept at 3 for backwards compatibility; lower it where the reader
+ * retries on your behalf.
+ */
+const DEFAULT_MAX_RETRIES = 3;
 
 /**
  * Wraps an ArNS registry cache in a debounce cache that automatically refreshes
@@ -32,6 +42,8 @@ export class ArNSNamesCache {
   private networkProcess: ARIORead;
   private arnsRegistryKvCache: KVBufferStore;
   private arnsDebounceCache: KvDebounceStore;
+  private pageSize: number;
+  private maxRetries: number;
 
   constructor({
     log,
@@ -39,13 +51,19 @@ export class ArNSNamesCache {
     networkProcess,
     cacheMissDebounceTtl = DEFAULT_CACHE_MISS_DEBOUNCE_TTL,
     cacheHitDebounceTtl = DEFAULT_CACHE_HIT_DEBOUNCE_TTL,
+    pageSize = DEFAULT_PAGE_SIZE,
+    maxRetries = DEFAULT_MAX_RETRIES,
   }: {
     log: winston.Logger;
     registryCache: KVBufferStore;
     networkProcess: ARIORead;
     cacheMissDebounceTtl?: number;
     cacheHitDebounceTtl?: number;
+    pageSize?: number;
+    maxRetries?: number;
   }) {
+    this.pageSize = pageSize;
+    this.maxRetries = maxRetries;
     this.log = log.child({
       class: 'ArNSNamesCache',
     });
@@ -68,6 +86,12 @@ export class ArNSNamesCache {
    * Paginate through all the names in the registry and hydrate the cache
    * with the names and their associated processId and undernameLimits. The ar-io-sdk
    * retries requests 3 times with exponential backoff by default.
+   *
+   * Note on page size: the Solana-backed `getArNSRecords` paginates
+   * client-side -- each call runs a full `getProgramAccounts` scan of the ArNS
+   * program and slices the result. A page size smaller than the registry
+   * therefore repeats that scan once per page. `pageSize` defaults to
+   * ARNS_NAME_LIST_PAGE_SIZE so a typical registry is walked in one request.
    */
   private async hydrateArNSNamesCache(parentSpan?: Span) {
     const span = parentSpan
@@ -82,7 +106,7 @@ export class ArNSNamesCache {
       this.log.info('Hydrating ArNS names cache...');
       let cursor: string | undefined = undefined;
       const start = Date.now();
-      const maxRetries = 3;
+      const maxRetries = this.maxRetries;
       let totalPages = 0;
       let failedPages = 0;
       let totalRetries = 0;
@@ -99,7 +123,10 @@ export class ArNSNamesCache {
               items: records,
               nextCursor,
             }: PaginationResult<ArNSNameDataWithName> =
-              await this.networkProcess.getArNSRecords({ cursor, limit: 1000 });
+              await this.networkProcess.getArNSRecords({
+                cursor,
+                limit: this.pageSize,
+              });
 
             for (const record of records) {
               // do not await, avoid blocking the event loop

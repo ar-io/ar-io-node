@@ -476,6 +476,11 @@ describe('ArNSNamesCache', () => {
     const debounceCache = new ArNSNamesCache({
       log,
       registryCache,
+      // Without this the cache inherits the 120s production default, so the
+      // 2.1s wait below can never cross the debounce and the second round of
+      // hydration attempts never fires. Matches the other debounce tests,
+      // which all pass an explicit short TTL.
+      cacheMissDebounceTtl: 1000,
       networkProcess: {
         getArNSRecords: async () => {
           callCount++;
@@ -503,5 +508,125 @@ describe('ArNSNamesCache', () => {
 
     // Should have made 3 more attempts (no circuit breaker blocking)
     assert.equal(callCount, 6);
+  });
+
+  /**
+   * Regression guard for redundant registry scans during hydration.
+   *
+   * The Solana-backed `getArNSRecords` has no server-side cursor: each call
+   * runs a full `getProgramAccounts` scan and slices client-side. With the
+   * previous hard-coded `limit: 1000`, a 2,998-name registry cost three full
+   * scans per hydration -- two of which re-fetched data page one already had.
+   */
+  it('requests a page large enough to walk the registry in one call', async () => {
+    const limits: (number | undefined)[] = [];
+    new ArNSNamesCache({
+      log,
+      registryCache,
+      networkProcess: {
+        getArNSRecords: async ({ limit }: { limit?: number }) => {
+          limits.push(limit);
+          return {
+            items: [{ name: 'a', processId: 'p' }],
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as ARIORead,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(limits.length, 1);
+    // must be well above a realistic registry so one page covers it
+    assert.ok(
+      (limits[0] ?? 0) >= 10_000,
+      `expected default page size >= 10000, got ${limits[0]}`,
+    );
+  });
+
+  it('makes exactly one request when the registry fits in a single page', async () => {
+    let callCount = 0;
+    const REGISTRY_SIZE = 2998; // production size at time of writing
+    // the shared registryCache caps at 100 keys; size one for a full registry
+    const bigCache = new NodeKvStore({ ttlSeconds: 60, maxKeys: 20_000 });
+    new ArNSNamesCache({
+      log,
+      registryCache: bigCache,
+      pageSize: 10_000,
+      networkProcess: {
+        getArNSRecords: async ({ limit }: { limit?: number }) => {
+          callCount++;
+          const size = Math.min(limit ?? 0, REGISTRY_SIZE);
+          return {
+            items: Array.from({ length: size }, (_, i) => ({
+              name: `name-${i}`,
+              processId: `process-${i}`,
+            })),
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as ARIORead,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(callCount, 1);
+  });
+
+  it('still paginates when the backend caps the page size server-side', async () => {
+    // Raising the limit must stay safe for readers that enforce their own cap:
+    // they return fewer items plus a cursor, and the loop continues.
+    const SERVER_CAP = 1000;
+    const TOTAL = 2500;
+    let callCount = 0;
+    const bigCache = new NodeKvStore({ ttlSeconds: 60, maxKeys: 20_000 });
+    const cache = new ArNSNamesCache({
+      log,
+      registryCache: bigCache,
+      pageSize: 10_000,
+      networkProcess: {
+        getArNSRecords: async ({ cursor }: { cursor?: string }) => {
+          callCount++;
+          const start = cursor ? parseInt(cursor, 10) : 0;
+          const end = Math.min(start + SERVER_CAP, TOTAL);
+          return {
+            items: Array.from({ length: end - start }, (_, i) => ({
+              name: `name-${start + i}`,
+              processId: `process-${start + i}`,
+            })),
+            nextCursor: end < TOTAL ? String(end) : undefined,
+          };
+        },
+      } as unknown as ARIORead,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // 1000 + 1000 + 500 => 3 calls, and every name cached
+    assert.equal(callCount, 3);
+    assert.deepEqual(await cache.getCachedArNSBaseName('name-2499'), {
+      name: 'name-2499',
+      processId: 'process-2499',
+    });
+  });
+
+  it('honours a configurable maxRetries (the reader may already retry)', async () => {
+    let callCount = 0;
+    const cache = new ArNSNamesCache({
+      log,
+      registryCache,
+      maxRetries: 1,
+      networkProcess: {
+        getArNSRecords: async () => {
+          callCount++;
+          throw new Error('rpc down');
+        },
+      } as unknown as ARIORead,
+    });
+
+    await cache.getCachedArNSBaseName('any-name');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // one attempt, not the default three
+    assert.equal(callCount, 1);
   });
 });
