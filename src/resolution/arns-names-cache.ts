@@ -21,13 +21,19 @@ const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
 const DEFAULT_PAGE_SIZE = config.ARNS_NAME_LIST_PAGE_SIZE;
 /**
  * Per-page attempts made here, on top of whatever the `ARIORead`
- * implementation already does internally. The Solana reader wraps every call
- * in the SDK's `withRetry` (3 attempts), so the effective worst case is
- * `maxRetries * 3` requests for a single page -- each one a full registry
- * scan. Kept at 3 for backwards compatibility; lower it where the reader
- * retries on your behalf.
+ * implementation already does internally. See ARNS_NAME_LIST_MAX_RETRIES.
  */
-const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_MAX_RETRIES = config.ARNS_NAME_LIST_MAX_RETRIES;
+
+/**
+ * How many registry writes are kept in flight at once during hydration.
+ *
+ * A page can now hold the whole registry, and every write is a real I/O call
+ * on the configured store, so the page is drained in bounded chunks: it caps
+ * in-flight work on the store, and yields to the event loop between chunks
+ * instead of queueing thousands of operations in one uninterrupted pass.
+ */
+const CACHE_WRITE_CHUNK_SIZE = 500;
 
 /**
  * Wraps an ArNS registry cache in a debounce cache that automatically refreshes
@@ -127,6 +133,8 @@ export class ArNSNamesCache {
       let failedPages = 0;
       let totalRetries = 0;
       let cachedNames = 0;
+      let failedWrites = 0;
+      let firstWriteError: any;
 
       do {
         let retryCount = 0;
@@ -144,11 +152,44 @@ export class ArNSNamesCache {
                 limit: this.pageSize,
               });
 
+            /**
+             * Writes are chunked and their failures collected rather than
+             * issued as one uncaught fire-and-forget burst. Both stores can
+             * fail here in normal operation -- `NodeKvStore` throws
+             * `Cache max keys amount exceeded` once the registry outgrows
+             * ARNS_CACHE_MAX_KEYS, and `RedisKvStore` rejects while Redis is
+             * unreachable -- and an uncaught rejection from a floating
+             * promise terminates the process.
+             *
+             * A failed write is counted and logged instead of aborting the
+             * page: losing one name to a transient store error should not
+             * discard the rest of the registry or trigger a full re-scan.
+             */
+            let pendingWrites: Promise<void>[] = [];
+            const flushWrites = async () => {
+              await Promise.all(pendingWrites);
+              pendingWrites = [];
+            };
+
             for (const record of records) {
-              // do not await, avoid blocking the event loop
-              this.setCachedArNSBaseName(record.name, record);
-              cachedNames++;
+              pendingWrites.push(
+                this.setCachedArNSBaseName(record.name, record).then(
+                  () => {
+                    cachedNames++;
+                  },
+                  (writeError: any) => {
+                    failedWrites++;
+                    firstWriteError ??= writeError;
+                  },
+                ),
+              );
+
+              if (pendingWrites.length >= CACHE_WRITE_CHUNK_SIZE) {
+                await flushWrites();
+              }
             }
+
+            await flushWrites();
 
             metrics.arnsNameCacheHydrationPagesCounter.inc();
 
@@ -193,10 +234,24 @@ export class ArNSNamesCache {
         'arns.cache.hydration.failed_pages': failedPages,
         'arns.cache.hydration.total_retries': totalRetries,
         'arns.cache.hydration.cached_names': cachedNames,
+        'arns.cache.hydration.failed_writes': failedWrites,
         'arns.cache.hydration.success': true,
       });
 
+      // Counts names actually written, so the gauge reports the cache the
+      // resolver can read rather than the number of records fetched.
       metrics.arnsBaseNameCacheEntriesGauge.set(cachedNames);
+
+      if (failedWrites > 0) {
+        // A partially hydrated cache resolves some names and 404s the rest,
+        // which is otherwise indistinguishable from a name that was never
+        // registered. Make it loud.
+        this.log.error('Failed to cache some ArNS names during hydration', {
+          failedWrites,
+          cachedNames,
+          error: firstWriteError?.message,
+        });
+      }
 
       this.log.info('Successfully hydrated ArNS names cache');
     } catch (error: any) {

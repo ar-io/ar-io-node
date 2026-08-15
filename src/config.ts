@@ -2792,9 +2792,24 @@ export const ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS =
  * returns fewer items plus a cursor, and the hydration loop continues as
  * before.
  */
-export const ARNS_NAME_LIST_PAGE_SIZE = +env.varOrDefault(
+export const ARNS_NAME_LIST_PAGE_SIZE = env.positiveIntOrDefault(
   'ARNS_NAME_LIST_PAGE_SIZE',
-  `${10_000}`,
+  10_000,
+);
+
+/**
+ * Per-page fetch attempts made by the name-cache hydration loop.
+ *
+ * These sit on top of whatever the `ARIORead` implementation already does:
+ * the Solana reader wraps every call in the SDK's `withRetry` (3 attempts),
+ * so the effective worst case is `ARNS_NAME_LIST_MAX_RETRIES * 3` requests
+ * for a single page -- and on that reader each request is a full
+ * `getProgramAccounts` scan of the ArNS program. Lower it where the reader
+ * already retries on your behalf.
+ */
+export const ARNS_NAME_LIST_MAX_RETRIES = env.positiveIntOrDefault(
+  'ARNS_NAME_LIST_MAX_RETRIES',
+  3,
 );
 
 export const ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS =

@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { after, beforeEach, describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 import winston from 'winston';
 import { ArNSNamesCache } from './arns-names-cache.js';
 import { ARIORead, Logger as ARIOLogger } from '@ar.io/sdk';
@@ -32,11 +32,6 @@ describe('ArNSNamesCache', () => {
       ttlSeconds: 1,
       maxKeys: 100,
     });
-  });
-
-  after(async () => {
-    // exit forcefully due to intentional non-awaited promises in ArNSNamesCache
-    process.exit(0);
   });
 
   it('should fetch and cache names on initialization', async () => {
@@ -465,6 +460,12 @@ describe('ArNSNamesCache', () => {
     const name3 = await debounceCache.getCachedArNSBaseName('name-3');
     assert.equal(name3, undefined);
 
+    // A miss-triggered hydration is fire-and-forget in KvDebounceStore.get,
+    // so the call above returns before the retries have run. Wait for them
+    // rather than relying on how many microtask turns hydration happens to
+    // take, as the sibling debounce tests do.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
     // Initial hydration: 1 (first page) + 3 (retries for second page) = 4
     // Cache miss triggers new hydration: 1 (first page) + 3 (retries) = 4
     // Total = 8
@@ -508,6 +509,42 @@ describe('ArNSNamesCache', () => {
 
     // Should have made 3 more attempts (no circuit breaker blocking)
     assert.equal(callCount, 6);
+  });
+
+  /**
+   * Hydration writes used to be fire-and-forget and uncaught, so any store
+   * error became an unhandled rejection -- which exits the process on every
+   * supported Node version. Both stores reach that path in normal operation:
+   * `NodeKvStore` throws `Cache max keys amount exceeded` once the registry
+   * outgrows ARNS_CACHE_MAX_KEYS, and `RedisKvStore` rejects while Redis is
+   * unreachable. A failed write must cost that one name, not the gateway.
+   */
+  it('survives store write failures without an unhandled rejection', async () => {
+    const REGISTRY_SIZE = 10;
+    // room for two names; every later write throws ECACHEFULL
+    const tinyCache = new NodeKvStore({ ttlSeconds: 60, maxKeys: 2 });
+    const cache = new ArNSNamesCache({
+      log,
+      registryCache: tinyCache,
+      networkProcess: {
+        getArNSRecords: async () => ({
+          items: Array.from({ length: REGISTRY_SIZE }, (_, i) => ({
+            name: `name-${i}`,
+            processId: `process-${i}`,
+          })),
+          nextCursor: undefined,
+        }),
+      } as unknown as ARIORead,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // the writes that fit still landed
+    assert.deepEqual(await cache.getCachedArNSBaseName('name-0'), {
+      name: 'name-0',
+      processId: 'process-0',
+    });
+    await cache.close();
   });
 
   /**
