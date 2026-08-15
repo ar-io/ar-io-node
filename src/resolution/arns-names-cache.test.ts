@@ -10,6 +10,7 @@ import winston from 'winston';
 import { ArNSNamesCache } from './arns-names-cache.js';
 import { ARIORead, Logger as ARIOLogger } from '@ar.io/sdk';
 import { NodeKvStore } from '../store/node-kv-store.js';
+import * as metrics from '../metrics.js';
 
 // disable sdk logging to reduce noise
 ARIOLogger.default.setLogLevel('none');
@@ -523,6 +524,9 @@ describe('ArNSNamesCache', () => {
    */
   it('survives store write failures without an unhandled rejection', async () => {
     const REGISTRY_SIZE = 10;
+    const failuresBefore = (
+      await metrics.arnsNameCacheHydrationWriteFailuresCounter.get()
+    ).values[0].value;
     // room for two names; every later write throws ECACHEFULL
     const tinyCache = new NodeKvStore({ ttlSeconds: 60, maxKeys: 2 });
     const cache = new ArNSNamesCache({
@@ -546,6 +550,14 @@ describe('ArNSNamesCache', () => {
       name: 'name-0',
       processId: 'process-0',
     });
+
+    // and the failures are countable, not just loggable -- a partial cache is
+    // otherwise indistinguishable from names that were never registered
+    const after = (
+      await metrics.arnsNameCacheHydrationWriteFailuresCounter.get()
+    ).values[0].value;
+    assert.equal(after - failuresBefore, REGISTRY_SIZE - 2);
+
     await cache.close();
   });
 

@@ -187,6 +187,7 @@ export class ArNSNamesCache {
                   (writeError: any) => {
                     failedWrites++;
                     firstWriteError ??= writeError;
+                    metrics.arnsNameCacheHydrationWriteFailuresCounter.inc();
                   },
                 ),
               );

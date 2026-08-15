@@ -815,6 +815,21 @@ export const arnsNameCacheHydrationFailuresCounter = new promClient.Counter({
   help: 'Number of failed hydration attempts for ArNS cache',
 });
 
+/**
+ * Registry writes that failed during hydration.
+ *
+ * Hydration tolerates a failed write so one bad key does not discard the rest
+ * of the registry, which means the only other trace is a log line. Without
+ * this counter a partially hydrated cache is invisible to monitoring: the
+ * gateway stays healthy and simply 404s the names it never managed to write.
+ */
+export const arnsNameCacheHydrationWriteFailuresCounter = new promClient.Counter(
+  {
+    name: 'arns_name_cache_hydration_write_failures_total',
+    help: 'Total number of registry cache writes that failed during ArNS cache hydration',
+  },
+);
+
 export const arnsBaseNameCacheEntriesGauge = new promClient.Gauge({
   name: 'arns_base_name_cache_entries',
   help: 'Current number of base name entries in the ArNS name cache',
