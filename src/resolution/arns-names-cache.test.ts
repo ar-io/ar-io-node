@@ -27,6 +27,27 @@ describe('ArNSNamesCache', () => {
 
   let registryCache: NodeKvStore;
 
+  /**
+   * Wait for a condition rather than a fixed delay. How many turns a hydration
+   * takes depends on the mocked reader and on runner speed, so a `setTimeout`
+   * long enough today is a flake tomorrow. Where the cache exposes a promise to
+   * await -- `getCachedArNSBaseName` awaits an in-flight hydration before
+   * re-reading -- prefer that over this.
+   */
+  const waitFor = async (
+    predicate: () => boolean,
+    label: string,
+    timeoutMs = 5000,
+  ) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${label}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+
   beforeEach(async () => {
     // new cache for each test
     registryCache = new NodeKvStore({
@@ -462,10 +483,8 @@ describe('ArNSNamesCache', () => {
     assert.equal(name3, undefined);
 
     // A miss-triggered hydration is fire-and-forget in KvDebounceStore.get,
-    // so the call above returns before the retries have run. Wait for them
-    // rather than relying on how many microtask turns hydration happens to
-    // take, as the sibling debounce tests do.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // so the call above returns before the retries have run.
+    await waitFor(() => callCount >= 8, 'the second hydration to finish');
 
     // Initial hydration: 1 (first page) + 3 (retries for second page) = 4
     // Cache miss triggers new hydration: 1 (first page) + 3 (retries) = 4
@@ -543,7 +562,8 @@ describe('ArNSNamesCache', () => {
       } as unknown as ARIORead,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // no sleep needed: getCachedArNSBaseName awaits the in-flight hydration
+    // before re-reading, so the writes are all settled once it returns
 
     // the writes that fit still landed
     assert.deepEqual(await cache.getCachedArNSBaseName('name-0'), {
@@ -585,7 +605,7 @@ describe('ArNSNamesCache', () => {
       } as unknown as ARIORead,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitFor(() => limits.length >= 1, 'the first page request');
 
     assert.equal(limits.length, 1);
     // must be well above a realistic registry so one page covers it
@@ -600,7 +620,7 @@ describe('ArNSNamesCache', () => {
     const REGISTRY_SIZE = 2998; // production size at time of writing
     // the shared registryCache caps at 100 keys; size one for a full registry
     const bigCache = new NodeKvStore({ ttlSeconds: 60, maxKeys: 20_000 });
-    new ArNSNamesCache({
+    const cache = new ArNSNamesCache({
       log,
       registryCache: bigCache,
       pageSize: 10_000,
@@ -619,7 +639,7 @@ describe('ArNSNamesCache', () => {
       } as unknown as ARIORead,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await cache.getCachedArNSBaseName('name-0');
     assert.equal(callCount, 1);
   });
 
@@ -650,14 +670,13 @@ describe('ArNSNamesCache', () => {
       } as unknown as ARIORead,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
+    // the read awaits the in-flight hydration, so no fixed delay is needed
     // 1000 + 1000 + 500 => 3 calls, and every name cached
-    assert.equal(callCount, 3);
     assert.deepEqual(await cache.getCachedArNSBaseName('name-2499'), {
       name: 'name-2499',
       processId: 'process-2499',
     });
+    assert.equal(callCount, 3);
   });
 
   it('honours a configurable maxRetries (the reader may already retry)', async () => {
@@ -674,8 +693,9 @@ describe('ArNSNamesCache', () => {
       } as unknown as ARIORead,
     });
 
+    // getCachedArNSBaseName awaits the in-flight hydration, so the attempts
+    // are already exhausted by the time it returns
     await cache.getCachedArNSBaseName('any-name');
-    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // one attempt, not the default three
     assert.equal(callCount, 1);
