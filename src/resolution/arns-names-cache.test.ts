@@ -513,11 +513,13 @@ describe('ArNSNamesCache', () => {
 
   /**
    * Hydration writes used to be fire-and-forget and uncaught, so any store
-   * error became an unhandled rejection -- which exits the process on every
-   * supported Node version. Both stores reach that path in normal operation:
-   * `NodeKvStore` throws `Cache max keys amount exceeded` once the registry
-   * outgrows ARNS_CACHE_MAX_KEYS, and `RedisKvStore` rejects while Redis is
-   * unreachable. A failed write must cost that one name, not the gateway.
+   * error became an unhandled rejection. system.ts installs an
+   * `uncaughtException` handler, so the process survived and the damage was
+   * silent instead: one uncaught exception per failed write, and a names
+   * cache reporting entries it never wrote. Both stores reach that path in
+   * normal operation -- `NodeKvStore` throws `Cache max keys amount
+   * exceeded` once the registry outgrows ARNS_CACHE_MAX_KEYS, and
+   * `RedisKvStore` rejects while Redis is unreachable.
    */
   it('survives store write failures without an unhandled rejection', async () => {
     const REGISTRY_SIZE = 10;

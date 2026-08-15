@@ -155,11 +155,18 @@ export class ArNSNamesCache {
             /**
              * Writes are chunked and their failures collected rather than
              * issued as one uncaught fire-and-forget burst. Both stores can
-             * fail here in normal operation -- `NodeKvStore` throws
+             * fail here in normal operation: `NodeKvStore` throws
              * `Cache max keys amount exceeded` once the registry outgrows
              * ARNS_CACHE_MAX_KEYS, and `RedisKvStore` rejects while Redis is
-             * unreachable -- and an uncaught rejection from a floating
-             * promise terminates the process.
+             * unreachable.
+             *
+             * Uncaught, each failed write became its own unhandled rejection.
+             * The `uncaughtException` handler in system.ts keeps the process
+             * alive, so the cost was not a crash but a silent one: measured
+             * against a 3007-name registry with ARNS_CACHE_MAX_KEYS=1000,
+             * 2007 uncaught exceptions, and a gauge still reporting 3007
+             * entries for a cache holding 1000. Two thirds of ArNS names
+             * 404ed with nothing in the logs naming the cause.
              *
              * A failed write is counted and logged instead of aborting the
              * page: losing one name to a transient store error should not
