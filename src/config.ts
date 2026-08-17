@@ -2085,12 +2085,36 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
 );
 
 // Max concurrent readdir/stat syscalls during the cleanup tree walk. The walk is
+// Size of the libuv thread pool backing every `fs.promises` call. Node's own
+// default is 4; the runtime reads this from the environment at startup, so this
+// constant only mirrors it for sizing decisions here.
+export const UV_THREADPOOL_SIZE =
+  +env.varOrDefault('UV_THREADPOOL_SIZE', '4') || 4;
+
 // dominated by directory-traversal I/O latency on large, deeply-sharded caches;
 // raising this hides that latency (parallel traversal) at the cost of more
 // concurrent filesystem load. Lower it if the walk contends with request I/O.
+//
+// The default is derived from the libuv thread pool rather than fixed, because
+// that pool is the resource actually being contended. Every `fs.promises` call
+// -- each walk `stat()`, and every filesystem operation on the request path --
+// is served by it, and it is small by default (`UV_THREADPOOL_SIZE`, 4).
+//
+// A fixed default cannot be safe across deployments: 64 is 16x oversubscribed
+// against a stock pool, and on a host that raises the pool to 64 it lets a
+// single worker consume all of it. Several workers run concurrently (chunk data
+// plus one per staging directory), so they must each stay well under the pool
+// size for the total to leave room for request handling.
+//
+// /16 keeps the total for a typical four-worker deployment at a quarter of the
+// pool. That is deliberately conservative: an over-large value degrades the
+// service in a way that is hard to read (the event loop and CPU stay healthy
+// while the process cannot answer HTTP at all), whereas an over-small value
+// only makes cleanup slower. Raise it if cleanup cannot keep up and the pool
+// has headroom.
 export const FS_CLEANUP_WORKER_WALK_CONCURRENCY = +env.varOrDefault(
   'FS_CLEANUP_WORKER_WALK_CONCURRENCY',
-  '64',
+  `${Math.max(1, Math.floor(UV_THREADPOOL_SIZE / 16))}`,
 );
 
 // Cache TTL for the SQLite worker's getDebugInfo response. The /ar-io/admin/debug
@@ -2527,6 +2551,38 @@ export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
   '',
 );
 
+// Whether to sweep orphaned files out of the download staging directories
+// (`data/contiguous/tmp`, `data/tmp/ans-104`, `data/tmp/data-root`).
+//
+// `FsDataStore` writes every cache entry to a random temp path first, then
+// renames it into the content-addressed blob tree on success (or unlinks it on
+// failure). A temp file that outlives its request is therefore always garbage:
+// it was abandoned by a process crash, a pipeline that never settled, or a
+// failed unlink.
+//
+// Nothing else reclaims those files. The index-driven evictor deletes by
+// content hash (`data/<hh>/<hh>/<hash>`), and the backfill reconciler only
+// walks the blob tree — neither can see the staging directory. The filesystem
+// cleanup worker covers it only incidentally, via its `data/contiguous` parent
+// path, and that worker is not constructed when the cache index is enabled. So
+// switching to the index evictor silently removes the staging directory's only
+// garbage collector, and orphans accumulate without bound.
+//
+// This sweeper runs regardless of which eviction strategy is in use.
+export const ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP =
+  env.varOrDefault('ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP', 'true') ===
+  'true';
+
+// Age in seconds past which a file in the staging directory is considered
+// orphaned. Must comfortably exceed the longest legitimate single cache write:
+// a slow, large upstream fetch can hold a temp file open for a long time, and
+// deleting one in flight loses that entry (the rename then fails and the
+// request falls back to upstream).
+export const CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD',
+  `${60 * 60 * 6}`, // 6 hours
+);
+
 // The delay in seconds before the first contiguous data cache cleanup runs.
 // The delay gives the metadata cache time to populate so that eviction
 // decisions reflect recent access rather than cold-start defaults. When unset,
@@ -2898,9 +2954,26 @@ export const LEGACY_AWS_S3_ENDPOINT = env.varOrUndefined(
 // Whether or not to bypass the header cache
 export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
 
-// Whether or not to bypass the data cache (read-through data cache)
+// Whether or not to bypass the data cache (read-through data cache) entirely:
+// no reads from it, no writes to it, no background range caching.
+//
+// Prefer SKIP_DATA_CACHE_WRITES when the goal is to stop a full cache volume
+// from growing: this flag also stops *serving* from the existing cache, so
+// every request falls through to upstream, and it stops the cache index being
+// populated (which is what the evictor needs in order to reclaim anything).
 export const SKIP_DATA_CACHE =
   env.varOrDefault('SKIP_DATA_CACHE', 'false') === 'true';
+
+// Whether to stop writing new entries to the contiguous data cache while
+// continuing to serve reads from it.
+//
+// This is the "stop the bleeding" control for a cache volume under disk
+// pressure. Unlike SKIP_DATA_CACHE it leaves the read path and the cache index
+// intact, so cached data keeps being served and the index-driven evictor can
+// keep reclaiming space. SKIP_DATA_CACHE implies this.
+export const SKIP_DATA_CACHE_WRITES =
+  env.varOrDefault('SKIP_DATA_CACHE_WRITES', 'false') === 'true' ||
+  SKIP_DATA_CACHE;
 
 //
 // Negative data cache
