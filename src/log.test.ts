@@ -7,7 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import log from './log.js';
+import { createTestLogger } from '../test/test-logger.js';
 
 /**
  * Builds an object shaped like the one that took the gateway down: an axios
@@ -55,9 +55,14 @@ function makeAxiosLikeError(): any {
 describe('log metadata sanitization', () => {
   // Capture what the format chain actually produces, which is the thing that
   // gets serialized -- asserting on the input object would prove nothing.
+  // The test logger is a child of the production logger, so it carries the
+  // real format chain -- which is the thing under test. Asserting against a
+  // hand-built format would prove nothing about what production serializes.
+  const testLog = createTestLogger({ suite: 'log metadata sanitization' });
+
   function transform(meta: unknown) {
     const info: any = { level: 'error', message: 'test', ...(meta as object) };
-    const fmt: any = (log as any).format;
+    const fmt: any = (testLog as any).format ?? (testLog as any).parent?.format;
     return fmt.transform(info, {});
   }
 
