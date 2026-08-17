@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, afterEach, before, describe, it, mock } from 'node:test';
 
+import * as config from '../config.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import {
   CleanupContext,
@@ -328,13 +329,14 @@ describe('FsCleanupWorker.processBatch', () => {
 });
 
 describe('warnIfWalkConcurrencyUnsafe', () => {
-  const origPool = process.env.UV_THREADPOOL_SIZE;
-
   afterEach(() => {
-    if (origPool === undefined) delete process.env.UV_THREADPOOL_SIZE;
-    else process.env.UV_THREADPOOL_SIZE = origPool;
     mock.restoreAll();
   });
+
+  // config reads UV_THREADPOOL_SIZE once at import, so these assert relative to
+  // the value the module actually resolved rather than mutating the environment.
+  const pool = config.UV_THREADPOOL_SIZE;
+  const budget = Math.max(1, Math.floor(pool / 2));
 
   function captureWarn() {
     const calls: any[] = [];
@@ -344,26 +346,43 @@ describe('warnIfWalkConcurrencyUnsafe', () => {
   }
 
   it('warns when workers collectively exceed half the thread pool', () => {
-    process.env.UV_THREADPOOL_SIZE = '8';
     const { child, calls } = captureWarn();
-    // 4 workers x 4 = 16 against a pool of 8; budget is 4.
-    const workers = [1, 2, 3, 4].map(() => makeWorker({ walkConcurrency: 4 }));
+    // Two workers each taking the whole pool: unambiguously over budget.
+    const workers = [1, 2].map(() => makeWorker({ walkConcurrency: pool }));
     warnIfWalkConcurrencyUnsafe(workers, child);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0][1].totalWalkConcurrency, 16);
-    assert.equal(calls[0][1].uvThreadpoolSize, 8);
+    assert.equal(calls[0][1].totalWalkConcurrency, pool * 2);
+    assert.equal(calls[0][1].uvThreadpoolSize, pool);
+    assert.equal(calls[0][1].recommendedMaxTotal, budget);
   });
 
-  it('stays quiet when the walks leave the pool room', () => {
-    process.env.UV_THREADPOOL_SIZE = '64';
+  it('stays quiet for a single worker at the derived default', () => {
     const { child, calls } = captureWarn();
-    const workers = [1, 2].map(() => makeWorker({ walkConcurrency: 4 }));
+    const workers = [
+      makeWorker({
+        walkConcurrency: config.FS_CLEANUP_WORKER_WALK_CONCURRENCY,
+      }),
+    ];
     warnIfWalkConcurrencyUnsafe(workers, child);
     assert.equal(calls.length, 0);
   });
 
+  // On a stock pool (4) the minimum viable concurrency of 1 per worker already
+  // reaches the whole pool once several workers are enabled, so the warning
+  // fires and tells the operator to raise UV_THREADPOOL_SIZE. That is the
+  // intended advice, not a false positive -- assert it rather than tune it away.
+  it('derives a default that scales with the pool', () => {
+    assert.equal(
+      config.FS_CLEANUP_WORKER_WALK_CONCURRENCY,
+      Math.max(1, Math.floor(config.UV_THREADPOOL_SIZE / 16)),
+    );
+    assert.ok(config.FS_CLEANUP_WORKER_WALK_CONCURRENCY >= 1);
+    assert.ok(
+      config.FS_CLEANUP_WORKER_WALK_CONCURRENCY <= config.UV_THREADPOOL_SIZE,
+    );
+  });
+
   it('ignores undefined (disabled) workers', () => {
-    process.env.UV_THREADPOOL_SIZE = '4';
     const { child, calls } = captureWarn();
     warnIfWalkConcurrencyUnsafe([undefined, undefined], child);
     assert.equal(calls.length, 0);

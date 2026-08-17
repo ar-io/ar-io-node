@@ -2085,12 +2085,36 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
 );
 
 // Max concurrent readdir/stat syscalls during the cleanup tree walk. The walk is
+// Size of the libuv thread pool backing every `fs.promises` call. Node's own
+// default is 4; the runtime reads this from the environment at startup, so this
+// constant only mirrors it for sizing decisions here.
+export const UV_THREADPOOL_SIZE =
+  +env.varOrDefault('UV_THREADPOOL_SIZE', '4') || 4;
+
 // dominated by directory-traversal I/O latency on large, deeply-sharded caches;
 // raising this hides that latency (parallel traversal) at the cost of more
 // concurrent filesystem load. Lower it if the walk contends with request I/O.
+//
+// The default is derived from the libuv thread pool rather than fixed, because
+// that pool is the resource actually being contended. Every `fs.promises` call
+// -- each walk `stat()`, and every filesystem operation on the request path --
+// is served by it, and it is small by default (`UV_THREADPOOL_SIZE`, 4).
+//
+// A fixed default cannot be safe across deployments: 64 is 16x oversubscribed
+// against a stock pool, and on a host that raises the pool to 64 it lets a
+// single worker consume all of it. Several workers run concurrently (chunk data
+// plus one per staging directory), so they must each stay well under the pool
+// size for the total to leave room for request handling.
+//
+// /16 keeps the total for a typical four-worker deployment at a quarter of the
+// pool. That is deliberately conservative: an over-large value degrades the
+// service in a way that is hard to read (the event loop and CPU stay healthy
+// while the process cannot answer HTTP at all), whereas an over-small value
+// only makes cleanup slower. Raise it if cleanup cannot keep up and the pool
+// has headroom.
 export const FS_CLEANUP_WORKER_WALK_CONCURRENCY = +env.varOrDefault(
   'FS_CLEANUP_WORKER_WALK_CONCURRENCY',
-  '64',
+  `${Math.max(1, Math.floor(UV_THREADPOOL_SIZE / 16))}`,
 );
 
 // Cache TTL for the SQLite worker's getDebugInfo response. The /ar-io/admin/debug

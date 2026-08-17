@@ -581,7 +581,7 @@ export function warnIfWalkConcurrencyUnsafe(
   const active = workers.filter((w): w is FsCleanupWorker => w !== undefined);
   if (active.length === 0) return;
 
-  const poolSize = Number(process.env.UV_THREADPOOL_SIZE ?? 4) || 4;
+  const poolSize = config.UV_THREADPOOL_SIZE;
   const total = active.reduce((sum, w) => sum + w.walkConcurrency, 0);
   // Leave at least half the pool for everything else the process does.
   const budget = Math.max(1, Math.floor(poolSize / 2));
