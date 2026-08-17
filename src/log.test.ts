@@ -1,6 +1,6 @@
 /**
  * AR.IO Gateway
- * Copyright (C) 2022-2026 Permanent Data Solutions, Inc. All Rights Reserved.
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
@@ -57,7 +57,6 @@ describe('log metadata sanitization', () => {
   // gets serialized -- asserting on the input object would prove nothing.
   function transform(meta: unknown) {
     const info: any = { level: 'error', message: 'test', ...(meta as object) };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fmt: any = (log as any).format;
     return fmt.transform(info, {});
   }
@@ -99,6 +98,45 @@ describe('log metadata sanitization', () => {
     const b: any = { name: 'b', a };
     a.b = b;
     assert.doesNotThrow(() => transform({ cyclic: a }));
+  });
+
+  it('keeps shared (non-cyclic) references instead of marking them circular', () => {
+    // Regression: tracking every object ever seen, rather than the objects on
+    // the current recursion path, made the second reference to a shared object
+    // serialize as "[Circular]" and silently dropped valid metadata.
+    const shared = { id: 'shared-value' };
+    const out: any = transform({ first: shared, second: shared });
+    assert.deepEqual(out.first, { id: 'shared-value' });
+    assert.deepEqual(out.second, { id: 'shared-value' });
+  });
+
+  it('bounds a wide object', () => {
+    const wide: Record<string, number> = {};
+    for (let i = 0; i < 5000; i++) wide[`k${i}`] = i;
+    const out: any = transform({ wide });
+    const keys = Object.keys(out.wide);
+    assert.ok(keys.length <= 129, `expected bounded keys, got ${keys.length}`);
+    assert.ok(String(out.wide['…']).includes('truncated'));
+  });
+
+  it('bounds a long array', () => {
+    const out: any = transform({
+      arr: Array.from({ length: 5000 }, (_, i) => i),
+    });
+    assert.ok(
+      out.arr.length <= 129,
+      `expected bounded array, got ${out.arr.length}`,
+    );
+    assert.ok(String(out.arr[out.arr.length - 1]).includes('truncated'));
+  });
+
+  it('truncates an oversized string', () => {
+    const out: any = transform({ blob: 'x'.repeat(50_000) });
+    assert.ok(
+      out.blob.length < 10_000,
+      `string not truncated: ${out.blob.length}`,
+    );
+    assert.ok(out.blob.includes('truncated'));
   });
 
   it('leaves ordinary metadata intact', () => {
