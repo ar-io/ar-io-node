@@ -11,6 +11,7 @@ import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import { parseNonNegativeInt } from '../lib/http-utils.js';
+import { createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
@@ -95,6 +96,7 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
     // Initialize axios instance
     this.axiosInstance = axios.create({
       timeout: requestTimeoutMs,
+      ...createAgentPair({ client: 'GatewaysRootTxIndex', log: this.log }),
       headers: {
         'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
       },

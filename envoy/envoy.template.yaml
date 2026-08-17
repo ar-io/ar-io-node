@@ -418,6 +418,47 @@ static_resources:
             idle_timeout: #@ data.values.ARIO_GATEWAY_UPSTREAM_IDLE_TIMEOUT
           explicit_http_config:
             http_protocol_options: {}
+      #! Envoy's DEFAULT circuit-breaker thresholds are 1024 for each of
+      #! max_connections / max_pending_requests / max_requests. Because this
+      #! cluster speaks HTTP/1.1 to core (explicit_http_config above), each
+      #! concurrent request needs its own connection, so max_connections is
+      #! the effective concurrency ceiling.
+      #!
+      #! Leaving that at the default makes a slow core self-amplify into an
+      #! outage: in-flight connections pin at the cap, further requests are
+      #! rejected immediately with "upstream connect error ... reset reason:
+      #! overflow" (a 503 with no upstream time), and client retries keep the
+      #! pool full so the cluster never drains. A transient slowdown latches
+      #! into a persistent failure that only a restart clears.
+      #!
+      #! These are raised, not removed. They still bound memory and fd usage
+      #! (see the envoy service's nofile ulimit in docker-compose.yaml), but
+      #! sit far above normal concurrency so a slow upstream degrades latency
+      #! instead of hard-failing. retry_budget supersedes the default
+      #! max_retries=3 and caps retries as a share of active requests, so the
+      #! route-level retry policies cannot amplify a 5xx storm into
+      #! self-inflicted load. track_remaining exposes remaining_* gauges on
+      #! the admin /stats endpoint for headroom monitoring.
+      circuit_breakers:
+        thresholds:
+          - priority: DEFAULT
+            max_connections: #@ int(data.values.ARIO_GATEWAY_MAX_CONNECTIONS)
+            max_pending_requests: #@ int(data.values.ARIO_GATEWAY_MAX_PENDING_REQUESTS)
+            max_requests: #@ int(data.values.ARIO_GATEWAY_MAX_REQUESTS)
+            track_remaining: true
+            retry_budget:
+              budget_percent:
+                value: #@ float(data.values.ARIO_GATEWAY_RETRY_BUDGET_PERCENT)
+              min_retry_concurrency: 16
+          - priority: HIGH
+            max_connections: #@ int(data.values.ARIO_GATEWAY_MAX_CONNECTIONS)
+            max_pending_requests: #@ int(data.values.ARIO_GATEWAY_MAX_PENDING_REQUESTS)
+            max_requests: #@ int(data.values.ARIO_GATEWAY_MAX_REQUESTS)
+            track_remaining: true
+            retry_budget:
+              budget_percent:
+                value: #@ float(data.values.ARIO_GATEWAY_RETRY_BUDGET_PERCENT)
+              min_retry_concurrency: 16
       type: STRICT_DNS
       lb_policy: LEAST_REQUEST
       load_assignment:

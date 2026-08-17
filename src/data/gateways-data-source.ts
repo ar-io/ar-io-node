@@ -8,7 +8,6 @@ import { Span } from '@opentelemetry/api';
 import { default as axios } from 'axios';
 import http from 'node:http';
 import https from 'node:https';
-import { performance } from 'node:perf_hooks';
 import winston from 'winston';
 
 import * as config from '../config.js';
@@ -19,6 +18,7 @@ import {
   parseContentLength,
   parseContentRange,
 } from '../lib/http-utils.js';
+import { BASE_AGENT_OPTIONS, instrumentAgent } from '../lib/http-agent.js';
 import { shuffleArray } from '../lib/random.js';
 import {
   detectLoopInViaChain,
@@ -39,23 +39,13 @@ import {
 
 const MAX_DATA_HOPS = 3;
 
-// Base keep-alive agent options shared by every per-gateway agent. Reusing
-// TCP+TLS connections across requests avoids per-request handshake cost, slashes
-// kernel TIME_WAIT churn, and gives upstream connections a chance to settle into
-// stable buffer sizes (which matters at high ANS104_DOWNLOAD_WORKERS).
-// maxSockets / maxFreeSockets are set per agent in getAgent() so trusted peers
-// and untrusted (CDN-fronted) gateways can be capped independently.
-const AGENT_OPTIONS = {
-  keepAlive: true,
-  keepAliveMsecs: 30_000,
-  // Idle-socket timeout: must stay strictly below the peer gateway's server
-  // keep-alive timeout (HTTP_KEEP_ALIVE_TIMEOUT_MS, default 60s) so this client
-  // retires an idle keep-alive socket before the peer closes it. Equal timeouts
-  // race — the client reuses a socket the server is simultaneously FIN-closing —
-  // stalling the request until the teardown resolves. See
-  // GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS in config.ts.
-  timeout: config.GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS,
-} as const;
+// Keep-alive options come from the shared outbound-agent module so this data
+// path and the metadata clients (root TX discovery, GraphQL fan-out) cannot
+// drift apart on the idle-timeout invariant. maxSockets / maxFreeSockets are
+// still set per agent in getAgent() below, so trusted peers and untrusted
+// (CDN-fronted) gateways can be capped independently — a distinction the
+// metadata clients don't need.
+const AGENT_OPTIONS = BASE_AGENT_OPTIONS;
 
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -151,13 +141,13 @@ export class GatewaysDataSource implements ContiguousDataSource {
     return agent;
   }
 
-  // Instruments an agent's socket lifecycle so we can see outbound-side stalls
-  // that never reach the wire. Node calls `Agent.addRequest` when a
-  // ClientRequest needs a socket; the request's 'socket' event fires once a
-  // socket is assigned (immediately when one is available, or after a wait when
-  // the pool is at capacity or a reused socket is being torn down). Timing
-  // addRequest -> 'socket' isolates the keep-alive pool/reuse phase from the
-  // request/response phase; connect time is measured separately for new sockets.
+  // Wraps the shared socket-lifecycle instrumentation, mapping its samples onto
+  // this data path's per-gateway metrics. The per-URL label is affordable here
+  // because the gateway list is a small, operator-configured set; the metadata
+  // clients label by component instead.
+  //
+  // For TLS gateways (https://, e.g. arweave.net) connect time is measured to
+  // 'secureConnect' rather than 'connect', so it reflects TCP + TLS.
   private instrumentAgent(
     agent: http.Agent | https.Agent,
     gatewayUrl: string,
@@ -165,48 +155,31 @@ export class GatewaysDataSource implements ContiguousDataSource {
     const log = this.log;
     const slowThresholdMs =
       config.GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS;
-    // `addRequest` is not in the public type surface; wrap it on the instance.
-    const agentAny = agent as unknown as {
-      addRequest: (req: http.ClientRequest, ...rest: unknown[]) => void;
-    };
-    const originalAddRequest = agentAny.addRequest.bind(agent);
-    agentAny.addRequest = function (
-      req: http.ClientRequest,
-      ...rest: unknown[]
-    ): void {
-      const requestedAt = performance.now();
-      req.once('socket', (socket: import('node:net').Socket) => {
-        const acquisitionSeconds = (performance.now() - requestedAt) / 1000;
-        const isNewSocket = socket.connecting === true;
+
+    instrumentAgent({
+      agent,
+      isTls: gatewayUrl.startsWith('https://'),
+      observe: ({ acquisitionSeconds, reused, connectSeconds }) => {
+        if (connectSeconds !== undefined) {
+          metrics.gatewaySocketConnectSeconds.observe(
+            { gateway_url: gatewayUrl },
+            connectSeconds,
+          );
+          return;
+        }
         metrics.gatewaySocketAcquisitionSeconds.observe(
-          { gateway_url: gatewayUrl, reused: String(!isNewSocket) },
+          { gateway_url: gatewayUrl, reused: String(reused) },
           acquisitionSeconds,
         );
         if (acquisitionSeconds * 1000 >= slowThresholdMs) {
           log.warn('Slow gateway socket acquisition', {
             gatewayUrl,
             acquisitionMs: Math.round(acquisitionSeconds * 1000),
-            reused: !isNewSocket,
+            reused,
           });
         }
-        if (isNewSocket) {
-          const connectStartedAt = performance.now();
-          // For TLS gateways (https://, e.g. arweave.net) the full handshake
-          // completes at 'secureConnect', not 'connect' — measure to that so the
-          // metric reflects TCP + TLS rather than TCP alone.
-          const connectEvent = gatewayUrl.startsWith('https://')
-            ? 'secureConnect'
-            : 'connect';
-          socket.once(connectEvent, () => {
-            metrics.gatewaySocketConnectSeconds.observe(
-              { gateway_url: gatewayUrl },
-              (performance.now() - connectStartedAt) / 1000,
-            );
-          });
-        }
-      });
-      return originalAddRequest(req, ...rest);
-    };
+      },
+    });
   }
 
   /**

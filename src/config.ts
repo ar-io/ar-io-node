@@ -397,6 +397,30 @@ export const GATEWAY_MAX_FREE_SOCKETS_PER_HOST = parsePerHostNumber(
   4,
 );
 
+// Socket caps for the non-data outbound clients — root TX discovery sources and
+// the GraphQL fan-out. These are low-volume metadata lookups against a handful
+// of upstreams, so the caps are modest; the point of pooling here is not
+// throughput but avoiding a per-request `dns.lookup()`, which queues on the
+// libuv threadpool behind filesystem I/O (see src/lib/http-agent.ts). Node's
+// Agent keys its pool by host:port, so these apply per origin.
+export const OUTBOUND_MAX_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'OUTBOUND_MAX_SOCKETS_PER_HOST',
+  16,
+);
+// Defaults to the same value as OUTBOUND_MAX_SOCKETS_PER_HOST, deliberately.
+// maxFreeSockets bounds *idle* sockets: any concurrency above it means the
+// excess sockets are destroyed once they go idle and reopened on the next
+// request — and every reopen is a fresh `dns.lookup()`, the exact cost this
+// pooling exists to avoid. The data path caps free sockets well below max
+// because its objective is throughput management against many hosts; here the
+// objective is maximizing reuse across a handful of upstreams, so holding the
+// full set idle is the point. Cost is a few idle sockets per origin, retired
+// anyway by the agent's idle timeout.
+export const OUTBOUND_MAX_FREE_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'OUTBOUND_MAX_FREE_SOCKETS_PER_HOST',
+  OUTBOUND_MAX_SOCKETS_PER_HOST,
+);
+
 // Kill-switch for the untrusted-gateway provenance-param omission. By default
 // (false) the `ar-io-*` query params are NOT sent to untrusted gateways
 // (`trusted: false`), because CDN-fronted gateways such as arweave.net (behind
@@ -678,6 +702,54 @@ export const GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
 
+// Peer AR.IO nodes queried for root TX offsets via `GET /ar-io/offsets/:id`.
+// Same `{ url: priority }` shape as GATEWAYS_ROOT_TX_URLS (lower number =
+// higher priority). Defaults to empty: unlike the header-based `gateways`
+// source, this endpoint only exists on nodes running a release that serves it,
+// so peers are opted in explicitly rather than guessed at.
+export const PEERS_ROOT_TX_URLS = JSON.parse(
+  env.varOrDefault('PEERS_ROOT_TX_URLS', '{}'),
+) as Record<string, number>;
+
+// Validate peer root TX URLs and priorities
+Object.entries(PEERS_ROOT_TX_URLS).forEach(([url, priority]) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in PEERS_ROOT_TX_URLS: ${url}`);
+  }
+  if (typeof priority !== 'number' || priority <= 0) {
+    throw new Error(
+      `Invalid priority in PEERS_ROOT_TX_URLS for ${url}: ${priority}`,
+    );
+  }
+});
+
+// Peer root TX lookup request configuration. The default is aggressive
+// relative to the `gateways` source (10s) because this endpoint is a single
+// indexed read on the peer — a slow response means the peer is unhealthy, not
+// that the work is genuinely expensive, so failing over quickly is correct.
+export const PEERS_ROOT_TX_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+  'PEERS_ROOT_TX_REQUEST_TIMEOUT_MS',
+  '2000',
+);
+
+// Peer root TX lookup rate limiting. Far more permissive than the `gateways`
+// source for the same reason: the peer answers from its index, so this is not
+// a probe that needs throttling to protect the remote node.
+export const PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '100',
+);
+export const PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL = +env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+  '600', // 600 per minute = 10 per second
+);
+export const PEERS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
+
 // Chain-anchored chunk metadata source (offset → tx + data_root via
 // reference-peer `/chunk/{offset}/data` headers, cross-checked against
 // the chain). Fast-path replacement for the log₂(height) block binary
@@ -713,7 +785,15 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
     300,
   );
 
-// Root TX index lookup order configuration
+// Root TX index lookup order configuration.
+// Available sources: 'db', 'peers', 'gateways', 'graphql', 'hyperbeam', 'cdb',
+// 'turbo'. Sources are probed in order and the first actionable result wins.
+// - 'peers':    GET /ar-io/offsets/:id against peer AR.IO nodes. One indexed
+//               read on the peer; cheap whether it hits or misses.
+// - 'gateways': HEAD /raw/:id against peer AR.IO gateways, harvesting
+//               X-AR-IO-Root-* headers. Works against any release, but a miss
+//               costs the peer a full retrieval cascade — list it *after*
+//               'peers' so it only serves peers that lack the endpoint.
 export const ROOT_TX_LOOKUP_ORDER = env
   .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql,hyperbeam,cdb')
   .split(',')
@@ -2005,12 +2085,36 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
 );
 
 // Max concurrent readdir/stat syscalls during the cleanup tree walk. The walk is
+// Size of the libuv thread pool backing every `fs.promises` call. Node's own
+// default is 4; the runtime reads this from the environment at startup, so this
+// constant only mirrors it for sizing decisions here.
+export const UV_THREADPOOL_SIZE =
+  +env.varOrDefault('UV_THREADPOOL_SIZE', '4') || 4;
+
 // dominated by directory-traversal I/O latency on large, deeply-sharded caches;
 // raising this hides that latency (parallel traversal) at the cost of more
 // concurrent filesystem load. Lower it if the walk contends with request I/O.
+//
+// The default is derived from the libuv thread pool rather than fixed, because
+// that pool is the resource actually being contended. Every `fs.promises` call
+// -- each walk `stat()`, and every filesystem operation on the request path --
+// is served by it, and it is small by default (`UV_THREADPOOL_SIZE`, 4).
+//
+// A fixed default cannot be safe across deployments: 64 is 16x oversubscribed
+// against a stock pool, and on a host that raises the pool to 64 it lets a
+// single worker consume all of it. Several workers run concurrently (chunk data
+// plus one per staging directory), so they must each stay well under the pool
+// size for the total to leave room for request handling.
+//
+// /16 keeps the total for a typical four-worker deployment at a quarter of the
+// pool. That is deliberately conservative: an over-large value degrades the
+// service in a way that is hard to read (the event loop and CPU stay healthy
+// while the process cannot answer HTTP at all), whereas an over-small value
+// only makes cleanup slower. Raise it if cleanup cannot keep up and the pool
+// has headroom.
 export const FS_CLEANUP_WORKER_WALK_CONCURRENCY = +env.varOrDefault(
   'FS_CLEANUP_WORKER_WALK_CONCURRENCY',
-  '64',
+  `${Math.max(1, Math.floor(UV_THREADPOOL_SIZE / 16))}`,
 );
 
 // Cache TTL for the SQLite worker's getDebugInfo response. The /ar-io/admin/debug
@@ -2447,6 +2551,38 @@ export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
   '',
 );
 
+// Whether to sweep orphaned files out of the download staging directories
+// (`data/contiguous/tmp`, `data/tmp/ans-104`, `data/tmp/data-root`).
+//
+// `FsDataStore` writes every cache entry to a random temp path first, then
+// renames it into the content-addressed blob tree on success (or unlinks it on
+// failure). A temp file that outlives its request is therefore always garbage:
+// it was abandoned by a process crash, a pipeline that never settled, or a
+// failed unlink.
+//
+// Nothing else reclaims those files. The index-driven evictor deletes by
+// content hash (`data/<hh>/<hh>/<hash>`), and the backfill reconciler only
+// walks the blob tree — neither can see the staging directory. The filesystem
+// cleanup worker covers it only incidentally, via its `data/contiguous` parent
+// path, and that worker is not constructed when the cache index is enabled. So
+// switching to the index evictor silently removes the staging directory's only
+// garbage collector, and orphans accumulate without bound.
+//
+// This sweeper runs regardless of which eviction strategy is in use.
+export const ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP =
+  env.varOrDefault('ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP', 'true') ===
+  'true';
+
+// Age in seconds past which a file in the staging directory is considered
+// orphaned. Must comfortably exceed the longest legitimate single cache write:
+// a slow, large upstream fetch can hold a temp file open for a long time, and
+// deleting one in flight loses that entry (the rename then fails and the
+// request falls back to upstream).
+export const CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD',
+  `${60 * 60 * 6}`, // 6 hours
+);
+
 // The delay in seconds before the first contiguous data cache cleanup runs.
 // The delay gives the metadata cache time to populate so that eviction
 // decisions reflect recent access rather than cold-start defaults. When unset,
@@ -2818,9 +2954,26 @@ export const LEGACY_AWS_S3_ENDPOINT = env.varOrUndefined(
 // Whether or not to bypass the header cache
 export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
 
-// Whether or not to bypass the data cache (read-through data cache)
+// Whether or not to bypass the data cache (read-through data cache) entirely:
+// no reads from it, no writes to it, no background range caching.
+//
+// Prefer SKIP_DATA_CACHE_WRITES when the goal is to stop a full cache volume
+// from growing: this flag also stops *serving* from the existing cache, so
+// every request falls through to upstream, and it stops the cache index being
+// populated (which is what the evictor needs in order to reclaim anything).
 export const SKIP_DATA_CACHE =
   env.varOrDefault('SKIP_DATA_CACHE', 'false') === 'true';
+
+// Whether to stop writing new entries to the contiguous data cache while
+// continuing to serve reads from it.
+//
+// This is the "stop the bleeding" control for a cache volume under disk
+// pressure. Unlike SKIP_DATA_CACHE it leaves the read path and the cache index
+// intact, so cached data keeps being served and the index-driven evictor can
+// keep reclaiming space. SKIP_DATA_CACHE implies this.
+export const SKIP_DATA_CACHE_WRITES =
+  env.varOrDefault('SKIP_DATA_CACHE_WRITES', 'false') === 'true' ||
+  SKIP_DATA_CACHE;
 
 //
 // Negative data cache

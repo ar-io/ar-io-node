@@ -15,6 +15,7 @@ import { createRequestIdMiddleware } from './middleware/request-id.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
 import { createErrorHandlerMiddleware } from './middleware/error-handler.js';
 import { createHttpSigMiddleware } from './middleware/httpsig.js';
+import { warnIfWalkConcurrencyUnsafe } from './workers/fs-cleanup-worker.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
@@ -44,6 +45,22 @@ system.arweavePeerManager.refreshPeers();
 system.headerFsCacheCleanupWorker?.start();
 
 system.contiguousDataFsCacheCleanupWorker?.start();
+
+for (const worker of system.stagingCleanupWorkers) {
+  worker.start();
+}
+
+// All cleanup walks share one libuv thread pool with the request path; warn if
+// they are collectively configured to crowd it out.
+warnIfWalkConcurrencyUnsafe(
+  [
+    system.headerFsCacheCleanupWorker,
+    system.contiguousDataFsCacheCleanupWorker,
+    system.chunkDataFsCacheCleanupWorker,
+    ...system.stagingCleanupWorkers,
+  ],
+  log,
+);
 
 system.contiguousDataCacheEvictor?.start();
 

@@ -11,6 +11,7 @@ import winston from 'winston';
 
 import * as config from '../config.js';
 import { fromB64Url } from '../lib/encoding.js';
+import { createAgentPair } from '../lib/http-agent.js';
 import * as metrics from '../metrics.js';
 import {
   GqlBlock,
@@ -764,7 +765,7 @@ export class GatewaysGqlQueryable
       );
     }
 
-    const http = axiosInstance ?? createHttpClient(requestTimeoutMs);
+    const http = axiosInstance ?? createHttpClient(requestTimeoutMs, this.log);
 
     const remoteSources = urls.map(
       (url) =>
@@ -1163,9 +1164,23 @@ export class GatewaysGqlQueryable
   }
 }
 
-function createHttpClient(timeoutMs: number): AxiosInstance {
+/**
+ * Builds the fan-out HTTP client.
+ *
+ * The keep-alive agents matter more here than raw connection reuse suggests:
+ * the fan-out awaits every upstream via `Promise.allSettled`, so a single
+ * upstream stuck in a per-request `dns.lookup()` holds the whole GraphQL
+ * response for its full timeout even when a healthy peer already answered in
+ * milliseconds. Pooling removes resolution from every request after the first.
+ * See src/lib/http-agent.ts.
+ */
+function createHttpClient(
+  timeoutMs: number,
+  log: winston.Logger,
+): AxiosInstance {
   return axios.create({
     timeout: timeoutMs,
+    ...createAgentPair({ client: 'GatewaysGqlQueryable', log }),
     headers: {
       'Content-Type': 'application/json',
       'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,

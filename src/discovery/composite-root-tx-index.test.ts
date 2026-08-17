@@ -292,3 +292,30 @@ describe('CompositeRootTxIndex', () => {
     assert.equal(cdb.calls, 0);
   });
 });
+
+describe('CompositeRootTxIndex source naming', () => {
+  // The `source` label on root_tx_lookup_* is derived from the index's class
+  // name via SOURCE_NAME_MAP, falling back to `className.toLowerCase()`. A
+  // missing entry is silent — the source still reports, just under a long
+  // machine name that disagrees with the short name its own cache metrics use
+  // (root_tx_cache_hit_total{source=...}). Dashboards then split across two
+  // spellings of the same source.
+  const sourceNameMap = (CompositeRootTxIndex as any)[
+    'SOURCE_NAME_MAP'
+  ] as Record<string, string>;
+
+  it('maps PeersRootTxIndex to the short "peers" label', () => {
+    assert.equal(sourceNameMap['PeersRootTxIndex'], 'peers');
+  });
+
+  it('never lets a mapped source fall through to the lowercased class name', () => {
+    for (const [className, sourceName] of Object.entries(sourceNameMap)) {
+      assert.notEqual(
+        sourceName,
+        className.toLowerCase(),
+        `${className} maps to its own lowercased class name, which is what an ` +
+          'absent entry produces — the mapping is not doing anything',
+      );
+    }
+  });
+});

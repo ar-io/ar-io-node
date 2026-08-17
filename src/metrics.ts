@@ -934,6 +934,26 @@ export const gatewaySocketConnectSeconds = new promClient.Histogram({
   buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5],
 });
 
+// Socket lifecycle for the non-data outbound clients (root TX discovery
+// sources, GraphQL fan-out). Deliberately labelled by CLIENT rather than
+// destination host: these clients each talk to a handful of upstreams and a
+// per-host label would be unbounded for anything reading a configurable peer
+// list. `reused=false` rising is the signal that pooling has stopped working —
+// every un-reused socket is a fresh `getaddrinfo` back on the libuv threadpool.
+export const outboundSocketAcquisitionSeconds = new promClient.Histogram({
+  name: 'outbound_socket_acquisition_seconds',
+  help: 'Time from an outbound client request needing a socket to a socket being assigned',
+  labelNames: ['client', 'reused'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+});
+
+export const outboundSocketConnectSeconds = new promClient.Histogram({
+  name: 'outbound_socket_connect_seconds',
+  help: 'TCP/TLS connect time for newly opened outbound client sockets',
+  labelNames: ['client'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5],
+});
+
 // PE-9099: count of local on-disk cache entries evicted by the lazy
 // poison-detection in ReadThroughDataCache when a caller's
 // `acceptContentType` predicate refuses the stored content-type. The
@@ -1228,6 +1248,7 @@ const breakerSourceNames = [
   'get-transaction-attributes',
   'graphql-root-tx-index',
   'hyperbeam-root-tx-index',
+  'peers-root-tx-index',
   'turbo-root-tx-index',
   'turbo_dynamodb',
   'turbo_elasticache',
@@ -1469,6 +1490,12 @@ export const compositeRootTxSourcesProbedSummary = new promClient.Summary({
 export const rootTxLocalResolveTotal = new promClient.Counter({
   name: 'root_tx_local_resolve_total',
   help: 'Outcome of RootParentDataSource local-first offset resolution for bare-rootTxId results: local (resolved by a local bundle-header scan, remote lookup avoided), remote_fallback (local scan missed and a full lookup recovered a path or direct offsets), or unresolved (neither found the item)',
+  labelNames: ['outcome'] as const,
+});
+
+export const rootTxStoredRootRebasedTotal = new promClient.Counter({
+  name: 'root_tx_stored_root_rebased_total',
+  help: "Data items whose stored root transaction ID was shown to be an intermediate bundle rather than an L1 transaction: resolved (walked to an L1 transaction and served from it), incomplete (bundling confirmed but the chain could not be fully resolved — no payload offset on an ancestor, nesting depth exhausted, or a cycle), lookup_failed (the validating attribute read threw, so nothing could be determined). Correctly rooted items do not increment this counter. A 'resolved' rebase is normally written back to the row: ReadThroughDataCache re-reads attributes after retrieval and queues them for persistence, so an item repairs itself on a cold fetch. The write is skipped when another saveDataContentAttributes for the same ID landed in the previous 7 minutes (the StandaloneSqlite dedupe window), in which case the correction applies to this request only and the row is repaired on a later fetch. Rows never requested are never repaired.",
   labelNames: ['outcome'] as const,
 });
 
@@ -1805,4 +1832,42 @@ export const optimisticTxIngestedCounter = new promClient.Counter({
 export const optimisticTxVerificationBlockedCounter = new promClient.Counter({
   name: 'optimistic_tx_verification_blocked_total',
   help: 'Count of verification attempts withheld because the root tx is not yet mined (optimistic / NULL height)',
+});
+
+//
+// Manifest path resolution
+//
+
+/**
+ * Count of manifest path resolutions, split by `source` — `index` (served from
+ * the persistent/cached index without parsing the body) vs `data` (on-demand
+ * body parse) — and by how the path resolved (`resolution_type`:
+ * path / index / fallback / unresolved). The index-vs-data ratio is the
+ * effectiveness signal for the resolution index and cache.
+ */
+export const manifestResolutionsTotal = new promClient.Counter({
+  name: 'manifest_resolutions_total',
+  help: 'Manifest path resolutions, by source (index vs on-demand data parse) and resolution type',
+  labelNames: ['source', 'resolution_type'] as const,
+});
+
+/**
+ * Count of manifest root/index requests that resolved to nothing. A rising
+ * value points at malformed manifests (e.g. an `index.path` with no matching
+ * `paths` entry and no fallback) being served from the gateway.
+ */
+export const manifestUnresolvedRootTotal = new promClient.Counter({
+  name: 'manifest_unresolved_root_total',
+  help: 'Manifest root/index requests that resolved to nothing (likely a malformed manifest)',
+});
+
+/**
+ * Manifest path resolution latency, by `source`. `data` resolutions parse the
+ * (potentially large) manifest body; `index` resolutions are a bounded lookup.
+ */
+export const manifestResolutionDurationSeconds = new promClient.Histogram({
+  name: 'manifest_resolution_duration_seconds',
+  help: 'Manifest path resolution latency, by source',
+  labelNames: ['source'] as const,
+  buckets: [0.0005, 0.001, 0.005, 0.025, 0.1, 0.5, 2],
 });
