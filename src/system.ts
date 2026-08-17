@@ -565,6 +565,29 @@ export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
     })
   : undefined;
 
+// Sweeps orphaned staging files out of the contiguous cache's temp directory.
+// See ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP in config.ts for why this needs
+// to exist separately from both the FS cleanup worker and the index evictor.
+//
+// Age is taken from mtime alone, not max(atime, mtime): a temp file is only
+// ever written, never read back, so mtime is the true "last progress" signal
+// and atime would only be noise from a backup or an audit walk.
+export const contiguousDataTempCleanupWorker =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP
+    ? new FsCleanupWorker({
+        log,
+        basePath: 'data/contiguous/tmp',
+        dataType: 'contiguous_data_temp',
+        shouldDelete: async (_path, stats) => {
+          const ageSeconds = (Date.now() - stats.mtimeMs) / 1000;
+          return (
+            config.CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD > 0 &&
+            ageSeconds > config.CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD
+          );
+        },
+      })
+    : undefined;
+
 const contiguousMetadataStore = makeContiguousMetadataStore({
   log,
   type: config.CONTIGUOUS_METADATA_CACHE_TYPE,
@@ -1955,6 +1978,7 @@ export const shutdown = async (exitCode = 0) => {
     await webhookEmitter.stop();
     await headerFsCacheCleanupWorker?.stop();
     await contiguousDataFsCacheCleanupWorker?.stop();
+    await contiguousDataTempCleanupWorker?.stop();
     await contiguousDataCacheEvictor?.stop();
     await contiguousDataCacheReconciler?.stop();
     await chunkDataFsCacheCleanupWorker?.stop();

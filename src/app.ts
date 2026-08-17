@@ -45,6 +45,8 @@ system.headerFsCacheCleanupWorker?.start();
 
 system.contiguousDataFsCacheCleanupWorker?.start();
 
+system.contiguousDataTempCleanupWorker?.start();
+
 system.contiguousDataCacheEvictor?.start();
 
 // One-time cache index backfill (background; does not block startup).

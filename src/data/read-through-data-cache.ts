@@ -75,6 +75,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   // without a filesystem walk (PE-9131).
   private contiguousDataCacheIndex?: ContiguousDataCacheIndex;
   private skipCache: boolean;
+  private skipCacheWrites: boolean;
   private eventEmitter?: EventEmitter;
   private untrustedCacheRetryRate: number;
   private trustedCacheRetryRate: number;
@@ -93,6 +94,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     dataContentAttributeImporter,
     contiguousDataCacheIndex,
     skipCache = false,
+    skipCacheWrites = false,
     eventEmitter,
     untrustedCacheRetryRate = 0,
     trustedCacheRetryRate = 0,
@@ -108,6 +110,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     dataContentAttributeImporter: DataContentAttributeImporter;
     contiguousDataCacheIndex?: ContiguousDataCacheIndex;
     skipCache?: boolean;
+    skipCacheWrites?: boolean;
     eventEmitter?: EventEmitter;
     untrustedCacheRetryRate?: number;
     trustedCacheRetryRate?: number;
@@ -123,6 +126,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.dataContentAttributeImporter = dataContentAttributeImporter;
     this.contiguousDataCacheIndex = contiguousDataCacheIndex;
     this.skipCache = skipCache;
+    // A full cache bypass necessarily bypasses writes too.
+    this.skipCacheWrites = skipCacheWrites || skipCache;
     this.eventEmitter = eventEmitter;
     this.untrustedCacheRetryRate = untrustedCacheRetryRate;
     this.trustedCacheRetryRate = trustedCacheRetryRate;
@@ -349,7 +354,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       return;
     }
 
-    if (this.skipCache) {
+    if (this.skipCacheWrites) {
       metrics.backgroundRangeCacheSkippedTotal.inc({
         reason: 'skip_cache_set',
       });
@@ -755,7 +760,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // and (more importantly) writing invalid ID to hash relationships in the
       // DB, and when data size is zero to avoid unnecessary storage operations
       // and indexing.
-      if (!this.skipCache && region === undefined && data.size > 0) {
+      if (!this.skipCacheWrites && region === undefined && data.size > 0) {
         span.addEvent('Starting caching process');
         const cachingStart = Date.now();
         let bytesReceived = 0;
@@ -1045,8 +1050,12 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       } else {
         // Log why caching was skipped
         const reasons = [];
-        if (this.skipCache) {
-          reasons.push('SKIP_DATA_CACHE is set');
+        if (this.skipCacheWrites) {
+          reasons.push(
+            this.skipCache
+              ? 'SKIP_DATA_CACHE is set'
+              : 'SKIP_DATA_CACHE_WRITES is set',
+          );
         }
         if (region !== undefined) {
           reasons.push('serving data region');

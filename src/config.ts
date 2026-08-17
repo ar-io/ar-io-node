@@ -2527,6 +2527,38 @@ export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
   '',
 );
 
+// Whether to sweep orphaned files out of the contiguous data cache's staging
+// directory (`data/contiguous/tmp`).
+//
+// `FsDataStore` writes every cache entry to a random temp path first, then
+// renames it into the content-addressed blob tree on success (or unlinks it on
+// failure). A temp file that outlives its request is therefore always garbage:
+// it was abandoned by a process crash, a pipeline that never settled, or a
+// failed unlink.
+//
+// Nothing else reclaims those files. The index-driven evictor deletes by
+// content hash (`data/<hh>/<hh>/<hash>`), and the backfill reconciler only
+// walks the blob tree — neither can see the staging directory. The filesystem
+// cleanup worker covers it only incidentally, via its `data/contiguous` parent
+// path, and that worker is not constructed when the cache index is enabled. So
+// switching to the index evictor silently removes the staging directory's only
+// garbage collector, and orphans accumulate without bound.
+//
+// This sweeper runs regardless of which eviction strategy is in use.
+export const ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP =
+  env.varOrDefault('ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP', 'true') ===
+  'true';
+
+// Age in seconds past which a file in the staging directory is considered
+// orphaned. Must comfortably exceed the longest legitimate single cache write:
+// a slow, large upstream fetch can hold a temp file open for a long time, and
+// deleting one in flight loses that entry (the rename then fails and the
+// request falls back to upstream).
+export const CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD',
+  `${60 * 60 * 6}`, // 6 hours
+);
+
 // The delay in seconds before the first contiguous data cache cleanup runs.
 // The delay gives the metadata cache time to populate so that eviction
 // decisions reflect recent access rather than cold-start defaults. When unset,
@@ -2898,9 +2930,26 @@ export const LEGACY_AWS_S3_ENDPOINT = env.varOrUndefined(
 // Whether or not to bypass the header cache
 export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
 
-// Whether or not to bypass the data cache (read-through data cache)
+// Whether or not to bypass the data cache (read-through data cache) entirely:
+// no reads from it, no writes to it, no background range caching.
+//
+// Prefer SKIP_DATA_CACHE_WRITES when the goal is to stop a full cache volume
+// from growing: this flag also stops *serving* from the existing cache, so
+// every request falls through to upstream, and it stops the cache index being
+// populated (which is what the evictor needs in order to reclaim anything).
 export const SKIP_DATA_CACHE =
   env.varOrDefault('SKIP_DATA_CACHE', 'false') === 'true';
+
+// Whether to stop writing new entries to the contiguous data cache while
+// continuing to serve reads from it.
+//
+// This is the "stop the bleeding" control for a cache volume under disk
+// pressure. Unlike SKIP_DATA_CACHE it leaves the read path and the cache index
+// intact, so cached data keeps being served and the index-driven evictor can
+// keep reclaiming space. SKIP_DATA_CACHE implies this.
+export const SKIP_DATA_CACHE_WRITES =
+  env.varOrDefault('SKIP_DATA_CACHE_WRITES', 'false') === 'true' ||
+  SKIP_DATA_CACHE;
 
 //
 // Negative data cache
