@@ -565,28 +565,46 @@ export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
     })
   : undefined;
 
-// Sweeps orphaned staging files out of the contiguous cache's temp directory.
-// See ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP in config.ts for why this needs
-// to exist separately from both the FS cleanup worker and the index evictor.
+// Staging directories that hold partially written downloads, keyed by the code
+// path that stages into them. Every one of these follows the same
+// write-to-temp-then-rename (or write-then-unlink-on-failure) pattern, and none
+// of them has a garbage collector of its own — see
+// ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP in config.ts.
 //
-// Age is taken from mtime alone, not max(atime, mtime): a temp file is only
-// ever written, never read back, so mtime is the true "last progress" signal
-// and atime would only be noise from a backup or an audit walk.
-export const contiguousDataTempCleanupWorker =
+// Note the deliberate precision of these paths. `data/tmp` is NOT swept
+// wholesale: it also holds `observer/`, `lost+found/`, and any diagnostic output
+// an operator has pointed there (heap snapshots, for instance). Only the
+// subdirectories that a download path stages into are listed.
+const STAGING_CLEANUP_PATHS: { basePath: string; dataType: string }[] = [
+  // ReadThroughDataCache writes -> FsDataStore.createWriteStream()
+  { basePath: 'data/contiguous/tmp', dataType: 'contiguous_data_temp' },
+  // Ans104Parser bundle downloads (src/lib/ans-104.ts)
+  { basePath: 'data/tmp/ans-104', dataType: 'ans104_bundle_temp' },
+  // data_root computation downloads (src/lib/data-root.ts)
+  { basePath: 'data/tmp/data-root', dataType: 'data_root_temp' },
+];
+
+// Age is taken from mtime alone, not max(atime, mtime): a staging file is only
+// ever written, never read back, so mtime is the true "last progress" signal and
+// atime would only be noise from a backup or an audit walk.
+export const stagingCleanupWorkers: FsCleanupWorker[] =
   config.ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP
-    ? new FsCleanupWorker({
-        log,
-        basePath: 'data/contiguous/tmp',
-        dataType: 'contiguous_data_temp',
-        shouldDelete: async (_path, stats) => {
-          const ageSeconds = (Date.now() - stats.mtimeMs) / 1000;
-          return (
-            config.CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD > 0 &&
-            ageSeconds > config.CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD
-          );
-        },
-      })
-    : undefined;
+    ? STAGING_CLEANUP_PATHS.map(
+        ({ basePath, dataType }) =>
+          new FsCleanupWorker({
+            log,
+            basePath,
+            dataType,
+            shouldDelete: async (_path, stats) => {
+              const ageSeconds = (Date.now() - stats.mtimeMs) / 1000;
+              return (
+                config.CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD > 0 &&
+                ageSeconds > config.CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD
+              );
+            },
+          }),
+      )
+    : [];
 
 const contiguousMetadataStore = makeContiguousMetadataStore({
   log,
@@ -1978,7 +1996,7 @@ export const shutdown = async (exitCode = 0) => {
     await webhookEmitter.stop();
     await headerFsCacheCleanupWorker?.stop();
     await contiguousDataFsCacheCleanupWorker?.stop();
-    await contiguousDataTempCleanupWorker?.stop();
+    await Promise.all(stagingCleanupWorkers.map((w) => w.stop()));
     await contiguousDataCacheEvictor?.stop();
     await contiguousDataCacheReconciler?.stop();
     await chunkDataFsCacheCleanupWorker?.stop();

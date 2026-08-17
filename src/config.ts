@@ -2527,8 +2527,8 @@ export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
   '',
 );
 
-// Whether to sweep orphaned files out of the contiguous data cache's staging
-// directory (`data/contiguous/tmp`).
+// Whether to sweep orphaned files out of the download staging directories
+// (`data/contiguous/tmp`, `data/tmp/ans-104`, `data/tmp/data-root`).
 //
 // `FsDataStore` writes every cache entry to a random temp path first, then
 // renames it into the content-addressed blob tree on success (or unlinks it on

@@ -45,7 +45,9 @@ system.headerFsCacheCleanupWorker?.start();
 
 system.contiguousDataFsCacheCleanupWorker?.start();
 
-system.contiguousDataTempCleanupWorker?.start();
+for (const worker of system.stagingCleanupWorkers) {
+  worker.start();
+}
 
 system.contiguousDataCacheEvictor?.start();
 
