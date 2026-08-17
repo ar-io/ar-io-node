@@ -584,9 +584,19 @@ const STAGING_CLEANUP_PATHS: { basePath: string; dataType: string }[] = [
   { basePath: 'data/tmp/data-root', dataType: 'data_root_temp' },
 ];
 
-// Age is taken from mtime alone, not max(atime, mtime): a staging file is only
-// ever written, never read back, so mtime is the true "last progress" signal and
-// atime would only be noise from a backup or an audit walk.
+/**
+ * Sweepers for the download staging directories listed in
+ * {@link STAGING_CLEANUP_PATHS}.
+ *
+ * Each deletes files whose mtime is older than
+ * `CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD`. Age is taken from mtime alone
+ * rather than `max(atime, mtime)`: a staging file is only ever written, never
+ * read back, so mtime is the true "last progress" signal and atime would only be
+ * noise from a backup or an audit walk.
+ *
+ * Empty when `ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP` is off. Started in
+ * `app.ts` and stopped by this module's shutdown handler.
+ */
 export const stagingCleanupWorkers: FsCleanupWorker[] =
   config.ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP
     ? STAGING_CLEANUP_PATHS.map(

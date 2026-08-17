@@ -74,7 +74,20 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   // {hash, size, cachedAt, tier} so the index-driven evictor can reclaim
   // without a filesystem walk (PE-9131).
   private contiguousDataCacheIndex?: ContiguousDataCacheIndex;
+  /**
+   * Bypass the cache entirely: serve nothing from it, write nothing to it, and
+   * populate no cache-index rows. Implies {@link skipCacheWrites}.
+   */
   private skipCache: boolean;
+  /**
+   * Suppress cache writes -- both the full-response caching pipeline and
+   * background range caching -- while leaving cache reads and cache-index
+   * population intact.
+   *
+   * This is the control for a cache volume under disk pressure: it stops the
+   * volume growing without stopping it being served, and without starving the
+   * index-driven evictor of the rows it needs to reclaim space.
+   */
   private skipCacheWrites: boolean;
   private eventEmitter?: EventEmitter;
   private untrustedCacheRetryRate: number;

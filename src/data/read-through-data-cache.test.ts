@@ -726,6 +726,65 @@ describe('ReadThroughDataCache', function () {
       assert.notEqual(result, undefined);
     });
 
+    it('should not write to the cache on an upstream miss', async () => {
+      // The point of the flag. getCacheData() alone cannot show this: it never
+      // consults skipCacheWrites, so a read-only assertion passes even if the
+      // write path is still running.
+      const writeSkippedInstance = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesStore: mockDataAttributesStore,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        skipCacheWrites: true,
+      });
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () =>
+        Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        ),
+      );
+      mock.method(mockContiguousDataSource, 'getData', () =>
+        Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('test data');
+              this.push(null);
+            },
+          }),
+          size: 9,
+          sourceContentType: 'plain/text',
+          verified: true,
+          trusted: true,
+          cached: false,
+        }),
+      );
+
+      const result = await writeSkippedInstance.getData({ id: 'test-id' });
+
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+
+      // Upstream data still reaches the caller...
+      assert.equal(receivedData, 'test data');
+      // ...but nothing was staged to disk.
+      assert.equal(
+        (mockContiguousDataStore.createWriteStream as any).mock.callCount(),
+        0,
+      );
+    });
+
     it('should skip reads as well when the full skipCache is enabled', async () => {
       const fullSkipInstance = new ReadThroughDataCache({
         log,
