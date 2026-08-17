@@ -364,15 +364,50 @@ export class FsCleanupWorker {
 
     // Throttle concurrent deletes to avoid file descriptor exhaustion
     const limit = pLimit(DELETE_CONCURRENCY);
+    let missing = 0;
+    let failed = 0;
     await Promise.all(
       batch.map((file) =>
         limit(async () => {
-          metrics.filesCleanedTotal.inc({ data_type: this.dataType });
-          return this.deleteCallback(file);
+          try {
+            await this.deleteCallback(file);
+            metrics.filesCleanedTotal.inc({ data_type: this.dataType });
+          } catch (error: any) {
+            // A selected file can legitimately vanish before we unlink it:
+            // another cleaner removed it, or -- in a staging directory --
+            // FsDataStore.finalize() renamed it into the content-addressed
+            // tree. Both mean the work is already done.
+            //
+            // This must not propagate. A rejected delete used to abort the
+            // whole batch via Promise.all, which also skipped the lastPath
+            // update below, so the next cycle re-walked the same window and
+            // hit the same race -- the worker could stop making progress
+            // entirely while still logging "Deleting N files".
+            if (error?.code === 'ENOENT') {
+              missing++;
+              return;
+            }
+            failed++;
+            this.log.warn('Failed to delete file', {
+              file,
+              message: error?.message,
+              code: error?.code,
+            });
+          }
         }),
       ),
     );
 
+    if (missing > 0 || failed > 0) {
+      this.log.debug('Batch completed with skipped files', {
+        deleted: batch.length - missing - failed,
+        alreadyGone: missing,
+        failed,
+      });
+    }
+
+    // Always advance, even when some deletes were skipped: the batch window has
+    // been processed either way, and not advancing wedges the walk.
     this.lastPath = batch[batch.length - 1];
   }
 

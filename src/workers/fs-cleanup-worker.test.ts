@@ -273,3 +273,52 @@ describe('FsCleanupWorker.getBatch parallel walk', () => {
     assert.equal(keptFileCount, files.length);
   });
 });
+
+describe('FsCleanupWorker.processBatch', () => {
+  let root: string;
+
+  afterEach(() => {
+    mock.restoreAll();
+  });
+
+  after(async () => {
+    await fs.promises.rm(root, { recursive: true, force: true });
+  });
+
+  before(async () => {
+    root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'fscw-del-'));
+    await fs.promises.writeFile(path.join(root, 'a-gone'), 'x');
+    await fs.promises.writeFile(path.join(root, 'b-present'), 'x');
+    await fs.promises.writeFile(path.join(root, 'c-present'), 'x');
+  });
+
+  // A selected file can legitimately disappear between the stat that selected
+  // it and the unlink: a concurrent cleaner removed it, or -- in a staging
+  // directory -- FsDataStore.finalize() renamed it into the blob tree. That
+  // must not abort the batch, because an aborted batch also skips the lastPath
+  // advance and the walk stops making progress.
+  it('tolerates files that vanish before deletion and still advances', async () => {
+    const deleted: string[] = [];
+    const worker = makeWorker({
+      basePath: root,
+      shouldDelete: async () => true,
+      walkConcurrency: 2,
+      deleteCallback: async (file: string) => {
+        if (file.endsWith('a-gone')) {
+          const err: any = new Error('ENOENT: no such file or directory');
+          err.code = 'ENOENT';
+          throw err;
+        }
+        deleted.push(file);
+      },
+    });
+
+    await assert.doesNotReject(() => worker.processBatch());
+
+    // The surviving files were still deleted despite the ENOENT.
+    assert.deepEqual(deleted.sort(), [
+      path.join(root, 'b-present'),
+      path.join(root, 'c-present'),
+    ]);
+  });
+});
