@@ -327,6 +327,23 @@ export class FsCleanupWorker {
     this.shouldRun = false;
   }
 
+  /**
+   * Select up to `batchSize` deletable files from the walk and unlink them.
+   *
+   * Deletion is best-effort per file. `ENOENT` counts as completed work: a
+   * selected file can legitimately disappear before the unlink, because a
+   * concurrent cleaner removed it or -- in a staging directory --
+   * `FsDataStore.finalize()` renamed it into the content-addressed tree. Other
+   * failures are logged per file. Neither aborts the batch.
+   *
+   * `lastPath` advances after every batch, including one where some deletes were
+   * skipped: the window has been processed either way, and failing to advance
+   * makes the next cycle re-walk the same window and stall the worker.
+   *
+   * When the walk yields nothing, the cycle is complete: the kept-file gauges are
+   * published, the cursor resets to the base path, and the worker pauses for
+   * `restartPauseDuration`.
+   */
   async processBatch(
     ctx: CleanupContext = NORMAL_CONTEXT,
     batchSize: number = this.batchSize,
