@@ -42,6 +42,86 @@ const filterFormat = format((info) => {
   return isMatching ? info : false; // Return `false` to discard
 });
 
+// Log metadata that carries a live network object serializes into an enormous
+// string. `format.json()` walks the whole reachable graph, and an axios error's
+// `request` is a Node `ClientRequest` that references its redirect wrapper, its
+// agent, that agent's sockets, and `nativeProtocols` -- which includes the full
+// HTTP METHODS array and STATUS_CODES table.
+//
+// Measured in production: one `AggregateError` of rejected axios promises,
+// logged whole, serialized to 243,511,505 characters. Because JSON building
+// concatenates, that is ~141 million ConsString nodes -- about 7 GB, enough to
+// exhaust an 8 GB heap on its own and take the process down mid-serialization.
+//
+// Individual call sites should extract the fields they need (message, stack,
+// code), and they overwhelmingly do. This is the backstop for the ones that do
+// not: no single logging mistake should be able to OOM the gateway.
+const DANGEROUS_METADATA_KEYS = new Set([
+  'request',
+  'response',
+  'config',
+  'socket',
+  'agent',
+  'httpAgent',
+  'httpsAgent',
+  '_redirectable',
+  '_httpMessage',
+  'req',
+  'res',
+]);
+
+const MAX_METADATA_DEPTH = 6;
+
+/**
+ * Replace values that are unsafe to serialize with a short marker, in place,
+ * bounded by depth. Cycles are handled by a seen-set; the depth cap bounds the
+ * cost on wide-but-shallow objects that are otherwise legitimate.
+ */
+function sanitizeMetadata(
+  value: unknown,
+  seen: WeakSet<object>,
+  depth: number,
+): unknown {
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  if (depth >= MAX_METADATA_DEPTH) {
+    return '[truncated: max depth]';
+  }
+  if (seen.has(value as object)) {
+    return '[Circular]';
+  }
+  seen.add(value as object);
+
+  if (Array.isArray(value)) {
+    return value.map((v) => sanitizeMetadata(v, seen, depth + 1));
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (DANGEROUS_METADATA_KEYS.has(k)) {
+      // Keep a breadcrumb so the log still says something useful.
+      out[k] = `[omitted: ${k}]`;
+      continue;
+    }
+    out[k] = sanitizeMetadata(v, seen, depth + 1);
+  }
+  return out;
+}
+
+const sanitizeFormat = format((info) => {
+  const seen = new WeakSet<object>();
+  for (const key of Object.keys(info)) {
+    // level/message/timestamp are winston's own and are always primitives here.
+    if (key === 'level' || key === 'message' || key === 'timestamp') continue;
+    const v = (info as Record<string, unknown>)[key];
+    if (v !== null && typeof v === 'object') {
+      (info as Record<string, unknown>)[key] = sanitizeMetadata(v, seen, 0);
+    }
+  }
+  return info;
+});
+
 const injectRequestId = format((info) => {
   const ctx = requestContextStorage.getStore();
   if (ctx !== undefined) {
@@ -71,6 +151,9 @@ const logger = createLogger({
     filterStackTraces(),
     filterFormat(),
     format.errors(),
+    // After filtering (so discarded records cost nothing) and before json()
+    // (which is what would otherwise walk the graph).
+    sanitizeFormat(),
     format.timestamp(),
     LOG_FORMAT === 'json' ? format.json() : format.simple(),
   ),
