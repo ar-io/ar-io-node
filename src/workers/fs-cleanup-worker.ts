@@ -72,7 +72,8 @@ export class FsCleanupWorker {
   private pauseDuration: number;
   private restartPauseDuration: number;
   private initialDelay: number;
-  private walkConcurrency: number;
+  /** Per-worker cap on concurrent `stat()` calls during the walk. */
+  readonly walkConcurrency: number;
 
   // Disk-pressure watermarks (all opt-in; disabled => pure age-based cleanup)
   private usagePath: string;
@@ -540,4 +541,46 @@ export class FsCleanupWorker {
 
     return { batch, keptFileCount, keptFileSize };
   }
+}
+
+/**
+ * Warn when the cleanup walks are configured to consume so much of libuv's
+ * thread pool that request handling can be starved of it.
+ *
+ * Every `fs.promises` call -- including each `stat()` a cleanup walk issues --
+ * is served by a fixed-size libuv thread pool (`UV_THREADPOOL_SIZE`, default 4).
+ * A walk that keeps the pool full blocks the filesystem operations on the
+ * request path behind it. The failure is easy to misread: the event loop stays
+ * healthy and CPU stays low, but the process cannot answer HTTP -- not even its
+ * own health check -- so it looks hung rather than saturated.
+ *
+ * This is aggregate, not per-worker: several workers each holding their own
+ * limiter add up against one shared pool.
+ */
+export function warnIfWalkConcurrencyUnsafe(
+  workers: (FsCleanupWorker | undefined)[],
+  log: winston.Logger,
+): void {
+  const active = workers.filter((w): w is FsCleanupWorker => w !== undefined);
+  if (active.length === 0) return;
+
+  const poolSize = Number(process.env.UV_THREADPOOL_SIZE ?? 4) || 4;
+  const total = active.reduce((sum, w) => sum + w.walkConcurrency, 0);
+  // Leave at least half the pool for everything else the process does.
+  const budget = Math.max(1, Math.floor(poolSize / 2));
+  if (total <= budget) return;
+
+  log.warn(
+    'Cleanup walk concurrency may starve request handling of libuv threads',
+    {
+      workers: active.length,
+      totalWalkConcurrency: total,
+      uvThreadpoolSize: poolSize,
+      recommendedMaxTotal: budget,
+      suggestion:
+        `set FS_CLEANUP_WORKER_WALK_CONCURRENCY to at most ` +
+        `${Math.max(1, Math.floor(budget / active.length))} ` +
+        `(${active.length} worker(s) share one pool), or raise UV_THREADPOOL_SIZE`,
+    },
+  );
 }

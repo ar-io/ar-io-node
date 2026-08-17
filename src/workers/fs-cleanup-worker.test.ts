@@ -11,7 +11,11 @@ import path from 'node:path';
 import { after, afterEach, before, describe, it, mock } from 'node:test';
 
 import { createTestLogger } from '../../test/test-logger.js';
-import { CleanupContext, FsCleanupWorker } from './fs-cleanup-worker.js';
+import {
+  CleanupContext,
+  FsCleanupWorker,
+  warnIfWalkConcurrencyUnsafe,
+} from './fs-cleanup-worker.js';
 
 const log = createTestLogger();
 
@@ -320,5 +324,48 @@ describe('FsCleanupWorker.processBatch', () => {
       path.join(root, 'b-present'),
       path.join(root, 'c-present'),
     ]);
+  });
+});
+
+describe('warnIfWalkConcurrencyUnsafe', () => {
+  const origPool = process.env.UV_THREADPOOL_SIZE;
+
+  afterEach(() => {
+    if (origPool === undefined) delete process.env.UV_THREADPOOL_SIZE;
+    else process.env.UV_THREADPOOL_SIZE = origPool;
+    mock.restoreAll();
+  });
+
+  function captureWarn() {
+    const calls: any[] = [];
+    const child = log.child({});
+    mock.method(child, 'warn', (...args: any[]) => calls.push(args));
+    return { child, calls };
+  }
+
+  it('warns when workers collectively exceed half the thread pool', () => {
+    process.env.UV_THREADPOOL_SIZE = '8';
+    const { child, calls } = captureWarn();
+    // 4 workers x 4 = 16 against a pool of 8; budget is 4.
+    const workers = [1, 2, 3, 4].map(() => makeWorker({ walkConcurrency: 4 }));
+    warnIfWalkConcurrencyUnsafe(workers, child);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][1].totalWalkConcurrency, 16);
+    assert.equal(calls[0][1].uvThreadpoolSize, 8);
+  });
+
+  it('stays quiet when the walks leave the pool room', () => {
+    process.env.UV_THREADPOOL_SIZE = '64';
+    const { child, calls } = captureWarn();
+    const workers = [1, 2].map(() => makeWorker({ walkConcurrency: 4 }));
+    warnIfWalkConcurrencyUnsafe(workers, child);
+    assert.equal(calls.length, 0);
+  });
+
+  it('ignores undefined (disabled) workers', () => {
+    process.env.UV_THREADPOOL_SIZE = '4';
+    const { child, calls } = captureWarn();
+    warnIfWalkConcurrencyUnsafe([undefined, undefined], child);
+    assert.equal(calls.length, 0);
   });
 });
