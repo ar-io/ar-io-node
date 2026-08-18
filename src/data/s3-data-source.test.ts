@@ -336,9 +336,13 @@ describe('S3DataSource', () => {
         throw notFound;
       });
 
-      // Must still throw: SequentialDataSource advances the retrieval cascade
-      // on exceptions, so swallowing this would strand the request here.
-      await assert.rejects(s3DataSource.getData({ id: testId }));
+      // Must still throw, and throw *this* error: SequentialDataSource
+      // advances the retrieval cascade on exceptions, so swallowing it would
+      // strand the request here.
+      await assert.rejects(
+        s3DataSource.getData({ id: testId }),
+        (err: any) => err === notFound && err.statusCode === 404,
+      );
 
       // A miss is not a failure -- S3 is first in the retrieval order, so most
       // probes are for data that was never uploaded via Turbo.
@@ -352,7 +356,10 @@ describe('S3DataSource', () => {
         throw denied;
       });
 
-      await assert.rejects(s3DataSource.getData({ id: testId }));
+      await assert.rejects(
+        s3DataSource.getData({ id: testId }),
+        (err: any) => err === denied && err.statusCode === 403,
+      );
 
       assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 1);
     });

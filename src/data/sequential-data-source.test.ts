@@ -59,9 +59,11 @@ beforeEach(async () => {
 
 describe('SequentialDataSource fallthrough logging', () => {
   it('should log a recovered fallthrough at debug, never at warn', async () => {
-    const { logger: recorder, levels } = createRecordingTestLogger({
-      suite: 'SequentialDataSource',
-    });
+    const {
+      logger: recorder,
+      levels,
+      entries,
+    } = createRecordingTestLogger({ suite: 'SequentialDataSource' });
     mockSource1.getData = mock.fn(async () => {
       throw new Error('source 1 unavailable');
     });
@@ -81,7 +83,17 @@ describe('SequentialDataSource fallthrough logging', () => {
     // Falling through is designed behaviour: it must not be surfaced as a
     // warning. Terminal failures are logged by the data route handler.
     assert.equal(levels.includes('warn'), false);
-    assert.ok(levels.includes('debug'));
+    // Assert the fallthrough line specifically. `levels.includes('debug')`
+    // would be satisfied by the unrelated debug emitted before the source
+    // loop, so it proves nothing on its own.
+    const fallthrough = entries.filter((e) =>
+      e.message.includes('Unable to fetch data from data source'),
+    );
+    assert.ok(fallthrough.length > 0, 'expected the fallthrough line');
+    assert.equal(
+      fallthrough.every((e) => e.level === 'debug'),
+      true,
+    );
   });
 
   it('should still throw when every source fails', async () => {
