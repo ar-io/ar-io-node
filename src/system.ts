@@ -167,7 +167,21 @@ export function registerCleanupHandler(
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
-  log.error('Uncaught exception:', error);
+  // Extract fields rather than passing the error object. A rejected axios
+  // promise carries `request` -- a live ClientRequest whose reachable graph is
+  // enormous -- and an AggregateError carries a whole array of them. Logging
+  // one whole serialized to 243 MB in production and exhausted the heap.
+  log.error('Uncaught exception:', {
+    message: error?.message,
+    stack: error?.stack,
+    name: error?.name,
+    ...(Array.isArray((error as AggregateError)?.errors) && {
+      errors: (error as AggregateError).errors
+        .slice(0, 20)
+        .map((e: any) => e?.message ?? String(e)),
+      errorCount: (error as AggregateError).errors.length,
+    }),
+  });
 });
 
 const arweave = Arweave.init({});
