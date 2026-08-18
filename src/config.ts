@@ -2835,6 +2835,39 @@ export const ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS =
     `${2 * 60}`, // 2 minutes
   );
 
+/**
+ * Page size used when walking the ArNS registry during name-cache hydration.
+ *
+ * This is a round-trip control, not a memory control. The Solana-backed
+ * `getArNSRecords` has no server-side cursor: every call issues a full
+ * `getProgramAccounts` scan of the ArNS program and then slices the result
+ * client-side. A page size below the registry size therefore repeats that
+ * scan once per page and discards all but one slice.
+ *
+ * Larger values are safe: a backend that caps the page server-side simply
+ * returns fewer items plus a cursor, and the hydration loop continues as
+ * before.
+ */
+export const ARNS_NAME_LIST_PAGE_SIZE = env.positiveIntOrDefault(
+  'ARNS_NAME_LIST_PAGE_SIZE',
+  10_000,
+);
+
+/**
+ * Per-page fetch attempts made by the name-cache hydration loop.
+ *
+ * These sit on top of whatever the `ARIORead` implementation already does:
+ * the Solana reader wraps every call in the SDK's `withRetry` (3 attempts),
+ * so the effective worst case is `ARNS_NAME_LIST_MAX_RETRIES * 3` requests
+ * for a single page -- and on that reader each request is a full
+ * `getProgramAccounts` scan of the ArNS program. Lower it where the reader
+ * already retries on your behalf.
+ */
+export const ARNS_NAME_LIST_MAX_RETRIES = env.positiveIntOrDefault(
+  'ARNS_NAME_LIST_MAX_RETRIES',
+  3,
+);
+
 export const ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS =
   +env.varOrDefault(
     'ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS',
