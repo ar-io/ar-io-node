@@ -9,7 +9,10 @@ import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { Readable } from 'node:stream';
 import { SequentialDataSource } from './sequential-data-source.js';
 import { ContiguousData, ContiguousDataSource } from '../types.js';
-import { createTestLogger } from '../../test/test-logger.js';
+import {
+  createTestLogger,
+  createRecordingTestLogger,
+} from '../../test/test-logger.js';
 
 let log: ReturnType<typeof createTestLogger>;
 let sequentialDataSource: SequentialDataSource;
@@ -55,22 +58,10 @@ beforeEach(async () => {
 });
 
 describe('SequentialDataSource fallthrough logging', () => {
-  // A recording logger: SequentialDataSource logs through log.child(), so
-  // spying on the parent's methods would not observe the calls.
-  const makeRecorder = () => {
-    const levels: string[] = [];
-    const recorder: any = {
-      child: () => recorder,
-      debug: () => levels.push('debug'),
-      info: () => levels.push('info'),
-      warn: () => levels.push('warn'),
-      error: () => levels.push('error'),
-    };
-    return { recorder, levels };
-  };
-
   it('should log a recovered fallthrough at debug, never at warn', async () => {
-    const { recorder, levels } = makeRecorder();
+    const { logger: recorder, levels } = createRecordingTestLogger({
+      suite: 'SequentialDataSource',
+    });
     mockSource1.getData = mock.fn(async () => {
       throw new Error('source 1 unavailable');
     });
@@ -94,7 +85,9 @@ describe('SequentialDataSource fallthrough logging', () => {
   });
 
   it('should still throw when every source fails', async () => {
-    const { recorder } = makeRecorder();
+    const { logger: recorder } = createRecordingTestLogger({
+      suite: 'SequentialDataSource',
+    });
     mockSource1.getData = mock.fn(async () => {
       throw new Error('source 1 unavailable');
     });

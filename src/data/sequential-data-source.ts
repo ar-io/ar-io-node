@@ -30,6 +30,16 @@ export class SequentialDataSource implements ContiguousDataSource {
     this.dataSources = dataSources;
   }
 
+  /**
+   * Try each data source in order and return the first success.
+   *
+   * Logging contract: an individual source failing is the cascade's designed
+   * behaviour -- the next source is tried -- so it is logged at debug without a
+   * stack. Only exhausting every source is a failure, and that is surfaced to
+   * the caller as a thrown error (the data route handler logs it at warn).
+   * A client disconnect short-circuits the whole cascade rather than falling
+   * through.
+   */
   async getData({
     id,
     requestAttributes,

@@ -51,6 +51,15 @@ export class S3DataSource implements ContiguousDataSource {
     this.awsClient = awsClient;
   }
 
+  /**
+   * Fetch contiguous data for `id` from the configured S3 bucket.
+   *
+   * Logging contract: a `HeadObject` 404 means the object is simply absent --
+   * an expected miss, since S3 is typically first in the retrieval order and
+   * most ids were never uploaded via Turbo. Misses are logged at debug and are
+   * *not* counted in `getDataErrorsTotal`; every other failure is. Both still
+   * throw, because the caller's cascade advances on exceptions.
+   */
   async getData({
     id,
     requestAttributes,
