@@ -331,12 +331,30 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 return response;
               },
               (error) => {
-                if (error.response) {
-                  this.log.error('Axios response error', {
+                if (axios.isCancel(error)) {
+                  // The caller disconnected, or a faster peer already won the
+                  // race. Neither is a fault of this gateway.
+                  this.log.debug('Axios request canceled', {
+                    message: error.message,
+                  });
+                } else if (error.response) {
+                  const details = {
                     url: error.response.config.url,
                     status: error.response.status,
                     headers: error.response.headers,
-                  });
+                  };
+                  // 404 means this peer simply does not hold the data; 429
+                  // means it is throttling us. Both are routine in a
+                  // multi-peer cascade and must not be reported as errors --
+                  // doing so buries genuine 5xx faults in noise.
+                  if (
+                    error.response.status === 404 ||
+                    error.response.status === 429
+                  ) {
+                    this.log.debug('Axios response error', details);
+                  } else {
+                    this.log.error('Axios response error', details);
+                  }
                 } else {
                   this.log.error('Axios network error', {
                     message: error.message,

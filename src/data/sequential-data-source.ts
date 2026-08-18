@@ -167,13 +167,18 @@ export class SequentialDataSource implements ContiguousDataSource {
             'sequential.attempt.duration_ms': sourceDuration,
           });
 
-          // Some errors are expected, so log them as warnings
-          this.log.warn('Unable to fetch data from data source', {
+          // Falling through to the next source is the cascade's designed
+          // behaviour, not a failure: the overwhelming majority of these
+          // attempts belong to requests that succeed on a later source. Log at
+          // debug and omit the stack -- serialising one per fallthrough is pure
+          // overhead on the hot path. Requests that exhaust every source still
+          // surface as a warning from the data handler ('Unable to retrieve
+          // contiguous data'), so terminal failures remain visible.
+          this.log.debug('Unable to fetch data from data source', {
             id,
             sourceIndex: i,
             sourceName: dataSource.constructor.name,
             message: error.message,
-            stack: error.stack,
           });
 
           sourceSpan.setAttributes({

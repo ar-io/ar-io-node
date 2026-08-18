@@ -258,6 +258,18 @@ export class S3DataSource implements ContiguousDataSource {
         throw error;
       }
 
+      // A 404 means the object simply isn't in the bucket. S3 is typically
+      // first in ON_DEMAND_RETRIEVAL_ORDER, so most requests probe it for data
+      // that was never uploaded via Turbo -- an expected miss, not a failure.
+      // Counting these as errors buries genuine S3 faults (403/5xx) in noise
+      // and skews the retrieval error ratio operators grade source health on.
+      // Still rethrow: SequentialDataSource advances the cascade on exceptions.
+      if (error.statusCode === 404) {
+        span.addEvent('S3 object not found');
+        log.debug('Contiguous data not found in S3', { id });
+        throw error;
+      }
+
       span.recordException(error);
       span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
 
@@ -267,6 +279,7 @@ export class S3DataSource implements ContiguousDataSource {
       });
       log.error('Failed to fetch contiguous data from S3', {
         id,
+        statusCode: error.statusCode,
         message: error.message,
         stack: error.stack,
       });

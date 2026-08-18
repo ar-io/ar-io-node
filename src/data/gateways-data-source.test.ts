@@ -1425,3 +1425,92 @@ describe('GatewayDataSource', () => {
     });
   });
 });
+
+describe('GatewaysDataSource response interceptor', () => {
+  // GatewaysDataSource logs through log.child(), so spying on the parent's
+  // methods would not observe the calls.
+  const makeRecorder = () => {
+    const levels: string[] = [];
+    const recorder: any = {
+      child: () => recorder,
+      debug: () => levels.push('debug'),
+      info: () => levels.push('info'),
+      warn: () => levels.push('warn'),
+      error: () => levels.push('error'),
+    };
+    return { recorder, levels };
+  };
+
+  // The suite mocks axios.create, so the interceptor never runs against a real
+  // request. Capture the rejection handler it registers and drive it directly.
+  const captureRejectionHandler = async (recorder: any) => {
+    let onRejected: ((e: any) => any) | undefined;
+    mockedAxiosInstance.interceptors.response.use = (_ok: any, rej: any) => {
+      onRejected = rej;
+    };
+
+    const source = new GatewaysDataSource({
+      log: recorder,
+      trustedGatewaysUrls: {
+        'https://gateway.domain': { priority: 1, trusted: true },
+      },
+    });
+    await source.getData({ id: 'some-id', requestAttributes }).catch(() => {});
+    return onRejected;
+  };
+
+  it('logs a peer 404 at debug, not error', async () => {
+    const { recorder, levels } = makeRecorder();
+    const onRejected = await captureRejectionHandler(recorder);
+    assert.ok(onRejected !== undefined);
+
+    levels.length = 0;
+    await onRejected({
+      response: { status: 404, config: { url: '/raw/x' }, headers: {} },
+    }).catch(() => {});
+
+    // A 404 means the peer does not hold the data -- routine in a cascade.
+    assert.equal(levels.includes('error'), false);
+    assert.ok(levels.includes('debug'));
+  });
+
+  it('logs a peer 429 at debug, not error', async () => {
+    const { recorder, levels } = makeRecorder();
+    const onRejected = await captureRejectionHandler(recorder);
+    assert.ok(onRejected !== undefined);
+
+    levels.length = 0;
+    await onRejected({
+      response: { status: 429, config: { url: '/raw/x' }, headers: {} },
+    }).catch(() => {});
+
+    assert.equal(levels.includes('error'), false);
+    assert.ok(levels.includes('debug'));
+  });
+
+  it('logs a cancellation at debug, not error', async () => {
+    const { recorder, levels } = makeRecorder();
+    const onRejected = await captureRejectionHandler(recorder);
+    assert.ok(onRejected !== undefined);
+
+    levels.length = 0;
+    await onRejected(new axios.CanceledError('canceled')).catch(() => {});
+
+    // A cancel is the caller disconnecting, not a gateway fault.
+    assert.equal(levels.includes('error'), false);
+    assert.ok(levels.includes('debug'));
+  });
+
+  it('still logs a genuine 5xx at error', async () => {
+    const { recorder, levels } = makeRecorder();
+    const onRejected = await captureRejectionHandler(recorder);
+    assert.ok(onRejected !== undefined);
+
+    levels.length = 0;
+    await onRejected({
+      response: { status: 503, config: { url: '/raw/x' }, headers: {} },
+    }).catch(() => {});
+
+    assert.ok(levels.includes('error'));
+  });
+});

@@ -54,6 +54,69 @@ beforeEach(async () => {
   });
 });
 
+describe('SequentialDataSource fallthrough logging', () => {
+  // A recording logger: SequentialDataSource logs through log.child(), so
+  // spying on the parent's methods would not observe the calls.
+  const makeRecorder = () => {
+    const levels: string[] = [];
+    const recorder: any = {
+      child: () => recorder,
+      debug: () => levels.push('debug'),
+      info: () => levels.push('info'),
+      warn: () => levels.push('warn'),
+      error: () => levels.push('error'),
+    };
+    return { recorder, levels };
+  };
+
+  it('should log a recovered fallthrough at debug, never at warn', async () => {
+    const { recorder, levels } = makeRecorder();
+    mockSource1.getData = mock.fn(async () => {
+      throw new Error('source 1 unavailable');
+    });
+
+    const source = new SequentialDataSource({
+      log: recorder,
+      dataSources: [
+        mockSource1 as unknown as ContiguousDataSource,
+        mockSource2 as unknown as ContiguousDataSource,
+      ],
+    });
+
+    const data = await source.getData({ id: 'test-id' });
+
+    // Source 2 served the request, so the cascade did its job.
+    assert.equal(data.size, 18);
+    // Falling through is designed behaviour: it must not be surfaced as a
+    // warning. Terminal failures are logged by the data route handler.
+    assert.equal(levels.includes('warn'), false);
+    assert.ok(levels.includes('debug'));
+  });
+
+  it('should still throw when every source fails', async () => {
+    const { recorder } = makeRecorder();
+    mockSource1.getData = mock.fn(async () => {
+      throw new Error('source 1 unavailable');
+    });
+    mockSource2.getData = mock.fn(async () => {
+      throw new Error('source 2 unavailable');
+    });
+
+    const source = new SequentialDataSource({
+      log: recorder,
+      dataSources: [
+        mockSource1 as unknown as ContiguousDataSource,
+        mockSource2 as unknown as ContiguousDataSource,
+      ],
+    });
+
+    await assert.rejects(
+      source.getData({ id: 'test-id' }),
+      /Unable to fetch data from any data source/,
+    );
+  });
+});
+
 afterEach(async () => {
   mock.restoreAll();
 });
