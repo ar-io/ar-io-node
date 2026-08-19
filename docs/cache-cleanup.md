@@ -116,3 +116,24 @@ Recommended large-cache setup:
   worker doesn't also run (or set it if you want it as an occasional reconciler).
 
 See [Environment Variables](envs.md) for the full list of related settings.
+
+## Scope: this document covers the contiguous data cache only
+
+The **chunk** data cache (`data/chunks`) is a separate volume with a separate
+lifecycle, and it has **no index evictor** — it is reclaimed solely by
+`FsCleanupWorker`, tuned by the `CHUNK_DATA_CACHE_*` watermarks rather than the
+`CONTIGUOUS_DATA_CACHE_*` ones above.
+
+That distinction matters when sizing: the walk cost described above applies to it
+too, and a chunk cache holds far more objects than a contiguous cache of the same
+size (millions of ~256 KiB chunks vs whole blobs). On a production gateway the
+chunk cleanup walk was measured spending 93.9s of every 94.9s batch cycle
+traversing rather than deleting, so the "use the index evictor on large caches"
+advice above has no equivalent escape hatch on the chunk side yet.
+
+One chunk-specific constraint has no analogue here: `AGGRESSIVE_MIN_AGE_SECONDS`
+must stay above the ingest confirmation lag, or the walk can free bytes out from
+under a placement the ingest GC still considers in flight (`row present, bytes
+gone` → later cache misses). Measure that lag from the `chunk_placements` table,
+not from `chunk_ingest_confirmation_latency` — the counter is process-lifetime
+scoped and drops the slow tail.
