@@ -196,17 +196,29 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
         this.chunkMetadataPath(dataRoot, relativeOffset),
       );
 
-      // Remove existing symlink if present (allows updating).
-      // Note: Race condition possible between unlink and symlink if another
-      // process creates a symlink at the same path. We catch all errors below
-      // to ensure cache write succeeds - symlink index is best-effort.
+      // Link directly rather than unlinking first. Unlinking opens a window in
+      // which the index entry does not exist: a concurrent read of this offset
+      // sees ENOENT, treats it as a cache miss, and refetches data that is
+      // already on disk. Concurrent writers for the same offset resolve to the
+      // same target, so an EEXIST whose target already matches is a no-op, not
+      // an error -- which is what made this the hottest error in the log.
+      // A genuinely different target still gets replaced: that is the
+      // "allows updating" case the unlink was there for.
       try {
+        await fs.promises.symlink(targetPath, symlinkPath);
+      } catch (error: any) {
+        if (error.code !== 'EEXIST') {
+          throw error;
+        }
+        const existing = await fs.promises
+          .readlink(symlinkPath)
+          .catch(() => undefined);
+        if (existing === targetPath) {
+          return;
+        }
         await fs.promises.unlink(symlinkPath);
-      } catch {
-        // Ignore if doesn't exist
+        await fs.promises.symlink(targetPath, symlinkPath);
       }
-
-      await fs.promises.symlink(targetPath, symlinkPath);
     } catch (error: any) {
       this.log.error('Failed to create absolute offset symlink', {
         dataRoot,
