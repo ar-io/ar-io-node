@@ -16,6 +16,8 @@ import {
   CleanupContext,
   FsCleanupWorker,
   warnIfWalkConcurrencyUnsafe,
+  NORMAL_CONTEXT,
+  scaledThresholdSeconds,
 } from './fs-cleanup-worker.js';
 
 const log = createTestLogger();
@@ -386,5 +388,46 @@ describe('warnIfWalkConcurrencyUnsafe', () => {
     const { child, calls } = captureWarn();
     warnIfWalkConcurrencyUnsafe([undefined, undefined], child);
     assert.equal(calls.length, 0);
+  });
+});
+
+describe('scaledThresholdSeconds', () => {
+  it('returns the base threshold unchanged under NORMAL_CONTEXT', () => {
+    // This is the no-regression guarantee for callers that leave watermarks
+    // disabled: every batch runs with NORMAL_CONTEXT, so retention must be
+    // byte-for-byte what it was before the context was threaded through.
+    for (const base of [0, 1, 3600, 14_400, 2_592_000]) {
+      assert.equal(scaledThresholdSeconds(base, NORMAL_CONTEXT), base);
+    }
+  });
+
+  it('tightens retention as pressure rises', () => {
+    const ctx: CleanupContext = {
+      thresholdScale: 0.25,
+      minAgeSeconds: 0,
+      regime: 'aggressive',
+    };
+    assert.equal(scaledThresholdSeconds(14_400, ctx), 3600);
+  });
+
+  it('never evicts below the minimum-age floor', () => {
+    // thresholdScale 0 would otherwise make everything eligible; the floor is
+    // what stops aggressive cleanup from evicting freshly-written data.
+    const ctx: CleanupContext = {
+      thresholdScale: 0,
+      minAgeSeconds: 3600,
+      regime: 'aggressive',
+    };
+    assert.equal(scaledThresholdSeconds(14_400, ctx), 3600);
+  });
+
+  it('takes the floor when it exceeds the scaled threshold', () => {
+    const ctx: CleanupContext = {
+      thresholdScale: 0.1,
+      minAgeSeconds: 7200,
+      regime: 'aggressive',
+    };
+    // scaled = 1440s, floor = 7200s -> floor wins
+    assert.equal(scaledThresholdSeconds(14_400, ctx), 7200);
   });
 });
