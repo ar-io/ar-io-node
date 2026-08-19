@@ -33,12 +33,18 @@ describe('percentOrDefault', () => {
     // cleanup walk skipped every cycle and the cache grew unbounded -- the
     // exact failure the watermarks exist to prevent.
     process.env[VAR] = '150';
-    assert.throws(() => percentOrDefault(VAR, 0), /must be an integer percentage/);
+    assert.throws(
+      () => percentOrDefault(VAR, 0),
+      /must be an integer percentage/,
+    );
   });
 
   it('rejects negative values', () => {
     process.env[VAR] = '-1';
-    assert.throws(() => percentOrDefault(VAR, 0), /must be an integer percentage/);
+    assert.throws(
+      () => percentOrDefault(VAR, 0),
+      /must be an integer percentage/,
+    );
   });
 
   it('rejects non-numeric values instead of coercing to NaN', () => {
@@ -77,6 +83,9 @@ describe('percentOrDefault', () => {
 
   it('rejects non-integer percentages', () => {
     process.env[VAR] = '85.5';
-    assert.throws(() => percentOrDefault(VAR, 0), /must be an integer percentage/);
+    assert.throws(
+      () => percentOrDefault(VAR, 0),
+      /must be an integer percentage/,
+    );
   });
 });
