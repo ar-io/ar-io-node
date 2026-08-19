@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import winston from 'winston';
@@ -181,6 +182,16 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
     }
   }
 
+  /**
+   * Point the absolute-offset index at a chunk, creating or updating the link.
+   *
+   * The entry is never momentarily absent: the common case (an existing link
+   * already pointing at this target) is a no-op, and a genuine retarget is
+   * applied with an atomic rename. A concurrent reader therefore always
+   * resolves either the previous target or the new one. The index is
+   * best-effort -- failures are logged and swallowed so they cannot prevent
+   * the chunk itself from being cached.
+   */
   private async createAbsoluteOffsetSymlink(
     dataRoot: string,
     relativeOffset: number,
@@ -216,8 +227,21 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
         if (existing === targetPath) {
           return;
         }
-        await fs.promises.unlink(symlinkPath);
-        await fs.promises.symlink(targetPath, symlinkPath);
+        // Replace atomically. Unlinking first would reintroduce the very
+        // window this change exists to close: rename() over an existing path
+        // is atomic within a filesystem, so a concurrent read always sees
+        // either the old link or the new one, never nothing. The temporary
+        // name is unique so concurrent replacements cannot collide on it.
+        const tmpPath = `${symlinkPath}.tmp-${crypto
+          .randomBytes(8)
+          .toString('hex')}`;
+        await fs.promises.symlink(targetPath, tmpPath);
+        try {
+          await fs.promises.rename(tmpPath, symlinkPath);
+        } catch (renameError: any) {
+          await fs.promises.unlink(tmpPath).catch(() => undefined);
+          throw renameError;
+        }
       }
     } catch (error: any) {
       this.log.error('Failed to create absolute offset symlink', {
