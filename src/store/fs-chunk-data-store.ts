@@ -199,6 +199,16 @@ export class FsChunkDataStore implements ChunkDataStore {
     }
   }
 
+  /**
+   * Point the absolute-offset index at a chunk, creating or updating the link.
+   *
+   * The entry is never momentarily absent: the common case (an existing link
+   * already pointing at this target) is a no-op, and a genuine retarget is
+   * applied with an atomic rename. A concurrent reader therefore always
+   * resolves either the previous target or the new one. The index is
+   * best-effort -- failures are logged and swallowed so they cannot prevent
+   * the chunk itself from being cached.
+   */
   private async createAbsoluteOffsetSymlink(
     dataRoot: string,
     relativeOffset: number,
@@ -214,14 +224,42 @@ export class FsChunkDataStore implements ChunkDataStore {
         this.chunkDataRootPath(dataRoot, relativeOffset),
       );
 
-      // Remove existing symlink if present (allows updating)
+      // Link directly rather than unlinking first. Unlinking opens a window in
+      // which the index entry does not exist: a concurrent read of this offset
+      // sees ENOENT, treats it as a cache miss, and refetches data that is
+      // already on disk. Concurrent writers for the same offset resolve to the
+      // same target, so an EEXIST whose target already matches is a no-op, not
+      // an error -- which is what made this the hottest error in the log.
+      // A genuinely different target still gets replaced: that is the
+      // "allows updating" case the unlink was there for.
       try {
-        await fs.promises.unlink(symlinkPath);
-      } catch {
-        // Ignore if doesn't exist
+        await fs.promises.symlink(targetPath, symlinkPath);
+      } catch (error: any) {
+        if (error.code !== 'EEXIST') {
+          throw error;
+        }
+        const existing = await fs.promises
+          .readlink(symlinkPath)
+          .catch(() => undefined);
+        if (existing === targetPath) {
+          return;
+        }
+        // Replace atomically. Unlinking first would reintroduce the very
+        // window this change exists to close: rename() over an existing path
+        // is atomic within a filesystem, so a concurrent read always sees
+        // either the old link or the new one, never nothing. The temporary
+        // name is unique so concurrent replacements cannot collide on it.
+        const tmpPath = `${symlinkPath}.tmp-${crypto
+          .randomBytes(8)
+          .toString('hex')}`;
+        await fs.promises.symlink(targetPath, tmpPath);
+        try {
+          await fs.promises.rename(tmpPath, symlinkPath);
+        } catch (renameError: any) {
+          await fs.promises.unlink(tmpPath).catch(() => undefined);
+          throw renameError;
+        }
       }
-
-      await fs.promises.symlink(targetPath, symlinkPath);
     } catch (error: any) {
       this.log.error('Failed to create absolute offset symlink', {
         dataRoot,

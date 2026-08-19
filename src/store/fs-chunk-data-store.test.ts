@@ -35,6 +35,92 @@ describe('FsChunkDataStore', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  describe('absolute offset symlink', () => {
+    const dataRoot = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
+    const relativeOffset = 0;
+    const absoluteOffset = 388149830525175;
+    const chunkData: ChunkData = {
+      chunk: Buffer.from('test chunk data'),
+      hash: crypto.createHash('sha256').update('test chunk data').digest(),
+    };
+
+    const symlinkPath = () =>
+      join(
+        tempDir,
+        'data',
+        'by-absolute-offset',
+        '388',
+        '149',
+        absoluteOffset.toString(),
+      );
+
+    it('should not unlink when the existing link already points at the target', async () => {
+      const fsp = (await import('node:fs')).promises;
+
+      // First write establishes the link.
+      await store.set(dataRoot, relativeOffset, chunkData, absoluteOffset);
+      const before = await fsp.readlink(symlinkPath());
+
+      // Unlinking before re-linking would leave a window where the index entry
+      // does not exist; a concurrent read would see ENOENT and refetch data
+      // that is already on disk. A rewrite of the same offset must therefore
+      // leave the link untouched.
+      let unlinked = false;
+      const realUnlink = fsp.unlink.bind(fsp);
+      (fsp as any).unlink = async (p: any) => {
+        if (String(p).includes('by-absolute-offset')) unlinked = true;
+        return realUnlink(p);
+      };
+      try {
+        await store.set(dataRoot, relativeOffset, chunkData, absoluteOffset);
+      } finally {
+        (fsp as any).unlink = realUnlink;
+      }
+
+      assert.equal(unlinked, false, 'must not unlink an already-correct link');
+      assert.equal(await fsp.readlink(symlinkPath()), before);
+    });
+
+    it('should replace the link when the target genuinely differs', async () => {
+      const fsp = (await import('node:fs')).promises;
+      const otherRoot = 'aBq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
+
+      await store.set(dataRoot, relativeOffset, chunkData, absoluteOffset);
+      const first = await fsp.readlink(symlinkPath());
+
+      // Replacement must be atomic too: unlinking the live path would
+      // reintroduce the window this change closes, so the retarget has to go
+      // through rename() and must never unlink the index path itself.
+      let unlinkedIndexPath = false;
+      const realUnlink = fsp.unlink.bind(fsp);
+      (fsp as any).unlink = async (p: any) => {
+        if (String(p) === symlinkPath()) unlinkedIndexPath = true;
+        return realUnlink(p);
+      };
+      try {
+        // Same absolute offset, different data root: the index must follow it.
+        await store.set(otherRoot, relativeOffset, chunkData, absoluteOffset);
+      } finally {
+        (fsp as any).unlink = realUnlink;
+      }
+      const second = await fsp.readlink(symlinkPath());
+
+      assert.equal(
+        unlinkedIndexPath,
+        false,
+        'retarget must replace atomically, not unlink the live path',
+      );
+      assert.notEqual(second, first);
+      assert.ok(second.includes(otherRoot));
+
+      // No temporary links left behind.
+      const dir = await fsp.readdir(
+        join(tempDir, 'data', 'by-absolute-offset', '388', '149'),
+      );
+      assert.deepEqual(dir, [absoluteOffset.toString()]);
+    });
+  });
+
   describe('set', () => {
     it('should save chunk data to the correct path', async () => {
       const dataRoot = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
