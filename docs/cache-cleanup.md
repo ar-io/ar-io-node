@@ -116,3 +116,12 @@ Recommended large-cache setup:
   worker doesn't also run (or set it if you want it as an occasional reconciler).
 
 See [Environment Variables](envs.md) for the full list of related settings.
+
+## Chunk data cache
+
+This document covers the **contiguous** data cache only. The chunk data cache
+(`data/chunks`) has no index evictor — it is reclaimed solely by
+`FsCleanupWorker`, which on a cache of several million chunks is walk-bound for
+the reasons described above. See
+[madr/005-chunk-data-cache-indexed-eviction.md](madr/005-chunk-data-cache-indexed-eviction.md)
+for measurements and a proposal to port this pattern there.
