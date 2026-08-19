@@ -2531,9 +2531,12 @@ export const CHUNK_DATA_CACHE_CLEANUP_THRESHOLD = +env.varOrDefault(
   `${60 * 60 * 4}`, // 4 hours by default
 );
 
-// Disk-pressure watermarks for the chunk data cache cleanup walk. All opt-in
-// and 0 by default, which keeps the pure age-based behavior: the worker only
-// consults filesystem usage when at least one of these is set.
+// Disk-pressure watermarks for the chunk data cache cleanup walk. The three
+// watermarks below are opt-in and 0 by default, which keeps the pure age-based
+// behavior: the worker only consults filesystem usage when at least one of them
+// is set. CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS is not a watermark but the
+// floor they escalate against, and it carries a non-zero default; it only takes
+// effect once one of the watermarks turns escalation on.
 //
 // Without them the walk runs unconditionally, which on a large cache atop
 // spinning storage means it never stops: a tree with tens of millions of
