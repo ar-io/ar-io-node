@@ -107,6 +107,35 @@ against a measured reuse need of ~0.5 h. **The volume is not undersized** — it
 is roughly 18x larger than the workload requires. The failure was reclaim
 throughput, not capacity.
 
+### Independent corroboration on `turbo-gw-fsn1-2`
+
+The same failure was measured on the second gateway on 2026-08-19/20, after it
+had been upgraded to `develop` with PR #847 in place. Different node, different
+traffic mix (~42% of inbound requests are `/chunk/*`), same conclusion.
+
+```
+inter-batch gap          median 67.7 s  (min 39.5, max 429.5)
+pause floor in effect    250 ms          => pause is 0.4% of the cycle
+batch size in use        ~7,450          => already the 4x aggressive cap
+candidates per scan step avg 252
+achieved delete rate     8.2 GB/hr
+device utilisation       1.84%           (NVMe, idle throughout)
+```
+
+Two operational notes from that node:
+
+- **`chunk_placements` already indexes part of the cache.** The optimistic
+  ingest path maintains 876,850 rows against ~4.29M chunk files on disk —
+  **20.4% coverage**, per-chunk, in a separate `chunks.db` with its own WAL. It
+  is not a candidate vehicle for eviction (it is per-chunk, which this ADR
+  rejects as option 3, and its GC index serves the confirmation lifecycle) but
+  it is prior art for the write hook, and its separate WAL is a useful precedent
+  for keeping eviction bookkeeping off `data.db`.
+- **PR #847 alone did not hold.** With watermarks active the volume still
+  reached 99% twice in 24 hours and needed two manual `find -delete` sweeps.
+  This is consistent with the ADR's framing of #847 as a stopgap: watermarks
+  scale the batch, they cannot make discovery faster.
+
 ### Seeding safety envelope
 
 ```
@@ -242,6 +271,12 @@ physical bytes.
   its evictor freed 0 bytes per sweep; gw1 logged "Cache index drained but still
   over pressure; untracked files may need the FS reconciler" 51x per 2 h. The
   reconciler is not optional at chunk cardinality.
+- **Derived reclaim figures are unreliable; measure directly.** An attempt on
+  gw2 to infer the re-fetch rate as `distinct misses - (growth + deletes)`
+  produced an implausible 78%, because the delete term counted only
+  `FsCleanupWorker` log lines and missed `FsChunkDataStore.del()`. The
+  `atime - mtime` sampling used above is the sound method; any future reclaim
+  accounting should follow it rather than differencing counters.
 - **`rmdir` is never called.** 67% of dataRoot dirs are empty. Reaping them is
   natural once eviction is dataRoot-scoped, but note `FsChunkDataStore.set()`
   does `mkdir` then `writeFile` with **no ENOENT retry** — removing a directory
