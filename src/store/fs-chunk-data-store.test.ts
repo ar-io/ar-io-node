@@ -35,6 +35,45 @@ describe('FsChunkDataStore', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  describe('write durability', () => {
+    it('should retry the write when the data-root directory disappears mid-set', async () => {
+      const dataRoot = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
+      const relativeOffset = 0;
+      const chunkData: ChunkData = {
+        chunk: Buffer.from('survives a concurrent rmdir'),
+        hash: crypto
+          .createHash('sha256')
+          .update('survives a concurrent rmdir')
+          .digest(),
+      };
+      const fsp = (await import('node:fs')).promises;
+
+      // Simulate the directory being reaped between mkdir and writeFile, which
+      // is what data-root-granularity eviction will do. Without a retry the
+      // ENOENT is swallowed and the chunk is silently lost.
+      const realWriteFile = fsp.writeFile.bind(fsp);
+      let firstAttempt = true;
+      (fsp as any).writeFile = async (p: any, d: any) => {
+        if (firstAttempt && String(p).includes('by-dataroot')) {
+          firstAttempt = false;
+          const err: any = new Error('ENOENT: no such file or directory');
+          err.code = 'ENOENT';
+          throw err;
+        }
+        return realWriteFile(p, d);
+      };
+      try {
+        await store.set(dataRoot, relativeOffset, chunkData);
+      } finally {
+        (fsp as any).writeFile = realWriteFile;
+      }
+
+      assert.equal(await store.has(dataRoot, relativeOffset), true);
+      const stream = await store.get(dataRoot, relativeOffset);
+      assert.ok(stream !== undefined);
+    });
+  });
+
   describe('absolute offset symlink', () => {
     const dataRoot = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
     const relativeOffset = 0;
