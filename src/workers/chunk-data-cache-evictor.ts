@@ -71,7 +71,11 @@ export interface ChunkDataCacheEvictorIndex {
  * error propagates so the caller can log it and let the reconciler heal.
  */
 export interface ChunkDataRootStore {
-  delDataRoot(dataRoot: string): Promise<void>;
+  // Resolves true if a directory was actually removed, false if there was
+  // nothing there. The evictor books reclaimed bytes on this, because an index
+  // row can outlive its files and crediting those bytes would report progress
+  // the filesystem will not show.
+  delDataRoot(dataRoot: string): Promise<boolean>;
 }
 
 /**
