@@ -25,7 +25,7 @@ function setNoStore(res: Response): void {
 }
 
 const facilitatorConfig = createFacilitatorConfigFromCredentials(
-  config.X_402_CDP_CLIENT_KEY,
+  config.X_402_CDP_API_KEY_ID,
   config.X_402_CDP_CLIENT_SECRET,
   config.X_402_USDC_FACILITATOR_URL as `${string}://${string}`,
 );

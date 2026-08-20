@@ -3346,8 +3346,17 @@ export const X_402_USDC_SETTLE_TIMEOUT_MS = +env.varOrDefault(
   '5000', // 5 seconds
 );
 
-// Paywall customization (optional)
+// Paywall customization (optional). This is the PUBLIC CDP Client API key used
+// to brand/serve the paywall UI. It is NOT a facilitator credential — passing it
+// where an API key id belongs makes CDP reject every verify with 401.
 export const X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+
+// CDP API key ID, paired with CDP_API_KEY_SECRET to authenticate against the
+// Coinbase facilitator. Required for mainnet (`base`); without a working pair
+// the SDK silently falls back to X_402_USDC_FACILITATOR_URL, which for the
+// common `facilitator.x402.rs` value supports testnets ONLY, so payments fail
+// either way.
+export const X_402_CDP_API_KEY_ID = env.varOrUndefined('CDP_API_KEY_ID');
 
 // CDP Secret API Key for session token generation (optional)
 // Load from file if CDP_API_KEY_SECRET_FILE is set, otherwise use CDP_API_KEY_SECRET

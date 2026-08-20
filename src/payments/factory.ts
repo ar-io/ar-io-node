@@ -45,7 +45,7 @@ export function createPaymentProcessor(): PaymentProcessor | undefined {
     appName: config.X_402_APP_NAME,
     appLogo: config.X_402_APP_LOGO,
     sessionTokenEndpoint: config.X_402_SESSION_TOKEN_ENDPOINT,
-    cdpClientKey: config.X_402_CDP_CLIENT_KEY,
+    cdpClientKey: config.X_402_CDP_API_KEY_ID,
     cdpClientSecret: config.X_402_CDP_CLIENT_SECRET,
   });
 }
