@@ -80,7 +80,10 @@ function makeIndex(worker: StandaloneSqliteDatabaseWorker) {
         track(() =>
           worker.selectChunkDataCacheEvictionCandidates(maxLastWrite, limit),
         ),
-      deleteChunkDataCacheEntries: (dataRoots: string[], maxLastWrite: number) =>
+      deleteChunkDataCacheEntries: (
+        dataRoots: string[],
+        maxLastWrite: number,
+      ) =>
         track(() =>
           worker.deleteChunkDataCacheEntries(dataRoots, maxLastWrite),
         ),
@@ -218,7 +221,9 @@ describe('chunk data cache index (end-to-end)', () => {
     await store.set(warm, 0, chunkOf('warm-chunk'));
     await flush();
     chunksDb
-      .prepare('UPDATE chunk_data_cache SET last_access = ? WHERE data_root = ?')
+      .prepare(
+        'UPDATE chunk_data_cache SET last_access = ? WHERE data_root = ?',
+      )
       .run(1, cold);
 
     assert.equal(fs.existsSync(dirOf(tempDir, cold)), true);
