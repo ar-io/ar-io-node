@@ -2088,6 +2088,67 @@ st
           assert.equal(getDataMock.mock.calls.length, 0);
         });
 
+        it('should fail closed (503) when the blocklist check throws for a manifest-resolved item', async () => {
+          const manifestId = 'manifest-id';
+          const resolvedId = 'resolved-id';
+
+          mock.method(dataAttributesSource, 'getDataAttributes', () =>
+            Promise.resolve({
+              size: 100,
+              contentType: 'application/x.arweave-manifest+json',
+              isManifest: true,
+              stable: true,
+              verified: true,
+              signature: null,
+            }),
+          );
+
+          // Top-level id check passes; the resolved-leaf check throws.
+          mock.method(
+            dataBlockListValidator,
+            'isIdBlocked',
+            (checkId: string) => {
+              if (checkId === resolvedId) {
+                return Promise.reject(
+                  new Error('blocklist backend unavailable'),
+                );
+              }
+              return Promise.resolve(false);
+            },
+          );
+
+          mock.method(manifestPathResolver, 'resolveFromIndex', () =>
+            Promise.resolve({
+              id: manifestId,
+              resolvedId,
+              complete: true,
+              resolutionType: 'path',
+            }),
+          );
+
+          // Content must not be served when we cannot verify it is unblocked.
+          const getDataMock = mock.method(dataSource, 'getData', () =>
+            Promise.reject(
+              new Error('getData should not be called when failing closed'),
+            ),
+          );
+
+          app.get(
+            '/:id/*',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          await request(app).get('/manifest-id/path/to/file.html').expect(503);
+
+          assert.equal(getDataMock.mock.calls.length, 0);
+        });
+
         it('should evict resolvedId from negative cache when manifest-resolved data is served', async () => {
           const manifestId = 'manifest-id';
           const resolvedId = 'resolved-manifest-path-id';

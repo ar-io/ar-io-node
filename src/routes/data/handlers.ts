@@ -1485,11 +1485,19 @@ const sendManifestResponse = async ({
       }
     } catch (error: any) {
       parentSpan?.recordException(error);
+      parentSpan?.setAttribute('http.status_code', 503);
+      parentSpan?.setAttribute('data.error', 'blocklist_check_failed');
       log.error('Error checking blocklist:', {
         dataId: resolvedId,
         message: error.message,
         stack: error.stack,
       });
+      // Fail closed: if we cannot confirm the resolved item is unblocked, do
+      // not serve it — otherwise a validator outage silently reopens the
+      // manifest-path bypass this check exists to close.
+      res.status(503).send('Unable to verify content policy for this item');
+      // Indicate response was sent
+      return true;
     }
 
     let dataAttributes: ContiguousDataAttributes | undefined;
@@ -1517,11 +1525,17 @@ const sendManifestResponse = async ({
         }
       } catch (error: any) {
         parentSpan?.recordException(error);
+        parentSpan?.setAttribute('http.status_code', 503);
+        parentSpan?.setAttribute('data.error', 'blocklist_check_failed');
         log.error('Error checking blocklist:', {
           dataId: resolvedId,
           message: error.message,
           stack: error.stack,
         });
+        // Fail closed (see the id-blocked branch above).
+        res.status(503).send('Unable to verify content policy for this item');
+        // Indicate response was sent
+        return true;
       }
     }
 
