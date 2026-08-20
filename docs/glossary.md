@@ -234,14 +234,72 @@ Arweave byte-range.
 
 ## Data Storage Architecture
 
+<a id="age-floor"></a> **Age Floor** - The minimum age cached data must reach
+before a reclaimer may delete it. For the contiguous cache this is
+`AGGRESSIVE_MIN_AGE_SECONDS`, honoured by the
+[filesystem-walk reclaimer](#filesystem-walk-reclaimer) and deliberately
+**ignored** by the [index evictor](#index-evictor). For the chunk cache it is a
+**correctness control**, not a tuning knob: the chunk index evictor must never
+reclaim a chunk whose ingest confirmation window is still open, so the floor is
+_derived_ in code as
+`max(CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS, CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS)`
+when `CHUNK_INGEST_CACHE_ENABLED` (exposed as
+`CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS`, with no environment variable of its
+own) and enforced both in SQL and again per candidate. Violating it breaks
+upload propagation silently. See
+[cache cleanup](./cache-cleanup.md) and [ADR 005](./madr/005-chunk-data-cache-indexed-eviction.md).
+
 **Cache Store** - High-speed storage layer (Redis or filesystem) for frequently
 accessed data chunks and headers.
+
+<a id="chunk-data-cache-index"></a> **Chunk Data Cache Index** - The
+`chunk_data_cache` table in [`chunks.db`](#databases), one row per
+[data root](#data-root), that lets the chunk cache be reclaimed by query instead
+of by directory traversal. Each row aggregates the whole
+`by-dataroot/<hh>/<hh>/<dataRoot>/` directory: summed `size`, `chunk_count`,
+`last_write` (MAX write time — the [age floor](#age-floor) field, advanced on
+every chunk write and never by a read), `last_access` (MAX read time, LRU
+ordering only) and `tier`. Populated by a write hook on
+`FsChunkDataStore.set()`, refreshed by a read hook
+(`CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ`), seeded for a pre-existing cache by a
+one-time insert-if-absent backfill, and consumed by the chunk
+[index evictor](#index-evictor). Gated on `ENABLE_CHUNK_DATA_CACHE_INDEX`.
 
 **Chunk Data Store** - Backend storage for transaction chunks. Supports multiple
 implementations including filesystem and S3.
 
 **Contiguous Data Store** - Storage backend for complete transaction data.
 Manages both data files and verification metadata.
+
+<a id="filesystem-walk-reclaimer"></a> **Filesystem-Walk Reclaimer** -
+`FsCleanupWorker`: reclaims a cache by periodically walking the sharded
+directory tree and deleting files older than an effective TTL. Discovery cost is
+`O(files)` random-access I/O, so on a large cache it becomes the bottleneck —
+measured on a production chunk cache spending 93.9 s of every 94.9 s batch cycle
+traversing rather than deleting. Contrast the [index evictor](#index-evictor);
+the walk worker is still useful as an occasional reconciler for files the index
+does not know about.
+
+<a id="hybrid-tail"></a> **Hybrid Tail** - Proposed refinement to
+[data root](#data-root)-granular chunk eviction (ADR 005, Departure 2) for the
+extreme size skew of the chunk cache: the median data root holds ~2 chunks while
+the top 1% hold ~50% of all chunks. Above a chunk-count threshold a data root
+would be tracked (or evicted) at finer granularity, so a single hot chunk cannot
+pin a multi-gigabyte all-or-nothing eviction unit, while the small-tail majority
+stays whole-unit. `ENABLE_CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL` and
+`CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL_CHUNK_THRESHOLD` are **reserved and inert** —
+nothing reads them yet.
+
+<a id="index-evictor"></a> **Index Evictor** - A reclaimer that decides _what_ to
+delete by querying a SQLite cache index instead of walking the cache tree, so
+discovery is O(log n) rather than O(files); disk usage (`statfs`) remains the
+authoritative signal for _whether_ to delete. Two exist:
+`ContiguousDataCacheEvictor` (per-blob, LRU by `last_access`, tiered by
+preferred ArNS, no [age floor](#age-floor)) and `ChunkDataCacheEvictor`
+(per [data root](#data-root), size-aware — it accumulates candidates to a byte
+target rather than evicting a fixed number of coldest rows — and it **must**
+honour an age floor). Contrast the
+[filesystem-walk reclaimer](#filesystem-walk-reclaimer).
 
 ## Data Verification
 
