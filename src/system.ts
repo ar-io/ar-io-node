@@ -82,6 +82,7 @@ import {
   DataItemRootIndex,
   ChainIndex,
   ChainOffsetIndex,
+  ChunkDataCacheIndex,
   ContiguousDataCacheIndex,
   ContiguousDataIndex,
   ContiguousDataSource,
@@ -102,6 +103,8 @@ import {
   FsCleanupWorker,
   scaledThresholdSeconds,
 } from './workers/fs-cleanup-worker.js';
+import { ChunkDataCacheEvictor } from './workers/chunk-data-cache-evictor.js';
+import { ChunkDataCacheReconciler } from './workers/chunk-data-cache-reconciler.js';
 import { ContiguousDataCacheEvictor } from './workers/contiguous-data-cache-evictor.js';
 import { ContiguousDataCacheReconciler } from './workers/contiguous-data-cache-reconciler.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
@@ -938,10 +941,17 @@ export const chunkSource =
       })
     : fullChunkSource;
 
+// Chunk cache eviction index handle (ADR 005). Handed to the store only when
+// the feature is enabled, so an absent handle disables the write/read hooks
+// entirely. `db` structurally satisfies ChunkDataCacheIndex.
+const chunkDataCacheIndex: ChunkDataCacheIndex | undefined =
+  config.ENABLE_CHUNK_DATA_CACHE_INDEX ? db : undefined;
+
 // Create stores for ChunkRetrievalService fast path (cache lookup by absoluteOffset)
 export const chunkDataStore = new FsChunkDataStore({
   log,
   baseDir: 'data/chunks',
+  chunkDataCacheIndex,
 });
 
 export const chunkMetadataStore = new FsChunkMetadataStore({
@@ -1540,6 +1550,44 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
 });
 
+// Index-driven chunk cache evictor (ADR 005): the chunk cache is reclaimed
+// today only by FsCleanupWorker, whose walk was measured spending 99% of each
+// batch cycle traversing rather than deleting. This queries the index instead.
+//
+// Two departures from the contiguous evictor are mandatory, not stylistic:
+//  - It honours an AGE FLOOR. The contiguous evictor deliberately has none.
+//    Evicting a chunk before its ingest placement confirms breaks upload
+//    propagation silently, so CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS (derived
+//    from the ingest confirmation timeouts, not configured independently)
+//    excludes anything too young.
+//  - It is size-aware, accumulating to a byte target, because data-root chunk
+//    counts are skewed hard enough (p50 2, max ~11k) that coldest-first would
+//    reclaim nothing.
+//
+// FsCleanupWorker stays available as the reconciler for untracked files.
+export const chunkDataCacheEvictor = config.ENABLE_CHUNK_DATA_CACHE_INDEX
+  ? new ChunkDataCacheEvictor({
+      log,
+      chunkDataStore,
+      cacheIndex: db,
+      usagePath: 'data/chunks',
+    })
+  : undefined;
+
+// One-time backfill to adopt the pre-existing on-disk chunk cache into the
+// index. Walks by-dataroot only; last_write/last_access are seeded from file
+// mtime/atime, never from walk time -- seeding from walk time would make the
+// whole cache look freshly written and stall eviction behind the age floor.
+export const chunkDataCacheReconciler =
+  config.ENABLE_CHUNK_DATA_CACHE_INDEX &&
+  config.ENABLE_CHUNK_DATA_CACHE_INDEX_BACKFILL
+    ? new ChunkDataCacheReconciler({
+        log,
+        cacheIndex: db,
+        baseDir: 'data/chunks/data/by-dataroot',
+      })
+    : undefined;
+
 // Index-driven contiguous cache evictor (PE-9131): reclaims by querying the
 // SQLite cleanup index for the oldest blobs under disk pressure, instead of
 // walking the (HDD-backed) cache directory tree. Uses the same watermark
@@ -1966,6 +2014,20 @@ if (dataSqliteWalCleanupWorker !== undefined) {
   dataSqliteWalCleanupWorker.start();
 }
 
+// chunks.db carries the chunk data cache eviction index (ADR 005), whose write
+// hook fires on every cached chunk. Nothing else checkpoints that WAL.
+const chunksSqliteWalCleanupWorker = config.ENABLE_CHUNKS_DB_WAL_CLEANUP
+  ? new SQLiteWalCleanupWorker({
+      log,
+      db,
+      dbName: 'chunks',
+    })
+  : undefined;
+
+if (chunksSqliteWalCleanupWorker !== undefined) {
+  chunksSqliteWalCleanupWorker.start();
+}
+
 const dataVerificationWorker = config.ENABLE_BACKGROUND_DATA_VERIFICATION
   ? new DataVerificationWorker({
       log,
@@ -2016,6 +2078,7 @@ export const shutdown = async (exitCode = 0) => {
     eventEmitter.removeAllListeners();
     arIOPeerManager.stopUpdatingPeers();
     dataSqliteWalCleanupWorker?.stop();
+    chunksSqliteWalCleanupWorker?.stop();
     await arnsResolutionCache.close();
     await arnsRegistryCache.close();
     await envoyEndpointHealthWorker?.stop();
@@ -2038,6 +2101,8 @@ export const shutdown = async (exitCode = 0) => {
     await Promise.all(stagingCleanupWorkers.map((w) => w.stop()));
     await contiguousDataCacheEvictor?.stop();
     await contiguousDataCacheReconciler?.stop();
+    await chunkDataCacheEvictor?.stop();
+    await chunkDataCacheReconciler?.stop();
     await chunkDataFsCacheCleanupWorker?.stop();
     symlinkCleanupWorker?.stop();
     await dataVerificationWorker?.stop();
