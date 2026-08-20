@@ -2627,6 +2627,20 @@ export const CHUNK_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
   );
 
 // Max index rows considered (and chunks unlinked) per batch within a sweep.
+// Concurrent data-root directory removals per eviction batch. DERIVED from
+// UV_THREADPOOL_SIZE rather than fixed, because every fs.rm(recursive) occupies
+// a libuv thread for the whole walk-and-unlink: a hard-coded 50 takes the
+// entire pool on a stock node (UV_THREADPOOL_SIZE defaults to 4) and queues
+// every chunk read behind it -- on a device that is, by definition, already
+// saturated when the evictor is running. Same shape as
+// FS_CLEANUP_WORKER_WALK_CONCURRENCY, one eighth of the pool rather than a
+// sixteenth because these are removals rather than a sustained walk.
+export const CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY =
+  env.positiveIntOrDefault(
+    'CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY',
+    Math.max(1, Math.floor(UV_THREADPOOL_SIZE / 8)),
+  );
+
 export const CHUNK_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
   env.positiveIntOrDefault('CHUNK_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', 1000);
 

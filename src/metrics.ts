@@ -1285,6 +1285,19 @@ export const chunkCacheIndexBackfilledTotal = new promClient.Counter({
 // this counter is what makes that protection visible in production instead of
 // silent (a rising value under disk pressure means the floor, not the evictor,
 // is what is limiting reclamation).
+// Index rows whose files were already gone when the evictor reached them.
+// Every other reclaimer on a gateway (the ingest GC, the filesystem-walk
+// worker, manual sweeps) unlinks chunks without touching this index, so its
+// rows outlive their bytes. Those rows are the COLDEST -- last_access froze
+// when the files vanished -- so they sort to the front of every eviction batch.
+// A high rate here means the evictor is spending its batches reclaiming
+// nothing, which is otherwise indistinguishable from healthy operation:
+// compare it against chunk_cache_index_evicted_total.
+export const chunkCacheIndexEvictedMissingTotal = new promClient.Counter({
+  name: 'chunk_cache_index_evicted_missing_total',
+  help: 'Chunk cache index rows evicted whose on-disk data root was already absent',
+});
+
 export const chunkCacheIndexSkippedFloorTotal = new promClient.Counter({
   name: 'chunk_cache_index_skipped_floor_total',
   help: 'Chunk cache index eviction candidates excluded by the minimum age floor',

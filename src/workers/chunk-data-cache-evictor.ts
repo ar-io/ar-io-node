@@ -16,10 +16,12 @@ import { currentUnixTimestamp } from '../lib/time.js';
 // rather than one unbounded pass; the next sweep resumes.
 const MAX_BATCHES_PER_SWEEP = 50;
 
-// Concurrent data-root unlinks per batch. The index row deletes are already
-// batched into one transaction; the unlinks are the remaining (HDD-bound) cost,
-// so run them in parallel to saturate the disk instead of one seek at a time.
-const UNLINK_CONCURRENCY = 50;
+// Concurrent data-root unlinks per batch comes from
+// config.CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY, derived from
+// UV_THREADPOOL_SIZE. Deliberately NOT a fixed constant: each fs.rm(recursive)
+// holds a libuv thread for its whole walk, and the evictor runs precisely when
+// the device is saturated, so taking the entire pool converts "disk full" into
+// "disk full and chunk reads time out".
 
 /**
  * One eviction candidate: a whole data root's worth of cached chunks.
@@ -111,6 +113,7 @@ export class ChunkDataCacheEvictor {
   private minFreeBytes: number;
   private intervalMs: number;
   private batchSize: number;
+  private unlinkConcurrency: number;
   private minAgeSeconds: number;
   private targetBytes: number;
 
@@ -127,6 +130,7 @@ export class ChunkDataCacheEvictor {
     minFreeBytes = config.CHUNK_DATA_CACHE_MIN_FREE_BYTES,
     intervalMs = config.CHUNK_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS,
     batchSize = config.CHUNK_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE,
+    unlinkConcurrency = config.CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY,
     minAgeSeconds = config.CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS,
     targetBytes = config.CHUNK_DATA_CACHE_INDEX_EVICTION_TARGET_BYTES,
   }: {
@@ -139,6 +143,7 @@ export class ChunkDataCacheEvictor {
     minFreeBytes?: number;
     intervalMs?: number;
     batchSize?: number;
+    unlinkConcurrency?: number;
     minAgeSeconds?: number;
     targetBytes?: number;
   }) {
@@ -151,6 +156,7 @@ export class ChunkDataCacheEvictor {
     this.minFreeBytes = minFreeBytes;
     this.intervalMs = intervalMs;
     this.batchSize = Math.max(1, batchSize);
+    this.unlinkConcurrency = Math.max(1, unlinkConcurrency);
     this.minAgeSeconds = Math.max(0, minAgeSeconds);
     this.targetBytes = Math.max(0, targetBytes);
   }
@@ -177,6 +183,20 @@ export class ChunkDataCacheEvictor {
     if (this.minAgeSeconds === 0) {
       this.log.warn(
         'Chunk data cache eviction has NO age floor; a chunk can be evicted immediately after it is written. This is only safe when the optimistic chunk ingest cache is disabled.',
+      );
+    }
+    // Both pressure triggers default to 0, i.e. disabled. With neither set,
+    // overPressure() can never be true and this worker will never evict a
+    // byte -- while the write and read hooks still pay their full cost. That
+    // combination looks identical to a healthy idle evictor in the logs, so
+    // say so once at startup rather than leaving an operator to infer it.
+    if (this.highWatermarkPercent <= 0 && this.minFreeBytes <= 0) {
+      this.log.warn(
+        'Chunk data cache index evictor has no pressure trigger configured and will never evict; set CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT and/or CHUNK_DATA_CACHE_MIN_FREE_BYTES',
+        {
+          highWatermarkPercent: this.highWatermarkPercent,
+          minFreeBytes: this.minFreeBytes,
+        },
       );
     }
     this.timer = setInterval(() => {
@@ -388,13 +408,49 @@ export class ChunkDataCacheEvictor {
             maxLastWrite,
           );
 
-        // Account metrics on the (authoritative) deleted rows, then remove the
-        // directories in parallel -- best-effort; a failed/ENOENT unlink still
-        // counts, since the row is gone and the reconciler can heal any orphan.
-        for (const dataRoot of deletedDataRoots) {
+        // Remove the directories, then account for what was ACTUALLY removed.
+        //
+        // The index is not authoritative for reclaimed bytes. Every other
+        // reclaimer on a gateway -- the ingest GC, the filesystem-walk worker,
+        // an operator's manual sweep -- unlinks chunks without touching this
+        // index, so a row can outlive its files. Those rows are the coldest
+        // (last_access froze when the files vanished), so they sort to the
+        // front of every batch. Booking their bytes as freed would report
+        // gigabytes of progress that `df` never shows, which is precisely the
+        // failure this index exists to make visible.
+        const unlinkLimit = pLimit(this.unlinkConcurrency);
+        const removals = await Promise.all(
+          deletedDataRoots.map((dataRoot) =>
+            unlinkLimit(() =>
+              this.chunkDataStore
+                .delDataRoot(dataRoot)
+                .catch((error: any) => {
+                  // Genuinely failed (EACCES, EIO, ...) rather than absent.
+                  // Not a reclaim, and worth seeing: at info level the whole
+                  // feature could otherwise fail silently.
+                  this.log.warn('Failed to unlink evicted data root', {
+                    dataRoot,
+                    error: error?.message,
+                  });
+                  return false;
+                })
+                .then((removed) => ({ dataRoot, removed })),
+            ),
+          ),
+        );
+
+        let missingThisBatch = 0;
+        for (const { dataRoot, removed } of removals) {
           const candidate = candidateByDataRoot.get(dataRoot);
           const size = candidate?.size ?? 0;
           const chunkCount = candidate?.chunkCount ?? 0;
+          if (!removed) {
+            // The row is gone either way -- which is the useful half: the
+            // index self-heals of stale rows as the evictor encounters them.
+            missingThisBatch++;
+            metrics.chunkCacheIndexEvictedMissingTotal.inc();
+            continue;
+          }
           evictedDataRoots++;
           evictedChunks += chunkCount;
           bytesFreed += size;
@@ -404,19 +460,15 @@ export class ChunkDataCacheEvictor {
           );
           metrics.chunkCacheIndexEvictedBytesTotal.inc(size);
         }
-        const unlinkLimit = pLimit(UNLINK_CONCURRENCY);
-        await Promise.all(
-          deletedDataRoots.map((dataRoot) =>
-            unlinkLimit(() =>
-              this.chunkDataStore.delDataRoot(dataRoot).catch((error: any) => {
-                this.log.debug('Failed to unlink evicted data root', {
-                  dataRoot,
-                  error: error?.message,
-                });
-              }),
-            ),
-          ),
-        );
+        if (missingThisBatch === removals.length && removals.length > 0) {
+          // A whole batch of rows with nothing behind them. Harmless once, but
+          // a persistent pattern means the index has drifted badly and the
+          // evictor is doing no useful work while appearing busy.
+          this.log.warn(
+            'Chunk cache eviction batch freed nothing; every row selected was already absent from disk',
+            { batchSize: removals.length, usedPercent: usage.usedPercent },
+          );
+        }
 
         usage = await this.diskUsage();
         if (usage === undefined) {

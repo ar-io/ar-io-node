@@ -19,6 +19,7 @@ import {
   ChunkDataRootStore,
 } from './chunk-data-cache-evictor.js';
 import { currentUnixTimestamp } from '../lib/time.js';
+import promClient from 'prom-client';
 
 const log = createTestLogger();
 
@@ -53,6 +54,7 @@ function makeHarness(opts: {
   entries: Entry[];
   freePerEvict: number;
   deleteReturnsZeroFor?: Set<string>;
+  absentOnDisk?: Set<string>;
   // Simulates an index query that has stopped applying the age floor, so the
   // evictor's own floor check is the only thing standing between an in-flight
   // upload and a half-deleted data root.
@@ -111,6 +113,9 @@ function makeHarness(opts: {
   const chunkDataStore = {
     delDataRoot: async (dataRoot: string) => {
       unlinked.push(dataRoot);
+      // Model the real store: `false` means the directory was already gone,
+      // which is what a row that outlived its files looks like.
+      return !(opts.absentOnDisk?.has(dataRoot) ?? false);
     },
   } as unknown as ChunkDataRootStore;
 
@@ -138,6 +143,17 @@ function coldEntries(count: number, size: number, prefix = 'dr'): Entry[] {
     chunkCount: Math.max(1, Math.round(size / 262_144)),
     lastWrite,
   }));
+}
+
+// Read a counter straight out of the shared prom-client registry. The metrics
+// are the operator's only view of this subsystem and nothing else in the suite
+// touches them, so assert on the real registry rather than a stand-in.
+async function readCounter(name: string): Promise<number> {
+  const metric = await promClient.register.getSingleMetric(name)?.get();
+  return (metric?.values ?? []).reduce(
+    (sum: number, v: any) => sum + (v.value ?? 0),
+    0,
+  );
 }
 
 function makeEvictor(
@@ -446,5 +462,139 @@ describe('ChunkDataCacheEvictor', () => {
       base + 1,
       'cutoff must round like currentUnixTimestamp(), not floor',
     );
+  });
+
+  // Blocker 1: index rows outlive their files, because the ingest GC, the
+  // filesystem-walk worker and manual sweeps all unlink chunks without
+  // touching this index. Those rows are the coldest, so they sort FIRST. If
+  // their bytes were booked as reclaimed, the evictor would report gigabytes
+  // freed while df did not move -- the exact failure the index exists to
+  // surface.
+  it('does not count bytes for rows whose data root was already gone', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 95,
+      entries: coldEntries(4, 10_000_000),
+      freePerEvict: 0, // nothing is actually reclaimed
+      absentOnDisk: new Set(['dr0000', 'dr0001', 'dr0002', 'dr0003']),
+    });
+    const evictedBefore = await readCounter(
+      'chunk_cache_index_evicted_bytes_total',
+    );
+    const missingBefore = await readCounter(
+      'chunk_cache_index_evicted_missing_total',
+    );
+
+    await makeEvictor(h, { minAgeSeconds: 0 }).sweep();
+
+    assert.equal(
+      await readCounter('chunk_cache_index_evicted_bytes_total'),
+      evictedBefore,
+      'bytes must not be booked for data roots that were already absent',
+    );
+    assert.ok(
+      (await readCounter('chunk_cache_index_evicted_missing_total')) >
+        missingBefore,
+      'absent data roots must be counted on their own series',
+    );
+    // The rows are still purged, so the index self-heals of stale entries.
+    assert.equal(h.remaining.size, 0);
+  });
+
+  // Blocker 2: with neither pressure trigger set, overPressure() can never be
+  // true, so the hooks pay their full cost and nothing is ever evicted. That
+  // is indistinguishable from a healthy idle evictor unless it says so.
+  it('warns at startup when no pressure trigger is configured', () => {
+    const { logger, entries: logEntries } = createRecordingTestLogger({
+      suite: 'ChunkDataCacheEvictor',
+    });
+    const h = makeHarness({
+      initialUsedPercent: 10,
+      entries: coldEntries(1, 1000),
+      freePerEvict: 1,
+    });
+    const evictor = makeEvictor(h, {
+      log: logger,
+      highWatermarkPercent: 0,
+      minFreeBytes: 0,
+    });
+    evictor.start();
+    evictor.stop();
+
+    assert.ok(
+      logEntries.some(
+        (e) => e.level === 'warn' && e.message.includes('no pressure trigger'),
+      ),
+      `expected a no-trigger warning, got ${JSON.stringify(logEntries)}`,
+    );
+  });
+
+  // The min-free-bytes trigger is the ENOSPC backstop for a volume shared with
+  // SQLite DBs and logs. Every other test here runs with minFreeBytes: 0, so
+  // without this the whole path is dead code under test.
+  it('evicts on the free-bytes floor even when the percentage looks healthy', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 10, // far below any watermark
+      entries: coldEntries(3, 1000),
+      freePerEvict: 0,
+    });
+    // fakeStatfs gives bavail = 90 blocks * 1e9 = 90 GB free; demand 200 GB.
+    const evictor = makeEvictor(h, {
+      highWatermarkPercent: 0,
+      lowWatermarkPercent: 0,
+      minFreeBytes: 200_000_000_000,
+      minAgeSeconds: 0,
+    });
+
+    await evictor.sweep();
+
+    assert.ok(
+      h.unlinked.length > 0,
+      'a breached free-bytes floor must trigger eviction regardless of usage percent',
+    );
+  });
+
+  // Sweeps must never overlap: two concurrent passes would select the same
+  // rows twice and unlink the same data root twice. Asserted by observing that
+  // a second sweep started while the first is in flight does no work at all --
+  // checking for duplicate unlinks is not enough, because the first sweep's
+  // deletes remove the rows the second would have selected, hiding the bug.
+  it('does not run overlapping sweeps', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 95,
+      entries: coldEntries(6, 1000),
+      freePerEvict: 50,
+    });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realSelect = h.cacheIndex.selectChunkDataCacheEvictionCandidates;
+    let gated = false;
+    (h.cacheIndex as any).selectChunkDataCacheEvictionCandidates = async (
+      maxLastWrite: number,
+      limit: number,
+    ) => {
+      if (!gated) {
+        gated = true;
+        await gate; // hold the first sweep open
+      }
+      return realSelect(maxLastWrite, limit);
+    };
+    const evictor = makeEvictor(h, { minAgeSeconds: 0 });
+
+    const inFlight = evictor.sweep();
+    await Promise.resolve(); // let the first sweep reach the gated select
+    const callsWhileBusy = h.selectCalls.length;
+
+    await evictor.sweep(); // must be an immediate no-op
+
+    assert.equal(
+      h.selectCalls.length,
+      callsWhileBusy,
+      'a sweep started while another is in flight must not query the index',
+    );
+
+    release();
+    await inFlight;
   });
 });

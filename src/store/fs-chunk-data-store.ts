@@ -239,15 +239,25 @@ export class FsChunkDataStore implements ChunkDataStore {
    * that closes that window is at set() below; an image predating it must not
    * run the evictor, or chunk writes are silently dropped.
    */
-  async delDataRoot(dataRoot: string): Promise<void> {
+  /**
+   * Returns true if a directory was actually removed, false if there was
+   * nothing there. The caller needs the distinction for accounting: an index
+   * row can outlive its files (the ingest GC, the filesystem-walk worker and
+   * manual sweeps all unlink chunks without touching this index), and booking
+   * those bytes as reclaimed would report progress that `df` will not show.
+   */
+  async delDataRoot(dataRoot: string): Promise<boolean> {
     try {
       await fs.promises.rm(this.chunkDataRootDir(dataRoot), {
         recursive: true,
       });
+      return true;
     } catch (error: any) {
+      // ENOENT = the files were already gone; nothing was reclaimed here.
       if (error.code !== 'ENOENT') {
         throw error;
       }
+      return false;
     }
   }
 

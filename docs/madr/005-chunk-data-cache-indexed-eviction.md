@@ -505,6 +505,39 @@ from a gateway rollout.
   `docs/cache-cleanup.md`. Flagged here because this ADR is what makes the two
   reclaimers coexist by design.
 
+- **Index rows outlive their files on every other delete path — RESOLVED
+  (adversarial review).** `deleteChunkDataCacheEntries` is the only thing that
+  removes a row, but the ingest GC (`FsChunkDataStore.del`), the
+  filesystem-walk worker (on by default, and kept on as the reconciler) and
+  operator sweeps all unlink chunks without touching this index. Those rows are
+  the *coldest* — `last_access` freezes when the files vanish — so they sort to
+  the front of every eviction batch, and the evictor booked their bytes as
+  reclaimed. A sweep could therefore report tens of gigabytes freed while `df`
+  did not move: the gw1 failure this ADR cites, with the drift warning
+  bypassed because candidates are never empty.
+
+  Resolved by deriving reclaimed bytes from the filesystem rather than the
+  index: `delDataRoot` reports whether it actually removed a directory, and
+  only real removals are counted. Absent rows are still deleted (so the index
+  self-heals as the evictor encounters them) but counted on
+  `chunk_cache_index_evicted_missing_total`, and a batch that frees nothing at
+  all logs a warning. Deliberately NOT resolved by writing index deletes into
+  the other reclaimers: `del()` is per chunk, so that would reintroduce the
+  per-chunk index writes this ADR rejects at 4.5M cardinality.
+
+- **The evictor silently never fires at stock settings — RESOLVED.** All three
+  pressure triggers default to 0, which makes `overPressure()` unconditionally
+  false, so enabling the index bought both hooks and their cost while evicting
+  nothing — indistinguishable from a healthy idle evictor. It now warns at
+  startup when no trigger is configured.
+
+- **Unlink concurrency ignored the libuv budget — RESOLVED.** A fixed 50
+  concurrent `fs.rm(recursive)` calls take the entire threadpool on a stock
+  node (`UV_THREADPOOL_SIZE` defaults to 4), queueing chunk reads behind
+  removals on a device that is saturated whenever the evictor runs. Now
+  `CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY`, derived as
+  `max(1, UV_THREADPOOL_SIZE / 8)`.
+
 - **Age floor at SELECT time is not sufficient — RESOLVED (found in review,
   2026-08-20).** The floor was originally applied only in the candidate query
   and re-checked in the evictor. Both happen at *selection* time, which leaves a

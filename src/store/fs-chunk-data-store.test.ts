@@ -761,6 +761,25 @@ describe('FsChunkDataStore', () => {
       await store.delDataRoot(dataRoot);
     });
 
+    // The evictor books reclaimed bytes on this return value. Index rows
+    // routinely outlive their files -- the ingest GC, the filesystem-walk
+    // worker and manual sweeps all unlink chunks without touching the index --
+    // so reporting `true` for a directory that was already gone would credit
+    // the evictor with bytes that `df` never shows.
+    it('reports whether a data root was actually removed', async () => {
+      await store.set(dataRoot, 0, chunkData);
+      assert.equal(
+        await store.delDataRoot(dataRoot),
+        true,
+        'removing real files must report true',
+      );
+      assert.equal(
+        await store.delDataRoot(dataRoot),
+        false,
+        'an already-absent data root must report false',
+      );
+    });
+
     it('propagates a non-ENOENT error instead of reporting a false free', async () => {
       const fs = await import('node:fs');
       await store.set(dataRoot, 0, chunkData);
