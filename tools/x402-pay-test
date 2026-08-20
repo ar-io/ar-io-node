@@ -21,6 +21,7 @@
  *         MAX_USDC (default 0.05 — hard ceiling on a single payment)
  */
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -35,7 +36,7 @@ const KEY_FILE =
   process.env.X402_KEY_FILE ?? join(homedir(), '.config/ar-io-x402/test-wallet.key');
 const MAX_USDC = Number(process.env.MAX_USDC ?? '0.05');
 const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-const TEST_IP = '203.0.113.99'; // TEST-NET-3; the probe drains this bucket
+const TEST_IP = '203.0.113.99'; // TEST-NET-3, reserved for documentation
 
 const say = (...a) => console.log(...a);
 
@@ -74,13 +75,26 @@ if (usdc <= 0) {
 }
 
 // --- 1. unpaid request must be refused --------------------------------------
+// Seed our own exhausted bucket rather than relying on tools/x402-probe having
+// run: the probe deletes its bucket on exit, so depending on it makes this test
+// order-sensitive and silently skippable.
+const REDIS = process.env.REDIS ?? 'ar-io-node-redis-1';
+const BUCKET = `rl:ip:${TEST_IP}`;
+const redis = (...args) =>
+  execFileSync('docker', ['exec', REDIS, 'redis-cli', ...args], { encoding: 'utf8' }).trim();
+
+redis('HSET', BUCKET, 'tokens', '0', 'paidTokens', '0',
+  'lastRefill', String(Date.now()), 'capacity', '1000000', 'refillRate', '100');
+process.on('exit', () => { try { redis('DEL', BUCKET); } catch { /* best effort */ } });
+say(`   bucket  : ${BUCKET} seeded empty (deleted on exit)`);
+
 const url = `${GATEWAY}/raw/${TX}`;
 const headers = { 'X-Forwarded-For': TEST_IP, Accept: 'application/json' };
 
 const unpaid = await fetch(url, { headers });
 say(`\n-- unpaid request        HTTP ${unpaid.status}   expect 402`);
 if (unpaid.status !== 402) {
-  say('   !! bucket is not exhausted; run tools/x402-probe first to drain it');
+  say('   !! expected 402 with an empty bucket — is ENABLE_RATE_LIMITER on, and is this IP allowlisted?');
   process.exit(1);
 }
 const reqs = await unpaid.json();
@@ -103,9 +117,11 @@ const elapsed = ((Date.now() - started) / 1000).toFixed(1);
 
 say(`-- paid request          HTTP ${paid.status}   (${elapsed}s)`);
 const settled = paid.headers.get('x-payment-response');
+let settlementTx;
 if (settled) {
   try {
     const d = decodeXPaymentResponse(settled);
+    settlementTx = d.transaction;
     say(`   settlement: success=${d.success} tx=${d.transaction ?? 'n/a'} network=${d.network ?? 'n/a'}`);
   } catch {
     say(`   settlement header present (undecodable): ${settled.slice(0, 80)}`);
@@ -114,27 +130,65 @@ if (settled) {
   say('   !! no X-Payment-Response header — settlement not reported');
 }
 
-const bytes = Number(paid.headers.get('content-length') ?? 0);
-say(`   content-type: ${paid.headers.get('content-type')}  bytes: ${bytes}`);
+// Count what actually arrived. Content-Length is a claim; a truncated or
+// aborted stream would still advertise the full size, and reading balances
+// before the body completes is what made an earlier run report "spent 0".
+let bytes = 0;
+if (paid.body) {
+  const reader = paid.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+  }
+}
+const claimed = Number(paid.headers.get('content-length') ?? 0);
+say(`   content-type: ${paid.headers.get('content-type')}  bytes received: ${bytes}` +
+    (claimed && claimed !== bytes ? `  !! content-length claimed ${claimed}` : ''));
 
 // --- 3. what it cost ---------------------------------------------------------
-const after = await wallet.readContract({
-  address: USDC_BASE,
-  abi: [
-    {
-      name: 'balanceOf',
-      type: 'function',
-      stateMutability: 'view',
-      inputs: [{ name: 'a', type: 'address' }],
-      outputs: [{ type: 'uint256' }],
-    },
-  ],
-  functionName: 'balanceOf',
-  args: [account.address],
-});
+// Settlement is submitted by the facilitator and confirms a block later, so a
+// balance read taken right after the response races it and reports 0 spent.
+// Wait for the receipt first, then the delta is real.
+let atBlock;
+if (settlementTx) {
+  const receipt = await wallet.waitForTransactionReceipt({ hash: settlementTx });
+  atBlock = receipt.blockNumber;
+  say(`   settlement confirmed: ${receipt.status} in block ${receipt.blockNumber}`);
+}
+
+// Poll for the post-balance. Even after the receipt exists, an RPC node's view
+// of head can lag the block the transfer landed in, so a single read at
+// "latest" may still return pre-settlement state and report 0 spent. Pinning to
+// the settlement block is not an option either: public RPCs do not serve
+// archive state. So: re-read until it moves, with a short bound.
+const readBalance = () =>
+  wallet.readContract({
+    address: USDC_BASE,
+    abi: [
+      {
+        name: 'balanceOf',
+        type: 'function',
+        stateMutability: 'view',
+        inputs: [{ name: 'a', type: 'address' }],
+        outputs: [{ type: 'uint256' }],
+      },
+    ],
+    functionName: 'balanceOf',
+    args: [account.address],
+  });
+
+let after = await readBalance();
+for (let i = 0; i < 15 && after === balance; i++) {
+  await new Promise((r) => setTimeout(r, 1000));
+  after = await readBalance();
+}
+if (after === balance) {
+  say('   !! balance unchanged after 15s — settlement may not have credited yet');
+}
 const spent = Number(formatUnits(balance - after, 6));
 say(`   spent: ${spent} USDC   (balance now ${Number(formatUnits(after, 6))})`);
 
-const ok = paid.status === 200 && bytes > 0;
+const ok = paid.status === 200 && bytes > 0 && (claimed === 0 || claimed === bytes);
 say(`\n== ${ok ? 'PASS — 402 answered, data served' : 'FAIL — see above'} ==`);
 process.exit(ok ? 0 : 1);

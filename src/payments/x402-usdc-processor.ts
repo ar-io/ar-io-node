@@ -41,12 +41,16 @@ export interface X402UsdcProcessorConfig {
   facilitatorUrl: `${string}://${string}`;
   settleTimeoutMs: number;
   version: number;
-  // Paywall customization
+  // Paywall customization. PUBLIC CDP Client API key, embedded in the paywall
+  // HTML for the onramp widget. Not a facilitator credential.
   cdpClientKey?: string;
   appName?: string;
   appLogo?: string;
   sessionTokenEndpoint?: string;
-  // CDP API secret for coinbase facilitator access
+  // CDP API key ID + secret, used to authenticate against the Coinbase
+  // facilitator. The ID is NOT the same value as `cdpClientKey` above; passing
+  // the public client key here makes CDP reject every verify with 401.
+  cdpApiKeyId?: string;
   cdpClientSecret?: string;
 }
 
@@ -67,7 +71,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
     this.config = config;
 
     const facilitatorConfig = createFacilitatorConfigFromCredentials(
-      this.config.cdpClientKey,
+      this.config.cdpApiKeyId,
       this.config.cdpClientSecret,
       config.facilitatorUrl,
     );

@@ -24,6 +24,10 @@ function setNoStore(res: Response): void {
   res.setHeader('Cache-Control', 'no-store');
 }
 
+// Facilitator auth: CDP API key ID + secret. Falls back to
+// X_402_USDC_FACILITATOR_URL when either is unset -- note that the commonly
+// configured facilitator.x402.rs supports testnets only, so on mainnet a
+// missing credential fails silently rather than loudly.
 const facilitatorConfig = createFacilitatorConfigFromCredentials(
   config.X_402_CDP_API_KEY_ID,
   config.X_402_CDP_CLIENT_SECRET,
