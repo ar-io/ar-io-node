@@ -492,6 +492,19 @@ from a gateway rollout.
   deviation above: **any value that gates removal must be complete, or absent —
   never partially computed.**
 
+- **The walk worker does not honour the derived floor (pre-existing, NOT
+  introduced here).** `FsCleanupWorker` reclaims destructively with
+  `CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS` as its floor, independently of
+  the ingest confirmation timeouts. Where that is configured below the longer
+  confirmation window and ingest caching is on, the walk worker can already
+  delete an unconfirmed chunk today — on `turbo-gw-fsn1-2` that is a 2h gap
+  (aggressive 7200s vs allowlist timeout 14400s). Measured exposure is currently
+  nil (confirmation is <=300s and no placement was observed unconfirmed beyond
+  1.51h), but the contract is violated. Keeping the walk worker as the index
+  reconciler therefore requires raising its floor to meet the derived one; see
+  `docs/cache-cleanup.md`. Flagged here because this ADR is what makes the two
+  reclaimers coexist by design.
+
 - **Age floor at SELECT time is not sufficient — RESOLVED (found in review,
   2026-08-20).** The floor was originally applied only in the candidate query
   and re-checked in the evictor. Both happen at *selection* time, which leaves a

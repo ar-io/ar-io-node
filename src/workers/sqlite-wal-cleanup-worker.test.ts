@@ -76,6 +76,12 @@ describe('cleanupWal database targeting', () => {
 
     worker.cleanupWal('chunks');
 
+    // Drop the fixture rows: chunks.db is shared across suites and the
+    // chunk_data_cache tests assert on exact row counts.
+    chunksDb
+      .prepare("DELETE FROM chunk_data_cache WHERE data_root LIKE 'wal-test-%'")
+      .run();
+
     const after = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0;
     assert.ok(
       after < before,

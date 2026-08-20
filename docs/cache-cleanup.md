@@ -310,6 +310,24 @@ evictor distinguishes the two cases in its logs: "index drained but still over
 pressure" (drift — run the walk worker) versus "all remaining entries are inside
 the age floor" (working as designed — add capacity).
 
+> [!WARNING]
+> **The walk worker does not honour the derived age floor, and it deletes.**
+> `FsCleanupWorker` is a destructive TTL reclaimer, not a read-only drift
+> scanner. Under pressure its floor is `CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS`
+> alone, which is **independent of** the ingest confirmation timeouts the index
+> evictor's floor is derived from. If it is set below
+> `max(CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS, CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS)`
+> while `CHUNK_INGEST_CACHE_ENABLED=true`, the walk worker can delete an
+> unconfirmed chunk before its confirmation window closes — the exact failure
+> the evictor's floor exists to prevent, reached by the other reclaimer.
+>
+> This is **not** specific to the index evictor: it applies to any gateway
+> running the walk worker with ingest caching on, including deployments that
+> never enable the index. When running both, either raise
+> `CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS` to meet the derived floor, or
+> run the walk worker only as an occasional manual sweep with an age floor at
+> least as large.
+
 See [ADR 005](madr/005-chunk-data-cache-indexed-eviction.md) for the
 measurements and the design rationale, and [Environment Variables](envs.md) for
 the full list of related settings.

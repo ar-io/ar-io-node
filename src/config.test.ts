@@ -234,73 +234,100 @@ describe('deriveChunkDataCacheMinAgeSeconds', () => {
   // data root confirms on chain breaks upload propagation, and it fails
   // silently. See the comment block on the function in config.ts.
 
-  it('equals the allowlist confirmation timeout when ingest caching is enabled and that timeout is larger', () => {
-    // Stock defaults: AGGRESSIVE=3600 (1h), ALLOWLIST_TIMEOUT=86400 (24h).
+  it('covers the longer confirmation window when ingest caching is enabled', () => {
+    // Stock defaults: AGGRESSIVE=3600 (1h), OPEN=21600 (6h), ALLOWLIST=86400 (24h).
     assert.equal(
       deriveChunkDataCacheMinAgeSeconds({
         ingestCacheEnabled: true,
         aggressiveMinAgeSeconds: 3600,
+        confirmationTimeoutSeconds: 21600,
         allowlistConfirmationTimeoutSeconds: 86400,
       }),
       86400,
     );
 
-    // Production gw2: AGGRESSIVE=7200 (2h), ALLOWLIST_TIMEOUT=14400 (4h).
+    // Production gw2: AGGRESSIVE=7200 (2h), OPEN=7200 (2h), ALLOWLIST=14400 (4h).
     assert.equal(
       deriveChunkDataCacheMinAgeSeconds({
         ingestCacheEnabled: true,
         aggressiveMinAgeSeconds: 7200,
+        confirmationTimeoutSeconds: 7200,
         allowlistConfirmationTimeoutSeconds: 14400,
       }),
       14400,
     );
   });
 
-  it('equals the aggressive min age when ingest caching is disabled', () => {
-    // Nothing locally-originated to protect, so the floor is just the same
-    // floor the filesystem-walk cleanup worker honors -- even though the
-    // allowlist timeout is far larger.
-    assert.equal(
-      deriveChunkDataCacheMinAgeSeconds({
-        ingestCacheEnabled: false,
-        aggressiveMinAgeSeconds: 3600,
-        allowlistConfirmationTimeoutSeconds: 86400,
-      }),
-      3600,
-    );
-  });
-
-  it('keeps the aggressive min age when it already exceeds the allowlist timeout', () => {
+  // The two ingest timeouts are independent settings; the allowlist one is the
+  // longer only at stock defaults. Deriving from that assumed ordering rather
+  // than from the actual configuration would leave an open-ingest chunk
+  // evictable before its window closes -- the exact silent failure this
+  // derivation exists to prevent.
+  it('covers the OPEN-ingest timeout when an operator raises it above the allowlist one', () => {
     assert.equal(
       deriveChunkDataCacheMinAgeSeconds({
         ingestCacheEnabled: true,
-        aggressiveMinAgeSeconds: 172800,
+        aggressiveMinAgeSeconds: 3600,
+        confirmationTimeoutSeconds: 172800, // 48h -- deliberately the longest
         allowlistConfirmationTimeoutSeconds: 86400,
       }),
       172800,
     );
   });
 
-  it('is never below the allowlist confirmation timeout while ingest caching is enabled', () => {
+  it('equals the aggressive min age when ingest caching is disabled', () => {
+    // Nothing locally-originated to protect, so the floor is just the same
+    // floor the filesystem-walk cleanup worker honors -- even though both
+    // ingest timeouts are far larger.
+    assert.equal(
+      deriveChunkDataCacheMinAgeSeconds({
+        ingestCacheEnabled: false,
+        aggressiveMinAgeSeconds: 3600,
+        confirmationTimeoutSeconds: 21600,
+        allowlistConfirmationTimeoutSeconds: 86400,
+      }),
+      3600,
+    );
+  });
+
+  it('keeps the aggressive min age when it already exceeds both timeouts', () => {
+    assert.equal(
+      deriveChunkDataCacheMinAgeSeconds({
+        ingestCacheEnabled: true,
+        aggressiveMinAgeSeconds: 604800,
+        confirmationTimeoutSeconds: 21600,
+        allowlistConfirmationTimeoutSeconds: 86400,
+      }),
+      604800,
+    );
+  });
+
+  it('is never below ANY of its inputs while ingest caching is enabled', () => {
     const aggressiveValues = [0, 60, 3600, 7200, 14400, 86400, 172800];
-    const allowlistValues = [60, 3600, 14400, 21600, 86400, 604800];
+    const openValues = [60, 3600, 21600, 172800];
+    const allowlistValues = [60, 3600, 14400, 86400, 604800];
     for (const aggressiveMinAgeSeconds of aggressiveValues) {
-      for (const allowlistConfirmationTimeoutSeconds of allowlistValues) {
-        const floor = deriveChunkDataCacheMinAgeSeconds({
-          ingestCacheEnabled: true,
-          aggressiveMinAgeSeconds,
-          allowlistConfirmationTimeoutSeconds,
-        });
-        assert.ok(
-          floor >= allowlistConfirmationTimeoutSeconds,
-          `floor ${floor} must not be below the allowlist confirmation ` +
-            `timeout ${allowlistConfirmationTimeoutSeconds} ` +
-            `(aggressive=${aggressiveMinAgeSeconds})`,
-        );
-        assert.ok(
-          floor >= aggressiveMinAgeSeconds,
-          `floor ${floor} must not be below the aggressive min age ${aggressiveMinAgeSeconds}`,
-        );
+      for (const confirmationTimeoutSeconds of openValues) {
+        for (const allowlistConfirmationTimeoutSeconds of allowlistValues) {
+          const floor = deriveChunkDataCacheMinAgeSeconds({
+            ingestCacheEnabled: true,
+            aggressiveMinAgeSeconds,
+            confirmationTimeoutSeconds,
+            allowlistConfirmationTimeoutSeconds,
+          });
+          const inputs = {
+            aggressiveMinAgeSeconds,
+            confirmationTimeoutSeconds,
+            allowlistConfirmationTimeoutSeconds,
+          };
+          for (const [name, value] of Object.entries(inputs)) {
+            assert.ok(
+              floor >= value,
+              `floor ${floor} must not be below ${name}=${value} ` +
+                `(inputs ${JSON.stringify(inputs)})`,
+            );
+          }
+        }
       }
     }
   });

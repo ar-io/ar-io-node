@@ -3389,8 +3389,10 @@ export const CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS =
  *     open-ingest chunks, and
  *   - CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS (default 86400 / 24h)
  *     for allowlisted posters.
- * The ALLOWLIST timeout is the one that matters here because it is the LONGER
- * of the two, and the floor has to cover the worst case. Taking
+ * BOTH are taken into account. The allowlist timeout is the longer only at
+ * stock defaults; they are independent settings, so relying on that ordering
+ * would leave an open-ingest chunk evictable before its window closes the
+ * moment an operator raises the open timeout. Taking
  * CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS alone would leave an allowlisted
  * chunk evictable well before its confirmation window expires -- on the
  * production gw2 configuration (AGGRESSIVE=7200, ALLOWLIST_TIMEOUT=14400) that
@@ -3408,15 +3410,30 @@ export const CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS =
 export function deriveChunkDataCacheMinAgeSeconds({
   ingestCacheEnabled,
   aggressiveMinAgeSeconds,
+  confirmationTimeoutSeconds,
   allowlistConfirmationTimeoutSeconds,
 }: {
   ingestCacheEnabled: boolean;
   aggressiveMinAgeSeconds: number;
+  confirmationTimeoutSeconds: number;
   allowlistConfirmationTimeoutSeconds: number;
 }): number {
-  return ingestCacheEnabled
-    ? Math.max(aggressiveMinAgeSeconds, allowlistConfirmationTimeoutSeconds)
-    : aggressiveMinAgeSeconds;
+  if (!ingestCacheEnabled) {
+    return aggressiveMinAgeSeconds;
+  }
+  // Take the maximum of BOTH confirmation windows, not just the allowlist one.
+  // They are independent environment variables: the allowlist timeout is the
+  // longer only at stock defaults, and an operator who raises
+  // CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS above it would otherwise get a
+  // floor below the open-ingest window -- reintroducing exactly the silent
+  // eviction-before-confirmation this derivation exists to prevent. Deriving
+  // from the actual configuration rather than from the default ordering is the
+  // whole point.
+  return Math.max(
+    aggressiveMinAgeSeconds,
+    confirmationTimeoutSeconds,
+    allowlistConfirmationTimeoutSeconds,
+  );
 }
 
 // Chunks younger than this are never eviction candidates, however tight disk
@@ -3430,6 +3447,7 @@ export const CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS =
   deriveChunkDataCacheMinAgeSeconds({
     ingestCacheEnabled: CHUNK_INGEST_CACHE_ENABLED,
     aggressiveMinAgeSeconds: CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
+    confirmationTimeoutSeconds: CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS,
     allowlistConfirmationTimeoutSeconds:
       CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS,
   });

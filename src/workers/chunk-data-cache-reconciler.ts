@@ -52,6 +52,10 @@ export class ChunkDataCacheReconciler {
   private checkpointPath: string;
 
   private running = false;
+  // Set when a flush dropped a batch. Suppresses checkpoint advancement and
+  // clearing so a restart re-walks the affected shards rather than skipping
+  // data roots that were never indexed.
+  private flushFailed = false;
   private buffer: {
     dataRoot: string;
     size: number;
@@ -156,6 +160,12 @@ export class ChunkDataCacheReconciler {
       this.backfilled += batch.length;
       metrics.chunkCacheIndexBackfilledTotal.inc(batch.length);
     } catch (error: any) {
+      // The batch is gone and the insert is insert-if-absent, so those data
+      // roots are only recovered by walking them again. Remember the failure
+      // so the shard checkpoint is neither advanced nor cleared: advancing it
+      // would let a restart skip shards whose rows were never written, and the
+      // pass would report success with silent gaps in the index.
+      this.flushFailed = true;
       this.log.warn('Backfill insert failed; dropping batch', {
         count: batch.length,
         error: error?.message,
@@ -227,6 +237,9 @@ export class ChunkDataCacheReconciler {
     let chunkCount = 0;
     let maxMtimeMs = 0;
     let maxAccessMs = 0;
+    // Set when a chunk file exists but could not be read, which makes the
+    // aggregate below incomplete in the same way an abort does.
+    let unreadable = false;
 
     for (
       let i = 0;
@@ -255,7 +268,15 @@ export class ChunkDataCacheReconciler {
               maxAccessMs = accessMs;
             }
           } catch (error: any) {
+            // ENOENT is safe to ignore: the file is genuinely gone, so it
+            // contributes no bytes and no timestamp. ANY other failure means a
+            // chunk exists that we could not read, and emitting the row anyway
+            // would understate size, chunk_count and -- the dangerous one --
+            // lastWrite, letting the row pass the evictor's age floor early
+            // and taking the unread chunk with the directory. Same hazard as
+            // the abort path below; poison it so the data root is skipped.
             if (error?.code !== 'ENOENT') {
+              unreadable = true;
               this.log.debug('Backfill: error statting chunk file', {
                 path: fullPath,
                 error: error?.message,
@@ -277,7 +298,7 @@ export class ChunkDataCacheReconciler {
     // re-run; only a subsequent write to that data root would repair it, and a
     // cold data root never gets one. Emitting nothing is always safe: an
     // unindexed data root simply is not an eviction candidate.
-    if (!this.running) {
+    if (!this.running || unreadable) {
       return null;
     }
 
@@ -301,6 +322,7 @@ export class ChunkDataCacheReconciler {
       return;
     }
     this.running = true;
+    this.flushFailed = false;
     this.lastProgressLogMs = Date.now();
     this.log.info('Starting chunk cache index backfill', {
       baseDir: this.baseDir,
@@ -418,15 +440,21 @@ export class ChunkDataCacheReconciler {
         // only if the shard finished cleanly (not aborted mid-walk by stop()),
         // so we never record a partially-processed shard as done.
         await this.flush();
-        if (this.running) {
+        if (this.running && !this.flushFailed) {
           await this.saveCheckpoint(shard.name);
+        } else if (this.flushFailed) {
+          // A batch was dropped somewhere in this shard. Leaving the
+          // checkpoint where it is makes a restart re-walk the shard, which is
+          // the only way those rows are ever written (the insert is
+          // insert-if-absent, so re-walking is safe and idempotent).
+          completed = false;
         } else {
           completed = false;
         }
       }
 
       await this.flush();
-      if (completed && this.running) {
+      if (completed && this.running && !this.flushFailed) {
         // Full pass done: clear the checkpoint so a future enable starts fresh.
         await this.clearCheckpoint();
       }
@@ -435,6 +463,7 @@ export class ChunkDataCacheReconciler {
         chunkFilesVisited: this.chunkFilesVisited,
         backfilled: this.backfilled,
         aborted: !this.running,
+        droppedBatches: this.flushFailed,
         completed,
       });
     } catch (error: any) {

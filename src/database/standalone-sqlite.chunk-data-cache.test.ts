@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { before, describe, it } from 'node:test';
+import { before, beforeEach, describe, it } from 'node:test';
 
 import { StandaloneSqliteDatabaseWorker } from './standalone-sqlite.js';
 import { toB64Url } from '../lib/encoding.js';
@@ -54,6 +54,13 @@ describe('chunk_data_cache (chunks.db) worker methods', () => {
       chunksDbPath,
       tagSelectivity: {},
     });
+  });
+
+  // chunks.db is shared with every other suite in the run, and these tests
+  // assert on exact row counts and orderings. Start each from an empty table
+  // so results cannot depend on execution order.
+  beforeEach(() => {
+    chunksDb.prepare('DELETE FROM chunk_data_cache').run();
   });
 
   it('accumulates size and chunk_count across writes to the same data root', () => {

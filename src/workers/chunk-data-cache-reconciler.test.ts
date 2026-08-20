@@ -377,4 +377,93 @@ describe('ChunkDataCacheReconciler', () => {
       `a partially-walked data root must not be indexed, got ${JSON.stringify(partial)}`,
     );
   });
+
+  // Same hazard as the abort path, different trigger: a chunk file that exists
+  // but cannot be stat'd must poison its data root rather than yield a row
+  // built from the files that could be read. ENOENT is the one safe exception.
+  it('emits no row for a data root with an unreadable chunk file', async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const baseDir = await buildTree(nowSec);
+    const { cacheIndex, inserted } = makeIndex();
+
+    const realStat = fs.promises.stat;
+    (fs.promises as any).stat = async (p: any) => {
+      if (String(p).endsWith(`${DATA_ROOT_A}/524288`)) {
+        const err: any = new Error('simulated I/O error');
+        err.code = 'EIO';
+        throw err;
+      }
+      return realStat(p);
+    };
+    try {
+      await new ChunkDataCacheReconciler({
+        log,
+        cacheIndex,
+        baseDir,
+        checkpointPath: path.join(baseDir, '..', '.eio-ckpt'),
+        batchSize: 100,
+        walkConcurrency: 1,
+      } as any).run();
+    } finally {
+      (fs.promises as any).stat = realStat;
+    }
+
+    const poisoned = inserted.find((e) => e.dataRoot === DATA_ROOT_A);
+    assert.equal(
+      poisoned,
+      undefined,
+      `a data root with an unreadable chunk must not be indexed, got ${JSON.stringify(poisoned)}`,
+    );
+    // The unaffected data root is still indexed -- one bad directory must not
+    // abandon the whole pass.
+    assert.ok(
+      inserted.some((e) => e.dataRoot === DATA_ROOT_B),
+      'other data roots must still be backfilled',
+    );
+  });
+
+  // A dropped batch means those data roots were never written, so the shard
+  // checkpoint must not advance past them. Observed mid-pass rather than at the
+  // end: a pass that believes it succeeded advances the checkpoint AND then
+  // clears it, so the final file state looks identical either way. What
+  // actually differs -- and what causes the data loss -- is that a restart
+  // between the two would skip a shard whose rows were never inserted.
+  it('does not advance the checkpoint past a shard whose batch was dropped', async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const baseDir = await buildTree(nowSec);
+    const checkpointPath = path.join(baseDir, '..', '.drop-ckpt');
+    let checkpointDuringLaterShard: string | null = null;
+
+    const cacheIndex = {
+      insertChunkDataCacheEntriesIfAbsent: async (entries: any[]) => {
+        // Shard 'aa' holds DATA_ROOT_A; shard 'bb' holds DATA_ROOT_B and is
+        // walked second, so by then the 'aa' checkpoint decision is made.
+        if (entries.some((e) => e.dataRoot === DATA_ROOT_A)) {
+          throw new Error('simulated insert failure');
+        }
+        if (entries.some((e) => e.dataRoot === DATA_ROOT_B)) {
+          checkpointDuringLaterShard = fs.existsSync(checkpointPath)
+            ? fs.readFileSync(checkpointPath, 'utf8').trim()
+            : null;
+        }
+      },
+    };
+
+    await new ChunkDataCacheReconciler({
+      log,
+      cacheIndex,
+      baseDir,
+      checkpointPath,
+      batchSize: 1,
+      walkConcurrency: 1,
+    } as any).run();
+
+    assert.equal(
+      checkpointDuringLaterShard,
+      null,
+      `checkpoint must not have advanced past the dropped shard, but was ` +
+        `"${checkpointDuringLaterShard}" -- a restart here would skip it and ` +
+        `those data roots would never be indexed`,
+    );
+  });
 });
