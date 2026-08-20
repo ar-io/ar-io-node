@@ -118,10 +118,12 @@ const elapsed = ((Date.now() - started) / 1000).toFixed(1);
 say(`-- paid request          HTTP ${paid.status}   (${elapsed}s)`);
 const settled = paid.headers.get('x-payment-response');
 let settlementTx;
+let settlementOk = false;
 if (settled) {
   try {
     const d = decodeXPaymentResponse(settled);
     settlementTx = d.transaction;
+    settlementOk = d.success === true;
     say(`   settlement: success=${d.success} tx=${d.transaction ?? 'n/a'} network=${d.network ?? 'n/a'}`);
   } catch {
     say(`   settlement header present (undecodable): ${settled.slice(0, 80)}`);
@@ -142,9 +144,12 @@ if (paid.body) {
     bytes += value.byteLength;
   }
 }
-const claimed = Number(paid.headers.get('content-length') ?? 0);
+// An ABSENT Content-Length cannot be cross-checked; a DECLARED zero is a real
+// mismatch against a non-empty body. `Number(header ?? 0)` conflated the two.
+const claimedHeader = paid.headers.get('content-length');
+const claimed = claimedHeader === null ? undefined : Number(claimedHeader);
 say(`   content-type: ${paid.headers.get('content-type')}  bytes received: ${bytes}` +
-    (claimed && claimed !== bytes ? `  !! content-length claimed ${claimed}` : ''));
+    (claimed !== undefined && claimed !== bytes ? `  !! content-length claimed ${claimed}` : ''));
 
 // --- 3. what it cost ---------------------------------------------------------
 // Settlement is submitted by the facilitator and confirms a block later, so a
@@ -154,6 +159,7 @@ let atBlock;
 if (settlementTx) {
   const receipt = await wallet.waitForTransactionReceipt({ hash: settlementTx });
   atBlock = receipt.blockNumber;
+  if (receipt.status !== 'success') settlementOk = false;
   say(`   settlement confirmed: ${receipt.status} in block ${receipt.blockNumber}`);
 }
 
@@ -189,6 +195,10 @@ if (after === balance) {
 const spent = Number(formatUnits(balance - after, 6));
 say(`   spent: ${spent} USDC   (balance now ${Number(formatUnits(after, 6))})`);
 
-const ok = paid.status === 200 && bytes > 0 && (claimed === 0 || claimed === bytes);
-say(`\n== ${ok ? 'PASS — 402 answered, data served' : 'FAIL — see above'} ==`);
+// Serving data without a confirmed settlement is the failure this whole
+// exercise exists to catch, so it must not PASS.
+const lengthOk = claimed === undefined || claimed === bytes;
+const ok = paid.status === 200 && bytes > 0 && lengthOk && settlementOk;
+if (!settlementOk) say('   !! settlement not confirmed successful — data was served unpaid');
+say(`\n== ${ok ? 'PASS — 402 answered, payment settled, data served' : 'FAIL — see above'} ==`);
 process.exit(ok ? 0 : 1);
