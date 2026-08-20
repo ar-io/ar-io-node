@@ -2014,20 +2014,6 @@ if (dataSqliteWalCleanupWorker !== undefined) {
   dataSqliteWalCleanupWorker.start();
 }
 
-// chunks.db carries the chunk data cache eviction index (ADR 005), whose write
-// hook fires on every cached chunk. Nothing else checkpoints that WAL.
-const chunksSqliteWalCleanupWorker = config.ENABLE_CHUNKS_DB_WAL_CLEANUP
-  ? new SQLiteWalCleanupWorker({
-      log,
-      db,
-      dbName: 'chunks',
-    })
-  : undefined;
-
-if (chunksSqliteWalCleanupWorker !== undefined) {
-  chunksSqliteWalCleanupWorker.start();
-}
-
 const dataVerificationWorker = config.ENABLE_BACKGROUND_DATA_VERIFICATION
   ? new DataVerificationWorker({
       log,
@@ -2078,7 +2064,6 @@ export const shutdown = async (exitCode = 0) => {
     eventEmitter.removeAllListeners();
     arIOPeerManager.stopUpdatingPeers();
     dataSqliteWalCleanupWorker?.stop();
-    chunksSqliteWalCleanupWorker?.stop();
     await arnsResolutionCache.close();
     await arnsRegistryCache.close();
     await envoyEndpointHealthWorker?.stop();

@@ -6,17 +6,14 @@
  */
 
 import * as winston from 'winston';
-import {
-  SqliteDbName,
-  StandaloneSqliteDatabase,
-} from '../database/standalone-sqlite.js';
+import { StandaloneSqliteDatabase } from '../database/standalone-sqlite.js';
 
 const CLEANUP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 
 export class SQLiteWalCleanupWorker {
   private log: winston.Logger;
   private db: StandaloneSqliteDatabase;
-  private dbName: SqliteDbName;
+  private dbName: 'core' | 'bundles' | 'data' | 'moderation';
   private intervalId?: NodeJS.Timeout;
 
   constructor({
@@ -26,7 +23,7 @@ export class SQLiteWalCleanupWorker {
   }: {
     log: winston.Logger;
     db: StandaloneSqliteDatabase;
-    dbName: SqliteDbName;
+    dbName: 'core' | 'bundles' | 'data' | 'moderation';
   }) {
     this.log = log.child({ class: 'SQLiteWalCleanupWorker' });
     this.db = db;

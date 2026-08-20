@@ -3361,7 +3361,7 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
-  cleanupWal(dbName: SqliteDbName) {
+  cleanupWal(dbName: 'core' | 'bundles' | 'data' | 'moderation') {
     const walCheckpoint = this.dbs[dbName].pragma('wal_checkpoint(TRUNCATE)');
 
     return walCheckpoint[0];
@@ -3383,15 +3383,6 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 }
-
-// The SQLite files this process owns. Distinct from WorkerPoolName: chunks.db
-// deliberately has no worker pool of its own.
-export type SqliteDbName =
-  | 'core'
-  | 'data'
-  | 'moderation'
-  | 'bundles'
-  | 'chunks';
 
 type WorkerPoolName =
   | 'core'
@@ -4650,15 +4641,8 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('bundles', 'pruneStableDataItems', [params]);
   }
 
-  async cleanupWal(dbName: SqliteDbName): Promise<void> {
-    // Which worker pool executes the checkpoint. For most databases the pool
-    // shares the database's name, but chunks.db has no pool of its own -- like
-    // every other chunks.db statement it runs on the `data` pool. The
-    // checkpoint still targets chunks.db's own WAL, which is otherwise never
-    // truncated: nothing else checkpoints it, so a write-heavy table there
-    // (chunk_data_cache, ADR 005) would grow chunks.db-wal without bound.
-    const pool: WorkerPoolName = dbName === 'chunks' ? 'data' : dbName;
-    return this.queueWrite(pool, 'cleanupWal', [dbName]).then(
+  async cleanupWal(dbName: WorkerPoolName): Promise<void> {
+    return this.queueWrite(dbName, 'cleanupWal', [dbName]).then(
       (walCheckpoint) => {
         this.log.info('WAL checkpoint', {
           dbName,

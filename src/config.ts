@@ -1814,14 +1814,6 @@ export const OPTIMISTIC_TX_MAX_BATCH_SIZE = env.positiveIntOrDefault(
 export const ENABLE_DATA_DB_WAL_CLEANUP =
   env.varOrDefault('ENABLE_DATA_DB_WAL_CLEANUP', 'false') === 'true';
 
-// Periodically TRUNCATE-checkpoint chunks.db's WAL. Nothing else does: chunks.db
-// is deliberately isolated (no ATTACH in either direction) so it never rides
-// another database's checkpoint, and it had no WAL cleanup worker before the
-// chunk data cache index (ADR 005) added a high-write table to it. Enable this
-// alongside ENABLE_CHUNK_DATA_CACHE_INDEX or chunks.db-wal grows unbounded.
-export const ENABLE_CHUNKS_DB_WAL_CLEANUP =
-  env.varOrDefault('ENABLE_CHUNKS_DB_WAL_CLEANUP', 'false') === 'true';
-
 // The maximum number of data items to queue for indexing before skipping
 // indexing new data items
 export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(

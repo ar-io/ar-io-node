@@ -56,6 +56,9 @@ export class ChunkDataCacheReconciler {
   // clearing so a restart re-walks the affected shards rather than skipping
   // data roots that were never indexed.
   private flushFailed = false;
+  // Sticky across the whole pass: gates the final clearCheckpoint and is
+  // reported in the completion log, so a lossy pass never looks clean.
+  private anyFlushFailed = false;
   private buffer: {
     dataRoot: string;
     size: number;
@@ -95,9 +98,17 @@ export class ChunkDataCacheReconciler {
     this.walkConcurrency = Math.max(1, walkConcurrency);
     // Default beside (not under) baseDir so the checkpoint file is never itself
     // walked/indexed.
+    // NOT under the chunk cache tree. FsCleanupWorker walks `data/chunks`
+    // wholesale and unlinks any file past its TTL with no skip list, so a
+    // checkpoint left in there is deleted after a few hours -- and a backfill
+    // paused overnight would silently re-walk millions of files from scratch.
+    //
+    // `data/tmp` root is safe: the staging sweepers are scoped to specific
+    // subdirectories (`data/tmp/ans-104`, `data/tmp/data-root`), not to
+    // `data/tmp` itself. Adding a sweeper for `data/tmp` would break this.
     this.checkpointPath =
       checkpointPath ??
-      path.join(baseDir, '..', '.chunk-cache-index-backfill-checkpoint');
+      path.join('data', 'tmp', 'chunk-cache-index-backfill-checkpoint');
   }
 
   private async loadCheckpoint(): Promise<string | null> {
@@ -121,6 +132,11 @@ export class ChunkDataCacheReconciler {
     // Atomic write (temp + rename) so a crash can't leave a torn checkpoint.
     const tmp = `${this.checkpointPath}.tmp`;
     try {
+      // The directory may not exist on a fresh install; without it every save
+      // fails at debug level and the backfill silently loses resumability.
+      await fs.promises.mkdir(path.dirname(this.checkpointPath), {
+        recursive: true,
+      });
       await fs.promises.writeFile(tmp, name);
       await fs.promises.rename(tmp, this.checkpointPath);
     } catch (error: any) {
@@ -166,6 +182,7 @@ export class ChunkDataCacheReconciler {
       // would let a restart skip shards whose rows were never written, and the
       // pass would report success with silent gaps in the index.
       this.flushFailed = true;
+      this.anyFlushFailed = true;
       this.log.warn('Backfill insert failed; dropping batch', {
         count: batch.length,
         error: error?.message,
@@ -323,6 +340,7 @@ export class ChunkDataCacheReconciler {
     }
     this.running = true;
     this.flushFailed = false;
+    this.anyFlushFailed = false;
     this.lastProgressLogMs = Date.now();
     this.log.info('Starting chunk cache index backfill', {
       baseDir: this.baseDir,
@@ -431,6 +449,8 @@ export class ChunkDataCacheReconciler {
           completed = false;
           break;
         }
+        // Per-shard: only this shard's flushes decide this shard's checkpoint.
+        this.flushFailed = false;
         // Skip shards already completed in a prior run.
         if (resumeFrom !== null && shard.name <= resumeFrom) {
           continue;
@@ -440,9 +460,13 @@ export class ChunkDataCacheReconciler {
         // only if the shard finished cleanly (not aborted mid-walk by stop()),
         // so we never record a partially-processed shard as done.
         await this.flush();
-        if (this.running && !this.flushFailed) {
+        // Scoped to THIS shard: a transient failure earlier in the pass must
+        // not suppress checkpointing for every shard after it. Cleared at the
+        // top of the next iteration below.
+        const shardDroppedBatches = this.flushFailed;
+        if (this.running && !shardDroppedBatches) {
           await this.saveCheckpoint(shard.name);
-        } else if (this.flushFailed) {
+        } else if (shardDroppedBatches) {
           // A batch was dropped somewhere in this shard. Leaving the
           // checkpoint where it is makes a restart re-walk the shard, which is
           // the only way those rows are ever written (the insert is
@@ -454,7 +478,7 @@ export class ChunkDataCacheReconciler {
       }
 
       await this.flush();
-      if (completed && this.running && !this.flushFailed) {
+      if (completed && this.running && !this.anyFlushFailed) {
         // Full pass done: clear the checkpoint so a future enable starts fresh.
         await this.clearCheckpoint();
       }
@@ -463,7 +487,7 @@ export class ChunkDataCacheReconciler {
         chunkFilesVisited: this.chunkFilesVisited,
         backfilled: this.backfilled,
         aborted: !this.running,
-        droppedBatches: this.flushFailed,
+        droppedBatches: this.anyFlushFailed,
         completed,
       });
     } catch (error: any) {

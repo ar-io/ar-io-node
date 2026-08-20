@@ -466,4 +466,43 @@ describe('ChunkDataCacheReconciler', () => {
         `those data roots would never be indexed`,
     );
   });
+
+  // A dropped batch must suppress the checkpoint for ITS shard only. Making it
+  // sticky for the whole pass means one transient SQLITE_BUSY early on stops
+  // every later shard from checkpointing, so a restart near the end of a
+  // multi-hour walk resumes from near the beginning.
+  it('still checkpoints later shards after an earlier shard dropped a batch', async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const baseDir = await buildTree(nowSec);
+    const checkpointPath = path.join(baseDir, '..', '.per-shard-ckpt');
+    let checkpointAtEnd: string | null = null;
+
+    const cacheIndex = {
+      insertChunkDataCacheEntriesIfAbsent: async (entries: any[]) => {
+        // Fail only in shard 'aa' (DATA_ROOT_A); shard 'bb' succeeds.
+        if (entries.some((e) => e.dataRoot === DATA_ROOT_A)) {
+          throw new Error('simulated insert failure');
+        }
+      },
+    };
+
+    const reconciler = new ChunkDataCacheReconciler({
+      log,
+      cacheIndex,
+      baseDir,
+      checkpointPath,
+      batchSize: 1,
+      walkConcurrency: 1,
+    } as any);
+    await reconciler.run();
+    checkpointAtEnd = fs.existsSync(checkpointPath)
+      ? fs.readFileSync(checkpointPath, 'utf8').trim()
+      : null;
+
+    assert.equal(
+      checkpointAtEnd,
+      'bb',
+      'the later, successful shard must still record its checkpoint',
+    );
+  });
 });
