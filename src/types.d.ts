@@ -329,6 +329,68 @@ export interface ContiguousDataCacheIndex {
 }
 
 /**
+ * Eviction index for the chunk data cache (ADR 005). A dedicated per-dataRoot
+ * table so the disk-pressure evictor can query "oldest N in tier T" from the DB
+ * instead of walking the deeply-sharded chunk cache directory tree. Implemented
+ * by StandaloneSqliteDatabase; the raw chunk bytes live on the filesystem under
+ * a directory named by the base64url data root -- which is why `dataRoot` is a
+ * string here and TEXT in the table.
+ *
+ * Eviction is all-or-nothing per data root, so every row describes the whole
+ * unit that would be reclaimed: accumulated `size`/`chunkCount`, the age floor
+ * `lastWrite` (max write time, NOT first write), and `lastAccess` (max read
+ * time) for LRU ordering.
+ */
+export interface ChunkDataCacheIndex {
+  // Chunk-write hook: accumulates size/chunkCount for the data root and
+  // advances the lastWrite age floor (MAX, never backwards).
+  saveChunkDataCacheEntry(entry: {
+    dataRoot: string;
+    size: number;
+    lastWrite: number;
+    tier: number;
+  }): Promise<void>;
+  // Chunk-read hook: refresh lastAccess and raise the tier (MAX, never
+  // demotes). Deliberately does NOT touch lastWrite -- a read must not push the
+  // age floor forward.
+  touchChunkDataCacheEntry(
+    dataRoot: string,
+    lastAccess: number,
+    tier: number,
+  ): Promise<void>;
+  // Batch backfill: insert rows only if absent (never clobbers live entries).
+  insertChunkDataCacheEntriesIfAbsent(
+    entries: {
+      dataRoot: string;
+      size: number;
+      chunkCount: number;
+      lastWrite: number;
+      lastAccess: number;
+      tier: number;
+    }[],
+  ): Promise<void>;
+  // Only data roots whose newest chunk write is at or before `maxLastWrite` are
+  // returned (the age floor); ordered tier ASC, lastAccess ASC.
+  selectChunkDataCacheEvictionCandidates(
+    maxLastWrite: number,
+    limit: number,
+  ): Promise<
+    { dataRoot: string; size: number; chunkCount: number; lastWrite: number }[]
+  >;
+  // Batch delete: removes many rows in one transaction and returns the data
+  // roots that were actually deleted (so the caller unlinks only those).
+  // maxLastWrite re-applies the age floor at delete time: a data root written
+  // to between selection and deletion deletes 0 rows and is not returned, so
+  // the caller never unlinks the directory holding that fresh chunk.
+  deleteChunkDataCacheEntries(
+    dataRoots: string[],
+    maxLastWrite: number,
+  ): Promise<string[]>;
+  sumChunkDataCacheBytes(): Promise<number>;
+  countChunkDataCacheEntries(): Promise<number>;
+}
+
+/**
  * Transaction boundary information for a given offset.
  * Contains the essential data needed to locate and validate a chunk
  * within a transaction.
