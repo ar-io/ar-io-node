@@ -1429,6 +1429,7 @@ const sendManifestResponse = async ({
   res,
   dataSource,
   dataAttributesSource,
+  dataBlockListValidator,
   dataItemMetaResolver,
   id,
   resolvedId,
@@ -1445,6 +1446,7 @@ const sendManifestResponse = async ({
   res: Response;
   dataSource: ContiguousDataSource;
   dataAttributesSource: DataAttributesSource;
+  dataBlockListValidator: DataBlockListValidator;
   dataItemMetaResolver?: TxMetadataResolver;
   id: string;
   resolvedId: string | undefined;
@@ -1469,6 +1471,27 @@ const sendManifestResponse = async ({
       return true;
     }
 
+    // Return 451 if the manifest-resolved data item is blocked by ID.
+    // The top-level handler only checks the request id — which for a manifest
+    // path is the manifest tx, not the item it resolves to. Without this check
+    // blocked content stays reachable via any manifest that references it.
+    try {
+      if (await dataBlockListValidator.isIdBlocked(resolvedId)) {
+        parentSpan?.setAttribute('http.status_code', 451);
+        parentSpan?.setAttribute('data.error', 'id_blocked');
+        sendBlocked(res, resolvedId);
+        // Indicate response was sent
+        return true;
+      }
+    } catch (error: any) {
+      parentSpan?.recordException(error);
+      log.error('Error checking blocklist:', {
+        dataId: resolvedId,
+        message: error.message,
+        stack: error.stack,
+      });
+    }
+
     let dataAttributes: ContiguousDataAttributes | undefined;
     try {
       dataAttributes = await dataAttributesSource.getDataAttributes(resolvedId);
@@ -1480,6 +1503,26 @@ const sendManifestResponse = async ({
       });
       // Indicate response was NOT sent
       return false;
+    }
+
+    // Return 451 if the manifest-resolved data item is blocked by hash.
+    if (dataAttributes?.hash !== undefined) {
+      try {
+        if (await dataBlockListValidator.isHashBlocked(dataAttributes.hash)) {
+          parentSpan?.setAttribute('http.status_code', 451);
+          parentSpan?.setAttribute('data.error', 'hash_blocked');
+          sendBlocked(res, resolvedId);
+          // Indicate response was sent
+          return true;
+        }
+      } catch (error: any) {
+        parentSpan?.recordException(error);
+        log.error('Error checking blocklist:', {
+          dataId: resolvedId,
+          message: error.message,
+          stack: error.stack,
+        });
+      }
     }
 
     // Retrieve data based on ID resolved from manifest path or index
@@ -1832,6 +1875,7 @@ export const createDataHandler = ({
               res,
               dataAttributesSource,
               dataSource,
+              dataBlockListValidator,
               dataItemMetaResolver,
               requestAttributes,
               rateLimiter,
@@ -1973,6 +2017,7 @@ export const createDataHandler = ({
               res,
               dataAttributesSource,
               dataSource,
+              dataBlockListValidator,
               dataItemMetaResolver,
               requestAttributes,
               rateLimiter,
