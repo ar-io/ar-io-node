@@ -178,11 +178,37 @@ That is safe for contiguous data. It is **not** safe for chunks: the floor is
 what guarantees a chunk is not evicted before its placement confirms. Measured
 confirmation is <=120 s, so the floor is what keeps a 15x-60x safety margin.
 
-The chunk evictor must therefore exclude candidates younger than
-`CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS` (or a dedicated
-`CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS`). Porting the contiguous semantics
-verbatim would introduce a data-propagation bug. This is the single most
-important review point in this document.
+The chunk evictor must therefore exclude candidates younger than the
+confirmation window. Porting the contiguous semantics verbatim would introduce a
+data-propagation bug. This is the single most important review point in this
+document.
+
+**The obvious floor value is not sufficient.** Taking
+`CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS` as the floor leaves a gap, because
+it is configured shorter than the window it has to cover:
+
+```
+CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS         =  7,200s (2h)   <- candidate floor
+CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS           =  7,200s (2h)
+CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS = 14,400s (4h)   <- longer
+```
+
+An allowlisted chunk therefore becomes evictable **two hours before its
+confirmation window expires**. Measured confirmation is <=120 s, so the
+practical exposure is small, but the timeout is the contract and eviction should
+not violate it merely because the common case is fast.
+
+The floor should be _derived_, not duplicated, so it cannot drift out of step
+with the ingest configuration:
+
+```
+effectiveFloor = max(CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
+                     CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS)
+```
+
+applied when ingest caching is enabled. Retaining 4 h rather than 2 h is free on
+a volume the measurements above show to be ~18x larger than the reuse profile
+requires.
 
 An alternative, arguably cleaner: give unconfirmed ingest chunks their own tier
 (see Departure 3) and let the floor apply only to tier 0. Either works; the
@@ -259,6 +285,15 @@ and an unindexed file simply is not a candidate. Unlike the contiguous cache,
 the chunk volume is XFS without compression, so logical byte counters equal
 physical bytes.
 
+## Scope: gateway cache only
+
+`ar-io-node-indexer-core-1` mounts a **separate** chunk tree
+(`caches/indexer/chunks`) on the spinning disk, not the NVMe LV measured here.
+The indexer is therefore unaffected by this change, but it runs the same code:
+enabling the evictor there is a distinct decision against an HDD-backed cache
+with different traversal characteristics, and should not be assumed to follow
+from a gateway rollout.
+
 ## Risks and Open Questions
 
 - **Age floor (blocking).** Porting the contiguous evictor's "no age floor"
@@ -282,6 +317,12 @@ physical bytes.
   does `mkdir` then `writeFile` with **no ENOENT retry** — removing a directory
   between those two calls silently drops the chunk. Any `rmdir` work must add
   that retry first.
+- **`chunk_placements` staleness is inert today.** dataRoot-scoped eviction will
+  unlink files that the optimistic-ingest index still has rows for.
+  `getChunkPlacement` currently has no callers outside the database layer and
+  tests, so a stale row is harmless and the two indexes do not need
+  synchronising to ship. This should be re-checked if that accessor ever gains a
+  caller on the serving path.
 - **`by-absolute-offset` symlinks** are unaffected and still reaped by
   `SymlinkCleanupWorker`; dataRoot-scoped eviction will orphan more of them at
   once, so its interval may need review.
