@@ -575,19 +575,21 @@ from a gateway rollout.
   schema replaces it with `last_write` = MAX(write time) over the dataRoot's
   chunks, advanced by `MAX(last_write, excluded.last_write)` on every upsert;
   reads update `last_access` only and never advance it. See Schema (as built).
-- **`chunks.db` WAL is never checkpointed (open; blocking for phase 3).**
-  `StandaloneSqliteDatabaseWorker.cleanupWal` is typed
-  `'core' | 'bundles' | 'data' | 'moderation'`
-  (`src/database/standalone-sqlite.ts`) and only the `data` database is wired to
-  a `SQLiteWalCleanupWorker` (`src/system.ts`, behind
-  `ENABLE_DATA_DB_WAL_CLEANUP`). `chunks.db` is deliberately isolated with its
-  own WAL — the point of putting `chunk_data_cache` there — but that also means
-  a write-heavy `chunk_data_cache` grows `chunks.db-wal` **unbounded**, on the
-  very volume this ADR is about. This must be addressed before the write hook
-  runs at production write rates. The fix needs pool/db separation, not just a
-  wider union type: there is no `chunks` worker pool, so `chunks.db` work routes
-  through the `data` pool, while `cleanupWal` currently uses the single `dbName`
-  argument as _both_ the queue target and the database to checkpoint.
+- **`chunks.db` WAL growth — NOT a risk (measured; this entry previously said
+  the opposite).** An earlier revision listed unbounded `chunks.db-wal` growth
+  as blocking for phase 3, and a periodic TRUNCATE-checkpoint worker was written
+  for it. The premise was wrong: nothing disables SQLite's default
+  `wal_autocheckpoint` (1000 pages at a 4 KiB page size), so the WAL is
+  checkpointed passively and reused in place. Measured on `turbo-gw-fsn1-2`
+  against ~877k `chunk_placements` rows: **11,857,392 bytes, byte-identical
+  across a 30-second sample and unchanged over 19 hours.** Bounded, not growing.
+
+  The worker was removed rather than kept. It would have reclaimed ~12 MB while
+  running `wal_checkpoint(TRUNCATE)` — which requires exclusive access — on the
+  shared `data` worker pool, against 30+ live connections to `chunks.db` (every
+  worker thread opens all five databases) with a 30 s busy timeout: a potential
+  head-of-line stall of the `data.db` writer every 15 minutes, bought for
+  nothing. `cleanupWal` is unchanged from `develop`.
 - **Large-dataRoot retention / hybrid tail (open).** The hybrid tail did not
   ship: `ENABLE_CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL` and
   `CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL_CHUNK_THRESHOLD` are reserved and inert.
@@ -636,11 +638,19 @@ from a gateway rollout.
   plus a refetch until reaped. Operators enabling the evictor on a large chunk
   cache should shorten `CHUNK_SYMLINK_CLEANUP_INTERVAL` accordingly; 24 h leaves
   a substantial orphan population resident between sweeps.
-- **Write amplification** from the read hook. Keeping the table in `chunks.db`
-  removes the `data.db` exposure the proposal worried about, and per-dataRoot
-  keying keeps the hot set small — but it relocates the cost onto the
-  un-checkpointed WAL above rather than eliminating it. Still to be measured,
-  not assumed.
+- **Write amplification from the hooks (open; measure before enabling at
+  scale).** Keeping the table in `chunks.db` removes the `data.db` exposure the
+  proposal worried about, and per-dataRoot keying keeps the hot set small. What
+  it does not remove is the per-operation cost: every cached chunk is one
+  upsert and every by-dataRoot cache hit one touch, each its own implicit
+  transaction, all queued onto the `data` pool's **single** write worker, which
+  is shared with `data.db`. `chunks.db` has no pool of its own. A large upload
+  therefore issues one upsert per chunk against the *same row* — up to ~25,000
+  of them for the largest observed dataRoot — to move one `size` accumulator.
+  Coalescing in `FsChunkDataStore` (an in-memory map flushed on a short timer,
+  the shape the reconciler's `flush()` already uses) would collapse that, but it
+  is a change to the chunk write hot path and belongs behind its own
+  measurement rather than bundled with this ADR.
 
 ## Related
 
