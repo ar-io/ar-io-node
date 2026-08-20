@@ -29,7 +29,7 @@ function setNoStore(res: Response): void {
 // configured facilitator.x402.rs supports testnets only, so on mainnet a
 // missing credential fails silently rather than loudly.
 const facilitatorConfig = createFacilitatorConfigFromCredentials(
-  config.X_402_CDP_API_KEY_ID,
+  config.X_402_CDP_FACILITATOR_KEY_ID,
   config.X_402_CDP_CLIENT_SECRET,
   config.X_402_USDC_FACILITATOR_URL as `${string}://${string}`,
 );
