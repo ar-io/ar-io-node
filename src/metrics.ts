@@ -1249,6 +1249,47 @@ export const cacheIndexBackfilledTotal = new promClient.Counter({
   help: 'On-disk blobs seeded into the cache cleanup index by the reconciler',
 });
 
+// Chunk data cache cleanup index (ADR 005). A parallel family rather than a
+// data_type label on the cache_index_* metrics above: those are unlabelled by
+// data type, so a chunk evictor emitting into them would collide with the
+// contiguous evictor's series.
+
+export const chunkCacheIndexEvictedTotal = new promClient.Counter({
+  name: 'chunk_cache_index_evicted_total',
+  help: 'Chunks evicted by the index-driven chunk data cache evictor',
+  labelNames: ['reason'] as const,
+});
+
+export const chunkCacheIndexEvictedBytesTotal = new promClient.Counter({
+  name: 'chunk_cache_index_evicted_bytes_total',
+  help: 'Bytes reclaimed by the index-driven chunk data cache evictor',
+});
+
+export const chunkCacheIndexEntriesGauge = new promClient.Gauge({
+  name: 'chunk_cache_index_entries',
+  help: 'Current row count of the chunk data cache cleanup index',
+});
+
+export const chunkCacheIndexBytesGauge = new promClient.Gauge({
+  name: 'chunk_cache_index_bytes',
+  help: 'Sum of chunk sizes tracked by the chunk data cache cleanup index',
+});
+
+export const chunkCacheIndexBackfilledTotal = new promClient.Counter({
+  name: 'chunk_cache_index_backfilled_total',
+  help: 'On-disk chunks seeded into the chunk cache cleanup index by the reconciler',
+});
+
+// Eviction candidates held back by CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS. The
+// age floor protects chunks whose ingest confirmation window is still open;
+// this counter is what makes that protection visible in production instead of
+// silent (a rising value under disk pressure means the floor, not the evictor,
+// is what is limiting reclamation).
+export const chunkCacheIndexSkippedFloorTotal = new promClient.Counter({
+  name: 'chunk_cache_index_skipped_floor_total',
+  help: 'Chunk cache index eviction candidates excluded by the minimum age floor',
+});
+
 //
 // Circuit breaker metrics
 //

@@ -8,12 +8,85 @@ import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { afterEach, before, beforeEach, describe, it } from 'node:test';
 import crypto from 'node:crypto';
 
 import { FsChunkDataStore } from './fs-chunk-data-store.js';
-import { ChunkData } from '../types.js';
+import { ChunkData, ChunkDataCacheIndex } from '../types.js';
 import { createTestLogger } from '../../test/test-logger.js';
+
+type SavedEntry = {
+  dataRoot: string;
+  size: number;
+  lastWrite: number;
+  tier: number;
+};
+type TouchedEntry = { dataRoot: string; lastAccess: number; tier: number };
+
+/**
+ * Recording stand-in for the SQLite-backed eviction index. Implements the full
+ * ChunkDataCacheIndex surface so a signature drift in types.d.ts fails the
+ * build here rather than silently skipping the hooks.
+ */
+class FakeChunkDataCacheIndex implements ChunkDataCacheIndex {
+  saved: SavedEntry[] = [];
+  touched: TouchedEntry[] = [];
+  // Optional hook run inside saveChunkDataCacheEntry, so a test can observe
+  // the world at the moment the write hook fires.
+  onSave?: (entry: SavedEntry) => void;
+  // When set, saveChunkDataCacheEntry rejects with it.
+  saveError?: Error;
+  // When true, saveChunkDataCacheEntry returns a promise that never settles.
+  saveHangs = false;
+
+  async saveChunkDataCacheEntry(entry: SavedEntry): Promise<void> {
+    this.saved.push(entry);
+    this.onSave?.(entry);
+    if (this.saveHangs) {
+      return new Promise<void>(() => undefined);
+    }
+    if (this.saveError !== undefined) {
+      throw this.saveError;
+    }
+  }
+
+  async touchChunkDataCacheEntry(
+    dataRoot: string,
+    lastAccess: number,
+    tier: number,
+  ): Promise<void> {
+    this.touched.push({ dataRoot, lastAccess, tier });
+  }
+
+  async insertChunkDataCacheEntriesIfAbsent(): Promise<void> {
+    throw new Error('not used by these tests');
+  }
+
+  async selectChunkDataCacheEvictionCandidates(): Promise<
+    { dataRoot: string; size: number; chunkCount: number; lastWrite: number }[]
+  > {
+    throw new Error('not used by these tests');
+  }
+
+  async deleteChunkDataCacheEntries(): Promise<string[]> {
+    throw new Error('not used by these tests');
+  }
+
+  async sumChunkDataCacheBytes(): Promise<number> {
+    throw new Error('not used by these tests');
+  }
+
+  async countChunkDataCacheEntries(): Promise<number> {
+    throw new Error('not used by these tests');
+  }
+}
+
+// The hooks are fire-and-forget, so a synchronous assertion right after set()
+// or get() can race the microtask that records them. Drain the microtask queue
+// (plus a macrotask turn) before asserting.
+const flush = async () => {
+  await new Promise((resolve) => setImmediate(resolve));
+};
 
 describe('FsChunkDataStore', () => {
   let log: ReturnType<typeof createTestLogger>;
@@ -498,6 +571,210 @@ describe('FsChunkDataStore', () => {
       // Verify nothing was written
       const exists = await store.has(dataRoot, relativeOffset);
       assert.strictEqual(exists, false);
+    });
+  });
+
+  describe('chunk data cache index hooks', () => {
+    const dataRoot = 'idxHookZZZ5oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o';
+    const relativeOffset = 0;
+    const payload = Buffer.from('indexed chunk payload');
+    const chunkData: ChunkData = {
+      chunk: payload,
+      hash: crypto.createHash('sha256').update(payload).digest(),
+    };
+    const chunkPath = () =>
+      join(
+        tempDir,
+        'data',
+        'by-dataroot',
+        'id',
+        'xH',
+        dataRoot,
+        String(relativeOffset),
+      );
+
+    let index: FakeChunkDataCacheIndex;
+    let indexedStore: FsChunkDataStore;
+
+    beforeEach(() => {
+      index = new FakeChunkDataCacheIndex();
+      indexedStore = new FsChunkDataStore({
+        log,
+        baseDir: tempDir,
+        chunkDataCacheIndex: index,
+        updateOnRead: true,
+      });
+    });
+
+    it('records an index entry with the written byte length and tier 0', async () => {
+      await indexedStore.set(dataRoot, relativeOffset, chunkData);
+      await flush();
+
+      assert.equal(index.saved.length, 1);
+      assert.equal(index.saved[0].dataRoot, dataRoot);
+      // The evictor sizes batches from this, so it must be the bytes actually
+      // written, not a nominal 256 KiB chunk size.
+      assert.equal(index.saved[0].size, payload.length);
+      assert.equal(index.saved[0].tier, 0);
+      assert.equal(typeof index.saved[0].lastWrite, 'number');
+      assert.ok(index.saved[0].lastWrite > 0);
+    });
+
+    it('records nothing for a zero-length chunk', async () => {
+      // set() bails before touching the filesystem for a zero-length chunk, so
+      // indexing it would create a row for bytes that are not on disk -- the
+      // evictor would then account for phantom bytes it can never reclaim.
+      const emptyChunk: ChunkData = {
+        chunk: Buffer.alloc(0),
+        hash: crypto.createHash('sha256').update(Buffer.alloc(0)).digest(),
+      };
+
+      await indexedStore.set(dataRoot, relativeOffset, emptyChunk);
+      await flush();
+
+      assert.equal(index.saved.length, 0);
+      assert.equal(await indexedStore.has(dataRoot, relativeOffset), false);
+    });
+
+    it('does not fail the chunk write when the index rejects', async () => {
+      index.saveError = new Error('index unavailable');
+
+      await indexedStore.set(dataRoot, relativeOffset, chunkData);
+      await flush();
+
+      const fs = await import('node:fs');
+      assert.ok(fs.existsSync(chunkPath()));
+      assert.deepEqual(fs.readFileSync(chunkPath()), payload);
+      assert.equal(await indexedStore.has(dataRoot, relativeOffset), true);
+    });
+
+    it('does not block the chunk write when the index never settles', async () => {
+      // A stalled index worker must not stall chunk caching: the hook is
+      // fire-and-forget, so set() has to resolve without awaiting it.
+      index.saveHangs = true;
+
+      await indexedStore.set(dataRoot, relativeOffset, chunkData);
+
+      const fs = await import('node:fs');
+      assert.ok(fs.existsSync(chunkPath()));
+      assert.equal(await indexedStore.has(dataRoot, relativeOffset), true);
+    });
+
+    it('fires the write hook only after the bytes are on disk', async () => {
+      // Ordering matters: an index row for a chunk that is not yet (or never)
+      // written points the evictor at bytes that do not exist.
+      const fs = await import('node:fs');
+      let fileExistedAtHookTime: boolean | undefined;
+      index.onSave = () => {
+        fileExistedAtHookTime = fs.existsSync(chunkPath());
+      };
+
+      await indexedStore.set(dataRoot, relativeOffset, chunkData);
+      await flush();
+
+      assert.equal(fileExistedAtHookTime, true);
+    });
+
+    it('touches last_access on a cache hit when update-on-read is enabled', async () => {
+      await indexedStore.set(dataRoot, relativeOffset, chunkData);
+      await flush();
+      index.touched = [];
+
+      const retrieved = await indexedStore.get(dataRoot, relativeOffset);
+      await flush();
+
+      assert.ok(retrieved !== undefined);
+      assert.equal(index.touched.length, 1);
+      assert.equal(index.touched[0].dataRoot, dataRoot);
+      assert.ok(index.touched[0].lastAccess > 0);
+      assert.equal(index.touched[0].tier, 0);
+      // A read must never advance last_write: that is the ingest-confirmation
+      // age floor, and refreshing it on reads would let a hot chunk sit
+      // permanently above the floor (or, worse, mask an unconfirmed one).
+      assert.equal(index.saved.length, 1);
+    });
+
+    it('does not touch last_access on a cache hit when update-on-read is disabled', async () => {
+      const fifoStore = new FsChunkDataStore({
+        log,
+        baseDir: tempDir,
+        chunkDataCacheIndex: index,
+        updateOnRead: false,
+      });
+
+      await fifoStore.set(dataRoot, relativeOffset, chunkData);
+      await flush();
+
+      const retrieved = await fifoStore.get(dataRoot, relativeOffset);
+      await flush();
+
+      assert.ok(retrieved !== undefined);
+      assert.equal(index.touched.length, 0);
+    });
+
+    it('does not touch last_access on a cache miss', async () => {
+      const retrieved = await indexedStore.get(dataRoot, relativeOffset);
+      await flush();
+
+      assert.equal(retrieved, undefined);
+      assert.equal(index.touched.length, 0);
+    });
+  });
+
+  describe('delDataRoot', () => {
+    // The eviction unit is the whole data-root directory, so these guard the
+    // primitive ChunkDataCacheEvictor unlinks with.
+    const dataRoot = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
+    const chunkData: ChunkData = {
+      chunk: Buffer.from('del data root'),
+      hash: crypto.createHash('sha256').update('del data root').digest(),
+    };
+    const rootDir = () =>
+      join(tempDir, 'data', 'by-dataroot', 'wR', 'q6', dataRoot);
+
+    it('removes every chunk under the data root', async () => {
+      await store.set(dataRoot, 0, chunkData);
+      await store.set(dataRoot, 262144, chunkData);
+      assert.equal(await store.has(dataRoot, 0), true);
+      assert.equal(await store.has(dataRoot, 262144), true);
+
+      await store.delDataRoot(dataRoot);
+
+      assert.equal(await store.has(dataRoot, 0), false);
+      assert.equal(await store.has(dataRoot, 262144), false);
+    });
+
+    it('removes the data root directory itself, not just its files', async () => {
+      const fs = await import('node:fs');
+      await store.set(dataRoot, 0, chunkData);
+      assert.equal(fs.existsSync(rootDir()), true);
+
+      await store.delDataRoot(dataRoot);
+
+      // Leaving the empty directory behind is the cost ADR 005 quantifies: 67%
+      // of data-root dirs on the production volume are empty because nothing
+      // ever rmdir'd them, and that is most of what makes the FS walk slow.
+      assert.equal(fs.existsSync(rootDir()), false);
+    });
+
+    it('treats a missing data root as success', async () => {
+      await store.delDataRoot(dataRoot);
+    });
+
+    it('propagates a non-ENOENT error instead of reporting a false free', async () => {
+      const fs = await import('node:fs');
+      await store.set(dataRoot, 0, chunkData);
+      const parent = join(tempDir, 'data', 'by-dataroot', 'wR', 'q6');
+      // Read+execute but not write: the child cannot be unlinked from it.
+      fs.chmodSync(parent, 0o500);
+      try {
+        // Must reject, not resolve. A swallowed EACCES would tell the evictor
+        // it freed bytes it did not free, and it would delete the index row
+        // anyway -- losing track of on-disk chunks permanently.
+        await assert.rejects(() => store.delDataRoot(dataRoot));
+      } finally {
+        fs.chmodSync(parent, 0o755);
+      }
     });
   });
 });

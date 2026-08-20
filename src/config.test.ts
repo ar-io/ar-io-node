@@ -10,6 +10,7 @@ import { strict as assert } from 'node:assert';
 import {
   ARNS_ROOT_HOSTS,
   ARNS_ROOT_HOST,
+  deriveChunkDataCacheMinAgeSeconds,
   matchArnsRootHost,
   resolvePerHostNumber,
 } from './config.js';
@@ -224,5 +225,83 @@ describe('resolvePerHostNumber', () => {
   it('falls back to the built-in fallback with no matching entry or default', () => {
     const cfg = { 'http://10.84.0.82:4000': 128 };
     assert.equal(resolvePerHostNumber(cfg, 'https://arweave.net', 16), 16);
+  });
+});
+
+describe('deriveChunkDataCacheMinAgeSeconds', () => {
+  // The chunk data cache index eviction age floor. This is a correctness
+  // control, not a tuning knob: evicting an ingest-cached chunk before its
+  // data root confirms on chain breaks upload propagation, and it fails
+  // silently. See the comment block on the function in config.ts.
+
+  it('equals the allowlist confirmation timeout when ingest caching is enabled and that timeout is larger', () => {
+    // Stock defaults: AGGRESSIVE=3600 (1h), ALLOWLIST_TIMEOUT=86400 (24h).
+    assert.equal(
+      deriveChunkDataCacheMinAgeSeconds({
+        ingestCacheEnabled: true,
+        aggressiveMinAgeSeconds: 3600,
+        allowlistConfirmationTimeoutSeconds: 86400,
+      }),
+      86400,
+    );
+
+    // Production gw2: AGGRESSIVE=7200 (2h), ALLOWLIST_TIMEOUT=14400 (4h).
+    assert.equal(
+      deriveChunkDataCacheMinAgeSeconds({
+        ingestCacheEnabled: true,
+        aggressiveMinAgeSeconds: 7200,
+        allowlistConfirmationTimeoutSeconds: 14400,
+      }),
+      14400,
+    );
+  });
+
+  it('equals the aggressive min age when ingest caching is disabled', () => {
+    // Nothing locally-originated to protect, so the floor is just the same
+    // floor the filesystem-walk cleanup worker honors -- even though the
+    // allowlist timeout is far larger.
+    assert.equal(
+      deriveChunkDataCacheMinAgeSeconds({
+        ingestCacheEnabled: false,
+        aggressiveMinAgeSeconds: 3600,
+        allowlistConfirmationTimeoutSeconds: 86400,
+      }),
+      3600,
+    );
+  });
+
+  it('keeps the aggressive min age when it already exceeds the allowlist timeout', () => {
+    assert.equal(
+      deriveChunkDataCacheMinAgeSeconds({
+        ingestCacheEnabled: true,
+        aggressiveMinAgeSeconds: 172800,
+        allowlistConfirmationTimeoutSeconds: 86400,
+      }),
+      172800,
+    );
+  });
+
+  it('is never below the allowlist confirmation timeout while ingest caching is enabled', () => {
+    const aggressiveValues = [0, 60, 3600, 7200, 14400, 86400, 172800];
+    const allowlistValues = [60, 3600, 14400, 21600, 86400, 604800];
+    for (const aggressiveMinAgeSeconds of aggressiveValues) {
+      for (const allowlistConfirmationTimeoutSeconds of allowlistValues) {
+        const floor = deriveChunkDataCacheMinAgeSeconds({
+          ingestCacheEnabled: true,
+          aggressiveMinAgeSeconds,
+          allowlistConfirmationTimeoutSeconds,
+        });
+        assert.ok(
+          floor >= allowlistConfirmationTimeoutSeconds,
+          `floor ${floor} must not be below the allowlist confirmation ` +
+            `timeout ${allowlistConfirmationTimeoutSeconds} ` +
+            `(aggressive=${aggressiveMinAgeSeconds})`,
+        );
+        assert.ok(
+          floor >= aggressiveMinAgeSeconds,
+          `floor ${floor} must not be below the aggressive min age ${aggressiveMinAgeSeconds}`,
+        );
+      }
+    }
   });
 });

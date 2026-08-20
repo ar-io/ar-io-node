@@ -9,16 +9,78 @@ import fs from 'node:fs';
 import path from 'node:path';
 import winston from 'winston';
 
-import { ChunkData, ChunkDataStore } from '../types.js';
+import { ChunkData, ChunkDataCacheIndex, ChunkDataStore } from '../types.js';
+import { CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ } from '../config.js';
+import { currentUnixTimestamp } from '../lib/time.js';
 import * as metrics from '../metrics.js';
 
 export class FsChunkDataStore implements ChunkDataStore {
   private log: winston.Logger;
   private baseDir: string;
+  // Absent => the eviction index feature is entirely off for this store, the
+  // same way ReadThroughDataCache treats its contiguous cache index.
+  private chunkDataCacheIndex?: ChunkDataCacheIndex;
+  // Defaults to CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ; overridable so the
+  // read-hook gate can be exercised in both states within one test process
+  // (the config value is fixed at module load).
+  private updateOnRead: boolean;
 
-  constructor({ log, baseDir }: { log: winston.Logger; baseDir: string }) {
+  constructor({
+    log,
+    baseDir,
+    chunkDataCacheIndex,
+    updateOnRead = CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ,
+  }: {
+    log: winston.Logger;
+    baseDir: string;
+    chunkDataCacheIndex?: ChunkDataCacheIndex;
+    updateOnRead?: boolean;
+  }) {
     this.log = log.child({ class: this.constructor.name });
     this.baseDir = baseDir;
+    this.chunkDataCacheIndex = chunkDataCacheIndex;
+    this.updateOnRead = updateOnRead;
+  }
+
+  // Record a freshly-written chunk in the eviction index (best-effort). Tier 0
+  // = general. Fire-and-forget: the index is an eviction accelerator, never a
+  // precondition for caching, so a failure here must not fail or delay the
+  // chunk write that already succeeded.
+  private recordCacheIndexEntry(dataRoot: string, size: number): void {
+    if (this.chunkDataCacheIndex === undefined) {
+      return;
+    }
+    this.chunkDataCacheIndex
+      .saveChunkDataCacheEntry({
+        dataRoot,
+        size,
+        lastWrite: currentUnixTimestamp(),
+        tier: 0,
+      })
+      .catch((error: any) => {
+        this.log.debug('Failed to record chunk cache index entry', {
+          dataRoot,
+          message: error?.message,
+        });
+      });
+  }
+
+  // Refresh a data root's recency in the eviction index on a cache hit. No-op
+  // when the index isn't wired or update-on-read is disabled (FIFO mode).
+  // Touches last_access only -- a read must never advance last_write, which is
+  // the ingest-confirmation age floor.
+  private touchCacheIndexEntry(dataRoot: string): void {
+    if (this.chunkDataCacheIndex === undefined || !this.updateOnRead) {
+      return;
+    }
+    this.chunkDataCacheIndex
+      .touchChunkDataCacheEntry(dataRoot, currentUnixTimestamp(), 0)
+      .catch((error: any) => {
+        this.log.debug('Failed to touch chunk cache index entry', {
+          dataRoot,
+          message: error?.message,
+        });
+      });
   }
 
   private chunkDataRootDir(dataRoot: string) {
@@ -79,6 +141,8 @@ export class FsChunkDataStore implements ChunkDataStore {
 
         const hash = crypto.createHash('sha256').update(chunk).digest();
 
+        this.touchCacheIndexEntry(dataRoot);
+
         return {
           hash,
           chunk,
@@ -96,6 +160,14 @@ export class FsChunkDataStore implements ChunkDataStore {
     return undefined;
   }
 
+  // KNOWN GAP: absolute-offset hits do not refresh the eviction index's
+  // last_access. This path is reached by absolute offset alone; the data root
+  // it belongs to is only recoverable by readlink()ing the index entry and
+  // parsing the target path, i.e. an extra syscall plus a path-format
+  // dependency on every hit of a hot read path. Recency here is therefore
+  // best-effort: a data root read exclusively through this index looks colder
+  // than it is and may be evicted earlier under LRU. Acceptable because the
+  // last_write age floor -- the correctness-bearing half -- is unaffected.
   async getByAbsoluteOffset(
     absoluteOffset: number,
   ): Promise<ChunkData | undefined> {
@@ -148,6 +220,37 @@ export class FsChunkDataStore implements ChunkDataStore {
     }
   }
 
+  /**
+   * Remove an entire data root's cached chunks -- the unit the index evictor
+   * reclaims. `del()` is the wrong shape for eviction: it takes a
+   * relativeOffset per chunk, and the eviction index deliberately stores only
+   * per-data-root aggregates (ADR 005 rejects per-chunk indexing at ~4.5M
+   * rows), so the offsets are not available to it.
+   *
+   * ENOENT is success -- the directory may already be gone because a stale
+   * index row outlived it. Any other error propagates so the evictor leaves
+   * the orphan for the reconciler instead of reporting bytes it did not free.
+   *
+   * The `by-absolute-offset` symlinks pointing into this directory are NOT
+   * removed here: they are reaped by SymlinkCleanupWorker, and a dangling one
+   * already reads as a cache miss in getByAbsoluteOffset().
+   *
+   * Removing the directory races set()'s mkdir -> writeFile. The ENOENT retry
+   * that closes that window is at set() below; an image predating it must not
+   * run the evictor, or chunk writes are silently dropped.
+   */
+  async delDataRoot(dataRoot: string): Promise<void> {
+    try {
+      await fs.promises.rm(this.chunkDataRootDir(dataRoot), {
+        recursive: true,
+      });
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
   async set(
     dataRoot: string,
     relativeOffset: number,
@@ -186,6 +289,12 @@ export class FsChunkDataStore implements ChunkDataStore {
         await fs.promises.mkdir(chunkDataRootDir, { recursive: true });
         await fs.promises.writeFile(chunkPath, chunkData.chunk);
       }
+
+      // The bytes are durably on disk at this point. Record them in the
+      // eviction index before (and independently of) the symlink step, so a
+      // symlink failure can't leave indexed-but-unwritten or written-but-
+      // unindexed state depending on ordering.
+      this.recordCacheIndexEntry(dataRoot, chunkData.chunk.length);
 
       // If absoluteOffset provided, create symlink in by-absolute-offset index
       if (absoluteOffset !== undefined) {
