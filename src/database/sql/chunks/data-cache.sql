@@ -61,18 +61,40 @@ INSERT INTO chunk_data_cache (
 ON CONFLICT (data_root) DO NOTHING
 
 -- selectChunkDataCacheEvictionCandidates
--- CORRECTNESS-CRITICAL: the WHERE clause is the AGE FLOOR. Only a data_root
--- whose newest chunk write is at or before @max_last_write may be evicted.
+-- CORRECTNESS-CRITICAL. Two independent guards, and the NOT EXISTS is the
+-- primary one.
+--
+-- A data root with an UNCONFIRMED placement is never evictable, full stop.
+-- That is the actual invariant: a chunk POSTed to this gateway must survive
+-- until its data root confirms on chain. The age floor only approximates it
+-- with a clock, and a clock derived from configuration cannot describe bytes
+-- already on disk -- disabling the ingest cache would otherwise shorten the
+-- floor out from under chunks that are still in flight. Placements are the
+-- record of what is actually pending, so ask them.
+--
+-- This also gets the read-through path right for free: chunks cached from the
+-- network have no placement row at all, so they stay freely evictable, which
+-- is correct -- they can simply be refetched.
+--
+-- The age floor remains as a backstop for anything the placement index does
+-- not know about. Only a data_root whose newest chunk write is at or before
+-- @max_last_write may be evicted.
 -- Without it, a data_root still actively receiving chunks (or one whose chunks
 -- were all just written but not yet read) can be selected and unlinked out from
 -- under an in-flight ingest, leaving a gappy, unservable chunk set.
 --
 -- Ordering within the eligible set is oldest-accessed-first inside the lowest
 -- tier, matching chunk_data_cache_eviction_idx (tier, last_access).
-SELECT data_root, size, chunk_count, last_write
-FROM chunk_data_cache
-WHERE last_write <= @max_last_write
-ORDER BY tier ASC, last_access ASC
+SELECT c.data_root, c.size, c.chunk_count, c.last_write
+FROM chunk_data_cache c
+WHERE c.last_write <= @max_last_write
+  AND NOT EXISTS (
+    SELECT 1
+    FROM chunk_placements p
+    WHERE p.data_root = c.data_root
+      AND p.confirmed_at IS NULL
+  )
+ORDER BY c.tier ASC, c.last_access ASC
 LIMIT @limit
 
 -- deleteChunkDataCacheEntry

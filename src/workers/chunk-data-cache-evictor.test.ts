@@ -71,6 +71,7 @@ function makeHarness(opts: {
   const selectCalls: { maxLastWrite: number; limit: number }[] = [];
   const deleteCalls: string[][] = [];
   const deleteFloors: number[] = [];
+  const unlinkFloors: (number | undefined)[] = [];
 
   const cacheIndex = {
     countChunkDataCacheEntries: async () => remaining.size,
@@ -111,11 +112,21 @@ function makeHarness(opts: {
   } as unknown as ChunkDataCacheEvictorIndex;
 
   const chunkDataStore = {
-    delDataRoot: async (dataRoot: string) => {
+    delDataRoot: async (dataRoot: string, maxMtimeSeconds?: number) => {
       unlinked.push(dataRoot);
-      // Model the real store: `false` means the directory was already gone,
-      // which is what a row that outlived its files looks like.
-      return !(opts.absentOnDisk?.has(dataRoot) ?? false);
+      unlinkFloors.push(maxMtimeSeconds);
+      // Model the real store: a data root whose files are already gone
+      // reclaims nothing, which is what a row that outlived its files looks
+      // like. Bytes come from the filesystem, never from the index row.
+      if (opts.absentOnDisk?.has(dataRoot) ?? false) {
+        return { removedFiles: 0, removedBytes: 0, keptFiles: 0 };
+      }
+      const entry = opts.entries.find((e) => e.dataRoot === dataRoot);
+      return {
+        removedFiles: entry?.chunkCount ?? 1,
+        removedBytes: entry?.size ?? 0,
+        keptFiles: 0,
+      };
     },
   } as unknown as ChunkDataRootStore;
 
@@ -128,6 +139,7 @@ function makeHarness(opts: {
     selectCalls,
     deleteCalls,
     deleteFloors,
+    unlinkFloors,
     cacheIndex,
     chunkDataStore,
   };

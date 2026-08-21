@@ -505,6 +505,48 @@ from a gateway rollout.
   `docs/cache-cleanup.md`. Flagged here because this ADR is what makes the two
   reclaimers coexist by design.
 
+- **Eviction removed whole directories, destroying chunks that landed in the
+  gap — RESOLVED.** `delDataRoot` used `fs.rm(recursive)`, so anything written
+  between the evictor's index DELETE and the removal went with it, and a chunk
+  whose index write silently failed left `last_write` stale so its data root
+  looked cold. A directory-mtime check was tried and reverted: overwriting an
+  existing offset updates the file's mtime but never the parent directory's, so
+  a re-POSTed chunk slipped straight through it — and because unlinking *does*
+  bump directory mtime, the other reclaimers would have vetoed evictions
+  constantly.
+
+  Resolved by reclaiming per file: `readdir`, then `stat` and unlink only files
+  whose own mtime is at or before the floor. Each file's mtime is the ground
+  truth for when that chunk was written, checked immediately before its own
+  unlink, and a file that cannot be proven old is kept. The cost is close to a
+  wash, since `fs.rm(recursive)` already walks and unlinks every entry
+  internally. The store now reports bytes actually reclaimed, so eviction
+  metrics describe the filesystem rather than the index. The directory is
+  reaped only once it is genuinely empty, which also drains the ~93% of empty
+  data-root directories that make the walk expensive.
+
+- **The age floor collapsed when the ingest cache was disabled — RESOLVED, and
+  the floor is no longer the primary guard.** `CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS`
+  is derived at module load from `CHUNK_INGEST_CACHE_ENABLED`, so turning that
+  flag off — the natural response to disk pressure — dropped the floor from 24h
+  to 1h over chunks already on disk with hours of confirmation window left. A
+  clock derived from configuration cannot describe bytes that are already
+  written.
+
+  The candidate query now states the actual invariant instead of approximating
+  it: a data root with an **unconfirmed placement is never evictable**. Both
+  tables live in `chunks.db` and `chunk_placements` is keyed
+  `(data_root, relative_offset)`, so this is a PK-prefix probe — measured plan
+  on the production database: `SCAN c USING INDEX chunk_data_cache_eviction_idx`
+  plus `SEARCH p USING INDEX sqlite_autoindex_chunk_placements_1 (data_root=?)`,
+  no temp b-tree. `chunk_data_cache.data_root` became BLOB to match; the
+  migration was still unreleased, so that cost nothing.
+
+  This also gets the read-through path right for free: network-cached chunks
+  have no placement row and stay freely evictable, which is correct — they can
+  be refetched. The age floor remains as a backstop for anything the placement
+  index does not know about.
+
 - **Index rows outlive their files on every other delete path — RESOLVED
   (adversarial review).** `deleteChunkDataCacheEntries` is the only thing that
   removes a row, but the ingest GC (`FsChunkDataStore.del`), the

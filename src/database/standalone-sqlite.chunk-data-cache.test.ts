@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import { before, beforeEach, describe, it } from 'node:test';
 
 import { StandaloneSqliteDatabaseWorker } from './standalone-sqlite.js';
-import { toB64Url } from '../lib/encoding.js';
+import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import {
   bundlesDbPath,
@@ -28,7 +28,7 @@ const ROOT_B = dataRoot(2);
 const ROOT_C = dataRoot(3);
 
 interface CacheRow {
-  data_root: string;
+  data_root: Buffer;
   size: number;
   chunk_count: number;
   last_write: number;
@@ -36,10 +36,12 @@ interface CacheRow {
   tier: number;
 }
 
+// data_root is stored as a BLOB (matching chunk_placements so the two can be
+// joined), while the worker API speaks base64url. Convert on the way in.
 const readRow = (root: string): CacheRow =>
   chunksDb
     .prepare('SELECT * FROM chunk_data_cache WHERE data_root = ?')
-    .get(root) as CacheRow;
+    .get(fromB64Url(root)) as CacheRow;
 
 describe('chunk_data_cache (chunks.db) worker methods', () => {
   let worker: StandaloneSqliteDatabaseWorker;

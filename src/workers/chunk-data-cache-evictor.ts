@@ -71,11 +71,15 @@ export interface ChunkDataCacheEvictorIndex {
  * error propagates so the caller can log it and let the reconciler heal.
  */
 export interface ChunkDataRootStore {
-  // Resolves true if a directory was actually removed, false if there was
-  // nothing there. The evictor books reclaimed bytes on this, because an index
-  // row can outlive its files and crediting those bytes would report progress
-  // the filesystem will not show.
-  delDataRoot(dataRoot: string): Promise<boolean>;
+  // Reclaims a data root's chunks, refusing any file newer than
+  // `maxMtimeSeconds` -- the age floor, handed down to the filesystem so it is
+  // enforced against each file's own mtime rather than against the index. The
+  // byte count is what was actually unlinked, so the evictor reports what the
+  // disk really gave back.
+  delDataRoot(
+    dataRoot: string,
+    maxMtimeSeconds?: number,
+  ): Promise<{ removedFiles: number; removedBytes: number; keptFiles: number }>;
 }
 
 /**
@@ -403,9 +407,6 @@ export class ChunkDataCacheEvictor {
         // Delete all the index rows in one transaction; it returns the data
         // roots actually removed (guards against a row deleted/re-cached
         // between the select and now), and only those get unlinked.
-        const candidateByDataRoot = new Map(
-          selected.map((candidate) => [candidate.dataRoot, candidate]),
-        );
         const deletedDataRoots =
           await this.cacheIndex.deleteChunkDataCacheEntries(
             selected.map((candidate) => candidate.dataRoot),
@@ -427,42 +428,59 @@ export class ChunkDataCacheEvictor {
           deletedDataRoots.map((dataRoot) =>
             unlinkLimit(() =>
               this.chunkDataStore
-                .delDataRoot(dataRoot)
+                .delDataRoot(dataRoot, maxLastWrite)
                 .catch((error: any) => {
                   // Genuinely failed (EACCES, EIO, ...) rather than absent.
                   // Not a reclaim, and worth seeing: at info level the whole
                   // feature could otherwise fail silently.
-                  this.log.warn('Failed to unlink evicted data root', {
+                  this.log.warn('Failed to reclaim evicted data root', {
                     dataRoot,
                     error: error?.message,
                   });
-                  return false;
+                  return { removedFiles: 0, removedBytes: 0, keptFiles: 0 };
                 })
-                .then((removed) => ({ dataRoot, removed })),
+                .then((result) => ({ dataRoot, result })),
             ),
           ),
         );
 
         let missingThisBatch = 0;
-        for (const { dataRoot, removed } of removals) {
-          const candidate = candidateByDataRoot.get(dataRoot);
-          const size = candidate?.size ?? 0;
-          const chunkCount = candidate?.chunkCount ?? 0;
-          if (!removed) {
-            // The row is gone either way -- which is the useful half: the
-            // index self-heals of stale rows as the evictor encounters them.
-            missingThisBatch++;
-            metrics.chunkCacheIndexEvictedMissingTotal.inc();
+        for (const { dataRoot, result } of removals) {
+          if (result.keptFiles > 0) {
+            // Files inside the age floor survived. Their row is already gone,
+            // so those bytes are untracked until the next write to this data
+            // root recreates the row or the reconciler re-seeds it. That is
+            // the direction to fail in: an untracked chunk is merely not an
+            // eviction candidate, whereas a destroyed one is unrecoverable.
+            metrics.chunkCacheIndexUnlinkRefusedTotal.inc({
+              reason: 'inside_age_floor',
+            });
+            this.log.debug('Kept chunks inside the age floor during eviction', {
+              dataRoot,
+              keptFiles: result.keptFiles,
+              removedFiles: result.removedFiles,
+            });
+          }
+          if (result.removedFiles === 0) {
+            // Nothing on disk: the row outlived its files, which every other
+            // reclaimer on the box can cause. The row is gone either way --
+            // the useful half -- so the index self-heals as these are found.
+            if (result.keptFiles === 0) {
+              missingThisBatch++;
+              metrics.chunkCacheIndexEvictedMissingTotal.inc();
+            }
             continue;
           }
+          // Booked from what the filesystem actually gave back, not from what
+          // the index claimed the data root was worth.
           evictedDataRoots++;
-          evictedChunks += chunkCount;
-          bytesFreed += size;
+          evictedChunks += result.removedFiles;
+          bytesFreed += result.removedBytes;
           metrics.chunkCacheIndexEvictedTotal.inc(
             { reason: 'disk_pressure' },
-            chunkCount,
+            result.removedFiles,
           );
-          metrics.chunkCacheIndexEvictedBytesTotal.inc(size);
+          metrics.chunkCacheIndexEvictedBytesTotal.inc(result.removedBytes);
         }
         if (missingThisBatch === removals.length && removals.length > 0) {
           // A whole batch of rows with nothing behind them. Harmless once, but

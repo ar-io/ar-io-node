@@ -1242,6 +1242,10 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   // --- Chunk data cache eviction index (chunks.db) ---
+  //
+  // data_root crosses the worker boundary as base64url (the on-disk directory
+  // name the evictor needs) and is stored as a BLOB, matching chunk_placements
+  // so the two can be joined. Same convention as the placement methods above.
 
   saveChunkDataCacheEntry(entry: {
     dataRoot: string;
@@ -1250,7 +1254,7 @@ export class StandaloneSqliteDatabaseWorker {
     tier: number;
   }) {
     this.stmts.chunks.saveChunkDataCacheEntry.run({
-      data_root: entry.dataRoot,
+      data_root: fromB64Url(entry.dataRoot),
       size: entry.size,
       last_write: entry.lastWrite,
       tier: entry.tier,
@@ -1259,7 +1263,7 @@ export class StandaloneSqliteDatabaseWorker {
 
   touchChunkDataCacheEntry(dataRoot: string, lastAccess: number, tier: number) {
     this.stmts.chunks.touchChunkDataCacheEntry.run({
-      data_root: dataRoot,
+      data_root: fromB64Url(dataRoot),
       last_access: lastAccess,
       tier,
     });
@@ -1289,7 +1293,7 @@ export class StandaloneSqliteDatabaseWorker {
       ) => {
         for (const row of rows) {
           stmt.run({
-            data_root: row.dataRoot,
+            data_root: fromB64Url(row.dataRoot),
             size: row.size,
             chunk_count: row.chunkCount,
             last_write: row.lastWrite,
@@ -1316,7 +1320,7 @@ export class StandaloneSqliteDatabaseWorker {
       limit,
     });
     return rows.map((row: any) => ({
-      dataRoot: row.data_root,
+      dataRoot: toB64Url(row.data_root),
       size: row.size,
       chunkCount: row.chunk_count,
       // Returned so ChunkDataCacheEvictor can re-assert the age floor itself
@@ -1342,8 +1346,10 @@ export class StandaloneSqliteDatabaseWorker {
         // A row whose last_write advanced past the floor since selection
         // deletes 0 rows and is therefore never unlinked. See the statement.
         if (
-          stmt.run({ data_root: dataRoot, max_last_write: maxLastWrite })
-            .changes > 0
+          stmt.run({
+            data_root: fromB64Url(dataRoot),
+            max_last_write: maxLastWrite,
+          }).changes > 0
         ) {
           deleted.push(dataRoot);
         }

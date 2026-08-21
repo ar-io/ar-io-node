@@ -23,7 +23,7 @@ CREATE INDEX chunk_placements_confirmed_sibling_idx
   ON chunk_placements (data_root)
   WHERE confirmed_at IS NOT NULL;
 CREATE TABLE chunk_data_cache (
-  data_root    TEXT    NOT NULL PRIMARY KEY,
+  data_root    BLOB    NOT NULL PRIMARY KEY,
   size         INTEGER NOT NULL,
   chunk_count  INTEGER NOT NULL,
   last_write   INTEGER NOT NULL,

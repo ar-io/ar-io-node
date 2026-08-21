@@ -6,9 +6,12 @@
 -- this table owns the eviction metadata, mirroring the contiguous_data_cache
 -- pattern.
 --
--- `data_root` is the base64url data root, stored as TEXT (NOT BLOB like
--- chunk_placements) because it must round-trip unchanged to the on-disk
--- directory name so the evictor can unlink that directory.
+-- `data_root` is the raw 32-byte data root, stored as BLOB to match
+-- chunk_placements. The two tables live in the same database, and eviction has
+-- to ask "does this data root still have an unconfirmed placement?" -- a
+-- PK-prefix probe that only works if the key types agree. The worker converts
+-- to base64url on the way out so the evictor still gets the on-disk directory
+-- name.
 --
 -- `size` and `chunk_count` accumulate across the chunk writes that land under
 -- the same data_root; eviction is all-or-nothing per data_root, so they describe
@@ -31,7 +34,7 @@
 -- (tier, last_access) index shape identical to the proven contiguous index makes
 -- ingest-origin tiering later a config change rather than a migration.
 CREATE TABLE IF NOT EXISTS chunk_data_cache (
-  data_root    TEXT    NOT NULL PRIMARY KEY,
+  data_root    BLOB    NOT NULL PRIMARY KEY,
   size         INTEGER NOT NULL,
   chunk_count  INTEGER NOT NULL,
   last_write   INTEGER NOT NULL,

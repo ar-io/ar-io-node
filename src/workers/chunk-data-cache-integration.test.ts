@@ -16,7 +16,7 @@ import { FsChunkDataStore } from '../store/fs-chunk-data-store.js';
 import { ChunkDataCacheEvictor } from './chunk-data-cache-evictor.js';
 import { ChunkDataCacheReconciler } from './chunk-data-cache-reconciler.js';
 import { createTestLogger } from '../../test/test-logger.js';
-import { toB64Url } from '../lib/encoding.js';
+import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import {
   bundlesDbPath,
   chunksDb,
@@ -100,10 +100,12 @@ function makeIndex(worker: StandaloneSqliteDatabaseWorker) {
   };
 }
 
+// data_root is a BLOB (matching chunk_placements so eviction can ask whether a
+// data root still has an unconfirmed placement); the worker API is base64url.
 const row = (dataRoot: string): any =>
   chunksDb
     .prepare('SELECT * FROM chunk_data_cache WHERE data_root = ?')
-    .get(dataRoot);
+    .get(fromB64Url(dataRoot));
 
 const chunkOf = (text: string) => ({
   chunk: Buffer.from(text),
@@ -196,7 +198,7 @@ describe('chunk data cache index (end-to-end)', () => {
       .prepare(
         'UPDATE chunk_data_cache SET last_write = ?, last_access = ? WHERE data_root = ?',
       )
-      .run(before.last_write - 500, before.last_access - 500, dr);
+      .run(before.last_write - 500, before.last_access - 500, fromB64Url(dr));
 
     const got = await store.get(dr, 0);
     await flush();
@@ -224,7 +226,7 @@ describe('chunk data cache index (end-to-end)', () => {
       .prepare(
         'UPDATE chunk_data_cache SET last_access = ? WHERE data_root = ?',
       )
-      .run(1, cold);
+      .run(1, fromB64Url(cold));
 
     assert.equal(fs.existsSync(dirOf(tempDir, cold)), true);
     let used = 95;
@@ -334,7 +336,7 @@ describe('chunk data cache index (end-to-end)', () => {
       .prepare(
         'UPDATE chunk_data_cache SET last_write = ?, last_access = 1 WHERE data_root = ?',
       )
-      .run(Math.floor(Date.now() / 1000) - 7200, dr);
+      .run(Math.floor(Date.now() / 1000) - 7200, fromB64Url(dr));
 
     mock.method(fs.promises, 'statfs', async () => fakeStatfs(99));
 
@@ -369,6 +371,115 @@ describe('chunk data cache index (end-to-end)', () => {
       fs.existsSync(join(dirOf(tempDir, dr), '262144')),
       true,
       'the chunk written during the sweep must still be on disk',
+    );
+  });
+
+  // ITEM 2: the real invariant. A data root with an UNCONFIRMED placement must
+  // never be selected, whatever the clock says. This is what makes the feature
+  // safe when an operator disables the ingest cache -- the protection comes
+  // from the placements that exist, not from a config-derived timer.
+  it('never selects a data root that still has an unconfirmed placement', async () => {
+    const dr = dataRootFor(9);
+    await store.set(dr, 0, chunkOf('pending-ingest-chunk'));
+    await flush();
+    // Old enough that the age floor alone would happily evict it.
+    chunksDb
+      .prepare(
+        'UPDATE chunk_data_cache SET last_write = ?, last_access = 1 WHERE data_root = ?',
+      )
+      .run(Math.floor(Date.now() / 1000) - 86400, fromB64Url(dr));
+    // ...but its placement has not confirmed.
+    worker.saveChunkPlacement({
+      dataRoot: dr,
+      relativeOffset: 0,
+      dataSize: 100,
+      chunkSize: 20,
+      hash: toB64Url(Buffer.alloc(32, 9)),
+      dataPath: toB64Url(Buffer.alloc(8, 1)),
+      origin: 1,
+      cachedAt: Math.floor(Date.now() / 1000) - 86400,
+    });
+
+    mock.method(fs.promises, 'statfs', async () => fakeStatfs(99));
+    await makeEvictor({ minAgeSeconds: 0 }).sweep();
+    await flush();
+
+    assert.ok(
+      row(dr) !== undefined,
+      'a data root with an unconfirmed placement must not be evicted',
+    );
+    assert.equal(
+      fs.existsSync(join(dirOf(tempDir, dr), '0')),
+      true,
+      'its chunk must still be on disk',
+    );
+  });
+
+  it('evicts once the placement confirms', async () => {
+    const dr = dataRootFor(10);
+    await store.set(dr, 0, chunkOf('confirmed-chunk'));
+    await flush();
+    const old = Math.floor(Date.now() / 1000) - 86400;
+    chunksDb
+      .prepare(
+        'UPDATE chunk_data_cache SET last_write = ?, last_access = 1 WHERE data_root = ?',
+      )
+      .run(old, fromB64Url(dr));
+    worker.saveChunkPlacement({
+      dataRoot: dr,
+      relativeOffset: 0,
+      dataSize: 100,
+      chunkSize: 20,
+      hash: toB64Url(Buffer.alloc(32, 10)),
+      dataPath: toB64Url(Buffer.alloc(8, 1)),
+      origin: 1,
+      cachedAt: old,
+    });
+    // Confirmed on chain: the invariant no longer applies.
+    worker.confirmChunkPlacements(dr, Math.floor(Date.now() / 1000));
+
+    // Age the file too, so the floor backstop also permits eviction.
+    const past = new Date(Date.now() - 10 * 3600 * 1000);
+    fs.utimesSync(join(dirOf(tempDir, dr), '0'), past, past);
+
+    mock.method(fs.promises, 'statfs', async () => fakeStatfs(99));
+    await makeEvictor({ minAgeSeconds: 3600 }).sweep();
+    await flush();
+
+    assert.equal(row(dr), undefined, 'a confirmed data root is evictable');
+    assert.equal(fs.existsSync(dirOf(tempDir, dr)), false);
+  });
+
+  // ITEM 1: the floor is enforced per file against its own mtime, so a chunk
+  // that lands after selection -- or whose index write failed -- survives even
+  // though the directory as a whole was authorised for eviction.
+  it('keeps a fresh chunk while evicting the aged ones around it', async () => {
+    const dr = dataRootFor(11);
+    await store.set(dr, 0, chunkOf('aged-chunk'));
+    await store.set(dr, 262144, chunkOf('fresh-chunk'));
+    await flush();
+    // Age only the first chunk; the row looks entirely old.
+    const past = new Date(Date.now() - 10 * 3600 * 1000);
+    fs.utimesSync(join(dirOf(tempDir, dr), '0'), past, past);
+    chunksDb
+      .prepare(
+        'UPDATE chunk_data_cache SET last_write = ?, last_access = 1 WHERE data_root = ?',
+      )
+      .run(Math.floor(Date.now() / 1000) - 86400, fromB64Url(dr));
+
+    mock.method(fs.promises, 'statfs', async () => fakeStatfs(99));
+    await makeEvictor({ minAgeSeconds: 3600 }).sweep();
+    await flush();
+
+    assert.equal(
+      fs.existsSync(join(dirOf(tempDir, dr), '0')),
+      false,
+      'the aged chunk is reclaimed',
+    );
+    assert.equal(
+      fs.existsSync(join(dirOf(tempDir, dr), '262144')),
+      true,
+      'the fresh chunk must survive even though its data root was evicted',
     );
   });
 });

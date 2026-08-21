@@ -766,33 +766,76 @@ describe('FsChunkDataStore', () => {
     // worker and manual sweeps all unlink chunks without touching the index --
     // so reporting `true` for a directory that was already gone would credit
     // the evictor with bytes that `df` never shows.
-    it('reports whether a data root was actually removed', async () => {
+    it('reports exactly what it reclaimed', async () => {
+      // The evictor books reclaimed bytes on this, so it must describe the
+      // filesystem rather than the index: rows routinely outlive their files.
       await store.set(dataRoot, 0, chunkData);
-      assert.equal(
-        await store.delDataRoot(dataRoot),
-        true,
-        'removing real files must report true',
-      );
-      assert.equal(
-        await store.delDataRoot(dataRoot),
-        false,
-        'an already-absent data root must report false',
-      );
+      const removed = await store.delDataRoot(dataRoot);
+      assert.equal(removed.removedFiles, 1);
+      assert.equal(removed.removedBytes, chunkData.chunk.length);
+      assert.equal(removed.keptFiles, 0);
+
+      const again = await store.delDataRoot(dataRoot);
+      assert.deepEqual(again, {
+        removedFiles: 0,
+        removedBytes: 0,
+        keptFiles: 0,
+      });
     });
 
-    it('propagates a non-ENOENT error instead of reporting a false free', async () => {
+    // The age floor, enforced per file against its own mtime. A directory-level
+    // check is not enough: overwriting an existing offset updates the file's
+    // mtime but never the parent directory's.
+    it('keeps files newer than the age floor and removes the rest', async () => {
       const fs = await import('node:fs');
       await store.set(dataRoot, 0, chunkData);
-      const parent = join(tempDir, 'data', 'by-dataroot', 'wR', 'q6');
-      // Read+execute but not write: the child cannot be unlinked from it.
-      fs.chmodSync(parent, 0o500);
+      await store.set(dataRoot, 262144, chunkData);
+      const dir = rootDir();
+      const old = new Date(Date.now() - 10 * 3600 * 1000);
+      fs.utimesSync(join(dir, '0'), old, old);
+
+      const floor = Math.floor(Date.now() / 1000) - 3600;
+      const result = await store.delDataRoot(dataRoot, floor);
+
+      assert.equal(result.removedFiles, 1, 'the aged file is removed');
+      assert.equal(result.keptFiles, 1, 'the fresh file is kept');
+      assert.equal(fs.existsSync(join(dir, '0')), false);
+      assert.equal(
+        fs.existsSync(join(dir, '262144')),
+        true,
+        'a chunk inside the floor must survive eviction',
+      );
+      assert.equal(fs.existsSync(dir), true, 'directory kept while non-empty');
+    });
+
+    it('removes the directory once nothing is left in it', async () => {
+      const fs = await import('node:fs');
+      await store.set(dataRoot, 0, chunkData);
+      const dir = rootDir();
+
+      await store.delDataRoot(dataRoot);
+
+      // ~93% of data-root directories on the production volume are empty
+      // because nothing ever reaped them; that is most of the walk cost.
+      assert.equal(fs.existsSync(dir), false);
+    });
+
+    it('keeps a file it cannot remove rather than reporting it freed', async () => {
+      const fs = await import('node:fs');
+      await store.set(dataRoot, 0, chunkData);
+      // Unlinking a file needs write permission on the file's OWN directory,
+      // so deny it there -- not on the grandparent, which only governs whether
+      // the data-root directory itself can be removed.
+      const dir = rootDir();
+      fs.chmodSync(dir, 0o500);
       try {
-        // Must reject, not resolve. A swallowed EACCES would tell the evictor
-        // it freed bytes it did not free, and it would delete the index row
-        // anyway -- losing track of on-disk chunks permanently.
-        await assert.rejects(() => store.delDataRoot(dataRoot));
+        const result = await store.delDataRoot(dataRoot);
+        // Must not claim bytes it did not free -- the evictor books on this.
+        assert.equal(result.removedFiles, 0);
+        assert.equal(result.removedBytes, 0);
+        assert.equal(result.keptFiles, 1);
       } finally {
-        fs.chmodSync(parent, 0o755);
+        fs.chmodSync(dir, 0o755);
       }
     });
   });
