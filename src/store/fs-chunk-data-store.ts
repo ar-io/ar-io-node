@@ -172,7 +172,20 @@ export class FsChunkDataStore implements ChunkDataStore {
       await fs.promises.mkdir(chunkDataRootDir, { recursive: true });
 
       const chunkPath = this.chunkDataRootPath(dataRoot, relativeOffset);
-      await fs.promises.writeFile(chunkPath, chunkData.chunk);
+      try {
+        await fs.promises.writeFile(chunkPath, chunkData.chunk);
+      } catch (error: any) {
+        // The directory can be removed between the mkdir above and this write:
+        // nothing reaps empty data-root directories today, but eviction that
+        // works at data-root granularity will, and the resulting ENOENT would
+        // otherwise be swallowed by the outer catch -- silently dropping a
+        // chunk the caller believes was cached. Recreate and retry once.
+        if (error.code !== 'ENOENT') {
+          throw error;
+        }
+        await fs.promises.mkdir(chunkDataRootDir, { recursive: true });
+        await fs.promises.writeFile(chunkPath, chunkData.chunk);
+      }
 
       // If absoluteOffset provided, create symlink in by-absolute-offset index
       if (absoluteOffset !== undefined) {
