@@ -583,18 +583,24 @@ describe('ChunkDataCacheEvictor', () => {
     const evictor = makeEvictor(h, { minAgeSeconds: 0 });
 
     const inFlight = evictor.sweep();
-    await Promise.resolve(); // let the first sweep reach the gated select
-    const callsWhileBusy = h.selectCalls.length;
+    try {
+      await Promise.resolve(); // let the first sweep reach the gated select
+      const callsWhileBusy = h.selectCalls.length;
 
-    await evictor.sweep(); // must be an immediate no-op
+      await evictor.sweep(); // must be an immediate no-op
 
-    assert.equal(
-      h.selectCalls.length,
-      callsWhileBusy,
-      'a sweep started while another is in flight must not query the index',
-    );
-
-    release();
-    await inFlight;
+      assert.equal(
+        h.selectCalls.length,
+        callsWhileBusy,
+        'a sweep started while another is in flight must not query the index',
+      );
+    } finally {
+      // Always release, even when the assertion above throws: otherwise the
+      // gated sweep stays pending and the runner hangs instead of reporting a
+      // failure. A test that hangs costs a whole CI job; one that fails costs
+      // a line of output.
+      release();
+      await inFlight;
+    }
   });
 });
