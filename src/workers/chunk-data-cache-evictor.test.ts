@@ -119,13 +119,19 @@ function makeHarness(opts: {
       // reclaims nothing, which is what a row that outlived its files looks
       // like. Bytes come from the filesystem, never from the index row.
       if (opts.absentOnDisk?.has(dataRoot) ?? false) {
-        return { removedFiles: 0, removedBytes: 0, keptFiles: 0 };
+        return {
+          removedFiles: 0,
+          removedBytes: 0,
+          keptFiles: 0,
+          failedFiles: 0,
+        };
       }
       const entry = opts.entries.find((e) => e.dataRoot === dataRoot);
       return {
         removedFiles: entry?.chunkCount ?? 1,
         removedBytes: entry?.size ?? 0,
         keptFiles: 0,
+        failedFiles: 0,
       };
     },
   } as unknown as ChunkDataRootStore;

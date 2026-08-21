@@ -285,7 +285,7 @@ The same staged rollout proven on the contiguous side:
    adopt the pre-existing on-disk cache, then turn it back off. It is
    insert-if-absent, so it can never clobber a live write-hook row, and it is
    resumable via a per-shard checkpoint
-   (`data/chunks/data/.chunk-cache-index-backfill-checkpoint`). It runs in the
+   (`data/tmp/chunk-cache-index-backfill-checkpoint`). It runs in the
    background without blocking startup; a full pass over a ~129k-directory /
    ~917k-file production tree took ~35 s. **Operational rule: the backfill flag
    does nothing on its own** — `system.ts` gates the reconciler on _both_

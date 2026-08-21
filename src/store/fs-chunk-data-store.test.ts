@@ -780,6 +780,7 @@ describe('FsChunkDataStore', () => {
         removedFiles: 0,
         removedBytes: 0,
         keptFiles: 0,
+        failedFiles: 0,
       });
     });
 
@@ -820,23 +821,33 @@ describe('FsChunkDataStore', () => {
       assert.equal(fs.existsSync(dir), false);
     });
 
-    it('keeps a file it cannot remove rather than reporting it freed', async () => {
-      const fs = await import('node:fs');
-      await store.set(dataRoot, 0, chunkData);
-      // Unlinking a file needs write permission on the file's OWN directory,
-      // so deny it there -- not on the grandparent, which only governs whether
-      // the data-root directory itself can be removed.
-      const dir = rootDir();
-      fs.chmodSync(dir, 0o500);
-      try {
-        const result = await store.delDataRoot(dataRoot);
-        // Must not claim bytes it did not free -- the evictor books on this.
-        assert.equal(result.removedFiles, 0);
-        assert.equal(result.removedBytes, 0);
-        assert.equal(result.keptFiles, 1);
-      } finally {
-        fs.chmodSync(dir, 0o755);
-      }
-    });
+    // Root ignores mode bits (CAP_DAC_OVERRIDE), so the unlink would succeed
+    // and the assertions invert. CLAUDE.md calls this out: run the suite as a
+    // non-root user. Skip rather than fail misleadingly in a root container.
+    it(
+      'keeps a file it cannot remove rather than reporting it freed',
+      {
+        skip: process.getuid?.() === 0 ? 'requires a non-root uid' : false,
+      },
+      async () => {
+        const fs = await import('node:fs');
+        await store.set(dataRoot, 0, chunkData);
+        // Unlinking a file needs write permission on the file's OWN directory,
+        // so deny it there -- not on the grandparent, which only governs whether
+        // the data-root directory itself can be removed.
+        const dir = rootDir();
+        fs.chmodSync(dir, 0o500);
+        try {
+          const result = await store.delDataRoot(dataRoot);
+          // Must not claim bytes it did not free -- the evictor books on this.
+          assert.equal(result.removedFiles, 0);
+          assert.equal(result.removedBytes, 0);
+          assert.equal(result.failedFiles, 1);
+          assert.equal(result.keptFiles, 0);
+        } finally {
+          fs.chmodSync(dir, 0o755);
+        }
+      },
+    );
   });
 });

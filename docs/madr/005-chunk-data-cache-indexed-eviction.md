@@ -417,7 +417,7 @@ Mirror the contiguous rollout, which is already proven operationally:
    safe direction.)
 2. `ENABLE_CHUNK_DATA_CACHE_INDEX_BACKFILL=true` for one pass, resumable via a
    per-shard checkpoint file
-   (`data/chunks/data/.chunk-cache-index-backfill-checkpoint`, written beside —
+   (`data/tmp/chunk-cache-index-backfill-checkpoint`, written beside —
    not under — the walked subtree, at top-level-shard granularity). This is the
    _last_ full walk the cache ever needs; measured at 34.9 s for the whole gw2
    tree.

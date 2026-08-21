@@ -221,25 +221,6 @@ export class FsChunkDataStore implements ChunkDataStore {
   }
 
   /**
-   * Remove an entire data root's cached chunks -- the unit the index evictor
-   * reclaims. `del()` is the wrong shape for eviction: it takes a
-   * relativeOffset per chunk, and the eviction index deliberately stores only
-   * per-data-root aggregates (ADR 005 rejects per-chunk indexing at ~4.5M
-   * rows), so the offsets are not available to it.
-   *
-   * ENOENT is success -- the directory may already be gone because a stale
-   * index row outlived it. Any other error propagates so the evictor leaves
-   * the orphan for the reconciler instead of reporting bytes it did not free.
-   *
-   * The `by-absolute-offset` symlinks pointing into this directory are NOT
-   * removed here: they are reaped by SymlinkCleanupWorker, and a dangling one
-   * already reads as a cache miss in getByAbsoluteOffset().
-   *
-   * Removing the directory races set()'s mkdir -> writeFile. The ENOENT retry
-   * that closes that window is at set() below; an image predating it must not
-   * run the evictor, or chunk writes are silently dropped.
-   */
-  /**
    * Reclaim a data root's chunks, refusing any file that is not provably old
    * enough to evict.
    *
@@ -265,6 +246,12 @@ export class FsChunkDataStore implements ChunkDataStore {
    *
    * `maxMtimeSeconds` omitted means "no floor", used by callers that are not
    * the evictor.
+   *
+   * `by-absolute-offset` symlinks pointing here are NOT removed: they are
+   * reaped by SymlinkCleanupWorker, and a dangling one already reads as a cache
+   * miss in getByAbsoluteOffset(). Removing the directory also races set()'s
+   * mkdir -> writeFile; the ENOENT retry that closes that window is in set()
+   * below, so an image predating it must not run the evictor.
    */
   async delDataRoot(
     dataRoot: string,
@@ -281,21 +268,31 @@ export class FsChunkDataStore implements ChunkDataStore {
     } catch (error: any) {
       // Already gone: nothing reclaimed, nothing at risk.
       if (error.code === 'ENOENT') {
-        return { removedFiles: 0, removedBytes: 0, keptFiles: 0 };
+        return {
+          removedFiles: 0,
+          removedBytes: 0,
+          keptFiles: 0,
+          failedFiles: 0,
+        };
       }
       throw error;
     }
 
     let removedFiles = 0;
     let removedBytes = 0;
+    // Deliberately withheld because it is newer than the floor. Expected.
     let keptFiles = 0;
+    // Could not be removed: unreadable, unlinkable, or not a plain file. A
+    // genuine fault, counted apart from keptFiles so it is never reported as
+    // an age-floor refusal -- operators read that as working as designed.
+    let failedFiles = 0;
 
     for (const entry of entries) {
       const fullPath = `${dir}/${entry.name}`;
       // Only plain files are chunks. Anything else (a stray directory, a
       // symlink) is left alone rather than guessed at.
       if (!entry.isFile()) {
-        keptFiles++;
+        failedFiles++;
         continue;
       }
       let stats: fs.Stats;
@@ -306,8 +303,8 @@ export class FsChunkDataStore implements ChunkDataStore {
           continue; // raced with another deleter; nothing to do
         }
         // Cannot establish this file's age, so cannot prove it is safe to
-        // remove. Keep it.
-        keptFiles++;
+        // remove. Keep it, but as a fault rather than a floor refusal.
+        failedFiles++;
         continue;
       }
       if (
@@ -325,18 +322,18 @@ export class FsChunkDataStore implements ChunkDataStore {
         if (error.code === 'ENOENT') {
           continue;
         }
-        keptFiles++;
+        failedFiles++;
       }
     }
 
-    if (keptFiles === 0) {
+    if (keptFiles === 0 && failedFiles === 0) {
       // Reap the directory itself. ~93% of data-root directories on a
       // production volume are empty because nothing ever did this, and that
       // is most of what makes the filesystem walk expensive.
       await fs.promises.rmdir(dir).catch(() => undefined);
     }
 
-    return { removedFiles, removedBytes, keptFiles };
+    return { removedFiles, removedBytes, keptFiles, failedFiles };
   }
 
   async set(

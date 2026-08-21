@@ -79,7 +79,12 @@ export interface ChunkDataRootStore {
   delDataRoot(
     dataRoot: string,
     maxMtimeSeconds?: number,
-  ): Promise<{ removedFiles: number; removedBytes: number; keptFiles: number }>;
+  ): Promise<{
+    removedFiles: number;
+    removedBytes: number;
+    keptFiles: number;
+    failedFiles: number;
+  }>;
 }
 
 /**
@@ -437,7 +442,12 @@ export class ChunkDataCacheEvictor {
                     dataRoot,
                     error: error?.message,
                   });
-                  return { removedFiles: 0, removedBytes: 0, keptFiles: 0 };
+                  return {
+                    removedFiles: 0,
+                    removedBytes: 0,
+                    keptFiles: 0,
+                    failedFiles: 0,
+                  };
                 })
                 .then((result) => ({ dataRoot, result })),
             ),
@@ -446,6 +456,18 @@ export class ChunkDataCacheEvictor {
 
         let missingThisBatch = 0;
         for (const { dataRoot, result } of removals) {
+          if (result.failedFiles > 0) {
+            // Not an age-floor refusal: something could not be read or
+            // unlinked. Distinct label so a permission or I/O fault is never
+            // mistaken for the guard working as designed.
+            metrics.chunkCacheIndexUnlinkRefusedTotal.inc({
+              reason: 'unremovable',
+            });
+            this.log.warn('Could not remove some chunks during eviction', {
+              dataRoot,
+              failedFiles: result.failedFiles,
+            });
+          }
           if (result.keptFiles > 0) {
             // Files inside the age floor survived. Their row is already gone,
             // so those bytes are untracked until the next write to this data
@@ -465,7 +487,7 @@ export class ChunkDataCacheEvictor {
             // Nothing on disk: the row outlived its files, which every other
             // reclaimer on the box can cause. The row is gone either way --
             // the useful half -- so the index self-heals as these are found.
-            if (result.keptFiles === 0) {
+            if (result.keptFiles === 0 && result.failedFiles === 0) {
               missingThisBatch++;
               metrics.chunkCacheIndexEvictedMissingTotal.inc();
             }

@@ -234,9 +234,14 @@ describe('chunk data cache index (end-to-end)', () => {
     const evictor = makeEvictor({ batchSize: 1 });
     // One batch frees enough to recover.
     const originalDel = store.delDataRoot.bind(store);
-    (store as any).delDataRoot = async (dr: string) => {
-      await originalDel(dr);
+    // Forward maxMtimeSeconds and the reclaim summary. Dropping either makes
+    // sweep() throw on result.keptFiles, which its own catch swallows -- the
+    // unlink has already happened by then, so the assertions below would still
+    // pass while the accounting path was never exercised.
+    (store as any).delDataRoot = async (dr: string, floor?: number) => {
+      const result = await originalDel(dr, floor);
       used = 50;
+      return result;
     };
 
     await evictor.sweep();
@@ -316,9 +321,10 @@ describe('chunk data cache index (end-to-end)', () => {
     let used = 95;
     mock.method(fs.promises, 'statfs', async () => fakeStatfs(used));
     const originalDel = store.delDataRoot.bind(store);
-    (store as any).delDataRoot = async (d: string) => {
-      await originalDel(d);
+    (store as any).delDataRoot = async (d: string, floor?: number) => {
+      const result = await originalDel(d, floor);
       used = 50;
+      return result;
     };
     await makeEvictor({ minAgeSeconds: 3600 }).sweep();
     await flush();
