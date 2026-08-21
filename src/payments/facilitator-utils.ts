@@ -44,3 +44,27 @@ export function createFacilitatorConfigFromCredentials(
     return { url: facilitatorUrl };
   }
 }
+
+/**
+ * Choose the credential used to authenticate against the Coinbase facilitator.
+ *
+ * Prefers the dedicated API key id. Falls back to the PUBLIC paywall client key
+ * only because operators who hit the 401 before this was fixed were told,
+ * correctly for the code at the time, to put their API key id there; reading
+ * only the dedicated variable would turn that working workaround into a silent
+ * fallback to a facilitator URL that cannot settle on mainnet.
+ *
+ * Extracted so the precedence can be tested with explicit inputs. Asserting it
+ * through the config module instead makes the test depend on ambient
+ * environment: with neither variable set, both sides of the comparison are
+ * `undefined` and the assertion holds no matter which credential wins.
+ *
+ * @param apiKeyId - dedicated CDP API key id (CDP_API_KEY_ID)
+ * @param paywallClientKey - public paywall client key (X_402_CDP_CLIENT_KEY)
+ */
+export function resolveFacilitatorKeyId(
+  apiKeyId: string | undefined,
+  paywallClientKey: string | undefined,
+): string | undefined {
+  return apiKeyId ?? paywallClientKey;
+}

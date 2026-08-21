@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createFilter } from './filters.js';
 import { assertMonotoneFilter } from './database/gql-l1-routing.js';
 import * as env from './lib/env.js';
+import { resolveFacilitatorKeyId } from './payments/facilitator-utils.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
 import { release } from './version.js';
@@ -3389,8 +3390,10 @@ export const X_402_CDP_CLIENT_SECRET = env.varOrUndefined('CDP_API_KEY_SECRET');
  * broken one is not an acceptable trade, so the fallback stays and is warned
  * about instead.
  */
-export const X_402_CDP_FACILITATOR_KEY_ID =
-  X_402_CDP_API_KEY_ID ?? X_402_CDP_CLIENT_KEY;
+export const X_402_CDP_FACILITATOR_KEY_ID = resolveFacilitatorKeyId(
+  X_402_CDP_API_KEY_ID,
+  X_402_CDP_CLIENT_KEY,
+);
 
 if (
   ENABLE_X_402_USDC_DATA_EGRESS &&

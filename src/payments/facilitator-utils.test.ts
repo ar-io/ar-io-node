@@ -7,7 +7,10 @@
 import assert from 'node:assert';
 import { before, describe, it } from 'node:test';
 
-import { createFacilitatorConfigFromCredentials } from './facilitator-utils.js';
+import {
+  createFacilitatorConfigFromCredentials,
+  resolveFacilitatorKeyId,
+} from './facilitator-utils.js';
 
 /**
  * Facilitator credential selection.
@@ -84,42 +87,72 @@ describe('createFacilitatorConfigFromCredentials', () => {
   });
 });
 
-describe('x402 credential wiring', () => {
+describe('resolveFacilitatorKeyId', () => {
+  // Explicit inputs, no ambient environment. Asserting this through the config
+  // module is what made the previous version of these tests vacuous: with
+  // neither variable set — which is how CI runs — both sides of the comparison
+  // were `undefined`, so the assertion held even with the precedence reversed.
+  const API_KEY_ID = 'cdp-api-key-id';
+  const PAYWALL_KEY = 'public-paywall-client-key';
+
+  it('prefers the dedicated API key id over the paywall client key', () => {
+    assert.strictEqual(
+      resolveFacilitatorKeyId(API_KEY_ID, PAYWALL_KEY),
+      API_KEY_ID,
+      'the paywall client key must never win while a dedicated id exists',
+    );
+  });
+
+  it('never returns the paywall client key when the API key id is set', () => {
+    // Stated separately from the above because this is the security-relevant
+    // half: routing the PUBLIC paywall key into facilitator auth is the bug,
+    // and it earns a 401 that surfaces only as a generic verification failure.
+    assert.notStrictEqual(
+      resolveFacilitatorKeyId(API_KEY_ID, PAYWALL_KEY),
+      PAYWALL_KEY,
+    );
+  });
+
+  it('falls back to the paywall client key when no API key id is set', () => {
+    // Back-compat for operators who worked around the 401 by putting their API
+    // key id in X_402_CDP_CLIENT_KEY.
+    assert.strictEqual(
+      resolveFacilitatorKeyId(undefined, PAYWALL_KEY),
+      PAYWALL_KEY,
+    );
+  });
+
+  it('returns undefined when neither is set, so the URL fallback applies', () => {
+    assert.strictEqual(resolveFacilitatorKeyId(undefined, undefined), undefined);
+  });
+});
+
+describe('x402 config exports', () => {
   let config: typeof import('../config.js');
 
   before(async () => {
     config = await import('../config.js');
   });
 
-  it('resolves the facilitator key id from CDP_API_KEY_ID, not the paywall key', () => {
-    // The regression this pins: X_402_CDP_CLIENT_KEY is the PUBLIC client key
-    // that brands the paywall. If someone routes it back into facilitator auth,
-    // the resolved value stops tracking CDP_API_KEY_ID and this fails.
-    if (config.X_402_CDP_API_KEY_ID !== undefined) {
-      assert.strictEqual(
-        config.X_402_CDP_FACILITATOR_KEY_ID,
+  it('wires the facilitator credential through resolveFacilitatorKeyId', () => {
+    // The config module evaluates once at import, so its values cannot be
+    // re-derived per case here. What this pins is that the export is the
+    // resolver's output for the ambient inputs -- the precedence itself is
+    // covered above with explicit values.
+    assert.strictEqual(
+      config.X_402_CDP_FACILITATOR_KEY_ID,
+      resolveFacilitatorKeyId(
         config.X_402_CDP_API_KEY_ID,
-        'CDP_API_KEY_ID must win when set',
-      );
-    } else {
-      assert.strictEqual(
-        config.X_402_CDP_FACILITATOR_KEY_ID,
         config.X_402_CDP_CLIENT_KEY,
-        'without CDP_API_KEY_ID the documented back-compat fallback applies',
-      );
-    }
+      ),
+    );
   });
 
-  it('keeps the paywall client key distinct from the facilitator credential', () => {
-    // These are separate exports precisely so one cannot silently stand in for
-    // the other. Collapsing them back into a single value is the bug.
-    assert.ok(
-      Object.hasOwn(config, 'X_402_CDP_CLIENT_KEY'),
-      'the paywall client key must remain its own config export',
-    );
-    assert.ok(
-      Object.hasOwn(config, 'X_402_CDP_FACILITATOR_KEY_ID'),
-      'facilitator auth must have a config export separate from the paywall key',
-    );
+  it('keeps the paywall client key as its own export', () => {
+    // Collapsing the two back into one value is the bug; they must stay
+    // separately addressable so neither can silently stand in for the other.
+    assert.ok(Object.hasOwn(config, 'X_402_CDP_CLIENT_KEY'));
+    assert.ok(Object.hasOwn(config, 'X_402_CDP_API_KEY_ID'));
+    assert.ok(Object.hasOwn(config, 'X_402_CDP_FACILITATOR_KEY_ID'));
   });
 });
