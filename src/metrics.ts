@@ -1298,6 +1298,22 @@ export const chunkCacheIndexEvictedMissingTotal = new promClient.Counter({
   help: 'Chunk cache index rows evicted whose on-disk data root was already absent',
 });
 
+// Files kept during an eviction because they were newer than the age floor,
+// even though their index row had already been authorised for removal. Every
+// increment means the index and the disk disagreed about how cold a data root
+// was -- a chunk landed after selection, or its index write did not land at
+// all. Harmless individually (the chunk is preserved, which is the point) but
+// a sustained rate says the write hook is dropping updates.
+//
+// Deliberately separate from chunk_cache_index_skipped_floor_total, which
+// counts candidates the floor rejected at SELECT time. Different condition,
+// different remedy.
+export const chunkCacheIndexUnlinkRefusedTotal = new promClient.Counter({
+  name: 'chunk_cache_index_unlink_refused_total',
+  help: 'Chunk files kept during eviction because they were inside the age floor',
+  labelNames: ['reason'],
+});
+
 export const chunkCacheIndexSkippedFloorTotal = new promClient.Counter({
   name: 'chunk_cache_index_skipped_floor_total',
   help: 'Chunk cache index eviction candidates excluded by the minimum age floor',
