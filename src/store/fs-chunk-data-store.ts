@@ -260,6 +260,7 @@ export class FsChunkDataStore implements ChunkDataStore {
     removedFiles: number;
     removedBytes: number;
     keptFiles: number;
+    failedFiles: number;
   }> {
     const dir = this.chunkDataRootDir(dataRoot);
     let entries: fs.Dirent[];
