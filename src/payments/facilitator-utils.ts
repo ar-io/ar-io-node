@@ -29,9 +29,16 @@ export function createFacilitatorConfigFromCredentials(
   cdpApiKeySecret: string | undefined,
   facilitatorUrl: `${string}://${string}`,
 ): FacilitatorConfig {
-  if (cdpApiKeyId !== undefined && cdpApiKeySecret !== undefined) {
+  // Blank is absent. Callers coming through config.ts are already normalized by
+  // env.varOrUndefined, but this helper is exported and takes raw strings, so a
+  // direct caller passing '' would otherwise build a CDP config around an empty
+  // key id and earn a 401 rather than falling back.
+  const id = cdpApiKeyId?.trim() === '' ? undefined : cdpApiKeyId;
+  const secret = cdpApiKeySecret?.trim() === '' ? undefined : cdpApiKeySecret;
+
+  if (id !== undefined && secret !== undefined) {
     // Use CDP-enabled facilitator configuration when credentials are provided
-    return createFacilitatorConfig(cdpApiKeyId, cdpApiKeySecret);
+    return createFacilitatorConfig(id, secret);
   } else {
     // Use basic URL-based facilitator configuration
     return { url: facilitatorUrl };

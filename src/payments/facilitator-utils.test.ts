@@ -59,16 +59,20 @@ describe('createFacilitatorConfigFromCredentials', () => {
     );
   });
 
-  it('treats an empty-string credential as present, not as unset', () => {
-    // Documents real behaviour rather than asserting it is desirable: compose
-    // renders an unset variable as `VAR=`, which arrives as '' and is NOT
-    // undefined. An operator who leaves CDP_API_KEY_ID blank therefore gets a
-    // CDP config built from an empty id and a 401, not the URL fallback.
-    const cfg = createFacilitatorConfigFromCredentials('', '', URL);
-    assert.notDeepStrictEqual(
-      cfg,
+  it('treats a blank credential as absent', () => {
+    // Compose renders an unset variable as `VAR=`, which arrives as ''. Config
+    // already normalizes that via env.varOrUndefined, but this helper is
+    // exported and takes raw strings, so it must not build a CDP config around
+    // an empty key id — that earns a 401 instead of the URL fallback.
+    assert.deepStrictEqual(
+      createFacilitatorConfigFromCredentials('', '', URL),
       { url: URL },
-      'empty strings are defined, so they select CDP — see env.varOrUndefined',
+      'blank credentials must fall back, not authenticate with an empty id',
+    );
+    assert.deepStrictEqual(
+      createFacilitatorConfigFromCredentials('   ', 'secret', URL),
+      { url: URL },
+      'whitespace-only is blank too',
     );
   });
 });
