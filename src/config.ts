@@ -3400,7 +3400,6 @@ if (
   X_402_CDP_API_KEY_ID === undefined &&
   X_402_CDP_CLIENT_KEY !== undefined
 ) {
-  // eslint-disable-next-line no-console
   console.warn(
     '[x402] Authenticating the CDP facilitator with X_402_CDP_CLIENT_KEY. ' +
       'That variable is the PUBLIC paywall client key; the facilitator wants an ' +
@@ -3427,7 +3426,6 @@ if (
   (X_402_CDP_FACILITATOR_KEY_ID === undefined ||
     X_402_CDP_CLIENT_SECRET === undefined)
 ) {
-  // eslint-disable-next-line no-console
   console.warn(
     '[x402] MAINNET IS ENABLED WITHOUT COMPLETE CDP CREDENTIALS. ' +
       `Falling back to ${X_402_USDC_FACILITATOR_URL}. Unless that facilitator ` +

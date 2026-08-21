@@ -123,7 +123,10 @@ describe('resolveFacilitatorKeyId', () => {
   });
 
   it('returns undefined when neither is set, so the URL fallback applies', () => {
-    assert.strictEqual(resolveFacilitatorKeyId(undefined, undefined), undefined);
+    assert.strictEqual(
+      resolveFacilitatorKeyId(undefined, undefined),
+      undefined,
+    );
   });
 });
 
