@@ -72,7 +72,14 @@ describe('createFacilitatorConfigFromCredentials', () => {
     assert.deepStrictEqual(
       createFacilitatorConfigFromCredentials('   ', 'secret', URL),
       { url: URL },
-      'whitespace-only is blank too',
+      'whitespace-only key id is blank too',
+    );
+    // The implementation normalizes BOTH arguments, so both need covering --
+    // testing only the key id would let a regression on the secret through.
+    assert.deepStrictEqual(
+      createFacilitatorConfigFromCredentials('key-id', '   ', URL),
+      { url: URL },
+      'whitespace-only secret is blank too',
     );
   });
 });
