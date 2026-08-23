@@ -2602,6 +2602,95 @@ export const CHUNK_SYMLINK_CLEANUP_INTERVAL = +env.varOrDefault(
   `${60 * 60 * 24}`, // 24 hours by default
 );
 
+// Chunk data cache cleanup INDEX (ADR 005). When enabled, each cached chunk
+// records {data_root, size, last_write, last_access, tier} in a SQLite index at
+// write time, and a disk-pressure evictor reclaims by querying the (SSD-backed)
+// DB instead of walking the HDD-backed chunk tree. Mirrors the contiguous data
+// cache index below, and uses the same LOW/HIGH_WATERMARK_PERCENT +
+// MIN_FREE_BYTES thresholds above.
+export const ENABLE_CHUNK_DATA_CACHE_INDEX =
+  env.varOrDefault('ENABLE_CHUNK_DATA_CACHE_INDEX', 'false') === 'true';
+
+// How often the index-driven evictor checks disk pressure (ms).
+export const CHUNK_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
+  env.positiveIntOrDefault(
+    'CHUNK_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS',
+    60000,
+  );
+
+// Max index rows considered (and chunks unlinked) per batch within a sweep.
+// Concurrent data-root directory removals per eviction batch. DERIVED from
+// UV_THREADPOOL_SIZE rather than fixed, because every fs.rm(recursive) occupies
+// a libuv thread for the whole walk-and-unlink: a hard-coded 50 takes the
+// entire pool on a stock node (UV_THREADPOOL_SIZE defaults to 4) and queues
+// every chunk read behind it -- on a device that is, by definition, already
+// saturated when the evictor is running. Same shape as
+// FS_CLEANUP_WORKER_WALK_CONCURRENCY, one eighth of the pool rather than a
+// sixteenth because these are removals rather than a sustained walk.
+export const CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY =
+  env.positiveIntOrDefault(
+    'CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY',
+    Math.max(1, Math.floor(UV_THREADPOOL_SIZE / 8)),
+  );
+
+export const CHUNK_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
+  env.positiveIntOrDefault('CHUNK_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', 1000);
+
+// Bytes the evictor aims to free per eviction batch. Chunk eviction has to be
+// SIZE-AWARE, not purely coldest-first: the median data_root holds ~2 chunks
+// (~512 KiB), so a coldest-first batch of N rows can free almost nothing while
+// still paying N index reads and N unlinks. Evicting toward a byte target
+// instead lets a sweep make real progress against disk pressure.
+export const CHUNK_DATA_CACHE_INDEX_EVICTION_TARGET_BYTES =
+  env.nonNegativeIntOrDefault(
+    'CHUNK_DATA_CACHE_INDEX_EVICTION_TARGET_BYTES',
+    1073741824, // 1 GiB
+  );
+
+// Whether to refresh a cached chunk's last_access on cache HITS. On => LRU
+// eviction; off => FIFO by cache-write time. Operators fronted by an edge cache
+// see only a fraction of reads at the core, so the recency signal is weak
+// there and turning this off avoids the extra index writes.
+export const CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ =
+  env.varOrDefault('CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ', 'true') === 'true';
+
+// One-time backfill/reconciler: on startup, walk the existing on-disk chunk
+// cache once and seed index rows for chunks not already tracked
+// (insert-if-absent, so live entries are untouched). Needed to adopt a
+// pre-existing cache that predates the index; enable once, then disable. The
+// walk is HDD-bound and runs in the background without blocking startup.
+export const ENABLE_CHUNK_DATA_CACHE_INDEX_BACKFILL =
+  env.varOrDefault('ENABLE_CHUNK_DATA_CACHE_INDEX_BACKFILL', 'false') ===
+  'true';
+
+// Rows buffered per backfill insert transaction.
+export const CHUNK_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE =
+  env.positiveIntOrDefault('CHUNK_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE', 2000);
+
+// RESERVED / CURRENTLY INERT -- the "hybrid tail" knobs from ADR 005
+// Departure 2. The idea is to leave data roots with only a handful of chunks
+// (a long tail that the index would track at a poor bytes-per-row ratio) to the
+// filesystem-walk cleanup worker, and index only the large roots. Nothing reads
+// these two values yet: the knobs exist so the shape is settled and the
+// deployment surface is stable, but ENABLING THE FLAG DOES NOTHING TODAY.
+// Wire the behavior before documenting it as functional.
+export const ENABLE_CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL =
+  env.varOrDefault('ENABLE_CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL', 'false') ===
+  'true';
+
+// RESERVED / CURRENTLY INERT (see above): the chunk count at or below which a
+// data root would be treated as "tail" and left to the filesystem walk.
+export const CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL_CHUNK_THRESHOLD =
+  env.positiveIntOrDefault(
+    'CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL_CHUNK_THRESHOLD',
+    100,
+  );
+
+// NOTE: the eviction age floor for this index
+// (CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS) is DERIVED, not read from the
+// environment, and is declared further down alongside the chunk ingest cache
+// settings it depends on. See "Chunk data cache index eviction age floor".
+
 //
 // Contiguous data caching
 //
@@ -3280,6 +3369,94 @@ export const CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS =
     'CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS',
     3600, // 1 hour
   );
+
+//
+// Chunk data cache index eviction age floor (ADR 005)
+//
+
+/**
+ * Derive the minimum age a cached chunk must reach before the index-driven
+ * evictor may reclaim it.
+ *
+ * This is a CORRECTNESS control, not a tuning knob, which is why it is derived
+ * rather than read from its own environment variable: an operator-settable
+ * floor can silently drift out of step with the ingest configuration it has to
+ * respect, and the resulting failure is invisible.
+ *
+ * When the optimistic chunk ingest cache is on, this gateway is the only place
+ * a freshly POSTed chunk lives until its data root confirms on chain. Evicting
+ * such a chunk before its confirmation window closes breaks upload propagation
+ * -- and it breaks it SILENTLY: the poster got its 200, the chunk simply is not
+ * there any more when the network comes asking, so the failure surfaces (if at
+ * all) as an unrelated "data unavailable" much later.
+ *
+ * The ingest cache has two confirmation leashes:
+ *   - CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS (default 21600 / 6h) for
+ *     open-ingest chunks, and
+ *   - CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS (default 86400 / 24h)
+ *     for allowlisted posters.
+ * BOTH are taken into account. The allowlist timeout is the longer only at
+ * stock defaults; they are independent settings, so relying on that ordering
+ * would leave an open-ingest chunk evictable before its window closes the
+ * moment an operator raises the open timeout. Taking
+ * CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS alone would leave an allowlisted
+ * chunk evictable well before its confirmation window expires -- on the
+ * production gw2 configuration (AGGRESSIVE=7200, ALLOWLIST_TIMEOUT=14400) that
+ * gap is 2h; at stock defaults (3600 vs 86400) it is 23h.
+ *
+ * So: with ingest caching ON the floor is max(aggressive min age, allowlist
+ * confirmation timeout) -- 86400s / 24h at stock defaults, 14400s / 4h on gw2.
+ * With ingest caching OFF (the default) there is no locally-originated chunk to
+ * protect and the floor is just CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
+ * the same floor the filesystem-walk cleanup worker honors.
+ *
+ * Exported as a pure function so the derivation can be tested independently of
+ * the module-load-time environment parsing.
+ */
+export function deriveChunkDataCacheMinAgeSeconds({
+  ingestCacheEnabled,
+  aggressiveMinAgeSeconds,
+  confirmationTimeoutSeconds,
+  allowlistConfirmationTimeoutSeconds,
+}: {
+  ingestCacheEnabled: boolean;
+  aggressiveMinAgeSeconds: number;
+  confirmationTimeoutSeconds: number;
+  allowlistConfirmationTimeoutSeconds: number;
+}): number {
+  if (!ingestCacheEnabled) {
+    return aggressiveMinAgeSeconds;
+  }
+  // Take the maximum of BOTH confirmation windows, not just the allowlist one.
+  // They are independent environment variables: the allowlist timeout is the
+  // longer only at stock defaults, and an operator who raises
+  // CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS above it would otherwise get a
+  // floor below the open-ingest window -- reintroducing exactly the silent
+  // eviction-before-confirmation this derivation exists to prevent. Deriving
+  // from the actual configuration rather than from the default ordering is the
+  // whole point.
+  return Math.max(
+    aggressiveMinAgeSeconds,
+    confirmationTimeoutSeconds,
+    allowlistConfirmationTimeoutSeconds,
+  );
+}
+
+// Chunks younger than this are never eviction candidates, however tight disk
+// pressure gets. ORDERING CONSTRAINT: this must be declared after all three of
+// its inputs -- CHUNK_INGEST_CACHE_ENABLED (the master gate, default false),
+// CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS (default 3600) and
+// CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS (default 86400). Moving
+// it up next to the other CHUNK_DATA_CACHE_INDEX_* knobs would read them as
+// undefined (TDZ / NaN), which is why it lives down here instead.
+export const CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS =
+  deriveChunkDataCacheMinAgeSeconds({
+    ingestCacheEnabled: CHUNK_INGEST_CACHE_ENABLED,
+    aggressiveMinAgeSeconds: CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
+    confirmationTimeoutSeconds: CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS,
+    allowlistConfirmationTimeoutSeconds:
+      CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS,
+  });
 
 // ArNS names to exclude from rate limiting
 export const RATE_LIMITER_ARNS_ALLOWLIST =

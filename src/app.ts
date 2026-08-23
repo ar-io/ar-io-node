@@ -67,6 +67,12 @@ system.contiguousDataCacheEvictor?.start();
 // One-time cache index backfill (background; does not block startup).
 void system.contiguousDataCacheReconciler?.run();
 
+system.chunkDataCacheEvictor?.start();
+
+// One-time chunk cache index backfill (background; does not block startup).
+// This is the last full walk of the chunk cache the node ever needs.
+void system.chunkDataCacheReconciler?.run();
+
 system.chunkDataFsCacheCleanupWorker?.start();
 
 // ClickHouse streaming pipeline (issue #696). Started before writers so

@@ -85,6 +85,7 @@ Technical details about Arweave data structures.
 | [002 - ArNS Cache Timing](madr/002-arns-cache-timing.md) | ArNS resolution caching strategy |
 | [003 - ArNS Undername Limits](madr/003-arns-undername-limits.md) | Undername resolution limits |
 | [004 - Optimistic L1 Transaction Indexing](madr/004-optimistic-l1-tx-indexing.md) | Index a signed L1 tx before it mines + the never-serve-as-permanent guard |
+| [005 - Chunk Data Cache Indexed Eviction](madr/005-chunk-data-cache-indexed-eviction.md) | Per-dataRoot SQLite eviction index for the chunk cache, with a derived ingest-confirmation age floor |
 
 ## Testing
 

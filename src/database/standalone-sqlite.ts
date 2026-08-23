@@ -1241,6 +1241,134 @@ export class StandaloneSqliteDatabaseWorker {
     return txn(hashes);
   }
 
+  // --- Chunk data cache eviction index (chunks.db) ---
+  //
+  // data_root crosses the worker boundary as base64url (the on-disk directory
+  // name the evictor needs) and is stored as a BLOB, matching chunk_placements
+  // so the two can be joined. Same convention as the placement methods above.
+
+  saveChunkDataCacheEntry(entry: {
+    dataRoot: string;
+    size: number;
+    lastWrite: number;
+    tier: number;
+  }) {
+    this.stmts.chunks.saveChunkDataCacheEntry.run({
+      data_root: fromB64Url(entry.dataRoot),
+      size: entry.size,
+      last_write: entry.lastWrite,
+      tier: entry.tier,
+    });
+  }
+
+  touchChunkDataCacheEntry(dataRoot: string, lastAccess: number, tier: number) {
+    this.stmts.chunks.touchChunkDataCacheEntry.run({
+      data_root: fromB64Url(dataRoot),
+      last_access: lastAccess,
+      tier,
+    });
+  }
+
+  insertChunkDataCacheEntriesIfAbsent(
+    entries: {
+      dataRoot: string;
+      size: number;
+      chunkCount: number;
+      lastWrite: number;
+      lastAccess: number;
+      tier: number;
+    }[],
+  ) {
+    const stmt = this.stmts.chunks.insertChunkDataCacheEntryIfAbsent;
+    const txn = this.dbs.chunks.transaction(
+      (
+        rows: {
+          dataRoot: string;
+          size: number;
+          chunkCount: number;
+          lastWrite: number;
+          lastAccess: number;
+          tier: number;
+        }[],
+      ) => {
+        for (const row of rows) {
+          stmt.run({
+            data_root: fromB64Url(row.dataRoot),
+            size: row.size,
+            chunk_count: row.chunkCount,
+            last_write: row.lastWrite,
+            last_access: row.lastAccess,
+            tier: row.tier,
+          });
+        }
+      },
+    );
+    txn(entries);
+  }
+
+  selectChunkDataCacheEvictionCandidates(
+    maxLastWrite: number,
+    limit: number,
+  ): {
+    dataRoot: string;
+    size: number;
+    chunkCount: number;
+    lastWrite: number;
+  }[] {
+    const rows = this.stmts.chunks.selectChunkDataCacheEvictionCandidates.all({
+      max_last_write: maxLastWrite,
+      limit,
+    });
+    return rows.map((row: any) => ({
+      dataRoot: toB64Url(row.data_root),
+      size: row.size,
+      chunkCount: row.chunk_count,
+      // Returned so ChunkDataCacheEvictor can re-assert the age floor itself
+      // rather than trusting this query's WHERE clause. The floor is the one
+      // control whose failure is silent, so it is checked on both sides.
+      lastWrite: row.last_write,
+    }));
+  }
+
+  // Batch delete: removes many rows in one transaction and returns only the
+  // data roots whose DELETE actually changed a row. That return value is the
+  // delete-before-unlink race guard -- the caller unlinks the on-disk data_root
+  // directory for those and only those, so a concurrent sweep (or a re-ingest
+  // that already replaced the row) never unlinks bytes it does not own.
+  deleteChunkDataCacheEntries(
+    dataRoots: string[],
+    maxLastWrite: number,
+  ): string[] {
+    const stmt = this.stmts.chunks.deleteChunkDataCacheEntry;
+    const txn = this.dbs.chunks.transaction((rows: string[]): string[] => {
+      const deleted: string[] = [];
+      for (const dataRoot of rows) {
+        // A row whose last_write advanced past the floor since selection
+        // deletes 0 rows and is therefore never unlinked. See the statement.
+        if (
+          stmt.run({
+            data_root: fromB64Url(dataRoot),
+            max_last_write: maxLastWrite,
+          }).changes > 0
+        ) {
+          deleted.push(dataRoot);
+        }
+      }
+      return deleted;
+    });
+    return txn(dataRoots);
+  }
+
+  sumChunkDataCacheBytes(): number {
+    const row: any = this.stmts.chunks.sumChunkDataCacheBytes.get();
+    return row.total_bytes as number;
+  }
+
+  countChunkDataCacheEntries(): number {
+    const row: any = this.stmts.chunks.countChunkDataCacheEntries.get();
+    return row.count as number;
+  }
+
   getTxByOffset(offset: number): TxByOffsetResult {
     const result = this.stmts.core.selectStableTransactionOffsetById.get({
       offset,
@@ -3961,6 +4089,75 @@ export class StandaloneSqliteDatabase
     ]);
   }
 
+  // --- Chunk data cache eviction index (chunks.db; routed through the `data`
+  // worker pool -- chunks.db has no pool of its own). ---
+
+  saveChunkDataCacheEntry(entry: {
+    dataRoot: string;
+    size: number;
+    lastWrite: number;
+    tier: number;
+  }): Promise<void> {
+    return this.queueWrite('data', 'saveChunkDataCacheEntry', [entry]);
+  }
+
+  touchChunkDataCacheEntry(
+    dataRoot: string,
+    lastAccess: number,
+    tier: number,
+  ): Promise<void> {
+    return this.queueWrite('data', 'touchChunkDataCacheEntry', [
+      dataRoot,
+      lastAccess,
+      tier,
+    ]);
+  }
+
+  insertChunkDataCacheEntriesIfAbsent(
+    entries: {
+      dataRoot: string;
+      size: number;
+      chunkCount: number;
+      lastWrite: number;
+      lastAccess: number;
+      tier: number;
+    }[],
+  ): Promise<void> {
+    return this.queueWrite('data', 'insertChunkDataCacheEntriesIfAbsent', [
+      entries,
+    ]);
+  }
+
+  selectChunkDataCacheEvictionCandidates(
+    maxLastWrite: number,
+    limit: number,
+  ): Promise<
+    { dataRoot: string; size: number; chunkCount: number; lastWrite: number }[]
+  > {
+    return this.queueRead('data', 'selectChunkDataCacheEvictionCandidates', [
+      maxLastWrite,
+      limit,
+    ]);
+  }
+
+  deleteChunkDataCacheEntries(
+    dataRoots: string[],
+    maxLastWrite: number,
+  ): Promise<string[]> {
+    return this.queueWrite('data', 'deleteChunkDataCacheEntries', [
+      dataRoots,
+      maxLastWrite,
+    ]);
+  }
+
+  sumChunkDataCacheBytes(): Promise<number> {
+    return this.queueRead('data', 'sumChunkDataCacheBytes', undefined);
+  }
+
+  countChunkDataCacheEntries(): Promise<number> {
+    return this.queueRead('data', 'countChunkDataCacheEntries', undefined);
+  }
+
   async saveDataItem(
     item: NormalizedDataItem,
     isOptimistic = false,
@@ -4627,6 +4824,34 @@ if (!isMainThread) {
           parentPort?.postMessage(
             worker.deleteContiguousDataCacheEntries(args[0]),
           );
+          break;
+        case 'saveChunkDataCacheEntry':
+          worker.saveChunkDataCacheEntry(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'touchChunkDataCacheEntry':
+          worker.touchChunkDataCacheEntry(args[0], args[1], args[2]);
+          parentPort?.postMessage(null);
+          break;
+        case 'insertChunkDataCacheEntriesIfAbsent':
+          worker.insertChunkDataCacheEntriesIfAbsent(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'selectChunkDataCacheEvictionCandidates':
+          parentPort?.postMessage(
+            worker.selectChunkDataCacheEvictionCandidates(args[0], args[1]),
+          );
+          break;
+        case 'deleteChunkDataCacheEntries':
+          parentPort?.postMessage(
+            worker.deleteChunkDataCacheEntries(args[0], args[1]),
+          );
+          break;
+        case 'sumChunkDataCacheBytes':
+          parentPort?.postMessage(worker.sumChunkDataCacheBytes());
+          break;
+        case 'countChunkDataCacheEntries':
+          parentPort?.postMessage(worker.countChunkDataCacheEntries());
           break;
         case 'countConfirmedDataRoots':
           parentPort?.postMessage(worker.countConfirmedDataRoots());
