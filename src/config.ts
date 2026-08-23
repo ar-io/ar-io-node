@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createFilter } from './filters.js';
 import { assertMonotoneFilter } from './database/gql-l1-routing.js';
 import * as env from './lib/env.js';
+import { resolveFacilitatorKeyId } from './payments/facilitator-utils.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
 import { release } from './version.js';
@@ -3523,8 +3524,17 @@ export const X_402_USDC_SETTLE_TIMEOUT_MS = +env.varOrDefault(
   '5000', // 5 seconds
 );
 
-// Paywall customization (optional)
+// Paywall customization (optional). This is the PUBLIC CDP Client API key used
+// to brand/serve the paywall UI. It is NOT a facilitator credential — passing it
+// where an API key id belongs makes CDP reject every verify with 401.
 export const X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+
+// CDP API key ID, paired with CDP_API_KEY_SECRET to authenticate against the
+// Coinbase facilitator. Required for mainnet (`base`); without a working pair
+// the SDK silently falls back to X_402_USDC_FACILITATOR_URL, which for the
+// common `facilitator.x402.rs` value supports testnets ONLY, so payments fail
+// either way.
+export const X_402_CDP_API_KEY_ID = env.varOrUndefined('CDP_API_KEY_ID');
 
 // CDP Secret API Key for session token generation (optional)
 // Load from file if CDP_API_KEY_SECRET_FILE is set, otherwise use CDP_API_KEY_SECRET
@@ -3543,6 +3553,64 @@ if (CDP_API_KEY_SECRET_FILE !== undefined) {
 }
 
 export const X_402_CDP_CLIENT_SECRET = env.varOrUndefined('CDP_API_KEY_SECRET');
+
+/**
+ * The credential actually used to authenticate against the Coinbase
+ * facilitator.
+ *
+ * Prefers CDP_API_KEY_ID. Falls back to X_402_CDP_CLIENT_KEY because operators
+ * who hit the 401 before this was fixed were told, correctly for the code at
+ * the time, to put their API key id in X_402_CDP_CLIENT_KEY. Reading only
+ * CDP_API_KEY_ID would turn that working workaround into a silent fallback to
+ * X_402_USDC_FACILITATOR_URL — which for the common `facilitator.x402.rs` value
+ * cannot settle on mainnet at all. Breaking a working deployment while fixing a
+ * broken one is not an acceptable trade, so the fallback stays and is warned
+ * about instead.
+ */
+export const X_402_CDP_FACILITATOR_KEY_ID = resolveFacilitatorKeyId(
+  X_402_CDP_API_KEY_ID,
+  X_402_CDP_CLIENT_KEY,
+);
+
+if (
+  ENABLE_X_402_USDC_DATA_EGRESS &&
+  X_402_CDP_API_KEY_ID === undefined &&
+  X_402_CDP_CLIENT_KEY !== undefined
+) {
+  console.warn(
+    '[x402] Authenticating the CDP facilitator with X_402_CDP_CLIENT_KEY. ' +
+      'That variable is the PUBLIC paywall client key; the facilitator wants an ' +
+      'API key id. Set CDP_API_KEY_ID instead — this fallback exists only so ' +
+      'that pre-existing workarounds keep working, and it also leaks the value ' +
+      'into the paywall HTML.',
+  );
+}
+
+/**
+ * Mainnet cannot settle without working CDP credentials. When either is
+ * missing the SDK silently falls back to X_402_USDC_FACILITATOR_URL, and the
+ * facilitators commonly configured there (facilitator.x402.rs, x402.org)
+ * support testnets only — so every payment fails verification while the
+ * gateway keeps advertising x402 as enabled.
+ *
+ * This warns rather than throws: a custom mainnet-capable facilitator URL is a
+ * legitimate configuration, and refusing to boot would take down deployments
+ * that are merely mis-earning rather than mis-serving.
+ */
+if (
+  ENABLE_X_402_USDC_DATA_EGRESS &&
+  X_402_USDC_NETWORK === 'base' &&
+  (X_402_CDP_FACILITATOR_KEY_ID === undefined ||
+    X_402_CDP_CLIENT_SECRET === undefined)
+) {
+  console.warn(
+    '[x402] MAINNET IS ENABLED WITHOUT COMPLETE CDP CREDENTIALS. ' +
+      `Falling back to ${X_402_USDC_FACILITATOR_URL}. Unless that facilitator ` +
+      'supports Base mainnet, EVERY payment will fail verification and the ' +
+      'gateway will earn nothing while still returning 402s. Set CDP_API_KEY_ID ' +
+      'and CDP_API_KEY_SECRET.',
+  );
+}
 
 // Validate X402 requires rate limiter
 if (ENABLE_X_402_USDC_DATA_EGRESS && !ENABLE_RATE_LIMITER) {

@@ -1,0 +1,204 @@
+#!/usr/bin/env node
+/**
+ * x402-pay-test — close the last unverified link in the payment path.
+ *
+ * `tools/x402-probe` proves the gateway ASKS for payment. This proves the ask
+ * can be ANSWERED: it drives a real wallet through 402 -> sign -> retry -> 200,
+ * and reports what the gateway actually settled on chain.
+ *
+ * It spends real USDC on Base mainnet. The amount is derived from response size
+ * (~$0.004 for a 36 MB object) and is capped below, so a pricing bug cannot
+ * drain the wallet.
+ *
+ * The signing wallet is a throwaway kept outside the repo:
+ *   ~/.config/ar-io-x402/test-wallet.key   (0600)
+ * Never point this at the receiving wallet — payer and payTo being the same
+ * address is a self-transfer and proves nothing about a real customer's path.
+ *
+ * Usage:  tools/x402-pay-test [tx-id]
+ * Env:    GATEWAY (default http://localhost:3000)
+ *         X402_KEY_FILE (default ~/.config/ar-io-x402/test-wallet.key)
+ *         MAX_USDC (default 0.05 — hard ceiling on a single payment)
+ */
+
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { createWalletClient, http, publicActions, formatUnits } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { base } from 'viem/chains';
+import { wrapFetchWithPayment, decodeXPaymentResponse } from 'x402-fetch';
+
+const TX = process.argv[2] ?? 'hhOoYZtHBqQi3d-dmxcGooXKTbiT3HJ2-eNsE7HNtKg';
+const GATEWAY = process.env.GATEWAY ?? 'http://localhost:3000';
+const KEY_FILE =
+  process.env.X402_KEY_FILE ?? join(homedir(), '.config/ar-io-x402/test-wallet.key');
+const MAX_USDC = Number(process.env.MAX_USDC ?? '0.05');
+const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const TEST_IP = '203.0.113.99'; // TEST-NET-3, reserved for documentation
+
+const say = (...a) => console.log(...a);
+
+const key = readFileSync(KEY_FILE, 'utf8').trim();
+const account = privateKeyToAccount(key);
+const wallet = createWalletClient({ account, chain: base, transport: http() }).extend(
+  publicActions,
+);
+
+say('== x402 payment test ==');
+say(`   gateway : ${GATEWAY}`);
+say(`   payer   : ${account.address}`);
+say(`   tx      : ${TX}`);
+
+// --- funding check -----------------------------------------------------------
+const balance = await wallet.readContract({
+  address: USDC_BASE,
+  abi: [
+    {
+      name: 'balanceOf',
+      type: 'function',
+      stateMutability: 'view',
+      inputs: [{ name: 'a', type: 'address' }],
+      outputs: [{ type: 'uint256' }],
+    },
+  ],
+  functionName: 'balanceOf',
+  args: [account.address],
+});
+const usdc = Number(formatUnits(balance, 6));
+say(`   balance : ${usdc} USDC on Base`);
+if (usdc <= 0) {
+  say('\n!! wallet holds no USDC — fund it and re-run.');
+  say('   Payment uses EIP-3009 (gasless for the payer), so it needs USDC only, no ETH.');
+  process.exit(1);
+}
+
+// --- 1. unpaid request must be refused --------------------------------------
+// Seed our own exhausted bucket rather than relying on tools/x402-probe having
+// run: the probe deletes its bucket on exit, so depending on it makes this test
+// order-sensitive and silently skippable.
+const REDIS = process.env.REDIS ?? 'ar-io-node-redis-1';
+const BUCKET = `rl:ip:${TEST_IP}`;
+const redis = (...args) =>
+  execFileSync('docker', ['exec', REDIS, 'redis-cli', ...args], { encoding: 'utf8' }).trim();
+
+redis('HSET', BUCKET, 'tokens', '0', 'paidTokens', '0',
+  'lastRefill', String(Date.now()), 'capacity', '1000000', 'refillRate', '100');
+process.on('exit', () => { try { redis('DEL', BUCKET); } catch { /* best effort */ } });
+say(`   bucket  : ${BUCKET} seeded empty (deleted on exit)`);
+
+const url = `${GATEWAY}/raw/${TX}`;
+const headers = { 'X-Forwarded-For': TEST_IP, Accept: 'application/json' };
+
+const unpaid = await fetch(url, { headers });
+say(`\n-- unpaid request        HTTP ${unpaid.status}   expect 402`);
+if (unpaid.status !== 402) {
+  say('   !! expected 402 with an empty bucket — is ENABLE_RATE_LIMITER on, and is this IP allowlisted?');
+  process.exit(1);
+}
+const reqs = await unpaid.json();
+const need = reqs.accepts?.[0];
+say(`   asking ${need?.maxAmountRequired} atomic USDC on ${need?.network} -> ${need?.payTo}`);
+
+if (need?.payTo?.toLowerCase() === account.address.toLowerCase()) {
+  say('   !! payer === payTo. That is a self-transfer and proves nothing. Aborting.');
+  process.exit(1);
+}
+
+// --- 2. pay and retry --------------------------------------------------------
+const maxAtomic = BigInt(Math.round(MAX_USDC * 1e6));
+say(`\n-- paying (ceiling ${MAX_USDC} USDC) ...`);
+const payFetch = wrapFetchWithPayment(fetch, wallet, maxAtomic);
+
+const started = Date.now();
+const paid = await payFetch(url, { headers });
+const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+
+say(`-- paid request          HTTP ${paid.status}   (${elapsed}s)`);
+const settled = paid.headers.get('x-payment-response');
+let settlementTx;
+let settlementOk = false;
+if (settled) {
+  try {
+    const d = decodeXPaymentResponse(settled);
+    settlementTx = d.transaction;
+    settlementOk = d.success === true;
+    say(`   settlement: success=${d.success} tx=${d.transaction ?? 'n/a'} network=${d.network ?? 'n/a'}`);
+  } catch {
+    say(`   settlement header present (undecodable): ${settled.slice(0, 80)}`);
+  }
+} else {
+  say('   !! no X-Payment-Response header — settlement not reported');
+}
+
+// Count what actually arrived. Content-Length is a claim; a truncated or
+// aborted stream would still advertise the full size, and reading balances
+// before the body completes is what made an earlier run report "spent 0".
+let bytes = 0;
+if (paid.body) {
+  const reader = paid.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+  }
+}
+// An ABSENT Content-Length cannot be cross-checked; a DECLARED zero is a real
+// mismatch against a non-empty body. `Number(header ?? 0)` conflated the two.
+const claimedHeader = paid.headers.get('content-length');
+const claimed = claimedHeader === null ? undefined : Number(claimedHeader);
+say(`   content-type: ${paid.headers.get('content-type')}  bytes received: ${bytes}` +
+    (claimed !== undefined && claimed !== bytes ? `  !! content-length claimed ${claimed}` : ''));
+
+// --- 3. what it cost ---------------------------------------------------------
+// Settlement is submitted by the facilitator and confirms a block later, so a
+// balance read taken right after the response races it and reports 0 spent.
+// Wait for the receipt first, then the delta is real.
+let atBlock;
+if (settlementTx) {
+  const receipt = await wallet.waitForTransactionReceipt({ hash: settlementTx });
+  atBlock = receipt.blockNumber;
+  if (receipt.status !== 'success') settlementOk = false;
+  say(`   settlement confirmed: ${receipt.status} in block ${receipt.blockNumber}`);
+}
+
+// Poll for the post-balance. Even after the receipt exists, an RPC node's view
+// of head can lag the block the transfer landed in, so a single read at
+// "latest" may still return pre-settlement state and report 0 spent. Pinning to
+// the settlement block is not an option either: public RPCs do not serve
+// archive state. So: re-read until it moves, with a short bound.
+const readBalance = () =>
+  wallet.readContract({
+    address: USDC_BASE,
+    abi: [
+      {
+        name: 'balanceOf',
+        type: 'function',
+        stateMutability: 'view',
+        inputs: [{ name: 'a', type: 'address' }],
+        outputs: [{ type: 'uint256' }],
+      },
+    ],
+    functionName: 'balanceOf',
+    args: [account.address],
+  });
+
+let after = await readBalance();
+for (let i = 0; i < 15 && after === balance; i++) {
+  await new Promise((r) => setTimeout(r, 1000));
+  after = await readBalance();
+}
+if (after === balance) {
+  say('   !! balance unchanged after 15s — settlement may not have credited yet');
+}
+const spent = Number(formatUnits(balance - after, 6));
+say(`   spent: ${spent} USDC   (balance now ${Number(formatUnits(after, 6))})`);
+
+// Serving data without a confirmed settlement is the failure this whole
+// exercise exists to catch, so it must not PASS.
+const lengthOk = claimed === undefined || claimed === bytes;
+const ok = paid.status === 200 && bytes > 0 && lengthOk && settlementOk;
+if (!settlementOk) say('   !! settlement not confirmed successful — data was served unpaid');
+say(`\n== ${ok ? 'PASS — 402 answered, payment settled, data served' : 'FAIL — see above'} ==`);
+process.exit(ok ? 0 : 1);
