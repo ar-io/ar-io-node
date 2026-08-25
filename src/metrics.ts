@@ -1709,6 +1709,11 @@ export const foregroundCacheCoalescedOutcomeTotal = new promClient.Counter({
   labelNames: ['outcome'] as const,
 });
 
+export const foregroundCacheStalledWritesTotal = new promClient.Counter({
+  name: 'foreground_cache_stalled_writes_total',
+  help: 'Foreground cache writes whose concurrency permit was reclaimed after the write stopped making progress',
+});
+
 //
 // Sampling data source metrics
 //

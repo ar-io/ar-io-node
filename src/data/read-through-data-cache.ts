@@ -150,6 +150,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     foregroundCacheMaxSize = 0,
     foregroundCacheConcurrency = 0,
     foregroundCacheCoalesceTimeoutMs = 300000,
+    foregroundCacheSemaphore,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
@@ -169,6 +170,13 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     foregroundCacheMaxSize?: number;
     foregroundCacheConcurrency?: number;
     foregroundCacheCoalesceTimeoutMs?: number;
+    /**
+     * Shared across instances by {@link system}. The resource being bounded is
+     * `contiguous/tmp` on one disk, which every instance writes to, so the
+     * budget has to be process-wide rather than per-instance. Takes precedence
+     * over {@link foregroundCacheConcurrency}, which exists for standalone use.
+     */
+    foregroundCacheSemaphore?: Semaphore;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
@@ -236,9 +244,10 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     // 0 means unbounded -- leave the semaphore unset rather than constructing
     // one with a permit count that would reject in the Semaphore constructor.
     this.foregroundCacheSemaphore =
-      foregroundCacheConcurrency > 0
+      foregroundCacheSemaphore ??
+      (foregroundCacheConcurrency > 0
         ? new Semaphore(foregroundCacheConcurrency)
-        : undefined;
+        : undefined);
     this.foregroundCacheCoalesceTimeoutMs = foregroundCacheCoalesceTimeoutMs;
   }
 
@@ -1127,11 +1136,49 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         // discards), the buffer stays empty. For HTTP `/raw/` clients,
         // short slow periods buffer briefly on a single bundle's worth of
         // bytes — bounded by `data.size`.
+        // A wedged pipeline never invokes its callback, so the permit acquired
+        // above would never come back and -- at FOREGROUND_CACHE_CONCURRENCY=1
+        // -- one wedged stream would stop foreground cache writes for the life
+        // of the process. Reclaim the permit once the write stops producing
+        // bytes entirely. Keying on inactivity rather than total elapsed time
+        // matters: a slow but live multi-GB write keeps resetting this and
+        // keeps its permit, so the cap still bounds real concurrency instead of
+        // decaying into an advisory limit under sustained load.
+        const stallBoundMs = this.foregroundCacheCoalesceTimeoutMs;
+        let stallTimer: NodeJS.Timeout | undefined;
+        const clearStallTimer = () => {
+          if (stallTimer !== undefined) {
+            clearTimeout(stallTimer);
+            stallTimer = undefined;
+          }
+        };
+        const touchStallTimer = () => {
+          if (!foregroundPermitHeld || stallBoundMs <= 0) {
+            return;
+          }
+          clearStallTimer();
+          stallTimer = setTimeout(() => {
+            stallTimer = undefined;
+            if (!foregroundPermitHeld) {
+              return;
+            }
+            foregroundPermitHeld = false;
+            this.foregroundCacheSemaphore?.release();
+            metrics.foregroundCacheStalledWritesTotal.inc();
+            this.log.warn(
+              'Reclaiming foreground cache permit from stalled write',
+              { id, bytesReceived, dataSize: data.size },
+            );
+          }, stallBoundMs);
+        };
+        touchStallTimer();
+
         const hashingStream = new Transform({
           transform(chunk: Buffer, _encoding, callback) {
             bytesReceived += chunk.length;
             hasher.update(chunk);
             consumerStream.write(chunk);
+            touchStallTimer();
             callback(null, chunk);
           },
         });
@@ -1368,6 +1415,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             // attached to this fetch. Deliberately last: it runs after the
             // finalize logic above, so a follower that re-reads the cache on
             // being woken finds a durable blob rather than a staging file.
+            clearStallTimer();
             finishForegroundCache(cacheFinalized);
           },
         );

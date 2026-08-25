@@ -1501,6 +1501,15 @@ const contiguousDataStore = new FsDataStore({
 const contiguousDataCacheIndex: ContiguousDataCacheIndex | undefined =
   config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX ? db : undefined;
 
+// Shared across both ReadThroughDataCache instances on purpose. What is being
+// bounded is unfinished data in `contiguous/tmp` on a single disk, which both
+// instances write to, so the budget has to be process-wide -- a per-instance
+// semaphore would silently allow twice the configured concurrency.
+const foregroundCacheSemaphore =
+  config.FOREGROUND_CACHE_CONCURRENCY > 0
+    ? new Semaphore(config.FOREGROUND_CACHE_CONCURRENCY)
+    : undefined;
+
 export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource:
@@ -1531,7 +1540,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   backgroundCacheRangeMaxSize: config.BACKGROUND_CACHE_RANGE_MAX_SIZE,
   backgroundCacheRangeConcurrency: config.BACKGROUND_CACHE_RANGE_CONCURRENCY,
   foregroundCacheMaxSize: config.FOREGROUND_CACHE_MAX_SIZE,
-  foregroundCacheConcurrency: config.FOREGROUND_CACHE_CONCURRENCY,
+  foregroundCacheSemaphore,
   foregroundCacheCoalesceTimeoutMs: config.FOREGROUND_CACHE_COALESCE_TIMEOUT_MS,
 });
 
@@ -1552,7 +1561,7 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
   trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
   foregroundCacheMaxSize: config.FOREGROUND_CACHE_MAX_SIZE,
-  foregroundCacheConcurrency: config.FOREGROUND_CACHE_CONCURRENCY,
+  foregroundCacheSemaphore,
   foregroundCacheCoalesceTimeoutMs: config.FOREGROUND_CACHE_COALESCE_TIMEOUT_MS,
 });
 

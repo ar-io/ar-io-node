@@ -26,6 +26,7 @@ import {
 } from '../workers/data-content-attribute-importer.js';
 import { makeContiguousMetadataStore } from '../init/metadata-store.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import { Semaphore } from '../lib/semaphore.js';
 
 describe('ReadThroughDataCache', function () {
   let log: ReturnType<typeof createTestLogger>;
@@ -3027,6 +3028,200 @@ describe('ReadThroughDataCache', function () {
         .map((c: any) => c.arguments[0]?.reason)
         .filter((r: string) => r === 'already_pending');
       assert.equal(skips.length, 1);
+    });
+
+    it('reclaims the concurrency permit from a stalled write', async () => {
+      mock.method(metrics.foregroundCacheStalledWritesTotal, 'inc');
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'after the stall';
+      let upstreamCalls = 0;
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          upstreamCalls++;
+          if (upstreamCalls === 1) {
+            // Produces no bytes and never ends: the pipeline callback that
+            // would normally return the permit never fires.
+            return {
+              stream: new Readable({ read() {} }),
+              size: payload.length,
+              verified: true,
+              trusted: true,
+              cached: false,
+            };
+          }
+          return {
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheConcurrency: 1,
+        foregroundCacheCoalesceTimeoutMs: 40,
+      });
+
+      const stalled = cache.getData({ id: 'stalled-id', requestAttributes });
+      stalled.then(
+        (result) => result.stream.on('error', () => undefined),
+        () => undefined,
+      );
+
+      // Wait past the stall bound so the permit is reclaimed.
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      // A different ID must still be able to acquire the single permit.
+      const result = await cache.getData({
+        id: 'after-stall-id',
+        requestAttributes,
+      });
+      let received = '';
+      for await (const chunk of result.stream) {
+        received += chunk;
+      }
+
+      assert.equal(received, payload);
+      assert.equal(
+        (metrics.foregroundCacheStalledWritesTotal.inc as any).mock.callCount(),
+        1,
+      );
+      // Two staging files: the stalled one, and the second write that only
+      // succeeds because the permit came back.
+      assert.equal(counters.createWriteStream, 2);
+      assert.equal(counters.finalize, 1);
+    });
+
+    it('keeps its permit while a slow write is still making progress', async () => {
+      mock.method(metrics.foregroundCacheStalledWritesTotal, 'inc');
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          let sent = 0;
+          return {
+            stream: new Readable({
+              read() {
+                // Drip a byte at a time, each well inside the stall bound, for
+                // longer in total than that bound.
+                setTimeout(() => {
+                  if (sent < 8) {
+                    sent++;
+                    this.push('x');
+                  } else {
+                    this.push(null);
+                  }
+                }, 20);
+              },
+            }),
+            size: 8,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheConcurrency: 1,
+        foregroundCacheCoalesceTimeoutMs: 60,
+      });
+
+      const result = await cache.getData({ id: 'slow-id', requestAttributes });
+      let received = '';
+      for await (const chunk of result.stream) {
+        received += chunk;
+      }
+
+      assert.equal(received, 'xxxxxxxx');
+      // Live-but-slow is not stalled: the permit was never reclaimed early.
+      assert.equal(
+        (metrics.foregroundCacheStalledWritesTotal.inc as any).mock.callCount(),
+        0,
+      );
+      assert.equal(counters.finalize, 1);
+    });
+
+    it('shares one concurrency budget when a semaphore is injected', async () => {
+      mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'shared';
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return {
+            stream: new Readable({
+              read() {
+                setTimeout(() => {
+                  this.push(payload);
+                  this.push(null);
+                }, 30);
+              },
+            }),
+            size: payload.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const shared = new Semaphore(1);
+      const cacheA = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheSemaphore: shared,
+      });
+      const cacheB = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheSemaphore: shared,
+      });
+
+      const received = await Promise.all([
+        cacheA.getData({ id: 'shared-a', requestAttributes }),
+        cacheB.getData({ id: 'shared-b', requestAttributes }),
+      ]).then((results) =>
+        Promise.all(
+          results.map(async (result) => {
+            let out = '';
+            for await (const chunk of result.stream) {
+              out += chunk;
+            }
+            return out;
+          }),
+        ),
+      );
+
+      // Two separate cache instances, one budget: only one staging file.
+      assert.deepEqual(received, [payload, payload]);
+      assert.equal(counters.createWriteStream, 1);
+      const reasons = (
+        metrics.foregroundCacheSkippedTotal.inc as any
+      ).mock.calls
+        .map((c: any) => c.arguments[0]?.reason)
+        .filter((r: string) => r === 'at_capacity');
+      assert.equal(reasons.length, 1);
     });
 
     it('does not park later requests forever when the leader wedges', async () => {

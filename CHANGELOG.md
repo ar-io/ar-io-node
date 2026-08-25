@@ -24,6 +24,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   altogether and lets the cache grow unbounded. All four default to the
   existing behavior, so nothing changes unless they are set.
 
+- **Bounds on foreground cache writes** — `FOREGROUND_CACHE_MAX_SIZE` and
+  `FOREGROUND_CACHE_CONCURRENCY` cap how much unfinished data a burst of
+  *distinct* large objects can accumulate in `contiguous/tmp`, mirroring the
+  guards background range caching already had. Exceeding either serves the
+  request normally and skips only the cache write. The concurrency budget is
+  process-wide, shared by the on-demand and background caches, because both
+  stage to the same directory. Both default to unbounded, so nothing changes
+  unless they are set.
+
 ### Changed
 
 ### Fixed
@@ -45,12 +54,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   coalesced request reports the same cache-hit semantics (`X-Cache: HIT`,
   `Content-Digest`, conditional-request eligibility) as a request arriving a
   moment later would.
-- **Foreground cache writes can now be bounded** — `FOREGROUND_CACHE_MAX_SIZE`
-  and `FOREGROUND_CACHE_CONCURRENCY` cap how much unfinished data a burst of
-  *distinct* large objects can accumulate in `contiguous/tmp`, mirroring the
-  guards background range caching already had. Exceeding either serves the
-  request normally and skips only the cache write. Both default to unbounded,
-  so nothing changes unless they are set.
 
 ## [Release 82] - 2026-08-13
 
