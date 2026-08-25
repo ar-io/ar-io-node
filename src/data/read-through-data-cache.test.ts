@@ -2934,6 +2934,101 @@ describe('ReadThroughDataCache', function () {
       assert.equal(counters.finalize, 3);
     });
 
+    it('does not trigger a background range cache while a foreground fetch of the same ID is in flight', async () => {
+      mock.method(metrics.backgroundRangeCacheTriggeredTotal, 'inc');
+      mock.method(metrics.backgroundRangeCacheSkippedTotal, 'inc');
+
+      const { store } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'full object';
+
+      mock.method(attributesStore, 'getDataAttributes', async () => ({
+        size: payload.length,
+        contentType: 'text/plain',
+        isManifest: false,
+        stable: true,
+        verified: true,
+      }));
+
+      const dataSource: ContiguousDataSource = {
+        getData: async (params: any) => {
+          if (params.region) {
+            return {
+              stream: new Readable({
+                read() {
+                  this.push('rng');
+                  this.push(null);
+                },
+              }),
+              size: 3,
+              verified: true,
+              trusted: true,
+              cached: false,
+            };
+          }
+          // Slow full fetch so it is still in flight when the range request
+          // lands.
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          return {
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        backgroundCacheRangeMaxSize: 10000,
+        backgroundCacheRangeConcurrency: 1,
+      });
+
+      const foreground = cache
+        .getData({ id: 'bg-overlap-id', requestAttributes })
+        .then(async (result) => {
+          for await (const _ of result.stream) {
+            // drain
+          }
+        });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const ranged = await cache.getData({
+        id: 'bg-overlap-id',
+        requestAttributes,
+        region: { offset: 0, size: 3 },
+      });
+      for await (const _ of ranged.stream) {
+        // drain
+      }
+
+      await foreground;
+
+      // The foreground fetch is already caching the whole object, so the
+      // background trigger must not fire and must not hold its permit.
+      assert.equal(
+        (
+          metrics.backgroundRangeCacheTriggeredTotal.inc as any
+        ).mock.callCount(),
+        0,
+      );
+      const skips = (
+        metrics.backgroundRangeCacheSkippedTotal.inc as any
+      ).mock.calls
+        .map((c: any) => c.arguments[0]?.reason)
+        .filter((r: string) => r === 'already_pending');
+      assert.equal(skips.length, 1);
+    });
+
     it('does not park later requests forever when the leader wedges', async () => {
       const { store, counters } = makeStatefulStore();
       const { store: attributesStore } = makeStatefulAttributesStore();

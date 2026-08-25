@@ -463,6 +463,20 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       return;
     }
 
+    // A foreground fetch of this ID is already downloading and caching the
+    // whole object, so a background full-item fetch would be pure duplication.
+    // Skipping also keeps the background permit free: without this check the
+    // trigger below would coalesce onto that foreground leader and hold its
+    // permit for the duration -- with BACKGROUND_CACHE_RANGE_CONCURRENCY
+    // defaulting to 1, one slow foreground fetch would stall background range
+    // caching process-wide.
+    if (this.inFlightForegroundFetches.has(id)) {
+      metrics.backgroundRangeCacheSkippedTotal.inc({
+        reason: 'already_pending',
+      });
+      return;
+    }
+
     if (dataSize > this.backgroundCacheRangeMaxSize) {
       metrics.backgroundRangeCacheSkippedTotal.inc({
         reason: 'exceeds_max_size',
