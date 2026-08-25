@@ -1530,6 +1530,9 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
   backgroundCacheRangeMaxSize: config.BACKGROUND_CACHE_RANGE_MAX_SIZE,
   backgroundCacheRangeConcurrency: config.BACKGROUND_CACHE_RANGE_CONCURRENCY,
+  foregroundCacheMaxSize: config.FOREGROUND_CACHE_MAX_SIZE,
+  foregroundCacheConcurrency: config.FOREGROUND_CACHE_CONCURRENCY,
+  foregroundCacheCoalesceTimeoutMs: config.FOREGROUND_CACHE_COALESCE_TIMEOUT_MS,
 });
 
 export const backgroundContiguousDataSource = new ReadThroughDataCache({
@@ -1548,6 +1551,9 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   eventEmitter,
   untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
   trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
+  foregroundCacheMaxSize: config.FOREGROUND_CACHE_MAX_SIZE,
+  foregroundCacheConcurrency: config.FOREGROUND_CACHE_CONCURRENCY,
+  foregroundCacheCoalesceTimeoutMs: config.FOREGROUND_CACHE_COALESCE_TIMEOUT_MS,
 });
 
 // Index-driven chunk cache evictor (ADR 005): the chunk cache is reclaimed

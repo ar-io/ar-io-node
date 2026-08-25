@@ -3226,6 +3226,39 @@ export const BACKGROUND_CACHE_RANGE_CONCURRENCY = env.positiveIntOrDefault(
   1,
 );
 
+// Guards on the foreground (on-demand) full-item cache write path. Both
+// default to unbounded, preserving pre-existing behavior; set them to bound
+// how much unfinished data can accumulate in contiguous/tmp during a burst.
+//
+// 0 disables the cap: any size is eligible for a foreground cache write.
+export const FOREGROUND_CACHE_MAX_SIZE = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_MAX_SIZE',
+  0,
+);
+
+// 0 disables the limit: unlimited concurrent foreground cache writes. When
+// set, requests beyond the limit are still served -- they just stream through
+// without being written to the cache.
+export const FOREGROUND_CACHE_CONCURRENCY = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_CONCURRENCY',
+  0,
+);
+
+// How long a request will wait to be served by another request's in-flight
+// fetch of the same ID before giving up and fetching independently.
+//
+// This is the safety valve on foreground coalescing. A leader whose stream
+// wedges never reaches its pipeline callback, so without a bound its map entry
+// would outlive it and park every later request for that ID for the life of
+// the process -- turning a transient stall into permanent unavailability for
+// one ID. Timing out restores pre-coalescing behavior (each request fetches
+// for itself) for exactly the wedged case. Matches the wall-clock convention
+// of ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS. 0 waits indefinitely.
+export const FOREGROUND_CACHE_COALESCE_TIMEOUT_MS = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_COALESCE_TIMEOUT_MS',
+  300000,
+);
+
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',

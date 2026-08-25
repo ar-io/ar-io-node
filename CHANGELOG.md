@@ -28,6 +28,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Concurrent requests for one uncached object no longer stampede** — on a
+  full-object cache miss `ReadThroughDataCache.getData` ran an upstream fetch
+  and opened a staging file per request, with nothing checking whether a fetch
+  for the same ID was already running. Seen in production as 59 concurrent
+  partial copies of one 1.5 GB bundle: 1,434 open descriptors under
+  `contiguous/tmp`, ~253 GB staged across only 18 distinct objects of which
+  83% was redundant. It is self-amplifying — the duplicated writes saturate
+  the disk, so no copy finishes, so every new request is also a miss and
+  starts another copy. The first caller for an ID is now the sole owner of the
+  fetch, the staging file and the tee; concurrent callers wait on it and are
+  served from the blob it finalizes. Waiters hold no reference to the shared
+  fetch, so one aborting can neither cancel it nor orphan its staging file,
+  and `FOREGROUND_CACHE_COALESCE_TIMEOUT_MS` (default 300000) bounds the wait
+  so a stalled fetch cannot park later requests for that ID indefinitely. A
+  coalesced request reports the same cache-hit semantics (`X-Cache: HIT`,
+  `Content-Digest`, conditional-request eligibility) as a request arriving a
+  moment later would.
+- **Foreground cache writes can now be bounded** — `FOREGROUND_CACHE_MAX_SIZE`
+  and `FOREGROUND_CACHE_CONCURRENCY` cap how much unfinished data a burst of
+  *distinct* large objects can accumulate in `contiguous/tmp`, mirroring the
+  guards background range caching already had. Exceeding either serves the
+  request normally and skips only the cache write. Both default to unbounded,
+  so nothing changes unless they are set.
+
 ## [Release 82] - 2026-08-13
 
 This is a **recommended release** focused on **data-retrieval correctness and

@@ -2405,4 +2405,648 @@ describe('ReadThroughDataCache', function () {
       }
     });
   });
+
+  describe('foreground fetch coalescing', () => {
+    // A content-addressed store that actually remembers what was finalized, so
+    // a follower woken by the leader can really be served from the cache.
+    function makeStatefulStore() {
+      const finalized = new Map<string, string>();
+      const counters = { createWriteStream: 0, cleanup: 0, finalize: 0 };
+
+      const store: ContiguousDataStore = {
+        has: async () => false,
+        get: async (hash: string) => {
+          const content = finalized.get(hash);
+          if (content === undefined) {
+            return undefined;
+          }
+          return new Readable({
+            read() {
+              this.push(content);
+              this.push(null);
+            },
+          });
+        },
+        createWriteStream: async () => {
+          counters.createWriteStream++;
+          const chunks: Buffer[] = [];
+          const stream: any = new Writable({
+            write(chunk, _, callback) {
+              chunks.push(Buffer.from(chunk));
+              callback();
+            },
+          });
+          stream.__chunks = chunks;
+          return stream;
+        },
+        cleanup: async () => {
+          counters.cleanup++;
+        },
+        finalize: async (stream: any, hash: string) => {
+          counters.finalize++;
+          finalized.set(hash, Buffer.concat(stream.__chunks).toString());
+        },
+        delete: async (hash: string) => {
+          finalized.delete(hash);
+        },
+      } as unknown as ContiguousDataStore;
+
+      return { store, finalized, counters };
+    }
+
+    // Mirrors the real attributes store closely enough that a follower's
+    // re-read finds the hash the leader just wrote.
+    function makeStatefulAttributesStore() {
+      const attributes = new Map<string, any>();
+      return {
+        attributes,
+        store: {
+          getDataAttributes: async (id: string) => attributes.get(id),
+          setDataAttributes: async (id: string, update: any) => {
+            attributes.set(id, { ...(attributes.get(id) ?? {}), ...update });
+          },
+        } as any,
+      };
+    }
+
+    function makeCache(overrides: any = {}) {
+      return new ReadThroughDataCache({
+        log,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        ...overrides,
+      });
+    }
+
+    it('runs one upstream fetch and one staging file for N concurrent requests', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'concurrent payload';
+      let upstreamCalls = 0;
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          upstreamCalls++;
+          // Stay in flight long enough for every follower to arrive.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return {
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            sourceContentType: 'application/octet-stream',
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+      });
+
+      const results = await Promise.all(
+        Array.from({ length: 50 }, () =>
+          cache
+            .getData({ id: 'stampede-id', requestAttributes })
+            .then(async (result) => {
+              let received = '';
+              for await (const chunk of result.stream) {
+                received += chunk;
+              }
+              return received;
+            }),
+        ),
+      );
+
+      // The regression: one upstream fetch, one staging file -- not 50 of each.
+      assert.equal(upstreamCalls, 1);
+      assert.equal(counters.createWriteStream, 1);
+      assert.equal(counters.finalize, 1);
+      // No follower orphaned a staging file on the way through.
+      assert.equal(counters.cleanup, 0);
+      // Every caller still got the full object.
+      assert.equal(results.length, 50);
+      for (const received of results) {
+        assert.equal(received, payload);
+      }
+    });
+
+    it('counts coalesced requests in foregroundCacheSkippedTotal', async () => {
+      mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
+      mock.method(metrics.foregroundCacheCoalescedOutcomeTotal, 'inc');
+
+      const { store } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'metric payload';
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return {
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+      });
+
+      await Promise.all(
+        Array.from({ length: 3 }, () =>
+          cache
+            .getData({ id: 'metric-id', requestAttributes })
+            .then(async (result) => {
+              for await (const _ of result.stream) {
+                // drain
+              }
+            }),
+        ),
+      );
+
+      const skips = (metrics.foregroundCacheSkippedTotal.inc as any).mock.calls
+        .map((c: any) => c.arguments[0]?.reason)
+        .filter((r: string) => r === 'already_pending');
+      assert.equal(skips.length, 2);
+
+      const outcomes = (
+        metrics.foregroundCacheCoalescedOutcomeTotal.inc as any
+      ).mock.calls.map((c: any) => c.arguments[0]?.outcome);
+      assert.equal(outcomes.length, 2);
+      for (const outcome of outcomes) {
+        assert.equal(outcome, 'cache_hit');
+      }
+    });
+
+    it('does not cancel the shared fetch or leak a staging file when a follower aborts', async () => {
+      const { store, counters, finalized } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'survives follower abort';
+      let upstreamCalls = 0;
+      let upstreamDestroyed = false;
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          upstreamCalls++;
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          const stream = new Readable({
+            read() {
+              setTimeout(() => {
+                this.push(payload);
+                this.push(null);
+              }, 40);
+            },
+          });
+          stream.once('close', () => {
+            if (!stream.readableEnded) {
+              upstreamDestroyed = true;
+            }
+          });
+          return {
+            stream,
+            size: payload.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+      });
+
+      const leader = cache
+        .getData({ id: 'abort-id', requestAttributes })
+        .then(async (result) => {
+          let received = '';
+          for await (const chunk of result.stream) {
+            received += chunk;
+          }
+          return received;
+        });
+
+      // Let the leader claim the key before the follower attaches.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const controller = new AbortController();
+      const follower = cache.getData({
+        id: 'abort-id',
+        requestAttributes,
+        signal: controller.signal,
+      });
+      const followerSettled = follower.then(
+        () => 'resolved',
+        (error: any) => error.name,
+      );
+
+      // Abort while the leader is still downloading.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      controller.abort();
+
+      assert.equal(await followerSettled, 'AbortError');
+
+      // The leader is unaffected: it finishes, finalizes, and its staging file
+      // is neither cleaned up nor duplicated.
+      assert.equal(await leader, payload);
+      assert.equal(upstreamCalls, 1);
+      assert.equal(upstreamDestroyed, false);
+      assert.equal(counters.createWriteStream, 1);
+      assert.equal(counters.finalize, 1);
+      assert.equal(counters.cleanup, 0);
+      assert.equal(finalized.size, 1);
+    });
+
+    it('falls back to its own fetch when the leader fails', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'second attempt';
+      let upstreamCalls = 0;
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          upstreamCalls++;
+          if (upstreamCalls === 1) {
+            await new Promise((resolve) => setTimeout(resolve, 40));
+            throw new Error('upstream exploded');
+          }
+          return {
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+      });
+
+      const leader = cache
+        .getData({ id: 'failing-id', requestAttributes })
+        .then(
+          () => 'resolved',
+          (error: any) => error.message,
+        );
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const follower = cache
+        .getData({ id: 'failing-id', requestAttributes })
+        .then(async (result) => {
+          let received = '';
+          for await (const chunk of result.stream) {
+            received += chunk;
+          }
+          return received;
+        });
+
+      assert.equal(await leader, 'upstream exploded');
+      // The follower is not stranded -- it refetches and succeeds.
+      assert.equal(await follower, payload);
+      assert.equal(upstreamCalls, 2);
+      assert.equal(counters.createWriteStream, 1);
+    });
+
+    it('does not coalesce range requests', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      let upstreamCalls = 0;
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          upstreamCalls++;
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return {
+            stream: new Readable({
+              read() {
+                this.push('range');
+                this.push(null);
+              },
+            }),
+            size: 5,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+      });
+
+      await Promise.all(
+        Array.from({ length: 3 }, () =>
+          cache
+            .getData({
+              id: 'range-id',
+              requestAttributes,
+              region: { offset: 0, size: 5 },
+            })
+            .then(async (result) => {
+              for await (const _ of result.stream) {
+                // drain
+              }
+            }),
+        ),
+      );
+
+      // Range requests cache nothing, so there is no finalized blob to serve a
+      // follower from -- they must each fetch. No staging files either.
+      assert.equal(upstreamCalls, 3);
+      assert.equal(counters.createWriteStream, 0);
+    });
+
+    it('serves the data but skips the cache write above foregroundCacheMaxSize', async () => {
+      mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'oversized payload';
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => ({
+          stream: new Readable({
+            read() {
+              this.push(payload);
+              this.push(null);
+            },
+          }),
+          size: payload.length,
+          verified: true,
+          trusted: true,
+          cached: false,
+        }),
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheMaxSize: payload.length - 1,
+      });
+
+      const result = await cache.getData({
+        id: 'oversized-id',
+        requestAttributes,
+      });
+      let received = '';
+      for await (const chunk of result.stream) {
+        received += chunk;
+      }
+
+      assert.equal(received, payload);
+      assert.equal(counters.createWriteStream, 0);
+      const reasons = (
+        metrics.foregroundCacheSkippedTotal.inc as any
+      ).mock.calls
+        .map((c: any) => c.arguments[0]?.reason)
+        .filter((r: string) => r === 'exceeds_max_size');
+      assert.equal(reasons.length, 1);
+    });
+
+    it('serves the data but skips the cache write at foregroundCacheConcurrency', async () => {
+      mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'bounded';
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return {
+            stream: new Readable({
+              read() {
+                setTimeout(() => {
+                  this.push(payload);
+                  this.push(null);
+                }, 30);
+              },
+            }),
+            size: payload.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheConcurrency: 1,
+      });
+
+      // Two DISTINCT ids, so coalescing does not apply -- only the semaphore.
+      const received = await Promise.all(
+        ['bounded-a', 'bounded-b'].map((id) =>
+          cache.getData({ id, requestAttributes }).then(async (result) => {
+            let out = '';
+            for await (const chunk of result.stream) {
+              out += chunk;
+            }
+            return out;
+          }),
+        ),
+      );
+
+      // Both callers are served; only one staging file was opened.
+      assert.deepEqual(received, [payload, payload]);
+      assert.equal(counters.createWriteStream, 1);
+      const reasons = (
+        metrics.foregroundCacheSkippedTotal.inc as any
+      ).mock.calls
+        .map((c: any) => c.arguments[0]?.reason)
+        .filter((r: string) => r === 'at_capacity');
+      assert.equal(reasons.length, 1);
+    });
+
+    it('releases the concurrency permit after a fetch completes', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'sequential';
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => ({
+          stream: new Readable({
+            read() {
+              this.push(payload);
+              this.push(null);
+            },
+          }),
+          size: payload.length,
+          verified: true,
+          trusted: true,
+          cached: false,
+        }),
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheConcurrency: 1,
+      });
+
+      // Sequential fetches of distinct ids must each get a permit; if the
+      // permit leaked, the second would be skipped at capacity.
+      for (const id of ['seq-a', 'seq-b', 'seq-c']) {
+        const result = await cache.getData({ id, requestAttributes });
+        for await (const _ of result.stream) {
+          // drain
+        }
+      }
+
+      assert.equal(counters.createWriteStream, 3);
+      assert.equal(counters.finalize, 3);
+    });
+
+    it('does not park later requests forever when the leader wedges', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'eventually';
+      let upstreamCalls = 0;
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          upstreamCalls++;
+          if (upstreamCalls === 1) {
+            // A wedged stream: never ends, never errors. The leader's pipeline
+            // callback never fires, so its in-flight entry is never settled.
+            return {
+              stream: new Readable({ read() {} }),
+              size: payload.length,
+              verified: true,
+              trusted: true,
+              cached: false,
+            };
+          }
+          return {
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheCoalesceTimeoutMs: 50,
+      });
+
+      // Leader wedges. Do not await it -- it never completes.
+      const wedged = cache.getData({ id: 'wedged-id', requestAttributes });
+      wedged.then(
+        (result) => result.stream.on('error', () => undefined),
+        () => undefined,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // A later request must not inherit the wedge.
+      const follower = await cache.getData({
+        id: 'wedged-id',
+        requestAttributes,
+      });
+      let received = '';
+      for await (const chunk of follower.stream) {
+        received += chunk;
+      }
+
+      assert.equal(received, payload);
+      assert.equal(upstreamCalls, 2);
+      // The leader still holds its own staging file; the follower opened one
+      // of its own rather than waiting on a fetch that will never finish.
+      assert.equal(counters.createWriteStream, 2);
+      assert.equal(counters.finalize, 1);
+    });
+
+    it('rejects invalid foreground cache options', () => {
+      assert.throws(
+        () =>
+          makeCache({
+            dataSource: mockContiguousDataSource,
+            dataStore: mockContiguousDataStore,
+            dataAttributesStore: mockDataAttributesStore,
+            foregroundCacheMaxSize: NaN,
+          }),
+        /foregroundCacheMaxSize must be a non-negative finite number/,
+      );
+
+      assert.throws(
+        () =>
+          makeCache({
+            dataSource: mockContiguousDataSource,
+            dataStore: mockContiguousDataStore,
+            dataAttributesStore: mockDataAttributesStore,
+            foregroundCacheConcurrency: -1,
+          }),
+        /foregroundCacheConcurrency must be a non-negative integer/,
+      );
+
+      assert.throws(
+        () =>
+          makeCache({
+            dataSource: mockContiguousDataSource,
+            dataStore: mockContiguousDataStore,
+            dataAttributesStore: mockDataAttributesStore,
+            foregroundCacheConcurrency: 1.5,
+          }),
+        /foregroundCacheConcurrency must be a non-negative integer/,
+      );
+
+      assert.throws(
+        () =>
+          makeCache({
+            dataSource: mockContiguousDataSource,
+            dataStore: mockContiguousDataStore,
+            dataAttributesStore: mockDataAttributesStore,
+            foregroundCacheCoalesceTimeoutMs: -1,
+          }),
+        /foregroundCacheCoalesceTimeoutMs must be a non-negative finite number/,
+      );
+    });
+  });
 });

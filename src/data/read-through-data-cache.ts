@@ -62,6 +62,18 @@ function updateMruList(
   return updatedList;
 }
 
+type GetDataArgs = {
+  id: string;
+  requestAttributes?: RequestAttributes;
+  region?: {
+    offset: number;
+    size: number;
+  };
+  parentSpan?: Span;
+  signal?: AbortSignal;
+  acceptContentType?: (contentType: string | undefined) => boolean;
+};
+
 export class ReadThroughDataCache implements ContiguousDataSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
@@ -96,6 +108,28 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private pendingBackgroundCaches: Set<string> = new Set();
   private backgroundCacheRangeMaxSize: number;
   private backgroundCacheSemaphore: Semaphore;
+  /**
+   * Single-flight map for foreground full-object fetches, keyed by data ID.
+   *
+   * Without this, N concurrent requests for one uncached object each ran their
+   * own upstream fetch and opened their own staging file. Observed in
+   * production as 59 concurrent partial copies of a single 1.5 GB bundle --
+   * 83% of ~253 GB staged in `contiguous/tmp` was redundant, and because the
+   * disk never drained no copy finished, so every new request was also a miss
+   * and started yet another copy.
+   *
+   * The first caller for an ID becomes the leader: it owns the upstream fetch,
+   * the staging file, and the tee. Later callers do not touch any of those --
+   * they wait on the leader's promise and are then served from the blob the
+   * leader finalized. See {@link awaitInFlightFetch} for why followers can
+   * never cancel or destroy the shared fetch.
+   */
+  private inFlightForegroundFetches: Map<string, Promise<boolean>> = new Map();
+  private foregroundCacheMaxSize: number;
+  /** Undefined when foreground cache-write concurrency is unbounded. */
+  private foregroundCacheSemaphore: Semaphore | undefined;
+  /** 0 waits indefinitely. See the config docs for why a bound matters. */
+  private foregroundCacheCoalesceTimeoutMs: number;
 
   constructor({
     log,
@@ -113,6 +147,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     trustedCacheRetryRate = 0,
     backgroundCacheRangeMaxSize = 0,
     backgroundCacheRangeConcurrency = 1,
+    foregroundCacheMaxSize = 0,
+    foregroundCacheConcurrency = 0,
+    foregroundCacheCoalesceTimeoutMs = 300000,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
@@ -129,6 +166,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     trustedCacheRetryRate?: number;
     backgroundCacheRangeMaxSize?: number;
     backgroundCacheRangeConcurrency?: number;
+    foregroundCacheMaxSize?: number;
+    foregroundCacheConcurrency?: number;
+    foregroundCacheCoalesceTimeoutMs?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
@@ -161,10 +201,45 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       );
     }
 
+    if (
+      !Number.isFinite(foregroundCacheMaxSize) ||
+      foregroundCacheMaxSize < 0
+    ) {
+      throw new Error(
+        'foregroundCacheMaxSize must be a non-negative finite number',
+      );
+    }
+    // Integer, not merely finite: a fractional permit count would otherwise
+    // either throw from inside Semaphore or silently yield a half-permit.
+    if (
+      !Number.isInteger(foregroundCacheConcurrency) ||
+      foregroundCacheConcurrency < 0
+    ) {
+      throw new Error(
+        'foregroundCacheConcurrency must be a non-negative integer',
+      );
+    }
+    if (
+      !Number.isFinite(foregroundCacheCoalesceTimeoutMs) ||
+      foregroundCacheCoalesceTimeoutMs < 0
+    ) {
+      throw new Error(
+        'foregroundCacheCoalesceTimeoutMs must be a non-negative finite number',
+      );
+    }
+
     this.backgroundCacheRangeMaxSize = backgroundCacheRangeMaxSize;
     this.backgroundCacheSemaphore = new Semaphore(
       backgroundCacheRangeConcurrency,
     );
+    this.foregroundCacheMaxSize = foregroundCacheMaxSize;
+    // 0 means unbounded -- leave the semaphore unset rather than constructing
+    // one with a permit count that would reject in the Semaphore constructor.
+    this.foregroundCacheSemaphore =
+      foregroundCacheConcurrency > 0
+        ? new Semaphore(foregroundCacheConcurrency)
+        : undefined;
+    this.foregroundCacheCoalesceTimeoutMs = foregroundCacheCoalesceTimeoutMs;
   }
 
   private calculateVerificationPriority(
@@ -518,24 +593,95 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     return undefined;
   }
 
-  async getData({
-    id,
-    requestAttributes,
-    region,
-    parentSpan,
-    signal,
-    acceptContentType,
-  }: {
-    id: string;
-    requestAttributes?: RequestAttributes;
-    region?: {
-      offset: number;
-      size: number;
-    };
-    parentSpan?: Span;
-    signal?: AbortSignal;
-    acceptContentType?: (contentType: string | undefined) => boolean;
-  }): Promise<ContiguousData> {
+  /**
+   * Wait for another caller's in-flight foreground fetch to settle.
+   *
+   * The waiter only ever observes the shared fetch. It holds no reference to
+   * the leader's upstream stream, tee, or staging file, so an aborting waiter
+   * detaches itself and nothing else: the leader keeps downloading for the
+   * benefit of every other waiter, and no staging file is orphaned. The
+   * reverse also holds -- if the *leader* aborts, this resolves `false` and
+   * the waiter falls back to its own fetch.
+   *
+   * Resolves `'timed_out'` rather than throwing when the wait bound expires:
+   * a leader that wedges never reaches its pipeline callback, and waiting on
+   * it forever would convert a transient stall into permanent unavailability
+   * for that ID.
+   */
+  private awaitInFlightFetch(
+    inFlight: Promise<boolean>,
+    signal?: AbortSignal,
+  ): Promise<boolean | 'timed_out'> {
+    const timeoutMs = this.foregroundCacheCoalesceTimeoutMs;
+    signal?.throwIfAborted();
+
+    if (signal === undefined && timeoutMs <= 0) {
+      return inFlight;
+    }
+
+    return new Promise<boolean | 'timed_out'>((resolve, reject) => {
+      let timer: NodeJS.Timeout | undefined;
+
+      const cleanup = () => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        signal?.removeEventListener('abort', onAbort);
+      };
+
+      const onAbort = () => {
+        cleanup();
+        reject(signal?.reason ?? new Error('Aborted'));
+      };
+
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          cleanup();
+          resolve('timed_out');
+        }, timeoutMs);
+        // Deliberately NOT unref'd: an unref'd timer can fail to fire if the
+        // loop drains, which is the exact hang this bound exists to prevent.
+        // A parked waiter is an in-flight request, so keeping the loop alive
+        // for it is correct; the timer is cleared as soon as the leader
+        // settles.
+      }
+
+      signal?.addEventListener('abort', onAbort, { once: true });
+
+      inFlight.then(
+        (cached) => {
+          cleanup();
+          resolve(cached);
+        },
+        (error) => {
+          cleanup();
+          reject(error);
+        },
+      );
+    });
+  }
+
+  async getData(args: GetDataArgs): Promise<ContiguousData> {
+    return this.getDataInternal(args, true);
+  }
+
+  /**
+   * @param allowCoalescing When false, this call will not wait on another
+   *   caller's in-flight fetch. Set only for the re-entry a waiter makes after
+   *   its leader settles, which bounds coalescing recursion at one hop.
+   */
+  private async getDataInternal(
+    {
+      id,
+      requestAttributes,
+      region,
+      parentSpan,
+      signal,
+      acceptContentType,
+    }: GetDataArgs,
+    allowCoalescing: boolean,
+  ): Promise<ContiguousData> {
     const span = startChildSpan(
       'ReadThroughDataCache.getData',
       {
@@ -554,6 +700,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.log.debug('Checking for cached data...', {
       id,
     });
+
+    // Foreground single-flight / cache-write-guard bookkeeping. Declared out
+    // here so the catch block below can settle and release on the error paths.
+    let settleInFlight: ((cached: boolean) => void) | undefined;
+    let foregroundPermitHeld = false;
+    const finishForegroundCache = (cached: boolean) => {
+      if (foregroundPermitHeld) {
+        foregroundPermitHeld = false;
+        this.foregroundCacheSemaphore?.release();
+      }
+      // Idempotent: settleInFlight ignores repeat calls.
+      settleInFlight?.(cached);
+    };
 
     try {
       // Check for abort before starting
@@ -741,6 +900,104 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         'cache.check_duration_ms': cacheCheckDuration,
       });
 
+      // Only full-object fetches that are allowed to write to the cache can be
+      // coalesced: a range request caches nothing, so there would be no
+      // finalized blob for a waiter to be served from.
+      const coalescingEligible = !this.skipCacheWrites && region === undefined;
+
+      if (coalescingEligible && allowCoalescing) {
+        const inFlight = this.inFlightForegroundFetches.get(id);
+        if (inFlight !== undefined) {
+          metrics.foregroundCacheSkippedTotal.inc({
+            reason: 'already_pending',
+          });
+          span.addEvent('Attaching to in-flight foreground fetch');
+          this.log.debug('Attaching to in-flight foreground fetch', { id });
+
+          const attachStart = Date.now();
+          let leaderCached: boolean | 'timed_out' = false;
+          try {
+            leaderCached = await this.awaitInFlightFetch(inFlight, signal);
+          } catch (error: any) {
+            if (error?.name === 'AbortError') {
+              // Our caller went away. Detach only -- the leader's fetch and
+              // staging file belong to it and are untouched.
+              throw error;
+            }
+            this.log.debug(
+              'In-flight foreground fetch failed, falling back to own fetch',
+              { id, message: error?.message },
+            );
+          }
+          span.addEvent('In-flight foreground fetch settled', {
+            'cache.coalesce_wait_ms': Date.now() - attachStart,
+            'cache.leader_cached': leaderCached,
+          });
+
+          if (leaderCached === 'timed_out') {
+            // The leader is stalled, not merely slow. Stop waiting on it and
+            // fetch for ourselves; its map entry stays put in case it does
+            // finish, but it can no longer strand anyone indefinitely.
+            metrics.foregroundCacheCoalescedOutcomeTotal.inc({
+              outcome: 'timed_out',
+            });
+            this.log.warn(
+              'Timed out waiting on in-flight foreground fetch, fetching independently',
+              { id, waitedMs: Date.now() - attachStart },
+            );
+          }
+
+          // Re-enter rather than duplicating the cache-read path: this reruns
+          // poison eviction, hit metrics, and MRU bookkeeping exactly as a
+          // normal request would. Coalescing is disabled on the way back in so
+          // this can recurse at most one level -- if the leader cached
+          // nothing, we fetch it ourselves instead of waiting again.
+          const result = await this.getDataInternal(
+            {
+              id,
+              requestAttributes,
+              region,
+              parentSpan: span,
+              signal,
+              acceptContentType,
+            },
+            false,
+          );
+          if (leaderCached !== 'timed_out') {
+            metrics.foregroundCacheCoalescedOutcomeTotal.inc({
+              outcome: result.cached ? 'cache_hit' : 'refetched',
+            });
+          }
+          return result;
+        }
+      }
+
+      // Become the leader for this ID. The get() above and this set() are in
+      // the same synchronous run -- no await separates them -- so exactly one
+      // concurrent caller can claim the key.
+      if (coalescingEligible && !this.inFlightForegroundFetches.has(id)) {
+        let resolveInFlight!: (cached: boolean) => void;
+        const inFlightPromise = new Promise<boolean>((resolve) => {
+          resolveInFlight = resolve;
+        });
+        this.inFlightForegroundFetches.set(id, inFlightPromise);
+
+        let settled = false;
+        settleInFlight = (cached: boolean) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          // Identity check: a later leader may already own the key.
+          if (this.inFlightForegroundFetches.get(id) === inFlightPromise) {
+            this.inFlightForegroundFetches.delete(id);
+          }
+          // Always resolves, never rejects, so an unobserved leader failure
+          // cannot surface as an unhandled rejection.
+          resolveInFlight(cached);
+        };
+      }
+
       const upstreamStart = Date.now();
       const data = await this.dataSource.getData({
         id,
@@ -773,10 +1030,47 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // and (more importantly) writing invalid ID to hash relationships in the
       // DB, and when data size is zero to avoid unnecessary storage operations
       // and indexing.
-      if (!this.skipCacheWrites && region === undefined && data.size > 0) {
+      const cacheEligible =
+        !this.skipCacheWrites && region === undefined && data.size > 0;
+
+      // Bound what a burst of *distinct* objects can stage, the way
+      // triggerBackgroundCacheForRange already bounds the background path.
+      // Failing either guard degrades to "serve the bytes, stage nothing"
+      // rather than to an error -- the caller still gets its data.
+      let foregroundSkipReason: string | undefined;
+      if (cacheEligible) {
+        if (
+          this.foregroundCacheMaxSize > 0 &&
+          data.size > this.foregroundCacheMaxSize
+        ) {
+          foregroundSkipReason = 'exceeds_max_size';
+        } else if (this.foregroundCacheSemaphore !== undefined) {
+          if (this.foregroundCacheSemaphore.tryAcquire()) {
+            foregroundPermitHeld = true;
+          } else {
+            foregroundSkipReason = 'at_capacity';
+          }
+        }
+
+        if (foregroundSkipReason !== undefined) {
+          metrics.foregroundCacheSkippedTotal.inc({
+            reason: foregroundSkipReason,
+          });
+          this.log.debug('Skipping foreground cache write', {
+            id,
+            reason: foregroundSkipReason,
+            dataSize: data.size,
+          });
+        }
+      }
+
+      if (cacheEligible && foregroundSkipReason === undefined) {
         span.addEvent('Starting caching process');
         const cachingStart = Date.now();
         let bytesReceived = 0;
+        // Whether the staging file was promoted into the cache. Drives what
+        // waiting followers are told: true means "re-read, it is there now".
+        let cacheFinalized = false;
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
 
@@ -879,6 +1173,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   } else if (data.trusted === true) {
                     // Trusted source: finalize, save with trusted: true
                     await this.dataStore.finalize(cacheStream, hash);
+                    cacheFinalized = true;
                     span.addEvent('Data cached successfully', {
                       'cache.duration_ms': cachingDuration,
                       'data.computed_hash': hash,
@@ -949,6 +1244,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     // Untrusted source, hash matches existing: finalize but
                     // don't update trust status
                     await this.dataStore.finalize(cacheStream, hash);
+                    cacheFinalized = true;
                     span.addEvent('Data cached successfully', {
                       'cache.duration_ms': cachingDuration,
                       'data.computed_hash': hash,
@@ -962,6 +1258,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   } else if (attributes?.hash === undefined) {
                     // Untrusted source, no local hash: optimistic cache
                     await this.dataStore.finalize(cacheStream, hash);
+                    cacheFinalized = true;
                     span.addEvent('Data cached optimistically (untrusted)', {
                       'cache.duration_ms': cachingDuration,
                       'data.computed_hash': hash,
@@ -1052,6 +1349,12 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             } else {
               consumerStream.end();
             }
+
+            // Release the cache-write permit and wake any callers that
+            // attached to this fetch. Deliberately last: it runs after the
+            // finalize logic above, so a follower that re-reads the cache on
+            // being woken finds a durable blob rather than a staging file.
+            finishForegroundCache(cacheFinalized);
           },
         );
 
@@ -1061,8 +1364,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         // IncomingMessage that the pipeline now owns exclusively.
         data.stream = consumerStream;
       } else {
+        // Nothing will be written to the cache on this path, so release any
+        // waiters now instead of parking them until the stream drains.
+        finishForegroundCache(false);
+
         // Log why caching was skipped
         const reasons = [];
+        if (foregroundSkipReason !== undefined) {
+          reasons.push(`foreground cache ${foregroundSkipReason}`);
+        }
         if (this.skipCacheWrites) {
           reasons.push(
             this.skipCache
@@ -1140,6 +1450,10 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       span.addEvent('Returning data from upstream');
       return data;
     } catch (error: any) {
+      // Release the permit and unblock waiters before rethrowing -- otherwise
+      // a failed leader parks every follower until their own signals fire.
+      finishForegroundCache(false);
+
       // Don't record AbortError as exception
       if (error.name === 'AbortError') {
         span.addEvent('Request aborted', {
