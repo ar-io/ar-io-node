@@ -2412,11 +2412,17 @@ describe('ReadThroughDataCache', function () {
     // a follower woken by the leader can really be served from the cache.
     function makeStatefulStore() {
       const finalized = new Map<string, string>();
-      const counters = { createWriteStream: 0, cleanup: 0, finalize: 0 };
+      const counters = {
+        createWriteStream: 0,
+        cleanup: 0,
+        finalize: 0,
+        get: 0,
+      };
 
       const store: ContiguousDataStore = {
         has: async () => false,
         get: async (hash: string) => {
+          counters.get++;
           const content = finalized.get(hash);
           if (content === undefined) {
             return undefined;
@@ -2538,6 +2544,13 @@ describe('ReadThroughDataCache', function () {
       for (const received of results) {
         assert.equal(received, payload);
       }
+      // The fix CONVERTS this load rather than removing it: the leader writes
+      // once, and every waiter then opens its own read of the finalized blob.
+      // That is the same shape as N concurrent requests for an already-cached
+      // object -- the gateway's ordinary steady state -- and vastly cheaper
+      // than N concurrent multi-GB writes, but it is a real fan-out and is
+      // asserted here so a future change cannot silently make it worse.
+      assert.equal(counters.get, 49);
     });
 
     it('counts coalesced requests in foregroundCacheSkippedTotal', async () => {

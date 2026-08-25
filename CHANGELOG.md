@@ -30,8 +30,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   guards background range caching already had. Exceeding either serves the
   request normally and skips only the cache write. The concurrency budget is
   process-wide, shared by the on-demand and background caches, because both
-  stage to the same directory. Both default to unbounded, so nothing changes
-  unless they are set.
+  stage to the same directory.
+
+  **Both default to unbounded, deliberately.** Coalescing alone removes the
+  duplication of *identical* objects and needs no configuration, but a burst
+  of *distinct* large objects is only bounded once these are set -- upgrading
+  does not inherit that protection. Any finite default would silently stop a
+  busy gateway caching most of what it serves, which is not a change to make
+  on an operator's behalf; set them explicitly per deployment.
 
 ### Changed
 
@@ -50,10 +56,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   served from the blob it finalizes. Waiters hold no reference to the shared
   fetch, so one aborting can neither cancel it nor orphan its staging file,
   and `FOREGROUND_CACHE_COALESCE_TIMEOUT_MS` (default 300000) bounds the wait
-  so a stalled fetch cannot park later requests for that ID indefinitely. A
-  coalesced request reports the same cache-hit semantics (`X-Cache: HIT`,
-  `Content-Digest`, conditional-request eligibility) as a request arriving a
-  moment later would.
+  so a stalled fetch cannot park later requests for that ID indefinitely.
+
+  **Operator note — the cache-miss signal for this failure is gone.** A
+  coalesced request is served from the cache, so it now reports the same
+  cache-hit semantics as a request arriving a moment later (`X-Cache: HIT`,
+  `Content-Digest`, conditional-request eligibility) and counts as a hit
+  rather than a miss. Hit-rate dashboards will move, and more importantly
+  `contiguous_data_cache_miss_total` no longer rises when many requests
+  converge on one uncached object -- which was the signal this failure mode
+  used to produce. Use `foreground_cache_skipped_total{reason="already_pending"}`
+  to detect recurrence instead: it counts exactly the requests that would
+  previously have started a duplicate fetch, so a sustained rise is the
+  stampede re-forming. `foreground_cache_coalesced_outcome_total{outcome}`
+  breaks those down into `cache_hit` (the leader cached, waiter served from
+  disk), `refetched` (the leader cached nothing) and `timed_out` (the leader
+  stalled past the bound).
+
+  The fix also **converts** part of the load rather than removing it: the
+  leader writes once, then each waiter opens its own read of the finalized
+  blob (measured: 49 reads for 50 concurrent requests). That is the same
+  shape as N concurrent requests for an already-cached object, and far
+  cheaper than N concurrent multi-GB writes, but the reads all begin at the
+  moment the leader finalizes rather than being spread over time.
 
 ## [Release 82] - 2026-08-13
 
