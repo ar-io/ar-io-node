@@ -158,6 +158,12 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private foregroundCacheSemaphore: Semaphore | undefined;
   /** 0 waits indefinitely. See the config docs for why a bound matters. */
   private foregroundCacheCoalesceTimeoutMs: number;
+  /**
+   * Known object sizes below this never coalesce. 0 disables the floor. An
+   * object of unknown size is treated as eligible, so this can only narrow
+   * coalescing where the object is positively known to be small.
+   */
+  private foregroundCacheCoalesceMinSize: number;
 
   constructor({
     log,
@@ -178,6 +184,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     foregroundCacheMaxSize = 0,
     foregroundCacheConcurrency = 0,
     foregroundCacheCoalesceTimeoutMs = 300000,
+    foregroundCacheCoalesceMinSize = 0,
     foregroundCacheSemaphore,
   }: {
     log: winston.Logger;
@@ -198,6 +205,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     foregroundCacheMaxSize?: number;
     foregroundCacheConcurrency?: number;
     foregroundCacheCoalesceTimeoutMs?: number;
+    foregroundCacheCoalesceMinSize?: number;
     /**
      * Shared across instances by {@link system}. The resource being bounded is
      * `contiguous/tmp` on one disk, which every instance writes to, so the
@@ -263,6 +271,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         'foregroundCacheCoalesceTimeoutMs must be a non-negative finite number',
       );
     }
+    if (
+      !Number.isFinite(foregroundCacheCoalesceMinSize) ||
+      foregroundCacheCoalesceMinSize < 0
+    ) {
+      throw new Error(
+        'foregroundCacheCoalesceMinSize must be a non-negative finite number',
+      );
+    }
 
     this.backgroundCacheRangeMaxSize = backgroundCacheRangeMaxSize;
     this.backgroundCacheSemaphore = new Semaphore(
@@ -277,6 +293,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         ? new Semaphore(foregroundCacheConcurrency)
         : undefined);
     this.foregroundCacheCoalesceTimeoutMs = foregroundCacheCoalesceTimeoutMs;
+    this.foregroundCacheCoalesceMinSize = foregroundCacheCoalesceMinSize;
   }
 
   private calculateVerificationPriority(
@@ -951,10 +968,45 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         'cache.check_duration_ms': cacheCheckDuration,
       });
 
+      // A known-small object is exempt from coalescing. Waiters are served from
+      // the finalized blob, so coalescing costs them the whole download in
+      // time-to-first-byte -- worth paying on a multi-gigabyte object whose
+      // duplicates are measured in gigabytes, not on a small one that
+      // duplicates cheaply and finishes fast.
+      //
+      // The size used is the one the attributes store already resolved above.
+      // data.size is not available here: the upstream fetch has not run yet,
+      // and a leader must claim the ID before it does. An unknown size is
+      // therefore treated as eligible, so the floor can only narrow coalescing
+      // where the object is positively known to be small -- it can never make
+      // stampede protection weaker than leaving it unset.
+      const knownSize = attributes?.size;
+      const belowCoalesceFloor =
+        this.foregroundCacheCoalesceMinSize > 0 &&
+        knownSize !== undefined &&
+        knownSize < this.foregroundCacheCoalesceMinSize;
+
       // Only full-object fetches that are allowed to write to the cache can be
       // coalesced: a range request caches nothing, so there would be no
       // finalized blob for a waiter to be served from.
-      const coalescingEligible = !this.skipCacheWrites && region === undefined;
+      const coalescingEligible =
+        !this.skipCacheWrites && region === undefined && !belowCoalesceFloor;
+
+      // Counts every miss the floor exempted, not just the ones that would
+      // have found a leader. Nothing claims the in-flight entry for an exempt
+      // ID, so there is no way to tell here whether a concurrent fetch existed
+      // -- gating on that would make this unreachable. Compare against
+      // already_pending to judge whether the floor is set too high.
+      if (belowCoalesceFloor) {
+        metrics.foregroundCacheSkippedTotal.inc({
+          reason: 'below_coalesce_floor',
+        });
+        this.log.debug('Below coalesce floor, fetching independently', {
+          id,
+          knownSize,
+          coalesceMinSize: this.foregroundCacheCoalesceMinSize,
+        });
+      }
 
       if (coalescingEligible && allowCoalescing) {
         const inFlight = this.inFlightForegroundFetches.get(id);

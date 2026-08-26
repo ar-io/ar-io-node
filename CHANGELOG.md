@@ -24,6 +24,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   altogether and lets the cache grow unbounded. All four default to the
   existing behavior, so nothing changes unless they are set.
 
+- **A size floor on foreground coalescing** — `FOREGROUND_CACHE_COALESCE_MIN_SIZE`
+  exempts objects known to be smaller than it, which then fetch for themselves
+  exactly as they did before coalescing existed. Coalescing serves a waiter
+  from the blob the leader finalizes, so it costs that waiter the whole
+  download in time-to-first-byte. That is worth paying on a multi-gigabyte
+  object whose duplicates are measured in gigabytes; it is a poor trade on a
+  small one that duplicates cheaply and finishes fast.
+
+  Sized against the production stampede above: objects over 1 GiB were 94.8%
+  of the redundant bytes and everything under 100 MiB was 0.2%, so a 100 MiB
+  floor there would have retained 99.83% of the reclaimed bytes (223.6 of
+  224.0 GB) while leaving about half of all staged objects, by count,
+  streaming independently.
+
+  **Defaults to 0 — no floor — so behavior is unchanged unless it is set.**
+  The size compared is the one already resolved from the attributes store at
+  the point coalescing is decided; `data.size` is not available until the
+  upstream fetch returns, which is after a leader has claimed the ID. An
+  object of unknown size is therefore treated as eligible, so the floor can
+  only narrow coalescing where an object is positively known to be small and
+  can never make stampede protection weaker than leaving it unset. Exemptions
+  are counted as `foreground_cache_skipped_total{reason="below_coalesce_floor"}`;
+  compare it against `already_pending` to judge whether the floor is too high.
+
 - **Bounds on foreground cache writes** — `FOREGROUND_CACHE_MAX_SIZE` and
   `FOREGROUND_CACHE_CONCURRENCY` cap how much unfinished data a burst of
   *distinct* large objects can accumulate in `contiguous/tmp`, mirroring the

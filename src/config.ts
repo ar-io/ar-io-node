@@ -3259,6 +3259,35 @@ export const FOREGROUND_CACHE_COALESCE_TIMEOUT_MS = env.nonNegativeIntOrDefault(
   300000,
 );
 
+// Smallest known object size, in bytes, that is eligible for foreground
+// coalescing. Below it a request fetches for itself exactly as it did before
+// coalescing existed.
+//
+// Coalescing trades time-to-first-byte for deduplication: a waiter is served
+// from the blob the leader finalizes, so it receives nothing until the leader
+// finishes. That trade is worth making for a large object, where the duplicate
+// cost is measured in gigabytes and the caller is going to wait regardless. It
+// is a poor trade for a small one, which duplicates cheaply and completes fast.
+//
+// Measured on a saturated production gateway carrying ~1 TB of staged
+// duplicates: objects over 1 GiB accounted for 94.8% of redundant bytes and
+// everything under 100 MiB for 0.2%. A 100 MiB floor there would have retained
+// 99.83% of the reclaimed bytes while leaving roughly half of all staged
+// objects, by count, streaming independently.
+//
+// The size used is the one already known from the attributes store at the
+// point coalescing is decided -- data.size is not available until the upstream
+// fetch returns, which is after a leader has claimed the ID. An object whose
+// size is unknown is therefore treated as eligible, so the floor can only ever
+// narrow coalescing where the object is positively known to be small and can
+// never weaken stampede protection relative to leaving it unset.
+//
+// 0 disables the floor: every eligible full-object fetch coalesces.
+export const FOREGROUND_CACHE_COALESCE_MIN_SIZE = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_COALESCE_MIN_SIZE',
+  0,
+);
+
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',

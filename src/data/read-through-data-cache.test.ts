@@ -2804,6 +2804,195 @@ describe('ReadThroughDataCache', function () {
       assert.equal(counters.createWriteStream, 0);
     });
 
+    // A stream source that stays in flight long enough for followers to arrive.
+    function makeCountingSource(payload: string, counter: { calls: number }) {
+      const source: ContiguousDataSource = {
+        getData: async () => {
+          counter.calls++;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return {
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            sourceContentType: 'application/octet-stream',
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+      return source;
+    }
+
+    it('does not coalesce an item known to be below the coalesce floor', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore, attributes } =
+        makeStatefulAttributesStore();
+      const counter = { calls: 0 };
+
+      // Known small: the floor applies and each caller fetches for itself.
+      attributes.set('small-id', { size: 1024 });
+
+      const cache = makeCache({
+        dataSource: makeCountingSource('small payload', counter),
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheCoalesceMinSize: 1048576,
+      });
+
+      await Promise.all(
+        Array.from({ length: 3 }, () =>
+          cache
+            .getData({ id: 'small-id', requestAttributes })
+            .then(async (result) => {
+              for await (const _ of result.stream) {
+                // drain
+              }
+            }),
+        ),
+      );
+
+      // Pre-coalescing behavior is preserved exactly for small items.
+      assert.equal(counter.calls, 3);
+      assert.equal(counters.createWriteStream, 3);
+    });
+
+    it('coalesces an item at or above the coalesce floor', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore, attributes } =
+        makeStatefulAttributesStore();
+      const counter = { calls: 0 };
+
+      attributes.set('large-id', { size: 1048576 });
+
+      const cache = makeCache({
+        dataSource: makeCountingSource('large payload', counter),
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheCoalesceMinSize: 1048576,
+      });
+
+      await Promise.all(
+        Array.from({ length: 3 }, () =>
+          cache
+            .getData({ id: 'large-id', requestAttributes })
+            .then(async (result) => {
+              for await (const _ of result.stream) {
+                // drain
+              }
+            }),
+        ),
+      );
+
+      // The floor is inclusive: size === floor still coalesces.
+      assert.equal(counter.calls, 1);
+      assert.equal(counters.createWriteStream, 1);
+    });
+
+    it('coalesces an item of unknown size even with a floor set', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const counter = { calls: 0 };
+
+      // No attributes seeded: size is unknown at the point coalescing is
+      // decided. Treating it as eligible keeps stampede protection at least as
+      // strong as it is with no floor configured.
+      const cache = makeCache({
+        dataSource: makeCountingSource('unknown size payload', counter),
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheCoalesceMinSize: 1048576,
+      });
+
+      await Promise.all(
+        Array.from({ length: 3 }, () =>
+          cache
+            .getData({ id: 'unknown-id', requestAttributes })
+            .then(async (result) => {
+              for await (const _ of result.stream) {
+                // drain
+              }
+            }),
+        ),
+      );
+
+      assert.equal(counter.calls, 1);
+      assert.equal(counters.createWriteStream, 1);
+    });
+
+    it('coalesces every size when the floor is left at its default of 0', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore, attributes } =
+        makeStatefulAttributesStore();
+      const counter = { calls: 0 };
+
+      attributes.set('tiny-id', { size: 1 });
+
+      // No foregroundCacheCoalesceMinSize override: the default must leave
+      // coalescing behavior identical to a build without the floor.
+      const cache = makeCache({
+        dataSource: makeCountingSource('tiny payload', counter),
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+      });
+
+      await Promise.all(
+        Array.from({ length: 3 }, () =>
+          cache
+            .getData({ id: 'tiny-id', requestAttributes })
+            .then(async (result) => {
+              for await (const _ of result.stream) {
+                // drain
+              }
+            }),
+        ),
+      );
+
+      assert.equal(counter.calls, 1);
+      assert.equal(counters.createWriteStream, 1);
+    });
+
+    it('counts floor exemptions in foregroundCacheSkippedTotal', async () => {
+      mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
+      const { store } = makeStatefulStore();
+      const { store: attributesStore, attributes } =
+        makeStatefulAttributesStore();
+      const counter = { calls: 0 };
+
+      attributes.set('metric-id', { size: 512 });
+
+      const cache = makeCache({
+        dataSource: makeCountingSource('metric payload', counter),
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheCoalesceMinSize: 1048576,
+      });
+
+      const result = await cache.getData({
+        id: 'metric-id',
+        requestAttributes,
+      });
+      for await (const _ of result.stream) {
+        // drain
+      }
+
+      const reasons = (
+        metrics.foregroundCacheSkippedTotal.inc as any
+      ).mock.calls.map((call: any) => call.arguments[0]?.reason);
+      assert.ok(reasons.includes('below_coalesce_floor'));
+    });
+
+    it('rejects a negative foregroundCacheCoalesceMinSize', () => {
+      assert.throws(
+        () => makeCache({ foregroundCacheCoalesceMinSize: -1 }),
+        /foregroundCacheCoalesceMinSize must be a non-negative finite number/,
+      );
+    });
+
     it('serves the data but skips the cache write above foregroundCacheMaxSize', async () => {
       mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
       const { store, counters } = makeStatefulStore();
