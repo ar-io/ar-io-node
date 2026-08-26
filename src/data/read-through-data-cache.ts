@@ -45,7 +45,10 @@ const MAX_MRU_ARNS_NAMES_LENGTH = 10;
  *
  * - `cached`   — a blob was finalized. Waiters re-read the cache and are served.
  * - `uncached` — the fetch succeeded but the write was declined by policy
- *                (size cap, concurrency cap, zero-length, writes disabled).
+ *                (size cap, concurrency cap, zero-length). Writes being
+ *                disabled, and ranged requests, cannot produce this: both
+ *                clear `coalescingEligible`, so such a request never claims
+ *                the ID and so never has waiters to report an outcome to.
  *                A new leader would hit the same policy, so waiters go
  *                straight to their own fetch rather than re-electing.
  * - `failed`   — the fetch errored, or its caller aborted. Nothing about the

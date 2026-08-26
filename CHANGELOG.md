@@ -39,7 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Re-election is deliberately limited to failures. The in-flight promise now
   reports `cached` / `uncached` / `failed` rather than a bare boolean, because
   the old `false` conflated three endings. A leader that succeeded but declined
-  to cache (size cap, concurrency cap, zero-length, writes disabled) would be
+  to cache (size cap, concurrency cap, zero-length) would be
   followed by a new leader declined by the same policy, and a leader that timed
   out still owns its map entry, so re-attaching would wait on the fetch just
   abandoned. Both send the waiter straight to its own fetch. Re-elections are counted by
