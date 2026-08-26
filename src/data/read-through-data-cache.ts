@@ -1199,6 +1199,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   id,
                 });
                 await this.dataStore.cleanup(cacheStream);
+                // This branch returns early, so it must do its own
+                // single-flight teardown -- the calls at the end of this
+                // callback are not reached. Without it a client disconnecting
+                // mid-download leaves this ID's in-flight entry behind
+                // forever, and every later request for it waits the full
+                // coalesce timeout before refetching, for the life of the
+                // process.
+                clearStallTimer();
+                finishForegroundCache(false);
                 return;
               }
 

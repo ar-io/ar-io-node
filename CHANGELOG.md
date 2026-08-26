@@ -52,11 +52,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   83% was redundant. It is self-amplifying — the duplicated writes saturate
   the disk, so no copy finishes, so every new request is also a miss and
   starts another copy. The first caller for an ID is now the sole owner of the
-  fetch, the staging file and the tee; concurrent callers wait on it and are
-  served from the blob it finalizes. Waiters hold no reference to the shared
-  fetch, so one aborting can neither cancel it nor orphan its staging file,
-  and `FOREGROUND_CACHE_COALESCE_TIMEOUT_MS` (default 300000) bounds the wait
-  so a stalled fetch cannot park later requests for that ID indefinitely.
+  fetch, the staging file and the tee; concurrent callers wait on it rather
+  than starting their own. When it finalizes they are served from the blob it
+  wrote. When it does not -- it failed, or it stalled past
+  `FOREGROUND_CACHE_COALESCE_TIMEOUT_MS` (default 300000) -- there is no
+  shared blob to serve, so each waiter falls back to fetching independently,
+  which is the pre-existing behavior for exactly that case. Those two
+  outcomes are visible as `refetched` and `timed_out` on
+  `foreground_cache_coalesced_outcome_total`. Waiters hold no reference to
+  the shared fetch, so one aborting can neither cancel it nor orphan its
+  staging file, and the timeout keeps a stalled fetch from parking later
+  requests for that ID indefinitely.
 
   **Operator note — the cache-miss signal for this failure is gone.** A
   coalesced request is served from the cache, so it now reports the same

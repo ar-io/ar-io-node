@@ -3043,6 +3043,97 @@ describe('ReadThroughDataCache', function () {
       assert.equal(skips.length, 1);
     });
 
+    it('releases the in-flight entry when the leader is aborted mid-download', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'after abort';
+      let upstreamCalls = 0;
+
+      const dataSource: ContiguousDataSource = {
+        getData: async ({ signal }: any) => {
+          upstreamCalls++;
+          const stream = new Readable({ read() {} });
+          if (upstreamCalls === 1) {
+            // Mirror a real source: the caller's abort tears down the stream
+            // with an AbortError, which reaches the pipeline callback.
+            signal?.addEventListener('abort', () => {
+              const abortError: any = new Error('Aborted');
+              abortError.name = 'AbortError';
+              stream.destroy(abortError);
+            });
+            return {
+              stream,
+              size: payload.length,
+              verified: true,
+              trusted: true,
+              cached: false,
+            };
+          }
+          return {
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        // Long enough that a leaked entry would park the second request well
+        // past this test's own timeout rather than quietly passing.
+        foregroundCacheCoalesceTimeoutMs: 60000,
+      });
+
+      const controller = new AbortController();
+      const leader = cache.getData({
+        id: 'aborted-leader-id',
+        requestAttributes,
+        signal: controller.signal,
+      });
+      const leaderSettled = leader.then(
+        (result) => {
+          result.stream.on('error', () => undefined);
+          return 'resolved';
+        },
+        (error: any) => error.name,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      controller.abort();
+      await leaderSettled;
+      // Let the pipeline callback run its abort teardown.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      // Must not inherit the aborted leader's in-flight entry.
+      const started = Date.now();
+      const result = await cache.getData({
+        id: 'aborted-leader-id',
+        requestAttributes,
+      });
+      let received = '';
+      for await (const chunk of result.stream) {
+        received += chunk;
+      }
+
+      assert.equal(received, payload);
+      assert.equal(upstreamCalls, 2);
+      // Served promptly rather than after the coalesce timeout.
+      assert.ok(
+        Date.now() - started < 5000,
+        'second request waited on a leaked in-flight entry',
+      );
+      assert.equal(counters.finalize, 1);
+    });
+
     it('reclaims the concurrency permit from a stalled write', async () => {
       mock.method(metrics.foregroundCacheStalledWritesTotal, 'inc');
       const { store, counters } = makeStatefulStore();
