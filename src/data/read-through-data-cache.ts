@@ -62,15 +62,43 @@ function updateMruList(
   return updatedList;
 }
 
+/**
+ * Arguments to {@link ReadThroughDataCache.getData}. Extracted as a named type
+ * because the public entry point forwards them unchanged to the internal
+ * implementation, which takes an extra coalescing flag.
+ */
 type GetDataArgs = {
+  /** Transaction or data item ID to retrieve. */
   id: string;
+  /** Caller context (ArNS name, hops, origin) used for verification priority, cache-index tiering and MRU bookkeeping. */
   requestAttributes?: RequestAttributes;
+  /**
+   * Byte range to serve, relative to the start of the item.
+   *
+   * Ranged requests are deliberately never written to the cache -- persisting
+   * fragments would record invalid ID-to-hash relationships -- so they are
+   * also never coalesced, since no finalized blob would exist for a waiting
+   * caller to be served from. A range miss may instead trigger a background
+   * fetch of the whole item; see `triggerBackgroundCacheForRange`.
+   */
   region?: {
     offset: number;
     size: number;
   };
+  /** Parent OTEL span; the retrieval span is attached beneath it. */
   parentSpan?: Span;
+  /**
+   * Aborts this caller's request. It does not abort a fetch shared with other
+   * callers: a request waiting on another's in-flight fetch detaches itself
+   * only, leaving that fetch and its staging file intact for everyone else.
+   */
   signal?: AbortSignal;
+  /**
+   * Rejects cached content by content type. Returning false for a cached
+   * entry's stored content type evicts the blob and treats the request as a
+   * cold miss, which heals entries poisoned by upstream error pages
+   * (PE-9099). Also forwarded upstream.
+   */
   acceptContentType?: (contentType: string | undefined) => boolean;
 };
 
