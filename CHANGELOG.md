@@ -42,8 +42,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   to cache (size cap, concurrency cap, zero-length, writes disabled) would be
   followed by a new leader declined by the same policy, and a leader that timed
   out still owns its map entry, so re-attaching would wait on the fetch just
-  abandoned. Both send the waiter straight to its own fetch. Re-elections are
-  visible as `foreground_cache_coalesced_outcome_total{outcome="re_electing"}`.
+  abandoned. Both send the waiter straight to its own fetch. Re-elections are counted by
+  `foreground_cache_re_elections_total`, kept separate from
+  `foreground_cache_coalesced_outcome_total` so that counter still records
+  exactly one terminal outcome per attached request.
 
 - **A size floor on foreground coalescing** — `FOREGROUND_CACHE_COALESCE_MIN_SIZE`
   exempts objects known to be smaller than it, which then fetch for themselves

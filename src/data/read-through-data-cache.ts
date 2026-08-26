@@ -83,7 +83,7 @@ function updateMruList(
 /**
  * Arguments to {@link ReadThroughDataCache.getData}. Extracted as a named type
  * because the public entry point forwards them unchanged to the internal
- * implementation, which takes an extra coalescing flag.
+ * implementation, which takes an additional coalescing attempt budget.
  */
 type GetDataArgs = {
   /** Transaction or data item ID to retrieve. */
@@ -1116,10 +1116,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           // would wait on the fetch we just gave up on.
           const nextAttempts =
             leaderOutcome === 'failed' ? coalesceAttemptsRemaining - 1 : 0;
+          // Deliberately a separate counter rather than another label on
+          // foregroundCacheCoalescedOutcomeTotal: that one records exactly one
+          // terminal outcome per attached request, so it sums to the number of
+          // requests that attached. A re-electing request goes on to record
+          // cache_hit or refetched as well, and folding both into the same
+          // counter would double-count it and break that invariant.
           if (leaderOutcome === 'failed' && nextAttempts > 0) {
-            metrics.foregroundCacheCoalescedOutcomeTotal.inc({
-              outcome: 're_electing',
-            });
+            metrics.foregroundCacheReElectionsTotal.inc();
           }
 
           // Re-enter rather than duplicating the cache-read path: this reruns
