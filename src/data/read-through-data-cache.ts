@@ -37,6 +37,24 @@ import { DataContentAttributeImporter } from '../workers/data-content-attribute-
 
 const MAX_MRU_ARNS_NAMES_LENGTH = 10;
 
+/**
+ * How a leader's foreground fetch ended, as seen by callers waiting on it.
+ *
+ * The distinction drives leader re-election. `false` alone conflated three
+ * different endings, and only one of them is worth electing a new leader for:
+ *
+ * - `cached`   — a blob was finalized. Waiters re-read the cache and are served.
+ * - `uncached` — the fetch succeeded but the write was declined by policy
+ *                (size cap, concurrency cap, zero-length, writes disabled).
+ *                A new leader would hit the same policy, so waiters go
+ *                straight to their own fetch rather than re-electing.
+ * - `failed`   — the fetch errored, or its caller aborted. Nothing about the
+ *                object says the next attempt must fail too, so one waiter is
+ *                promoted to leader and the rest wait on it instead of every
+ *                waiter firing its own fetch in the same tick.
+ */
+type ForegroundFetchOutcome = 'cached' | 'uncached' | 'failed';
+
 function updateMruList(
   currentMruList: string[] | string | undefined,
   newItem: string | undefined,
@@ -152,7 +170,10 @@ export class ReadThroughDataCache implements ContiguousDataSource {
    * leader finalized. See {@link awaitInFlightFetch} for why followers can
    * never cancel or destroy the shared fetch.
    */
-  private inFlightForegroundFetches: Map<string, Promise<boolean>> = new Map();
+  private inFlightForegroundFetches: Map<
+    string,
+    Promise<ForegroundFetchOutcome>
+  > = new Map();
   private foregroundCacheMaxSize: number;
   /** Undefined when foreground cache-write concurrency is unbounded. */
   private foregroundCacheSemaphore: Semaphore | undefined;
@@ -164,6 +185,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
    * coalescing where the object is positively known to be small.
    */
   private foregroundCacheCoalesceMinSize: number;
+  /**
+   * How many times one request may attach to a leader before fetching for
+   * itself. 1 disables re-election (a single attach, then go it alone).
+   */
+  private foregroundCacheCoalesceMaxAttempts: number;
 
   constructor({
     log,
@@ -185,6 +211,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     foregroundCacheConcurrency = 0,
     foregroundCacheCoalesceTimeoutMs = 300000,
     foregroundCacheCoalesceMinSize = 0,
+    foregroundCacheCoalesceMaxAttempts = 2,
     foregroundCacheSemaphore,
   }: {
     log: winston.Logger;
@@ -206,6 +233,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     foregroundCacheConcurrency?: number;
     foregroundCacheCoalesceTimeoutMs?: number;
     foregroundCacheCoalesceMinSize?: number;
+    foregroundCacheCoalesceMaxAttempts?: number;
     /**
      * Shared across instances by {@link system}. The resource being bounded is
      * `contiguous/tmp` on one disk, which every instance writes to, so the
@@ -279,6 +307,16 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         'foregroundCacheCoalesceMinSize must be a non-negative finite number',
       );
     }
+    // At least 1: a request must be allowed one attach, otherwise coalescing is
+    // off entirely and the single-flight map would never be consulted.
+    if (
+      !Number.isInteger(foregroundCacheCoalesceMaxAttempts) ||
+      foregroundCacheCoalesceMaxAttempts < 1
+    ) {
+      throw new Error(
+        'foregroundCacheCoalesceMaxAttempts must be an integer >= 1',
+      );
+    }
 
     this.backgroundCacheRangeMaxSize = backgroundCacheRangeMaxSize;
     this.backgroundCacheSemaphore = new Semaphore(
@@ -294,6 +332,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         : undefined);
     this.foregroundCacheCoalesceTimeoutMs = foregroundCacheCoalesceTimeoutMs;
     this.foregroundCacheCoalesceMinSize = foregroundCacheCoalesceMinSize;
+    this.foregroundCacheCoalesceMaxAttempts =
+      foregroundCacheCoalesceMaxAttempts;
   }
 
   private calculateVerificationPriority(
@@ -677,9 +717,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
    * for that ID.
    */
   private awaitInFlightFetch(
-    inFlight: Promise<boolean>,
+    inFlight: Promise<ForegroundFetchOutcome>,
     signal?: AbortSignal,
-  ): Promise<boolean | 'timed_out'> {
+  ): Promise<ForegroundFetchOutcome | 'timed_out'> {
     const timeoutMs = this.foregroundCacheCoalesceTimeoutMs;
     signal?.throwIfAborted();
 
@@ -687,57 +727,72 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       return inFlight;
     }
 
-    return new Promise<boolean | 'timed_out'>((resolve, reject) => {
-      let timer: NodeJS.Timeout | undefined;
+    return new Promise<ForegroundFetchOutcome | 'timed_out'>(
+      (resolve, reject) => {
+        let timer: NodeJS.Timeout | undefined;
 
-      const cleanup = () => {
-        if (timer !== undefined) {
-          clearTimeout(timer);
-          timer = undefined;
+        const cleanup = () => {
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+          signal?.removeEventListener('abort', onAbort);
+        };
+
+        const onAbort = () => {
+          cleanup();
+          reject(signal?.reason ?? new Error('Aborted'));
+        };
+
+        if (timeoutMs > 0) {
+          timer = setTimeout(() => {
+            cleanup();
+            resolve('timed_out');
+          }, timeoutMs);
+          // Deliberately NOT unref'd: an unref'd timer can fail to fire if the
+          // loop drains, which is the exact hang this bound exists to prevent.
+          // A parked waiter is an in-flight request, so keeping the loop alive
+          // for it is correct; the timer is cleared as soon as the leader
+          // settles.
         }
-        signal?.removeEventListener('abort', onAbort);
-      };
 
-      const onAbort = () => {
-        cleanup();
-        reject(signal?.reason ?? new Error('Aborted'));
-      };
+        signal?.addEventListener('abort', onAbort, { once: true });
 
-      if (timeoutMs > 0) {
-        timer = setTimeout(() => {
-          cleanup();
-          resolve('timed_out');
-        }, timeoutMs);
-        // Deliberately NOT unref'd: an unref'd timer can fail to fire if the
-        // loop drains, which is the exact hang this bound exists to prevent.
-        // A parked waiter is an in-flight request, so keeping the loop alive
-        // for it is correct; the timer is cleared as soon as the leader
-        // settles.
-      }
-
-      signal?.addEventListener('abort', onAbort, { once: true });
-
-      inFlight.then(
-        (cached) => {
-          cleanup();
-          resolve(cached);
-        },
-        (error) => {
-          cleanup();
-          reject(error);
-        },
-      );
-    });
+        inFlight.then(
+          (cached) => {
+            cleanup();
+            resolve(cached);
+          },
+          (error) => {
+            cleanup();
+            reject(error);
+          },
+        );
+      },
+    );
   }
 
   async getData(args: GetDataArgs): Promise<ContiguousData> {
-    return this.getDataInternal(args, true);
+    return this.getDataInternal(args, this.foregroundCacheCoalesceMaxAttempts);
   }
 
   /**
-   * @param allowCoalescing When false, this call will not wait on another
-   *   caller's in-flight fetch. Set only for the re-entry a waiter makes after
-   *   its leader settles, which bounds coalescing recursion at one hop.
+   * @param coalesceAttemptsRemaining How many more times this call may attach
+   *   to another caller's in-flight fetch. 0 means fetch for ourselves without
+   *   waiting on anyone.
+   *
+   *   Spending one on each attach is what makes leader re-election terminate.
+   *   When a leader fails, its waiters all wake at once; the first to re-enter
+   *   finds no owner and claims the ID, and the rest attach to it rather than
+   *   each starting their own fetch. Without a budget that could chain for as
+   *   long as leaders keep failing; with it, a request waits at most this many
+   *   times before fetching independently.
+   *
+   *   Only a genuine leader failure is worth re-electing for. A leader that
+   *   succeeded but declined to cache ('uncached') would be followed by a new
+   *   leader hitting the same policy, and a leader that timed out keeps its map
+   *   entry, so re-attaching would just wait on the same stalled fetch. Both
+   *   re-enter with 0.
    */
   private async getDataInternal(
     {
@@ -748,7 +803,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       signal,
       acceptContentType,
     }: GetDataArgs,
-    allowCoalescing: boolean,
+    coalesceAttemptsRemaining: number,
   ): Promise<ContiguousData> {
     const span = startChildSpan(
       'ReadThroughDataCache.getData',
@@ -771,15 +826,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
     // Foreground single-flight / cache-write-guard bookkeeping. Declared out
     // here so the catch block below can settle and release on the error paths.
-    let settleInFlight: ((cached: boolean) => void) | undefined;
+    let settleInFlight: ((outcome: ForegroundFetchOutcome) => void) | undefined;
     let foregroundPermitHeld = false;
-    const finishForegroundCache = (cached: boolean) => {
+    const finishForegroundCache = (outcome: ForegroundFetchOutcome) => {
       if (foregroundPermitHeld) {
         foregroundPermitHeld = false;
         this.foregroundCacheSemaphore?.release();
       }
       // Idempotent: settleInFlight ignores repeat calls.
-      settleInFlight?.(cached);
+      settleInFlight?.(outcome);
     };
 
     try {
@@ -1008,7 +1063,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         });
       }
 
-      if (coalescingEligible && allowCoalescing) {
+      if (coalescingEligible && coalesceAttemptsRemaining > 0) {
         const inFlight = this.inFlightForegroundFetches.get(id);
         if (inFlight !== undefined) {
           metrics.foregroundCacheSkippedTotal.inc({
@@ -1018,9 +1073,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           this.log.debug('Attaching to in-flight foreground fetch', { id });
 
           const attachStart = Date.now();
-          let leaderCached: boolean | 'timed_out' = false;
+          let leaderOutcome: ForegroundFetchOutcome | 'timed_out' = 'failed';
           try {
-            leaderCached = await this.awaitInFlightFetch(inFlight, signal);
+            leaderOutcome = await this.awaitInFlightFetch(inFlight, signal);
           } catch (error: any) {
             if (error?.name === 'AbortError') {
               // Our caller went away. Detach only -- the leader's fetch and
@@ -1034,10 +1089,10 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           }
           span.addEvent('In-flight foreground fetch settled', {
             'cache.coalesce_wait_ms': Date.now() - attachStart,
-            'cache.leader_cached': leaderCached,
+            'cache.leader_outcome': leaderOutcome,
           });
 
-          if (leaderCached === 'timed_out') {
+          if (leaderOutcome === 'timed_out') {
             // The leader is stalled, not merely slow. Stop waiting on it and
             // fetch for ourselves; its map entry stays put in case it does
             // finish, but it can no longer strand anyone indefinitely.
@@ -1050,11 +1105,26 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             );
           }
 
+          // Leader re-election. Only a genuine failure earns another attach:
+          // the leader's map entry is gone, so the first of its waiters back
+          // through here claims the ID and the rest attach to that new leader
+          // instead of every waiter firing its own fetch in the same tick.
+          //
+          // 'uncached' does not, because a new leader would be declined by the
+          // same policy that declined this one, and 'timed_out' does not,
+          // because the stalled leader still owns the entry -- re-attaching
+          // would wait on the fetch we just gave up on.
+          const nextAttempts =
+            leaderOutcome === 'failed' ? coalesceAttemptsRemaining - 1 : 0;
+          if (leaderOutcome === 'failed' && nextAttempts > 0) {
+            metrics.foregroundCacheCoalescedOutcomeTotal.inc({
+              outcome: 're_electing',
+            });
+          }
+
           // Re-enter rather than duplicating the cache-read path: this reruns
           // poison eviction, hit metrics, and MRU bookkeeping exactly as a
-          // normal request would. Coalescing is disabled on the way back in so
-          // this can recurse at most one level -- if the leader cached
-          // nothing, we fetch it ourselves instead of waiting again.
+          // normal request would.
           const result = await this.getDataInternal(
             {
               id,
@@ -1064,9 +1134,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               signal,
               acceptContentType,
             },
-            false,
+            nextAttempts,
           );
-          if (leaderCached !== 'timed_out') {
+          if (leaderOutcome !== 'timed_out') {
             metrics.foregroundCacheCoalescedOutcomeTotal.inc({
               outcome: result.cached ? 'cache_hit' : 'refetched',
             });
@@ -1079,14 +1149,16 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // the same synchronous run -- no await separates them -- so exactly one
       // concurrent caller can claim the key.
       if (coalescingEligible && !this.inFlightForegroundFetches.has(id)) {
-        let resolveInFlight!: (cached: boolean) => void;
-        const inFlightPromise = new Promise<boolean>((resolve) => {
-          resolveInFlight = resolve;
-        });
+        let resolveInFlight!: (outcome: ForegroundFetchOutcome) => void;
+        const inFlightPromise = new Promise<ForegroundFetchOutcome>(
+          (resolve) => {
+            resolveInFlight = resolve;
+          },
+        );
         this.inFlightForegroundFetches.set(id, inFlightPromise);
 
         let settled = false;
-        settleInFlight = (cached: boolean) => {
+        settleInFlight = (outcome: ForegroundFetchOutcome) => {
           if (settled) {
             return;
           }
@@ -1097,7 +1169,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           }
           // Always resolves, never rejects, so an unobserved leader failure
           // cannot surface as an unhandled rejection.
-          resolveInFlight(cached);
+          resolveInFlight(outcome);
         };
       }
 
@@ -1287,7 +1359,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                 // coalesce timeout before refetching, for the life of the
                 // process.
                 clearStallTimer();
-                finishForegroundCache(false);
+                finishForegroundCache('failed');
                 return;
               }
 
@@ -1505,7 +1577,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             // finalize logic above, so a follower that re-reads the cache on
             // being woken finds a durable blob rather than a staging file.
             clearStallTimer();
-            finishForegroundCache(cacheFinalized);
+            finishForegroundCache(cacheFinalized ? 'cached' : 'failed');
           },
         );
 
@@ -1517,7 +1589,10 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       } else {
         // Nothing will be written to the cache on this path, so release any
         // waiters now instead of parking them until the stream drains.
-        finishForegroundCache(false);
+        // The fetch itself succeeded; only the write was declined, so this is
+        // 'uncached' rather than 'failed' -- a re-elected leader would be
+        // declined by the same policy.
+        finishForegroundCache('uncached');
 
         // Log why caching was skipped
         const reasons = [];
@@ -1603,7 +1678,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     } catch (error: any) {
       // Release the permit and unblock waiters before rethrowing -- otherwise
       // a failed leader parks every follower until their own signals fire.
-      finishForegroundCache(false);
+      finishForegroundCache('failed');
 
       // Don't record AbortError as exception
       if (error.name === 'AbortError') {

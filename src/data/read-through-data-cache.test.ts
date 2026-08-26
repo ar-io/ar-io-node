@@ -2993,6 +2993,163 @@ describe('ReadThroughDataCache', function () {
       );
     });
 
+    it('re-elects a new leader when the first one fails, instead of every waiter refetching', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'second leader payload';
+      let upstreamCalls = 0;
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          upstreamCalls++;
+          const attempt = upstreamCalls;
+          // Stay in flight long enough for the other callers to attach.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          if (attempt === 1) {
+            throw new Error('leader blew up');
+          }
+          return {
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            sourceContentType: 'application/octet-stream',
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+      });
+
+      const results = await Promise.allSettled(
+        Array.from({ length: 4 }, () =>
+          cache
+            .getData({ id: 'reelect-id', requestAttributes })
+            .then(async (result) => {
+              for await (const _ of result.stream) {
+                // drain
+              }
+              return 'ok';
+            }),
+        ),
+      );
+
+      // One failed leader, then exactly one re-elected leader that the
+      // remaining waiters shared. Without re-election every waiter released by
+      // the failure would have fetched for itself: 1 + 3 = 4 upstream calls.
+      assert.equal(upstreamCalls, 2);
+      // Only one staging file: the first leader threw before streaming began,
+      // so it never opened one. Re-election does not multiply staging files.
+      assert.equal(counters.createWriteStream, 1);
+
+      // The leader's own caller sees the failure; the waiters are served.
+      const fulfilled = results.filter((r) => r.status === 'fulfilled').length;
+      assert.equal(fulfilled, 3);
+    });
+
+    it('does not re-elect when the leader succeeded but declined to cache', async () => {
+      const { store, counters } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      const payload = 'uncacheable payload';
+      let upstreamCalls = 0;
+
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          upstreamCalls++;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return {
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            sourceContentType: 'application/octet-stream',
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
+      };
+
+      // Every write is declined by the size cap, so a re-elected leader would
+      // be declined identically -- waiters must go straight to their own fetch
+      // rather than burning an attempt to learn that.
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheMaxSize: 1,
+      });
+
+      await Promise.all(
+        Array.from({ length: 3 }, () =>
+          cache
+            .getData({ id: 'uncacheable-id', requestAttributes })
+            .then(async (result) => {
+              for await (const _ of result.stream) {
+                // drain
+              }
+            }),
+        ),
+      );
+
+      assert.equal(upstreamCalls, 3);
+      assert.equal(counters.createWriteStream, 0);
+    });
+
+    it('stops re-electing once the attempt budget is spent', async () => {
+      const { store } = makeStatefulStore();
+      const { store: attributesStore } = makeStatefulAttributesStore();
+      let upstreamCalls = 0;
+
+      // Every leader fails, so the budget is what stops the chain.
+      const dataSource: ContiguousDataSource = {
+        getData: async () => {
+          upstreamCalls++;
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          throw new Error('always fails');
+        },
+      };
+
+      const cache = makeCache({
+        dataSource,
+        dataStore: store,
+        dataAttributesStore: attributesStore,
+        foregroundCacheCoalesceMaxAttempts: 2,
+      });
+
+      const results = await Promise.allSettled(
+        Array.from({ length: 4 }, () =>
+          cache.getData({ id: 'always-fails-id', requestAttributes }),
+        ),
+      );
+
+      // All four surface the failure rather than hanging, and the chain
+      // terminates: nobody waits forever on a succession of dead leaders.
+      assert.equal(results.length, 4);
+      assert.ok(results.every((r) => r.status === 'rejected'));
+      assert.ok(upstreamCalls >= 2);
+      assert.ok(upstreamCalls <= 4);
+    });
+
+    it('rejects a foregroundCacheCoalesceMaxAttempts below 1', () => {
+      assert.throws(
+        () => makeCache({ foregroundCacheCoalesceMaxAttempts: 0 }),
+        /foregroundCacheCoalesceMaxAttempts must be an integer >= 1/,
+      );
+    });
+
     it('serves the data but skips the cache write above foregroundCacheMaxSize', async () => {
       mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
       const { store, counters } = makeStatefulStore();

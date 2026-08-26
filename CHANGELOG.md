@@ -24,6 +24,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   altogether and lets the cache grow unbounded. All four default to the
   existing behavior, so nothing changes unless they are set.
 
+- **Leader re-election on a failed foreground fetch** — a leader that fails
+  releases every waiter at once, and each of them then started its own fetch in
+  the same tick. That is the same total work as no coalescing at all, delivered
+  as one synchronised burst instead of spread across the arrivals that produced
+  it -- strictly a worse shape than the problem coalescing was added to fix.
+
+  A waiter released by a *failure* now re-enters with one attempt spent: the
+  first back through finds the ID unowned and claims it, and the rest attach to
+  that new leader. `FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS` (default 2, minimum
+  1) bounds the chain so a succession of dying leaders cannot park a request
+  indefinitely; 1 restores the previous behavior exactly.
+
+  Re-election is deliberately limited to failures. The in-flight promise now
+  reports `cached` / `uncached` / `failed` rather than a bare boolean, because
+  the old `false` conflated three endings. A leader that succeeded but declined
+  to cache (size cap, concurrency cap, zero-length, writes disabled) would be
+  followed by a new leader declined by the same policy, and a leader that timed
+  out still owns its map entry, so re-attaching would wait on the fetch just
+  abandoned. Both send the waiter straight to its own fetch. Re-elections are
+  visible as `foreground_cache_coalesced_outcome_total{outcome="re_electing"}`.
+
 - **A size floor on foreground coalescing** — `FOREGROUND_CACHE_COALESCE_MIN_SIZE`
   exempts objects known to be smaller than it, which then fetch for themselves
   exactly as they did before coalescing existed. Coalescing serves a waiter

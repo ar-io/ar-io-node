@@ -1543,6 +1543,8 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   foregroundCacheSemaphore,
   foregroundCacheCoalesceTimeoutMs: config.FOREGROUND_CACHE_COALESCE_TIMEOUT_MS,
   foregroundCacheCoalesceMinSize: config.FOREGROUND_CACHE_COALESCE_MIN_SIZE,
+  foregroundCacheCoalesceMaxAttempts:
+    config.FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS,
 });
 
 export const backgroundContiguousDataSource = new ReadThroughDataCache({
@@ -1565,6 +1567,8 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   foregroundCacheSemaphore,
   foregroundCacheCoalesceTimeoutMs: config.FOREGROUND_CACHE_COALESCE_TIMEOUT_MS,
   foregroundCacheCoalesceMinSize: config.FOREGROUND_CACHE_COALESCE_MIN_SIZE,
+  foregroundCacheCoalesceMaxAttempts:
+    config.FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS,
 });
 
 // Index-driven chunk cache evictor (ADR 005): the chunk cache is reclaimed

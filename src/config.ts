@@ -3288,6 +3288,30 @@ export const FOREGROUND_CACHE_COALESCE_MIN_SIZE = env.nonNegativeIntOrDefault(
   0,
 );
 
+// How many times one request may attach to another's in-flight fetch before
+// giving up on sharing and fetching for itself. Minimum 1.
+//
+// This is leader re-election. With a single attempt, a leader that fails
+// releases all of its waiters at once and every one of them starts its own
+// fetch in the same tick -- the same total work as having no coalescing, but
+// delivered as one synchronised burst instead of spread over the arrivals that
+// produced it. Allowing a second attempt lets the first waiter back through
+// claim the ID and the rest attach to it, so a failure costs one retry rather
+// than a fan-out.
+//
+// Only a genuine failure re-elects. A leader that succeeded without caching
+// would be followed by a new leader declined by the same policy, and a leader
+// that timed out still owns its map entry, so re-attaching would wait on the
+// fetch we just abandoned. Both send the waiter straight to its own fetch.
+//
+// Each attempt can cost up to FOREGROUND_CACHE_COALESCE_TIMEOUT_MS in the
+// worst case, so raising this raises the worst-case wait proportionally. 2 is
+// one re-election; 1 restores the un-elected behavior exactly.
+export const FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS = env.positiveIntOrDefault(
+  'FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS',
+  2,
+);
+
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',
