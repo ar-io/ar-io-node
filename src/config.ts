@@ -3226,6 +3226,92 @@ export const BACKGROUND_CACHE_RANGE_CONCURRENCY = env.positiveIntOrDefault(
   1,
 );
 
+// Guards on the foreground (on-demand) full-item cache write path. Both
+// default to unbounded, preserving pre-existing behavior; set them to bound
+// how much unfinished data can accumulate in contiguous/tmp during a burst.
+//
+// 0 disables the cap: any size is eligible for a foreground cache write.
+export const FOREGROUND_CACHE_MAX_SIZE = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_MAX_SIZE',
+  0,
+);
+
+// 0 disables the limit: unlimited concurrent foreground cache writes. When
+// set, requests beyond the limit are still served -- they just stream through
+// without being written to the cache.
+export const FOREGROUND_CACHE_CONCURRENCY = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_CONCURRENCY',
+  0,
+);
+
+// How long a request will wait to be served by another request's in-flight
+// fetch of the same ID before giving up and fetching independently.
+//
+// This is the safety valve on foreground coalescing. A leader whose stream
+// wedges never reaches its pipeline callback, so without a bound its map entry
+// would outlive it and park every later request for that ID for the life of
+// the process -- turning a transient stall into permanent unavailability for
+// one ID. Timing out restores pre-coalescing behavior (each request fetches
+// for itself) for exactly the wedged case. Matches the wall-clock convention
+// of ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS. 0 waits indefinitely.
+export const FOREGROUND_CACHE_COALESCE_TIMEOUT_MS = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_COALESCE_TIMEOUT_MS',
+  300000,
+);
+
+// Smallest known object size, in bytes, that is eligible for foreground
+// coalescing. Below it a request fetches for itself exactly as it did before
+// coalescing existed.
+//
+// Coalescing trades time-to-first-byte for deduplication: a waiter is served
+// from the blob the leader finalizes, so it receives nothing until the leader
+// finishes. That trade is worth making for a large object, where the duplicate
+// cost is measured in gigabytes and the caller is going to wait regardless. It
+// is a poor trade for a small one, which duplicates cheaply and completes fast.
+//
+// Measured on a saturated production gateway carrying ~1 TB of staged
+// duplicates: objects over 1 GiB accounted for 94.8% of redundant bytes and
+// everything under 100 MiB for 0.2%. A 100 MiB floor there would have retained
+// 99.83% of the reclaimed bytes while leaving roughly half of all staged
+// objects, by count, streaming independently.
+//
+// The size used is the one already known from the attributes store at the
+// point coalescing is decided -- data.size is not available until the upstream
+// fetch returns, which is after a leader has claimed the ID. An object whose
+// size is unknown is therefore treated as eligible, so the floor can only ever
+// narrow coalescing where the object is positively known to be small and can
+// never weaken stampede protection relative to leaving it unset.
+//
+// 0 disables the floor: every eligible full-object fetch coalesces.
+export const FOREGROUND_CACHE_COALESCE_MIN_SIZE = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_COALESCE_MIN_SIZE',
+  0,
+);
+
+// How many times one request may attach to another's in-flight fetch before
+// giving up on sharing and fetching for itself. Minimum 1.
+//
+// This is leader re-election. With a single attempt, a leader that fails
+// releases all of its waiters at once and every one of them starts its own
+// fetch in the same tick -- the same total work as having no coalescing, but
+// delivered as one synchronised burst instead of spread over the arrivals that
+// produced it. Allowing a second attempt lets the first waiter back through
+// claim the ID and the rest attach to it, so a failure costs one retry rather
+// than a fan-out.
+//
+// Only a genuine failure re-elects. A leader that succeeded without caching
+// would be followed by a new leader declined by the same policy, and a leader
+// that timed out still owns its map entry, so re-attaching would wait on the
+// fetch we just abandoned. Both send the waiter straight to its own fetch.
+//
+// Each attempt can cost up to FOREGROUND_CACHE_COALESCE_TIMEOUT_MS in the
+// worst case, so raising this raises the worst-case wait proportionally. 2 is
+// one re-election; 1 restores the un-elected behavior exactly.
+export const FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS = env.positiveIntOrDefault(
+  'FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS',
+  2,
+);
+
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',

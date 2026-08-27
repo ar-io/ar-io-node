@@ -1694,6 +1694,32 @@ export const backgroundRangeCacheSkippedTotal = new promClient.Counter({
 });
 
 //
+// Foreground (on-demand) cache write metrics
+//
+
+export const foregroundCacheSkippedTotal = new promClient.Counter({
+  name: 'foreground_cache_skipped_total',
+  help: 'Foreground full-item cache writes that did not start their own staging write',
+  labelNames: ['reason'] as const,
+});
+
+export const foregroundCacheCoalescedOutcomeTotal = new promClient.Counter({
+  name: 'foreground_cache_coalesced_outcome_total',
+  help: 'Outcome for requests that attached to an in-flight foreground fetch',
+  labelNames: ['outcome'] as const,
+});
+
+export const foregroundCacheReElectionsTotal = new promClient.Counter({
+  name: 'foreground_cache_re_elections_total',
+  help: 'Requests that were released by a failed leader and went back in with an attempt remaining, promoting one of them to leader instead of every waiter refetching',
+});
+
+export const foregroundCacheStalledWritesTotal = new promClient.Counter({
+  name: 'foreground_cache_stalled_writes_total',
+  help: 'Foreground cache writes whose concurrency permit was reclaimed after the write stopped making progress',
+});
+
+//
 // Sampling data source metrics
 //
 
