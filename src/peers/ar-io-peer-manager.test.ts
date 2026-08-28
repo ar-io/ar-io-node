@@ -373,6 +373,13 @@ describe('ArIOPeerManager', () => {
   describe('leaving-gateway filtering', () => {
     // Registry fixture mixing every status case, including the two that must
     // NOT be excluded: absent status, and an unrecognised value.
+    /**
+     * Build a manager whose registry returns `items` as a single page.
+     *
+     * The fixtures deliberately include gateways with no `status` and with an
+     * unrecognised one, so the fail-open behaviour is exercised rather than
+     * assumed.
+     */
     function managerWith(items: any[]) {
       return new ArIOPeerManager({
         log,

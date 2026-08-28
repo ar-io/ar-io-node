@@ -493,6 +493,24 @@ export class ArIOPeerManager implements WithFormattedPeers {
     await this.updatePeerList();
   }
 
+  /**
+   * Refresh the peer pool from the AR.IO gateway registry.
+   *
+   * Pages through the registry, rebuilds the hash ring, and reconciles the
+   * per-category weight maps so new peers start at the category default and
+   * departed peers stop being selected.
+   *
+   * Two gateways are excluded: our own (by wallet), and any the registry
+   * reports as `leaving`. A gateway leaves either because its operator
+   * withdrew it or because the network marked it non-responsive for 30
+   * consecutive epochs, so the status doubles as a consensus liveness signal.
+   * Only an explicit `leaving` is filtered — see {@link
+   * config.SKIP_LEAVING_GATEWAYS} for why unknown status is deliberately kept
+   * — and exclusions are counted by `ar_io_peers_skipped_leaving_total`.
+   *
+   * A registry fetch failure leaves the previous peer list in place rather
+   * than emptying it.
+   */
   private async updatePeerList(): Promise<void> {
     const log = this.log.child({ method: 'updatePeerList' });
     log.info('Fetching AR.IO network peer list');
