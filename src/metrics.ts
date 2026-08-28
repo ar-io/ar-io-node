@@ -1709,6 +1709,11 @@ export const foregroundCacheCoalescedOutcomeTotal = new promClient.Counter({
   labelNames: ['outcome'] as const,
 });
 
+export const arIOPeersSkippedLeavingTotal = new promClient.Counter({
+  name: 'ar_io_peers_skipped_leaving_total',
+  help: 'Gateways excluded from the AR.IO peer pool because the registry reports them as leaving the network',
+});
+
 export const foregroundCacheReElectionsTotal = new promClient.Counter({
   name: 'foreground_cache_re_elections_total',
   help: 'Requests that were released by a failed leader and went back in with an attempt remaining, promoting one of them to leader instead of every waiter refetching',

@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+- **Gateways leaving the network are no longer used as peers** — `updatePeerList`
+  admitted every gateway in the registry, filtering only our own wallet. A
+  gateway is `leaving` either because its operator withdrew it or because the
+  network marked it non-responsive for 30 consecutive epochs, so the status is
+  both a statement of intent and a consensus liveness signal — and in both cases
+  it should not be receiving requests.
+
+  Measured on turbo-gateway gw1 (2026-08-28): **334 of 646** registered gateways
+  were `leaving`, and peer failures were dominated by them — 40% of all peer
+  errors were `ENOTFOUND` against hostnames that no longer resolve, with a
+  further 18% TLS failures and 14% 5xx. Roughly half of every peer draw was
+  spent rediscovering, one DNS timeout at a time, something the registry already
+  knew.
+
+  Controlled by `SKIP_LEAVING_GATEWAYS` (default true). Only an explicit
+  `leaving` is excluded: a gateway whose status is absent or unrecognised is
+  kept, so a registry or SDK that stops reporting status degrades to the
+  previous behaviour instead of emptying the peer list. Exclusions are counted
+  by `ar_io_peers_skipped_leaving_total`.
+
 ## [Unreleased]
 
 ### Added
