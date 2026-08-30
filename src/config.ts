@@ -947,6 +947,25 @@ export const PEER_CANDIDATE_COUNT = env.positiveIntOrDefault(
   5,
 );
 
+// Exclude gateways the registry reports as `leaving` from the peer pool.
+//
+// A gateway leaves either because its operator withdrew it or because the
+// network marked it non-responsive for 30 consecutive epochs. In both cases it
+// should no longer be serving requests, and the second makes `leaving` a
+// network-consensus liveness signal rather than a mere intent flag.
+//
+// Without this the pool is roughly half corpses: on turbo-gateway gw1
+// (2026-08-28) 334 of 646 registered gateways were `leaving`, and peer errors
+// were dominated by `ENOTFOUND` against hostnames that no longer resolve. Every
+// such peer is a retrieval slot spent to rediscover, one DNS timeout at a time,
+// something the registry already knew.
+//
+// Only an explicit 'leaving' is excluded; unknown or absent status is kept, so
+// a registry that stops reporting status degrades to the previous behaviour
+// instead of emptying the peer list. Set false to restore that behaviour.
+export const SKIP_LEAVING_GATEWAYS =
+  env.varOrDefault('SKIP_LEAVING_GATEWAYS', 'true') === 'true';
+
 // Hedged request configuration
 export const PEER_HEDGE_DELAY_MS = env.nonNegativeIntOrDefault(
   'PEER_HEDGE_DELAY_MS',
