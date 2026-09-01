@@ -38,6 +38,16 @@ import { DataContentAttributeImporter } from '../workers/data-content-attribute-
 const MAX_MRU_ARNS_NAMES_LENGTH = 10;
 
 /**
+ * Slack allowed between an ANS-104 item's `itemSize` (header + payload) and
+ * the payload actually retrieved, used by {@link
+ * ReadThroughDataCache.isShortRead}. A real header is far smaller -- signature
+ * and owner are 512 bytes each for RSA and tags are capped at 4096 by the spec
+ * -- so this is a deliberately generous bound that cannot reject a legitimate
+ * payload.
+ */
+const MAX_DATA_ITEM_HEADER_BYTES = 16384;
+
+/**
  * How a leader's foreground fetch ended, as seen by callers waiting on it.
  *
  * The distinction drives leader re-election. `false` alone conflated three
@@ -370,6 +380,64 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     }
 
     return undefined;
+  }
+
+  /**
+   * Decide whether a completed full-body retrieval is implausibly small for
+   * the data item it claims to be, and must therefore not be cached.
+   *
+   * The existing `bytesReceived !== data.size` check cannot catch this.
+   * `data.size` is taken from the upstream `Content-Length`, so a peer that is
+   * itself serving a truncated body reports a size that matches the bytes it
+   * actually sends: the two agree, the truncation is finalized as if complete,
+   * and the ID is bound to the hash of the fragment. The next gateway then
+   * fetches from us and inherits it the same way. A one-byte body is how this
+   * shows up in practice, and because the store is content-addressed every
+   * item sharing a first byte collapses onto a single blob -- every truncated
+   * RIFF file lands on `sha256("R")`.
+   *
+   * `itemSize` is the cross-check that closes this, because it does not come
+   * from retrieval: it is the ANS-104 item length recorded when the bundle
+   * header was parsed (`data_item_size`, falling back to the bundles index).
+   * A poisoned `contiguous_data.data_size` therefore cannot launder itself
+   * through this comparison.
+   *
+   * `itemSize` covers header + payload while `bytesReceived` is payload only,
+   * so the comparison is deliberately slack by one ANS-104 header. The spec
+   * bounds that well below {@link MAX_DATA_ITEM_HEADER_BYTES} (signature and
+   * owner are 512 bytes each for RSA, tags at most 4096), so a legitimate
+   * payload can never trip this while a fragment orders of magnitude too small
+   * always does. Undersize only: an oversize body is already rejected by the
+   * `data.size` comparison above.
+   *
+   * @returns the offending `itemSize` when the read is short, otherwise
+   *   `undefined`. Attribute lookup failures return `undefined` -- this guard
+   *   refuses to cache, so it must never turn a transient index error into a
+   *   silent cache bypass.
+   */
+  private async isShortRead(
+    id: string,
+    bytesReceived: number,
+  ): Promise<{ itemSize: number } | undefined> {
+    let itemSize: number | undefined;
+    try {
+      itemSize = (await this.dataAttributesStore.getDataAttributes(id))
+        ?.itemSize;
+    } catch (error: any) {
+      this.log.debug('Short-read check skipped; attribute lookup failed', {
+        id,
+        message: error?.message,
+      });
+      return undefined;
+    }
+
+    if (itemSize === undefined || itemSize <= MAX_DATA_ITEM_HEADER_BYTES) {
+      return undefined;
+    }
+
+    return bytesReceived + MAX_DATA_ITEM_HEADER_BYTES < itemSize
+      ? { itemSize }
+      : undefined;
   }
 
   // Record a freshly-cached blob in the cleanup index (best-effort). Tier 1 =
@@ -1386,6 +1454,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               if (cacheStream !== undefined) {
                 const hash = hasher.digest('base64url');
 
+                const shortRead = await this.isShortRead(id, bytesReceived);
+
                 try {
                   if (bytesReceived !== data.size) {
                     span.addEvent('Skipping cache storage - size mismatch', {
@@ -1398,6 +1468,27 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                       expectedSize: data.size,
                       receivedSize: bytesReceived,
                     });
+                    await this.dataStore.cleanup(cacheStream);
+                  } else if (shortRead !== undefined) {
+                    // The body agreed with its own Content-Length but is far
+                    // too small for this data item. See {@link isShortRead}:
+                    // caching it here is what makes a truncated body durable
+                    // and contagious.
+                    metrics.shortReadsRejectedTotal.inc();
+                    span.addEvent('Skipping cache storage - short read', {
+                      'data.item_size': shortRead.itemSize,
+                      'data.received_size': bytesReceived,
+                    });
+                    span.setAttribute('cache.operation.short_read', true);
+                    this.log.warn(
+                      'Retrieved body far smaller than the indexed data item size - not caching',
+                      {
+                        id,
+                        itemSize: shortRead.itemSize,
+                        receivedSize: bytesReceived,
+                        reportedSize: data.size,
+                      },
+                    );
                     await this.dataStore.cleanup(cacheStream);
                   } else if (data.trusted === true) {
                     // Trusted source: finalize, save with trusted: true

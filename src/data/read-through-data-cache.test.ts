@@ -3790,3 +3790,186 @@ describe('ReadThroughDataCache', function () {
     });
   });
 });
+
+describe('ReadThroughDataCache short-read rejection', () => {
+  const log = createTestLogger({ silent: true } as any);
+
+  // Local stand-ins: the suite-wide mocks are scoped to the outer describe's
+  // beforeEach and are not visible here.
+  const dataIndex = {
+    getDataAttributes: async () => undefined,
+    getDataParent: async () => undefined,
+    saveDataContentAttributes: async () => undefined,
+    clearDataHash: async () => undefined,
+    setDataAttributes: async () => undefined,
+  } as any;
+  const attributeImporter = {
+    queueDataContentAttributes: () => undefined,
+  } as any;
+
+  // Records what actually reached durable storage, so a test can assert the
+  // difference between "finalized" and "cleaned up" rather than inspecting
+  // log output.
+  function makeStore() {
+    const finalized = new Map<string, string>();
+    const counters = { finalize: 0, cleanup: 0 };
+    const store = {
+      has: async () => false,
+      get: async () => undefined,
+      createWriteStream: async () => {
+        const chunks: Buffer[] = [];
+        const stream: any = new Writable({
+          write(chunk, _, callback) {
+            chunks.push(Buffer.from(chunk));
+            callback();
+          },
+        });
+        stream.__chunks = chunks;
+        return stream;
+      },
+      cleanup: async () => {
+        counters.cleanup++;
+      },
+      finalize: async (stream: any, hash: string) => {
+        counters.finalize++;
+        finalized.set(hash, Buffer.concat(stream.__chunks).toString());
+      },
+      delete: async () => undefined,
+    } as unknown as ContiguousDataStore;
+    return { store, finalized, counters };
+  }
+
+  // `payload` is what upstream sends AND what it declares as its size — the
+  // whole point of the bug being fixed is that a truncating peer reports a
+  // Content-Length consistent with its own truncated body.
+  function makeSource(payload: string): ContiguousDataSource {
+    return {
+      getData: async () => ({
+        stream: new Readable({
+          read() {
+            this.push(payload);
+            this.push(null);
+          },
+        }),
+        size: payload.length,
+        verified: false,
+        trusted: true,
+        cached: false,
+      }),
+    } as unknown as ContiguousDataSource;
+  }
+
+  function makeCache(attributes: any, store: ContiguousDataStore) {
+    return new ReadThroughDataCache({
+      log,
+      dataSource: makeSource('R'),
+      dataStore: store,
+      metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+      contiguousDataIndex: dataIndex,
+      dataContentAttributeImporter: attributeImporter,
+      dataAttributesStore: {
+        getDataAttributes: async () =>
+          attributes instanceof Error ? Promise.reject(attributes) : attributes,
+        setDataAttributes: async () => undefined,
+      } as any,
+    });
+  }
+
+  async function drain(result: any) {
+    try {
+      for await (const _ of result.stream) {
+        // discard
+      }
+    } catch {
+      // discard
+    }
+    // let the stream 'end' handler finish its async cache decision
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  it('refuses to cache a 1-byte body when the item is indexed as 24 MB', async () => {
+    // The real DwObkWEd… case: a RIFF header byte cached as the whole file.
+    const { store, counters, finalized } = makeStore();
+    const cache = makeCache({ itemSize: 24106479 }, store);
+
+    await drain(await cache.getData({ id: 'short-id' }));
+
+    assert.equal(counters.finalize, 0, 'must not finalize a fragment');
+    assert.equal(
+      counters.cleanup >= 1,
+      true,
+      'staging file must be cleaned up',
+    );
+    assert.equal(
+      finalized.size,
+      0,
+      'nothing may be bound to the fragment hash',
+    );
+  });
+
+  it('still caches a payload that is only shorter by an ANS-104 header', async () => {
+    // itemSize covers header + payload, so the guard must tolerate that gap.
+    const payload = 'x'.repeat(4096);
+    const { store, counters } = makeStore();
+    const cache = new ReadThroughDataCache({
+      log,
+      dataSource: makeSource(payload),
+      dataStore: store,
+      metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+      contiguousDataIndex: dataIndex,
+      dataContentAttributeImporter: attributeImporter,
+      dataAttributesStore: {
+        getDataAttributes: async () => ({ itemSize: payload.length + 1131 }),
+        setDataAttributes: async () => undefined,
+      } as any,
+    });
+
+    await drain(await cache.getData({ id: 'ok-id' }));
+
+    assert.equal(counters.finalize, 1, 'a legitimate payload must still cache');
+  });
+
+  it('does not reject when the item size is unknown', async () => {
+    // No ANS-104 record (e.g. an L1 transaction): the guard must stay out of
+    // the way rather than refuse to cache anything it cannot cross-check.
+    const { store, counters } = makeStore();
+    const cache = makeCache({}, store);
+
+    await drain(await cache.getData({ id: 'no-attrs-id' }));
+
+    assert.equal(counters.finalize, 1);
+  });
+
+  it("does not reject when the guard's attribute lookup throws", async () => {
+    // A transient index error at guard time must not become a silent cache
+    // bypass. Only the guard's own lookup fails here — the earlier lookup in
+    // getData succeeds, so this isolates the guard rather than the whole path.
+    const { store, counters } = makeStore();
+    let calls = 0;
+    const cache = new ReadThroughDataCache({
+      log,
+      dataSource: makeSource('R'),
+      dataStore: store,
+      metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+      contiguousDataIndex: dataIndex,
+      dataContentAttributeImporter: attributeImporter,
+      dataAttributesStore: {
+        getDataAttributes: async () => {
+          calls++;
+          if (calls === 1) return undefined;
+          throw new Error('index unavailable');
+        },
+        setDataAttributes: async () => undefined,
+      } as any,
+    });
+
+    await drain(await cache.getData({ id: 'throws-id' }));
+
+    assert.equal(calls > 1, true, 'the guard must have attempted a lookup');
+    assert.equal(
+      counters.finalize,
+      1,
+      'a lookup failure must not block caching',
+    );
+  });
+});
