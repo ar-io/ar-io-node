@@ -713,7 +713,14 @@ services:
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-83-pre}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       # Reference Gateway Configuration
-      - REFERENCE_GATEWAY_HOSTS=${REFERENCE_GATEWAY_HOSTS:-}
+      # The bundled observer references THIS node's own gateway by default (its
+      # ARNS_ROOT_HOST), rather than external gateways. Since the gateway now
+      # resolves ArNS on-demand (authoritatively, from chain), self-reference is
+      # both authoritative and more decentralized — the observer forms its own
+      # chain-derived view and the protocol aggregates observers by majority.
+      # Falls back to the observer's own default (turbo/ar-io.net) if neither
+      # REFERENCE_GATEWAY_HOSTS nor ARNS_ROOT_HOST is set.
+      - REFERENCE_GATEWAY_HOSTS=${REFERENCE_GATEWAY_HOSTS:-${ARNS_ROOT_HOST:-}}
       - REFERENCE_GATEWAY_NETWORK_ONLY=${REFERENCE_GATEWAY_NETWORK_ONLY:-}
       - REFERENCE_GATEWAY_NETWORK_FALLBACK=${REFERENCE_GATEWAY_NETWORK_FALLBACK:-}
       - REFERENCE_GATEWAY_CONSENSUS_SIZE=${REFERENCE_GATEWAY_CONSENSUS_SIZE:-}
