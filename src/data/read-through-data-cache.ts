@@ -40,10 +40,15 @@ const MAX_MRU_ARNS_NAMES_LENGTH = 10;
 /**
  * Slack allowed between an ANS-104 item's `itemSize` (header + payload) and
  * the payload actually retrieved, used by {@link
- * ReadThroughDataCache.isShortRead}. A real header is far smaller -- signature
- * and owner are 512 bytes each for RSA and tags are capped at 4096 by the spec
- * -- so this is a deliberately generous bound that cannot reject a legitimate
- * payload.
+ * ReadThroughDataCache.isShortRead}.
+ *
+ * A real header cannot approach this. Taking the largest signature type in
+ * `SIG_CONFIG` (type 6, multi-Aptos: 2052-byte signature + 1025-byte owner)
+ * with the spec's maximum 4096 bytes of tags, plus target, anchor and the
+ * length fields, the worst case is 7257 bytes -- so this bound carries a 2.26x
+ * margin and cannot reject a legitimate payload for any signature type. Note
+ * the worst case is NOT the RSA 512+512: an allowance derived from RSA alone
+ * would be too tight.
  */
 const MAX_DATA_ITEM_HEADER_BYTES = 16384;
 
@@ -403,12 +408,18 @@ export class ReadThroughDataCache implements ContiguousDataSource {
    * through this comparison.
    *
    * `itemSize` covers header + payload while `bytesReceived` is payload only,
-   * so the comparison is deliberately slack by one ANS-104 header. The spec
-   * bounds that well below {@link MAX_DATA_ITEM_HEADER_BYTES} (signature and
-   * owner are 512 bytes each for RSA, tags at most 4096), so a legitimate
-   * payload can never trip this while a fragment orders of magnitude too small
-   * always does. Undersize only: an oversize body is already rejected by the
-   * `data.size` comparison above.
+   * so the comparison is deliberately slack by one ANS-104 header, bounded by
+   * {@link MAX_DATA_ITEM_HEADER_BYTES} at 2.26x the worst case any signature
+   * type can produce. A legitimate payload can never trip this, while a
+   * fragment orders of magnitude too small always does. Undersize only: an
+   * oversize body is already rejected by the `data.size` comparison above.
+   *
+   * Deliberately NOT compared against the attributes' payload size (`size`):
+   * that resolves as `txOrItemRow?.data_size ?? dataRow?.data_size`, and the
+   * fallback is `contiguous_data.data_size` -- the very column a poisoned
+   * entry corrupts. Whenever the bundles row is missing, an exact comparison
+   * against it would read 1 against a 1-byte body and wave the fragment
+   * through, disarming this guard in exactly the case it exists for.
    *
    * @returns the offending `itemSize` when the read is short, otherwise
    *   `undefined`. Attribute lookup failures return `undefined` -- this guard
