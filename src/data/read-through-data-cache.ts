@@ -431,25 +431,37 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       return undefined;
     }
 
+    // Validated as finite numbers rather than merely !== undefined. The types
+    // say `number | undefined`, but the values reach here straight off a raw
+    // SQLite row (`selectDataItemAttributes` is returned unmapped), so a NULL
+    // column arrives as `null` -- and `itemSize` in particular is produced by
+    // `data_item_size ?? dataItemAttributes?.size`, which yields `null` when
+    // both sides are NULL rather than falling through to undefined.
+    //
+    // A null would currently land in the stand-down path anyway, but only by
+    // way of `headerLength >= null` coercing to `>= 0`. That is not a property
+    // worth depending on: it is invisible at the call site and inverts if the
+    // comparison is ever reordered.
     const itemSize = attributes?.itemSize;
     const rootDataOffset = attributes?.rootDataOffset;
     const rootDataItemOffset = attributes?.rootDataItemOffset;
     if (
-      itemSize === undefined ||
-      rootDataOffset === undefined ||
-      rootDataItemOffset === undefined
+      !Number.isFinite(itemSize) ||
+      !Number.isFinite(rootDataOffset) ||
+      !Number.isFinite(rootDataItemOffset)
     ) {
       return undefined;
     }
 
     // Both offsets are absolute positions in the root transaction's payload,
     // so their difference is this item's header length exactly.
-    const headerLength = rootDataOffset - rootDataItemOffset;
-    if (headerLength < 0 || headerLength >= itemSize) {
+    const headerLength =
+      (rootDataOffset as number) - (rootDataItemOffset as number);
+    if (headerLength < 0 || headerLength >= (itemSize as number)) {
       return undefined;
     }
 
-    const expectedPayloadSize = itemSize - headerLength;
+    const expectedPayloadSize = (itemSize as number) - headerLength;
     return bytesReceived < expectedPayloadSize
       ? { expectedPayloadSize }
       : undefined;

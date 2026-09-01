@@ -3980,6 +3980,32 @@ describe('ReadThroughDataCache short-read rejection', () => {
     assert.equal(counters.finalize, 1);
   });
 
+  it('stands down when itemSize is null (raw NULL column)', async () => {
+    const { cache, counters } = cacheFor('R', {
+      itemSize: null,
+      rootDataItemOffset: 1628,
+      rootDataOffset: 2759,
+    });
+
+    await drain(await cache.getData({ id: 'null-itemsize' }));
+
+    // Cannot compute a payload without itemSize, so it must fail open rather
+    // than compute a nonsense one from a coerced null.
+    assert.equal(counters.finalize, 1);
+  });
+
+  it('stands down when an offset is null (raw NULL column)', async () => {
+    const { cache, counters } = cacheFor('R', {
+      itemSize: 24106479,
+      rootDataItemOffset: null,
+      rootDataOffset: 2759,
+    });
+
+    await drain(await cache.getData({ id: 'null-offset' }));
+
+    assert.equal(counters.finalize, 1);
+  });
+
   it('does not reject when the item size is unknown', async () => {
     // No ANS-104 record (e.g. an L1 transaction): the guard must stay out of
     // the way rather than refuse to cache anything it cannot cross-check.
