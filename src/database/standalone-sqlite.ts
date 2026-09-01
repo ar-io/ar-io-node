@@ -1924,10 +1924,16 @@ export class StandaloneSqliteDatabaseWorker {
       });
     }
 
-    if (this.insertDataHashCache.get(hash)) {
+    // Dedupe on (hash, content type) rather than hash alone. `insertDataHash`
+    // can now heal a row whose content type is the `application/octet-stream`
+    // placeholder, and keying on the hash alone would let this in-process memo
+    // swallow exactly the write that heals it — the repeat suppressed is the
+    // one carrying the better value.
+    const insertDataHashCacheKey = `${hash}|${contentType ?? ''}`;
+    if (this.insertDataHashCache.get(insertDataHashCacheKey)) {
       return;
     }
-    this.insertDataHashCache.set(hash, true);
+    this.insertDataHashCache.set(insertDataHashCacheKey, true);
 
     this.stmts.data.insertDataHash.run({
       hash: hashBuffer,
@@ -4361,11 +4367,18 @@ export class StandaloneSqliteDatabase
     // suppress ones it allowed, and the extra writes are limited to genuine
     // corrections — so the protection this cache exists to give the write
     // queue is preserved.
+    //
+    // `contentType` is in the key for the same reason: a retrieval that
+    // resolved the item's content type only from the bundle around it claims
+    // the slot first, and the write carrying the item's real type — the one
+    // that heals `contiguous_data.original_source_content_type` — arrives
+    // inside the same window and would otherwise be the one dropped.
     const dedupeKey = [
       id,
       rootTransactionId ?? '',
       rootDataItemOffset ?? '',
       rootDataOffset ?? '',
+      contentType ?? '',
     ].join('|');
 
     if (this.saveDataContentAttributesCache.get(dedupeKey)) {
