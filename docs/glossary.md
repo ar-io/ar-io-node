@@ -301,6 +301,24 @@ target rather than evicting a fixed number of coldest rows — and it **must**
 honour an age floor). Contrast the
 [filesystem-walk reclaimer](#filesystem-walk-reclaimer).
 
+<a id="original-source-content-type"></a> **Original Source Content Type** - The
+`contiguous_data.original_source_content_type` column: the content type a
+response is served with when the item is not in the local index.
+`getDataAttributes` prefers the tags-derived content type from
+`stable_transactions` / `new_transactions` / `bundles.*_data_items` and falls
+back to this column, so for any data item whose parent [bundle](#bundle) this
+gateway has never unbundled, this column _is_ the content type. Two properties
+make it easy to get wrong. It is keyed by the **data hash**, not the data item
+ID, so it is shared by every byte-identical upload — re-uploading a file cannot
+give it a different content type here. And it only ever transitions from the
+`application/octet-stream` placeholder (or NULL) to a real type, never between
+two real types, so two byte-identical items with conflicting `Content-Type` tags
+cannot flap the row. The placeholder is what a
+[bundle](#bundle)-range read reports — an ANS-104 bundle's own content type —
+so a data item served without its tags ever being read would otherwise be typed
+as the envelope around it. Unbundling the parent bundle
+(`POST /ar-io/admin/queue-bundle`) takes precedence over this column entirely.
+
 ## Data Verification
 
 **Data Verification** - The process of cryptographically verifying data
