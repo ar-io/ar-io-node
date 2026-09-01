@@ -2950,9 +2950,20 @@ export const ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
   '3000',
 );
 
+// Budget for the LAST resolver in the chain, which is allowed to run longer
+// than the others because nothing follows it.
+//
+// Lowered from 30000 alongside the on-demand-first default above, because that
+// flip is what makes this timeout user-visible. The gateway resolver is now
+// last, so a name that does not exist costs the full on-demand attempt
+// (bounded by ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS, ~3s) and then the whole of
+// this budget before 404ing. At 30000 that is a ~33s 404; measured on a
+// production gateway running this order since 2026-06-08, and the reason that
+// operator has overridden it to 5000 ever since. Real names are unaffected:
+// on-demand resolves them first and never reaches this resolver.
 export const ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
   'ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS',
-  '30000',
+  '5000',
 );
 
 export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(

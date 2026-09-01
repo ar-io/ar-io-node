@@ -295,6 +295,13 @@ disk and take down every container on the host.
   (`ARNS_ROOT_HOST`) by default, so its reference resolution is authoritative and
   local.
 
+  `ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS` drops from `30000` to `5000` as part
+  of the same change. The order flip makes the gateway resolver last, so a name
+  that does not exist costs the on-demand attempt (~3s) plus that entire budget
+  before 404ing — a ~33s 404 at the old default. Names that do exist are
+  unaffected, since on-demand resolves them first and never reaches the last
+  resolver.
+
 - **Untrusted gateways no longer receive `ar-io-*` provenance query params** —
   gateways configured with `"trusted": false` in `TRUSTED_GATEWAYS_URLS` now get
   provenance via `X-AR-IO-*` headers only. Required for CDN-fronted gateways
