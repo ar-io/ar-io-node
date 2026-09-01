@@ -25,6 +25,7 @@ import { KvJsonStore } from '../store/kv-attributes-store.js';
 import { startChildSpan } from '../tracing.js';
 import {
   ContiguousData,
+  ContiguousDataAttributes,
   ContiguousDataAttributesStore,
   ContiguousDataCacheIndex,
   ContiguousDataIndex,
@@ -36,21 +37,6 @@ import {
 import { DataContentAttributeImporter } from '../workers/data-content-attribute-importer.js';
 
 const MAX_MRU_ARNS_NAMES_LENGTH = 10;
-
-/**
- * Slack allowed between an ANS-104 item's `itemSize` (header + payload) and
- * the payload actually retrieved, used by {@link
- * ReadThroughDataCache.isShortRead}.
- *
- * A real header cannot approach this. Taking the largest signature type in
- * `SIG_CONFIG` (type 6, multi-Aptos: 2052-byte signature + 1025-byte owner)
- * with the spec's maximum 4096 bytes of tags, plus target, anchor and the
- * length fields, the worst case is 7257 bytes -- so this bound carries a 2.26x
- * margin and cannot reject a legitimate payload for any signature type. Note
- * the worst case is NOT the RSA 512+512: an allowance derived from RSA alone
- * would be too tight.
- */
-const MAX_DATA_ITEM_HEADER_BYTES = 16384;
 
 /**
  * How a leader's foreground fetch ended, as seen by callers waiting on it.
@@ -388,8 +374,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   }
 
   /**
-   * Decide whether a completed full-body retrieval is implausibly small for
-   * the data item it claims to be, and must therefore not be cached.
+   * Decide whether a completed full-body retrieval is smaller than the payload
+   * this data item is indexed as having, and must therefore not be cached.
    *
    * The existing `bytesReceived !== data.size` check cannot catch this.
    * `data.size` is taken from the upstream `Content-Length`, so a peer that is
@@ -401,18 +387,12 @@ export class ReadThroughDataCache implements ContiguousDataSource {
    * item sharing a first byte collapses onto a single blob -- every truncated
    * RIFF file lands on `sha256("R")`.
    *
-   * `itemSize` is the cross-check that closes this, because it does not come
-   * from retrieval: it is the ANS-104 item length recorded when the bundle
-   * header was parsed (`data_item_size`, falling back to the bundles index).
-   * A poisoned `contiguous_data.data_size` therefore cannot launder itself
-   * through this comparison.
-   *
-   * `itemSize` covers header + payload while `bytesReceived` is payload only,
-   * so the comparison is deliberately slack by one ANS-104 header, bounded by
-   * {@link MAX_DATA_ITEM_HEADER_BYTES} at 2.26x the worst case any signature
-   * type can produce. A legitimate payload can never trip this, while a
-   * fragment orders of magnitude too small always does. Undersize only: an
-   * oversize body is already rejected by the `data.size` comparison above.
+   * The expected payload size is reconstructed from three attributes that do
+   * not come from retrieval: `itemSize` (the ANS-104 item length recorded when
+   * the bundle header was parsed) minus the header length, which is the gap
+   * between where the item starts and where its data starts. A poisoned
+   * `contiguous_data.data_size` therefore cannot launder itself through this
+   * comparison.
    *
    * Deliberately NOT compared against the attributes' payload size (`size`):
    * that resolves as `txOrItemRow?.data_size ?? dataRow?.data_size`, and the
@@ -421,19 +401,28 @@ export class ReadThroughDataCache implements ContiguousDataSource {
    * against it would read 1 against a 1-byte body and wave the fragment
    * through, disarming this guard in exactly the case it exists for.
    *
-   * @returns the offending `itemSize` when the read is short, otherwise
-   *   `undefined`. Attribute lookup failures return `undefined` -- this guard
-   *   refuses to cache, so it must never turn a transient index error into a
-   *   silent cache bypass.
+   * The header length is measured rather than bounded by a constant. ANS-104
+   * tags are variable-length and `processBundleStream` reads whatever
+   * `tagsBytesLength` an item declares -- it does not apply `DataItem.verify`'s
+   * 4 KiB tag limit -- so a legitimately indexed item can carry a header of
+   * any size. Any fixed allowance would eventually classify such an item's
+   * complete payload as short and silently stop caching it.
+   *
+   * Undersize only: an oversize body is already rejected by the `data.size`
+   * comparison above.
+   *
+   * @returns the expected payload size when the read is short, otherwise
+   *   `undefined`. Missing attributes and lookup failures both return
+   *   `undefined` -- this guard refuses to cache, so it must never turn an
+   *   incomplete index or a transient error into a silent cache bypass.
    */
   private async isShortRead(
     id: string,
     bytesReceived: number,
-  ): Promise<{ itemSize: number } | undefined> {
-    let itemSize: number | undefined;
+  ): Promise<{ expectedPayloadSize: number } | undefined> {
+    let attributes: ContiguousDataAttributes | undefined;
     try {
-      itemSize = (await this.dataAttributesStore.getDataAttributes(id))
-        ?.itemSize;
+      attributes = await this.dataAttributesStore.getDataAttributes(id);
     } catch (error: any) {
       this.log.debug('Short-read check skipped; attribute lookup failed', {
         id,
@@ -442,12 +431,27 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       return undefined;
     }
 
-    if (itemSize === undefined || itemSize <= MAX_DATA_ITEM_HEADER_BYTES) {
+    const itemSize = attributes?.itemSize;
+    const rootDataOffset = attributes?.rootDataOffset;
+    const rootDataItemOffset = attributes?.rootDataItemOffset;
+    if (
+      itemSize === undefined ||
+      rootDataOffset === undefined ||
+      rootDataItemOffset === undefined
+    ) {
       return undefined;
     }
 
-    return bytesReceived + MAX_DATA_ITEM_HEADER_BYTES < itemSize
-      ? { itemSize }
+    // Both offsets are absolute positions in the root transaction's payload,
+    // so their difference is this item's header length exactly.
+    const headerLength = rootDataOffset - rootDataItemOffset;
+    if (headerLength < 0 || headerLength >= itemSize) {
+      return undefined;
+    }
+
+    const expectedPayloadSize = itemSize - headerLength;
+    return bytesReceived < expectedPayloadSize
+      ? { expectedPayloadSize }
       : undefined;
   }
 
@@ -1481,21 +1485,22 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     });
                     await this.dataStore.cleanup(cacheStream);
                   } else if (shortRead !== undefined) {
-                    // The body agreed with its own Content-Length but is far
-                    // too small for this data item. See {@link isShortRead}:
-                    // caching it here is what makes a truncated body durable
-                    // and contagious.
+                    // The body agreed with its own Content-Length but is
+                    // smaller than this item's indexed payload. See {@link
+                    // isShortRead}: caching it here is what makes a truncated
+                    // body durable and contagious.
                     metrics.shortReadsRejectedTotal.inc();
                     span.addEvent('Skipping cache storage - short read', {
-                      'data.item_size': shortRead.itemSize,
+                      'data.expected_payload_size':
+                        shortRead.expectedPayloadSize,
                       'data.received_size': bytesReceived,
                     });
                     span.setAttribute('cache.operation.short_read', true);
                     this.log.warn(
-                      'Retrieved body far smaller than the indexed data item size - not caching',
+                      'Retrieved body smaller than the indexed data item payload - not caching',
                       {
                         id,
-                        itemSize: shortRead.itemSize,
+                        expectedPayloadSize: shortRead.expectedPayloadSize,
                         receivedSize: bytesReceived,
                         reportedSize: data.size,
                       },

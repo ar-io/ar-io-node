@@ -3890,7 +3890,17 @@ describe('ReadThroughDataCache short-read rejection', () => {
   it('refuses to cache a 1-byte body when the item is indexed as 24 MB', async () => {
     // The real DwObkWEd… case: a RIFF header byte cached as the whole file.
     const { store, counters, finalized } = makeStore();
-    const cache = makeCache({ itemSize: 24106479 }, store);
+    // Real attribute values from the DwObkWEd… row: header is
+    // 2759 - 1628 = 1131, so the payload is 24,105,348 — exactly the size the
+    // file's RIFF header declares.
+    const cache = makeCache(
+      {
+        itemSize: 24106479,
+        rootDataItemOffset: 1628,
+        rootDataOffset: 2759,
+      },
+      store,
+    );
 
     await drain(await cache.getData({ id: 'short-id' }));
 
@@ -3907,9 +3917,7 @@ describe('ReadThroughDataCache short-read rejection', () => {
     );
   });
 
-  it('still caches a payload that is only shorter by an ANS-104 header', async () => {
-    // itemSize covers header + payload, so the guard must tolerate that gap.
-    const payload = 'x'.repeat(4096);
+  function cacheFor(payload: string, attributes: any) {
     const { store, counters } = makeStore();
     const cache = new ReadThroughDataCache({
       log,
@@ -3919,14 +3927,57 @@ describe('ReadThroughDataCache short-read rejection', () => {
       contiguousDataIndex: dataIndex,
       dataContentAttributeImporter: attributeImporter,
       dataAttributesStore: {
-        getDataAttributes: async () => ({ itemSize: payload.length + 1131 }),
+        getDataAttributes: async () => attributes,
         setDataAttributes: async () => undefined,
       } as any,
+    });
+    return { cache, counters };
+  }
+
+  it('caches a payload that exactly matches the indexed payload size', async () => {
+    const payload = 'x'.repeat(4096);
+    const { cache, counters } = cacheFor(payload, {
+      itemSize: payload.length + 1131,
+      rootDataItemOffset: 1628,
+      rootDataOffset: 1628 + 1131,
     });
 
     await drain(await cache.getData({ id: 'ok-id' }));
 
     assert.equal(counters.finalize, 1, 'a legitimate payload must still cache');
+  });
+
+  it('caches an item whose header is far larger than any fixed allowance', async () => {
+    // ANS-104 tags are variable-length and processBundleStream reads whatever
+    // tagsBytesLength an item declares — it does not apply DataItem.verify's
+    // 4 KiB tag limit — so a legitimately indexed item can carry a header of
+    // any size. A guard using a fixed slack would classify this complete
+    // payload as short and silently stop caching it.
+    const payload = 'x'.repeat(4096);
+    const hugeHeader = 512 * 1024;
+    const { cache, counters } = cacheFor(payload, {
+      itemSize: payload.length + hugeHeader,
+      rootDataItemOffset: 1000,
+      rootDataOffset: 1000 + hugeHeader,
+    });
+
+    await drain(await cache.getData({ id: 'big-header-id' }));
+
+    assert.equal(
+      counters.finalize,
+      1,
+      'a large header must not be mistaken for a truncated payload',
+    );
+  });
+
+  it('does not reject when the offsets needed for the header are missing', async () => {
+    // itemSize alone cannot separate header from payload, so the guard must
+    // stand down rather than guess.
+    const { cache, counters } = cacheFor('R', { itemSize: 24106479 });
+
+    await drain(await cache.getData({ id: 'no-offsets-id' }));
+
+    assert.equal(counters.finalize, 1);
   });
 
   it('does not reject when the item size is unknown', async () => {
