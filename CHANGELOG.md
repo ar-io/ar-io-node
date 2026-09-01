@@ -4,27 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-- **Gateways leaving the network are no longer used as peers** — `updatePeerList`
-  admitted every gateway in the registry, filtering only our own wallet. A
-  gateway is `leaving` either because its operator withdrew it or because the
-  network marked it non-responsive for 30 consecutive epochs, so the status is
-  both a statement of intent and a consensus liveness signal — and in both cases
-  it should not be receiving requests.
+## [Release 83] - 2026-09-01
 
-  Measured on turbo-gateway gw1 (2026-08-28): **334 of 646** registered gateways
-  were `leaving`, and peer failures were dominated by them — 40% of all peer
-  errors were `ENOTFOUND` against hostnames that no longer resolve, with a
-  further 18% TLS failures and 14% 5xx. Roughly half of every peer draw was
-  spent rediscovering, one DNS timeout at a time, something the registry already
-  knew.
-
-  Controlled by `SKIP_LEAVING_GATEWAYS` (default true). Only an explicit
-  `leaving` is excluded: a gateway whose status is absent or unrecognised is
-  kept, so a registry or SDK that stops reporting status degrades to the
-  previous behaviour instead of emptying the peer list. Exclusions are counted
-  by `ar_io_peers_skipped_leaving_total`.
-
-## [Unreleased]
+This is a **recommended release** focused on **data-retrieval correctness,
+chunk cache management, and decentralized ArNS resolution**. Key highlights
+include a fix for truncated upstream bodies being cached and re-served as
+complete data — the mechanism by which a one-byte fragment propagates between
+gateways — plus enforcement of the blocklist on manifest-resolved paths,
+index-driven eviction and backfill for the chunk data cache, coalescing of
+concurrent requests for the same uncached object, and ArNS now resolving
+on-demand from chain by default so each gateway is self-sufficient rather than
+a client of a few trusted gateways. Gateways the registry reports as `leaving`
+are no longer used as peers or spent on observation, and the bundled observer
+is updated for ADR-0029 epoch rent refunds.
 
 ### Added
 
@@ -106,9 +98,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   busy gateway caching most of what it serves, which is not a change to make
   on an operator's behalf; set them explicitly per deployment.
 
+- **Index-driven chunk cache eviction and backfill** — the chunk data cache is
+  now tracked in a `chunk_data_cache` index, so eviction reclaims by age and
+  size against disk watermarks instead of walking the filesystem, and a
+  backfill reconciler adopts pre-existing files into the index. Tuned by the
+  `CHUNK_DATA_CACHE_INDEX_*` variables (eviction interval, batch size, target
+  bytes, unlink concurrency, update-on-read) and
+  `CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS`.
+
 ### Changed
 
+- **ArNS resolves on-demand (from chain) by default** — the default
+  `ARNS_RESOLVER_PRIORITY_ORDER` is now `on-demand,gateway`. Each gateway reads
+  the ANT record itself and only falls back to a trusted-gateway hop if that
+  fails, making gateways self-sufficient rather than clients of a few trusted
+  gateways. The bundled observer now references this node's own gateway
+  (`ARNS_ROOT_HOST`) by default. `ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS` drops
+  from `30000` to `5000` in the same change: with the gateway resolver now last,
+  a name that does not exist previously cost ~3s on-demand plus the full 30s
+  budget before 404ing. Restore the old behaviour with
+  `ARNS_RESOLVER_PRIORITY_ORDER=gateway,on-demand`.
+
+- **Gateways leaving the network are no longer used as peers** — a gateway is
+  `leaving` either because its operator withdrew it or because the network
+  marked it non-responsive for 30 consecutive epochs, so it should not be
+  receiving requests. Measured on turbo-gateway gw1: 334 of 646 registered
+  gateways were `leaving`, and 40% of all peer errors were `ENOTFOUND` against
+  hostnames that no longer resolve. Controlled by `SKIP_LEAVING_GATEWAYS`
+  (default true); only an explicit `leaving` is excluded, so a registry that
+  stops reporting status degrades to the previous behaviour rather than
+  emptying the peer list. Counted by `ar_io_peers_skipped_leaving_total`.
+
+- **Bundled observer updated to `0e956b08`** — adds the matching
+  leaving-gateway filter on the observation path (about half of each epoch's
+  observation budget was spent on gateways that always fail) and bumps
+  `@ar.io/sdk` to 4.3.0-alpha.2 for ADR-0029, so `close_epoch` refunds epoch
+  rent to the account that created the epoch.
+
 ### Fixed
+
+- **Truncated upstream bodies are no longer cached** — `data.size` comes from
+  the peer's `Content-Length`, so a gateway serving a fragment reports a size
+  matching the bytes it sends: the existing size check passed and the fragment
+  was stored as complete, then served on to the next gateway. Retrieved bodies
+  are now also checked against the item's indexed ANS-104 payload size, which
+  is derived from the bundle header rather than from retrieval. Rejections are
+  counted by `short_reads_rejected_total`. The check stands down when those
+  attributes are unavailable, so L1 transactions are unaffected.
+
+- **Blocklisted data items are enforced on manifest paths** — an item blocked
+  by ID or hash still returned 200 through any manifest or ArNS path that
+  resolved to it, while `/raw/<id>` correctly returned 451. The resolved-item
+  checks now also respond 503 rather than serving when the blocklist backend
+  errors, so an outage cannot silently reopen the bypass.
+
+- **x402 CDP facilitator authentication** — the CDP facilitator was not
+  authenticated with its API key id, the fallback to the configured facilitator
+  URL failed silently rather than surfacing, a blank credential was treated as
+  configured, and the paywall client key was conflated with the facilitator
+  credential. Settlement must now be confirmed before a payment is treated as
+  successful.
 
 - **Concurrent requests for one uncached object no longer stampede** — on a
   full-object cache miss `ReadThroughDataCache.getData` ran an upstream fetch
@@ -281,26 +330,6 @@ disk and take down every container on the host.
   acceptance split (#819).
 
 ### Changed
-
-- **ArNS resolves on-demand (from chain) by default** — the default
-  `ARNS_RESOLVER_PRIORITY_ORDER` is now `on-demand,gateway` (was
-  `gateway,on-demand`). Each gateway resolves ArNS names authoritatively from the
-  ANT record itself, falling back to a trusted-gateway hop only if the on-demand
-  resolver fails. This makes gateways self-sufficient rather than clients of a few
-  trusted gateways (more decentralized) and reads the source of truth instead of
-  another gateway's possibly-stale cached answer. On-demand adds a chain read per
-  cache-miss resolution (cheap on Solana RPC; heavier as an AO CU dryrun) — set
-  `ARNS_RESOLVER_PRIORITY_ORDER=gateway,on-demand` to restore the prior behavior.
-  The bundled observer now references this node's own gateway
-  (`ARNS_ROOT_HOST`) by default, so its reference resolution is authoritative and
-  local.
-
-  `ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS` drops from `30000` to `5000` as part
-  of the same change. The order flip makes the gateway resolver last, so a name
-  that does not exist costs the on-demand attempt (~3s) plus that entire budget
-  before 404ing — a ~33s 404 at the old default. Names that do exist are
-  unaffected, since on-demand resolves them first and never reaches the last
-  resolver.
 
 - **Untrusted gateways no longer receive `ar-io-*` provenance query params** —
   gateways configured with `"trusted": false` in `TRUSTED_GATEWAYS_URLS` now get

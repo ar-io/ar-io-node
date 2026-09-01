@@ -307,7 +307,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-83-pre}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-83}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT=${CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT:-}
       - CHUNK_POST_MAX_CONSECUTIVE_FAILURES=${CHUNK_POST_MAX_CONSECUTIVE_FAILURES:-}
@@ -643,7 +643,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-4d1c904642dbe51a69434b6bf60736481ee51286}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-0e956b0802d132b7cdc14305c93ec3a8fe61a24a}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -710,7 +710,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-83-pre}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-83}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       # Reference Gateway Configuration
       # The bundled observer references THIS node's own gateway by default (its
