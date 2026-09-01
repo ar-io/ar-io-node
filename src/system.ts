@@ -2051,6 +2051,93 @@ if (dataVerificationWorker !== undefined) {
   dataVerificationWorker.start();
 }
 
+//
+// IPFS subsystem (conditionally initialized)
+//
+
+import { KuboDataSource } from './ipfs/kubo-data-source.js';
+import { IpfsFsCache } from './ipfs/ipfs-cache.js';
+import { IpfsService } from './ipfs/ipfs-service.js';
+import { IpfsPinner } from './ipfs/ipfs-pinner.js';
+import { createIpfsRateLimiter } from './ipfs/ipfs-rate-limiter.js';
+import { RateLimiter } from './limiter/types.js';
+
+export let ipfsService: IpfsService | undefined;
+export let ipfsRateLimiter: RateLimiter | undefined;
+export let ipfsPinner: IpfsPinner | undefined;
+
+if (config.IPFS_ENABLED) {
+  log.info('IPFS subsystem enabled, initializing...');
+
+  const kuboDataSource = new KuboDataSource({
+    log,
+    kuboUrl: config.IPFS_KUBO_URL,
+    requestTimeoutMs: config.IPFS_KUBO_REQUEST_TIMEOUT_MS,
+    streamStallTimeoutMs: config.IPFS_STREAM_STALL_TIMEOUT_MS,
+    maxConcurrent: config.IPFS_KUBO_MAX_CONCURRENT_REQUESTS,
+    maxRequestMs: config.IPFS_KUBO_MAX_REQUEST_MS,
+  });
+
+  const ipfsCache = new IpfsFsCache({
+    log,
+    basePath: config.IPFS_CACHE_PATH,
+    maxSizeBytes: config.IPFS_CACHE_MAX_SIZE_BYTES,
+    eventEmitter,
+  });
+
+  // Dedicated negative cache for IPFS. It short-circuits absent/unpinned CIDs
+  // like the Arweave one does, but MUST be a separate instance: the negative
+  // cache also tracks a rolling success/failure health window that gates
+  // promotions, and mixing IPFS traffic into the Arweave window would let one
+  // upstream's health mask or suppress the other's (a Kubo 404 flood suppressing
+  // legit Arweave promotions, or healthy IPFS traffic hiding an Arweave outage).
+  const ipfsNegativeCache = new NegativeDataCache({
+    log,
+    enabled: config.NEGATIVE_CACHE_ENABLED,
+    maxSize: config.NEGATIVE_CACHE_MAX_SIZE,
+    ttlMs: config.NEGATIVE_CACHE_TTL_MS,
+    missCountThreshold: config.NEGATIVE_CACHE_MISS_COUNT_THRESHOLD,
+    missDurationMs: config.NEGATIVE_CACHE_MISS_THRESHOLD_MS,
+    missTrackerTtlMs: config.NEGATIVE_CACHE_MISS_TRACKER_TTL_MS,
+    maxTtlMs: config.NEGATIVE_CACHE_MAX_TTL_MS,
+    // IPFS retrieval timeouts are soft misses: short, non-escalating blackhole so
+    // recovering-but-slow content self-heals instead of being cached-out for hours.
+    softMissTtlMs: config.IPFS_TIMEOUT_NEGATIVE_CACHE_TTL_MS,
+    promotionHistoryTtlMs: config.NEGATIVE_CACHE_PROMOTION_HISTORY_TTL_MS,
+    healthWindowMs: config.NEGATIVE_CACHE_HEALTH_WINDOW_MS,
+    unhealthyThreshold: config.NEGATIVE_CACHE_UNHEALTHY_THRESHOLD,
+    minSampleSize: config.NEGATIVE_CACHE_HEALTH_MIN_SAMPLE_SIZE,
+    // Distinct gauge series so IPFS and Arweave negative-cache sizes don't
+    // clobber each other's unlabelled metric.
+    metricsSource: 'ipfs',
+  });
+
+  ipfsService = new IpfsService({
+    log,
+    dataSource: kuboDataSource,
+    cache: ipfsCache,
+    blockListValidator: dataBlockListValidator,
+    maxResponseSizeBytes: config.IPFS_MAX_RESPONSE_SIZE_BYTES,
+    negativeCache: ipfsNegativeCache,
+  });
+
+  ipfsRateLimiter = createIpfsRateLimiter();
+
+  if (config.IPFS_PIN_ARNS_CONTENT) {
+    ipfsPinner = new IpfsPinner({
+      log,
+      apiUrl: config.IPFS_KUBO_API_URL,
+      max: config.IPFS_PIN_MAX,
+    });
+  }
+
+  log.info('IPFS subsystem initialized', {
+    kuboUrl: config.IPFS_KUBO_URL,
+    cachePath: config.IPFS_CACHE_PATH,
+    maxCacheSize: config.IPFS_CACHE_MAX_SIZE_BYTES,
+  });
+}
+
 export const blockedNamesCache = new BlockedNamesCache({
   log,
   cacheTTL: 3600,

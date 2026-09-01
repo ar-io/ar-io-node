@@ -58,6 +58,11 @@ services:
       - ${HEADERS_DATA_PATH:-./data/headers}:/app/data/headers
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
       - ${DUCKDB_DATA_PATH:-./data/duckdb}:/app/data/duckdb
+      # The container target must match core's IPFS_CACHE_PATH (default
+      # data/ipfs-cache -> /app/data/ipfs-cache). If you change IPFS_CACHE_PATH,
+      # point it inside this mount, or the cache is written to an unmounted path
+      # and is lost when the container is recreated.
+      - ${IPFS_CACHE_DATA_PATH:-./data/ipfs-cache}:/app/data/ipfs-cache
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
@@ -161,6 +166,25 @@ services:
       - RATE_LIMITER_IP_REFILL_PER_SEC=${RATE_LIMITER_IP_REFILL_PER_SEC:-}
       - RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST=${RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST:-}
       - RATE_LIMITER_ARNS_ALLOWLIST=${RATE_LIMITER_ARNS_ALLOWLIST:-}
+      - IPFS_ENABLED=${IPFS_ENABLED:-false}
+      - IPFS_KUBO_URL=${IPFS_KUBO_URL:-http://kubo:8080}
+      - IPFS_KUBO_REQUEST_TIMEOUT_MS=${IPFS_KUBO_REQUEST_TIMEOUT_MS:-}
+      - IPFS_STREAM_STALL_TIMEOUT_MS=${IPFS_STREAM_STALL_TIMEOUT_MS:-}
+      - IPFS_KUBO_MAX_CONCURRENT_REQUESTS=${IPFS_KUBO_MAX_CONCURRENT_REQUESTS:-}
+      - IPFS_KUBO_MAX_REQUEST_MS=${IPFS_KUBO_MAX_REQUEST_MS:-}
+      - IPFS_KUBO_API_URL=${IPFS_KUBO_API_URL:-}
+      - IPFS_PIN_ARNS_CONTENT=${IPFS_PIN_ARNS_CONTENT:-}
+      - IPFS_PIN_MAX=${IPFS_PIN_MAX:-}
+      - IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES=${IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES:-}
+      - IPFS_TIMEOUT_NEGATIVE_CACHE_TTL_MS=${IPFS_TIMEOUT_NEGATIVE_CACHE_TTL_MS:-}
+      - IPFS_CACHE_PATH=${IPFS_CACHE_PATH:-}
+      - IPFS_CACHE_MAX_SIZE_BYTES=${IPFS_CACHE_MAX_SIZE_BYTES:-}
+      - IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS=${IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS:-}
+      - IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET=${IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET:-}
+      - IPFS_RATE_LIMITER_IP_REFILL_PER_SEC=${IPFS_RATE_LIMITER_IP_REFILL_PER_SEC:-}
+      - IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=${IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET:-}
+      - IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC=${IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC:-}
+      - IPFS_MAX_RESPONSE_SIZE_BYTES=${IPFS_MAX_RESPONSE_SIZE_BYTES:-}
       - NODE_MAX_OLD_SPACE_SIZE=${NODE_MAX_OLD_SPACE_SIZE:-}
       - ENABLE_FS_HEADER_CACHE_CLEANUP=${ENABLE_FS_HEADER_CACHE_CLEANUP:-}
       - ON_DEMAND_RETRIEVAL_ORDER=${ON_DEMAND_RETRIEVAL_ORDER:-}
@@ -734,6 +758,9 @@ services:
       # the .env value — see ar-io-observer src/config.ts.
       - GATEWAY_ASSESSMENT_CONCURRENCY=${GATEWAY_ASSESSMENT_CONCURRENCY:-}
       - NAME_ASSESSMENT_CONCURRENCY=${NAME_ASSESSMENT_CONCURRENCY:-}
+      # Deadline for the observer's trustless IPFS `?format=raw` fetch when
+      # assessing IPFS-target ArNS names (>= the gateway's IPFS retrieval budget).
+      - IPFS_ASSESSMENT_TIMEOUT_MS=${IPFS_ASSESSMENT_TIMEOUT_MS:-}
       # Enable the LogReportSink — logs full per-gateway assessment detail at
       # info level (off by default).
       - ENABLE_LOG_REPORT_SINK=${ENABLE_LOG_REPORT_SINK:-}
@@ -775,6 +802,22 @@ services:
       - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX=${AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX:-}
     networks:
       - ar-io-network
+
+  kubo:
+    image: ipfs/kubo:${KUBO_IMAGE_TAG:-v0.32.1}
+    profiles:
+      - ipfs
+    restart: unless-stopped
+    ports:
+      - '${IPFS_SWARM_PORT:-4001}:4001/tcp'
+      - '${IPFS_SWARM_PORT:-4001}:4001/udp'
+    environment:
+      - IPFS_PROFILE=${IPFS_PROFILE:-server}
+    volumes:
+      - ${IPFS_DATA_PATH:-./data/ipfs}:/data/ipfs
+    networks:
+      - ar-io-network
+    command: ['daemon', '--enable-gc']
 
   autoheal:
     image: willfarrell/autoheal@sha256:fd2c5500ab9210be9fa0d365162301eb0d16923f1d9a36de887f5d1751c6eb8c

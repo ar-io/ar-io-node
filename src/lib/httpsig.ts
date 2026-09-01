@@ -37,12 +37,16 @@ export const TRIGGER_HEADERS = new Set([
   'x-arweave-tags-truncated',
   'x-arns-name',
   'x-arns-resolved-id',
+  'x-arns-protocol',
   'x-arns-ttl-seconds',
   'x-arns-ant-program-id',
   'x-arns-ant-id',
   'x-arweave-chunk-data-root',
   'x-arweave-chunk-tx-id',
   'x-ar-io-chunk-source-type',
+  // IPFS headers — presence of x-ipfs-path triggers signing for IPFS responses
+  'x-ipfs-path',
+  'x-ar-io-source',
 ]);
 
 /**
@@ -63,6 +67,11 @@ export const TRIGGER_HEADERS = new Set([
 export const CO_SIGNABLE_HEADERS = new Set([
   'content-type',
   'content-digest',
+  // Bind the served byte range into the signature on a 206, so a partial
+  // response can't be passed off as the full object under a signed ETag=CID.
+  'content-range',
+  'x-cache',
+  'etag',
   'x-ar-io-root-data-item-offset',
   'x-ar-io-root-data-offset',
   'x-ar-io-root-item-offset',

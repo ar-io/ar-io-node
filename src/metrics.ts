@@ -1064,11 +1064,13 @@ export const negativeCacheEvictionsTotal = new promClient.Counter({
 export const negativeCacheSize = new promClient.Gauge({
   name: 'negative_cache_size',
   help: 'Current number of entries in the negative cache',
+  labelNames: ['source'],
 });
 
 export const missTrackerSize = new promClient.Gauge({
   name: 'miss_tracker_size',
   help: 'Current number of entries in the miss tracker',
+  labelNames: ['source'],
 });
 
 export const negativeCacheRePromotionsTotal = new promClient.Counter({
@@ -1079,6 +1081,7 @@ export const negativeCacheRePromotionsTotal = new promClient.Counter({
 export const promotionHistorySize = new promClient.Gauge({
   name: 'promotion_history_size',
   help: 'Current number of entries in promotion history tracker',
+  labelNames: ['source'],
 });
 
 export const negativeCachePromotionsSuppressedTotal = new promClient.Counter({
@@ -1815,6 +1818,44 @@ export const httpSigSigningDuration = new promClient.Histogram({
 export const httpSigErrorsTotal = new promClient.Counter({
   name: 'httpsig_errors_total',
   help: 'Total HTTPSIG signing errors',
+});
+
+//
+// IPFS metrics
+//
+
+export const ipfsRequestsTotal = new promClient.Counter({
+  name: 'ipfs_requests_total',
+  help: 'Total IPFS content requests',
+  labelNames: ['route_type', 'status'] as const,
+});
+
+export const ipfsCacheHitTotal = new promClient.Counter({
+  name: 'ipfs_cache_hit_total',
+  help: 'IPFS content cache hits',
+});
+
+export const ipfsCacheMissTotal = new promClient.Counter({
+  name: 'ipfs_cache_miss_total',
+  help: 'IPFS content cache misses',
+});
+
+export const ipfsContentSizeHistogram = new promClient.Histogram({
+  name: 'ipfs_content_size_bytes',
+  help: 'Distribution of IPFS content sizes',
+  buckets: [1024, 102400, 1048576, 10485760, 104857600],
+});
+
+export const ipfsRequestDurationHistogram = new promClient.Histogram({
+  name: 'ipfs_request_duration_seconds',
+  help: 'Duration of IPFS content requests',
+  labelNames: ['route_type', 'cache_status'] as const,
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+export const ipfsBlockedTotal = new promClient.Counter({
+  name: 'ipfs_blocked_total',
+  help: 'IPFS requests blocked by CID blocklist',
 });
 
 //

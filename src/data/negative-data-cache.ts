@@ -24,6 +24,7 @@ export class NegativeDataCache {
   private missDurationMs: number;
   private baseTtlMs: number;
   private maxTtlMs: number;
+  private softMissTtlMs: number;
   private now: () => number;
   private recentSuccesses: number = 0;
   private recentFailures: number = 0;
@@ -31,6 +32,10 @@ export class NegativeDataCache {
   private healthWindowMs: number;
   private unhealthyThreshold: number;
   private minSampleSize: number;
+  // Distinguishes this instance's gauge series from any sibling instance (e.g.
+  // the separate Arweave vs IPFS caches) so their updateGauges() calls don't
+  // clobber the same unlabelled metric.
+  private metricsSource: string;
 
   constructor({
     log,
@@ -41,10 +46,12 @@ export class NegativeDataCache {
     missDurationMs,
     missTrackerTtlMs,
     maxTtlMs,
+    softMissTtlMs,
     promotionHistoryTtlMs,
     healthWindowMs = 60_000,
     unhealthyThreshold = 0.8,
     minSampleSize = 10,
+    metricsSource = 'arweave',
     now = Date.now,
   }: {
     log: Logger;
@@ -55,18 +62,25 @@ export class NegativeDataCache {
     missDurationMs: number;
     missTrackerTtlMs?: number;
     maxTtlMs?: number;
+    softMissTtlMs?: number;
     promotionHistoryTtlMs?: number;
     healthWindowMs?: number;
     unhealthyThreshold?: number;
     minSampleSize?: number;
+    metricsSource?: string;
     now?: () => number;
   }) {
     this.log = log;
+    this.metricsSource = metricsSource;
     this.enabled = enabled;
     this.missCountThreshold = missCountThreshold;
     this.missDurationMs = missDurationMs;
     this.baseTtlMs = ttlMs;
     this.maxTtlMs = maxTtlMs ?? ttlMs;
+    // Soft (timeout-origin) blackholes use a short, non-escalating TTL so a
+    // recovering-but-slow id self-heals quickly instead of being blackholed for
+    // hours. Defaults to ttlMs so callers that never pass softMiss are unaffected.
+    this.softMissTtlMs = softMissTtlMs ?? ttlMs;
     this.now = now;
     this.healthWindowMs = healthWindowMs;
     this.unhealthyThreshold = unhealthyThreshold;
@@ -123,7 +137,14 @@ export class NegativeDataCache {
     this.recentSuccesses++;
   }
 
-  recordMiss(id: string): void {
+  /**
+   * @param opts.softMiss a soft miss is a transient availability failure (e.g.
+   *   an IPFS retrieval timeout — no live provider) rather than a definitive
+   *   "absent" (a 404). Soft misses NEVER use the single-miss re-promotion fast
+   *   path, so one transient timeout can't instantly re-blackhole a recovering id;
+   *   they always require the full miss count/duration threshold.
+   */
+  recordMiss(id: string, opts?: { softMiss?: boolean }): void {
     if (!this.enabled) {
       return;
     }
@@ -145,8 +166,9 @@ export class NegativeDataCache {
     }
 
     const priorPromotions = this.promotionHistory.get(id) ?? 0;
-    const effectiveCount = priorPromotions > 0 ? 1 : this.missCountThreshold;
-    const effectiveDuration = priorPromotions > 0 ? 0 : this.missDurationMs;
+    const usePromotionFastPath = priorPromotions > 0 && opts?.softMiss !== true;
+    const effectiveCount = usePromotionFastPath ? 1 : this.missCountThreshold;
+    const effectiveDuration = usePromotionFastPath ? 0 : this.missDurationMs;
 
     if (
       entry.count >= effectiveCount &&
@@ -158,15 +180,24 @@ export class NegativeDataCache {
         return;
       }
 
-      const ttl = Math.min(
-        this.baseTtlMs * 2 ** Math.min(priorPromotions, 30),
-        this.maxTtlMs,
-      );
+      // A soft (timeout) promotion gets a short, fixed TTL and does NOT build the
+      // escalation/re-promotion history — so a transient-but-recovering id can't
+      // be blackholed for hours (or escalate toward maxTtlMs). A hard (definitive
+      // 404) promotion keeps the exponential-backoff TTL and history.
+      const soft = opts?.softMiss === true;
+      const ttl = soft
+        ? this.softMissTtlMs
+        : Math.min(
+            this.baseTtlMs * 2 ** Math.min(priorPromotions, 30),
+            this.maxTtlMs,
+          );
       this.negativeCache.set(id, true, { ttl });
-      this.promotionHistory.set(id, priorPromotions + 1);
+      if (!soft) {
+        this.promotionHistory.set(id, priorPromotions + 1);
+      }
       this.missTracker.delete(id);
       metrics.negativeCachePromotionsTotal.inc();
-      if (priorPromotions > 0) {
+      if (!soft && priorPromotions > 0) {
         metrics.negativeCacheRePromotionsTotal.inc();
       }
       this.log.info('ID promoted to negative cache', {
@@ -210,8 +241,9 @@ export class NegativeDataCache {
   }
 
   private updateGauges(): void {
-    metrics.negativeCacheSize.set(this.negativeCache.size);
-    metrics.missTrackerSize.set(this.missTracker.size);
-    metrics.promotionHistorySize.set(this.promotionHistory.size);
+    const source = this.metricsSource;
+    metrics.negativeCacheSize.set({ source }, this.negativeCache.size);
+    metrics.missTrackerSize.set({ source }, this.missTracker.size);
+    metrics.promotionHistorySize.set({ source }, this.promotionHistory.size);
   }
 }

@@ -3143,12 +3143,13 @@ paths:
   '/ar-io/admin/block-data':
     put:
       tags: [Admin]
-      summary: Blocks transactions or data-items so your AR.IO Gateway will not serve them.
+      summary: Blocks transactions, data-items, or IPFS CIDs so your AR.IO Gateway will not serve them.
       description: |
-        Submits a TX ID/data-item ID or sha-256 content hash for content you do not want your AR.IO Gateway to serve. Once submitted, your Gateway will not respond to requests for these transactions or data-items.
+        Submits a TX ID/data-item ID, IPFS CID, or sha-256 content hash for content you do not want your AR.IO Gateway to serve. Once submitted, your Gateway will not respond to requests for these transactions, data-items, or IPFS CIDs.
 
+        For IPFS content, pass the CIDv1 base32 string (e.g. bafkreigbk3hjz6oyiywqf7eknthwc2osvt5xi6b6igwljn2qrxkthqgrp4) as the id field. The gateway returns HTTP 451 for blocked CIDs.
 
-        WARNING - Testing a TX ID here WILL result in that data being blocked by your Gateway.
+        WARNING - Testing an ID here WILL result in that data being blocked by your Gateway.
       operationId: adminBlockData
       requestBody:
         required: true
@@ -3159,7 +3160,11 @@ paths:
               properties:
                 id:
                   type: string
-                  description: TX ID for a transaction you want to block.
+                  description: >-
+                    Identifier of the content to block: an Arweave TX ID or
+                    data-item ID (43-char base64url), an IPFS CIDv1 (base32), or
+                    a sha-256 content hash. Blocked content is served as HTTP 451
+                    by the data/IPFS endpoints.
                 notes:
                   type: string
                   description: Any notes or comments related to the block data. Documentation purposes only.

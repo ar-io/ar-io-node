@@ -343,6 +343,13 @@ containing bundled data.
 human-readable names (like "my-app") to their corresponding Arweave
 [item IDs](#item-id).
 
+**Target Protocol (ANT record)** - A field on an ANT record (`0` = Arweave,
+`1` = IPFS, default `0`) declaring where the record's target lives. For an
+Arweave target the resolved id is a 43-char transaction/data-item ID served from
+the Arweave data path; for an IPFS target it is an [IPFS CID](#ipfs-cid) served
+via the Kubo IPFS path. The gateway surfaces it as `X-ArNS-Protocol` and uses it
+to route an ArNS name to either backend. See `docs/ipfs-integration.md`.
+
 **Path Resolution** - The process of interpreting URL paths to determine which
 transaction data to serve. Includes manifest resolution (looking up paths in a
 manifest's routing table), index path resolution (adding index.html), and

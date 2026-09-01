@@ -23,3 +23,5 @@ node_modules/
 # Test
 test/
 coverage/
+.claude/
+logs/

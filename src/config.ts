@@ -3800,6 +3800,124 @@ if (ENABLE_SAMPLING_DATA_SOURCE) {
 }
 
 //
+// IPFS
+//
+
+export const IPFS_ENABLED =
+  env.varOrDefault('IPFS_ENABLED', 'false') === 'true';
+
+export const IPFS_KUBO_URL = env.varOrDefault(
+  'IPFS_KUBO_URL',
+  'http://kubo:8080',
+);
+
+export const IPFS_KUBO_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
+  'IPFS_KUBO_REQUEST_TIMEOUT_MS',
+  30000,
+);
+
+export const IPFS_STREAM_STALL_TIMEOUT_MS = env.positiveIntOrDefault(
+  'IPFS_STREAM_STALL_TIMEOUT_MS',
+  30000,
+);
+
+// Max concurrent in-flight fetches to the Kubo gateway. Bounds Kubo/DHT
+// amplification from cheap-to-issue requests (HEAD, tiny Range) that each force
+// an upstream fetch before rate limiting is evaluated; excess requests fail fast
+// with 502 rather than piling onto Kubo. 0 disables the cap.
+export const IPFS_KUBO_MAX_CONCURRENT_REQUESTS = env.positiveIntOrDefault(
+  'IPFS_KUBO_MAX_CONCURRENT_REQUESTS',
+  100,
+);
+
+// Hard wall-clock cap on a single Kubo fetch. The per-chunk stall timer can't
+// see the case where a stream is paused for downstream backpressure and then
+// stalls upstream (the pause clears the stall timer); this bounds that wedge so
+// it can't hold a concurrency slot + socket indefinitely. Generous so it doesn't
+// cut legitimately-slow large transfers; 0 disables it.
+export const IPFS_KUBO_MAX_REQUEST_MS = env.positiveIntOrDefault(
+  'IPFS_KUBO_MAX_REQUEST_MS',
+  1_200_000,
+);
+
+// Kubo RPC API base (distinct from the read-only gateway on 8080). Used only for
+// pinning; the powerful admin API should not be exposed beyond the sidecar.
+export const IPFS_KUBO_API_URL = env.varOrDefault(
+  'IPFS_KUBO_API_URL',
+  'http://kubo:5001',
+);
+
+// Pin the IPFS CIDs that ArNS names resolve to, so named content this gateway
+// serves stays retrievable (read-only availability) instead of being GC'd from
+// Kubo when unpinned network-wide. Bounded set of "named" content only.
+export const IPFS_PIN_ARNS_CONTENT =
+  env.varOrDefault('IPFS_PIN_ARNS_CONTENT', 'false') === 'true';
+
+// Max distinct CIDs the pinner tracks/holds this process; oldest are unpinned
+// (FIFO) beyond this to bound local storage.
+export const IPFS_PIN_MAX = env.positiveIntOrDefault('IPFS_PIN_MAX', 10000);
+
+// Rate-limit reserve for a response whose size Kubo doesn't declare up front
+// (CAR / chunked). Reserving the full IPFS_MAX_RESPONSE_SIZE_BYTES would exceed
+// the token buckets and reject every such request; actual bytes are still bounded
+// mid-stream by IPFS_MAX_RESPONSE_SIZE_BYTES.
+export const IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES = env.positiveIntOrDefault(
+  'IPFS_RATE_LIMIT_UNKNOWN_SIZE_BYTES',
+  262144,
+);
+
+// Short, non-escalating negative-cache TTL for IPFS retrieval TIMEOUTS (soft
+// misses). Keeps a repeatedly-timing-out CID from re-hammering Kubo without
+// blackholing recovering-but-slow content for hours — it self-heals after this
+// window. Distinct from the (long, escalating) TTL used for definitive 404s.
+export const IPFS_TIMEOUT_NEGATIVE_CACHE_TTL_MS = env.positiveIntOrDefault(
+  'IPFS_TIMEOUT_NEGATIVE_CACHE_TTL_MS',
+  60000,
+);
+
+export const IPFS_CACHE_PATH = env.varOrDefault(
+  'IPFS_CACHE_PATH',
+  'data/ipfs-cache',
+);
+
+export const IPFS_CACHE_MAX_SIZE_BYTES = env.positiveIntOrDefault(
+  'IPFS_CACHE_MAX_SIZE_BYTES',
+  10 * 1024 * 1024 * 1024, // 10 GB
+);
+
+// Reserved for future cache cleanup worker. Currently unused — LRU eviction
+// in the in-memory index handles cache bounding. After restarts, disk usage
+// may temporarily exceed IPFS_CACHE_MAX_SIZE_BYTES until the index rebuilds.
+export const IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS = env.positiveIntOrDefault(
+  'IPFS_CACHE_CLEANUP_THRESHOLD_SECONDS',
+  3600,
+);
+
+export const IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET = env.positiveIntOrDefault(
+  'IPFS_RATE_LIMITER_IP_TOKENS_PER_BUCKET',
+  100000,
+);
+
+export const IPFS_RATE_LIMITER_IP_REFILL_PER_SEC = env.positiveIntOrDefault(
+  'IPFS_RATE_LIMITER_IP_REFILL_PER_SEC',
+  20,
+);
+
+export const IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET =
+  env.positiveIntOrDefault(
+    'IPFS_RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET',
+    1000000,
+  );
+
+export const IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC =
+  env.positiveIntOrDefault('IPFS_RATE_LIMITER_RESOURCE_REFILL_PER_SEC', 100);
+
+export const IPFS_MAX_RESPONSE_SIZE_BYTES = env.positiveIntOrDefault(
+  'IPFS_MAX_RESPONSE_SIZE_BYTES',
+  1 * 1024 * 1024 * 1024, // 1 GB
+);
+
+//
 // StandaloneSqlite worker pools
 //
 

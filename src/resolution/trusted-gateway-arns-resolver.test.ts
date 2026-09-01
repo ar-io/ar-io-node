@@ -187,5 +187,93 @@ describe('TrustedGatewayArNSResolver', () => {
       assert.equal(resolution.antId, undefined);
       assert.equal(resolution.resolvedId, resolvedId);
     });
+
+    it('should propagate protocol=ipfs and a CID from X-ArNS-Protocol', async () => {
+      const cid = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {
+              [headerNames.arnsResolvedId.toLowerCase()]: cid,
+              [headerNames.arnsProtocol.toLowerCase()]: 'ipfs',
+              [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
+              [headerNames.arnsLimit.toLowerCase()]: '10',
+              [headerNames.arnsIndex.toLowerCase()]: '0',
+            },
+            config,
+            data: null,
+          });
+        return config;
+      });
+
+      const resolver = new TrustedGatewayArNSResolver({
+        log,
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
+      });
+
+      const resolution = await resolver.resolve({ name: 'ipfs-name' });
+
+      assert.equal(resolution.resolvedId, cid);
+      assert.equal((resolution as { protocol?: string }).protocol, 'ipfs');
+    });
+
+    it('should default protocol to arweave when X-ArNS-Protocol is absent', async () => {
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {
+              [headerNames.arnsResolvedId.toLowerCase()]: resolvedId,
+              [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
+              [headerNames.arnsLimit.toLowerCase()]: '10',
+              [headerNames.arnsIndex.toLowerCase()]: '0',
+            },
+            config,
+            data: null,
+          });
+        return config;
+      });
+
+      const resolver = new TrustedGatewayArNSResolver({
+        log,
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
+      });
+
+      const resolution = await resolver.resolve({ name: 'arweave-name' });
+
+      assert.equal(resolution.resolvedId, resolvedId);
+      assert.equal((resolution as { protocol?: string }).protocol, 'arweave');
+    });
+
+    it('should fail resolution when protocol=ipfs but id is not a valid CID', async () => {
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {
+              // a 43-char Arweave id mislabeled as ipfs must be rejected
+              [headerNames.arnsResolvedId.toLowerCase()]: resolvedId,
+              [headerNames.arnsProtocol.toLowerCase()]: 'ipfs',
+              [headerNames.arnsTtlSeconds.toLowerCase()]: '300',
+            },
+            config,
+            data: null,
+          });
+        return config;
+      });
+
+      const resolver = new TrustedGatewayArNSResolver({
+        log,
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
+      });
+
+      const resolution = await resolver.resolve({ name: 'mislabeled' });
+
+      assert.equal(resolution.resolvedId, undefined);
+    });
   });
 });
