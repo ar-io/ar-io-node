@@ -25,6 +25,7 @@ import { KvJsonStore } from '../store/kv-attributes-store.js';
 import { startChildSpan } from '../tracing.js';
 import {
   ContiguousData,
+  ContiguousDataAttributes,
   ContiguousDataAttributesStore,
   ContiguousDataCacheIndex,
   ContiguousDataIndex,
@@ -370,6 +371,100 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     }
 
     return undefined;
+  }
+
+  /**
+   * Decide whether a completed full-body retrieval is smaller than the payload
+   * this data item is indexed as having, and must therefore not be cached.
+   *
+   * The existing `bytesReceived !== data.size` check cannot catch this.
+   * `data.size` is taken from the upstream `Content-Length`, so a peer that is
+   * itself serving a truncated body reports a size that matches the bytes it
+   * actually sends: the two agree, the truncation is finalized as if complete,
+   * and the ID is bound to the hash of the fragment. The next gateway then
+   * fetches from us and inherits it the same way. A one-byte body is how this
+   * shows up in practice, and because the store is content-addressed every
+   * item sharing a first byte collapses onto a single blob -- every truncated
+   * RIFF file lands on `sha256("R")`.
+   *
+   * The expected payload size is reconstructed from three attributes that do
+   * not come from retrieval: `itemSize` (the ANS-104 item length recorded when
+   * the bundle header was parsed) minus the header length, which is the gap
+   * between where the item starts and where its data starts. A poisoned
+   * `contiguous_data.data_size` therefore cannot launder itself through this
+   * comparison.
+   *
+   * Deliberately NOT compared against the attributes' payload size (`size`):
+   * that resolves as `txOrItemRow?.data_size ?? dataRow?.data_size`, and the
+   * fallback is `contiguous_data.data_size` -- the very column a poisoned
+   * entry corrupts. Whenever the bundles row is missing, an exact comparison
+   * against it would read 1 against a 1-byte body and wave the fragment
+   * through, disarming this guard in exactly the case it exists for.
+   *
+   * The header length is measured rather than bounded by a constant. ANS-104
+   * tags are variable-length and `processBundleStream` reads whatever
+   * `tagsBytesLength` an item declares -- it does not apply `DataItem.verify`'s
+   * 4 KiB tag limit -- so a legitimately indexed item can carry a header of
+   * any size. Any fixed allowance would eventually classify such an item's
+   * complete payload as short and silently stop caching it.
+   *
+   * Undersize only: an oversize body is already rejected by the `data.size`
+   * comparison above.
+   *
+   * @returns the expected payload size when the read is short, otherwise
+   *   `undefined`. Missing attributes and lookup failures both return
+   *   `undefined` -- this guard refuses to cache, so it must never turn an
+   *   incomplete index or a transient error into a silent cache bypass.
+   */
+  private async isShortRead(
+    id: string,
+    bytesReceived: number,
+  ): Promise<{ expectedPayloadSize: number } | undefined> {
+    let attributes: ContiguousDataAttributes | undefined;
+    try {
+      attributes = await this.dataAttributesStore.getDataAttributes(id);
+    } catch (error: any) {
+      this.log.debug('Short-read check skipped; attribute lookup failed', {
+        id,
+        message: error?.message,
+      });
+      return undefined;
+    }
+
+    // Validated as finite numbers rather than merely !== undefined. The types
+    // say `number | undefined`, but the values reach here straight off a raw
+    // SQLite row (`selectDataItemAttributes` is returned unmapped), so a NULL
+    // column arrives as `null` -- and `itemSize` in particular is produced by
+    // `data_item_size ?? dataItemAttributes?.size`, which yields `null` when
+    // both sides are NULL rather than falling through to undefined.
+    //
+    // A null would currently land in the stand-down path anyway, but only by
+    // way of `headerLength >= null` coercing to `>= 0`. That is not a property
+    // worth depending on: it is invisible at the call site and inverts if the
+    // comparison is ever reordered.
+    const itemSize = attributes?.itemSize;
+    const rootDataOffset = attributes?.rootDataOffset;
+    const rootDataItemOffset = attributes?.rootDataItemOffset;
+    if (
+      !Number.isFinite(itemSize) ||
+      !Number.isFinite(rootDataOffset) ||
+      !Number.isFinite(rootDataItemOffset)
+    ) {
+      return undefined;
+    }
+
+    // Both offsets are absolute positions in the root transaction's payload,
+    // so their difference is this item's header length exactly.
+    const headerLength =
+      (rootDataOffset as number) - (rootDataItemOffset as number);
+    if (headerLength < 0 || headerLength >= (itemSize as number)) {
+      return undefined;
+    }
+
+    const expectedPayloadSize = (itemSize as number) - headerLength;
+    return bytesReceived < expectedPayloadSize
+      ? { expectedPayloadSize }
+      : undefined;
   }
 
   // Record a freshly-cached blob in the cleanup index (best-effort). Tier 1 =
@@ -1386,6 +1481,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               if (cacheStream !== undefined) {
                 const hash = hasher.digest('base64url');
 
+                // Gated on the cheap comparison so the attribute read only
+                // happens for bodies that agree with their own Content-Length.
+                // Running it unconditionally would add a SQLite round trip to
+                // every successful cache write.
+                const shortRead =
+                  bytesReceived === data.size
+                    ? await this.isShortRead(id, bytesReceived)
+                    : undefined;
+
                 try {
                   if (bytesReceived !== data.size) {
                     span.addEvent('Skipping cache storage - size mismatch', {
@@ -1398,6 +1502,28 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                       expectedSize: data.size,
                       receivedSize: bytesReceived,
                     });
+                    await this.dataStore.cleanup(cacheStream);
+                  } else if (shortRead !== undefined) {
+                    // The body agreed with its own Content-Length but is
+                    // smaller than this item's indexed payload. See {@link
+                    // isShortRead}: caching it here is what makes a truncated
+                    // body durable and contagious.
+                    metrics.shortReadsRejectedTotal.inc();
+                    span.addEvent('Skipping cache storage - short read', {
+                      'data.expected_payload_size':
+                        shortRead.expectedPayloadSize,
+                      'data.received_size': bytesReceived,
+                    });
+                    span.setAttribute('cache.operation.short_read', true);
+                    this.log.warn(
+                      'Retrieved body smaller than the indexed data item payload - not caching',
+                      {
+                        id,
+                        expectedPayloadSize: shortRead.expectedPayloadSize,
+                        receivedSize: bytesReceived,
+                        reportedSize: data.size,
+                      },
+                    );
                     await this.dataStore.cleanup(cacheStream);
                   } else if (data.trusted === true) {
                     // Trusted source: finalize, save with trusted: true

@@ -1709,6 +1709,11 @@ export const foregroundCacheCoalescedOutcomeTotal = new promClient.Counter({
   labelNames: ['outcome'] as const,
 });
 
+export const shortReadsRejectedTotal = new promClient.Counter({
+  name: 'short_reads_rejected_total',
+  help: 'Completed full-body retrievals refused by the cache because the payload was implausibly small for the indexed ANS-104 item size. The upstream Content-Length agreed with the bytes actually sent, so the existing size check alone would have stored the fragment and bound the ID to its hash — the mechanism by which a truncated body becomes durable and spreads to the next gateway',
+});
+
 export const arIOPeersSkippedLeavingTotal = new promClient.Counter({
   name: 'ar_io_peers_skipped_leaving_total',
   help: 'Gateways excluded from the AR.IO peer pool because the registry reports them as leaving the network',
