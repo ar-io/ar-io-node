@@ -1469,7 +1469,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               if (cacheStream !== undefined) {
                 const hash = hasher.digest('base64url');
 
-                const shortRead = await this.isShortRead(id, bytesReceived);
+                // Gated on the cheap comparison so the attribute read only
+                // happens for bodies that agree with their own Content-Length.
+                // Running it unconditionally would add a SQLite round trip to
+                // every successful cache write.
+                const shortRead =
+                  bytesReceived === data.size
+                    ? await this.isShortRead(id, bytesReceived)
+                    : undefined;
 
                 try {
                   if (bytesReceived !== data.size) {
