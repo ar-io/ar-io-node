@@ -2793,4 +2793,174 @@ describe('RootParentDataSource', () => {
       assert.strictEqual((await readRebased('incomplete')) - before, 1);
     });
   });
+
+  // A data item is served as a byte range of the bundle that contains it, so
+  // the root fetch reports the *bundle's* content type — `application/octet-
+  // stream` for every ANS-104 bundle. Reporting that as the item's type makes
+  // an HTML page download instead of render, and it does not stop at the
+  // response: the served type is written to `contiguous_data`, keyed by the
+  // data hash, where nothing corrects it and every byte-identical re-upload
+  // inherits it. None of these paths may pass the envelope's type through.
+  describe('bundle envelope content type', () => {
+    const ENVELOPE = 'application/octet-stream';
+
+    const stubRootFetch = (size = 150) => {
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('x'.repeat(size))]),
+        size,
+        verified: false,
+        cached: false,
+        trusted: true,
+        sourceContentType: ENVELOPE,
+      }));
+    };
+
+    beforeEach(() => {
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+      stubRootFetch();
+    });
+
+    it('does not inherit it on the direct offset hint path', async () => {
+      const dataItemId = 'envelope-direct-hint-item';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => ({}),
+      );
+      // Header parsed, but the item carries no Content-Type tag.
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => ({ id: dataItemId, headerSize: 50, payloadSize: 150 }),
+      );
+
+      const result = await rootParentDataSource.getData({
+        id: dataItemId,
+        requestAttributes: {
+          rootTransactionIdHint: 'envelope-root',
+          rootByteHint: { offset: 5000, size: 200 },
+          hops: 0,
+          clientIps: [],
+        },
+      });
+
+      assert.strictEqual(result.sourceContentType, undefined);
+    });
+
+    it('does not inherit it on the bundle-parse hint path', async () => {
+      const dataItemId = 'envelope-parse-hint-item';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => ({}),
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 150,
+        }),
+      );
+
+      const result = await rootParentDataSource.getData({
+        id: dataItemId,
+        requestAttributes: {
+          rootTransactionIdHint: 'envelope-root',
+          hops: 0,
+          clientIps: [],
+        },
+      });
+
+      assert.strictEqual(result.sourceContentType, undefined);
+    });
+
+    it('does not inherit it on the attributes traversal path', async () => {
+      const dataItemId = 'envelope-attributes-item';
+      const rootTxId = 'envelope-root-bundle';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) =>
+          id === dataItemId
+            ? {
+                size: 150,
+                rootTransactionId: rootTxId,
+                rootDataItemOffset: 1234,
+                rootDataOffset: 1334,
+              }
+            : null,
+      );
+
+      const result = await rootParentDataSource.getData({ id: dataItemId });
+
+      assert.strictEqual(result.sourceContentType, undefined);
+    });
+
+    it('does not inherit it on the legacy traversal path', async () => {
+      const dataItemId = 'envelope-legacy-item';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId: 'envelope-legacy-root' }),
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 150,
+        }),
+      );
+
+      const result = await rootParentDataSource.getData({ id: dataItemId });
+
+      assert.strictEqual(result.sourceContentType, undefined);
+    });
+
+    it('keeps the fetched content type when the item is its own root', async () => {
+      // Not an envelope here: the fetch is of the item itself, so the content
+      // type it reports really does describe the bytes being returned.
+      const rootId = 'self-rooted-item';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) =>
+          id === rootId
+            ? {
+                size: 150,
+                rootTransactionId: rootId,
+                rootDataItemOffset: 0,
+                rootDataOffset: 0,
+              }
+            : null,
+      );
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('page')]),
+        size: 150,
+        verified: false,
+        cached: false,
+        trusted: true,
+        sourceContentType: 'text/html',
+      }));
+
+      const result = await rootParentDataSource.getData({ id: rootId });
+
+      assert.strictEqual(result.sourceContentType, 'text/html');
+    });
+
+    it('still reports a known item content type over the envelope', async () => {
+      const dataItemId = 'envelope-known-item';
+      const rootTxId = 'envelope-known-root';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) =>
+          id === dataItemId
+            ? {
+                size: 150,
+                contentType: 'text/html',
+                rootTransactionId: rootTxId,
+                rootDataItemOffset: 1234,
+                rootDataOffset: 1334,
+              }
+            : null,
+      );
+
+      const result = await rootParentDataSource.getData({ id: dataItemId });
+
+      assert.strictEqual(result.sourceContentType, 'text/html');
+    });
+  });
 });

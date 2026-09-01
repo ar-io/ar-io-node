@@ -203,6 +203,43 @@ export class RootParentDataSource implements ContiguousDataSource {
   }
 
   /**
+   * Picks the content type to report for a data item that is being served as a
+   * byte range of its root transaction.
+   *
+   * The root fetch's `sourceContentType` describes the *bundle envelope*, not
+   * the item inside it — an ANS-104 bundle is `application/octet-stream`. Using
+   * it as the item's content type makes a `text/html` item download instead of
+   * render, and the damage outlives the request: `ReadThroughDataCache` writes
+   * the served content type to `contiguous_data.original_source_content_type`,
+   * which is keyed by the data *hash*, is never rewritten once set, and is what
+   * `getDataAttributes` falls back to for any item this gateway has not indexed.
+   * One envelope-typed response therefore poisons the item permanently, is
+   * inherited by every byte-identical re-upload, and spreads to peers that copy
+   * the `Content-Type` header off our response.
+   *
+   * So when the item's own content type is unknown, report nothing and let the
+   * route handler apply its default rather than asserting the envelope's type.
+   * The one case where the fetched type does describe the item is when the item
+   * *is* the root transaction, where the fetch is of the item itself.
+   */
+  private resolveItemContentType({
+    id,
+    rootTxId,
+    itemContentType,
+    rootContentType,
+  }: {
+    id: string;
+    rootTxId: string;
+    itemContentType?: string;
+    rootContentType?: string;
+  }): string | undefined {
+    if (itemContentType !== undefined) {
+      return itemContentType;
+    }
+    return rootTxId === id ? rootContentType : undefined;
+  }
+
+  /**
    * Validates a stored root transaction ID and, when it turns out to be an
    * intermediate bundle rather than an L1 transaction, rebases the offsets onto
    * the real root.
@@ -684,10 +721,12 @@ export class RootParentDataSource implements ContiguousDataSource {
 
               return {
                 ...data,
-                sourceContentType:
-                  hintContentType ??
-                  originalContentType ??
-                  data.sourceContentType,
+                sourceContentType: this.resolveItemContentType({
+                  id,
+                  rootTxId: hintRootTxId,
+                  itemContentType: hintContentType ?? originalContentType,
+                  rootContentType: data.sourceContentType,
+                }),
               };
             }
           }
@@ -783,7 +822,12 @@ export class RootParentDataSource implements ContiguousDataSource {
 
           return {
             ...data,
-            sourceContentType: hintContentType ?? data.sourceContentType,
+            sourceContentType: this.resolveItemContentType({
+              id,
+              rootTxId: resolvedRootTxId,
+              itemContentType: hintContentType,
+              rootContentType: data.sourceContentType,
+            }),
           };
         }
 
@@ -896,7 +940,12 @@ export class RootParentDataSource implements ContiguousDataSource {
 
           return {
             ...data,
-            sourceContentType: originalContentType ?? data.sourceContentType,
+            sourceContentType: this.resolveItemContentType({
+              id,
+              rootTxId,
+              itemContentType: originalContentType,
+              rootContentType: data.sourceContentType,
+            }),
           };
         } finally {
           fetchSpan.end();
@@ -1253,7 +1302,12 @@ export class RootParentDataSource implements ContiguousDataSource {
         // Preserve the original data item's content type if available
         return {
           ...data,
-          sourceContentType: originalContentType ?? data.sourceContentType,
+          sourceContentType: this.resolveItemContentType({
+            id,
+            rootTxId,
+            itemContentType: originalContentType,
+            rootContentType: data.sourceContentType,
+          }),
         };
       } finally {
         fetchSpan.end();
