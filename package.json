@@ -27,7 +27,7 @@
     "@opentelemetry/exporter-logs-otlp-http": "^0.200.0",
     "@opentelemetry/instrumentation-winston": "^0.45.0",
     "@opentelemetry/sdk-logs": "^0.200.0",
-    "@opentelemetry/sdk-node": "^0.200.0",
+    "@opentelemetry/sdk-node": "^0.217.0",
     "@opentelemetry/sdk-trace-node": "^2.1.0",
     "@opentelemetry/winston-transport": "^0.11.0",
     "any-signal": "^4.1.1",
