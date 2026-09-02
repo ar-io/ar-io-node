@@ -10,7 +10,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     # Backstop only. A hung poll used to run out the 360-minute default and
     # burn a runner; the E2E waits now time out on their own well before this.
-    timeout-minutes: 60
+    # The suite runs in ~3 minutes. 60 was a backstop so generous that a hung
+    # test process burned a full hour and, worse, silently skipped the `images`
+    # job that publishes release containers -- the run reads "cancelled" rather
+    # than "failed", so nothing surfaces as broken. Paired with
+    # --test-force-exit and --test-timeout in the test scripts.
+    timeout-minutes: 20
     permissions:
       checks: write
       contents: read
