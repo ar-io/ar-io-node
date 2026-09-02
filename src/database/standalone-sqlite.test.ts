@@ -2289,6 +2289,17 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(await contentTypeOf(id), 'text/html');
     });
 
+    it('treats a structured-suffix type as real, not as the placeholder', async () => {
+      // `application/octet-stream+json` is a specific type of its own, not the
+      // placeholder — a prefix match would have let text/html replace it.
+      const id = idFor('heal-structured-suffix');
+      await save(id, 'heal-structured-suffix', 'application/octet-stream+json');
+
+      await save(id, 'heal-structured-suffix', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'application/octet-stream+json');
+    });
+
     it('never overwrites one real content type with another', async () => {
       const id = idFor('heal-no-flap');
       await save(id, 'heal-no-flap', 'text/html');

@@ -25,16 +25,32 @@ INSERT INTO contiguous_data (
   :original_source_content_type,
   :indexed_at,
   :cached_at
+--
+-- The placeholder is matched as a whole media type, not as a prefix: bare, or
+-- followed by parameters after a `;` or whitespace. A prefix match would also
+-- catch distinct specific types that merely start with the same characters —
+-- `application/octet-stream+json` is a structured-suffix type of its own, and
+-- treating it as the placeholder would let a later write replace it.
 ) ON CONFLICT(hash) DO UPDATE SET
   original_source_content_type = excluded.original_source_content_type
 WHERE
   excluded.original_source_content_type IS NOT NULL
-  AND lower(trim(excluded.original_source_content_type))
-    NOT LIKE 'application/octet-stream%'
+  AND NOT (
+    lower(trim(excluded.original_source_content_type))
+      = 'application/octet-stream'
+    OR lower(trim(excluded.original_source_content_type))
+      LIKE 'application/octet-stream;%'
+    OR lower(trim(excluded.original_source_content_type))
+      LIKE 'application/octet-stream %'
+  )
   AND (
     contiguous_data.original_source_content_type IS NULL
     OR lower(trim(contiguous_data.original_source_content_type))
-      LIKE 'application/octet-stream%'
+      = 'application/octet-stream'
+    OR lower(trim(contiguous_data.original_source_content_type))
+      LIKE 'application/octet-stream;%'
+    OR lower(trim(contiguous_data.original_source_content_type))
+      LIKE 'application/octet-stream %'
   )
 
 -- insertDataId

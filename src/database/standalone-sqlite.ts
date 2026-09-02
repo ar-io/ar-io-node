@@ -4308,12 +4308,15 @@ export class StandaloneSqliteDatabase
    * position within the root transaction — for persistence.
    *
    * Writes are deduped over a {@link DEDUPE_CACHE_TTL_MS} window keyed on the
-   * item ID **and its root coordinates** (`rootTransactionId`,
-   * `rootDataItemOffset`, `rootDataOffset`). A repeat write carrying the same
-   * coordinates is dropped, which is what the cache exists for; a write that
-   * moves the item to a different root always reaches the queue. Keying on the
-   * ID alone let whichever retrieval finished first inside the window win, so a
-   * corrected root arriving behind an unchanged write was silently discarded.
+   * item ID **plus every field a write can correct**: its root coordinates
+   * (`rootTransactionId`, `rootDataItemOffset`, `rootDataOffset`) and its
+   * `contentType`. A repeat write carrying all the same values is dropped,
+   * which is what the cache exists for; a write that moves the item to a
+   * different root, or that carries a different content type, always reaches
+   * the queue. Keying on the ID alone let whichever retrieval finished first
+   * inside the window win, so a correction arriving behind an unchanged write
+   * was silently discarded — the root coordinates and the content type are in
+   * the key because each was a correction being lost that way.
    *
    * Callers that invalidate an item must clear every dedupe entry for it, not
    * just the bare ID — see {@link clearDataHash}.
