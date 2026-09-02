@@ -12,6 +12,7 @@ import {
   ContiguousDataAttributesStore,
   DataAttributesSource,
 } from '../types.js';
+import { isOctetStreamPlaceholder } from '../lib/content-type.js';
 
 const DEFAULT_MAX_CACHE_SIZE = 10000;
 
@@ -105,6 +106,17 @@ export class CompositeDataAttributesSource
    * present, incoming values are applied on top, but DB-authoritative
    * fields (contentType, isManifest) are preserved via reverse splat
    * so partial producers cannot overwrite them.
+   *
+   * The one content type that does **not** hold its ground is the
+   * octet-stream placeholder. It is what an entry carries when nobody had
+   * read the item's tags yet, so preserving it over an incoming specific
+   * type pins the wrong answer in memory: the write that heals
+   * `contiguous_data.original_source_content_type` on the cache-miss path
+   * would correct the row while this cache — which has no TTL — kept serving
+   * the placeholder until eviction or restart. Yielding to a specific type
+   * mirrors the one-way transition `insertDataHash` allows, so memory and
+   * the persisted row heal together. A specific type is still never replaced
+   * by another specific type, or by the placeholder.
    */
   async setDataAttributes(
     id: string,
@@ -115,7 +127,14 @@ export class CompositeDataAttributesSource
     if (existingAttributes != null) {
       // Preserve DB-authoritative fields from the existing entry
       const authoritative: Partial<ContiguousDataAttributes> = {};
-      if (existingAttributes.contentType != null) {
+      if (
+        existingAttributes.contentType != null &&
+        !(
+          isOctetStreamPlaceholder(existingAttributes.contentType) &&
+          attributes.contentType != null &&
+          !isOctetStreamPlaceholder(attributes.contentType)
+        )
+      ) {
         authoritative.contentType = existingAttributes.contentType;
       }
       if (existingAttributes.isManifest != null) {
