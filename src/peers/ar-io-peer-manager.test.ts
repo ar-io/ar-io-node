@@ -369,4 +369,124 @@ describe('ArIOPeerManager', () => {
       assert.equal(peers2.length, 2);
     });
   });
+
+  describe('leaving-gateway filtering', () => {
+    // Registry fixture mixing every status case, including the two that must
+    // NOT be excluded: absent status, and an unrecognised value.
+    /**
+     * Build a manager whose registry returns `items` as a single page.
+     *
+     * The fixtures deliberately include gateways with no `status` and with an
+     * unrecognised one, so the fail-open behaviour is exercised rather than
+     * assumed.
+     */
+    function managerWith(items: any[]) {
+      return new ArIOPeerManager({
+        log,
+        networkProcess: {
+          getGateways: async () => ({
+            items,
+            hasMore: false,
+            nextCursor: undefined,
+          }),
+        } as unknown as ARIORead,
+        nodeWallet: 'localNode',
+        initialCategories: ['test'],
+        updatePeersRefreshIntervalMs: 3600000,
+      });
+    }
+
+    const MIXED = [
+      {
+        gatewayAddress: 'joined1',
+        status: 'joined',
+        settings: { protocol: 'https', fqdn: 'joined1.com' },
+      },
+      {
+        gatewayAddress: 'leaving1',
+        status: 'leaving',
+        settings: { protocol: 'https', fqdn: 'leaving1.com' },
+      },
+      {
+        gatewayAddress: 'leaving2',
+        status: 'leaving',
+        settings: { protocol: 'http', fqdn: 'leaving2.com' },
+      },
+      {
+        gatewayAddress: 'nostatus',
+        settings: { protocol: 'https', fqdn: 'nostatus.com' },
+      },
+      {
+        gatewayAddress: 'weird',
+        status: 'someFutureStatus',
+        settings: { protocol: 'https', fqdn: 'weird.com' },
+      },
+    ];
+
+    it('excludes gateways the registry reports as leaving', async () => {
+      const m = managerWith(MIXED);
+      await m.refreshPeers();
+      const urls = m.getPeerUrls();
+      assert.ok(
+        !urls.includes('https://leaving1.com'),
+        'leaving1 must be excluded',
+      );
+      assert.ok(
+        !urls.includes('http://leaving2.com'),
+        'leaving2 must be excluded',
+      );
+      assert.ok(urls.includes('https://joined1.com'), 'joined must be kept');
+      m.stopUpdatingPeers?.();
+    });
+
+    it('keeps gateways whose status is absent or unrecognised (fail open)', async () => {
+      // The guard that matters: a registry or SDK that stops reporting status
+      // must degrade to the old behaviour, never to an empty peer list.
+      const m = managerWith(MIXED);
+      await m.refreshPeers();
+      const urls = m.getPeerUrls();
+      assert.ok(
+        urls.includes('https://nostatus.com'),
+        'absent status must be kept',
+      );
+      assert.ok(
+        urls.includes('https://weird.com'),
+        'unknown status must be kept',
+      );
+      m.stopUpdatingPeers?.();
+    });
+
+    it('does not empty the peer list when no gateway reports a status', async () => {
+      const m = managerWith([
+        { gatewayAddress: 'a', settings: { protocol: 'https', fqdn: 'a.com' } },
+        { gatewayAddress: 'b', settings: { protocol: 'https', fqdn: 'b.com' } },
+      ]);
+      await m.refreshPeers();
+      assert.equal(m.getPeerUrls().length, 2);
+      m.stopUpdatingPeers?.();
+    });
+
+    it('still excludes our own wallet regardless of status', async () => {
+      const m = managerWith([
+        {
+          gatewayAddress: 'localNode',
+          status: 'joined',
+          settings: { protocol: 'https', fqdn: 'self.com' },
+        },
+        {
+          gatewayAddress: 'other',
+          status: 'joined',
+          settings: { protocol: 'https', fqdn: 'other.com' },
+        },
+      ]);
+      await m.refreshPeers();
+      const urls = m.getPeerUrls();
+      assert.ok(
+        !urls.includes('https://self.com'),
+        'own wallet must stay excluded',
+      );
+      assert.ok(urls.includes('https://other.com'));
+      m.stopUpdatingPeers?.();
+    });
+  });
 });

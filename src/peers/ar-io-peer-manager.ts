@@ -493,11 +493,31 @@ export class ArIOPeerManager implements WithFormattedPeers {
     await this.updatePeerList();
   }
 
+  /**
+   * Refresh the peer pool from the AR.IO gateway registry.
+   *
+   * Pages through the registry, rebuilds the hash ring, and reconciles the
+   * per-category weight maps so new peers start at the category default and
+   * departed peers stop being selected.
+   *
+   * Two gateways are excluded: our own (by wallet), and any the registry
+   * reports as `leaving`. A gateway leaves either because its operator
+   * withdrew it or because the network marked it non-responsive for 30
+   * consecutive epochs, so the status doubles as a consensus liveness signal.
+   * Only an explicit `leaving` is filtered — see {@link
+   * config.SKIP_LEAVING_GATEWAYS} for why unknown status is deliberately kept
+   * — and exclusions are counted by `ar_io_peers_skipped_leaving_total`.
+   *
+   * A registry fetch failure leaves the previous peer list in place rather
+   * than emptying it.
+   */
   private async updatePeerList(): Promise<void> {
     const log = this.log.child({ method: 'updatePeerList' });
     log.info('Fetching AR.IO network peer list');
 
     const peers: Record<string, string> = {};
+    const skipLeaving = config.SKIP_LEAVING_GATEWAYS;
+    let skippedLeaving = 0;
     let cursor: string | undefined;
     do {
       try {
@@ -513,6 +533,29 @@ export class ArIOPeerManager implements WithFormattedPeers {
             this.nodeWallet !== undefined &&
             this.nodeWallet === gateway.gatewayAddress
           ) {
+            continue;
+          }
+
+          // Skip gateways the registry says are on their way out.
+          //
+          // A gateway leaves the network either because its operator withdrew
+          // it or because the network marked it as non-responsive for 30
+          // consecutive epochs. Either way it should no longer be receiving
+          // requests, and the second case makes `leaving` a consensus signal
+          // that the gateway is dead -- observed by the whole network rather
+          // than rediscovered locally, one DNS timeout at a time.
+          //
+          // Measured on turbo-gateway gw1 (2026-08-28): 334 of 646 registered
+          // gateways were `leaving`, and they accounted for the bulk of the
+          // peer failures -- 40% of all peer errors were `ENOTFOUND` against
+          // hostnames that no longer resolve.
+          //
+          // Deliberately excludes ONLY on an explicit 'leaving'. A gateway
+          // whose status is absent or unrecognised is kept, so a registry or
+          // SDK that does not report status degrades to the previous behaviour
+          // rather than emptying the peer list.
+          if (skipLeaving && gateway.status === 'leaving') {
+            skippedLeaving++;
             continue;
           }
 
@@ -534,7 +577,10 @@ export class ArIOPeerManager implements WithFormattedPeers {
 
     log.info('Successfully fetched AR.IO network peer list', {
       count: Object.keys(peers).length,
+      skippedLeaving,
+      skipLeavingEnabled: skipLeaving,
     });
+    metrics.arIOPeersSkippedLeavingTotal.inc(skippedLeaving);
 
     const oldPeers = this.peers;
     this.peers = peers;

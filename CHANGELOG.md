@@ -4,6 +4,204 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 83] - 2026-09-01
+
+This is a **recommended release** focused on **data-retrieval correctness,
+chunk cache management, and decentralized ArNS resolution**. Key highlights
+include a fix for truncated upstream bodies being cached and re-served as
+complete data — the mechanism by which a one-byte fragment propagates between
+gateways — plus enforcement of the blocklist on manifest-resolved paths,
+index-driven eviction and backfill for the chunk data cache, coalescing of
+concurrent requests for the same uncached object, and ArNS now resolving
+on-demand from chain by default so each gateway is self-sufficient rather than
+a client of a few trusted gateways. Gateways the registry reports as `leaving`
+are no longer used as peers or spent on observation, and the bundled observer
+is updated for ADR-0029 epoch rent refunds.
+
+### Added
+
+- **Disk-pressure watermarks for the chunk data cache** —
+  `CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT`,
+  `CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT`,
+  `CHUNK_DATA_CACHE_MIN_FREE_BYTES` and
+  `CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS` bring the chunk cache cleanup
+  walk in line with the contiguous data cache, which already had them. With a
+  low watermark set the walk is skipped entirely while the filesystem has
+  headroom, instead of running unconditionally. This matters on large caches
+  atop spinning storage: the walk is metadata-bound, so a tree with tens of
+  millions of inodes cannot be traversed within
+  `FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION` — a pass never completes and the
+  device stays saturated even with terabytes free. Previously the only escape
+  was `ENABLE_CHUNK_DATA_CACHE_CLEANUP=false`, which stops reclamation
+  altogether and lets the cache grow unbounded. All four default to the
+  existing behavior, so nothing changes unless they are set.
+
+- **Leader re-election on a failed foreground fetch** — a leader that fails
+  releases every waiter at once, and each of them then started its own fetch in
+  the same tick. That is the same total work as no coalescing at all, delivered
+  as one synchronised burst instead of spread across the arrivals that produced
+  it -- strictly a worse shape than the problem coalescing was added to fix.
+
+  A waiter released by a *failure* now re-enters with one attempt spent: the
+  first back through finds the ID unowned and claims it, and the rest attach to
+  that new leader. `FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS` (default 2, minimum
+  1) bounds the chain so a succession of dying leaders cannot park a request
+  indefinitely; 1 restores the previous behavior exactly.
+
+  Re-election is deliberately limited to failures. The in-flight promise now
+  reports `cached` / `uncached` / `failed` rather than a bare boolean, because
+  the old `false` conflated three endings. A leader that succeeded but declined
+  to cache (size cap, concurrency cap, zero-length) would be
+  followed by a new leader declined by the same policy, and a leader that timed
+  out still owns its map entry, so re-attaching would wait on the fetch just
+  abandoned. Both send the waiter straight to its own fetch. Re-elections are counted by
+  `foreground_cache_re_elections_total`, kept separate from
+  `foreground_cache_coalesced_outcome_total` so that counter still records
+  exactly one terminal outcome per attached request.
+
+- **A size floor on foreground coalescing** — `FOREGROUND_CACHE_COALESCE_MIN_SIZE`
+  exempts objects known to be smaller than it, which then fetch for themselves
+  exactly as they did before coalescing existed. Coalescing serves a waiter
+  from the blob the leader finalizes, so it costs that waiter the whole
+  download in time-to-first-byte. That is worth paying on a multi-gigabyte
+  object whose duplicates are measured in gigabytes; it is a poor trade on a
+  small one that duplicates cheaply and finishes fast.
+
+  Sized against the production stampede above: objects over 1 GiB were 94.8%
+  of the redundant bytes and everything under 100 MiB was 0.2%, so a 100 MiB
+  floor there would have retained 99.83% of the reclaimed bytes (223.6 of
+  224.0 GB) while leaving about half of all staged objects, by count,
+  streaming independently.
+
+  **Defaults to 0 — no floor — so behavior is unchanged unless it is set.**
+  The size compared is the one already resolved from the attributes store at
+  the point coalescing is decided; `data.size` is not available until the
+  upstream fetch returns, which is after a leader has claimed the ID. An
+  object of unknown size is therefore treated as eligible, so the floor can
+  only narrow coalescing where an object is positively known to be small and
+  can never make stampede protection weaker than leaving it unset. Exemptions
+  are counted as `foreground_cache_skipped_total{reason="below_coalesce_floor"}`;
+  compare it against `already_pending` to judge whether the floor is too high.
+
+- **Bounds on foreground cache writes** — `FOREGROUND_CACHE_MAX_SIZE` and
+  `FOREGROUND_CACHE_CONCURRENCY` cap how much unfinished data a burst of
+  *distinct* large objects can accumulate in `contiguous/tmp`, mirroring the
+  guards background range caching already had. Exceeding either serves the
+  request normally and skips only the cache write. The concurrency budget is
+  process-wide, shared by the on-demand and background caches, because both
+  stage to the same directory.
+
+  **Both default to unbounded, deliberately.** Coalescing alone removes the
+  duplication of *identical* objects and needs no configuration, but a burst
+  of *distinct* large objects is only bounded once these are set -- upgrading
+  does not inherit that protection. Any finite default would silently stop a
+  busy gateway caching most of what it serves, which is not a change to make
+  on an operator's behalf; set them explicitly per deployment.
+
+- **Index-driven chunk cache eviction and backfill** — the chunk data cache is
+  now tracked in a `chunk_data_cache` index, so eviction reclaims by age and
+  size against disk watermarks instead of walking the filesystem, and a
+  backfill reconciler adopts pre-existing files into the index. Tuned by the
+  `CHUNK_DATA_CACHE_INDEX_*` variables (eviction interval, batch size, target
+  bytes, unlink concurrency, update-on-read) and
+  `CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS`.
+
+### Changed
+
+- **ArNS resolves on-demand (from chain) by default** — the default
+  `ARNS_RESOLVER_PRIORITY_ORDER` is now `on-demand,gateway`. Each gateway reads
+  the ANT record itself and only falls back to a trusted-gateway hop if that
+  fails, making gateways self-sufficient rather than clients of a few trusted
+  gateways. The bundled observer now references this node's own gateway
+  (`ARNS_ROOT_HOST`) by default. `ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS` drops
+  from `30000` to `5000` in the same change: with the gateway resolver now last,
+  a name that does not exist previously cost ~3s on-demand plus the full 30s
+  budget before 404ing. Restore the old behaviour with
+  `ARNS_RESOLVER_PRIORITY_ORDER=gateway,on-demand`.
+
+- **Gateways leaving the network are no longer used as peers** — a gateway is
+  `leaving` either because its operator withdrew it or because the network
+  marked it non-responsive for 30 consecutive epochs, so it should not be
+  receiving requests. Measured on turbo-gateway gw1: 334 of 646 registered
+  gateways were `leaving`, and 40% of all peer errors were `ENOTFOUND` against
+  hostnames that no longer resolve. Controlled by `SKIP_LEAVING_GATEWAYS`
+  (default true); only an explicit `leaving` is excluded, so a registry that
+  stops reporting status degrades to the previous behaviour rather than
+  emptying the peer list. Counted by `ar_io_peers_skipped_leaving_total`.
+
+- **Bundled observer updated to `0e956b08`** — adds the matching
+  leaving-gateway filter on the observation path (about half of each epoch's
+  observation budget was spent on gateways that always fail) and bumps
+  `@ar.io/sdk` to 4.3.0-alpha.2 for ADR-0029, so `close_epoch` refunds epoch
+  rent to the account that created the epoch.
+
+### Fixed
+
+- **Truncated upstream bodies are no longer cached** — `data.size` comes from
+  the peer's `Content-Length`, so a gateway serving a fragment reports a size
+  matching the bytes it sends: the existing size check passed and the fragment
+  was stored as complete, then served on to the next gateway. Retrieved bodies
+  are now also checked against the item's indexed ANS-104 payload size, which
+  is derived from the bundle header rather than from retrieval. Rejections are
+  counted by `short_reads_rejected_total`. The check stands down when those
+  attributes are unavailable, so L1 transactions are unaffected.
+
+- **Blocklisted data items are enforced on manifest paths** — an item blocked
+  by ID or hash still returned 200 through any manifest or ArNS path that
+  resolved to it, while `/raw/<id>` correctly returned 451. The resolved-item
+  checks now also respond 503 rather than serving when the blocklist backend
+  errors, so an outage cannot silently reopen the bypass.
+
+- **x402 CDP facilitator authentication** — the CDP facilitator was not
+  authenticated with its API key id, the fallback to the configured facilitator
+  URL failed silently rather than surfacing, a blank credential was treated as
+  configured, and the paywall client key was conflated with the facilitator
+  credential. Settlement must now be confirmed before a payment is treated as
+  successful.
+
+- **Concurrent requests for one uncached object no longer stampede** — on a
+  full-object cache miss `ReadThroughDataCache.getData` ran an upstream fetch
+  and opened a staging file per request, with nothing checking whether a fetch
+  for the same ID was already running. Seen in production as 59 concurrent
+  partial copies of one 1.5 GB bundle: 1,434 open descriptors under
+  `contiguous/tmp`, ~253 GB staged across only 18 distinct objects of which
+  83% was redundant. It is self-amplifying — the duplicated writes saturate
+  the disk, so no copy finishes, so every new request is also a miss and
+  starts another copy. The first caller for an ID is now the sole owner of the
+  fetch, the staging file and the tee; concurrent callers wait on it rather
+  than starting their own. When it finalizes they are served from the blob it
+  wrote. When it does not -- it failed, or it stalled past
+  `FOREGROUND_CACHE_COALESCE_TIMEOUT_MS` (default 300000) -- there is no
+  shared blob to serve, so each waiter falls back to fetching independently,
+  which is the pre-existing behavior for exactly that case. Those two
+  outcomes are visible as `refetched` and `timed_out` on
+  `foreground_cache_coalesced_outcome_total`. Waiters hold no reference to
+  the shared fetch, so one aborting can neither cancel it nor orphan its
+  staging file, and the timeout keeps a stalled fetch from parking later
+  requests for that ID indefinitely.
+
+  **Operator note — the cache-miss signal for this failure is gone.** A
+  coalesced request is served from the cache, so it now reports the same
+  cache-hit semantics as a request arriving a moment later (`X-Cache: HIT`,
+  `Content-Digest`, conditional-request eligibility) and counts as a hit
+  rather than a miss. Hit-rate dashboards will move, and more importantly
+  `contiguous_data_cache_miss_total` no longer rises when many requests
+  converge on one uncached object -- which was the signal this failure mode
+  used to produce. Use `foreground_cache_skipped_total{reason="already_pending"}`
+  to detect recurrence instead: it counts exactly the requests that would
+  previously have started a duplicate fetch, so a sustained rise is the
+  stampede re-forming. `foreground_cache_coalesced_outcome_total{outcome}`
+  breaks those down into `cache_hit` (the leader cached, waiter served from
+  disk), `refetched` (the leader cached nothing) and `timed_out` (the leader
+  stalled past the bound).
+
+  The fix also **converts** part of the load rather than removing it: the
+  leader writes once, then each waiter opens its own read of the finalized
+  blob (measured: 49 reads for 50 concurrent requests). That is the same
+  shape as N concurrent requests for an already-cached object, and far
+  cheaper than N concurrent multi-GB writes, but the reads all begin at the
+  moment the leader finalizes rather than being spread over time.
+
 ## [Release 82] - 2026-08-13
 
 This is a **recommended release** focused on **data-retrieval correctness and

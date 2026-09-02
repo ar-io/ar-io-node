@@ -82,6 +82,7 @@ import {
   DataItemRootIndex,
   ChainIndex,
   ChainOffsetIndex,
+  ChunkDataCacheIndex,
   ContiguousDataCacheIndex,
   ContiguousDataIndex,
   ContiguousDataSource,
@@ -98,7 +99,12 @@ import { BlockImporter } from './workers/block-importer.js';
 import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
 import { SymlinkCleanupWorker } from './workers/symlink-cleanup-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
-import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
+import {
+  FsCleanupWorker,
+  scaledThresholdSeconds,
+} from './workers/fs-cleanup-worker.js';
+import { ChunkDataCacheEvictor } from './workers/chunk-data-cache-evictor.js';
+import { ChunkDataCacheReconciler } from './workers/chunk-data-cache-reconciler.js';
 import { ContiguousDataCacheEvictor } from './workers/contiguous-data-cache-evictor.js';
 import { ContiguousDataCacheReconciler } from './workers/contiguous-data-cache-reconciler.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
@@ -167,7 +173,21 @@ export function registerCleanupHandler(
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
-  log.error('Uncaught exception:', error);
+  // Extract fields rather than passing the error object. A rejected axios
+  // promise carries `request` -- a live ClientRequest whose reachable graph is
+  // enormous -- and an AggregateError carries a whole array of them. Logging
+  // one whole serialized to 243 MB in production and exhausted the heap.
+  log.error('Uncaught exception:', {
+    message: error?.message,
+    stack: error?.stack,
+    name: error?.name,
+    ...(Array.isArray((error as AggregateError)?.errors) && {
+      errors: (error as AggregateError).errors
+        .slice(0, 20)
+        .map((e: any) => e?.message ?? String(e)),
+      errorCount: (error as AggregateError).errors.length,
+    }),
+  });
 });
 
 const arweave = Arweave.init({});
@@ -565,6 +585,57 @@ export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
     })
   : undefined;
 
+// Staging directories that hold partially written downloads, keyed by the code
+// path that stages into them. Every one of these follows the same
+// write-to-temp-then-rename (or write-then-unlink-on-failure) pattern, and none
+// of them has a garbage collector of its own — see
+// ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP in config.ts.
+//
+// Note the deliberate precision of these paths. `data/tmp` is NOT swept
+// wholesale: it also holds `observer/`, `lost+found/`, and any diagnostic output
+// an operator has pointed there (heap snapshots, for instance). Only the
+// subdirectories that a download path stages into are listed.
+const STAGING_CLEANUP_PATHS: { basePath: string; dataType: string }[] = [
+  // ReadThroughDataCache writes -> FsDataStore.createWriteStream()
+  { basePath: 'data/contiguous/tmp', dataType: 'contiguous_data_temp' },
+  // Ans104Parser bundle downloads (src/lib/ans-104.ts)
+  { basePath: 'data/tmp/ans-104', dataType: 'ans104_bundle_temp' },
+  // data_root computation downloads (src/lib/data-root.ts)
+  { basePath: 'data/tmp/data-root', dataType: 'data_root_temp' },
+];
+
+/**
+ * Sweepers for the download staging directories listed in
+ * {@link STAGING_CLEANUP_PATHS}.
+ *
+ * Each deletes files whose mtime is older than
+ * `CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD`. Age is taken from mtime alone
+ * rather than `max(atime, mtime)`: a staging file is only ever written, never
+ * read back, so mtime is the true "last progress" signal and atime would only be
+ * noise from a backup or an audit walk.
+ *
+ * Empty when `ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP` is off. Started in
+ * `app.ts` and stopped by this module's shutdown handler.
+ */
+export const stagingCleanupWorkers: FsCleanupWorker[] =
+  config.ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP
+    ? STAGING_CLEANUP_PATHS.map(
+        ({ basePath, dataType }) =>
+          new FsCleanupWorker({
+            log,
+            basePath,
+            dataType,
+            shouldDelete: async (_path, stats) => {
+              const ageSeconds = (Date.now() - stats.mtimeMs) / 1000;
+              return (
+                config.CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD > 0 &&
+                ageSeconds > config.CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD
+              );
+            },
+          }),
+      )
+    : [];
+
 const contiguousMetadataStore = makeContiguousMetadataStore({
   log,
   type: config.CONTIGUOUS_METADATA_CACHE_TYPE,
@@ -870,10 +941,17 @@ export const chunkSource =
       })
     : fullChunkSource;
 
+// Chunk cache eviction index handle (ADR 005). Handed to the store only when
+// the feature is enabled, so an absent handle disables the write/read hooks
+// entirely. `db` structurally satisfies ChunkDataCacheIndex.
+const chunkDataCacheIndex: ChunkDataCacheIndex | undefined =
+  config.ENABLE_CHUNK_DATA_CACHE_INDEX ? db : undefined;
+
 // Create stores for ChunkRetrievalService fast path (cache lookup by absoluteOffset)
 export const chunkDataStore = new FsChunkDataStore({
   log,
   baseDir: 'data/chunks',
+  chunkDataCacheIndex,
 });
 
 export const chunkMetadataStore = new FsChunkMetadataStore({
@@ -1279,22 +1357,34 @@ export const chunkDataFsCacheCleanupWorker =
         log,
         basePath: 'data/chunks',
         dataType: 'chunk_data',
+        // Disk-pressure watermarks (all opt-in; 0 => pure age-based cleanup)
+        lowWatermarkPercent: config.CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT,
+        highWatermarkPercent: config.CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT,
+        minFreeBytes: config.CHUNK_DATA_CACHE_MIN_FREE_BYTES,
+        aggressiveMinAgeSeconds:
+          config.CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
         // Stats are passed by the worker to avoid redundant stat calls
-        shouldDelete: async (_path, stats) => {
+        shouldDelete: async (_path, stats, ctx) => {
           // Use the more recent of atime or mtime, matching contiguous data cleanup pattern
           const mostRecentTimeMs =
             stats.atime > stats.mtime ? stats.atimeMs : stats.mtimeMs;
           const ageInSeconds = (Date.now() - mostRecentTimeMs) / 1000;
 
-          // Delete if file is older than threshold
-          if (
-            config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD > 0 &&
-            ageInSeconds > config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD
-          ) {
-            return true;
+          if (config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD <= 0) {
+            return false;
           }
 
-          return false;
+          // Under disk pressure ctx.thresholdScale (< 1) tightens retention,
+          // floored at ctx.minAgeSeconds so hot/fresh chunks are never evicted.
+          // With watermarks disabled ctx is the normal context (scale 1, floor
+          // 0), so this is exactly the base threshold — unchanged behavior.
+          return (
+            ageInSeconds >
+            scaledThresholdSeconds(
+              config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD,
+              ctx,
+            )
+          );
         },
       })
     : undefined;
@@ -1411,6 +1501,15 @@ const contiguousDataStore = new FsDataStore({
 const contiguousDataCacheIndex: ContiguousDataCacheIndex | undefined =
   config.ENABLE_CONTIGUOUS_DATA_CACHE_INDEX ? db : undefined;
 
+// Shared across both ReadThroughDataCache instances on purpose. What is being
+// bounded is unfinished data in `contiguous/tmp` on a single disk, which both
+// instances write to, so the budget has to be process-wide -- a per-instance
+// semaphore would silently allow twice the configured concurrency.
+const foregroundCacheSemaphore =
+  config.FOREGROUND_CACHE_CONCURRENCY > 0
+    ? new Semaphore(config.FOREGROUND_CACHE_CONCURRENCY)
+    : undefined;
+
 export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource:
@@ -1440,6 +1539,12 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
   backgroundCacheRangeMaxSize: config.BACKGROUND_CACHE_RANGE_MAX_SIZE,
   backgroundCacheRangeConcurrency: config.BACKGROUND_CACHE_RANGE_CONCURRENCY,
+  foregroundCacheMaxSize: config.FOREGROUND_CACHE_MAX_SIZE,
+  foregroundCacheSemaphore,
+  foregroundCacheCoalesceTimeoutMs: config.FOREGROUND_CACHE_COALESCE_TIMEOUT_MS,
+  foregroundCacheCoalesceMinSize: config.FOREGROUND_CACHE_COALESCE_MIN_SIZE,
+  foregroundCacheCoalesceMaxAttempts:
+    config.FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS,
 });
 
 export const backgroundContiguousDataSource = new ReadThroughDataCache({
@@ -1458,7 +1563,51 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   eventEmitter,
   untrustedCacheRetryRate: config.UNTRUSTED_CACHE_RETRY_RATE,
   trustedCacheRetryRate: config.TRUSTED_CACHE_RETRY_RATE,
+  foregroundCacheMaxSize: config.FOREGROUND_CACHE_MAX_SIZE,
+  foregroundCacheSemaphore,
+  foregroundCacheCoalesceTimeoutMs: config.FOREGROUND_CACHE_COALESCE_TIMEOUT_MS,
+  foregroundCacheCoalesceMinSize: config.FOREGROUND_CACHE_COALESCE_MIN_SIZE,
+  foregroundCacheCoalesceMaxAttempts:
+    config.FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS,
 });
+
+// Index-driven chunk cache evictor (ADR 005): the chunk cache is reclaimed
+// today only by FsCleanupWorker, whose walk was measured spending 99% of each
+// batch cycle traversing rather than deleting. This queries the index instead.
+//
+// Two departures from the contiguous evictor are mandatory, not stylistic:
+//  - It honours an AGE FLOOR. The contiguous evictor deliberately has none.
+//    Evicting a chunk before its ingest placement confirms breaks upload
+//    propagation silently, so CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS (derived
+//    from the ingest confirmation timeouts, not configured independently)
+//    excludes anything too young.
+//  - It is size-aware, accumulating to a byte target, because data-root chunk
+//    counts are skewed hard enough (p50 2, max ~11k) that coldest-first would
+//    reclaim nothing.
+//
+// FsCleanupWorker stays available as the reconciler for untracked files.
+export const chunkDataCacheEvictor = config.ENABLE_CHUNK_DATA_CACHE_INDEX
+  ? new ChunkDataCacheEvictor({
+      log,
+      chunkDataStore,
+      cacheIndex: db,
+      usagePath: 'data/chunks',
+    })
+  : undefined;
+
+// One-time backfill to adopt the pre-existing on-disk chunk cache into the
+// index. Walks by-dataroot only; last_write/last_access are seeded from file
+// mtime/atime, never from walk time -- seeding from walk time would make the
+// whole cache look freshly written and stall eviction behind the age floor.
+export const chunkDataCacheReconciler =
+  config.ENABLE_CHUNK_DATA_CACHE_INDEX &&
+  config.ENABLE_CHUNK_DATA_CACHE_INDEX_BACKFILL
+    ? new ChunkDataCacheReconciler({
+        log,
+        cacheIndex: db,
+        baseDir: 'data/chunks/data/by-dataroot',
+      })
+    : undefined;
 
 // Index-driven contiguous cache evictor (PE-9131): reclaims by querying the
 // SQLite cleanup index for the oldest blobs under disk pressure, instead of
@@ -1955,8 +2104,11 @@ export const shutdown = async (exitCode = 0) => {
     await webhookEmitter.stop();
     await headerFsCacheCleanupWorker?.stop();
     await contiguousDataFsCacheCleanupWorker?.stop();
+    await Promise.all(stagingCleanupWorkers.map((w) => w.stop()));
     await contiguousDataCacheEvictor?.stop();
     await contiguousDataCacheReconciler?.stop();
+    await chunkDataCacheEvictor?.stop();
+    await chunkDataCacheReconciler?.stop();
     await chunkDataFsCacheCleanupWorker?.stop();
     symlinkCleanupWorker?.stop();
     await dataVerificationWorker?.stop();

@@ -1947,6 +1947,208 @@ st
             });
         });
 
+        it('should return 451 when a manifest resolves to a data item blocked by ID', async () => {
+          const manifestId = 'manifest-id';
+          const resolvedId = 'resolved-blocked-id';
+
+          // manifest-id is a manifest; the resolved leaf is a normal item.
+          mock.method(
+            dataAttributesSource,
+            'getDataAttributes',
+            (checkId: string) =>
+              Promise.resolve({
+                size: 100,
+                contentType:
+                  checkId === manifestId
+                    ? 'application/x.arweave-manifest+json'
+                    : 'text/html',
+                isManifest: checkId === manifestId,
+                stable: true,
+                verified: true,
+                signature: null,
+              }),
+          );
+
+          // The manifest itself is NOT blocked; only the resolved leaf is.
+          mock.method(
+            dataBlockListValidator,
+            'isIdBlocked',
+            (checkId: string) => Promise.resolve(checkId === resolvedId),
+          );
+
+          mock.method(manifestPathResolver, 'resolveFromIndex', () =>
+            Promise.resolve({
+              id: manifestId,
+              resolvedId,
+              complete: true,
+              resolutionType: 'path',
+            }),
+          );
+
+          // Blocked content must never be fetched/streamed.
+          const getDataMock = mock.method(dataSource, 'getData', () =>
+            Promise.reject(
+              new Error('getData should not be called for blocked content'),
+            ),
+          );
+
+          app.get(
+            '/:id/*',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          await request(app)
+            .get('/manifest-id/path/to/file.html')
+            .expect(451)
+            .then((res: any) => {
+              assert.match(
+                res.text,
+                /Requested content blocked by this node's content policy/,
+              );
+              // The blocked leaf id is reported, not the manifest id.
+              assert.match(res.text, new RegExp(resolvedId));
+            });
+
+          assert.equal(getDataMock.mock.calls.length, 0);
+        });
+
+        it('should return 451 when a manifest resolves to a data item blocked by hash', async () => {
+          const manifestId = 'manifest-id';
+          const resolvedId = 'resolved-hash-blocked-id';
+          const blockedHash = 'blocked-content-hash';
+
+          mock.method(
+            dataAttributesSource,
+            'getDataAttributes',
+            (checkId: string) =>
+              Promise.resolve(
+                checkId === manifestId
+                  ? {
+                      size: 100,
+                      contentType: 'application/x.arweave-manifest+json',
+                      isManifest: true,
+                      stable: true,
+                      verified: true,
+                      signature: null,
+                    }
+                  : {
+                      size: 42,
+                      contentType: 'text/html',
+                      isManifest: false,
+                      stable: true,
+                      verified: true,
+                      signature: null,
+                      hash: blockedHash,
+                    },
+              ),
+          );
+
+          // Nothing blocked by ID; the resolved leaf's content hash IS blocked.
+          mock.method(dataBlockListValidator, 'isIdBlocked', () =>
+            Promise.resolve(false),
+          );
+          mock.method(dataBlockListValidator, 'isHashBlocked', (hash: string) =>
+            Promise.resolve(hash === blockedHash),
+          );
+
+          mock.method(manifestPathResolver, 'resolveFromIndex', () =>
+            Promise.resolve({
+              id: manifestId,
+              resolvedId,
+              complete: true,
+              resolutionType: 'path',
+            }),
+          );
+
+          const getDataMock = mock.method(dataSource, 'getData', () =>
+            Promise.reject(
+              new Error('getData should not be called for blocked content'),
+            ),
+          );
+
+          app.get(
+            '/:id/*',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          await request(app).get('/manifest-id/path/to/file.html').expect(451);
+
+          assert.equal(getDataMock.mock.calls.length, 0);
+        });
+
+        it('should fail closed (503) when the blocklist check throws for a manifest-resolved item', async () => {
+          const manifestId = 'manifest-id';
+          const resolvedId = 'resolved-id';
+
+          mock.method(dataAttributesSource, 'getDataAttributes', () =>
+            Promise.resolve({
+              size: 100,
+              contentType: 'application/x.arweave-manifest+json',
+              isManifest: true,
+              stable: true,
+              verified: true,
+              signature: null,
+            }),
+          );
+
+          // Top-level id check passes; the resolved-leaf check throws.
+          mock.method(
+            dataBlockListValidator,
+            'isIdBlocked',
+            (checkId: string) => {
+              if (checkId === resolvedId) {
+                return Promise.reject(
+                  new Error('blocklist backend unavailable'),
+                );
+              }
+              return Promise.resolve(false);
+            },
+          );
+
+          mock.method(manifestPathResolver, 'resolveFromIndex', () =>
+            Promise.resolve({
+              id: manifestId,
+              resolvedId,
+              complete: true,
+              resolutionType: 'path',
+            }),
+          );
+
+          // Content must not be served when we cannot verify it is unblocked.
+          const getDataMock = mock.method(dataSource, 'getData', () =>
+            Promise.reject(
+              new Error('getData should not be called when failing closed'),
+            ),
+          );
+
+          app.get(
+            '/:id/*',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          await request(app).get('/manifest-id/path/to/file.html').expect(503);
+
+          assert.equal(getDataMock.mock.calls.length, 0);
+        });
+
         it('should evict resolvedId from negative cache when manifest-resolved data is served', async () => {
           const manifestId = 'manifest-id';
           const resolvedId = 'resolved-manifest-path-id';

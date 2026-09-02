@@ -815,6 +815,21 @@ export const arnsNameCacheHydrationFailuresCounter = new promClient.Counter({
   help: 'Number of failed hydration attempts for ArNS cache',
 });
 
+/**
+ * Registry writes that failed during hydration.
+ *
+ * Hydration tolerates a failed write so one bad key does not discard the rest
+ * of the registry, which means the only other trace is a log line. Without
+ * this counter a partially hydrated cache is invisible to monitoring: the
+ * gateway stays healthy and simply 404s the names it never managed to write.
+ */
+export const arnsNameCacheHydrationWriteFailuresCounter = new promClient.Counter(
+  {
+    name: 'arns_name_cache_hydration_write_failures_total',
+    help: 'Total number of registry cache writes that failed during ArNS cache hydration',
+  },
+);
+
 export const arnsBaseNameCacheEntriesGauge = new promClient.Gauge({
   name: 'arns_base_name_cache_entries',
   help: 'Current number of base name entries in the ArNS name cache',
@@ -1234,6 +1249,76 @@ export const cacheIndexBackfilledTotal = new promClient.Counter({
   help: 'On-disk blobs seeded into the cache cleanup index by the reconciler',
 });
 
+// Chunk data cache cleanup index (ADR 005). A parallel family rather than a
+// data_type label on the cache_index_* metrics above: those are unlabelled by
+// data type, so a chunk evictor emitting into them would collide with the
+// contiguous evictor's series.
+
+export const chunkCacheIndexEvictedTotal = new promClient.Counter({
+  name: 'chunk_cache_index_evicted_total',
+  help: 'Chunks evicted by the index-driven chunk data cache evictor',
+  labelNames: ['reason'] as const,
+});
+
+export const chunkCacheIndexEvictedBytesTotal = new promClient.Counter({
+  name: 'chunk_cache_index_evicted_bytes_total',
+  help: 'Bytes reclaimed by the index-driven chunk data cache evictor',
+});
+
+export const chunkCacheIndexEntriesGauge = new promClient.Gauge({
+  name: 'chunk_cache_index_entries',
+  help: 'Current row count of the chunk data cache cleanup index',
+});
+
+export const chunkCacheIndexBytesGauge = new promClient.Gauge({
+  name: 'chunk_cache_index_bytes',
+  help: 'Sum of chunk sizes tracked by the chunk data cache cleanup index',
+});
+
+export const chunkCacheIndexBackfilledTotal = new promClient.Counter({
+  name: 'chunk_cache_index_backfilled_total',
+  help: 'On-disk chunks seeded into the chunk cache cleanup index by the reconciler',
+});
+
+// Eviction candidates held back by CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS. The
+// age floor protects chunks whose ingest confirmation window is still open;
+// this counter is what makes that protection visible in production instead of
+// silent (a rising value under disk pressure means the floor, not the evictor,
+// is what is limiting reclamation).
+// Index rows whose files were already gone when the evictor reached them.
+// Every other reclaimer on a gateway (the ingest GC, the filesystem-walk
+// worker, manual sweeps) unlinks chunks without touching this index, so its
+// rows outlive their bytes. Those rows are the COLDEST -- last_access froze
+// when the files vanished -- so they sort to the front of every eviction batch.
+// A high rate here means the evictor is spending its batches reclaiming
+// nothing, which is otherwise indistinguishable from healthy operation:
+// compare it against chunk_cache_index_evicted_total.
+export const chunkCacheIndexEvictedMissingTotal = new promClient.Counter({
+  name: 'chunk_cache_index_evicted_missing_total',
+  help: 'Chunk cache index rows evicted whose on-disk data root was already absent',
+});
+
+// Files kept during an eviction because they were newer than the age floor,
+// even though their index row had already been authorised for removal. Every
+// increment means the index and the disk disagreed about how cold a data root
+// was -- a chunk landed after selection, or its index write did not land at
+// all. Harmless individually (the chunk is preserved, which is the point) but
+// a sustained rate says the write hook is dropping updates.
+//
+// Deliberately separate from chunk_cache_index_skipped_floor_total, which
+// counts candidates the floor rejected at SELECT time. Different condition,
+// different remedy.
+export const chunkCacheIndexUnlinkRefusedTotal = new promClient.Counter({
+  name: 'chunk_cache_index_unlink_refused_total',
+  help: 'Chunk files kept during eviction because they were inside the age floor',
+  labelNames: ['reason'],
+});
+
+export const chunkCacheIndexSkippedFloorTotal = new promClient.Counter({
+  name: 'chunk_cache_index_skipped_floor_total',
+  help: 'Chunk cache index eviction candidates excluded by the minimum age floor',
+});
+
 //
 // Circuit breaker metrics
 //
@@ -1606,6 +1691,42 @@ export const backgroundRangeCacheSkippedTotal = new promClient.Counter({
   name: 'background_range_cache_skipped_total',
   help: 'Background full-item cache fetches skipped',
   labelNames: ['reason'] as const,
+});
+
+//
+// Foreground (on-demand) cache write metrics
+//
+
+export const foregroundCacheSkippedTotal = new promClient.Counter({
+  name: 'foreground_cache_skipped_total',
+  help: 'Foreground full-item cache writes that did not start their own staging write',
+  labelNames: ['reason'] as const,
+});
+
+export const foregroundCacheCoalescedOutcomeTotal = new promClient.Counter({
+  name: 'foreground_cache_coalesced_outcome_total',
+  help: 'Outcome for requests that attached to an in-flight foreground fetch',
+  labelNames: ['outcome'] as const,
+});
+
+export const shortReadsRejectedTotal = new promClient.Counter({
+  name: 'short_reads_rejected_total',
+  help: 'Completed full-body retrievals refused by the cache because the payload was implausibly small for the indexed ANS-104 item size. The upstream Content-Length agreed with the bytes actually sent, so the existing size check alone would have stored the fragment and bound the ID to its hash — the mechanism by which a truncated body becomes durable and spreads to the next gateway',
+});
+
+export const arIOPeersSkippedLeavingTotal = new promClient.Counter({
+  name: 'ar_io_peers_skipped_leaving_total',
+  help: 'Gateways excluded from the AR.IO peer pool because the registry reports them as leaving the network',
+});
+
+export const foregroundCacheReElectionsTotal = new promClient.Counter({
+  name: 'foreground_cache_re_elections_total',
+  help: 'Requests that were released by a failed leader and went back in with an attempt remaining, promoting one of them to leader instead of every waiter refetching',
+});
+
+export const foregroundCacheStalledWritesTotal = new promClient.Counter({
+  name: 'foreground_cache_stalled_writes_total',
+  help: 'Foreground cache writes whose concurrency permit was reclaimed after the write stopped making progress',
 });
 
 //

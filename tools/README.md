@@ -392,3 +392,24 @@ pandoc architecture-review.md -o architecture-review.pdf --pdf-engine=typst --va
 ```
 
 The resulting PDF is optimized for 6-inch e-readers with appropriate margins, font sizes, and table of contents for easy navigation.
+
+## `x402-probe`
+
+Exercises the live 402 payment-required path end to end. Nothing else does — a
+402 is only emitted when a client's rate-limit bucket is exhausted *and* no
+valid payment is attached, so ordinary traffic never produces one, and the
+operator's own egress IP is typically allowlisted (which skips the check).
+
+```bash
+tools/x402-probe [tx-id]          # GATEWAY=… REDIS=… to override
+```
+
+It talks to envoy directly (the public edge rewrites `X-Forwarded-For`, so a
+synthetic client IP only survives there), seeds a reserved TEST-NET-3 address's
+token bucket to empty in redis rather than draining it with real traffic, and
+checks both response shapes the processor branches on — JSON payment
+requirements for an agent, an HTML paywall for a browser (`Accept: text/html`
+plus a `Mozilla` user-agent). It also asserts an allowlisted client is still
+served, so it doubles as a regression test for allowlist changes.
+
+The synthetic bucket is deleted on exit.

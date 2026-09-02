@@ -9,7 +9,10 @@ import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { Readable } from 'node:stream';
 import { SequentialDataSource } from './sequential-data-source.js';
 import { ContiguousData, ContiguousDataSource } from '../types.js';
-import { createTestLogger } from '../../test/test-logger.js';
+import {
+  createTestLogger,
+  createRecordingTestLogger,
+} from '../../test/test-logger.js';
 
 let log: ReturnType<typeof createTestLogger>;
 let sequentialDataSource: SequentialDataSource;
@@ -51,6 +54,71 @@ beforeEach(async () => {
       mockSource1 as unknown as ContiguousDataSource,
       mockSource2 as unknown as ContiguousDataSource,
     ],
+  });
+});
+
+describe('SequentialDataSource fallthrough logging', () => {
+  it('should log a recovered fallthrough at debug, never at warn', async () => {
+    const {
+      logger: recorder,
+      levels,
+      entries,
+    } = createRecordingTestLogger({ suite: 'SequentialDataSource' });
+    mockSource1.getData = mock.fn(async () => {
+      throw new Error('source 1 unavailable');
+    });
+
+    const source = new SequentialDataSource({
+      log: recorder,
+      dataSources: [
+        mockSource1 as unknown as ContiguousDataSource,
+        mockSource2 as unknown as ContiguousDataSource,
+      ],
+    });
+
+    const data = await source.getData({ id: 'test-id' });
+
+    // Source 2 served the request, so the cascade did its job.
+    assert.equal(data.size, 18);
+    // Falling through is designed behaviour: it must not be surfaced as a
+    // warning. Terminal failures are logged by the data route handler.
+    assert.equal(levels.includes('warn'), false);
+    // Assert the fallthrough line specifically. `levels.includes('debug')`
+    // would be satisfied by the unrelated debug emitted before the source
+    // loop, so it proves nothing on its own.
+    const fallthrough = entries.filter((e) =>
+      e.message.includes('Unable to fetch data from data source'),
+    );
+    assert.ok(fallthrough.length > 0, 'expected the fallthrough line');
+    assert.equal(
+      fallthrough.every((e) => e.level === 'debug'),
+      true,
+    );
+  });
+
+  it('should still throw when every source fails', async () => {
+    const { logger: recorder } = createRecordingTestLogger({
+      suite: 'SequentialDataSource',
+    });
+    mockSource1.getData = mock.fn(async () => {
+      throw new Error('source 1 unavailable');
+    });
+    mockSource2.getData = mock.fn(async () => {
+      throw new Error('source 2 unavailable');
+    });
+
+    const source = new SequentialDataSource({
+      log: recorder,
+      dataSources: [
+        mockSource1 as unknown as ContiguousDataSource,
+        mockSource2 as unknown as ContiguousDataSource,
+      ],
+    });
+
+    await assert.rejects(
+      source.getData({ id: 'test-id' }),
+      /Unable to fetch data from any data source/,
+    );
   });
 });
 

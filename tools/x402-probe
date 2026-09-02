@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#
+# x402-probe — exercise the live 402 payment-required path end to end.
+#
+# There is no other way to see this flow. A 402 is only emitted when a client's
+# rate-limit bucket is exhausted AND no valid payment is attached, so ordinary
+# traffic never produces one, and the operator's own egress IP is usually
+# allowlisted (which skips the check entirely).
+#
+# This probe sidesteps both problems without moving a gigabyte of data:
+#
+#   * It talks to envoy directly, bypassing the edge cache. The public path
+#     rewrites X-Forwarded-For, so a synthetic client IP only survives here.
+#   * It seeds that synthetic IP's token bucket to empty in redis rather than
+#     draining it with ~28 real video requests.
+#
+# The IP is 203.0.113.99 (TEST-NET-3, reserved for documentation) so it can
+# never collide with a real client, and the probe deletes the bucket afterward.
+#
+# Two shapes are checked, because the processor branches on them:
+#   agent   -> JSON body carrying x402 payment requirements
+#   browser -> HTML paywall  (Accept: text/html AND User-Agent containing Mozilla)
+#
+# Usage:  tools/x402-probe [tx-id]
+# Env:    GATEWAY (default http://localhost:3000), REDIS (default ar-io-node-redis-1)
+
+set -uo pipefail
+
+TX="${1:-hhOoYZtHBqQi3d-dmxcGooXKTbiT3HJ2-eNsE7HNtKg}"   # ~36 MB video/mp4
+GATEWAY="${GATEWAY:-http://localhost:3000}"
+REDIS="${REDIS:-ar-io-node-redis-1}"
+TEST_IP="203.0.113.99"
+KEY="rl:ip:${TEST_IP}"
+
+say() { printf '%s\n' "$*"; }
+rc=0
+
+cleanup() { docker exec "$REDIS" redis-cli DEL "$KEY" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+say "== x402 probe =="
+say "   gateway : $GATEWAY"
+say "   tx      : $TX"
+say "   client  : $TEST_IP (synthetic, bucket removed on exit)"
+say ""
+
+# --- 0. sanity: is x402 even on? ---------------------------------------------
+info=$(curl -s -m 15 "$GATEWAY/ar-io/info" 2>/dev/null)
+if ! grep -q '"x402"' <<<"$info"; then
+  say "!! /ar-io/info does not advertise x402 — is ENABLE_X_402_USDC_DATA_EGRESS set?"
+  exit 1
+fi
+say "-- x402 advertised by /ar-io/info: yes"
+
+# --- 1. baseline: a fresh client should be SERVED, not charged ---------------
+docker exec "$REDIS" redis-cli DEL "$KEY" >/dev/null 2>&1
+base=$(curl -s -m 60 -o /dev/null -w '%{http_code}' \
+  -H "X-Forwarded-For: $TEST_IP" -H 'Accept: application/json' \
+  "$GATEWAY/raw/$TX" 2>/dev/null)
+say "-- baseline (bucket full)      HTTP $base   expect 200"
+[ "$base" = "200" ] || { say "   !! expected 200 before exhausting the bucket"; rc=1; }
+
+# --- 2. exhaust the bucket ---------------------------------------------------
+# Fields mirror what the limiter writes: see src/limiter/redis-rate-limiter.ts
+now_ms=$(( $(date +%s) * 1000 ))
+docker exec "$REDIS" redis-cli HSET "$KEY" \
+  tokens 0 paidTokens 0 lastRefill "$now_ms" capacity 1000000 refillRate 100 >/dev/null 2>&1
+say "-- bucket drained to 0 tokens"
+say ""
+
+probe() {                      # probe <label> <expect-substr> <curl args...>
+  local label="$1" expect="$2"; shift 2
+  local body code ctype
+  body=$(mktemp)
+  read -r code ctype < <(curl -s -m 60 -o "$body" -w '%{http_code} %{content_type}\n' \
+    -H "X-Forwarded-For: $TEST_IP" "$@" "$GATEWAY/raw/$TX" 2>/dev/null)
+  say "-- $label"
+  say "   HTTP $code   content-type: ${ctype:-none}"
+  if [ "$code" != "402" ]; then
+    say "   !! expected 402 Payment Required"
+    rc=1
+  fi
+  if grep -qi "$expect" "$body" 2>/dev/null; then
+    say "   body contains '$expect': yes"
+  else
+    say "   !! body does NOT contain '$expect'"
+    rc=1
+  fi
+  say "   first 240 bytes:"
+  head -c 240 "$body" | sed 's/^/     /'
+  say ""
+  rm -f "$body"
+}
+
+# --- 3. agent shape ----------------------------------------------------------
+probe "AGENT  (Accept: application/json)" "accepts" \
+  -H 'Accept: application/json' -H 'User-Agent: x402-probe/1.0'
+
+# --- 4. browser shape --------------------------------------------------------
+probe "BROWSER (Accept: text/html + Mozilla UA)" "html" \
+  -H 'Accept: text/html,application/xhtml+xml' \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/149.0.0.0 Safari/537.36'
+
+# --- 5. an allowlisted client must NOT be charged ---------------------------
+allow=$(curl -s -m 60 -o /dev/null -w '%{http_code}' \
+  -H "X-Forwarded-For: 100.124.239.34" -H 'Accept: application/json' \
+  "$GATEWAY/raw/$TX" 2>/dev/null)
+say "-- allowlisted client (tailscale 100.124.239.34)  HTTP $allow   expect 200"
+[ "$allow" = "200" ] || { say "   !! allowlist regression: allowlisted IP was not served"; rc=1; }
+
+say ""
+say "== $( [ $rc -eq 0 ] && echo 'PASS — 402 emitted in both shapes, allowlist intact' || echo 'FAIL — see !! lines above' ) =="
+exit $rc

@@ -22,3 +22,13 @@ CREATE TABLE confirmed_data_roots (
 CREATE INDEX chunk_placements_confirmed_sibling_idx
   ON chunk_placements (data_root)
   WHERE confirmed_at IS NOT NULL;
+CREATE TABLE chunk_data_cache (
+  data_root    BLOB    NOT NULL PRIMARY KEY,
+  size         INTEGER NOT NULL,
+  chunk_count  INTEGER NOT NULL,
+  last_write   INTEGER NOT NULL,
+  last_access  INTEGER,
+  tier         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX chunk_data_cache_eviction_idx
+  ON chunk_data_cache (tier, last_access);

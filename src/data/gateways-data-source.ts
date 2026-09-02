@@ -200,6 +200,13 @@ export class GatewaysDataSource implements ContiguousDataSource {
    * reverts to the legacy behavior of sending the query params to every
    * gateway, including untrusted ones.
    */
+  /**
+   * Logging contract: a peer returning 404 (does not hold the data) or 429
+   * (throttling us), and a cancelled request, are all routine in a multi-peer
+   * cascade and are logged at debug. Every other outcome is logged at error or
+   * warn. `getDataErrorsTotal` is incremented only when *all* gateways fail,
+   * not per-peer.
+   */
   async getData({
     id,
     requestAttributes,
@@ -331,12 +338,30 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 return response;
               },
               (error) => {
-                if (error.response) {
-                  this.log.error('Axios response error', {
+                if (axios.isCancel(error)) {
+                  // The caller disconnected, or a faster peer already won the
+                  // race. Neither is a fault of this gateway.
+                  this.log.debug('Axios request canceled', {
+                    message: error.message,
+                  });
+                } else if (error.response) {
+                  const details = {
                     url: error.response.config.url,
                     status: error.response.status,
                     headers: error.response.headers,
-                  });
+                  };
+                  // 404 means this peer simply does not hold the data; 429
+                  // means it is throttling us. Both are routine in a
+                  // multi-peer cascade and must not be reported as errors --
+                  // doing so buries genuine 5xx faults in noise.
+                  if (
+                    error.response.status === 404 ||
+                    error.response.status === 429
+                  ) {
+                    this.log.debug('Axios response error', details);
+                  } else {
+                    this.log.error('Axios response error', details);
+                  }
                 } else {
                   this.log.error('Axios network error', {
                     message: error.message,
@@ -456,11 +481,17 @@ export class GatewaysDataSource implements ContiguousDataSource {
                       : '200',
                     'gateways.request.duration_ms': gatewayRequestDuration,
                   });
-                  throw new Error(
-                    `Unexpected status code from gateway: ${response.status}. Expected ${
-                      isRangedRequest ? '200 or 206' : '200'
-                    }.`,
-                  );
+                  // Carry the upstream status on the error so the
+                  // per-gateway handler below can tell a routine 404/429 from
+                  // a genuine fault without re-parsing this message.
+                  const statusError: Error & { gatewayStatus?: number } =
+                    new Error(
+                      `Unexpected status code from gateway: ${response.status}. Expected ${
+                        isRangedRequest ? '200 or 206' : '200'
+                      }.`,
+                    );
+                  statusError.gatewayStatus = response.status;
+                  throw statusError;
                 }
 
                 // PE-9099: caller-supplied content-type predicate. Used by
@@ -767,12 +798,29 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   'gateways.request.duration_ms': gatewayRequestDuration,
                 });
 
-                this.log.warn('Failed to fetch from gateway', {
+                // A peer that lacks the data (404), is throttling us (429),
+                // or a cancelled request are all routine in a multi-peer
+                // cascade -- the next gateway or tier handles them. Only
+                // genuine faults warrant a warning; exhausting every tier is
+                // still reported by the caller.
+                const expectedOutcome =
+                  axios.isCancel(error) ||
+                  error.gatewayStatus === 404 ||
+                  error.gatewayStatus === 429;
+                const failureDetails = {
                   gatewayUrl,
                   priority,
                   path,
                   error: error.message,
-                });
+                };
+                if (expectedOutcome) {
+                  this.log.debug(
+                    'Failed to fetch from gateway',
+                    failureDetails,
+                  );
+                } else {
+                  this.log.warn('Failed to fetch from gateway', failureDetails);
+                }
               }
             }
           }
