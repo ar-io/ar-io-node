@@ -100,13 +100,12 @@ describe('CompositeDataAttributesSource', () => {
 
     it('should accept a positive integer partial seed TTL', () => {
       const source = new MockDataAttributesSource('source1');
-      assert.ok(
-        new CompositeDataAttributesSource({
-          log,
-          source,
-          partialSeedTtlMs: 1,
-        }) !== undefined,
-      );
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source,
+        partialSeedTtlMs: 1,
+      });
+      assert.ok(composite instanceof CompositeDataAttributesSource);
     });
 
     it('should create instance with custom cache size', () => {
