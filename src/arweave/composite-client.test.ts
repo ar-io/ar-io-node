@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it, beforeEach, afterEach, mock } from 'node:test';
+import { describe, it, after, beforeEach, afterEach, mock } from 'node:test';
 import http from 'node:http';
 import { AddressInfo } from 'node:net';
 import { default as Arweave } from 'arweave';
@@ -17,6 +17,38 @@ import * as config from '../config.js';
 import log from '../log.js';
 
 describe('ArweaveCompositeClient', () => {
+  // TEMPORARY DIAGNOSTIC — remove once the leak is identified.
+  //
+  // This file's assertions all pass in ~350ms, then its process fails to exit,
+  // so node's runner waits on the child forever. Before --test-timeout was
+  // added that silently consumed the job's full 60-minute budget and skipped
+  // the `images` job that publishes release containers. A lingering handle
+  // emits nothing by definition, which is why four occurrences produced no
+  // usable logs.
+  //
+  // It does not reproduce locally: this file passes alone on Node 20.11.1 and
+  // 22.13.0, passes paired with the file that follows it, and the full
+  // `test:ci` completes under c8 and pinned to two cores. It only leaks inside
+  // the full suite on CI, so asking the process what it still holds is the
+  // remaining way to identify it.
+  after(async () => {
+    const immediate = process.getActiveResourcesInfo();
+    // close() is asynchronous: a handle can still be listed while it is being
+    // torn down. Sample again after the loop has had a chance to reap them, so
+    // a genuine leak is distinguishable from one merely in flight.
+    await new Promise((r) => setTimeout(r, 250));
+    const settled = process.getActiveResourcesInfo();
+    const count = (a: string[]) =>
+      a.reduce<Record<string, number>>(
+        (m, k) => ({ ...m, [k]: (m[k] ?? 0) + 1 }),
+        {},
+      );
+
+    console.log(
+      `[leak-probe] immediate=${JSON.stringify(count(immediate))} settled=${JSON.stringify(count(settled))}`,
+    );
+  });
+
   let mockBlockStore: any;
   let mockTxStore: any;
   let mockPeerManager: any;
@@ -524,11 +556,22 @@ describe('ArweaveCompositeClient', () => {
     };
 
     afterEach(async () => {
+      // close() alone leaves the handle alive until every connection ends, and
+      // the dead peers here are deliberately destroying sockets mid-request, so
+      // some are always in flight when a test finishes. Drop the connections
+      // first, then wait for the listener itself.
+      const all = [...servers, ...deadServers];
+      for (const s of all) {
+        s.closeAllConnections?.();
+      }
       await Promise.all(
-        [...servers, ...deadServers].map(
+        all.map(
           (s) => new Promise<void>((resolve) => s.close(() => resolve())),
         ),
       );
+      // `servers` was never cleared, so each afterEach re-closed every server
+      // from every earlier test in this describe.
+      servers = [];
       deadServers = [];
     });
 
