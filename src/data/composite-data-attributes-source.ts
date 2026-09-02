@@ -54,6 +54,21 @@ export class CompositeDataAttributesSource
     cacheSize?: number;
     partialSeedTtlMs?: number;
   }) {
+    // A non-positive or fractional TTL cannot express "expire a seed after
+    // this long", and `0` in particular is not a short expiry: lru-cache reads
+    // it as no expiry at all, so seeds would mask the source indefinitely and
+    // `getRemainingTTL` would report Infinity, making `isSeededEntry` classify
+    // them as source-backed too. Fail at construction rather than silently
+    // restoring the behaviour this class exists to prevent.
+    if (
+      !Number.isInteger(partialSeedTtlMs) ||
+      (partialSeedTtlMs as number) <= 0
+    ) {
+      throw new Error(
+        `partialSeedTtlMs must be a positive integer, got ${partialSeedTtlMs}`,
+      );
+    }
+
     this.log = log.child({ class: this.constructor.name });
     this.source = source;
     this.partialSeedTtlMs = partialSeedTtlMs;

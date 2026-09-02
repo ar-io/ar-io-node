@@ -78,6 +78,37 @@ describe('CompositeDataAttributesSource', () => {
       assert.ok(composite !== undefined);
     });
 
+    it('should reject a non-positive or non-integer partial seed TTL', () => {
+      const source = new MockDataAttributesSource('source1');
+      // `ttl: 0` reaches lru-cache as "no expiry" rather than "expire
+      // immediately", which would silently restore the unbounded seed this
+      // class exists to prevent -- and report Infinity from getRemainingTTL,
+      // so merges would treat the seed as a source-backed entry too.
+      for (const partialSeedTtlMs of [0, -1, 1.5, Number.NaN, Infinity]) {
+        assert.throws(
+          () =>
+            new CompositeDataAttributesSource({
+              log,
+              source,
+              partialSeedTtlMs,
+            }),
+          /partialSeedTtlMs/,
+          `expected ${partialSeedTtlMs} to be rejected`,
+        );
+      }
+    });
+
+    it('should accept a positive integer partial seed TTL', () => {
+      const source = new MockDataAttributesSource('source1');
+      assert.ok(
+        new CompositeDataAttributesSource({
+          log,
+          source,
+          partialSeedTtlMs: 1,
+        }) !== undefined,
+      );
+    });
+
     it('should create instance with custom cache size', () => {
       const source = new MockDataAttributesSource('source1');
       const composite = new CompositeDataAttributesSource({
