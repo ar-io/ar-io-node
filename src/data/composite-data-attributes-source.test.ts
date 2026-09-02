@@ -310,6 +310,83 @@ describe('CompositeDataAttributesSource', () => {
       assert.strictEqual(source.callCount, 1); // No additional source calls
     });
 
+    it('should not let a partial seed permanently mask the source', async () => {
+      const source = new MockDataAttributesSource('source1');
+      source.setData('test-id', {
+        ...TEST_DATA_ATTRIBUTES,
+        contentType: 'image/gif',
+      });
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source,
+        partialSeedTtlMs: 25,
+      });
+
+      // The shape ReadThroughDataCache writes after a retrieval whose upstream
+      // response carried no usable Content-Type: every retrieval-time field is
+      // present and contentType is undefined.
+      await composite.setDataAttributes('test-id', {
+        hash: 'partial-hash',
+        size: 1024,
+        contentType: undefined,
+        trusted: true,
+      });
+
+      // Immediately after the seed the fast path still applies: no source call.
+      const immediate = await composite.getDataAttributes('test-id');
+      assert.strictEqual(source.callCount, 0);
+      assert.strictEqual(immediate?.hash, 'partial-hash');
+      assert.strictEqual(immediate?.contentType, undefined);
+
+      // Once the seed ages out the source must be consulted again, so the
+      // authoritative content type reaches the caller instead of being masked
+      // for the life of the process.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const refreshed = await composite.getDataAttributes('test-id');
+      assert.strictEqual(source.callCount, 1);
+      assert.strictEqual(refreshed?.contentType, 'image/gif');
+    });
+
+    it('should keep source-backed entries cached without expiry', async () => {
+      const source = new MockDataAttributesSource('source1');
+      source.setData('test-id', TEST_DATA_ATTRIBUTES);
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source,
+        partialSeedTtlMs: 25,
+      });
+
+      await composite.getDataAttributes('test-id');
+      assert.strictEqual(source.callCount, 1);
+
+      // The seed TTL must not leak onto entries that came from the source.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      await composite.getDataAttributes('test-id');
+      assert.strictEqual(source.callCount, 1);
+    });
+
+    it('should not extend a partial seed into a permanent entry on merge', async () => {
+      const source = new MockDataAttributesSource('source1');
+      source.setData('test-id', {
+        ...TEST_DATA_ATTRIBUTES,
+        contentType: 'text/html',
+      });
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source,
+        partialSeedTtlMs: 25,
+      });
+
+      await composite.setDataAttributes('test-id', { hash: 'seed-hash' });
+      // A second partial write merges into the seed; it must stay expirable.
+      await composite.setDataAttributes('test-id', { size: 2048 });
+
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const refreshed = await composite.getDataAttributes('test-id');
+      assert.strictEqual(source.callCount, 1);
+      assert.strictEqual(refreshed?.contentType, 'text/html');
+    });
+
     it('should not allow partial updates to overwrite authoritative contentType', async () => {
       const source = new MockDataAttributesSource('source1');
       source.setData('test-id', {
