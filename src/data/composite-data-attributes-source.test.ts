@@ -387,6 +387,53 @@ describe('CompositeDataAttributesSource', () => {
       assert.strictEqual(refreshed?.contentType, 'text/html');
     });
 
+    it('should not let repeated merges postpone a seed expiry', async () => {
+      const source = new MockDataAttributesSource('source1');
+      source.setData('test-id', {
+        ...TEST_DATA_ATTRIBUTES,
+        contentType: 'image/gif',
+      });
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source,
+        partialSeedTtlMs: 200,
+      });
+
+      await composite.setDataAttributes('test-id', { hash: 'seed-hash' });
+
+      // A second partial write lands inside the seed's window. It must update
+      // the value without postponing the deadline, or a steady trickle of
+      // retrieval-time writes would keep an entry that has never seen the
+      // source alive indefinitely -- the exact masking this TTL exists to stop.
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      await composite.setDataAttributes('test-id', { size: 2048 });
+
+      // Past the ORIGINAL deadline (200ms) but inside a hypothetical restarted
+      // one (120 + 200 = 320ms).
+      await new Promise((resolve) => setTimeout(resolve, 140));
+      const refreshed = await composite.getDataAttributes('test-id');
+      assert.strictEqual(source.callCount, 1);
+      assert.strictEqual(refreshed?.contentType, 'image/gif');
+    });
+
+    it('should still apply a merge to the value while the seed is live', async () => {
+      const source = new MockDataAttributesSource('source1');
+      source.setData('test-id', TEST_DATA_ATTRIBUTES);
+      const composite = new CompositeDataAttributesSource({
+        log,
+        source,
+        partialSeedTtlMs: 2000,
+      });
+
+      await composite.setDataAttributes('test-id', { hash: 'seed-hash' });
+      await composite.setDataAttributes('test-id', { size: 4096 });
+
+      const result = await composite.getDataAttributes('test-id');
+      assert.strictEqual(source.callCount, 0);
+      assert.strictEqual(result?.hash, 'seed-hash');
+      assert.strictEqual(result?.size, 4096);
+    });
+
     it('should not allow partial updates to overwrite authoritative contentType', async () => {
       const source = new MockDataAttributesSource('source1');
       source.setData('test-id', {

@@ -171,7 +171,14 @@ export class CompositeDataAttributesSource
         // Merging another partial write into a seed must not promote it to a
         // permanent entry, or a steady trickle of writes would keep an entry
         // that has never seen the source alive indefinitely.
-        wasSeeded ? { ttl: this.partialSeedTtlMs } : undefined,
+        //
+        // `noUpdateTTL` is what makes that true: `set` otherwise restarts the
+        // countdown, so writes arriving more often than the TTL would postpone
+        // the deadline forever. The value is still updated -- only the expiry
+        // is left alone.
+        wasSeeded
+          ? { ttl: this.partialSeedTtlMs, noUpdateTTL: true }
+          : undefined,
       );
     } else {
       // Seed the cache with partial attributes. Callers like
