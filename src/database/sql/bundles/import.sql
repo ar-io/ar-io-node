@@ -97,6 +97,31 @@ INSERT INTO new_data_item_tags (
   @height, @indexed_at
 ) ON CONFLICT DO UPDATE SET height = IFNULL(@height, height)
 
+-- deleteOptimisticNewDataItemTags
+--
+-- `root_transaction_id` is part of the new_data_item_tags primary key, and it
+-- is NULL for optimistically indexed data items. SQLite treats every NULL in
+-- a unique index as distinct, so upsertNewDataItemTag never conflicts with an
+-- optimistic row: repeated writes stack full tag sets instead of replacing
+-- them, and the GraphQL tag lookup (which filters on data_item_id alone)
+-- returns every tag once per set. Both writer paths clear the optimistic set
+-- before writing tags.
+DELETE FROM new_data_item_tags
+WHERE data_item_id = @data_item_id
+  AND root_transaction_id IS NULL
+
+-- selectRootedNewDataItemTag
+--
+-- True when the unbundle path has already written a rooted tag set for this
+-- data item. Those rows carry the same tags -- tags are immutable per data
+-- item id -- so an optimistic write that arrives afterwards must not add a
+-- second, NULL-rooted set alongside them.
+SELECT 1 AS present
+FROM new_data_item_tags
+WHERE data_item_id = @data_item_id
+  AND root_transaction_id IS NOT NULL
+LIMIT 1
+
 -- upsertBundleDataItem
 INSERT INTO bundle_data_items (
   id,

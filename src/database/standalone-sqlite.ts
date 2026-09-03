@@ -621,6 +621,19 @@ export class StandaloneSqliteDatabaseWorker {
       (item: NormalizedDataItem, height?: number) => {
         const rows = dataItemToDbRows(item, height);
 
+        // An earlier optimistic write may have left a full set of tag rows
+        // keyed on a NULL root_transaction_id. That column is part of the
+        // new_data_item_tags primary key and SQLite treats NULLs there as
+        // distinct, so the upserts below cannot replace those rows -- they
+        // would sit alongside the ones written here and GraphQL would return
+        // every tag twice. Drop them now that the real root is known. See
+        // deleteOptimisticNewDataItemTags in import.sql.
+        if (rows.newDataItem.root_transaction_id !== null) {
+          this.stmts.bundles.deleteOptimisticNewDataItemTags.run({
+            data_item_id: rows.newDataItem.id,
+          });
+        }
+
         for (const row of rows.tagNames) {
           this.stmts.bundles.insertOrIgnoreTagName.run(row);
         }
@@ -656,13 +669,29 @@ export class StandaloneSqliteDatabaseWorker {
 
     // Optimistic path: caller has no tuple knowledge. Used by the admin
     // queue-data-item route. INSERT-if-absent for the data item row;
-    // never updates the root-atom fields on conflict. Tag rows still
-    // upsert the always-known optimistic metadata. We deliberately skip
-    // the bundle_data_items write — that table records actual unbundle
-    // observations, not optimistic claims.
+    // never updates the root-atom fields on conflict. Tag rows are written
+    // only while no rooted set exists, and always replace the previous
+    // optimistic set. We deliberately skip the bundle_data_items write —
+    // that table records actual unbundle observations, not optimistic
+    // claims.
     this.insertOptimisticDataItemFn = this.dbs.bundles.transaction(
       (item: NormalizedDataItem, height?: number) => {
         const rows = dataItemToDbRows(item, height);
+
+        // Optimistic tag rows carry a NULL root_transaction_id, which SQLite
+        // treats as distinct from every other NULL in the primary key. Clear
+        // the previous optimistic set so a re-POST replaces its own tags
+        // instead of stacking a second copy, and leave the tags alone
+        // entirely once the unbundle path has written a rooted set -- the
+        // tags are the same either way, and re-adding them here would
+        // reintroduce the duplication the unbundle path just resolved.
+        this.stmts.bundles.deleteOptimisticNewDataItemTags.run({
+          data_item_id: rows.newDataItem.id,
+        });
+        const rootedTagsExist =
+          this.stmts.bundles.selectRootedNewDataItemTag.get({
+            data_item_id: rows.newDataItem.id,
+          }) !== undefined;
 
         for (const row of rows.tagNames) {
           this.stmts.bundles.insertOrIgnoreTagName.run(row);
@@ -672,11 +701,13 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreTagValue.run(row);
         }
 
-        for (const row of rows.newDataItemTags) {
-          this.stmts.bundles.upsertNewDataItemTag.run({
-            ...row,
-            height,
-          });
+        if (!rootedTagsExist) {
+          for (const row of rows.newDataItemTags) {
+            this.stmts.bundles.upsertNewDataItemTag.run({
+              ...row,
+              height,
+            });
+          }
         }
 
         for (const row of rows.wallets) {
