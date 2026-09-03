@@ -336,4 +336,59 @@ describe('CompositeDataAttributesSource', () => {
       assert.strictEqual(result?.isManifest, true);
     });
   });
+
+  // The healing counterpart to insertDataHash's one-way transition: this cache
+  // has no TTL, so a placeholder preserved here outlives the DB row it came
+  // from and keeps serving the wrong content type after the row has healed.
+  describe('octet-stream placeholder handling', () => {
+    it('lets a specific content type displace the placeholder', async () => {
+      const source = {
+        getDataAttributes: async () =>
+          ({ contentType: 'application/octet-stream' }) as any,
+      };
+      const composite = new CompositeDataAttributesSource({ log, source });
+
+      // Seed from the (poisoned) DB record, as a request would.
+      await composite.getDataAttributes('id-1');
+      // The cache-miss path then writes the real type.
+      await composite.setDataAttributes('id-1', { contentType: 'text/html' });
+
+      assert.equal(
+        (await composite.getDataAttributes('id-1'))?.contentType,
+        'text/html',
+      );
+    });
+
+    it('does not let the placeholder displace a specific type', async () => {
+      const source = {
+        getDataAttributes: async () => ({ contentType: 'text/html' }) as any,
+      };
+      const composite = new CompositeDataAttributesSource({ log, source });
+
+      await composite.getDataAttributes('id-2');
+      await composite.setDataAttributes('id-2', {
+        contentType: 'application/octet-stream',
+      });
+
+      assert.equal(
+        (await composite.getDataAttributes('id-2'))?.contentType,
+        'text/html',
+      );
+    });
+
+    it('does not let one specific type displace another', async () => {
+      const source = {
+        getDataAttributes: async () => ({ contentType: 'text/html' }) as any,
+      };
+      const composite = new CompositeDataAttributesSource({ log, source });
+
+      await composite.getDataAttributes('id-3');
+      await composite.setDataAttributes('id-3', { contentType: 'image/png' });
+
+      assert.equal(
+        (await composite.getDataAttributes('id-3'))?.contentType,
+        'text/html',
+      );
+    });
+  });
 });

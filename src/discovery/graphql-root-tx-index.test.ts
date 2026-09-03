@@ -6,12 +6,12 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, describe, it, mock } from 'node:test';
-import winston from 'winston';
 import { LRUCache } from 'lru-cache';
 import { default as axios } from 'axios';
 import { GraphQLRootTxIndex } from './graphql-root-tx-index.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-const log = winston.createLogger({ silent: true });
+const log = createTestLogger({ suite: 'GraphQLRootTxIndex' });
 
 describe('GraphQLRootTxIndex', () => {
   afterEach(() => {
@@ -621,6 +621,130 @@ describe('GraphQLRootTxIndex', () => {
         0,
         'Should not call any gateways when rate limited',
       );
+    });
+  });
+
+  // Indexers do not reliably populate `data.type` for bundled data items —
+  // arweave.net returns null for it on ArDrive uploads whose `Content-Type`
+  // tag is present and correct. Returning no content type here is not a
+  // harmless gap: the caller is resolving an item this gateway has not
+  // indexed, and with nothing to report the item gets served with the content
+  // type of the bundle around it. Fall back to the tag `data.type` derives
+  // from.
+  describe('content type resolution', () => {
+    const dataItemId = 'ct-fallback-item';
+    const rootBundleId = 'ct-fallback-root';
+
+    const stubAxios = (node: Record<string, unknown>) => {
+      const mockAxiosInstance = {
+        post: mock.fn((_url: string, body: any) => {
+          if (body.query.includes('getBundleParents')) {
+            // Batched path: one query answers both parent and metadata.
+            return Promise.resolve({
+              status: 200,
+              data: {
+                data: {
+                  transactions: {
+                    edges: [
+                      { node: { id: dataItemId, ...node, bundledIn: null } },
+                    ],
+                  },
+                },
+              },
+            });
+          }
+          if (body.query.includes('getMetadata')) {
+            return Promise.resolve({
+              status: 200,
+              data: { data: { transaction: { id: dataItemId, ...node } } },
+            });
+          }
+          if (body.query.includes('getBundleParent')) {
+            return Promise.resolve({
+              status: 200,
+              data: {
+                data: {
+                  transaction: {
+                    id: body.variables.id,
+                    bundledIn:
+                      body.variables.id === dataItemId
+                        ? { id: rootBundleId }
+                        : null,
+                  },
+                },
+              },
+            });
+          }
+          return Promise.reject(new Error('Unexpected query'));
+        }),
+        defaults: { raxConfig: {} },
+        interceptors: {
+          request: { use: mock.fn(), eject: mock.fn() },
+          response: { use: mock.fn(), eject: mock.fn() },
+        },
+      };
+      mock.method(axios, 'create', () => mockAxiosInstance);
+      return mockAxiosInstance;
+    };
+
+    const buildIndex = (batchEnabled: boolean) => {
+      const graphqlIndex = new GraphQLRootTxIndex({
+        log,
+        trustedGatewaysUrls: { 'https://arweave-search.goldsky.com': 1 },
+        rateLimitBurstSize: 100,
+        rateLimitTokensPerInterval: 100,
+        rateLimitInterval: 'second',
+        batchEnabled,
+      });
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (graphqlIndex as any)['limiter'].content = (graphqlIndex as any)[
+        'limiter'
+      ].bucketSize;
+      return graphqlIndex;
+    };
+
+    it('falls back to the Content-Type tag when data.type is null', async () => {
+      stubAxios({
+        data: { type: null, size: '5357' },
+        tags: [
+          { name: 'Content-Type', value: 'text/html' },
+          { name: 'App-Name', value: 'ArDrive-CLI' },
+        ],
+      });
+
+      const result = await buildIndex(false).getRootTx(dataItemId);
+
+      assert.equal(result?.contentType, 'text/html');
+    });
+
+    it('falls back to the Content-Type tag on the batched path', async () => {
+      stubAxios({
+        data: { type: null, size: '5357' },
+        tags: [{ name: 'content-type', value: 'text/html' }],
+      });
+
+      const result = await buildIndex(true).getRootTx(dataItemId);
+
+      assert.equal(result?.contentType, 'text/html');
+    });
+
+    it('prefers data.type when it is populated', async () => {
+      stubAxios({
+        data: { type: 'image/png', size: '5357' },
+        tags: [{ name: 'Content-Type', value: 'text/html' }],
+      });
+
+      const result = await buildIndex(false).getRootTx(dataItemId);
+
+      assert.equal(result?.contentType, 'image/png');
+    });
+
+    it('reports no content type when neither is present', async () => {
+      stubAxios({ data: { type: null, size: '5357' }, tags: [] });
+
+      const result = await buildIndex(false).getRootTx(dataItemId);
+
+      assert.equal(result?.contentType, undefined);
     });
   });
 });

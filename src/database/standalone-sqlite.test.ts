@@ -2238,6 +2238,110 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  // `contiguous_data.original_source_content_type` is keyed by the data hash
+  // and, for an item this gateway has not indexed, it is the only content type
+  // getDataAttributes can return. It used to be write-once, so an item served
+  // even a single time with the `application/octet-stream` placeholder — the
+  // ANS-104 envelope's own type, which a bundle-range read reports when the
+  // item's tags were never read — downloaded instead of rendering forever.
+  describe('content type healing', () => {
+    // Both dedupe caches in front of these writes — the main thread's
+    // saveDataContentAttributes LRU and the worker's insertDataHashCache —
+    // outlive the per-test database reset, so every case needs an ID and a
+    // hash no other case has written, or its writes are silently suppressed.
+    //
+    // 43-char base64url; the final character carries only 2 significant bits,
+    // so it must be canonical to survive a decode/encode round trip.
+    const idFor = (label: string) => label.padEnd(42, 'x') + '0';
+
+    const save = (id: string, hash: string, contentType?: string) =>
+      db.saveDataContentAttributes({ id, hash, dataSize: 5357, contentType });
+
+    const contentTypeOf = async (id: string) =>
+      (await db.getDataAttributes(id))?.contentType ?? undefined;
+
+    it('replaces the octet-stream placeholder with a real content type', async () => {
+      const id = idFor('heal-placeholder');
+      await save(id, 'heal-placeholder', 'application/octet-stream');
+      assert.equal(await contentTypeOf(id), 'application/octet-stream');
+
+      await save(id, 'heal-placeholder', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('fills in a null content type', async () => {
+      const id = idFor('heal-null');
+      await save(id, 'heal-null', undefined);
+      assert.equal(await contentTypeOf(id), undefined);
+
+      await save(id, 'heal-null', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('matches the placeholder with parameters and odd casing', async () => {
+      const id = idFor('heal-normalized');
+      await save(id, 'heal-normalized', 'Application/Octet-Stream; x=1');
+
+      await save(id, 'heal-normalized', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('treats a structured-suffix type as real, not as the placeholder', async () => {
+      // `application/octet-stream+json` is a specific type of its own, not the
+      // placeholder — a prefix match would have let text/html replace it.
+      const id = idFor('heal-structured-suffix');
+      await save(id, 'heal-structured-suffix', 'application/octet-stream+json');
+
+      await save(id, 'heal-structured-suffix', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'application/octet-stream+json');
+    });
+
+    it('never overwrites one real content type with another', async () => {
+      const id = idFor('heal-no-flap');
+      await save(id, 'heal-no-flap', 'text/html');
+
+      await save(id, 'heal-no-flap', 'image/png');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('never falls back from a real content type to the placeholder', async () => {
+      const id = idFor('heal-no-regress');
+      await save(id, 'heal-no-regress', 'text/html');
+
+      await save(id, 'heal-no-regress', 'application/octet-stream');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('heals a byte-identical re-upload, which shares the poisoned row', async () => {
+      // The reported symptom: re-uploading the file produced a new data item
+      // ID that hashed to the same bytes, so it inherited the placeholder and
+      // the re-upload appeared to change nothing.
+      const original = idFor('heal-reupload-original');
+      const reupload = idFor('heal-reupload-new');
+      await save(original, 'heal-reupload', 'application/octet-stream');
+      assert.equal(
+        await contentTypeOf(reupload),
+        undefined,
+        'the re-upload has no row of its own yet',
+      );
+
+      await save(reupload, 'heal-reupload', 'text/html');
+
+      assert.equal(await contentTypeOf(reupload), 'text/html');
+      assert.equal(
+        await contentTypeOf(original),
+        'text/html',
+        'the original ID shares the row, so it heals too',
+      );
+    });
+  });
+
   describe('getVerifiableDataIds', () => {
     it("should return an empty list if there's no verifiable data ids", async () => {
       const emptyDbIds = await db.getVerifiableDataIds();
