@@ -9,6 +9,7 @@ import { Span } from '@opentelemetry/api';
 import winston from 'winston';
 
 import { toB64Url } from '../lib/encoding.js';
+import * as metrics from '../metrics.js';
 import { startChildSpan } from '../tracing.js';
 import {
   Chunk,
@@ -119,6 +120,11 @@ export interface ChunkRetrievalServiceConfig {
   // Optional cache stores for fast path
   chunkDataStore?: ChunkDataStore;
   chunkMetadataStore?: ChunkMetadataStore;
+  /**
+   * Serve peer-origin requests (hops >= 1) from local caches only, refusing
+   * to run the remote cascade on a peer's behalf. Defaults to false.
+   */
+  peerOriginLocalOnly?: boolean;
 }
 
 /**
@@ -137,6 +143,7 @@ export class ChunkRetrievalService {
   // Optional cache stores for fast path
   private chunkDataStore?: ChunkDataStore;
   private chunkMetadataStore?: ChunkMetadataStore;
+  private peerOriginLocalOnly: boolean;
 
   constructor(config: ChunkRetrievalServiceConfig) {
     this.log = config.log.child({ class: this.constructor.name });
@@ -144,6 +151,7 @@ export class ChunkRetrievalService {
     this.txBoundarySource = config.txBoundarySource;
     this.chunkDataStore = config.chunkDataStore;
     this.chunkMetadataStore = config.chunkMetadataStore;
+    this.peerOriginLocalOnly = config.peerOriginLocalOnly ?? false;
   }
 
   /**
@@ -179,13 +187,38 @@ export class ChunkRetrievalService {
       // Check for abort before starting
       signal?.throwIfAborted();
 
+      // A request that has already passed through an AR.IO gateway carries a
+      // non-zero hop count. Those callers give us one second before giving up
+      // (PEER_REQUEST_TIMEOUT_MS in ar-io-chunk-source.ts) and they run their
+      // own cascade, so remote work started on their behalf outlives their
+      // patience and duplicates work they are already doing.
+      const peerOrigin = (requestAttributes?.hops ?? 0) >= 1;
+      span.setAttribute('chunk.peer_origin', peerOrigin);
+
       // 1. Try cache hit first
       if (this.chunkDataStore && this.chunkMetadataStore) {
         const cacheResult = await this.tryCacheHit(absoluteOffset, span);
         if (cacheResult) {
           span.setAttribute('chunk.retrieval_path', 'cache_hit');
+          if (peerOrigin && this.peerOriginLocalOnly) {
+            metrics.chunkServeLocalOnlyCounter.inc({ result: 'cache_hit' });
+          }
           return cacheResult;
         }
+      }
+
+      // 1a. Peer-origin requests stop here when configured: answer from what
+      // this gateway already holds, never by escalating to the boundary
+      // sources or the chunk cascade. The AR.IO peer sources bound forwarding
+      // depth themselves (validateHopCount), but the boundary lookup and the
+      // Arweave node path do not, so the bound is applied here instead.
+      if (peerOrigin && this.peerOriginLocalOnly) {
+        span.setAttribute('chunk.retrieval_path', 'peer_origin_local_only');
+        metrics.chunkServeLocalOnlyCounter.inc({ result: 'not_found' });
+        throw new ChunkNotFoundError(
+          `Peer-origin request for offset ${absoluteOffset} missed the local cache`,
+          'peer_origin_local_only',
+        );
       }
 
       // Check for abort before TX boundary lookup

@@ -86,6 +86,17 @@ export const chunkServeDeadlineExceededCounter = new promClient.Counter({
   labelNames: ['method'],
 });
 
+// Chunk serves answered from local caches only because the request arrived
+// from another AR.IO gateway (X-AR-IO-Hops >= 1) and
+// CHUNK_PEER_ORIGIN_LOCAL_ONLY is enabled. `result` is `cache_hit` when the
+// local cache satisfied the peer, `not_found` when the request was refused
+// rather than escalated to the remote cascade.
+export const chunkServeLocalOnlyCounter = new promClient.Counter({
+  name: 'chunk_serve_local_only_total',
+  help: 'Count of peer-origin chunk serves restricted to local sources',
+  labelNames: ['result'],
+});
+
 // Outcome of resolving an absolute weave offset to its containing block in
 // ArweaveCompositeClient.binarySearchBlocks. The `local_index_hit*` outcomes
 // mean the local index (stable_blocks ∪ new_blocks) resolved and verified the
