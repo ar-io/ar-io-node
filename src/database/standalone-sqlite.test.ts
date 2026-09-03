@@ -2705,6 +2705,188 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('optimistic tag rows superseded by the unbundle write', () => {
+    // Regression: new_data_item_tags carries root_transaction_id in its
+    // primary key and the optimistic path writes NULL there. The later
+    // unbundle write of the same data item therefore does not conflict --
+    // it leaves a second, parallel tag set, and the GraphQL tag lookup
+    // (which filters on data_item_id alone) returns every tag twice.
+    const itemId = 'b3B0aW1pc3RpYy10YWctZHVwLWl0ZW0tMDAwMQAAAAA';
+    const parentId = 'b3B0aW1pc3RpYy10YWctZHVwLXBhcmVudC0wMQAAAAA';
+    const rootTxId = 'b3B0aW1pc3RpYy10YWctZHVwLXJvb3QtMDAwMQAAAAA';
+
+    const tags = [
+      {
+        name: toB64Url(Buffer.from('App-Name')),
+        value: toB64Url(Buffer.from('ArDrive-App')),
+      },
+      {
+        name: toB64Url(Buffer.from('Entity-Type')),
+        value: toB64Url(Buffer.from('drive-state')),
+      },
+    ];
+
+    const optimisticItem = {
+      anchor: 'YW5jaG9y',
+      data_hash: null,
+      data_offset: null,
+      data_size: 1234,
+      id: itemId,
+      index: null,
+      offset: null,
+      owner: 'b3duZXI',
+      owner_address: 'b3duZXJfYWRkcmVzcw',
+      owner_offset: null,
+      owner_size: null,
+      parent_id: null,
+      parent_index: null,
+      root_parent_offset: null,
+      root_tx_id: null,
+      signature: 'c2lnbmF0dXJl',
+      signature_offset: null,
+      signature_size: null,
+      signature_type: null,
+      size: null,
+      tags,
+      target: 'dGFyZ2V0',
+    } as unknown as NormalizedDataItem;
+
+    const unbundledItem = {
+      ...optimisticItem,
+      data_offset: 100,
+      filter: '{"always": true}',
+      index: 0,
+      offset: 200,
+      owner_offset: 50,
+      owner_size: 32,
+      parent_id: parentId,
+      parent_index: 0,
+      root_parent_offset: 300,
+      root_tx_id: rootTxId,
+      signature_offset: 60,
+      signature_size: 32,
+      signature_type: 1,
+      size: 1234,
+    } as unknown as NormalizedDataItem;
+
+    const tagRowsById = () =>
+      bundlesDb
+        .prepare(
+          `SELECT root_transaction_id IS NULL AS optimistic, COUNT(*) AS count
+           FROM new_data_item_tags
+           WHERE data_item_id = @id
+           GROUP BY optimistic
+           ORDER BY optimistic`,
+        )
+        .all({ id: fromB64Url(itemId) }) as {
+        optimistic: number;
+        count: number;
+      }[];
+
+    it('drops the optimistic tag rows once the real root is known', async () => {
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'the optimistic write should leave one tag set with a NULL root',
+      );
+
+      await db.saveDataItem(unbundledItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'the unbundle write should replace the optimistic tag set, not add to it',
+      );
+    });
+
+    it('returns each tag once over GraphQL', async () => {
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+      await db.saveDataItem(unbundledItem);
+
+      const { edges } = await db.getGqlTransactions({
+        pageSize: 10,
+        ids: [itemId],
+      });
+
+      assert.equal(edges.length, 1);
+      assert.deepEqual(edges[0].node.tags, [
+        { name: 'App-Name', value: 'ArDrive-App' },
+        { name: 'Entity-Type', value: 'drive-state' },
+      ]);
+    });
+
+    it('keeps a repeated optimistic write idempotent', async () => {
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'a repeated optimistic write must replace its own tag set, not stack a second one',
+      );
+    });
+
+    it('does not re-add optimistic tags after the unbundle write', async () => {
+      // The admin queue-data-item route can be replayed after the bundle
+      // has already been unbundled (see the PE-9073 re-POST case above).
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+      await db.saveDataItem(unbundledItem);
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'the rooted tag set must survive an optimistic re-POST on its own',
+      );
+    });
+
+    it('keeps a repeated unrooted full write idempotent', async () => {
+      // The full-claim path is only reached with a root today, but the
+      // unrooted tag set must stay single-copy either way -- NULL roots do
+      // not conflict, so nothing else would deduplicate them.
+      await db.saveDataItem(optimisticItem);
+      await db.saveDataItem(optimisticItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'a repeated unrooted write must replace its own tag set',
+      );
+
+      await db.saveDataItem(unbundledItem);
+      await db.saveDataItem(optimisticItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'an unrooted write must not add a set alongside the rooted one',
+      );
+    });
+
+    it('writes unrooted tag rows when an optimistic write carries a root', async () => {
+      // insertOptimisticDataItem hardcodes NULL for the row-level root atom.
+      // The tag rows follow the same contract, so a caller that binds a root
+      // on the optimistic path cannot create a rooted set.
+      await db.saveDataItem(unbundledItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'an optimistic write must not claim a root on its tag rows',
+      );
+
+      await db.saveDataItem(unbundledItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'the unbundle write should still replace that set',
+      );
+    });
+  });
+
   // skipping for now as it works when running the test individually
   describe.skip('saveVerificationStatus', () => {
     const dataItemRootTxId = '0000000000000000000000000000000000000000000';

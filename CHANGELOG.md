@@ -12,6 +12,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Stopped GraphQL returning every tag twice for a recently uploaded data item.
+  Optimistically indexed data items are written with a NULL
+  `root_transaction_id`, which is part of the `new_data_item_tags` primary key.
+  SQLite treats those NULLs as distinct, so the later unbundle write added a
+  second tag set instead of replacing the first, and the tag lookup returned
+  both. The unbundle path now removes the optimistic tag rows, and the
+  optimistic path replaces its own rows rather than stacking a second copy.
+
 ## [Release 83] - 2026-09-01
 
 This is a **recommended release** focused on **data-retrieval correctness,
