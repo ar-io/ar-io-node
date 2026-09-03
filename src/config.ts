@@ -1266,16 +1266,24 @@ export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
 
 // Chunk data retrieval priority order (comma-separated list of sources)
 // Available sources: 'ar-io-network', 'arweave-network', 'legacy-s3'
+//
+// 'arweave-network' (miners) leads by default: miners are protocol-incentivized
+// to store and serve arbitrary chunks, while AR.IO gateways only hold what they
+// happened to cache. Asking the gateway layer first turns the common case into a
+// near-certain miss, and the misses concentrate on whichever gateway originated
+// the data. 'ar-io-network' stays in the chain as a fallback for chunks the
+// miner set cannot serve.
 export const CHUNK_DATA_RETRIEVAL_ORDER = env
-  .varOrDefault('CHUNK_DATA_RETRIEVAL_ORDER', 'ar-io-network,arweave-network')
+  .varOrDefault('CHUNK_DATA_RETRIEVAL_ORDER', 'arweave-network,ar-io-network')
   .split(',');
 
 // Chunk metadata retrieval priority order (comma-separated list of sources)
 // Available sources: 'ar-io-network', 'arweave-network', 'legacy-psql'
+// Ordered miners-first for the same reason as CHUNK_DATA_RETRIEVAL_ORDER above.
 export const CHUNK_METADATA_RETRIEVAL_ORDER = env
   .varOrDefault(
     'CHUNK_METADATA_RETRIEVAL_ORDER',
-    'ar-io-network,arweave-network',
+    'arweave-network,ar-io-network',
   )
   .split(',');
 
