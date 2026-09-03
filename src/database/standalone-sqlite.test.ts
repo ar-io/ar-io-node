@@ -2841,6 +2841,50 @@ describe('StandaloneSqliteDatabase', () => {
         'the rooted tag set must survive an optimistic re-POST on its own',
       );
     });
+
+    it('keeps a repeated unrooted full write idempotent', async () => {
+      // The full-claim path is only reached with a root today, but the
+      // unrooted tag set must stay single-copy either way -- NULL roots do
+      // not conflict, so nothing else would deduplicate them.
+      await db.saveDataItem(optimisticItem);
+      await db.saveDataItem(optimisticItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'a repeated unrooted write must replace its own tag set',
+      );
+
+      await db.saveDataItem(unbundledItem);
+      await db.saveDataItem(optimisticItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'an unrooted write must not add a set alongside the rooted one',
+      );
+    });
+
+    it('writes unrooted tag rows when an optimistic write carries a root', async () => {
+      // insertOptimisticDataItem hardcodes NULL for the row-level root atom.
+      // The tag rows follow the same contract, so a caller that binds a root
+      // on the optimistic path cannot create a rooted set.
+      await db.saveDataItem(unbundledItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'an optimistic write must not claim a root on its tag rows',
+      );
+
+      await db.saveDataItem(unbundledItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'the unbundle write should still replace that set',
+      );
+    });
   });
 
   // skipping for now as it works when running the test individually
