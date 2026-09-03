@@ -104,6 +104,10 @@ export const chunkServeLocalOnlyCounter = new promClient.Counter({
 // remote source. `boundary="local",bytes="local"` counts the requests
 // enforcing would refuse even though this gateway held the answer, which is
 // the number that decides whether an origin gateway can enforce.
+//
+// `cancelled` means the retrieval was aborted, either by the caller
+// disconnecting or by an internal timeout. The service sees a merged signal
+// and cannot separate them; the 499 and 502 counts on the route do.
 export const chunkPeerOriginShadowCounter = new promClient.Counter({
   name: 'chunk_peer_origin_shadow_total',
   help: 'Outcomes of peer-origin chunk serves that enforcing would have refused',

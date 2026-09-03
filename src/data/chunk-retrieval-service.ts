@@ -240,7 +240,7 @@ export class ChunkRetrievalService {
 
       // Boundary provenance for the shadow record. `db` is the only source
       // that resolves without a network call.
-      let shadowBoundary: 'local' | 'remote' | 'none' | 'aborted' = 'none';
+      let shadowBoundary: 'local' | 'remote' | 'none' | 'cancelled' = 'none';
 
       try {
         // Check for abort before TX boundary lookup
@@ -291,10 +291,15 @@ export class ChunkRetrievalService {
         return result;
       } catch (error: any) {
         if (shadowing) {
-          const aborted = error.name === 'AbortError';
+          // `cancelled` covers both a caller that disconnected and an
+          // internal abort (a source's own timeout, a losing peer being
+          // cancelled). The service sees a merged signal and cannot tell
+          // them apart; split them by comparing against the 499 and 502
+          // counts on the route.
+          const cancelled = error.name === 'AbortError';
           this.recordShadowOutcome(
-            aborted && shadowBoundary === 'none' ? 'aborted' : shadowBoundary,
-            aborted ? 'aborted' : 'none',
+            cancelled && shadowBoundary === 'none' ? 'cancelled' : shadowBoundary,
+            cancelled ? 'cancelled' : 'none',
           );
         }
         throw error;
@@ -320,8 +325,8 @@ export class ChunkRetrievalService {
    * boundary resolution, which enforcing skips.
    */
   private recordShadowOutcome(
-    boundary: 'local' | 'remote' | 'none' | 'aborted',
-    bytes: 'local' | 'remote' | 'none' | 'aborted',
+    boundary: 'local' | 'remote' | 'none' | 'cancelled',
+    bytes: 'local' | 'remote' | 'none' | 'cancelled',
   ): void {
     metrics.chunkPeerOriginShadowCounter.inc({ boundary, bytes });
   }
