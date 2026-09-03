@@ -1041,7 +1041,7 @@ export const chunkRetrievalService = new ChunkRetrievalService({
   txBoundarySource,
   chunkDataStore,
   chunkMetadataStore,
-  peerOriginLocalOnly: config.CHUNK_PEER_ORIGIN_LOCAL_ONLY,
+  peerOriginMode: config.CHUNK_PEER_ORIGIN_MODE,
 });
 
 // Optimistic chunk ingest GC: evicts cached chunks whose data_root never

@@ -1316,10 +1316,8 @@ export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
   12000,
 );
 
-// Serve peer-origin chunk requests (X-AR-IO-Hops >= 1, i.e. forwarded by
-// another AR.IO gateway) from local caches only, returning the usual
-// not-found 404 on a miss instead of running the remote cascade on the
-// peer's behalf.
+// How to treat chunk requests forwarded by another AR.IO gateway
+// (X-AR-IO-Hops >= 1): `off`, `shadow` or `enforce`.
 //
 // A peer that asks us for a chunk gives us one second before it gives up
 // (PEER_REQUEST_TIMEOUT_MS in ar-io-chunk-source.ts), while the serve
@@ -1327,12 +1325,25 @@ export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
 // work started for that caller therefore outlives its patience, and the
 // caller already has its own miner path. The AR.IO peer sources bound
 // forwarding depth with validateHopCount, but the boundary lookup and the
-// Arweave node path carry no such bound, so this closes that gap at the
+// Arweave node path carry no such bound, so `enforce` closes that gap at the
 // serve boundary rather than in each source.
 //
-// Defaults to false, preserving existing behavior.
-export const CHUNK_PEER_ORIGIN_LOCAL_ONLY =
-  env.varOrDefault('CHUNK_PEER_ORIGIN_LOCAL_ONLY', 'false') === 'true';
+// `shadow` changes nothing and records what enforcing would have cost, via
+// chunk_peer_origin_shadow_total. Run it before enforcing on any gateway
+// that originates data: a chunk ingested at upload time has no
+// absolute-offset index entry, so it misses the local cache lookup and is
+// reachable only through boundary resolution, which `enforce` skips.
+//
+// Defaults to `off`, preserving existing behavior.
+export const CHUNK_PEER_ORIGIN_MODE = (() => {
+  const value = env.varOrDefault('CHUNK_PEER_ORIGIN_MODE', 'off');
+  if (value !== 'off' && value !== 'shadow' && value !== 'enforce') {
+    throw new Error(
+      `Invalid CHUNK_PEER_ORIGIN_MODE: ${value}. Must be off, shadow or enforce`,
+    );
+  }
+  return value;
+})();
 
 // Chain fallback for chunk offset requests
 export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =

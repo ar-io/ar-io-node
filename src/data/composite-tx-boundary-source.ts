@@ -80,7 +80,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
           txId: dbResult.id,
           dataRoot: dbResult.dataRoot,
         });
-        return dbResult;
+        return { ...dbResult, source: 'db' };
       }
       log.debug('Database lookup returned no result');
     } catch (error: any) {
@@ -109,7 +109,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
             txId: anchorResult.id,
             dataRoot: anchorResult.dataRoot,
           });
-          return anchorResult;
+          return { ...anchorResult, source: 'anchor' };
         }
         log.debug('Chunk-metadata anchor returned no result');
       } catch (error: any) {
@@ -136,7 +136,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
           log.debug('tx_path validation successful', {
             dataRoot: txPathResult.dataRoot,
           });
-          return txPathResult;
+          return { ...txPathResult, source: 'tx_path' };
         }
         log.debug('tx_path validation returned no result');
       } catch (error: any) {
@@ -177,7 +177,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
             txId: chainResult.id,
             dataRoot: chainResult.dataRoot,
           });
-          return chainResult;
+          return { ...chainResult, source: 'chain' };
         }
         log.debug('Chain fallback returned no result');
       } catch (error: any) {

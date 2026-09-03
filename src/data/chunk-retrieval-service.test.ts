@@ -19,12 +19,23 @@ import {
   TxBoundary,
   TxBoundarySource,
 } from '../types.js';
+import * as metrics from '../metrics.js';
 import {
   ChunkNotFoundError,
   ChunkRetrievalService,
   hasTxId,
   usedCachePath,
 } from './chunk-retrieval-service.js';
+
+// Counters are process-global, so shadow assertions read the delta rather
+// than an absolute value.
+async function shadowCount(boundary: string, bytes: string): Promise<number> {
+  const out = await metrics.chunkPeerOriginShadowCounter.get();
+  const match = out.values.find(
+    (v: any) => v.labels.boundary === boundary && v.labels.bytes === bytes,
+  );
+  return match?.value ?? 0;
+}
 
 // Test constants
 const B64_DATA_ROOT = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
@@ -410,7 +421,7 @@ describe('ChunkRetrievalService', () => {
     });
   });
 
-  describe('retrieveChunk - peer-origin local-only policy', () => {
+  describe('retrieveChunk - peer-origin enforce mode', () => {
     it('refuses a peer-origin request that misses the local cache', async () => {
       const chunkDataStore = createMockChunkDataStore();
       const chunkMetadataStore = createMockChunkMetadataStore();
@@ -423,11 +434,11 @@ describe('ChunkRetrievalService', () => {
         txBoundarySource,
         chunkDataStore,
         chunkMetadataStore,
-        peerOriginLocalOnly: true,
+        peerOriginMode: 'enforce' as const,
       });
 
       await assert.rejects(
-        () => service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1 }),
+        () => service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1, clientIps: [] }),
         (error: any) => {
           assert.ok(error instanceof ChunkNotFoundError);
           assert.equal(error.errorType, 'peer_origin_local_only');
@@ -459,10 +470,10 @@ describe('ChunkRetrievalService', () => {
         txBoundarySource,
         chunkDataStore,
         chunkMetadataStore,
-        peerOriginLocalOnly: true,
+        peerOriginMode: 'enforce' as const,
       });
 
-      const result = await service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1 });
+      const result = await service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1, clientIps: [] });
 
       assert.equal(result.type, 'cache_hit');
       assert.equal((txBoundarySource.getTxBoundary as any).mock.callCount(), 0);
@@ -481,10 +492,10 @@ describe('ChunkRetrievalService', () => {
         txBoundarySource,
         chunkDataStore,
         chunkMetadataStore,
-        peerOriginLocalOnly: true,
+        peerOriginMode: 'enforce' as const,
       });
 
-      const result = await service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 0 });
+      const result = await service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 0, clientIps: [] });
 
       assert.equal(result.type, 'boundary_fetch');
       assert.equal((txBoundarySource.getTxBoundary as any).mock.callCount(), 1);
@@ -499,7 +510,7 @@ describe('ChunkRetrievalService', () => {
         log,
         chunkSource,
         txBoundarySource,
-        peerOriginLocalOnly: true,
+        peerOriginMode: 'enforce' as const,
       });
 
       const result = await service.retrieveChunk(ABSOLUTE_OFFSET);
@@ -522,11 +533,136 @@ describe('ChunkRetrievalService', () => {
         chunkMetadataStore,
       });
 
-      const result = await service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1 });
+      const result = await service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1, clientIps: [] });
 
       assert.equal(result.type, 'boundary_fetch');
       assert.equal((txBoundarySource.getTxBoundary as any).mock.callCount(), 1);
       assert.equal((chunkSource.getChunkByAny as any).mock.callCount(), 1);
+    });
+  });
+
+  describe('retrieveChunk - peer-origin shadow mode', () => {
+    it('leaves behavior unchanged and records a local/local outcome', async () => {
+      const chunkDataStore = createMockChunkDataStore();
+      const chunkMetadataStore = createMockChunkMetadataStore();
+      const txBoundarySource = createMockTxBoundarySource();
+      const chunkSource = createMockChunkSource();
+
+      // Boundary resolved by the DB source, bytes served off local disk: the
+      // case enforcing would wrongly refuse.
+      (txBoundarySource.getTxBoundary as any).mock.mockImplementation(
+        async () => ({
+          dataRoot: B64_DATA_ROOT,
+          id: TX_ID,
+          dataSize: TX_SIZE,
+          weaveOffset: WEAVE_OFFSET,
+          source: 'db',
+        }),
+      );
+      (chunkSource.getChunkByAny as any).mock.mockImplementation(async () => ({
+        ...mockChunk,
+        source: 'cache',
+      }));
+
+      const before = await shadowCount('local', 'local');
+
+      const service = new ChunkRetrievalService({
+        log,
+        chunkSource,
+        txBoundarySource,
+        chunkDataStore,
+        chunkMetadataStore,
+        peerOriginMode: 'shadow' as const,
+      });
+
+      const result = await service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1, clientIps: [] });
+
+      // Behavior is untouched: the peer is still served.
+      assert.equal(result.type, 'boundary_fetch');
+      assert.equal((txBoundarySource.getTxBoundary as any).mock.callCount(), 1);
+      assert.equal((chunkSource.getChunkByAny as any).mock.callCount(), 1);
+      assert.equal(await shadowCount('local', 'local'), before + 1);
+    });
+
+    it('records a remote boundary and remote bytes', async () => {
+      const chunkDataStore = createMockChunkDataStore();
+      const chunkMetadataStore = createMockChunkMetadataStore();
+      const txBoundarySource = createMockTxBoundarySource();
+      const chunkSource = createMockChunkSource();
+
+      (txBoundarySource.getTxBoundary as any).mock.mockImplementation(
+        async () => ({
+          dataRoot: B64_DATA_ROOT,
+          id: TX_ID,
+          dataSize: TX_SIZE,
+          weaveOffset: WEAVE_OFFSET,
+          source: 'anchor',
+        }),
+      );
+
+      const before = await shadowCount('remote', 'remote');
+
+      const service = new ChunkRetrievalService({
+        log,
+        chunkSource,
+        txBoundarySource,
+        chunkDataStore,
+        chunkMetadataStore,
+        peerOriginMode: 'shadow' as const,
+      });
+
+      await service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1, clientIps: [] });
+
+      assert.equal(await shadowCount('remote', 'remote'), before + 1);
+    });
+
+    it('records nothing for a direct client request', async () => {
+      const txBoundarySource = createMockTxBoundarySource();
+      const chunkSource = createMockChunkSource();
+
+      const before =
+        (await shadowCount('local', 'local')) +
+        (await shadowCount('remote', 'remote')) +
+        (await shadowCount('remote', 'none'));
+
+      const service = new ChunkRetrievalService({
+        log,
+        chunkSource,
+        txBoundarySource,
+        peerOriginMode: 'shadow' as const,
+      });
+
+      await service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 0, clientIps: [] });
+
+      const after =
+        (await shadowCount('local', 'local')) +
+        (await shadowCount('remote', 'remote')) +
+        (await shadowCount('remote', 'none'));
+      assert.equal(after, before);
+    });
+
+    it('records a failed retrieval as bytes=none', async () => {
+      const txBoundarySource = createMockTxBoundarySource();
+      const chunkSource = createMockChunkSource();
+
+      (txBoundarySource.getTxBoundary as any).mock.mockImplementation(
+        async () => null,
+      );
+
+      const before = await shadowCount('none', 'none');
+
+      const service = new ChunkRetrievalService({
+        log,
+        chunkSource,
+        txBoundarySource,
+        peerOriginMode: 'shadow' as const,
+      });
+
+      await assert.rejects(() =>
+        service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1, clientIps: [] }),
+      );
+
+      assert.equal(await shadowCount('none', 'none'), before + 1);
     });
   });
 });

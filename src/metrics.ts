@@ -87,14 +87,27 @@ export const chunkServeDeadlineExceededCounter = new promClient.Counter({
 });
 
 // Chunk serves answered from local caches only because the request arrived
-// from another AR.IO gateway (X-AR-IO-Hops >= 1) and
-// CHUNK_PEER_ORIGIN_LOCAL_ONLY is enabled. `result` is `cache_hit` when the
-// local cache satisfied the peer, `not_found` when the request was refused
-// rather than escalated to the remote cascade.
+// from another AR.IO gateway (X-AR-IO-Hops >= 1) and CHUNK_PEER_ORIGIN_MODE
+// is `shadow` or `enforce`. `result` is `cache_hit` when the local cache
+// satisfied the peer, `not_found` when `enforce` refused the request rather
+// than escalating it to the remote cascade.
 export const chunkServeLocalOnlyCounter = new promClient.Counter({
   name: 'chunk_serve_local_only_total',
   help: 'Count of peer-origin chunk serves restricted to local sources',
   labelNames: ['result'],
+});
+
+// What enforcing CHUNK_PEER_ORIGIN_MODE would have done to a peer-origin
+// chunk request, recorded while `shadow` leaves behavior unchanged.
+// `boundary` is whether offset resolution stayed local (the DB source) or
+// needed the network; `bytes` is whether the chunk came off local disk or a
+// remote source. `boundary="local",bytes="local"` counts the requests
+// enforcing would refuse even though this gateway held the answer, which is
+// the number that decides whether an origin gateway can enforce.
+export const chunkPeerOriginShadowCounter = new promClient.Counter({
+  name: 'chunk_peer_origin_shadow_total',
+  help: 'Outcomes of peer-origin chunk serves that enforcing would have refused',
+  labelNames: ['boundary', 'bytes'],
 });
 
 // Outcome of resolving an absolute weave offset to its containing block in

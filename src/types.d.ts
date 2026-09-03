@@ -404,6 +404,14 @@ export interface TxBoundary {
   dataSize: number;
   /** Absolute weave offset (end offset of transaction) */
   weaveOffset: number;
+  /**
+   * Which source in CompositeTxBoundarySource answered, set by that
+   * composite. `db` is the only one that resolves without a network call;
+   * `anchor` HEADs a peer, `tx_path` fetches an unvalidated chunk from AR.IO
+   * peers, and `chain` binary-searches the chain. Callers that need to know
+   * whether resolution stayed local read this rather than inferring it.
+   */
+  source?: 'db' | 'anchor' | 'tx_path' | 'chain';
 }
 
 /**

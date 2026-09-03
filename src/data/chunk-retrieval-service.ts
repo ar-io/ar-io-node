@@ -113,6 +113,11 @@ export class ChunkNotFoundError extends Error {
 // Service Implementation
 // =============================================================================
 
+/**
+ * Treatment of chunk requests forwarded by another AR.IO gateway.
+ */
+export type PeerOriginMode = 'off' | 'shadow' | 'enforce';
+
 export interface ChunkRetrievalServiceConfig {
   log: winston.Logger;
   chunkSource: ChunkByAnySource;
@@ -121,10 +126,14 @@ export interface ChunkRetrievalServiceConfig {
   chunkDataStore?: ChunkDataStore;
   chunkMetadataStore?: ChunkMetadataStore;
   /**
-   * Serve peer-origin requests (hops >= 1) from local caches only, refusing
-   * to run the remote cascade on a peer's behalf. Defaults to false.
+   * How to treat peer-origin requests (hops >= 1):
+   * - `off`: unchanged behavior, the full cascade runs for peers.
+   * - `shadow`: unchanged behavior, plus a record of what enforcing would
+   *   have cost, via `chunk_peer_origin_shadow_total`.
+   * - `enforce`: serve from local caches only, else a not-found 404.
+   * Defaults to `off`.
    */
-  peerOriginLocalOnly?: boolean;
+  peerOriginMode?: PeerOriginMode;
 }
 
 /**
@@ -143,7 +152,7 @@ export class ChunkRetrievalService {
   // Optional cache stores for fast path
   private chunkDataStore?: ChunkDataStore;
   private chunkMetadataStore?: ChunkMetadataStore;
-  private peerOriginLocalOnly: boolean;
+  private peerOriginMode: PeerOriginMode;
 
   constructor(config: ChunkRetrievalServiceConfig) {
     this.log = config.log.child({ class: this.constructor.name });
@@ -151,7 +160,7 @@ export class ChunkRetrievalService {
     this.txBoundarySource = config.txBoundarySource;
     this.chunkDataStore = config.chunkDataStore;
     this.chunkMetadataStore = config.chunkMetadataStore;
-    this.peerOriginLocalOnly = config.peerOriginLocalOnly ?? false;
+    this.peerOriginMode = config.peerOriginMode ?? 'off';
   }
 
   /**
@@ -194,25 +203,33 @@ export class ChunkRetrievalService {
       // patience and duplicates work they are already doing.
       const peerOrigin = (requestAttributes?.hops ?? 0) >= 1;
       span.setAttribute('chunk.peer_origin', peerOrigin);
+      const shadowing = peerOrigin && this.peerOriginMode === 'shadow';
 
       // 1. Try cache hit first
       if (this.chunkDataStore && this.chunkMetadataStore) {
         const cacheResult = await this.tryCacheHit(absoluteOffset, span);
         if (cacheResult) {
           span.setAttribute('chunk.retrieval_path', 'cache_hit');
-          if (peerOrigin && this.peerOriginLocalOnly) {
+          if (peerOrigin && this.peerOriginMode !== 'off') {
             metrics.chunkServeLocalOnlyCounter.inc({ result: 'cache_hit' });
           }
           return cacheResult;
         }
       }
 
-      // 1a. Peer-origin requests stop here when configured: answer from what
+      // 1a. Peer-origin requests stop here under `enforce`: answer from what
       // this gateway already holds, never by escalating to the boundary
       // sources or the chunk cascade. The AR.IO peer sources bound forwarding
       // depth themselves (validateHopCount), but the boundary lookup and the
       // Arweave node path do not, so the bound is applied here instead.
-      if (peerOrigin && this.peerOriginLocalOnly) {
+      //
+      // Under `shadow` the request proceeds untouched and the outcome is
+      // recorded, so an operator can size what enforcing would cost before
+      // enforcing it. That distinction matters most on a gateway that
+      // originates data: a chunk it ingested at upload time has no
+      // absolute-offset index entry, so it misses the cache lookup above and
+      // is reachable only through boundary resolution.
+      if (peerOrigin && this.peerOriginMode === 'enforce') {
         span.setAttribute('chunk.retrieval_path', 'peer_origin_local_only');
         metrics.chunkServeLocalOnlyCounter.inc({ result: 'not_found' });
         throw new ChunkNotFoundError(
@@ -221,38 +238,67 @@ export class ChunkRetrievalService {
         );
       }
 
-      // Check for abort before TX boundary lookup
-      signal?.throwIfAborted();
+      // Boundary provenance for the shadow record. `db` is the only source
+      // that resolves without a network call.
+      let shadowBoundary: 'local' | 'remote' | 'none' | 'aborted' = 'none';
 
-      // 2. Get TX boundary from composite source (handles DB → tx_path → chain)
-      span.addEvent('Getting TX boundary');
-      const txBoundary = await this.txBoundarySource.getTxBoundary(
-        BigInt(absoluteOffset),
-        signal,
-      );
+      try {
+        // Check for abort before TX boundary lookup
+        signal?.throwIfAborted();
 
-      if (!txBoundary) {
-        throw new ChunkNotFoundError(
-          `No TX boundary found for offset ${absoluteOffset}`,
-          'boundary_not_found',
+        // 2. Get TX boundary from composite source (handles DB → tx_path → chain)
+        span.addEvent('Getting TX boundary');
+        const txBoundary = await this.txBoundarySource.getTxBoundary(
+          BigInt(absoluteOffset),
+          signal,
         );
+
+        if (!txBoundary) {
+          throw new ChunkNotFoundError(
+            `No TX boundary found for offset ${absoluteOffset}`,
+            'boundary_not_found',
+          );
+        }
+
+        shadowBoundary = txBoundary.source === 'db' ? 'local' : 'remote';
+        span.setAttribute(
+          'chunk.boundary_source',
+          txBoundary.source ?? 'unknown',
+        );
+
+        span.addEvent('TX boundary found', {
+          tx_id: txBoundary.id ?? 'unknown',
+          data_root: txBoundary.dataRoot,
+          data_size: txBoundary.dataSize,
+        });
+
+        // 3. Fetch chunk using TX boundary
+        span.setAttribute('chunk.retrieval_path', 'boundary_fetch');
+        const result = await this.fetchChunkWithBoundary(
+          absoluteOffset,
+          txBoundary,
+          requestAttributes,
+          span,
+          signal,
+        );
+
+        if (shadowing) {
+          this.recordShadowOutcome(
+            shadowBoundary,
+            result.chunk.source === 'cache' ? 'local' : 'remote',
+          );
+        }
+        return result;
+      } catch (error: any) {
+        if (shadowing) {
+          const aborted = error.name === 'AbortError';
+          this.recordShadowOutcome(
+            aborted && shadowBoundary === 'none' ? 'aborted' : shadowBoundary,
+            aborted ? 'aborted' : 'none',
+          );
+        }
+        throw error;
       }
-
-      span.addEvent('TX boundary found', {
-        tx_id: txBoundary.id ?? 'unknown',
-        data_root: txBoundary.dataRoot,
-        data_size: txBoundary.dataSize,
-      });
-
-      // 3. Fetch chunk using TX boundary
-      span.setAttribute('chunk.retrieval_path', 'boundary_fetch');
-      return await this.fetchChunkWithBoundary(
-        absoluteOffset,
-        txBoundary,
-        requestAttributes,
-        span,
-        signal,
-      );
     } catch (error: any) {
       // Don't record AbortError as an exception
       if (error.name !== 'AbortError') {
@@ -262,6 +308,22 @@ export class ChunkRetrievalService {
     } finally {
       span.end();
     }
+  }
+
+  /**
+   * Records what enforcing would have done to one peer-origin request.
+   *
+   * `boundary` says whether offset resolution stayed local (`db`) or needed
+   * the network; `bytes` says whether the chunk itself came off local disk or
+   * a remote source. `boundary=local, bytes=local` is the case enforcing
+   * would break: this gateway held the answer but only reached it through
+   * boundary resolution, which enforcing skips.
+   */
+  private recordShadowOutcome(
+    boundary: 'local' | 'remote' | 'none' | 'aborted',
+    bytes: 'local' | 'remote' | 'none' | 'aborted',
+  ): void {
+    metrics.chunkPeerOriginShadowCounter.inc({ boundary, bytes });
   }
 
   /**
