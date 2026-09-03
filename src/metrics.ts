@@ -88,7 +88,7 @@ export const chunkServeDeadlineExceededCounter = new promClient.Counter({
 
 // Chunk serves answered from local caches only because the request arrived
 // from another AR.IO gateway (X-AR-IO-Hops >= 1) and CHUNK_PEER_ORIGIN_MODE
-// is `shadow` or `enforce`. `result` is `cache_hit` when the local cache
+// is `audit` or `enforce`. `result` is `cache_hit` when the local cache
 // satisfied the peer, `not_found` when `enforce` refused the request rather
 // than escalating it to the remote cascade.
 export const chunkServeLocalOnlyCounter = new promClient.Counter({
@@ -98,7 +98,7 @@ export const chunkServeLocalOnlyCounter = new promClient.Counter({
 });
 
 // What enforcing CHUNK_PEER_ORIGIN_MODE would have done to a peer-origin
-// chunk request, recorded while `shadow` leaves behavior unchanged.
+// chunk request, recorded while `audit` leaves behavior unchanged.
 // `boundary` is whether offset resolution stayed local (the DB source) or
 // needed the network; `bytes` is whether the chunk came off local disk or a
 // remote source. `boundary="local",bytes="local"` counts the requests
@@ -108,8 +108,8 @@ export const chunkServeLocalOnlyCounter = new promClient.Counter({
 // `cancelled` means the retrieval was aborted, either by the caller
 // disconnecting or by an internal timeout. The service sees a merged signal
 // and cannot separate them; the 499 and 502 counts on the route do.
-export const chunkPeerOriginShadowCounter = new promClient.Counter({
-  name: 'chunk_peer_origin_shadow_total',
+export const chunkPeerOriginAuditCounter = new promClient.Counter({
+  name: 'chunk_peer_origin_audit_total',
   help: 'Outcomes of peer-origin chunk serves that enforcing would have refused',
   labelNames: ['boundary', 'bytes'],
 });

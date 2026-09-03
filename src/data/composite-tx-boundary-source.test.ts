@@ -128,6 +128,71 @@ describe('CompositeTxBoundarySource', () => {
     });
   });
 
+  describe('localSourcesOnly', () => {
+    const localOnly = { hops: 1, clientIps: [], localSourcesOnly: true };
+
+    it('still uses the database source, which needs no network', async () => {
+      const anchorSource = sourceReturning(boundary('anchor-tx'));
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource: sourceReturning(boundary('db-tx')),
+        anchorSource,
+      });
+
+      const result = await composite.getTxBoundary(
+        OFFSET,
+        undefined,
+        localOnly,
+      );
+
+      assert.equal(result?.source, 'db');
+      assert.equal((anchorSource.getTxBoundary as any).mock.callCount(), 0);
+    });
+
+    it('returns null rather than reaching the network when the database misses', async () => {
+      const anchorSource = sourceReturning(boundary('anchor-tx'));
+      const txPathSource = sourceReturning(boundary('txpath-tx'));
+      const chainSource = sourceReturning(boundary('chain-tx'));
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource: sourceReturning(null),
+        anchorSource,
+        txPathSource,
+        chainSource,
+      });
+
+      const result = await composite.getTxBoundary(
+        OFFSET,
+        undefined,
+        localOnly,
+      );
+
+      // Each of these is a network call: a HEAD to a peer, an unvalidated
+      // chunk fetch from AR.IO peers, and a chain binary search.
+      assert.equal(result, null);
+      assert.equal((anchorSource.getTxBoundary as any).mock.callCount(), 0);
+      assert.equal((txPathSource.getTxBoundary as any).mock.callCount(), 0);
+      assert.equal((chainSource.getTxBoundary as any).mock.callCount(), 0);
+    });
+
+    it('leaves the remote sources in play when the flag is absent', async () => {
+      const anchorSource = sourceReturning(boundary('anchor-tx'));
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource: sourceReturning(null),
+        anchorSource,
+      });
+
+      const result = await composite.getTxBoundary(OFFSET, undefined, {
+        hops: 1,
+        clientIps: [],
+      });
+
+      assert.equal(result?.source, 'anchor');
+      assert.equal((anchorSource.getTxBoundary as any).mock.callCount(), 1);
+    });
+  });
+
   describe('cancellation', () => {
     it('propagates an AbortError rather than falling through', async () => {
       const anchorSource = sourceReturning(boundary('anchor-tx'));

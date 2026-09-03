@@ -1515,6 +1515,17 @@ export class ArweaveCompositeClient
       this.failureSimulator.maybeFail();
       signal?.throwIfAborted();
 
+      // A caller that asked for local sources only has declined the network,
+      // and every path below this point is a request to an Arweave node.
+      // Declining here rather than in each caller keeps the rule in one
+      // place: getChunkDataByAny and getChunkMetadataByAny both funnel
+      // through this method.
+      if (params.requestAttributes?.localSourcesOnly === true) {
+        throw new Error(
+          'Arweave network chunk retrieval skipped: request is local-sources-only',
+        );
+      }
+
       const cacheKey = JSON.stringify({
         absoluteOffset,
         txSize,

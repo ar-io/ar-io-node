@@ -423,6 +423,7 @@ export interface TxBoundarySource {
   getTxBoundary(
     absoluteOffset: bigint,
     signal?: AbortSignal,
+    requestAttributes?: RequestAttributes,
   ): Promise<TxBoundary | null>;
 }
 
@@ -688,6 +689,18 @@ export interface RequestAttributes {
   /** When true, remote data sources (AR.IO peers, trusted gateways) should be
    * skipped to prevent request loops from compute-origin callers like HyperBEAM. */
   skipRemoteForwarding?: boolean;
+  /**
+   * When true, answer using only what this gateway can reach without asking
+   * the network: its local caches, its own index, and operator-owned storage
+   * backends. Arweave nodes, the chain, and the peer chunk-metadata anchor
+   * probe are all declined.
+   *
+   * Distinct from `skipRemoteForwarding`, which covers the AR.IO peer layer
+   * only. Set both to deny every network source; `skipRemoteForwarding` alone
+   * keeps its existing meaning for compute-origin callers, which may still
+   * reach Arweave nodes.
+   */
+  localSourcesOnly?: boolean;
   /** Chain of gateway identities this request has traversed, for loop detection */
   via?: string[];
   /** Client-supplied root transaction ID hint for fast-path resolution */

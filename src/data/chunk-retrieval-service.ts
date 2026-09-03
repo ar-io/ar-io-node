@@ -116,7 +116,7 @@ export class ChunkNotFoundError extends Error {
 /**
  * Treatment of chunk requests forwarded by another AR.IO gateway.
  */
-export type PeerOriginMode = 'off' | 'shadow' | 'enforce';
+export type PeerOriginMode = 'off' | 'audit' | 'enforce';
 
 export interface ChunkRetrievalServiceConfig {
   log: winston.Logger;
@@ -128,8 +128,8 @@ export interface ChunkRetrievalServiceConfig {
   /**
    * How to treat peer-origin requests (hops >= 1):
    * - `off`: unchanged behavior, the full cascade runs for peers.
-   * - `shadow`: unchanged behavior, plus a record of what enforcing would
-   *   have cost, via `chunk_peer_origin_shadow_total`.
+   * - `audit`: unchanged behavior, plus a record of what enforcing would
+   *   have cost, via `chunk_peer_origin_audit_total`.
    * - `enforce`: serve from local caches only, else a not-found 404.
    * Defaults to `off`.
    */
@@ -203,7 +203,27 @@ export class ChunkRetrievalService {
       // patience and duplicates work they are already doing.
       const peerOrigin = (requestAttributes?.hops ?? 0) >= 1;
       span.setAttribute('chunk.peer_origin', peerOrigin);
-      const shadowing = peerOrigin && this.peerOriginMode === 'shadow';
+      const auditing = peerOrigin && this.peerOriginMode === 'audit';
+      const enforcing = peerOrigin && this.peerOriginMode === 'enforce';
+
+      // Under `enforce` the request still runs the pipeline, with every
+      // network source declined. Stopping at the cache lookup instead would
+      // refuse chunks this gateway holds: one cached at ingest is stored by
+      // data root and relative offset, with no absolute-offset symlink,
+      // because a chunk posted before mining has no weave offset yet. Such a
+      // chunk misses `tryCacheHit` and is reachable only once the local index
+      // resolves the boundary, which is why the local index stays in play.
+      //
+      // `skipRemoteForwarding` covers the AR.IO peer sources, which already
+      // honor it. `localSourcesOnly` covers the Arweave node path and the
+      // remote boundary sources, which do not.
+      const effectiveAttributes: RequestAttributes | undefined = enforcing
+        ? {
+            ...(requestAttributes ?? { hops: 1, clientIps: [] }),
+            localSourcesOnly: true,
+            skipRemoteForwarding: true,
+          }
+        : requestAttributes;
 
       // 1. Try cache hit first
       if (this.chunkDataStore && this.chunkMetadataStore) {
@@ -217,30 +237,9 @@ export class ChunkRetrievalService {
         }
       }
 
-      // 1a. Peer-origin requests stop here under `enforce`: answer from what
-      // this gateway already holds, never by escalating to the boundary
-      // sources or the chunk cascade. The AR.IO peer sources bound forwarding
-      // depth themselves (validateHopCount), but the boundary lookup and the
-      // Arweave node path do not, so the bound is applied here instead.
-      //
-      // Under `shadow` the request proceeds untouched and the outcome is
-      // recorded, so an operator can size what enforcing would cost before
-      // enforcing it. That distinction matters most on a gateway that
-      // originates data: a chunk it ingested at upload time has no
-      // absolute-offset index entry, so it misses the cache lookup above and
-      // is reachable only through boundary resolution.
-      if (peerOrigin && this.peerOriginMode === 'enforce') {
-        span.setAttribute('chunk.retrieval_path', 'peer_origin_local_only');
-        metrics.chunkServeLocalOnlyCounter.inc({ result: 'not_found' });
-        throw new ChunkNotFoundError(
-          `Peer-origin request for offset ${absoluteOffset} missed the local cache`,
-          'peer_origin_local_only',
-        );
-      }
-
-      // Boundary provenance for the shadow record. `db` is the only source
+      // Boundary provenance for the audit record. `db` is the only source
       // that resolves without a network call.
-      let shadowBoundary: 'local' | 'remote' | 'none' | 'cancelled' = 'none';
+      let auditBoundary: 'local' | 'remote' | 'none' | 'cancelled' = 'none';
 
       try {
         // Check for abort before TX boundary lookup
@@ -251,6 +250,7 @@ export class ChunkRetrievalService {
         const txBoundary = await this.txBoundarySource.getTxBoundary(
           BigInt(absoluteOffset),
           signal,
+          effectiveAttributes,
         );
 
         if (!txBoundary) {
@@ -260,7 +260,7 @@ export class ChunkRetrievalService {
           );
         }
 
-        shadowBoundary = txBoundary.source === 'db' ? 'local' : 'remote';
+        auditBoundary = txBoundary.source === 'db' ? 'local' : 'remote';
         span.setAttribute(
           'chunk.boundary_source',
           txBoundary.source ?? 'unknown',
@@ -277,29 +277,43 @@ export class ChunkRetrievalService {
         const result = await this.fetchChunkWithBoundary(
           absoluteOffset,
           txBoundary,
-          requestAttributes,
+          effectiveAttributes,
           span,
           signal,
         );
 
-        if (shadowing) {
-          this.recordShadowOutcome(
-            shadowBoundary,
+        if (auditing) {
+          this.recordAuditOutcome(
+            auditBoundary,
             result.chunk.source === 'cache' ? 'local' : 'remote',
           );
         }
+        if (enforcing) {
+          metrics.chunkServeLocalOnlyCounter.inc({ result: 'cache_hit' });
+        }
         return result;
       } catch (error: any) {
-        if (shadowing) {
+        const cancelled = error.name === 'AbortError';
+        if (auditing) {
           // `cancelled` covers both a caller that disconnected and an
           // internal abort (a source's own timeout, a losing peer being
           // cancelled). The service sees a merged signal and cannot tell
           // them apart; split them by comparing against the 499 and 502
           // counts on the route.
-          const cancelled = error.name === 'AbortError';
-          this.recordShadowOutcome(
-            cancelled && shadowBoundary === 'none' ? 'cancelled' : shadowBoundary,
+          this.recordAuditOutcome(
+            cancelled && auditBoundary === 'none' ? 'cancelled' : auditBoundary,
             cancelled ? 'cancelled' : 'none',
+          );
+        }
+        // Under `enforce` a declined network source surfaces as an ordinary
+        // failure. Wrap it so the route returns the documented not-found 404
+        // rather than classifying a deliberate refusal as a gateway fault.
+        if (enforcing && !cancelled) {
+          span.setAttribute('chunk.retrieval_path', 'peer_origin_local_only');
+          metrics.chunkServeLocalOnlyCounter.inc({ result: 'not_found' });
+          throw new ChunkNotFoundError(
+            `Peer-origin request for offset ${absoluteOffset} is not servable from local sources`,
+            'peer_origin_local_only',
           );
         }
         throw error;
@@ -324,11 +338,11 @@ export class ChunkRetrievalService {
    * would break: this gateway held the answer but only reached it through
    * boundary resolution, which enforcing skips.
    */
-  private recordShadowOutcome(
+  private recordAuditOutcome(
     boundary: 'local' | 'remote' | 'none' | 'cancelled',
     bytes: 'local' | 'remote' | 'none' | 'cancelled',
   ): void {
-    metrics.chunkPeerOriginShadowCounter.inc({ boundary, bytes });
+    metrics.chunkPeerOriginAuditCounter.inc({ boundary, bytes });
   }
 
   /**

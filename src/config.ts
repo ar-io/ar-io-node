@@ -1317,7 +1317,7 @@ export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
 );
 
 // How to treat chunk requests forwarded by another AR.IO gateway
-// (X-AR-IO-Hops >= 1): `off`, `shadow` or `enforce`.
+// (X-AR-IO-Hops >= 1): `off`, `audit` or `enforce`.
 //
 // A peer that asks us for a chunk gives us one second before it gives up
 // (PEER_REQUEST_TIMEOUT_MS in ar-io-chunk-source.ts), while the serve
@@ -1328,8 +1328,8 @@ export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
 // Arweave node path carry no such bound, so `enforce` closes that gap at the
 // serve boundary rather than in each source.
 //
-// `shadow` changes nothing and records what enforcing would have cost, via
-// chunk_peer_origin_shadow_total. Run it before enforcing on any gateway
+// `audit` changes nothing and records what enforcing would have cost, via
+// chunk_peer_origin_audit_total. Run it before enforcing on any gateway
 // that originates data: a chunk ingested at upload time has no
 // absolute-offset index entry, so it misses the local cache lookup and is
 // reachable only through boundary resolution, which `enforce` skips.
@@ -1337,9 +1337,9 @@ export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
 // Defaults to `off`, preserving existing behavior.
 export const CHUNK_PEER_ORIGIN_MODE = (() => {
   const value = env.varOrDefault('CHUNK_PEER_ORIGIN_MODE', 'off');
-  if (value !== 'off' && value !== 'shadow' && value !== 'enforce') {
+  if (value !== 'off' && value !== 'audit' && value !== 'enforce') {
     throw new Error(
-      `Invalid CHUNK_PEER_ORIGIN_MODE: ${value}. Must be off, shadow or enforce`,
+      `Invalid CHUNK_PEER_ORIGIN_MODE: ${value}. Must be off, audit or enforce`,
     );
   }
   return value;
