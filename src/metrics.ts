@@ -101,9 +101,14 @@ export const chunkServeLocalOnlyCounter = new promClient.Counter({
 // chunk request, recorded while `audit` leaves behavior unchanged.
 // `boundary` is whether offset resolution stayed local (the DB source) or
 // needed the network; `bytes` is whether the chunk came off local disk or a
-// remote source. `boundary="local",bytes="local"` counts the requests
-// enforcing would refuse even though this gateway held the answer, which is
-// the number that decides whether an origin gateway can enforce.
+// remote source.
+//
+// **`bytes="local"` is the cost of enforcing**, whatever the boundary label:
+// this gateway held the chunk and served it. `boundary="local"` means
+// enforcing would still have served it; `boundary="remote"` means it would
+// not, because the bytes were only locatable through a network offset
+// lookup that enforcing declines. Sum both when deciding whether a gateway
+// can enforce, and do not read `boundary="local",bytes="local"` alone.
 //
 // `cancelled` means the retrieval was aborted, either by the caller
 // disconnecting or by an internal timeout. The service sees a merged signal

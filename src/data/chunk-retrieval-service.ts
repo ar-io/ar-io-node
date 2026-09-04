@@ -334,9 +334,12 @@ export class ChunkRetrievalService {
    *
    * `boundary` says whether offset resolution stayed local (`db`) or needed
    * the network; `bytes` says whether the chunk itself came off local disk or
-   * a remote source. `boundary=local, bytes=local` is the case enforcing
-   * would break: this gateway held the answer but only reached it through
-   * boundary resolution, which enforcing skips.
+   * a remote source.
+   *
+   * `bytes=local` is the cost of enforcing: this gateway held the chunk and
+   * served it. With `boundary=remote` it would no longer be served, because
+   * the bytes were locatable only through a network offset lookup that
+   * enforcing declines. Both cells count.
    */
   private recordAuditOutcome(
     boundary: 'local' | 'remote' | 'none' | 'cancelled',
