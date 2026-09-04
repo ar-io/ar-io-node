@@ -404,6 +404,14 @@ export interface TxBoundary {
   dataSize: number;
   /** Absolute weave offset (end offset of transaction) */
   weaveOffset: number;
+  /**
+   * Which source in CompositeTxBoundarySource answered, set by that
+   * composite. `db` is the only one that resolves without a network call;
+   * `anchor` HEADs a peer, `tx_path` fetches an unvalidated chunk from AR.IO
+   * peers, and `chain` binary-searches the chain. Callers that need to know
+   * whether resolution stayed local read this rather than inferring it.
+   */
+  source?: 'db' | 'anchor' | 'tx_path' | 'chain';
 }
 
 /**
@@ -415,6 +423,7 @@ export interface TxBoundarySource {
   getTxBoundary(
     absoluteOffset: bigint,
     signal?: AbortSignal,
+    requestAttributes?: RequestAttributes,
   ): Promise<TxBoundary | null>;
 }
 
@@ -680,6 +689,18 @@ export interface RequestAttributes {
   /** When true, remote data sources (AR.IO peers, trusted gateways) should be
    * skipped to prevent request loops from compute-origin callers like HyperBEAM. */
   skipRemoteForwarding?: boolean;
+  /**
+   * When true, answer using only what this gateway can reach without asking
+   * the network: its local caches, its own index, and operator-owned storage
+   * backends. Arweave nodes, the chain, and the peer chunk-metadata anchor
+   * probe are all declined.
+   *
+   * Distinct from `skipRemoteForwarding`, which covers the AR.IO peer layer
+   * only. Set both to deny every network source; `skipRemoteForwarding` alone
+   * keeps its existing meaning for compute-origin callers, which may still
+   * reach Arweave nodes.
+   */
+  localSourcesOnly?: boolean;
   /** Chain of gateway identities this request has traversed, for loop detection */
   via?: string[];
   /** Client-supplied root transaction ID hint for fast-path resolution */
