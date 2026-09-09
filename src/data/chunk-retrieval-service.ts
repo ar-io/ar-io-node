@@ -118,6 +118,17 @@ export class ChunkNotFoundError extends Error {
  */
 export type PeerOriginMode = 'off' | 'audit' | 'enforce';
 
+/**
+ * `Chunk.source` values that answer without a request to the AR.IO or Arweave
+ * networks: the local chunk cache, and operator-owned storage backends.
+ *
+ * `enforce` permits exactly these, so the audit has to classify them the same
+ * way. Treating only `cache` as local would record an S3-served chunk as
+ * `bytes="remote"` and overstate what enforcing costs. Keep this in step with
+ * whatever `enforce` declines.
+ */
+const LOCAL_CHUNK_SOURCES = new Set(['cache', 'legacy-s3']);
+
 export interface ChunkRetrievalServiceConfig {
   log: winston.Logger;
   chunkSource: ChunkByAnySource;
@@ -285,7 +296,9 @@ export class ChunkRetrievalService {
         if (auditing) {
           this.recordAuditOutcome(
             auditBoundary,
-            result.chunk.source === 'cache' ? 'local' : 'remote',
+            LOCAL_CHUNK_SOURCES.has(result.chunk.source ?? '')
+              ? 'local'
+              : 'remote',
           );
         }
         if (enforcing) {
@@ -308,7 +321,12 @@ export class ChunkRetrievalService {
         // Under `enforce` a declined network source surfaces as an ordinary
         // failure. Wrap it so the route returns the documented not-found 404
         // rather than classifying a deliberate refusal as a gateway fault.
-        if (enforcing && !cancelled) {
+        //
+        // Only an absence is wrapped. A local source that *errored*, a SQLite
+        // failure or a disk error, keeps its own error so
+        // classifyChunkRetrievalError can report it as a gateway fault
+        // instead of hiding infrastructure trouble behind a not-found.
+        if (enforcing && !cancelled && error instanceof ChunkNotFoundError) {
           span.setAttribute('chunk.retrieval_path', 'peer_origin_local_only');
           metrics.chunkServeLocalOnlyCounter.inc({ result: 'not_found' });
           throw new ChunkNotFoundError(

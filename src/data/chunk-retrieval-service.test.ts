@@ -493,6 +493,40 @@ describe('ChunkRetrievalService', () => {
       assert.equal(result.chunk.source, 'cache');
     });
 
+    it('preserves a local infrastructure error instead of reporting not-found', async () => {
+      // A SQLite or disk failure must not be flattened into
+      // peer_origin_local_only, or a 404 hides a broken gateway.
+      const chunkDataStore = createMockChunkDataStore();
+      const chunkMetadataStore = createMockChunkMetadataStore();
+      const txBoundarySource = createMockTxBoundarySource();
+      const chunkSource = createMockChunkSource();
+
+      (txBoundarySource.getTxBoundary as any).mock.mockImplementation(
+        async () => {
+          throw new Error('SQLITE_IOERR: disk I/O error');
+        },
+      );
+
+      const service = new ChunkRetrievalService({
+        log,
+        chunkSource,
+        txBoundarySource,
+        chunkDataStore,
+        chunkMetadataStore,
+        peerOriginMode: 'enforce' as const,
+      });
+
+      await assert.rejects(
+        () =>
+          service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1, clientIps: [] }),
+        (error: any) => {
+          assert.equal(error instanceof ChunkNotFoundError, false);
+          assert.match(error.message, /disk I\/O error/);
+          return true;
+        },
+      );
+    });
+
     it('refuses with peer_origin_local_only when no local source can serve', async () => {
       const chunkDataStore = createMockChunkDataStore();
       const chunkMetadataStore = createMockChunkMetadataStore();
@@ -668,6 +702,45 @@ describe('ChunkRetrievalService', () => {
       assert.equal(result.type, 'boundary_fetch');
       assert.equal((txBoundarySource.getTxBoundary as any).mock.callCount(), 1);
       assert.equal((chunkSource.getChunkByAny as any).mock.callCount(), 1);
+      assert.equal(await auditCount('local', 'local'), before + 1);
+    });
+
+    it('counts an operator-owned S3 chunk as local, not remote', async () => {
+      // S3ChunkSource returns source 'legacy-s3'. `enforce` permits that
+      // backend, so classifying it as remote would overstate the cost of
+      // enforcing.
+      const chunkDataStore = createMockChunkDataStore();
+      const chunkMetadataStore = createMockChunkMetadataStore();
+      const txBoundarySource = createMockTxBoundarySource();
+      const chunkSource = createMockChunkSource();
+
+      (txBoundarySource.getTxBoundary as any).mock.mockImplementation(
+        async () => ({
+          dataRoot: B64_DATA_ROOT,
+          id: TX_ID,
+          dataSize: TX_SIZE,
+          weaveOffset: WEAVE_OFFSET,
+          source: 'db',
+        }),
+      );
+      (chunkSource.getChunkByAny as any).mock.mockImplementation(async () => ({
+        ...mockChunk,
+        source: 'legacy-s3',
+      }));
+
+      const before = await auditCount('local', 'local');
+
+      const service = new ChunkRetrievalService({
+        log,
+        chunkSource,
+        txBoundarySource,
+        chunkDataStore,
+        chunkMetadataStore,
+        peerOriginMode: 'audit' as const,
+      });
+
+      await service.retrieveChunk(ABSOLUTE_OFFSET, { hops: 1, clientIps: [] });
+
       assert.equal(await auditCount('local', 'local'), before + 1);
     });
 

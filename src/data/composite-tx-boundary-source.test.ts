@@ -175,6 +175,23 @@ describe('CompositeTxBoundarySource', () => {
       assert.equal((chainSource.getTxBoundary as any).mock.callCount(), 0);
     });
 
+    it('propagates a database failure rather than reporting a miss', async () => {
+      // With no fallback available, swallowing the error would present a
+      // SQLite failure as "this offset does not exist".
+      const anchorSource = sourceReturning(boundary('anchor-tx'));
+      const composite = new CompositeTxBoundarySource({
+        log,
+        dbSource: sourceThrowing('SQLITE_IOERR: disk I/O error'),
+        anchorSource,
+      });
+
+      await assert.rejects(
+        () => composite.getTxBoundary(OFFSET, undefined, localOnly),
+        /disk I\/O error/,
+      );
+      assert.equal((anchorSource.getTxBoundary as any).mock.callCount(), 0);
+    });
+
     it('leaves the remote sources in play when the flag is absent', async () => {
       const anchorSource = sourceReturning(boundary('anchor-tx'));
       const composite = new CompositeTxBoundarySource({

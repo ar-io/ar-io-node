@@ -79,6 +79,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     signal?.throwIfAborted();
 
     // 1. Try database source first (fastest)
+    let dbError: any;
     try {
       log.debug('Attempting database lookup');
       const dbResult = await this.dbSource.getTxBoundary(
@@ -99,6 +100,7 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
         throw error;
       }
       log.debug('Database lookup failed', { error: error.message });
+      dbError = error;
     }
 
     // Check for abort before chunk-metadata anchor
@@ -199,6 +201,17 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
       } finally {
         this.activeChainFallbackCount--;
       }
+    }
+
+    // A local-only caller has no fallback, so a failed database lookup is the
+    // whole answer rather than one miss among several. Returning null here
+    // would present a SQLite or disk failure as "this offset does not exist",
+    // and the caller would report a not-found instead of a gateway fault.
+    if (localOnly && dbError !== undefined) {
+      log.debug('Local-only lookup failed with no fallback available', {
+        error: dbError.message,
+      });
+      throw dbError;
     }
 
     log.debug('All sources exhausted - no TX boundary found');
