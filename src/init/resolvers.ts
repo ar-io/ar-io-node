@@ -97,6 +97,20 @@ export const createArNSResolver = ({
         : undefined,
   };
 
+  // The trusted-gateway resolver now accepts an upstream's protocol + resolved
+  // id (including IPFS CIDs). A plaintext upstream can be MITM'd to bind a name
+  // to arbitrary content and drive this node's Kubo to fetch it — so prefer https.
+  if (
+    trustedGatewayUrl !== undefined &&
+    trustedGatewayUrl.startsWith('http://')
+  ) {
+    log.warn(
+      'TRUSTED_ARNS_GATEWAY_URL uses plaintext http; an on-path attacker could ' +
+        'forge name resolutions (incl. IPFS CIDs). Use https.',
+      { trustedGatewayUrl },
+    );
+  }
+
   const resolvers: NameResolver[] = [];
 
   // add resolvers in the order specified by resolutionOrder

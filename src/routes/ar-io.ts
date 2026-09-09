@@ -228,6 +228,7 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
             solanaAddress: config.HTTPSIG_SIGNER.solanaAddress,
           }
         : undefined,
+    ipfs: config.IPFS_ENABLED ? { enabled: true } : undefined,
   });
 
   res.status(200).send(response);

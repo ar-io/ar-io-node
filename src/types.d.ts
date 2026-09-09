@@ -1394,6 +1394,16 @@ export interface ValidNameResolution {
   name: string;
   statusCode?: number;
   resolvedId: string;
+  /**
+   * Storage protocol of the resolved target, mirroring the ANT record's
+   * `targetProtocol` (0 = Arweave, 1 = IPFS). `'arweave'` means `resolvedId`
+   * is a 43-char Arweave TX / data-item ID served from the Arweave data path;
+   * `'ipfs'` means `resolvedId` is an IPFS CID served via the Kubo IPFS path.
+   * Optional for backward compatibility — `undefined` is treated as
+   * `'arweave'` by consumers (e.g. trusted-gateway hops that don't yet carry
+   * the protocol).
+   */
+  protocol?: 'arweave' | 'ipfs';
   resolvedAt: number;
   ttl: number;
   /**

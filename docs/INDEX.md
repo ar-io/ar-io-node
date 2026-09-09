@@ -23,6 +23,12 @@ Fast, offline lookups for data item to root transaction mappings.
 | [CDB64 Tools Reference](cdb64-tools.md) | CLI tools for creating indexes |
 | [CDB64 Format Specification](cdb64-format.md) | Technical file format details |
 
+### IPFS Integration
+
+| Document | Description |
+|----------|-------------|
+| [IPFS Integration](ipfs-integration.md) | Architecture, deployment, and configuration for IPFS CID serving |
+
 ### Rate Limiting & Payments
 
 | Document | Description |

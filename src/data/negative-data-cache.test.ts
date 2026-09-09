@@ -68,6 +68,65 @@ describe('NegativeDataCache', () => {
     assert.equal(cache.isNegativelyCached('id1'), true);
   });
 
+  it('a single HARD miss re-promotes immediately after a prior promotion', () => {
+    const cache = createCache();
+    cache.recordMiss('id1');
+    currentTime = 6_000;
+    cache.recordMiss('id1');
+    currentTime = 11_000;
+    cache.recordMiss('id1');
+    // Let the negative-cache entry expire (past ttlMs) but keep promotion history.
+    currentTime = 11_000 + 60_001;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+    // A single hard miss re-promotes immediately (the fast path).
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), true);
+  });
+
+  it('a single SOFT miss does NOT use the re-promotion fast path (timeout safety)', () => {
+    const cache = createCache();
+    cache.recordMiss('id1');
+    currentTime = 6_000;
+    cache.recordMiss('id1');
+    currentTime = 11_000;
+    cache.recordMiss('id1');
+    currentTime = 11_000 + 60_001;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+    // A single SOFT miss (e.g. a transient IPFS timeout) must NOT instantly
+    // re-blackhole a recovering id — it still needs the full miss threshold.
+    cache.recordMiss('id1', { softMiss: true });
+    assert.equal(cache.isNegativelyCached('id1'), false);
+  });
+
+  it('a soft-miss promotion uses the short softMissTtlMs and self-heals', () => {
+    const cache = createCache({ softMissTtlMs: 5_000, maxTtlMs: 120_000 });
+    // Trip via the full threshold of soft misses over the duration window.
+    cache.recordMiss('id1', { softMiss: true });
+    currentTime = 6_000;
+    cache.recordMiss('id1', { softMiss: true });
+    currentTime = 11_000;
+    cache.recordMiss('id1', { softMiss: true });
+    assert.equal(cache.isNegativelyCached('id1'), true);
+    // Self-heals after the short 5s soft TTL, NOT the 60s absent-content ttl.
+    currentTime = 11_000 + 5_001;
+    assert.equal(cache.isNegativelyCached('id1'), false);
+  });
+
+  it('a soft-miss promotion does not build escalation history', () => {
+    const cache = createCache({ softMissTtlMs: 5_000 });
+    cache.recordMiss('id1', { softMiss: true });
+    currentTime = 6_000;
+    cache.recordMiss('id1', { softMiss: true });
+    currentTime = 11_000;
+    cache.recordMiss('id1', { softMiss: true });
+    assert.equal(cache.isNegativelyCached('id1'), true);
+    currentTime = 11_000 + 5_001; // soft entry expired
+    // A later HARD miss must NOT get the single-miss fast path, because the soft
+    // promotion did not record promotion history.
+    cache.recordMiss('id1');
+    assert.equal(cache.isNegativelyCached('id1'), false);
+  });
+
   it('evict removes from negative cache', () => {
     const cache = createCache();
     cache.recordMiss('id1');

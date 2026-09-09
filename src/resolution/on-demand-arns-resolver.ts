@@ -6,7 +6,7 @@
  */
 import winston from 'winston';
 
-import { isValidDataId } from '../lib/validation.js';
+import { classifyResolvedTarget } from './resolved-target.js';
 import { NameResolution, NameResolver } from '../types.js';
 import { ArNSNameDataWithName, SolanaANTReadable } from '@ar.io/sdk';
 import { address, type Rpc, type SolanaRpcApiMainnet } from '@solana/kit';
@@ -117,12 +117,17 @@ export class OnDemandArNSResolver implements NameResolver {
       const ttl = antRecord.ttlSeconds;
       const index = antRecord.index;
 
-      if (!isValidDataId(resolvedId)) {
-        throw new Error('Invalid resolved data ID');
-      }
+      // Classify + validate the target against the ANT record's
+      // `targetProtocol` (0 = Arweave, 1 = IPFS). Throws if the id doesn't
+      // match the format for its protocol (treated as "name didn't resolve").
+      const protocol = classifyResolvedTarget(
+        resolvedId,
+        antRecord.targetProtocol,
+      );
       return {
         name,
         resolvedId,
+        protocol,
         resolvedAt: Date.now(),
         antId,
         ttl,

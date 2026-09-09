@@ -27,9 +27,15 @@ const MAX_ARNS_NAME_LENGTH = 51;
 export const createArnsMiddleware = ({
   dataHandler,
   nameResolver,
+  ipfsHandler,
 }: {
   dataHandler: Handler;
   nameResolver: NameResolver;
+  // Optional handler for ArNS names whose ANT record resolves to an IPFS CID
+  // (`targetProtocol === ipfs`). Provided only when IPFS serving is enabled;
+  // when absent, IPFS-protocol resolutions fall through to the Arweave data
+  // path (which will 404 on a CID, the correct behavior with IPFS disabled).
+  ipfsHandler?: Handler;
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
     // Skip all ArNS processing if no root ArNS hosts are configured.
@@ -166,6 +172,11 @@ export const createArnsMiddleware = ({
         const resolutionDuration = Date.now() - resolutionStart;
         span.setAttribute('arns.resolution_duration_ms', resolutionDuration);
 
+        // Set when the ANT record resolves to an IPFS CID (targetProtocol
+        // ipfs); routes the final handoff to the IPFS handler instead of the
+        // Arweave data handler.
+        let serveViaIpfs = false;
+
         if (resolution.statusCode === 451) {
           span.setAttribute('arns.blocked', true);
           span.setAttribute('http.status_code', 451);
@@ -184,6 +195,25 @@ export const createArnsMiddleware = ({
           // Set request context
           req.dataId = resolvedId;
           req.manifestPath = manifestPath;
+
+          // If the ANT record points at an IPFS CID, hand the request to the
+          // IPFS handler (when IPFS serving is enabled) instead of the Arweave
+          // data path. The handler reads `ipfsCid`/`ipfsPath` off the request,
+          // matching the IPFS subdomain middleware's contract.
+          const arnsProtocol =
+            (resolution as { protocol?: 'arweave' | 'ipfs' }).protocol ??
+            'arweave';
+          if (arnsProtocol === 'ipfs' && ipfsHandler !== undefined) {
+            serveViaIpfs = true;
+            (req as any).ipfsCid = resolvedId;
+            // Normalize an empty root path to undefined to match the IPFS
+            // subdomain middleware's contract — otherwise a root request keys the
+            // content/negative caches and ETag as `${cid}/` here but `${cid}` via
+            // the subdomain path, double-fetching and double-storing the same CID.
+            (req as any).ipfsPath =
+              manifestPath === '' ? undefined : manifestPath;
+            span.setAttribute('arns.protocol', 'ipfs');
+          }
 
           // Parse ArNS name components
           const parts = arnsSubdomain.split('_');
@@ -206,6 +236,9 @@ export const createArnsMiddleware = ({
           // Populate the ArNS response headers for client visibility
           res.header(headerNames.arnsName, arnsSubdomain);
           res.header(headerNames.arnsResolvedId, resolvedId);
+          // Tell the client how to interpret the resolved id (Arweave TX vs
+          // IPFS CID). Signed (x-arns-protocol is a trigger header).
+          res.header(headerNames.arnsProtocol, arnsProtocol);
           if (basename !== '') {
             res.header(headerNames.arnsBasename, basename);
           }
@@ -305,7 +338,11 @@ export const createArnsMiddleware = ({
         if (req.arns?.ttl !== undefined) {
           res.header('Cache-Control', `public, max-age=${req.arns.ttl}`);
         }
-        dataHandler(req, res, next);
+        if (serveViaIpfs && ipfsHandler !== undefined) {
+          ipfsHandler(req, res, next);
+        } else {
+          dataHandler(req, res, next);
+        }
       } catch (error: any) {
         span.recordException(error);
         span.setStatus({ code: SpanStatusCode.ERROR });
