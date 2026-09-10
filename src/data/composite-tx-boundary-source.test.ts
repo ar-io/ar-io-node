@@ -40,7 +40,7 @@ before(() => {
 describe('CompositeTxBoundarySource', () => {
   describe('source attribution', () => {
     // The `source` label is what tells a caller whether resolution stayed
-    // local. CHUNK_PEER_ORIGIN_MODE=shadow classifies outcomes by it, so a
+    // local. CHUNK_PEER_ORIGIN_MODE=audit classifies outcomes by it, so a
     // wrong label silently corrupts that measurement.
     it('labels a database hit as db and consults nothing else', async () => {
       const anchorSource = sourceReturning(boundary('anchor-tx'));
