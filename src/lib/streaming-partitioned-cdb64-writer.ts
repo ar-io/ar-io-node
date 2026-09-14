@@ -31,6 +31,7 @@
 import * as fs from 'node:fs/promises';
 import { createWriteStream, WriteStream } from 'node:fs';
 import * as path from 'node:path';
+import { once } from 'node:events';
 import { CdbWriter } from 'cdb64/node/index.js';
 import {
   Cdb64Manifest,
@@ -102,8 +103,12 @@ export class StreamingPartitionedCdb64Writer {
    * Adds a key-value pair to the appropriate partition's scatter file.
    * The scatter file format per record is:
    *   [key_len: uint32 LE][value_len: uint32 LE][key bytes][value bytes]
+   *
+   * Awaits stream drain when the scatter stream signals backpressure. Without
+   * this the producer (a sqlite/CSV scan running at ~250k rows/s) outruns the
+   * 256 scatter streams and Node buffers the difference without bound.
    */
-  add(key: Buffer, value: Buffer): void {
+  async add(key: Buffer, value: Buffer): Promise<void> {
     if (!this.opened) {
       throw new Error('Writer not opened. Call open() first.');
     }
@@ -137,7 +142,12 @@ export class StreamingPartitionedCdb64Writer {
 
     partition.stream.write(header);
     partition.stream.write(key);
-    partition.stream.write(value);
+    // Backpressure is cumulative on the stream: if an earlier write pushed the
+    // buffer past highWaterMark this final write returns false too, so checking
+    // it alone is sufficient.
+    if (!partition.stream.write(value)) {
+      await once(partition.stream, 'drain');
+    }
 
     partition.recordCount++;
   }

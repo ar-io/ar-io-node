@@ -87,20 +87,23 @@ describe(
     });
 
     describe('add', () => {
-      it('should throw if not opened', () => {
+      it('should throw if not opened', async () => {
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         const key = Buffer.from([0x00, 0x01, 0x02]);
         const value = Buffer.from('test');
 
-        assert.throws(() => writer.add(key, value), /Writer not opened/);
+        await assert.rejects(
+          async () => writer.add(key, value),
+          /Writer not opened/,
+        );
       });
 
       it('should throw for empty key', async () => {
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        assert.throws(
-          () => writer.add(Buffer.alloc(0), Buffer.from('test')),
+        await assert.rejects(
+          async () => writer.add(Buffer.alloc(0), Buffer.from('test')),
           /Key must be at least 1 byte/,
         );
 
@@ -115,7 +118,7 @@ describe(
 
         // Add a record with key starting with 0xab
         const key = Buffer.from([0xab, 0x01, 0x02, 0x03]);
-        writer.add(key, Buffer.from('test'));
+        await writer.add(key, Buffer.from('test'));
 
         // Wait a tick for createWriteStream to open the file
         await new Promise((resolve) => setImmediate(resolve));
@@ -143,19 +146,19 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        writer.add(
+        await writer.add(
           Buffer.from([0x00, 0x01, 0x02, 0x03]),
           Buffer.from('value-00'),
         );
-        writer.add(
+        await writer.add(
           Buffer.from([0x00, 0x04, 0x05, 0x06]),
           Buffer.from('value-00-2'),
         );
-        writer.add(
+        await writer.add(
           Buffer.from([0xff, 0x01, 0x02, 0x03]),
           Buffer.from('value-ff'),
         );
-        writer.add(
+        await writer.add(
           Buffer.from([0xab, 0x01, 0x02, 0x03]),
           Buffer.from('value-ab'),
         );
@@ -201,7 +204,7 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        writer.add(Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.from('test'));
 
         await writer.finalize();
 
@@ -218,8 +221,8 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        writer.add(Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.from('test'));
-        writer.add(Buffer.from([0xff, 0x01, 0x02, 0x03]), Buffer.from('test2'));
+        await writer.add(Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.from('test'));
+        await writer.add(Buffer.from([0xff, 0x01, 0x02, 0x03]), Buffer.from('test2'));
 
         const manifest = await writer.finalize();
 
@@ -247,8 +250,8 @@ describe(
         const key2 = Buffer.from([0xab, 0x11, 0x12, 0x13, 0x14, 0x15]);
         const value2 = Buffer.from('goodbye world');
 
-        writer.add(key1, value1);
-        writer.add(key2, value2);
+        await writer.add(key1, value1);
+        await writer.add(key2, value2);
         await writer.finalize();
 
         // Read back from the CDB file
@@ -271,7 +274,7 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        writer.add(Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.from('test'));
         await writer.finalize();
 
         // Output directory should exist
@@ -287,8 +290,8 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
-        writer.add(Buffer.from([0xff, 0x01]), Buffer.from('test2'));
+        await writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0xff, 0x01]), Buffer.from('test2'));
         await writer.finalize();
 
         // No scatter directory or scatter files in output
@@ -305,8 +308,8 @@ describe(
 
         // Add in non-sorted order
         writer.add(Buffer.from([0xff, 0x01]), Buffer.from('ff'));
-        writer.add(Buffer.from([0x00, 0x01]), Buffer.from('00'));
-        writer.add(Buffer.from([0x7f, 0x01]), Buffer.from('7f'));
+        await writer.add(Buffer.from([0x00, 0x01]), Buffer.from('00'));
+        await writer.add(Buffer.from([0x7f, 0x01]), Buffer.from('7f'));
 
         const manifest = await writer.finalize();
 
@@ -321,7 +324,7 @@ describe(
         });
         await writer.open();
 
-        writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
         const manifest = await writer.finalize();
 
         assert.deepStrictEqual(manifest.metadata, {
@@ -348,7 +351,7 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        writer.add(Buffer.from([0xab, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0xab, 0x01]), Buffer.from('test'));
         await writer.finalize();
 
         const files = await fs.readdir(outputDir);
@@ -362,7 +365,7 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
         await writer.abort();
 
         // Temp directory should not exist
@@ -389,11 +392,11 @@ describe(
 
         assert.strictEqual(writer.getTotalRecordCount(), 0);
 
-        writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
         assert.strictEqual(writer.getTotalRecordCount(), 1);
 
-        writer.add(Buffer.from([0x00, 0x02]), Buffer.from('test'));
-        writer.add(Buffer.from([0xff, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x02]), Buffer.from('test'));
+        await writer.add(Buffer.from([0xff, 0x01]), Buffer.from('test'));
         assert.strictEqual(writer.getTotalRecordCount(), 3);
 
         await writer.abort();
@@ -405,13 +408,13 @@ describe(
 
         assert.strictEqual(writer.getPartitionCount(), 0);
 
-        writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
         assert.strictEqual(writer.getPartitionCount(), 1);
 
-        writer.add(Buffer.from([0x00, 0x02]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x02]), Buffer.from('test'));
         assert.strictEqual(writer.getPartitionCount(), 1); // Same partition
 
-        writer.add(Buffer.from([0xff, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0xff, 0x01]), Buffer.from('test'));
         assert.strictEqual(writer.getPartitionCount(), 2);
 
         await writer.abort();
@@ -421,9 +424,9 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
-        writer.add(Buffer.from([0x00, 0x02]), Buffer.from('test'));
-        writer.add(Buffer.from([0xab, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x02]), Buffer.from('test'));
+        await writer.add(Buffer.from([0xab, 0x01]), Buffer.from('test'));
 
         const stats = writer.getPartitionStats();
         assert.strictEqual(stats.length, 2);
@@ -451,8 +454,8 @@ describe(
         });
         await writer.open();
 
-        writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
-        writer.add(Buffer.from([0xab, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
+        await writer.add(Buffer.from([0xab, 0x01]), Buffer.from('test'));
 
         await writer.finalize();
 
@@ -529,7 +532,7 @@ describe(
             const key = Buffer.alloc(32);
             key[0] = prefix;
             key[1] = j;
-            writer.add(key, Buffer.from(`value-${prefix.toString(16)}-${j}`));
+            await writer.add(key, Buffer.from(`value-${prefix.toString(16)}-${j}`));
           }
         }
 
