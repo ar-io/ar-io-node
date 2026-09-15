@@ -136,7 +136,8 @@ function parsePositiveInt(value: string | undefined, flag: string): number {
  * Parses command-line arguments into a {@link Config}.
  *
  * @returns The config, or null when help was requested
- * @throws Error on unknown flags, missing values, or missing required options
+ * @throws Error on unknown flags, missing values, missing required options, or
+ *   when --output, --details and --progress don't name three different files
  */
 function parseArgs(): Config | null {
   const args = process.argv.slice(2);
@@ -211,10 +212,29 @@ function parseArgs(): Config | null {
     throw new Error('--input or --bundle is required');
   }
 
-  return {
-    ...(config as Config),
-    progressPath: config.progressPath ?? `${config.outputPath}.progress`,
-  };
+  const progressPath = config.progressPath ?? `${config.outputPath}.progress`;
+
+  // The progress file and both CSVs are appended to independently, so two of
+  // them sharing a file would corrupt both.
+  const files: Array<[string, string | undefined]> = [
+    ['--output', config.outputPath],
+    ['--details', config.detailsPath],
+    ['--progress', progressPath],
+  ];
+  const seen = new Map<string, string>();
+  for (const [flag, filePath] of files) {
+    if (filePath === undefined) continue;
+    const resolved = path.resolve(filePath);
+    const other = seen.get(resolved);
+    if (other !== undefined) {
+      throw new Error(
+        `${flag} and ${other} must be different files: ${resolved}`,
+      );
+    }
+    seen.set(resolved, flag);
+  }
+
+  return { ...(config as Config), progressPath };
 }
 
 /** Reads root IDs from --input and --bundle, de-duplicated in order. */
