@@ -251,6 +251,60 @@ describe('StandaloneSqliteDatabase', () => {
   });
 
   describe('offsets', () => {
+    it('should return stable transaction geometry via getTxGeometry only when offset and data_root are set', async () => {
+      const completeId = 'Gm0rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
+      const noOffsetId = 'Gm1rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
+      const noDataRootId = 'Gm2rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
+      const dataRoot = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
+
+      const insert = coreDb.prepare(`
+        INSERT INTO stable_transactions (
+          id, height, block_transaction_index, format, last_tx, owner_address,
+          quantity, reward, tag_count, offset, data_size, data_root
+        ) VALUES (
+          @id, 1, @block_transaction_index, 2, @last_tx, @owner_address,
+          '0', '0', 0, @offset, 256000, @data_root
+        )
+      `);
+      const base = {
+        last_tx: Buffer.alloc(32),
+        owner_address: Buffer.alloc(32),
+      };
+      insert.run({
+        ...base,
+        id: fromB64Url(completeId),
+        block_transaction_index: 10,
+        offset: 51530681583862,
+        data_root: fromB64Url(dataRoot),
+      });
+      insert.run({
+        ...base,
+        id: fromB64Url(noOffsetId),
+        block_transaction_index: 11,
+        offset: null,
+        data_root: fromB64Url(dataRoot),
+      });
+      insert.run({
+        ...base,
+        id: fromB64Url(noDataRootId),
+        block_transaction_index: 12,
+        offset: 51530681583862,
+        data_root: null,
+      });
+
+      assert.deepEqual(await db.getTxGeometry(completeId), {
+        dataRoot,
+        offset: 51530681583862,
+        size: 256000,
+      });
+      assert.equal(await db.getTxGeometry(noOffsetId), undefined);
+      assert.equal(await db.getTxGeometry(noDataRootId), undefined);
+      assert.equal(
+        await db.getTxGeometry('Gm3rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E'),
+        undefined,
+      );
+    });
+
     it('should save offsets into the database and then be discoverable via getTxByOffset', async () => {
       const tx1id = '_H6KgmI_ZfSdSlf9r2xzDh_ebJnvQtTYLUBQlnRjIdM';
       const tx2id = 'UTjG9QyeQ8dJgghq_7JRYb3iTAvlc0IgVN3OfJFGwNk';
