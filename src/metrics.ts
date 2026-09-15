@@ -1053,8 +1053,9 @@ export const chunkStreamAbortsTotal = new promClient.Counter({
 
 /**
  * Where TxChunksDataSource resolved a transaction's chunk-read geometry
- * (data_root, offset, size): its in-memory cache, the local stable
- * transactions index, or the trusted-node chain lookups.
+ * (data_root, offset, size): a chain override recorded after a local/chain
+ * mismatch, its in-memory cache, the local stable transactions index, or the
+ * trusted-node chain lookups.
  */
 export const txChunksGeometryLookupTotal = new promClient.Counter({
   name: 'tx_chunks_geometry_lookup_total',

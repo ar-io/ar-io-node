@@ -56,6 +56,10 @@ export class TxChunksDataSource implements ContiguousDataSource {
   private txGeometrySource?: TxGeometrySource;
   private geometryCache: LRUCache<string, TxGeometry>;
   private geometryVerified: LRUCache<string, true>;
+  // Chain geometry for transactions whose local geometry disagreed with the
+  // chain. Consulted before the local index so a bad row costs at most one
+  // failed read and one chain re-check per GEOMETRY_VERIFIED_TTL_MS.
+  private geometryOverrides: LRUCache<string, TxGeometry>;
   // Errors from reads that used locally resolved geometry, so getData can
   // re-check that geometry against the chain before giving up.
   private localGeometryErrors = new WeakMap<object, TxGeometry>();
@@ -88,6 +92,10 @@ export class TxChunksDataSource implements ContiguousDataSource {
       max: geometryCacheSize,
       ttl: GEOMETRY_VERIFIED_TTL_MS,
     });
+    this.geometryOverrides = new LRUCache({
+      max: geometryCacheSize,
+      ttl: GEOMETRY_VERIFIED_TTL_MS,
+    });
   }
 
   /**
@@ -100,6 +108,17 @@ export class TxChunksDataSource implements ContiguousDataSource {
     id: string,
     signal?: AbortSignal,
   ): Promise<ResolvedGeometry> {
+    const override = this.geometryOverrides.get(id);
+    if (override !== undefined) {
+      metrics.txChunksGeometryLookupTotal.inc({
+        source: 'override',
+        outcome: 'hit',
+      });
+      // Reported as chain geometry: it came from the chain, so a failing read
+      // with it is not re-verified.
+      return { geometry: override, source: 'chain' };
+    }
+
     const cached = this.geometryCache.get(id);
     if (cached !== undefined) {
       metrics.txChunksGeometryLookupTotal.inc({
@@ -230,7 +249,10 @@ export class TxChunksDataSource implements ContiguousDataSource {
       let chainGeometry: TxGeometry;
       try {
         chainGeometry = await this.getChainGeometry(args.id, args.signal);
-      } catch {
+      } catch (chainError: any) {
+        if (chainError?.name === 'AbortError') {
+          throw chainError;
+        }
         metrics.txChunksGeometryVerifyTotal.inc({ result: 'chain_error' });
         throw error;
       }
@@ -247,6 +269,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         { id: args.id, local: localGeometry, chain: chainGeometry },
       );
       this.geometryCache.delete(args.id);
+      this.geometryOverrides.set(args.id, chainGeometry);
       return this.getDataWithGeometry(args, chainGeometry);
     }
   }
