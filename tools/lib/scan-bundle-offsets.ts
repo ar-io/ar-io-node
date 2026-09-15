@@ -24,6 +24,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as readline from 'node:readline';
 
 import {
@@ -107,7 +108,9 @@ Resuming:
   Re-running the same command skips roots recorded as ok and retries the rest.
   A root's rows are written only after the whole root verified, and rows left
   behind by a run that stopped mid-write are truncated before resuming, so the
-  output never holds duplicate or partial rows.
+  output never holds duplicate or partial rows. A progress file belongs to the
+  --output and --details paths it was created with; resuming with different
+  paths is refused.
 
 Example:
   ./tools/scan-bundle-offsets --input roots.txt --output offsets.csv --details details.csv
@@ -266,6 +269,63 @@ interface Progress {
   statuses: Map<string, string>;
   /** Output sizes from the last line that recorded them, if any */
   sizes?: OutputSizes;
+  /** Output files the progress file belongs to, from its header line */
+  outputs?: ProgressOutputs;
+}
+
+/** Absolute paths of the files a progress file's sizes refer to. */
+interface ProgressOutputs {
+  output: string;
+  /** Null when the run writes no details file */
+  details: string | null;
+}
+
+/** Prefix of the progress file line naming its output files. */
+const PROGRESS_HEADER_PREFIX = '# scan-bundle-offsets outputs ';
+
+/** The output files this run writes, as recorded in a progress file. */
+function progressOutputs(config: Config): ProgressOutputs {
+  return {
+    output: path.resolve(config.outputPath),
+    details:
+      config.detailsPath === undefined
+        ? null
+        : path.resolve(config.detailsPath),
+  };
+}
+
+/**
+ * Checks that the progress file belongs to this run's output files, and
+ * records them when the file has no header yet. Sizes in a progress file are
+ * only meaningful for the files they were measured on, so resuming against
+ * other paths, or with the details file added or dropped, would truncate or
+ * trust the wrong files.
+ *
+ * @throws Error when the recorded files differ from this run's, or when the
+ *   file records sizes without saying which files they belong to
+ */
+function bindProgressToOutputs(config: Config, progress: Progress): void {
+  const outputs = progressOutputs(config);
+  if (progress.outputs === undefined) {
+    if (progress.sizes !== undefined) {
+      throw new Error(
+        `${config.progressPath} records output sizes but not which files they belong to; refusing to resume`,
+      );
+    }
+    fs.appendFileSync(
+      config.progressPath,
+      `${PROGRESS_HEADER_PREFIX}${JSON.stringify(outputs)}\n`,
+    );
+    return;
+  }
+  if (
+    progress.outputs.output !== outputs.output ||
+    progress.outputs.details !== outputs.details
+  ) {
+    throw new Error(
+      `${config.progressPath} belongs to --output ${progress.outputs.output} and --details ${progress.outputs.details ?? '(none)'}, but this run uses --output ${outputs.output} and --details ${outputs.details ?? '(none)'}; refusing to resume`,
+    );
+  }
 }
 
 /**
@@ -273,6 +333,9 @@ interface Progress {
  * `root, status, items, output_bytes, details_bytes, message`, tab-separated.
  * Older four-column lines (`root, status, items, message`) still give a
  * root's status but no sizes.
+ *
+ * A header line (`# scan-bundle-offsets outputs {...}`) names the output files
+ * the sizes refer to.
  *
  * Only newline-terminated lines count, so a line cut short by a crash is
  * ignored rather than marking its root done.
@@ -284,6 +347,10 @@ function loadProgress(progressPath: string): Progress {
   const lines = fs.readFileSync(progressPath, 'utf-8').split('\n');
   lines.pop(); // empty, or a line without its newline
   for (const line of lines) {
+    if (line.startsWith(PROGRESS_HEADER_PREFIX)) {
+      progress.outputs = JSON.parse(line.slice(PROGRESS_HEADER_PREFIX.length));
+      continue;
+    }
     const fields = line.split('\t');
     const [root, status] = fields;
     if (root === undefined || status === undefined || !ID_PATTERN.test(root)) {
@@ -659,6 +726,7 @@ async function main(): Promise<void> {
   const roots = await readRoots(config);
   dropPartialProgressLine(config.progressPath);
   const progress = loadProgress(config.progressPath);
+  bindProgressToOutputs(config, progress);
   if (progress.sizes !== undefined) {
     truncateToRecorded(config.outputPath, progress.sizes.outputBytes);
     if (

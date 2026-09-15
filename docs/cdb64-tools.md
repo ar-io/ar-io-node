@@ -107,7 +107,9 @@ How it works and what it verifies:
   bundle fails the whole root instead, so no items go silently missing.
 - **Resuming.** A root's rows are appended only after the whole root is
   scanned. Each progress line records the output files' sizes, and on restart
-  any rows a stopped run appended without recording them are truncated.
+  any rows a stopped run appended without recording them are truncated. A
+  progress file belongs to the `--output` and `--details` paths it was created
+  with, and resuming with different paths is refused.
   Re-running the same command skips roots recorded as `ok`.
 
 ## generate-cdb64-root-tx-index-rs

@@ -181,6 +181,21 @@ describe('ans104-bundle-scan', () => {
       );
     });
 
+    it('rejects invalid read options before reading', async () => {
+      const { raw } = await buildFlatBundle();
+      const source = new BufferByteRangeSource(raw);
+
+      await assert.rejects(
+        readBundleIndex(source, 0, raw.length, ROOT, { readChunkItems: 0 }),
+        /readChunkItems must be a positive integer, got 0/,
+      );
+      await assert.rejects(
+        readBundleIndex(source, 0, raw.length, ROOT, { maxItems: -1 }),
+        /maxItems must be a non-negative integer, got -1/,
+      );
+      assert.equal(source.reads.length, 0);
+    });
+
     it('stops reading once the listed items run past the bundle', async () => {
       const { raw } = await buildFlatBundle();
       const corrupted = Buffer.from(raw);

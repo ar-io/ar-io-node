@@ -208,6 +208,7 @@ export function decodeDataItemHeader(buf: Buffer): DataItemHeaderDecodeResult {
  * @param options.maxItems - Largest item count accepted from the index
  * @param options.readChunkItems - Index entries fetched per range read
  * @throws BundleScanError when the index does not describe the bundle
+ * @throws RangeError when `maxItems` or `readChunkItems` is invalid
  */
 export async function readBundleIndex(
   source: ByteRangeSource,
@@ -219,6 +220,16 @@ export async function readBundleIndex(
     readChunkItems = INDEX_READ_CHUNK_ITEMS,
   }: { maxItems?: number; readChunkItems?: number } = {},
 ): Promise<BundleIndexEntry[]> {
+  if (!Number.isSafeInteger(readChunkItems) || readChunkItems <= 0) {
+    throw new RangeError(
+      `readChunkItems must be a positive integer, got ${readChunkItems}`,
+    );
+  }
+  if (!Number.isSafeInteger(maxItems) || maxItems < 0) {
+    throw new RangeError(
+      `maxItems must be a non-negative integer, got ${maxItems}`,
+    );
+  }
   if (bundleSize < 32) {
     throw new BundleScanError(
       `Bundle is ${bundleSize} bytes, too small for an item count`,
