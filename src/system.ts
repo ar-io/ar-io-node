@@ -1070,6 +1070,8 @@ const baseTxChunksDataSource = new TxChunksDataSource({
   chunkSource,
   concurrencyLimit: chunkRequestLimit,
   firstDataTimeoutMs: config.CHUNK_FIRST_DATA_TIMEOUT_MS,
+  txGeometrySource: config.TX_CHUNKS_GEOMETRY_DB_ENABLED ? db : undefined,
+  geometryCacheSize: config.TX_CHUNKS_GEOMETRY_CACHE_SIZE,
 });
 
 // ANS-104 offset source for parsing bundle headers from chunks

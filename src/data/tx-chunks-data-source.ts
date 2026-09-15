@@ -6,6 +6,7 @@
  */
 import { Readable } from 'node:stream';
 import { anySignal, ClearableSignal } from 'any-signal';
+import { LRUCache } from 'lru-cache';
 import pLimit, { LimitFunction } from 'p-limit';
 import winston from 'winston';
 import { MAX_CHUNK_SIZE } from '../config.js';
@@ -23,8 +24,28 @@ import {
   ContiguousDataSource,
   Region,
   RequestAttributes,
+  TxGeometry,
+  TxGeometrySource,
 } from '../types.js';
 import * as metrics from '../metrics.js';
+
+type GeometrySourceName = 'cache' | 'db' | 'chain';
+
+interface ResolvedGeometry {
+  geometry: TxGeometry;
+  source: GeometrySourceName;
+}
+
+// How long a chain re-check that confirmed local geometry suppresses further
+// re-checks for the same transaction. Stable geometry is immutable, so this
+// only bounds trusted-node spend on transactions whose chunks keep failing.
+const GEOMETRY_VERIFIED_TTL_MS = 60 * 60 * 1000;
+
+function sameGeometry(a: TxGeometry, b: TxGeometry): boolean {
+  return (
+    a.dataRoot === b.dataRoot && a.offset === b.offset && a.size === b.size
+  );
+}
 
 export class TxChunksDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -32,6 +53,16 @@ export class TxChunksDataSource implements ContiguousDataSource {
   private chunkSource: ChunkDataByAnySource & ChunkByAnySource;
   private concurrencyLimit: LimitFunction;
   private firstDataTimeoutMs: number;
+  private txGeometrySource?: TxGeometrySource;
+  private geometryCache: LRUCache<string, TxGeometry>;
+  private geometryVerified: LRUCache<string, true>;
+  // Chain geometry for transactions whose local geometry disagreed with the
+  // chain. Consulted before the local index so a bad row costs at most one
+  // failed read and one chain re-check per GEOMETRY_VERIFIED_TTL_MS.
+  private geometryOverrides: LRUCache<string, TxGeometry>;
+  // Errors from reads that used locally resolved geometry, so getData can
+  // re-check that geometry against the chain before giving up.
+  private localGeometryErrors = new WeakMap<object, TxGeometry>();
 
   constructor({
     log,
@@ -39,18 +70,128 @@ export class TxChunksDataSource implements ContiguousDataSource {
     chunkSource,
     concurrencyLimit,
     firstDataTimeoutMs = 0,
+    txGeometrySource,
+    geometryCacheSize = 10000,
   }: {
     log: winston.Logger;
     chainSource: ChainSource;
     chunkSource: ChunkDataByAnySource & ChunkByAnySource;
     concurrencyLimit?: LimitFunction;
     firstDataTimeoutMs?: number;
+    txGeometrySource?: TxGeometrySource;
+    geometryCacheSize?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.chainSource = chainSource;
     this.chunkSource = chunkSource;
     this.concurrencyLimit = concurrencyLimit ?? pLimit(Infinity);
     this.firstDataTimeoutMs = firstDataTimeoutMs;
+    this.txGeometrySource = txGeometrySource;
+    this.geometryCache = new LRUCache({ max: geometryCacheSize });
+    this.geometryVerified = new LRUCache({
+      max: geometryCacheSize,
+      ttl: GEOMETRY_VERIFIED_TTL_MS,
+    });
+    this.geometryOverrides = new LRUCache({
+      max: geometryCacheSize,
+      ttl: GEOMETRY_VERIFIED_TTL_MS,
+    });
+  }
+
+  /**
+   * Resolve geometry from the in-memory cache, then the local stable
+   * transactions index, then the chain. Local results are cached; chain
+   * results are not, since they may describe a transaction that is not yet
+   * stable.
+   */
+  private async resolveGeometry(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ResolvedGeometry> {
+    const override = this.geometryOverrides.get(id);
+    if (override !== undefined) {
+      metrics.txChunksGeometryLookupTotal.inc({
+        source: 'override',
+        outcome: 'hit',
+      });
+      // Reported as chain geometry: it came from the chain, so a failing read
+      // with it is not re-verified.
+      return { geometry: override, source: 'chain' };
+    }
+
+    const cached = this.geometryCache.get(id);
+    if (cached !== undefined) {
+      metrics.txChunksGeometryLookupTotal.inc({
+        source: 'cache',
+        outcome: 'hit',
+      });
+      return { geometry: cached, source: 'cache' };
+    }
+
+    if (this.txGeometrySource !== undefined) {
+      signal?.throwIfAborted();
+      try {
+        const geometry = await this.txGeometrySource.getTxGeometry(id);
+        if (
+          geometry !== undefined &&
+          Number.isSafeInteger(geometry.offset) &&
+          Number.isSafeInteger(geometry.size) &&
+          geometry.size > 0
+        ) {
+          metrics.txChunksGeometryLookupTotal.inc({
+            source: 'db',
+            outcome: 'hit',
+          });
+          this.geometryCache.set(id, geometry);
+          return { geometry, source: 'db' };
+        }
+        metrics.txChunksGeometryLookupTotal.inc({
+          source: 'db',
+          outcome: 'miss',
+        });
+      } catch (error: any) {
+        metrics.txChunksGeometryLookupTotal.inc({
+          source: 'db',
+          outcome: 'error',
+        });
+        this.log.debug('Local tx geometry lookup failed, using chain', {
+          id,
+          error: error?.message,
+        });
+      }
+    }
+
+    return {
+      geometry: await this.getChainGeometry(id, signal),
+      source: 'chain',
+    };
+  }
+
+  private async getChainGeometry(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<TxGeometry> {
+    try {
+      const [dataRoot, txOffset] = await Promise.all([
+        this.chainSource.getTxField(id, 'data_root', signal),
+        this.chainSource.getTxOffset(id, signal),
+      ]);
+      metrics.txChunksGeometryLookupTotal.inc({
+        source: 'chain',
+        outcome: 'hit',
+      });
+      return { dataRoot, offset: +txOffset.offset, size: +txOffset.size };
+    } catch (error: any) {
+      // A caller cancellation (AbortError, or axios CanceledError) is not a
+      // chain lookup failure.
+      if (!signal?.aborted && error?.name !== 'AbortError') {
+        metrics.txChunksGeometryLookupTotal.inc({
+          source: 'chain',
+          outcome: 'error',
+        });
+      }
+      throw error;
+    }
   }
 
   /**
@@ -79,19 +220,80 @@ export class TxChunksDataSource implements ContiguousDataSource {
     };
   }
 
-  async getData({
-    id,
-    requestAttributes,
-    region,
-    parentSpan,
-    signal,
-  }: {
+  async getData(args: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
     signal?: AbortSignal;
   }): Promise<ContiguousData> {
+    try {
+      return await this.getDataWithGeometry(args);
+    } catch (error: any) {
+      const localGeometry =
+        error !== null && typeof error === 'object'
+          ? this.localGeometryErrors.get(error)
+          : undefined;
+      if (localGeometry === undefined || args.signal?.aborted) {
+        throw error;
+      }
+      this.localGeometryErrors.delete(error);
+
+      // A read using local geometry failed before its first byte. Only a
+      // disagreement with the chain justifies a second attempt, so chunks that
+      // are genuinely unavailable don't cost a duplicate peer cascade. Each
+      // transaction is re-checked at most once per GEOMETRY_VERIFIED_TTL_MS.
+      if (this.geometryVerified.has(args.id)) {
+        metrics.txChunksGeometryVerifyTotal.inc({ result: 'skipped' });
+        throw error;
+      }
+
+      let chainGeometry: TxGeometry;
+      try {
+        chainGeometry = await this.getChainGeometry(args.id, args.signal);
+      } catch (chainError: any) {
+        // Cancellation surfaces as an AbortError or an axios CanceledError, so
+        // key off the caller's signal rather than the error type.
+        if (args.signal?.aborted || chainError?.name === 'AbortError') {
+          throw chainError;
+        }
+        metrics.txChunksGeometryVerifyTotal.inc({ result: 'chain_error' });
+        throw error;
+      }
+
+      if (sameGeometry(localGeometry, chainGeometry)) {
+        metrics.txChunksGeometryVerifyTotal.inc({ result: 'match' });
+        this.geometryVerified.set(args.id, true);
+        throw error;
+      }
+
+      metrics.txChunksGeometryVerifyTotal.inc({ result: 'mismatch' });
+      this.log.warn(
+        'Local tx geometry disagrees with chain; retrying with chain geometry',
+        { id: args.id, local: localGeometry, chain: chainGeometry },
+      );
+      this.geometryCache.delete(args.id);
+      this.geometryOverrides.set(args.id, chainGeometry);
+      return this.getDataWithGeometry(args, chainGeometry);
+    }
+  }
+
+  private async getDataWithGeometry(
+    {
+      id,
+      requestAttributes,
+      region,
+      parentSpan,
+      signal,
+    }: {
+      id: string;
+      requestAttributes?: RequestAttributes;
+      region?: Region;
+      parentSpan?: Span;
+      signal?: AbortSignal;
+    },
+    chainGeometry?: TxGeometry,
+  ): Promise<ContiguousData> {
     const span = startChildSpan(
       'TxChunksDataSource.getData',
       {
@@ -110,6 +312,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
     let timeout: ReturnType<typeof this.createFirstDataTimeoutController> =
       null;
     let combinedSignal: ClearableSignal | undefined;
+    let resolved: ResolvedGeometry | undefined;
 
     try {
       // Check for abort before starting
@@ -117,16 +320,17 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
       this.log.debug('Fetching chunk data for TX', { id });
 
-      span.addEvent('Starting chain source requests');
+      span.addEvent('Resolving tx geometry');
       // Pass caller's signal directly (not effectiveSignal — that's
       // constructed below from caller's signal + first-data timeout, and the
       // first-data timer should only start after geometry resolves).
-      const [txDataRoot, txOffset] = await Promise.all([
-        this.chainSource.getTxField(id, 'data_root', signal),
-        this.chainSource.getTxOffset(id, signal),
-      ]);
-      const size = +txOffset.size;
-      const offset = +txOffset.offset;
+      resolved =
+        chainGeometry !== undefined
+          ? { geometry: chainGeometry, source: 'chain' }
+          : await this.resolveGeometry(id, signal);
+      const txDataRoot = resolved.geometry.dataRoot;
+      const size = resolved.geometry.size;
+      const offset = resolved.geometry.offset;
       const startOffset = offset - size + 1;
       let bytes = 0;
 
@@ -146,9 +350,10 @@ export class TxChunksDataSource implements ContiguousDataSource {
         'chunks.tx.size': size,
         'chunks.tx.offset': offset,
         'chunks.tx.start_offset': startOffset,
+        'chunks.tx.geometry_source': resolved.source,
       });
 
-      span.addEvent('Chain source requests completed');
+      span.addEvent('Tx geometry resolved');
 
       if (region) {
         span.setAttribute('chunks.streaming.request_type', 'range');
@@ -467,6 +672,16 @@ export class TxChunksDataSource implements ContiguousDataSource {
           generateRequestAttributes(requestAttributes)?.attributes,
       };
     } catch (error: any) {
+      if (
+        resolved !== undefined &&
+        resolved.source !== 'chain' &&
+        error !== null &&
+        typeof error === 'object' &&
+        error.name !== 'AbortError'
+      ) {
+        this.localGeometryErrors.set(error, resolved.geometry);
+      }
+
       // Don't record AbortError as exception
       if (error.name === 'AbortError') {
         span.addEvent('Request aborted', {
