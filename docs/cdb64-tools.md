@@ -89,8 +89,9 @@ How it works and what it verifies:
   makes the gateway fetch the whole root in the background. An ID the gateway
   reports as a data item (`X-AR-IO-Root-Transaction-Id` differs) is refused,
   since offsets must be relative to an L1 transaction.
-- **Index.** The item index must fit in the bundle, and the listed items must
-  end exactly at the bundle's size.
+- **Index.** The item index must fit in the bundle and list at most 2,000,000
+  items, and the listed items must end exactly at the bundle's size. The index
+  is read in 4 MiB chunks.
 - **Headers.** Every item header is decoded, and the SHA-256 of its signature
   must equal the ID in the index. Items tagged `Bundle-Format: binary` and
   `Bundle-Version: 2.0.0` are scanned recursively. Their items get a `path` of
@@ -99,10 +100,14 @@ How it works and what it verifies:
   most `--window-bytes`, each contributing up to `--header-guess-bytes`, so
   bundles of small items read nearly sequentially and bundles of large items
   read a few KiB per item.
-- **Failures.** A root that fails verification is recorded as `failed` in the
-  progress file and contributes no rows. A nested bundle that fails is reported
-  as a warning, and the root's other items are still written.
-- **Resuming.** A root's rows are appended only after the whole root is scanned.
+- **Failures.** A root that fails verification, or whose reads still fail
+  after retries, is recorded as `failed` in the progress file and contributes
+  no rows. A nested bundle that fails verification is reported as a warning,
+  and the root's other items are still written; a failed read inside a nested
+  bundle fails the whole root instead, so no items go silently missing.
+- **Resuming.** A root's rows are appended only after the whole root is
+  scanned. Each progress line records the output files' sizes, and on restart
+  any rows a stopped run appended without recording them are truncated.
   Re-running the same command skips roots recorded as `ok`.
 
 ## generate-cdb64-root-tx-index-rs

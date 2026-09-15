@@ -56,6 +56,7 @@ const DETAIL_COLUMNS = [
   'data_item_size',
 ];
 
+/** Parsed command-line options. */
 interface Config {
   inputPath?: string;
   bundles: string[];
@@ -102,9 +103,11 @@ Output (CDB64 CSV, header row included):
   [root, ..., parent] for items inside nested bundles.
 
 Resuming:
-  Each finished root is recorded in the progress file. Re-running the same
-  command skips roots recorded as ok and retries failed ones. A root's rows are
-  written only after the whole root verified.
+  Each root is recorded in the progress file with the output files' sizes.
+  Re-running the same command skips roots recorded as ok and retries the rest.
+  A root's rows are written only after the whole root verified, and rows left
+  behind by a run that stopped mid-write are truncated before resuming, so the
+  output never holds duplicate or partial rows.
 
 Example:
   ./tools/scan-bundle-offsets --input roots.txt --output offsets.csv --details details.csv
@@ -112,6 +115,12 @@ Example:
 `);
 }
 
+/**
+ * Parses a flag value as a positive integer.
+ *
+ * @throws Error naming the flag when the value is missing or not a positive
+ *   integer
+ */
 function parsePositiveInt(value: string | undefined, flag: string): number {
   const parsed = Number(value);
   if (value === undefined || !Number.isInteger(parsed) || parsed <= 0) {
@@ -120,6 +129,12 @@ function parsePositiveInt(value: string | undefined, flag: string): number {
   return parsed;
 }
 
+/**
+ * Parses command-line arguments into a {@link Config}.
+ *
+ * @returns The config, or null when help was requested
+ * @throws Error on unknown flags, missing values, or missing required options
+ */
 function parseArgs(): Config | null {
   const args = process.argv.slice(2);
   const config: Partial<Config> & { bundles: string[] } = {
@@ -238,29 +253,140 @@ async function readRoots(config: Config): Promise<string[]> {
   return [...roots];
 }
 
-/** Loads the latest recorded status per root from the progress file. */
-function loadProgress(progressPath: string): Map<string, string> {
-  const statuses = new Map<string, string>();
-  if (!fs.existsSync(progressPath)) return statuses;
-  for (const line of fs.readFileSync(progressPath, 'utf-8').split('\n')) {
-    const [root, status] = line.split('\t');
-    if (root !== undefined && status !== undefined && ID_PATTERN.test(root)) {
-      statuses.set(root, status);
-    }
-  }
-  return statuses;
+/** Sizes of the output files, recorded with every progress line. */
+interface OutputSizes {
+  outputBytes: number;
+  /** Undefined when the run writes no details file */
+  detailsBytes?: number;
 }
 
+/** State recovered from a progress file. */
+interface Progress {
+  /** Latest recorded status per root: `writing`, `ok` or `failed` */
+  statuses: Map<string, string>;
+  /** Output sizes from the last line that recorded them, if any */
+  sizes?: OutputSizes;
+}
+
+/**
+ * Loads the progress file. Lines are
+ * `root, status, items, output_bytes, details_bytes, message`, tab-separated.
+ * Older four-column lines (`root, status, items, message`) still give a
+ * root's status but no sizes.
+ *
+ * Only newline-terminated lines count, so a line cut short by a crash is
+ * ignored rather than marking its root done.
+ */
+function loadProgress(progressPath: string): Progress {
+  const progress: Progress = { statuses: new Map() };
+  if (!fs.existsSync(progressPath)) return progress;
+
+  const lines = fs.readFileSync(progressPath, 'utf-8').split('\n');
+  lines.pop(); // empty, or a line without its newline
+  for (const line of lines) {
+    const fields = line.split('\t');
+    const [root, status] = fields;
+    if (root === undefined || status === undefined || !ID_PATTERN.test(root)) {
+      continue;
+    }
+    progress.statuses.set(root, status);
+    if (
+      fields.length >= 6 &&
+      /^\d+$/.test(fields[3]) &&
+      /^\d*$/.test(fields[4])
+    ) {
+      progress.sizes = {
+        outputBytes: Number(fields[3]),
+        detailsBytes: fields[4] === '' ? undefined : Number(fields[4]),
+      };
+    }
+  }
+  return progress;
+}
+
+/**
+ * Removes a last line a stopped run left without its newline, so the next
+ * record starts on a line of its own instead of merging into it.
+ */
+function dropPartialProgressLine(progressPath: string): void {
+  if (!fs.existsSync(progressPath)) return;
+  const content = fs.readFileSync(progressPath);
+  const end = content.lastIndexOf(0x0a) + 1;
+  if (end < content.length) {
+    fs.truncateSync(progressPath, end);
+    console.error(`Discarded an incomplete last line from ${progressPath}`);
+  }
+}
+
+/** Returns a file's size in bytes, or 0 when it does not exist. */
+function fileSize(filePath: string): number {
+  return fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
+}
+
+/** Current sizes of the output files for this run. */
+function outputSizes(config: Config): OutputSizes {
+  return {
+    outputBytes: fileSize(config.outputPath),
+    detailsBytes:
+      config.detailsPath === undefined
+        ? undefined
+        : fileSize(config.detailsPath),
+  };
+}
+
+/**
+ * Cuts an output file back to the size the progress file last recorded,
+ * dropping rows a stopped run appended without recording them.
+ *
+ * @throws Error when the file is smaller than recorded, since it then isn't
+ *   the file the progress refers to
+ */
+function truncateToRecorded(filePath: string, recorded: number): void {
+  const size = fileSize(filePath);
+  if (size < recorded) {
+    throw new Error(
+      `${filePath} is ${size} bytes but the progress file records ${recorded}; refusing to resume`,
+    );
+  }
+  if (size > recorded) {
+    fs.truncateSync(filePath, recorded);
+    console.error(
+      `Discarded ${size - recorded} unrecorded bytes from ${filePath}`,
+    );
+  }
+}
+
+/** Appends one tab-separated line to the progress file. */
+function recordProgress(
+  config: Config,
+  root: string,
+  status: 'writing' | 'ok' | 'failed',
+  items: number,
+  message: string,
+): void {
+  const sizes = outputSizes(config);
+  fs.appendFileSync(
+    config.progressPath,
+    `${root}\t${status}\t${items}\t${sizes.outputBytes}\t${sizes.detailsBytes ?? ''}\t${oneLine(message)}\n`,
+  );
+}
+
+/** Formats one CSV field, quoting it when it contains a delimiter. */
 function csvField(value: string | number | undefined): string {
   if (value === undefined) return '';
   const text = String(value);
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+/** Formats a CSV line from its fields. */
 function csvLine(fields: Array<string | number | undefined>): string {
   return fields.map(csvField).join(',');
 }
 
+/**
+ * Appends lines to a CSV file in one write, starting with the header row when
+ * the file is new or empty.
+ */
 function appendRows(
   filePath: string,
   columns: string[],
@@ -273,6 +399,7 @@ function appendRows(
   }
 }
 
+/** Resolves after `ms` milliseconds. */
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Wraps a byte source with retries and request/byte counters. */
@@ -357,6 +484,7 @@ async function fetchRootSize(config: Config, root: string): Promise<number> {
   }
 }
 
+/** Rows and statistics from scanning one root. */
 interface RootResult {
   lines: string[];
   detailLines: string[];
@@ -367,6 +495,13 @@ interface RootResult {
   bytes: number;
 }
 
+/**
+ * Scans one root bundle and collects its output rows in memory, so nothing is
+ * written for a root that fails part-way.
+ *
+ * @throws Error when the root's size can't be read, a read still fails after
+ *   retries, or the root bundle does not verify
+ */
 async function scanRoot(config: Config, root: string): Promise<RootResult> {
   const bundleSize = await fetchRootSize(config, root);
   const source = new RetryingByteRangeSource(
@@ -418,6 +553,7 @@ async function scanRoot(config: Config, root: string): Promise<RootResult> {
   return result;
 }
 
+/** Formats an item as a CDB64 CSV row. */
 function cdbLine(item: ScannedDataItem): string {
   return csvLine([
     item.id,
@@ -429,6 +565,7 @@ function cdbLine(item: ScannedDataItem): string {
   ]);
 }
 
+/** Formats an item as a details CSV row. */
 function detailLine(item: ScannedDataItem): string {
   return csvLine([
     item.rootTxId,
@@ -441,10 +578,15 @@ function detailLine(item: ScannedDataItem): string {
   ]);
 }
 
+/** Collapses tabs and newlines so text fits in one progress file field. */
 function oneLine(text: string): string {
   return text.replace(/[\t\r\n]+/g, ' ');
 }
 
+/**
+ * Scans every pending root and prints a summary. Sets exit code 2 when any
+ * root failed.
+ */
 async function main(): Promise<void> {
   const config = parseArgs();
   if (config === null) {
@@ -453,8 +595,18 @@ async function main(): Promise<void> {
   }
 
   const roots = await readRoots(config);
+  dropPartialProgressLine(config.progressPath);
   const progress = loadProgress(config.progressPath);
-  const pending = roots.filter((root) => progress.get(root) !== 'ok');
+  if (progress.sizes !== undefined) {
+    truncateToRecorded(config.outputPath, progress.sizes.outputBytes);
+    if (
+      config.detailsPath !== undefined &&
+      progress.sizes.detailsBytes !== undefined
+    ) {
+      truncateToRecorded(config.detailsPath, progress.sizes.detailsBytes);
+    }
+  }
+  const pending = roots.filter((root) => progress.statuses.get(root) !== 'ok');
 
   console.error('=== Bundle Offset Scanner ===');
   console.error(`Gateway:  ${config.gateway}`);
@@ -482,13 +634,20 @@ async function main(): Promise<void> {
       const root = pending[nextIndex++];
       try {
         const result = await scanRoot(config, root);
+        // Synchronous from here to the ok record, so roots never interleave.
+        // The writing record holds the sizes before this root's rows; if the
+        // run stops before the ok record, the next run truncates back to them.
+        recordProgress(config, root, 'writing', 0, '');
         appendRows(config.outputPath, CDB_COLUMNS, result.lines);
         if (config.detailsPath !== undefined) {
           appendRows(config.detailsPath, DETAIL_COLUMNS, result.detailLines);
         }
-        fs.appendFileSync(
-          config.progressPath,
-          `${root}\tok\t${result.lines.length}\t${oneLine(result.warnings.join(' | '))}\n`,
+        recordProgress(
+          config,
+          root,
+          'ok',
+          result.lines.length,
+          result.warnings.join(' | '),
         );
 
         totals.ok++;
@@ -509,10 +668,7 @@ async function main(): Promise<void> {
       } catch (error: any) {
         totals.failed++;
         const message = oneLine(error?.message ?? String(error));
-        fs.appendFileSync(
-          config.progressPath,
-          `${root}\tfailed\t0\t${message}\n`,
-        );
+        recordProgress(config, root, 'failed', 0, message);
         console.error(`failed ${root}: ${message}`);
       }
     }

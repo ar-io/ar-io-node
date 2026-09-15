@@ -19,6 +19,7 @@ import {
   BundleScanError,
   ScannedDataItem,
   decodeDataItemHeader,
+  readBundleIndex,
   scanBundle,
 } from './ans104-bundle-scan.js';
 import { ByteRangeSource } from './byte-range-source.js';
@@ -144,6 +145,57 @@ describe('ans104-bundle-scan', () => {
         () => decodeDataItemHeader(raw),
         /Invalid target presence byte: 7/,
       );
+    });
+  });
+
+  describe('readBundleIndex', () => {
+    it('reads the index in chunks with the same result', async () => {
+      const { items, raw } = await buildFlatBundle();
+      const whole = await readBundleIndex(
+        new BufferByteRangeSource(raw),
+        0,
+        raw.length,
+        ROOT,
+      );
+      const source = new BufferByteRangeSource(raw);
+      const chunked = await readBundleIndex(source, 0, raw.length, ROOT, {
+        readChunkItems: 1,
+      });
+
+      assert.deepEqual(chunked, whole);
+      assert.deepEqual(
+        whole.map((entry) => entry.id),
+        items.map((item) => item.id),
+      );
+      // One read for the item count, then one per index entry.
+      assert.equal(source.reads.length, 1 + items.length);
+    });
+
+    it('rejects an index listing more items than the limit', async () => {
+      const { raw } = await buildFlatBundle();
+      await assert.rejects(
+        readBundleIndex(new BufferByteRangeSource(raw), 0, raw.length, ROOT, {
+          maxItems: 2,
+        }),
+        /Index lists 3 items, more than the limit of 2/,
+      );
+    });
+
+    it('stops reading once the listed items run past the bundle', async () => {
+      const { raw } = await buildFlatBundle();
+      const corrupted = Buffer.from(raw);
+      // Give the first item a size larger than the whole bundle.
+      corrupted.fill(0xff, 32, 40);
+      const source = new BufferByteRangeSource(corrupted);
+
+      await assert.rejects(
+        readBundleIndex(source, 0, corrupted.length, ROOT, {
+          readChunkItems: 1,
+        }),
+        /Items end at byte/,
+      );
+      // The item count and the first index entry, but no further entries.
+      assert.equal(source.reads.length, 2);
     });
   });
 
@@ -348,6 +400,40 @@ describe('ans104-bundle-scan', () => {
         ),
         BundleScanError,
       );
+    });
+
+    it('fails on a read error inside a nested bundle even when a handler is given', async () => {
+      const { raw } = await buildNestedBundle();
+      const clean = await collect(
+        scanBundle({
+          source: new BufferByteRangeSource(raw),
+          rootTxId: ROOT,
+          bundleSize: raw.length,
+        }),
+      );
+      const nestedBundleStart = clean[1].rootDataOffset;
+      const source = new BufferByteRangeSource(raw);
+      const read = source.read.bind(source);
+      source.read = async (offset: number, size: number) => {
+        if (offset >= nestedBundleStart) {
+          throw new Error('connection reset');
+        }
+        return read(offset, size);
+      };
+
+      const errors: string[] = [];
+      await assert.rejects(
+        collect(
+          scanBundle({
+            source,
+            rootTxId: ROOT,
+            bundleSize: raw.length,
+            onNestedBundleError: (error) => errors.push(error.message),
+          }),
+        ),
+        /connection reset/,
+      );
+      assert.deepEqual(errors, []);
     });
   });
 });

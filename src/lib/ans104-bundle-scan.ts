@@ -14,6 +14,10 @@
  * transaction, its total size, and the bundle path for nested items. Each
  * item's header is parsed and its signature hashed, so an item is only reported
  * when the header at the computed offset really is that item.
+ *
+ * That check establishes which item a header belongs to, not that its payload
+ * is intact: the signature itself is not verified here, because that needs the
+ * payload. Anything serving payloads located this way still has to verify them.
  */
 
 import { createHash } from 'node:crypto';
@@ -32,6 +36,17 @@ export const DEFAULT_MAX_WINDOW_BYTES = 1024 * 1024;
  * longer headers get one follow-up read.
  */
 export const DEFAULT_HEADER_GUESS_BYTES = 2 * 1024;
+
+/**
+ * Largest item count accepted from a bundle index by default (an index of
+ * about 122 MiB). The count comes from the bundle itself, so without a limit a
+ * corrupt count could make the scanner read and hold an index of any size the
+ * bundle allows.
+ */
+export const DEFAULT_MAX_INDEX_ITEMS = 2_000_000;
+
+/** Index entries fetched per range read (4 MiB). */
+const INDEX_READ_CHUNK_ITEMS = 65_536;
 
 /** One entry of a bundle's item index. */
 export interface BundleIndexEntry {
@@ -180,14 +195,18 @@ export function decodeDataItemHeader(buf: Buffer): DataItemHeaderDecodeResult {
 /**
  * Reads and validates a bundle's item index.
  *
- * The index must fit inside the bundle, and the items it lists must end
- * exactly at the end of the bundle, so a truncated or misframed bundle fails
- * instead of producing wrong offsets.
+ * The index must fit inside the bundle, list at most `maxItems` items, and
+ * the items it lists must end exactly at the end of the bundle, so a truncated
+ * or misframed bundle fails instead of producing wrong offsets. The index is
+ * read in chunks, and reading stops as soon as the listed items run past the
+ * end of the bundle.
  *
  * @param source - Byte source for the root transaction's data
  * @param bundleOffset - Offset of the bundle within the root TX data
  * @param bundleSize - Size of the bundle in bytes
  * @param bundleId - Bundle ID, for error messages
+ * @param options.maxItems - Largest item count accepted from the index
+ * @param options.readChunkItems - Index entries fetched per range read
  * @throws BundleScanError when the index does not describe the bundle
  */
 export async function readBundleIndex(
@@ -195,6 +214,10 @@ export async function readBundleIndex(
   bundleOffset: number,
   bundleSize: number,
   bundleId: string,
+  {
+    maxItems = DEFAULT_MAX_INDEX_ITEMS,
+    readChunkItems = INDEX_READ_CHUNK_ITEMS,
+  }: { maxItems?: number; readChunkItems?: number } = {},
 ): Promise<BundleIndexEntry[]> {
   if (bundleSize < 32) {
     throw new BundleScanError(
@@ -204,6 +227,12 @@ export async function readBundleIndex(
   }
 
   const itemCount = byteArrayToLong(await source.read(bundleOffset, 32));
+  if (itemCount > maxItems) {
+    throw new BundleScanError(
+      `Index lists ${itemCount} items, more than the limit of ${maxItems}`,
+      bundleId,
+    );
+  }
   const indexSize = 64 * itemCount;
   if (!Number.isSafeInteger(indexSize) || 32 + indexSize > bundleSize) {
     throw new BundleScanError(
@@ -212,21 +241,23 @@ export async function readBundleIndex(
     );
   }
 
-  const index =
-    itemCount === 0
-      ? Buffer.alloc(0)
-      : await source.read(bundleOffset + 32, indexSize);
-
   const entries: BundleIndexEntry[] = [];
   let offset = 32 + indexSize;
-  for (let i = 0; i < indexSize; i += 64) {
-    const size = byteArrayToLong(index.subarray(i, i + 32));
-    entries.push({
-      id: index.subarray(i + 32, i + 64).toString('base64url'),
-      offset,
-      size,
-    });
-    offset += size;
+  for (let first = 0; first < itemCount; first += readChunkItems) {
+    const count = Math.min(readChunkItems, itemCount - first);
+    const chunk = await source.read(bundleOffset + 32 + 64 * first, 64 * count);
+    for (let i = 0; i < chunk.length; i += 64) {
+      const size = byteArrayToLong(chunk.subarray(i, i + 32));
+      entries.push({
+        id: chunk.subarray(i + 32, i + 64).toString('base64url'),
+        offset,
+        size,
+      });
+      offset += size;
+    }
+    if (offset > bundleSize) {
+      break;
+    }
   }
 
   if (offset !== bundleSize) {
@@ -255,10 +286,15 @@ export interface ScanBundleOptions {
   maxWindowBytes?: number;
   /** Bytes read from the start of each item when coalescing header reads */
   headerGuessBytes?: number;
+  /** Largest item count accepted from any bundle index in the scan */
+  maxIndexItems?: number;
   /**
-   * Called when a nested bundle fails to verify. When provided, scanning
-   * continues with the next item (the nested bundle item itself has already
-   * been reported); when omitted, the error propagates.
+   * Called when a nested bundle fails to verify, with the
+   * {@link BundleScanError}. When provided, scanning continues with the next
+   * item (the nested bundle item itself has already been reported); when
+   * omitted, the error propagates. Other errors, such as failed reads, always
+   * propagate, so a scan never completes with a readable nested bundle's items
+   * silently missing.
    */
   onNestedBundleError?: (
     error: Error,
@@ -286,6 +322,7 @@ export async function* scanBundle({
   path = [],
   maxWindowBytes = DEFAULT_MAX_WINDOW_BYTES,
   headerGuessBytes = DEFAULT_HEADER_GUESS_BYTES,
+  maxIndexItems = DEFAULT_MAX_INDEX_ITEMS,
   onNestedBundleError,
 }: ScanBundleOptions): AsyncGenerator<ScannedDataItem> {
   const bundleId = path.length === 0 ? rootTxId : path[path.length - 1];
@@ -301,6 +338,7 @@ export async function* scanBundle({
     bundleOffset,
     bundleSize,
     bundleId,
+    { maxItems: maxIndexItems },
   );
 
   let first = 0;
@@ -366,10 +404,14 @@ export async function* scanBundle({
             path: nestedPath,
             maxWindowBytes,
             headerGuessBytes,
+            maxIndexItems,
             onNestedBundleError,
           });
         } catch (error: any) {
-          if (onNestedBundleError === undefined) {
+          if (
+            onNestedBundleError === undefined ||
+            !(error instanceof BundleScanError)
+          ) {
             throw error;
           }
           onNestedBundleError(error, { id: entry.id, path: nestedPath });
