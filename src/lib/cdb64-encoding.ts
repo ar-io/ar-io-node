@@ -24,7 +24,7 @@
  * ### Complete Format (Legacy)
  * Used when offset information is available:
  * ```
- * { r: <Buffer 32 bytes>, i: <integer>, d: <integer> }
+ * { r: <Buffer 32 bytes>, i: <integer>, d: <integer>, s?: <integer> }
  * ```
  *
  * ### Path Format
@@ -36,7 +36,7 @@
  * ### Path Complete Format
  * Used when both path and offset information are available:
  * ```
- * { p: [<Buffer 32 bytes>, ...], i: <integer>, d: <integer> }
+ * { p: [<Buffer 32 bytes>, ...], i: <integer>, d: <integer>, s?: <integer> }
  * ```
  *
  * ## Key Mapping
@@ -47,10 +47,18 @@
  * | p   | path                 | Array of 32-byte TX IDs [root, ..., parent] |
  * | i   | rootDataItemOffset   | Byte offset of data item header          |
  * | d   | rootDataOffset       | Byte offset of data payload              |
+ * | s   | dataItemSize         | Total data item size (header + payload), optional |
  *
  * The offsets correspond to HTTP headers:
  * - `i` → `X-AR-IO-Root-Data-Item-Offset`
  * - `d` → `X-AR-IO-Root-Data-Offset`
+ * - `s` → `X-AR-IO-Data-Item-Size`
+ *
+ * `s` is only meaningful alongside `i` and `d`. It is optional so that values
+ * written before it existed still decode, and readers that predate it ignore
+ * the extra key, so indexes that carry it remain readable by older gateways.
+ * Without it a reader knows where the item starts but not where it ends, and
+ * must search the bundle header for the item's size.
  *
  * ## Path Structure
  *
@@ -82,6 +90,7 @@ export interface Cdb64RootTxValueSimple {
  * The offsets match the HTTP headers returned by the gateway:
  * - rootDataItemOffset → X-AR-IO-Root-Data-Item-Offset
  * - rootDataOffset → X-AR-IO-Root-Data-Offset
+ * - dataItemSize → X-AR-IO-Data-Item-Size
  */
 export interface Cdb64RootTxValueComplete {
   /** 32-byte root transaction ID */
@@ -90,6 +99,11 @@ export interface Cdb64RootTxValueComplete {
   rootDataItemOffset: number;
   /** Byte offset of data payload within root TX data */
   rootDataOffset: number;
+  /**
+   * Total data item size in bytes (header + payload), when known. Lets a
+   * reader locate the item without searching the bundle header for its size.
+   */
+  dataItemSize?: number;
 }
 
 /**
@@ -119,6 +133,11 @@ export interface Cdb64RootTxValuePathComplete {
   rootDataItemOffset: number;
   /** Byte offset of data payload within root TX data */
   rootDataOffset: number;
+  /**
+   * Total data item size in bytes (header + payload), when known. Lets a
+   * reader locate the item without searching the bundle header for its size.
+   */
+  dataItemSize?: number;
 }
 
 /**
@@ -172,17 +191,47 @@ export function isPathCompleteValue(
 }
 
 /**
- * Validates that offsets are non-negative integers.
+ * Checks that an item size is consistent with its offsets: a non-negative
+ * integer no smaller than the header, which spans from the item offset to the
+ * payload offset. The item's end offset must also be a safe integer, so a huge
+ * size can't frame a payload range beyond what the gateway can address.
+ */
+function isValidDataItemSize(
+  dataItemSize: unknown,
+  rootDataItemOffset: number,
+  rootDataOffset: number,
+): dataItemSize is number {
+  return (
+    typeof dataItemSize === 'number' &&
+    Number.isSafeInteger(dataItemSize) &&
+    Number.isSafeInteger(rootDataItemOffset + dataItemSize) &&
+    rootDataOffset >= rootDataItemOffset &&
+    dataItemSize >= rootDataOffset - rootDataItemOffset
+  );
+}
+
+/**
+ * Validates that offsets are non-negative integers and, when an item size is
+ * given, that it is consistent with them.
  */
 function validateOffsets(
   rootDataItemOffset: number,
   rootDataOffset: number,
+  dataItemSize?: number,
 ): void {
   if (!Number.isInteger(rootDataItemOffset) || rootDataItemOffset < 0) {
     throw new Error('rootDataItemOffset must be a non-negative integer');
   }
   if (!Number.isInteger(rootDataOffset) || rootDataOffset < 0) {
     throw new Error('rootDataOffset must be a non-negative integer');
+  }
+  if (
+    dataItemSize !== undefined &&
+    !isValidDataItemSize(dataItemSize, rootDataItemOffset, rootDataOffset)
+  ) {
+    throw new Error(
+      'dataItemSize must be a safe integer no smaller than the header size (rootDataOffset - rootDataItemOffset)',
+    );
   }
 }
 
@@ -217,11 +266,16 @@ export function encodeCdb64Value(value: Cdb64RootTxValue): Buffer {
     validatePath(value.path);
 
     if (isPathCompleteValue(value)) {
-      validateOffsets(value.rootDataItemOffset, value.rootDataOffset);
+      validateOffsets(
+        value.rootDataItemOffset,
+        value.rootDataOffset,
+        value.dataItemSize,
+      );
       return toMsgpack({
         p: value.path,
         i: value.rootDataItemOffset,
         d: value.rootDataOffset,
+        ...(value.dataItemSize !== undefined ? { s: value.dataItemSize } : {}),
       });
     }
 
@@ -242,11 +296,16 @@ export function encodeCdb64Value(value: Cdb64RootTxValue): Buffer {
   }
 
   if (isCompleteValue(value)) {
-    validateOffsets(value.rootDataItemOffset, value.rootDataOffset);
+    validateOffsets(
+      value.rootDataItemOffset,
+      value.rootDataOffset,
+      value.dataItemSize,
+    );
     return toMsgpack({
       r: value.rootTxId,
       i: value.rootDataItemOffset,
       d: value.rootDataOffset,
+      ...(value.dataItemSize !== undefined ? { s: value.dataItemSize } : {}),
     });
   }
 
@@ -258,11 +317,20 @@ export function encodeCdb64Value(value: Cdb64RootTxValue): Buffer {
 
 /**
  * Validates decoded offset fields and returns them if valid.
+ *
+ * `s` (item size) is read only when both offsets are present; on its own it
+ * carries no location and is ignored. An `s` inconsistent with the offsets
+ * (not a safe integer, smaller than the header, or ending beyond a safe offset)
+ * is ignored too: the offsets remain usable, so a reader falls back to
+ * searching the bundle for the item's size instead of losing the whole entry.
  */
-function decodeOffsets(decoded: {
-  i?: unknown;
-  d?: unknown;
-}): { rootDataItemOffset: number; rootDataOffset: number } | undefined {
+function decodeOffsets(decoded: { i?: unknown; d?: unknown; s?: unknown }):
+  | {
+      rootDataItemOffset: number;
+      rootDataOffset: number;
+      dataItemSize?: number;
+    }
+  | undefined {
   if (!('i' in decoded) || !('d' in decoded)) {
     return undefined;
   }
@@ -286,7 +354,14 @@ function decodeOffsets(decoded: {
     throw new Error('Invalid CDB64 value: invalid rootDataOffset');
   }
 
-  return { rootDataItemOffset, rootDataOffset };
+  if (
+    !('s' in decoded) ||
+    !isValidDataItemSize(decoded.s, rootDataItemOffset, rootDataOffset)
+  ) {
+    return { rootDataItemOffset, rootDataOffset };
+  }
+
+  return { rootDataItemOffset, rootDataOffset, dataItemSize: decoded.s };
 }
 
 /**
@@ -328,11 +403,7 @@ export function decodeCdb64Value(buffer: Buffer): Cdb64RootTxValue {
     // Check for offsets
     const offsets = decodeOffsets(decoded);
     if (offsets !== undefined) {
-      return {
-        path,
-        rootDataItemOffset: offsets.rootDataItemOffset,
-        rootDataOffset: offsets.rootDataOffset,
-      };
+      return { path, ...offsets };
     }
 
     // Path-only format
@@ -351,11 +422,7 @@ export function decodeCdb64Value(buffer: Buffer): Cdb64RootTxValue {
   // Check for offsets
   const offsets = decodeOffsets(decoded);
   if (offsets !== undefined) {
-    return {
-      rootTxId: decoded.r,
-      rootDataItemOffset: offsets.rootDataItemOffset,
-      rootDataOffset: offsets.rootDataOffset,
-    };
+    return { rootTxId: decoded.r, ...offsets };
   }
 
   // Simple format
@@ -400,4 +467,15 @@ export function hasOffsets(
   value: Cdb64RootTxValue,
 ): value is Cdb64RootTxValueComplete | Cdb64RootTxValuePathComplete {
   return isCompleteValue(value) || isPathCompleteValue(value);
+}
+
+/**
+ * Extracts the total data item size (header + payload) from a CDB64 value, if
+ * the value carries it.
+ *
+ * @param value - The decoded CDB64 value
+ * @returns The item size in bytes, or undefined when not recorded
+ */
+export function getDataItemSize(value: Cdb64RootTxValue): number | undefined {
+  return hasOffsets(value) ? value.dataItemSize : undefined;
 }

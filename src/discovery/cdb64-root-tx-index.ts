@@ -1096,22 +1096,24 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           const pathBuffers = getPath(value);
           const path = pathBuffers?.map((buf) => toB64Url(buf));
 
-          // Check for offset information (both legacy complete and path complete)
-          if (isPathCompleteValue(value)) {
+          // Check for offset information (both legacy complete and path complete).
+          //
+          // When the value records the item size it is returned as `size` (the
+          // whole item, header + payload). `dataSize` is deliberately left
+          // unset even though it could be derived: a result carrying
+          // `dataSize` is treated as ready to serve with no header read, but
+          // the index does not store the item's content type, and only reading
+          // the item header recovers it (and confirms the offset belongs to
+          // the requested ID).
+          if (isPathCompleteValue(value) || isCompleteValue(value)) {
             return {
               rootTxId,
               path,
               rootOffset: value.rootDataItemOffset,
               rootDataOffset: value.rootDataOffset,
-            };
-          }
-
-          if (isCompleteValue(value)) {
-            return {
-              rootTxId,
-              path,
-              rootOffset: value.rootDataItemOffset,
-              rootDataOffset: value.rootDataOffset,
+              ...(value.dataItemSize !== undefined
+                ? { size: value.dataItemSize }
+                : {}),
             };
           }
 

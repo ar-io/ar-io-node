@@ -111,6 +111,7 @@ Each data item ID maps to information about its location:
 | `rootTxId`       | The L1 Arweave transaction containing the data         |
 | `rootOffset`     | Byte offset of the data item header within the root TX |
 | `rootDataOffset` | Byte offset of the data payload within the root TX     |
+| `size`           | Total data item size, header + payload (optional)      |
 | `path`           | Bundle traversal path for nested bundles               |
 
 ### Source Priority
@@ -133,7 +134,7 @@ result is actionable when the caller can proceed without further lookups:
 | ------------------ | ----------------------------------------------------- | ------------------------------------------------- |
 | `complete_offsets` | `rootOffset` + `rootDataOffset` + `size` + `dataSize` | Full offsets; no header parse needed              |
 | `l1_root`          | `rootTxId === id`                                     | Definitive L1 root; passthrough                   |
-| `offsets`          | `rootOffset` + `rootDataOffset` present               | The CDB64 case; size is read from the item header |
+| `offsets`          | `rootOffset` + `rootDataOffset` present               | The CDB64 case; see [Item size](#item-size)       |
 | `path`             | non-empty `path`                                      | Enables path-guided bundle navigation             |
 | `caller_accept`    | `opts.accept(result) === true`                        | Caller-provided predicate accepted the result     |
 
@@ -147,9 +148,33 @@ a fallback and the search continues, so a later source (e.g. CDB64) can supply a
 path or offsets. If no source is actionable, the saved fallback is returned
 (`fallback`), or `undefined` if nothing resolved (`not_found`).
 
-CDB64 values carry offsets (`rootOffset`/`rootDataOffset`) but not `size`, so
-CDB64 hits terminate with the `offsets` (or `path`) reason rather than
-`complete_offsets`.
+CDB64 values never carry `dataSize` or the item's content type, so CDB64 hits
+terminate with the `offsets` (or `path`) reason rather than `complete_offsets`.
+
+### Item size
+
+An offset tells the gateway where a data item starts, but not where it ends.
+CDB64 values can optionally record the total item size (`s`, header + payload;
+the `data_item_size` CSV column), and whether they do decides how an `offsets`
+hit is served:
+
+| Value carries          | How the item is located                                                                                   | Reads before the payload |
+| ---------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------ |
+| offsets + item size    | Reads the item header at `rootOffset`, checks that its signature hashes to the requested ID and that the header ends at `rootDataOffset`, takes the payload size and content type from it, then serves the payload only if the item's signature verifies over it | 1 (bounded item header)  |
+| offsets only           | Searches the root bundle header for the item (item count, ID index, item header), as for a bare `rootTxId` | 3 or more                |
+
+If the header check fails (wrong ID, or a header that does not end at
+`rootDataOffset`), the gateway falls back to the bundle search. The recorded
+size itself can only be checked against the payload, so the payload streams
+through signature verification: its final bytes are released only once the
+item's signature verifies, and the offsets are saved only then. A wrong size
+therefore ends the response short instead of completing it, and later requests
+for that entry use the bundle search. Range requests always use the bundle
+search, because a range cannot be verified end to end. Outcomes are counted in
+`data_item_signature_verification_total{source="root_tx_index"}`. Each resolution is counted in
+`root_tx_local_resolve_total{outcome}`; `index_offsets` counts items located from
+the recorded size. The size is optional and ignored by readers that predate it,
+so indexes that include it remain readable by older gateways.
 
 Observability (per-node Prometheus metrics):
 

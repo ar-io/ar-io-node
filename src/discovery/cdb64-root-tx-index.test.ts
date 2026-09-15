@@ -118,6 +118,73 @@ describe('Cdb64RootTxIndex', () => {
       assert.equal(result.rootTxId, toB64Url(rootTxId));
       assert.equal(result.rootOffset, rootDataItemOffset);
       assert.equal(result.rootDataOffset, rootDataOffset);
+      assert.equal(result.size, undefined);
+      assert.equal(result.dataSize, undefined);
+
+      await index.close();
+    });
+
+    it('should return the recorded item size as size, without dataSize', async () => {
+      const cdbPath = path.join(tempDir, 'complete-with-size.cdb');
+      const dataItemId = createTxId(3);
+      const rootTxId = createTxId(210);
+
+      const writer = new Cdb64Writer(cdbPath);
+      await writer.open();
+      await writer.add(
+        dataItemId,
+        encodeCdb64Value({
+          rootTxId,
+          rootDataItemOffset: 12345,
+          rootDataOffset: 13000,
+          dataItemSize: 2000,
+        }),
+      );
+      await writer.finalize();
+
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
+      const result = await index.getRootTx(toB64Url(dataItemId));
+
+      assert(result !== undefined);
+      assert.equal(result.rootOffset, 12345);
+      assert.equal(result.rootDataOffset, 13000);
+      assert.equal(result.size, 2000);
+      // Left unset on purpose: a result with dataSize is served without an
+      // item-header read, which is the only way to recover the content type.
+      assert.equal(result.dataSize, undefined);
+
+      await index.close();
+    });
+
+    it('should return the recorded item size for path-complete values', async () => {
+      const cdbPath = path.join(tempDir, 'path-complete-with-size.cdb');
+      const dataItemId = createTxId(4);
+      const rootTxId = createTxId(220);
+      const parentId = createTxId(230);
+
+      const writer = new Cdb64Writer(cdbPath);
+      await writer.open();
+      await writer.add(
+        dataItemId,
+        encodeCdb64Value({
+          path: [rootTxId, parentId],
+          rootDataItemOffset: 5000,
+          rootDataOffset: 5512,
+          dataItemSize: 9000,
+        }),
+      );
+      await writer.finalize();
+
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
+      const result = await index.getRootTx(toB64Url(dataItemId));
+
+      assert(result !== undefined);
+      assert.equal(result.rootTxId, toB64Url(rootTxId));
+      assert.deepEqual(result.path, [toB64Url(rootTxId), toB64Url(parentId)]);
+      assert.equal(result.rootOffset, 5000);
+      assert.equal(result.rootDataOffset, 5512);
+      assert.equal(result.size, 9000);
+      assert.equal(result.dataSize, undefined);
 
       await index.close();
     });
