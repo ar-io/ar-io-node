@@ -42,6 +42,8 @@ interface DataRow {
   root_transaction_id: Buffer;
   root_data_item_offset: number | null;
   root_data_offset: number | null;
+  /** Total data item size (header + payload), when recorded */
+  data_item_size: number | null;
 }
 
 function printUsage(): void {
@@ -157,7 +159,8 @@ async function exportToCdb64(config: Config): Promise<void> {
   try {
     // Prepare the query
     const query = db.prepare(`
-      SELECT id, root_transaction_id, root_data_item_offset, root_data_offset
+      SELECT id, root_transaction_id, root_data_item_offset, root_data_offset,
+        data_item_size
       FROM contiguous_data_ids
       WHERE root_transaction_id IS NOT NULL
     `);
@@ -199,6 +202,7 @@ async function exportToCdb64(config: Config): Promise<void> {
     let recordCount = 0;
     let simpleCount = 0;
     let completeCount = 0;
+    let dataItemSizeCount = 0;
     let skippedCount = 0;
 
     try {
@@ -235,12 +239,27 @@ async function exportToCdb64(config: Config): Promise<void> {
         // Encode value based on available data
         let encodedValue: Buffer;
         if (hasOffsets) {
+          const rootDataItemOffset = row.root_data_item_offset!;
+          const rootDataOffset = row.root_data_offset!;
+          // Record the item size only when it is consistent with the offsets
+          // (at least the header size); an inconsistent size is dropped
+          // rather than failing the whole export.
+          const dataItemSize =
+            row.data_item_size !== null &&
+            rootDataOffset >= rootDataItemOffset &&
+            row.data_item_size >= rootDataOffset - rootDataItemOffset
+              ? row.data_item_size
+              : undefined;
           encodedValue = encodeCdb64Value({
             rootTxId: row.root_transaction_id,
-            rootDataItemOffset: row.root_data_item_offset!,
-            rootDataOffset: row.root_data_offset!,
+            rootDataItemOffset,
+            rootDataOffset,
+            dataItemSize,
           });
           completeCount++;
+          if (dataItemSize !== undefined) {
+            dataItemSizeCount++;
+          }
         } else {
           encodedValue = encodeCdb64Value({
             rootTxId: row.root_transaction_id,
@@ -267,6 +286,9 @@ async function exportToCdb64(config: Config): Promise<void> {
       console.log(`Records exported: ${recordCount.toLocaleString()}`);
       console.log(`  - Simple format: ${simpleCount.toLocaleString()}`);
       console.log(`  - Complete format: ${completeCount.toLocaleString()}`);
+      console.log(
+        `    - With item size: ${dataItemSizeCount.toLocaleString()}`,
+      );
       if (skippedCount > 0) {
         console.log(
           `Records skipped (invalid): ${skippedCount.toLocaleString()}`,

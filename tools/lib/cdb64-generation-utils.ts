@@ -39,6 +39,8 @@ export interface ProcessingStats {
   completeCount: number;
   pathCount: number;
   pathCompleteCount: number;
+  /** Offset records (complete or path complete) that also carry the item size */
+  dataItemSizeCount: number;
   errorCount: number;
   startTime: number;
 }
@@ -54,6 +56,7 @@ export function createStats(): ProcessingStats {
     completeCount: 0,
     pathCount: 0,
     pathCompleteCount: 0,
+    dataItemSizeCount: 0,
     errorCount: 0,
     startTime: Date.now(),
   };
@@ -82,7 +85,7 @@ Options:
   --help, -h            Show this help message
 
 CSV Format:
-  data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
+  data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_size
 
   - data_item_id: Base64URL-encoded data item ID (43 characters)
   - root_tx_id: Base64URL-encoded root transaction ID (43 characters)
@@ -90,14 +93,18 @@ CSV Format:
           Format: ["rootId","bundle1Id","bundle2Id",...,"parentId"]
   - root_data_item_offset: Byte offset (empty if not available)
   - root_data_offset: Byte offset (empty if not available)
+  - data_item_size: Total item size, header + payload (optional, empty if not available)
 
-  If offset columns are present, both must be provided.
+  If offset columns are present, both must be provided. data_item_size
+  requires both offsets; with it the gateway reads one item header instead of
+  searching the bundle header. Five-column files remain valid; every row in
+  a file must have the same number of columns.
 
 Supported Value Formats:
   - Simple: rootTxId only (legacy)
-  - Complete: rootTxId + offsets (legacy)
+  - Complete: rootTxId + offsets, optionally item size (legacy)
   - Path: bundle traversal path (nested bundles)
-  - Path Complete: path + offsets (nested bundles with offsets)
+  - Path Complete: path + offsets, optionally item size (nested bundles with offsets)
 
 Example:
   # Single file output
@@ -267,6 +274,30 @@ export function parseOffset(value: string, fieldName: string): number {
 }
 
 /**
+ * Parses the optional `data_item_size` column (column 6): the total data item
+ * size in bytes, header + payload.
+ *
+ * @param parts - The CSV record fields
+ * @param hasOffsets - Whether both offset columns are populated
+ * @returns The item size, or undefined when the column is absent or empty
+ * @throws Error if the size is invalid or supplied without both offsets
+ */
+export function parseDataItemSize(
+  parts: string[],
+  hasOffsets: boolean,
+): number | undefined {
+  if (parts.length < 6 || parts[5].trim() === '') {
+    return undefined;
+  }
+  if (!hasOffsets) {
+    throw new Error(
+      'data_item_size requires both root_data_item_offset and root_data_offset',
+    );
+  }
+  return parseOffset(parts[5], 'data_item_size');
+}
+
+/**
  * Parses a path JSON array from a CSV field.
  *
  * @param pathStr - The raw path JSON string
@@ -321,6 +352,9 @@ export function printGenerationSummary(
   console.log('  Path formats:');
   console.log(`    - Path: ${stats.pathCount.toLocaleString()}`);
   console.log(`    - Path Complete: ${stats.pathCompleteCount.toLocaleString()}`);
+  console.log(
+    `  With item size: ${stats.dataItemSizeCount.toLocaleString()}`,
+  );
   if (stats.errorCount > 0) {
     console.log(`Errors: ${stats.errorCount}`);
   }
