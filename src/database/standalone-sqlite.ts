@@ -60,6 +60,7 @@ import {
   TransactionAttributes,
   ChunkPlacement,
   ChunkPlacementRef,
+  TxGeometry,
 } from '../types.js';
 import * as config from '../config.js';
 import { DetailedError } from '../lib/error.js';
@@ -1387,6 +1388,25 @@ export class StandaloneSqliteDatabaseWorker {
   countChunkDataCacheEntries(): number {
     const row: any = this.stmts.chunks.countChunkDataCacheEntries.get();
     return row.count as number;
+  }
+
+  getTxGeometry(txId: string): TxGeometry | undefined {
+    const row = this.stmts.core.selectStableTransactionGeometryById.get({
+      id: fromB64Url(txId),
+    });
+    if (
+      row === undefined ||
+      row.data_root == null ||
+      row.offset == null ||
+      row.data_size == null
+    ) {
+      return undefined;
+    }
+    return {
+      dataRoot: toB64Url(row.data_root),
+      offset: row.offset,
+      size: row.data_size,
+    };
   }
 
   getTxByOffset(offset: number): TxByOffsetResult {
@@ -4025,6 +4045,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getTxByOffset', [offset]);
   }
 
+  getTxGeometry(txId: string): Promise<TxGeometry | undefined> {
+    return this.queueRead('core', 'getTxGeometry', [txId]);
+  }
+
   /**
    * Queue-wrapper for the worker's {@link StandaloneSqliteDatabaseWorker.getBlockByWeaveOffset}:
    * resolve an absolute weave `offset` to its containing stable block (with the
@@ -4836,6 +4860,9 @@ if (!isMainThread) {
         case 'getTxByOffset':
           const tx = worker.getTxByOffset(args[0]);
           parentPort?.postMessage(tx);
+          break;
+        case 'getTxGeometry':
+          parentPort?.postMessage(worker.getTxGeometry(args[0]));
           break;
         case 'getBlockByWeaveOffset':
           const blockByWeaveOffset = worker.getBlockByWeaveOffset(args[0]);
