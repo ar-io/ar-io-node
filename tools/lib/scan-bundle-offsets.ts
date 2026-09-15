@@ -584,6 +584,68 @@ function oneLine(text: string): string {
 }
 
 /**
+ * Raised when the output files could not be restored after a failed write.
+ * The run stops instead of recording the root as failed, since a `failed`
+ * record would capture sizes that include the partial rows; the next run
+ * truncates back to the root's `writing` record instead.
+ */
+class OutputRecoveryError extends Error {}
+
+/** Truncates a file to `size` bytes when it has grown past it. */
+function shrinkTo(filePath: string, size: number): void {
+  if (fileSize(filePath) > size) {
+    fs.truncateSync(filePath, size);
+  }
+}
+
+/**
+ * Writes a scanned root's rows and records it as ok, synchronously, so roots
+ * never interleave. A `writing` record with the output sizes from before this
+ * root comes first: if the process stops before the `ok` record, the next run
+ * truncates back to it.
+ *
+ * If a write throws instead, the outputs and the progress file are truncated
+ * back to their sizes before this root and the error is rethrown, so the
+ * caller's `failed` record never keeps partial rows.
+ *
+ * @throws OutputRecoveryError when that truncation fails too
+ */
+function commitRoot(config: Config, root: string, result: RootResult): void {
+  const before = outputSizes(config);
+  const progressBefore = fileSize(config.progressPath);
+  try {
+    recordProgress(config, root, 'writing', 0, '');
+    appendRows(config.outputPath, CDB_COLUMNS, result.lines);
+    if (config.detailsPath !== undefined) {
+      appendRows(config.detailsPath, DETAIL_COLUMNS, result.detailLines);
+    }
+    recordProgress(
+      config,
+      root,
+      'ok',
+      result.lines.length,
+      result.warnings.join(' | '),
+    );
+  } catch (error: any) {
+    try {
+      shrinkTo(config.outputPath, before.outputBytes);
+      if (
+        config.detailsPath !== undefined &&
+        before.detailsBytes !== undefined
+      ) {
+        shrinkTo(config.detailsPath, before.detailsBytes);
+      }
+      shrinkTo(config.progressPath, progressBefore);
+    } catch (restoreError: any) {
+      throw new OutputRecoveryError(
+        `Writing ${root} failed (${error?.message}) and the outputs could not be restored (${restoreError?.message})`,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
  * Scans every pending root and prints a summary. Sets exit code 2 when any
  * root failed.
  */
@@ -634,21 +696,7 @@ async function main(): Promise<void> {
       const root = pending[nextIndex++];
       try {
         const result = await scanRoot(config, root);
-        // Synchronous from here to the ok record, so roots never interleave.
-        // The writing record holds the sizes before this root's rows; if the
-        // run stops before the ok record, the next run truncates back to them.
-        recordProgress(config, root, 'writing', 0, '');
-        appendRows(config.outputPath, CDB_COLUMNS, result.lines);
-        if (config.detailsPath !== undefined) {
-          appendRows(config.detailsPath, DETAIL_COLUMNS, result.detailLines);
-        }
-        recordProgress(
-          config,
-          root,
-          'ok',
-          result.lines.length,
-          result.warnings.join(' | '),
-        );
+        commitRoot(config, root, result);
 
         totals.ok++;
         totals.items += result.lines.length;
@@ -666,6 +714,9 @@ async function main(): Promise<void> {
           `ok     ${root} items=${result.lines.length} nested=${result.nestedBundles} requests=${result.requests} bytes=${result.bytes}${result.warnings.length > 0 ? ` warnings=${result.warnings.length}` : ''}`,
         );
       } catch (error: any) {
+        if (error instanceof OutputRecoveryError) {
+          throw error;
+        }
         totals.failed++;
         const message = oneLine(error?.message ?? String(error));
         recordProgress(config, root, 'failed', 0, message);
