@@ -193,7 +193,8 @@ export function isPathCompleteValue(
 /**
  * Checks that an item size is consistent with its offsets: a non-negative
  * integer no smaller than the header, which spans from the item offset to the
- * payload offset.
+ * payload offset. The item's end offset must also be a safe integer, so a huge
+ * size can't frame a payload range beyond what the gateway can address.
  */
 function isValidDataItemSize(
   dataItemSize: unknown,
@@ -202,7 +203,8 @@ function isValidDataItemSize(
 ): dataItemSize is number {
   return (
     typeof dataItemSize === 'number' &&
-    Number.isInteger(dataItemSize) &&
+    Number.isSafeInteger(dataItemSize) &&
+    Number.isSafeInteger(rootDataItemOffset + dataItemSize) &&
     rootDataOffset >= rootDataItemOffset &&
     dataItemSize >= rootDataOffset - rootDataItemOffset
   );
@@ -228,7 +230,7 @@ function validateOffsets(
     !isValidDataItemSize(dataItemSize, rootDataItemOffset, rootDataOffset)
   ) {
     throw new Error(
-      'dataItemSize must be an integer no smaller than the header size (rootDataOffset - rootDataItemOffset)',
+      'dataItemSize must be a safe integer no smaller than the header size (rootDataOffset - rootDataItemOffset)',
     );
   }
 }

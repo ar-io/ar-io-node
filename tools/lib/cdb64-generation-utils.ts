@@ -256,7 +256,8 @@ export function parseBase64UrlId(value: string, fieldName: string): Buffer {
  */
 export function parseOffset(value: string, fieldName: string): number {
   const trimmed = value.trim();
-  const num = parseInt(trimmed, 10);
+  // parseInt alone would accept "3072bytes" or "3072.5" as 3072.
+  const num = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
 
   if (isNaN(num) || !Number.isInteger(num) || num < 0) {
     throw new Error(

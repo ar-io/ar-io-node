@@ -627,7 +627,7 @@ describe('CDB64 Encoding', () => {
             rootDataOffset: 180,
             dataItemSize: 79,
           }),
-        /dataItemSize must be an integer no smaller than the header size/,
+        /dataItemSize must be a safe integer no smaller than the header size/,
       );
     });
 
@@ -640,7 +640,34 @@ describe('CDB64 Encoding', () => {
             rootDataOffset: 180,
             dataItemSize: 200.5,
           }),
-        /dataItemSize must be an integer/,
+        /dataItemSize must be a safe integer/,
+      );
+    });
+
+    it('should reject an unsafe item size on decode', () => {
+      const encoded = toMsgpack({
+        r: createTestTxId(80),
+        i: 100,
+        d: 200,
+        s: 2 ** 53,
+      });
+
+      assert.throws(
+        () => decodeCdb64Value(encoded),
+        /Invalid CDB64 value: invalid dataItemSize/,
+      );
+    });
+
+    it('should reject an item size whose end offset is unsafe on encode', () => {
+      assert.throws(
+        () =>
+          encodeCdb64Value({
+            rootTxId: createTestTxId(81),
+            rootDataItemOffset: Number.MAX_SAFE_INTEGER - 100,
+            rootDataOffset: Number.MAX_SAFE_INTEGER - 50,
+            dataItemSize: 200,
+          }),
+        /dataItemSize must be a safe integer/,
       );
     });
 
