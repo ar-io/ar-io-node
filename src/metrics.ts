@@ -1889,13 +1889,47 @@ export const chunkMetadataAnchorTotal = new promClient.Counter({
  * Labels (`kind`):
  * - `root_id`     — `X-AR-IO-Root-Transaction-Id` was sent
  * - `path`        — `X-AR-IO-Root-Path` was sent (comma-separated parent chain)
- * - `byte_offset` — `X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size` pair was sent
+ * - `byte_offset` — no longer emitted: item offset/size hints are not forwarded
  */
 export const hintEmittedTotal = new promClient.Counter({
   name: 'ario_hint_emitted_total',
   help: 'Retrieval-hint headers emitted on outbound forwards',
   labelNames: ['kind'],
 });
+
+/**
+ * Outcomes of verifying a data item's signature over a payload located from an
+ * offset and size nothing else vouches for.
+ *
+ * Labels:
+ * - `source`: where the offset and size came from (`direct_offset_hint`)
+ * - `result`:
+ *   - `verified`: the payload matched the signature and was released in full
+ *   - `invalid_signature`, `size_mismatch`: the payload was rejected before its
+ *     final bytes were released and nothing was cached or persisted
+ *   - `unsupported_signature_type`: no verifier for the item's signature type,
+ *     so the offset was not used
+ *   - `skipped_range`: a range request, which cannot be verified end to end
+ *   - `skipped_rejected`: the same offset and size were rejected recently
+ */
+export const dataItemSignatureVerificationTotal = new promClient.Counter({
+  name: 'data_item_signature_verification_total',
+  help: 'Outcomes of verifying data item signatures over payloads located from unverified offsets and sizes',
+  labelNames: ['source', 'result'] as const,
+});
+
+/**
+ * Time to finalize a payload's deep hash and check its signature, once the
+ * payload has streamed. The incremental hashing done while bytes stream is not
+ * included.
+ */
+export const dataItemSignatureVerificationDurationSeconds =
+  new promClient.Histogram({
+    name: 'data_item_signature_verification_duration_seconds',
+    help: 'Time to finalize the deep hash and check a data item signature after its payload has streamed',
+    labelNames: ['source', 'signature_type'] as const,
+    buckets: [0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1],
+  });
 
 /**
  * Counter of Content-Digest emission outcomes on data and chunk

@@ -1040,6 +1040,18 @@ export class Ans104OffsetSource {
     headerSize: number;
     payloadSize: number;
     contentType?: string;
+    /**
+     * The header fields the item's signature covers besides the payload, for
+     * verifying a payload located from this header.
+     */
+    signedFields: {
+      signatureType: number;
+      signature: Buffer;
+      owner: Buffer;
+      target: Buffer;
+      anchor: Buffer;
+      tagsBytes: Buffer;
+    };
   }> {
     const log = this.log.child({
       method: 'parseDataItemHeader',
@@ -1081,34 +1093,39 @@ export class Ans104OffsetSource {
 
         // Read signature (used to compute data item ID)
         bytes = await readBytes(reader, bytes, sigLength);
-        const signature = bytes.subarray(0, sigLength);
+        const signature = Buffer.from(bytes.subarray(0, sigLength));
         const id = createHash('sha256').update(signature).digest('base64url');
         bytes = bytes.subarray(sigLength);
         headerOffset += sigLength;
 
-        // Skip owner
+        // Read owner
         bytes = await readBytes(reader, bytes, pubLength);
+        const owner = Buffer.from(bytes.subarray(0, pubLength));
         bytes = bytes.subarray(pubLength);
         headerOffset += pubLength;
 
-        // Skip target (1 byte flag + optional 32 bytes)
+        // Read target (1 byte flag + optional 32 bytes)
         bytes = await readBytes(reader, bytes, 1);
         const hasTarget = bytes[0] === 1;
         bytes = bytes.subarray(1);
         headerOffset += 1;
+        let target = Buffer.alloc(0);
         if (hasTarget) {
           bytes = await readBytes(reader, bytes, 32);
+          target = Buffer.from(bytes.subarray(0, 32));
           bytes = bytes.subarray(32);
           headerOffset += 32;
         }
 
-        // Skip anchor (1 byte flag + optional 32 bytes)
+        // Read anchor (1 byte flag + optional 32 bytes)
         bytes = await readBytes(reader, bytes, 1);
         const hasAnchor = bytes[0] === 1;
         bytes = bytes.subarray(1);
         headerOffset += 1;
+        let anchor = Buffer.alloc(0);
         if (hasAnchor) {
           bytes = await readBytes(reader, bytes, 32);
+          anchor = Buffer.from(bytes.subarray(0, 32));
           bytes = bytes.subarray(32);
           headerOffset += 32;
         }
@@ -1122,13 +1139,14 @@ export class Ans104OffsetSource {
 
         // Parse tags to extract Content-Type
         let contentType: string | undefined;
+        let tagsBytes = Buffer.alloc(0);
         if (tagsBytesLength > 0) {
           bytes = await readBytes(reader, bytes, tagsBytesLength);
-          const tagsBytes = bytes.subarray(0, tagsBytesLength);
+          tagsBytes = Buffer.from(bytes.subarray(0, tagsBytesLength));
 
           // Parse tags and find Content-Type (case-insensitive, use first match)
           if (tagsLength > 0) {
-            const tags = deserializeTags(Buffer.from(tagsBytes));
+            const tags = deserializeTags(tagsBytes);
             const contentTypeTag = tags.find(
               (tag) => tag.name.toLowerCase() === 'content-type',
             );
@@ -1151,7 +1169,20 @@ export class Ans104OffsetSource {
           contentType,
         });
 
-        return { id, headerSize, payloadSize, contentType };
+        return {
+          id,
+          headerSize,
+          payloadSize,
+          contentType,
+          signedFields: {
+            signatureType,
+            signature,
+            owner,
+            target,
+            anchor,
+            tagsBytes,
+          },
+        };
       } finally {
         destroyStream(headerData.stream);
       }

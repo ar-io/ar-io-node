@@ -40,22 +40,21 @@ export function validateHopCount(currentHops: number, maxHops: number): void {
  * arns context, via chain, retrieval hints) into `X-AR-IO-*` headers.
  *
  * **Retrieval-hint contract** (see `architect-handoff/retrieval-hints.md`):
- * The three optional hint fields — `rootTransactionIdHint`, `rootPathHint`,
- * `rootByteHint` — are emitted as request headers when populated:
+ * The root hint fields are emitted as request headers when populated:
  *
  * - `X-AR-IO-Root-Transaction-Id` — the L1 tx that ultimately contains
  *   the requested data item
  * - `X-AR-IO-Root-Path` — comma-joined parent chain `[root, ..., parent]`
  *   (canonical form for `getDataItemOffsetWithPath`)
- * - `X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size` — emitted as a
- *   pair when both are known (offset alone is meaningless)
  *
- * Hints are **best-effort, not authoritative**. The receiving gateway
- * MUST re-validate every hint against the parsed-header ID before
- * serving bytes (`RootParentDataSource` does this for the request
- * paths that consume these). A wrong hint produces a fallthrough to
- * the canonical resolver — never wrong bytes — so emitting a hint
- * adds zero trust surface and requires no operator opt-in.
+ * A receiving gateway uses these only to decide which bundle to read. It
+ * takes the item's offset and size from that bundle's own index, so a wrong
+ * root or path produces a fallthrough to the canonical resolver.
+ *
+ * `rootByteHint` (`X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size`) is
+ * **not** forwarded. Its size cannot be checked against the bundle's index,
+ * and it usually originates from the client that made the request, so passing
+ * it on would ask other gateways to rely on an unverified value.
  *
  * @param requestAttributes - The resolved attributes for this request,
  *   or `undefined` to skip emission entirely (returns `undefined`).
@@ -117,10 +116,13 @@ export const generateRequestAttributes = (
   // Retrieval-hint propagation. When the caller has already resolved any
   // part of the parent chain locally, send those hints along so the
   // upstream gateway can short-circuit the resolver instead of redoing
-  // the same `bundledIn` traversal. The receiving gateway re-validates
-  // every hint against the parsed-header ID before serving bytes
-  // (`RootParentDataSource`), so a wrong hint produces a fallthrough,
-  // never wrong bytes — emitting a hint adds no trust surface.
+  // the same `bundledIn` traversal. Root and path hints only select which
+  // bundle to read; the item's offset and size still come from that
+  // bundle's own index, so a wrong one produces a fallthrough.
+  //
+  // `rootByteHint` is deliberately not forwarded: its size cannot be checked
+  // against a bundle index, and it usually comes straight from the client
+  // that made this request.
   if (requestAttributes.rootTransactionIdHint != null) {
     headers[headerNames.rootTransactionId] =
       requestAttributes.rootTransactionIdHint;
@@ -135,17 +137,6 @@ export const generateRequestAttributes = (
     headers[headerNames.rootPath] = requestAttributes.rootPathHint.join(',');
     attributes.rootPathHint = requestAttributes.rootPathHint;
     metrics.hintEmittedTotal.inc({ kind: 'path' });
-  }
-
-  if (requestAttributes.rootByteHint != null) {
-    headers[headerNames.rootItemOffset] = String(
-      requestAttributes.rootByteHint.offset,
-    );
-    headers[headerNames.rootItemSize] = String(
-      requestAttributes.rootByteHint.size,
-    );
-    attributes.rootByteHint = requestAttributes.rootByteHint;
-    metrics.hintEmittedTotal.inc({ kind: 'byte_offset' });
   }
 
   return { headers, attributes };

@@ -113,7 +113,11 @@ components:
       description: |
         Optional byte offset of the complete ANS-104 data item, including its
         header, from the start of the root transaction's data. This header is
-        only used when X-AR-IO-Root-Item-Size is also provided.
+        only used when X-AR-IO-Root-Item-Size is also provided, and only for
+        requests without a Range header. The gateway reads the item header at
+        this offset and serves the payload only if the item's signature
+        verifies over it; otherwise the hint is ignored. It is not forwarded to
+        other gateways.
       example: 2048
     RootItemSizeHint:
       name: X-AR-IO-Root-Item-Size
@@ -125,7 +129,9 @@ components:
       description: |
         Optional size of the complete ANS-104 data item, including its header,
         in bytes. This header is only used when X-AR-IO-Root-Item-Offset is also
-        provided.
+        provided, under the same conditions: no Range header, and the item's
+        signature must verify over the payload it frames. It is not forwarded to
+        other gateways.
       example: 2092
   schemas:
     ParquetExportStatus:
