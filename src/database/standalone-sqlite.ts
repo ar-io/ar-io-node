@@ -1390,6 +1390,14 @@ export class StandaloneSqliteDatabaseWorker {
     return row.count as number;
   }
 
+  /**
+   * Look up the chunk-read geometry (data_root, END offset, data size) of a
+   * stable transaction by id.
+   *
+   * @param txId - base64url transaction id
+   * @returns the geometry, or `undefined` when the transaction is not a stable
+   *   row with both `offset` and `data_root` populated
+   */
   getTxGeometry(txId: string): TxGeometry | undefined {
     const row = this.stmts.core.selectStableTransactionGeometryById.get({
       id: fromB64Url(txId),
@@ -4045,6 +4053,14 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getTxByOffset', [offset]);
   }
 
+  /**
+   * Look up the chunk-read geometry of a stable transaction on a core read
+   * worker. See {@link StandaloneSqliteDatabaseWorker.getTxGeometry}.
+   *
+   * @param txId - base64url transaction id
+   * @returns the geometry, or `undefined` when no stable row with both
+   *   `offset` and `data_root` exists
+   */
   getTxGeometry(txId: string): Promise<TxGeometry | undefined> {
     return this.queueRead('core', 'getTxGeometry', [txId]);
   }
