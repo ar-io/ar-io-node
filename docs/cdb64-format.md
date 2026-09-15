@@ -178,7 +178,8 @@ Used when offset information is available:
 {
   r: <Buffer 32 bytes>,  // Root transaction ID (binary)
   i: <integer>,          // Root data item offset (byte offset of data item header)
-  d: <integer>           // Root data offset (byte offset of data payload)
+  d: <integer>,          // Root data offset (byte offset of data payload)
+  s: <integer>           // Optional: total data item size (header + payload)
 }
 ```
 
@@ -204,7 +205,8 @@ Used when both path and offset information are available:
 {
   p: [<Buffer 32 bytes>, ...],  // Array of bundle IDs from root to parent
   i: <integer>,                  // Root data item offset
-  d: <integer>                   // Root data offset
+  d: <integer>,                  // Root data offset
+  s: <integer>                   // Optional: total data item size (header + payload)
 }
 ```
 
@@ -233,10 +235,26 @@ For path formats, the root TX ID is derived from `path[0]`, eliminating the need
 | `p` | path | Array of 32-byte bundle IDs [root, ..., parent] |
 | `i` | rootDataItemOffset | Byte offset of nested data item within root TX |
 | `d` | rootDataOffset | Byte offset of data payload within root TX |
+| `s` | dataItemSize | Total data item size in bytes, header + payload (optional) |
 
-These offsets correspond to the HTTP headers:
+These fields correspond to the HTTP headers:
 - `i` → `X-AR-IO-Root-Data-Item-Offset`
 - `d` → `X-AR-IO-Root-Data-Offset`
+- `s` → `X-AR-IO-Data-Item-Size`
+
+### Item Size
+
+`s` is optional and only valid alongside `i` and `d`. It must be an integer no
+smaller than the header size (`d - i`); a value equal to the header size
+describes an item with an empty payload. Decoders reject an `s` that violates
+this, and ignore `s` on values without offsets.
+
+Offsets alone locate the start of an item but not its end, so a reader without
+`s` must search the bundle header for the item's size. With `s`, the payload is
+`d` to `i + s`, and a reader can confirm the entry by parsing the item header at
+`i`. Older decoders only read the keys above them in this table and ignore
+`s`, so adding it does not break existing readers, and values written without
+it encode to exactly the same bytes as before.
 
 ### Maximum Nesting Depth
 
