@@ -182,7 +182,9 @@ export class TxChunksDataSource implements ContiguousDataSource {
       });
       return { dataRoot, offset: +txOffset.offset, size: +txOffset.size };
     } catch (error: any) {
-      if (error?.name !== 'AbortError') {
+      // A caller cancellation (AbortError, or axios CanceledError) is not a
+      // chain lookup failure.
+      if (!signal?.aborted && error?.name !== 'AbortError') {
         metrics.txChunksGeometryLookupTotal.inc({
           source: 'chain',
           outcome: 'error',

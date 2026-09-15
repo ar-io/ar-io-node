@@ -946,6 +946,7 @@ describe('TxChunksDataSource', () => {
         (e: any) => e === canceled,
       );
       assert.deepEqual(verifyResults(), []);
+      assert.ok(!lookupLabels().includes('chain:error'));
     });
 
     it('does not re-check geometry when the caller aborted', async () => {
