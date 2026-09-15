@@ -920,6 +920,34 @@ describe('TxChunksDataSource', () => {
       assert.deepEqual(verifyResults(), []);
     });
 
+    it('propagates an axios-style cancellation during the chain re-check', async () => {
+      const { source } = newSource(async () => GEOMETRY);
+      const controller = new AbortController();
+      const canceled = Object.assign(new Error('canceled'), {
+        name: 'CanceledError',
+        code: 'ERR_CANCELED',
+      });
+      mock.method(chunkSource, 'getChunkDataByAny', () =>
+        Promise.reject(new Error('missing chunk')),
+      );
+      getTxOffsetMock.mock.mockImplementation(async () => {
+        chainCalls.getTxOffset++;
+        controller.abort();
+        throw canceled;
+      });
+
+      await assert.rejects(
+        () =>
+          source.getData({
+            id: TX_ID,
+            requestAttributes,
+            signal: controller.signal,
+          }),
+        (e: any) => e === canceled,
+      );
+      assert.deepEqual(verifyResults(), []);
+    });
+
     it('does not re-check geometry when the caller aborted', async () => {
       const { source } = newSource(async () => GEOMETRY);
       const controller = new AbortController();

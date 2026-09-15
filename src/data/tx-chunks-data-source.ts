@@ -250,7 +250,9 @@ export class TxChunksDataSource implements ContiguousDataSource {
       try {
         chainGeometry = await this.getChainGeometry(args.id, args.signal);
       } catch (chainError: any) {
-        if (chainError?.name === 'AbortError') {
+        // Cancellation surfaces as an AbortError or an axios CanceledError, so
+        // key off the caller's signal rather than the error type.
+        if (args.signal?.aborted || chainError?.name === 'AbortError') {
           throw chainError;
         }
         metrics.txChunksGeometryVerifyTotal.inc({ result: 'chain_error' });
