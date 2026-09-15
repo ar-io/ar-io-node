@@ -644,18 +644,15 @@ describe('CDB64 Encoding', () => {
       );
     });
 
-    it('should reject an unsafe item size on decode', () => {
-      const encoded = toMsgpack({
-        r: createTestTxId(80),
-        i: 100,
-        d: 200,
-        s: 2 ** 53,
-      });
-
-      assert.throws(
-        () => decodeCdb64Value(encoded),
-        /Invalid CDB64 value: invalid dataItemSize/,
+    it('should ignore an unsafe item size on decode, keeping the offsets', () => {
+      const decoded = decodeCdb64Value(
+        toMsgpack({ r: createTestTxId(80), i: 100, d: 200, s: 2 ** 53 }),
       );
+
+      assert(isCompleteValue(decoded));
+      assert.equal(decoded.rootDataItemOffset, 100);
+      assert.equal(decoded.rootDataOffset, 200);
+      assert.equal(getDataItemSize(decoded), undefined);
     });
 
     it('should reject an item size whose end offset is unsafe on encode', () => {
@@ -671,32 +668,26 @@ describe('CDB64 Encoding', () => {
       );
     });
 
-    it('should reject an item size smaller than the header on decode', () => {
-      const encoded = toMsgpack({
-        r: createTestTxId(77),
-        i: 100,
-        d: 200,
-        s: 50,
-      });
-
-      assert.throws(
-        () => decodeCdb64Value(encoded),
-        /Invalid CDB64 value: invalid dataItemSize/,
+    it('should ignore an item size smaller than the header on decode, keeping the offsets', () => {
+      const decoded = decodeCdb64Value(
+        toMsgpack({ r: createTestTxId(77), i: 100, d: 200, s: 50 }),
       );
+
+      assert(isCompleteValue(decoded));
+      assert.equal(decoded.rootDataItemOffset, 100);
+      assert.equal(decoded.rootDataOffset, 200);
+      assert.equal(getDataItemSize(decoded), undefined);
     });
 
-    it('should reject an item size when the payload offset precedes the item offset', () => {
-      const encoded = toMsgpack({
-        p: [createTestTxId(78)],
-        i: 200,
-        d: 100,
-        s: 500,
-      });
-
-      assert.throws(
-        () => decodeCdb64Value(encoded),
-        /Invalid CDB64 value: invalid dataItemSize/,
+    it('should ignore an item size when the payload offset precedes the item offset', () => {
+      const decoded = decodeCdb64Value(
+        toMsgpack({ p: [createTestTxId(78)], i: 200, d: 100, s: 500 }),
       );
+
+      assert(isPathCompleteValue(decoded));
+      assert.equal(decoded.rootDataItemOffset, 200);
+      assert.equal(decoded.rootDataOffset, 100);
+      assert.equal(getDataItemSize(decoded), undefined);
     });
 
     it('should ignore an item size without offsets', () => {

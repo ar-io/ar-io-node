@@ -244,10 +244,12 @@ These fields correspond to the HTTP headers:
 
 ### Item Size
 
-`s` is optional and only valid alongside `i` and `d`. It must be an integer no
-smaller than the header size (`d - i`); a value equal to the header size
-describes an item with an empty payload. Decoders reject an `s` that violates
-this, and ignore `s` on values without offsets.
+`s` is optional and only valid alongside `i` and `d`. It must be a safe integer
+no smaller than the header size (`d - i`), and `i + s` must also be a safe
+integer; a value equal to the header size describes an item with an empty
+payload. Encoders reject an `s` that violates this. Decoders ignore it and
+keep the offsets, so the entry still resolves (the reader searches the bundle
+for the item's size), and they ignore `s` on values without offsets.
 
 Offsets alone locate the start of an item but not its end, so a reader without
 `s` must search the bundle header for the item's size. With `s`, the payload is

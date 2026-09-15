@@ -319,7 +319,10 @@ export function encodeCdb64Value(value: Cdb64RootTxValue): Buffer {
  * Validates decoded offset fields and returns them if valid.
  *
  * `s` (item size) is read only when both offsets are present; on its own it
- * carries no location and is ignored.
+ * carries no location and is ignored. An `s` inconsistent with the offsets
+ * (not a safe integer, smaller than the header, or ending beyond a safe offset)
+ * is ignored too: the offsets remain usable, so a reader falls back to
+ * searching the bundle for the item's size instead of losing the whole entry.
  */
 function decodeOffsets(decoded: { i?: unknown; d?: unknown; s?: unknown }):
   | {
@@ -351,12 +354,11 @@ function decodeOffsets(decoded: { i?: unknown; d?: unknown; s?: unknown }):
     throw new Error('Invalid CDB64 value: invalid rootDataOffset');
   }
 
-  if (!('s' in decoded) || decoded.s === undefined) {
+  if (
+    !('s' in decoded) ||
+    !isValidDataItemSize(decoded.s, rootDataItemOffset, rootDataOffset)
+  ) {
     return { rootDataItemOffset, rootDataOffset };
-  }
-
-  if (!isValidDataItemSize(decoded.s, rootDataItemOffset, rootDataOffset)) {
-    throw new Error('Invalid CDB64 value: invalid dataItemSize');
   }
 
   return { rootDataItemOffset, rootDataOffset, dataItemSize: decoded.s };
