@@ -14,6 +14,7 @@ Tools for generating, exporting, verifying, and uploading CDB64 index files. See
 | [`export-cdb64-root-tx-index`](#export-cdb64-root-tx-index) | Export CDB64 back to CSV | TypeScript |
 | [`upload-cdb64-to-arweave`](#upload-cdb64-to-arweave) | Upload partitioned CDB64 to Arweave | TypeScript (Turbo SDK) |
 | [`verify-cdb64`](#verify-cdb64) | Verify CDB64 against CSV | TypeScript |
+| [`scan-bundle-offsets`](#scan-bundle-offsets) | Scan root bundles' headers into CSV with offsets and item sizes | TypeScript |
 | [`build-cdb64-napi`](#building-the-native-dependency) | Build the Rust napi-rs native module | Bash |
 
 ## CSV Format
@@ -55,6 +56,54 @@ data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_si
 | Complete | All except `path` | Legacy: root TX ID + byte offsets (+ optional item size) |
 | Path | `data_item_id`, `root_tx_id`, `path` | Nested bundles: traversal path |
 | Path Complete | All columns | Nested bundles: path + byte offsets (+ optional item size) |
+
+## scan-bundle-offsets
+
+Produces CSV input with offsets **and item sizes** for every data item in a
+list of root bundles, nested bundles included. Only each bundle's item index
+and item headers are read, through range requests to a gateway's
+`/raw/<rootTxId>`.
+
+```bash
+./tools/scan-bundle-offsets --input roots.txt --output offsets.csv --details details.csv
+./tools/generate-cdb64-root-tx-index-rs --input offsets.csv --partitioned --output-dir ./index/
+```
+
+| Option | Description |
+|--------|-------------|
+| `--input <path>` | Root bundle IDs, one per line or first CSV column (`-` for stdin) |
+| `--bundle <id>` | Root bundle ID to scan (repeatable) |
+| `--gateway <url>` | Gateway to read from (default `http://localhost:4000`) |
+| `--output <path>` | Output CSV in the format above (appended to when resuming) |
+| `--details <path>` | Optional `root_tx_id,data_item_id,depth,signature_type,content_type,is_bundle,data_item_size` |
+| `--progress <path>` | Progress file (default `<output>.progress`) |
+| `--concurrency <n>` | Roots scanned in parallel (default 2) |
+| `--window-bytes <n>` | Largest coalesced header read (default 1 MiB) |
+| `--header-guess-bytes <n>` | Bytes read per item when coalescing (default 2 KiB) |
+| `--timeout-ms <n>`, `--retries <n>` | Per-request timeout and retries (defaults 60000, 3) |
+
+How it works and what it verifies:
+
+- **Size.** The root's size comes from the `Content-Range` total of a 32-byte
+  range read of `/raw`. A HEAD isn't used, because a HEAD for an uncached ID
+  makes the gateway fetch the whole root in the background. An ID the gateway
+  reports as a data item (`X-AR-IO-Root-Transaction-Id` differs) is refused,
+  since offsets must be relative to an L1 transaction.
+- **Index.** The item index must fit in the bundle, and the listed items must
+  end exactly at the bundle's size.
+- **Headers.** Every item header is decoded, and the SHA-256 of its signature
+  must equal the ID in the index. Items tagged `Bundle-Format: binary` and
+  `Bundle-Version: 2.0.0` are scanned recursively. Their items get a `path` of
+  `[root, ..., parent]` and offsets relative to the root.
+- **Coalesced reads.** Consecutive items share one range read while it spans at
+  most `--window-bytes`, each contributing up to `--header-guess-bytes`, so
+  bundles of small items read nearly sequentially and bundles of large items
+  read a few KiB per item.
+- **Failures.** A root that fails verification is recorded as `failed` in the
+  progress file and contributes no rows. A nested bundle that fails is reported
+  as a warning, and the root's other items are still written.
+- **Resuming.** A root's rows are appended only after the whole root is scanned.
+  Re-running the same command skips roots recorded as `ok`.
 
 ## generate-cdb64-root-tx-index-rs
 

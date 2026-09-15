@@ -219,6 +219,24 @@ cat data-items.csv | ./tools/queue-missing-bundles --input - \
 
 Run `./tools/queue-missing-bundles --help` for the full flag list.
 
+### `scan-bundle-offsets`
+Reads the item index and item headers of ANS-104 root bundles through a gateway's `/raw` range requests and writes the offsets and total size of every data item they contain, nested bundles included, in the CDB64 CSV format, ready for `generate-cdb64-root-tx-index-rs`. Payloads are never downloaded except where a coalesced header read spans them. Each item's header is decoded and its signature hashed to confirm the ID, and a root whose structure does not verify is recorded as failed instead of indexed. Point it at a gateway you control: range reads on uncached roots are served from chunks by that gateway.
+
+**Usage:**
+```bash
+# Scan a list of root bundle IDs (one per line, or first CSV column)
+./tools/scan-bundle-offsets --input roots.txt --output offsets.csv
+
+# Add per-item signature type and content type, scan 4 roots at a time
+./tools/scan-bundle-offsets --input roots.txt --output offsets.csv \
+  --details details.csv --concurrency 4 --gateway http://localhost:4000
+
+# Build an index with item sizes from the result
+./tools/generate-cdb64-root-tx-index-rs --input offsets.csv --partitioned --output-dir ./index/
+```
+
+Finished roots are recorded in `<output>.progress`; re-running the same command skips roots already scanned and retries failed ones. Run `./tools/scan-bundle-offsets --help` for the full flag list.
+
 ### `test-clickhouse-graphql`
 Compares the local AR.IO node GraphQL endpoint against `arweave.net` for
 Drive-Id and owner-address queries, runs pagination consistency checks in both
