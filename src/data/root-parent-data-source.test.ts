@@ -6,7 +6,11 @@
  */
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
+import { generateKeyPairSync } from 'node:crypto';
 import { Readable } from 'node:stream';
+import { SolanaSigner, createData } from '@dha-team/arbundles';
+// @ts-expect-error bs58 v4 has no type declarations
+import bs58 from 'bs58';
 import winston from 'winston';
 
 import { RootParentDataSource } from './root-parent-data-source.js';
@@ -16,8 +20,77 @@ import {
   ContiguousDataAttributesStore,
   DataItemRootIndex,
 } from '../types.js';
+import { DataItemVerificationError } from '../lib/data-item-signature.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import * as metrics from '../metrics.js';
+
+// Reads data_item_signature_verification_total for direct offset hints with the
+// given result label; assert deltas, since the counter is process-global.
+async function readHintVerification(result: string): Promise<number> {
+  const metric = await metrics.dataItemSignatureVerificationTotal.get();
+  return (
+    metric.values.find(
+      (v: any) =>
+        v.labels.source === 'direct_offset_hint' && v.labels.result === result,
+    )?.value ?? 0
+  );
+}
+
+/**
+ * A signed data item (ed25519, so fixtures are fast to create) plus the header
+ * info parseDataItemHeader would return for it at `offset`.
+ */
+async function signedItemFixture(
+  payload: Buffer,
+  {
+    offset = 5000,
+    withContentType = true,
+  }: { offset?: number; withContentType?: boolean } = {},
+) {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const seed = privateKey
+    .export({ format: 'der', type: 'pkcs8' })
+    .subarray(-32);
+  const pub = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32);
+  const signer = new SolanaSigner(bs58.encode(Buffer.concat([seed, pub])));
+
+  const item = createData(payload, signer, {
+    tags: withContentType
+      ? [{ name: 'Content-Type', value: 'text/plain' }]
+      : [],
+  });
+  await item.sign(signer);
+  const itemSize = item.getRaw().length;
+  const headerSize = itemSize - item.rawData.length;
+
+  return {
+    item,
+    hint: { offset, size: itemSize },
+    headerSize,
+    header: {
+      id: item.id,
+      headerSize,
+      payloadSize: item.rawData.length,
+      contentType: withContentType ? 'text/plain' : undefined,
+      signedFields: {
+        signatureType: item.signatureType,
+        signature: item.rawSignature,
+        owner: item.rawOwner,
+        target: item.rawTarget,
+        anchor: item.rawAnchor,
+        tagsBytes: item.rawTags,
+      },
+    },
+  };
+}
+
+async function readAll(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks);
+}
 
 // Reads the current value of root_tx_local_resolve_total for a given outcome
 // label so tests can assert the increment (the counter is process-global, so
@@ -2053,10 +2126,11 @@ describe('RootParentDataSource', () => {
       });
     });
 
-    it('should use direct offset hints, parse item header, and skip bundle search', async () => {
-      const dataItemId = 'direct-offset-item';
+    it('should use direct offset hints, verify the payload, and skip bundle search', async () => {
       const hintRootTxId = 'direct-offset-root';
-      const dataStream = Readable.from([Buffer.from('direct offset data')]);
+      const { item, hint, header, headerSize } = await signedItemFixture(
+        Buffer.from('direct offset data'),
+      );
 
       (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => ({ contentType: 'application/json' }),
@@ -2064,45 +2138,39 @@ describe('RootParentDataSource', () => {
       (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
         async () => {},
       );
-
-      // parseDataItemHeader returns header info (50-byte header, 150 payload, with content type)
       (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
-        async () => ({
-          id: dataItemId,
-          headerSize: 50,
-          payloadSize: 150,
-          contentType: 'text/plain',
-        }),
+        async () => header,
       );
-
       (dataSource.getData as any).mock.mockImplementation(async () => ({
-        stream: dataStream,
-        size: 150,
+        stream: Readable.from([item.rawData]),
+        size: item.rawData.length,
         verified: false,
         cached: false,
         trusted: true,
         sourceContentType: 'application/octet-stream',
       }));
 
+      const verifiedBefore = await readHintVerification('verified');
       const result = await rootParentDataSource.getData({
-        id: dataItemId,
+        id: item.id,
         requestAttributes: {
           rootTransactionIdHint: hintRootTxId,
-          rootByteHint: { offset: 5000, size: 200 },
+          rootByteHint: hint,
+          hops: 0,
           clientIps: [],
         },
       });
 
       // Content type from parsed header takes priority
       assert.strictEqual(result.sourceContentType, 'text/plain');
-      assert.strictEqual(result.size, 150);
+      assert.strictEqual(result.size, item.rawData.length);
 
       // Should have parsed the item header at the hint offset
       const parseCall = (ans104OffsetSource.parseDataItemHeader as any).mock
         .calls[0].arguments;
       assert.strictEqual(parseCall[0], hintRootTxId); // bundleId
-      assert.strictEqual(parseCall[1], 5000); // itemOffset
-      assert.strictEqual(parseCall[2], 200); // totalSize
+      assert.strictEqual(parseCall[1], hint.offset); // itemOffset
+      assert.strictEqual(parseCall[2], hint.size); // totalSize
 
       // Should NOT have called getDataItemOffset (linear search)
       assert.strictEqual(
@@ -2113,26 +2181,42 @@ describe('RootParentDataSource', () => {
       // Should have fetched data at computed data offset (item offset + header size)
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
       assert.strictEqual(dataCall.id, hintRootTxId);
-      assert.deepStrictEqual(dataCall.region, { offset: 5050, size: 150 });
+      assert.deepStrictEqual(dataCall.region, {
+        offset: hint.offset + headerSize,
+        size: item.rawData.length,
+      });
 
-      // Should have cached with correct item and data offsets
-      const setCalls = (dataAttributesStore.setDataAttributes as any).mock
-        .calls;
+      // Offsets must not be persisted before the payload has verified.
+      // mock.calls returns a snapshot, so it is read again after streaming.
+      const setDataAttributes = dataAttributesStore.setDataAttributes as any;
+      assert.strictEqual(setDataAttributes.mock.calls.length, 0);
+
+      assert.deepStrictEqual(await readAll(result.stream), item.rawData);
+
+      const setCalls = setDataAttributes.mock.calls;
       assert.strictEqual(setCalls.length, 1);
       assert.deepStrictEqual(setCalls[0].arguments[1], {
         rootTransactionId: hintRootTxId,
-        rootDataItemOffset: 5000,
-        rootDataOffset: 5050,
-        itemSize: 200,
-        size: 150,
+        rootDataItemOffset: hint.offset,
+        rootDataOffset: hint.offset + headerSize,
+        itemSize: hint.size,
+        size: item.rawData.length,
         contentType: 'text/plain',
       });
+      assert.strictEqual(
+        (await readHintVerification('verified')) - verifiedBefore,
+        1,
+      );
     });
 
-    it('should apply region adjustments with direct offset hints', async () => {
-      const dataItemId = 'direct-offset-region-item';
+    it('should reject a payload framed by a wrong hinted size and remember the hint', async () => {
       const hintRootTxId = 'direct-offset-root';
-      const dataStream = Readable.from([Buffer.from('region data')]);
+      const { item, hint, header } = await signedItemFixture(
+        Buffer.alloc(4000, 7),
+      );
+      // A size 1000 bytes short: the header at the offset is the right item,
+      // but the size frames only a prefix of its payload.
+      const shortHint = { offset: hint.offset, size: hint.size - 1000 };
 
       (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => ({}),
@@ -2140,17 +2224,92 @@ describe('RootParentDataSource', () => {
       (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
         async () => {},
       );
-
       (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => ({ ...header, payloadSize: header.payloadSize - 1000 }),
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
         async () => ({
-          id: dataItemId,
-          headerSize: 50,
-          payloadSize: 150,
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+        }),
+      );
+      (dataSource.getData as any).mock.mockImplementation(
+        async ({ region }: any) => ({
+          stream: Readable.from([item.rawData.subarray(0, region.size)]),
+          size: region.size,
+          verified: false,
+          cached: false,
+          trusted: true,
+          sourceContentType: 'application/octet-stream',
         }),
       );
 
+      const rejectedBefore = await readHintVerification('invalid_signature');
+      const skippedBefore = await readHintVerification('skipped_rejected');
+      const request = {
+        id: item.id,
+        requestAttributes: {
+          rootTransactionIdHint: hintRootTxId,
+          rootByteHint: shortHint,
+          hops: 0,
+          clientIps: [],
+        },
+      };
+
+      const first = await rootParentDataSource.getData(request);
+      await assert.rejects(
+        readAll(first.stream),
+        (error: unknown) =>
+          error instanceof DataItemVerificationError &&
+          error.reason === 'invalid_signature',
+      );
+      assert.strictEqual(
+        (dataAttributesStore.setDataAttributes as any).mock.calls.length,
+        0,
+      );
+      assert.strictEqual(
+        (await readHintVerification('invalid_signature')) - rejectedBefore,
+        1,
+      );
+
+      // The same hint is not tried again: the bundle's own index is used.
+      await rootParentDataSource.getData(request);
+      assert.strictEqual(
+        (ans104OffsetSource.parseDataItemHeader as any).mock.calls.length,
+        1,
+      );
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        1,
+      );
+      assert.strictEqual(
+        (await readHintVerification('skipped_rejected')) - skippedBefore,
+        1,
+      );
+    });
+
+    it('should not use direct offset hints for range requests', async () => {
+      const dataItemId = 'direct-offset-region-item';
+      const hintRootTxId = 'direct-offset-root';
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => ({}),
+      );
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+        }),
+      );
       (dataSource.getData as any).mock.mockImplementation(async () => ({
-        stream: dataStream,
+        stream: Readable.from([Buffer.from('region data')]),
         size: 50,
         verified: false,
         cached: false,
@@ -2158,19 +2317,95 @@ describe('RootParentDataSource', () => {
         sourceContentType: 'application/octet-stream',
       }));
 
+      const skippedBefore = await readHintVerification('skipped_range');
       await rootParentDataSource.getData({
         id: dataItemId,
         requestAttributes: {
           rootTransactionIdHint: hintRootTxId,
           rootByteHint: { offset: 5000, size: 200 },
+          hops: 0,
           clientIps: [],
         },
         region: { offset: 10, size: 50 },
       });
 
-      // Region should be relative to data offset (5000 + 50 header = 5050 data start)
+      // The byte hint is skipped; the root hint still drives a bundle search,
+      // and the region applies to the offsets from the bundle's index.
+      assert.strictEqual(
+        (ans104OffsetSource.parseDataItemHeader as any).mock.calls.length,
+        0,
+      );
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        1,
+      );
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
-      assert.deepStrictEqual(dataCall.region, { offset: 5060, size: 50 });
+      assert.deepStrictEqual(dataCall.region, { offset: 1010, size: 50 });
+      assert.strictEqual(
+        (await readHintVerification('skipped_range')) - skippedBefore,
+        1,
+      );
+    });
+
+    it('should fall through when the hinted item cannot be signature-verified', async () => {
+      const dataItemId = 'direct-offset-unverifiable-item';
+      const hintRootTxId = 'direct-offset-root';
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => ({}),
+      );
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+      // No signed fields: nothing to verify the payload against.
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => ({
+          id: dataItemId,
+          headerSize: 50,
+          payloadSize: 150,
+        }),
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+        }),
+      );
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('fallback data')]),
+        size: 500,
+        verified: false,
+        cached: false,
+        trusted: true,
+        sourceContentType: 'application/octet-stream',
+      }));
+
+      const unsupportedBefore = await readHintVerification(
+        'unsupported_signature_type',
+      );
+      await rootParentDataSource.getData({
+        id: dataItemId,
+        requestAttributes: {
+          rootTransactionIdHint: hintRootTxId,
+          rootByteHint: { offset: 5000, size: 200 },
+          hops: 0,
+          clientIps: [],
+        },
+      });
+
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        1,
+      );
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.deepStrictEqual(dataCall.region, { offset: 1000, size: 500 });
+      assert.strictEqual(
+        (await readHintVerification('unsupported_signature_type')) -
+          unsupportedBefore,
+        1,
+      );
     });
 
     it('should fall through when direct offset hint fails', async () => {
@@ -2823,25 +3058,40 @@ describe('RootParentDataSource', () => {
     });
 
     it('does not inherit it on the direct offset hint path', async () => {
-      const dataItemId = 'envelope-direct-hint-item';
+      // A real signed item whose header carries no Content-Type tag.
+      const { item, hint, header } = await signedItemFixture(
+        Buffer.from('x'.repeat(150)),
+        { withContentType: false },
+      );
       (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => ({}),
       );
-      // Header parsed, but the item carries no Content-Type tag.
       (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
-        async () => ({ id: dataItemId, headerSize: 50, payloadSize: 150 }),
+        async () => header,
       );
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([item.rawData]),
+        size: item.rawData.length,
+        verified: false,
+        cached: false,
+        trusted: true,
+        sourceContentType: ENVELOPE,
+      }));
 
       const result = await rootParentDataSource.getData({
-        id: dataItemId,
+        id: item.id,
         requestAttributes: {
           rootTransactionIdHint: 'envelope-root',
-          rootByteHint: { offset: 5000, size: 200 },
+          rootByteHint: hint,
           hops: 0,
           clientIps: [],
         },
       });
 
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        0,
+      );
       assert.strictEqual(result.sourceContentType, undefined);
     });
 

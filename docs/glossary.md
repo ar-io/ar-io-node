@@ -468,10 +468,18 @@ receiving side can skip the resolver work it would otherwise do. Three kinds
 exist today: a root [transaction ID](#transaction) (`X-AR-IO-Root-Transaction-Id`),
 a parent path of intermediate bundle IDs (`X-AR-IO-Root-Path`), and a byte
 range within the root tx pointing at the [data item](#data-item)
-(`X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size`). Hints are always
-re-validated by the receiving gateway against parsed-header IDs before serving
-bytes — a wrong hint produces a fallthrough, never wrong bytes — so emitting
-one adds no trust surface.
+(`X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size`).
+
+Root and path hints only choose which bundle to read; the item's offset and
+size still come from that bundle's own index. A wrong one therefore produces a
+fallthrough, and gateways forward them to each other.
+
+A byte-range hint's size cannot be checked against a bundle index, so it is
+handled differently:
+
+- It is honored only for requests without a `Range` header.
+- The payload is served only if the item's signature verifies over it.
+- It is not forwarded to other gateways.
 
 **Naming-symmetry note**: response headers historically used the longer pair
 `X-AR-IO-Root-Data-Item-Offset` / `X-AR-IO-Root-Data-Offset`, while the
