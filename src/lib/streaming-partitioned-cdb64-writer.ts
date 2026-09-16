@@ -43,6 +43,8 @@ interface ScatterPartitionState {
   stream: WriteStream;
   recordCount: number;
   filePath: string;
+  /** First error emitted by the scatter stream, surfaced to the caller. */
+  error?: Error;
 }
 
 export interface StreamingPartitionedCdb64WriterOptions {
@@ -124,15 +126,30 @@ export class StreamingPartitionedCdb64Writer {
       const prefix = indexToPrefix(partitionIndex);
       const filePath = path.join(this.scatterDir, `${prefix}.scatter`);
       const stream = createWriteStream(filePath);
-
-      this.partitions[partitionIndex] = {
+      const state: ScatterPartitionState = {
         stream,
         recordCount: 0,
         filePath,
       };
+
+      // A scatter stream with no 'error' listener turns any I/O failure
+      // (ENOSPC, EACCES, EMFILE) into an uncaught exception. Streams open
+      // lazily, so the failure arrives after add() has already returned, and an
+      // EventEmitter 'error' event cannot be intercepted by the caller's
+      // try/catch — so abort() never runs and the temp directory is orphaned.
+      // Record the error here and surface it from the next add() or finalize().
+      stream.on('error', (error: Error) => {
+        state.error ??= error;
+      });
+
+      this.partitions[partitionIndex] = state;
     }
 
     const partition = this.partitions[partitionIndex]!;
+
+    if (partition.error !== undefined) {
+      throw partition.error;
+    }
 
     // Write length-prefixed record: [keyLen u32 LE][valueLen u32 LE][key][value]
     const header = Buffer.allocUnsafe(8);
@@ -213,6 +230,15 @@ export class StreamingPartitionedCdb64Writer {
       }
     }
     await Promise.all(closePromises);
+
+    // Surface any error the scatter streams recorded during phase 1 rather than
+    // building an index from a scatter file that was never fully written.
+    for (let i = 0; i < 256; i++) {
+      const partition = this.partitions[i];
+      if (partition?.error !== undefined) {
+        throw partition.error;
+      }
+    }
 
     // Phase 2: build each partition sequentially
     const partitionInfos: PartitionInfo[] = [];

@@ -142,6 +142,42 @@ describe(
         await writer.abort();
       });
 
+      it('should surface a scatter stream error instead of crashing', async () => {
+        const writer = new StreamingPartitionedCdb64Writer(outputDir);
+        await writer.open();
+
+        // Remove the scatter directory so the lazily opened stream cannot
+        // create its file. ENOENT fails for any uid, unlike a chmod, which
+        // root would bypass.
+        await fs.rm(path.join(`${outputDir}.tmp.${process.pid}`, 'scatter'), {
+          recursive: true,
+          force: true,
+        });
+
+        // Streams open lazily, so this add() returns before the open fails.
+        await writer.add(Buffer.from([0x00, 0x01]), Buffer.from('test'));
+
+        // The failed open must be recorded and re-thrown by a later add(),
+        // not raised as an uncaught 'error' event.
+        let rejection: NodeJS.ErrnoException | undefined;
+        for (let i = 0; i < 40 && rejection === undefined; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          try {
+            await writer.add(Buffer.from([0x00, 0x02]), Buffer.from('test'));
+          } catch (error) {
+            rejection = error as NodeJS.ErrnoException;
+          }
+        }
+
+        assert.ok(
+          rejection !== undefined,
+          'add() should surface the scatter stream error',
+        );
+        assert.strictEqual(rejection.code, 'ENOENT');
+
+        await writer.abort();
+      });
+
       it('should route records to correct partitions', async () => {
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
