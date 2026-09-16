@@ -1310,6 +1310,20 @@ export const CHUNK_FIRST_DATA_TIMEOUT_MS = env.nonNegativeIntOrDefault(
   10000,
 );
 
+// Resolve TxChunksDataSource geometry (data_root, offset, size) from the local
+// stable transactions index before the trusted node. Every cold range read
+// otherwise costs two trusted-node requests, which share a 5 req/s budget with
+// the transaction offset importer.
+export const TX_CHUNKS_GEOMETRY_DB_ENABLED =
+  env.varOrDefault('TX_CHUNKS_GEOMETRY_DB_ENABLED', 'true') === 'true';
+
+// Maximum entries in TxChunksDataSource's in-memory cache of locally resolved
+// geometry. Entries are immutable (stable transactions only).
+export const TX_CHUNKS_GEOMETRY_CACHE_SIZE = env.positiveIntOrDefault(
+  'TX_CHUNKS_GEOMETRY_CACHE_SIZE',
+  10000,
+);
+
 // Wall-clock deadline (ms) for serving a single chunk request
 // (/chunk/:offset and /chunk/:offset/data). The per-source timeouts in the
 // retrieval cascade are additive with no overall ceiling, and some awaited
