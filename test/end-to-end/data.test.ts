@@ -873,7 +873,7 @@ describe('x402 Payments', { skip: true }, function () {
         parseFloat(config.X_402_USDC_DATA_EGRESS_MIN_PRICE),
       );
       assert.equal(res.status, 402);
-      assert(res.headers['content-type'].includes('application/json'));
+      assert(String(res.headers['content-type']).includes('application/json'));
       assert.equal(res.data.error, 'X-PAYMENT header is required');
       assert(
         res.data.message.includes(`Payment of $${expectedPrice} USDC required`),

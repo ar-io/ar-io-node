@@ -172,8 +172,12 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
             const rootDataOffsetStr =
               response.headers['x-ar-io-root-data-offset'];
             const rootItemSizeStr = response.headers['x-ar-io-root-item-size'];
-            const contentType = response.headers['content-type'];
-            const contentLengthStr = response.headers['content-length'];
+            const contentType = response.headers['content-type'] as
+              | string
+              | undefined;
+            const contentLengthStr = response.headers['content-length'] as
+              | string
+              | undefined;
 
             // Root transaction ID found - offsets can only be present if root ID exists
             if (rootTxId) {
