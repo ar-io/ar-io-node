@@ -24,6 +24,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Payloads located by a direct offset hint (`X-AR-IO-Root-Item-Offset` +
+  `X-AR-IO-Root-Item-Size`) are now checked against the data item's signature
+  before they are served in full, cached, or have their offsets saved.
+  Previously the hinted size was taken as given, so an incorrect size could
+  frame a truncated or over-long payload under that ID. Range requests carrying
+  these hints now resolve through the bundle's own index, and the two hint
+  headers are no longer forwarded to other gateways; root transaction and path
+  hints are unchanged. Outcomes are counted in
+  `data_item_signature_verification_total`.
+
 - Stopped GraphQL returning every tag twice for a recently uploaded data item.
   Optimistically indexed data items are written with a NULL
   `root_transaction_id`, which is part of the `new_data_item_tags` primary key.

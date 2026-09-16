@@ -4,8 +4,10 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { pipeline } from 'node:stream';
 import winston from 'winston';
 import { Span } from '@opentelemetry/api';
+import { LRUCache } from 'lru-cache';
 
 import {
   ContiguousData,
@@ -19,7 +21,22 @@ import {
 import { startChildSpan } from '../tracing.js';
 import { Ans104OffsetSource } from './ans104-offset-source.js';
 import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
+import {
+  VerifyingPayloadStream,
+  isSupportedSignatureType,
+} from '../lib/data-item-signature.js';
 import * as metrics from '../metrics.js';
+
+/** Metric `source` label for direct offset hint verification. */
+const DIRECT_OFFSET_HINT = 'direct_offset_hint';
+
+/**
+ * Creates the default cache of direct offset hints whose payload failed
+ * signature verification. Entries expire so an item can be retried later; the
+ * bound keeps a flood of distinct bad hints from growing memory.
+ */
+const createRejectedHintCache = () =>
+  new LRUCache<string, true>({ max: 10_000, ttl: 60 * 60 * 1000 });
 
 /**
  * Data source that resolves data items to their root bundles before fetching data.
@@ -33,6 +50,7 @@ export class RootParentDataSource implements ContiguousDataSource {
   private ans104OffsetSource: Ans104OffsetSource;
   private fallbackToLegacyTraversal: boolean;
   private allowPassthroughWithoutOffsets: boolean;
+  private rejectedDirectOffsetHints: LRUCache<string, true>;
 
   /**
    * Creates a new RootParentDataSource instance.
@@ -43,6 +61,9 @@ export class RootParentDataSource implements ContiguousDataSource {
    * @param ans104OffsetSource - Source for finding data item offsets within ANS-104 bundles (fallback)
    * @param fallbackToLegacyTraversal - Whether to search for data item root transaction when attributes are incomplete
    * @param allowPassthroughWithoutOffsets - Whether to allow data retrieval without offset information
+   * @param rejectedDirectOffsetHints - Direct offset hints whose payload failed
+   *   signature verification, keyed by item, root, offset and size; later
+   *   requests with the same hint skip straight to the bundle's own index
    */
   constructor({
     log,
@@ -52,6 +73,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     ans104OffsetSource,
     fallbackToLegacyTraversal = true,
     allowPassthroughWithoutOffsets = true,
+    rejectedDirectOffsetHints = createRejectedHintCache(),
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
@@ -60,6 +82,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     ans104OffsetSource: Ans104OffsetSource;
     fallbackToLegacyTraversal?: boolean;
     allowPassthroughWithoutOffsets?: boolean;
+    rejectedDirectOffsetHints?: LRUCache<string, true>;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
@@ -68,6 +91,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     this.ans104OffsetSource = ans104OffsetSource;
     this.fallbackToLegacyTraversal = fallbackToLegacyTraversal;
     this.allowPassthroughWithoutOffsets = allowPassthroughWithoutOffsets;
+    this.rejectedDirectOffsetHints = rejectedDirectOffsetHints;
   }
 
   /**
@@ -643,66 +667,110 @@ export class RootParentDataSource implements ContiguousDataSource {
         requestAttributes?.rootPathHint?.[0] ??
         null;
       if (hintRootTxId != null) {
-        // Step 0a: Direct item offset hint — parse item header then fetch data
+        // Step 0a: Direct item offset hint — parse the item header, then serve
+        // the payload through signature verification.
+        //
+        // The size in this hint comes from the caller and nothing else vouches
+        // for it. The header ID check proves the offset points at the requested
+        // item, but a wrong size that is still larger than the header passes
+        // that check and frames the wrong bytes, which would then be served,
+        // cached and persisted under this ID. Verifying the item's signature
+        // over the payload binds the served bytes to the ID: a wrong size fails
+        // before the final bytes are released, and the offsets are stored only
+        // once the payload has verified. A range request cannot be verified end
+        // to end, so it uses the bundle's own index instead (Step 0b).
         const hintItemOffset = requestAttributes?.rootByteHint?.offset;
         const hintItemSize = requestAttributes?.rootByteHint?.size;
         if (hintItemOffset != null && hintItemSize != null) {
-          span.addEvent('Attempting direct offset hint resolution', {
-            'hint.root_tx_id': hintRootTxId,
-            'hint.item_offset': hintItemOffset,
-            'hint.item_size': hintItemSize,
-          });
+          const hintKey = `${id}:${hintRootTxId}:${hintItemOffset}:${hintItemSize}`;
+          if (region !== undefined) {
+            span.addEvent('Skipping direct offset hint for range request');
+            metrics.dataItemSignatureVerificationTotal.inc({
+              source: DIRECT_OFFSET_HINT,
+              result: 'skipped_range',
+            });
+          } else if (this.rejectedDirectOffsetHints.has(hintKey)) {
+            span.addEvent('Skipping recently rejected direct offset hint');
+            metrics.dataItemSignatureVerificationTotal.inc({
+              source: DIRECT_OFFSET_HINT,
+              result: 'skipped_rejected',
+            });
+          } else {
+            span.addEvent('Attempting direct offset hint resolution', {
+              'hint.root_tx_id': hintRootTxId,
+              'hint.item_offset': hintItemOffset,
+              'hint.item_size': hintItemSize,
+            });
 
-          let headerInfo;
-          try {
-            // Parse the data item header to get content type and payload offset
-            headerInfo = await this.ans104OffsetSource.parseDataItemHeader(
-              hintRootTxId,
-              hintItemOffset,
-              hintItemSize,
-              signal,
-            );
-          } catch (error: any) {
-            this.log.debug(
-              'Direct offset hint resolution failed, falling through',
-              { id, hintRootTxId, error: error.message },
-            );
-          }
+            let headerInfo:
+              | Awaited<ReturnType<Ans104OffsetSource['parseDataItemHeader']>>
+              | undefined;
+            try {
+              // Parse the data item header for content type, payload offset
+              // and the fields its signature covers
+              headerInfo = await this.ans104OffsetSource.parseDataItemHeader(
+                hintRootTxId,
+                hintItemOffset,
+                hintItemSize,
+                signal,
+              );
+            } catch (error: any) {
+              this.log.debug(
+                'Direct offset hint resolution failed, falling through',
+                { id, hintRootTxId, error: error.message },
+              );
+            }
 
-          if (headerInfo != null) {
-            if (headerInfo.id !== id) {
+            const signedFields = headerInfo?.signedFields;
+            if (headerInfo === undefined) {
+              // Header could not be parsed; fall through.
+            } else if (headerInfo.id !== id) {
               this.log.debug(
                 'Direct offset hint ID mismatch, falling through',
                 { id, hintId: headerInfo.id, hintRootTxId },
+              );
+            } else if (
+              signedFields === undefined ||
+              !isSupportedSignatureType(signedFields.signatureType)
+            ) {
+              this.log.debug(
+                'Direct offset hint item cannot be signature-verified, falling through',
+                {
+                  id,
+                  hintRootTxId,
+                  signatureType: signedFields?.signatureType,
+                },
+              );
+              metrics.dataItemSignatureVerificationTotal.inc({
+                source: DIRECT_OFFSET_HINT,
+                result: 'unsupported_signature_type',
+              });
+            } else if (headerInfo.payloadSize < 0) {
+              this.log.debug(
+                'Direct offset hint size is smaller than the item header, falling through',
+                { id, hintRootTxId, hintItemSize },
               );
             } else {
               const dataOffset = hintItemOffset + headerInfo.headerSize;
               const dataSize = headerInfo.payloadSize;
               const hintContentType = headerInfo.contentType;
 
-              const finalRegion = this.calculateFinalRegion(
-                dataOffset,
-                dataSize,
-                region,
-              );
-
               span.setAttributes({
                 'traversal.method': 'direct_offset_hint',
                 'hint.root_tx_id': hintRootTxId,
-                'final.region.offset': finalRegion.offset,
-                'final.region.size': finalRegion.size,
+                'final.region.offset': dataOffset,
+                'final.region.size': dataSize,
               });
 
               const data = await this.dataSource.getData({
                 id: hintRootTxId,
                 requestAttributes,
-                region: finalRegion,
+                region: { offset: dataOffset, size: dataSize },
                 parentSpan: span,
                 signal,
                 acceptContentType,
               });
 
-              // Cache only after successful fetch to avoid poisoning from bad hints
               const attributesToStore: Record<string, unknown> = {
                 rootTransactionId: hintRootTxId,
                 rootDataItemOffset: hintItemOffset,
@@ -713,14 +781,56 @@ export class RootParentDataSource implements ContiguousDataSource {
               if (hintContentType !== undefined) {
                 attributesToStore.contentType = hintContentType;
               }
-              await this.tryCacheAttributes(
-                id,
-                attributesToStore,
-                'direct offset hint',
-              );
+
+              const verifier = new VerifyingPayloadStream({
+                fields: signedFields,
+                payloadSize: dataSize,
+                onVerified: () => {
+                  metrics.dataItemSignatureVerificationTotal.inc({
+                    source: DIRECT_OFFSET_HINT,
+                    result: 'verified',
+                  });
+                  // Persist the offsets only once the payload is proven to be
+                  // this item's.
+                  void this.tryCacheAttributes(
+                    id,
+                    attributesToStore,
+                    'direct offset hint',
+                  );
+                },
+                onRejected: (error) => {
+                  this.rejectedDirectOffsetHints.set(hintKey, true);
+                  metrics.dataItemSignatureVerificationTotal.inc({
+                    source: DIRECT_OFFSET_HINT,
+                    result: error.reason,
+                  });
+                  this.log.debug(
+                    'Direct offset hint payload failed signature verification',
+                    {
+                      id,
+                      hintRootTxId,
+                      hintItemOffset,
+                      hintItemSize,
+                      reason: error.reason,
+                    },
+                  );
+                },
+                onVerificationTimed: (durationMs) => {
+                  metrics.dataItemSignatureVerificationDurationSeconds.observe(
+                    {
+                      source: DIRECT_OFFSET_HINT,
+                      signature_type: String(signedFields.signatureType),
+                    },
+                    durationMs / 1000,
+                  );
+                },
+              });
 
               return {
                 ...data,
+                // Stream errors, including a failed verification, reach the
+                // consumer through the returned stream.
+                stream: pipeline(data.stream, verifier, () => {}),
                 sourceContentType: this.resolveItemContentType({
                   id,
                   rootTxId: hintRootTxId,
