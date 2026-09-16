@@ -229,6 +229,21 @@ export interface ChainOffsetIndex {
 }
 
 /**
+ * Chunk-read geometry of a transaction: the base64url data_root, the END weave
+ * offset, and the data size — the same values `/tx/{id}/data_root` and
+ * `/tx/{id}/offset` return.
+ */
+export interface TxGeometry {
+  dataRoot: string;
+  offset: number;
+  size: number;
+}
+
+export interface TxGeometrySource {
+  getTxGeometry(txId: string): Promise<TxGeometry | undefined>;
+}
+
+/**
  * A cached chunk's placement row in chunks.db. Serves as both the chunk
  * metadata index (keyed by data_root + relative_offset) and the optimistic
  * ingest ledger (origin / cached_at / confirmed_at drive GC). BLOB-valued

@@ -1052,6 +1052,29 @@ export const chunkStreamAbortsTotal = new promClient.Counter({
 });
 
 /**
+ * Where TxChunksDataSource resolved a transaction's chunk-read geometry
+ * (data_root, offset, size): a chain override recorded after a local/chain
+ * mismatch, its in-memory cache, the local stable transactions index, or the
+ * trusted-node chain lookups.
+ */
+export const txChunksGeometryLookupTotal = new promClient.Counter({
+  name: 'tx_chunks_geometry_lookup_total',
+  help: 'Count of TxChunksDataSource geometry resolutions by source and outcome',
+  labelNames: ['source', 'outcome'] as const,
+});
+
+/**
+ * Chain re-checks of locally resolved geometry after a read using it failed
+ * before its first byte (match, mismatch, chain_error, or skipped when the
+ * transaction was already verified).
+ */
+export const txChunksGeometryVerifyTotal = new promClient.Counter({
+  name: 'tx_chunks_geometry_verify_total',
+  help: 'Count of chain re-checks of local TxChunksDataSource geometry by result',
+  labelNames: ['result'] as const,
+});
+
+/**
  * Counts invalid zero-length chunks rejected before they can poison the chunk
  * cache (a persisted empty chunk is served as a hit and stalls consumers).
  *

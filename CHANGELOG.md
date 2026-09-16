@@ -29,6 +29,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- `TxChunksDataSource` now resolves a transaction's chunk-read geometry
+  (`data_root`, offset and size) from the local stable transactions index
+  before asking the trusted node, falling back to the chain on a miss. Every
+  cold range read previously cost two trusted-node requests, which share a
+  5 req/s budget with the transaction offset importer, so a busy gateway spent
+  most of that budget re-reading geometry it already had indexed and starved
+  the importer. A read that fails using local geometry re-checks it against
+  the chain, at most once per transaction per hour, and retries only if the
+  two disagree. Set `TX_CHUNKS_GEOMETRY_DB_ENABLED=false` to restore the
+  previous behavior; `TX_CHUNKS_GEOMETRY_CACHE_SIZE` bounds the in-memory
+  cache of resolved geometry.
+
 ### Fixed
 
 - Payloads located by a direct offset hint (`X-AR-IO-Root-Item-Offset` +

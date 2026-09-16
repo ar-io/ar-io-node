@@ -348,7 +348,7 @@ async function generatePartitionedIndex(config: Config): Promise<void> {
           }
         }
 
-        writer.add(dataItemId, encodeCdb64Value(value));
+        await writer.add(dataItemId, encodeCdb64Value(value));
         if (dataItemSize !== undefined) {
           stats.dataItemSizeCount++;
         }
