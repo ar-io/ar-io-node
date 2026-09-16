@@ -25,7 +25,7 @@ import { byteArrayToLong, deserializeTags } from '@dha-team/arbundles';
 
 import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
 import { ByteRangeSource } from './byte-range-source.js';
-import { getSignatureMeta } from './bundles.js';
+import { getSignatureMeta, isValidSignatureConfig } from './bundles.js';
 
 /** Largest byte range a single coalesced header read may span by default. */
 export const DEFAULT_MAX_WINDOW_BYTES = 1024 * 1024;
@@ -113,6 +113,38 @@ export class BundleScanError extends Error {
   }
 }
 
+/** Raised when a header's signature type has no known layout. */
+export class UnsupportedSignatureTypeError extends Error {
+  constructor(readonly signatureType: number) {
+    super(`Unsupported signature type ${signatureType}`);
+    this.name = 'UnsupportedSignatureTypeError';
+  }
+}
+
+/**
+ * Raised when an item can't be located because its signature type has no
+ * known layout, so its header length is unknown.
+ *
+ * The bundle's framing is unaffected: every other item's offset comes from the
+ * bundle index, which has already been checked against the bundle size. A scan
+ * can therefore skip this item and continue (see
+ * {@link ScanBundleOptions.onUnsupportedItem}).
+ */
+export class UnsupportedDataItemError extends BundleScanError {
+  constructor(
+    message: string,
+    bundleId: string,
+    /** The item that could not be located */
+    readonly itemId: string,
+    readonly signatureType: number,
+    /** Byte offset of the item within the root TX data */
+    readonly rootDataItemOffset: number,
+  ) {
+    super(message, bundleId);
+    this.name = 'UnsupportedDataItemError';
+  }
+}
+
 /**
  * Decodes an ANS-104 data item header from the start of `buf`.
  *
@@ -120,7 +152,9 @@ export class BundleScanError extends Error {
  * how many bytes are needed to make progress (the full header size once the
  * tag section length has been read).
  *
- * @throws Error on an unknown signature type or a malformed header
+ * @throws UnsupportedSignatureTypeError when the signature type has no known
+ *   layout
+ * @throws Error on a malformed header
  */
 export function decodeDataItemHeader(buf: Buffer): DataItemHeaderDecodeResult {
   const incomplete = (needBytes: number): DataItemHeaderDecodeResult => ({
@@ -132,6 +166,9 @@ export function decodeDataItemHeader(buf: Buffer): DataItemHeaderDecodeResult {
     return incomplete(2);
   }
   const signatureType = byteArrayToLong(buf.subarray(0, 2));
+  if (!isValidSignatureConfig(signatureType)) {
+    throw new UnsupportedSignatureTypeError(signatureType);
+  }
   const { sigLength, pubLength } = getSignatureMeta(signatureType);
 
   let pos = 2 + sigLength + pubLength;
@@ -311,6 +348,14 @@ export interface ScanBundleOptions {
     error: Error,
     bundle: { id: string; path: string[] },
   ) => void;
+  /**
+   * Called for an item whose signature type has no known layout, so its
+   * header can't be read. When provided, the item is skipped (nothing is
+   * yielded for it) and scanning continues with the next item, in this bundle
+   * or a nested one; when omitted, the {@link UnsupportedDataItemError}
+   * propagates like any other structure error.
+   */
+  onUnsupportedItem?: (error: UnsupportedDataItemError) => void;
 }
 
 /**
@@ -335,6 +380,7 @@ export async function* scanBundle({
   headerGuessBytes = DEFAULT_HEADER_GUESS_BYTES,
   maxIndexItems = DEFAULT_MAX_INDEX_ITEMS,
   onNestedBundleError,
+  onUnsupportedItem,
 }: ScanBundleOptions): AsyncGenerator<ScannedDataItem> {
   const bundleId = path.length === 0 ? rootTxId : path[path.length - 1];
   if (path.length > MAX_BUNDLE_NESTING_DEPTH) {
@@ -377,16 +423,28 @@ export async function* scanBundle({
       const entry = entries[i];
       const itemStart = bundleOffset + entry.offset;
       const sliceStart = itemStart - windowStart;
-      const header = await readItemHeader({
-        source,
-        entry,
-        itemStart,
-        initial: window.subarray(
-          sliceStart,
-          Math.min(sliceStart + entry.size, window.length),
-        ),
-        bundleId,
-      });
+      let header: DecodedDataItemHeader;
+      try {
+        header = await readItemHeader({
+          source,
+          entry,
+          itemStart,
+          initial: window.subarray(
+            sliceStart,
+            Math.min(sliceStart + entry.size, window.length),
+          ),
+          bundleId,
+        });
+      } catch (error) {
+        if (
+          onUnsupportedItem !== undefined &&
+          error instanceof UnsupportedDataItemError
+        ) {
+          onUnsupportedItem(error);
+          continue;
+        }
+        throw error;
+      }
 
       const item: ScannedDataItem = {
         id: entry.id,
@@ -417,6 +475,7 @@ export async function* scanBundle({
             headerGuessBytes,
             maxIndexItems,
             onNestedBundleError,
+            onUnsupportedItem,
           });
         } catch (error: any) {
           if (
@@ -466,6 +525,15 @@ async function readItemHeader({
     try {
       result = decodeDataItemHeader(bytes);
     } catch (error: any) {
+      if (error instanceof UnsupportedSignatureTypeError) {
+        throw new UnsupportedDataItemError(
+          `Item ${entry.id} at offset ${itemStart}: ${error.message}`,
+          bundleId,
+          entry.id,
+          error.signatureType,
+          itemStart,
+        );
+      }
       throw new BundleScanError(
         `Item ${entry.id} at offset ${itemStart}: ${error.message}`,
         bundleId,

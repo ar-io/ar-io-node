@@ -18,6 +18,8 @@ import { before, describe, it } from 'node:test';
 import {
   BundleScanError,
   ScannedDataItem,
+  UnsupportedDataItemError,
+  UnsupportedSignatureTypeError,
   decodeDataItemHeader,
   readBundleIndex,
   scanBundle,
@@ -144,6 +146,20 @@ describe('ans104-bundle-scan', () => {
       assert.throws(
         () => decodeDataItemHeader(raw),
         /Invalid target presence byte: 7/,
+      );
+    });
+
+    it('rejects a signature type with no known layout', async () => {
+      const item = createData('x', signer);
+      await item.sign(signer);
+      const raw = Buffer.from(item.getRaw());
+      raw.writeUInt16LE(999, 0);
+
+      assert.throws(
+        () => decodeDataItemHeader(raw),
+        (error: unknown) =>
+          error instanceof UnsupportedSignatureTypeError &&
+          error.signatureType === 999,
       );
     });
   });
@@ -368,6 +384,89 @@ describe('ans104-bundle-scan', () => {
         ),
         /Items end at byte/,
       );
+    });
+
+    it('skips only an item with an unsupported signature type when a handler is given', async () => {
+      const { items, raw } = await buildFlatBundle();
+      const clean = await collect(
+        scanBundle({
+          source: new BufferByteRangeSource(raw),
+          rootTxId: ROOT,
+          bundleSize: raw.length,
+        }),
+      );
+      const corrupted = Buffer.from(raw);
+      corrupted.writeUInt16LE(999, clean[1].rootDataItemOffset);
+
+      // Without a handler the whole scan fails, as before.
+      await assert.rejects(
+        collect(
+          scanBundle({
+            source: new BufferByteRangeSource(corrupted),
+            rootTxId: ROOT,
+            bundleSize: corrupted.length,
+          }),
+        ),
+        (error: unknown) =>
+          error instanceof UnsupportedDataItemError &&
+          error instanceof BundleScanError &&
+          error.bundleId === ROOT &&
+          error.itemId === items[1].id &&
+          error.signatureType === 999 &&
+          error.rootDataItemOffset === clean[1].rootDataItemOffset,
+      );
+
+      const skipped: UnsupportedDataItemError[] = [];
+      const scanned = await collect(
+        scanBundle({
+          source: new BufferByteRangeSource(corrupted),
+          rootTxId: ROOT,
+          bundleSize: corrupted.length,
+          onUnsupportedItem: (error) => skipped.push(error),
+        }),
+      );
+
+      // The other items keep the offsets a clean scan finds.
+      assert.deepEqual(scanned, [clean[0], clean[2]]);
+      assert.deepEqual(
+        skipped.map((error) => error.itemId),
+        [items[1].id],
+      );
+    });
+
+    it('skips an unsupported item inside a nested bundle and keeps its siblings', async () => {
+      const { inner, nestedItem, plain, raw } = await buildNestedBundle();
+      const clean = await collect(
+        scanBundle({
+          source: new BufferByteRangeSource(raw),
+          rootTxId: ROOT,
+          bundleSize: raw.length,
+        }),
+      );
+      assert.deepEqual(
+        clean.map((item) => item.id),
+        [plain.id, nestedItem.id, inner[0].id, inner[1].id],
+      );
+      const corrupted = Buffer.from(raw);
+      corrupted.writeUInt16LE(999, clean[2].rootDataItemOffset);
+
+      const skipped: UnsupportedDataItemError[] = [];
+      const nestedErrors: string[] = [];
+      const scanned = await collect(
+        scanBundle({
+          source: new BufferByteRangeSource(corrupted),
+          rootTxId: ROOT,
+          bundleSize: corrupted.length,
+          onUnsupportedItem: (error) => skipped.push(error),
+          onNestedBundleError: (error) => nestedErrors.push(error.message),
+        }),
+      );
+
+      assert.deepEqual(scanned, [clean[0], clean[1], clean[3]]);
+      assert.equal(skipped.length, 1);
+      assert.equal(skipped[0].itemId, inner[0].id);
+      assert.equal(skipped[0].bundleId, nestedItem.id);
+      assert.deepEqual(nestedErrors, []);
     });
 
     it('reports a corrupt nested bundle and keeps scanning when a handler is given', async () => {

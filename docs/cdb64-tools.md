@@ -80,18 +80,28 @@ and item headers are read, through range requests to a gateway's
 | `--concurrency <n>` | Roots scanned in parallel (default 2) |
 | `--window-bytes <n>` | Largest coalesced header read (default 1 MiB) |
 | `--header-guess-bytes <n>` | Bytes read per item when coalescing (default 2 KiB) |
+| `--max-index-items <n>` | Largest item count accepted from a bundle index (default 2,000,000) |
+| `--requests-per-second <n>` | Request rate across all roots, retries included (default 10; `0` for no limit) |
 | `--timeout-ms <n>`, `--retries <n>` | Per-request timeout and retries (defaults 60000, 3) |
 
 How it works and what it verifies:
 
 - **Size.** The root's size comes from the `Content-Range` total of a 32-byte
   range read of `/raw`. A HEAD isn't used, because a HEAD for an uncached ID
-  makes the gateway fetch the whole root in the background. An ID the gateway
-  reports as a data item (`X-AR-IO-Root-Transaction-Id` differs) is refused,
-  since offsets must be relative to an L1 transaction.
-- **Index.** The item index must fit in the bundle and list at most 2,000,000
-  items, and the listed items must end exactly at the bundle's size. The index
-  is read in 4 MiB chunks.
+  makes the gateway fetch the whole root in the background.
+- **L1 roots only.** Offsets must be relative to an L1 transaction, so an ID
+  the gateway reports as a data item is refused: either
+  `X-AR-IO-Root-Transaction-Id` names a different transaction, or it is absent
+  and a data item offset header (`X-AR-IO-Data-Item-Offset`,
+  `X-AR-IO-Data-Item-Root-Parent-Offset` or `X-AR-IO-Root-Data-Item-Offset`)
+  is present. A root header naming the ID itself is always accepted. A gateway
+  with no record of a data item sends none of these, so only list IDs you know
+  are L1 transactions.
+- **Index.** The item index must fit in the bundle and list at most
+  `--max-index-items` items, and the listed items must end exactly at the
+  bundle's size. The index is read in 4 MiB chunks and held in memory while
+  its bundle is scanned (about 0.3 KiB per item), so `--max-index-items` also
+  bounds a scan's memory.
 - **Headers.** Every item header is decoded, and the SHA-256 of its signature
   must equal the ID in the index. Items tagged `Bundle-Format: binary` and
   `Bundle-Version: 2.0.0` are scanned recursively. Their items get a `path` of
@@ -100,16 +110,29 @@ How it works and what it verifies:
   most `--window-bytes`, each contributing up to `--header-guess-bytes`, so
   bundles of small items read nearly sequentially and bundles of large items
   read a few KiB per item.
+- **Unsupported signature types.** An item whose signature type this build has
+  no layout for can't have its header read. It is skipped with a warning
+  (counted as `unsupported` in the log and summary), and the rest of its bundle
+  is still scanned, since every other item's offset comes from the verified
+  index.
 - **Failures.** A root that fails verification, or whose reads still fail
   after retries, is recorded as `failed` in the progress file and contributes
   no rows. A nested bundle that fails verification is reported as a warning,
   and the root's other items are still written; a failed read inside a nested
-  bundle fails the whole root instead, so no items go silently missing.
-- **Resuming.** A root's rows are appended only after the whole root is
-  scanned. Each progress line records the output files' sizes, and on restart
-  any rows a stopped run appended without recording them are truncated. A
-  progress file belongs to the `--output` and `--details` paths it was created
-  with, and resuming with different paths is refused.
+  bundle fails the whole root instead, so no items go silently missing. The
+  first 20 warnings per root are kept in its progress line, followed by a count
+  of the rest.
+- **Rate.** Requests are spaced evenly across all workers, retries included,
+  at `--requests-per-second`. A `429` is retried like a `5xx`, waiting for its
+  `Retry-After` (up to 60 seconds) when it sends one.
+- **Resuming.** While a root is scanned its rows go to
+  `<output>.<root>.part` (and `<details>.<root>.part`), so memory use doesn't
+  grow with the root's row count; they're appended to the outputs only after
+  the whole root is scanned, and removed once it is written or has failed. Each
+  progress line records the output files' sizes, and on restart any rows a
+  stopped run appended without recording them are truncated. A progress file
+  belongs to the `--output` and `--details` paths it was created with, and
+  resuming with different paths is refused.
   Re-running the same command skips roots recorded as `ok`.
 
 ## generate-cdb64-root-tx-index-rs

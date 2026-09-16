@@ -220,7 +220,7 @@ cat data-items.csv | ./tools/queue-missing-bundles --input - \
 Run `./tools/queue-missing-bundles --help` for the full flag list.
 
 ### `scan-bundle-offsets`
-Reads the item index and item headers of ANS-104 root bundles through a gateway's `/raw` range requests and writes the offsets and total size of every data item they contain, nested bundles included, in the CDB64 CSV format, ready for `generate-cdb64-root-tx-index-rs`. Payloads are never downloaded except where a coalesced header read spans them. Each item's header is decoded and its signature hashed to confirm the ID, and a root whose structure does not verify is recorded as failed instead of indexed. Point it at a gateway you control: range reads on uncached roots are served from chunks by that gateway.
+Reads the item index and item headers of ANS-104 root bundles through a gateway's `/raw` range requests and writes the offsets and total size of every data item they contain, nested bundles included, in the CDB64 CSV format, ready for `generate-cdb64-root-tx-index-rs`. Payloads are never downloaded except where a coalesced header read spans them. Each item's header is decoded and its signature hashed to confirm the ID, and a root whose structure does not verify is recorded as failed instead of indexed; an item with an unknown signature type is skipped with a warning. Point it at a gateway you control: range reads on uncached roots are served from chunks by that gateway. Requests are limited to 10 per second by default (`--requests-per-second`, `0` for no limit), and only L1 transaction IDs should be listed.
 
 **Usage:**
 ```bash

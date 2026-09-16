@@ -29,6 +29,7 @@ import * as readline from 'node:readline';
 
 import {
   DEFAULT_HEADER_GUESS_BYTES,
+  DEFAULT_MAX_INDEX_ITEMS,
   DEFAULT_MAX_WINDOW_BYTES,
   ScannedDataItem,
   scanBundle,
@@ -57,6 +58,37 @@ const DETAIL_COLUMNS = [
   'data_item_size',
 ];
 
+/**
+ * Default request rate. Each request against an uncached root makes the
+ * gateway fetch chunks, so an unthrottled scan pointed at someone else's
+ * gateway is effectively a load test.
+ */
+const DEFAULT_REQUESTS_PER_SECOND = 10;
+
+/** Longest `Retry-After` a scan will wait for before retrying a request. */
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * Response headers the gateway only sends for data items (they are derived
+ * from the item's offset within its parent). Seeing one for an ID without a
+ * root transaction header matching that ID means the ID is not an L1
+ * transaction.
+ */
+const DATA_ITEM_HEADERS = [
+  'x-ar-io-data-item-offset',
+  'x-ar-io-data-item-root-parent-offset',
+  'x-ar-io-root-data-item-offset',
+];
+
+/** Largest number of warning messages recorded per root. */
+const MAX_WARNINGS_RECORDED = 20;
+
+/** Bytes buffered before scanned rows are flushed to a part file. */
+const PART_FLUSH_BYTES = 1024 * 1024;
+
+/** Bytes copied per read when appending a part file to an output file. */
+const COPY_CHUNK_BYTES = 1024 * 1024;
+
 /** Parsed command-line options. */
 interface Config {
   inputPath?: string;
@@ -68,6 +100,9 @@ interface Config {
   concurrency: number;
   windowBytes: number;
   headerGuessBytes: number;
+  maxIndexItems: number;
+  /** Requests per second across all workers; 0 means unlimited */
+  requestsPerSecond: number;
   timeoutMs: number;
   retries: number;
 }
@@ -93,8 +128,13 @@ Options:
   --concurrency <n>          Roots scanned in parallel (default: 2)
   --window-bytes <n>         Largest coalesced header read (default: ${DEFAULT_MAX_WINDOW_BYTES})
   --header-guess-bytes <n>   Bytes read per item when coalescing (default: ${DEFAULT_HEADER_GUESS_BYTES})
+  --max-index-items <n>      Largest item count accepted from a bundle index
+                             (default: ${DEFAULT_MAX_INDEX_ITEMS}); bounds the index held in memory
+  --requests-per-second <n>  Requests per second across all roots, retries
+                             included (default: ${DEFAULT_REQUESTS_PER_SECOND}; 0 for no limit)
   --timeout-ms <n>           Per-request timeout (default: 60000)
-  --retries <n>              Retries per request (default: 3)
+  --retries <n>              Retries per request (default: 3); a 429 response's
+                             Retry-After is honoured, up to ${MAX_RETRY_AFTER_MS / 1000}s
   --help, -h                 Show this help message
 
 Output (CDB64 CSV, header row included):
@@ -102,6 +142,14 @@ Output (CDB64 CSV, header row included):
 
   path is empty for direct children of the root and a JSON array
   [root, ..., parent] for items inside nested bundles.
+
+  An item whose signature type this build doesn't know is skipped with a
+  warning; the rest of its bundle is still scanned.
+
+Roots:
+  Every ID must be an L1 transaction: offsets are relative to it. IDs the
+  gateway reports as data items are refused. A gateway with no record of a
+  data item can't tell, so only list IDs you know are L1 transactions.
 
 Resuming:
   Each root is recorded in the progress file with the output files' sizes.
@@ -111,6 +159,10 @@ Resuming:
   output never holds duplicate or partial rows. A progress file belongs to the
   --output and --details paths it was created with; resuming with different
   paths is refused.
+
+  While a root is scanned its rows go to <output>.<root>.part (and
+  <details>.<root>.part), so memory use doesn't grow with the root's size.
+  Part files are removed once the root is written or has failed.
 
 Example:
   ./tools/scan-bundle-offsets --input roots.txt --output offsets.csv --details details.csv
@@ -147,6 +199,8 @@ function parseArgs(): Config | null {
     concurrency: 2,
     windowBytes: DEFAULT_MAX_WINDOW_BYTES,
     headerGuessBytes: DEFAULT_HEADER_GUESS_BYTES,
+    maxIndexItems: DEFAULT_MAX_INDEX_ITEMS,
+    requestsPerSecond: DEFAULT_REQUESTS_PER_SECOND,
     timeoutMs: 60000,
     retries: 3,
   };
@@ -187,6 +241,20 @@ function parseArgs(): Config | null {
         break;
       case '--header-guess-bytes':
         config.headerGuessBytes = parsePositiveInt(requireValue(), arg);
+        break;
+      case '--max-index-items':
+        config.maxIndexItems = parsePositiveInt(requireValue(), arg);
+        break;
+      case '--requests-per-second':
+        config.requestsPerSecond = Number(requireValue());
+        if (
+          !Number.isFinite(config.requestsPerSecond) ||
+          config.requestsPerSecond < 0
+        ) {
+          throw new Error(
+            '--requests-per-second requires a non-negative number',
+          );
+        }
         break;
       case '--timeout-ms':
         config.timeoutMs = parsePositiveInt(requireValue(), arg);
@@ -470,26 +538,129 @@ function csvLine(fields: Array<string | number | undefined>): string {
   return fields.map(csvField).join(',');
 }
 
+/** Path of the part file holding one root's rows for `filePath`. */
+function partPath(filePath: string, root: string): string {
+  return `${filePath}.${root}.part`;
+}
+
 /**
- * Appends lines to a CSV file in one write, starting with the header row when
- * the file is new or empty.
+ * Collects one root's rows in a part file, flushing in batches, so a scan's
+ * memory use doesn't grow with the number of items in the root.
  */
-function appendRows(
+class PartFileWriter {
+  /** Rows written so far */
+  lines = 0;
+  private pending: string[] = [];
+  private pendingBytes = 0;
+
+  private constructor(readonly filePath: string) {}
+
+  /** Creates (or empties) the part file. */
+  static async create(filePath: string): Promise<PartFileWriter> {
+    await fs.promises.writeFile(filePath, '');
+    return new PartFileWriter(filePath);
+  }
+
+  async write(line: string): Promise<void> {
+    this.pending.push(line);
+    this.pendingBytes += line.length + 1;
+    this.lines++;
+    if (this.pendingBytes >= PART_FLUSH_BYTES) {
+      await this.flush();
+    }
+  }
+
+  async flush(): Promise<void> {
+    if (this.pending.length === 0) return;
+    const text = this.pending.join('\n') + '\n';
+    this.pending = [];
+    this.pendingBytes = 0;
+    await fs.promises.appendFile(this.filePath, text);
+  }
+}
+
+/**
+ * Appends a part file to a CSV file, starting with the header row when the
+ * CSV is new or empty. Synchronous, so roots committed by concurrent workers
+ * never interleave, and copied in chunks, so a large root is never held in
+ * memory.
+ */
+function appendPartFile(
   filePath: string,
   columns: string[],
-  lines: string[],
+  sourcePath: string,
 ): void {
-  const isNew = !fs.existsSync(filePath) || fs.statSync(filePath).size === 0;
-  const content = [...(isNew ? [columns.join(',')] : []), ...lines];
-  if (content.length > 0) {
-    fs.appendFileSync(filePath, content.join('\n') + '\n');
+  const isNew = fileSize(filePath) === 0;
+  const out = fs.openSync(filePath, 'a');
+  try {
+    if (isNew) {
+      fs.writeSync(out, `${columns.join(',')}\n`);
+    }
+    const input = fs.openSync(sourcePath, 'r');
+    try {
+      const buffer = Buffer.allocUnsafe(COPY_CHUNK_BYTES);
+      for (;;) {
+        const read = fs.readSync(input, buffer, 0, buffer.length, null);
+        if (read === 0) break;
+        let written = 0;
+        while (written < read) {
+          written += fs.writeSync(out, buffer, written, read - written);
+        }
+      }
+    } finally {
+      fs.closeSync(input);
+    }
+  } finally {
+    fs.closeSync(out);
   }
 }
 
 /** Resolves after `ms` milliseconds. */
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Wraps a byte source with retries and request/byte counters. */
+/**
+ * Spaces requests evenly across every worker, so a scan never sends the
+ * gateway more than `requestsPerSecond` requests, retries included.
+ */
+class RequestRateLimiter {
+  private nextSlot = 0;
+
+  /** @param requestsPerSecond - Request rate; 0 disables the limit */
+  constructor(private readonly requestsPerSecond: number) {}
+
+  /** Resolves when the caller may send its next request. */
+  async acquire(): Promise<void> {
+    if (this.requestsPerSecond <= 0) return;
+    const now = Date.now();
+    const slot = Math.max(now, this.nextSlot);
+    this.nextSlot = slot + 1000 / this.requestsPerSecond;
+    if (slot > now) {
+      await sleep(slot - now);
+    }
+  }
+}
+
+/**
+ * Delay before retry `attempt`: exponential backoff, or the server's
+ * `Retry-After` (seconds or an HTTP date) when it sent one, capped at
+ * {@link MAX_RETRY_AFTER_MS}.
+ */
+function retryDelayMs(attempt: number, retryAfter?: string | null): number {
+  const backoff = 500 * 2 ** attempt;
+  if (retryAfter === undefined || retryAfter === null || retryAfter === '') {
+    return backoff;
+  }
+  const seconds = Number(retryAfter);
+  const delay = Number.isFinite(seconds)
+    ? seconds * 1000
+    : Date.parse(retryAfter) - Date.now();
+  if (!Number.isFinite(delay)) {
+    return backoff;
+  }
+  return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, delay));
+}
+
+/** Wraps a byte source with rate limiting, retries and counters. */
 class RetryingByteRangeSource implements ByteRangeSource {
   requests = 0;
   bytes = 0;
@@ -497,18 +668,26 @@ class RetryingByteRangeSource implements ByteRangeSource {
   constructor(
     private readonly inner: ByteRangeSource,
     private readonly retries: number,
+    private readonly limiter: RequestRateLimiter,
   ) {}
 
   async read(offset: number, size: number): Promise<Buffer> {
     for (let attempt = 0; ; attempt++) {
+      await this.limiter.acquire();
       this.requests++;
       try {
         const buffer = await this.inner.read(offset, size);
         this.bytes += buffer.length;
         return buffer;
-      } catch (error) {
+      } catch (error: any) {
         if (attempt >= this.retries) throw error;
-        await sleep(500 * 2 ** attempt);
+        // HttpByteRangeSource rejects with the axios error, whose response
+        // carries the status and headers of a 429.
+        const retryAfter =
+          error?.response?.status === 429
+            ? error.response.headers?.['retry-after']
+            : undefined;
+        await sleep(retryDelayMs(attempt, retryAfter));
       }
     }
   }
@@ -523,14 +702,49 @@ class RetryingByteRangeSource implements ByteRangeSource {
 }
 
 /**
- * Gets the root's size from the `Content-Range` total of a 32-byte range read,
- * refusing IDs the gateway reports as data items: offsets are only meaningful
- * relative to an L1 transaction. A range read is used instead of HEAD because a
- * HEAD for an uncached ID makes the gateway fetch the whole root in the
- * background, while range misses are not cached by default.
+ * Refuses an ID the gateway's response identifies as a data item: offsets are
+ * only meaningful relative to an L1 transaction.
+ *
+ * A root transaction header naming the ID itself is trusted outright. Without
+ * that header, any data item offset header marks the ID as a data item. A
+ * gateway with no record of a data item sends neither, so this check can't
+ * catch that case.
+ *
+ * @throws Error when the ID is a data item
  */
-async function fetchRootSize(config: Config, root: string): Promise<number> {
+function assertL1Transaction(root: string, headers: Headers): void {
+  const reportedRoot = headers.get('x-ar-io-root-transaction-id');
+  if (reportedRoot !== null) {
+    if (reportedRoot !== root) {
+      throw new Error(
+        `Not an L1 transaction: gateway reports root ${reportedRoot}`,
+      );
+    }
+    return;
+  }
+  const itemHeader = DATA_ITEM_HEADERS.find(
+    (name) => headers.get(name) !== null,
+  );
+  if (itemHeader !== undefined) {
+    throw new Error(
+      `Not an L1 transaction: gateway sent data item header ${itemHeader}`,
+    );
+  }
+}
+
+/**
+ * Gets the root's size from the `Content-Range` total of a 32-byte range read,
+ * refusing IDs the gateway reports as data items. A range read is used instead
+ * of HEAD because a HEAD for an uncached ID makes the gateway fetch the whole
+ * root in the background, while range misses are not cached by default.
+ */
+async function fetchRootSize(
+  config: Config,
+  root: string,
+  limiter: RequestRateLimiter,
+): Promise<number> {
   for (let attempt = 0; ; attempt++) {
+    await limiter.acquire();
     let response: Response;
     try {
       response = await fetch(`${config.gateway}/raw/${root}`, {
@@ -539,26 +753,24 @@ async function fetchRootSize(config: Config, root: string): Promise<number> {
       });
     } catch (error) {
       if (attempt >= config.retries) throw error;
-      await sleep(500 * 2 ** attempt);
+      await sleep(retryDelayMs(attempt));
       continue;
     }
     // Only headers are needed; don't leave the body stream open.
     await response.body?.cancel();
 
-    if (response.status >= 500 && attempt < config.retries) {
-      await sleep(500 * 2 ** attempt);
+    if (
+      (response.status === 429 || response.status >= 500) &&
+      attempt < config.retries
+    ) {
+      await sleep(retryDelayMs(attempt, response.headers.get('retry-after')));
       continue;
     }
     if (response.status !== 206) {
       throw new Error(`Range read of /raw/${root} returned ${response.status}`);
     }
 
-    const reportedRoot = response.headers.get('x-ar-io-root-transaction-id');
-    if (reportedRoot !== null && reportedRoot !== root) {
-      throw new Error(
-        `Not an L1 transaction: gateway reports root ${reportedRoot}`,
-      );
-    }
+    assertL1Transaction(root, response.headers);
 
     const total = /\/(\d+)\s*$/.exec(
       response.headers.get('content-range') ?? '',
@@ -571,43 +783,90 @@ async function fetchRootSize(config: Config, root: string): Promise<number> {
   }
 }
 
-/** Rows and statistics from scanning one root. */
+/** Statistics from scanning one root; its rows are in the part files. */
 interface RootResult {
-  lines: string[];
-  detailLines: string[];
+  /** Rows written to the output part file */
+  items: number;
+  /** The first {@link MAX_WARNINGS_RECORDED} warnings */
   warnings: string[];
+  /** All warnings, including those not recorded */
+  warningCount: number;
+  /** Items skipped because their signature type is unknown */
+  unsupportedItems: number;
   nestedBundles: number;
   signatureTypes: Map<number, number>;
   requests: number;
   bytes: number;
 }
 
+/** Part files a root's rows are written to while it is scanned. */
+function rootPartPaths(
+  config: Config,
+  root: string,
+): { output: string; details?: string } {
+  return {
+    output: partPath(config.outputPath, root),
+    details:
+      config.detailsPath === undefined
+        ? undefined
+        : partPath(config.detailsPath, root),
+  };
+}
+
+/** Removes a root's part files, ignoring ones that don't exist. */
+function removePartFiles(config: Config, root: string): void {
+  const parts = rootPartPaths(config, root);
+  fs.rmSync(parts.output, { force: true });
+  if (parts.details !== undefined) {
+    fs.rmSync(parts.details, { force: true });
+  }
+}
+
 /**
- * Scans one root bundle and collects its output rows in memory, so nothing is
- * written for a root that fails part-way.
+ * Scans one root bundle, writing its rows to part files rather than the
+ * outputs, so nothing reaches the outputs for a root that fails part-way.
  *
  * @throws Error when the root's size can't be read, a read still fails after
  *   retries, or the root bundle does not verify
  */
-async function scanRoot(config: Config, root: string): Promise<RootResult> {
-  const bundleSize = await fetchRootSize(config, root);
+async function scanRoot(
+  config: Config,
+  root: string,
+  limiter: RequestRateLimiter,
+): Promise<RootResult> {
+  const bundleSize = await fetchRootSize(config, root, limiter);
   const source = new RetryingByteRangeSource(
     new HttpByteRangeSource({
       url: `${config.gateway}/raw/${root}`,
       timeout: config.timeoutMs,
     }),
     config.retries,
+    limiter,
   );
 
   const result: RootResult = {
-    lines: [],
-    detailLines: [],
+    items: 0,
     warnings: [],
+    warningCount: 0,
+    unsupportedItems: 0,
     nestedBundles: 0,
     signatureTypes: new Map(),
     requests: 0,
     bytes: 0,
   };
+  const warn = (message: string): void => {
+    result.warningCount++;
+    if (result.warnings.length < MAX_WARNINGS_RECORDED) {
+      result.warnings.push(message);
+    }
+  };
+
+  const parts = rootPartPaths(config, root);
+  const rows = await PartFileWriter.create(parts.output);
+  const details =
+    parts.details === undefined
+      ? undefined
+      : await PartFileWriter.create(parts.details);
 
   try {
     const items = scanBundle({
@@ -616,14 +875,21 @@ async function scanRoot(config: Config, root: string): Promise<RootResult> {
       bundleSize,
       maxWindowBytes: config.windowBytes,
       headerGuessBytes: config.headerGuessBytes,
+      maxIndexItems: config.maxIndexItems,
       onNestedBundleError: (error, bundle) =>
-        result.warnings.push(`nested bundle ${bundle.id}: ${error.message}`),
+        warn(`nested bundle ${bundle.id}: ${error.message}`),
+      onUnsupportedItem: (error) => {
+        result.unsupportedItems++;
+        warn(
+          `unsupported item ${error.itemId} (signature type ${error.signatureType}) at offset ${error.rootDataItemOffset}`,
+        );
+      },
     });
 
     for await (const item of items) {
-      result.lines.push(cdbLine(item));
-      if (config.detailsPath !== undefined) {
-        result.detailLines.push(detailLine(item));
+      await rows.write(cdbLine(item));
+      if (details !== undefined) {
+        await details.write(detailLine(item));
       }
       if (item.isBundle) result.nestedBundles++;
       result.signatureTypes.set(
@@ -631,6 +897,9 @@ async function scanRoot(config: Config, root: string): Promise<RootResult> {
         (result.signatureTypes.get(item.signatureType) ?? 0) + 1,
       );
     }
+    await rows.flush();
+    await details?.flush();
+    result.items = rows.lines;
   } finally {
     result.requests = source.requests;
     result.bytes = source.bytes;
@@ -638,6 +907,15 @@ async function scanRoot(config: Config, root: string): Promise<RootResult> {
   }
 
   return result;
+}
+
+/** The progress message for a root: its recorded warnings, and how many more. */
+function warningSummary(result: RootResult): string {
+  const hidden = result.warningCount - result.warnings.length;
+  return [
+    ...result.warnings,
+    ...(hidden > 0 ? [`and ${hidden} more warning(s)`] : []),
+  ].join(' | ');
 }
 
 /** Formats an item as a CDB64 CSV row. */
@@ -700,19 +978,14 @@ function shrinkTo(filePath: string, size: number): void {
 function commitRoot(config: Config, root: string, result: RootResult): void {
   const before = outputSizes(config);
   const progressBefore = fileSize(config.progressPath);
+  const parts = rootPartPaths(config, root);
   try {
     recordProgress(config, root, 'writing', 0, '');
-    appendRows(config.outputPath, CDB_COLUMNS, result.lines);
-    if (config.detailsPath !== undefined) {
-      appendRows(config.detailsPath, DETAIL_COLUMNS, result.detailLines);
+    appendPartFile(config.outputPath, CDB_COLUMNS, parts.output);
+    if (config.detailsPath !== undefined && parts.details !== undefined) {
+      appendPartFile(config.detailsPath, DETAIL_COLUMNS, parts.details);
     }
-    recordProgress(
-      config,
-      root,
-      'ok',
-      result.lines.length,
-      result.warnings.join(' | '),
-    );
+    recordProgress(config, root, 'ok', result.items, warningSummary(result));
   } catch (error: any) {
     try {
       shrinkTo(config.outputPath, before.outputBytes);
@@ -760,6 +1033,9 @@ async function main(): Promise<void> {
 
   console.error('=== Bundle Offset Scanner ===');
   console.error(`Gateway:  ${config.gateway}`);
+  console.error(
+    `Rate:     ${config.requestsPerSecond > 0 ? `${config.requestsPerSecond} requests/s` : 'unlimited'}`,
+  );
   console.error(`Output:   ${config.outputPath}`);
   console.error(
     `Roots:    ${roots.length} (${roots.length - pending.length} already done, ${pending.length} to scan)`,
@@ -774,24 +1050,27 @@ async function main(): Promise<void> {
     requests: 0,
     bytes: 0,
     warnings: 0,
+    unsupportedItems: 0,
     signatureTypes: new Map<number, number>(),
   };
   const startTime = Date.now();
+  const limiter = new RequestRateLimiter(config.requestsPerSecond);
   let nextIndex = 0;
 
   const worker = async (): Promise<void> => {
     while (nextIndex < pending.length) {
       const root = pending[nextIndex++];
       try {
-        const result = await scanRoot(config, root);
+        const result = await scanRoot(config, root, limiter);
         commitRoot(config, root, result);
 
         totals.ok++;
-        totals.items += result.lines.length;
+        totals.items += result.items;
         totals.nestedBundles += result.nestedBundles;
         totals.requests += result.requests;
         totals.bytes += result.bytes;
-        totals.warnings += result.warnings.length;
+        totals.warnings += result.warningCount;
+        totals.unsupportedItems += result.unsupportedItems;
         for (const [type, count] of result.signatureTypes) {
           totals.signatureTypes.set(
             type,
@@ -799,7 +1078,7 @@ async function main(): Promise<void> {
           );
         }
         console.error(
-          `ok     ${root} items=${result.lines.length} nested=${result.nestedBundles} requests=${result.requests} bytes=${result.bytes}${result.warnings.length > 0 ? ` warnings=${result.warnings.length}` : ''}`,
+          `ok     ${root} items=${result.items} nested=${result.nestedBundles} requests=${result.requests} bytes=${result.bytes}${result.unsupportedItems > 0 ? ` unsupported=${result.unsupportedItems}` : ''}${result.warningCount > 0 ? ` warnings=${result.warningCount}` : ''}`,
         );
       } catch (error: any) {
         if (error instanceof OutputRecoveryError) {
@@ -809,6 +1088,8 @@ async function main(): Promise<void> {
         const message = oneLine(error?.message ?? String(error));
         recordProgress(config, root, 'failed', 0, message);
         console.error(`failed ${root}: ${message}`);
+      } finally {
+        removePartFiles(config, root);
       }
     }
   };
@@ -826,7 +1107,8 @@ async function main(): Promise<void> {
   console.error(`Roots failed:    ${totals.failed}`);
   console.error(`Items written:   ${totals.items}`);
   console.error(`Nested bundles:  ${totals.nestedBundles}`);
-  console.error(`Nested warnings: ${totals.warnings}`);
+  console.error(`Unsupported:     ${totals.unsupportedItems}`);
+  console.error(`Warnings:        ${totals.warnings}`);
   console.error(`Range requests:  ${totals.requests}`);
   console.error(`Bytes read:      ${totals.bytes}`);
   console.error(
