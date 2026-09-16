@@ -235,6 +235,9 @@ async function exportToCdb64(config: Config): Promise<void> {
         // Encode value based on available data
         let encodedValue: Buffer;
         if (hasOffsets) {
+          // Item sizes are deliberately not exported. data.db records sizes
+          // from every resolution path, while an index's sizes should come from
+          // the bundles themselves.
           encodedValue = encodeCdb64Value({
             rootTxId: row.root_transaction_id,
             rootDataItemOffset: row.root_data_item_offset!,

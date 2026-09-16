@@ -46,6 +46,7 @@ import {
   printUsage,
   looksLikeHeader,
   parseBase64UrlId,
+  parseDataItemSize,
   parseOffset,
   parsePath,
   printGenerationSummary,
@@ -146,6 +147,9 @@ async function generateIndex(config: Config): Promise<void> {
           );
         }
 
+        // Optional item size (column 6), only valid alongside both offsets
+        const dataItemSize = parseDataItemSize(parts, hasOffset1 && hasOffset2);
+
         // Build value based on format type
         let value: Cdb64RootTxValue;
         if (path !== undefined) {
@@ -160,6 +164,7 @@ async function generateIndex(config: Config): Promise<void> {
               path,
               rootDataItemOffset,
               rootDataOffset,
+              dataItemSize,
             };
             stats.pathCompleteCount++;
           } else {
@@ -178,6 +183,7 @@ async function generateIndex(config: Config): Promise<void> {
               rootTxId,
               rootDataItemOffset,
               rootDataOffset,
+              dataItemSize,
             };
             stats.completeCount++;
           } else {
@@ -188,6 +194,9 @@ async function generateIndex(config: Config): Promise<void> {
 
         // Rust writer uses synchronous put()
         writer.put(dataItemId, encodeCdb64Value(value));
+        if (dataItemSize !== undefined) {
+          stats.dataItemSizeCount++;
+        }
         stats.recordCount++;
 
         // Progress indicator
@@ -298,6 +307,8 @@ async function generatePartitionedIndex(config: Config): Promise<void> {
           );
         }
 
+        const dataItemSize = parseDataItemSize(parts, hasOffset1 && hasOffset2);
+
         let value: Cdb64RootTxValue;
         if (pathValue !== undefined) {
           if (hasOffset1 && hasOffset2) {
@@ -310,6 +321,7 @@ async function generatePartitionedIndex(config: Config): Promise<void> {
               path: pathValue,
               rootDataItemOffset,
               rootDataOffset,
+              dataItemSize,
             };
             stats.pathCompleteCount++;
           } else {
@@ -327,6 +339,7 @@ async function generatePartitionedIndex(config: Config): Promise<void> {
               rootTxId,
               rootDataItemOffset,
               rootDataOffset,
+              dataItemSize,
             };
             stats.completeCount++;
           } else {
@@ -336,6 +349,9 @@ async function generatePartitionedIndex(config: Config): Promise<void> {
         }
 
         await writer.add(dataItemId, encodeCdb64Value(value));
+        if (dataItemSize !== undefined) {
+          stats.dataItemSizeCount++;
+        }
         stats.recordCount++;
 
         if (stats.recordCount % 100000 === 0) {

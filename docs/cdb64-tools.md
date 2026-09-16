@@ -22,7 +22,7 @@ The generate, export, and verify tools share a common CSV format for data item
 to root transaction mappings:
 
 ```text
-data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
+data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_size
 ```
 
 **Columns:**
@@ -34,8 +34,15 @@ data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
 | `path` | No | JSON array of base64URL IDs for nested bundles (e.g., `["rootId","bundle1Id","parentId"]`) |
 | `root_data_item_offset` | No | Byte offset of data item within root transaction |
 | `root_data_offset` | No | Byte offset of data within root transaction |
+| `data_item_size` | No | Total data item size in bytes (header + payload) |
 
 - If offset columns are present, **both** must be provided
+- `data_item_size` requires both offset columns and must be at least the
+  header size (`root_data_offset - root_data_item_offset`). Without it the
+  gateway searches the bundle header to find where the item ends; with it,
+  one read of the item header is enough (see
+  [Item size](cdb64.md#item-size)). Existing five-column files remain valid;
+  as before, every row in a file must have the same number of columns.
 - Headers are auto-detected and skipped, or can be explicitly skipped with
   `--skip-header`
 - Comment lines starting with `#` are ignored
@@ -45,9 +52,9 @@ data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
 | Format | Columns Used | Use Case |
 |--------|-------------|----------|
 | Simple | `data_item_id`, `root_tx_id` | Legacy: root TX ID only |
-| Complete | All except `path` | Legacy: root TX ID + byte offsets |
+| Complete | All except `path` | Legacy: root TX ID + byte offsets (+ optional item size) |
 | Path | `data_item_id`, `root_tx_id`, `path` | Nested bundles: traversal path |
-| Path Complete | All columns | Nested bundles: path + byte offsets |
+| Path Complete | All columns | Nested bundles: path + byte offsets (+ optional item size) |
 
 ## generate-cdb64-root-tx-index-rs
 

@@ -257,8 +257,9 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
         // probing the remaining sources:
         //   - complete_offsets: full offsets + size (skip even a header parse)
         //   - l1_root: rootTxId === id, a definitive L1 root (passthrough)
-        //   - offsets: rootOffset + rootDataOffset present (serve via a cheap
-        //     header parse for size; the CDB case)
+        //   - offsets: rootOffset + rootDataOffset present (the CDB case:
+        //     served via one ID-verified item-header read when the result
+        //     also carries the item size, otherwise via a bundle-header search)
         //   - path: a bundle traversal path (path-guided navigation)
         let exitReason:
           | 'complete_offsets'

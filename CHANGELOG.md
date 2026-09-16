@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Item size in CDB64 root TX index values** — CDB64 values can now record
+  the total data item size (`s`, header + payload) alongside the two root
+  offsets. The generate tools accept it as an optional sixth CSV column,
+  `data_item_size`, and `export-cdb64-root-tx-index` writes it. An offset
+  without a size tells the gateway where an item starts but not where it ends,
+  so every CDB64 hit still searched the root bundle's header for the item: the
+  item count, the whole ID index, then the item header, each a separate range
+  read of the root bundle. With the size recorded, the gateway reads the item
+  header once at the recorded offset, checks that its signature hashes to the
+  requested ID and that the header ends at the recorded payload offset, and
+  serves the payload with the item's own content type. The payload goes
+  through the same signature verification as direct offset hints, and the
+  offsets are saved only once it verifies. Any mismatch, and any range
+  request, falls back to the bundle search. The key is optional and ignored by
+  readers that predate it, so existing indexes behave as before and new ones
+  stay readable by older gateways. A size inconsistent with its offsets is
+  ignored rather than invalidating the entry. Items located this way are
+  counted as `root_tx_local_resolve_total{outcome="index_offsets"}`.
+
 ### Changed
 
 - `TxChunksDataSource` now resolves a transaction's chunk-read geometry

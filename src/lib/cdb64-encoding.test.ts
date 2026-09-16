@@ -16,6 +16,7 @@ import {
   isPathCompleteValue,
   getRootTxId,
   getPath,
+  getDataItemSize,
   hasOffsets,
   Cdb64RootTxValue,
   Cdb64RootTxValueSimple,
@@ -559,6 +560,143 @@ describe('CDB64 Encoding', () => {
       assert(completeDecoded.rootTxId.equals(rootTxId));
       assert.equal(completeDecoded.rootDataItemOffset, 1000);
       assert.equal(completeDecoded.rootDataOffset, 2000);
+    });
+  });
+
+  describe('data item size', () => {
+    it('should round-trip a complete value with an item size', () => {
+      const value: Cdb64RootTxValueComplete = {
+        rootTxId: createTestTxId(70),
+        rootDataItemOffset: 1024,
+        rootDataOffset: 1536,
+        dataItemSize: 4096,
+      };
+
+      const decoded = decodeCdb64Value(encodeCdb64Value(value));
+
+      assert.deepEqual(decoded, value);
+      assert.equal(getDataItemSize(decoded), 4096);
+    });
+
+    it('should round-trip a path-complete value with an item size', () => {
+      const value: Cdb64RootTxValuePathComplete = {
+        path: [createTestTxId(71), createTestTxId(72)],
+        rootDataItemOffset: 5000,
+        rootDataOffset: 5512,
+        dataItemSize: 6000,
+      };
+
+      const decoded = decodeCdb64Value(encodeCdb64Value(value));
+
+      assert.deepEqual(decoded, value);
+      assert.equal(getDataItemSize(decoded), 6000);
+    });
+
+    it('should encode values without an item size to the same bytes as before', () => {
+      const rootTxId = createTestTxId(73);
+
+      const encoded = encodeCdb64Value({
+        rootTxId,
+        rootDataItemOffset: 10,
+        rootDataOffset: 20,
+      });
+
+      assert(encoded.equals(toMsgpack({ r: rootTxId, i: 10, d: 20 })));
+      const decoded = decodeCdb64Value(encoded);
+      assert.equal('dataItemSize' in decoded, false);
+      assert.equal(getDataItemSize(decoded), undefined);
+    });
+
+    it('should accept an item size equal to the header size (empty payload)', () => {
+      const value: Cdb64RootTxValueComplete = {
+        rootTxId: createTestTxId(74),
+        rootDataItemOffset: 100,
+        rootDataOffset: 180,
+        dataItemSize: 80,
+      };
+
+      assert.deepEqual(decodeCdb64Value(encodeCdb64Value(value)), value);
+    });
+
+    it('should reject an item size smaller than the header on encode', () => {
+      assert.throws(
+        () =>
+          encodeCdb64Value({
+            rootTxId: createTestTxId(75),
+            rootDataItemOffset: 100,
+            rootDataOffset: 180,
+            dataItemSize: 79,
+          }),
+        /dataItemSize must be a safe integer no smaller than the header size/,
+      );
+    });
+
+    it('should reject a non-integer item size on encode', () => {
+      assert.throws(
+        () =>
+          encodeCdb64Value({
+            path: [createTestTxId(76)],
+            rootDataItemOffset: 100,
+            rootDataOffset: 180,
+            dataItemSize: 200.5,
+          }),
+        /dataItemSize must be a safe integer/,
+      );
+    });
+
+    it('should ignore an unsafe item size on decode, keeping the offsets', () => {
+      const decoded = decodeCdb64Value(
+        toMsgpack({ r: createTestTxId(80), i: 100, d: 200, s: 2 ** 53 }),
+      );
+
+      assert(isCompleteValue(decoded));
+      assert.equal(decoded.rootDataItemOffset, 100);
+      assert.equal(decoded.rootDataOffset, 200);
+      assert.equal(getDataItemSize(decoded), undefined);
+    });
+
+    it('should reject an item size whose end offset is unsafe on encode', () => {
+      assert.throws(
+        () =>
+          encodeCdb64Value({
+            rootTxId: createTestTxId(81),
+            rootDataItemOffset: Number.MAX_SAFE_INTEGER - 100,
+            rootDataOffset: Number.MAX_SAFE_INTEGER - 50,
+            dataItemSize: 200,
+          }),
+        /dataItemSize must be a safe integer/,
+      );
+    });
+
+    it('should ignore an item size smaller than the header on decode, keeping the offsets', () => {
+      const decoded = decodeCdb64Value(
+        toMsgpack({ r: createTestTxId(77), i: 100, d: 200, s: 50 }),
+      );
+
+      assert(isCompleteValue(decoded));
+      assert.equal(decoded.rootDataItemOffset, 100);
+      assert.equal(decoded.rootDataOffset, 200);
+      assert.equal(getDataItemSize(decoded), undefined);
+    });
+
+    it('should ignore an item size when the payload offset precedes the item offset', () => {
+      const decoded = decodeCdb64Value(
+        toMsgpack({ p: [createTestTxId(78)], i: 200, d: 100, s: 500 }),
+      );
+
+      assert(isPathCompleteValue(decoded));
+      assert.equal(decoded.rootDataItemOffset, 200);
+      assert.equal(decoded.rootDataOffset, 100);
+      assert.equal(getDataItemSize(decoded), undefined);
+    });
+
+    it('should ignore an item size without offsets', () => {
+      const rootTxId = createTestTxId(79);
+
+      const decoded = decodeCdb64Value(toMsgpack({ r: rootTxId, s: 500 }));
+
+      assert.deepEqual(decoded, { rootTxId });
+      assert.equal(getDataItemSize(decoded), undefined);
     });
   });
 });
