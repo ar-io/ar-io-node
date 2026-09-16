@@ -204,7 +204,10 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        await writer.add(Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.from('test'));
+        await writer.add(
+          Buffer.from([0x00, 0x01, 0x02, 0x03]),
+          Buffer.from('test'),
+        );
 
         await writer.finalize();
 
@@ -221,8 +224,14 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        await writer.add(Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.from('test'));
-        await writer.add(Buffer.from([0xff, 0x01, 0x02, 0x03]), Buffer.from('test2'));
+        await writer.add(
+          Buffer.from([0x00, 0x01, 0x02, 0x03]),
+          Buffer.from('test'),
+        );
+        await writer.add(
+          Buffer.from([0xff, 0x01, 0x02, 0x03]),
+          Buffer.from('test2'),
+        );
 
         const manifest = await writer.finalize();
 
@@ -274,7 +283,10 @@ describe(
         const writer = new StreamingPartitionedCdb64Writer(outputDir);
         await writer.open();
 
-        await writer.add(Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.from('test'));
+        await writer.add(
+          Buffer.from([0x00, 0x01, 0x02, 0x03]),
+          Buffer.from('test'),
+        );
         await writer.finalize();
 
         // Output directory should exist
@@ -307,7 +319,7 @@ describe(
         await writer.open();
 
         // Add in non-sorted order
-        writer.add(Buffer.from([0xff, 0x01]), Buffer.from('ff'));
+        await writer.add(Buffer.from([0xff, 0x01]), Buffer.from('ff'));
         await writer.add(Buffer.from([0x00, 0x01]), Buffer.from('00'));
         await writer.add(Buffer.from([0x7f, 0x01]), Buffer.from('7f'));
 
@@ -316,6 +328,38 @@ describe(
         assert.strictEqual(manifest.partitions[0].prefix, '00');
         assert.strictEqual(manifest.partitions[1].prefix, '7f');
         assert.strictEqual(manifest.partitions[2].prefix, 'ff');
+      });
+
+      it('should settle a backpressured add when abort destroys the stream', async () => {
+        const writer = new StreamingPartitionedCdb64Writer(outputDir);
+        await writer.open();
+
+        // A value far larger than the stream's default highWaterMark makes
+        // write() report backpressure, so add() is parked waiting for drain.
+        const huge = Buffer.alloc(1024 * 1024);
+        const pending = writer.add(Buffer.from([0x00, 0x01]), huge).then(
+          () => null,
+          (error: Error) => error,
+        );
+
+        // abort() destroys the stream, which emits 'close' and never 'drain'.
+        await writer.abort();
+
+        const outcome = await Promise.race([
+          pending,
+          new Promise((resolve) => {
+            const t = setTimeout(() => resolve('HUNG'), 2000);
+            t.unref();
+          }),
+        ]);
+
+        assert.notStrictEqual(
+          outcome,
+          'HUNG',
+          'add() must settle after abort, not hang forever',
+        );
+        assert.ok(outcome instanceof Error);
+        assert.match(outcome.message, /closed while awaiting drain/);
       });
 
       it('should include metadata in manifest', async () => {
@@ -532,7 +576,10 @@ describe(
             const key = Buffer.alloc(32);
             key[0] = prefix;
             key[1] = j;
-            await writer.add(key, Buffer.from(`value-${prefix.toString(16)}-${j}`));
+            await writer.add(
+              key,
+              Buffer.from(`value-${prefix.toString(16)}-${j}`),
+            );
           }
         }
 

@@ -31,7 +31,6 @@
 import * as fs from 'node:fs/promises';
 import { createWriteStream, WriteStream } from 'node:fs';
 import * as path from 'node:path';
-import { once } from 'node:events';
 import { CdbWriter } from 'cdb64/node/index.js';
 import {
   Cdb64Manifest,
@@ -145,11 +144,49 @@ export class StreamingPartitionedCdb64Writer {
     // Backpressure is cumulative on the stream: if an earlier write pushed the
     // buffer past highWaterMark this final write returns false too, so checking
     // it alone is sufficient.
-    if (!partition.stream.write(value)) {
-      await once(partition.stream, 'drain');
-    }
+    const backpressured = !partition.stream.write(value);
 
+    // The writes above already buffered the record, so count it before waiting:
+    // a stream closed mid-wait must not drop a record the stream already holds.
     partition.recordCount++;
+
+    if (backpressured) {
+      await this.waitForDrain(partition.stream);
+    }
+  }
+
+  /**
+   * Resolves once the scatter stream drains.
+   *
+   * A destroyed or ended stream emits `close`, never `drain`, so waiting on
+   * `drain` alone would hang forever if `abort()` (which destroys) or
+   * `finalize()` (which ends) ran while a write was backpressured. Settle on
+   * whichever event arrives first.
+   */
+  private async waitForDrain(stream: WriteStream): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        stream.off('drain', onDrain);
+        stream.off('close', onClose);
+        stream.off('error', onError);
+      };
+      const onDrain = () => {
+        cleanup();
+        resolve();
+      };
+      const onClose = () => {
+        cleanup();
+        reject(new Error('Scatter stream closed while awaiting drain'));
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+
+      stream.once('drain', onDrain);
+      stream.once('close', onClose);
+      stream.once('error', onError);
+    });
   }
 
   async finalize(): Promise<Cdb64Manifest> {
