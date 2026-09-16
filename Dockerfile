@@ -9,7 +9,10 @@ RUN apt-get update \
     && apt-get install -y build-essential curl git python3
 # .yarnrc carries `ignore-engines true`, which some transitive dependencies need
 # to install at all. It was previously swept in by `COPY . .`; copying the
-# manifests without it breaks the install.
+# manifests without it breaks the install. It also raises yarn's network
+# timeout: the multi-platform CI build runs both installs below at once for
+# each platform, and under arm64 emulation yarn's default 30 s socket timeout
+# expires mid-download (ESOCKETTIMEDOUT), failing the image build.
 COPY package.json yarn.lock .yarnrc ./
 
 # Full dependency tree, used only to compile.
