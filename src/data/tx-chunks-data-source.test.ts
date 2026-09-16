@@ -722,4 +722,338 @@ describe('TxChunksDataSource', () => {
       assert.equal(maxConcurrency, 1, 'Max concurrency should be 1');
     });
   });
+
+  describe('local tx geometry', () => {
+    // Geometry of TX_ID as the chain stub reports it (mock offsets + tx files).
+    const GEOMETRY = {
+      dataRoot: 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4',
+      offset: 51530681583862,
+      size: 256000,
+    };
+
+    let chainCalls: { getTxField: number; getTxOffset: number };
+    let getTxOffsetMock: ReturnType<typeof mock.method>;
+
+    const readAll = async (data: { stream: AsyncIterable<Buffer> }) => {
+      let bytes = 0;
+      for await (const chunk of data.stream) {
+        bytes += chunk.length;
+      }
+      return bytes;
+    };
+
+    const countChainCalls = () => {
+      chainCalls = { getTxField: 0, getTxOffset: 0 };
+      const originalGetTxField = chainSource.getTxField.bind(chainSource);
+      const originalGetTxOffset = chainSource.getTxOffset.bind(chainSource);
+      mock.method(
+        chainSource,
+        'getTxField',
+        async (id: string, field: any, signal?: AbortSignal) => {
+          chainCalls.getTxField++;
+          return (originalGetTxField as any)(id, field, signal);
+        },
+      );
+      getTxOffsetMock = mock.method(
+        chainSource,
+        'getTxOffset',
+        async (id: string, signal?: AbortSignal) => {
+          chainCalls.getTxOffset++;
+          return (originalGetTxOffset as any)(id, signal);
+        },
+      );
+    };
+
+    const newSource = (getTxGeometry: (id: string) => Promise<any>) => {
+      const txGeometrySource = { getTxGeometry: mock.fn(getTxGeometry) };
+      const source = new TxChunksDataSource({
+        log,
+        chainSource,
+        chunkSource,
+        txGeometrySource,
+      });
+      return { source, txGeometrySource };
+    };
+
+    beforeEach(() => {
+      mock.method(metrics.txChunksGeometryLookupTotal, 'inc');
+      mock.method(metrics.txChunksGeometryVerifyTotal, 'inc');
+      countChainCalls();
+    });
+
+    const lookupLabels = () =>
+      (metrics.txChunksGeometryLookupTotal.inc as any).mock.calls.map(
+        (c: any) => `${c.arguments[0].source}:${c.arguments[0].outcome}`,
+      );
+    const verifyResults = () =>
+      (metrics.txChunksGeometryVerifyTotal.inc as any).mock.calls.map(
+        (c: any) => c.arguments[0].result,
+      );
+
+    it('uses local geometry and makes no chain lookups', async () => {
+      const { source, txGeometrySource } = newSource(async () => GEOMETRY);
+
+      const data = await source.getData({ id: TX_ID, requestAttributes });
+
+      assert.equal(await readAll(data), GEOMETRY.size);
+      assert.equal(txGeometrySource.getTxGeometry.mock.callCount(), 1);
+      assert.deepEqual(chainCalls, { getTxField: 0, getTxOffset: 0 });
+      assert.deepEqual(lookupLabels(), ['db:hit']);
+    });
+
+    it('serves repeat reads of the same tx from the in-memory cache', async () => {
+      const { source, txGeometrySource } = newSource(async () => GEOMETRY);
+
+      await readAll(await source.getData({ id: TX_ID, requestAttributes }));
+      await readAll(await source.getData({ id: TX_ID, requestAttributes }));
+
+      assert.equal(txGeometrySource.getTxGeometry.mock.callCount(), 1);
+      assert.deepEqual(chainCalls, { getTxField: 0, getTxOffset: 0 });
+      assert.deepEqual(lookupLabels(), ['db:hit', 'cache:hit']);
+    });
+
+    it('falls back to the chain when the local index has no geometry', async () => {
+      const { source } = newSource(async () => undefined);
+
+      const data = await source.getData({ id: TX_ID, requestAttributes });
+
+      assert.equal(await readAll(data), GEOMETRY.size);
+      assert.deepEqual(chainCalls, { getTxField: 1, getTxOffset: 1 });
+      assert.deepEqual(lookupLabels(), ['db:miss', 'chain:hit']);
+    });
+
+    it('falls back to the chain when the local lookup throws', async () => {
+      const { source } = newSource(async () => {
+        throw new Error('database unavailable');
+      });
+
+      const data = await source.getData({ id: TX_ID, requestAttributes });
+
+      assert.equal(await readAll(data), GEOMETRY.size);
+      assert.deepEqual(chainCalls, { getTxField: 1, getTxOffset: 1 });
+      assert.deepEqual(lookupLabels(), ['db:error', 'chain:hit']);
+    });
+
+    it('retries with chain geometry when local geometry is wrong', async () => {
+      const wrong = { ...GEOMETRY, offset: GEOMETRY.offset + 1_000_000 };
+      const { source, txGeometrySource } = newSource(async () => wrong);
+
+      const data = await source.getData({ id: TX_ID, requestAttributes });
+
+      assert.equal(await readAll(data), GEOMETRY.size);
+      assert.deepEqual(chainCalls, { getTxField: 1, getTxOffset: 1 });
+      assert.deepEqual(verifyResults(), ['mismatch']);
+
+      // Later reads use the recorded chain geometry: no second local lookup,
+      // failed read, or chain re-check within the TTL.
+      await readAll(await source.getData({ id: TX_ID, requestAttributes }));
+      assert.equal(txGeometrySource.getTxGeometry.mock.callCount(), 1);
+      assert.deepEqual(chainCalls, { getTxField: 1, getTxOffset: 1 });
+      assert.deepEqual(verifyResults(), ['mismatch']);
+      assert.ok(lookupLabels().includes('override:hit'));
+    });
+
+    it('does not retry a failing read when the chain agrees, and re-checks a tx only once', async () => {
+      const { source } = newSource(async () => GEOMETRY);
+      const error = new Error('missing chunk');
+      const chunkFetch = mock.method(chunkSource, 'getChunkDataByAny', () =>
+        Promise.reject(error),
+      );
+
+      await assert.rejects(
+        () => source.getData({ id: TX_ID, requestAttributes }),
+        (e: any) => e === error,
+      );
+      assert.equal(chunkFetch.mock.callCount(), 1);
+      assert.deepEqual(chainCalls, { getTxField: 1, getTxOffset: 1 });
+
+      await assert.rejects(
+        () => source.getData({ id: TX_ID, requestAttributes }),
+        (e: any) => e === error,
+      );
+      assert.equal(chunkFetch.mock.callCount(), 2);
+      assert.deepEqual(chainCalls, { getTxField: 1, getTxOffset: 1 });
+      assert.deepEqual(verifyResults(), ['match', 'skipped']);
+    });
+
+    it('shares one chain re-check between concurrent failing reads', async () => {
+      const { source } = newSource(async () => GEOMETRY);
+      // A fresh error per read: failures are tracked by error identity.
+      mock.method(chunkSource, 'getChunkDataByAny', () =>
+        Promise.reject(new Error('missing chunk')),
+      );
+      // Hold the re-check open so both reads reach it before either finishes.
+      let release: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      getTxOffsetMock.mock.mockImplementation(async () => {
+        chainCalls.getTxOffset++;
+        await gate;
+        return { offset: GEOMETRY.offset, size: GEOMETRY.size };
+      });
+
+      // Settled up front so neither rejection is unhandled while gated.
+      const settled = Promise.allSettled([
+        source.getData({ id: TX_ID, requestAttributes }),
+        source.getData({ id: TX_ID, requestAttributes }),
+      ]);
+      // Let both reads fail and reach the re-check before releasing it.
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      release!();
+
+      const results = await settled;
+      assert.deepEqual(
+        results.map((r) => r.status),
+        ['rejected', 'rejected'],
+      );
+      for (const result of results) {
+        assert.equal(
+          (result as PromiseRejectedResult).reason.message,
+          'missing chunk',
+        );
+      }
+      // One lookup for both reads, rather than one per read.
+      assert.deepEqual(chainCalls, { getTxField: 1, getTxOffset: 1 });
+      assert.deepEqual(verifyResults(), ['match', 'match']);
+    });
+
+    it('rethrows the original error when the chain re-check itself fails', async () => {
+      const { source } = newSource(async () => GEOMETRY);
+      const error = new Error('missing chunk');
+      mock.method(chunkSource, 'getChunkDataByAny', () =>
+        Promise.reject(error),
+      );
+      // Replace the counting mock's implementation rather than stacking a
+      // second mock on the same method, which would leak into later tests.
+      getTxOffsetMock.mock.mockImplementation(async () => {
+        chainCalls.getTxOffset++;
+        throw new Error('trusted node unavailable');
+      });
+
+      await assert.rejects(
+        () => source.getData({ id: TX_ID, requestAttributes }),
+        (e: any) => e === error,
+      );
+      assert.deepEqual(verifyResults(), ['chain_error']);
+    });
+
+    it('propagates a caller abort that happens during the chain re-check', async () => {
+      const { source } = newSource(async () => GEOMETRY);
+      const controller = new AbortController();
+      mock.method(chunkSource, 'getChunkDataByAny', () =>
+        Promise.reject(new Error('missing chunk')),
+      );
+      getTxOffsetMock.mock.mockImplementation(async () => {
+        chainCalls.getTxOffset++;
+        controller.abort();
+        throw new DOMException('The operation was aborted', 'AbortError');
+      });
+
+      await assert.rejects(
+        () =>
+          source.getData({
+            id: TX_ID,
+            requestAttributes,
+            signal: controller.signal,
+          }),
+        (e: any) => e.name === 'AbortError',
+      );
+      assert.deepEqual(verifyResults(), []);
+    });
+
+    it('propagates an axios-style cancellation during the chain re-check', async () => {
+      const { source } = newSource(async () => GEOMETRY);
+      const controller = new AbortController();
+      const canceled = Object.assign(new Error('canceled'), {
+        name: 'CanceledError',
+        code: 'ERR_CANCELED',
+      });
+      mock.method(chunkSource, 'getChunkDataByAny', () =>
+        Promise.reject(new Error('missing chunk')),
+      );
+      getTxOffsetMock.mock.mockImplementation(async () => {
+        chainCalls.getTxOffset++;
+        controller.abort();
+        throw canceled;
+      });
+
+      await assert.rejects(
+        () =>
+          source.getData({
+            id: TX_ID,
+            requestAttributes,
+            signal: controller.signal,
+          }),
+        (e: any) => e === canceled,
+      );
+      assert.deepEqual(verifyResults(), []);
+      assert.ok(!lookupLabels().includes('chain:error'));
+    });
+
+    it('does not re-check geometry when the caller aborted', async () => {
+      const { source } = newSource(async () => GEOMETRY);
+      const controller = new AbortController();
+      const error = new Error('fetch failed after abort');
+      mock.method(chunkSource, 'getChunkDataByAny', () => {
+        controller.abort();
+        return Promise.reject(error);
+      });
+
+      await assert.rejects(
+        () =>
+          source.getData({
+            id: TX_ID,
+            requestAttributes,
+            signal: controller.signal,
+          }),
+        (e: any) => e === error,
+      );
+      assert.deepEqual(chainCalls, { getTxField: 0, getTxOffset: 0 });
+      assert.deepEqual(verifyResults(), []);
+    });
+
+    it('rethrows non-Error rejections without re-checking geometry', async () => {
+      const { source } = newSource(async () => GEOMETRY);
+      mock.method(chunkSource, 'getChunkDataByAny', () =>
+        Promise.reject('boom'),
+      );
+
+      await assert.rejects(
+        () => source.getData({ id: TX_ID, requestAttributes }),
+        (e: any) => e === 'boom',
+      );
+      assert.deepEqual(chainCalls, { getTxField: 0, getTxOffset: 0 });
+      assert.deepEqual(verifyResults(), []);
+    });
+
+    it('treats local geometry with an unusable size as a miss', async () => {
+      const { source } = newSource(async () => ({ ...GEOMETRY, size: 0 }));
+
+      const data = await source.getData({ id: TX_ID, requestAttributes });
+
+      assert.equal(await readAll(data), GEOMETRY.size);
+      assert.deepEqual(chainCalls, { getTxField: 1, getTxOffset: 1 });
+      assert.deepEqual(lookupLabels(), ['db:miss', 'chain:hit']);
+    });
+
+    it('does not query the local index once the caller has aborted', async () => {
+      const { source, txGeometrySource } = newSource(async () => GEOMETRY);
+      const controller = new AbortController();
+      controller.abort();
+
+      await assert.rejects(
+        () =>
+          source.getData({
+            id: TX_ID,
+            requestAttributes,
+            signal: controller.signal,
+          }),
+        (e: any) => e.name === 'AbortError',
+      );
+      assert.equal(txGeometrySource.getTxGeometry.mock.callCount(), 0);
+    });
+  });
 });
