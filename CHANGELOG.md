@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
+  item sizes for every data item in a list of root bundles, nested bundles
+  included, by reading only each bundle's item index and item headers through
+  a gateway's `/raw` range requests. Each item's header is decoded and its
+  signature hashed to confirm the ID, and a bundle whose items do not add up to
+  its size is rejected rather than indexed. Header reads are coalesced (bundles
+  of small items read in 1 MiB windows, bundles of large items a few KiB per
+  item), roots are scanned in parallel, and a progress file makes long runs
+  resumable. An optional details CSV records each item's signature type and
+  content type.
+
 - **Item size in CDB64 root TX index values** — CDB64 values can now record
   the total data item size (`s`, header + payload) alongside the two root
   offsets. The generate tools accept it as an optional sixth CSV column,
