@@ -876,6 +876,50 @@ describe('TxChunksDataSource', () => {
       assert.deepEqual(verifyResults(), ['match', 'skipped']);
     });
 
+    it('shares one chain re-check between concurrent failing reads', async () => {
+      const { source } = newSource(async () => GEOMETRY);
+      // A fresh error per read: failures are tracked by error identity.
+      mock.method(chunkSource, 'getChunkDataByAny', () =>
+        Promise.reject(new Error('missing chunk')),
+      );
+      // Hold the re-check open so both reads reach it before either finishes.
+      let release: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      getTxOffsetMock.mock.mockImplementation(async () => {
+        chainCalls.getTxOffset++;
+        await gate;
+        return { offset: GEOMETRY.offset, size: GEOMETRY.size };
+      });
+
+      // Settled up front so neither rejection is unhandled while gated.
+      const settled = Promise.allSettled([
+        source.getData({ id: TX_ID, requestAttributes }),
+        source.getData({ id: TX_ID, requestAttributes }),
+      ]);
+      // Let both reads fail and reach the re-check before releasing it.
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      release!();
+
+      const results = await settled;
+      assert.deepEqual(
+        results.map((r) => r.status),
+        ['rejected', 'rejected'],
+      );
+      for (const result of results) {
+        assert.equal(
+          (result as PromiseRejectedResult).reason.message,
+          'missing chunk',
+        );
+      }
+      // One lookup for both reads, rather than one per read.
+      assert.deepEqual(chainCalls, { getTxField: 1, getTxOffset: 1 });
+      assert.deepEqual(verifyResults(), ['match', 'match']);
+    });
+
     it('rethrows the original error when the chain re-check itself fails', async () => {
       const { source } = newSource(async () => GEOMETRY);
       const error = new Error('missing chunk');

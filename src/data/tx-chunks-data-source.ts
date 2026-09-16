@@ -47,6 +47,18 @@ function sameGeometry(a: TxGeometry, b: TxGeometry): boolean {
   );
 }
 
+/**
+ * True for a cancelled request: an `AbortError`, or axios reporting the same
+ * thing as `CanceledError` / `ERR_CANCELED`.
+ */
+function isCancellation(error: any): boolean {
+  return (
+    error?.name === 'AbortError' ||
+    error?.name === 'CanceledError' ||
+    error?.code === 'ERR_CANCELED'
+  );
+}
+
 export class TxChunksDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private chainSource: ChainSource;
@@ -63,6 +75,11 @@ export class TxChunksDataSource implements ContiguousDataSource {
   // Errors from reads that used locally resolved geometry, so getData can
   // re-check that geometry against the chain before giving up.
   private localGeometryErrors = new WeakMap<object, TxGeometry>();
+  // Chain re-checks in flight, keyed by transaction. Concurrent failing reads
+  // of the same transaction share one lookup: each would otherwise pass the
+  // geometryVerified check before any of them recorded a result, and spend its
+  // own pair of trusted-node requests.
+  private geometryVerifyInFlight = new Map<string, Promise<TxGeometry>>();
 
   constructor({
     log,
@@ -195,6 +212,29 @@ export class TxChunksDataSource implements ContiguousDataSource {
   }
 
   /**
+   * Re-check a transaction's geometry against the chain, sharing one lookup
+   * between concurrent callers.
+   *
+   * The entry is dropped once the lookup settles: a later read re-checks only
+   * if neither {@link geometryVerified} nor {@link geometryOverrides} has
+   * recorded an answer, so a failed re-check can be retried.
+   */
+  private verifyGeometry(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<TxGeometry> {
+    const inFlight = this.geometryVerifyInFlight.get(id);
+    if (inFlight !== undefined) {
+      return inFlight;
+    }
+    const verification = this.getChainGeometry(id, signal).finally(() => {
+      this.geometryVerifyInFlight.delete(id);
+    });
+    this.geometryVerifyInFlight.set(id, verification);
+    return verification;
+  }
+
+  /**
    * Create an AbortController that fires after firstDataTimeoutMs, or null if
    * the timeout is disabled. When the timeout fires, the metric is incremented
    * and the controller is aborted. Callers must invoke cleanup() to clear the
@@ -242,7 +282,8 @@ export class TxChunksDataSource implements ContiguousDataSource {
       // A read using local geometry failed before its first byte. Only a
       // disagreement with the chain justifies a second attempt, so chunks that
       // are genuinely unavailable don't cost a duplicate peer cascade. Each
-      // transaction is re-checked at most once per GEOMETRY_VERIFIED_TTL_MS.
+      // transaction is re-checked at most once per GEOMETRY_VERIFIED_TTL_MS,
+      // and concurrent failures share one re-check.
       if (this.geometryVerified.has(args.id)) {
         metrics.txChunksGeometryVerifyTotal.inc({ result: 'skipped' });
         throw error;
@@ -250,14 +291,18 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
       let chainGeometry: TxGeometry;
       try {
-        chainGeometry = await this.getChainGeometry(args.id, args.signal);
+        chainGeometry = await this.verifyGeometry(args.id, args.signal);
       } catch (chainError: any) {
         // Cancellation surfaces as an AbortError or an axios CanceledError, so
         // key off the caller's signal rather than the error type.
         if (args.signal?.aborted || chainError?.name === 'AbortError') {
           throw chainError;
         }
-        metrics.txChunksGeometryVerifyTotal.inc({ result: 'chain_error' });
+        // A shared re-check cancelled by the caller that started it is not a
+        // chain failure for this caller; it just doesn't get an answer here.
+        if (!isCancellation(chainError)) {
+          metrics.txChunksGeometryVerifyTotal.inc({ result: 'chain_error' });
+        }
         throw error;
       }
 
