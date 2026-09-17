@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { randomBytes } from 'node:crypto';
+import { Readable } from 'node:stream';
 import rangeParser from 'range-parser';
 import { Request, Response } from 'express';
 
@@ -360,4 +361,71 @@ export function normalizeAbortError(error: any): any {
     return abortError;
   }
   return error;
+}
+
+/** Largest response body {@link discardResponseBody} reads to the end. */
+export const DISCARDED_BODY_MAX_BYTES = 64 * 1024;
+
+/**
+ * Discards a response body that was requested as a stream only for its
+ * headers, such as the `Range: bytes=0-0` GET used when a peer rejects HEAD.
+ *
+ * A body of up to `maxBytes` is read to the end, so a keep-alive socket goes
+ * back to its pool exactly as it would after a buffered read. A larger body (a
+ * peer that ignored the range and is sending the whole item), a body still
+ * arriving after `timeoutMs`, or a stream that fails is destroyed instead,
+ * which closes the connection rather than downloading the rest.
+ *
+ * Never rejects. Values that aren't readable streams are ignored.
+ */
+export async function discardResponseBody(
+  body: unknown,
+  {
+    maxBytes = DISCARDED_BODY_MAX_BYTES,
+    timeoutMs,
+  }: { maxBytes?: number; timeoutMs: number },
+): Promise<void> {
+  if (!(body instanceof Readable) || body.destroyed || body.readableEnded) {
+    return;
+  }
+  const stream: Readable = body;
+
+  // A stream destroyed or failing after we stop listening must not raise an
+  // unhandled 'error' event.
+  stream.on('error', () => {});
+
+  await new Promise<void>((resolve) => {
+    let received = 0;
+    // Created before any listener, so every callback below can clear it.
+    const timer = setTimeout(() => finish(true), timeoutMs);
+
+    function finish(destroy: boolean): void {
+      clearTimeout(timer);
+      stream.off('data', onData);
+      stream.off('end', onDone);
+      stream.off('close', onDone);
+      stream.off('error', onError);
+      if (destroy && !stream.destroyed) {
+        stream.destroy();
+      }
+      resolve();
+    }
+    function onData(chunk: Buffer): void {
+      received += chunk.length;
+      if (received > maxBytes) {
+        finish(true);
+      }
+    }
+    function onDone(): void {
+      finish(false);
+    }
+    function onError(): void {
+      finish(true);
+    }
+
+    stream.on('data', onData);
+    stream.once('end', onDone);
+    stream.once('close', onDone);
+    stream.once('error', onError);
+  });
 }

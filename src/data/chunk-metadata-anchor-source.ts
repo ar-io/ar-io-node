@@ -17,7 +17,7 @@ import {
   anchorChunkMetadata,
 } from '../lib/chunk-metadata-anchor.js';
 import { createAgentPair } from '../lib/http-agent.js';
-import { normalizeAbortError } from '../lib/http-utils.js';
+import { discardResponseBody, normalizeAbortError } from '../lib/http-utils.js';
 
 // Largest absolute weave offset this source will probe via the
 // number-typed cache + chain cross-check path. The chain-anchored
@@ -301,13 +301,21 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     }
 
     // `bytes=0-0` is the smallest legal range; the server returns a 1-
-    // byte body which we discard. Headers are the only thing we want.
+    // byte body which we discard. Headers are the only thing we want. The
+    // body arrives as a stream so a peer that ignores the range has its
+    // connection closed instead of its whole response buffered.
     const getResponse = await this.axiosInstance.get(url, {
       signal,
       timeout: this.requestTimeoutMs,
       headers: { Range: 'bytes=0-0' },
-      responseType: 'arraybuffer',
+      responseType: 'stream',
     });
+    await discardResponseBody(getResponse.data, {
+      timeoutMs: this.requestTimeoutMs,
+    });
+    // A buffered read rejected when aborted mid-body; keep that behaviour now
+    // that the body is discarded separately.
+    signal?.throwIfAborted();
     return getResponse.headers as Record<string, string | string[] | undefined>;
   }
 

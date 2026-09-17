@@ -5,12 +5,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import { Readable } from 'node:stream';
 import { describe, it, mock } from 'node:test';
 import {
   buildMultipartResponseParts,
   buildRangeHeader,
   calculateMultipartSize,
   calculateRangeResponseSize,
+  discardResponseBody,
   generateBoundary,
   handleIfNoneMatch,
   normalizeAbortError,
@@ -726,6 +728,82 @@ describe('http-utils', () => {
     it('should pass through null and undefined', () => {
       assert.equal(normalizeAbortError(null), null);
       assert.equal(normalizeAbortError(undefined), undefined);
+    });
+  });
+
+  describe('discardResponseBody', () => {
+    /** A stream that yields `chunks` chunks of `chunkSize` bytes, then ends. */
+    const chunkedStream = (chunkSize: number, chunks: number) => {
+      let sent = 0;
+      return {
+        stream: new Readable({
+          read() {
+            if (sent >= chunks) {
+              this.push(null);
+              return;
+            }
+            sent++;
+            this.push(Buffer.alloc(chunkSize));
+          },
+        }),
+        chunksSent: () => sent,
+      };
+    };
+
+    it('reads a small body to the end without destroying it', async () => {
+      const { stream } = chunkedStream(1, 1);
+
+      await discardResponseBody(stream, { timeoutMs: 1000 });
+
+      // Ending normally is what lets a keep-alive socket be reused.
+      assert.equal(stream.readableEnded, true);
+    });
+
+    it('destroys a body larger than the limit instead of reading it all', async () => {
+      const { stream, chunksSent } = chunkedStream(16 * 1024, 1000); // ~16 MiB
+
+      await discardResponseBody(stream, {
+        maxBytes: 64 * 1024,
+        timeoutMs: 1000,
+      });
+
+      assert.equal(stream.destroyed, true);
+      assert.equal(stream.readableEnded, false);
+      assert.ok(chunksSent() < 20, `read ${chunksSent()} chunks`);
+    });
+
+    it('destroys a body that is still arriving after the timeout', async () => {
+      const stream = new Readable({ read() {} }); // never ends
+      stream.push(Buffer.alloc(1));
+
+      await discardResponseBody(stream, { timeoutMs: 50 });
+
+      assert.equal(stream.destroyed, true);
+    });
+
+    it('resolves when the stream fails, without an unhandled error', async () => {
+      const stream = new Readable({ read() {} });
+      const done = discardResponseBody(stream, { timeoutMs: 1000 });
+      stream.destroy(new Error('socket hang up'));
+
+      await done;
+
+      // A later error has a listener, so it cannot crash the process.
+      assert.ok(stream.listenerCount('error') > 0);
+    });
+
+    it('ignores values that are not readable streams', async () => {
+      await discardResponseBody(undefined, { timeoutMs: 10 });
+      await discardResponseBody(Buffer.alloc(4), { timeoutMs: 10 });
+      await discardResponseBody('body', { timeoutMs: 10 });
+    });
+
+    it('returns at once for a stream that has already ended', async () => {
+      const stream = Readable.from([]);
+      stream.resume();
+      await new Promise((resolve) => stream.once('end', resolve));
+
+      await discardResponseBody(stream, { timeoutMs: 10_000 });
     });
   });
 });

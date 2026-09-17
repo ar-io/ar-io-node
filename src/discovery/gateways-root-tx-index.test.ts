@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import * as http from 'node:http';
+import { AddressInfo } from 'node:net';
 import { afterEach, describe, it, mock } from 'node:test';
 import { LRUCache } from 'lru-cache';
 import { GatewaysRootTxIndex } from './gateways-root-tx-index.js';
@@ -822,6 +824,156 @@ describe('GatewaysRootTxIndex', () => {
         gateway1Calls >= 1 || gateway2Calls >= 1,
         'At least one gateway should be used',
       );
+    });
+  });
+
+  describe('range-GET fallback against a real server', () => {
+    const ROOT_HEADERS = {
+      'X-AR-IO-Root-Transaction-Id': 'root-tx-456',
+      'X-AR-IO-Root-Data-Item-Offset': '1000',
+      'X-AR-IO-Root-Data-Offset': '1500',
+    };
+
+    /**
+     * A /raw server that rejects HEAD, as some peers behind CDNs do, so every
+     * lookup takes the range-GET fallback. Records each request's client port
+     * so tests can tell whether connections were reused.
+     */
+    const startServer = async (onGet: (res: http.ServerResponse) => void) => {
+      const clientPorts: number[] = [];
+      const server = http.createServer((req, res) => {
+        clientPorts.push(req.socket.remotePort ?? -1);
+        if (req.method === 'HEAD') {
+          res.writeHead(405, { 'Content-Length': '0' });
+          res.end();
+          return;
+        }
+        onGet(res);
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, '127.0.0.1', resolve),
+      );
+      const { port } = server.address() as AddressInfo;
+      return {
+        url: `http://127.0.0.1:${port}`,
+        clientPorts,
+        close: async () => {
+          server.closeAllConnections();
+          await new Promise((resolve) => server.close(resolve));
+        },
+      };
+    };
+
+    /**
+     * Streams `total` bytes with backpressure and reports how much the client
+     * actually accepted before hanging up.
+     */
+    const streamLargeBody = (
+      res: http.ServerResponse,
+      status: number,
+      total: number,
+      headers: Record<string, string>,
+    ) => {
+      const progress = { written: 0, finished: false };
+      res.writeHead(status, { 'Content-Length': String(total), ...headers });
+      const chunk = Buffer.alloc(64 * 1024);
+      const write = () => {
+        while (progress.written < total) {
+          progress.written += chunk.length;
+          if (!res.write(chunk)) {
+            res.once('drain', write);
+            return;
+          }
+        }
+        res.end();
+        progress.finished = true;
+      };
+      write();
+      return progress;
+    };
+
+    const makeIndex = (url: string) => {
+      const index = new GatewaysRootTxIndex({
+        log,
+        trustedGatewaysUrls: { [url]: 1 },
+        requestTimeoutMs: 5000,
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
+      });
+      for (const [, limiter] of (index as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
+      return index;
+    };
+
+    const TOTAL = 64 * 1024 * 1024;
+
+    it('does not download the whole item when the peer ignores the range', async () => {
+      let progress = { written: 0, finished: false };
+      const server = await startServer((res) => {
+        progress = streamLargeBody(res, 200, TOTAL, ROOT_HEADERS);
+      });
+      try {
+        const result = await makeIndex(server.url).getRootTx('item-a');
+
+        assert(result !== undefined);
+        assert.equal(result.rootTxId, 'root-tx-456');
+        // A 200 carries the whole payload, so Content-Length is its size.
+        assert.equal(result.dataSize, TOTAL);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.equal(progress.finished, false);
+        assert.ok(
+          progress.written < TOTAL / 2,
+          `peer sent ${progress.written} of ${TOTAL} bytes`,
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
+    it('does not download a large error body either', async () => {
+      let progress = { written: 0, finished: false };
+      const server = await startServer((res) => {
+        progress = streamLargeBody(res, 500, TOTAL, {});
+      });
+      try {
+        const result = await makeIndex(server.url).getRootTx('item-a');
+
+        assert.equal(result, undefined);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.equal(progress.finished, false);
+        assert.ok(
+          progress.written < TOTAL / 2,
+          `peer sent ${progress.written} of ${TOTAL} bytes`,
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
+    it('keeps reusing the connection when the peer honours the range', async () => {
+      const server = await startServer((res) => {
+        res.writeHead(206, {
+          'Content-Length': '1',
+          'Content-Range': 'bytes 0-0/5000',
+          ...ROOT_HEADERS,
+        });
+        res.end(Buffer.from('x'));
+      });
+      try {
+        const index = makeIndex(server.url);
+        const first = await index.getRootTx('item-a');
+        const second = await index.getRootTx('item-b');
+
+        assert.equal(first?.dataSize, 5000);
+        assert.equal(second?.dataSize, 5000);
+        // HEAD and GET for each lookup, all over one keep-alive connection.
+        assert.equal(server.clientPorts.length, 4);
+        assert.equal(new Set(server.clientPorts).size, 1);
+      } finally {
+        await server.close();
+      }
     });
   });
 });

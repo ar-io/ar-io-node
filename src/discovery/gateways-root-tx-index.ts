@@ -10,7 +10,11 @@ import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
-import { parseContentRange, parseNonNegativeInt } from '../lib/http-utils.js';
+import {
+  discardResponseBody,
+  parseContentRange,
+  parseNonNegativeInt,
+} from '../lib/http-utils.js';
 import { createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
@@ -46,6 +50,7 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
   private readonly axiosInstance: AxiosInstance;
   private readonly cache?: LRUCache<string, CachedGatewayOffsets>;
   private readonly limiters: Map<string, TokenBucket>;
+  private readonly requestTimeoutMs: number;
 
   constructor({
     log,
@@ -66,6 +71,7 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.cache = cache;
+    this.requestTimeoutMs = requestTimeoutMs;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -296,7 +302,9 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
    * those behind CDNs or proxies — don't support HEAD on this route even
    * though the upstream gateway would. `bytes=0-0` is the smallest legal
    * range; the server returns 1 byte of body we discard, and the headers
-   * are what we want.
+   * are what we want. The body is received as a stream and discarded by
+   * {@link discardResponseBody}: a peer that ignores the range and sends the
+   * whole item has its connection closed instead of the item being buffered.
    *
    * 404 is treated as a definitive "item doesn't exist on this peer" and
    * propagated to the caller — falling back to GET would just hit the
@@ -316,10 +324,22 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
         throw err;
       }
       // Network error, 405 Method Not Allowed, 5xx, etc. — try GET.
-      return this.axiosInstance.get(url, {
-        headers: { Range: 'bytes=0-0' },
-        responseType: 'arraybuffer',
-      });
+      try {
+        const response = await this.axiosInstance.get(url, {
+          headers: { Range: 'bytes=0-0' },
+          responseType: 'stream',
+        });
+        await discardResponseBody(response.data, {
+          timeoutMs: this.requestTimeoutMs,
+        });
+        return response;
+      } catch (getErr: any) {
+        // An error status still carries an unread body stream.
+        await discardResponseBody(getErr?.response?.data, {
+          timeoutMs: this.requestTimeoutMs,
+        });
+        throw getErr;
+      }
     }
   }
 }
