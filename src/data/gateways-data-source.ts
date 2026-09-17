@@ -649,7 +649,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   'gateway.request_duration_ms': gatewayRequestDuration,
                   'gateway.response_status': response.status,
                   'data.size': contentLength,
-                  'data.content_type': response.headers['content-type'],
+                  'data.content_type': response.headers['content-type'] as
+                    | string
+                    | undefined,
                 });
 
                 span.addEvent('Gateway request successful', {
@@ -751,7 +753,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
                         ?.total,
                   verified: false,
                   trusted: gatewayTrusted,
-                  sourceContentType: response.headers['content-type'],
+                  sourceContentType: response.headers['content-type'] as
+                    | string
+                    | undefined,
                   cached: false,
                   requestAttributes: parseRequestAttributesHeaders({
                     headers: response.headers as { [key: string]: string },

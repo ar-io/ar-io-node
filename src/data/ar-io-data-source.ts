@@ -495,7 +495,9 @@ export class ArIODataSource implements ContiguousDataSource {
     }
 
     const contentLength =
-      parseInt(response.headers['content-length'] ?? '0') || 0;
+      parseInt(
+        (response.headers['content-length'] as string | undefined) ?? '0',
+      ) || 0;
     const requestType = region ? 'range' : 'full';
 
     // PE-9081: reject responses with missing or zero Content-Length —
@@ -595,7 +597,7 @@ export class ArIODataSource implements ContiguousDataSource {
       totalSize: parseContentRange(response.headers['content-range'])?.total,
       verified: false,
       trusted: false,
-      sourceContentType: response.headers['content-type'],
+      sourceContentType: response.headers['content-type'] as string | undefined,
       cached: false,
       requestAttributes,
       upstreamTags: parseUpstreamTagHeaders(

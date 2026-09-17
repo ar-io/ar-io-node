@@ -121,10 +121,15 @@ if (!isTestEnvironment) {
     resourceDetectors: [],
     traceExporter: new OTLPTraceExporter(),
     spanProcessors: spanProcessors.length > 0 ? spanProcessors : undefined,
-    logRecordProcessor: new BatchLogRecordProcessor(new OTLPLogExporter(), {
-      scheduledDelayMillis: OTEL_BATCH_LOG_PROCESSOR_SCHEDULED_DELAY_MS,
-      maxExportBatchSize: OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE,
-    }),
+    // sdk-node deprecates the singular `logRecordProcessor` option and logs a
+    // warning at startup when it is used.
+    logRecordProcessors: [
+      new BatchLogRecordProcessor({
+        exporter: new OTLPLogExporter(),
+        scheduledDelayMillis: OTEL_BATCH_LOG_PROCESSOR_SCHEDULED_DELAY_MS,
+        maxExportBatchSize: OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE,
+      }),
+    ],
     // TODO: decide what auto instrumentation to enable
     instrumentations: [
       //getNodeAutoInstrumentations({

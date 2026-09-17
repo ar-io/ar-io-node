@@ -103,6 +103,22 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
     });
   }
 
+  /**
+   * Asks the trusted gateways, in priority order, where a data item lives.
+   *
+   * Each gateway's `/raw/<id>` response headers are read (HEAD, falling back
+   * to a zero-byte range GET). The first response that names a root
+   * transaction wins; offsets and sizes are parsed from its
+   * `X-AR-IO-Root-*` headers when present. Results are cached per ID.
+   *
+   * @param id - Data item ID to locate
+   * @returns The root transaction ID with whatever the gateway reported:
+   *   `rootOffset` and `rootDataOffset` within the root, `contentType` from
+   *   `Content-Type`, `dataSize` (the payload size) from `Content-Length`, and
+   *   `size` (the whole item) from `X-AR-IO-Root-Item-Size`, or else computed
+   *   as header size plus `dataSize` when both offsets are known. Returns
+   *   `undefined` when no gateway reports a root transaction.
+   */
   async getRootTx(id: string): Promise<
     | {
         rootTxId: string;
@@ -172,8 +188,12 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
             const rootDataOffsetStr =
               response.headers['x-ar-io-root-data-offset'];
             const rootItemSizeStr = response.headers['x-ar-io-root-item-size'];
-            const contentType = response.headers['content-type'];
-            const contentLengthStr = response.headers['content-length'];
+            const contentType = response.headers['content-type'] as
+              | string
+              | undefined;
+            const contentLengthStr = response.headers['content-length'] as
+              | string
+              | undefined;
 
             // Root transaction ID found - offsets can only be present if root ID exists
             if (rootTxId) {
