@@ -522,9 +522,14 @@ describe('scan-bundle-offsets CLI', () => {
       times.length >= 6,
       `expected several requests, saw ${times.length}`,
     );
-    // Requests are spaced 100 ms apart; allow a little scheduling jitter.
+    // The limiter spaces requests 100 ms apart when they are sent, but these
+    // times are taken when the fake gateway receives them. The first request
+    // opens a new connection from a different HTTP client, so it can arrive
+    // late and shorten the measured span (a macOS runner once saw 647 ms for a
+    // 700 ms spacing). Require 80% of the spacing: without the limiter the same
+    // requests arrive within a few tens of milliseconds, far below that.
     const span = Math.max(...times) - Math.min(...times);
-    const minimum = ((times.length - 1) * 1000) / requestsPerSecond - 50;
+    const minimum = (((times.length - 1) * 1000) / requestsPerSecond) * 0.8;
     assert.ok(
       span >= minimum,
       `${times.length} requests took ${span} ms, expected at least ${minimum} ms`,
