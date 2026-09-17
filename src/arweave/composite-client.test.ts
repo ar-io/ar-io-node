@@ -11,6 +11,7 @@ import { AddressInfo } from 'node:net';
 import { default as Arweave } from 'arweave';
 
 import { ArweaveCompositeClient } from './composite-client.js';
+import { toB64Url } from '../lib/encoding.js';
 import { UniformFailureSimulator } from '../lib/chaos.js';
 import { ArweavePeerManager } from '../peers/arweave-peer-manager.js';
 import * as config from '../config.js';
@@ -676,6 +677,128 @@ describe('ArweaveCompositeClient', () => {
         `expected the threshold to be met through the dead prefix, got ${result.successCount}`,
       );
       assert.equal(result.successCount, live.length);
+    });
+  });
+
+  describe('getData', () => {
+    const BASE_URL = 'https://test.example.com';
+
+    /** A client whose trusted node answers /data and /data_size as given. */
+    const clientAnswering = (
+      data: { status: number; data: unknown },
+      dataSize: { status: number; data: unknown },
+    ) => {
+      const client = createTestClient();
+      (client as any).trustedNodeRequestBucket = 10;
+      (client as any).trustedNodeAxios = mock.fn(
+        async (request: { url: string }) => ({
+          ...(request.url.endsWith('/data_size') ? dataSize : data),
+          config: { baseURL: BASE_URL },
+        }),
+      );
+      return client;
+    };
+
+    const readAll = async (stream: NodeJS.ReadableStream) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) {
+        chunks.push(Buffer.from(chunk as Buffer));
+      }
+      return Buffer.concat(chunks);
+    };
+
+    const payload = Buffer.from('hello world');
+
+    it('serves a mined transaction and lets later end listeners run', async () => {
+      // axios parses the plain-number /data_size body as JSON.
+      const client = clientAnswering(
+        { status: 200, data: toB64Url(payload) },
+        { status: 200, data: payload.length },
+      );
+
+      const result = await client.getData({ id: 'mined-tx' });
+      let laterEndListenerRan = false;
+      result.stream.on('end', () => {
+        laterEndListenerRan = true;
+      });
+
+      assert.equal(result.size, payload.length);
+      assert.deepEqual(await readAll(result.stream), payload);
+      assert.equal(laterEndListenerRan, true);
+    });
+
+    it('serves the requested region of a mined transaction', async () => {
+      const client = clientAnswering(
+        { status: 200, data: toB64Url(payload) },
+        { status: 200, data: String(payload.length) },
+      );
+
+      const result = await client.getData({
+        id: 'mined-tx',
+        region: { offset: 6, size: 5 },
+      });
+
+      assert.equal(result.size, 5);
+      assert.equal((await readAll(result.stream)).toString(), 'world');
+    });
+
+    it('keeps later end listeners running when a region size is not finite', async () => {
+      // Recording NaN would throw from inside the 'end' listener, and a
+      // throwing listener stops the ones registered after it.
+      const client = clientAnswering(
+        { status: 200, data: toB64Url(payload) },
+        { status: 200, data: payload.length },
+      );
+
+      const result = await client.getData({
+        id: 'mined-tx',
+        region: { offset: 0, size: Number.NaN },
+      });
+      let laterEndListenerRan = false;
+      result.stream.on('end', () => {
+        laterEndListenerRan = true;
+      });
+      await readAll(result.stream);
+
+      assert.equal(laterEndListenerRan, true);
+    });
+
+    it('rejects a transaction the node reports as pending', async () => {
+      // An unmined transaction: the node answers 202 with the text "Pending"
+      // on both routes. Serving it would yield junk bytes and a NaN size.
+      const client = clientAnswering(
+        { status: 202, data: 'Pending' },
+        { status: 202, data: 'Pending' },
+      );
+
+      await assert.rejects(
+        client.getData({ id: 'pending-tx' }),
+        /Transaction data unavailable \(data 202, data_size 202\)/,
+      );
+    });
+
+    it('rejects a size that is not a non-negative integer', async () => {
+      const client = clientAnswering(
+        { status: 200, data: toB64Url(payload) },
+        { status: 200, data: 'not-a-number' },
+      );
+
+      await assert.rejects(
+        client.getData({ id: 'mined-tx' }),
+        /Invalid transaction data size: not-a-number/,
+      );
+    });
+
+    it('rejects data whose length differs from data_size', async () => {
+      const client = clientAnswering(
+        { status: 200, data: toB64Url(payload) },
+        { status: 200, data: payload.length + 1 },
+      );
+
+      await assert.rejects(
+        client.getData({ id: 'mined-tx' }),
+        /Transaction data is 11 bytes but data_size is 12/,
+      );
     });
   });
 });

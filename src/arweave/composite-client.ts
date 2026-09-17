@@ -1782,12 +1782,33 @@ export class ArweaveCompositeClient
         }),
       ]);
 
+      // A node answers 202 "Pending" for a transaction it knows about but has
+      // not mined. That body is a status string, not data, so anything but a
+      // 200 is not a usable answer: decoding "Pending" would yield a few junk
+      // bytes and a NaN size.
+      if (dataResponse.status !== 200 || dataSizeResponse.status !== 200) {
+        throw new Error(
+          `Transaction data unavailable (data ${dataResponse.status}, data_size ${dataSizeResponse.status})`,
+        );
+      }
+
       if (!dataResponse.data) {
         throw Error('No transaction data');
       }
 
-      const size = +dataSizeResponse.data;
+      const size = Number(dataSizeResponse.data);
+      if (!Number.isSafeInteger(size) || size < 0) {
+        throw new Error(
+          `Invalid transaction data size: ${String(dataSizeResponse.data).slice(0, 32)}`,
+        );
+      }
+
       let txData = fromB64Url(dataResponse.data);
+      if (txData.length !== size) {
+        throw new Error(
+          `Transaction data is ${txData.length} bytes but data_size is ${size}`,
+        );
+      }
 
       if (region) {
         txData = txData.subarray(region.offset, region.offset + region.size);
@@ -1812,8 +1833,13 @@ export class ArweaveCompositeClient
           request_type: requestType,
         });
 
-        // Track bytes streamed
+        // Track bytes streamed. A non-finite value would poison the counter
+        // and make the histogram throw from inside this 'end' listener, which
+        // also skips any 'end' listeners registered after it.
         const bytesStreamed = region ? region.size : size;
+        if (!Number.isFinite(bytesStreamed)) {
+          return;
+        }
         metrics.getDataStreamBytesTotal.inc(
           {
             class: this.constructor.name,
