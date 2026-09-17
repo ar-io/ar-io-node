@@ -73,7 +73,7 @@
     "serve-index": "^1.9.1",
     "sql-bricks": "^3.0.1",
     "stream-chain": "^2.2.5",
-    "stream-json": "^1.9.1",
+    "stream-json": "^3.5.0",
     "swagger-ui-express": "^4.6.3",
     "umzug": "^3.8.2",
     "winston": "^3.17.0",
