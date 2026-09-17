@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import * as http from 'node:http';
+import { AddressInfo } from 'node:net';
 import { afterEach, describe, it } from 'node:test';
 import type { AxiosInstance } from 'axios';
 
@@ -502,6 +504,112 @@ describe('ChunkMetadataAnchorSource', () => {
       // chain cross-check succeeded.
       assert.strictEqual(stub.calls.length, 1);
       assert.notStrictEqual(result, null);
+    });
+  });
+
+  describe('range-GET fallback against a real server', () => {
+    /**
+     * A peer whose HEAD carries no chunk headers, so every probe takes the
+     * range-GET fallback. Records each request's client port so tests can
+     * tell whether connections were reused.
+     */
+    const startPeer = async (onGet: (res: http.ServerResponse) => void) => {
+      const clientPorts: number[] = [];
+      const server = http.createServer((req, res) => {
+        clientPorts.push(req.socket.remotePort ?? -1);
+        if (req.method === 'HEAD') {
+          res.writeHead(200, { 'Content-Length': '0' });
+          res.end();
+          return;
+        }
+        onGet(res);
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, '127.0.0.1', resolve),
+      );
+      const { port } = server.address() as AddressInfo;
+      return {
+        url: `http://127.0.0.1:${port}`,
+        clientPorts,
+        close: async () => {
+          server.closeAllConnections();
+          await new Promise((resolve) => server.close(resolve));
+        },
+      };
+    };
+
+    /** A source using its own real axios instance. */
+    const makeRealSource = (peerUrl: string) =>
+      new ChunkMetadataAnchorSource({
+        log,
+        peerUrls: [peerUrl],
+        requestTimeoutMs: 5000,
+        cacheSize: 32,
+        cacheTtlMs: 60_000,
+        fetchTxOffset: async () => matchingChainOffset,
+        fetchTransaction: async () => ({ data_root: dataRoot }),
+      });
+
+    it('does not download the whole body when the peer ignores the range', async () => {
+      const total = 64 * 1024 * 1024;
+      const progress = { written: 0, finished: false };
+      const peer = await startPeer((res) => {
+        res.writeHead(200, {
+          'Content-Length': String(total),
+          ...(chunkHeaders() as Record<string, string>),
+        });
+        const chunk = Buffer.alloc(64 * 1024);
+        const write = () => {
+          while (progress.written < total) {
+            progress.written += chunk.length;
+            if (!res.write(chunk)) {
+              res.once('drain', write);
+              return;
+            }
+          }
+          res.end();
+          progress.finished = true;
+        };
+        write();
+      });
+      try {
+        const result = await makeRealSource(peer.url).getTxBoundary(
+          inRangeOffset,
+        );
+
+        assert.notEqual(result, null);
+        assert.strictEqual(result!.id, txId);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.equal(progress.finished, false);
+        assert.ok(
+          progress.written < total / 2,
+          `peer sent ${progress.written} of ${total} bytes`,
+        );
+      } finally {
+        await peer.close();
+      }
+    });
+
+    it('keeps reusing the connection when the peer honours the range', async () => {
+      const peer = await startPeer((res) => {
+        res.writeHead(206, {
+          'Content-Length': '1',
+          'Content-Range': 'bytes 0-0/262144',
+          ...(chunkHeaders() as Record<string, string>),
+        });
+        res.end(Buffer.from('x'));
+      });
+      try {
+        const source = makeRealSource(peer.url);
+        assert.notEqual(await source.getTxBoundary(inRangeOffset), null);
+        assert.notEqual(await source.getTxBoundary(inRangeOffset + 1n), null);
+
+        // HEAD and GET for each probe, all over one keep-alive connection.
+        assert.equal(peer.clientPorts.length, 4);
+        assert.equal(new Set(peer.clientPorts).size, 1);
+      } finally {
+        await peer.close();
+      }
     });
   });
 });
