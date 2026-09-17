@@ -59,6 +59,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- The `tx-data` retrieval source no longer treats an unmined transaction as
+  data. A node answers `202 Pending` for a transaction it has not mined, and
+  that text was decoded as the transaction's data with a `NaN` size, which then
+  broke x402 pricing, let the request skip rate-limit token accounting, and
+  made a metrics call throw from inside the stream's `end` handler. The source
+  now accepts only `200` answers, requires a whole-number `data_size`, and
+  rejects data whose length differs from it, so the request moves on to the
+  next source.
 - The trusted-gateways root TX lookup no longer records a 1-byte payload size
   when a gateway rejects its HEAD request. The lookup then falls back to a
   `Range: bytes=0-0` GET, whose `Content-Length` is 1; that value was taken as
