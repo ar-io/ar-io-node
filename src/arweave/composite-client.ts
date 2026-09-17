@@ -1756,6 +1756,22 @@ export class ArweaveCompositeClient
     }
   }
 
+  /**
+   * Fetches a transaction's data from the trusted node via `/tx/{id}/data`
+   * and `/tx/{id}/data_size`.
+   *
+   * Both requests must answer `200`. Any other status, including the `202
+   * Pending` a node returns for an unmined transaction, throws so the caller
+   * can fall through to the next data source. The size must be a non-negative
+   * safe integer, and the decoded data must be exactly that many bytes.
+   *
+   * @param id - Transaction ID.
+   * @param region - Optional byte range. When given, the stream carries only
+   * that slice of the data and the reported size is `region.size`.
+   * @param signal - Aborts the request when triggered.
+   * @returns The data as an unverified, trusted, uncached stream.
+   * @throws When the node has no usable data or the size check fails.
+   */
   async getData({
     id,
     region,
