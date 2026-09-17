@@ -59,6 +59,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- The trusted-gateways root TX lookup no longer records a 1-byte payload size
+  when a gateway rejects its HEAD request. The lookup then falls back to a
+  `Range: bytes=0-0` GET, whose `Content-Length` is 1; that value was taken as
+  the item's payload size, so the item could be served, cached and recorded as
+  a single byte. The size now comes from the `Content-Range` total, and is left
+  unknown when the response has none, in which case the item is located by
+  searching its bundle instead.
 - Payloads located by a direct offset hint (`X-AR-IO-Root-Item-Offset` +
   `X-AR-IO-Root-Item-Size`) are now checked against the data item's signature
   before they are served in full, cached, or have their offsets saved.

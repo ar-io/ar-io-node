@@ -10,7 +10,7 @@ import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
-import { parseNonNegativeInt } from '../lib/http-utils.js';
+import { parseContentRange, parseNonNegativeInt } from '../lib/http-utils.js';
 import { createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
@@ -199,8 +199,16 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
             if (rootTxId) {
               const rootOffset = parseNonNegativeInt(rootOffsetStr);
               const rootDataOffset = parseNonNegativeInt(rootDataOffsetStr);
-              // Content-Length is the size of the data, not the full data item with headers
-              const dataSize = parseNonNegativeInt(contentLengthStr);
+              // The payload size (not the whole item). A HEAD response carries it
+              // as Content-Length. The range-GET fallback answers 206 with
+              // Content-Length: 1, the length of the byte it returned, so there
+              // the size is the Content-Range total. Without a total it stays
+              // unknown: a size of 1 would make the caller serve and record a
+              // single byte as the whole payload.
+              const dataSize =
+                response.status === 206
+                  ? parseContentRange(response.headers['content-range'])?.total
+                  : parseNonNegativeInt(contentLengthStr);
               // Prefer the explicit `Root-Item-Size` header when emitted;
               // otherwise compute the legacy way: header size + data size.
               const explicitItemSize = parseNonNegativeInt(rootItemSizeStr);
