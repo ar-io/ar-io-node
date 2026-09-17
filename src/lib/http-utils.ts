@@ -385,14 +385,19 @@ export async function discardResponseBody(
     timeoutMs,
   }: { maxBytes?: number; timeoutMs: number },
 ): Promise<void> {
-  if (!(body instanceof Readable) || body.destroyed || body.readableEnded) {
+  if (!(body instanceof Readable)) {
     return;
   }
   const stream: Readable = body;
 
-  // A stream destroyed or failing after we stop listening must not raise an
-  // unhandled 'error' event.
+  // A stream failing after we stop listening must not raise an unhandled
+  // 'error' event. This goes before the checks below: `destroy(error)` marks
+  // the stream destroyed at once but emits 'error' on a later tick, so a
+  // stream can already be destroyed with its error still pending.
   stream.on('error', () => {});
+  if (stream.destroyed || stream.readableEnded) {
+    return;
+  }
 
   await new Promise<void>((resolve) => {
     let received = 0;

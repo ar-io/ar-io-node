@@ -792,6 +792,19 @@ describe('http-utils', () => {
       assert.ok(stream.listenerCount('error') > 0);
     });
 
+    it('handles an error still pending on an already destroyed stream', async () => {
+      // destroy(error) sets `destroyed` immediately but emits 'error' on a
+      // later tick. Without a listener that error would be uncaught.
+      const stream = new Readable({ read() {} });
+      stream.destroy(new Error('late socket error'));
+      assert.equal(stream.destroyed, true);
+
+      await discardResponseBody(stream, { timeoutMs: 1000 });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.ok(stream.listenerCount('error') > 0);
+    });
+
     it('ignores values that are not readable streams', async () => {
       await discardResponseBody(undefined, { timeoutMs: 10 });
       await discardResponseBody(Buffer.alloc(4), { timeoutMs: 10 });
