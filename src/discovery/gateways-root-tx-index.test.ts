@@ -331,6 +331,8 @@ describe('GatewaysRootTxIndex', () => {
               message: 'Method Not Allowed',
             }),
           ),
+          // What a server really sends for `Range: bytes=0-0`: the length of
+          // the one returned byte, with the payload size only in the total.
           get: mock.fn(() =>
             Promise.resolve({
               status: 206,
@@ -339,7 +341,8 @@ describe('GatewaysRootTxIndex', () => {
                 'x-ar-io-root-data-item-offset': '1000',
                 'x-ar-io-root-data-offset': '1500',
                 'content-type': 'text/plain',
-                'content-length': '5000',
+                'content-length': '1',
+                'content-range': 'bytes 0-0/5000',
               },
             }),
           ),
@@ -375,6 +378,89 @@ describe('GatewaysRootTxIndex', () => {
         assert.deepEqual((getCall.arguments[1] as any).headers, {
           Range: 'bytes=0-0',
         });
+        // Sizes come from the Content-Range total, not the 1-byte
+        // Content-Length of the range response.
+        assert.equal(result.dataSize, 5000);
+        assert.equal(result.size, 500 + 5000);
+        assert.equal(result.contentType, 'text/plain');
+      });
+
+      /** Builds an index whose only gateway rejects HEAD and answers `get`. */
+      const indexWithRangeFallback = (getResponse: {
+        status: number;
+        headers: Record<string, string>;
+      }) => {
+        const mockAxiosInstance = {
+          head: mock.fn(() =>
+            Promise.reject({
+              response: { status: 405 },
+              message: 'Method Not Allowed',
+            }),
+          ),
+          get: mock.fn(() => Promise.resolve(getResponse)),
+          defaults: { raxConfig: {} },
+          interceptors: {
+            request: { use: mock.fn(), eject: mock.fn() },
+            response: { use: mock.fn(), eject: mock.fn() },
+          },
+        };
+        mock.method(axios, 'create', () => mockAxiosInstance);
+        const gatewaysIndex = new GatewaysRootTxIndex({
+          log,
+          trustedGatewaysUrls: { 'https://gateway.example.com': 1 },
+          rateLimitBurstSize: 1000,
+          rateLimitTokensPerInterval: 1000,
+          rateLimitInterval: 'second',
+        });
+        for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
+          limiter.content = limiter.bucketSize;
+        }
+        return gatewaysIndex;
+      };
+
+      it('leaves sizes unknown when a range response has no total', async () => {
+        // `bytes 0-0/*` (or no Content-Range at all) says nothing about the
+        // payload size. Reporting the 1-byte Content-Length instead would make
+        // callers serve and record a single byte as the whole item.
+        const gatewaysIndex = indexWithRangeFallback({
+          status: 206,
+          headers: {
+            'x-ar-io-root-transaction-id': 'root-tx-456',
+            'x-ar-io-root-data-item-offset': '1000',
+            'x-ar-io-root-data-offset': '1500',
+            'content-length': '1',
+            'content-range': 'bytes 0-0/*',
+          },
+        });
+
+        const result = await gatewaysIndex.getRootTx('test-data-item-123');
+
+        assert(result !== undefined);
+        assert.equal(result.rootTxId, 'root-tx-456');
+        assert.equal(result.rootOffset, 1000);
+        assert.equal(result.rootDataOffset, 1500);
+        assert.equal(result.dataSize, undefined);
+        assert.equal(result.size, undefined);
+      });
+
+      it('keeps an explicit item size on the range fallback', async () => {
+        const gatewaysIndex = indexWithRangeFallback({
+          status: 206,
+          headers: {
+            'x-ar-io-root-transaction-id': 'root-tx-456',
+            'x-ar-io-root-item-offset': '1000',
+            'x-ar-io-root-data-offset': '1500',
+            'x-ar-io-root-item-size': '5500',
+            'content-length': '1',
+            'content-range': 'bytes 0-0/5000',
+          },
+        });
+
+        const result = await gatewaysIndex.getRootTx('test-data-item-123');
+
+        assert(result !== undefined);
+        assert.equal(result.size, 5500);
+        assert.equal(result.dataSize, 5000);
       });
 
       it('falls back to range-GET when HEAD throws a network error', async () => {
