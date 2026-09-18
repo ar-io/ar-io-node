@@ -100,6 +100,50 @@ describe('ContiguousDataCacheEvictor', () => {
     assert.equal(h.remaining.size, 20);
   });
 
+  // Every unlink occupies a libuv thread for its duration, so an unbounded (or
+  // hard-coded 50) fan-out takes the whole pool on a stock node and queues every
+  // other file operation behind it — on a disk that is already saturated, which
+  // is why the evictor is running at all.
+  it('never exceeds the configured unlink concurrency', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 95,
+      entryCount: 200,
+      freePerEvict: 1,
+    });
+    let inFlight = 0;
+    let peak = 0;
+    (h.dataStore as any).delete = async (hash: string) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setImmediate(r));
+      inFlight--;
+      h.unlinked.push(hash);
+    };
+
+    await makeEvictor(h, { batchSize: 50, unlinkConcurrency: 4 }).sweep();
+
+    assert.ok(
+      h.unlinked.length > 4,
+      `expected real work, got ${h.unlinked.length}`,
+    );
+    assert.ok(peak <= 4, `peak concurrent unlinks was ${peak}, limit was 4`);
+  });
+
+  it('bounds unlinks per sweep by batchSize * maxBatchesPerSweep', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 99,
+      entryCount: 500,
+      freePerEvict: 0, // never recovers: only the sweep bound can stop it
+    });
+
+    await makeEvictor(h, { batchSize: 5, maxBatchesPerSweep: 3 }).sweep();
+
+    // The sweep must stop at the bound rather than draining the index, so the
+    // next sweep resumes instead of one pass holding the disk indefinitely.
+    assert.equal(h.unlinked.length, 15);
+    assert.equal(h.remaining.size, 485);
+  });
+
   it('evicts oldest-first until usage recovers below the low watermark', async () => {
     const h = makeHarness({
       initialUsedPercent: 90, // over high(80)
