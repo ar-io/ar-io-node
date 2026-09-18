@@ -129,6 +129,30 @@ describe('ContiguousDataCacheEvictor', () => {
     assert.ok(peak <= 4, `peak concurrent unlinks was ${peak}, limit was 4`);
   });
 
+  // Clamping these would fail silently in the worst way: Math.max(1, NaN) is
+  // NaN, so the sweep loop runs zero batches and the cache never drains, while
+  // a fractional unlinkConcurrency makes p-limit throw mid-sweep — after the
+  // index rows are deleted but before the blobs are unlinked.
+  it('rejects invalid explicit limits at construction', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 90,
+      entryCount: 10,
+      freePerEvict: 5,
+    });
+    for (const bad of [Number.NaN, Infinity, 0, -1, 2.5]) {
+      assert.throws(
+        () => makeEvictor(h, { unlinkConcurrency: bad }),
+        /unlinkConcurrency must be a positive integer/,
+        `unlinkConcurrency=${bad} should be rejected`,
+      );
+      assert.throws(
+        () => makeEvictor(h, { maxBatchesPerSweep: bad }),
+        /maxBatchesPerSweep must be a positive integer/,
+        `maxBatchesPerSweep=${bad} should be rejected`,
+      );
+    }
+  });
+
   it('bounds unlinks per sweep by batchSize * maxBatchesPerSweep', async () => {
     const h = makeHarness({
       initialUsedPercent: 99,

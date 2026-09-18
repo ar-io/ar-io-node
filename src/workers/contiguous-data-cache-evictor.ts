@@ -12,6 +12,21 @@ import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 import { ContiguousDataCacheIndex, ContiguousDataStore } from '../types.js';
 
+// Explicit limits are validated rather than clamped: Math.max(1, NaN) is NaN,
+// which makes the sweep loop run zero batches and evict nothing; Infinity
+// removes the bound entirely; and a fractional unlinkConcurrency makes p-limit
+// throw mid-sweep, after the index rows are deleted but before the blobs are
+// unlinked, leaving orphans for the reconciler. Failing at construction is the
+// only outcome that cannot silently misbehave in production.
+function positiveIntLimit(name: string, value: number): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(
+      `${name} must be a positive integer, received ${String(value)}`,
+    );
+  }
+  return value;
+}
+
 /**
  * Disk-pressure evictor for the contiguous data cache, driven by the SQLite
  * cleanup index instead of a filesystem walk. When usage on the cache
@@ -75,8 +90,14 @@ export class ContiguousDataCacheEvictor {
     this.minFreeBytes = minFreeBytes;
     this.intervalMs = intervalMs;
     this.batchSize = Math.max(1, batchSize);
-    this.unlinkConcurrency = Math.max(1, unlinkConcurrency);
-    this.maxBatchesPerSweep = Math.max(1, maxBatchesPerSweep);
+    this.unlinkConcurrency = positiveIntLimit(
+      'unlinkConcurrency',
+      unlinkConcurrency,
+    );
+    this.maxBatchesPerSweep = positiveIntLimit(
+      'maxBatchesPerSweep',
+      maxBatchesPerSweep,
+    );
   }
 
   start(): void {
