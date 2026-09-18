@@ -497,6 +497,11 @@ export class ArweaveCompositeClient
   }
 
   private async postChunkToPeer(task: ChunkPostTask): Promise<ChunkPostResult> {
+    // Assigned just before the request so the catch can ask whether the abort
+    // was our own deadline firing rather than a caller cancelling. Created
+    // lazily: the dry-run paths below return without posting, and creating the
+    // signal up front would arm a timer per call for nothing.
+    let abortSignal: AbortSignal | undefined;
     try {
       this.failureSimulator.maybeFail();
 
@@ -517,6 +522,7 @@ export class ArweaveCompositeClient
           metrics.arweaveChunkPostCounter.inc({
             endpoint: task.peer,
             status: 'success',
+            reason: 'dry_run',
           });
 
           return {
@@ -548,6 +554,7 @@ export class ArweaveCompositeClient
           metrics.arweaveChunkPostCounter.inc({
             endpoint: task.peer,
             status: 'fail',
+            reason: 'invalid_chunk',
           });
 
           return {
@@ -600,6 +607,7 @@ export class ArweaveCompositeClient
           metrics.arweaveChunkPostCounter.inc({
             endpoint: task.peer,
             status: 'fail',
+            reason: 'invalid_proof',
           });
 
           return {
@@ -611,6 +619,7 @@ export class ArweaveCompositeClient
         metrics.arweaveChunkPostCounter.inc({
           endpoint: task.peer,
           status: 'success',
+          reason: 'dry_run',
         });
 
         return {
@@ -619,11 +628,13 @@ export class ArweaveCompositeClient
         };
       }
 
+      abortSignal = AbortSignal.timeout(task.abortTimeout);
+
       const response = await axios({
         method: 'POST',
         url: `${task.peer}/chunk`,
         data: task.chunk,
-        signal: AbortSignal.timeout(task.abortTimeout),
+        signal: abortSignal,
         timeout: task.responseTimeout,
         headers: task.headers,
         // An arweave node returns 200 when it will store the chunk long-term and
@@ -643,6 +654,7 @@ export class ArweaveCompositeClient
       metrics.arweaveChunkPostCounter.inc({
         endpoint: task.peer,
         status: 'success',
+        reason: String(response.status),
       });
       if (temporary) {
         metrics.arweaveChunkPostTemporaryCounter.inc({ endpoint: task.peer });
@@ -657,24 +669,58 @@ export class ArweaveCompositeClient
       let canceled = false;
       let timedOut = false;
 
-      if (axios.isAxiosError(error)) {
-        timedOut = error.code === 'ECONNABORTED';
-        canceled = error.code === 'ERR_CANCELED';
+      const isAxiosError = axios.isAxiosError(error);
+      if (isAxiosError) {
+        // ECONNABORTED is the response timeout. An AbortSignal.timeout() firing
+        // surfaces as ERR_CANCELED, indistinguishable from a caller cancelling —
+        // but it is our own deadline, not the caller's, and abortTimeout is
+        // normally the lower of the two, so this is the common case. Ask the
+        // signal which it was: AbortSignal.timeout() sets reason to a
+        // TimeoutError DOMException, while an explicit abort does not.
+        // Misreporting it matters beyond the metric: aggregateStatusCode() maps
+        // canceled to 499 (Client Closed Request), blaming the uploader for a
+        // deadline of ours, where timedOut maps to 504.
+        const abortedByOurDeadline =
+          abortSignal?.aborted === true &&
+          abortSignal.reason?.name === 'TimeoutError';
+        timedOut = error.code === 'ECONNABORTED' || abortedByOurDeadline;
+        canceled = error.code === 'ERR_CANCELED' && !abortedByOurDeadline;
       }
+
+      // A peer that answered tells us why it refused the chunk (400 unknown
+      // data root, 429 rate limited, 503 overloaded); one that did not answer
+      // is a timeout, our own abort, or unreachable. These call for completely
+      // different operator responses, so record which it was.
+      const statusCode = error.response?.status;
+      const reason =
+        statusCode !== undefined
+          ? String(statusCode)
+          : timedOut
+            ? 'timeout'
+            : canceled
+              ? 'canceled'
+              : isAxiosError
+                ? 'network'
+                : // Not an HTTP failure at all: a throw from our own code path
+                  // (e.g. the failure simulator). Calling it "network" would
+                  // send an operator looking at the wrong thing.
+                  'error';
 
       metrics.arweaveChunkPostCounter.inc({
         endpoint: task.peer,
         status: 'fail',
+        reason,
       });
 
       this.log.debug('Failed to POST chunk to peer:', {
         peer: task.peer,
         error: error.message,
+        reason,
       });
 
       return {
         success: false,
-        statusCode: error.response?.status,
+        statusCode,
         error: error.message,
         canceled,
         timedOut,
@@ -1965,6 +2011,8 @@ export class ArweaveCompositeClient
         return {
           successCount: 0,
           preferredSuccessCount: 0,
+          temporarySuccessCount: 0,
+          longTermSuccessCount: 0,
           failureCount: 0,
           results: [],
         };
@@ -2158,6 +2206,7 @@ export class ArweaveCompositeClient
               statusCode,
               canceled: result.canceled ?? false,
               timedOut: result.timedOut ?? false,
+              temporary: result.temporary ?? false,
             };
           } catch (error: any) {
             failureCount++;
@@ -2192,10 +2241,28 @@ export class ArweaveCompositeClient
         }
       }
 
+      // Derived from `results` rather than incremented in the workers: the
+      // counters above are deliberately racy (they only gate early
+      // termination), while these are reported to callers.
+      const temporarySuccessCount = results.filter(
+        (r) => r.success && r.temporary === true,
+      ).length;
+      const longTermSuccessCount = results.filter(
+        (r) => r.success && r.temporary !== true,
+      ).length;
+
       const duration = Date.now() - startTime;
 
       span.setAttribute('chunk.broadcast.duration_ms', duration);
       span.setAttribute('chunk.broadcast.success_count', successCount);
+      span.setAttribute(
+        'chunk.broadcast.temporary_success_count',
+        temporarySuccessCount,
+      );
+      span.setAttribute(
+        'chunk.broadcast.long_term_success_count',
+        longTermSuccessCount,
+      );
       span.setAttribute(
         'chunk.broadcast.preferred_success_count',
         preferredSuccessCount,
@@ -2243,6 +2310,8 @@ export class ArweaveCompositeClient
       this.log.debug('Chunk broadcast complete', {
         successCount,
         preferredSuccessCount,
+        temporarySuccessCount,
+        longTermSuccessCount,
         failureCount,
         consecutive4xxFailures,
         totalPeers: sortedPeers.length,
@@ -2262,6 +2331,8 @@ export class ArweaveCompositeClient
       return {
         successCount,
         preferredSuccessCount,
+        temporarySuccessCount,
+        longTermSuccessCount,
         failureCount,
         results,
       };

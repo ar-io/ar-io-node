@@ -93,6 +93,8 @@ class MockChunkBroadcaster implements ChunkBroadcaster {
   public shouldFail = false;
   public result: BroadcastChunkResult = {
     successCount: 1,
+    temporarySuccessCount: 0,
+    longTermSuccessCount: 1,
     preferredSuccessCount: 0,
     failureCount: 0,
     results: [
@@ -151,6 +153,9 @@ class MockChunkBroadcaster implements ChunkBroadcaster {
     this.broadcastPromise = null;
     this.result = {
       successCount: 1,
+      preferredSuccessCount: 0,
+      temporarySuccessCount: 0,
+      longTermSuccessCount: 1,
       failureCount: 0,
       results: [
         {
@@ -379,6 +384,9 @@ describe('RebroadcastingChunkSource', () => {
     it('should not cache when success count below threshold', async () => {
       mockBroadcaster.result = {
         successCount: 0,
+        preferredSuccessCount: 0,
+        temporarySuccessCount: 0,
+        longTermSuccessCount: 0,
         failureCount: 1,
         results: [
           {
@@ -406,6 +414,9 @@ describe('RebroadcastingChunkSource', () => {
       // Fix broadcaster result
       mockBroadcaster.result = {
         successCount: 1,
+        preferredSuccessCount: 0,
+        temporarySuccessCount: 0,
+        longTermSuccessCount: 1,
         failureCount: 0,
         results: [
           {
@@ -471,6 +482,8 @@ describe('RebroadcastingChunkSource', () => {
           totalBroadcasts++;
           return {
             successCount: 1,
+            temporarySuccessCount: 0,
+            longTermSuccessCount: 1,
             preferredSuccessCount: 0,
             failureCount: 0,
             results: [
