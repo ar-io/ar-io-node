@@ -497,9 +497,11 @@ export class ArweaveCompositeClient
   }
 
   private async postChunkToPeer(task: ChunkPostTask): Promise<ChunkPostResult> {
-    // Held so the catch can ask whether the abort was our own deadline firing
-    // rather than a caller cancelling the request.
-    const abortSignal = AbortSignal.timeout(task.abortTimeout);
+    // Assigned just before the request so the catch can ask whether the abort
+    // was our own deadline firing rather than a caller cancelling. Created
+    // lazily: the dry-run paths below return without posting, and creating the
+    // signal up front would arm a timer per call for nothing.
+    let abortSignal: AbortSignal | undefined;
     try {
       this.failureSimulator.maybeFail();
 
@@ -626,6 +628,8 @@ export class ArweaveCompositeClient
         };
       }
 
+      abortSignal = AbortSignal.timeout(task.abortTimeout);
+
       const response = await axios({
         method: 'POST',
         url: `${task.peer}/chunk`,
@@ -665,7 +669,8 @@ export class ArweaveCompositeClient
       let canceled = false;
       let timedOut = false;
 
-      if (axios.isAxiosError(error)) {
+      const isAxiosError = axios.isAxiosError(error);
+      if (isAxiosError) {
         // ECONNABORTED is the response timeout. An AbortSignal.timeout() firing
         // surfaces as ERR_CANCELED, indistinguishable from a caller cancelling —
         // but it is our own deadline, not the caller's, and abortTimeout is
@@ -676,7 +681,8 @@ export class ArweaveCompositeClient
         // canceled to 499 (Client Closed Request), blaming the uploader for a
         // deadline of ours, where timedOut maps to 504.
         const abortedByOurDeadline =
-          abortSignal.aborted && abortSignal.reason?.name === 'TimeoutError';
+          abortSignal?.aborted === true &&
+          abortSignal.reason?.name === 'TimeoutError';
         timedOut = error.code === 'ECONNABORTED' || abortedByOurDeadline;
         canceled = error.code === 'ERR_CANCELED' && !abortedByOurDeadline;
       }
@@ -693,7 +699,12 @@ export class ArweaveCompositeClient
             ? 'timeout'
             : canceled
               ? 'canceled'
-              : 'network';
+              : isAxiosError
+                ? 'network'
+                : // Not an HTTP failure at all: a throw from our own code path
+                  // (e.g. the failure simulator). Calling it "network" would
+                  // send an operator looking at the wrong thing.
+                  'error';
 
       metrics.arweaveChunkPostCounter.inc({
         endpoint: task.peer,

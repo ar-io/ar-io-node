@@ -950,7 +950,7 @@ interface BroadcastChunkResult {
   preferredSuccessCount: number;
   failureCount: number;
   /**
-   * Of `successCount`, how many peers answered 303 ("temporary"): they
+   * How many accepting peers answered 303 ("temporary"): they
    * persisted the chunk into their disk pool but are not the long-term home for
    * that offset. `longTermSuccessCount` is the 200 remainder. Both outcomes are
    * successful propagation — a chunk whose transaction is still pending has no
@@ -958,6 +958,10 @@ interface BroadcastChunkResult {
    * — but the split is the difference between "peers that will keep this" and
    * "peers that will drop it when their disk pool matures", which callers
    * cannot otherwise see.
+   *
+   * Both are derived from `results`, which is authoritative, rather than from
+   * the early-termination counters above — so their sum can differ slightly
+   * from `successCount`, which is deliberately racy.
    */
   temporarySuccessCount: number;
   longTermSuccessCount: number;
