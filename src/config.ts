@@ -2877,6 +2877,26 @@ export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
 export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
   +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', '1000');
 
+// Concurrent blob unlinks per eviction batch. DERIVED from UV_THREADPOOL_SIZE
+// for the same reason as CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY: every
+// unlink occupies a libuv thread, so a hard-coded 50 takes the entire pool on a
+// stock node (UV_THREADPOOL_SIZE defaults to 4) and queues every other file
+// operation behind it -- on a device that is, by definition, already saturated
+// when the evictor is running.
+export const CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY =
+  env.positiveIntOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY',
+    Math.max(1, Math.floor(UV_THREADPOOL_SIZE / 8)),
+  );
+
+// Batches per sweep. batchSize * this is the upper bound on unlinks issued by a
+// single sweep, so it bounds how long one sweep can hold the disk and the pool.
+export const CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP =
+  env.positiveIntOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP',
+    50,
+  );
+
 // Whether to refresh a cache entry's last_access (and promote its tier on a
 // preferred-ArNS read) on cache HITS. On => LRU eviction; off => FIFO by
 // cache-write time. Operators without an edge cache see every read at the core,
