@@ -65,9 +65,13 @@ export async function processPaymentAndTopUp(
   contentSizeOverride?: number,
 ): Promise<PaymentTopUpResult> {
   // Records where an attempt ended, so the funnel from 402 -> settled payment is
-  // visible. Every early return below goes through this.
-  const countOutcome = (outcome: string) =>
+  // visible. Every early return below goes through this, and the outer catch
+  // only records `error` if nothing more specific was recorded first.
+  let outcomeRecorded = false;
+  const countOutcome = (outcome: string) => {
+    outcomeRecorded = true;
     metrics.x402PaymentCounter.inc({ outcome, target: target.type });
+  };
   try {
     // Extract payment from headers
     const payment = paymentProcessor.extractPayment(req);
@@ -192,6 +196,20 @@ export async function processPaymentAndTopUp(
       };
     }
 
+    // Recorded here rather than after the top-up: settlement is the point the
+    // funds actually move, so a later failure granting access must not erase
+    // revenue that was really collected. USDC has 6 decimals; parseInt of a
+    // non-numeric value would poison the counter, so only a finite result is
+    // recorded.
+    const settledUsdc =
+      parseInt(payment.payload.authorization.value.toString(), 10) / 1_000_000;
+    if (Number.isFinite(settledUsdc)) {
+      metrics.x402PaymentSettledUsdcCounter.inc(
+        { target: target.type },
+        settledUsdc,
+      );
+    }
+
     // Convert payment amount to tokens and top up bucket
     // Payment has been settled successfully and validations passed, now grant access tokens
 
@@ -214,17 +232,29 @@ export async function processPaymentAndTopUp(
 
     if (target.type === 'ip') {
       // For IP bucket, use existing method with request
-      await rateLimiter.topOffPaidTokens(req, tokens);
+      try {
+        await rateLimiter.topOffPaidTokens(req, tokens);
+      } catch (error: any) {
+        // The payment settled; only the access grant failed. Attribute it
+        // precisely instead of letting the outer catch call it an error.
+        countOutcome('topup_failed');
+        throw error;
+      }
       tokensAdded = tokens * multiplierApplied;
     } else if (target.type === 'resource') {
       // For resource bucket, use new method with explicit params
       // Note: target validation already done at function entry
-      await rateLimiter.topOffPaidTokensForResource(
-        target.method!,
-        target.host!,
-        target.path!,
-        tokens,
-      );
+      try {
+        await rateLimiter.topOffPaidTokensForResource(
+          target.method!,
+          target.host!,
+          target.path!,
+          tokens,
+        );
+      } catch (error: any) {
+        countOutcome('topup_failed');
+        throw error;
+      }
       tokensAdded = tokens * multiplierApplied;
     } else {
       log.error('Invalid target type', { target });
@@ -246,15 +276,6 @@ export async function processPaymentAndTopUp(
     });
 
     countOutcome('settled');
-    // USDC has 6 decimals; parseInt of a non-numeric value would poison the
-    // counter, so only record a finite result.
-    const settledUsdc = parseInt(paymentAmount, 10) / 1_000_000;
-    if (Number.isFinite(settledUsdc)) {
-      metrics.x402PaymentSettledUsdcCounter.inc(
-        { target: target.type },
-        settledUsdc,
-      );
-    }
 
     return {
       success: true,
@@ -264,7 +285,9 @@ export async function processPaymentAndTopUp(
       responseHeader: settlementResult.responseHeader,
     };
   } catch (error: any) {
-    countOutcome('error');
+    if (!outcomeRecorded) {
+      countOutcome('error');
+    }
     log.error('Error processing payment and top-up', {
       error: error.message,
       stack: error.stack,

@@ -2045,7 +2045,14 @@ Payment attempts are counted at `/ar-io/__gateway_metrics`:
 
 `outcome` values: `no_payment_header`, `invalid_target`, `missing_host`,
 `verify_failed`, `unsupported_processor`, `unsupported_payload`,
-`settle_failed`, `topup_failed`, `error`, `settled`.
+`settle_failed`, `topup_failed`, `error` (an unexpected throw with no more
+specific stage), `settled`.
+
+`x402_payment_settled_usdc_total` is recorded **at settlement** — the point the
+funds move — while `outcome="settled"` also requires the access top-up to have
+succeeded. So revenue counts every payment collected, and
+`outcome="topup_failed"` counts payments taken where access was not granted.
+That second number is worth alerting on: it is money owed back.
 
 402 responses themselves are already countable without these, via
 `http_request_duration_seconds_count{status_code="402"}`. The counters above
@@ -2065,6 +2072,9 @@ sum by (outcome) (rate(x402_payment_total{outcome!="settled"}[1h]))
 
 # revenue actually settled
 sum(increase(x402_payment_settled_usdc_total[24h]))
+
+# paid but not granted access — alert on this
+sum(increase(x402_payment_total{outcome="topup_failed"}[1h]))
 
 # conversion: settled payments per 402 served
 sum(increase(x402_payment_total{outcome="settled"}[24h]))

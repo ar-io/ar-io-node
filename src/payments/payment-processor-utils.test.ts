@@ -133,6 +133,40 @@ describe('processPaymentAndTopUp metrics', () => {
     assert.equal(await outcomeCount('verify_failed'), beforeVerify + 1);
   });
 
+  // A payment that settles on-chain and then fails to grant access is the worst
+  // case to misreport: the funds moved. It must not be filed as a generic
+  // error, and the revenue must still be counted.
+  it('records settled USDC and topup_failed when the top-up throws after settlement', async () => {
+    const beforeUsdc = await settledUsdc();
+    const beforeTopup = await outcomeCount('topup_failed');
+    const beforeError = await outcomeCount('error');
+    const beforeSettled = await outcomeCount('settled');
+
+    const failingLimiter = {
+      topOffPaidTokens: async () => {
+        throw new Error('redis unavailable');
+      },
+      topOffPaidTokensForResource: async () => undefined,
+    } as unknown as RateLimiter;
+
+    const result = await processPaymentAndTopUp(
+      failingLimiter,
+      makeProcessor() as any,
+      req(),
+      log,
+      { type: 'ip' },
+    );
+
+    assert.equal(result.success, false);
+    // The payment settled, so the money is counted...
+    assert.ok(Math.abs((await settledUsdc()) - (beforeUsdc + 0.25)) < 1e-9);
+    // ...attributed to the stage that actually failed...
+    assert.equal(await outcomeCount('topup_failed'), beforeTopup + 1);
+    // ...and not double-counted as a generic error or a clean success.
+    assert.equal(await outcomeCount('error'), beforeError);
+    assert.equal(await outcomeCount('settled'), beforeSettled);
+  });
+
   it('counts a request that carried no payment header', async () => {
     const before = await outcomeCount('no_payment_header');
 

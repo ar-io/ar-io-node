@@ -1580,9 +1580,17 @@ export const rateLimitTokensConsumedTotal = new promClient.Counter({
  * with incomplete CDP credentials silently falls back to a facilitator that
  * cannot settle, and keeps serving 402s while earning nothing.
  *
- * `outcome` is the stage that ended the attempt: no_payment_header,
- * invalid_target, missing_host, verify_failed, unsupported_processor,
- * unsupported_payload, settle_failed, topup_failed, or settled.
+ * `outcome` is the stage that ended the attempt: `no_payment_header`,
+ * `invalid_target`, `missing_host`, `verify_failed`, `unsupported_processor`,
+ * `unsupported_payload`, `settle_failed`, `topup_failed`, `error` (an
+ * unexpected throw with no more specific stage), or `settled`.
+ *
+ * Note that `x402_payment_settled_usdc_total` is recorded at settlement, which
+ * is when the funds actually move, while `outcome="settled"` requires the
+ * access top-up to have succeeded as well. Revenue therefore counts every
+ * payment collected even when a later step failed, and
+ * `sum(x402_payment_total{outcome="topup_failed"})` is the count of payments
+ * taken without access granted — an amount owed back, and worth alerting on.
  */
 export const x402PaymentCounter = new promClient.Counter({
   name: 'x402_payment_total',
