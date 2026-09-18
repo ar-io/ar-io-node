@@ -1571,6 +1571,39 @@ export const rateLimitTokensConsumedTotal = new promClient.Counter({
   labelNames: ['bucket_type', 'token_type', 'domain'],
 });
 
+/**
+ * x402 payment funnel. 402 responses are already countable via
+ * http_request_duration_seconds_count{status_code="402"}; what was missing is
+ * everything after one: whether a payment verified, settled, and topped up a
+ * bucket. Without it an operator cannot tell a paywall nobody pays from one
+ * whose settlements are failing — which matters because a mainnet deployment
+ * with incomplete CDP credentials silently falls back to a facilitator that
+ * cannot settle, and keeps serving 402s while earning nothing.
+ *
+ * `outcome` is the stage that ended the attempt: `no_payment_header`,
+ * `invalid_target`, `missing_host`, `verify_failed`, `unsupported_processor`,
+ * `unsupported_payload`, `settle_failed`, `topup_failed`, `error` (an
+ * unexpected throw with no more specific stage), or `settled`.
+ *
+ * Note that `x402_payment_settled_usdc_total` is recorded at settlement, which
+ * is when the funds actually move, while `outcome="settled"` requires the
+ * access top-up to have succeeded as well. Revenue therefore counts every
+ * payment collected even when a later step failed, and
+ * `sum(x402_payment_total{outcome="topup_failed"})` is the count of payments
+ * taken without access granted — an amount owed back, and worth alerting on.
+ */
+export const x402PaymentCounter = new promClient.Counter({
+  name: 'x402_payment_total',
+  help: 'x402 payment attempts by outcome and top-up target',
+  labelNames: ['outcome', 'target'],
+});
+
+export const x402PaymentSettledUsdcCounter = new promClient.Counter({
+  name: 'x402_payment_settled_usdc_total',
+  help: 'Total USDC settled through x402 (converted from atomic units; USDC has 6 decimals)',
+  labelNames: ['target'],
+});
+
 //
 // Root TX Index metrics
 //
