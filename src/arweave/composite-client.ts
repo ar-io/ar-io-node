@@ -497,6 +497,9 @@ export class ArweaveCompositeClient
   }
 
   private async postChunkToPeer(task: ChunkPostTask): Promise<ChunkPostResult> {
+    // Held so the catch can ask whether the abort was our own deadline firing
+    // rather than a caller cancelling the request.
+    const abortSignal = AbortSignal.timeout(task.abortTimeout);
     try {
       this.failureSimulator.maybeFail();
 
@@ -517,6 +520,7 @@ export class ArweaveCompositeClient
           metrics.arweaveChunkPostCounter.inc({
             endpoint: task.peer,
             status: 'success',
+            reason: 'dry_run',
           });
 
           return {
@@ -613,6 +617,7 @@ export class ArweaveCompositeClient
         metrics.arweaveChunkPostCounter.inc({
           endpoint: task.peer,
           status: 'success',
+          reason: 'dry_run',
         });
 
         return {
@@ -625,7 +630,7 @@ export class ArweaveCompositeClient
         method: 'POST',
         url: `${task.peer}/chunk`,
         data: task.chunk,
-        signal: AbortSignal.timeout(task.abortTimeout),
+        signal: abortSignal,
         timeout: task.responseTimeout,
         headers: task.headers,
         // An arweave node returns 200 when it will store the chunk long-term and
@@ -645,6 +650,7 @@ export class ArweaveCompositeClient
       metrics.arweaveChunkPostCounter.inc({
         endpoint: task.peer,
         status: 'success',
+        reason: String(response.status),
       });
       if (temporary) {
         metrics.arweaveChunkPostTemporaryCounter.inc({ endpoint: task.peer });
@@ -660,8 +666,19 @@ export class ArweaveCompositeClient
       let timedOut = false;
 
       if (axios.isAxiosError(error)) {
-        timedOut = error.code === 'ECONNABORTED';
-        canceled = error.code === 'ERR_CANCELED';
+        // ECONNABORTED is the response timeout. An AbortSignal.timeout() firing
+        // surfaces as ERR_CANCELED, indistinguishable from a caller cancelling —
+        // but it is our own deadline, not the caller's, and abortTimeout is
+        // normally the lower of the two, so this is the common case. Ask the
+        // signal which it was: AbortSignal.timeout() sets reason to a
+        // TimeoutError DOMException, while an explicit abort does not.
+        // Misreporting it matters beyond the metric: aggregateStatusCode() maps
+        // canceled to 499 (Client Closed Request), blaming the uploader for a
+        // deadline of ours, where timedOut maps to 504.
+        const abortedByOurDeadline =
+          abortSignal.aborted && abortSignal.reason?.name === 'TimeoutError';
+        timedOut = error.code === 'ECONNABORTED' || abortedByOurDeadline;
+        canceled = error.code === 'ERR_CANCELED' && !abortedByOurDeadline;
       }
 
       // A peer that answered tells us why it refused the chunk (400 unknown

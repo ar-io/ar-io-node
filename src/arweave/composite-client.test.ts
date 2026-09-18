@@ -554,6 +554,46 @@ describe('ArweaveCompositeClient', () => {
       assert.equal(await failReasonCount(baseUrl, '429'), before + 1);
     });
 
+    // The abort deadline is normally the LOWER of the two, so this is the common
+    // timeout path. AbortSignal.timeout() surfaces as ERR_CANCELED, which would
+    // otherwise be reported as a caller cancellation — and aggregateStatusCode()
+    // turns that into 499 (Client Closed Request), blaming the uploader for our
+    // own deadline.
+    it('reports our own abort deadline as a timeout, not a cancellation', async () => {
+      respond = () => undefined; // never answer
+      const client: any = createTestClient();
+      const before = await failReasonCount(baseUrl, 'timeout');
+      const result = await client.postChunkToPeer({
+        peer: baseUrl,
+        chunk: {} as any,
+        abortTimeout: 50, // fires first
+        responseTimeout: 5000,
+        headers: {},
+      });
+      assert.equal(result.success, false);
+      assert.equal(result.timedOut, true);
+      assert.equal(result.canceled, false);
+      assert.equal(await failReasonCount(baseUrl, 'timeout'), before + 1);
+    });
+
+    it('labels accepted posts with the status the peer returned', async () => {
+      const successReasonCount = async (endpoint: string, reason: string) => {
+        const { values } = await metrics.arweaveChunkPostCounter.get();
+        const s = values.find(
+          (v: any) =>
+            v.labels.endpoint === endpoint &&
+            v.labels.status === 'success' &&
+            v.labels.reason === reason,
+        );
+        return s?.value ?? 0;
+      };
+      respond = (res) => res.writeHead(303).end();
+      const client = createTestClient();
+      const before = await successReasonCount(baseUrl, '303');
+      await post(client);
+      assert.equal(await successReasonCount(baseUrl, '303'), before + 1);
+    });
+
     it('labels a post the peer never answers as a timeout, not a status code', async () => {
       // Never respond: the request must hit responseTimeout rather than any
       // HTTP status, so the reason has to come from the error, not a response.

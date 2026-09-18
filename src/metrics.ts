@@ -604,12 +604,20 @@ export const arweaveTxFetchCounter = new promClient.Counter({
 });
 
 /**
- * `reason` is set on status="fail" only (empty for successes) and says why the
- * post failed: the peer's HTTP status as a string when it answered ("400",
- * "429", "503"), or "timeout" / "canceled" / "network" when it did not. Without
- * it a peer rejecting chunks is indistinguishable from one rate-limiting us or
- * one we cannot reach, and telling them apart otherwise takes the peer
- * operator's own logs.
+ * `reason` carries the outcome behind `status`:
+ *
+ * - success: the accepted HTTP status, "200" (peer will store it long-term) or
+ *   "303" (peer parked it in its disk pool), or "dry_run" when posting is
+ *   simulated. The 303 subset is also counted by
+ *   `arweave_chunk_post_temporary_total`.
+ * - fail: the peer's HTTP status as a string when it answered ("400", "429",
+ *   "503"); otherwise "timeout" (our response or abort deadline), "canceled"
+ *   (the caller aborted), "network" (unreachable), or "invalid_chunk" /
+ *   "invalid_proof" for dry-run validation failures.
+ *
+ * Without it, a peer rejecting chunks is indistinguishable from one
+ * rate-limiting us or one we cannot reach, and telling them apart otherwise
+ * takes the peer operator's own logs.
  */
 export const arweaveChunkPostCounter = new promClient.Counter({
   name: 'arweave_chunk_post_total',
