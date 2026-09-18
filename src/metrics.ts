@@ -603,10 +603,18 @@ export const arweaveTxFetchCounter = new promClient.Counter({
   labelNames: ['node_type'],
 });
 
+/**
+ * `reason` is set on status="fail" only (empty for successes) and says why the
+ * post failed: the peer's HTTP status as a string when it answered ("400",
+ * "429", "503"), or "timeout" / "canceled" / "network" when it did not. Without
+ * it a peer rejecting chunks is indistinguishable from one rate-limiting us or
+ * one we cannot reach, and telling them apart otherwise takes the peer
+ * operator's own logs.
+ */
 export const arweaveChunkPostCounter = new promClient.Counter({
   name: 'arweave_chunk_post_total',
   help: 'Counts individual POST request to endpoint',
-  labelNames: ['endpoint', 'status', 'role'],
+  labelNames: ['endpoint', 'status', 'role', 'reason'],
 });
 
 /**

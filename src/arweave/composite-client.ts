@@ -548,6 +548,7 @@ export class ArweaveCompositeClient
           metrics.arweaveChunkPostCounter.inc({
             endpoint: task.peer,
             status: 'fail',
+            reason: 'invalid_chunk',
           });
 
           return {
@@ -600,6 +601,7 @@ export class ArweaveCompositeClient
           metrics.arweaveChunkPostCounter.inc({
             endpoint: task.peer,
             status: 'fail',
+            reason: 'invalid_proof',
           });
 
           return {
@@ -662,19 +664,35 @@ export class ArweaveCompositeClient
         canceled = error.code === 'ERR_CANCELED';
       }
 
+      // A peer that answered tells us why it refused the chunk (400 unknown
+      // data root, 429 rate limited, 503 overloaded); one that did not answer
+      // is a timeout, our own abort, or unreachable. These call for completely
+      // different operator responses, so record which it was.
+      const statusCode = error.response?.status;
+      const reason =
+        statusCode !== undefined
+          ? String(statusCode)
+          : timedOut
+            ? 'timeout'
+            : canceled
+              ? 'canceled'
+              : 'network';
+
       metrics.arweaveChunkPostCounter.inc({
         endpoint: task.peer,
         status: 'fail',
+        reason,
       });
 
       this.log.debug('Failed to POST chunk to peer:', {
         peer: task.peer,
         error: error.message,
+        reason,
       });
 
       return {
         success: false,
-        statusCode: error.response?.status,
+        statusCode,
         error: error.message,
         canceled,
         timedOut,
@@ -1965,6 +1983,8 @@ export class ArweaveCompositeClient
         return {
           successCount: 0,
           preferredSuccessCount: 0,
+          temporarySuccessCount: 0,
+          longTermSuccessCount: 0,
           failureCount: 0,
           results: [],
         };
@@ -2158,6 +2178,7 @@ export class ArweaveCompositeClient
               statusCode,
               canceled: result.canceled ?? false,
               timedOut: result.timedOut ?? false,
+              temporary: result.temporary ?? false,
             };
           } catch (error: any) {
             failureCount++;
@@ -2192,10 +2213,28 @@ export class ArweaveCompositeClient
         }
       }
 
+      // Derived from `results` rather than incremented in the workers: the
+      // counters above are deliberately racy (they only gate early
+      // termination), while these are reported to callers.
+      const temporarySuccessCount = results.filter(
+        (r) => r.success && r.temporary === true,
+      ).length;
+      const longTermSuccessCount = results.filter(
+        (r) => r.success && r.temporary !== true,
+      ).length;
+
       const duration = Date.now() - startTime;
 
       span.setAttribute('chunk.broadcast.duration_ms', duration);
       span.setAttribute('chunk.broadcast.success_count', successCount);
+      span.setAttribute(
+        'chunk.broadcast.temporary_success_count',
+        temporarySuccessCount,
+      );
+      span.setAttribute(
+        'chunk.broadcast.long_term_success_count',
+        longTermSuccessCount,
+      );
       span.setAttribute(
         'chunk.broadcast.preferred_success_count',
         preferredSuccessCount,
@@ -2243,6 +2282,8 @@ export class ArweaveCompositeClient
       this.log.debug('Chunk broadcast complete', {
         successCount,
         preferredSuccessCount,
+        temporarySuccessCount,
+        longTermSuccessCount,
         failureCount,
         consecutive4xxFailures,
         totalPeers: sortedPeers.length,
@@ -2262,6 +2303,8 @@ export class ArweaveCompositeClient
       return {
         successCount,
         preferredSuccessCount,
+        temporarySuccessCount,
+        longTermSuccessCount,
         failureCount,
         results,
       };
