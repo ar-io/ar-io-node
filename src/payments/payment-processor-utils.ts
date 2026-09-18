@@ -10,6 +10,7 @@ import { PaymentRequirements } from 'x402/types';
 import * as config from '../config.js';
 import { RateLimiter } from '../limiter/types.js';
 import { PaymentProcessor } from './types.js';
+import * as metrics from '../metrics.js';
 import { X402UsdcProcessor } from './x402-usdc-processor.js';
 
 export interface PaymentTopUpTarget {
@@ -63,11 +64,16 @@ export async function processPaymentAndTopUp(
   target: PaymentTopUpTarget,
   contentSizeOverride?: number,
 ): Promise<PaymentTopUpResult> {
+  // Records where an attempt ended, so the funnel from 402 -> settled payment is
+  // visible. Every early return below goes through this.
+  const countOutcome = (outcome: string) =>
+    metrics.x402PaymentCounter.inc({ outcome, target: target.type });
   try {
     // Extract payment from headers
     const payment = paymentProcessor.extractPayment(req);
 
     if (payment === undefined) {
+      countOutcome('no_payment_header');
       return {
         success: false,
         error: 'No payment found in headers',
@@ -81,6 +87,7 @@ export async function processPaymentAndTopUp(
         target.host === undefined ||
         target.path === undefined
       ) {
+        countOutcome('invalid_target');
         return {
           success: false,
           error: 'Resource top-up requires method, host, and path',
@@ -107,6 +114,7 @@ export async function processPaymentAndTopUp(
     // Validate host header is present
     const host = req.headers.host;
     if (host === undefined || host === '') {
+      countOutcome('missing_host');
       return {
         success: false,
         error: 'Missing Host header - required for payment processing',
@@ -131,6 +139,7 @@ export async function processPaymentAndTopUp(
     );
 
     if (!verifyResult.isValid) {
+      countOutcome('verify_failed');
       return {
         success: false,
         error: `Payment verification failed: ${verifyResult.invalidReason}`,
@@ -144,6 +153,7 @@ export async function processPaymentAndTopUp(
         network: payment.network,
         scheme: payment.scheme,
       });
+      countOutcome('unsupported_processor');
       return {
         success: false,
         error: `Unsupported payment processor type: ${paymentProcessor.constructor.name}`,
@@ -159,6 +169,7 @@ export async function processPaymentAndTopUp(
         hasAuthorization: 'authorization' in payment.payload,
         hasTransaction: 'transaction' in payment.payload,
       });
+      countOutcome('unsupported_payload');
       return {
         success: false,
         error:
@@ -174,6 +185,7 @@ export async function processPaymentAndTopUp(
     );
 
     if (!settlementResult.success) {
+      countOutcome('settle_failed');
       return {
         success: false,
         error: `Payment settlement failed: ${settlementResult.errorReason}`,
@@ -216,6 +228,7 @@ export async function processPaymentAndTopUp(
       tokensAdded = tokens * multiplierApplied;
     } else {
       log.error('Invalid target type', { target });
+      countOutcome('topup_failed');
       return {
         success: false,
         error: `Invalid target type: ${target.type}`,
@@ -232,6 +245,17 @@ export async function processPaymentAndTopUp(
       multiplierApplied,
     });
 
+    countOutcome('settled');
+    // USDC has 6 decimals; parseInt of a non-numeric value would poison the
+    // counter, so only record a finite result.
+    const settledUsdc = parseInt(paymentAmount, 10) / 1_000_000;
+    if (Number.isFinite(settledUsdc)) {
+      metrics.x402PaymentSettledUsdcCounter.inc(
+        { target: target.type },
+        settledUsdc,
+      );
+    }
+
     return {
       success: true,
       tokensAdded,
@@ -240,6 +264,7 @@ export async function processPaymentAndTopUp(
       responseHeader: settlementResult.responseHeader,
     };
   } catch (error: any) {
+    countOutcome('error');
     log.error('Error processing payment and top-up', {
       error: error.message,
       stack: error.stack,
