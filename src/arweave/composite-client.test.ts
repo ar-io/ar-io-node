@@ -15,6 +15,7 @@ import { toB64Url } from '../lib/encoding.js';
 import { UniformFailureSimulator } from '../lib/chaos.js';
 import { ArweavePeerManager } from '../peers/arweave-peer-manager.js';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 import log from '../log.js';
 
 describe('ArweaveCompositeClient', () => {
@@ -529,6 +530,88 @@ describe('ArweaveCompositeClient', () => {
       assert.equal(result.success, false);
       assert.equal(result.statusCode, 500);
     });
+
+    // The failure counter is what an operator reads when a peer starts
+    // rejecting chunks. Without a reason, a peer refusing the chunk (400), one
+    // rate-limiting us (429) and one we cannot reach are indistinguishable,
+    // and each calls for a different response.
+    const failReasonCount = async (endpoint: string, reason: string) => {
+      const { values } = await metrics.arweaveChunkPostCounter.get();
+      const sample = values.find(
+        (v: any) =>
+          v.labels.endpoint === endpoint &&
+          v.labels.status === 'fail' &&
+          v.labels.reason === reason,
+      );
+      return sample?.value ?? 0;
+    };
+
+    it('labels a peer-rejected post with the peer’s status code', async () => {
+      respond = (res) => res.writeHead(429).end();
+      const client = createTestClient();
+      const before = await failReasonCount(baseUrl, '429');
+      await post(client);
+      assert.equal(await failReasonCount(baseUrl, '429'), before + 1);
+    });
+
+    // The abort deadline is normally the LOWER of the two, so this is the common
+    // timeout path. AbortSignal.timeout() surfaces as ERR_CANCELED, which would
+    // otherwise be reported as a caller cancellation — and aggregateStatusCode()
+    // turns that into 499 (Client Closed Request), blaming the uploader for our
+    // own deadline.
+    it('reports our own abort deadline as a timeout, not a cancellation', async () => {
+      respond = () => undefined; // never answer
+      const client: any = createTestClient();
+      const before = await failReasonCount(baseUrl, 'timeout');
+      const result = await client.postChunkToPeer({
+        peer: baseUrl,
+        chunk: {} as any,
+        abortTimeout: 50, // fires first
+        responseTimeout: 5000,
+        headers: {},
+      });
+      assert.equal(result.success, false);
+      assert.equal(result.timedOut, true);
+      assert.equal(result.canceled, false);
+      assert.equal(await failReasonCount(baseUrl, 'timeout'), before + 1);
+    });
+
+    it('labels accepted posts with the status the peer returned', async () => {
+      const successReasonCount = async (endpoint: string, reason: string) => {
+        const { values } = await metrics.arweaveChunkPostCounter.get();
+        const s = values.find(
+          (v: any) =>
+            v.labels.endpoint === endpoint &&
+            v.labels.status === 'success' &&
+            v.labels.reason === reason,
+        );
+        return s?.value ?? 0;
+      };
+      respond = (res) => res.writeHead(303).end();
+      const client = createTestClient();
+      const before = await successReasonCount(baseUrl, '303');
+      await post(client);
+      assert.equal(await successReasonCount(baseUrl, '303'), before + 1);
+    });
+
+    it('labels a post the peer never answers as a timeout, not a status code', async () => {
+      // Never respond: the request must hit responseTimeout rather than any
+      // HTTP status, so the reason has to come from the error, not a response.
+      respond = () => undefined;
+      const client: any = createTestClient();
+      const before = await failReasonCount(baseUrl, 'timeout');
+      const result = await client.postChunkToPeer({
+        peer: baseUrl,
+        chunk: {} as any,
+        abortTimeout: 5000,
+        responseTimeout: 50,
+        headers: {},
+      });
+      assert.equal(result.success, false);
+      assert.equal(result.timedOut, true);
+      assert.equal(result.statusCode, undefined);
+      assert.equal(await failReasonCount(baseUrl, 'timeout'), before + 1);
+    });
   });
 
   // Verifies the CHUNK_POST_CONTINUE_PAST_THRESHOLD behavior against real
@@ -624,6 +707,46 @@ describe('ArweaveCompositeClient', () => {
       const client = createTestClient();
       const result = await broadcast(client, true);
       assert.equal(result.successCount, urls.length);
+    });
+
+    // successCount alone cannot tell "peers that will keep this chunk" from
+    // "peers that parked it in a disk pool they will drain", because a 303 is
+    // counted as a success (correctly — it is still propagation). The split is
+    // reported so callers can see which they got.
+    it('splits successes into long-term (200) and temporary (303)', async () => {
+      await startServers(2, 200);
+      const longTerm = [...urls];
+      // startServers resets `servers`/`urls`, so hold on to the first batch and
+      // restore both lists afterwards — otherwise afterEach never closes those
+      // listeners and this file leaks handles.
+      const longTermServers = [...servers];
+      await startServers(3, 303);
+      const temporary = [...urls];
+      servers = [...longTermServers, ...servers];
+      urls = [...longTerm, ...temporary];
+      mockPeerManager.getPeerUrls = mock.fn(() => urls);
+      mockPeerManager.selectPeers = mock.fn(() => urls);
+
+      const client = createTestClient();
+      const result = await broadcast(client, true);
+
+      assert.equal(result.successCount, urls.length);
+      assert.equal(result.longTermSuccessCount, longTerm.length);
+      assert.equal(result.temporarySuccessCount, temporary.length);
+      assert.equal(
+        result.longTermSuccessCount + result.temporarySuccessCount,
+        result.successCount,
+      );
+    });
+
+    it('counts a broadcast accepted only into disk pools as entirely temporary', async () => {
+      await startServers(4, 303);
+      const client = createTestClient();
+      const result = await broadcast(client, true);
+
+      assert.equal(result.successCount, urls.length);
+      assert.equal(result.temporarySuccessCount, urls.length);
+      assert.equal(result.longTermSuccessCount, 0);
     });
 
     it('bails out of the dead peer tail in continuePastThreshold mode', async () => {
