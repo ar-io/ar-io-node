@@ -10,6 +10,7 @@ import { PaymentRequirements } from 'x402/types';
 import * as config from '../config.js';
 import { RateLimiter } from '../limiter/types.js';
 import { PaymentProcessor } from './types.js';
+import * as metrics from '../metrics.js';
 import { X402UsdcProcessor } from './x402-usdc-processor.js';
 
 export interface PaymentTopUpTarget {
@@ -63,11 +64,20 @@ export async function processPaymentAndTopUp(
   target: PaymentTopUpTarget,
   contentSizeOverride?: number,
 ): Promise<PaymentTopUpResult> {
+  // Records where an attempt ended, so the funnel from 402 -> settled payment is
+  // visible. Every early return below goes through this, and the outer catch
+  // only records `error` if nothing more specific was recorded first.
+  let outcomeRecorded = false;
+  const countOutcome = (outcome: string) => {
+    outcomeRecorded = true;
+    metrics.x402PaymentCounter.inc({ outcome, target: target.type });
+  };
   try {
     // Extract payment from headers
     const payment = paymentProcessor.extractPayment(req);
 
     if (payment === undefined) {
+      countOutcome('no_payment_header');
       return {
         success: false,
         error: 'No payment found in headers',
@@ -81,6 +91,7 @@ export async function processPaymentAndTopUp(
         target.host === undefined ||
         target.path === undefined
       ) {
+        countOutcome('invalid_target');
         return {
           success: false,
           error: 'Resource top-up requires method, host, and path',
@@ -107,6 +118,7 @@ export async function processPaymentAndTopUp(
     // Validate host header is present
     const host = req.headers.host;
     if (host === undefined || host === '') {
+      countOutcome('missing_host');
       return {
         success: false,
         error: 'Missing Host header - required for payment processing',
@@ -131,6 +143,7 @@ export async function processPaymentAndTopUp(
     );
 
     if (!verifyResult.isValid) {
+      countOutcome('verify_failed');
       return {
         success: false,
         error: `Payment verification failed: ${verifyResult.invalidReason}`,
@@ -144,6 +157,7 @@ export async function processPaymentAndTopUp(
         network: payment.network,
         scheme: payment.scheme,
       });
+      countOutcome('unsupported_processor');
       return {
         success: false,
         error: `Unsupported payment processor type: ${paymentProcessor.constructor.name}`,
@@ -159,6 +173,7 @@ export async function processPaymentAndTopUp(
         hasAuthorization: 'authorization' in payment.payload,
         hasTransaction: 'transaction' in payment.payload,
       });
+      countOutcome('unsupported_payload');
       return {
         success: false,
         error:
@@ -174,10 +189,25 @@ export async function processPaymentAndTopUp(
     );
 
     if (!settlementResult.success) {
+      countOutcome('settle_failed');
       return {
         success: false,
         error: `Payment settlement failed: ${settlementResult.errorReason}`,
       };
+    }
+
+    // Recorded here rather than after the top-up: settlement is the point the
+    // funds actually move, so a later failure granting access must not erase
+    // revenue that was really collected. USDC has 6 decimals; parseInt of a
+    // non-numeric value would poison the counter, so only a finite result is
+    // recorded.
+    const settledUsdc =
+      parseInt(payment.payload.authorization.value.toString(), 10) / 1_000_000;
+    if (Number.isFinite(settledUsdc)) {
+      metrics.x402PaymentSettledUsdcCounter.inc(
+        { target: target.type },
+        settledUsdc,
+      );
     }
 
     // Convert payment amount to tokens and top up bucket
@@ -202,20 +232,33 @@ export async function processPaymentAndTopUp(
 
     if (target.type === 'ip') {
       // For IP bucket, use existing method with request
-      await rateLimiter.topOffPaidTokens(req, tokens);
+      try {
+        await rateLimiter.topOffPaidTokens(req, tokens);
+      } catch (error: any) {
+        // The payment settled; only the access grant failed. Attribute it
+        // precisely instead of letting the outer catch call it an error.
+        countOutcome('topup_failed');
+        throw error;
+      }
       tokensAdded = tokens * multiplierApplied;
     } else if (target.type === 'resource') {
       // For resource bucket, use new method with explicit params
       // Note: target validation already done at function entry
-      await rateLimiter.topOffPaidTokensForResource(
-        target.method!,
-        target.host!,
-        target.path!,
-        tokens,
-      );
+      try {
+        await rateLimiter.topOffPaidTokensForResource(
+          target.method!,
+          target.host!,
+          target.path!,
+          tokens,
+        );
+      } catch (error: any) {
+        countOutcome('topup_failed');
+        throw error;
+      }
       tokensAdded = tokens * multiplierApplied;
     } else {
       log.error('Invalid target type', { target });
+      countOutcome('topup_failed');
       return {
         success: false,
         error: `Invalid target type: ${target.type}`,
@@ -232,6 +275,8 @@ export async function processPaymentAndTopUp(
       multiplierApplied,
     });
 
+    countOutcome('settled');
+
     return {
       success: true,
       tokensAdded,
@@ -240,6 +285,9 @@ export async function processPaymentAndTopUp(
       responseHeader: settlementResult.responseHeader,
     };
   } catch (error: any) {
+    if (!outcomeRecorded) {
+      countOutcome('error');
+    }
     log.error('Error processing payment and top-up', {
       error: error.message,
       stack: error.stack,

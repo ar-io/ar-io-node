@@ -12,6 +12,7 @@ traffic management and content monetization.
 - [x402 Payment Protocol Deep Dive](#x402-payment-protocol-deep-dive)
 - [Integration Topics](#integration-topics)
 - [Reference](#reference)
+- [Metrics](#metrics)
 - [Troubleshooting](#troubleshooting)
 - [Examples](#examples)
 
@@ -2031,6 +2032,53 @@ curl -X POST \
   -H "Authorization: Bearer ${ADMIN_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"tokens": 1000000, "tokenType": "paid"}'
+```
+
+## Metrics
+
+Payment attempts are counted at `/ar-io/__gateway_metrics`:
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `x402_payment_total` | `outcome`, `target` | Payment attempts by the stage that ended them |
+| `x402_payment_settled_usdc_total` | `target` | USDC actually settled (atomic units converted; USDC has 6 decimals) |
+
+`outcome` values: `no_payment_header`, `invalid_target`, `missing_host`,
+`verify_failed`, `unsupported_processor`, `unsupported_payload`,
+`settle_failed`, `topup_failed`, `error` (an unexpected throw with no more
+specific stage), `settled`.
+
+`x402_payment_settled_usdc_total` is recorded **at settlement** — the point the
+funds move — while `outcome="settled"` also requires the access top-up to have
+succeeded. So revenue counts every payment collected, and
+`outcome="topup_failed"` counts payments taken where access was not granted.
+That second number is worth alerting on: it is money owed back.
+
+402 responses themselves are already countable without these, via
+`http_request_duration_seconds_count{status_code="402"}`. The counters above
+cover what happens *after* a 402 — whether anyone pays, and whether their
+payments settle.
+
+That distinction matters in one specific failure: a mainnet deployment with
+incomplete CDP credentials silently falls back to `X_402_USDC_FACILITATOR_URL`,
+and the commonly configured facilitators there support testnets only. Every
+payment then fails verification while the gateway keeps advertising x402 and
+serving 402s. Without these metrics that is indistinguishable from a paywall
+nobody has paid yet:
+
+```promql
+# paid attempts that never settled
+sum by (outcome) (rate(x402_payment_total{outcome!="settled"}[1h]))
+
+# revenue actually settled
+sum(increase(x402_payment_settled_usdc_total[24h]))
+
+# paid but not granted access — alert on this
+sum(increase(x402_payment_total{outcome="topup_failed"}[1h]))
+
+# conversion: settled payments per 402 served
+sum(increase(x402_payment_total{outcome="settled"}[24h]))
+  / sum(increase(http_request_duration_seconds_count{status_code="402"}[24h]))
 ```
 
 ## Troubleshooting
