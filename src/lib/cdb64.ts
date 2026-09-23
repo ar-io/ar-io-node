@@ -591,6 +591,28 @@ export class Cdb64Reader {
   /**
    * Returns the underlying ByteRangeSource.
    */
+  /**
+   * Number of records in the file, read from the header.
+   *
+   * Each hash table is sized at two slots per record, so the slot counts the
+   * header already carries give the total without reading any data. Useful
+   * as a cheap integrity cross-check: a file that is the right length but
+   * zero-filled parses as a valid, empty database, which a size or digest
+   * check cannot distinguish from a real one.
+   *
+   * @throws if the reader is not open.
+   */
+  getRecordCount(): number {
+    if (!this.opened) {
+      throw new Error('Cannot count records before open()');
+    }
+    let slots = 0n;
+    for (const pointer of this.tablePointers) {
+      slots += pointer.length;
+    }
+    return Number(slots / 2n);
+  }
+
   getSource(): ByteRangeSource {
     return this.source;
   }

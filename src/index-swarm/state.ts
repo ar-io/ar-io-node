@@ -34,6 +34,12 @@ export interface InstalledBand {
   dir: string;
   files: BandFile[];
   installedAt: string;
+  /**
+   * When the band stopped being readable, for one that has been retired but
+   * whose files are still on disk. Held here rather than in a timer so the
+   * pending deletion survives a restart instead of orphaning the directory.
+   */
+  retiredAt?: string;
 }
 
 export interface SubscriptionState {
