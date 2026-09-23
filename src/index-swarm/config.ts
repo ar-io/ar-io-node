@@ -123,6 +123,10 @@ export const PUBLISHED_DIR = path.join(DATA_DIR, 'published');
 export const INCOMING_DIR = path.join(DATA_DIR, 'incoming');
 /** Bands in use. The gateway loads these through its collection source. */
 export const INSTALLED_DIR = path.join(DATA_DIR, 'installed');
+/** Content-addressed links into the published bands, served by hash. */
+export const BLOBS_DIR = path.join(PUBLISHED_DIR, 'blobs');
+/** The signed document the gateway serves at /ar-io/indexes. */
+export const PUBLICATION_FILE = path.join(PUBLISHED_DIR, 'publication.json');
 /** Sidecar state: sequences seen, bands installed. Rebuildable from disk. */
 export const STATE_FILE = path.join(DATA_DIR, 'state.json');
 
@@ -132,6 +136,29 @@ export const PUBLISH: PublishConfig[] = parsePublish(
 export const SUBSCRIBE: SubscribeConfig[] = parseSubscribe(
   env.varOrUndefined('INDEX_SWARM_SUBSCRIBE'),
 );
+
+/** How often to look for new or changed bands. */
+export const PUBLISH_SCAN_INTERVAL_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_PUBLISH_SCAN_INTERVAL_SECONDS', 60) *
+  1000;
+
+/**
+ * How long a publication stays fresh.
+ *
+ * A subscriber alarms once `expiresAt` has passed, so this is the staleness
+ * contract rather than a cache hint. Set it to roughly twice the interval at
+ * which bands are expected to change, so an ordinary quiet period does not
+ * read as a dead publisher.
+ */
+export const PUBLISH_TTL_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_PUBLISH_TTL_SECONDS', 86_400) * 1000;
+
+/**
+ * How long a retired band's files stay on disk after it stops being served,
+ * giving anything mid-read time to finish.
+ */
+export const SUPERSEDE_GRACE_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_SUPERSEDE_GRACE_SECONDS', 300) * 1000;
 
 export const METRICS_PORT = env.positiveIntOrDefault(
   'INDEX_SWARM_METRICS_PORT',
@@ -162,6 +189,15 @@ export const MIN_CORE_RELEASE = env.positiveIntOrDefault(
   'INDEX_SWARM_MIN_CORE_RELEASE',
   85,
 );
+
+/**
+ * The gateway's registered observer key, used to sign what this node
+ * publishes. Read but never written; a publisher without one refuses to run.
+ */
+export const OBSERVER_KEYPAIR_PATH = env.varOrUndefined(
+  'OBSERVER_KEYPAIR_PATH',
+);
+export const OBSERVER_PRIVATE_KEY = env.varOrUndefined('OBSERVER_PRIVATE_KEY');
 
 /** How long to let work finish on SIGTERM before exiting anyway. */
 export const SHUTDOWN_TIMEOUT_MS = env.positiveIntOrDefault(

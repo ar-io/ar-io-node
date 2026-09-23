@@ -69,6 +69,20 @@ The signing identity is the gateway's registered observer key
 publication against that record, so a publisher running on the auto-generated
 fallback key has nothing anyone can verify against and will refuse to publish.
 
+### Publishing cadence
+
+The publisher rescans every `INDEX_SWARM_PUBLISH_SCAN_INTERVAL_SECONDS`
+(default 60) but writes a new document only when the band set or a file
+digest has changed, or when the current document is halfway through its TTL.
+That second condition matters: subscribers alarm once `expiresAt` passes, so
+a publisher whose bands are simply quiet would otherwise go stale and read as
+dead. Set `INDEX_SWARM_PUBLISH_TTL_SECONDS` to roughly twice the interval at
+which bands are expected to change.
+
+Only bands whose files changed are re-hashed. The description is keyed on
+each file's name, size and mtime and persisted, so a restart does not re-read
+tens of gigabytes on its next scan.
+
 ## Volume layout
 
 ```text

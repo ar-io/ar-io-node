@@ -23,6 +23,8 @@ import * as fs from 'node:fs/promises';
 import * as config from './config.js';
 import log from './log.js';
 import { StateStore } from './state.js';
+import { createKindRegistry } from './kinds/registry.js';
+import { Publisher, loadPublisherSigner } from './publisher.js';
 import {
   buildInfo,
   configuredIndexes,
@@ -89,6 +91,37 @@ async function main(): Promise<void> {
   const state = new StateStore({ log, filePath: config.STATE_FILE });
   await state.load();
 
+  const kinds = createKindRegistry({ log });
+
+  // Publishing needs a key a subscriber can check against, so this is fatal
+  // rather than a warning: a publisher that signs with an unregistered key
+  // produces documents nobody can verify, which is worse than not publishing.
+  let publisher: Publisher | undefined;
+  if (config.PUBLISH.length > 0) {
+    const signer = loadPublisherSigner({
+      keypairPath: config.OBSERVER_KEYPAIR_PATH,
+      privateKeyBase58: config.OBSERVER_PRIVATE_KEY,
+    });
+    if (signer === undefined) {
+      throw new Error(
+        'index-swarm publisher requires a registry-bound observer key: set OBSERVER_KEYPAIR_PATH or OBSERVER_PRIVATE_KEY',
+      );
+    }
+    publisher = new Publisher({
+      log,
+      state,
+      kinds,
+      signer,
+      publish: config.PUBLISH,
+      publishedDir: config.PUBLISHED_DIR,
+      blobsDir: config.BLOBS_DIR,
+      publicationFile: config.PUBLICATION_FILE,
+      ttlMs: config.PUBLISH_TTL_MS,
+      supersedeGraceMs: config.SUPERSEDE_GRACE_MS,
+    });
+    log.info('Publishing as', { publisher: signer.keyId });
+  }
+
   let shuttingDown = false;
   const metrics = await startMetricsServer({
     log,
@@ -131,6 +164,28 @@ async function main(): Promise<void> {
 
   up.set(1);
 
+  let publishTimer: NodeJS.Timeout | undefined;
+  if (publisher !== undefined) {
+    const runScan = async () => {
+      if (shuttingDown) return;
+      try {
+        await publisher.scanOnce();
+      } catch (error: any) {
+        // One bad scan must not end the loop; the next one may well succeed.
+        log.error('Publish scan failed', {
+          error: error?.message,
+          stack: error?.stack,
+        });
+      }
+    };
+
+    await runScan();
+    publishTimer = setInterval(
+      () => void runScan(),
+      config.PUBLISH_SCAN_INTERVAL_MS,
+    );
+  }
+
   if (config.isIdle()) {
     log.info(
       'index-swarm idle: nothing configured. Set INDEX_SWARM_PUBLISH or INDEX_SWARM_SUBSCRIBE to give it work.',
@@ -161,6 +216,7 @@ async function main(): Promise<void> {
     timer.unref();
 
     try {
+      if (publishTimer !== undefined) clearInterval(publishTimer);
       await metrics.close();
       await state.save();
     } catch (error: any) {

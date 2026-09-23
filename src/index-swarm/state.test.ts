@@ -36,7 +36,8 @@ describe('index-swarm StateStore', () => {
     assert.equal(state.version, SWARM_STATE_VERSION);
     assert.deepEqual(state.subscriptions, {});
     assert.deepEqual(state.installed, {});
-    assert.deepEqual(state.published, {});
+    assert.equal(state.published, undefined);
+    assert.deepEqual(state.describeCache, {});
   });
 
   it('persists an update and reloads it, creating parent directories', async () => {
@@ -58,7 +59,7 @@ describe('index-swarm StateStore', () => {
   it('never leaves a temp file behind', async () => {
     const store = new StateStore({ log, filePath });
     await store.update((state) => {
-      state.published['root-tx-index'] = {
+      state.published = {
         sequence: 1,
         manifestSha256: null,
         updatedAt: '2026-09-23T00:00:00Z',
@@ -112,6 +113,7 @@ describe('index-swarm StateStore', () => {
 
     const state = await new StateStore({ log, filePath }).load();
     assert.deepEqual(state.installed, {});
-    assert.deepEqual(state.published, {});
+    assert.equal(state.published, undefined);
+    assert.deepEqual(state.describeCache, {});
   });
 });

@@ -69,6 +69,40 @@ export function setCoreCompatibility(result: CoreCompatibility): void {
   }
 }
 
+export const publishTotal = new promClient.Counter({
+  name: 'index_publish_total',
+  help: 'Publication attempts by outcome: published when a new document was written, unchanged when nothing needed one, failed on error.',
+  labelNames: ['index', 'result'] as const,
+  registers: [registry],
+});
+
+export const publishSequence = new promClient.Gauge({
+  name: 'index_publish_sequence',
+  help: 'Sequence of the publication document last written. Monotonic; a subscriber refuses anything at or below the sequence it holds.',
+  registers: [registry],
+});
+
+export const publishBands = new promClient.Gauge({
+  name: 'index_publish_bands',
+  help: 'Bands currently offered, by index.',
+  labelNames: ['index'] as const,
+  registers: [registry],
+});
+
+export const publishManifestAge = new promClient.Gauge({
+  name: 'index_publish_manifest_age_seconds',
+  help: 'Age of the published document. Climbing past the configured TTL means subscribers are seeing this publisher as stale.',
+  registers: [registry],
+});
+
+export const publishDescribeDuration = new promClient.Histogram({
+  name: 'index_publish_describe_duration_seconds',
+  help: 'Time spent hashing a band. Only bands whose files changed are described, so a steady stream of these means bands are churning.',
+  labelNames: ['index'] as const,
+  buckets: [0.1, 1, 5, 15, 60, 300, 900],
+  registers: [registry],
+});
+
 export interface MetricsServer {
   close(): Promise<void>;
   port: number;

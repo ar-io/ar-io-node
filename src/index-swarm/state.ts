@@ -25,7 +25,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { Logger } from 'winston';
 
-import { BandFile } from '../lib/index-publication.js';
+import { BandDescriptor, BandFile } from '../lib/index-publication.js';
 
 export const SWARM_STATE_VERSION = 1;
 
@@ -51,10 +51,32 @@ export interface SubscriptionState {
 }
 
 export interface PublicationState {
+  /**
+   * Sequence of the document last written. Document-level, not per index:
+   * one publication covers every index this node offers, and its sequence is
+   * what a subscriber compares to decide whether it has seen this already.
+   */
   sequence: number;
-  /** Digest of the previous document, which the next one chains to. */
+  /** Digest of that document, which the next one chains to. */
   manifestSha256: string | null;
   updatedAt: string;
+}
+
+/**
+ * A band already described, keyed by its directory.
+ *
+ * Hashing a band is the expensive part of publishing: a full index is tens of
+ * gigabytes, and a scan that re-read all of it every minute would be
+ * pointless work on a disk that is also serving traffic. The fingerprint
+ * covers each file's name, size and mtime, so any change to the bytes forces
+ * a re-describe while an untouched band costs one stat per file.
+ *
+ * Persisted rather than held in memory, so a restart does not re-hash
+ * everything on the next scan.
+ */
+export interface DescribedBand {
+  fingerprint: string;
+  band: BandDescriptor;
 }
 
 export interface SwarmState {
@@ -63,8 +85,10 @@ export interface SwarmState {
   subscriptions: Record<string, SubscriptionState>;
   /** Keyed by index name, then band id. */
   installed: Record<string, Record<string, InstalledBand>>;
-  /** Keyed by index name, for what this node publishes. */
-  published: Record<string, PublicationState>;
+  /** What this node last published. One document covers every index. */
+  published?: PublicationState;
+  /** Describe results, keyed by band directory. */
+  describeCache: Record<string, DescribedBand>;
 }
 
 export function emptyState(): SwarmState {
@@ -72,7 +96,7 @@ export function emptyState(): SwarmState {
     version: SWARM_STATE_VERSION,
     subscriptions: {},
     installed: {},
-    published: {},
+    describeCache: {},
   };
 }
 
@@ -87,7 +111,8 @@ function normalize(parsed: unknown): SwarmState {
     version: typeof obj.version === 'number' ? obj.version : base.version,
     subscriptions: obj.subscriptions ?? base.subscriptions,
     installed: obj.installed ?? base.installed,
-    published: obj.published ?? base.published,
+    describeCache: obj.describeCache ?? base.describeCache,
+    ...(obj.published !== undefined ? { published: obj.published } : {}),
   };
 }
 
