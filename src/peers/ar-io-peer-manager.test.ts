@@ -489,4 +489,48 @@ describe('ArIOPeerManager', () => {
       m.stopUpdatingPeers?.();
     });
   });
+
+  describe('a registry read that fails', () => {
+    it('keeps the peer list it had rather than emptying it', async () => {
+      let fail = false;
+      const m = new ArIOPeerManager({
+        log,
+        networkProcess: {
+          getGateways: async () => {
+            if (fail) throw new Error('RPC unavailable');
+            return {
+              items: [
+                {
+                  gatewayAddress: 'a',
+                  status: 'joined',
+                  settings: { protocol: 'https', fqdn: 'a.com' },
+                },
+                {
+                  gatewayAddress: 'b',
+                  status: 'joined',
+                  settings: { protocol: 'https', fqdn: 'b.com' },
+                },
+              ],
+              hasMore: false,
+              nextCursor: undefined,
+            };
+          },
+        } as unknown as ARIORead,
+        nodeWallet: 'localNode',
+        initialCategories: ['test'],
+        updatePeersRefreshIntervalMs: 3600000,
+      });
+      await m.refreshPeers();
+      assert.equal(m.getPeerUrls().length, 2);
+
+      fail = true;
+      await m.refreshPeers();
+      assert.equal(
+        m.getPeerUrls().length,
+        2,
+        'a failed refresh must not replace the peers with nothing',
+      );
+      m.stopUpdatingPeers?.();
+    });
+  });
 });

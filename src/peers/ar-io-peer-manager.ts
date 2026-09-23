@@ -519,6 +519,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
     const skipLeaving = config.SKIP_LEAVING_GATEWAYS;
     let skippedLeaving = 0;
     let cursor: string | undefined;
+    let failed = false;
     do {
       try {
         const { nextCursor, items } =
@@ -571,9 +572,16 @@ export class ArIOPeerManager implements WithFormattedPeers {
             stack: error.stack,
           },
         );
+        failed = true;
         break;
       }
     } while (cursor !== undefined);
+
+    // Keep what we had. Applying a failed read would replace the peer list
+    // with the pages fetched before the error, which on a first-page failure
+    // is nothing at all, and every peer-first retrieval would fail until the
+    // next successful refresh.
+    if (failed) return;
 
     log.info('Successfully fetched AR.IO network peer list', {
       count: Object.keys(peers).length,
