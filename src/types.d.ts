@@ -1601,7 +1601,15 @@ export interface WithPeers<T> {
 }
 
 export interface WithFormattedPeers {
-  getFormattedPeers(
-    categories: string[],
-  ): Record<string, { url: string; weights: Record<string, number> }>;
+  getFormattedPeers(categories: string[]): Record<
+    string,
+    {
+      url: string;
+      weights: Record<string, number>;
+      wallet?: string;
+      observerAddress?: string;
+      operatorStake?: number;
+      status?: string;
+    }
+  >;
 }

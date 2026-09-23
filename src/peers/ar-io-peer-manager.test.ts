@@ -533,4 +533,51 @@ describe('ArIOPeerManager', () => {
       m.stopUpdatingPeers?.();
     });
   });
+
+  describe('registry fields', () => {
+    it('carries each peer’s wallet, observer, stake and status from the same read', async () => {
+      const m = new ArIOPeerManager({
+        log,
+        networkProcess: {
+          getGateways: async () => ({
+            items: [
+              {
+                gatewayAddress: 'wallet-a',
+                observerAddress: 'observer-a',
+                operatorStake: 50_000_000_000,
+                status: 'joined',
+                settings: { protocol: 'https', fqdn: 'a.com' },
+              },
+              {
+                gatewayAddress: 'wallet-b',
+                settings: { protocol: 'https', fqdn: 'b.com' },
+              },
+            ],
+            hasMore: false,
+            nextCursor: undefined,
+          }),
+        } as unknown as ARIORead,
+        nodeWallet: 'localNode',
+        initialCategories: ['data'],
+        updatePeersRefreshIntervalMs: 3600000,
+      });
+      await m.refreshPeers();
+      const peers = m.getFormattedPeers(['data']);
+      assert.deepEqual(
+        { ...peers['a.com:443'], weights: undefined },
+        {
+          wallet: 'wallet-a',
+          observerAddress: 'observer-a',
+          operatorStake: 50_000_000_000,
+          status: 'joined',
+          url: 'https://a.com',
+          weights: undefined,
+        },
+      );
+      // A registry that omits fields yields a peer without them, not a broken one.
+      assert.equal(peers['b.com:443'].wallet, 'wallet-b');
+      assert.equal(peers['b.com:443'].observerAddress, undefined);
+      m.stopUpdatingPeers?.();
+    });
+  });
 });

@@ -324,16 +324,34 @@ function getGatewayPeers() {
     'chunk',
   ]);
 
-  // Transform to the expected format for backward compatibility
+  // The original three fields, plus what the registry says about each peer,
+  // so a consumer (the index-swarm sidecar among them) can use the registry
+  // read this gateway already makes instead of making its own.
   const peers: Record<
     string,
-    { url: string; dataWeight: number; chunkWeight: number }
+    {
+      url: string;
+      dataWeight: number;
+      chunkWeight: number;
+      wallet?: string;
+      observerAddress?: string;
+      operatorStake?: number;
+      status?: string;
+    }
   > = {};
   for (const [key, peer] of Object.entries(formattedPeers)) {
     peers[key] = {
       url: peer.url,
       dataWeight: peer.weights.data,
       chunkWeight: peer.weights.chunk,
+      ...(peer.wallet !== undefined ? { wallet: peer.wallet } : {}),
+      ...(peer.observerAddress !== undefined
+        ? { observerAddress: peer.observerAddress }
+        : {}),
+      ...(peer.operatorStake !== undefined
+        ? { operatorStake: peer.operatorStake }
+        : {}),
+      ...(peer.status !== undefined ? { status: peer.status } : {}),
     };
   }
 

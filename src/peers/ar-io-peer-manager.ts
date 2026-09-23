@@ -37,7 +37,23 @@ export interface PeerSuccessMetrics {
 
 export type WeightCategory = 'data' | 'chunk' | string;
 
-export interface FormattedPeer {
+/**
+ * What the gateway registry says about a peer, kept from the same read that
+ * supplies its URL. Public on-chain data, surfaced so that a consumer of the
+ * peer list (the index-swarm sidecar, a client choosing gateways) does not
+ * have to read the registry again itself.
+ */
+export interface PeerRegistryRecord {
+  /** The gateway's registered wallet. */
+  wallet: string;
+  /** The key the gateway observes and signs with. */
+  observerAddress?: string;
+  /** The operator's own stake, as the registry reports it. */
+  operatorStake?: number;
+  status?: string;
+}
+
+export interface FormattedPeer extends Partial<PeerRegistryRecord> {
   url: string;
   weights: Record<WeightCategory, number>;
 }
@@ -54,6 +70,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
   private updatePeersRefreshIntervalMs: number;
   private networkProcess: ARIORead;
   private peers: Record<string, string> = {};
+  /** Registry fields for each peer, by wallet; replaced with `peers`. */
+  private records: Record<string, PeerRegistryRecord> = {};
   private intervalId?: NodeJS.Timeout;
 
   // Weight management per category
@@ -441,7 +459,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
   ): Record<string, FormattedPeer> {
     const peers: Record<string, FormattedPeer> = {};
 
-    for (const [_walletAddress, url] of Object.entries(this.getPeers())) {
+    for (const [walletAddress, url] of Object.entries(this.getPeers())) {
       try {
         const urlObj = new URL(url);
         const defaultPort = urlObj.protocol === 'https:' ? '443' : '80';
@@ -456,6 +474,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
         }
 
         peers[key] = {
+          ...this.records[walletAddress],
           url: url,
           weights,
         };
@@ -516,6 +535,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
     log.info('Fetching AR.IO network peer list');
 
     const peers: Record<string, string> = {};
+    const records: Record<string, PeerRegistryRecord> = {};
     const skipLeaving = config.SKIP_LEAVING_GATEWAYS;
     let skippedLeaving = 0;
     let cursor: string | undefined;
@@ -562,6 +582,18 @@ export class ArIOPeerManager implements WithFormattedPeers {
 
           peers[gateway.gatewayAddress] =
             `${gateway.settings.protocol}://${gateway.settings.fqdn}`;
+          records[gateway.gatewayAddress] = {
+            wallet: gateway.gatewayAddress,
+            ...(typeof gateway.observerAddress === 'string'
+              ? { observerAddress: gateway.observerAddress }
+              : {}),
+            ...(typeof gateway.operatorStake === 'number'
+              ? { operatorStake: gateway.operatorStake }
+              : {}),
+            ...(typeof gateway.status === 'string'
+              ? { status: gateway.status }
+              : {}),
+          };
         }
         cursor = nextCursor;
       } catch (error: any) {
@@ -592,6 +624,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
 
     const oldPeers = this.peers;
     this.peers = peers;
+    this.records = records;
     this.hashRing.rebuild(Object.values(peers));
 
     // Update weights for all categories
