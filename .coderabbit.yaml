@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit configuration.
+# https://docs.coderabbit.ai/getting-started/configure-coderabbit
+#
+# Only non-default settings belong here. Everything omitted keeps CodeRabbit's
+# defaults, which is what this repository ran on before this file existed.
+
+# Issue enrichment posts an auto-generated "Plan Mode" comment on new issues.
+# Those comments add noise to the backlog without adding information, so the
+# automatic pass is disabled. Enrichment can still be requested per issue.
+issue_enrichment:
+  auto_enrich:
+    enabled: false
