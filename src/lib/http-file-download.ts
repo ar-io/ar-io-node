@@ -39,6 +39,31 @@ import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { anySignal, ClearableSignal } from 'any-signal';
 
+/**
+ * The bytes arrived but are not the ones asked for: too many of them, or a
+ * digest that does not match. Distinct from every transport failure because
+ * it says something about the source, not the network, and a caller
+ * monitoring for tampering should not have that signal drowned by timeouts
+ * and rate limits.
+ */
+export class DownloadIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DownloadIntegrityError';
+  }
+}
+
+/** The server answered with a status other than the one expected. */
+export class DownloadHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, statusText: string) {
+    super(`HTTP ${status} ${statusText}`);
+    this.name = 'DownloadHttpError';
+    this.status = status;
+  }
+}
+
 export interface DownloadFileOptions {
   /** Resource to fetch. */
   url: string;
@@ -177,7 +202,7 @@ export async function downloadFile(
 
     if (response.status !== 206) {
       if (response.status < 200 || response.status >= 300) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        throw new DownloadHttpError(response.status, response.statusText);
       }
       if (existingSize > 0) {
         // A 200 to a Range request means the server ignored it and is sending
@@ -252,7 +277,7 @@ export async function downloadFile(
     if (expectedSize !== undefined) {
       if (bytesWritten > expectedSize) {
         safeUnlink(tmpPath);
-        throw new Error(
+        throw new DownloadIntegrityError(
           `Size overflow: expected ${expectedSize} bytes, got ${bytesWritten}`,
         );
       }
@@ -269,7 +294,7 @@ export async function downloadFile(
       digest = hash.digest('hex');
       if (digest !== expectedSha256) {
         safeUnlink(tmpPath);
-        throw new Error(
+        throw new DownloadIntegrityError(
           `SHA-256 mismatch: expected ${expectedSha256}, got ${digest}`,
         );
       }

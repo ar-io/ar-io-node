@@ -35,7 +35,11 @@ import {
   verifyIndexPublication,
 } from '../lib/index-publication.js';
 import { publicKeyFromSolanaAddress } from '../lib/httpsig.js';
-import { downloadFile } from '../lib/http-file-download.js';
+import {
+  DownloadHttpError,
+  DownloadIntegrityError,
+  downloadFile,
+} from '../lib/http-file-download.js';
 import { SubscribeConfig } from './config.js';
 import { StateStore } from './state.js';
 import { ArtifactKind } from './kinds/types.js';
@@ -85,6 +89,7 @@ export type SubscriptionResult =
   | 'replayed'
   | 'signature_failed'
   | 'verify_failed'
+  | 'download_failed'
   | 'skipped_disk_budget'
   | 'unknown_kind'
   | 'unreachable'
@@ -564,13 +569,29 @@ export class Subscriber {
     } catch (error: any) {
       // Partial files are deliberately left in place: the next poll resumes
       // from them rather than starting the band over.
-      this.log.warn('Band download failed; will retry', {
+      // Bytes that do not match what was signed say something about the
+      // source; everything else (timeouts, 402s, 429s, a publisher mid-swap)
+      // is the network or the meter, and must not be read as tampering.
+      const integrity = error instanceof DownloadIntegrityError;
+      this.log.warn(
+        integrity
+          ? 'Band bytes did not match their signed digests; will retry'
+          : 'Band download failed; will retry',
+        {
+          publisher,
+          index: index.name,
+          band: band.id,
+          error: error?.message,
+          ...(error instanceof DownloadHttpError
+            ? { status: error.status }
+            : {}),
+        },
+      );
+      this.count(
         publisher,
-        index: index.name,
-        band: band.id,
-        error: error?.message,
-      });
-      this.count(publisher, index.name, 'verify_failed');
+        index.name,
+        integrity ? 'verify_failed' : 'download_failed',
+      );
       return false;
     }
 

@@ -14,6 +14,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import { fileUrl, Subscriber } from './subscriber.js';
+import { subscriptionTotal } from './metrics.js';
 import { Publisher } from './publisher.js';
 import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
@@ -62,6 +63,8 @@ describe('Subscriber', () => {
   let clock: Date;
   /** Lets a test corrupt what the publisher serves without touching disk. */
   let tamper: ((urlPath: string, body: Buffer) => Buffer) | undefined;
+  /** Status to answer partition fetches with instead of their bytes. */
+  let failPartitionsWith: number | undefined;
 
   /**
    * A real base58 address, and deliberately a different key from the one that
@@ -86,6 +89,7 @@ describe('Subscriber', () => {
       filePath: path.join(tempDir, 'sub', 'state.json'),
     });
     tamper = undefined;
+    failPartitionsWith = undefined;
     clock = new Date('2026-09-23T00:00:00.000Z');
 
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -108,6 +112,10 @@ describe('Subscriber', () => {
             : path.join(pubDir, urlPath.replace('/ar-io/indexes/', ''));
 
       void (async () => {
+        if (failPartitionsWith !== undefined && isPartitionFetch(urlPath)) {
+          res.writeHead(failPartitionsWith).end();
+          return;
+        }
         let body: Buffer;
         try {
           body = await fs.readFile(filePath);
@@ -359,6 +367,16 @@ describe('Subscriber', () => {
     assert.deepEqual(await installedIds(), []);
   });
 
+  /** How often a result has been counted for this test's publisher. */
+  const resultCount = async (result: string): Promise<number> => {
+    const { values } = await subscriptionTotal.get();
+    return values
+      .filter(
+        (v) => v.labels.publisher === WALLET && v.labels.result === result,
+      )
+      .reduce((sum, v) => sum + v.value, 0);
+  };
+
   it('installs nothing when a file does not match its digest', async () => {
     await makeBand('band-a');
     await publish();
@@ -366,9 +384,15 @@ describe('Subscriber', () => {
     // The document is authentic; the bytes served are not what it names.
     tamper = (urlPath, body) =>
       isPartitionFetch(urlPath) ? Buffer.alloc(body.length, 0x41) : body;
+    const before = await resultCount('verify_failed');
 
     await makeSubscriber().pollOnce();
 
+    assert.equal(
+      await resultCount('verify_failed'),
+      before + 1,
+      'bytes that fail their digest are counted as verify_failed',
+    );
     assert.deepEqual(await installedIds(), []);
     assert.equal(
       existsSync(path.join(subInstalled, 'root-tx-index', 'band-a')),
@@ -431,6 +455,24 @@ describe('Subscriber', () => {
     }).pollOnce();
 
     assert.deepEqual(await installedIds(), ['band-a']);
+  });
+
+  it('counts a metered or failed fetch as download_failed, not tampering', async () => {
+    await makeBand('band-a');
+    await publish();
+    failPartitionsWith = 402;
+    const verifyBefore = await resultCount('verify_failed');
+    const downloadBefore = await resultCount('download_failed');
+
+    await makeSubscriber().pollOnce();
+
+    assert.deepEqual(await installedIds(), []);
+    assert.equal(await resultCount('download_failed'), downloadBefore + 1);
+    assert.equal(
+      await resultCount('verify_failed'),
+      verifyBefore,
+      'a 402 says nothing about the bytes',
+    );
   });
 
   it('replaces a band the publisher rebuilt under the same id', async () => {

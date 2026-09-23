@@ -105,7 +105,7 @@ export const publishDescribeDuration = new promClient.Histogram({
 
 export const subscriptionTotal = new promClient.Counter({
   name: 'index_subscription_total',
-  help: 'Subscription outcomes. signature_failed and replayed are security-relevant and should be zero; verify_failed means bytes did not match the digests the publisher signed.',
+  help: 'Subscription outcomes. signature_failed and replayed are security-relevant and should be zero; verify_failed means bytes did not match the digests the publisher signed; download_failed is the network or a meter (402, 429), not the bytes.',
   labelNames: ['publisher', 'index', 'transport', 'result'] as const,
   registers: [registry],
 });
