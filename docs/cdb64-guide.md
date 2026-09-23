@@ -105,7 +105,10 @@ are skipped, which lets a writer build an index and then rename it into place
 without it being loaded half-written.
 
 A directory is detected as a collection at runtime; no separate setting is
-needed. The same directory may also hold loose `.cdb` files, and both are
+needed. It need not exist yet, either: a local source that is missing and not
+named like a `.cdb` file is checked for every 30 seconds and loaded once it
+appears, which is what lets a gateway start before the
+[index-swarm sidecar](index-swarm.md) has created its install directory. The same directory may also hold loose `.cdb` files, and both are
 loaded, so an existing flat directory keeps working exactly as before.
 
 ### HTTP URL

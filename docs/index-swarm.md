@@ -9,11 +9,11 @@ compose profile behaves exactly as it did.
 
 ## Status
 
-The scaffold: the sidecar starts, serves health and metrics, checks that the
-gateway beside it is new enough to load what it installs, and idles. The
-publish and subscribe loops land in later changes, so configuring
-`INDEX_SWARM_PUBLISH` or `INDEX_SWARM_SUBSCRIBE` today records the intent and
-reports it, but moves no data yet.
+Publishing and subscribing work over HTTP: a publisher signs and serves its
+bands, a subscriber verifies, downloads and installs them, and the gateway
+beside it loads them without a restart. The torrent transport, which takes
+the bytes off the publisher's HTTP routes, comes later; until then every
+subscriber fetches from the publisher's metered routes.
 
 ## What it is, and what it is not
 
@@ -69,6 +69,31 @@ The signing identity is the gateway's registered observer key
 publication against that record, so a publisher running on the auto-generated
 fallback key has nothing anyone can verify against and will refuse to publish.
 
+### Producing bands
+
+The publisher offers whatever band directories are under
+`data/indexes/published/<index>/`; it does not build indexes itself. A band is
+a [partitioned CDB64 index](cdb64-format.md#partitioned-cdb64-index-format),
+for example from the local database:
+
+```bash
+./tools/export-sqlite-to-cdb64 --partitioned \
+  --output-dir data/indexes/published/root-tx-index/band-tip.tmp
+mv data/indexes/published/root-tx-index/band-tip.tmp \
+  data/indexes/published/root-tx-index/band-tip
+```
+
+Build under a `.tmp` name and rename into place: directories ending in `.tmp`
+are skipped, so a band is never described half-written.
+
+To replace a band, prefer a fresh id per build (`band-tip-20260923T1200`,
+say) and delete the previous one after the next scan: subscribers install
+the new band, then retire the old after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`.
+Swapping under the same id also works, but a directory cannot be renamed over
+a non-empty one, so there is a moment when the band is absent; a scan that
+lands in it withdraws the band until the next scan, and subscribers retire it
+in the meantime.
+
 ### Publishing cadence
 
 The publisher rescans every `INDEX_SWARM_PUBLISH_SCAN_INTERVAL_SECONDS`
@@ -114,6 +139,34 @@ What a subscriber refuses, and why:
 An expired document is installed anyway, with a warning: expiry is a signal
 that the publisher has gone quiet, not that its bands have gone bad.
 
+`INDEX_SWARM_TRUSTED_PUBLISHERS`, a comma-separated list of wallets, narrows
+the registry check and never replaces it: a publisher on the list still has
+to sign with its registered key.
+
+### Pointing the gateway at installed bands
+
+The subscriber installs into `data/indexes/installed/<index>/`. The gateway
+loads a band only if that directory is one of its CDB64 sources, so add it,
+**first**, to `CDB64_ROOT_TX_INDEX_SOURCES` on the gateway, keeping whatever
+was there after it:
+
+```bash
+CDB64_ROOT_TX_INDEX_SOURCES=data/indexes/installed/root-tx-index,<previous sources>
+```
+
+First, because sources are searched in the order given and a fresh band from
+a publisher should answer before an older shipped snapshot. If this variable
+was unset, `<previous sources>` is the shipped default listed in
+[envs.md](envs.md); write it out, or those indexes stop being searched.
+
+The directory need not exist when the gateway starts. A local source that is
+missing and not named like a `.cdb` file is treated as a directory nobody has
+created yet and checked for every 30 seconds, so the order in which the
+gateway and the sidecar first start does not matter. This needs
+`CDB64_ROOT_TX_INDEX_WATCH` left at its default of `true`, which is also what
+lets bands come and go without a restart. Changing the sources variable does
+need a gateway restart.
+
 ### What the gateway serves
 
 The gateway's side is four read-only routes under `/ar-io/indexes`: the signed
@@ -144,10 +197,14 @@ it could fetch. The gateway mounts `data/indexes` read only: it serves
 
 ```text
 data/indexes/
-  published/          # bands this node offers; the gateway serves these
+  published/
+    publication.json  # the signed document; the gateway serves it
+    <index>/<band>/   # bands this node offers
+    blobs/            # the same files by SHA-256, as hard links
   incoming/           # downloads in progress; never read by the gateway
-  installed/          # bands in use; the gateway loads these
-  state.json          # sequences seen and bands installed
+  installed/
+    <index>/<band>/   # bands in use; the gateway loads these
+  state.json          # hashes, sequences seen and bands installed
 ```
 
 `state.json` is re-derivable. If it is unreadable the sidecar renames it to
@@ -170,8 +227,27 @@ Metrics worth a dashboard:
 |---|---|
 | `index_swarm_up` | 1 while running; 0 during shutdown |
 | `index_swarm_configured_total{role}` | Zero on both roles means idle by configuration, not broken |
-| `index_swarm_core_compatible{result}` | Exactly one of `compatible`, `too_old`, `unknown` is 1. `too_old` means bands would be installed into a gateway that cannot load them; `unknown` means the gateway could not be reached, which is not the same thing |
+| `index_swarm_core_compatible{result}` | Exactly one of `compatible`, `too_old`, `unknown` is 1. `too_old` means the gateway cannot load bands, so the subscriber is waiting for an upgrade; `unknown` means the gateway could not be reached, which is not the same thing |
 | `index_swarm_build_info{version,node_version}` | Which build is deployed |
+| `index_publish_total{index,result}` | `published` when a new document was written, `unchanged` when none was needed, `failed` on error |
+| `index_publish_manifest_age_seconds` | Age of this node's document. Past the TTL, subscribers see this publisher as stale |
+| `index_publish_sequence`, `index_publish_bands{index}` | What is currently offered |
+| `index_publish_describe_duration_seconds{index}` | Time spent hashing a band. A steady stream means bands are churning |
+| `index_subscription_total{publisher,index,transport,result}` | Outcomes: one per poll for the document (`index` empty), plus one per band that was fetched. `installed` and `unchanged` are healthy; see below for the rest |
+| `index_subscription_manifest_age_seconds{publisher}` | Age of the newest document from each publisher. **The alarm that matters**: climbing past the publisher's TTL means it has gone quiet |
+| `index_subscription_sequence{publisher}`, `index_swarm_installed_bands{index}` | What is installed |
+| `index_subscription_bytes_total{transport}` | Which transport is doing the work |
+
+The subscription results that need attention:
+
+| `result` | Meaning | Action |
+|---|---|---|
+| `signature_failed` | A document did not verify against the registered key | Security-relevant; should be zero. Check the publisher's registry record and who answers at its URL |
+| `replayed` | A document older than one already installed | Security-relevant if sustained; a cache in front of the publisher can cause one-offs |
+| `verify_failed` | Downloaded bytes did not match their signed digests | Retried every poll. Sustained means a bad mirror or disk |
+| `skipped_disk_budget` | The band would exceed `INDEX_SWARM_MAX_DISK_BYTES` | Raise the budget or subscribe to less |
+| `unknown_kind` | A band of a kind this build does not implement | Upgrade the sidecar, or ignore |
+| `unreachable`, `error` | The publisher or the registry could not be read | Bands already installed keep serving |
 
 ## Operational notes
 
@@ -179,31 +255,63 @@ Metrics worth a dashboard:
   (50 MB × 3 by default). Docker's json-file driver is unbounded by default,
   which on a long-lived gateway quietly fills the disk holding
   `/var/lib/docker`.
+- **Outside compose**, override the healthcheck. The image's own
+  `HEALTHCHECK` probes the gateway's port, so a sidecar started with plain
+  `docker run` reports unhealthy while working; pass
+  `--health-cmd` with the `/healthz` check from `docker-compose.yaml`.
 - **`init: true`** is set, so signals reach the process and exited children are
   reaped. Without it a wedged process needs a kill, which is how a band install
   gets left half-written.
 - **`stop_grace_period` is 30s**, giving an install in progress time to finish
   before the container is killed.
-- **Disk.** A full root-tx index is roughly 20 GB today. `incoming/` holds one
-  band in addition while it downloads.
+- **Disk.** It depends entirely on what is published. The root-tx set
+  Turbo's fleet builds is about 20 GB; the three older snapshots shipped as
+  the gateway's defaults are 122, 150 and 245 GB. `incoming/` holds one band in addition while it
+  downloads, on the same filesystem so the install is a rename. Set
+  `INDEX_SWARM_MAX_DISK_BYTES` before subscribing to anything that carries
+  historical bands.
 - **Anonymous volume.** Running the core image inherits its `VOLUME /app/data`
   declaration, so each container creates an anonymous volume holding nothing
   but the mount point for `data/indexes`. Harmless, but it accumulates across
   recreates; `docker compose down -v` clears them.
+
+## Turning it off
+
+Stopping the sidecar changes nothing the gateway serves: installed bands stay
+loaded and published bands stay served, from the last document written.
+Subscribers see that document age and, once it expires, alarm. To remove the
+feature entirely:
+
+1. `docker compose --profile index-swarm stop index-swarm`, then
+   `docker compose --profile index-swarm rm -f index-swarm`.
+2. On a subscriber, restore the previous `CDB64_ROOT_TX_INDEX_SOURCES` and
+   restart the gateway, then delete `data/indexes/installed/`. In that order,
+   so the gateway is no longer holding the files open when they go.
+3. On a publisher, delete `data/indexes/published/publication.json`. The
+   gateway stops serving the routes and drops the `indexes` block from
+   `/ar-io/info` on its next request, without a restart. The band
+   directories can then go too.
+
+`state.json` can be deleted with everything else. Kept, it holds the
+sequences already seen, which is what stops a re-enabled subscriber from
+accepting a replayed older document.
 
 ## Troubleshooting
 
 **`index-swarm idle: nothing configured`** — neither `INDEX_SWARM_PUBLISH` nor
 `INDEX_SWARM_SUBSCRIBE` is set. This is the default and is not an error.
 
-**`Gateway is too old to load installed index bands`** — the gateway release
-predates the collection source, so anything installed would sit on disk unread.
-Upgrade the gateway, or unset the subscription until you do.
+**`Gateway is too old to load installed index bands; not installing until it
+is upgraded`** — the gateway predates the collection source, so anything
+installed would sit on disk unread. The subscriber skips its polls until the
+gateway reports `INDEX_SWARM_MIN_CORE_RELEASE` or later, and notices an
+upgrade by itself. Publishing is unaffected.
 
 **`Could not determine the gateway release`** — the gateway was unreachable at
-`INDEX_SWARM_CORE_URL` or reported a release the sidecar could not parse. The
-sidecar continues without the check, since a sidecar restarting in a loop
-beside a struggling gateway helps nobody.
+`INDEX_SWARM_CORE_URL` or reported a release the sidecar could not parse. Seen
+once at startup this is normal, since the gateway usually takes longer to
+start; the check repeats before each poll until the gateway answers. The
+subscriber installs meanwhile, because the cost of being wrong is disk.
 
 **`index-swarm publisher requires a registry-bound observer key`** — publishing
 is configured but no observer key is set, so nothing it signed could be
