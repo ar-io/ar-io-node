@@ -60,8 +60,14 @@ import {
 
 export interface PublisherSigner {
   privateKey: crypto.KeyObject;
-  /** The publisher's registered observer address. */
+  /** The registered observer address, which is what signs. */
   keyId: string;
+  /**
+   * The gateway's registered wallet, which is what identifies the publisher.
+   * A subscriber resolves this in the registry to find the URL to fetch from
+   * and the observer address the signature must carry.
+   */
+  wallet: string;
 }
 
 /**
@@ -75,9 +81,11 @@ export interface PublisherSigner {
 export function loadPublisherSigner({
   keypairPath,
   privateKeyBase58,
+  wallet,
 }: {
   keypairPath?: string;
   privateKeyBase58?: string;
+  wallet?: string;
 }): PublisherSigner | undefined {
   if (keypairPath !== undefined && privateKeyBase58 !== undefined) {
     throw new Error(
@@ -99,9 +107,16 @@ export function loadPublisherSigner({
     return undefined;
   }
 
+  const keyId = getSolanaAddress(crypto.createPublicKey(privateKey));
+
   return {
     privateKey,
-    keyId: getSolanaAddress(crypto.createPublicKey(privateKey)),
+    keyId,
+    // Falling back to the observer address covers the common case of one key
+    // serving both roles. Where they differ, a document naming the wrong
+    // identity is unresolvable: a subscriber would look up the observer
+    // address in the registry and find no gateway.
+    wallet: wallet ?? keyId,
   };
 }
 
@@ -454,7 +469,7 @@ export class Publisher {
 
     const document: IndexPublication = {
       version: 1,
-      publisher: this.signer.keyId,
+      publisher: this.signer.wallet,
       sequence: previousSequence + 1,
       previousManifestSha256: current?.digest ?? null,
       issuedAt: now.toISOString(),

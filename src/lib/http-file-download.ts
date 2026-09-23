@@ -62,6 +62,14 @@ export interface DownloadFileOptions {
   signal?: AbortSignal;
   /** Abort if the transfer has not finished within this many milliseconds. */
   timeoutMs?: number;
+  /**
+   * Cap the write rate, in bytes per second.
+   *
+   * A gateway's index volume is often a spinning disk that is also serving
+   * reads, and pulling a multi-gigabyte band at full speed competes with the
+   * traffic the gateway exists to serve. Unset means no cap.
+   */
+  maxBytesPerSecond?: number;
 }
 
 export interface DownloadFileResult {
@@ -110,6 +118,7 @@ export async function downloadFile(
     headers,
     signal,
     timeoutMs,
+    maxBytesPerSecond,
   } = options;
 
   if (rangeOffset !== undefined && expectedSize === undefined) {
@@ -205,6 +214,8 @@ export async function downloadFile(
     });
 
     let bytesWritten = existingSize;
+    const resumedFrom = existingSize;
+    const startedAt = Date.now();
     const reader = response.body.getReader();
     const bodyStream = new Readable({
       async read() {
@@ -217,6 +228,19 @@ export async function downloadFile(
           bytesWritten += value.length;
           hash?.update(value);
           this.push(value);
+
+          // Pace by sleeping for however long this chunk "should" have taken,
+          // measured against the whole transfer rather than chunk by chunk,
+          // so a burst is absorbed rather than compounding.
+          if (maxBytesPerSecond !== undefined && maxBytesPerSecond > 0) {
+            const transferred = bytesWritten - resumedFrom;
+            const owedMs =
+              (transferred / maxBytesPerSecond) * 1000 -
+              (Date.now() - startedAt);
+            if (owedMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, owedMs));
+            }
+          }
         } catch (error) {
           this.destroy(error as Error);
         }

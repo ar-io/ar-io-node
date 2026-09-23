@@ -44,7 +44,11 @@ describe('Publisher', () => {
   let blobsDir: string;
   let publicationFile: string;
   let state: StateStore;
-  let signer: { privateKey: crypto.KeyObject; keyId: string };
+  let signer: {
+    privateKey: crypto.KeyObject;
+    keyId: string;
+    wallet: string;
+  };
   let clock: Date;
 
   beforeEach(async () => {
@@ -55,7 +59,14 @@ describe('Publisher', () => {
     state = new StateStore({ log, filePath: path.join(tempDir, 'state.json') });
 
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
-    signer = { privateKey, keyId: getSolanaAddress(publicKey) };
+    // The wallet is the publisher's identity and the observer key is the
+    // signer; deliberately different keys here, since they only sometimes
+    // coincide and a document must name the identity, not the signer.
+    signer = {
+      privateKey,
+      keyId: getSolanaAddress(publicKey),
+      wallet: getSolanaAddress(crypto.generateKeyPairSync('ed25519').publicKey),
+    };
     clock = new Date('2026-09-23T00:00:00.000Z');
   });
 
@@ -111,7 +122,12 @@ describe('Publisher', () => {
     assert.equal(await makePublisher().scanOnce(), true);
 
     const doc = await readPublication();
-    assert.equal(doc.publisher, signer.keyId);
+    assert.equal(doc.publisher, signer.wallet, 'names the identity');
+    assert.equal(
+      doc.signature?.keyId,
+      signer.keyId,
+      'signed by the observer key',
+    );
     assert.equal(doc.sequence, 1);
     assert.equal(doc.previousManifestSha256, null);
     assert.equal(doc.indexes[0].name, 'root-tx-index');
