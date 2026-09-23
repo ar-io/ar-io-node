@@ -1118,7 +1118,10 @@ paths:
         egress: this is the metered tier, and the swarm is the free one.
         Supports a single byte range, which resuming downloaders and torrent
         WebSeeds use. 503 with Retry-After while the file on disk briefly
-        disagrees with the publication during a band update.
+        disagrees with the publication during a band update. Sent with
+        `Cache-Control: public, no-cache`, because a name is reused when a
+        band is rebuilt; fetch by digest from the blob route for anything a
+        cache should keep.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
         - { name: band, in: path, required: true, schema: { type: string } }

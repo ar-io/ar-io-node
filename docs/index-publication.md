@@ -197,9 +197,15 @@ digest is the same whichever you use, so check it every time.
 
 | Route | Addresses | Cache-Control |
 |---|---|---|
-| `GET /ar-io/indexes/<name>/<band>/<file>` | By name, within the current publication | `public, max-age=3600` |
+| `GET /ar-io/indexes/<name>/<band>/<file>` | By name, within the current publication | `public, no-cache` |
 | `GET /ar-io/indexes/blob/<sha256>` | By content | `public, max-age=31536000, immutable` |
 | `GET /ar-io/indexes/<name>/<band>.torrent` | The band as a torrent | `public, max-age=300` |
+
+Prefer the blob route. A name is reused whenever a band is rebuilt, which the
+rolling tip band is on every cadence, so named files must be revalidated and
+a cache in front of the publisher cannot keep them; a digest can never change
+meaning, so an edge cache or CDN may hold a blob indefinitely. The sidecar
+fetches by digest for exactly this reason.
 
 Only files the current publication lists are served. A name the document does
 not list is a 404 even if a file of that name exists on the server, and a

@@ -9,11 +9,11 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import crypto from 'node:crypto';
 import * as http from 'node:http';
 import * as fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { Subscriber } from './subscriber.js';
+import { fileUrl, Subscriber } from './subscriber.js';
 import { Publisher } from './publisher.js';
 import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
@@ -30,6 +30,24 @@ const txId = (seed: number): Buffer => {
   for (let i = 0; i < 32; i++) buf[i] = (seed + i) % 256;
   return buf;
 };
+
+describe('fileUrl', () => {
+  const file = { name: '00.cdb', size: 1, sha256: 'ab'.repeat(32) };
+
+  it('fetches a file on the publisher gateway by digest', () => {
+    assert.equal(
+      fileUrl('https://gw.example', '/ar-io/indexes/idx/band/', file),
+      `https://gw.example/ar-io/indexes/blob/${'ab'.repeat(32)}`,
+    );
+  });
+
+  it('fetches a file on another server by name', () => {
+    assert.equal(
+      fileUrl('https://gw.example', 'https://cdn.example/idx/band/', file),
+      'https://cdn.example/idx/band/00.cdb',
+    );
+  });
+});
 
 describe('Subscriber', () => {
   let tempDir: string;
@@ -81,10 +99,13 @@ describe('Subscriber', () => {
     // is exercised rather than assumed.
     server = http.createServer((req, res) => {
       const urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
+      const blob = /^\/ar-io\/indexes\/blob\/([0-9a-f]{64})$/.exec(urlPath);
       const filePath =
         urlPath === '/ar-io/indexes'
           ? path.join(pubDir, 'publication.json')
-          : path.join(pubDir, urlPath.replace('/ar-io/indexes/', ''));
+          : blob !== null
+            ? path.join(pubDir, 'blobs', blob[1])
+            : path.join(pubDir, urlPath.replace('/ar-io/indexes/', ''));
 
       void (async () => {
         let body: Buffer;
@@ -125,6 +146,26 @@ describe('Subscriber', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await fs.rm(tempDir, { recursive: true, force: true });
   });
+
+  /**
+   * Whether a request is for a partition file. Bands are fetched by digest,
+   * so the path does not say which file it is; the publisher's own copy
+   * does.
+   */
+  const isPartitionFetch = (urlPath: string): boolean => {
+    const digest = /\/blob\/([0-9a-f]{64})$/.exec(urlPath)?.[1];
+    if (digest === undefined) return urlPath.endsWith('.cdb');
+    const doc = JSON.parse(
+      readFileSync(path.join(pubDir, 'publication.json'), 'utf8'),
+    );
+    return doc.indexes.some((index: any) =>
+      index.bands.some((band: any) =>
+        band.files.some(
+          (file: any) => file.sha256 === digest && file.name.endsWith('.cdb'),
+        ),
+      ),
+    );
+  };
 
   const registryFor = (
     override?: Partial<PublisherRecord>,
@@ -324,7 +365,7 @@ describe('Subscriber', () => {
 
     // The document is authentic; the bytes served are not what it names.
     tamper = (urlPath, body) =>
-      urlPath.endsWith('.cdb') ? Buffer.alloc(body.length, 0x41) : body;
+      isPartitionFetch(urlPath) ? Buffer.alloc(body.length, 0x41) : body;
 
     await makeSubscriber().pollOnce();
 
@@ -506,7 +547,7 @@ describe('Subscriber', () => {
 
     // A transient failure: the bytes served do not match their digests.
     tamper = (urlPath, body) =>
-      urlPath.endsWith('.cdb') ? Buffer.alloc(body.length, 0x41) : body;
+      isPartitionFetch(urlPath) ? Buffer.alloc(body.length, 0x41) : body;
     const subscriber = makeSubscriber();
     await subscriber.pollOnce();
     assert.deepEqual(await installedIds(), []);

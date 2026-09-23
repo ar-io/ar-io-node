@@ -48,6 +48,28 @@ import {
   subscriptionTotal,
 } from './metrics.js';
 
+/**
+ * Where to fetch one band file from.
+ *
+ * A band whose files live on the publisher's own gateway (a relative
+ * `baseUrl`) is fetched by digest from the blob route rather than by name.
+ * The blob address can never change meaning, so an edge cache or CDN in
+ * front of the publisher may keep it indefinitely, whereas a name is reused
+ * whenever a band is rebuilt and must be revalidated. An absolute `baseUrl`
+ * names some other server, whose layout this cannot assume, so its files are
+ * fetched as named.
+ */
+export function fileUrl(
+  origin: string,
+  baseUrl: string,
+  file: BandFile,
+): string {
+  if (/^https?:\/\//i.test(baseUrl)) {
+    return new URL(`${baseUrl}${file.name}`).toString();
+  }
+  return new URL(`/ar-io/indexes/blob/${file.sha256}`, origin).toString();
+}
+
 /** True when two file lists name the same bytes, in any order. */
 export function sameFiles(a: BandFile[], b: BandFile[]): boolean {
   if (a.length !== b.length) return false;
@@ -520,7 +542,7 @@ export class Subscriber {
       await Promise.all(
         band.files.map((file) =>
           limit(async () => {
-            const url = new URL(`${baseUrl}${file.name}`, origin).toString();
+            const url = fileUrl(origin, baseUrl, file);
             const result = await downloadFile({
               url,
               destPath: path.join(incoming, file.name),

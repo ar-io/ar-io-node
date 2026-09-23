@@ -163,6 +163,8 @@ describe('/ar-io/indexes routes', () => {
       );
       assert.equal(res.headers.etag, `"${file.sha256}"`);
       assert.equal(res.headers['accept-ranges'], 'bytes');
+      // Names are reused when a band is rebuilt, so caches must revalidate.
+      assert.equal(res.headers['cache-control'], 'public, no-cache');
       const expected = `sha-256=:${Buffer.from(file.sha256, 'hex').toString('base64')}:`;
       assert.equal(res.headers['repr-digest'], expected);
       assert.equal(res.headers['content-digest'], expected);

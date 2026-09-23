@@ -215,10 +215,13 @@ export function createIndexesRouter({
         return;
       }
       await serveFile(req, res, entry, 'file', {
-        // A band id could in principle be reused for different bytes; the
-        // ETag makes a stale copy detectable, and this bounds how long one
-        // is trusted without asking.
-        cacheControl: 'public, max-age=3600',
+        // A name is not an address: the rolling tip band is rebuilt under the
+        // same name on every cadence. A cache holding the old bytes would
+        // hand every subscriber a file that fails its digest until it
+        // expired, so caches must revalidate (the ETag is the digest, so an
+        // unchanged file costs a 304). Anything cacheable goes through the
+        // blob route, whose address cannot change meaning.
+        cacheControl: 'public, no-cache',
       });
     },
   );
