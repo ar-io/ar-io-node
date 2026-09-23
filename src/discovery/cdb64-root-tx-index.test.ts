@@ -939,4 +939,282 @@ describe('Cdb64RootTxIndex', () => {
       });
     });
   });
+
+  describe('collection directories', () => {
+    /**
+     * A collection is a directory whose immediate subdirectories are each a
+     * partitioned index. Index bands published by another gateway are
+     * installed and retired underneath one of these while the node runs, so
+     * the readers have to follow without a restart.
+     */
+    const createBand = async (
+      bandDir: string,
+      entries: Array<{ dataItemId: Buffer; rootTxId: Buffer }>,
+    ): Promise<void> => {
+      const writer = new PartitionedCdb64Writer(bandDir);
+      await writer.open();
+      for (const entry of entries) {
+        await writer.add(
+          entry.dataItemId,
+          encodeCdb64Value({ rootTxId: entry.rootTxId }),
+        );
+      }
+      await writer.finalize();
+    };
+
+    /** Poll until a condition holds, so the tests do not race the watcher. */
+    const waitFor = async (
+      predicate: () => Promise<boolean>,
+      timeoutMs = 8000,
+    ): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (await predicate()) return true;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return false;
+    };
+
+    /**
+     * Install a band the way a subscriber does: build it elsewhere, then
+     * rename it into place so the directory never exists half-written.
+     */
+    const installBand = async (
+      collectionDir: string,
+      stagingDir: string,
+      bandName: string,
+      entries: Array<{ dataItemId: Buffer; rootTxId: Buffer }>,
+    ): Promise<void> => {
+      await createBand(stagingDir, entries);
+      await fs.rename(stagingDir, path.join(collectionDir, bandName));
+    };
+
+    it('loads every band in a collection directory', async () => {
+      const collectionDir = path.join(tempDir, 'collection');
+      await fs.mkdir(collectionDir, { recursive: true });
+
+      const idA = createTxId(11);
+      const idB = createTxId(22);
+      await createBand(path.join(collectionDir, 'band-a'), [
+        { dataItemId: idA, rootTxId: createTxId(101) },
+      ]);
+      await createBand(path.join(collectionDir, 'band-b'), [
+        { dataItemId: idB, rootTxId: createTxId(102) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [collectionDir],
+        watch: false,
+      });
+
+      const resultA = await index.getRootTx(toB64Url(idA));
+      const resultB = await index.getRootTx(toB64Url(idB));
+      assert.equal(resultA?.rootTxId, toB64Url(createTxId(101)));
+      assert.equal(resultB?.rootTxId, toB64Url(createTxId(102)));
+
+      await index.close();
+    });
+
+    it('picks up a band installed while running, with no restart', async () => {
+      const collectionDir = path.join(tempDir, 'collection-add');
+      await fs.mkdir(collectionDir, { recursive: true });
+
+      const existingId = createTxId(31);
+      await createBand(path.join(collectionDir, 'band-existing'), [
+        { dataItemId: existingId, rootTxId: createTxId(201) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [collectionDir],
+        watch: true,
+      });
+
+      // Initialize, and confirm the new band's key is not resolvable yet.
+      assert(
+        (await index.getRootTx(toB64Url(existingId))) !== undefined,
+        'existing band should resolve',
+      );
+      const newId = createTxId(32);
+      assert.equal(await index.getRootTx(toB64Url(newId)), undefined);
+
+      await installBand(
+        collectionDir,
+        path.join(tempDir, 'staging-new'),
+        'band-new',
+        [{ dataItemId: newId, rootTxId: createTxId(202) }],
+      );
+
+      const found = await waitFor(
+        async () => (await index.getRootTx(toB64Url(newId))) !== undefined,
+      );
+      assert(found, 'band installed at runtime should become resolvable');
+
+      const result = await index.getRootTx(toB64Url(newId));
+      assert.equal(result?.rootTxId, toB64Url(createTxId(202)));
+
+      // The band that was already there is untouched.
+      assert(
+        (await index.getRootTx(toB64Url(existingId))) !== undefined,
+        'existing band should still resolve',
+      );
+
+      await index.close();
+    });
+
+    it('drops a band when it is retired', async () => {
+      const collectionDir = path.join(tempDir, 'collection-remove');
+      await fs.mkdir(collectionDir, { recursive: true });
+
+      const keptId = createTxId(41);
+      const goingId = createTxId(42);
+      await createBand(path.join(collectionDir, 'band-kept'), [
+        { dataItemId: keptId, rootTxId: createTxId(301) },
+      ]);
+      const goingDir = path.join(collectionDir, 'band-going');
+      await createBand(goingDir, [
+        { dataItemId: goingId, rootTxId: createTxId(302) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [collectionDir],
+        watch: true,
+      });
+
+      assert(
+        (await index.getRootTx(toB64Url(goingId))) !== undefined,
+        'band should resolve before removal',
+      );
+
+      await fs.rm(goingDir, { recursive: true, force: true });
+
+      const dropped = await waitFor(
+        async () => (await index.getRootTx(toB64Url(goingId))) === undefined,
+      );
+      assert(dropped, 'retired band should stop resolving');
+
+      // Retiring one band must not disturb the others.
+      const kept = await index.getRootTx(toB64Url(keptId));
+      assert.equal(kept?.rootTxId, toB64Url(createTxId(301)));
+
+      await index.close();
+    });
+
+    it('ignores a band directory that is still being written', async () => {
+      const collectionDir = path.join(tempDir, 'collection-tmp');
+      await fs.mkdir(collectionDir, { recursive: true });
+
+      const readyId = createTxId(51);
+      const partialId = createTxId(52);
+      await createBand(path.join(collectionDir, 'band-ready'), [
+        { dataItemId: readyId, rootTxId: createTxId(401) },
+      ]);
+      // A `.tmp` suffix marks a band mid-install; it must not be loaded even
+      // though it already has a valid manifest.
+      await createBand(path.join(collectionDir, 'band-partial.tmp'), [
+        { dataItemId: partialId, rootTxId: createTxId(402) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [collectionDir],
+        watch: false,
+      });
+
+      assert(
+        (await index.getRootTx(toB64Url(readyId))) !== undefined,
+        'finished band should resolve',
+      );
+      assert.equal(
+        await index.getRootTx(toB64Url(partialId)),
+        undefined,
+        'band still being written should be ignored',
+      );
+
+      await index.close();
+    });
+
+    it('serves a flat directory and a collection in the same source', async () => {
+      // A directory may hold loose .cdb files, band subdirectories, or both.
+      // Supporting both keeps an existing flat directory working unchanged.
+      const mixedDir = path.join(tempDir, 'mixed');
+      await fs.mkdir(mixedDir, { recursive: true });
+
+      const looseId = createTxId(61);
+      const bandId = createTxId(62);
+      await createTestCdb(path.join(mixedDir, 'loose.cdb'), [
+        { dataItemId: looseId, rootTxId: createTxId(501) },
+      ]);
+      await createBand(path.join(mixedDir, 'band-one'), [
+        { dataItemId: bandId, rootTxId: createTxId(502) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [mixedDir],
+        watch: false,
+      });
+
+      assert.equal(
+        (await index.getRootTx(toB64Url(looseId)))?.rootTxId,
+        toB64Url(createTxId(501)),
+      );
+      assert.equal(
+        (await index.getRootTx(toB64Url(bandId)))?.rootTxId,
+        toB64Url(createTxId(502)),
+      );
+
+      await index.close();
+    });
+
+    it('watches every configured directory, not only the first', async () => {
+      // Previously a single shared watcher meant the second and later
+      // directory sources were never watched, and files added to them were
+      // silently missed until the next restart.
+      const firstDir = path.join(tempDir, 'watch-first');
+      const secondDir = path.join(tempDir, 'watch-second');
+      await fs.mkdir(firstDir, { recursive: true });
+      await fs.mkdir(secondDir, { recursive: true });
+
+      const firstId = createTxId(71);
+      await createTestCdb(path.join(firstDir, 'first.cdb'), [
+        { dataItemId: firstId, rootTxId: createTxId(601) },
+      ]);
+      const secondId = createTxId(72);
+      await createTestCdb(path.join(secondDir, 'second.cdb'), [
+        { dataItemId: secondId, rootTxId: createTxId(602) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [firstDir, secondDir],
+        watch: true,
+      });
+
+      assert(
+        (await index.getRootTx(toB64Url(firstId))) !== undefined,
+        'first directory should resolve',
+      );
+
+      // Add a file to the SECOND directory, the one that used to go unwatched.
+      const lateId = createTxId(73);
+      const stagedPath = path.join(tempDir, 'late-staged.cdb');
+      await createTestCdb(stagedPath, [
+        { dataItemId: lateId, rootTxId: createTxId(603) },
+      ]);
+      await fs.rename(stagedPath, path.join(secondDir, 'late.cdb'));
+
+      const found = await waitFor(
+        async () => (await index.getRootTx(toB64Url(lateId))) !== undefined,
+      );
+      assert(
+        found,
+        'a file added to a later directory source should be picked up',
+      );
+
+      await index.close();
+    });
+  });
 });

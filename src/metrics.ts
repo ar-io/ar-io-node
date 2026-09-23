@@ -228,6 +228,16 @@ export const chunkIngestConfirmedRootsPrunedTotal = new promClient.Counter({
 });
 
 //
+// CDB64 root transaction index
+//
+
+export const cdb64RootTxIndexReadersGauge = new promClient.Gauge({
+  name: 'cdb64_root_tx_index_readers',
+  help: 'Open CDB64 root-tx index readers, by configured source. For a collection source this is the number of index bands currently installed, so it falls when a band is retired and rises when one arrives.',
+  labelNames: ['source'] as const,
+});
+
+//
 // Global bundle metrics
 //
 
