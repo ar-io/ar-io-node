@@ -114,6 +114,22 @@ What a subscriber refuses, and why:
 An expired document is installed anyway, with a warning: expiry is a signal
 that the publisher has gone quiet, not that its bands have gone bad.
 
+### What the gateway serves
+
+The gateway's side is four read-only routes under `/ar-io/indexes`: the signed
+publication document, each published file by name, each by its SHA-256, and a
+band's torrent once one exists. They serve **only what the publication lists**.
+A request is looked up in a map built from the signed document rather than
+joined onto a path, so anything else in the directory, such as a band still
+being written or the sidecar's own state, is unreachable however it is asked
+for. See [openapi.yaml](openapi.yaml) for the headers each returns.
+
+The byte routes are rate limited and priced like data egress (see
+[x402-and-rate-limiting.md](x402-and-rate-limiting.md)); the publication
+document is not, so a client that has run out of tokens can still learn what
+it could fetch. The gateway mounts `data/indexes` read only: it serves
+`published/`, loads `installed/`, and never writes to either.
+
 ## Volume layout
 
 ```text

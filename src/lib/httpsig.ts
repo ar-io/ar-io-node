@@ -42,6 +42,10 @@ export const TRIGGER_HEADERS = new Set([
   'x-arns-ant-id',
   'x-arweave-chunk-data-root',
   'x-arweave-chunk-tx-id',
+  // An index publication. The document also carries its own detached
+  // signature, which survives relay; this signs the live response, binding
+  // the body through Content-Digest to what this gateway actually served.
+  'x-ar-io-index-publication',
   'x-ar-io-chunk-source-type',
 ]);
 

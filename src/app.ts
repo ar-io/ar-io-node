@@ -18,6 +18,7 @@ import { createHttpSigMiddleware } from './middleware/httpsig.js';
 import { warnIfWalkConcurrencyUnsafe } from './workers/fs-cleanup-worker.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
+import { createIndexesRouter } from './routes/indexes.js';
 import { arnsRouter } from './routes/arns.js';
 import { chunkRouter } from './routes/chunk/index.js';
 import { dataRouter } from './routes/data/index.js';
@@ -152,6 +153,16 @@ if (system.rateLimiter !== undefined) {
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);
+// Index artifacts published by the index-swarm sidecar. Mounted ahead of the
+// data router, whose `/:id` catch-all would otherwise claim these paths.
+app.use(
+  createIndexesRouter({
+    log,
+    publishedDir: config.INDEXES_PUBLISHED_DIR,
+    rateLimiter: system.rateLimiter,
+    paymentProcessor: system.paymentProcessor,
+  }),
+);
 app.use(datasetsRouter);
 app.use(chunkRouter);
 app.use(rootRouter);

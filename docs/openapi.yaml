@@ -1054,6 +1054,118 @@ paths:
                   - supportedManifestVersions
                   - release
                   - bundlers
+  '/ar-io/indexes':
+    get:
+      tags: [Gateway]
+      summary: Get the index publication this gateway offers
+      description: |
+        Returns the signed document listing the index artifacts this gateway's
+        index-swarm sidecar publishes: each index, its bands, and every file in
+        each band with its size and SHA-256. The document carries a detached
+        Ed25519 signature by the gateway's registered observer key, so it
+        verifies against the gateway registry however it was obtained. The
+        live response is additionally signed with HTTPSIG, covering
+        Content-Digest.
+
+        The byte routes below serve only what this document lists.
+        404 when the gateway publishes nothing.
+      responses:
+        '200':
+          description: The publication document.
+          headers:
+            ETag:
+              schema: { type: string }
+            Content-Digest:
+              schema: { type: string }
+              description: RFC 9530 SHA-256 of the body.
+            x-ar-io-index-publication:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+        '304':
+          description: Not modified.
+        '404':
+          description: Nothing published.
+  '/ar-io/indexes/{name}/{band}/{file}':
+    get:
+      tags: [Gateway]
+      summary: Get a published index file by name
+      description: |
+        Serves one file of a published band. Rate limited and priced as data
+        egress: this is the metered tier, and the swarm is the free one.
+        Supports a single byte range, which resuming downloaders and torrent
+        WebSeeds use. 503 with Retry-After while the file on disk briefly
+        disagrees with the publication during a band update.
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: band, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: string } }
+        - { name: Range, in: header, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: The whole file.
+          headers:
+            ETag: { schema: { type: string }, description: The file's SHA-256, quoted. }
+            Repr-Digest: { schema: { type: string }, description: RFC 9530 SHA-256 of the whole file. }
+            Content-Digest: { schema: { type: string }, description: RFC 9530 SHA-256 of this body. }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: A byte range of the file. Carries Repr-Digest but not Content-Digest.
+        '304':
+          description: Not modified.
+        '400':
+          description: Malformed name or range.
+        '402':
+          description: Payment required (x402), when rate limited and payments are enabled.
+        '404':
+          description: Not listed in the publication.
+        '416':
+          description: Range not satisfiable.
+        '429':
+          description: Rate limited.
+        '503':
+          description: The file is being updated; retry.
+  '/ar-io/indexes/blob/{sha256}':
+    get:
+      tags: [Gateway]
+      summary: Get a published index file by content address
+      description: |
+        The same bytes as the named route, addressed by SHA-256, so a client
+        that knows a digest can fetch it from any gateway publishing it.
+        Immutable by construction. Rate limited like the named route.
+      parameters:
+        - { name: sha256, in: path, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
+      responses:
+        '200':
+          description: The file.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404':
+          description: No published file has this digest.
+  '/ar-io/indexes/{name}/{band}.torrent':
+    get:
+      tags: [Gateway]
+      summary: Get the torrent for a published band
+      description: |
+        BitTorrent metainfo for a published band. 404 until the publisher's
+        torrent engine has built one, and for any band the publication does
+        not list.
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: band, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The torrent file.
+          content:
+            application/x-bittorrent:
+              schema: { type: string, format: binary }
+        '404':
+          description: No torrent, or not a published band.
   '/ar-io/peers':
     get:
       tags: [Gateway]

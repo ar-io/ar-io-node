@@ -228,6 +228,22 @@ export const chunkIngestConfirmedRootsPrunedTotal = new promClient.Counter({
 });
 
 //
+// Index publication routes
+//
+
+export const indexesRequestsTotal = new promClient.Counter({
+  name: 'indexes_requests_total',
+  help: 'Requests to the /ar-io/indexes routes, by route and response status.',
+  labelNames: ['route', 'status'] as const,
+});
+
+export const indexesBytesServedTotal = new promClient.Counter({
+  name: 'indexes_bytes_served_total',
+  help: 'Index bytes served over HTTP, by route. The swarm is meant to carry most of this load; a steady climb here means subscribers are leaning on the HTTP fallback.',
+  labelNames: ['route'] as const,
+});
+
+//
 // CDB64 root transaction index
 //
 

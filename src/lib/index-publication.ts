@@ -226,6 +226,25 @@ function asInteger(
 }
 
 /**
+ * Whether a string is acceptable as a band id or file name: the same rule the
+ * validator applies to a manifest, exported so anything that maps request
+ * input onto these names applies exactly the same one.
+ */
+export function isValidPathSegment(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    PATH_SEGMENT_PATTERN.test(value) &&
+    !value.includes('..') &&
+    value !== '.'
+  );
+}
+
+/** Whether a string is acceptable as an index name. */
+export function isValidIndexName(value: unknown): value is string {
+  return typeof value === 'string' && INDEX_NAME_PATTERN.test(value);
+}
+
+/**
  * A path segment written to disk. Rejects traversal and separators outright
  * rather than relying on a caller to normalize: these names arrive from a
  * remote publisher and become file and directory names.
