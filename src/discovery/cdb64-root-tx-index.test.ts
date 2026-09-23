@@ -1216,5 +1216,139 @@ describe('Cdb64RootTxIndex', () => {
 
       await index.close();
     });
+
+    describe('a directory source that does not exist yet', () => {
+      /**
+       * A subscriber's gateway usually starts before the sidecar has created
+       * the install directory. The source has to be picked up when it
+       * appears, not written off as a missing file.
+       */
+      const originalPollMs = Cdb64RootTxIndex.PENDING_DIRECTORY_POLL_MS;
+      beforeEach(() => {
+        Cdb64RootTxIndex.PENDING_DIRECTORY_POLL_MS = 50;
+      });
+      afterEach(() => {
+        Cdb64RootTxIndex.PENDING_DIRECTORY_POLL_MS = originalPollMs;
+      });
+
+      it('loads it, and bands installed into it, once it appears', async () => {
+        // Missing two levels deep, as installed/<index> is on a fresh volume.
+        const collectionDir = path.join(tempDir, 'indexes', 'installed', 'x');
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [collectionDir],
+          watch: true,
+        });
+        const firstId = createTxId(41);
+        assert.equal(await index.getRootTx(toB64Url(firstId)), undefined);
+
+        await fs.mkdir(collectionDir, { recursive: true });
+        await installBand(
+          collectionDir,
+          path.join(tempDir, 'staging-first'),
+          'band-first',
+          [{ dataItemId: firstId, rootTxId: createTxId(211) }],
+        );
+        assert(
+          await waitFor(
+            async () =>
+              (await index.getRootTx(toB64Url(firstId))) !== undefined,
+          ),
+          'band in a directory that appeared later should resolve',
+        );
+
+        // And the collection watcher is live from then on.
+        const secondId = createTxId(42);
+        await installBand(
+          collectionDir,
+          path.join(tempDir, 'staging-second'),
+          'band-second',
+          [{ dataItemId: secondId, rootTxId: createTxId(212) }],
+        );
+        assert(
+          await waitFor(
+            async () =>
+              (await index.getRootTx(toB64Url(secondId))) !== undefined,
+          ),
+          'band installed after the directory appeared should resolve',
+        );
+
+        await index.close();
+      });
+
+      it('keeps configured order when the late source loads', async () => {
+        const lateDir = path.join(tempDir, 'late');
+        const presentDir = path.join(tempDir, 'present');
+        const id = createTxId(43);
+        await createBand(path.join(presentDir, 'band'), [
+          { dataItemId: id, rootTxId: createTxId(221) },
+        ]);
+
+        // The late source is configured first, so once it loads it must win.
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [lateDir, presentDir],
+          watch: true,
+        });
+        const before = await index.getRootTx(toB64Url(id));
+        assert.equal(before?.rootTxId, toB64Url(createTxId(221)));
+
+        await fs.mkdir(lateDir, { recursive: true });
+        await installBand(lateDir, path.join(tempDir, 'staging-late'), 'band', [
+          { dataItemId: id, rootTxId: createTxId(222) },
+        ]);
+        assert(
+          await waitFor(
+            async () =>
+              (await index.getRootTx(toB64Url(id)))?.rootTxId ===
+              toB64Url(createTxId(222)),
+          ),
+          'the earlier-configured source should take precedence once loaded',
+        );
+
+        await index.close();
+      });
+
+      it('stops waiting when closed', async () => {
+        const collectionDir = path.join(tempDir, 'never');
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [collectionDir],
+          watch: true,
+        });
+        await index.getRootTx(toB64Url(createTxId(44)));
+        assert.equal((index as any).pendingDirectories.size, 1);
+
+        await index.close();
+        assert.equal((index as any).pendingDirectories.size, 0);
+
+        // Appearing after close loads nothing and starts no watcher.
+        await fs.mkdir(collectionDir, { recursive: true });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        assert.equal((index as any).watchers.size, 0);
+      });
+
+      it('does not wait for a missing file named like one', async () => {
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [path.join(tempDir, 'missing.cdb')],
+          watch: true,
+        });
+        await index.getRootTx(toB64Url(createTxId(45)));
+        assert.equal((index as any).pendingDirectories.size, 0);
+        await index.close();
+      });
+
+      it('does not wait when watching is off', async () => {
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [path.join(tempDir, 'absent')],
+          watch: false,
+        });
+        await index.getRootTx(toB64Url(createTxId(46)));
+        assert.equal((index as any).pendingDirectories.size, 0);
+        await index.close();
+      });
+    });
   });
 });

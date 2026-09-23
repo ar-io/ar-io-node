@@ -190,6 +190,14 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
    */
   private watchers: Map<string, FSWatcher> = new Map();
 
+  /**
+   * Directory sources that did not exist yet when the index started, each
+   * with the timer that checks for it. A sidecar creates its install
+   * directory on first use, so a gateway that starts first must wait for it
+   * rather than write it off as a missing file.
+   */
+  private pendingDirectories: Map<string, NodeJS.Timeout> = new Map();
+
   // Dependencies for remote sources
   private contiguousDataSource?: ContiguousDataSource;
 
@@ -257,6 +265,9 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   /** How long to wait for in-flight lookups before closing a retired reader. */
   private static readonly READER_DRAIN_TIMEOUT_MS = 5000;
   private static readonly READER_DRAIN_POLL_MS = 25;
+
+  /** How often a directory source that does not exist yet is checked for. */
+  static PENDING_DIRECTORY_POLL_MS = 30_000;
 
   /**
    * Converts a fetch Response body to an AsyncIterable.
@@ -717,6 +728,11 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
    * Stops watching the directory.
    */
   private async stopWatching(): Promise<void> {
+    for (const timer of this.pendingDirectories.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingDirectories.clear();
+
     if (this.watchers.size === 0) return;
 
     const watcherCount = this.watchers.size;
@@ -893,6 +909,75 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       // File doesn't exist or can't be stat'd - not a directory
       return undefined;
     }
+  }
+
+  /** True only when nothing exists at the path; other errors are not. */
+  private async pathIsMissing(filePath: string): Promise<boolean> {
+    try {
+      await fs.stat(filePath);
+      return false;
+    } catch (error: any) {
+      return error?.code === 'ENOENT';
+    }
+  }
+
+  /**
+   * Checks for a directory source that does not exist yet until it does,
+   * then loads it exactly as it would have been loaded at startup.
+   *
+   * Without this, a gateway that starts before the index-swarm sidecar has
+   * created its install directory treats the path as a missing file and
+   * never looks at it again, so every band installed afterwards sits on disk
+   * unread until the gateway restarts. A timer rather than a watcher, because
+   * the missing part may be several levels deep and the gateway mounts the
+   * volume read only, so it cannot create the directory itself.
+   */
+  private waitForDirectory(dirPath: string): void {
+    if (!this.watchEnabled || this.pendingDirectories.has(dirPath)) return;
+
+    this.log.info('CDB64 directory source does not exist yet; waiting for it', {
+      path: dirPath,
+      pollMs: Cdb64RootTxIndex.PENDING_DIRECTORY_POLL_MS,
+    });
+
+    const check = async () => {
+      if (!this.pendingDirectories.has(dirPath)) return;
+      const found = await this.checkIfDirectory(dirPath);
+      // close() may have run while that was awaited.
+      if (!this.pendingDirectories.has(dirPath)) return;
+      if (found === undefined) {
+        schedule();
+        return;
+      }
+      this.pendingDirectories.delete(dirPath);
+      try {
+        if (await this.isPartitionedDirectory(found)) {
+          await this.initializePartitionedDirectory(found);
+        } else {
+          await this.initializeDirectory(found);
+        }
+        this.rebuildReaderList();
+        this.log.info('CDB64 directory source appeared and was loaded', {
+          path: found,
+        });
+      } catch (error: any) {
+        this.log.error('Failed to load CDB64 directory source', {
+          path: found,
+          error: error.message,
+        });
+      }
+    };
+
+    const schedule = () => {
+      const timer = setTimeout(() => {
+        void check();
+      }, Cdb64RootTxIndex.PENDING_DIRECTORY_POLL_MS);
+      // Waiting must never be what keeps the process alive.
+      timer.unref();
+      this.pendingDirectories.set(dirPath, timer);
+    };
+
+    schedule();
   }
 
   /**
@@ -1206,6 +1291,17 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           } else {
             await this.initializeDirectory(dirPath);
           }
+          continue;
+        }
+
+        // A local path that does not exist and is not named like a CDB64
+        // file is a directory nothing has created yet. Wait for it.
+        if (
+          parsed.type === 'file' &&
+          !isCdb64File(parsed.path) &&
+          (await this.pathIsMissing(parsed.path))
+        ) {
+          this.waitForDirectory(parsed.path);
           continue;
         }
 
