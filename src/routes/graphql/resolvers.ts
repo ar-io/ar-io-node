@@ -107,11 +107,11 @@ function collectWarnings(
 }
 
 export function resolveTxRecipient(tx: GqlTransaction) {
-  if (tx.recipient !== null) {
-    return tx.recipient;
-  } else {
-    return '';
-  }
+  // Both null and undefined mean "no recipient", and the schema's contract is
+  // an empty string either way. Checking only for null returned undefined for
+  // a transaction that simply omits the field, which clients expecting the
+  // Arweave GraphQL convention read as a missing value rather than none.
+  return tx.recipient ?? '';
 }
 
 export function resolveTxData(tx: GqlTransaction) {
