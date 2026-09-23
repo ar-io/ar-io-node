@@ -18,9 +18,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as crypto from 'node:crypto';
-import { pipeline } from 'node:stream/promises';
-import { Readable, Writable } from 'node:stream';
 
 import {
   Cdb64Manifest,
@@ -29,6 +26,7 @@ import {
   parseManifest,
   serializeManifest,
 } from '../../src/lib/cdb64-manifest.js';
+import { downloadFile } from '../../src/lib/http-file-download.js';
 
 // Parsed manifest source types
 type ManifestSource =
@@ -376,8 +374,11 @@ function safeUnlink(filePath: string): void {
 
 /**
  * Download a single partition file with optional SHA-256 verification.
- * Uses atomic write (write to .tmp, rename on success).
- * Supports resuming from partial .tmp files via HTTP Range requests.
+ *
+ * The transfer itself lives in `src/lib/http-file-download.ts` so the gateway
+ * and this tool share one implementation. All this adds is the partition
+ * specific part: a partition stored inside a root transaction is a byte range
+ * of a larger object, so it needs an explicit offset.
  */
 async function downloadPartition(
   url: string,
@@ -387,137 +388,18 @@ async function downloadPartition(
   expectedSha256: string | undefined,
   verify: boolean,
 ): Promise<void> {
-  const tmpPath = `${destPath}.tmp`;
+  const rangeOffset =
+    location.type === 'arweave-byte-range' && !location.dataItemId
+      ? location.dataOffsetInRootTx
+      : undefined;
 
-  // Detect existing partial .tmp file for resume
-  let existingSize = 0;
-  if (fs.existsSync(tmpPath)) {
-    const tmpStat = fs.statSync(tmpPath);
-    if (tmpStat.size >= expectedSize) {
-      // Corrupt or stale — delete and start fresh
-      safeUnlink(tmpPath);
-    } else {
-      existingSize = tmpStat.size;
-    }
-  }
-
-  // Build fetch options with Range header
-  const fetchOptions: RequestInit = {};
-  if (
-    location.type === 'arweave-byte-range' &&
-    !location.dataItemId
-  ) {
-    // Byte-range from root TX: compose partition offset + resume offset
-    const rangeStart = location.dataOffsetInRootTx + existingSize;
-    const rangeEnd = location.dataOffsetInRootTx + expectedSize - 1;
-    fetchOptions.headers = {
-      Range: `bytes=${rangeStart}-${rangeEnd}`,
-    };
-  } else if (existingSize > 0) {
-    // Standard Range request for resume
-    fetchOptions.headers = {
-      Range: `bytes=${existingSize}-`,
-    };
-  }
-
-  const response = await fetch(url, fetchOptions);
-
-  // Handle Range request responses
-  if (response.status === 416) {
-    // Range Not Satisfiable — partial file is invalid
-    safeUnlink(tmpPath);
-    throw new Error('416 Range Not Satisfiable (invalid partial file)');
-  }
-
-  let resuming = false;
-  if (response.status === 206) {
-    resuming = true;
-  } else if (response.status >= 200 && response.status < 300) {
-    if (existingSize > 0) {
-      // Server ignored Range header — restart from scratch
-      existingSize = 0;
-    }
-  } else {
-    throw new Error(`HTTP ${response.status} ${response.statusText}`);
-  }
-
-  if (!response.body) {
-    throw new Error('Response body is null');
-  }
-
-  const hash = verify && expectedSha256 ? crypto.createHash('sha256') : null;
-
-  // Hash existing data on resume for verification
-  if (resuming && existingSize > 0 && hash) {
-    const hashWritable = new Writable({
-      write(chunk, _encoding, callback) {
-        hash.update(chunk);
-        callback();
-      },
-    });
-    await pipeline(
-      fs.createReadStream(tmpPath, { end: existingSize - 1 }),
-      hashWritable,
-    );
-  }
-
-  // Open write stream in appropriate mode
-  const writeStream = resuming
-    ? fs.createWriteStream(tmpPath, { flags: 'a' })
-    : fs.createWriteStream(tmpPath);
-
-  let bytesWritten = existingSize;
-
-  // Stream the response body to file
-  const reader = response.body.getReader();
-  const nodeStream = new Readable({
-    async read() {
-      try {
-        const { done, value } = await reader.read();
-        if (done) {
-          this.push(null);
-          return;
-        }
-        bytesWritten += value.length;
-        if (hash) {
-          hash.update(value);
-        }
-        this.push(value);
-      } catch (err) {
-        this.destroy(err as Error);
-      }
-    },
+  await downloadFile({
+    url,
+    destPath,
+    expectedSize,
+    expectedSha256: verify ? expectedSha256 : undefined,
+    rangeOffset,
   });
-
-  await pipeline(nodeStream, writeStream);
-
-  // Verify size
-  if (bytesWritten > expectedSize) {
-    safeUnlink(tmpPath);
-    throw new Error(
-      `Size overflow: expected ${expectedSize} bytes, got ${bytesWritten}`,
-    );
-  }
-  if (bytesWritten !== expectedSize) {
-    // Partial download — keep .tmp for resume on next retry
-    throw new Error(
-      `Incomplete download: expected ${expectedSize} bytes, got ${bytesWritten}`,
-    );
-  }
-
-  // Verify SHA-256 if requested
-  if (verify && expectedSha256 && hash) {
-    const actualHash = hash.digest('hex');
-    if (actualHash !== expectedSha256) {
-      safeUnlink(tmpPath);
-      throw new Error(
-        `SHA-256 mismatch: expected ${expectedSha256}, got ${actualHash}`,
-      );
-    }
-  }
-
-  // Atomic rename
-  fs.renameSync(tmpPath, destPath);
 }
 
 function formatBytes(bytes: number): string {
