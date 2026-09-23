@@ -21,6 +21,7 @@
 import * as fs from 'node:fs/promises';
 
 import * as config from './config.js';
+import { release } from '../version.js';
 import log from './log.js';
 import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
@@ -36,7 +37,8 @@ import {
 } from './metrics.js';
 
 async function main(): Promise<void> {
-  buildInfo.set({ version: 'dev', node_version: process.version }, 1);
+  // The sidecar ships in the core image, so the core's release is its own.
+  buildInfo.set({ version: release, node_version: process.version }, 1);
   configuredIndexes.set({ role: 'publish' }, config.PUBLISH.length);
   configuredIndexes.set({ role: 'subscribe' }, config.SUBSCRIBE.length);
 
@@ -169,7 +171,9 @@ async function main(): Promise<void> {
     coreUrl: config.CORE_URL,
     minRelease: config.MIN_CORE_RELEASE,
   });
-  await compatibility.check();
+  if (subscriber !== undefined) {
+    await compatibility.check();
+  }
 
   up.set(1);
 
