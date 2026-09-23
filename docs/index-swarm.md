@@ -83,6 +83,37 @@ Only bands whose files changed are re-hashed. The description is keyed on
 each file's name, size and mtime and persisted, so a restart does not re-read
 tens of gigabytes on its next scan.
 
+### Subscribing
+
+A subscriber is configured with a publisher's **wallet**, never a hostname.
+The gateway registry turns that into the two facts it needs: where to fetch
+from, and which key a signature must carry. That is what makes the trust model
+work, because an operator never types a URL that could later point somewhere
+else. `url` on a subscription overrides only where the bytes come from; the
+key that must have signed still comes from the registry, so pointing a
+subscription at a mirror cannot change whose documents are accepted.
+
+Every poll re-reconciles, whether or not the publisher's document has changed.
+The sequence guards against rollback and nothing else: it records what has been
+*seen*, not what has been successfully installed, so a band that failed to
+download or was skipped by the disk budget is retried on the next poll rather
+than waiting for the publisher to publish again. Reconciling costs a state
+comparison when everything is already in place.
+
+What a subscriber refuses, and why:
+
+| Refused | Because |
+|---|---|
+| A document signed by a key the registry does not name for that wallet | A signature that verifies against some other key proves only that somebody signed something |
+| A document naming a different publisher than the wallet it came from | Otherwise a relayed document could be attributed to the wrong gateway |
+| A sequence lower than one already installed | A cache or mirror replaying an older document must not roll the node back to a stale band set |
+| Bytes that do not match the digests the document names | The signature covers the digests; the digests cover the bytes |
+| A band that passes its digests but is not a readable index | Digests prove the bytes are the ones named, not that they are servable |
+| A band that would exceed `INDEX_SWARM_MAX_DISK_BYTES` | The volume the gateway serves from is not worth filling for an index |
+
+An expired document is installed anyway, with a warning: expiry is a signal
+that the publisher has gone quiet, not that its bands have gone bad.
+
 ## Volume layout
 
 ```text

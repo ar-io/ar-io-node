@@ -67,6 +67,12 @@ This document describes the environment variables that can be used to configure 
 | INDEX_SWARM_PUBLISH_SCAN_INTERVAL_SECONDS        | Number               | 60                                            | How often the publisher looks for new or changed bands. Only bands whose files changed are re-hashed |
 | INDEX_SWARM_PUBLISH_TTL_SECONDS                  | Number               | 86400                                         | How long a publication stays fresh. Subscribers alarm once `expiresAt` passes, so this is a staleness contract, not a cache hint; the publisher re-signs at half this age so a quiet publisher does not read as dead. Set it to roughly twice the interval at which bands are expected to change |
 | INDEX_SWARM_SUPERSEDE_GRACE_SECONDS              | Number               | 300                                           | How long a retired band's files stay on disk after it stops being served, giving anything mid-read time to finish |
+| INDEX_SWARM_POLL_INTERVAL_SECONDS                | Number               | 300                                           | How often each publisher is polled for a new document. The reconcile is idempotent and runs every poll, so a band that failed to download earlier is retried without waiting for the publisher to publish again |
+| INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS            | Number               | 30000                                         | Give up on a publisher that has not answered in this long. Also bounds each band file download |
+| INDEX_SWARM_DOWNLOAD_CONCURRENCY                 | Number               | 4                                             | Parallel file downloads within one band |
+| INDEX_SWARM_MAX_DISK_BYTES                       | Number               | unset (no ceiling)                            | Ceiling on what installed bands may occupy. A band that would take the total past this is skipped and counted rather than filling the volume the gateway serves from |
+| INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC    | Number               | unset (no cap)                                | Write-rate cap while downloading a band. Set this on a gateway whose index volume is a spinning disk that is also serving reads |
+| INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS           | Number               | 600                                           | How long a resolved publisher record is reused. The Solana RPC is shared with the gateway and the observer, so an uncached lookup per publisher per poll would spend calls on an answer that rarely changes |
 | INDEX_SWARM_METRICS_PORT                         | Number               | 9101                                          | Port for the sidecar's `/metrics` and `/healthz` endpoints |
 | INDEX_SWARM_METRICS_HOST                         | String               | 0.0.0.0                                       | Bind address inside the container. Nothing reaches the host unless the port is mapped |
 | INDEX_SWARM_CORE_URL                             | String               | http://core:4000                               | Where the sidecar reaches the gateway for the release-compatibility check |
@@ -77,6 +83,13 @@ This document describes the environment variables that can be used to configure 
 | INDEX_SWARM_LOG_MAX_SIZE                         | String               | 50m                                           | Docker json-file log rotation size for the sidecar container |
 | INDEX_SWARM_LOG_MAX_FILE                         | Number               | 3                                             | Docker json-file log rotation file count for the sidecar container |
 | INDEX_SWARM_DATA_PATH                            | String               | ./data/indexes                                | Host path mounted as the sidecar's data directory |
+
+The index-swarm sidecar also reads four settings it shares with the gateway:
+`OBSERVER_KEYPAIR_PATH` or `OBSERVER_PRIVATE_KEY` (the key it signs with, read
+only; publishing refuses to start without one), `AR_IO_WALLET` (the identity it
+publishes under, which subscribers resolve in the registry), and
+`SOLANA_RPC_URL` plus the `ARIO_*_PROGRAM_ID` overrides (how it reads the
+registry; subscribing refuses to start without the RPC URL).
 | CDB64_REMOTE_RETRIEVAL_ORDER                     | String               | "gateways,chunks"                             | Comma-separated list of data sources for fetching remote CDB64 files. Options: 'gateways' (trusted gateways), 'chunks' (L1 chunk reconstruction), 'tx-data' (Arweave node /tx/:id/data) |
 | CDB64_REMOTE_CACHE_MAX_REGIONS                   | Number               | 100                                           | Maximum number of byte-range regions to cache per remote CDB64 source |
 | CDB64_REMOTE_CACHE_TTL_MS                        | Number               | 300000                                        | TTL in milliseconds for cached CDB64 byte-range regions (5 minutes) |

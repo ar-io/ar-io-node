@@ -14,9 +14,9 @@
  * else: no database, no chain access, and no ability to disturb the gateway
  * process, which reads what lands on disk through its own watcher.
  *
- * The scaffold starts, serves health and metrics, checks that the gateway it
- * sits beside is new enough to load what it installs, and idles. The publish
- * and subscribe loops arrive in later changes.
+ * Either role is optional and they are independent: a node may publish, or
+ * subscribe, or do both, or neither, in which case it serves health and
+ * metrics and idles.
  */
 import * as fs from 'node:fs/promises';
 
@@ -25,6 +25,8 @@ import log from './log.js';
 import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
 import { Publisher, loadPublisherSigner } from './publisher.js';
+import { Subscriber } from './subscriber.js';
+import { CachedGatewayRegistry } from './gateway-registry.js';
 import {
   buildInfo,
   configuredIndexes,
@@ -101,6 +103,7 @@ async function main(): Promise<void> {
     const signer = loadPublisherSigner({
       keypairPath: config.OBSERVER_KEYPAIR_PATH,
       privateKeyBase58: config.OBSERVER_PRIVATE_KEY,
+      wallet: config.AR_IO_WALLET,
     });
     if (signer === undefined) {
       throw new Error(
@@ -119,7 +122,68 @@ async function main(): Promise<void> {
       ttlMs: config.PUBLISH_TTL_MS,
       supersedeGraceMs: config.SUPERSEDE_GRACE_MS,
     });
-    log.info('Publishing as', { publisher: signer.keyId });
+    log.info('Publishing as', {
+      publisher: signer.wallet,
+      signingKey: signer.keyId,
+    });
+    if (config.AR_IO_WALLET === undefined) {
+      log.warn(
+        'AR_IO_WALLET is not set; publishing under the observer address as identity. Set it if this gateway registers a different wallet, or subscribers will not resolve this publisher.',
+      );
+    }
+  }
+
+  // Subscribing reads the gateway registry, which is how a publisher's URL
+  // and signing key are established. Without it there is no way to decide
+  // whether a document is authentic, so this is fatal rather than degraded.
+  let subscriber: Subscriber | undefined;
+  if (config.SUBSCRIBE.length > 0) {
+    if (config.SOLANA_RPC_URL === undefined) {
+      throw new Error(
+        'index-swarm subscriber requires SOLANA_RPC_URL: publishers are resolved through the gateway registry',
+      );
+    }
+    const { SolanaARIOReadable } = await import('@ar.io/sdk');
+    const { createSolanaRpc, address } = await import('@solana/kit');
+    const reader = new SolanaARIOReadable({
+      rpc: createSolanaRpc(config.SOLANA_RPC_URL),
+      ...(config.ARIO_CORE_PROGRAM_ID !== undefined
+        ? { coreProgramId: address(config.ARIO_CORE_PROGRAM_ID) }
+        : {}),
+      ...(config.ARIO_GAR_PROGRAM_ID !== undefined
+        ? { garProgramId: address(config.ARIO_GAR_PROGRAM_ID) }
+        : {}),
+    } as never);
+
+    subscriber = new Subscriber({
+      log,
+      state,
+      kinds,
+      registry: new CachedGatewayRegistry({
+        log,
+        reader: reader as never,
+        ttlMs: config.REGISTRY_CACHE_TTL_MS,
+      }),
+      subscribe: config.SUBSCRIBE,
+      trustedPublishers: config.TRUSTED_PUBLISHERS,
+      incomingDir: config.INCOMING_DIR,
+      installedDir: config.INSTALLED_DIR,
+      fetchTimeoutMs: config.MANIFEST_FETCH_TIMEOUT_MS,
+      downloadConcurrency: config.DOWNLOAD_CONCURRENCY,
+      supersedeGraceMs: config.SUPERSEDE_GRACE_MS,
+      ...(config.MAX_DISK_BYTES !== undefined
+        ? { maxDiskBytes: config.MAX_DISK_BYTES }
+        : {}),
+      ...(config.DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC !== undefined
+        ? {
+            downloadRateLimitBytesPerSec:
+              config.DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC,
+          }
+        : {}),
+    });
+    log.info('Subscribing to publishers', {
+      publishers: config.SUBSCRIBE.map((entry) => entry.publisher),
+    });
   }
 
   let shuttingDown = false;
@@ -186,6 +250,25 @@ async function main(): Promise<void> {
     );
   }
 
+  let pollTimer: NodeJS.Timeout | undefined;
+  if (subscriber !== undefined) {
+    const runPoll = async () => {
+      if (shuttingDown) return;
+      try {
+        await subscriber.pollOnce();
+      } catch (error: any) {
+        // One bad poll must not end the loop.
+        log.error('Subscription poll failed', {
+          error: error?.message,
+          stack: error?.stack,
+        });
+      }
+    };
+
+    await runPoll();
+    pollTimer = setInterval(() => void runPoll(), config.POLL_INTERVAL_MS);
+  }
+
   if (config.isIdle()) {
     log.info(
       'index-swarm idle: nothing configured. Set INDEX_SWARM_PUBLISH or INDEX_SWARM_SUBSCRIBE to give it work.',
@@ -217,6 +300,7 @@ async function main(): Promise<void> {
 
     try {
       if (publishTimer !== undefined) clearInterval(publishTimer);
+      if (pollTimer !== undefined) clearInterval(pollTimer);
       await metrics.close();
       await state.save();
     } catch (error: any) {

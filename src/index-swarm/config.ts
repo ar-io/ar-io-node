@@ -160,6 +160,56 @@ export const PUBLISH_TTL_MS =
 export const SUPERSEDE_GRACE_MS =
   env.positiveIntOrDefault('INDEX_SWARM_SUPERSEDE_GRACE_SECONDS', 300) * 1000;
 
+/** How often to poll each publisher for a new document. */
+export const POLL_INTERVAL_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_POLL_INTERVAL_SECONDS', 300) * 1000;
+
+/** Give up on a publisher that has not answered in this long. */
+export const MANIFEST_FETCH_TIMEOUT_MS = env.positiveIntOrDefault(
+  'INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS',
+  30_000,
+);
+
+/** Parallel file downloads within one band. */
+export const DOWNLOAD_CONCURRENCY = env.positiveIntOrDefault(
+  'INDEX_SWARM_DOWNLOAD_CONCURRENCY',
+  4,
+);
+
+/**
+ * Ceiling on what installed bands may occupy. A band that would take the
+ * total past this is skipped and counted rather than filling the volume the
+ * gateway serves from. Unset means no ceiling.
+ */
+export const MAX_DISK_BYTES = env.positiveIntOrUndefined(
+  'INDEX_SWARM_MAX_DISK_BYTES',
+);
+
+/** Write-rate cap while downloading a band. Unset means no cap. */
+export const DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC = env.positiveIntOrUndefined(
+  'INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC',
+);
+
+/**
+ * Gateway records change rarely and the Solana RPC is a shared, rate-limited
+ * resource, so a resolved publisher is reused for this long.
+ */
+export const REGISTRY_CACHE_TTL_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS', 600) *
+  1000;
+
+/** Optional allowlist that tightens the registry check, never replaces it. */
+export const TRUSTED_PUBLISHERS = env
+  .varOrDefault('INDEX_SWARM_TRUSTED_PUBLISHERS', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/** Solana RPC the registry is read through. Required to subscribe. */
+export const SOLANA_RPC_URL = env.varOrUndefined('SOLANA_RPC_URL');
+export const ARIO_GAR_PROGRAM_ID = env.varOrUndefined('ARIO_GAR_PROGRAM_ID');
+export const ARIO_CORE_PROGRAM_ID = env.varOrUndefined('ARIO_CORE_PROGRAM_ID');
+
 export const METRICS_PORT = env.positiveIntOrDefault(
   'INDEX_SWARM_METRICS_PORT',
   9101,
@@ -189,6 +239,14 @@ export const MIN_CORE_RELEASE = env.positiveIntOrDefault(
   'INDEX_SWARM_MIN_CORE_RELEASE',
   85,
 );
+
+/**
+ * This gateway's wallet, as registered. It is the publisher's *identity*:
+ * subscribers are configured with it and look the record up by it. The
+ * observer key below is the *signer*. They are often the same key, but not
+ * always, so publishing requires the wallet rather than inferring it.
+ */
+export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
 
 /**
  * The gateway's registered observer key, used to sign what this node

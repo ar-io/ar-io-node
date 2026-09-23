@@ -103,6 +103,41 @@ export const publishDescribeDuration = new promClient.Histogram({
   registers: [registry],
 });
 
+export const subscriptionTotal = new promClient.Counter({
+  name: 'index_subscription_total',
+  help: 'Subscription outcomes. signature_failed and replayed are security-relevant and should be zero; verify_failed means bytes did not match the digests the publisher signed.',
+  labelNames: ['publisher', 'index', 'transport', 'result'] as const,
+  registers: [registry],
+});
+
+export const subscriptionBytes = new promClient.Counter({
+  name: 'index_subscription_bytes_total',
+  help: 'Bytes fetched, by transport. Shows whether the swarm or the HTTP fallback is doing the work.',
+  labelNames: ['transport'] as const,
+  registers: [registry],
+});
+
+export const subscriptionManifestAge = new promClient.Gauge({
+  name: 'index_subscription_manifest_age_seconds',
+  help: 'Age of the newest document seen from each publisher. Climbing past its TTL is the signal that a publisher has gone quiet; this is the alarm that matters.',
+  labelNames: ['publisher'] as const,
+  registers: [registry],
+});
+
+export const subscriptionSequence = new promClient.Gauge({
+  name: 'index_subscription_sequence',
+  help: 'Highest publication sequence installed from each publisher.',
+  labelNames: ['publisher'] as const,
+  registers: [registry],
+});
+
+export const installedBands = new promClient.Gauge({
+  name: 'index_swarm_installed_bands',
+  help: 'Bands currently installed, by index.',
+  labelNames: ['index'] as const,
+  registers: [registry],
+});
+
 export interface MetricsServer {
   close(): Promise<void>;
   port: number;
