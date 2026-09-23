@@ -22,6 +22,7 @@ Fast, offline lookups for data item to root transaction mappings.
 | [CDB64 Operator Guide](cdb64-guide.md) | Configuration, deployment, and troubleshooting |
 | [CDB64 Tools Reference](cdb64-tools.md) | CLI tools for creating indexes |
 | [CDB64 Format Specification](cdb64-format.md) | Technical file format details |
+| [Index Publication Protocol](index-publication.md) | Discovering, verifying and reading the index artifacts a gateway publishes, with a reference client |
 
 ### Rate Limiting & Payments
 

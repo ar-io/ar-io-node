@@ -122,7 +122,10 @@ band's torrent once one exists. They serve **only what the publication lists**.
 A request is looked up in a map built from the signed document rather than
 joined onto a path, so anything else in the directory, such as a band still
 being written or the sidecar's own state, is unreachable however it is asked
-for. See [openapi.yaml](openapi.yaml) for the headers each returns.
+for. See [openapi.yaml](openapi.yaml) for the headers each returns, and
+[index-publication.md](index-publication.md) for the protocol from a
+consumer's side: the document schema, how to verify it, and how to read one
+entry without the sidecar.
 
 While a valid publication exists, `/ar-io/info` carries an `indexes` block
 naming what is published and where the document lives, which is how another

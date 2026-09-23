@@ -146,8 +146,9 @@ export interface IndexPublication {
   publisher: string;
   /**
    * Monotonic per publisher. A subscriber never installs a publication whose
-   * sequence is at or below the one it already holds, so a replayed or cached
-   * older document cannot roll it back.
+   * sequence is below the one it already holds, so a replayed or cached older
+   * document cannot roll it back. An equal sequence is accepted: it is what an
+   * unchanged publisher serves on every poll.
    */
   sequence: number;
   /**

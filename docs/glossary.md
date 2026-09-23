@@ -240,7 +240,8 @@ their bands, and where each band's files can be fetched. Signed with the
 gateway's Ed25519 observer key so it verifies against the publisher's
 registered `observerAddress` regardless of which mirror or transport delivered
 it. Distinct from an [Index Manifest](#index-manifest), which describes the
-partitions inside one CDB64 index.
+partitions inside one CDB64 index. Specified in
+[index-publication.md](index-publication.md).
 
 <a id="band"></a> **Band** — One immutable unit of a published index, normally
 covering a block height range. Bands let a subscriber re-fetch only what
@@ -255,7 +256,8 @@ being distributed.
 <a id="publication-sequence"></a> **Publication Sequence** — A monotonic
 counter per publisher, paired with the previous document's SHA-256. A
 subscriber never installs a lower sequence than it holds, so a cached or
-mirrored older document cannot roll it back.
+mirrored older document cannot roll it back. An equal sequence is accepted:
+it is what an unchanged publisher serves on every poll.
 
 <a id="collection-source"></a> **Collection Source** — A configured CDB64
 source that is a directory *of* indexes rather than one index: each
