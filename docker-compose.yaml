@@ -786,6 +786,78 @@ services:
     networks:
       - ar-io-network
 
+  # Publishes the index artifacts this gateway offers, and subscribes to those
+  # published by other gateways, installing and retiring bands under the
+  # running node. Off unless the index-swarm profile is enabled.
+  #
+  # Runs the core image rather than one of its own: the sidecar is compiled
+  # into the same dist/ tree and needs no dependency core does not already
+  # have, so a separate image would be roughly a gigabyte of duplicate layers
+  # per operator for code that is already present.
+  index-swarm:
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    build:
+      context: .
+    entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/main.js']
+    profiles:
+      - index-swarm
+    restart: unless-stopped
+    # Proper PID 1, so signals reach the process and exited children are
+    # reaped. Without it a wedged process cannot be stopped without a kill,
+    # which is how a band install gets left half-written.
+    init: true
+    stop_grace_period: 30s
+    # Deliberately no depends_on. The sidecar shares only a volume with the
+    # gateway and works whether or not it is up, and a dependency here would
+    # mean bringing this profile up could start or recreate core.
+    volumes:
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
+      - ${WALLETS_PATH:-./wallets}:/app/wallets:ro
+      - ${SECRETS_PATH:-./secrets}:/app/secrets:ro
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - INDEX_SWARM_LOG_LEVEL=${INDEX_SWARM_LOG_LEVEL:-info}
+      - INDEX_SWARM_LOG_FORMAT=${INDEX_SWARM_LOG_FORMAT:-simple}
+      - INDEX_SWARM_DATA_DIR=/app/data/indexes
+      - INDEX_SWARM_PUBLISH=${INDEX_SWARM_PUBLISH:-}
+      - INDEX_SWARM_SUBSCRIBE=${INDEX_SWARM_SUBSCRIBE:-}
+      - INDEX_SWARM_TRUSTED_PUBLISHERS=${INDEX_SWARM_TRUSTED_PUBLISHERS:-}
+      - INDEX_SWARM_METRICS_PORT=${INDEX_SWARM_METRICS_PORT:-9101}
+      - INDEX_SWARM_METRICS_HOST=${INDEX_SWARM_METRICS_HOST:-0.0.0.0}
+      - INDEX_SWARM_CORE_URL=${INDEX_SWARM_CORE_URL:-http://core:4000}
+      - INDEX_SWARM_MIN_CORE_RELEASE=${INDEX_SWARM_MIN_CORE_RELEASE:-}
+      - INDEX_SWARM_SHUTDOWN_TIMEOUT_MS=${INDEX_SWARM_SHUTDOWN_TIMEOUT_MS:-}
+      # The signing identity is the gateway's registered observer key, read
+      # only: the sidecar signs what it publishes and never writes key material.
+      - OBSERVER_KEYPAIR_PATH=${OBSERVER_KEYPAIR_PATH:-}
+      - OBSERVER_PRIVATE_KEY=${OBSERVER_PRIVATE_KEY:-}
+    # The runtime image is distroless and carries no shell utilities beyond
+    # sh and mkdir, so the check runs through node.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          '/nodejs/bin/node',
+          '-e',
+          "fetch('http://127.0.0.1:${INDEX_SWARM_METRICS_PORT:-9101}/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    # Docker's json-file driver is unbounded by default, which on a long-lived
+    # gateway quietly fills the disk holding /var/lib/docker. Capped here so a
+    # new service cannot reintroduce that.
+    logging:
+      driver: json-file
+      options:
+        max-size: '${INDEX_SWARM_LOG_MAX_SIZE:-50m}'
+        max-file: '${INDEX_SWARM_LOG_MAX_FILE:-3}'
+    networks:
+      - ar-io-network
+    labels:
+      autoheal: ${RUN_AUTOHEAL:-false}
+
   autoheal:
     image: willfarrell/autoheal@sha256:fd2c5500ab9210be9fa0d365162301eb0d16923f1d9a36de887f5d1751c6eb8c
     network_mode: none

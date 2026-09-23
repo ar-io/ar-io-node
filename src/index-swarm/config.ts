@@ -1,0 +1,175 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/**
+ * Configuration for the index-swarm sidecar.
+ *
+ * Deliberately not `src/config.ts`. That module is the gateway's, and reading
+ * it has side effects: it stats and reads key material, parses filters, and
+ * initialises HTTPSIG signing state. A sidecar that only moves files should
+ * not do any of that as a consequence of importing its settings.
+ *
+ * Every setting is read once here so a malformed value fails at startup with
+ * a clear message, rather than on the first poll hours later.
+ */
+import * as path from 'node:path';
+
+import * as env from '../lib/env.js';
+
+/** One index this node publishes. */
+export interface PublishConfig {
+  /** Index name, matching `^[a-z0-9-]{1,64}$`. */
+  name: string;
+  /** Artifact kind, selecting the plugin that describes and installs bands. */
+  kind: string;
+  /** Opaque, passed through to the manifest for subscribers to match on. */
+  filter?: unknown;
+}
+
+/** One publisher this node subscribes to. */
+export interface SubscribeConfig {
+  /** The publishing gateway's wallet address, as registered. */
+  publisher: string;
+  /** Restrict to one index name; all of the publisher's indexes when unset. */
+  name?: string;
+  /** Override the URL derived from the publisher's gateway record. */
+  url?: string;
+}
+
+function parseJson(raw: string | undefined, varName: string): unknown {
+  if (raw === undefined || raw.trim() === '') {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error: any) {
+    throw new Error(
+      `${varName} is not valid JSON: ${error?.message ?? 'parse failed'}`,
+    );
+  }
+}
+
+/**
+ * Parse the publish configuration.
+ *
+ * Takes the raw string rather than reading the environment itself, so the
+ * rules can be tested directly instead of through module-load ordering.
+ */
+export function parsePublish(raw: string | undefined): PublishConfig[] {
+  const parsed = parseJson(raw, 'INDEX_SWARM_PUBLISH');
+  if (parsed === undefined) return [];
+  if (!Array.isArray(parsed)) {
+    throw new Error('INDEX_SWARM_PUBLISH must be a JSON array');
+  }
+  return parsed.map((entry, i) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error(`INDEX_SWARM_PUBLISH[${i}] must be an object`);
+    }
+    const { name, kind, filter } = entry as Record<string, unknown>;
+    if (typeof name !== 'string' || name.length === 0) {
+      throw new Error(`INDEX_SWARM_PUBLISH[${i}].name must be a string`);
+    }
+    if (typeof kind !== 'string' || kind.length === 0) {
+      throw new Error(`INDEX_SWARM_PUBLISH[${i}].kind must be a string`);
+    }
+    return { name, kind, ...(filter !== undefined ? { filter } : {}) };
+  });
+}
+
+/** Parse the subscribe configuration. See {@link parsePublish}. */
+export function parseSubscribe(raw: string | undefined): SubscribeConfig[] {
+  const parsed = parseJson(raw, 'INDEX_SWARM_SUBSCRIBE');
+  if (parsed === undefined) return [];
+  if (!Array.isArray(parsed)) {
+    throw new Error('INDEX_SWARM_SUBSCRIBE must be a JSON array');
+  }
+  return parsed.map((entry, i) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error(`INDEX_SWARM_SUBSCRIBE[${i}] must be an object`);
+    }
+    const { publisher, name, url } = entry as Record<string, unknown>;
+    if (typeof publisher !== 'string' || publisher.length === 0) {
+      throw new Error(
+        `INDEX_SWARM_SUBSCRIBE[${i}].publisher must be a wallet address`,
+      );
+    }
+    if (name !== undefined && typeof name !== 'string') {
+      throw new Error(`INDEX_SWARM_SUBSCRIBE[${i}].name must be a string`);
+    }
+    if (url !== undefined && typeof url !== 'string') {
+      throw new Error(`INDEX_SWARM_SUBSCRIBE[${i}].url must be a string`);
+    }
+    return {
+      publisher,
+      ...(name !== undefined ? { name } : {}),
+      ...(url !== undefined ? { url } : {}),
+    };
+  });
+}
+
+/** Root of the shared volume the gateway also reads. */
+export const DATA_DIR = env.varOrDefault(
+  'INDEX_SWARM_DATA_DIR',
+  'data/indexes',
+);
+
+/** Bands this node offers. The gateway serves these at /ar-io/indexes. */
+export const PUBLISHED_DIR = path.join(DATA_DIR, 'published');
+/** Downloads in progress. Never read by the gateway. */
+export const INCOMING_DIR = path.join(DATA_DIR, 'incoming');
+/** Bands in use. The gateway loads these through its collection source. */
+export const INSTALLED_DIR = path.join(DATA_DIR, 'installed');
+/** Sidecar state: sequences seen, bands installed. Rebuildable from disk. */
+export const STATE_FILE = path.join(DATA_DIR, 'state.json');
+
+export const PUBLISH: PublishConfig[] = parsePublish(
+  env.varOrUndefined('INDEX_SWARM_PUBLISH'),
+);
+export const SUBSCRIBE: SubscribeConfig[] = parseSubscribe(
+  env.varOrUndefined('INDEX_SWARM_SUBSCRIBE'),
+);
+
+export const METRICS_PORT = env.positiveIntOrDefault(
+  'INDEX_SWARM_METRICS_PORT',
+  9101,
+);
+/**
+ * Bound inside the container, so the compose network can reach it and the
+ * healthcheck can too. Nothing is published to the host unless the operator
+ * maps the port.
+ */
+export const METRICS_HOST = env.varOrDefault(
+  'INDEX_SWARM_METRICS_HOST',
+  '0.0.0.0',
+);
+
+/** Where to reach the gateway, for the release-compatibility check. */
+export const CORE_URL = env.varOrDefault(
+  'INDEX_SWARM_CORE_URL',
+  'http://core:4000',
+);
+
+/**
+ * The gateway release that first understood a collection source. Below it,
+ * bands installed here would sit on disk unread, so the sidecar says so
+ * rather than filling a directory nothing loads.
+ */
+export const MIN_CORE_RELEASE = env.positiveIntOrDefault(
+  'INDEX_SWARM_MIN_CORE_RELEASE',
+  85,
+);
+
+/** How long to let work finish on SIGTERM before exiting anyway. */
+export const SHUTDOWN_TIMEOUT_MS = env.positiveIntOrDefault(
+  'INDEX_SWARM_SHUTDOWN_TIMEOUT_MS',
+  10_000,
+);
+
+/** True when this process has nothing configured to do. */
+export function isIdle(): boolean {
+  return PUBLISH.length === 0 && SUBSCRIBE.length === 0;
+}

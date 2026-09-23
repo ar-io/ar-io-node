@@ -60,6 +60,7 @@ Fast, offline lookups for data item to root transaction mappings.
 | Document | Description |
 |----------|-------------|
 | [Deployment Topologies](deployment-topologies.md) | Proxy edge, shared ClickHouse, partitioning, and app-split topologies |
+| [Index Swarm Sidecar](index-swarm.md) | Publishing index artifacts to other gateways and subscribing to theirs, as an optional sidecar |
 
 ## Reference
 
