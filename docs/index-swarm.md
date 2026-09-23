@@ -124,6 +124,13 @@ joined onto a path, so anything else in the directory, such as a band still
 being written or the sidecar's own state, is unreachable however it is asked
 for. See [openapi.yaml](openapi.yaml) for the headers each returns.
 
+While a valid publication exists, `/ar-io/info` carries an `indexes` block
+naming what is published and where the document lives, which is how another
+gateway discovers publishers without fetching every gateway's document. The
+routes and that block read one shared view of the publication, so an index is
+advertised exactly when it is servable, and both drop it together if the
+document goes bad.
+
 The byte routes are rate limited and priced like data egress (see
 [x402-and-rate-limiting.md](x402-and-rate-limiting.md)); the publication
 document is not, so a client that has run out of tokens can still learn what

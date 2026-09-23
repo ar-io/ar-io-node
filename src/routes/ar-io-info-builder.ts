@@ -98,6 +98,17 @@ export interface HttpsigInfo {
 }
 
 /**
+ * Index artifacts this gateway publishes, for discovery by other gateways.
+ * Present only while a valid publication exists. `manifestUrl` is where the
+ * signed publication document lives; `names` lets a crawler decide whether
+ * a publisher offers anything it wants without fetching the document.
+ */
+export interface IndexesInfo {
+  manifestUrl: string;
+  names: string[];
+}
+
+/**
  * Solana program IDs for the AR.IO Network suite. Each is a base58-encoded
  * Solana pubkey.
  */
@@ -122,6 +133,7 @@ export interface ArIoInfoResponse {
   rateLimiter?: RateLimiterInfo;
   x402?: X402Info;
   httpsig?: HttpsigInfo;
+  indexes?: IndexesInfo;
 }
 
 /**
@@ -155,6 +167,8 @@ export interface ArIoInfoConfig {
     algorithm: string;
     solanaAddress: string;
   };
+  /** Names of the indexes currently published; omitted when none. */
+  indexNames?: string[];
 }
 
 /**
@@ -284,6 +298,13 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
     response.httpsig = {
       algorithm: config.httpsig.algorithm,
       solanaAddress: config.httpsig.solanaAddress,
+    };
+  }
+
+  if (config.indexNames !== undefined && config.indexNames.length > 0) {
+    response.indexes = {
+      manifestUrl: '/ar-io/indexes',
+      names: config.indexNames,
     };
   }
 

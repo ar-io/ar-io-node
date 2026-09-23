@@ -1050,6 +1050,27 @@ paths:
                       - algorithm
                       - publicKey
                       - keyId
+                  indexes:
+                    type: object
+                    description: |
+                      Index artifacts this gateway publishes through its index-swarm
+                      sidecar. Present only while a valid publication exists, so a
+                      crawler can decide whether this gateway offers anything it
+                      wants without fetching the document.
+                    properties:
+                      manifestUrl:
+                        type: string
+                        description: Where the signed publication document is served
+                        example: '/ar-io/indexes'
+                      names:
+                        type: array
+                        description: Names of the indexes currently published, sorted
+                        items:
+                          type: string
+                        example: ['root-tx-index']
+                    required:
+                      - manifestUrl
+                      - names
                 required:
                   - supportedManifestVersions
                   - release

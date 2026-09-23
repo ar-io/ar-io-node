@@ -188,7 +188,17 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
  *   }
  * }
  */
-export const arIoInfoHandler = (_req: Request, res: Response) => {
+export const arIoInfoHandler = async (_req: Request, res: Response) => {
+  // What this gateway publishes, from the same view the /ar-io/indexes routes
+  // serve from, so an index is advertised exactly when it is servable. Any
+  // failure here only omits the block: /ar-io/info must answer regardless.
+  let indexNames: string[] | undefined;
+  try {
+    indexNames = (await system.publishedIndexes.current())?.names;
+  } catch {
+    indexNames = undefined;
+  }
+
   const response = buildArIoInfo({
     wallet: config.AR_IO_WALLET,
     programIds: {
@@ -229,6 +239,7 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
             solanaAddress: config.HTTPSIG_SIGNER.solanaAddress,
           }
         : undefined,
+    indexNames,
   });
 
   res.status(200).send(response);

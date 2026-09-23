@@ -158,7 +158,7 @@ app.use(arIoRouter);
 app.use(
   createIndexesRouter({
     log,
-    publishedDir: config.INDEXES_PUBLISHED_DIR,
+    publishedIndexes: system.publishedIndexes,
     rateLimiter: system.rateLimiter,
     paymentProcessor: system.paymentProcessor,
   }),

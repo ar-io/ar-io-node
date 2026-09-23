@@ -25,17 +25,15 @@
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import crypto from 'node:crypto';
 import { Request, Response, Router } from 'express';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
 
 import {
-  IndexPublication,
   isValidIndexName,
   isValidPathSegment,
-  parseIndexPublication,
 } from '../lib/index-publication.js';
+import { PublishedFile, PublishedIndexes } from './published-indexes.js';
 import {
   adjustRateLimitTokens,
   checkPaymentAndRateLimits,
@@ -50,28 +48,6 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
 /** Header whose presence makes the HTTPSIG middleware sign the response. */
 export const INDEX_PUBLICATION_HEADER = 'x-ar-io-index-publication';
 
-interface PublishedFile {
-  /** Absolute path, built from the publication, never from the request. */
-  filePath: string;
-  size: number;
-  sha256: string;
-}
-
-/** The publication, indexed for lookup. Rebuilt whenever the file changes. */
-interface PublicationView {
-  raw: Buffer;
-  sha256: string;
-  /** `<index>/<band>/<file>` to the file it names. */
-  files: Map<string, PublishedFile>;
-  /** Digest to a file carrying it, for the content-addressed route. */
-  blobs: Map<string, PublishedFile>;
-  /** `<index>/<band>` for every band offered, for the torrent route. */
-  bands: Set<string>;
-  /** Stat of the publication file this view was built from. */
-  mtimeMs: number;
-  byteSize: number;
-}
-
 /** Standard base64 of a hex digest, as RFC 9530 digest fields want it. */
 function digestField(hexSha256: string): string {
   return `sha-256=:${Buffer.from(hexSha256, 'hex').toString('base64')}:`;
@@ -79,110 +55,38 @@ function digestField(hexSha256: string): string {
 
 export interface IndexesRouterOptions {
   log: Logger;
-  publishedDir: string;
+  /**
+   * The shared view of what is published. Pass the system instance so the
+   * routes and /ar-io/info read one cache; tests may pass publishedDir alone.
+   */
+  publishedIndexes?: PublishedIndexes;
+  publishedDir?: string;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
 }
 
 export function createIndexesRouter({
   log: parentLog,
-  publishedDir,
+  publishedIndexes: suppliedIndexes,
+  publishedDir: suppliedDir,
   rateLimiter,
   paymentProcessor,
 }: IndexesRouterOptions): Router {
   const log = parentLog.child({ class: 'IndexesRouter' });
   const router = Router();
-  const publicationFile = path.join(publishedDir, 'publication.json');
 
-  let view: PublicationView | undefined;
-  let loading: Promise<PublicationView | undefined> | undefined;
-
-  /**
-   * The current publication, rebuilt only when the file on disk changes.
-   *
-   * Checked with one stat per request rather than a watcher: the sidecar
-   * replaces the file by rename, so size and mtime change together, and a
-   * stat is cheap next to serving the bytes it gates.
-   */
-  async function currentView(): Promise<PublicationView | undefined> {
-    let stat;
-    try {
-      stat = await fs.stat(publicationFile);
-    } catch {
-      view = undefined;
-      return undefined;
-    }
-
-    if (
-      view !== undefined &&
-      view.mtimeMs === stat.mtimeMs &&
-      view.byteSize === stat.size
-    ) {
-      return view;
-    }
-
-    // Concurrent requests arriving just after a republish share one rebuild.
-    if (loading === undefined) {
-      loading = buildView(stat.mtimeMs, stat.size).finally(() => {
-        loading = undefined;
-      });
-    }
-    return loading;
+  let published: PublishedIndexes;
+  if (suppliedIndexes !== undefined) {
+    published = suppliedIndexes;
+  } else if (suppliedDir !== undefined) {
+    published = new PublishedIndexes({ log, publishedDir: suppliedDir });
+  } else {
+    throw new Error(
+      'createIndexesRouter needs publishedIndexes or publishedDir',
+    );
   }
-
-  async function buildView(
-    mtimeMs: number,
-    byteSize: number,
-  ): Promise<PublicationView | undefined> {
-    let raw: Buffer;
-    let publication: IndexPublication;
-    try {
-      raw = await fs.readFile(publicationFile);
-      publication = parseIndexPublication(raw);
-    } catch (error: any) {
-      // A malformed publication means the sidecar wrote something wrong.
-      // Serving nothing is correct; serving a stale view would advertise
-      // bytes the current document no longer vouches for.
-      log.warn('Published index document is unreadable; serving nothing', {
-        path: publicationFile,
-        error: error?.message,
-      });
-      view = undefined;
-      return undefined;
-    }
-
-    const files = new Map<string, PublishedFile>();
-    const blobs = new Map<string, PublishedFile>();
-    const bands = new Set<string>();
-
-    for (const index of publication.indexes) {
-      for (const band of index.bands) {
-        bands.add(`${index.name}/${band.id}`);
-        for (const file of band.files) {
-          const entry: PublishedFile = {
-            filePath: path.join(publishedDir, index.name, band.id, file.name),
-            size: file.size,
-            sha256: file.sha256,
-          };
-          files.set(`${index.name}/${band.id}/${file.name}`, entry);
-          if (!blobs.has(file.sha256)) {
-            blobs.set(file.sha256, entry);
-          }
-        }
-      }
-    }
-
-    view = {
-      raw,
-      sha256: crypto.createHash('sha256').update(raw).digest('hex'),
-      files,
-      blobs,
-      bands,
-      mtimeMs,
-      byteSize,
-    };
-    return view;
-  }
+  const publishedDir = published.publishedDir;
+  const currentView = () => published.current();
 
   function finish(_res: Response, route: string, status: number): void {
     metrics.indexesRequestsTotal.inc({ route, status: String(status) });
