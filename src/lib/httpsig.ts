@@ -98,6 +98,10 @@ export function isTriggerHeader(name: string): boolean {
 // Ed25519 SPKI DER has a fixed 12-byte prefix before the raw 32-byte public key.
 const SPKI_ED25519_PREFIX_LENGTH = 12;
 
+// The same 12 bytes, spelled out, for rebuilding a public key from raw key
+// material: SEQUENCE { SEQUENCE { OID 1.3.101.112 } BIT STRING (33, 0 unused) }.
+const SPKI_ED25519_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+
 // Ed25519 PKCS8 DER has a fixed 16-byte prefix before the raw 32-byte seed.
 const PKCS8_ED25519_PREFIX = Buffer.from(
   '302e020100300506032b657004220420',
@@ -259,6 +263,52 @@ export function getPublicKeyBase64Url(publicKey: crypto.KeyObject): string {
  */
 export function getSolanaAddress(publicKey: crypto.KeyObject): string {
   return bs58.encode(getRawPublicKey(publicKey));
+}
+
+/**
+ * True when `value` is the base58 encoding of a raw 32-byte Ed25519 key, the
+ * form a Solana address takes. Used to validate an address read from an
+ * untrusted document before it is turned into a key.
+ */
+export function isSolanaAddress(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    return false;
+  }
+  try {
+    return bs58.decode(value).length === 32;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rebuild an Ed25519 public key from a Solana address.
+ *
+ * The inverse of {@link getSolanaAddress}: a Solana address is the base58
+ * encoding of the raw 32-byte public key, so a verifier that has read an
+ * address from the gateway registry can reconstruct the key it needs without
+ * fetching anything further. Used to verify index publication manifests
+ * against the publisher's registered `observerAddress`.
+ *
+ * @throws if the address is not base58 or does not decode to 32 bytes.
+ */
+export function publicKeyFromSolanaAddress(address: string): crypto.KeyObject {
+  let raw: Uint8Array;
+  try {
+    raw = bs58.decode(address);
+  } catch {
+    throw new Error(`Invalid Solana address: not base58: ${address}`);
+  }
+  if (raw.length !== 32) {
+    throw new Error(
+      `Invalid Solana address: decoded ${raw.length} bytes, expected 32`,
+    );
+  }
+  return crypto.createPublicKey({
+    key: Buffer.concat([SPKI_ED25519_PREFIX, Buffer.from(raw)]),
+    format: 'der',
+    type: 'spki',
+  });
 }
 
 /**
