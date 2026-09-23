@@ -69,7 +69,11 @@ export interface BandFile {
   sha256: string;
 }
 
-/** Where a band can be fetched from as a torrent. */
+/**
+ * Where a band can be fetched from as a torrent. Reserved for a torrent
+ * transport: publishers in this release never set it, but it is validated so
+ * a document from a publisher that does still parses.
+ */
 export interface BandTorrent {
   /** Lowercase hex SHA-1 infohash (BitTorrent v1). Always present. */
   infohashV1: string;

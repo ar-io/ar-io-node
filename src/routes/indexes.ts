@@ -24,7 +24,6 @@
  */
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import { Request, Response, Router } from 'express';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
@@ -85,7 +84,6 @@ export function createIndexesRouter({
       'createIndexesRouter needs publishedIndexes or publishedDir',
     );
   }
-  const publishedDir = published.publishedDir;
   const currentView = () => published.current();
 
   function finish(_res: Response, route: string, status: number): void {
@@ -153,46 +151,6 @@ export function createIndexesRouter({
     },
   );
 
-  // --- Torrent metainfo --------------------------------------------------
-
-  router.get(
-    '/ar-io/indexes/:name/:torrent',
-    async (req: Request, res: Response, next) => {
-      const { name, torrent } = req.params;
-      if (!torrent.endsWith('.torrent')) {
-        next();
-        return;
-      }
-      const bandId = torrent.slice(0, -'.torrent'.length);
-      if (!isValidIndexName(name) || !isValidPathSegment(bandId)) {
-        res.status(400).type('text').send('Invalid index or band name');
-        finish(res, 'torrent', 400);
-        return;
-      }
-      const current = await currentView();
-      if (current === undefined || !current.bands.has(`${name}/${bandId}`)) {
-        notFound(res, 'torrent');
-        return;
-      }
-
-      const torrentPath = path.join(publishedDir, name, `${bandId}.torrent`);
-      let body: Buffer;
-      try {
-        body = await fs.readFile(torrentPath);
-      } catch {
-        // The band is offered but has no torrent yet, which is normal until
-        // the publisher's engine has built one.
-        notFound(res, 'torrent');
-        return;
-      }
-      res.setHeader('Content-Type', 'application/x-bittorrent');
-      res.setHeader('Cache-Control', 'public, max-age=300');
-      res.setHeader('Content-Length', String(body.byteLength));
-      res.status(200).end(req.method === 'HEAD' ? undefined : body);
-      finish(res, 'torrent', 200);
-    },
-  );
-
   // --- Bytes, by name ----------------------------------------------------
 
   router.get(
@@ -229,9 +187,8 @@ export function createIndexesRouter({
   /**
    * Serve one published file, rate limited and priced like data egress.
    *
-   * These routes are the metered tier. The swarm is the free path, and a
-   * subscriber pulling a multi-gigabyte band over HTTP pays for it the same
-   * way a client pulling data does: tokens first, then x402.
+   * A subscriber pulling a multi-gigabyte band pays for it the same way a
+   * client pulling data does: tokens first, then x402.
    */
   async function serveFile(
     req: Request,
@@ -300,9 +257,9 @@ export function createIndexesRouter({
         finish(res, route, 416);
         return;
       }
-      // A single range is what resuming downloaders and WebSeed clients
-      // send. Several are answered with the whole file, which RFC 9110
-      // permits and which avoids a multipart body for a byte stream.
+      // A single range is what resuming downloaders send. Several are
+      // answered with the whole file, which RFC 9110 permits and which
+      // avoids a multipart body for a byte stream.
       if (ranges.length === 1) {
         start = ranges[0].start;
         end = ranges[0].end;

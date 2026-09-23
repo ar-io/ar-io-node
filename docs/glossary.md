@@ -264,11 +264,6 @@ source that is a directory *of* indexes rather than one index: each
 subdirectory holding a `manifest.json` becomes its own reader, added and
 removed at runtime without a gateway restart.
 
-<a id="webseed"></a> **WebSeed** — An HTTP URL listed in a torrent
-(BEP-19) that serves the same bytes as the swarm, so a download completes
-even with no peers. On a gateway these are the index byte routes, which are
-rate limited and x402-priced while the swarm itself is free.
-
 ## Data Storage Architecture
 
 <a id="age-floor"></a> **Age Floor** - The minimum age cached data must reach

@@ -126,7 +126,7 @@ shortened real example, with 254 of the 257 file entries removed:
 | `heightRange` | `[start, end]` or `[start, null]` | Optional. Block heights covered; a `null` end is still open. |
 | `records` | integer | Optional, informational. |
 | `http.baseUrl` | string | Optional. File names resolve against it. |
-| `torrent` | object | Optional. `infohashV1` (40 hex), `infohashV2` (64 hex, hybrid torrents), `magnet`, `torrentUrl`. |
+| `torrent` | object | Optional, reserved for a torrent transport; publishers in this release never set it. `infohashV1` (40 hex), `infohashV2` (64 hex, hybrid torrents), `magnet`, `torrentUrl`. |
 | `arweave.manifestTxId` | 43-char ID | Optional. Where the band is archived on Arweave. |
 | `metadata` | object | Optional, kind-specific. |
 
@@ -201,7 +201,6 @@ digest is the same whichever you use, so check it every time.
 |---|---|---|
 | `GET /ar-io/indexes/<name>/<band>/<file>` | By name, within the current publication | `public, no-cache` |
 | `GET /ar-io/indexes/blob/<sha256>` | By content | `public, max-age=31536000, immutable` |
-| `GET /ar-io/indexes/<name>/<band>.torrent` | The band as a torrent | `public, max-age=300` |
 
 Prefer the blob route. A name is reused whenever a band is rebuilt, which the
 rolling tip band is on every cadence, so named files must be revalidated and
@@ -214,10 +213,10 @@ not list is a 404 even if a file of that name exists on the server, and a
 blob is served only while some listed file has that digest.
 
 Both byte routes support single `Range` requests (`206` with
-`Content-Range`), which is how a download resumes and how a WebSeed client
-reads pieces. Responses carry `ETag: "<sha256>"` and `Repr-Digest:
-sha-256=:<base64>:`, the digest of the whole file, even on a partial response;
-full responses also carry `Content-Digest`. A `503` with `Retry-After` means
+`Content-Range`), which is how a download resumes. Responses carry
+`ETag: "<sha256>"` and `Repr-Digest: sha-256=:<base64>:`, the digest of the
+whole file, even on a partial response; full responses also carry
+`Content-Digest`. A `503` with `Retry-After` means
 the publisher is part way through replacing a band: the file on disk no longer
 matches the document you hold. Fetch the document again after the delay.
 
@@ -234,9 +233,6 @@ $ curl -s -o 00.cdb https://gateway.example/ar-io/indexes/blob/80c34b0b…
 $ sha256sum 00.cdb
 ```
 
-The torrent route answers 404 until the publisher has built a torrent for the
-band, which is normal; the HTTP routes always work.
-
 ## Metering
 
 The byte routes are metered like data egress. When the gateway enables its
@@ -249,8 +245,7 @@ run out of tokens can still see what it could fetch.
 The limits and prices in force are advertised in `/ar-io/info`, in the
 `rateLimiter` and `x402` blocks (present only when enabled). See
 [x402-and-rate-limiting.md](x402-and-rate-limiting.md) for how to pay and how
-the buckets work. The torrent swarm is the free path: peers seeding a band are
-not metered by anyone.
+the buckets work.
 
 ## Looking up one ID
 

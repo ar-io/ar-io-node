@@ -11,9 +11,8 @@ compose profile behaves exactly as it did.
 
 Publishing and subscribing work over HTTP: a publisher signs and serves its
 bands, a subscriber verifies, downloads and installs them, and the gateway
-beside it loads them without a restart. The torrent transport, which takes
-the bytes off the publisher's HTTP routes, comes later; until then every
-subscriber fetches from the publisher's metered routes.
+beside it loads them without a restart. Every subscriber fetches from the
+publisher's metered HTTP routes.
 
 ## What it is, and what it is not
 
@@ -117,6 +116,7 @@ work, because an operator never types a URL that could later point somewhere
 else. `url` on a subscription overrides only where the bytes come from; the
 key that must have signed still comes from the registry, so pointing a
 subscription at a mirror cannot change whose documents are accepted.
+
 The sidecar reads the registry through its own gateway rather than the
 chain. The gateway already refreshes the whole registry hourly for its peer
 selection and serves each peer's wallet, observer key, stake and status at
@@ -125,7 +125,6 @@ selection and serves each peer's wallet, observer key, stake and status at
 the Solana RPC provider and needs no RPC settings. The view is at most an hour
 old, and it lists the gateways the gateway itself would use: not its own
 wallet, and by default not gateways that are leaving.
-
 
 Every poll re-reconciles, whether or not the publisher's document has changed.
 The sequence guards against rollback and nothing else: it records what has been
@@ -178,9 +177,9 @@ need a gateway restart.
 
 ### What the gateway serves
 
-The gateway's side is four read-only routes under `/ar-io/indexes`: the signed
-publication document, each published file by name, each by its SHA-256, and a
-band's torrent once one exists. They serve **only what the publication lists**.
+The gateway's side is three read-only routes under `/ar-io/indexes`: the signed
+publication document, each published file by name, and each by its SHA-256.
+They serve **only what the publication lists**.
 A request is looked up in a map built from the signed document rather than
 joined onto a path, so anything else in the directory, such as a band still
 being written or the sidecar's own state, is unreachable however it is asked
@@ -325,6 +324,7 @@ subscriber installs meanwhile, because the cost of being wrong is disk.
 
 **`index-swarm publisher requires a registry-bound observer key`** — publishing
 is configured but no observer key is set, so nothing it signed could be
+verified by anyone.
 
 **`The gateway's /ar-io/peers carries no registry fields`** — the gateway
 predates the registry fields on its peer list, so the sidecar cannot resolve
@@ -335,4 +335,3 @@ publishers from its gateway's peer list, which excludes the gateway's own
 wallet and, unless `SKIP_LEAVING_GATEWAYS=false`, gateways that are leaving.
 A newly registered publisher appears after the gateway's next hourly
 refresh.
-verified by anyone.

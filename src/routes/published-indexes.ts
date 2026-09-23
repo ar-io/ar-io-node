@@ -45,8 +45,6 @@ export interface PublicationView {
   files: Map<string, PublishedFile>;
   /** Digest to a file carrying it, for the content-addressed route. */
   blobs: Map<string, PublishedFile>;
-  /** `<index>/<band>` for every band offered, for the torrent route. */
-  bands: Set<string>;
   /** Stat of the publication file this view was built from. */
   mtimeMs: number;
   byteSize: number;
@@ -113,11 +111,9 @@ export class PublishedIndexes {
 
     const files = new Map<string, PublishedFile>();
     const blobs = new Map<string, PublishedFile>();
-    const bands = new Set<string>();
 
     for (const index of publication.indexes) {
       for (const band of index.bands) {
-        bands.add(`${index.name}/${band.id}`);
         for (const file of band.files) {
           const entry: PublishedFile = {
             filePath: path.join(
@@ -145,7 +141,6 @@ export class PublishedIndexes {
       ].sort(),
       files,
       blobs,
-      bands,
       mtimeMs,
       byteSize,
     };

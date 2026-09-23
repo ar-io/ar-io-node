@@ -278,47 +278,6 @@ describe('/ar-io/indexes routes', () => {
     });
   });
 
-  describe('torrent metainfo', () => {
-    it('is 404 for a published band with no torrent yet', async () => {
-      await request(app)
-        .get('/ar-io/indexes/root-tx-index/band-a.torrent')
-        .expect(404);
-    });
-
-    it('serves a torrent file for a published band', async () => {
-      const torrentPath = path.join(
-        publishedDir,
-        'root-tx-index',
-        'band-a.torrent',
-      );
-      await fs.writeFile(torrentPath, 'd4:infod4:name6:band-aee');
-      try {
-        const res = await request(app)
-          .get('/ar-io/indexes/root-tx-index/band-a.torrent')
-          .expect(200);
-        assert.equal(res.headers['content-type'], 'application/x-bittorrent');
-      } finally {
-        await fs.rm(torrentPath);
-      }
-    });
-
-    it('does not serve a torrent for a band no publication lists', async () => {
-      const torrentPath = path.join(
-        publishedDir,
-        'root-tx-index',
-        'band-x.torrent',
-      );
-      await fs.writeFile(torrentPath, 'd4:infod4:name6:band-xee');
-      try {
-        await request(app)
-          .get('/ar-io/indexes/root-tx-index/band-x.torrent')
-          .expect(404);
-      } finally {
-        await fs.rm(torrentPath);
-      }
-    });
-  });
-
   describe('HTTPSIG', () => {
     it('signs the publication and leaves the byte routes unsigned', async () => {
       const { privateKey } = crypto.generateKeyPairSync('ed25519');

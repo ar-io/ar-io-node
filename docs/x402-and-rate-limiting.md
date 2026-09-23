@@ -75,11 +75,10 @@ The rate limiter and x402 payment system apply to data egress endpoints:
 - **ArNS resolved content**: All requests resolved through ArNS names
 - **Farcaster frames**: `/local/farcaster/frame/:txid`
 - **Index artifacts**: `/ar-io/indexes/:name/:band/:file` and
-  `/ar-io/indexes/blob/:sha256`, the HTTP tier of the index swarm. Priced like
-  data by the bytes actually sent. The publication document at
+  `/ar-io/indexes/blob/:sha256`, published by the index-swarm sidecar.
+  Priced like data by the bytes actually sent. The publication document at
   `/ar-io/indexes` is not metered, so an exhausted client can still learn
-  what it could fetch. The swarm itself is not metered: it is the free path,
-  and pricing the HTTP one is what makes it the attractive one.
+  what it could fetch.
 - **Chunk requests**:
   - `GET /chunk/:offset` (base64url-encoded JSON, uses fixed size pricing - see note below)
   - `GET /chunk/:offset/data` (raw binary, uses fixed size pricing - see note below)

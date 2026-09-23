@@ -1115,9 +1115,8 @@ paths:
       summary: Get a published index file by name
       description: |
         Serves one file of a published band. Rate limited and priced as data
-        egress: this is the metered tier, and the swarm is the free one.
-        Supports a single byte range, which resuming downloaders and torrent
-        WebSeeds use. 503 with Retry-After while the file on disk briefly
+        egress. Supports a single byte range, which resuming downloaders
+        use. 503 with Retry-After while the file on disk briefly
         disagrees with the publication during a band update. Sent with
         `Cache-Control: public, no-cache`, because a name is reused when a
         band is rebuilt; fetch by digest from the blob route for anything a
@@ -1171,25 +1170,6 @@ paths:
               schema: { type: string, format: binary }
         '404':
           description: No published file has this digest.
-  '/ar-io/indexes/{name}/{band}.torrent':
-    get:
-      tags: [Gateway]
-      summary: Get the torrent for a published band
-      description: |
-        BitTorrent metainfo for a published band. 404 until the publisher's
-        torrent engine has built one, and for any band the publication does
-        not list.
-      parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
-        - { name: band, in: path, required: true, schema: { type: string } }
-      responses:
-        '200':
-          description: The torrent file.
-          content:
-            application/x-bittorrent:
-              schema: { type: string, format: binary }
-        '404':
-          description: No torrent, or not a published band.
   '/ar-io/peers':
     get:
       tags: [Gateway]
