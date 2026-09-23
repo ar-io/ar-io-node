@@ -27,6 +27,7 @@ import { Logger } from 'winston';
 
 import {
   BandDescriptor,
+  BandFile,
   IndexEntry,
   IndexPublication,
   INDEX_PUBLICATION_MAX_BYTES,
@@ -46,6 +47,14 @@ import {
   subscriptionSequence,
   subscriptionTotal,
 } from './metrics.js';
+
+/** True when two file lists name the same bytes, in any order. */
+export function sameFiles(a: BandFile[], b: BandFile[]): boolean {
+  if (a.length !== b.length) return false;
+  const key = (file: BandFile) => `${file.name}\0${file.size}\0${file.sha256}`;
+  const left = new Set(a.map(key));
+  return b.every((file) => left.has(key(file)));
+}
 
 /** Every way a subscription can end, as reported on the result metric. */
 export type SubscriptionResult =
@@ -411,7 +420,14 @@ export class Subscriber {
     for (const band of index.bands) {
       const state = await this.state.load();
       const existing = state.installed[index.name]?.[band.id];
-      if (existing !== undefined && existing.retiredAt === undefined) {
+      // Matching on the id alone would pin a subscriber to the first copy of
+      // a band the publisher rebuilds under the same id, which the rolling
+      // tip band always is. A band is its files, so compare those.
+      if (
+        existing !== undefined &&
+        existing.retiredAt === undefined &&
+        sameFiles(existing.files, band.files)
+      ) {
         continue;
       }
 

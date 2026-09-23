@@ -377,6 +377,48 @@ describe('Subscriber', () => {
     assert.deepEqual(await installedIds(), []);
   });
 
+  it('replaces a band the publisher rebuilt under the same id', async () => {
+    // The rolling tip band is rebuilt in place on every publisher cadence.
+    await makeBand('band-tip', 3);
+    await publish();
+    const subscriber = makeSubscriber();
+    await subscriber.pollOnce();
+    const manifestPath = path.join(
+      subInstalled,
+      'root-tx-index',
+      'band-tip',
+      'manifest.json',
+    );
+    const before = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    assert.equal(before.totalRecords, 3);
+
+    await fs.rm(path.join(pubDir, 'root-tx-index', 'band-tip'), {
+      recursive: true,
+      force: true,
+    });
+    await makeBand('band-tip', 5);
+    clock = new Date(clock.getTime() + 60_000);
+    await publish();
+
+    await subscriber.pollOnce();
+
+    const after = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    assert.equal(after.totalRecords, 5, 'the rebuilt band replaced the old');
+    const state = await subState.load();
+    const published = JSON.parse(
+      await fs.readFile(path.join(pubDir, 'publication.json'), 'utf8'),
+    );
+    assert.deepEqual(
+      state.installed['root-tx-index']['band-tip'].files
+        .map((file) => file.sha256)
+        .sort(),
+      published.indexes[0].bands[0].files
+        .map((file: { sha256: string }) => file.sha256)
+        .sort(),
+      'state records the files actually installed',
+    );
+  });
+
   it('retires a band the publisher stops offering', async () => {
     await makeBand('band-a');
     await makeBand('band-b');

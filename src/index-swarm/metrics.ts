@@ -78,7 +78,7 @@ export const publishTotal = new promClient.Counter({
 
 export const publishSequence = new promClient.Gauge({
   name: 'index_publish_sequence',
-  help: 'Sequence of the publication document last written. Monotonic; a subscriber refuses anything at or below the sequence it holds.',
+  help: 'Sequence of the publication document last written. Monotonic; a subscriber refuses anything below the sequence it holds.',
   registers: [registry],
 });
 
