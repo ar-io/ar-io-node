@@ -305,7 +305,7 @@ export class Subscriber {
         this.count(publisher, index.name, 'unknown_kind');
         continue;
       }
-      if (await this.reconcileIndex(publisher, index, kind)) {
+      if (await this.reconcileIndex(publisher, record.url, index, kind)) {
         installedAnything = true;
       }
     }
@@ -412,6 +412,7 @@ export class Subscriber {
   /** Install what is new in this index, and retire what the publisher dropped. */
   private async reconcileIndex(
     publisher: string,
+    origin: string,
     index: IndexEntry,
     kind: ArtifactKind,
   ): Promise<boolean> {
@@ -431,7 +432,13 @@ export class Subscriber {
         continue;
       }
 
-      const installed = await this.installBand(publisher, index, band, kind);
+      const installed = await this.installBand(
+        publisher,
+        origin,
+        index,
+        band,
+        kind,
+      );
       if (installed) installedAnything = true;
     }
 
@@ -464,8 +471,15 @@ export class Subscriber {
     return installedAnything;
   }
 
+  /**
+   * @param origin where the publication was fetched from, which is where its
+   *   relative band URLs resolve: the registry's URL for the publisher, or
+   *   the subscription's override. Looking the publisher up again here would
+   *   silently drop the override and fetch from the publisher's own host.
+   */
   private async installBand(
     publisher: string,
+    origin: string,
     index: IndexEntry,
     band: BandDescriptor,
     kind: ArtifactKind,
@@ -494,13 +508,6 @@ export class Subscriber {
         index: index.name,
         band: band.id,
       });
-      this.count(publisher, index.name, 'unreachable');
-      return false;
-    }
-
-    const record = await this.registry.lookup(publisher);
-    const origin = record?.url;
-    if (origin === undefined) {
       this.count(publisher, index.name, 'unreachable');
       return false;
     }

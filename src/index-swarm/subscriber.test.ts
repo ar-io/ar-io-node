@@ -173,6 +173,7 @@ describe('Subscriber', () => {
       maxDiskBytes: number;
       trustedPublishers: string[];
       name: string;
+      url: string;
     }> = {},
   ) =>
     new Subscriber({
@@ -184,6 +185,7 @@ describe('Subscriber', () => {
         {
           publisher: WALLET,
           ...(opts.name !== undefined ? { name: opts.name } : {}),
+          ...(opts.url !== undefined ? { url: opts.url } : {}),
         },
       ],
       trustedPublishers: opts.trustedPublishers ?? [],
@@ -375,6 +377,19 @@ describe('Subscriber', () => {
     await makeSubscriber({ maxDiskBytes: 10 }).pollOnce();
 
     assert.deepEqual(await installedIds(), []);
+  });
+
+  it('fetches the bands, not just the document, from a url override', async () => {
+    await makeBand('band-a');
+    await publish();
+
+    // The registry's host is dead; only the override can serve anything.
+    await makeSubscriber({
+      registry: registryFor({ url: 'http://127.0.0.1:1' }),
+      url: origin,
+    }).pollOnce();
+
+    assert.deepEqual(await installedIds(), ['band-a']);
   });
 
   it('replaces a band the publisher rebuilt under the same id', async () => {
