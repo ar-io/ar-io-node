@@ -6,17 +6,21 @@
  */
 
 /**
- * Resolving a publisher through the gateway registry.
+ * The gateway registry, as the sidecar sees it: through its own gateway.
  *
- * A subscriber is configured with a publisher's wallet and nothing else. The
- * registry is what turns that into the two facts it needs: where to fetch
- * from, and which key a signature must carry. Anchoring on the registry
- * rather than on configured URLs is what makes the trust model work, because
- * an operator never types a hostname that could be pointed somewhere else.
+ * A subscriber needs each publisher's URL and the key its publications must
+ * be signed with, and discovery needs every gateway's stake and status. The
+ * gateway already reads the whole registry every hour for its own peer
+ * selection and serves the result at `/ar-io/peers`, wallet, observer key,
+ * stake and status included. Reading that instead of the chain means the
+ * sidecar adds no load at all on the Solana RPC provider, needs no RPC
+ * configuration of its own, and can never disagree with the gateway about
+ * who its peers are.
  *
- * Defined as an interface so tests can supply records directly, and because
- * the Solana RPC behind the real one is a shared, rate-limited resource that
- * a test has no business touching.
+ * The trade: the view is as fresh as the gateway's last refresh (an hour at
+ * most), and it lists the gateways the gateway itself would use, which
+ * excludes the gateway's own wallet and, by default, gateways that are
+ * leaving. Neither is something a subscriber should subscribe to anyway.
  */
 import { Logger } from 'winston';
 
@@ -34,132 +38,139 @@ export interface GatewayRegistry {
   lookup(wallet: string): Promise<PublisherRecord | undefined>;
 }
 
-/** Build the base URL a gateway's registered settings describe. */
-export function gatewayUrl(settings: {
-  protocol?: string;
-  fqdn?: string;
-  port?: number;
-}): string | undefined {
-  const { protocol = 'https', fqdn, port } = settings;
-  if (typeof fqdn !== 'string' || fqdn.length === 0) {
-    return undefined;
-  }
-  const defaultPort = protocol === 'https' ? 443 : 80;
-  const suffix =
-    port === undefined || port === defaultPort ? '' : `:${String(port)}`;
-  return `${protocol}://${fqdn}${suffix}`;
+/** A registered gateway, as discovery needs it. */
+export interface RegistryGateway extends PublisherRecord {
+  fqdn: string;
+  operatorStake: number;
 }
 
-/** The shape this module needs from the SDK, so tests need no SDK at all. */
-export interface GatewayReader {
-  getGateway(params: { address: string }): Promise<
-    | {
-        settings: { protocol?: string; fqdn?: string; port?: number };
-        observerAddress: string;
-        status: 'joined' | 'leaving';
-      }
-    | undefined
-  >;
+export interface GatewayLister {
+  list(): Promise<RegistryGateway[]>;
 }
 
-interface CacheEntry {
-  record: PublisherRecord | undefined;
-  expiresAt: number;
+export interface CoreGatewayRegistryOptions {
+  log: Logger;
+  /** The gateway beside the sidecar, e.g. `http://core:4000`. */
+  coreUrl: string;
+  /** How long one read of the gateway's peer list is reused. */
+  ttlMs: number;
+  timeoutMs?: number;
+  now?: () => number;
 }
 
-/**
- * Registry lookups backed by the AR.IO SDK, cached.
- *
- * Gateway records change rarely, while subscriptions poll on a timer, so an
- * uncached lookup would spend a Solana RPC call per publisher per poll on an
- * answer that is almost always identical. The RPC is shared with the gateway
- * and the observer, and exhausting it is how a free-tier endpoint took this
- * node's observer down before.
- */
-export class CachedGatewayRegistry implements GatewayRegistry {
+/** Registry records from the gateway's own `/ar-io/peers`. */
+export class CoreGatewayRegistry implements GatewayRegistry, GatewayLister {
   private readonly log: Logger;
-  private readonly reader: GatewayReader;
+  private readonly coreUrl: string;
   private readonly ttlMs: number;
-  private readonly cache = new Map<string, CacheEntry>();
-  private readonly inFlight = new Map<
-    string,
-    Promise<PublisherRecord | undefined>
-  >();
+  private readonly timeoutMs: number;
   private readonly now: () => number;
+  private cached: { at: number; gateways: RegistryGateway[] } | undefined;
+  private inFlight: Promise<RegistryGateway[]> | undefined;
+  private warnedOldCore = false;
 
-  constructor({
-    log,
-    reader,
-    ttlMs,
-    now = () => Date.now(),
-  }: {
-    log: Logger;
-    reader: GatewayReader;
-    ttlMs: number;
-    now?: () => number;
-  }) {
-    this.log = log.child({ class: 'CachedGatewayRegistry' });
-    this.reader = reader;
-    this.ttlMs = ttlMs;
-    this.now = now;
+  constructor(options: CoreGatewayRegistryOptions) {
+    this.log = options.log.child({ class: 'CoreGatewayRegistry' });
+    this.coreUrl = options.coreUrl.replace(/\/+$/, '');
+    this.ttlMs = options.ttlMs;
+    this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.now = options.now ?? (() => Date.now());
+  }
+
+  /**
+   * Every gateway the gateway knows, from a cache no older than the TTL.
+   * When the gateway cannot be reached, the last good read is returned
+   * rather than nothing, so a brief restart of the gateway does not make
+   * every publisher unresolvable. With no good read yet, it throws.
+   */
+  async list(): Promise<RegistryGateway[]> {
+    if (this.cached !== undefined && this.now() - this.cached.at < this.ttlMs) {
+      return this.cached.gateways;
+    }
+    // One request for concurrent callers: several subscriptions resolving
+    // at once must not each fetch the whole peer list.
+    this.inFlight ??= this.fetchPeers().finally(() => {
+      this.inFlight = undefined;
+    });
+    try {
+      const gateways = await this.inFlight;
+      this.cached = { at: this.now(), gateways };
+      return gateways;
+    } catch (error: any) {
+      if (this.cached !== undefined) {
+        this.log.warn(
+          'Could not read the gateway’s peer list; using the last one',
+          {
+            error: error?.message,
+          },
+        );
+        return this.cached.gateways;
+      }
+      throw error;
+    }
   }
 
   async lookup(wallet: string): Promise<PublisherRecord | undefined> {
-    const cached = this.cache.get(wallet);
-    if (cached !== undefined && cached.expiresAt > this.now()) {
-      return cached.record;
-    }
-
-    // Collapse concurrent lookups of the same wallet onto one RPC call.
-    const existing = this.inFlight.get(wallet);
-    if (existing !== undefined) {
-      return existing;
-    }
-
-    const request = this.fetchRecord(wallet).finally(() => {
-      this.inFlight.delete(wallet);
-    });
-    this.inFlight.set(wallet, request);
-    return request;
-  }
-
-  private async fetchRecord(
-    wallet: string,
-  ): Promise<PublisherRecord | undefined> {
-    let record: PublisherRecord | undefined;
     try {
-      const gateway = await this.reader.getGateway({ address: wallet });
-      const url =
-        gateway !== undefined ? gatewayUrl(gateway.settings) : undefined;
-      if (gateway === undefined || url === undefined) {
-        this.log.warn('Publisher is not in the gateway registry', { wallet });
-      } else {
-        record = {
-          wallet,
-          observerAddress: gateway.observerAddress,
-          url,
-          status: gateway.status,
-        };
-      }
+      const gateway = (await this.list()).find((g) => g.wallet === wallet);
+      if (gateway === undefined) return undefined;
+      const { wallet: w, observerAddress, url, status } = gateway;
+      return { wallet: w, observerAddress, url, status };
     } catch (error: any) {
-      // A registry that cannot be read is a transient problem. Cache the miss
-      // briefly so a flapping RPC does not turn into a request storm, but far
-      // more briefly than a successful answer.
-      this.log.warn('Could not read the gateway registry', {
+      this.log.warn('Could not resolve publisher through the gateway', {
         wallet,
         error: error?.message,
       });
-      this.cache.set(wallet, {
-        record: undefined,
-        expiresAt: this.now() + Math.min(this.ttlMs, 30_000),
-      });
       return undefined;
     }
+  }
 
-    this.cache.set(wallet, {
-      record,
-      expiresAt: this.now() + this.ttlMs,
+  private async fetchPeers(): Promise<RegistryGateway[]> {
+    const response = await fetch(`${this.coreUrl}/ar-io/peers`, {
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
-    return record;
+    if (!response.ok) {
+      throw new Error(
+        `HTTP ${response.status} from the gateway’s /ar-io/peers`,
+      );
+    }
+    const body = (await response.json()) as {
+      gateways?: Record<string, Record<string, unknown>>;
+    };
+    const entries = Object.values(body.gateways ?? {});
+    const gateways: RegistryGateway[] = [];
+    for (const entry of entries) {
+      const { url, wallet, observerAddress, operatorStake, status } = entry;
+      if (
+        typeof url !== 'string' ||
+        typeof wallet !== 'string' ||
+        typeof observerAddress !== 'string'
+      ) {
+        continue;
+      }
+      let fqdn: string;
+      try {
+        fqdn = new URL(url).hostname;
+      } catch {
+        continue;
+      }
+      gateways.push({
+        wallet,
+        observerAddress,
+        url: url.replace(/\/+$/, ''),
+        fqdn,
+        status: status === 'leaving' ? 'leaving' : 'joined',
+        operatorStake: typeof operatorStake === 'number' ? operatorStake : 0,
+      });
+    }
+    if (entries.length > 0 && gateways.length === 0 && !this.warnedOldCore) {
+      // Peers without registry fields: a gateway that predates them.
+      this.warnedOldCore = true;
+      this.log.warn(
+        'The gateway’s /ar-io/peers carries no registry fields; upgrade the gateway to subscribe or discover',
+        { coreUrl: this.coreUrl },
+      );
+    }
+    return gateways;
   }
 }

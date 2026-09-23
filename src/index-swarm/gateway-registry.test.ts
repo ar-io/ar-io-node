@@ -5,139 +5,148 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import * as http from 'node:http';
+import { AddressInfo } from 'node:net';
 
-import {
-  CachedGatewayRegistry,
-  GatewayReader,
-  gatewayUrl,
-} from './gateway-registry.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import { CoreGatewayRegistry } from './gateway-registry.js';
 
-const log = createTestLogger({ suite: 'gateway registry' });
+const log = createTestLogger({ suite: 'CoreGatewayRegistry' });
 
-describe('gatewayUrl', () => {
-  it('omits the port when it is the default for the protocol', () => {
-    assert.equal(
-      gatewayUrl({ protocol: 'https', fqdn: 'example.com', port: 443 }),
-      'https://example.com',
+/** What a current gateway's /ar-io/peers returns, trimmed to two peers. */
+const PEERS = {
+  gateways: {
+    'a.example:443': {
+      url: 'https://a.example',
+      dataWeight: 50,
+      chunkWeight: 50,
+      wallet: 'wallet-a',
+      observerAddress: 'observer-a',
+      operatorStake: 10_000,
+      status: 'joined',
+    },
+    'b.example:8443': {
+      url: 'https://b.example:8443',
+      dataWeight: 50,
+      chunkWeight: 50,
+      wallet: 'wallet-b',
+      observerAddress: 'observer-b',
+      status: 'leaving',
+    },
+  },
+  arweaveNodes: {},
+};
+
+describe('CoreGatewayRegistry', () => {
+  let server: http.Server;
+  let url: string;
+  let body: unknown;
+  let status: number;
+  let requests: number;
+  let clock: number;
+
+  beforeEach(async () => {
+    body = PEERS;
+    status = 200;
+    requests = 0;
+    clock = 0;
+    server = http.createServer((req, res) => {
+      requests++;
+      if (req.url !== '/ar-io/peers') {
+        res.writeHead(404).end();
+        return;
+      }
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
     );
-    assert.equal(
-      gatewayUrl({ protocol: 'http', fqdn: 'example.com', port: 80 }),
-      'http://example.com',
-    );
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
 
-  it('keeps a non-default port', () => {
-    assert.equal(
-      gatewayUrl({ protocol: 'https', fqdn: 'example.com', port: 8443 }),
-      'https://example.com:8443',
-    );
+  afterEach(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it('defaults to https and rejects a record with no hostname', () => {
-    assert.equal(gatewayUrl({ fqdn: 'example.com' }), 'https://example.com');
-    assert.equal(gatewayUrl({ fqdn: '' }), undefined);
-    assert.equal(gatewayUrl({}), undefined);
-  });
-});
+  const registry = () =>
+    new CoreGatewayRegistry({
+      log,
+      coreUrl: url,
+      ttlMs: 60_000,
+      now: () => clock,
+    });
 
-describe('CachedGatewayRegistry', () => {
-  const record = {
-    settings: { protocol: 'https', fqdn: 'gw.example', port: 443 },
-    observerAddress: 'ObserverAddress',
-    status: 'joined' as const,
-  };
-
-  const readerCounting = (
-    impl: () => Promise<typeof record | undefined>,
-  ): { reader: GatewayReader; calls: () => number } => {
-    let calls = 0;
-    return {
-      reader: {
-        getGateway: async () => {
-          calls++;
-          return impl();
-        },
+  it('reads every gateway, with its registry fields, from the gateway’s peer list', async () => {
+    const all = await registry().list();
+    assert.deepEqual(all, [
+      {
+        wallet: 'wallet-a',
+        observerAddress: 'observer-a',
+        url: 'https://a.example',
+        fqdn: 'a.example',
+        status: 'joined',
+        operatorStake: 10_000,
       },
-      calls: () => calls,
-    };
-  };
+      {
+        wallet: 'wallet-b',
+        observerAddress: 'observer-b',
+        url: 'https://b.example:8443',
+        fqdn: 'b.example',
+        status: 'leaving',
+        operatorStake: 0,
+      },
+    ]);
+  });
 
-  it('resolves a wallet to its URL and signing key', async () => {
-    const { reader } = readerCounting(async () => record);
-    const registry = new CachedGatewayRegistry({ log, reader, ttlMs: 1000 });
-
-    assert.deepEqual(await registry.lookup('wallet'), {
-      wallet: 'wallet',
-      observerAddress: 'ObserverAddress',
-      url: 'https://gw.example',
+  it('resolves a publisher by wallet, and nothing for one it does not know', async () => {
+    const r = registry();
+    assert.deepEqual(await r.lookup('wallet-a'), {
+      wallet: 'wallet-a',
+      observerAddress: 'observer-a',
+      url: 'https://a.example',
       status: 'joined',
     });
+    assert.equal(await r.lookup('nobody'), undefined);
   });
 
-  it('serves repeats from cache until the TTL expires', async () => {
-    const { reader, calls } = readerCounting(async () => record);
-    let now = 0;
-    const registry = new CachedGatewayRegistry({
-      log,
-      reader,
-      ttlMs: 1000,
-      now: () => now,
-    });
-
-    await registry.lookup('wallet');
-    await registry.lookup('wallet');
-    assert.equal(
-      calls(),
-      1,
-      'the RPC is shared and rate limited; do not spam it',
-    );
-
-    now = 1001;
-    await registry.lookup('wallet');
-    assert.equal(calls(), 2);
+  it('reads the peer list once per TTL, however many lookups ask', async () => {
+    const r = registry();
+    await Promise.all([r.lookup('wallet-a'), r.lookup('wallet-b'), r.list()]);
+    await r.lookup('wallet-a');
+    assert.equal(requests, 1);
+    clock += 60_001;
+    await r.lookup('wallet-a');
+    assert.equal(requests, 2);
   });
 
-  it('collapses concurrent lookups of the same wallet onto one call', async () => {
-    const { reader, calls } = readerCounting(
-      () => new Promise((resolve) => setTimeout(() => resolve(record), 10)),
-    );
-    const registry = new CachedGatewayRegistry({ log, reader, ttlMs: 1000 });
-
-    await Promise.all(
-      Array.from({ length: 10 }, () => registry.lookup('wallet')),
-    );
-    assert.equal(calls(), 1);
+  it('keeps the last good read while the gateway is unreachable', async () => {
+    const r = registry();
+    await r.list();
+    status = 503;
+    clock += 60_001;
+    assert.equal((await r.list()).length, 2);
+    assert.equal((await r.lookup('wallet-a'))?.observerAddress, 'observer-a');
   });
 
-  it('caches a read failure only briefly, so a flap does not become a storm', async () => {
-    let fail = true;
-    const { reader, calls } = readerCounting(async () => {
-      if (fail) throw new Error('rpc down');
-      return record;
-    });
-    let now = 0;
-    const registry = new CachedGatewayRegistry({
-      log,
-      reader,
-      ttlMs: 600_000,
-      now: () => now,
-    });
-
-    assert.equal(await registry.lookup('wallet'), undefined);
-    assert.equal(await registry.lookup('wallet'), undefined);
-    assert.equal(calls(), 1, 'the failure is cached');
-
-    // A failure is held far more briefly than a success, so recovery is fast.
-    fail = false;
-    now = 30_001;
-    assert.notEqual(await registry.lookup('wallet'), undefined);
+  it('resolves nothing, rather than throwing, before any good read', async () => {
+    status = 503;
+    assert.equal(await registry().lookup('wallet-a'), undefined);
+    await assert.rejects(registry().list());
   });
 
-  it('returns undefined for a wallet that is not a registered gateway', async () => {
-    const { reader } = readerCounting(async () => undefined);
-    const registry = new CachedGatewayRegistry({ log, reader, ttlMs: 1000 });
-    assert.equal(await registry.lookup('nobody'), undefined);
+  it('skips peers without registry fields, as an older gateway reports them', async () => {
+    body = {
+      gateways: {
+        'old.example:443': {
+          url: 'https://old.example',
+          dataWeight: 1,
+          chunkWeight: 1,
+        },
+      },
+    };
+    assert.deepEqual(await registry().list(), []);
   });
 });

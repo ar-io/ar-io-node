@@ -27,7 +27,7 @@ import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
 import { Publisher, loadPublisherSigner } from './publisher.js';
 import { Subscriber } from './subscriber.js';
-import { CachedGatewayRegistry } from './gateway-registry.js';
+import { CoreGatewayRegistry } from './gateway-registry.js';
 import { CoreCompatibilityCheck } from './core-compatibility.js';
 import {
   buildInfo,
@@ -96,34 +96,18 @@ async function main(): Promise<void> {
   }
 
   // Subscribing reads the gateway registry, which is how a publisher's URL
-  // and signing key are established. Without it there is no way to decide
-  // whether a document is authentic, so this is fatal rather than degraded.
+  // and signing key are established. The sidecar reads it through its own
+  // gateway's /ar-io/peers rather than the chain, so it adds no load on the
+  // Solana RPC provider and needs no RPC configuration of its own.
   let subscriber: Subscriber | undefined;
   if (config.SUBSCRIBE.length > 0) {
-    if (config.SOLANA_RPC_URL === undefined) {
-      throw new Error(
-        'index-swarm subscriber requires SOLANA_RPC_URL: publishers are resolved through the gateway registry',
-      );
-    }
-    const { SolanaARIOReadable } = await import('@ar.io/sdk');
-    const { createSolanaRpc, address } = await import('@solana/kit');
-    const reader = new SolanaARIOReadable({
-      rpc: createSolanaRpc(config.SOLANA_RPC_URL),
-      ...(config.ARIO_CORE_PROGRAM_ID !== undefined
-        ? { coreProgramId: address(config.ARIO_CORE_PROGRAM_ID) }
-        : {}),
-      ...(config.ARIO_GAR_PROGRAM_ID !== undefined
-        ? { garProgramId: address(config.ARIO_GAR_PROGRAM_ID) }
-        : {}),
-    } as never);
-
     subscriber = new Subscriber({
       log,
       state,
       kinds,
-      registry: new CachedGatewayRegistry({
+      registry: new CoreGatewayRegistry({
         log,
-        reader: reader as never,
+        coreUrl: config.CORE_URL,
         ttlMs: config.REGISTRY_CACHE_TTL_MS,
       }),
       subscribe: config.SUBSCRIBE,

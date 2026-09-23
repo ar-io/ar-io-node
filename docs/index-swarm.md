@@ -20,8 +20,8 @@ subscriber fetches from the publisher's metered routes.
 | | |
 |---|---|
 | Shares with the gateway | One directory, `data/indexes`. The sidecar writes; the gateway reads through its [collection source](cdb64-guide.md#collection-directory). |
-| Talks to | Other gateways' `/ar-io/indexes` over HTTP, and (later) a torrent engine on the compose network. |
-| Never touches | The gateway's databases, its process, or the chain. It signs with the observer key, read only, and never writes key material. |
+| Talks to | Its own gateway (`/ar-io/peers` for registry records, `/ar-io/info`) and other gateways' `/ar-io/indexes`, over HTTP. |
+| Never touches | The gateway's databases, its process, or the chain: it makes no RPC calls. It signs with the observer key, read only, and never writes key material. |
 | If it dies | Nothing degrades. Bands already installed keep serving; the gateway does not depend on the sidecar being up. |
 
 ## Running it
@@ -117,6 +117,15 @@ work, because an operator never types a URL that could later point somewhere
 else. `url` on a subscription overrides only where the bytes come from; the
 key that must have signed still comes from the registry, so pointing a
 subscription at a mirror cannot change whose documents are accepted.
+The sidecar reads the registry through its own gateway rather than the
+chain. The gateway already refreshes the whole registry hourly for its peer
+selection and serves each peer's wallet, observer key, stake and status at
+`/ar-io/peers`; the sidecar reuses that read
+(`INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS`, default 300), so it adds no load on
+the Solana RPC provider and needs no RPC settings. The view is at most an hour
+old, and it lists the gateways the gateway itself would use: not its own
+wallet, and by default not gateways that are leaving.
+
 
 Every poll re-reconciles, whether or not the publisher's document has changed.
 The sequence guards against rollback and nothing else: it records what has been
@@ -316,4 +325,14 @@ subscriber installs meanwhile, because the cost of being wrong is disk.
 
 **`index-swarm publisher requires a registry-bound observer key`** — publishing
 is configured but no observer key is set, so nothing it signed could be
+
+**`The gateway's /ar-io/peers carries no registry fields`** — the gateway
+predates the registry fields on its peer list, so the sidecar cannot resolve
+publishers. Upgrade the gateway.
+
+**Publisher not resolvable** (`unreachable`) — the sidecar resolves
+publishers from its gateway's peer list, which excludes the gateway's own
+wallet and, unless `SKIP_LEAVING_GATEWAYS=false`, gateways that are leaving.
+A newly registered publisher appears after the gateway's next hourly
+refresh.
 verified by anyone.

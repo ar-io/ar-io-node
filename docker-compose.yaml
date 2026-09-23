@@ -835,11 +835,9 @@ services:
       - INDEX_SWARM_MAX_DISK_BYTES=${INDEX_SWARM_MAX_DISK_BYTES:-}
       - INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC:-}
       - INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS=${INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS:-}
-      # Identity and registry access, shared with the gateway.
+      # Identity, shared with the gateway. Registry records come from the
+      # gateway's /ar-io/peers, so the sidecar needs no RPC settings.
       - AR_IO_WALLET=${AR_IO_WALLET:-}
-      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-}
-      - ARIO_GAR_PROGRAM_ID=${ARIO_GAR_PROGRAM_ID:-}
-      - ARIO_CORE_PROGRAM_ID=${ARIO_CORE_PROGRAM_ID:-}
       - INDEX_SWARM_METRICS_PORT=${INDEX_SWARM_METRICS_PORT:-9101}
       - INDEX_SWARM_METRICS_HOST=${INDEX_SWARM_METRICS_HOST:-0.0.0.0}
       - INDEX_SWARM_CORE_URL=${INDEX_SWARM_CORE_URL:-http://core:4000}

@@ -191,11 +191,12 @@ export const DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC = env.positiveIntOrUndefined(
 );
 
 /**
- * Gateway records change rarely and the Solana RPC is a shared, rate-limited
- * resource, so a resolved publisher is reused for this long.
+ * How long one read of the gateway's peer list, which is where the sidecar
+ * gets registry records, is reused. The gateway refreshes it hourly, so
+ * reading it more often than every few minutes gains nothing.
  */
 export const REGISTRY_CACHE_TTL_MS =
-  env.positiveIntOrDefault('INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS', 600) *
+  env.positiveIntOrDefault('INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS', 300) *
   1000;
 
 /** Optional allowlist that tightens the registry check, never replaces it. */
@@ -204,11 +205,6 @@ export const TRUSTED_PUBLISHERS = env
   .split(',')
   .map((entry) => entry.trim())
   .filter((entry) => entry.length > 0);
-
-/** Solana RPC the registry is read through. Required to subscribe. */
-export const SOLANA_RPC_URL = env.varOrUndefined('SOLANA_RPC_URL');
-export const ARIO_GAR_PROGRAM_ID = env.varOrUndefined('ARIO_GAR_PROGRAM_ID');
-export const ARIO_CORE_PROGRAM_ID = env.varOrUndefined('ARIO_CORE_PROGRAM_ID');
 
 export const METRICS_PORT = env.positiveIntOrDefault(
   'INDEX_SWARM_METRICS_PORT',

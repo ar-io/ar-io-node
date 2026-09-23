@@ -148,7 +148,9 @@ document that is at least well formed.
 1. **It parses and validates.** `version` is `1` and the fields have the types
    and patterns above.
 2. **The key belongs to the publisher.** Look up the gateway whose wallet is
-   `publisher` in the registry (`getGateway` in the AR.IO SDK). Its
+   `publisher` in the registry (`getGateway` in the AR.IO SDK, or, if you
+   trust that gateway, the entry for that wallet in a gateway's
+   `/ar-io/peers`, which is what the index-swarm sidecar reads). Its
    `observerAddress` must equal `signature.keyId` exactly. Both are base58;
    compare the strings. A document naming a gateway that is not registered is
    untrusted.
