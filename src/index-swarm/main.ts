@@ -27,53 +27,13 @@ import { createKindRegistry } from './kinds/registry.js';
 import { Publisher, loadPublisherSigner } from './publisher.js';
 import { Subscriber } from './subscriber.js';
 import { CachedGatewayRegistry } from './gateway-registry.js';
+import { CoreCompatibilityCheck } from './core-compatibility.js';
 import {
   buildInfo,
   configuredIndexes,
-  setCoreCompatibility,
   startMetricsServer,
   up,
 } from './metrics.js';
-
-/** Release of the gateway this sidecar is sitting beside, if it answers. */
-interface CoreRelease {
-  release: number | undefined;
-  raw: string | undefined;
-}
-
-/**
- * Ask the gateway what release it is.
- *
- * Deliberately advisory: a gateway that is down, slow, or on an unparseable
- * release must not stop the sidecar from starting, because the sidecar
- * restarting in a loop beside a struggling gateway helps nobody. The answer
- * only decides whether installing bands is useful yet.
- */
-async function fetchCoreRelease(): Promise<CoreRelease> {
-  try {
-    const response = await fetch(`${config.CORE_URL}/ar-io/info`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) {
-      return { release: undefined, raw: undefined };
-    }
-    const info = (await response.json()) as { release?: unknown };
-    const raw = typeof info.release === 'string' ? info.release : undefined;
-    // Releases are reported as "84" or "84-pre"; the numeric prefix is what
-    // orders them, and a pre-release of N does not yet carry N's features.
-    const match = raw !== undefined ? /^(\d+)(-pre)?$/.exec(raw) : null;
-    if (match === null) {
-      return { release: undefined, raw };
-    }
-    const numeric = Number(match[1]);
-    return {
-      release: match[2] === undefined ? numeric : numeric - 1,
-      raw,
-    };
-  } catch {
-    return { release: undefined, raw: undefined };
-  }
-}
 
 async function main(): Promise<void> {
   buildInfo.set({ version: 'dev', node_version: process.version }, 1);
@@ -201,30 +161,15 @@ async function main(): Promise<void> {
     }),
   });
 
-  const core = await fetchCoreRelease();
-  if (core.release === undefined) {
-    setCoreCompatibility('unknown');
-    log.warn(
-      'Could not determine the gateway release; continuing without the compatibility check',
-      { coreUrl: config.CORE_URL, reported: core.raw },
-    );
-  } else if (core.release < config.MIN_CORE_RELEASE) {
-    setCoreCompatibility('too_old');
-    log.error(
-      'Gateway is too old to load installed index bands; not installing anything',
-      {
-        coreUrl: config.CORE_URL,
-        reported: core.raw,
-        required: config.MIN_CORE_RELEASE,
-      },
-    );
-  } else {
-    setCoreCompatibility('compatible');
-    log.info('Gateway release is compatible', {
-      reported: core.raw,
-      required: config.MIN_CORE_RELEASE,
-    });
-  }
+  // Only the subscriber consults the answer; the publisher serves files the
+  // gateway already understands. Checked now for the log and the gauge, and
+  // again before each poll until the gateway has answered compatible.
+  const compatibility = new CoreCompatibilityCheck({
+    log,
+    coreUrl: config.CORE_URL,
+    minRelease: config.MIN_CORE_RELEASE,
+  });
+  await compatibility.check();
 
   up.set(1);
 
@@ -255,6 +200,9 @@ async function main(): Promise<void> {
     const runPoll = async () => {
       if (shuttingDown) return;
       try {
+        // Bands installed into a gateway that cannot load them would sit on
+        // disk unread, so wait for it to be upgraded.
+        if (!(await compatibility.allowsInstalling())) return;
         await subscriber.pollOnce();
       } catch (error: any) {
         // One bad poll must not end the loop.

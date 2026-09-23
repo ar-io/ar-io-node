@@ -232,12 +232,14 @@ export const CORE_URL = env.varOrDefault(
 
 /**
  * The gateway release that first understood a collection source. Below it,
- * bands installed here would sit on disk unread, so the sidecar says so
- * rather than filling a directory nothing loads.
+ * bands installed here would sit on disk unread, so the subscriber waits
+ * rather than filling a directory nothing loads. A pre-release counts as its
+ * release (see `parseRelease`). Confirm this against the release the feature
+ * actually ships in.
  */
 export const MIN_CORE_RELEASE = env.positiveIntOrDefault(
   'INDEX_SWARM_MIN_CORE_RELEASE',
-  85,
+  84,
 );
 
 /**
