@@ -76,6 +76,19 @@ export const unhandledRequestErrorsCounter = new promClient.Counter({
   labelNames: ['method', 'status'],
 });
 
+/**
+ * Chunk serves cut short by the peer-origin deadline
+ * (CHUNK_PEER_ORIGIN_DEADLINE_MS) rather than the general one. Separated from
+ * chunk_serve_deadline_exceeded_total so an operator can see what the shorter
+ * deadline actually costs before lowering it further -- these are requests a
+ * peer would otherwise have waited on, though its own timeout is 1s.
+ */
+export const chunkPeerOriginDeadlineExceededCounter = new promClient.Counter({
+  name: 'chunk_peer_origin_deadline_exceeded_total',
+  help: 'Chunk serves aborted by the peer-origin deadline',
+  labelNames: ['method'],
+});
+
 // Chunk serves cut short by the handler's wall-clock deadline
 // (CHUNK_SERVE_DEADLINE_MS). A rising rate means the retrieval cascade is
 // routinely exceeding the deadline — tune the deadline or the upstream load,

@@ -16,6 +16,7 @@ import {
   CHUNK_POST_MIN_SUCCESS_COUNT,
   CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT,
   CHUNK_SERVE_DEADLINE_MS,
+  CHUNK_PEER_ORIGIN_DEADLINE_MS,
   MAX_CHUNK_SIZE,
 } from '../../config.js';
 import * as config from '../../config.js';
@@ -24,6 +25,7 @@ import { formatContentDigest } from '../../lib/digest.js';
 import { toB64Url } from '../../lib/encoding.js';
 import type {
   BroadcastChunkResponses,
+  RequestAttributes,
   ChunkDataStore,
   ChunkMetadataStore,
   ChunkPlacementIndex,
@@ -109,6 +111,29 @@ export function withChunkServeDeadline<T>(
   return Promise.race([op(signal), deadlinePromise]).finally(() =>
     clearTimeout(timer),
   );
+}
+
+/**
+ * Picks the wall-clock deadline for one chunk serve.
+ *
+ * A request forwarded by another gateway (X-AR-IO-Hops >= 1) gets
+ * CHUNK_PEER_ORIGIN_DEADLINE_MS: that caller times out after
+ * PEER_REQUEST_TIMEOUT_MS (1s) and falls back to its own sources, so the tail
+ * of a long retrieval is delivered to nobody while still holding a libuv
+ * thread and the disk. Everything else -- including a user hitting this
+ * gateway directly -- keeps CHUNK_SERVE_DEADLINE_MS unchanged.
+ *
+ * Returns 0 (meaning "no cap") only if the selected value is 0, matching
+ * withChunkServeDeadline's contract.
+ */
+export function selectChunkServeDeadline(
+  requestAttributes: RequestAttributes | undefined,
+): { deadlineMs: number; peerOrigin: boolean } {
+  const peerOrigin = (requestAttributes?.hops ?? 0) >= 1;
+  if (peerOrigin && CHUNK_PEER_ORIGIN_DEADLINE_MS > 0) {
+    return { deadlineMs: CHUNK_PEER_ORIGIN_DEADLINE_MS, peerOrigin };
+  }
+  return { deadlineMs: CHUNK_SERVE_DEADLINE_MS, peerOrigin };
 }
 
 /**
@@ -204,6 +229,13 @@ function sendChunkRetrievalError(
   span.setAttribute('chunk.retrieval.error', errorType);
   if (errorType === 'serve_deadline_exceeded') {
     metrics.chunkServeDeadlineExceededCounter.inc({ method: request.method });
+    // Counted separately so an operator can see what the shorter peer-origin
+    // deadline costs, without it being hidden inside the general total.
+    if ((getRequestAttributes(request, response)?.hops ?? 0) >= 1) {
+      metrics.chunkPeerOriginDeadlineExceededCounter.inc({
+        method: request.method,
+      });
+    }
   }
   if (statusCode >= 500) {
     span.recordException(error);
@@ -314,8 +346,12 @@ export const createChunkOffsetHandler = ({
         // === RETRIEVE CHUNK VIA SERVICE ===
         let result;
         try {
+          const { deadlineMs, peerOrigin } =
+            selectChunkServeDeadline(requestAttributes);
+          span.setAttribute('chunk.serve_deadline_ms', deadlineMs);
+          span.setAttribute('chunk.peer_origin', peerOrigin);
           result = await withChunkServeDeadline(
-            CHUNK_SERVE_DEADLINE_MS,
+            deadlineMs,
             request.signal,
             (signal) =>
               chunkRetrievalService.retrieveChunk(
@@ -575,8 +611,12 @@ export const createChunkOffsetDataHandler = ({
         // === RETRIEVE CHUNK VIA SERVICE ===
         let result;
         try {
+          const { deadlineMs, peerOrigin } =
+            selectChunkServeDeadline(requestAttributes);
+          span.setAttribute('chunk.serve_deadline_ms', deadlineMs);
+          span.setAttribute('chunk.peer_origin', peerOrigin);
           result = await withChunkServeDeadline(
-            CHUNK_SERVE_DEADLINE_MS,
+            deadlineMs,
             request.signal,
             (signal) =>
               chunkRetrievalService.retrieveChunk(
