@@ -45,6 +45,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **OpenAPI spec: current introduction, and the real version.** The spec's
+  front matter (what the gateway serves, how to verify responses with the
+  `X-AR-IO-*` trust headers and HTTP signatures, rate limits and x402, errors,
+  authentication) replaces text from the project's first release. `/openapi.json`
+  and `/api-docs` now report the running gateway's release as `info.version`,
+  instead of a fixed `0.0.1`. The spec also gains a relative `servers` entry,
+  so "Try it out" targets the gateway serving the page, and the current logo.
+
 - **`root_tx_lookup_total{has_offsets}` now means both root offsets came
   back**, for every source. It used to also require `size` and `dataSize`. A
   CDB64 index never returns `dataSize` (it returns `size` only when the entry
