@@ -57,8 +57,14 @@ export const cleanDb = async (sqlitePath = `${process.cwd()}/data/sqlite`) => {
     // silently pass. A guard that can fail open is worse than no guard.
     let existing: string[] = [];
     try {
+      // Must match the rimraf glob below exactly. `*.db*` deletes anything
+      // containing `.db`, which includes the `-wal` and `-shm` sidecars and
+      // files like `snapshot.db.bak`. An earlier version of this guard tested
+      // `endsWith('.db')`, so a directory holding only sidecars or a backup
+      // looked empty to the guard and was then deleted by the glob: a guard
+      // that failed open, which is worse than no guard.
       existing = (await fs.promises.readdir(sqlitePath)).filter((f) =>
-        f.endsWith('.db'),
+        f.includes('.db'),
       );
     } catch (error: any) {
       // No directory at all means nothing to destroy — that's the safe case.

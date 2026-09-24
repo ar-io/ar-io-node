@@ -52,4 +52,10 @@ jobs:
       # skipping was invisible. This workflow is dispatch-only and had
       # accumulated enough type errors to make everything below it unreachable.
       # Ordering it last keeps it a gate without letting it mask the tests.
+      #
+      # `if: !cancelled()` because an omitted `if` implies `success()`, which
+      # would swap one masking problem for its mirror image: a failing test
+      # suite would then hide type errors instead of the other way round. This
+      # way both are always reported from a single run.
       - run: yarn typecheck
+        if: ${{ !cancelled() }}
