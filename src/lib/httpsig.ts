@@ -68,13 +68,17 @@ export const CO_SIGNABLE_HEADERS = new Set([
   'x-ar-io-root-item-offset',
   'x-ar-io-root-item-size',
   'x-ar-io-root-path',
-  // The rest of an ArNS resolution. They only ever appear alongside
-  // x-arns-name, a trigger, so co-signing them covers every ArNS response
-  // without changing which responses are signed. -undername-limit and
-  // -record-index together decide whether a record is served at all
-  // (ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT), so they are evidence a client
-  // must be able to check; -resolved-at is a timestamped claim like the
-  // signature's own created parameter.
+  // The rest of an ArNS resolution. They only ever appear alongside a
+  // trigger: x-arns-name on a resolved-name response, x-arns-resolved-id and
+  // x-arns-ttl-seconds on /ar-io/resolver/:name (which sets no x-arns-name).
+  // So co-signing them covers every ArNS response without changing which
+  // responses are signed; keep one of those triggers on each path.
+  // -undername-limit and -record-index together decide whether a record is
+  // served at all (ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT), so they are
+  // evidence a client must be able to check; -resolved-at is a timestamped
+  // claim like the signature's own created parameter. The signature binds
+  // them as this gateway's claim, not as chain state: on the trusted-gateway
+  // resolver path they are relayed from the upstream.
   'x-arns-basename',
   'x-arns-record',
   'x-arns-resolved-at',
