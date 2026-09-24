@@ -149,6 +149,16 @@ describe('Publisher', () => {
     );
   });
 
+  it('joins an overlapping scan instead of running a second', async () => {
+    await makeBand('band-tip');
+    const publisher = makePublisher();
+    const first = publisher.scanOnce();
+    const second = publisher.scanOnce();
+    assert.equal(second, first, 'the second call joins the first');
+    await Promise.all([first, second]);
+    assert.equal((await readPublication()).sequence, 1, 'one document');
+  });
+
   it('chains each document to the bytes actually served before it', async () => {
     await makeBand('band-a');
     const publisher = makePublisher();

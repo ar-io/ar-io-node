@@ -145,8 +145,25 @@ export class Subscriber {
     this.now = options.now ?? (() => new Date());
   }
 
-  /** Poll every configured publisher once. */
-  async pollOnce(): Promise<void> {
+  private inFlight: Promise<void> | undefined;
+
+  /**
+   * Poll every configured publisher once. A call while a poll is still
+   * running joins it rather than starting a second: downloading a large band
+   * outlasts the poll interval, and two polls over the same band write the
+   * same `.tmp` files at once, corrupting them, and race to install into
+   * the same directory.
+   */
+  pollOnce(): Promise<void> {
+    if (this.inFlight === undefined) {
+      this.inFlight = this.poll().finally(() => {
+        this.inFlight = undefined;
+      });
+    }
+    return this.inFlight;
+  }
+
+  private async poll(): Promise<void> {
     for (const subscription of this.subscribe) {
       try {
         await this.pollSubscription(subscription);

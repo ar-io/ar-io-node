@@ -417,12 +417,26 @@ export class Publisher {
     }
   }
 
+  private inFlight: Promise<boolean> | undefined;
+
   /**
-   * Run one scan.
+   * Run one scan. A call while a scan is still running joins it: describing
+   * a large band takes minutes, longer than the scan interval, and two scans
+   * at once would hash the same files twice and race to sign and write the
+   * document.
    *
    * @returns whether a new document was written.
    */
-  async scanOnce(): Promise<boolean> {
+  scanOnce(): Promise<boolean> {
+    if (this.inFlight === undefined) {
+      this.inFlight = this.scan().finally(() => {
+        this.inFlight = undefined;
+      });
+    }
+    return this.inFlight;
+  }
+
+  private async scan(): Promise<boolean> {
     const indexes: IndexEntry[] = [];
     for (const entry of this.publish) {
       const collected = await this.collectIndex(entry);

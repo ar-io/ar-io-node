@@ -283,6 +283,17 @@ describe('Subscriber', () => {
     );
   });
 
+  it('joins an overlapping poll instead of downloading the same band twice', async () => {
+    await makeBand('band-a');
+    await publish();
+    const subscriber = makeSubscriber();
+    const first = subscriber.pollOnce();
+    const second = subscriber.pollOnce();
+    assert.equal(second, first, 'the second call joins the first');
+    await Promise.all([first, second]);
+    assert.deepEqual(await installedIds(), ['band-a']);
+  });
+
   it('does nothing on a second poll when the publisher has not moved', async () => {
     await makeBand('band-a');
     await publish();
