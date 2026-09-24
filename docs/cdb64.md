@@ -189,7 +189,9 @@ Observability (per-node Prometheus metrics):
   what each index hit returned. `has_offsets="true"` means both root offsets
   came back; `has_size="true"` means the item size did too, which lets the
   item be served with one ID-verified header read. An index built without
-  offsets shows up as `has_offsets="false"`. (Before this label was fixed it
+  offsets shows up as `has_offsets="false"`. The labels apply to every
+  source, not only `cdb64`; for an L1 root (for example from `turbo`),
+  `has_size` reflects the transaction's data size rather than an item's. (Before this label was fixed it
   also required `dataSize`, which a CDB64 index never returns, so every index
   hit read `"false"`.)
 

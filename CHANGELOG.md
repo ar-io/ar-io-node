@@ -45,6 +45,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **`root_tx_lookup_total{has_offsets}` now means both root offsets came
+  back**, for every source. It used to also require the item size and data
+  size, which a CDB64 index never returns, so every index hit read `false`.
+  A new `has_size` label records whether the item size came back. Queries
+  filtering on `has_offsets="true"` will now count CDB64 hits, and any other
+  source's hits that carry offsets without a data size.
+
 - `TxChunksDataSource` now resolves a transaction's chunk-read geometry
   (`data_root`, offset and size) from the local stable transactions index
   before asking the trusted node, falling back to the chain on a miss. Every

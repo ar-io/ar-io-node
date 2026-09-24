@@ -141,6 +141,48 @@ describe('CompositeRootTxIndex', () => {
     assert.equal(await found({ has_offsets: 'false' }), without);
   });
 
+  it('labels offsets and size separately', async () => {
+    // An index built without item sizes still carries both offsets; one
+    // with neither is a bare root lookup.
+    const count = async (source: string, labels: Record<string, string>) =>
+      (await metrics.rootTxLookupTotal.get()).values
+        .filter(
+          (v) =>
+            v.labels.source === source &&
+            v.labels.status === 'found' &&
+            Object.entries(labels).every(
+              ([k, want]) => (v.labels as Record<string, unknown>)[k] === want,
+            ),
+        )
+        .reduce((sum, v) => sum + v.value, 0);
+
+    const offsetsOnly = { has_offsets: 'true', has_size: 'false' };
+    const neither = { has_offsets: 'false', has_size: 'false' };
+    const beforeOffsets = await count('cdb64', offsetsOnly);
+    const beforeNeither = await count('graphql', neither);
+
+    await new CompositeRootTxIndex({
+      log,
+      indexes: [
+        makeIndex('Cdb64RootTxIndex', {
+          rootTxId: 'root-4',
+          rootOffset: 0,
+          rootDataOffset: 0,
+        }),
+      ],
+      circuitBreakerOptions: stableBreakerOptions,
+    }).getRootTx(ID);
+    await new CompositeRootTxIndex({
+      log,
+      indexes: [makeIndex('GraphQLRootTxIndex', { rootTxId: 'root-5' })],
+      circuitBreakerOptions: stableBreakerOptions,
+    }).getRootTx(ID);
+
+    // An offset of 0 is the first item in a bundle, not a missing value.
+    assert.equal(await count('cdb64', offsetsOnly), beforeOffsets + 1);
+    assert.equal(await count('graphql', neither), beforeNeither + 1);
+  });
+
   it('short-circuits on a definitive L1 root (rootTxId === id)', async () => {
     const db = makeIndex('StandaloneSqlite', { rootTxId: ID });
     const graphql = makeIndex('GraphQLRootTxIndex', { rootTxId: ID });

@@ -872,11 +872,12 @@ export const arnsNameCacheHydrationFailuresCounter = new promClient.Counter({
  * this counter a partially hydrated cache is invisible to monitoring: the
  * gateway stays healthy and simply 404s the names it never managed to write.
  */
-export const arnsNameCacheHydrationWriteFailuresCounter =
-  new promClient.Counter({
+export const arnsNameCacheHydrationWriteFailuresCounter = new promClient.Counter(
+  {
     name: 'arns_name_cache_hydration_write_failures_total',
     help: 'Total number of registry cache writes that failed during ArNS cache hydration',
-  });
+  },
+);
 
 export const arnsBaseNameCacheEntriesGauge = new promClient.Gauge({
   name: 'arns_base_name_cache_entries',
