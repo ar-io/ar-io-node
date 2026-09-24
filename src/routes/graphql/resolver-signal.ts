@@ -10,17 +10,26 @@ import * as config from '../../config.js';
 import * as metrics from '../../metrics.js';
 
 /**
- * The part of the GraphQL context this module needs: a flag the Apollo
- * `willSendResponse` plugin sets once the response is on its way out, read by
- * the close listeners installed by `buildResolverSignal`.
+ * State holder shared by reference between the Apollo context object (as the
+ * nested `signalState` field), the Apollo `willSendResponse` plugin, and the
+ * close listeners installed by `buildResolverSignal`.
  *
- * Apollo Server 5 hands plugins the context object itself, so the per-request
- * context satisfies this directly and both sides see the same instance. Under
- * Apollo Server 3 that was not true — apollo-server-core shallow-cloned the
- * context before invoking plugins (`runHttpQuery.js:166`), so root-level
- * mutations were isolated to the clone and the flag had to live in a nested
- * `__state` holder whose reference survived the copy. That indirection is gone;
- * this type is now just the narrow contract between the plugin and the signal.
+ * Why a separate nested holder rather than a flag on the context root: Apollo
+ * shallow-clones the context before handing it to plugins. In Apollo Server 5
+ * that is `@apollo/server/dist/esm/ApolloServer.js`, which builds each
+ * operation's request context with
+ * `contextValue: cloneObject(options?.contextValue ?? {})` where `cloneObject`
+ * is `Object.assign(Object.create(Object.getPrototypeOf(o)), o)`. Properties on
+ * the root get copied by value; nested object references are preserved. The
+ * plugin therefore mutates the same instance this signal builder closed over.
+ *
+ * Apollo Server 3 did the same thing in
+ * `apollo-server-core/dist/runHttpQuery.js`. The clone moved between majors but
+ * never went away, so do not "simplify" this into a root-level flag. The
+ * failure mode is silent: the flag stays false, `responseFullySent()` falls
+ * back to the unreliable `res.writableEnded` check below, and every completed
+ * request risks being counted as a `client_disconnect` cancellation.
+ * `resolver-signal.test.ts` pins this with a clone-simulating case.
  */
 export type ResolverSignalState = {
   responseSent: boolean;
@@ -53,13 +62,14 @@ export type ResolverSignalState = {
  *   as the authoritative signal instead, set by the Apollo
  *   `willSendResponse` plugin in graphql/index.ts.
  *
- * - Under Apollo Server 3 the context was shallow-cloned before plugins ran
- *   (`apollo-server-core/dist/runHttpQuery.js:166`), so plugin mutations to
- *   root-level fields never reached this closure and the flag had to sit in a
- *   nested holder. Apollo Server 5 passes `contextValue` by reference, so the
- *   plugin writes `responseSent` straight onto the context this function
- *   closed over. If the Apollo major version ever changes again, this is the
- *   assumption to re-check first.
+ * - Apollo shallow-clones the context object before passing it to plugins, in
+ *   both Apollo Server 3 (`apollo-server-core/dist/runHttpQuery.js`) and
+ *   Apollo Server 5 (`@apollo/server/dist/esm/ApolloServer.js`, via
+ *   `cloneObject`). Plugin mutations to root-level fields don't reach this
+ *   closure. That's why the plugin sets `responseSent` on a NESTED
+ *   `signalState` object whose reference is preserved across the shallow
+ *   clone. Re-check this against the installed source on any Apollo major
+ *   bump; it was wrongly assumed fixed in 5.
  *
  * Lives in its own module (not the Apollo barrel) so tests can import
  * it without booting the full gateway via `system.ts`.

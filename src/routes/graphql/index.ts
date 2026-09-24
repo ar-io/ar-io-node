@@ -18,18 +18,31 @@ import { resolvers } from './resolvers.js';
 import { buildResolverSignal, ResolverSignalState } from './resolver-signal.js';
 
 /**
- * Per-request GraphQL context. Apollo Server 5 hands this exact object to
- * plugins as `contextValue` — it is not cloned — so a plugin mutating
- * `responseSent` is observed by the close listener that `buildResolverSignal`
- * closed over. Apollo Server 3 shallow-cloned the context, which is why this
- * flag used to live in a nested `__state` holder; that indirection is no
- * longer needed.
+ * Per-request GraphQL context.
+ *
+ * `signalState` is a NESTED holder, not a flag on the root, and that is
+ * load-bearing. Apollo Server still shallow-clones the context before handing
+ * it to plugins — `ApolloServer.js` builds each operation's request context
+ * with `contextValue: cloneObject(options?.contextValue ?? {})`, where
+ * `cloneObject` is `Object.assign(Object.create(Object.getPrototypeOf(o)), o)`.
+ * Root-level properties are copied by value, so a plugin writing
+ * `contextValue.responseSent` would mutate only the clone and the close
+ * listener inside `buildResolverSignal` would never see it. Nested object
+ * references survive the copy, so the plugin and the signal builder share one
+ * `signalState` instance.
+ *
+ * This was true of Apollo Server 3 and is still true of 5; the clone moved from
+ * `apollo-server-core/dist/runHttpQuery.js` to
+ * `@apollo/server/dist/esm/ApolloServer.js` but the behaviour did not change.
+ * Verify against the installed source before assuming otherwise — the failure
+ * is silent, and shows up only as inflated `client_disconnect` cancellations.
  */
-export type GraphQLContext = ResolverSignalState & {
+export type GraphQLContext = {
   db: GqlQueryable;
   txMetadataResolver?: TxMetadataResolver;
   warnings: GqlWarning[];
   signal: AbortSignal;
+  signalState: ResolverSignalState;
 };
 
 const typeDefsUrl = new URL('./schema/types.graphql', import.meta.url);
@@ -78,21 +91,19 @@ const requestCountPlugin: ApolloServerPlugin<GraphQLContext> = {
   },
 };
 
-// Marks the request as answered right before Apollo writes to the socket.
-// `buildResolverSignal` closed over this same context object, so the close
-// listener it installed reads the flag set here and knows the close was a
-// normal end-of-response rather than a client disconnect.
+// Marks the request as answered right before Apollo writes to the socket, so
+// the close listener installed by `buildResolverSignal` can tell a normal
+// end-of-response from a client disconnect.
 //
-// Under Apollo Server 3 this had to be written through a nested `__state`
-// holder, because apollo-server-core shallow-cloned the context before
-// invoking plugins and root-level mutations never reached the signal builder.
-// Apollo Server 4+ passes `contextValue` by reference, so the flag lives
-// directly on the context.
+// Writes through `contextValue.signalState`, never `contextValue.responseSent`.
+// Apollo shallow-clones the context per operation, so a root-level write lands
+// on the clone and never reaches the signal builder — see the note on
+// `GraphQLContext`. The nested holder's reference survives the clone.
 const responseSentPlugin: ApolloServerPlugin<GraphQLContext> = {
   async requestDidStart() {
     return {
       async willSendResponse({ contextValue }) {
-        contextValue.responseSent = true;
+        contextValue.signalState.responseSent = true;
       },
     };
   },
@@ -159,17 +170,17 @@ export const makeApolloServerMiddleware = async ({
     express.json(),
     expressMiddleware(server, {
       context: async ({ res }: { res: Response }): Promise<GraphQLContext> => {
-        const context: GraphQLContext = {
+        // The signal builder closes over `signalState` directly; the plugin
+        // reaches the same instance through the context's nested reference,
+        // which is what survives Apollo's per-operation shallow clone.
+        const signalState: ResolverSignalState = { responseSent: false };
+        return {
           db,
           txMetadataResolver,
           warnings: [],
-          responseSent: false,
-          // Replaced immediately below; the signal needs the context object
-          // it will later report on, so the two are tied together here.
-          signal: undefined as unknown as AbortSignal,
+          signalState,
+          signal: buildResolverSignal(res, signalState),
         };
-        context.signal = buildResolverSignal(res, context);
-        return context;
       },
     }),
   ];
