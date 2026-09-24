@@ -180,6 +180,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
           source: sourceName,
           status: 'circuit_open',
           has_offsets: 'false',
+          has_size: 'false',
         });
         continue;
       }
@@ -207,6 +208,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
           source: sourceName,
           status: 'error',
           has_offsets: 'false',
+          has_size: 'false',
         });
         log.debug('Index failed with error', {
           indexNumber: i + 1,
@@ -237,10 +239,20 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
           result.size !== undefined &&
           result.dataSize !== undefined;
 
+        // What the source returned, not whether it was enough to stop on:
+        // `has_offsets` is both offsets present, which is what a CDB64 index
+        // answers with. It used to require `size` and `dataSize` as well,
+        // which the CDB64 reader never sets by design (see
+        // Cdb64RootTxIndex), so every index hit counted as having none.
         metrics.rootTxLookupTotal.inc({
           source: sourceName,
           status: 'found',
-          has_offsets: hasCompleteOffsets ? 'true' : 'false',
+          has_offsets:
+            result.rootOffset !== undefined &&
+            result.rootDataOffset !== undefined
+              ? 'true'
+              : 'false',
+          has_size: result.size !== undefined ? 'true' : 'false',
         });
 
         // Decide whether this result is sufficient to stop the search.
@@ -329,6 +341,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
           source: sourceName,
           status: 'not_found',
           has_offsets: 'false',
+          has_size: 'false',
         });
         log.debug('Index returned undefined', {
           indexNumber: i + 1,

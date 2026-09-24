@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 import { CompositeRootTxIndex } from './composite-root-tx-index.js';
 import { DataItemRootIndex } from '../types.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import * as metrics from '../metrics.js';
 
 const log = createTestLogger({ suite: 'CompositeRootTxIndex' });
 
@@ -101,6 +102,85 @@ describe('CompositeRootTxIndex', () => {
       0,
       'GraphQL must not be probed after a CDB hit',
     );
+  });
+
+  it('labels a CDB-style hit as having offsets', async () => {
+    // A CDB64 index answers with both offsets and, when it recorded it, the
+    // item size, but never dataSize. The label once required all four, so
+    // every index hit was counted as having no offsets at all.
+    const found = async (labels: Record<string, string>) =>
+      (await metrics.rootTxLookupTotal.get()).values
+        .filter(
+          (v) =>
+            v.labels.source === 'cdb64' &&
+            v.labels.status === 'found' &&
+            Object.entries(labels).every(
+              ([k, want]) => (v.labels as Record<string, unknown>)[k] === want,
+            ),
+        )
+        .reduce((sum, v) => sum + v.value, 0);
+    const withOffsets = await found({ has_offsets: 'true', has_size: 'true' });
+    const without = await found({ has_offsets: 'false' });
+
+    const cdb = makeIndex('Cdb64RootTxIndex', {
+      rootTxId: 'root-3',
+      rootOffset: 10,
+      rootDataOffset: 20,
+      size: 120,
+    });
+    await new CompositeRootTxIndex({
+      log,
+      indexes: [cdb],
+      circuitBreakerOptions: stableBreakerOptions,
+    }).getRootTx(ID);
+
+    assert.equal(
+      await found({ has_offsets: 'true', has_size: 'true' }),
+      withOffsets + 1,
+    );
+    assert.equal(await found({ has_offsets: 'false' }), without);
+  });
+
+  it('labels offsets and size separately', async () => {
+    // An index built without item sizes still carries both offsets; one
+    // with neither is a bare root lookup.
+    const count = async (source: string, labels: Record<string, string>) =>
+      (await metrics.rootTxLookupTotal.get()).values
+        .filter(
+          (v) =>
+            v.labels.source === source &&
+            v.labels.status === 'found' &&
+            Object.entries(labels).every(
+              ([k, want]) => (v.labels as Record<string, unknown>)[k] === want,
+            ),
+        )
+        .reduce((sum, v) => sum + v.value, 0);
+
+    const offsetsOnly = { has_offsets: 'true', has_size: 'false' };
+    const neither = { has_offsets: 'false', has_size: 'false' };
+    const beforeOffsets = await count('cdb64', offsetsOnly);
+    const beforeNeither = await count('graphql', neither);
+
+    await new CompositeRootTxIndex({
+      log,
+      indexes: [
+        makeIndex('Cdb64RootTxIndex', {
+          rootTxId: 'root-4',
+          rootOffset: 0,
+          rootDataOffset: 0,
+        }),
+      ],
+      circuitBreakerOptions: stableBreakerOptions,
+    }).getRootTx(ID);
+    await new CompositeRootTxIndex({
+      log,
+      indexes: [makeIndex('GraphQLRootTxIndex', { rootTxId: 'root-5' })],
+      circuitBreakerOptions: stableBreakerOptions,
+    }).getRootTx(ID);
+
+    // An offset of 0 is the first item in a bundle, not a missing value.
+    assert.equal(await count('cdb64', offsetsOnly), beforeOffsets + 1);
+    assert.equal(await count('graphql', neither), beforeNeither + 1);
   });
 
   it('short-circuits on a definitive L1 root (rootTxId === id)', async () => {
