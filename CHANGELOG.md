@@ -30,6 +30,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `/ar-io/peers` gains each peer's registry fields (wallet, observer key,
     stake, status), which is what lets subscribers resolve publishers without
     RPC.
+  - Built to take input from other gateways safely:
+    - the signature is domain-separated (`ar-io-index-publication/v1\n` before the canonical JSON);
+    - documents are bounded in size and shape;
+    - band files are fetched only from the publication's origin (or `INDEX_SWARM_ALLOWED_FILE_ORIGINS`), and redirects are never followed;
+    - downloads stop at their signed size while streaming, and refuse compressed bodies;
+    - every CDB64 partition is walked and bounds-checked before a band installs, and the reader never trusts a length or pointer from the file;
+    - replacing a band never leaves a moment when lookups to it miss;
+    - one band id belongs to one publisher at a time.
 
 - **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
   item sizes for every data item in a list of root bundles, nested bundles

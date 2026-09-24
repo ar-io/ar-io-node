@@ -481,6 +481,11 @@ The subscription results that need attention:
   `incoming/`; and replacing a band under the same id needs room for both
   copies at once. Set the budget before subscribing to anything that carries
   historical bands, with headroom for `incoming/`.
+- **Validating a band reads it once.** Before a band installs, every
+  partition is walked end to end and every record and table pointer checked,
+  so a crafted file can't reach the gateway's reader. It is sequential and
+  bounded to one 1 MiB buffer per file, about 750 MiB/s from cache, so
+  roughly a minute for a 7 GB band on a spinning disk.
 - **Disk reads on every poll.** A file already in `incoming/` is re-hashed
   from local disk to confirm it before being skipped. That is far cheaper
   than fetching it, but on a spinning disk holding multi-gigabyte bands it is
