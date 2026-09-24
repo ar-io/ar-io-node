@@ -1137,6 +1137,63 @@ describe('Cdb64RootTxIndex', () => {
       await index.close();
     });
 
+    it('reloads a band rebuilt in place, answering throughout', async () => {
+      const collectionDir = path.join(tempDir, 'collection-rebuild');
+      await fs.mkdir(collectionDir, { recursive: true });
+      const bandDir = path.join(collectionDir, 'band-tip');
+      const kept = createTxId(41);
+      const added = createTxId(42);
+      await createBand(bandDir, [
+        { dataItemId: kept, rootTxId: createTxId(401) },
+      ]);
+
+      const drainKey = 'READER_DRAIN_TIMEOUT_MS';
+      const original = (Cdb64RootTxIndex as any)[drainKey];
+      (Cdb64RootTxIndex as any)[drainKey] = 400;
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [collectionDir],
+        watch: true,
+      });
+      assert((await index.getRootTx(toB64Url(kept))) !== undefined);
+
+      let running = true;
+      let misses = 0;
+      const loops = Array.from({ length: 8 }, async () => {
+        while (running) {
+          if ((await index.getRootTx(toB64Url(kept))) === undefined) misses++;
+        }
+      });
+      try {
+        // Rebuild the same band id in place: new files renamed over the
+        // old ones, the manifest last, which the watcher sees as a change.
+        const staging = path.join(tempDir, 'collection-rebuild-staging');
+        await createBand(staging, [
+          { dataItemId: kept, rootTxId: createTxId(401) },
+          { dataItemId: added, rootTxId: createTxId(402) },
+        ]);
+        const files = (await fs.readdir(staging)).sort((x, y) =>
+          x === 'manifest.json' ? 1 : y === 'manifest.json' ? -1 : 0,
+        );
+        for (const file of files) {
+          await fs.rename(path.join(staging, file), path.join(bandDir, file));
+        }
+        assert(
+          await waitFor(
+            async () => (await index.getRootTx(toB64Url(added))) !== undefined,
+          ),
+          'the rebuilt band is loaded without a restart',
+        );
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      } finally {
+        running = false;
+        await Promise.all(loops);
+        (Cdb64RootTxIndex as any)[drainKey] = original;
+        await index.close();
+      }
+      assert.equal(misses, 0, 'a record in both versions never misses');
+    });
+
     it('drops a band when it is retired', async () => {
       const collectionDir = path.join(tempDir, 'collection-remove');
       await fs.mkdir(collectionDir, { recursive: true });

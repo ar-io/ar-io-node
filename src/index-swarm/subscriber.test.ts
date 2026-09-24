@@ -23,6 +23,7 @@ import { PartitionedCdb64Writer } from '../lib/partitioned-cdb64-writer.js';
 import { encodeCdb64Value } from '../lib/cdb64-encoding.js';
 import { getSolanaAddress } from '../lib/httpsig.js';
 import {
+  INDEX_PUBLICATION_MAX_BYTES,
   serializeIndexPublication,
   signIndexPublication,
 } from '../lib/index-publication.js';
@@ -69,6 +70,10 @@ describe('Subscriber', () => {
   let tamper: ((urlPath: string, body: Buffer) => Buffer) | undefined;
   /** Status to answer partition fetches with instead of their bytes. */
   let failPartitionsWith: number | undefined;
+  /** Send bodies without Content-Length, as a chunked response. */
+  let omitContentLength: boolean;
+  /** Requests for this path, which no test should ever cause. */
+  let canaryHits: number;
 
   /**
    * A real base58 address, and deliberately a different key from the one that
@@ -94,6 +99,8 @@ describe('Subscriber', () => {
     });
     tamper = undefined;
     failPartitionsWith = undefined;
+    omitContentLength = false;
+    canaryHits = 0;
     clock = new Date('2026-09-23T00:00:00.000Z');
 
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -116,6 +123,11 @@ describe('Subscriber', () => {
             : path.join(pubDir, urlPath.replace('/ar-io/indexes/', ''));
 
       void (async () => {
+        if (urlPath === '/canary') {
+          canaryHits++;
+          res.writeHead(404).end();
+          return;
+        }
         if (failPartitionsWith !== undefined && isPartitionFetch(urlPath)) {
           res.writeHead(failPartitionsWith).end();
           return;
@@ -140,6 +152,11 @@ describe('Subscriber', () => {
             'Content-Length': String(slice.length),
           });
           res.end(slice);
+          return;
+        }
+        if (omitContentLength) {
+          res.writeHead(200);
+          res.end(body);
           return;
         }
         res.writeHead(200, { 'Content-Length': String(body.length) }).end(body);
@@ -261,6 +278,31 @@ describe('Subscriber', () => {
       )
       .reduce((sum, v) => sum + v.value, 0);
 
+  /**
+   * Rewrite what the publisher serves and sign it again with its own key: a
+   * newer or a hostile publisher, as far as a subscriber can tell.
+   */
+  const resign = async (mutate: (doc: any) => void | Promise<void>) => {
+    const file = path.join(pubDir, 'publication.json');
+    const doc: any = JSON.parse(await fs.readFile(file, 'utf8'));
+    delete doc.signature;
+    await mutate(doc);
+    await fs.writeFile(
+      file,
+      serializeIndexPublication(
+        signIndexPublication(doc, signer.privateKey, signer.keyId),
+      ),
+    );
+  };
+
+  /** Serve `bytes` as a band file of the publisher's, by name and digest. */
+  const serveFile = async (bandId: string, name: string, bytes: Buffer) => {
+    const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+    await fs.writeFile(path.join(pubDir, 'root-tx-index', bandId, name), bytes);
+    await fs.writeFile(path.join(pubDir, 'blobs', sha256), bytes);
+    return { name, size: bytes.length, sha256 };
+  };
+
   const installedIds = async (): Promise<string[]> => {
     const state = await subState.load();
     return Object.entries(state.installed['root-tx-index'] ?? {})
@@ -331,6 +373,112 @@ describe('Subscriber', () => {
 
     assert.deepEqual(await installedIds(), ['band-a']);
     assert.equal(await counted('signature_failed'), failuresBefore);
+  });
+
+  it('discards a signed band whose manifest points a partition at a URL, and never requests it', async () => {
+    await makeBand('band-a');
+    await publish();
+    await resign(async (doc) => {
+      const band = doc.indexes[0].bands[0];
+      const manifestPath = path.join(
+        pubDir,
+        'root-tx-index',
+        'band-a',
+        'manifest.json',
+      );
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+      const victim = manifest.partitions[0];
+      const dropped = victim.location.filename;
+      victim.location = { type: 'http', url: `${origin}/canary` };
+      const entry = await serveFile(
+        'band-a',
+        'manifest.json',
+        Buffer.from(JSON.stringify(manifest)),
+      );
+      band.files = band.files
+        .filter((f: any) => f.name !== dropped)
+        .map((f: any) => (f.name === 'manifest.json' ? entry : f));
+    });
+    const before = await counted('verify_failed');
+
+    await makeSubscriber().pollOnce();
+
+    assert.deepEqual(await installedIds(), [], 'nothing installed');
+    assert.equal(await counted('verify_failed'), before + 1);
+    assert.equal(canaryHits, 0, 'the publisher-chosen URL was never requested');
+    assert.equal(
+      existsSync(path.join(subIncoming, 'root-tx-index', 'band-a')),
+      false,
+      'the rejected download is not kept for resuming',
+    );
+  });
+
+  it('skips an index of a kind it does not know and installs the rest', async () => {
+    await makeBand('band-a');
+    await publish();
+    await resign((doc) => {
+      doc.indexes.push({
+        name: 'from-the-future',
+        kind: 'not-a-kind-yet',
+        bands: [],
+      });
+    });
+    const before = await counted('unknown_kind');
+
+    await makeSubscriber().pollOnce();
+
+    assert.deepEqual(await installedIds(), ['band-a']);
+    assert.equal(await counted('unknown_kind'), before + 1);
+  });
+
+  it('installs from a publication past its expiry, since its bands are still valid', async () => {
+    await makeBand('band-a');
+    await publish();
+    clock = new Date(clock.getTime() + 7 * 86_400_000);
+    await makeSubscriber().pollOnce();
+    assert.deepEqual(await installedIds(), ['band-a']);
+  });
+
+  it('counts bands already installed against the disk budget', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    const doc = JSON.parse(
+      await fs.readFile(path.join(pubDir, 'publication.json'), 'utf8'),
+    );
+    const sizeOf = (band: any) =>
+      band.files.reduce((sum: number, f: any) => sum + f.size, 0);
+    const aBytes = sizeOf(doc.indexes[0].bands[0]);
+
+    await makeBand('band-b');
+    clock = new Date(clock.getTime() + 60_000);
+    await publish();
+    const next = JSON.parse(
+      await fs.readFile(path.join(pubDir, 'publication.json'), 'utf8'),
+    );
+    const bBytes = sizeOf(
+      next.indexes[0].bands.find((b: any) => b.id === 'band-b'),
+    );
+    const before = await counted('skipped_disk_budget');
+
+    // Room for either band alone, not both.
+    await makeSubscriber({ maxDiskBytes: aBytes + bBytes - 1 }).pollOnce();
+
+    assert.deepEqual(await installedIds(), ['band-a']);
+    assert.equal(await counted('skipped_disk_budget'), before + 1);
+  });
+
+  it('refuses an oversized publication sent without a Content-Length', async () => {
+    await makeBand('band-a');
+    await publish();
+    await resign((doc) => {
+      doc.padding = 'x'.repeat(INDEX_PUBLICATION_MAX_BYTES);
+    });
+    omitContentLength = true;
+
+    await makeSubscriber().pollOnce();
+
+    assert.deepEqual(await installedIds(), []);
   });
 
   it('does nothing on a second poll when the publisher has not moved', async () => {

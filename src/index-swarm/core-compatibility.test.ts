@@ -6,12 +6,15 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
+import * as http from 'node:http';
+import { AddressInfo } from 'node:net';
 
 import { createTestLogger } from '../../test/test-logger.js';
 import {
   CoreCompatibilityCheck,
   CoreRelease,
   parseRelease,
+  fetchCoreRelease,
 } from './core-compatibility.js';
 import { registry } from './metrics.js';
 
@@ -92,5 +95,72 @@ describe('CoreCompatibilityCheck', () => {
     assert.equal(await compatibility.allowsInstalling(), false);
     assert.equal(await compatibility.allowsInstalling(), false);
     assert.equal(await compatibility.allowsInstalling(), true);
+  });
+});
+
+describe('fetchCoreRelease', () => {
+  /** A gateway answering /ar-io/info with `respond`, for the length of `run`. */
+  const withGateway = async (
+    respond: (res: http.ServerResponse) => void,
+    run: (url: string) => Promise<void>,
+  ) => {
+    const server = http.createServer((req, res) => {
+      if (req.url === '/ar-io/info') respond(res);
+      else res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    try {
+      await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  };
+
+  it('reads the release a gateway reports', async () => {
+    await withGateway(
+      (res) => res.end(JSON.stringify({ release: '84-pre' })),
+      async (url) => {
+        assert.deepEqual(await fetchCoreRelease(url), {
+          release: 84,
+          raw: '84-pre',
+        });
+      },
+    );
+  });
+
+  it('reports nothing, rather than throwing, for an error, bad JSON or no release', async () => {
+    const unknown = { release: undefined, raw: undefined };
+    await withGateway(
+      (res) => res.writeHead(503).end(),
+      async (url) => assert.deepEqual(await fetchCoreRelease(url), unknown),
+    );
+    await withGateway(
+      (res) => res.end('not json'),
+      async (url) => assert.deepEqual(await fetchCoreRelease(url), unknown),
+    );
+    await withGateway(
+      (res) => res.end(JSON.stringify({ release: 84 })),
+      async (url) => assert.deepEqual(await fetchCoreRelease(url), unknown),
+    );
+  });
+
+  it('reports nothing for a gateway that does not answer in time', async () => {
+    await withGateway(
+      () => {
+        // Never answer.
+      },
+      async (url) =>
+        assert.deepEqual(await fetchCoreRelease(url, 100), {
+          release: undefined,
+          raw: undefined,
+        }),
+    );
+    assert.deepEqual(await fetchCoreRelease('http://127.0.0.1:1', 500), {
+      release: undefined,
+      raw: undefined,
+    });
   });
 });
