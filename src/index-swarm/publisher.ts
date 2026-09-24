@@ -42,6 +42,7 @@ import {
   manifestSha256,
   serializeIndexPublication,
   signIndexPublication,
+  verifyIndexPublication,
 } from '../lib/index-publication.js';
 import { isCdb64TempDirName } from '../lib/cdb64-manifest.js';
 import {
@@ -668,7 +669,20 @@ export class Publisher {
         : now.getTime() - Date.parse(current.publication.issuedAt);
     const stale = Number.isNaN(ageMs) || ageMs >= this.ttlMs / 2;
 
-    if (!contentChanged && !stale) {
+    // A served document this key can no longer vouch for is republished at
+    // once rather than at the next refresh: one signed in an older format
+    // after an upgrade, or by the previous observer key after a rotation.
+    // Subscribers refuse it, so leaving it up would stall them for half a
+    // TTL.
+    const signatureCurrent =
+      current !== undefined &&
+      current.publication.signature?.keyId === this.signer.keyId &&
+      verifyIndexPublication(
+        current.publication,
+        crypto.createPublicKey(this.signer.privateKey),
+      ).ok;
+
+    if (!contentChanged && !stale && signatureCurrent) {
       // The document stands, but its links must still be there: one deleted
       // since (by hand, or by a failed earlier scan) would otherwise stay
       // missing until the next republish. An existing link costs an EEXIST.
@@ -735,7 +749,11 @@ export class Publisher {
 
     this.log.info('Published index manifest', {
       sequence: document.sequence,
-      reason: contentChanged ? 'content changed' : 'refreshing before expiry',
+      reason: contentChanged
+        ? 'content changed'
+        : !signatureCurrent
+          ? 'signature no longer verifies'
+          : 'refreshing before expiry',
       indexes: indexes.map((index) => `${index.name}:${index.bands.length}`),
     });
 
