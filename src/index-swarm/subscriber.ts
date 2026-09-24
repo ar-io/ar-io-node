@@ -80,6 +80,11 @@ export function bandsNewestFirst(bands: BandDescriptor[]): BandDescriptor[] {
     .map(({ band }) => band);
 }
 
+/** Whether a publisher's meter has refused this subscriber during one poll. */
+interface PollMeter {
+  refused: boolean;
+}
+
 /** A file not started because the publisher's meter already refused one. */
 class MeteredError extends Error {
   constructor() {
@@ -379,6 +384,9 @@ export class Subscriber {
     }
 
     let installedAnything = false;
+    // One per poll of this publisher: once its meter refuses a file, no
+    // band of any of its indexes starts another until the next poll.
+    const meter: PollMeter = { refused: false };
     for (const index of document.indexes) {
       if (subscription.name !== undefined && subscription.name !== index.name) {
         continue;
@@ -395,7 +403,9 @@ export class Subscriber {
         this.count(publisher, index.name, 'unknown_kind');
         continue;
       }
-      if (await this.reconcileIndex(publisher, record.url, index, kind)) {
+      if (
+        await this.reconcileIndex(publisher, record.url, index, kind, meter)
+      ) {
         installedAnything = true;
       }
     }
@@ -507,6 +517,7 @@ export class Subscriber {
     origin: string,
     index: IndexEntry,
     kind: ArtifactKind,
+    meter: PollMeter,
   ): Promise<boolean> {
     let installedAnything = false;
 
@@ -530,6 +541,7 @@ export class Subscriber {
         index,
         band,
         kind,
+        meter,
       );
       if (installed) installedAnything = true;
     }
@@ -579,7 +591,18 @@ export class Subscriber {
     index: IndexEntry,
     band: BandDescriptor,
     kind: ArtifactKind,
+    meter: PollMeter,
   ): Promise<boolean> {
+    if (meter.refused) {
+      // Not a failure of this band: the publisher's meter has already said
+      // no this poll, and asking again would only collect another refusal.
+      this.log.debug('Publisher is metering this subscriber; band waits', {
+        publisher,
+        index: index.name,
+        band: band.id,
+      });
+      return false;
+    }
     const bandBytes = band.files.reduce((sum, file) => sum + file.size, 0);
     if (this.maxDiskBytes !== undefined) {
       const used = await this.installedBytes();
@@ -617,11 +640,10 @@ export class Subscriber {
     // one exception is the publisher's meter. Once it answers 402 or 429,
     // starting more files would only collect more refusals.
     const limit = pLimit(this.downloadConcurrency);
-    let metered = false;
     const results = await Promise.allSettled(
       band.files.map((file) =>
         limit(async () => {
-          if (metered) throw new MeteredError();
+          if (meter.refused) throw new MeteredError();
           const url = fileUrl(origin, baseUrl, file);
           try {
             const result = await downloadFile({
@@ -654,7 +676,7 @@ export class Subscriber {
               error instanceof DownloadHttpError &&
               (error.status === 402 || error.status === 429)
             ) {
-              metered = true;
+              meter.refused = true;
             }
             throw error;
           }

@@ -112,7 +112,7 @@ export const subscriptionTotal = new promClient.Counter({
 
 export const subscriptionBytes = new promClient.Counter({
   name: 'index_subscription_bytes_total',
-  help: 'Bytes fetched, by transport. Shows whether the swarm or the HTTP fallback is doing the work.',
+  help: 'Bytes fetched from publishers, by transport (only http today). Excludes files skipped because they were already on disk.',
   labelNames: ['transport'] as const,
   registers: [registry],
 });
@@ -126,7 +126,7 @@ export const subscriptionManifestAge = new promClient.Gauge({
 
 export const subscriptionSequence = new promClient.Gauge({
   name: 'index_subscription_sequence',
-  help: 'Highest publication sequence installed from each publisher.',
+  help: 'Latest publication sequence seen from each publisher, whether or not its bands have installed yet. The replay guard compares against this.',
   labelNames: ['publisher'] as const,
   registers: [registry],
 });

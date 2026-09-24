@@ -757,6 +757,38 @@ describe('Subscriber', () => {
     assert.deepEqual(blobRequests, [unlucky], 'only the missing file');
   });
 
+  it('stops every band once the publisher meters it, not just the one refused', async () => {
+    // Different keys per band, so their files are distinct digests.
+    await makeBand('band-new', 12, { heightRange: [100, null] });
+    await makeBand('band-old', 30, { heightRange: [0, 99] });
+    await publish();
+    const doc = JSON.parse(
+      await fs.readFile(path.join(pubDir, 'publication.json'), 'utf8'),
+    );
+    const oldDigests = new Set(
+      doc.indexes[0].bands
+        .find((b: any) => b.id === 'band-old')
+        .files.map((f: any) => f.sha256),
+    );
+    const newDigests = new Set(
+      doc.indexes[0].bands
+        .find((b: any) => b.id === 'band-new')
+        .files.map((f: any) => f.sha256),
+    );
+    failPartitionsWith = 402;
+
+    await makeSubscriber().pollOnce();
+
+    const onlyOld = blobRequests.filter(
+      (d) => oldDigests.has(d) && !newDigests.has(d),
+    );
+    assert.deepEqual(
+      onlyOld,
+      [],
+      'the older band started nothing after the newer one was refused',
+    );
+  });
+
   it('stops starting files once the publisher meters it', async () => {
     await makeBand('band-a', 12);
     await publish();
