@@ -146,3 +146,62 @@ describe('X402UsdcProcessor', () => {
     });
   });
 });
+
+describe('X402UsdcProcessor.calculateRequirements', () => {
+  const baseConfig = {
+    walletAddress: '0x1234567890123456789012345678901234567890' as const,
+    network: 'base' as const,
+    facilitatorUrl: 'https://facilitator.example.com' as const,
+    settleTimeoutMs: 5000,
+    version: 1,
+  };
+  const context = {
+    protocol: 'https',
+    host: 'gateway.example.com',
+    originalUrl: '/raw/abc',
+    contentType: 'application/octet-stream',
+  };
+
+  it('quotes small items at a sub-$0.0005 per-byte rate instead of throwing', () => {
+    // $0.045/GiB with a $0.0001 floor: every item under ~11.9 MB used to be
+    // formatted as "$0.000", which x402 rejects.
+    const processor = new X402UsdcProcessor({
+      ...baseConfig,
+      perBytePrice: 0.000000000042,
+      minPrice: 0.0001,
+      maxPrice: 1.0,
+    });
+
+    const small = processor.calculateRequirements({
+      ...context,
+      contentSize: 1024,
+    });
+    assert.strictEqual(small.maxAmountRequired, '100');
+
+    const medium = processor.calculateRequirements({
+      ...context,
+      contentSize: 7_306_242,
+    });
+    assert.strictEqual(medium.maxAmountRequired, '307');
+    assert.strictEqual(medium.network, 'base');
+    assert.match(medium.asset, /^0x[0-9a-fA-F]{40}$/);
+  });
+
+  it('always quotes a whole number of atomic units', () => {
+    // $0.0079 through x402's string path is "7900.000000000001".
+    const processor = new X402UsdcProcessor({
+      ...baseConfig,
+      perBytePrice: 0.0000001,
+      minPrice: 0.0001,
+      maxPrice: 1.0,
+    });
+
+    for (const contentSize of [79_000, 157_000, 158_000, 1_234_567]) {
+      const { maxAmountRequired } = processor.calculateRequirements({
+        ...context,
+        contentSize,
+      });
+      assert.match(maxAmountRequired, /^\d+$/, `${contentSize} bytes`);
+    }
+  });
+});
