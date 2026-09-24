@@ -937,6 +937,80 @@ describe('Cdb64RootTxIndex', () => {
 
         await index.close();
       });
+
+      it('keeps answering throughout a reload under steady lookups', async () => {
+        const indexDir = path.join(tempDir, 'watch-manifest-steady');
+        const id = Buffer.alloc(32, 0xab);
+        id[1] = 0x03;
+        await createPartitionedIndex(indexDir, [
+          { dataItemId: id, rootTxId: createTxId(300) },
+        ]);
+
+        // Short enough for a test, long enough that a reader still in the
+        // lookup list would be closed with lookups in flight.
+        const drainKey = 'READER_DRAIN_TIMEOUT_MS';
+        const original = (Cdb64RootTxIndex as any)[drainKey];
+        (Cdb64RootTxIndex as any)[drainKey] = 400;
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [indexDir],
+          watch: true,
+        });
+        assert((await index.getRootTx(toB64Url(id))) !== undefined);
+
+        let running = true;
+        let misses = 0;
+        let lookups = 0;
+        // Several loops at once, so some lookup is nearly always in flight.
+        const loops = Array.from({ length: 8 }, async () => {
+          while (running) {
+            const result = await index.getRootTx(toB64Url(id));
+            lookups++;
+            if (result === undefined) misses++;
+          }
+        });
+
+        try {
+          // Rebuild the band in place with the same record plus another.
+          const rebuilt = path.join(tempDir, 'watch-manifest-steady-temp');
+          const other = Buffer.alloc(32, 0xcd);
+          other[1] = 0x04;
+          await createPartitionedIndex(rebuilt, [
+            { dataItemId: id, rootTxId: createTxId(300) },
+            { dataItemId: other, rootTxId: createTxId(400) },
+          ]);
+          // Replace each file by rename, as an installer does, so the old
+          // reader keeps its own bytes; the manifest goes last.
+          const files = (await fs.readdir(rebuilt)).sort((x, y) =>
+            x === 'manifest.json' ? 1 : y === 'manifest.json' ? -1 : 0,
+          );
+          for (const file of files) {
+            await fs.rename(
+              path.join(rebuilt, file),
+              path.join(indexDir, file),
+            );
+          }
+          // Until the new record is visible, then past the drain deadline.
+          for (let i = 0; i < 60; i++) {
+            if ((await index.getRootTx(toB64Url(other))) !== undefined) break;
+            await waitForWatcher(50);
+          }
+          assert(
+            (await index.getRootTx(toB64Url(other))) !== undefined,
+            'the rebuilt band was loaded',
+          );
+          await waitForWatcher(600);
+        } finally {
+          running = false;
+          await Promise.all(loops);
+          (Cdb64RootTxIndex as any)[drainKey] = original;
+          await index.close();
+        }
+
+        assert.ok(lookups > 100, `ran ${lookups} lookups`);
+        assert.equal(misses, 0, 'a record in both versions never misses');
+      });
     });
   });
 

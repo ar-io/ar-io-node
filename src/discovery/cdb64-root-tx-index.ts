@@ -501,14 +501,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
    * Reloads a partitioned directory after manifest change.
    */
   private async reloadPartitionedDirectory(dirPath: string): Promise<void> {
-    // Close existing reader
+    // Open the replacement first and publish it before draining the old
+    // reader. Draining while the old reader is still in the lookup list
+    // lets new lookups keep entering it, so under steady traffic it never
+    // goes idle, is closed at the drain deadline with lookups in flight, and
+    // those lookups miss until the new reader arrives.
     const existingEntry = this.readerMap.get(dirPath);
-    if (existingEntry) {
-      this.readerMap.delete(dirPath);
-      await this.closeReaderWhenIdle(existingEntry);
-    }
-
-    // Create new reader with updated manifest
     try {
       const entry = await this.createPartitionedReader(dirPath, {
         type: 'partitioned-directory',
@@ -527,7 +525,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         path: dirPath,
         error: error.message,
       });
+      this.readerMap.delete(dirPath);
       this.rebuildReaderList();
+    } finally {
+      if (existingEntry !== undefined) {
+        await this.closeReaderWhenIdle(existingEntry);
+      }
     }
   }
 
