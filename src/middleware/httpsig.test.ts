@@ -132,6 +132,60 @@ describe('createHttpSigMiddleware', () => {
     assert.equal(res.headers['signature-input'], undefined);
   });
 
+  it('covers every X-ArNS-* header on an ArNS response', async () => {
+    const { privateKey, keyId } = generateTestKeyPair();
+
+    const app = express();
+    app.use(createHttpSigMiddleware({ privateKey, keyId, bindRequest: false }));
+    app.get('/test', (_req, res) => {
+      // Exactly what the ArNS middleware sets on a resolved name.
+      res.header('X-ArNS-Name', 'docs_ardrive');
+      res.header('X-ArNS-Basename', 'ardrive');
+      res.header('X-ArNS-Record', 'docs');
+      res.header('X-ArNS-Resolved-Id', 'a'.repeat(43));
+      res.header('X-ArNS-TTL-Seconds', '900');
+      res.header('X-ArNS-Ant-Id', 'b'.repeat(43));
+      res.header('X-ArNS-Ant-Program-Id', 'c'.repeat(43));
+      res.header('X-ArNS-Resolved-At', '1790208021000');
+      res.header('X-ArNS-Undername-Limit', '10');
+      res.header('X-ArNS-Record-Index', '3');
+      res.send('ok');
+    });
+
+    const res = await request(app).get('/test');
+    const input = res.headers['signature-input'] as string;
+    for (const header of [
+      'x-arns-name',
+      'x-arns-basename',
+      'x-arns-record',
+      'x-arns-resolved-id',
+      'x-arns-ttl-seconds',
+      'x-arns-ant-id',
+      'x-arns-ant-program-id',
+      'x-arns-resolved-at',
+      'x-arns-undername-limit',
+      'x-arns-record-index',
+    ]) {
+      assert.ok(input.includes(`"${header}"`), `${header} is signed`);
+    }
+  });
+
+  it('does not sign a response carrying only the ArNS co-signable headers', async () => {
+    const { privateKey, keyId } = generateTestKeyPair();
+
+    const app = express();
+    app.use(createHttpSigMiddleware({ privateKey, keyId, bindRequest: false }));
+    app.get('/test', (_req, res) => {
+      // Co-signable, not triggers: alone they must not start a signature.
+      res.header('X-ArNS-Undername-Limit', '10');
+      res.header('X-ArNS-Record-Index', '3');
+      res.send('ok');
+    });
+
+    const res = await request(app).get('/test');
+    assert.equal(res.headers['signature'], undefined);
+  });
+
   it('signs x-arweave-tag-* headers via prefix match', async () => {
     const { privateKey, keyId } = generateTestKeyPair();
 

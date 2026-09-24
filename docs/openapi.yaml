@@ -2791,7 +2791,9 @@ paths:
             type: string
       responses:
         '200':
-          description: Successful resolution of ArNS name
+          description: |
+            Successful resolution of ArNS name. With HTTPSIG_ENABLED, the
+            response signature covers every X-ArNS-* header listed here.
           headers:
             x-arns-resolved-id:
               schema:

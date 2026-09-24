@@ -68,6 +68,18 @@ export const CO_SIGNABLE_HEADERS = new Set([
   'x-ar-io-root-item-offset',
   'x-ar-io-root-item-size',
   'x-ar-io-root-path',
+  // The rest of an ArNS resolution. They only ever appear alongside
+  // x-arns-name, a trigger, so co-signing them covers every ArNS response
+  // without changing which responses are signed. -undername-limit and
+  // -record-index together decide whether a record is served at all
+  // (ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT), so they are evidence a client
+  // must be able to check; -resolved-at is a timestamped claim like the
+  // signature's own created parameter.
+  'x-arns-basename',
+  'x-arns-record',
+  'x-arns-resolved-at',
+  'x-arns-undername-limit',
+  'x-arns-record-index',
 ]);
 
 // Header predicates normalize case defensively, but callers should pass
