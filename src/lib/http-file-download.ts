@@ -76,7 +76,11 @@ export interface DownloadFileOptions {
   expectedSize?: number;
   /** Expected lowercase hex SHA-256. When given, it is enforced. */
   expectedSha256?: string;
-  /** Resume from an existing partial `.tmp`. Defaults to true. */
+  /**
+   * Resume from an existing partial `.tmp`, and skip the fetch entirely when
+   * `destPath` already holds a file matching `expectedSha256` (and
+   * `expectedSize`, if given). Defaults to true.
+   */
   resume?: boolean;
   /**
    * Byte offset of this file within the resource at `url`, for a file stored
@@ -109,7 +113,10 @@ export interface DownloadFileOptions {
 export interface DownloadFileResult {
   /** Total size of the completed file, including any resumed prefix. */
   bytesWritten: number;
-  /** Bytes that were already present and resumed from; 0 for a fresh fetch. */
+  /**
+   * Bytes that were already present and resumed from; 0 for a fresh fetch,
+   * and the whole file when it was already complete and nothing was fetched.
+   */
   resumedFrom: number;
   /** Hex digest, present when `expectedSha256` was supplied and matched. */
   sha256?: string;
@@ -129,6 +136,41 @@ function safeUnlink(filePath: string): void {
     // A partial file we cannot remove is not worth failing the download over;
     // the size check on the next attempt will reject it.
   }
+}
+
+/**
+ * The size of `filePath` if it exists and has the expected size and digest;
+ * undefined otherwise.
+ */
+async function completedFile(
+  filePath: string,
+  expectedSize: number | undefined,
+  expectedSha256: string,
+): Promise<number | undefined> {
+  let size: number;
+  try {
+    const stat = statSync(filePath);
+    if (!stat.isFile()) return undefined;
+    size = stat.size;
+  } catch {
+    return undefined;
+  }
+  if (expectedSize !== undefined && size !== expectedSize) return undefined;
+  const hash = crypto.createHash('sha256');
+  try {
+    await pipeline(
+      createReadStream(filePath),
+      new Writable({
+        write(chunk, _encoding, callback) {
+          hash.update(chunk);
+          callback();
+        },
+      }),
+    );
+  } catch {
+    return undefined;
+  }
+  return hash.digest('hex') === expectedSha256 ? size : undefined;
 }
 
 /**
@@ -158,6 +200,25 @@ export async function downloadFile(
 
   if (rangeOffset !== undefined && expectedSize === undefined) {
     throw new Error('rangeOffset requires expectedSize to bound the range');
+  }
+
+  // A file already in place with the expected digest is done: fetching it
+  // again would only spend the publisher's bandwidth and our meter. Reading
+  // it back from local disk is far cheaper than the network. Anything that
+  // doesn't match is left alone and replaced by the download below.
+  if (resume && expectedSha256 !== undefined) {
+    const complete = await completedFile(
+      destPath,
+      expectedSize,
+      expectedSha256,
+    );
+    if (complete !== undefined) {
+      return {
+        bytesWritten: complete,
+        resumedFrom: complete,
+        sha256: expectedSha256,
+      };
+    }
   }
 
   const tmpPath = partialPathFor(destPath);

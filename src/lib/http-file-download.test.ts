@@ -115,6 +115,71 @@ describe('downloadFile', () => {
     assert.deepEqual(await fs.readFile(destPath), body);
   });
 
+  it('does not fetch a file that is already complete and verified', async () => {
+    const destPath = dest();
+    await fs.writeFile(destPath, body);
+    let requests = 0;
+    handler = (req, res) => {
+      requests += 1;
+      serveWithRanges(req, res);
+    };
+
+    const result = await downloadFile({
+      url: `${baseUrl}/file`,
+      destPath,
+      expectedSize: body.length,
+      expectedSha256: bodySha256,
+    });
+
+    assert.equal(requests, 0, 'nothing was fetched');
+    assert.equal(result.bytesWritten, body.length);
+    assert.equal(result.resumedFrom, body.length);
+    assert.equal(result.sha256, bodySha256);
+  });
+
+  it('replaces a file in place whose digest does not match', async () => {
+    const destPath = dest();
+    const wrong = Buffer.from(body);
+    wrong[0] ^= 0xff;
+    await fs.writeFile(destPath, wrong);
+    let requests = 0;
+    handler = (req, res) => {
+      requests += 1;
+      serveWithRanges(req, res);
+    };
+
+    const result = await downloadFile({
+      url: `${baseUrl}/file`,
+      destPath,
+      expectedSize: body.length,
+      expectedSha256: bodySha256,
+    });
+
+    assert.equal(requests, 1);
+    assert.equal(result.resumedFrom, 0);
+    assert.deepEqual(await fs.readFile(destPath), body);
+  });
+
+  it('fetches again when resume is disabled, even if the file is complete', async () => {
+    const destPath = dest();
+    await fs.writeFile(destPath, body);
+    let requests = 0;
+    handler = (req, res) => {
+      requests += 1;
+      serveWithRanges(req, res);
+    };
+
+    await downloadFile({
+      url: `${baseUrl}/file`,
+      destPath,
+      expectedSize: body.length,
+      expectedSha256: bodySha256,
+      resume: false,
+    });
+
+    assert.equal(requests, 1);
+  });
+
   it('starts over when the server ignores the range request', async () => {
     const destPath = dest();
     await fs.writeFile(partialPathFor(destPath), body.subarray(0, 10));
