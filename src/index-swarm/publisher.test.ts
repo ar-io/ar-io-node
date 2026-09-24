@@ -159,6 +159,27 @@ describe('Publisher', () => {
     assert.equal((await readPublication()).sequence, 1, 'one document');
   });
 
+  it('keeps counting from the served document when its state is lost', async () => {
+    await makeBand('band-a');
+    await makePublisher().scanOnce();
+    await makeBand('band-b');
+    await makePublisher().scanOnce();
+    assert.equal((await readPublication()).sequence, 2);
+
+    // State is re-derivable and may be reset to empty; publication.json,
+    // which subscribers have already seen, survives.
+    await fs.rm(path.join(tempDir, 'state.json'), { force: true });
+    state = new StateStore({ log, filePath: path.join(tempDir, 'state.json') });
+    await makeBand('band-c');
+    await makePublisher().scanOnce();
+
+    assert.equal(
+      (await readPublication()).sequence,
+      3,
+      'not 1, which every subscriber would refuse',
+    );
+  });
+
   it('chains each document to the bytes actually served before it', async () => {
     await makeBand('band-a');
     const publisher = makePublisher();

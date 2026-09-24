@@ -479,7 +479,16 @@ export class Publisher {
     }
 
     const state = await this.state.load();
-    const previousSequence = state.published?.sequence ?? 0;
+    // The served document is the authority on what subscribers have seen.
+    // State is re-derivable and can be lost or reset to empty while
+    // publication.json survives; counting from state alone would restart at
+    // 1 below the sequence every subscriber holds, and they would refuse
+    // every new document until the counter caught up.
+    const servedSequence = current?.publication.sequence ?? 0;
+    const previousSequence = Math.max(
+      state.published?.sequence ?? 0,
+      servedSequence,
+    );
 
     const document: IndexPublication = {
       version: 1,
