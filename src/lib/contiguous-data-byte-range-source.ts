@@ -6,7 +6,7 @@
  */
 
 import { Readable } from 'node:stream';
-import { ByteRangeSource } from './byte-range-source.js';
+import { assertReadableRange, ByteRangeSource } from './byte-range-source.js';
 import { ContiguousDataSource } from '../types.js';
 
 /**
@@ -93,6 +93,9 @@ export class ContiguousDataByteRangeSource implements ByteRangeSource {
   }
 
   async read(offset: number, size: number): Promise<Buffer> {
+    // streamToBuffer pre-allocates `size` bytes, so cap it before asking.
+    assertReadableRange(offset, size);
+
     // Bounds checking if total size is known
     if (this.totalSize !== undefined && offset + size > this.totalSize) {
       throw new Error(
@@ -115,6 +118,11 @@ export class ContiguousDataByteRangeSource implements ByteRangeSource {
     // on upstream overage. Replaces the previous Buffer.concat-based
     // accumulator that allowed unbounded memory growth (PE-9081).
     return streamToBuffer(data.stream, size);
+  }
+
+  /** The declared total size, when one was given. */
+  async getSize(): Promise<number | undefined> {
+    return this.totalSize;
   }
 
   async close(): Promise<void> {

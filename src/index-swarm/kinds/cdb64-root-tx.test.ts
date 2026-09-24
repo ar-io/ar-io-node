@@ -336,6 +336,109 @@ describe('Cdb64RootTxKind', () => {
     });
   });
 
+  describe('validate: partition structure', () => {
+    /**
+     * Build a band, rewrite bytes of one partition in place (same size, same
+     * header slot counts, so the header-only checks still pass), and return
+     * a descriptor restated over the tampered bytes.
+     */
+    const tamperedBand = async (
+      name: string,
+      tamper: (bytes: Buffer) => void,
+    ) => {
+      const dir = await makeBand(path.join(tempDir, name));
+      const original = await kind.describe(dir);
+      const partition = original.files.find((f) => f.name !== MANIFEST_FILE);
+      assert.ok(partition !== undefined);
+      const partitionPath = path.join(dir, partition.name);
+      const bytes = await fs.readFile(partitionPath);
+      tamper(bytes);
+      await fs.writeFile(partitionPath, bytes);
+      return { dir, band: await kind.describe(dir) };
+    };
+
+    /** The one non-empty table in a single-record partition. */
+    const onlyTable = (bytes: Buffer): number => {
+      for (let i = 0; i < 256; i++) {
+        if (bytes.readBigUInt64LE(i * 16 + 8) > 0n) return i;
+      }
+      throw new Error('no table');
+    };
+
+    it('rejects a record declaring a 2^31-byte key', async () => {
+      // The shape of the crash: header counts agree with the manifest, and
+      // the first lookup for this key would have aborted the gateway.
+      const { dir, band } = await tamperedBand('band-klen', (bytes) =>
+        bytes.writeBigUInt64LE(2n ** 31n, 4096),
+      );
+      await assert.rejects(
+        () => kind.validate(band, dir),
+        /not a well-formed CDB64 file: .*key length 2147483648/,
+      );
+    });
+
+    it('rejects a record declaring a huge value', async () => {
+      const { dir, band } = await tamperedBand('band-vlen', (bytes) =>
+        bytes.writeBigUInt64LE(2n ** 30n, 4096 + 8),
+      );
+      await assert.rejects(
+        () => kind.validate(band, dir),
+        /not a well-formed CDB64 file: .*value length 1073741824/,
+      );
+    });
+
+    it('rejects a value just over the root-tx bound', async () => {
+      const { dir, band } = await tamperedBand('band-vbound', (bytes) =>
+        bytes.writeBigUInt64LE(BigInt(64 * 1024 + 1), 4096 + 8),
+      );
+      await assert.rejects(
+        () => kind.validate(band, dir),
+        /beyond the 32\/65536-byte bounds/,
+      );
+    });
+
+    it('rejects a record that runs into the hash tables', async () => {
+      const { dir, band } = await tamperedBand('band-overrun', (bytes) =>
+        bytes.writeBigUInt64LE(1000n, 4096 + 8),
+      );
+      await assert.rejects(
+        () => kind.validate(band, dir),
+        /past the hash tables/,
+      );
+    });
+
+    it('rejects a table pointer past the end of the file', async () => {
+      const { dir, band } = await tamperedBand('band-tptr', (bytes) =>
+        bytes.writeBigUInt64LE(2n ** 40n, onlyTable(bytes) * 16),
+      );
+      await assert.rejects(
+        () => kind.validate(band, dir),
+        /does not fit in the/,
+      );
+    });
+
+    it('rejects a slot pointing outside the records', async () => {
+      const { dir, band } = await tamperedBand('band-slot', (bytes) => {
+        const table = Number(bytes.readBigUInt64LE(onlyTable(bytes) * 16));
+        for (let slot = 0; slot < 2; slot++) {
+          const at = table + slot * 16 + 8;
+          if (bytes.readBigUInt64LE(at) !== 0n) {
+            bytes.writeBigUInt64LE(2n ** 40n, at);
+          }
+        }
+      });
+      await assert.rejects(
+        () => kind.validate(band, dir),
+        /is not a valid entry/,
+      );
+    });
+
+    it('still accepts a larger real band', async () => {
+      const dir = await makeBand(path.join(tempDir, 'band-large'), 2000);
+      await kind.validate(await kind.describe(dir), dir);
+    });
+  });
+
   describe('install, retire and sweep', () => {
     it('installs a band atomically and records it', async () => {
       const source = await makeBand(path.join(tempDir, 'incoming', 'band-1'));

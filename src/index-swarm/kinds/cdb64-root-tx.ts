@@ -23,7 +23,7 @@ import pLimit from 'p-limit';
 import { Logger } from 'winston';
 
 import { BandDescriptor, BandFile } from '../../lib/index-publication.js';
-import { Cdb64Reader } from '../../lib/cdb64.js';
+import { Cdb64Reader, verifyCdb64File } from '../../lib/cdb64.js';
 import { FileByteRangeSource } from '../../lib/byte-range-source.js';
 import { parseManifest } from '../../lib/cdb64-manifest.js';
 import { InstalledBand } from '../state.js';
@@ -52,6 +52,19 @@ const PARTITION_NAME_PATTERN = /^[0-9a-f]{2}\.cdb$/;
  * with the traffic the gateway is there to serve.
  */
 const DEFAULT_FILE_CONCURRENCY = 4;
+
+/** Root-transaction index keys are 32-byte transaction and data item IDs. */
+const ROOT_TX_KEY_LENGTH = 32;
+
+/**
+ * Largest value a root-transaction record may carry (64 KiB).
+ *
+ * Values are MessagePack objects: a root ID, optional offsets, and at most a
+ * path of IDs from root to parent. With bundles nested at most ten deep that
+ * is well under a kilobyte; 64 KiB leaves ample headroom for new fields while
+ * refusing a file that declares values of a size no real index writes.
+ */
+export const MAX_ROOT_TX_VALUE_LENGTH = 64 * 1024;
 
 async function sha256File(filePath: string): Promise<string> {
   const hash = crypto.createHash('sha256');
@@ -257,7 +270,9 @@ export class Cdb64RootTxKind implements ArtifactKind {
     // malformed header; comparing the record count against the manifest
     // catches the case a size or digest check cannot see, a file that is the
     // right length but zero-filled, which parses as a perfectly valid empty
-    // database.
+    // database. Then a full structural walk (verifyCdb64File) proves every
+    // pointer and length a lookup would trust stays inside the file. It is
+    // one sequential read of the partition, bounded to one buffer of memory.
     const declaredRecords = new Map(
       manifest.partitions
         .filter((partition) => partition.location.type === 'file')
@@ -291,6 +306,28 @@ export class Cdb64RootTxKind implements ArtifactKind {
           if (expected !== undefined && actualRecords !== expected) {
             throw new Error(
               `Band ${band.id}: ${name} holds ${actualRecords} records, but the manifest declares ${expected}`,
+            );
+          }
+
+          // The header only says how many slots there are. A lookup follows
+          // table pointers, slots and record headers the publisher wrote, so
+          // walk all of them once here: a band whose structure would send a
+          // reader outside the file, or ask it for a record of absurd size,
+          // is refused before it is ever installed.
+          let walkedRecords: number;
+          try {
+            ({ records: walkedRecords } = await verifyCdb64File(filePath, {
+              maxKeyLength: ROOT_TX_KEY_LENGTH,
+              maxValueLength: MAX_ROOT_TX_VALUE_LENGTH,
+            }));
+          } catch (error: any) {
+            throw new Error(
+              `Band ${band.id}: ${name} is not a well-formed CDB64 file: ${error?.message ?? 'verification failed'}`,
+            );
+          }
+          if (walkedRecords !== actualRecords) {
+            throw new Error(
+              `Band ${band.id}: ${name} holds ${walkedRecords} records, but its header declares ${actualRecords}`,
             );
           }
         }),
