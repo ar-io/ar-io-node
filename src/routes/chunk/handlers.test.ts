@@ -17,8 +17,10 @@ import {
   withChunkServeDeadline,
   ChunkServeTimeoutError,
   classifyChunkRetrievalError,
+  selectChunkServeDeadline,
 } from './handlers.js';
 import { ChunkNotFoundError } from '../../data/chunk-retrieval-service.js';
+import * as config from '../../config.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 
@@ -1228,5 +1230,33 @@ describe('classifyChunkRetrievalError', () => {
       false,
     );
     assert.strictEqual(v.statusCode, 502);
+  });
+
+  // A peer gives us 1s (PEER_REQUEST_TIMEOUT_MS) before falling back to its own
+  // sources, while the general serve deadline is 12s. Work past the caller's
+  // patience is delivered to nobody but still holds a thread and the disk.
+  describe('peer-origin serve deadline', () => {
+    it('applies the shorter deadline to a request forwarded by a gateway', () => {
+      const { deadlineMs, peerOrigin } = selectChunkServeDeadline({
+        hops: 1,
+      } as any);
+      assert.equal(peerOrigin, true);
+      assert.equal(deadlineMs, config.CHUNK_PEER_ORIGIN_DEADLINE_MS);
+    });
+
+    it('leaves a direct user request on the general deadline', () => {
+      for (const attrs of [undefined, { hops: 0 } as any]) {
+        const { deadlineMs, peerOrigin } = selectChunkServeDeadline(attrs);
+        assert.equal(peerOrigin, false, `hops=${attrs?.hops}`);
+        assert.equal(deadlineMs, config.CHUNK_SERVE_DEADLINE_MS);
+      }
+    });
+
+    it('counts deeper forwarding as peer origin too', () => {
+      assert.equal(
+        selectChunkServeDeadline({ hops: 5 } as any).peerOrigin,
+        true,
+      );
+    });
   });
 });

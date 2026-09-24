@@ -1338,6 +1338,27 @@ export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
   12000,
 );
 
+// Wall-clock deadline (ms) for serving a chunk request that arrived from
+// another gateway (X-AR-IO-Hops >= 1), applied instead of
+// CHUNK_SERVE_DEADLINE_MS.
+//
+// A peer gives us one second before it gives up (PEER_REQUEST_TIMEOUT_MS in
+// ar-io-chunk-source.ts) and then goes to its own sources, so work past that
+// point is delivered to nobody. Measured on a production gateway pair: ~1.09M
+// chunk serves per day hit the 12s cap across two nodes, while a cold fetch
+// completes in ~600ms at the median -- so the cost is concentrated in a tail
+// that no caller is still waiting for.
+//
+// The default is deliberately well above the caller's 1s rather than equal to
+// it: a fetch that is nearly done is worth finishing (it populates the cache
+// for later readers), and one second is this implementation's timeout, not a
+// protocol guarantee -- other clients may wait longer. 0 falls back to
+// CHUNK_SERVE_DEADLINE_MS, preserving existing behavior.
+export const CHUNK_PEER_ORIGIN_DEADLINE_MS = env.nonNegativeIntOrDefault(
+  'CHUNK_PEER_ORIGIN_DEADLINE_MS',
+  3000,
+);
+
 // How to treat chunk requests forwarded by another AR.IO gateway
 // (X-AR-IO-Hops >= 1): `off`, `audit` or `enforce`.
 //
