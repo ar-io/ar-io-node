@@ -347,6 +347,34 @@ describe('downloadFile', () => {
     assert.deepEqual(await fs.readFile(destPath), body);
   });
 
+  it('holds a multi-chunk transfer to the rate cap', async () => {
+    // Many chunks, sent as fast as the server can: the cap, not the server,
+    // must set the pace. (A single-chunk body cannot tell the difference.)
+    const chunk = Buffer.alloc(1024, 7);
+    const count = 20;
+    handler = (_req, res) => {
+      res.writeHead(200, { 'Content-Length': String(chunk.length * count) });
+      let sent = 0;
+      const next = () => {
+        if (sent === count) return void res.end();
+        sent++;
+        res.write(chunk, next);
+      };
+      next();
+    };
+    const startedAt = Date.now();
+    const result = await downloadFile({
+      url: `${baseUrl}/paced`,
+      destPath: dest(),
+      expectedSize: chunk.length * count,
+      maxBytesPerSecond: 20_000,
+    });
+    const elapsed = Date.now() - startedAt;
+    assert.equal(result.bytesWritten, chunk.length * count);
+    // 20 KiB at 20,000 bytes/s is about 1 s; allow for timer slack.
+    assert.ok(elapsed >= 800, `took ${elapsed} ms, the cap did not hold`);
+  });
+
   it('does not count pacing for a rate cap as a stall', async () => {
     handler = serveWithRanges;
     const destPath = dest();

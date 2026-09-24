@@ -194,7 +194,10 @@ export const MAX_DISK_BYTES = env.positiveIntOrUndefined(
   'INDEX_SWARM_MAX_DISK_BYTES',
 );
 
-/** Write-rate cap while downloading a band. Unset means no cap. */
+/**
+ * Write-rate cap while downloading a band, shared across the files it
+ * downloads at once. Unset means no cap.
+ */
 export const DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC = env.positiveIntOrUndefined(
   'INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC',
 );

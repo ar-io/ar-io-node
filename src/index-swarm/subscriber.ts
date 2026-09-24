@@ -586,8 +586,18 @@ export class Subscriber {
               expectedSha256: file.sha256,
               resume: true,
               idleTimeoutMs: this.downloadStallTimeoutMs,
+              // The cap is for the band, and downloadConcurrency files move
+              // at once, so each gets its share.
               ...(this.downloadRateLimitBytesPerSec !== undefined
-                ? { maxBytesPerSecond: this.downloadRateLimitBytesPerSec }
+                ? {
+                    maxBytesPerSecond: Math.max(
+                      1,
+                      Math.floor(
+                        this.downloadRateLimitBytesPerSec /
+                          this.downloadConcurrency,
+                      ),
+                    ),
+                  }
                 : {}),
             });
             subscriptionBytes.inc(

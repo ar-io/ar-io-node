@@ -285,11 +285,12 @@ export async function downloadFile(
           }
           bytesWritten += value.length;
           hash?.update(value);
-          this.push(value);
 
           // Pace by sleeping for however long this chunk "should" have taken,
           // measured against the whole transfer rather than chunk by chunk,
-          // so a burst is absorbed rather than compounding.
+          // so a burst is absorbed rather than compounding. The sleep comes
+          // before push: Node calls read() again as soon as push() runs, not
+          // when this promise settles, so sleeping after it paced nothing.
           if (maxBytesPerSecond !== undefined && maxBytesPerSecond > 0) {
             const transferred = bytesWritten - resumedFrom;
             const owedMs =
@@ -299,6 +300,7 @@ export async function downloadFile(
               await new Promise((resolve) => setTimeout(resolve, owedMs));
             }
           }
+          this.push(value);
         } catch (error) {
           this.destroy(error as Error);
         }
