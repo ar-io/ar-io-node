@@ -333,7 +333,7 @@ describe('/ar-io/indexes routes', () => {
           .get(`/ar-io/indexes/blob/${file.sha256}`)
           .expect(503);
         assert.equal(res.headers['retry-after'], '60');
-        assert.equal(res.headers['cache-control'], undefined);
+        assert.equal(res.headers['cache-control'], 'no-store');
       } finally {
         await fs.writeFile(named, saved);
         await fs.link(named, link);
@@ -344,6 +344,103 @@ describe('/ar-io/indexes routes', () => {
       // Falls through to the named routes, where "blob" is just an index
       // name that happens not to exist.
       await request(app).get('/ar-io/indexes/blob/not-a-digest').expect(404);
+    });
+  });
+
+  // Most gateways sit behind nginx, often caching, with rules such as
+  // `proxy_cache_valid 404 30s`. An upstream Cache-Control overrides those
+  // rules, so every error must say no-store, and only 200, 206 and 304 may
+  // say anything cacheable.
+  describe('behind a caching proxy', () => {
+    const cacheControl = async (
+      target: express.Express,
+      url: string,
+      status: number,
+      headers: Record<string, string> = {},
+    ): Promise<string | undefined> => {
+      const req = request(target).get(url);
+      for (const [k, v] of Object.entries(headers)) req.set(k, v);
+      const res = await req.expect(status);
+      return res.headers['cache-control'];
+    };
+
+    it('marks every error uncacheable', async () => {
+      const file = partitionFile();
+      const empty = express();
+      empty.use(
+        createIndexesRouter({
+          log,
+          publishedDir: path.join(tempDir, 'nothing-here'),
+        }),
+      );
+      const cases: Array<
+        [string, express.Express, string, number, Record<string, string>?]
+      > = [
+        ['an unpublished document', empty, '/ar-io/indexes', 404],
+        [
+          'an unknown digest',
+          app,
+          `/ar-io/indexes/blob/${'0'.repeat(64)}`,
+          404,
+        ],
+        [
+          'an unknown file',
+          app,
+          '/ar-io/indexes/root-tx-index/band-a/nope.cdb',
+          404,
+        ],
+        ['a bad name', app, '/ar-io/indexes/Bad_Name/band-a/x.cdb', 400],
+        [
+          'an unsatisfiable range',
+          app,
+          `/ar-io/indexes/blob/${file.sha256}`,
+          416,
+          { Range: `bytes=${file.size + 10}-` },
+        ],
+        [
+          'a malformed range',
+          app,
+          `/ar-io/indexes/blob/${file.sha256}`,
+          400,
+          { Range: 'garbage' },
+        ],
+      ];
+      for (const [what, target, url, status, headers] of cases) {
+        assert.equal(
+          await cacheControl(target, url, status, headers),
+          'no-store',
+          what,
+        );
+      }
+    });
+
+    it('keeps the cacheable values on success', async () => {
+      const file = partitionFile();
+      const blob = `/ar-io/indexes/blob/${file.sha256}`;
+      const immutable = 'public, max-age=31536000, immutable';
+      assert.equal(await cacheControl(app, blob, 200), immutable);
+      assert.equal(
+        await cacheControl(app, blob, 206, { Range: 'bytes=0-9' }),
+        immutable,
+      );
+      assert.equal(
+        await cacheControl(app, blob, 304, {
+          'If-None-Match': `"${file.sha256}"`,
+        }),
+        immutable,
+      );
+      assert.equal(
+        await cacheControl(
+          app,
+          `/ar-io/indexes/root-tx-index/band-a/${file.name}`,
+          200,
+        ),
+        'public, no-cache',
+      );
+      assert.equal(
+        await cacheControl(app, '/ar-io/indexes', 200),
+        'public, max-age=60',
+      );
     });
   });
 

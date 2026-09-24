@@ -145,6 +145,8 @@ describe('/ar-io/indexes rate limiting', () => {
       429,
       'a second full copy does not fit in the bucket, so it is refused',
     );
+    // A cache in front of the gateway must not keep the refusal.
+    assert.equal(second.headers['cache-control'], 'no-store');
   });
 
   it('does not meter the publication document itself', async () => {
@@ -199,7 +201,10 @@ describe('/ar-io/indexes rate limiting', () => {
 
     await request(paid).get(url).expect(200);
     await settle();
-    await request(paid).get(url).expect(402);
+    const refused = await request(paid).get(url).expect(402);
     assert.equal(asked, 1);
+    // This is a blob URL, whose success value is a year of immutable caching:
+    // a cache that kept this 402 would keep refusing long after payment.
+    assert.equal(refused.headers['cache-control'], 'no-store');
   });
 });

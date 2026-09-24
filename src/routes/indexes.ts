@@ -96,7 +96,19 @@ export function createIndexesRouter({
     metrics.indexesRequestsTotal.inc({ route, status: String(status) });
   }
 
+  /**
+   * Mark a response uncacheable. Most gateways sit behind nginx, often with a
+   * cache and rules such as `proxy_cache_valid 404 30s`; an upstream
+   * Cache-Control takes precedence over those rules, so this is what keeps a
+   * cache from storing an error and replaying it. Every response starts
+   * with it, and only a 200, 206 or 304 replaces it with a cacheable value.
+   */
+  function uncacheable(res: Response): void {
+    res.setHeader('Cache-Control', 'no-store');
+  }
+
   function notFound(res: Response, route: string): void {
+    uncacheable(res);
     res.status(404).type('application/json').send('{}');
     finish(res, route, 404);
   }
@@ -168,6 +180,7 @@ export function createIndexesRouter({
         !isValidPathSegment(band) ||
         !isValidPathSegment(file)
       ) {
+        uncacheable(res);
         res.status(400).type('text').send('Invalid index, band or file name');
         finish(res, 'file', 400);
         return;
@@ -203,6 +216,11 @@ export function createIndexesRouter({
     route: string,
     { cacheControl }: { cacheControl: string },
   ): Promise<void> {
+    // Uncacheable until this is known to be a 200, 206 or 304: the 503s,
+    // 416 and 400 below, and the 402 or 429 the meter sends, must never be
+    // stored by a cache in front of the gateway. A blob's cacheable value is
+    // a year, so a stored 402 would outlive the refusal by that long.
+    uncacheable(res);
     let stat;
     const filePath = entry.filePath;
     try {
@@ -242,13 +260,13 @@ export function createIndexesRouter({
     const etag = `"${entry.sha256}"`;
     res.setHeader('ETag', etag);
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cache-Control', cacheControl);
     res.setHeader('Content-Type', 'application/octet-stream');
     // The digest of the whole representation, true of a partial response
     // too, which is what lets a client check a resumed file once assembled.
     res.setHeader('Repr-Digest', digestField(entry.sha256));
 
     if (req.headers['if-none-match'] === etag) {
+      res.setHeader('Cache-Control', cacheControl);
       res.status(304).end();
       finish(res, route, 304);
       return;
@@ -299,10 +317,11 @@ export function createIndexesRouter({
       paymentProcessor,
     });
     if (!limitCheck.allowed) {
-      // The helper has already sent the 402 or 429.
+      // The helper has already sent the 402 or 429, uncacheable.
       finish(res, route, res.statusCode);
       return;
     }
+    res.setHeader('Cache-Control', cacheControl);
 
     // Settle the tokens the same way the data routes do: for the size that
     // was priced, once the response has finished.
