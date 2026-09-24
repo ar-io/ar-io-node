@@ -598,7 +598,33 @@ for the rules-file format and behavior.
 
 | ENV_NAME                    | TYPE    | DEFAULT_VALUE                        | DESCRIPTION                                                                                                  |
 | --------------------------- | ------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| CLICKHOUSE_URL              | String  | undefined                            | ClickHouse HTTP endpoint the core service reads from, e.g. `http://clickhouse:8123` under the bundled compose file. Unset disables the ClickHouse read path |
+| CLICKHOUSE_USER             | String  | undefined                            | ClickHouse username for the core service. **Set this explicitly whenever `CLICKHOUSE_PASSWORD` is set, and to the same user the password belongs to.** Left unset, `@clickhouse/client` connects as `default`, so a deployment whose ClickHouse has a different user (or a password on a different account) authenticates as the wrong identity — see the warning below |
+| CLICKHOUSE_PASSWORD         | String  | undefined                            | Password for `CLICKHOUSE_USER`                                                                                |
 | CLICKHOUSE_TTL_RULES_PATH   | String  | ./config/clickhouse-ttl-rules.yaml   | Path to the YAML file of tag- and owner-based TTL rules loaded into ClickHouse before each import cycle       |
+
+> **Credential mismatch fails in a misleading way.** `clickhouse-auto-import`
+> is a bash script and applies its own default at the point of use —
+> `export CLICKHOUSE_USER="${CLICKHOUSE_USER:-default}"` in
+> `scripts/lib/common.sh` — while the core service passes whatever
+> `src/config.ts` read straight into `@clickhouse/client`. The two therefore do
+> not necessarily connect as the same user.
+>
+> The result is that imports keep succeeding while every GraphQL
+> `transactions(...)` query fails, which looks like ClickHouse is healthy. The
+> gateway's own logs show only
+> `Failed to read ClickHouse max height; skipping boundary optimization` with a
+> timeout, because the authentication error is raised on the ClickHouse side.
+> To confirm, query ClickHouse directly:
+>
+> ```sql
+> SELECT * FROM system.text_log WHERE message LIKE '%Authentication failed%'
+> ORDER BY event_time DESC LIMIT 10;
+> ```
+>
+> A `Code: 194` entry naming a user you did not intend is the signature. Note
+> that `blocks(...)` queries and `/raw/<id>` continue to work throughout, so
+> healthchecks stay green.
 
 ## ClickHouse Auto-Import Daemon
 
