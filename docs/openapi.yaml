@@ -1060,8 +1060,10 @@ paths:
       summary: Get AR.IO Gateway peer information
       description: |
         Returns information about AR.IO Gateway peers and Arweave node peers.
-        For gateways, includes both data and chunk weights used for peer selection.
-        Peer keys are formatted as host:port.
+        For gateways, includes both data and chunk weights used for peer selection,
+        and what the gateway registry says about each peer (wallet, observer
+        address, operator stake, status), from the registry read the gateway
+        refreshes hourly. Peer keys are formatted as host:port.
       responses:
         '200':
           description: Peer information response
@@ -1093,6 +1095,18 @@ paths:
                           maximum: 100
                           description: Weight for chunk retrieval operations
                           example: 50
+                        wallet:
+                          type: string
+                          description: The gateway's registered wallet, from the gateway registry
+                        observerAddress:
+                          type: string
+                          description: The key the gateway observes and signs with, from the registry
+                        operatorStake:
+                          type: number
+                          description: The operator's own stake, as the registry reports it
+                        status:
+                          type: string
+                          description: Registry status; `leaving` gateways appear only when SKIP_LEAVING_GATEWAYS is false
                       required:
                         - url
                         - dataWeight
