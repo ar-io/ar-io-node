@@ -132,6 +132,144 @@ describe('createHttpSigMiddleware', () => {
     assert.equal(res.headers['signature-input'], undefined);
   });
 
+  it('covers every X-ArNS-* header on an ArNS response', async () => {
+    const { privateKey, keyId } = generateTestKeyPair();
+
+    const app = express();
+    app.use(createHttpSigMiddleware({ privateKey, keyId, bindRequest: false }));
+    app.get('/test', (_req, res) => {
+      // Exactly what the ArNS middleware sets on a resolved name.
+      res.header('X-ArNS-Name', 'docs_ardrive');
+      res.header('X-ArNS-Basename', 'ardrive');
+      res.header('X-ArNS-Record', 'docs');
+      res.header('X-ArNS-Resolved-Id', 'a'.repeat(43));
+      res.header('X-ArNS-TTL-Seconds', '900');
+      res.header('X-ArNS-Ant-Id', 'b'.repeat(43));
+      res.header('X-ArNS-Ant-Program-Id', 'c'.repeat(43));
+      res.header('X-ArNS-Resolved-At', '1790208021000');
+      res.header('X-ArNS-Undername-Limit', '10');
+      res.header('X-ArNS-Record-Index', '3');
+      res.send('ok');
+    });
+
+    const res = await request(app).get('/test');
+    const input = res.headers['signature-input'] as string;
+    for (const header of [
+      'x-arns-name',
+      'x-arns-basename',
+      'x-arns-record',
+      'x-arns-resolved-id',
+      'x-arns-ttl-seconds',
+      'x-arns-ant-id',
+      'x-arns-ant-program-id',
+      'x-arns-resolved-at',
+      'x-arns-undername-limit',
+      'x-arns-record-index',
+    ]) {
+      assert.ok(input.includes(`"${header}"`), `${header} is signed`);
+    }
+  });
+
+  // Rebuilds the signature base from the response as a client would, and
+  // checks it, optionally after changing one header.
+  const verifies = (
+    res: request.Response,
+    publicKey: crypto.KeyObject,
+    keyId: string,
+    path: string,
+    tamper?: { header: string; value: string },
+  ): boolean => {
+    const sig = /^sig1=:(.+):$/.exec(res.headers['signature'] as string);
+    const created = /created=(\d+)/.exec(
+      res.headers['signature-input'] as string,
+    );
+    assert.ok(sig !== null && created !== null, 'the response is signed');
+    const covered = Object.keys(res.headers).filter(
+      (h) =>
+        isSignableHeader(h) && h !== 'signature' && h !== 'signature-input',
+    );
+    const { base } = buildSignatureBase(
+      res.status,
+      (name) =>
+        tamper !== undefined && name === tamper.header
+          ? tamper.value
+          : (res.headers[name] as string),
+      covered,
+      'GET',
+      path,
+      true,
+      parseInt(created[1], 10),
+      keyId,
+    );
+    return crypto.verify(
+      null,
+      Buffer.from(base, 'latin1'),
+      publicKey,
+      Buffer.from(sig[1], 'base64'),
+    );
+  };
+
+  // What the ArNS middleware sets on a resolved undername.
+  const arnsHeaders: Record<string, string> = {
+    'X-ArNS-Name': 'docs_ardrive',
+    'X-ArNS-Basename': 'ardrive',
+    'X-ArNS-Record': 'docs',
+    'X-ArNS-Resolved-Id': 'a'.repeat(43),
+    'X-ArNS-TTL-Seconds': '900',
+    'X-ArNS-Ant-Id': 'b'.repeat(43),
+    'X-ArNS-Ant-Program-Id': 'c'.repeat(43),
+    'X-ArNS-Resolved-At': '1790208021000',
+    'X-ArNS-Undername-Limit': '10',
+    'X-ArNS-Record-Index': '3',
+  };
+
+  for (const status of [200, 402]) {
+    it(`binds every X-ArNS-* header into a signature that verifies (${status})`, async () => {
+      // 402 is the undername-limit shape: headers set, then payment required.
+      const { privateKey, publicKey, keyId } = generateTestKeyPair();
+      const app = express();
+      app.use(
+        createHttpSigMiddleware({ privateKey, keyId, bindRequest: true }),
+      );
+      app.get('/test', (_req, res) => {
+        for (const [k, v] of Object.entries(arnsHeaders)) res.header(k, v);
+        res.status(status).send('ok');
+      });
+
+      const res = await request(app).get('/test');
+      assert.equal(res.status, status);
+      assert.equal(verifies(res, publicKey, keyId, '/test'), true);
+      // Changing any one of them, as an intermediary rewriting the resolved
+      // record or its limit would, must break the signature.
+      for (const name of Object.keys(arnsHeaders).map((h) => h.toLowerCase())) {
+        assert.equal(
+          verifies(res, publicKey, keyId, '/test', {
+            header: name,
+            value: '9',
+          }),
+          false,
+          `${name} is bound`,
+        );
+      }
+    });
+  }
+
+  it('does not sign a response carrying only the ArNS co-signable headers', async () => {
+    const { privateKey, keyId } = generateTestKeyPair();
+
+    const app = express();
+    app.use(createHttpSigMiddleware({ privateKey, keyId, bindRequest: false }));
+    app.get('/test', (_req, res) => {
+      // Co-signable, not triggers: alone they must not start a signature.
+      res.header('X-ArNS-Undername-Limit', '10');
+      res.header('X-ArNS-Record-Index', '3');
+      res.send('ok');
+    });
+
+    const res = await request(app).get('/test');
+    assert.equal(res.headers['signature'], undefined);
+  });
+
   it('signs x-arweave-tag-* headers via prefix match', async () => {
     const { privateKey, keyId } = generateTestKeyPair();
 

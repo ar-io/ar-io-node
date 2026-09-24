@@ -2791,7 +2791,11 @@ paths:
             type: string
       responses:
         '200':
-          description: Successful resolution of ArNS name
+          description: |
+            Successful resolution of ArNS name. With HTTPSIG_ENABLED, the
+            response signature covers every X-ArNS-* header listed here. It
+            binds them as this gateway's claim, not as chain state: a gateway
+            resolving through a trusted gateway relays that gateway's values.
           headers:
             x-arns-resolved-id:
               schema:

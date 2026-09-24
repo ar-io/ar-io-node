@@ -55,6 +55,16 @@ describe('httpsig lib', () => {
     it('matches co-signable headers', () => {
       assert.equal(isSignableHeader('content-type'), true);
       assert.equal(isSignableHeader('content-digest'), true);
+      for (const header of [
+        'x-arns-basename',
+        'x-arns-record',
+        'x-arns-resolved-at',
+        'x-arns-undername-limit',
+        'x-arns-record-index',
+      ]) {
+        assert.equal(isSignableHeader(header), true, header);
+        assert.equal(isTriggerHeader(header), false, `${header} is no trigger`);
+      }
     });
 
     it('matches x-arweave-tag-* prefix', () => {
