@@ -115,6 +115,7 @@ async function main(): Promise<void> {
       incomingDir: config.INCOMING_DIR,
       installedDir: config.INSTALLED_DIR,
       fetchTimeoutMs: config.MANIFEST_FETCH_TIMEOUT_MS,
+      downloadStallTimeoutMs: config.DOWNLOAD_STALL_TIMEOUT_MS,
       downloadConcurrency: config.DOWNLOAD_CONCURRENCY,
       supersedeGraceMs: config.SUPERSEDE_GRACE_MS,
       ...(config.MAX_DISK_BYTES !== undefined

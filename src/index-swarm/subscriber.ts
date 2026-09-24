@@ -105,6 +105,12 @@ export interface SubscriberOptions {
   incomingDir: string;
   installedDir: string;
   fetchTimeoutMs: number;
+  /**
+   * Give up on a band file download once no bytes have arrived for this
+   * long. A stall, not a cap on the whole transfer: band files are large and
+   * links slow, and a download still moving is never cut off.
+   */
+  downloadStallTimeoutMs?: number;
   downloadConcurrency: number;
   supersedeGraceMs: number;
   maxDiskBytes?: number;
@@ -122,6 +128,7 @@ export class Subscriber {
   private readonly incomingDir: string;
   private readonly installedDir: string;
   private readonly fetchTimeoutMs: number;
+  private readonly downloadStallTimeoutMs: number;
   private readonly downloadConcurrency: number;
   private readonly supersedeGraceMs: number;
   private readonly maxDiskBytes?: number;
@@ -138,6 +145,7 @@ export class Subscriber {
     this.incomingDir = options.incomingDir;
     this.installedDir = options.installedDir;
     this.fetchTimeoutMs = options.fetchTimeoutMs;
+    this.downloadStallTimeoutMs = options.downloadStallTimeoutMs ?? 60_000;
     this.downloadConcurrency = options.downloadConcurrency;
     this.supersedeGraceMs = options.supersedeGraceMs;
     this.maxDiskBytes = options.maxDiskBytes;
@@ -575,7 +583,7 @@ export class Subscriber {
               expectedSize: file.size,
               expectedSha256: file.sha256,
               resume: true,
-              timeoutMs: this.fetchTimeoutMs,
+              idleTimeoutMs: this.downloadStallTimeoutMs,
               ...(this.downloadRateLimitBytesPerSec !== undefined
                 ? { maxBytesPerSecond: this.downloadRateLimitBytesPerSec }
                 : {}),

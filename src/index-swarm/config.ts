@@ -170,6 +170,15 @@ export const MANIFEST_FETCH_TIMEOUT_MS = env.positiveIntOrDefault(
   30_000,
 );
 
+/**
+ * Give up on a band file download once no bytes have arrived for this long.
+ * Band files run to gigabytes, so this bounds a stall, not the transfer: a
+ * download still moving is never cut off, however long it takes.
+ */
+export const DOWNLOAD_STALL_TIMEOUT_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS', 60) *
+  1000;
+
 /** Parallel file downloads within one band. */
 export const DOWNLOAD_CONCURRENCY = env.positiveIntOrDefault(
   'INDEX_SWARM_DOWNLOAD_CONCURRENCY',

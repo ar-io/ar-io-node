@@ -303,6 +303,65 @@ describe('downloadFile', () => {
     );
   });
 
+  it('gives up on a stalled transfer and keeps its partial file for a resume', async () => {
+    handler = (_req, res) => {
+      res.writeHead(200, { 'Content-Length': String(body.length) });
+      res.write(body.subarray(0, 5)); // then nothing more
+    };
+    const destPath = dest();
+    await assert.rejects(
+      downloadFile({
+        url: `${baseUrl}/stall`,
+        destPath,
+        expectedSize: body.length,
+        idleTimeoutMs: 150,
+      }),
+      /Download stalled: no bytes for 150 ms/,
+    );
+    assert.ok(existsSync(partialPathFor(destPath)), 'the partial file stays');
+  });
+
+  it('lets a slow transfer that keeps moving run past the stall timeout', async () => {
+    handler = (_req, res) => {
+      res.writeHead(200, { 'Content-Length': String(body.length) });
+      let sent = 0;
+      // A byte every 20 ms: the whole body takes several times the timeout,
+      // but no gap between bytes comes near it.
+      const tick = setInterval(() => {
+        res.write(body.subarray(sent, sent + 1));
+        sent++;
+        if (sent >= body.length) {
+          clearInterval(tick);
+          res.end();
+        }
+      }, 20);
+    };
+    const destPath = dest();
+    const result = await downloadFile({
+      url: `${baseUrl}/trickle`,
+      destPath,
+      expectedSize: body.length,
+      idleTimeoutMs: 150,
+    });
+    assert.equal(result.bytesWritten, body.length);
+    assert.deepEqual(await fs.readFile(destPath), body);
+  });
+
+  it('does not count pacing for a rate cap as a stall', async () => {
+    handler = serveWithRanges;
+    const destPath = dest();
+    // 44 bytes at 100 bytes/s means sleeping about 440 ms after the first
+    // chunk, well past the 100 ms stall timeout.
+    const result = await downloadFile({
+      url: `${baseUrl}/file`,
+      destPath,
+      expectedSize: body.length,
+      idleTimeoutMs: 100,
+      maxBytesPerSecond: 100,
+    });
+    assert.equal(result.bytesWritten, body.length);
+  });
+
   it('honours an external abort signal', async () => {
     const controller = new AbortController();
     handler = (_req, res) => {

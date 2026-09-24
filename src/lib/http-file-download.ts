@@ -88,6 +88,15 @@ export interface DownloadFileOptions {
   /** Abort if the transfer has not finished within this many milliseconds. */
   timeoutMs?: number;
   /**
+   * Abort if no bytes arrive for this many milliseconds, counting from the
+   * request until the first byte and then between bytes. Unlike
+   * `timeoutMs`, a large file on a slow link is never cut off while it is
+   * still moving; only a transfer that has stalled is. Time spent pacing
+   * for `maxBytesPerSecond` does not count. A stalled download keeps its
+   * partial file, so the next attempt resumes it.
+   */
+  idleTimeoutMs?: number;
+  /**
    * Cap the write rate, in bytes per second.
    *
    * A gateway's index volume is often a spinning disk that is also serving
@@ -143,6 +152,7 @@ export async function downloadFile(
     headers,
     signal,
     timeoutMs,
+    idleTimeoutMs,
     maxBytesPerSecond,
   } = options;
 
@@ -179,19 +189,40 @@ export async function downloadFile(
   let combinedSignal: ClearableSignal | undefined;
   const timeoutSignal =
     timeoutMs !== undefined ? AbortSignal.timeout(timeoutMs) : undefined;
+
+  // The stall timer: armed while waiting for bytes, disarmed while pacing.
+  const idle = idleTimeoutMs !== undefined ? new AbortController() : undefined;
+  let idleTimer: NodeJS.Timeout | undefined;
+  const disarmIdle = () => {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    idleTimer = undefined;
+  };
+  const armIdle = () => {
+    if (idle === undefined || idleTimeoutMs === undefined) return;
+    disarmIdle();
+    idleTimer = setTimeout(() => idle.abort(), idleTimeoutMs);
+  };
+
+  const signals = [timeoutSignal, idle?.signal, signal].filter(
+    (s): s is AbortSignal => s !== undefined,
+  );
   let effectiveSignal: AbortSignal | undefined;
-  if (timeoutSignal !== undefined && signal !== undefined) {
-    combinedSignal = anySignal([timeoutSignal, signal]);
+  if (signals.length > 1) {
+    combinedSignal = anySignal(signals);
     effectiveSignal = combinedSignal;
   } else {
-    effectiveSignal = timeoutSignal ?? signal;
+    effectiveSignal = signals[0];
   }
 
   try {
+    armIdle();
     const response = await fetch(url, {
       headers: requestHeaders,
       signal: effectiveSignal,
     });
+    // Headers are in. Re-hashing a resumed prefix below is local work that
+    // can take a while for a large file; the timer re-arms for the body.
+    disarmIdle();
 
     if (response.status === 416) {
       // The partial file is longer than the resource, so it cannot be a
@@ -245,7 +276,9 @@ export async function downloadFile(
     const bodyStream = new Readable({
       async read() {
         try {
+          armIdle();
           const { done, value } = await reader.read();
+          disarmIdle();
           if (done === true) {
             this.push(null);
             return;
@@ -307,7 +340,16 @@ export async function downloadFile(
       resumedFrom: existingSize,
       ...(digest !== undefined ? { sha256: digest } : {}),
     };
+  } catch (error) {
+    if (idle?.signal.aborted === true && !(signal?.aborted ?? false)) {
+      // Keep the partial file: a stall is exactly what resuming is for.
+      throw new Error(
+        `Download stalled: no bytes for ${idleTimeoutMs} ms from ${url}`,
+      );
+    }
+    throw error;
   } finally {
+    disarmIdle();
     combinedSignal?.clear();
   }
 }
