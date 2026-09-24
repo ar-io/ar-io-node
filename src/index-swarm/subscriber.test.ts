@@ -1087,6 +1087,55 @@ describe('Subscriber', () => {
     assert.equal(await bandDir('band-a'), dir, 'the copy on disk was adopted');
   });
 
+  it('does not adopt a copy on disk that fails validation', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    await fs.rm(path.join(tempDir, 'sub', 'state.json'), { force: true });
+    subState = new StateStore({
+      log,
+      filePath: path.join(tempDir, 'sub', 'state.json'),
+    });
+    blobRequests = [];
+    // A kind that refuses what is already installed (as the stricter
+    // validation now would a band an older build let through), and accepts
+    // a fresh download.
+    const base = createKindRegistry({ log }).get('cdb64-root-tx')!;
+    const strict: ArtifactKind = Object.assign(Object.create(base), {
+      validate: async (band: any, dir: string) => {
+        if (dir.startsWith(subInstalled)) throw new Error('not well-formed');
+        return base.validate(band, dir);
+      },
+    });
+
+    await makeSubscriber({
+      kinds: new Map([['cdb64-root-tx', strict]]),
+    }).pollOnce();
+
+    assert(blobRequests.length > 0, 'downloaded again instead of adopting');
+    assert.deepEqual(await installedIds(), ['band-a']);
+  });
+
+  it('retires a band from a publisher no longer subscribed to', async () => {
+    const dir = path.join(subInstalled, 'root-tx-index', 'band-g~000000000000');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'manifest.json'), '{}');
+    await subState.update((draft) => {
+      draft.installed['root-tx-index'] = {
+        'band-g': {
+          dir,
+          files: [],
+          installedAt: clock.toISOString(),
+          publisher: 'GonePublisherWallet11111111111111111111111111',
+        },
+      };
+    });
+
+    await makeSubscriber({ subscribe: [] }).pollOnce();
+
+    assert.equal(existsSync(dir), false, 'retired and (grace 0) swept');
+  });
+
   it('counts downloads waiting in incoming/ against the disk budget', async () => {
     await makeBand('band-a');
     await publish();

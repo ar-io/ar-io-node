@@ -46,7 +46,11 @@ field for a peer-to-peer transport; nothing in this build sets or reads it.)
    gateway, not the sidecar.
 2. Its observer key must be the registered one. Set `OBSERVER_PRIVATE_KEY`,
    or `INDEX_SWARM_OBSERVER_KEYPAIR_FILE` to the keypair file's host path
-   (not both). Set `AR_IO_WALLET` to the gateway's wallet.
+   (not both). Set `AR_IO_WALLET` to the gateway's wallet. Publications are
+   signed over a fixed `ar-io-index-publication/v1` prefix, so no Solana
+   transaction or HTTPSIG signature can pass for one; but a wallet asked to
+   sign an arbitrary message starting with that prefix would produce one, so
+   don't use the observer key in a wallet that signs messages for dApps.
 3. Put finished bands under `data/indexes/published/<index>/<band>/`, with a
    `heightRange` in each manifest (see [producing bands](#producing-bands)).
 4. In `.env`: `INDEX_SWARM_PUBLISH='[{"name":"root-tx-index","kind":"cdb64-root-tx"}]'`.
@@ -235,6 +239,12 @@ redis and the observer. For the same reason, neither the document fetch nor
 any file download follows a redirect. Every request carries
 `User-Agent: ar-io-index-swarm/<release> (<gateway wallet>)`, so a publisher
 can tell subscribers apart even when several share one IP.
+
+Two limits to know. The publication's own origin is the URL in the
+publisher's registry record, and it is fetched as given, so subscribe only to
+publishers whose registered URL you would let your gateway call. And removing
+a publisher from `INDEX_SWARM_SUBSCRIBE` retires the bands it installed: no
+longer subscribing means no longer trusting it for what the gateway serves.
 
 ### Pointing the gateway at installed bands
 

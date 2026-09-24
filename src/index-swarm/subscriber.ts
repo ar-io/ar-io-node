@@ -378,6 +378,7 @@ export class Subscriber {
       this.maintaining = (async () => {
         await this.discardOrphanedDownloads();
         await this.retireDue();
+        await this.retireUnsubscribed();
         await this.retireUntracked();
         await this.sweep();
         await this.reportInstalled();
@@ -979,6 +980,7 @@ export class Subscriber {
       band,
       targetDir,
       claimed,
+      kind,
     );
     if (adopted !== undefined) {
       await this.recordInstall(publisher, index.name, band, adopted, live);
@@ -1151,6 +1153,7 @@ export class Subscriber {
     band: BandDescriptor,
     targetDir: string,
     claimed: ReadonlySet<string>,
+    kind: ArtifactKind,
   ): Promise<string | undefined> {
     const candidates = [
       targetDir,
@@ -1171,7 +1174,21 @@ export class Subscriber {
           break;
         }
       }
-      if (complete) return dir;
+      if (!complete) continue;
+      // The same gate a download passes: a copy left by an older build may
+      // never have been checked this thoroughly.
+      try {
+        await kind.validate(band, dir);
+      } catch (error: any) {
+        this.log.warn('A copy on disk failed validation; not adopting it', {
+          index: indexName,
+          band: band.id,
+          dir,
+          error: error?.message,
+        });
+        continue;
+      }
+      return dir;
     }
     return undefined;
   }
@@ -1230,6 +1247,45 @@ export class Subscriber {
       }
     }
     return claimed;
+  }
+
+  /**
+   * Retire bands installed from a publisher no longer subscribed to.
+   * Removing a subscription says that publisher is no longer trusted for
+   * what the gateway serves; its bands should not outlive that.
+   */
+  private async retireUnsubscribed(): Promise<void> {
+    const kind = this.kinds.values().next().value;
+    if (kind === undefined) return;
+    const state = await this.state.load();
+    for (const [indexName, live] of Object.entries(state.installed)) {
+      for (const [key, band] of Object.entries({ ...live })) {
+        if (band.retiredAt !== undefined || band.retireAfter !== undefined) {
+          continue;
+        }
+        if (
+          band.publisher === undefined ||
+          this.subscribedPublishers.has(band.publisher)
+        ) {
+          continue;
+        }
+        const current = {
+          ...((await this.state.load()).installed[indexName] ?? {}),
+        };
+        const next = await kind.retire({ bandId: key, dir: band.dir, current });
+        await this.state.update((draft) => {
+          applyBandChanges(draft.installed, indexName, current, next);
+        });
+        this.log.info(
+          'Retired a band from a publisher no longer subscribed to',
+          {
+            index: indexName,
+            band: key,
+            publisher: band.publisher,
+          },
+        );
+      }
+    }
   }
 
   /** Retire replaced copies whose overlap has passed. */
