@@ -513,13 +513,15 @@ dataItemLastIndexedTimestampSeconds.setToCurrentTime();
 export const graphqlHttpBatchSize = new promClient.Histogram({
   name: 'graphql_http_batch_size',
   help:
-    'Operations per inbound GraphQL HTTP request. 1 for an ordinary request; ' +
-    'greater than 1 when a client POSTs a JSON array and Apollo executes the ' +
-    'whole array in parallel. Measured before Apollo, so `_count` is the true ' +
-    'number of GraphQL HTTP requests and `_sum` the number of operations they ' +
-    'produced. Apollo offers no cap on batch size, and the rate limiter counts ' +
-    'HTTP requests rather than operations, so the gap between _sum and _count ' +
-    'is the amplification factor available to a caller. Exists to answer ' +
+    'Operations per inbound GraphQL POST whose body parsed. 1 for an ordinary ' +
+    'request; greater than 1 when a client posts a JSON array and Apollo ' +
+    'executes the whole array in parallel. Measured before Apollo, so `_count` ' +
+    'is those POSTs and `_sum` the operations they produced. Excludes GETs ' +
+    '(which cannot batch, and would fold in Sandbox landing-page views) and ' +
+    'bodies that failed to parse (diverted to the Express error flow before ' +
+    'this middleware). Apollo offers no cap on batch size, and the rate limiter ' +
+    'counts HTTP requests rather than operations, so the gap between _sum and ' +
+    '_count is the amplification available to a caller. Exists to answer ' +
     'whether any client batches at all: if this stays flat at 1, batching can ' +
     'be turned off outright rather than bounded.',
   buckets: [1, 2, 5, 10, 25, 50, 100, 500],

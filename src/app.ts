@@ -181,15 +181,6 @@ const { middleware: apolloMiddleware, stop: stopApolloServer } =
   });
 app.use('/graphql', apolloMiddleware);
 
-// Registered before the HTTP server's own handler so Apollo drains first:
-// handlers run in registration order, and stopping Apollo while the socket is
-// still open lets in-flight operations finish rather than being cut off.
-system.registerCleanupHandler('apollo-server', async () => {
-  log.debug('Stopping Apollo server...');
-  await stopApolloServer();
-  log.debug('Apollo server stopped');
-});
-
 // Terminal error handler — must be registered after every router and the
 // GraphQL middleware so it catches anything they let escape. Replaces
 // Express's default finalhandler (silent, generic 500s).
@@ -215,6 +206,19 @@ const server: Server = app.listen(config.PORT, () => {
         resolve();
       });
     });
+  });
+
+  // Registered AFTER the HTTP server handler, and the order matters. Handlers
+  // run sequentially in registration order, so the listener stops accepting
+  // and its in-flight connections finish first; only then is Apollo stopped.
+  // Stopping Apollo first would leave the socket open in front of a server
+  // that no longer starts operations, so a request arriving in that window
+  // fails instead of being served or refused cleanly. `server.stop()` does not
+  // drain an Express listener on its own.
+  system.registerCleanupHandler('apollo-server', async () => {
+    log.debug('Stopping Apollo server...');
+    await stopApolloServer();
+    log.debug('Apollo server stopped');
   });
 });
 

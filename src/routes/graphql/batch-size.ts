@@ -38,9 +38,22 @@ export const recordGraphqlBatchSize = (
   _res: Response,
   next: NextFunction,
 ): void => {
-  // A non-array body is a single operation. A malformed body that never
-  // parsed leaves `req.body` undefined, which is still one HTTP request and
-  // is counted as such — Apollo will reject it on its own terms.
+  // POST only, deliberately, and the metric's contract is scoped to match.
+  //
+  // Batching is a POST-with-a-JSON-array feature, so a GET can never carry
+  // more than one operation. Counting GETs would also fold in every browser
+  // hit on the Apollo Sandbox landing page, which is not an operation at all
+  // and would inflate the denominator with page views.
+  //
+  // Requests whose body failed to parse are absent for a different reason:
+  // `express.json()` diverts them into Express's error flow before this
+  // middleware runs, so they are unreachable from here. Neither this comment
+  // nor the histogram help claims to count them.
+  if (req.method !== 'POST') {
+    next();
+    return;
+  }
+
   metrics.graphqlHttpBatchSize.observe(
     Array.isArray(req.body) ? req.body.length : 1,
   );
