@@ -852,6 +852,8 @@ services:
       # A keypair file comes in through the single-file mount above, so the
       # gateway's own OBSERVER_KEYPAIR_PATH (a path inside its wallets
       # directory) is not used here.
+      # Set INDEX_SWARM_OBSERVER_KEYPAIR_FILE or OBSERVER_PRIVATE_KEY, not
+      # both: with both, publishing refuses to start.
       - OBSERVER_KEYPAIR_PATH=${INDEX_SWARM_OBSERVER_KEYPAIR_FILE:+/app/keys/observer.json}
       - OBSERVER_PRIVATE_KEY=${OBSERVER_PRIVATE_KEY:-}
     # The runtime image is distroless and carries no shell utilities beyond

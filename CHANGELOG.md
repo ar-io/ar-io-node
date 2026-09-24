@@ -8,6 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Signed index publishing (`index-swarm` sidecar, `/ar-io/indexes`)** — a
+  gateway can publish its CDB64 root-TX index bands for other gateways, and
+  subscribe to theirs. Off by default (compose profile `index-swarm`).
+  - The sidecar runs the core image with its own entrypoint. It signs a
+    publication with the gateway's registered observer key (RFC 8785, Ed25519,
+    a monotonic sequence), and resolves publishers through the gateway's
+    `/ar-io/peers`, so it makes no Solana RPC calls.
+  - Subscribers verify every document against the registry and every file
+    against its signed SHA-256. Downloads resume, skip files already on disk,
+    stop for the poll when a publisher's meter answers 402 or 429, and install
+    the newest heights first. Installed bands load without a gateway restart.
+  - New gateway routes: `GET /ar-io/indexes` (the signed document),
+    `/ar-io/indexes/<name>/<band>/<file>` and the immutable
+    `/ar-io/indexes/blob/<sha256>`. The byte routes are rate limited and
+    priced with x402 like data egress, and signed with HTTPSIG. Every error
+    response is `Cache-Control: no-store`, so a caching proxy never replays
+    one. `/ar-io/info` advertises what is published.
+  - See `docs/index-swarm.md` (operators: checklists, lookup order, running
+    behind nginx) and `docs/index-publication.md` (the protocol).
+  - `/ar-io/peers` gains each peer's registry fields (wallet, observer key,
+    stake, status), which is what lets subscribers resolve publishers without
+    RPC.
+
 - **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
   item sizes for every data item in a list of root bundles, nested bundles
   included, by reading only each bundle's item index and item headers through

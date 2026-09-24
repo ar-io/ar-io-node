@@ -255,14 +255,48 @@ being distributed.
 
 <a id="publication-sequence"></a> **Publication Sequence** — A monotonic
 counter per publisher, paired with the previous document's SHA-256. A
-subscriber never installs a lower sequence than it holds, so a cached or
-mirrored older document cannot roll it back. An equal sequence is accepted:
+subscriber refuses a lower sequence than the highest it has *seen*, whether or
+not that newer document's bands installed, so a cached or mirrored older
+document cannot roll it back. An equal sequence is accepted:
 it is what an unchanged publisher serves on every poll.
 
 <a id="collection-source"></a> **Collection Source** — A configured CDB64
 source that is a directory *of* indexes rather than one index: each
 subdirectory holding a `manifest.json` becomes its own reader, added and
 removed at runtime without a gateway restart.
+
+<a id="index-swarm"></a> **Index Swarm Sidecar** — The optional `index-swarm`
+compose service, running the core image with its own entrypoint, that
+publishes this gateway's bands and subscribes to other gateways'. It never
+touches the gateway's databases or the chain. See
+[index-swarm.md](index-swarm.md).
+
+<a id="publisher"></a> **Publisher** — A registered gateway serving a signed
+[Index Publication](#index-publication). Only the node holding the registered
+observer key can sign one, which is why a multi-node publisher sends
+`/ar-io/indexes*` to that node.
+
+<a id="subscriber"></a> **Subscriber** — A gateway whose sidecar follows one or
+more publishers, identified by wallet: it verifies each document against the
+registry, downloads bands by digest, and installs them where its gateway's
+[Collection Source](#collection-source) loads them.
+
+<a id="blob-route"></a> **Blob Route** — `GET /ar-io/indexes/blob/<sha256>`,
+which serves a published file by its digest. The address cannot change
+meaning, so responses are immutable and safe for any cache to keep; the
+publisher serves it from a hard link that pins the exact bytes it hashed.
+
+<a id="install-retire"></a> **Install / Retire** — A subscriber *installs* a
+band by renaming a fully downloaded and verified directory into
+`installed/<index>/`, where the gateway picks it up; it *retires* one the
+publisher no longer offers by removing its manifest (the gateway stops using
+it) and deleting the directory after the
+[supersede grace period](#supersede).
+
+<a id="supersede"></a> **Supersede** — A band's `metadata.supersedes` names the
+band or bands it replaces. The publisher stops offering those at once and
+deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`; subscribers retire
+them on the same grace, so a lookup in flight never loses its band.
 
 ## Data Storage Architecture
 

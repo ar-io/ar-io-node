@@ -29,8 +29,8 @@ A publisher serves one signed JSON document, the **publication**, at
 SHA-256. The signature is made with the Ed25519 key registered as the
 gateway's observer address, so the registry, not the server you asked, says
 whose document it is. The digests then make every file checkable on its own,
-so the bytes may come from the publisher, a mirror, a CDN or a torrent swarm
-without anyone in between being trusted. Nothing in this chain vouches for
+so the bytes may come from the publisher, a mirror or a CDN (or, in future,
+a peer-to-peer transport) without anyone in between being trusted. Nothing in this chain vouches for
 what an index *says*: a root-tx index entry is a claim about where an item
 lives, and a gateway checks that claim when it serves the item.
 
@@ -164,8 +164,11 @@ document that is at least well formed.
    from this publisher and refuse a document with a lower one. An equal one is
    fine, and is what you get when you poll an unchanged publisher.
 5. **It is current.** If `expiresAt` has passed, the publisher has stopped
-   signing. Keep using the bands you already hold, and alarm; do not install
-   anything new from it.
+   signing. Keep using the bands you already hold, and alarm. Whether to
+   install anything new from an expired document is your policy: expiry means
+   the publisher has gone quiet, not that its bands have gone bad, so the
+   reference subscriber installs anyway with a warning. A stricter consumer
+   may refuse.
 
 Which server returned the document does not appear anywhere in this list, and
 that is the point. The signature is over content, not transport: a copy served
@@ -195,13 +198,19 @@ keeping history can check that each document names the one before it.
 
 ## Fetching band files
 
-A band's files are addressed three ways. Use whichever is convenient; the
+A band's files are addressed two ways. Use whichever is convenient; the
 digest is the same whichever you use, so check it every time.
 
-| Route | Addresses | Cache-Control |
+| Route | Addresses | Cache-Control on success |
 |---|---|---|
-| `GET /ar-io/indexes/<name>/<band>/<file>` | By name, within the current publication | `public, no-cache` |
-| `GET /ar-io/indexes/blob/<sha256>` | By content | `public, max-age=31536000, immutable` |
+| `GET /ar-io/indexes` | The publication document itself | `public, max-age=60` |
+| `GET /ar-io/indexes/<name>/<band>/<file>` | A file by name, within the current publication | `public, no-cache` |
+| `GET /ar-io/indexes/blob/<sha256>` | A file by content | `public, max-age=31536000, immutable` |
+
+Every error response from these routes (400, 402, 404, 416, 429, 503) carries
+`Cache-Control: no-store`, so a cache in front of the publisher never keeps a
+refusal or a gap and replays it. Only `200`, `206` and `304` carry the values
+above.
 
 Prefer the blob route. A name is reused whenever a band is rebuilt, which the
 rolling tip band is on every cadence, so named files must be revalidated and
@@ -222,10 +231,13 @@ whole file, even on a partial response; full responses also carry
 (below), the signature covering `Content-Digest` or, on a range,
 `Repr-Digest`. A `503` with `Retry-After` means
 the publisher is part way through replacing a band: the file on disk no longer
-matches the document you hold, or, on the blob route, the digest has no link
-yet. The blob route never falls back to reading the file by name, since only
-the link is known to hold that digest's bytes. Fetch the document again after
-the delay.
+has the size the document names, or, on the blob route, the digest has no
+link yet. The blob route never falls back to reading the file by name, since
+only the link is known to hold that digest's bytes. Fetch the document again
+after the delay. The named route checks size only, so a rebuild at the same
+size is served under its name until the next document, and fails your digest
+check: another reason to fetch by digest. A listed file missing from disk is
+a `404`.
 
 ```console
 # The band's own manifest, by name

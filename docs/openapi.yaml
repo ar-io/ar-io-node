@@ -1089,11 +1089,19 @@ paths:
         Content-Digest.
 
         The byte routes below serve only what this document lists.
-        404 when the gateway publishes nothing.
+        404 when the gateway publishes nothing. Not rate limited, so a client
+        that has run out of tokens can still learn what it could fetch. HEAD
+        is supported.
+
+        Every error response on the three /ar-io/indexes routes carries
+        `Cache-Control: no-store`, so a cache in front of the gateway never
+        keeps it. Only 200, 206 and 304 carry a cacheable value.
       responses:
         '200':
           description: The publication document.
           headers:
+            Cache-Control:
+              schema: { type: string, example: 'public, max-age=60' }
             ETag:
               schema: { type: string }
             Content-Digest:
@@ -1108,7 +1116,7 @@ paths:
         '304':
           description: Not modified.
         '404':
-          description: Nothing published.
+          description: 'Nothing published. Body `{}`, `Cache-Control: no-store`.'
   '/ar-io/indexes/{name}/{band}/{file}':
     get:
       tags: [Gateway]
@@ -1120,7 +1128,7 @@ paths:
         disagrees with the publication during a band update. Sent with
         `Cache-Control: public, no-cache`, because a name is reused when a
         band is rebuilt; fetch by digest from the blob route for anything a
-        cache should keep.
+        cache should keep. Error responses carry `Cache-Control: no-store`.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
         - { name: band, in: path, required: true, schema: { type: string } }
@@ -1130,6 +1138,7 @@ paths:
         '200':
           description: The whole file.
           headers:
+            Cache-Control: { schema: { type: string, example: 'public, no-cache' } }
             ETag: { schema: { type: string }, description: The file's SHA-256, quoted. }
             X-AR-IO-Index-File: { schema: { type: string }, description: 'The SHA-256 the publication lists for this file, hex. An HTTPSIG trigger: the response is signed.' }
             Repr-Digest: { schema: { type: string }, description: RFC 9530 SHA-256 of the whole file. Covered by the signature. }
@@ -1148,7 +1157,7 @@ paths:
         '402':
           description: Payment required (x402), when rate limited and payments are enabled.
         '404':
-          description: Not listed in the publication.
+          description: Not listed in the publication, or listed but missing on disk.
         '416':
           description: Range not satisfiable.
         '429':
@@ -1163,12 +1172,17 @@ paths:
         The same bytes as the named route, addressed by SHA-256, so a client
         that knows a digest can fetch it from any gateway publishing it.
         Immutable by construction. Rate limited, priced and signed like the
-        named route, with the same headers.
+        named route, with the same headers, except that success responses
+        carry `Cache-Control: public, max-age=31536000, immutable`. Error
+        responses carry `Cache-Control: no-store`, so a cache never keeps a
+        402 or 429 for a year under this URL.
       parameters:
         - { name: sha256, in: path, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
       responses:
         '200':
           description: The file.
+          headers:
+            Cache-Control: { schema: { type: string, example: 'public, max-age=31536000, immutable' } }
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
