@@ -23,6 +23,7 @@ import { buildRootTxOffsets } from './ar-io-offsets-builder.js';
 import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
 import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
+import { buildGatewayPeers } from './ar-io-peers-builder.js';
 
 const arweave = Arweave.init({});
 
@@ -319,43 +320,9 @@ arIoRouter.get('/ar-io/peers', async (_req, res) => {
 });
 
 function getGatewayPeers() {
-  const formattedPeers = system.arIOPeerManager.getFormattedPeers([
-    'data',
-    'chunk',
-  ]);
-
-  // The original three fields, plus what the registry says about each peer,
-  // so a consumer (the index-swarm sidecar among them) can use the registry
-  // read this gateway already makes instead of making its own.
-  const peers: Record<
-    string,
-    {
-      url: string;
-      dataWeight: number;
-      chunkWeight: number;
-      wallet?: string;
-      observerAddress?: string;
-      operatorStake?: number;
-      status?: string;
-    }
-  > = {};
-  for (const [key, peer] of Object.entries(formattedPeers)) {
-    peers[key] = {
-      url: peer.url,
-      dataWeight: peer.weights.data,
-      chunkWeight: peer.weights.chunk,
-      ...(peer.wallet !== undefined ? { wallet: peer.wallet } : {}),
-      ...(peer.observerAddress !== undefined
-        ? { observerAddress: peer.observerAddress }
-        : {}),
-      ...(peer.operatorStake !== undefined
-        ? { operatorStake: peer.operatorStake }
-        : {}),
-      ...(peer.status !== undefined ? { status: peer.status } : {}),
-    };
-  }
-
-  return peers;
+  return buildGatewayPeers(
+    system.arIOPeerManager.getFormattedPeers(['data', 'chunk']),
+  );
 }
 
 // Only allow access to admin routes if the bearer token matches the admin api key

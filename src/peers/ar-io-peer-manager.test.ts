@@ -523,12 +523,25 @@ describe('ArIOPeerManager', () => {
       await m.refreshPeers();
       assert.equal(m.getPeerUrls().length, 2);
 
+      const fields = (formatted: ReturnType<typeof m.getFormattedPeers>) =>
+        Object.values(formatted)
+          .map((p) => ({ url: p.url, wallet: p.wallet, status: p.status }))
+          .sort((x, y) => x.url.localeCompare(y.url));
+      const before = fields(m.getFormattedPeers(['test']));
+      assert.equal(before.length, 2);
+      assert.ok(before.every((p) => p.wallet !== undefined));
+
       fail = true;
       await m.refreshPeers();
       assert.equal(
         m.getPeerUrls().length,
         2,
         'a failed refresh must not replace the peers with nothing',
+      );
+      assert.deepEqual(
+        fields(m.getFormattedPeers(['test'])),
+        before,
+        'nor the registry fields served alongside them',
       );
       m.stopUpdatingPeers?.();
     });
