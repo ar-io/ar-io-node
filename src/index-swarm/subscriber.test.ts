@@ -331,6 +331,14 @@ describe('Subscriber', () => {
     const state = await subState.load();
     assert.equal(state.subscriptions[WALLET].sequence, 1);
     assert.equal(
+      state.subscriptions[WALLET].manifestSha256,
+      crypto
+        .createHash('sha256')
+        .update(await fs.readFile(path.join(pubDir, 'publication.json')))
+        .digest('hex'),
+      'records the digest of the document as served',
+    );
+    assert.equal(
       state.installed['root-tx-index']['band-a'].publisher,
       WALLET,
       'provenance is recorded so retirement can be scoped',

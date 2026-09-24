@@ -31,6 +31,7 @@ import {
   IndexEntry,
   IndexPublication,
   INDEX_PUBLICATION_MAX_BYTES,
+  manifestSha256,
   parseIndexPublicationDocument,
   verifyIndexPublication,
 } from '../lib/index-publication.js';
@@ -367,7 +368,9 @@ export class Subscriber {
     await this.state.update((draft) => {
       draft.subscriptions[publisher] = {
         sequence: Math.max(document.sequence, seen),
-        manifestSha256: document.signature?.sig ?? '',
+        // The digest of the bytes as served, the same value the publisher
+        // records for its own document.
+        manifestSha256: manifestSha256(raw),
         updatedAt: this.now().toISOString(),
       };
     });
