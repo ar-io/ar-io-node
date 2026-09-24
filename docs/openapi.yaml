@@ -1,31 +1,98 @@
 ---
 openapi: 3.1.1
 info:
-  title: AR.IO Gateway
-  version: 0.0.1
+  title: ar.io Gateway API
+  # Served specs report the running gateway's release in place of this.
+  version: '84'
   x-logo:
-    url: 'https://ar.io/wp-content/uploads/2022/02/ar-io-FINAL-LOGO-SHADOW.png'
+    url: 'https://ar.io/brand/ario-full-black.svg'
+    altText: ar.io
+  summary: The HTTP API every ar.io gateway serves, for reading, verifying, querying and uploading permanent data.
   description: |
-    AR.IO Gateways are the interface between users and the Permaweb. Each Gateway acts like a “Permaweb Service
-    Provider” and supports multiple, value-added, low-trust services for users and applications.
+    ar.io is the open network that makes permanent data fast, verifiable, and
+    accessible through independent gateways, without ongoing storage fees or
+    dependence on a single vendor. This is the HTTP API each of those
+    gateways serves. Data on Arweave is addressed by content, not by host, so
+    the same request works against any gateway: pick one near you, or let a
+    client such as Wayfinder choose.
 
-    The AR.IO HTTP API is served by all AR.IO Gateways, and is used by all Arweave clients looking to read, write and query data.  It supports the following capabilities
-    - seeding layer one transactions to the greater Arweave network
-    - caching and serving chain and transaction data
-    - resolving friendly names to transaction data with the Arweave Name System
-    - indexing and querying layer one and two transactions
-    - proxy for Arweave nodes serving the Arweave HTTP API
+    ## What a gateway serves
+
+    - **Data**: any Arweave transaction or ANS-104 data item by ID
+      (`/{txId}`, `/raw/{txId}`), with manifest path resolution, byte
+      ranges, and caching.
+    - **Names**: ArNS names resolve as subdomains of the gateway
+      (`https://{name}.{gateway}`), and through `/ar-io/resolver/{name}`.
+    - **Queries**: a GraphQL endpoint (`/graphql`) over layer 1
+      transactions and bundled data items, filterable by tags, owners and
+      block ranges.
+    - **Uploads**: signed transactions and data chunks, forwarded to the
+      Arweave network.
+    - **Arweave node API**: node-compatible routes (`/info`, `/tx/{txId}`,
+      `/chunk/{offset}`, blocks, wallets, pricing), so existing Arweave
+      clients work unchanged.
+    - **The gateway itself**: `/ar-io/info` (release, capabilities),
+      `/ar-io/peers`, health checks and metrics.
+
+    ## Verifying what you receive
+
+    A gateway is one party among many, so its responses say what it knows
+    about the bytes it served:
+
+    - `X-AR-IO-Digest`: the SHA-256 of the data, when the gateway knows it.
+    - `X-AR-IO-Verified`: `true` when the gateway has verified the data
+      against its Arweave data root and is serving it from its own cache.
+    - `X-AR-IO-Trusted`: whether the data came from a source the gateway
+      trusts.
+    - `X-AR-IO-Stable`: whether the data's block is past the maximum fork
+      depth. Absent when the gateway has no local record of the data.
+    - **HTTP message signatures** (RFC 9421, `Signature` and
+      `Signature-Input`): when enabled, the gateway signs these headers and,
+      through `Content-Digest`, the body, so a client can prove which
+      gateway said what.
+
+    For data you need to trust without trusting the gateway, check the
+    digest yourself or fetch through a verifying client.
+
+    ## Limits and payments
+
+    Gateways may rate-limit data egress. A request over the limit gets
+    `429 Too Many Requests`, or, on a gateway that accepts x402 payments,
+    `402 Payment Required` with the price, payable in USDC (then retried
+    with an `X-PAYMENT` header). Both are the gateway operator's choice; see
+    [x402 and rate limiting](https://github.com/ar-io/ar-io-node/blob/main/docs/x402-and-rate-limiting.md).
 
     ## Errors
 
-    The API uses standard HTTP status codes to indicate the success or failure of the API call.
+    Standard HTTP status codes. `404` means the gateway could not find the
+    data, not that it doesn't exist on Arweave; another gateway may have it.
+    A `503` may carry `Retry-After`.
 
     ## Authentication
 
-    All inbound transactions to the Arweave network must contain a valid signature from an Arweave wallet with appropriate amount of AR tokens.  At this time, clients are not required to sign their requests for outbound data from the Arweave network.
+    Reading, querying and resolving are unauthenticated. Uploads carry their
+    own authorization: every transaction and data item must be signed by the
+    wallet paying for it, and the network verifies that signature. Admin
+    routes (`/ar-io/admin/*`) require the operator's `ADMIN_API_KEY` as a
+    bearer token.
+
+    ## Versions
+
+    Gateways upgrade independently. `info.version` in a served copy of this
+    spec (`/openapi.json`) is that gateway's release; `/ar-io/info` reports
+    it too.
+  contact:
+    name: ar.io
+    url: https://ar.io
   license:
     name: GNU Affero General Public License v3.0
     identifier: AGPL-3.0-only
+externalDocs:
+  description: ar.io documentation, including running a gateway
+  url: https://docs.ar.io
+servers:
+  - url: /
+    description: The gateway serving this page. Every ar.io gateway serves the same API.
 tags:
   - name: Gateway
     description: |
@@ -37,7 +104,7 @@ tags:
       data from the Permaweb.
   - name: Network
     description: |
-      Get Arweave node info, peers and nework status
+      Get Arweave node info, peers and network status
   - name: Pricing
     description: |
       Get the price (in winston) for an amount of bytes
@@ -55,7 +122,7 @@ tags:
       Upload Arweave data chunks or get existing chunk offset information
   - name: ArNS
     description: |
-      Get data from the AR.IO Gateway Arweave Name System
+      Resolve ArNS names (the ar.io Arweave Name System) and serve their data
   - name: Index Querying
     description: |
       Get data from the AR.IO Gateway index using GQL
