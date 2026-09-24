@@ -222,7 +222,10 @@ whole file, even on a partial response; full responses also carry
 (below), the signature covering `Content-Digest` or, on a range,
 `Repr-Digest`. A `503` with `Retry-After` means
 the publisher is part way through replacing a band: the file on disk no longer
-matches the document you hold. Fetch the document again after the delay.
+matches the document you hold, or, on the blob route, the digest has no link
+yet. The blob route never falls back to reading the file by name, since only
+the link is known to hold that digest's bytes. Fetch the document again after
+the delay.
 
 ```console
 # The band's own manifest, by name

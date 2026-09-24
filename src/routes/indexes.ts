@@ -204,21 +204,23 @@ export function createIndexesRouter({
     { cacheControl }: { cacheControl: string },
   ): Promise<void> {
     let stat;
-    let filePath = entry.filePath;
+    const filePath = entry.filePath;
     try {
       stat = await fs.stat(filePath);
     } catch {
-      if (entry.fallbackPath === undefined) {
-        notFound(res, route);
+      if (entry.isBlob === true) {
+        // The publication names this digest but the publisher has not
+        // linked it (yet). Only the link is known to hold these bytes.
+        log.warn('Published digest has no blob link', {
+          sha256: entry.sha256,
+        });
+        res.setHeader('Retry-After', '60');
+        res.status(503).type('text').send('Index file is not available yet');
+        finish(res, route, 503);
         return;
       }
-      try {
-        filePath = entry.fallbackPath;
-        stat = await fs.stat(filePath);
-      } catch {
-        notFound(res, route);
-        return;
-      }
+      notFound(res, route);
+      return;
     }
 
     // The file on disk no longer matches what the publication promises,

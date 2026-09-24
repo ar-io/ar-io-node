@@ -348,45 +348,36 @@ export class Publisher {
   }
 
   /**
-   * Hard-link every published file under its own digest, and drop links to
-   * files no longer offered.
+   * Hard-link every published file under its own digest.
    *
    * Hard links rather than copies: the bytes exist once on disk however many
    * names point at them, so the content-addressed route costs nothing beyond
    * a directory entry. Both paths are on the same volume, which is what makes
-   * that possible.
+   * that possible. A link also pins the bytes that were hashed: a band
+   * rebuilt under the same name gets a new inode, and the link keeps the old.
    */
-  private async reconcileBlobs(indexes: IndexEntry[]): Promise<void> {
+  private async linkBlobs(indexes: IndexEntry[]): Promise<void> {
     await fs.mkdir(this.blobsDir, { recursive: true });
-
-    const wanted = new Map<string, string>();
-    for (const index of indexes) {
-      for (const band of index.bands) {
-        for (const file of band.files) {
-          wanted.set(
-            file.sha256,
-            path.join(this.publishedDir, index.name, band.id, file.name),
-          );
-        }
-      }
-    }
-
-    for (const [digest, source] of wanted) {
+    for (const [digest, source] of this.blobSources(indexes)) {
       const target = path.join(this.blobsDir, digest);
       try {
         await fs.link(source, target);
       } catch (error: any) {
         if (error?.code === 'EEXIST') continue;
-        // Not fatal: the band is still served by name, only the
-        // content-addressed route is missing for this file.
-        this.log.warn('Could not link blob', {
+        // Not fatal to publishing, but the gateway answers 503 for this
+        // digest until a link exists, and subscribers fetch by digest.
+        this.log.error('Could not link blob; its digest will not be served', {
           digest,
           source,
           error: error?.message,
         });
       }
     }
+  }
 
+  /** Drop links to digests the publication no longer names. */
+  private async pruneBlobs(indexes: IndexEntry[]): Promise<void> {
+    const wanted = this.blobSources(indexes);
     let existing: string[];
     try {
       existing = await fs.readdir(this.blobsDir);
@@ -398,9 +389,25 @@ export class Publisher {
       try {
         await fs.unlink(path.join(this.blobsDir, name));
       } catch {
-        // Left behind; the next reconcile tries again.
+        // Left behind; the next scan tries again.
       }
     }
+  }
+
+  /** Each digest the indexes name, with the named file it came from. */
+  private blobSources(indexes: IndexEntry[]): Map<string, string> {
+    const sources = new Map<string, string>();
+    for (const index of indexes) {
+      for (const band of index.bands) {
+        for (const file of band.files) {
+          sources.set(
+            file.sha256,
+            path.join(this.publishedDir, index.name, band.id, file.name),
+          );
+        }
+      }
+    }
+    return sources;
   }
 
   /** The bytes currently served, so the next document chains to exactly them. */
@@ -511,9 +518,12 @@ export class Publisher {
     await fs.mkdir(path.dirname(this.publicationFile), { recursive: true });
     const tmpPath = `${this.publicationFile}.tmp`;
     await fs.writeFile(tmpPath, serialized, 'utf8');
+    // Link first: the blob route refuses a digest it has no link for, so
+    // every digest the document names must have one before it is served.
+    // Links to digests it no longer names go only once it is in place.
+    await this.linkBlobs(indexes);
     await fs.rename(tmpPath, this.publicationFile);
-
-    await this.reconcileBlobs(indexes);
+    await this.pruneBlobs(indexes);
 
     await this.state.update((draft) => {
       draft.published = {

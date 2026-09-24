@@ -310,17 +310,33 @@ describe('/ar-io/indexes routes', () => {
       }
     });
 
-    it('falls back to the named file when the publisher has no link for a digest', async () => {
+    it('refuses a digest the publisher has no link for, rather than read the name', async () => {
+      // With no link, only the named file is left, and a same-size rebuild
+      // may already have replaced it; serving it would put the wrong bytes
+      // under an immutable digest URL.
       const file = partitionFile();
       const link = path.join(publishedDir, 'blobs', file.sha256);
+      const named = path.join(
+        publishedDir,
+        'root-tx-index',
+        'band-a',
+        file.name,
+      );
       const saved = await fs.readFile(link);
       await fs.rm(link);
+      const rebuilt = Buffer.from(saved);
+      rebuilt[rebuilt.length - 1] ^= 0xff;
+      await fs.writeFile(`${named}.rebuild`, rebuilt);
+      await fs.rename(`${named}.rebuild`, named);
       try {
-        await request(app)
+        const res = await request(app)
           .get(`/ar-io/indexes/blob/${file.sha256}`)
-          .expect(200);
+          .expect(503);
+        assert.equal(res.headers['retry-after'], '60');
+        assert.equal(res.headers['cache-control'], undefined);
       } finally {
-        await fs.writeFile(link, saved);
+        await fs.writeFile(named, saved);
+        await fs.link(named, link);
       }
     });
 

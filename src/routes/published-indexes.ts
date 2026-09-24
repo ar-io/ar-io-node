@@ -34,11 +34,11 @@ export interface PublishedFile {
   size: number;
   sha256: string;
   /**
-   * Where to read from if `filePath` is missing. Set on a blob entry, whose
-   * `filePath` is the publisher's hard link and whose fallback is the named
-   * file, for a publisher that could not make the link.
+   * Set on a blob entry, whose `filePath` is the publisher's hard link. A
+   * missing link is answered 503, not by reading the named file instead:
+   * nothing guarantees the named file still holds the digest's bytes.
    */
-  fallbackPath?: string;
+  isBlob?: boolean;
 }
 
 /** The publication, indexed for lookup. */
@@ -138,11 +138,12 @@ export class PublishedIndexes {
             // by a rebuild under the same band id before the next scan
             // updates the document, and bytes read through the name would
             // then disagree with the digest in the URL, in a response marked
-            // immutable that edge caches keep for a year.
+            // immutable that edge caches keep for a year. For the same reason
+            // there is no fallback to the name when the link is missing.
             blobs.set(file.sha256, {
               ...entry,
               filePath: path.join(this.publishedDir, 'blobs', file.sha256),
-              fallbackPath: entry.filePath,
+              isBlob: true,
             });
           }
         }

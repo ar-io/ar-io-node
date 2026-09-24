@@ -1182,6 +1182,8 @@ paths:
           description: No published file has this digest.
         '429':
           description: Rate limited.
+        '503':
+          description: The digest is published but not yet servable (the publisher is replacing a band or has not linked the file). Retry after `Retry-After` seconds.
   '/ar-io/peers':
     get:
       tags: [Gateway]

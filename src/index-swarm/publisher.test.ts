@@ -311,6 +311,22 @@ describe('Publisher', () => {
     assert.equal(existsSync(stray), false);
   });
 
+  it('links a digest before the document that names it is published', async () => {
+    // The blob route refuses a digest with no link, so a document must never
+    // be visible before its links. Make the publishing rename fail, and the
+    // links must already be there.
+    await makeBand('band-a');
+    await fs.mkdir(path.join(publicationFile, 'occupied'), { recursive: true });
+
+    await assert.rejects(makePublisher().scanOnce());
+
+    const linked = await fs.readdir(blobsDir);
+    assert.ok(linked.length > 0, 'the band files were linked first');
+    for (const digest of linked) {
+      assert.match(digest, /^[0-9a-f]{64}$/);
+    }
+  });
+
   it('leaves the document alone when a band cannot be described', async () => {
     await makeBand('band-good');
     // A directory with a manifest that does not parse.
