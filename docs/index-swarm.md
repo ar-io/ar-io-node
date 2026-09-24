@@ -326,8 +326,8 @@ What the gateway sends:
 | Response | `Cache-Control` | Why |
 |---|---|---|
 | The document, `200`/`304` | `public, max-age=60` | A subscriber tolerates a document a minute old: the sequence cannot go backwards and `expiresAt` bounds it |
-| A blob (by digest), `200`/`206`/`304` | `public, max-age=31536000, immutable` | The address is the digest, so the bytes can never change |
-| A file by name, `200`/`206`/`304` | `public, no-cache` | A name is not an address; a rebuild under the same name must be revalidated (the `ETag` is the digest, so an unchanged file costs a `304`) |
+| A blob (by digest), `200`/`206`/`304` | `private, max-age=31536000, immutable` when metered, else `public, ...` | The address is the digest, so the bytes can never change |
+| A file by name, `200`/`206`/`304` | `private, no-cache` when metered, else `public, no-cache` | A name is not an address; a rebuild under the same name must be revalidated (the `ETag` is the digest, so an unchanged file costs a `304`) |
 | **Every error** (400, 402, 404, 416, 429, 503) | `no-store` | So a cache never keeps a refusal or a gap and replays it. nginx honours an upstream `Cache-Control` ahead of its own `proxy_cache_valid` rules |
 
 Things to decide or check:
@@ -335,11 +335,16 @@ Things to decide or check:
 - **Forward the client IP.** The meter keys on `X-Forwarded-For`; the stock
   config in [linux-setup.md](linux-setup.md) already sets it. Without it,
   every subscriber shares the proxy's allowance.
-- **Caching blobs bypasses the meter.** A cached blob is served by nginx
-  without reaching the gateway, so no tokens are spent and no `402` is
-  issued. For a publisher that meters (the default), leave
-  `/ar-io/indexes` uncached. For one that wants to spread egress, caching
-  blobs is safe: they are content-addressed.
+- **Metered bytes are private.** "Metered" means the gateway has a rate
+  limiter or x402 configured. A shared cache serves what it holds without
+  reaching the gateway, and a `304` is free, so a cached copy of a paid file
+  would reach anyone who asked the cache: no tokens spent, no `402` issued.
+  A metering gateway therefore marks its byte responses `private`, which a
+  shared cache such as nginx does not store; still leave `/ar-io/indexes`
+  uncached, so a proxy configured to ignore `Cache-Control` cannot bypass the
+  meter either. An operator who deliberately wants a CDN or edge cache to
+  spread egress runs the byte routes without metering, and gets `public`
+  responses that are safe to cache: blobs are content-addressed.
 - **Stale-on-error serving.** A `proxy_cache_use_stale` rule can serve an
   expired document when the gateway errors. Subscribers cope: an older
   sequence is refused as a replay, and the next poll gets the current one.

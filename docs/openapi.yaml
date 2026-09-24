@@ -1131,7 +1131,11 @@ paths:
         a band update. Sent with
         `Cache-Control: public, no-cache`, because a name is reused when a
         band is rebuilt; fetch by digest from the blob route for anything a
-        cache should keep. Error responses carry `Cache-Control: no-store`.
+        cache should keep. When the gateway meters these routes (a rate
+        limiter or x402 is configured) success responses carry
+        `private, no-cache` instead, so a shared cache cannot replay paid
+        bytes to a client that has not paid. Error responses carry
+        `Cache-Control: no-store`.
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
         - { name: band, in: path, required: true, schema: { type: string } }
@@ -1141,7 +1145,7 @@ paths:
         '200':
           description: The whole file.
           headers:
-            Cache-Control: { schema: { type: string, example: 'public, no-cache' } }
+            Cache-Control: { schema: { type: string, example: 'public, no-cache' }, description: '`private, no-cache` when the gateway meters the byte routes.' }
             ETag: { schema: { type: string }, description: The file's SHA-256, quoted. }
             X-AR-IO-Index-File: { schema: { type: string }, description: 'The SHA-256 the publication lists for this file, hex. An HTTPSIG trigger: the response is signed.' }
             Repr-Digest: { schema: { type: string }, description: RFC 9530 SHA-256 of the whole file. Covered by the signature. }
@@ -1180,7 +1184,9 @@ paths:
         that knows a digest can fetch it from any gateway publishing it.
         Immutable by construction. Rate limited, priced and signed like the
         named route, with the same headers, except that success responses
-        carry `Cache-Control: public, max-age=31536000, immutable`. Error
+        carry `Cache-Control: public, max-age=31536000, immutable`, or
+        `private, max-age=31536000, immutable` when the gateway meters the
+        byte routes, so a shared cache cannot replay paid bytes. Error
         responses carry `Cache-Control: no-store`, so a cache never keeps a
         402 or 429 for a year under this URL.
       parameters:
@@ -1189,7 +1195,7 @@ paths:
         '200':
           description: The file.
           headers:
-            Cache-Control: { schema: { type: string, example: 'public, max-age=31536000, immutable' } }
+            Cache-Control: { schema: { type: string, example: 'public, max-age=31536000, immutable' }, description: '`private, max-age=31536000, immutable` when the gateway meters the byte routes.' }
           content:
             application/octet-stream:
               schema: { type: string, format: binary }

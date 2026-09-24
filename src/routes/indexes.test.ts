@@ -498,6 +498,39 @@ describe('/ar-io/indexes routes', () => {
         'public, max-age=60',
       );
     });
+
+    it('marks bytes private when only payments meter them', async () => {
+      // x402 without a rate limiter still meters, so a shared cache must not
+      // keep the bytes either; a 304 is answered before the meter is asked.
+      const file = partitionFile();
+      const paid = express();
+      paid.use(
+        createIndexesRouter({
+          log,
+          publishedDir,
+          paymentProcessor: {} as never,
+        }),
+      );
+      assert.equal(
+        await cacheControl(paid, `/ar-io/indexes/blob/${file.sha256}`, 304, {
+          'If-None-Match': `"${file.sha256}"`,
+        }),
+        'private, max-age=31536000, immutable',
+      );
+      assert.equal(
+        await cacheControl(
+          paid,
+          `/ar-io/indexes/root-tx-index/band-a/${file.name}`,
+          304,
+          { 'If-None-Match': `"${file.sha256}"` },
+        ),
+        'private, no-cache',
+      );
+      assert.equal(
+        await cacheControl(paid, '/ar-io/indexes', 200),
+        'public, max-age=60',
+      );
+    });
   });
 
   describe('a client that disconnects mid-download', () => {

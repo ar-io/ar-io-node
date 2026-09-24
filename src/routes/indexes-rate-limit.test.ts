@@ -183,6 +183,35 @@ describe('/ar-io/indexes rate limiting', () => {
     await request(fresh).get(url).expect(200);
   });
 
+  it('marks metered bytes private, so a shared cache cannot bypass the meter', async () => {
+    // A shared cache replays what it stored without reaching the gateway, and
+    // a 304 is free, so a public copy of a paid file would be free to anyone.
+    const blob = `/ar-io/indexes/blob/${fileSha256}`;
+    const immutable = 'private, max-age=31536000, immutable';
+
+    const whole = await request(makeApp()).get(blob).expect(200);
+    assert.equal(whole.headers['cache-control'], immutable);
+    const range = await request(makeApp())
+      .get(blob)
+      .set('Range', 'bytes=0-9')
+      .expect(206);
+    assert.equal(range.headers['cache-control'], immutable);
+    const revalidated = await request(makeApp())
+      .get(blob)
+      .set('If-None-Match', `"${fileSha256}"`)
+      .expect(304);
+    assert.equal(revalidated.headers['cache-control'], immutable);
+
+    const named = await request(makeApp())
+      .get(`/ar-io/indexes/root-tx-index/band-a/${fileName}`)
+      .expect(200);
+    assert.equal(named.headers['cache-control'], 'private, no-cache');
+
+    // The document is never metered, so it stays shareable.
+    const doc = await request(makeApp()).get('/ar-io/indexes').expect(200);
+    assert.equal(doc.headers['cache-control'], 'public, max-age=60');
+  });
+
   it('asks for payment rather than refusing when x402 is enabled', async () => {
     let asked = 0;
     const payments = {

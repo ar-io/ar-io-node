@@ -207,8 +207,14 @@ digest is the same whichever you use, so check it every time.
 | Route | Addresses | Cache-Control on success |
 |---|---|---|
 | `GET /ar-io/indexes` | The publication document itself | `public, max-age=60` |
-| `GET /ar-io/indexes/<name>/<band>/<file>` | A file by name, within the current publication | `public, no-cache` |
-| `GET /ar-io/indexes/blob/<sha256>` | A file by content | `public, max-age=31536000, immutable` |
+| `GET /ar-io/indexes/<name>/<band>/<file>` | A file by name, within the current publication | `public, no-cache`, or `private, no-cache` when metered |
+| `GET /ar-io/indexes/blob/<sha256>` | A file by content | `public, max-age=31536000, immutable`, or `private, max-age=31536000, immutable` when metered |
+
+A publisher that meters the byte routes (see [Metering](#metering)) marks
+their successes `private`: a shared cache replays what it stores without
+asking the publisher, so a `public` paid file would be free to anyone behind
+that cache. Your own client may still keep what it paid for. The document is
+never metered and is `public` either way.
 
 Every error response from these routes (400, 402, 404, 416, 429, 503) carries
 `Cache-Control: no-store`, so a cache in front of the publisher never keeps a
@@ -218,8 +224,9 @@ above.
 Prefer the blob route. A name is reused whenever a band is rebuilt, which the
 rolling tip band is on every cadence, so named files must be revalidated and
 a cache in front of the publisher cannot keep them; a digest can never change
-meaning, so an edge cache or CDN may hold a blob indefinitely. The sidecar
-fetches by digest for exactly this reason.
+meaning, so a cache may hold a blob indefinitely (a shared one, such as a
+CDN, only when the publisher does not meter). The sidecar fetches by digest
+for exactly this reason.
 
 Only files the current publication lists are served. A name the document does
 not list is a 404 even if a file of that name exists on the server, and a

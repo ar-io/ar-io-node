@@ -92,6 +92,20 @@ export function createIndexesRouter({
   }
   const currentView = () => published.current();
 
+  /**
+   * Who may cache a served file. A shared cache replays what it holds without
+   * asking the gateway, and a 304 is free, so behind nginx a metering node's
+   * paid bytes would reach anyone who asked the cache. When the byte routes
+   * are metered their successes are therefore `private`: only the client
+   * that paid (or spent the tokens) keeps a copy. An operator who wants a CDN
+   * to spread egress runs these routes unmetered, and gets `public`. The
+   * document is never metered and stays public either way.
+   */
+  const fileCacheScope =
+    rateLimiter !== undefined || paymentProcessor !== undefined
+      ? 'private'
+      : 'public';
+
   function finish(_res: Response, route: string, status: number): void {
     metrics.indexesRequestsTotal.inc({ route, status: String(status) });
   }
@@ -164,7 +178,7 @@ export function createIndexesRouter({
       }
       await serveFile(req, res, file, 'blob', {
         // The address is the digest, so these bytes can never change.
-        cacheControl: 'public, max-age=31536000, immutable',
+        cacheControl: `${fileCacheScope}, max-age=31536000, immutable`,
       });
     },
   );
@@ -200,7 +214,7 @@ export function createIndexesRouter({
         // expired, so caches must revalidate (the ETag is the digest, so an
         // unchanged file costs a 304). Anything cacheable goes through the
         // blob route, whose address cannot change meaning.
-        cacheControl: 'public, no-cache',
+        cacheControl: `${fileCacheScope}, no-cache`,
       });
     },
   );
