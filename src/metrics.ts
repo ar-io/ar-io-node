@@ -1652,8 +1652,8 @@ export const x402PaymentSettledUsdcCounter = new promClient.Counter({
 
 export const rootTxLookupTotal = new promClient.Counter({
   name: 'root_tx_lookup_total',
-  help: 'Total root TX index lookups by source and status',
-  labelNames: ['source', 'status', 'has_offsets'] as const,
+  help: 'Total root TX index lookups by source and status. On a hit, has_offsets is whether both root offsets came back and has_size whether the item size did',
+  labelNames: ['source', 'status', 'has_offsets', 'has_size'] as const,
 });
 
 export const rootTxLookupDurationSummary = new promClient.Summary({
