@@ -19,6 +19,7 @@ import { TxMetadataResolver } from '../../data/tx-metadata-resolver.js';
 import * as metrics from '../../metrics.js';
 import { GqlQueryable, GqlWarning } from '../../types.js';
 import { resolvers } from './resolvers.js';
+import { recordGraphqlBatchSize } from './batch-size.js';
 import { buildResolverSignal, ResolverSignalState } from './resolver-signal.js';
 
 /**
@@ -186,6 +187,9 @@ export const makeApolloServerMiddleware = async ({
     // its default 100kb cap, so leaving it unset keeps the maximum accepted
     // query size exactly where it was.
     express.json(),
+    // Records operations-per-request so we can decide whether to cap batching
+    // or disable it outright. See the module for why it sits here.
+    recordGraphqlBatchSize,
     expressMiddleware(server, {
       context: async ({ res }: { res: Response }): Promise<GraphQLContext> => {
         // The signal builder closes over `signalState` directly; the plugin
