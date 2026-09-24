@@ -872,12 +872,11 @@ export const arnsNameCacheHydrationFailuresCounter = new promClient.Counter({
  * this counter a partially hydrated cache is invisible to monitoring: the
  * gateway stays healthy and simply 404s the names it never managed to write.
  */
-export const arnsNameCacheHydrationWriteFailuresCounter = new promClient.Counter(
-  {
+export const arnsNameCacheHydrationWriteFailuresCounter =
+  new promClient.Counter({
     name: 'arns_name_cache_hydration_write_failures_total',
     help: 'Total number of registry cache writes that failed during ArNS cache hydration',
-  },
-);
+  });
 
 export const arnsBaseNameCacheEntriesGauge = new promClient.Gauge({
   name: 'arns_base_name_cache_entries',
@@ -1626,8 +1625,8 @@ export const x402PaymentSettledUsdcCounter = new promClient.Counter({
 
 export const rootTxLookupTotal = new promClient.Counter({
   name: 'root_tx_lookup_total',
-  help: 'Total root TX index lookups by source and status',
-  labelNames: ['source', 'status', 'has_offsets'] as const,
+  help: 'Total root TX index lookups by source and status. On a hit, has_offsets is whether both root offsets came back and has_size whether the item size did',
+  labelNames: ['source', 'status', 'has_offsets', 'has_size'] as const,
 });
 
 export const rootTxLookupDurationSummary = new promClient.Summary({

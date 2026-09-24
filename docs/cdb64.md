@@ -185,6 +185,13 @@ Observability (per-node Prometheus metrics):
   before returning. Effective short-circuiting keeps this low.
 - `root_tx_lookup_total{source="graphql"}` — total GraphQL probes; falls sharply
   once early local sources (db/cdb) short-circuit.
+- `root_tx_lookup_total{source="cdb64",status="found",has_offsets,has_size}` —
+  what each index hit returned. `has_offsets="true"` means both root offsets
+  came back; `has_size="true"` means the item size did too, which lets the
+  item be served with one ID-verified header read. An index built without
+  offsets shows up as `has_offsets="false"`. (Before this label was fixed it
+  also required `dataSize`, which a CDB64 index never returns, so every index
+  hit read `"false"`.)
 
 ### Partitioned Indexes
 
