@@ -38,6 +38,7 @@ import {
   BandDescriptor,
   IndexEntry,
   IndexPublication,
+  isValidPathSegment,
   manifestSha256,
   serializeIndexPublication,
   signIndexPublication,
@@ -121,16 +122,87 @@ export function loadPublisherSigner({
   };
 }
 
-/** Name, size and mtime of every file in a band, as one digest. */
+/**
+ * Name, size and mtime of every file in a band, as one digest.
+ *
+ * @throws for a symlink in the band. An edit behind one would never change
+ *   the fingerprint, and a hard link to it in `blobs/` would resolve
+ *   relative to the wrong directory, so a band carries only its own files.
+ */
 async function fingerprintBand(dir: string): Promise<string> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const parts: string[] = [];
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isSymbolicLink()) {
+      throw new Error(
+        `${entry.name} is a symlink; a band holds only its own files`,
+      );
+    }
     if (!entry.isFile()) continue;
     const stat = await fs.stat(path.join(dir, entry.name));
     parts.push(`${entry.name}:${stat.size}:${stat.mtimeMs}`);
   }
   return crypto.createHash('sha256').update(parts.join('\n')).digest('hex');
+}
+
+/**
+ * The band ids that other bands in the set supersede.
+ *
+ * A self-reference is ignored, and so is every claim in a cycle (A replaces
+ * B, B replaces A): honouring them would retire, then delete, every band in
+ * it. A chain (C replaces B, B replaces A) retires A and B as intended.
+ */
+export function supersededBands(
+  bands: BandDescriptor[],
+  warn: (message: string, fields: Record<string, unknown>) => void = () =>
+    undefined,
+): Set<string> {
+  const ids = new Set(bands.map((band) => band.id));
+  const claims = new Map<string, string[]>();
+  for (const band of bands) {
+    const claim = band.metadata?.supersedes;
+    const targets = (
+      typeof claim === 'string' ? [claim] : Array.isArray(claim) ? claim : []
+    ).filter((id): id is string => typeof id === 'string');
+    const valid = targets.filter((id) => {
+      if (id === band.id) {
+        warn('Band supersedes itself; ignoring that', { band: band.id });
+        return false;
+      }
+      return true;
+    });
+    if (valid.length > 0) claims.set(band.id, valid);
+  }
+
+  // Drop every claim on a cycle among bands present in this set.
+  const onCycle = new Set<string>();
+  for (const start of claims.keys()) {
+    const stack: Array<{ id: string; path: string[] }> = [
+      { id: start, path: [start] },
+    ];
+    while (stack.length > 0) {
+      const { id, path: trail } = stack.pop()!;
+      for (const next of claims.get(id) ?? []) {
+        if (next === start) {
+          for (const member of trail) onCycle.add(member);
+        } else if (ids.has(next) && !trail.includes(next)) {
+          stack.push({ id: next, path: [...trail, next] });
+        }
+      }
+    }
+  }
+  if (onCycle.size > 0) {
+    warn('Bands supersede each other in a cycle; ignoring those claims', {
+      bands: [...onCycle].sort(),
+    });
+  }
+
+  const superseded = new Set<string>();
+  for (const [claimer, targets] of claims) {
+    if (onCycle.has(claimer)) continue;
+    for (const id of targets) superseded.add(id);
+  }
+  return superseded;
 }
 
 export interface PublisherOptions {
@@ -190,10 +262,21 @@ export class Publisher {
       if (error?.code === 'ENOENT') return [];
       throw error;
     }
-    return entries
-      .filter((entry) => entry.isDirectory() && !isCdb64TempDirName(entry.name))
-      .map((entry) => path.join(indexDir, entry.name))
-      .sort();
+    const dirs: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || isCdb64TempDirName(entry.name)) continue;
+      // The directory name becomes the band id in the signed document, and
+      // one invalid id would make every subscriber reject the whole thing.
+      if (!isValidPathSegment(entry.name)) {
+        this.log.warn('Band directory name is not a valid band id; skipping', {
+          index: indexName,
+          dir: entry.name,
+        });
+        continue;
+      }
+      dirs.push(path.join(indexDir, entry.name));
+    }
+    return dirs.sort();
   }
 
   /** Describe a band, reusing the cached result while its files are untouched. */
@@ -248,9 +331,18 @@ export class Publisher {
     return band;
   }
 
-  /** Build the entry for one configured index, retiring superseded bands. */
+  /**
+   * Build the entry for one configured index, retiring superseded bands.
+   *
+   * @param publishedIds band ids the current document offers for this index.
+   * @throws when one of them is still on disk but can't be described: a
+   *   transient read error must not withdraw a live band, which every
+   *   subscriber would retire and later download in full again. The scan
+   *   fails, the current document stands, and the next scan tries again.
+   */
   private async collectIndex(
     entry: config.PublishConfig,
+    publishedIds: ReadonlySet<string>,
   ): Promise<IndexEntry | undefined> {
     const kind = this.kinds.get(entry.kind);
     if (kind === undefined) {
@@ -266,21 +358,22 @@ export class Publisher {
     const described: Array<{ dir: string; band: BandDescriptor }> = [];
     for (const dir of dirs) {
       const band = await this.describeBand(kind, entry.name, dir);
-      if (band !== undefined) described.push({ dir, band });
+      if (band !== undefined) {
+        described.push({ dir, band });
+      } else if (publishedIds.has(path.basename(dir))) {
+        throw new Error(
+          `Published band ${entry.name}/${path.basename(dir)} could not be described; keeping the current document`,
+        );
+      }
     }
 
     // A band can name the one it replaces, so the publisher can stop offering
     // the old one without an operator having to delete it by hand.
-    const superseded = new Set<string>();
-    for (const { band } of described) {
-      const claim = band.metadata?.supersedes;
-      if (typeof claim === 'string') superseded.add(claim);
-      else if (Array.isArray(claim)) {
-        for (const id of claim) {
-          if (typeof id === 'string') superseded.add(id);
-        }
-      }
-    }
+    const superseded = supersededBands(
+      described.map(({ band }) => band),
+      (message, fields) =>
+        this.log.warn(message, { index: entry.name, ...fields }),
+    );
 
     const live = described.filter(({ band }) => !superseded.has(band.id));
 
@@ -455,23 +548,38 @@ export class Publisher {
 
   scanOnce(): Promise<boolean> {
     if (this.inFlight === undefined) {
-      this.inFlight = this.scan().finally(() => {
-        this.inFlight = undefined;
-      });
+      this.inFlight = this.scan()
+        .catch((error: unknown) => {
+          // Counted here so every way a scan can fail reaches the metric,
+          // not only the ones collectIndex anticipates.
+          for (const entry of this.publish) {
+            publishTotal.inc({ index: entry.name, result: 'failed' });
+          }
+          throw error;
+        })
+        .finally(() => {
+          this.inFlight = undefined;
+        });
     }
     return this.inFlight;
   }
 
   private async scan(): Promise<boolean> {
+    const current = await this.currentDocument();
     const indexes: IndexEntry[] = [];
     for (const entry of this.publish) {
-      const collected = await this.collectIndex(entry);
+      const publishedIds = new Set(
+        (
+          current?.publication.indexes.find((i) => i.name === entry.name)
+            ?.bands ?? []
+        ).map((band) => band.id),
+      );
+      const collected = await this.collectIndex(entry, publishedIds);
       if (collected !== undefined) indexes.push(collected);
     }
 
     await this.sweep();
 
-    const current = await this.currentDocument();
     const now = this.now();
 
     // Content is compared on its own, because issuedAt moves every scan and

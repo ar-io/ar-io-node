@@ -12,7 +12,12 @@ import { existsSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { Publisher, loadPublisherSigner } from './publisher.js';
+import {
+  Publisher,
+  loadPublisherSigner,
+  supersededBands,
+} from './publisher.js';
+import { publishTotal } from './metrics.js';
 import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
 import { PartitionedCdb64Writer } from '../lib/partitioned-cdb64-writer.js';
@@ -304,6 +309,103 @@ describe('Publisher', () => {
     // (Its own record of the retirement is swept at once: grace is 0 here.)
   });
 
+  const failedScans = async () =>
+    (await publishTotal.get()).values
+      .filter((v) => v.labels.result === 'failed')
+      .reduce((sum, v) => sum + v.value, 0);
+
+  // Root ignores directory permissions, so an unreadable band can't be staged.
+  it(
+    'keeps the current document when a published band is briefly unreadable',
+    {
+      skip: process.getuid?.() === 0,
+    },
+    async () => {
+      const dir = await makeBand('band-a');
+      await makeBand('band-b');
+      const publisher = makePublisher();
+      await publisher.scanOnce();
+      const before = await readPublication();
+      const failed = await failedScans();
+
+      await fs.chmod(dir, 0o000);
+      try {
+        clock = new Date(clock.getTime() + 60_000);
+        await assert.rejects(publisher.scanOnce(), /could not be described/);
+        const after = await readPublication();
+        assert.equal(
+          after.sequence,
+          before.sequence,
+          'nothing was republished',
+        );
+        assert.deepEqual(
+          after.indexes[0].bands.map((b) => b.id),
+          ['band-a', 'band-b'],
+          'the unreadable band is still offered',
+        );
+        assert.equal(await failedScans(), failed + 1, 'the failure is counted');
+      } finally {
+        await fs.chmod(dir, 0o755);
+      }
+    },
+  );
+
+  it('skips a band directory whose name is not a valid band id', async () => {
+    await makeBand('band-a');
+    await makeBand('band b');
+
+    await makePublisher().scanOnce();
+
+    // Parsing validates the whole document, as every subscriber does.
+    const doc = await readPublication();
+    assert.deepEqual(
+      doc.indexes[0].bands.map((b) => b.id),
+      ['band-a'],
+    );
+  });
+
+  it('refuses a band holding a symlink', async () => {
+    await makeBand('band-a');
+    const dir = await makeBand('band-link');
+    const manifest = parseManifest(
+      await fs.readFile(path.join(dir, 'manifest.json'), 'utf8'),
+    );
+    const victim = (manifest.partitions[0].location as { filename: string })
+      .filename;
+    const elsewhere = path.join(tempDir, 'elsewhere.cdb');
+    await fs.rename(path.join(dir, victim), elsewhere);
+    await fs.symlink(elsewhere, path.join(dir, victim));
+
+    await makePublisher().scanOnce();
+
+    const doc = await readPublication();
+    assert.deepEqual(
+      doc.indexes[0].bands.map((b) => b.id),
+      ['band-a'],
+    );
+  });
+
+  it('ignores a band that supersedes itself, and bands that supersede each other', async () => {
+    await makeBand('band-self', 3, { supersedes: 'band-self' });
+    await makeBand('band-x', 3, { supersedes: 'band-y' });
+    await makeBand('band-y', 3, { supersedes: 'band-x' });
+
+    await makePublisher().scanOnce();
+
+    const doc = await readPublication();
+    assert.deepEqual(
+      doc.indexes[0].bands.map((b) => b.id).sort(),
+      ['band-self', 'band-x', 'band-y'],
+      'none of them retired, so none of their directories are deleted',
+    );
+    for (const id of ['band-self', 'band-x', 'band-y']) {
+      assert.equal(
+        existsSync(path.join(publishedDir, 'root-tx-index', id)),
+        true,
+      );
+    }
+  });
+
   it('drops and retires a band that a newer one supersedes', async () => {
     const oldDir = await makeBand('band-old');
     await makeBand('band-new', 3, { supersedes: 'band-old' });
@@ -459,5 +561,44 @@ describe('Publisher', () => {
         /not both/,
       );
     });
+  });
+});
+
+describe('supersededBands', () => {
+  const band = (id: string, supersedes?: string | string[]) => ({
+    id,
+    files: [],
+    ...(supersedes !== undefined ? { metadata: { supersedes } } : {}),
+  });
+
+  it('retires down a chain', () => {
+    assert.deepEqual(
+      [...supersededBands([band('c', 'b'), band('b', 'a'), band('a')])].sort(),
+      ['a', 'b'],
+    );
+  });
+
+  it('drops a longer cycle but keeps an unrelated claim', () => {
+    assert.deepEqual(
+      [
+        ...supersededBands([
+          band('a', 'b'),
+          band('b', 'c'),
+          band('c', 'a'),
+          band('new', 'old'),
+          band('old'),
+        ]),
+      ],
+      ['old'],
+    );
+  });
+
+  it('accepts a list of ids, and a claim on a band not in the set', () => {
+    assert.deepEqual(
+      [
+        ...supersededBands([band('new', ['gone', 'older']), band('older')]),
+      ].sort(),
+      ['gone', 'older'],
+    );
   });
 });
