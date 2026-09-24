@@ -1405,6 +1405,62 @@ describe('Cdb64RootTxIndex', () => {
         await index.close();
       });
 
+      it('does not let a source claim the bands of a sibling sharing its prefix', async () => {
+        // `collection-sib` is a string prefix of `collection-sib2`. The first
+        // source's old band must still answer before the second's tip band.
+        const firstDir = path.join(tempDir, 'collection-sib');
+        const secondDir = path.join(tempDir, 'collection-sib2');
+        await createBand(
+          path.join(firstDir, 'band-old'),
+          [{ dataItemId: key, rootTxId: createTxId(831) }],
+          { heightRange: [0, 1000] },
+        );
+        await createBand(
+          path.join(secondDir, 'band-tip'),
+          [{ dataItemId: key, rootTxId: createTxId(832) }],
+          { heightRange: [1000, null] },
+        );
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [firstDir, secondDir],
+          watch: false,
+        });
+        assert.equal(
+          (await index.getRootTx(toB64Url(key)))?.rootTxId,
+          toB64Url(createTxId(831)),
+        );
+        await index.close();
+      });
+
+      it('orders the bands of a source written as a non-normalized path', async () => {
+        const collectionDir = path.join(tempDir, 'collection-relative');
+        await createBand(
+          path.join(collectionDir, 'a-old'),
+          [{ dataItemId: key, rootTxId: createTxId(841) }],
+          { heightRange: [0, 1000] },
+        );
+        await createBand(
+          path.join(collectionDir, 'b-tip'),
+          [{ dataItemId: key, rootTxId: createTxId(842) }],
+          { heightRange: [1000, null] },
+        );
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [
+            './' + path.relative(process.cwd(), collectionDir) + path.sep,
+          ],
+          watch: false,
+        });
+        assert.equal(
+          (await index.getRootTx(toB64Url(key)))?.rootTxId,
+          toB64Url(createTxId(842)),
+          'the tip band answers first',
+        );
+        await index.close();
+      });
+
       it('puts a band installed at runtime in its place by height', async () => {
         const collectionDir = path.join(tempDir, 'collection-order-add');
         await fs.mkdir(collectionDir, { recursive: true });

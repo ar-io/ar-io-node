@@ -230,6 +230,17 @@ function compareNewestFirst(
   return keyA.localeCompare(keyB);
 }
 
+/**
+ * Whether a reader key is a path inside the directory `dir`. Keys are built
+ * with `path.join`, which normalizes, so both sides are normalized before
+ * comparing, and the match stops at a path separator: `data/idx` does not
+ * claim `data/idx2/band`.
+ */
+function isUnderDirectory(key: string, dir: string): boolean {
+  const base = path.normalize(dir).replace(/[\\/]+$/, '');
+  return path.normalize(key).startsWith(base + path.sep);
+}
+
 export class Cdb64RootTxIndex implements DataItemRootIndex {
   private log: winston.Logger;
   private readers: ReaderEntry[] = [];
@@ -922,7 +933,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         // before reaching the tip.
         const matched: [string, ReaderEntry][] = [];
         for (const [key, entry] of this.readerMap) {
-          if (!claimed.has(key) && key.startsWith(sourceSpec)) {
+          if (!claimed.has(key) && isUnderDirectory(key, sourceSpec)) {
             matched.push([key, entry]);
             claimed.add(key);
           }
