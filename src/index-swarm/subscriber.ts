@@ -53,6 +53,14 @@ import {
   subscriptionTotal,
 } from './metrics.js';
 
+/** A file not started because the publisher's meter already refused one. */
+class MeteredError extends Error {
+  constructor() {
+    super('not started: the publisher is metering this subscriber');
+    this.name = 'MeteredError';
+  }
+}
+
 /**
  * Where to fetch one band file from.
  *
@@ -576,12 +584,19 @@ export class Subscriber {
     const incoming = path.join(this.incomingDir, index.name, band.id);
     await fs.mkdir(incoming, { recursive: true });
 
+    // Every file is attempted and the whole band is waited on, so a file that
+    // fails costs only itself: what completed stays on disk and is skipped
+    // next poll, and nothing is still downloading after this returns. The
+    // one exception is the publisher's meter. Once it answers 402 or 429,
+    // starting more files would only collect more refusals.
     const limit = pLimit(this.downloadConcurrency);
-    try {
-      await Promise.all(
-        band.files.map((file) =>
-          limit(async () => {
-            const url = fileUrl(origin, baseUrl, file);
+    let metered = false;
+    const results = await Promise.allSettled(
+      band.files.map((file) =>
+        limit(async () => {
+          if (metered) throw new MeteredError();
+          const url = fileUrl(origin, baseUrl, file);
+          try {
             const result = await downloadFile({
               url,
               destPath: path.join(incoming, file.name),
@@ -607,18 +622,34 @@ export class Subscriber {
               { transport: 'http' },
               result.bytesWritten - result.resumedFrom,
             );
-          }),
-        ),
-      );
-    } catch (error: any) {
-      // Partial files are deliberately left in place: the next poll resumes
-      // from them rather than starting the band over.
+          } catch (error) {
+            if (
+              error instanceof DownloadHttpError &&
+              (error.status === 402 || error.status === 429)
+            ) {
+              metered = true;
+            }
+            throw error;
+          }
+        }),
+      ),
+    );
+
+    const failures = results.flatMap((r) =>
+      r.status === 'rejected' && !(r.reason instanceof MeteredError)
+        ? [r.reason as unknown]
+        : [],
+    );
+    if (failures.length > 0) {
       // Bytes that do not match what was signed say something about the
       // source; everything else (timeouts, 402s, 429s, a publisher mid-swap)
       // is the network or the meter, and must not be read as tampering.
-      const integrity = error instanceof DownloadIntegrityError;
+      const integrity = failures.find(
+        (e) => e instanceof DownloadIntegrityError,
+      );
+      const error: any = integrity ?? failures[0];
       this.log.warn(
-        integrity
+        integrity !== undefined
           ? 'Band bytes did not match their signed digests; will retry'
           : 'Band download failed; will retry',
         {
@@ -629,12 +660,15 @@ export class Subscriber {
           ...(error instanceof DownloadHttpError
             ? { status: error.status }
             : {}),
+          failedFiles: failures.length,
+          completeFiles: results.filter((r) => r.status === 'fulfilled').length,
+          totalFiles: band.files.length,
         },
       );
       this.count(
         publisher,
         index.name,
-        integrity ? 'verify_failed' : 'download_failed',
+        integrity !== undefined ? 'verify_failed' : 'download_failed',
       );
       return false;
     }

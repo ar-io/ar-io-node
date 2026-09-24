@@ -70,6 +70,10 @@ describe('Subscriber', () => {
   let tamper: ((urlPath: string, body: Buffer) => Buffer) | undefined;
   /** Status to answer partition fetches with instead of their bytes. */
   let failPartitionsWith: number | undefined;
+  /** Every blob digest requested, in order. */
+  let blobRequests: string[];
+  /** Digests to answer with 404 once, as a load balancer's wrong node does. */
+  let notFoundOnce: Set<string>;
   /** Send bodies without Content-Length, as a chunked response. */
   let omitContentLength: boolean;
   /** Requests for this path, which no test should ever cause. */
@@ -99,6 +103,8 @@ describe('Subscriber', () => {
     });
     tamper = undefined;
     failPartitionsWith = undefined;
+    blobRequests = [];
+    notFoundOnce = new Set();
     omitContentLength = false;
     canaryHits = 0;
     clock = new Date('2026-09-23T00:00:00.000Z');
@@ -127,6 +133,13 @@ describe('Subscriber', () => {
           canaryHits++;
           res.writeHead(404).end();
           return;
+        }
+        if (blob !== null) {
+          blobRequests.push(blob[1]);
+          if (notFoundOnce.delete(blob[1])) {
+            res.writeHead(404).end();
+            return;
+          }
         }
         if (failPartitionsWith !== undefined && isPartitionFetch(urlPath)) {
           res.writeHead(failPartitionsWith).end();
@@ -678,6 +691,58 @@ describe('Subscriber', () => {
       await resultCount('verify_failed'),
       verifyBefore,
       'a 402 says nothing about the bytes',
+    );
+  });
+
+  it('keeps the files that completed, and fetches only the rest next poll', async () => {
+    // A publisher behind a load balancer where one node lacks the routes
+    // answers some requests 404. The files that did arrive must not be
+    // fetched again, or a band never completes.
+    await makeBand('band-a', 12);
+    await publish();
+    const doc = JSON.parse(
+      await fs.readFile(path.join(pubDir, 'publication.json'), 'utf8'),
+    );
+    const files: Array<{ sha256: string }> = doc.indexes[0].bands[0].files;
+    assert(files.length > 4, 'enough files to spread across the poll');
+    const unlucky = files[files.length - 1].sha256;
+    notFoundOnce.add(unlucky);
+    const subscriber = makeSubscriber();
+
+    await subscriber.pollOnce();
+    assert.deepEqual(await installedIds(), []);
+    assert.equal(
+      new Set(blobRequests).size,
+      files.length,
+      'every file was attempted, not only those before the failure',
+    );
+
+    blobRequests = [];
+    await subscriber.pollOnce();
+    assert.deepEqual(await installedIds(), ['band-a']);
+    assert.deepEqual(blobRequests, [unlucky], 'only the missing file');
+  });
+
+  it('stops starting files once the publisher meters it', async () => {
+    await makeBand('band-a', 12);
+    await publish();
+    failPartitionsWith = 402;
+
+    await makeSubscriber().pollOnce();
+    // Nothing may still be running after the poll returns.
+    const atReturn = blobRequests.length;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(
+      blobRequests.length,
+      atReturn,
+      'no download outlived the poll',
+    );
+    // Files in flight when the first 402 arrived may finish; nothing new
+    // starts. With 4 at a time that is at most 4 refused partitions, plus
+    // the manifest.
+    assert(
+      blobRequests.length <= 5,
+      `asked ${blobRequests.length} times after being metered`,
     );
   });
 
