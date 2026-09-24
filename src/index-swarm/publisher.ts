@@ -205,6 +205,12 @@ export function supersededBands(
   return superseded;
 }
 
+/**
+ * Scans a published band may fail to describe before it is withdrawn: ten
+ * minutes at the default scan interval, long enough for a transient error.
+ */
+export const MAX_HELD_SCANS = 10;
+
 export interface PublisherOptions {
   log: Logger;
   state: StateStore;
@@ -359,8 +365,11 @@ export class Publisher {
     for (const dir of dirs) {
       const band = await this.describeBand(kind, entry.name, dir);
       if (band !== undefined) {
+        this.describeFailures.delete(dir);
         described.push({ dir, band });
-      } else if (publishedIds.has(path.basename(dir))) {
+      } else if (
+        await this.isTransientlyUnreadable(entry.name, dir, publishedIds)
+      ) {
         throw new Error(
           `Published band ${entry.name}/${path.basename(dir)} could not be described; keeping the current document`,
         );
@@ -396,6 +405,56 @@ export class Publisher {
       indexEntry.filter = entry.filter;
     }
     return indexEntry;
+  }
+
+  /** Consecutive scans each band directory has failed to describe. */
+  private readonly describeFailures = new Map<string, number>();
+
+  /**
+   * Whether a band that failed to describe should hold the current document
+   * rather than be withdrawn from it.
+   *
+   * Only a band the document offers, whose manifest is still there, that
+   * this publisher has not itself retired, and only for a bounded number of
+   * scans. A band with no manifest was withdrawn (by an operator, or by a
+   * supersede), and holding the document for it would stop this publisher
+   * publishing for good; so would a band that stays broken.
+   */
+  private async isTransientlyUnreadable(
+    indexName: string,
+    dir: string,
+    publishedIds: ReadonlySet<string>,
+  ): Promise<boolean> {
+    const bandId = path.basename(dir);
+    if (!publishedIds.has(bandId)) return false;
+    const retired = (await this.state.load()).publishedBands[indexName];
+    if (
+      retired !== undefined &&
+      Object.prototype.hasOwnProperty.call(retired, bandId) &&
+      retired[bandId].retiredAt !== undefined
+    ) {
+      return false;
+    }
+    try {
+      await fs.stat(path.join(dir, 'manifest.json'));
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return false;
+      // Any other error (EACCES, EIO) is the kind of trouble that passes.
+    }
+    const failures = (this.describeFailures.get(dir) ?? 0) + 1;
+    this.describeFailures.set(dir, failures);
+    if (failures > MAX_HELD_SCANS) {
+      this.log.error(
+        'Published band has been unreadable too long; withdrawing it',
+        {
+          index: indexName,
+          band: bandId,
+          scans: failures,
+        },
+      );
+      return false;
+    }
+    return true;
   }
 
   /** Stop offering a band, and forget its cached description. */
@@ -568,18 +627,22 @@ export class Publisher {
   private async scan(): Promise<boolean> {
     const current = await this.currentDocument();
     const indexes: IndexEntry[] = [];
-    for (const entry of this.publish) {
-      const publishedIds = new Set(
-        (
-          current?.publication.indexes.find((i) => i.name === entry.name)
-            ?.bands ?? []
-        ).map((band) => band.id),
-      );
-      const collected = await this.collectIndex(entry, publishedIds);
-      if (collected !== undefined) indexes.push(collected);
+    try {
+      for (const entry of this.publish) {
+        const publishedIds = new Set(
+          (
+            current?.publication.indexes.find((i) => i.name === entry.name)
+              ?.bands ?? []
+          ).map((band) => band.id),
+        );
+        const collected = await this.collectIndex(entry, publishedIds);
+        if (collected !== undefined) indexes.push(collected);
+      }
+    } finally {
+      // Even when collecting fails: a retired band must still be removed
+      // once its grace has passed, or its directory stays forever.
+      await this.sweep();
     }
-
-    await this.sweep();
 
     const now = this.now();
 

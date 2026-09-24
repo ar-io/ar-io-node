@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import {
+  MAX_HELD_SCANS,
   Publisher,
   loadPublisherSigner,
   supersededBands,
@@ -79,7 +80,7 @@ describe('Publisher', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  const makePublisher = (ttlMs = 86_400_000) =>
+  const makePublisher = (ttlMs = 86_400_000, supersedeGraceMs = 0) =>
     new Publisher({
       log,
       state,
@@ -90,7 +91,7 @@ describe('Publisher', () => {
       blobsDir,
       publicationFile,
       ttlMs,
-      supersedeGraceMs: 0,
+      supersedeGraceMs,
       now: () => clock,
     });
 
@@ -344,6 +345,63 @@ describe('Publisher', () => {
           'the unreadable band is still offered',
         );
         assert.equal(await failedScans(), failed + 1, 'the failure is counted');
+      } finally {
+        await fs.chmod(dir, 0o755);
+      }
+    },
+  );
+
+  it('recovers when a scan fails after retiring a superseded band', async () => {
+    // The retirement (manifest unlinked) lands, then the scan fails before
+    // the document is written, so the document still offers the old band.
+    await makeBand('band-a');
+    const publisher = makePublisher(86_400_000, 300_000);
+    await publisher.scanOnce();
+    await makeBand('band-b', 3, { supersedes: 'band-a' });
+    await fs.rm(blobsDir, { recursive: true, force: true });
+    await fs.writeFile(blobsDir, 'not a directory');
+    clock = new Date(clock.getTime() + 60_000);
+    await assert.rejects(publisher.scanOnce());
+    assert.deepEqual(
+      (await readPublication()).indexes[0].bands.map((b) => b.id),
+      ['band-a'],
+      'the failed scan left the old document',
+    );
+
+    // The fault clears. Scans must publish again, not fail forever on the
+    // band this publisher retired itself.
+    await fs.rm(blobsDir, { force: true });
+    clock = new Date(clock.getTime() + 60_000);
+    await publisher.scanOnce();
+    assert.deepEqual(
+      (await readPublication()).indexes[0].bands.map((b) => b.id),
+      ['band-b'],
+    );
+  });
+
+  it(
+    'withdraws a published band that stays unreadable',
+    {
+      skip: process.getuid?.() === 0,
+    },
+    async () => {
+      const dir = await makeBand('band-a');
+      await makeBand('band-b');
+      const publisher = makePublisher();
+      await publisher.scanOnce();
+      await fs.chmod(dir, 0o000);
+      try {
+        for (let i = 0; i < MAX_HELD_SCANS; i++) {
+          clock = new Date(clock.getTime() + 60_000);
+          await assert.rejects(publisher.scanOnce());
+        }
+        clock = new Date(clock.getTime() + 60_000);
+        await publisher.scanOnce();
+        assert.deepEqual(
+          (await readPublication()).indexes[0].bands.map((b) => b.id),
+          ['band-b'],
+          'held for a while, then withdrawn rather than stuck forever',
+        );
       } finally {
         await fs.chmod(dir, 0o755);
       }
