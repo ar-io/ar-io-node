@@ -303,8 +303,16 @@ describe('Index publishing', { timeout: 600_000 }, () => {
       pubCore?.stop(),
     ]);
     await network?.stop();
-    await new Promise<void>((resolve) => stub?.close(() => resolve()));
-    await fs.rm(root, { recursive: true, force: true });
+    // before() can fail ahead of assigning these; without the guards this hook
+    // would wait on a close that never runs and hide the real error.
+    if (stub !== undefined) {
+      const server = stub;
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    if (root !== undefined) {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it('publishes a signed band, and the subscriber installs it and answers from it', async () => {
