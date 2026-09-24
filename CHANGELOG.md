@@ -22,9 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - New gateway routes: `GET /ar-io/indexes` (the signed document),
     `/ar-io/indexes/<name>/<band>/<file>` and the immutable
     `/ar-io/indexes/blob/<sha256>`. The byte routes are rate limited and
-    priced with x402 like data egress, and signed with HTTPSIG. Every error
-    response is `Cache-Control: no-store`, so a caching proxy never replays
-    one. `/ar-io/info` advertises what is published.
+    priced with x402 like data egress, and signed with HTTPSIG. The errors these routes return (400, 402, 404,
+    416, 429, 503) are `Cache-Control: no-store`, so a caching proxy never
+    replays one. `/ar-io/info` advertises what is published.
   - See `docs/index-swarm.md` (operators: checklists, lookup order, running
     behind nginx) and `docs/index-publication.md` (the protocol).
   - `/ar-io/peers` gains each peer's registry fields (wallet, observer key,

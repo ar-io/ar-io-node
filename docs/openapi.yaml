@@ -1160,9 +1160,10 @@ paths:
         index-swarm sidecar publishes: each index, its bands, and every file in
         each band with its size and SHA-256. The document carries a detached
         Ed25519 signature by the gateway's registered observer key, so it
-        verifies against the gateway registry however it was obtained. The
-        live response is additionally signed with HTTPSIG, covering
-        Content-Digest.
+        verifies against the gateway registry however it was obtained. When
+        HTTPSIG_ENABLED is set, the live response is also signed with
+        HTTPSIG, covering Content-Digest; a client must not require that
+        signature, since the detached one is what proves the document.
 
         The byte routes below serve only what this document lists.
         404 when the gateway publishes nothing. Not rate limited, so a client
@@ -1232,7 +1233,10 @@ paths:
             application/octet-stream:
               schema: { type: string, format: binary }
         '206':
-          description: A byte range of the file. Carries Repr-Digest but not Content-Digest, and is signed, the signature covering Repr-Digest.
+          description: A byte range of the file. Carries Repr-Digest but not Content-Digest. When HTTPSIG_ENABLED is set it is signed, the signature covering Repr-Digest.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
         '304':
           description: Not modified.
         '400':
@@ -1277,6 +1281,9 @@ paths:
               schema: { type: string, format: binary }
         '206':
           description: A byte range of the file.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
         '304':
           description: Not modified.
         '402':

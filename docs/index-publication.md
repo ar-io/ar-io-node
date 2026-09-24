@@ -330,7 +330,8 @@ decoder that handles only integer types will fail on any item more than
 
 Bands may overlap, but they should not disagree: an item has one location,
 so any band that holds its key gives the same answer. The gateway itself
-searches bands in name order and takes the first match.
+searches bands newest first, by the start of each band's `heightRange` (an
+open-ended tip band first), and takes the first match.
 
 ## Reference client
 
