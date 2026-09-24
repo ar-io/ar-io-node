@@ -643,7 +643,17 @@ export function verifyIndexPublication(
     };
   }
 
-  const base = canonicalizeIndexPublication(publication);
+  // Unknown members are carried into the signing base unvalidated, so a
+  // hostile document can be nested deeper than canonicalization can recurse.
+  let base: string;
+  try {
+    base = canonicalizeIndexPublication(publication);
+  } catch (error: any) {
+    return {
+      ok: false,
+      reason: `canonicalization failed: ${error?.message ?? 'unknown error'}`,
+    };
+  }
   let verified: boolean;
   try {
     verified = crypto.verify(null, Buffer.from(base, 'utf8'), publicKey, sig);

@@ -183,6 +183,29 @@ describe('index publication', () => {
       );
     });
 
+    it('reports a document too deeply nested to canonicalize', () => {
+      const signed = signIndexPublication(
+        samplePublication(),
+        loadSolanaKeypair(keypairPath),
+        getSolanaAddress(publicKey),
+      );
+      // Unknown members are kept for the signature, and JSON.parse accepts
+      // nesting far deeper than a recursive canonicalizer can walk: 200 KB
+      // of brackets, well inside the document size limit.
+      const depth = 100_000;
+      const hostile = {
+        ...signed,
+        extra: JSON.parse('['.repeat(depth) + ']'.repeat(depth)),
+      } as IndexPublication;
+
+      const result = verifyIndexPublication(hostile, publicKey);
+      assert.equal(result.ok, false);
+      assert.match(
+        result.ok === false ? result.reason : '',
+        /canonicalization failed/,
+      );
+    });
+
     it('replacing an existing signature does not nest or stack them', () => {
       const privateKey = loadSolanaKeypair(keypairPath);
       const once = signIndexPublication(
