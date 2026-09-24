@@ -319,6 +319,7 @@ describe('Subscriber', () => {
       subscribe: SubscribeConfig[];
       kinds: Map<string, ArtifactKind>;
       supersedeGraceMs: number;
+      untrackedMinAgeMs: number;
     }> = {},
   ) =>
     new Subscriber({
@@ -341,6 +342,9 @@ describe('Subscriber', () => {
       downloadConcurrency: 4,
       supersedeGraceMs: opts.supersedeGraceMs ?? 0,
       replaceOverlapMs: opts.replaceOverlapMs ?? 0,
+      ...(opts.untrackedMinAgeMs !== undefined
+        ? { untrackedMinAgeMs: opts.untrackedMinAgeMs }
+        : {}),
       ...(opts.maxDiskBytes !== undefined
         ? { maxDiskBytes: opts.maxDiskBytes }
         : {}),
@@ -1413,18 +1417,59 @@ describe('Subscriber', () => {
     const root = path.join(subInstalled, 'root-tx-index');
     const orphan = path.join(root, 'band-x~deadbeef0000');
     const fresh = path.join(root, 'band-y~deadbeef0000');
-    for (const dir of [orphan, fresh]) {
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(path.join(dir, 'manifest.json'), '{}');
-    }
-    const old = new Date(Date.now() - 20 * 60_000);
-    await fs.utimes(orphan, old, old);
+    await fs.mkdir(orphan, { recursive: true });
+    await fs.writeFile(path.join(orphan, 'manifest.json'), '{}');
+    // Only the orphan has sat past the minimum age.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await fs.mkdir(fresh, { recursive: true });
+    await fs.writeFile(path.join(fresh, 'manifest.json'), '{}');
 
-    await makeSubscriber().pollOnce();
+    await makeSubscriber({ untrackedMinAgeMs: 1000 }).pollOnce();
 
     assert.equal(existsSync(orphan), false, 'the orphan was retired and swept');
     assert.equal(existsSync(fresh), true, 'a new directory is left alone');
     assert.deepEqual(await installedIds(), ['band-a']);
+  });
+
+  it('retires nothing untracked until every publisher has been reconciled', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    const dir = await bandDir('band-a');
+    // State is lost, and the publisher is down on the first poll after.
+    await fs.rm(path.join(tempDir, 'sub', 'state.json'), { force: true });
+    subState = new StateStore({
+      log,
+      filePath: path.join(tempDir, 'sub', 'state.json'),
+    });
+    const down: GatewayRegistry = { lookup: async () => undefined };
+
+    await makeSubscriber({ registry: down, untrackedMinAgeMs: 0 }).pollOnce();
+    assert.equal(
+      existsSync(path.join(dir, 'manifest.json')),
+      true,
+      'the band was not mistaken for an orphan while its publisher was down',
+    );
+
+    // The publisher is back: the copy on disk is adopted, not downloaded.
+    blobRequests = [];
+    await makeSubscriber({ untrackedMinAgeMs: 0 }).pollOnce();
+    assert.deepEqual(blobRequests, [], 'nothing was downloaded');
+    assert.equal(await bandDir('band-a'), dir);
+  });
+
+  it('reinstalls a band whose record outlived its files', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    await fs.rm(await bandDir('band-a'), { recursive: true, force: true });
+
+    await makeSubscriber().pollOnce();
+
+    assert.equal(
+      existsSync(path.join(await bandDir('band-a'), 'manifest.json')),
+      true,
+    );
   });
 
   it('keeps the live band through a rollback to a generation still being swept', async () => {

@@ -22,6 +22,7 @@
  */
 import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import pLimit from 'p-limit';
 import { Logger } from 'winston';
@@ -271,6 +272,11 @@ export interface SubscriberOptions {
    * Costs only disk. Default 60 s.
    */
   replaceOverlapMs?: number;
+  /**
+   * How long a band directory no record points at must sit unchanged before
+   * it is retired as an orphan. Default 10 minutes.
+   */
+  untrackedMinAgeMs?: number;
   now?: () => Date;
 }
 
@@ -292,6 +298,7 @@ export class Subscriber {
   private readonly allowedFileOrigins: ReadonlySet<string>;
   private readonly requestHeaders: Record<string, string>;
   private readonly replaceOverlapMs: number;
+  private readonly untrackedMinAgeMs: number;
   private readonly subscribedPublishers: ReadonlySet<string>;
   private readonly now: () => Date;
 
@@ -318,6 +325,7 @@ export class Subscriber {
         ? { 'user-agent': options.userAgent }
         : {};
     this.replaceOverlapMs = options.replaceOverlapMs ?? 60_000;
+    this.untrackedMinAgeMs = options.untrackedMinAgeMs ?? UNTRACKED_MIN_AGE_MS;
     this.subscribedPublishers = new Set(
       options.subscribe.map((subscription) => subscription.publisher),
     );
@@ -329,6 +337,13 @@ export class Subscriber {
   private maintaining: Promise<void> | undefined;
   /** `<index>/<band>` ids being installed right now, by any publisher. */
   private readonly installing = new Set<string>();
+  /**
+   * Publishers whose document has been fetched, verified and reconciled at
+   * least once since startup. Until every configured publisher is in here,
+   * a band directory state doesn't know may simply not have been adopted
+   * yet (after lost state, with a publisher down), so none is retired.
+   */
+  private readonly reconciledSinceStart = new Set<string>();
 
   /**
    * Poll every configured publisher once, each independently.
@@ -651,6 +666,7 @@ export class Subscriber {
       };
     });
 
+    this.reconciledSinceStart.add(publisher);
     subscriptionSequence.set({ publisher }, document.sequence);
     this.reportAge(publisher, document);
 
@@ -769,7 +785,10 @@ export class Subscriber {
       if (
         existing !== undefined &&
         existing.retiredAt === undefined &&
-        sameFiles(existing.files, band.files)
+        sameFiles(existing.files, band.files) &&
+        // The record can outlive its files (a crash, an operator's rm);
+        // reinstall rather than trust a record the gateway can't serve.
+        existsSync(path.join(existing.dir, 'manifest.json'))
       ) {
         continue;
       }
@@ -1155,9 +1174,15 @@ export class Subscriber {
     claimed: ReadonlySet<string>,
     kind: ArtifactKind,
   ): Promise<string | undefined> {
+    // This generation's directory under any suffix, and the layout from
+    // before generations, in that order.
+    const indexDir = path.join(this.installedDir, indexName);
+    const prefix = `${band.id}${GENERATION_SEPARATOR}${bandGeneration(band)}`;
+    const onDisk = (await fs.readdir(indexDir).catch(() => [] as string[]))
+      .filter((name) => name === prefix || name.startsWith(`${prefix}.`))
+      .map((name) => path.join(indexDir, name));
     const candidates = [
-      targetDir,
-      path.join(this.installedDir, indexName, band.id),
+      ...new Set([targetDir, ...onDisk, path.join(indexDir, band.id)]),
     ];
     for (const dir of candidates) {
       // Never adopt a directory already on its way out.
@@ -1324,6 +1349,9 @@ export class Subscriber {
   private async retireUntracked(): Promise<void> {
     const kind = this.kinds.values().next().value;
     if (kind === undefined) return;
+    for (const publisher of this.subscribedPublishers) {
+      if (!this.reconciledSinceStart.has(publisher)) return;
+    }
     let indexes: string[];
     try {
       indexes = await fs.readdir(this.installedDir);
@@ -1347,6 +1375,9 @@ export class Subscriber {
       for (const name of names) {
         const dir = path.join(indexDir, name);
         if (tracked.has(path.resolve(dir))) continue;
+        // Being installed or adopted right now: its record isn't written yet.
+        const bandId = name.split(GENERATION_SEPARATOR)[0];
+        if (this.installing.has(`${indexName}/${bandId}`)) continue;
         let stat;
         try {
           stat = await fs.stat(dir);
@@ -1354,8 +1385,15 @@ export class Subscriber {
           continue;
         }
         if (!stat.isDirectory()) continue;
-        // Real time, not this.now(): file times are real.
-        if (Date.now() - stat.mtimeMs < UNTRACKED_MIN_AGE_MS) continue;
+        // ctime, not mtime: a rename keeps a directory's mtime, so a band
+        // renamed in a moment ago can carry an old one. Real time, not
+        // this.now(): file times are real.
+        if (Date.now() - stat.ctimeMs < this.untrackedMinAgeMs) continue;
+        // Re-check against state as it is now, not as it was at the listing.
+        const now_tracked = Object.values(
+          (await this.state.load()).installed[indexName] ?? {},
+        ).some((band) => path.resolve(band.dir) === path.resolve(dir));
+        if (now_tracked) continue;
         const key = `${name}${GENERATION_SEPARATOR}untracked-${now}`;
         const current = {
           ...((await this.state.load()).installed[indexName] ?? {}),
