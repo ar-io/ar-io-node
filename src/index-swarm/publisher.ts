@@ -406,7 +406,7 @@ export class Publisher {
     bandId: string,
   ): Promise<void> {
     const state = await this.state.load();
-    const retired = state.publishedBands[indexName] ?? {};
+    const retired = { ...(state.publishedBands[indexName] ?? {}) };
     if (
       Object.prototype.hasOwnProperty.call(retired, bandId) &&
       retired[bandId].retiredAt !== undefined
@@ -427,8 +427,9 @@ export class Publisher {
     const state = await this.state.load();
     for (const entry of this.publish) {
       const kind = this.kinds.get(entry.kind);
-      const current = state.publishedBands[entry.name];
-      if (kind === undefined || current === undefined) continue;
+      const live = state.publishedBands[entry.name];
+      if (kind === undefined || live === undefined) continue;
+      const current = { ...live };
 
       const next = await kind.sweepRetired({
         current,

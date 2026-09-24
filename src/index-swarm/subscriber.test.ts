@@ -39,6 +39,7 @@ import {
 } from '../lib/index-publication.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import { SubscribeConfig } from './config.js';
+import { ArtifactKind } from './kinds/types.js';
 import { Cdb64RootTxIndex } from '../discovery/cdb64-root-tx-index.js';
 import { toB64Url } from '../lib/encoding.js';
 
@@ -316,12 +317,13 @@ describe('Subscriber', () => {
       replaceOverlapMs: number;
       alsoSubscribedTo: string[];
       subscribe: SubscribeConfig[];
+      kinds: Map<string, ArtifactKind>;
     }> = {},
   ) =>
     new Subscriber({
       log,
       state: subState,
-      kinds: createKindRegistry({ log }),
+      kinds: opts.kinds ?? createKindRegistry({ log }),
       registry: opts.registry ?? registryFor(),
       subscribe: opts.subscribe ?? [
         {
@@ -1259,6 +1261,60 @@ describe('Subscriber', () => {
     );
     assert(labels.size <= 16 + 1, `${labels.size} index labels`);
     assert(labels.has('(other)'), 'the rest share one label');
+  });
+
+  it('keeps an install that lands while the sweep is deleting', async () => {
+    // A retired band waiting to be swept.
+    await subState.update((draft) => {
+      draft.installed['root-tx-index'] = {
+        old: {
+          dir: path.join(subInstalled, 'root-tx-index', 'old~1'),
+          files: [],
+          installedAt: '',
+          retiredAt: new Date(0).toISOString(),
+        },
+      };
+    });
+    // A kind whose sweep pauses mid-way, as a slow delete on a busy disk does.
+    const real = createKindRegistry({ log });
+    const base = real.get('cdb64-root-tx')!;
+    let release: () => void = () => undefined;
+    const paused = new Promise<void>((resolve) => (release = resolve));
+    let sweeping: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => (sweeping = resolve));
+    const slow: ArtifactKind = Object.assign(Object.create(base), {
+      sweepRetired: async (
+        request: Parameters<ArtifactKind['sweepRetired']>[0],
+      ) => {
+        // It has read its entries and is still deleting when the next
+        // poll's install lands.
+        const result = await base.sweepRetired(request);
+        sweeping();
+        await paused;
+        return result;
+      },
+    });
+    const subscriber = makeSubscriber({
+      kinds: new Map([['cdb64-root-tx', slow]]),
+      subscribe: [],
+    });
+
+    const poll = subscriber.pollOnce();
+    await started;
+    // Meanwhile another poll installs a band.
+    await subState.update((draft) => {
+      draft.installed['root-tx-index'].fresh = {
+        dir: path.join(subInstalled, 'root-tx-index', 'fresh~2'),
+        files: [],
+        installedAt: clock.toISOString(),
+        publisher: WALLET,
+      };
+    });
+    release();
+    await poll;
+
+    const bands = (await subState.load()).installed['root-tx-index'];
+    assert.deepEqual(Object.keys(bands), ['fresh'], 'swept old, kept fresh');
   });
 
   it('keeps the files that completed, and fetches only the rest next poll', async () => {

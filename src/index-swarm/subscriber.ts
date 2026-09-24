@@ -792,7 +792,11 @@ export class Subscriber {
       // Retire against the map as it is now, not as it was before the loop:
       // retire returns a copy of what it is given, so passing the stale map
       // would undo the band retired on the previous iteration.
-      const latest = (await this.state.load()).installed[index.name] ?? {};
+      // A snapshot, not the live map: load() returns the cached state, which
+      // other polls write to while this one awaits.
+      const latest = {
+        ...((await this.state.load()).installed[index.name] ?? {}),
+      };
       const next = await kind.retire({
         bandId,
         dir: band.dir,
@@ -1089,7 +1093,7 @@ export class Subscriber {
 
     if (this.stopping.signal.aborted) return false;
     const state = await this.state.load();
-    const current = state.installed[index.name] ?? {};
+    const current = { ...(state.installed[index.name] ?? {}) };
     const next = await kind.install({
       band,
       sourceDir: incoming,
@@ -1194,7 +1198,9 @@ export class Subscriber {
       );
     }
     const retiredKey = `${bandId}${GENERATION_SEPARATOR}retired-${this.now().getTime()}`;
-    const current = (await this.state.load()).installed[indexName] ?? {};
+    const current = {
+      ...((await this.state.load()).installed[indexName] ?? {}),
+    };
     const next = await kind.retire({
       bandId: retiredKey,
       dir: replaced.dir,
@@ -1261,11 +1267,14 @@ export class Subscriber {
   /** Delete the files of bands retired longer ago than the grace period. */
   private async sweep(): Promise<void> {
     const state = await this.state.load();
-    for (const [indexName, current] of Object.entries(state.installed)) {
+    for (const [indexName, live] of Object.entries(state.installed)) {
       // Any kind can sweep, but the entries were installed by one; use the
       // first that recognises the index rather than guessing.
       const kind = this.kinds.values().next().value;
       if (kind === undefined) continue;
+      // Snapshot before awaiting: the sweep's deletes take time, and polls
+      // install into this map meanwhile.
+      const current = { ...live };
 
       const next = await kind.sweepRetired({
         current,
