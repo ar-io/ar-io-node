@@ -8,12 +8,19 @@ import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import * as http from 'node:http';
 import * as fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import crypto from 'node:crypto';
+import * as zlib from 'node:zlib';
 
-import { downloadFile, partialPathFor } from './http-file-download.js';
+import {
+  completedFileHashes,
+  downloadFile,
+  DownloadHttpError,
+  DownloadIntegrityError,
+  partialPathFor,
+} from './http-file-download.js';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
 
@@ -229,8 +236,10 @@ describe('downloadFile', () => {
   it('keeps the partial file on a short read, so the next attempt resumes', async () => {
     const destPath = dest();
     const truncated = body.subarray(0, 12);
+    // No Content-Length: a declared length short of the expected size is
+    // refused up front, so the short read has to be one nobody announced.
     handler = (_req, res) => {
-      res.writeHead(200, { 'Content-Length': String(truncated.length) });
+      res.writeHead(200);
       res.end(truncated);
     };
 
@@ -471,6 +480,331 @@ describe('downloadFile', () => {
         signal: controller.signal,
       }),
     );
+  });
+
+  /** Resolves once the server-side response closes, or rejects after `ms`. */
+  const closedWithin = (res: http.ServerResponse, ms: number) =>
+    new Promise<void>((resolve, reject) => {
+      if (res.closed) return resolve();
+      const timer = setTimeout(
+        () => reject(new Error(`response still open after ${ms} ms`)),
+        ms,
+      );
+      res.once('close', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+
+  it('cuts off a body that runs past the expected size while it streams', async () => {
+    const destPath = dest();
+    const expectedSize = 1000;
+    const chunk = Buffer.alloc(64 * 1024, 1);
+    // Endless, with no declared length, so only the stream itself can tell.
+    handler = (_req, res) => {
+      res.writeHead(200);
+      const next = () => {
+        if (!res.destroyed) res.write(chunk, next);
+      };
+      next();
+    };
+
+    let maxPartial = 0;
+    const poll = setInterval(() => {
+      try {
+        const size = statSync(partialPathFor(destPath)).size;
+        if (size > maxPartial) maxPartial = size;
+      } catch {
+        // Not created yet, or already removed.
+      }
+    }, 2);
+
+    const startedAt = Date.now();
+    try {
+      await assert.rejects(
+        downloadFile({
+          url: `${baseUrl}/endless`,
+          destPath,
+          expectedSize,
+          // Only so the old behaviour (never finishing) fails rather than hangs.
+          signal: AbortSignal.timeout(3000),
+        }),
+        (error: Error) =>
+          error instanceof DownloadIntegrityError &&
+          /Size overflow/.test(error.message),
+      );
+    } finally {
+      clearInterval(poll);
+    }
+    assert.ok(Date.now() - startedAt < 2000, 'rejected promptly');
+    assert.ok(
+      maxPartial <= expectedSize + chunk.length,
+      `partial reached ${maxPartial} bytes`,
+    );
+    assert.equal(existsSync(partialPathFor(destPath)), false);
+    assert.equal(existsSync(destPath), false);
+  });
+
+  it('refuses a Content-Length that contradicts the expected size before reading the body', async () => {
+    let serverRes: http.ServerResponse | undefined;
+    handler = (_req, res) => {
+      serverRes = res;
+      res.writeHead(200, { 'Content-Length': String(body.length * 1000) });
+      res.write(body); // then hold the rest back
+    };
+
+    await assert.rejects(
+      downloadFile({
+        url: `${baseUrl}/big`,
+        destPath: dest(),
+        expectedSize: body.length,
+        signal: AbortSignal.timeout(3000),
+      }),
+      (error: Error) =>
+        error instanceof DownloadIntegrityError &&
+        /Content-Length/.test(error.message),
+    );
+    assert(serverRes !== undefined);
+    await closedWithin(serverRes, 1000);
+  });
+
+  it('refuses a 206 whose Content-Range does not start where the partial ends, and keeps the partial', async () => {
+    const destPath = dest();
+    const tmpPath = partialPathFor(destPath);
+    const prefix = body.subarray(0, 10);
+    await fs.writeFile(tmpPath, prefix);
+    // Ignores the requested start and sends the whole file as a 206.
+    handler = (_req, res) => {
+      res.writeHead(206, {
+        'Content-Range': `bytes 0-${body.length - 1}/${body.length}`,
+        'Content-Length': String(body.length),
+      });
+      res.end(body);
+    };
+
+    await assert.rejects(
+      downloadFile({
+        url: `${baseUrl}/file`,
+        destPath,
+        expectedSize: body.length,
+        expectedSha256: bodySha256,
+      }),
+      (error: Error) =>
+        error instanceof DownloadIntegrityError &&
+        /Content-Range/.test(error.message),
+    );
+    assert.deepEqual(await fs.readFile(tmpPath), prefix, 'partial untouched');
+  });
+
+  it('refuses a 206 whose Content-Range total contradicts the expected size', async () => {
+    const destPath = dest();
+    await fs.writeFile(partialPathFor(destPath), body.subarray(0, 10));
+    handler = (_req, res) => {
+      res.writeHead(206, {
+        'Content-Range': `bytes 10-${body.length - 1}/${body.length + 1}`,
+      });
+      res.end(body.subarray(10));
+    };
+
+    await assert.rejects(
+      downloadFile({
+        url: `${baseUrl}/file`,
+        destPath,
+        expectedSize: body.length,
+      }),
+      (error: Error) =>
+        error instanceof DownloadIntegrityError &&
+        /expected a total of/.test(error.message),
+    );
+  });
+
+  it('asks for no compression and refuses a compressed response', async () => {
+    const destPath = dest();
+    const gzipped = zlib.gzipSync(body);
+    let acceptEncoding: string | undefined;
+    handler = (req, res) => {
+      acceptEncoding = req.headers['accept-encoding'];
+      res.writeHead(200, {
+        'Content-Encoding': 'gzip',
+        'Content-Length': String(gzipped.length),
+      });
+      res.end(gzipped);
+    };
+
+    // Decompressed, these are exactly the expected bytes: it must be refused
+    // for the encoding alone, since a bomb would look the same until expanded.
+    await assert.rejects(
+      downloadFile({
+        url: `${baseUrl}/file`,
+        destPath,
+        expectedSize: body.length,
+        expectedSha256: bodySha256,
+        headers: { 'accept-encoding': 'gzip' },
+      }),
+      /Content-Encoding: gzip/,
+    );
+    assert.equal(acceptEncoding, 'identity');
+    assert.equal(existsSync(destPath), false);
+  });
+
+  it('does not follow a redirect', async () => {
+    let targetRequests = 0;
+    const target = http.createServer((_req, res) => {
+      targetRequests++;
+      res.writeHead(200, { 'Content-Length': String(body.length) });
+      res.end(body);
+    });
+    await new Promise<void>((resolve) =>
+      target.listen(0, '127.0.0.1', resolve),
+    );
+    try {
+      const address = target.address();
+      assert(address !== null && typeof address === 'object');
+      handler = (_req, res) => {
+        res.writeHead(302, {
+          Location: `http://127.0.0.1:${address.port}/internal`,
+        });
+        res.end();
+      };
+
+      await assert.rejects(
+        downloadFile({
+          url: `${baseUrl}/file`,
+          destPath: dest(),
+          expectedSize: body.length,
+          expectedSha256: bodySha256,
+        }),
+        (error: Error) =>
+          error instanceof DownloadHttpError && error.status === 302,
+      );
+      assert.equal(targetRequests, 0, 'the redirect target saw no request');
+    } finally {
+      target.closeAllConnections();
+      await new Promise<void>((resolve) => target.close(() => resolve()));
+    }
+  });
+
+  it('releases the connection of a non-success response', async () => {
+    let serverRes: http.ServerResponse | undefined;
+    handler = (_req, res) => {
+      serverRes = res;
+      res.writeHead(503, 'Service Unavailable');
+      res.write('x'.repeat(1024)); // and never finish
+    };
+
+    await assert.rejects(
+      downloadFile({ url: `${baseUrl}/file`, destPath: dest() }),
+      /HTTP 503/,
+    );
+    assert(serverRes !== undefined);
+    await closedWithin(serverRes, 1000);
+  });
+
+  it('keeps the partial where partialPath says, so another digest does not resume onto it', async () => {
+    const destPath = dest();
+    const oldPartial = path.join(tempDir, 'out.bin.old.tmp');
+    const newPartial = path.join(tempDir, 'out.bin.new.tmp');
+
+    // An earlier version of the file, interrupted part way.
+    const oldBody = Buffer.from(
+      'an older build of this file, since replaced\n',
+    );
+    handler = (_req, res) => {
+      res.writeHead(200, { 'Content-Length': String(oldBody.length) });
+      res.write(oldBody.subarray(0, 10)); // then stall
+    };
+    await assert.rejects(
+      downloadFile({
+        url: `${baseUrl}/file`,
+        destPath,
+        expectedSize: oldBody.length,
+        expectedSha256: crypto
+          .createHash('sha256')
+          .update(oldBody)
+          .digest('hex'),
+        idleTimeoutMs: 100,
+        partialPath: oldPartial,
+      }),
+      /stalled/,
+    );
+    assert.equal(existsSync(oldPartial), true);
+    assert.equal(existsSync(partialPathFor(destPath)), false);
+
+    // The rebuilt file, with its own digest and its own partial path.
+    const ranges: (string | undefined)[] = [];
+    handler = (req, res) => {
+      ranges.push(req.headers.range);
+      serveWithRanges(req, res);
+    };
+    const result = await downloadFile({
+      url: `${baseUrl}/file`,
+      destPath,
+      expectedSize: body.length,
+      expectedSha256: bodySha256,
+      partialPath: newPartial,
+    });
+    assert.deepEqual(ranges, [undefined], 'nothing was resumed');
+    assert.equal(result.resumedFrom, 0);
+    assert.deepEqual(await fs.readFile(destPath), body);
+    assert.equal(existsSync(newPartial), false);
+  });
+
+  it('resumes from the partial at partialPath', async () => {
+    const destPath = dest();
+    const partialPath = path.join(tempDir, 'elsewhere.tmp');
+    await fs.writeFile(partialPath, body.subarray(0, 10));
+
+    const result = await downloadFile({
+      url: `${baseUrl}/file`,
+      destPath,
+      expectedSize: body.length,
+      expectedSha256: bodySha256,
+      partialPath,
+    });
+    assert.equal(result.resumedFrom, 10);
+    assert.deepEqual(await fs.readFile(destPath), body);
+    assert.equal(existsSync(partialPath), false);
+  });
+
+  it('does not re-hash a completed file that has not changed, but does once it has', async () => {
+    const destPath = dest();
+    await fs.writeFile(destPath, body);
+    let requests = 0;
+    handler = (req, res) => {
+      requests++;
+      serveWithRanges(req, res);
+    };
+    const check = () =>
+      downloadFile({
+        url: `${baseUrl}/file`,
+        destPath,
+        expectedSize: body.length,
+        expectedSha256: bodySha256,
+      });
+
+    const before = completedFileHashes();
+    await check();
+    assert.equal(completedFileHashes(), before + 1, 'first check hashes');
+    await check();
+    await check();
+    assert.equal(completedFileHashes(), before + 1, 'unchanged: memo answers');
+
+    // Same size, different content and mtime: must be read again, found
+    // wrong, and fetched.
+    const wrong = Buffer.from(body);
+    wrong[0] ^= 0xff;
+    await fs.writeFile(destPath, wrong);
+    const later = new Date(Date.now() + 60_000);
+    await fs.utimes(destPath, later, later);
+    await check();
+    assert.equal(completedFileHashes(), before + 2, 'changed: hashed again');
+    assert.equal(requests, 1);
+    assert.deepEqual(await fs.readFile(destPath), body);
+
+    // And the file just downloaded and verified is remembered as such.
+    await check();
+    assert.equal(completedFileHashes(), before + 2);
+    assert.equal(requests, 1);
   });
 
   it('ignores an existing partial file when resume is disabled', async () => {
