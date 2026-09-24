@@ -26,6 +26,8 @@ const address = getSolanaAddress(publicKey);
 
 const pathSegment = fc
   .stringMatching(/^[A-Za-z0-9._-]{1,32}$/)
+  // Object.prototype members are refused: they would key state maps.
+  .filter((segment) => !(segment in Object.prototype))
   .filter((s) => !s.includes('..') && s !== '.');
 
 const sha256Hex = fc
@@ -59,7 +61,9 @@ const band = fc.record(
 
 const indexEntry = fc.record(
   {
-    name: fc.stringMatching(/^[a-z0-9-]{1,24}$/),
+    name: fc
+      .stringMatching(/^[a-z0-9-]{1,24}$/)
+      .filter((name) => !(name in Object.prototype)),
     kind: fc.stringMatching(/^[a-z0-9-]{1,24}$/),
     bands: fc.uniqueArray(band, {
       minLength: 0,

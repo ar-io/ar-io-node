@@ -156,10 +156,14 @@ document that is at least well formed.
    untrusted.
 3. **The signature is valid.** `alg` is `ed25519`. The public key is the
    32 bytes `keyId` base58-decodes to. The signed message is the UTF-8 of the
-   [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical JSON of the
-   document **with the `signature` member removed**, including every other
-   member, even ones you do not recognise. `sig` is the 64-byte signature in
-   standard base64.
+   fixed prefix `ar-io-index-publication/v1` and a newline (`\n`), followed
+   by the [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical JSON
+   of the document **with the `signature` member removed**, including every
+   other member, even ones you do not recognise. `sig` is the 64-byte
+   signature in standard base64. The prefix is domain separation: the
+   observer key signs other things too (Solana transactions, HTTPSIG
+   responses, and in a wallet, arbitrary messages), so a signature over bare
+   JSON must never count as a publication.
 4. **It is not a rollback.** Remember the highest `sequence` you have accepted
    from this publisher and refuse a document with a lower one. An equal one is
    fine, and is what you get when you poll an unchanged publisher.
@@ -174,13 +178,12 @@ Which server returned the document does not appear anywhere in this list, and
 that is the point. The signature is over content, not transport: a copy served
 by a mirror verifies exactly as well as the original.
 
-**Canonical JSON.** Use a JCS library where one exists. For version 1
-documents, whose numbers are all integers and whose keys are ASCII, the
-canonical form equals a key-sorted, whitespace-free serialization; in Python,
-`json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`.
-That shortcut stops being exact if a document ever carries a non-integer
-number, for example inside `filter` or `metadata`, which is why the library is
-the right answer.
+**Canonical JSON.** Use a JCS library (`rfc8785` in Python,
+`json-canonicalize` in JavaScript). A key-sorted, whitespace-free
+serialization is not a substitute: it disagrees with RFC 8785 on numbers such
+as `1e-7` and `1.0`, and on the sort order of keys outside the Basic
+Multilingual Plane, and unknown fields a publisher adds later can carry
+either.
 
 **The response signature.** The gateway also signs the HTTP response
 (RFC 9421, configured by the `HTTPSIG_*` settings in
@@ -377,7 +380,8 @@ def verify_publication(body, observer_address):
     # The signing base is the RFC 8785 (JCS) form of everything but the
     # signature, unknown fields included. json.dumps is not a substitute: it
     # writes 1.0 where JCS writes 1, and sorts keys differently.
-    base = rfc8785.dumps(doc)
+    # The prefix is domain separation: see step 3 above.
+    base = b"ar-io-index-publication/v1\n" + rfc8785.dumps(doc)
     key = Ed25519PublicKey.from_public_bytes(b58decode(sig["keyId"]))
     key.verify(base64.b64decode(sig["sig"]), base)  # raises if invalid
     return doc
@@ -488,6 +492,10 @@ These are what let a version 1 reader keep working as the protocol grows.
 - **A new version number is a breaking change.** Anything a version 1 reader
   would misinterpret, rather than merely not understand, gets a new
   `version`.
+- **Documents have bounded shape.** At most 64 indexes, 1024 bands per
+  index and 1024 files per band; names that are `Object.prototype` members
+  (`__proto__`, `constructor`, `toString`, …) are refused as index names,
+  band ids and file names. A reader rejects a document outside these bounds.
 - **Names are stable identifiers.** Index and band names become directory
   names on consumers, which is why they are restricted to a filesystem-safe
   alphabet and can never be `.` or `..`.

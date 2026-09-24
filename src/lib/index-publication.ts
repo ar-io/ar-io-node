@@ -54,6 +54,33 @@ const ED25519_SIGNATURE_BYTES = 64;
 const INDEX_NAME_PATTERN = /^[a-z0-9-]{1,64}$/;
 const KIND_PATTERN = /^[a-z0-9-]{1,64}$/;
 const PATH_SEGMENT_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+
+/**
+ * Names that are properties of every plain object. These arrive from a
+ * remote publisher and become keys in state maps, so one of them would read
+ * a prototype member (`state.installed[name]`) instead of an entry.
+ */
+function isReservedName(value: string): boolean {
+  return value in Object.prototype;
+}
+
+/**
+ * Bounds on one document's shape. A real publication is a handful of indexes
+ * with tens of bands of 257 files each; these are far above that and far
+ * below what would let one document fan out into a flood of requests.
+ */
+export const INDEX_PUBLICATION_MAX_INDEXES = 64;
+export const INDEX_PUBLICATION_MAX_BANDS_PER_INDEX = 1024;
+export const INDEX_PUBLICATION_MAX_FILES_PER_BAND = 1024;
+
+/**
+ * Prepended to the canonical document before signing. The observer key signs
+ * other things too (Solana transactions, HTTPSIG responses, and in a wallet
+ * like Phantom, arbitrary messages), so the signed bytes must say what they
+ * are: without this, any JSON message that key ever signed would verify as a
+ * publication.
+ */
+export const INDEX_PUBLICATION_SIGNING_PREFIX = 'ar-io-index-publication/v1\n';
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 const INFOHASH_V1_PATTERN = /^[0-9a-f]{40}$/;
 const INFOHASH_V2_PATTERN = /^[0-9a-f]{64}$/;
@@ -240,13 +267,18 @@ export function isValidPathSegment(value: unknown): value is string {
     typeof value === 'string' &&
     PATH_SEGMENT_PATTERN.test(value) &&
     !value.includes('..') &&
-    value !== '.'
+    value !== '.' &&
+    !isReservedName(value)
   );
 }
 
 /** Whether a string is acceptable as an index name. */
 export function isValidIndexName(value: unknown): value is string {
-  return typeof value === 'string' && INDEX_NAME_PATTERN.test(value);
+  return (
+    typeof value === 'string' &&
+    INDEX_NAME_PATTERN.test(value) &&
+    !isReservedName(value)
+  );
 }
 
 /**
@@ -258,6 +290,9 @@ function asPathSegment(value: unknown, path: string): string {
   const segment = asPattern(value, path, PATH_SEGMENT_PATTERN);
   if (segment.includes('..')) {
     fail(path, 'must not contain ".."');
+  }
+  if (isReservedName(segment)) {
+    fail(path, `"${segment}" is reserved`);
   }
   if (segment === '.') {
     fail(path, 'must not be "."');
@@ -317,6 +352,12 @@ function validateBand(value: unknown, path: string): BandDescriptor {
   const files = asArray(obj.files, `${path}.files`);
   if (files.length === 0) {
     fail(`${path}.files`, 'expected at least one file');
+  }
+  if (files.length > INDEX_PUBLICATION_MAX_FILES_PER_BAND) {
+    fail(
+      `${path}.files`,
+      `${files.length} files, over the limit of ${INDEX_PUBLICATION_MAX_FILES_PER_BAND}`,
+    );
   }
   const seenNames = new Set<string>();
   band.files = files.map((file, i) => {
@@ -394,8 +435,17 @@ function validateIndexEntry(value: unknown, path: string): IndexEntry {
     kind: asPattern(obj.kind, `${path}.kind`, KIND_PATTERN),
     bands: [],
   };
+  if (isReservedName(entry.name)) {
+    fail(`${path}.name`, `"${entry.name}" is reserved`);
+  }
 
   const bands = asArray(obj.bands, `${path}.bands`);
+  if (bands.length > INDEX_PUBLICATION_MAX_BANDS_PER_INDEX) {
+    fail(
+      `${path}.bands`,
+      `${bands.length} bands, over the limit of ${INDEX_PUBLICATION_MAX_BANDS_PER_INDEX}`,
+    );
+  }
   const seenIds = new Set<string>();
   entry.bands = bands.map((band, i) => {
     const validated = validateBand(band, `${path}.bands[${i}]`);
@@ -460,6 +510,12 @@ export function validateIndexPublication(input: unknown): IndexPublication {
   }
 
   const indexes = asArray(obj.indexes, 'indexes');
+  if (indexes.length > INDEX_PUBLICATION_MAX_INDEXES) {
+    fail(
+      'indexes',
+      `${indexes.length} indexes, over the limit of ${INDEX_PUBLICATION_MAX_INDEXES}`,
+    );
+  }
   const seenNames = new Set<string>();
   const validatedIndexes = indexes.map((entry, i) => {
     const validated = validateIndexEntry(entry, `indexes[${i}]`);
@@ -556,6 +612,15 @@ export function canonicalizeIndexPublication(
 }
 
 /**
+ * The bytes an Ed25519 signature is made over:
+ * {@link INDEX_PUBLICATION_SIGNING_PREFIX} followed by the canonical
+ * document, UTF-8.
+ */
+export function indexPublicationSigningInput(base: string): Buffer {
+  return Buffer.from(INDEX_PUBLICATION_SIGNING_PREFIX + base, 'utf8');
+}
+
+/**
  * Serialize a publication for writing to disk or sending on the wire.
  *
  * Canonical form is used for the whole signed document, not just the signing
@@ -599,7 +664,7 @@ export function signIndexPublication(
 ): IndexPublication {
   const { signature: _signature, ...unsigned } = publication;
   const base = canonicalizeIndexPublication(publication);
-  const sig = crypto.sign(null, Buffer.from(base, 'utf8'), privateKey);
+  const sig = crypto.sign(null, indexPublicationSigningInput(base), privateKey);
   return {
     ...(unsigned as IndexPublication),
     signature: { alg: 'ed25519', keyId, sig: sig.toString('base64') },
@@ -656,7 +721,12 @@ export function verifyIndexPublication(
   }
   let verified: boolean;
   try {
-    verified = crypto.verify(null, Buffer.from(base, 'utf8'), publicKey, sig);
+    verified = crypto.verify(
+      null,
+      indexPublicationSigningInput(base),
+      publicKey,
+      sig,
+    );
   } catch (error: any) {
     return {
       ok: false,

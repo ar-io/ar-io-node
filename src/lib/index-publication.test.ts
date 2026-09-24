@@ -22,6 +22,10 @@ import {
   IndexPublication,
   IndexPublicationValidationError,
   canonicalizeIndexPublication,
+  INDEX_PUBLICATION_MAX_BANDS_PER_INDEX,
+  INDEX_PUBLICATION_MAX_FILES_PER_BAND,
+  INDEX_PUBLICATION_MAX_INDEXES,
+  INDEX_PUBLICATION_SIGNING_PREFIX,
   manifestSha256,
   parseIndexPublication,
   serializeIndexPublication,
@@ -316,6 +320,126 @@ describe('index publication', () => {
       // must not be what gets verified.
       assert.equal((publication as any).addedLater, undefined);
       assert.equal(verifyIndexPublication(publication, publicKey).ok, false);
+    });
+  });
+
+  describe('domain separation', () => {
+    it('signs the prefixed document, not the bare JSON', () => {
+      const privateKey = loadSolanaKeypair(keypairPath);
+      const signed = signIndexPublication(
+        samplePublication(),
+        privateKey,
+        getSolanaAddress(publicKey),
+      );
+      const base = canonicalizeIndexPublication(signed);
+      const sig = Buffer.from(signed.signature!.sig, 'base64');
+      assert.equal(
+        crypto.verify(
+          null,
+          Buffer.from(INDEX_PUBLICATION_SIGNING_PREFIX + base, 'utf8'),
+          publicKey,
+          sig,
+        ),
+        true,
+      );
+    });
+
+    it('refuses a signature over the bare JSON, as any other signer of JSON would make', () => {
+      // The observer key signs other things too; a wallet asked to sign a
+      // JSON message must not thereby have signed a publication.
+      const privateKey = loadSolanaKeypair(keypairPath);
+      const unsigned = samplePublication();
+      const bare = crypto.sign(
+        null,
+        Buffer.from(canonicalizeIndexPublication(unsigned), 'utf8'),
+        privateKey,
+      );
+      const forged: IndexPublication = {
+        ...unsigned,
+        signature: {
+          alg: 'ed25519',
+          keyId: getSolanaAddress(publicKey),
+          sig: bare.toString('base64'),
+        },
+      };
+      assert.equal(verifyIndexPublication(forged, publicKey).ok, false);
+    });
+  });
+
+  describe('names and shape limits', () => {
+    const invalid =
+      (mutate: (doc: any) => void): (() => void) =>
+      () => {
+        const doc: any = JSON.parse(JSON.stringify(samplePublication()));
+        mutate(doc);
+        validateIndexPublication(doc);
+      };
+
+    for (const name of [
+      '__proto__',
+      'constructor',
+      'toString',
+      'hasOwnProperty',
+    ]) {
+      it(`rejects ${name} as a band id or file name`, () => {
+        assert.throws(
+          invalid((doc) => (doc.indexes[0].bands[0].id = name)),
+          IndexPublicationValidationError,
+        );
+        assert.throws(
+          invalid((doc) => (doc.indexes[0].bands[0].files[0].name = name)),
+          IndexPublicationValidationError,
+        );
+      });
+    }
+
+    it('rejects constructor as an index name', () => {
+      assert.throws(
+        invalid((doc) => (doc.indexes[0].name = 'constructor')),
+        IndexPublicationValidationError,
+      );
+    });
+
+    it('rejects a document that fans out past its limits', () => {
+      const file = (i: number) => ({
+        name: `f${i}`,
+        size: 1,
+        sha256: 'a'.repeat(64),
+      });
+      const band = (i: number, files = 1) => ({
+        id: `b${i}`,
+        files: Array.from({ length: files }, (_, j) => file(j)),
+      });
+      assert.throws(
+        invalid((doc) => {
+          doc.indexes[0].bands = [
+            band(0, INDEX_PUBLICATION_MAX_FILES_PER_BAND + 1),
+          ];
+        }),
+        /files, over the limit/,
+      );
+      assert.throws(
+        invalid((doc) => {
+          doc.indexes[0].bands = Array.from(
+            { length: INDEX_PUBLICATION_MAX_BANDS_PER_INDEX + 1 },
+            (_, i) => band(i),
+          );
+        }),
+        /bands, over the limit/,
+      );
+      assert.throws(
+        invalid((doc) => {
+          doc.indexes = Array.from(
+            { length: INDEX_PUBLICATION_MAX_INDEXES + 1 },
+            (_, i) => ({ name: `idx-${i}`, kind: 'k', bands: [band(0)] }),
+          );
+        }),
+        /indexes, over the limit/,
+      );
+      // A real band, 257 files, is well inside.
+      invalid((doc) => {
+        doc.indexes[0].bands = [band(0, 257)];
+      })();
     });
   });
 
