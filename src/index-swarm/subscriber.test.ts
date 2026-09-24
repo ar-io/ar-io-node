@@ -13,7 +13,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { fileUrl, Subscriber } from './subscriber.js';
+import { bandsNewestFirst, fileUrl, Subscriber } from './subscriber.js';
 import { subscriptionTotal } from './metrics.js';
 import { Publisher } from './publisher.js';
 import { StateStore } from './state.js';
@@ -221,9 +221,16 @@ describe('Subscriber', () => {
     }),
   });
 
-  const makeBand = async (bandId: string, entries = 3): Promise<void> => {
+  const makeBand = async (
+    bandId: string,
+    entries = 3,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> => {
     const dir = path.join(pubDir, 'root-tx-index', bandId);
-    const writer = new PartitionedCdb64Writer(dir);
+    const writer = new PartitionedCdb64Writer(
+      dir,
+      metadata !== undefined ? { metadata } : undefined,
+    );
     await writer.open();
     for (let i = 0; i < entries; i++) {
       await writer.add(
@@ -694,6 +701,33 @@ describe('Subscriber', () => {
     );
   });
 
+  it('installs the newest heights first, whatever order they are published in', async () => {
+    // Published oldest first, and named so that id order is wrong too.
+    await makeBand('a-old', 3, { heightRange: [0, 999] });
+    await makeBand('b-tip', 3, { heightRange: [2000, null] });
+    await makeBand('c-mid', 3, { heightRange: [1000, 1999] });
+    await publish();
+    const doc = JSON.parse(
+      await fs.readFile(path.join(pubDir, 'publication.json'), 'utf8'),
+    );
+    // The bands hold the same keys, so their partition files share digests;
+    // only each manifest (which carries the height range) tells them apart.
+    const bandOf = new Map<string, string>();
+    for (const band of doc.indexes[0].bands) {
+      for (const file of band.files) {
+        if (file.name === 'manifest.json') bandOf.set(file.sha256, band.id);
+      }
+    }
+
+    await makeSubscriber().pollOnce();
+
+    const order = blobRequests.flatMap((digest) => {
+      const id = bandOf.get(digest);
+      return id !== undefined ? [id] : [];
+    });
+    assert.deepEqual(order, ['b-tip', 'c-mid', 'a-old']);
+  });
+
   it('keeps the files that completed, and fetches only the rest next poll', async () => {
     // A publisher behind a load balancer where one node lacks the routes
     // answers some requests 404. The files that did arrive must not be
@@ -921,5 +955,55 @@ describe('Subscriber', () => {
 
     await makeSubscriber().pollOnce();
     assert.deepEqual(await installedIds(), []);
+  });
+});
+
+describe('bandsNewestFirst', () => {
+  const band = (id: string, heightRange?: [number, number | null]) => ({
+    id,
+    files: [],
+    ...(heightRange !== undefined ? { heightRange } : {}),
+  });
+  const ids = (bands: Array<{ id: string }>) => bands.map((b) => b.id);
+
+  it('puts the open-ended tip band first, then by the top of each range', () => {
+    // turbo-gateway's four bands, in a scrambled order.
+    const ordered = bandsNewestFirst([
+      band('b3', [1_350_000, 1_849_999]),
+      band('b1', [1_950_000, null]),
+      band('b4', [0, 1_349_999]),
+      band('b2', [1_850_000, 1_949_999]),
+    ]);
+    assert.deepEqual(ids(ordered), ['b1', 'b2', 'b3', 'b4']);
+  });
+
+  it('breaks a tie on the top by the higher bottom, then keeps the given order', () => {
+    const ordered = bandsNewestFirst([
+      band('wide-tip', [0, null]),
+      band('narrow-tip', [1_990_000, null]),
+      band('same-a', [100, 200]),
+      band('same-b', [100, 200]),
+    ]);
+    assert.deepEqual(ids(ordered), [
+      'narrow-tip',
+      'wide-tip',
+      'same-a',
+      'same-b',
+    ]);
+  });
+
+  it('puts bands with no height range last, in the given order', () => {
+    const ordered = bandsNewestFirst([
+      band('unknown-1'),
+      band('old', [0, 10]),
+      band('unknown-2'),
+    ]);
+    assert.deepEqual(ids(ordered), ['old', 'unknown-1', 'unknown-2']);
+  });
+
+  it('does not reorder the array it was given', () => {
+    const given = [band('old', [0, 10]), band('tip', [11, null])];
+    bandsNewestFirst(given);
+    assert.deepEqual(ids(given), ['old', 'tip']);
   });
 });
