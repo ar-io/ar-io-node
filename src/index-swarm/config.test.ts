@@ -87,6 +87,19 @@ describe('index-swarm config', () => {
       );
     });
 
+    it('rejects a publisher listed twice', () => {
+      assert.throws(
+        () =>
+          parseSubscribe(
+            JSON.stringify([
+              { publisher: 'w', name: 'root-tx-index' },
+              { publisher: 'w', name: 'other-index' },
+            ]),
+          ),
+        /\[1\] repeats publisher w/,
+      );
+    });
+
     it('rejects a malformed index name', () => {
       assert.throws(
         () => parseSubscribe('[{"publisher":"w","name":"Root_Tx"}]'),

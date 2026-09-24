@@ -92,6 +92,7 @@ export function parseSubscribe(raw: string | undefined): SubscribeConfig[] {
   if (!Array.isArray(parsed)) {
     throw new Error('INDEX_SWARM_SUBSCRIBE must be a JSON array');
   }
+  const seen = new Set<string>();
   return parsed.map((entry, i) => {
     if (typeof entry !== 'object' || entry === null) {
       throw new Error(`INDEX_SWARM_SUBSCRIBE[${i}] must be an object`);
@@ -112,6 +113,14 @@ export function parseSubscribe(raw: string | undefined): SubscribeConfig[] {
     if (url !== undefined && typeof url !== 'string') {
       throw new Error(`INDEX_SWARM_SUBSCRIBE[${i}].url must be a string`);
     }
+    // A publisher is polled once, under its first entry, so a second entry
+    // would be silently ignored.
+    if (seen.has(publisher)) {
+      throw new Error(
+        `INDEX_SWARM_SUBSCRIBE[${i}] repeats publisher ${publisher}; list it once, and omit name to take all of its indexes`,
+      );
+    }
+    seen.add(publisher);
     return {
       publisher,
       ...(name !== undefined ? { name } : {}),
