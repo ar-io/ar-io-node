@@ -31,6 +31,9 @@ info:
     - **Arweave node API**: node-compatible routes (`/info`, `/tx/{txId}`,
       `/chunk/{offset}`, blocks, wallets, pricing), so existing Arweave
       clients work unchanged.
+    - **Index sharing**: a gateway can publish the indexes that locate data
+      items inside their bundles, signed with its registered observer key,
+      at `/ar-io/indexes`; other gateways and clients verify and use them.
     - **The gateway itself**: `/ar-io/info` (release, capabilities),
       `/ar-io/peers`, health checks and metrics.
 
