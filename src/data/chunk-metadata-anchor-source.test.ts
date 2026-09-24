@@ -354,6 +354,52 @@ describe('ChunkMetadataAnchorSource', () => {
       assert.strictEqual(stub.calls[1].method, 'get');
     });
 
+    // #882: a non-2xx HEAD used to fall through to the ranged GET regardless of
+    // status, so a peer answering 404 or 429 received two requests instead of
+    // one. `validateStatus: () => true` means these arrive as responses rather
+    // than thrown errors, which is why the old `status >= 200` check let them
+    // through. Escalation is now limited to statuses a GET could actually
+    // improve on.
+    for (const status of [404, 429, 402, 401, 403, 500, 502, 503]) {
+      it(`does NOT escalate to GET when HEAD returns ${status}`, async () => {
+        const stub = makeAxiosStub();
+        stub.setNextHead(status, {});
+        // Armed deliberately: if the implementation regresses and escalates,
+        // the GET would succeed and the assertions below would catch it as a
+        // spurious success rather than as a missing stub.
+        stub.setNextGet(206, chunkHeaders());
+
+        const source = makeSource({ axiosInstance: stub.axios });
+        const result = await source.getTxBoundary(inRangeOffset);
+
+        assert.strictEqual(result, null);
+        assert.strictEqual(
+          stub.calls.length,
+          1,
+          `expected HEAD only for status ${status}, got ${stub.calls
+            .map((c) => c.method)
+            .join(',')}`,
+        );
+        assert.strictEqual(stub.calls[0].method, 'head');
+      });
+    }
+
+    for (const status of [405, 501]) {
+      it(`still escalates to GET when HEAD returns ${status} (peer lacks HEAD)`, async () => {
+        const stub = makeAxiosStub();
+        stub.setNextHead(status, {});
+        stub.setNextGet(206, chunkHeaders());
+
+        const source = makeSource({ axiosInstance: stub.axios });
+        const result = await source.getTxBoundary(inRangeOffset);
+
+        assert.notEqual(result, null);
+        assert.strictEqual(result!.id, txId);
+        assert.strictEqual(stub.calls.length, 2);
+        assert.strictEqual(stub.calls[1].method, 'get');
+      });
+    }
+
     it('returns null when both HEAD and GET fail', async () => {
       const stub = makeAxiosStub();
       stub.setHeadThrows(new Error('connect ECONNREFUSED'));

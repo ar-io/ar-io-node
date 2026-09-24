@@ -47,7 +47,24 @@ type AnchorResult =
   | 'cache_hit'
   | 'metadata_missing'
   | 'mismatch'
+  | 'peer_refused'
   | 'error';
+
+/**
+ * Thrown when the reference peer answered HEAD with a status that a ranged GET
+ * could not improve on: a refusal (404, 429, 402), an auth failure, or a server
+ * fault. Distinguished from a transport error so the outcome is counted as
+ * `peer_refused` rather than `error`, which is what tells an operator the peer
+ * is answering and declining as opposed to being unreachable.
+ */
+class PeerRefusedHeadError extends Error {
+  constructor(readonly status: number) {
+    super(
+      `Peer refused HEAD with status ${status}; a ranged GET would return the same result`,
+    );
+    this.name = 'PeerRefusedHeadError';
+  }
+}
 
 /**
  * Resolves `offset → tx + data_root` by HEAD-ing a reference peer's
@@ -185,6 +202,14 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       // being silently demoted to `'error'` and falling through.
       const normalized = normalizeAbortError(err);
       if (normalized?.name === 'AbortError') throw normalized;
+      if (err instanceof PeerRefusedHeadError) {
+        this.recordResult('peer_refused');
+        log.debug('Peer declined chunk-header probe; not escalating to GET', {
+          url,
+          status: err.status,
+        });
+        return null;
+      }
       this.recordResult('error');
       log.debug('Peer chunk-header fetch failed', {
         url,
@@ -259,11 +284,21 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
    * zero-byte range GET so we still get the response headers without
    * pulling the body. Returns the raw header bag for the parser.
    *
-   * Three "HEAD didn't work" cases all funnel into the same fallback:
+   * Three "HEAD didn't work" cases funnel into the fallback:
    * - HEAD threw (network error, peer down, peer doesn't support HEAD)
-   * - HEAD returned a non-2xx status (e.g. 405 Method Not Allowed)
+   * - HEAD returned 405 or 501, i.e. the peer does not implement HEAD on
+   *   this route
    * - HEAD returned 2xx but stripped the X-Arweave-Chunk-* headers
    *   (some proxies do this on HEAD even though GET sets them)
+   *
+   * Any other non-2xx status does NOT fall back. A 404, 429, 402, 401/403
+   * or 5xx means the peer answered and declined, and a GET to the same URL
+   * returns the same answer, so escalating would only double the request
+   * rate against a peer that is already refusing or failing. Those throw
+   * PeerRefusedHeadError instead, which the caller counts as
+   * `peer_refused`. `validateStatus: () => true` on the shared instance
+   * means these statuses arrive here as responses rather than as thrown
+   * errors, so the distinction has to be made explicitly.
    *
    * GET errors propagate up — both methods failing means the peer is
    * unreachable and the composite should fall through to the next
@@ -273,11 +308,17 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
     url: string,
     signal?: AbortSignal,
   ): Promise<Record<string, string | string[] | undefined>> {
+    // Left undefined when HEAD throws, which is a genuine "HEAD didn't work"
+    // and still earns the GET fallback. Set outside the catch below so the
+    // refusal check can run after it: throwing from inside the `try` would be
+    // caught by that same handler and fall through to the GET anyway.
+    let headStatus: number | undefined;
     try {
       const headResponse = await this.axiosInstance.head(url, {
         signal,
         timeout: this.requestTimeoutMs,
       });
+      headStatus = headResponse.status;
       if (
         headResponse.status >= 200 &&
         headResponse.status < 300 &&
@@ -298,6 +339,16 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       const normalized = normalizeAbortError(err);
       if (normalized?.name === 'AbortError') throw normalized;
       // Otherwise fall through to the GET fallback below.
+    }
+
+    // Escalate only where a GET could plausibly differ from the HEAD.
+    if (
+      headStatus !== undefined &&
+      !(headStatus >= 200 && headStatus < 300) &&
+      headStatus !== 405 &&
+      headStatus !== 501
+    ) {
+      throw new PeerRefusedHeadError(headStatus);
     }
 
     // `bytes=0-0` is the smallest legal range; the server returns a 1-
