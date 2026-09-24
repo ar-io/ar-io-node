@@ -49,7 +49,7 @@ import {
   loadSolanaKeypairFromBase58,
 } from '../lib/httpsig.js';
 import * as config from './config.js';
-import { StateStore } from './state.js';
+import { applyBandChanges, StateStore } from './state.js';
 import { ArtifactKind } from './kinds/types.js';
 import {
   publishBands,
@@ -313,14 +313,17 @@ export class Publisher {
     bandId: string,
   ): Promise<void> {
     const state = await this.state.load();
-    const installed = state.installed[indexName] ?? {};
-    if (installed[bandId]?.retiredAt !== undefined) {
+    const retired = state.publishedBands[indexName] ?? {};
+    if (
+      Object.prototype.hasOwnProperty.call(retired, bandId) &&
+      retired[bandId].retiredAt !== undefined
+    ) {
       return;
     }
 
-    const next = await kind.retire({ bandId, dir, current: installed });
+    const next = await kind.retire({ bandId, dir, current: retired });
     await this.state.update((draft) => {
-      draft.installed[indexName] = next;
+      applyBandChanges(draft.publishedBands, indexName, retired, next);
       delete draft.describeCache[dir];
     });
     this.log.info('Retired superseded band', { index: indexName, id: bandId });
@@ -331,7 +334,7 @@ export class Publisher {
     const state = await this.state.load();
     for (const entry of this.publish) {
       const kind = this.kinds.get(entry.kind);
-      const current = state.installed[entry.name];
+      const current = state.publishedBands[entry.name];
       if (kind === undefined || current === undefined) continue;
 
       const next = await kind.sweepRetired({
@@ -341,7 +344,7 @@ export class Publisher {
       });
       if (Object.keys(next).length !== Object.keys(current).length) {
         await this.state.update((draft) => {
-          draft.installed[entry.name] = next;
+          applyBandChanges(draft.publishedBands, entry.name, current, next);
         });
       }
     }
@@ -445,6 +448,11 @@ export class Publisher {
    *
    * @returns whether a new document was written.
    */
+  /** Wait for a scan in progress to finish, as a shutdown does. */
+  async drain(): Promise<void> {
+    await this.inFlight?.catch(() => undefined);
+  }
+
   scanOnce(): Promise<boolean> {
     if (this.inFlight === undefined) {
       this.inFlight = this.scan().finally(() => {

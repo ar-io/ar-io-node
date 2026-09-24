@@ -44,13 +44,13 @@ import {
   downloadFile,
 } from '../lib/http-file-download.js';
 import { SubscribeConfig } from './config.js';
-import { InstalledBand, StateStore } from './state.js';
+import { applyBandChanges, InstalledBand, StateStore } from './state.js';
 import { ArtifactKind } from './kinds/types.js';
 import { GatewayRegistry, PublisherRecord } from './gateway-registry.js';
 import {
   installedBands,
   subscriptionBytes,
-  subscriptionManifestAge,
+  publicationIssuedAt,
   subscriptionSequence,
   subscriptionTotal,
 } from './metrics.js';
@@ -316,41 +316,80 @@ export class Subscriber {
     this.now = options.now ?? (() => new Date());
   }
 
-  private inFlight: Promise<void> | undefined;
+  /** The poll running for each publisher, if any. */
+  private readonly polling = new Map<string, Promise<void>>();
+  private maintaining: Promise<void> | undefined;
+  /** `<index>/<band>` ids being installed right now, by any publisher. */
+  private readonly installing = new Set<string>();
 
   /**
-   * Poll every configured publisher once. A call while a poll is still
-   * running joins it rather than starting a second: downloading a large band
-   * outlasts the poll interval, and two polls over the same band write the
-   * same `.tmp` files at once, corrupting them, and race to install into
-   * the same directory.
+   * Poll every configured publisher once, each independently.
+   *
+   * A publisher whose poll is still running is joined rather than polled a
+   * second time: downloading a large band outlasts the poll interval, and
+   * two polls over the same band would race to install it. But a slow
+   * publisher, or one trickling bytes under a meter, holds up only itself;
+   * every other publisher is polled on schedule.
    */
   pollOnce(): Promise<void> {
-    if (this.inFlight === undefined) {
-      this.inFlight = this.poll().finally(() => {
-        this.inFlight = undefined;
-      });
-    }
-    return this.inFlight;
+    if (this.stopping.signal.aborted) return Promise.resolve();
+    const polls = this.subscribe.map((subscription) => {
+      let poll = this.polling.get(subscription.publisher);
+      if (poll === undefined) {
+        poll = this.pollSafely(subscription).finally(() => {
+          this.polling.delete(subscription.publisher);
+        });
+        this.polling.set(subscription.publisher, poll);
+      }
+      return poll;
+    });
+    return Promise.all(polls).then(() => this.maintain());
   }
 
-  private async poll(): Promise<void> {
-    for (const subscription of this.subscribe) {
-      try {
-        await this.pollSubscription(subscription);
-      } catch (error: any) {
-        // One bad publisher must not stop the others.
-        this.log.error('Subscription poll failed', {
-          publisher: subscription.publisher,
-          error: error?.message,
-          stack: error?.stack,
-        });
-        this.count(subscription.publisher, '', 'error');
-      }
+  /** When the last poll of any publisher finished, for the healthcheck. */
+  lastPollCompletedAt: Date | undefined;
+
+  private async pollSafely(subscription: SubscribeConfig): Promise<void> {
+    try {
+      await this.pollSubscription(subscription);
+    } catch (error: any) {
+      // One bad publisher must not stop the others.
+      this.log.error('Subscription poll failed', {
+        publisher: subscription.publisher,
+        error: error?.message,
+        stack: error?.stack,
+      });
+      this.count(subscription.publisher, '', 'error');
     }
-    await this.discardOrphanedDownloads();
-    await this.sweep();
-    await this.reportInstalled();
+    this.lastPollCompletedAt = this.now();
+  }
+
+  /** Housekeeping after polls: stale downloads, retired bands, gauges. */
+  private maintain(): Promise<void> {
+    if (this.maintaining === undefined) {
+      this.maintaining = (async () => {
+        await this.discardOrphanedDownloads();
+        await this.sweep();
+        await this.reportInstalled();
+      })().finally(() => {
+        this.maintaining = undefined;
+      });
+    }
+    return this.maintaining;
+  }
+
+  private readonly stopping = new AbortController();
+
+  /**
+   * Stop for shutdown: abort downloads in progress (they resume on the next
+   * start), start no new polls or installs, and wait for what is running to
+   * finish. An install already under way completes, so shutdown never
+   * leaves a band half-renamed.
+   */
+  async stop(): Promise<void> {
+    this.stopping.abort();
+    await Promise.allSettled([...this.polling.values()]);
+    await this.maintaining?.catch(() => undefined);
   }
 
   private count(
@@ -658,10 +697,10 @@ export class Subscriber {
   private reportAge(publisher: string, document: IndexPublication): void {
     const issued = Date.parse(document.issuedAt);
     if (!Number.isNaN(issued)) {
-      subscriptionManifestAge.set(
-        { publisher },
-        Math.max(0, (this.now().getTime() - issued) / 1000),
-      );
+      // Only ever moves forward: a replayed older document must not make a
+      // publisher look fresher than it is.
+      const previous = publicationIssuedAt.get(publisher) ?? 0;
+      publicationIssuedAt.set(publisher, Math.max(previous, issued));
     }
   }
 
@@ -742,7 +781,7 @@ export class Subscriber {
         current: latest,
       });
       await this.state.update((draft) => {
-        draft.installed[index.name] = next;
+        applyBandChanges(draft.installed, index.name, latest, next);
       });
       this.log.info('Retired a band the publisher no longer offers', {
         publisher,
@@ -805,6 +844,35 @@ export class Subscriber {
       return false;
     }
 
+    // Two publishers polled in parallel could otherwise both install one
+    // band id at once, leaving one copy on disk that state doesn't know.
+    const installKey = `${index.name}/${band.id}`;
+    if (this.installing.has(installKey)) return false;
+    this.installing.add(installKey);
+    try {
+      return await this.installBandExclusive(
+        publisher,
+        origin,
+        index,
+        band,
+        kind,
+        meter,
+        live,
+      );
+    } finally {
+      this.installing.delete(installKey);
+    }
+  }
+
+  private async installBandExclusive(
+    publisher: string,
+    origin: string,
+    index: IndexEntry,
+    band: BandDescriptor,
+    kind: ArtifactKind,
+    meter: PollMeter,
+    live: InstalledBand | undefined,
+  ): Promise<boolean> {
     const bandBytes = band.files.reduce((sum, file) => sum + file.size, 0);
     if (this.maxDiskBytes !== undefined) {
       const used = await this.diskBytes(live);
@@ -915,6 +983,7 @@ export class Subscriber {
               expectedSha256: file.sha256,
               resume: true,
               idleTimeoutMs: this.downloadStallTimeoutMs,
+              signal: this.stopping.signal,
               // The cap is for the band, and downloadConcurrency files move
               // at once, so each gets its share.
               ...(this.downloadRateLimitBytesPerSec !== undefined
@@ -1000,6 +1069,7 @@ export class Subscriber {
       return false;
     }
 
+    if (this.stopping.signal.aborted) return false;
     const state = await this.state.load();
     const current = state.installed[index.name] ?? {};
     const next = await kind.install({
@@ -1011,7 +1081,7 @@ export class Subscriber {
     next[band.id] = { ...next[band.id], publisher };
 
     await this.state.update((draft) => {
-      draft.installed[index.name] = next;
+      applyBandChanges(draft.installed, index.name, current, next);
     });
     await this.retireReplaced(index.name, band.id, live, targetDir, kind);
 
@@ -1114,7 +1184,7 @@ export class Subscriber {
     });
     next[retiredKey] = { ...next[retiredKey], files: replaced.files };
     await this.state.update((draft) => {
-      draft.installed[indexName] = next;
+      applyBandChanges(draft.installed, indexName, current, next);
     });
   }
 
@@ -1186,7 +1256,7 @@ export class Subscriber {
       });
       if (Object.keys(next).length !== Object.keys(current).length) {
         await this.state.update((draft) => {
-          draft.installed[indexName] = next;
+          applyBandChanges(draft.installed, indexName, current, next);
         });
       }
     }

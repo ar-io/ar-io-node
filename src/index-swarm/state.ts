@@ -96,12 +96,43 @@ export interface SwarmState {
   version: number;
   /** Keyed by publisher wallet address. */
   subscriptions: Record<string, SubscriptionState>;
-  /** Keyed by index name, then band id. */
+  /** Bands this node installed as a subscriber, by index name, then band id. */
   installed: Record<string, Record<string, InstalledBand>>;
+  /**
+   * Bands this node retired as a publisher (superseded ones awaiting their
+   * sweep), kept apart from {@link installed} so that publishing and
+   * subscribing to the same index name never overwrite each other's records.
+   */
+  publishedBands: Record<string, Record<string, InstalledBand>>;
   /** What this node last published. One document covers every index. */
   published?: PublicationState;
   /** Describe results, keyed by band directory. */
   describeCache: Record<string, DescribedBand>;
+}
+
+/**
+ * Write into `target` only what changed between `before` and `after`: set
+ * entries added or changed, delete entries removed.
+ *
+ * Callers read a band map, hand it to a kind (install, retire, sweep) that
+ * returns a new one, and write that back after awaiting. Assigning the whole
+ * map would drop whatever another poll wrote in between; applying the
+ * difference keeps both.
+ */
+export function applyBandChanges(
+  target: Record<string, Record<string, InstalledBand>>,
+  indexName: string,
+  before: Record<string, InstalledBand>,
+  after: Record<string, InstalledBand>,
+): void {
+  const map = (target[indexName] ??= {});
+  for (const [bandId, band] of Object.entries(after)) {
+    if (before[bandId] !== band) map[bandId] = band;
+  }
+  for (const bandId of Object.keys(before)) {
+    if (!Object.prototype.hasOwnProperty.call(after, bandId))
+      delete map[bandId];
+  }
 }
 
 export function emptyState(): SwarmState {
@@ -109,6 +140,7 @@ export function emptyState(): SwarmState {
     version: SWARM_STATE_VERSION,
     subscriptions: {},
     installed: {},
+    publishedBands: {},
     describeCache: {},
   };
 }
@@ -124,6 +156,7 @@ function normalize(parsed: unknown): SwarmState {
     version: typeof obj.version === 'number' ? obj.version : base.version,
     subscriptions: obj.subscriptions ?? base.subscriptions,
     installed: obj.installed ?? base.installed,
+    publishedBands: obj.publishedBands ?? base.publishedBands,
     describeCache: obj.describeCache ?? base.describeCache,
     ...(obj.published !== undefined ? { published: obj.published } : {}),
   };

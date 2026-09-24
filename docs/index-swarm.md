@@ -196,6 +196,9 @@ the Solana RPC provider and needs no RPC settings. The view is at most an hour
 old, and it lists the gateways the gateway itself would use: not its own
 wallet, and by default not gateways that are leaving.
 
+Each publisher is polled independently: a slow one, or one pulled at a
+meter's pace for hours, holds up only itself.
+
 Every poll re-reconciles, whether or not the publisher's document has changed.
 The sequence guards against rollback and nothing else: it records what has been
 *seen*, not what has been successfully installed, so a band that failed to
@@ -404,7 +407,7 @@ container. Nothing reaches the host unless the operator maps the port.
 
 | Path | Meaning |
 |---|---|
-| `/healthz` | 200 while running, 503 during shutdown. The container healthcheck acts on this, and so does autoheal when `RUN_AUTOHEAL=true`. |
+| `/healthz` | 200 while running, 503 during shutdown. The container healthcheck acts on this, and so does autoheal when `RUN_AUTOHEAL=true`. It deliberately does not track poll progress: a legitimate multi-gigabyte first pull keeps one publisher's poll running longer than any threshold would allow, and autoheal restarting it would lose nothing but waste the transfer. Alarm on `index_subscription_manifest_age_seconds` instead. |
 | `/metrics` | Prometheus exposition. Sidecar and process series only. The shipped `prometheus.yml` has no job for it; add one for `index-swarm:9101` to scrape it. |
 
 Metrics worth a dashboard:
@@ -420,7 +423,7 @@ Metrics worth a dashboard:
 | `index_publish_sequence`, `index_publish_bands{index}` | What is currently offered |
 | `index_publish_describe_duration_seconds{index}` | Time spent hashing a band. A steady stream means bands are churning |
 | `index_subscription_total{publisher,index,transport,result}` | Outcomes: one per poll for the document (`index` empty), plus one per band that was fetched. `installed` is healthy. `unchanged` means nothing was installed that poll, which is healthy on its own but also appears beside `download_failed` or `verify_failed`; see below for the rest |
-| `index_subscription_manifest_age_seconds{publisher}` | Age of the newest document from each publisher. **The alarm that matters**: climbing past the publisher's TTL means it has gone quiet |
+| `index_subscription_manifest_age_seconds{publisher}` | Age of the newest document from each publisher, computed at scrape time. **The alarm that matters**: climbing past the publisher's TTL means it has gone quiet, whether it still answers with an old document or does not answer at all |
 | `index_subscription_sequence{publisher}` | The latest sequence seen, whether or not its bands have installed |
 | `index_swarm_installed_bands{index}` | What is installed |
 | `index_subscription_bytes_total{transport}` | Bytes actually fetched (only `http` in this build). Files already on disk are not fetched again and not counted |
@@ -460,8 +463,9 @@ The subscription results that need attention:
 - **`init: true`** is set, so signals reach the process and exited children are
   reaped. Without it a wedged process needs a kill, which is how a band install
   gets left half-written.
-- **`stop_grace_period` is 30s**, giving an install in progress time to finish
-  before the container is killed.
+- **`stop_grace_period` is 30s.** On a stop signal the sidecar aborts
+  downloads in progress (they resume on the next start), starts nothing new,
+  and waits for an install or a publish already under way to finish.
 - **Disk.** It depends entirely on what is published. The root-tx set
   Turbo's fleet builds is about 20 GB; the three older snapshots shipped as
   the gateway's defaults are 122, 150 and 245 GB. `incoming/` keeps the files

@@ -273,6 +273,37 @@ describe('Publisher', () => {
     });
   }
 
+  it("keeps its records apart from a subscriber's on the same node", async () => {
+    // A node can publish and subscribe to the same index name; one role must
+    // never overwrite the other's band records.
+    await state.update((draft) => {
+      draft.installed['root-tx-index'] = {
+        'band-old': {
+          dir: '/subscriber/installed/root-tx-index/band-old~abc',
+          files: [],
+          installedAt: '',
+          publisher: 'SomeOtherPublisher',
+        },
+      };
+    });
+    await makeBand('band-old');
+    await makeBand('band-new', 3, { supersedes: 'band-old' });
+
+    await makePublisher().scanOnce();
+
+    const after = await state.load();
+    assert.equal(
+      after.installed['root-tx-index']['band-old'].dir,
+      '/subscriber/installed/root-tx-index/band-old~abc',
+      "the subscriber's record is untouched",
+    );
+    assert.equal(
+      after.installed['root-tx-index']['band-old'].retiredAt,
+      undefined,
+    );
+    // (Its own record of the retirement is swept at once: grace is 0 here.)
+  });
+
   it('drops and retires a band that a newer one supersedes', async () => {
     const oldDir = await makeBand('band-old');
     await makeBand('band-new', 3, { supersedes: 'band-old' });

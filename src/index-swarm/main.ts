@@ -246,6 +246,10 @@ async function main(): Promise<void> {
     try {
       if (publishTimer !== undefined) clearInterval(publishTimer);
       if (pollTimer !== undefined) clearInterval(pollTimer);
+      // Let work in progress finish, inside the timeout above: downloads
+      // are aborted (they resume on the next start), but a band mid-install
+      // or a document mid-write completes rather than being cut off.
+      await Promise.allSettled([subscriber?.stop(), publisher?.drain()]);
       await metrics.close();
       await state.save();
     } catch (error: any) {

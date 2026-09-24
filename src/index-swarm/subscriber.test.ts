@@ -19,7 +19,12 @@ import {
   MAX_SEQUENCE_JUMP,
   Subscriber,
 } from './subscriber.js';
-import { subscriptionTotal } from './metrics.js';
+import {
+  manifestAgeClock,
+  publicationIssuedAt,
+  subscriptionManifestAge,
+  subscriptionTotal,
+} from './metrics.js';
 import { Publisher } from './publisher.js';
 import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
@@ -33,6 +38,7 @@ import {
   signIndexPublication,
 } from '../lib/index-publication.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import { SubscribeConfig } from './config.js';
 import { Cdb64RootTxIndex } from '../discovery/cdb64-root-tx-index.js';
 import { toB64Url } from '../lib/encoding.js';
 
@@ -145,6 +151,8 @@ describe('Subscriber', () => {
     omitContentLength = false;
     canaryHits = 0;
     userAgents = [];
+    // Module-level, like the gauge it feeds: start each test clean.
+    publicationIssuedAt.clear();
     clock = new Date('2026-09-23T00:00:00.000Z');
 
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -307,6 +315,7 @@ describe('Subscriber', () => {
       allowedFileOrigins: string[];
       replaceOverlapMs: number;
       alsoSubscribedTo: string[];
+      subscribe: SubscribeConfig[];
     }> = {},
   ) =>
     new Subscriber({
@@ -314,7 +323,7 @@ describe('Subscriber', () => {
       state: subState,
       kinds: createKindRegistry({ log }),
       registry: opts.registry ?? registryFor(),
-      subscribe: [
+      subscribe: opts.subscribe ?? [
         {
           publisher: WALLET,
           ...(opts.name !== undefined ? { name: opts.name } : {}),
@@ -438,9 +447,13 @@ describe('Subscriber', () => {
     const subscriber = makeSubscriber();
     const first = subscriber.pollOnce();
     const second = subscriber.pollOnce();
-    assert.equal(second, first, 'the second call joins the first');
     await Promise.all([first, second]);
     assert.deepEqual(await installedIds(), ['band-a']);
+    assert.equal(
+      blobRequests.length,
+      new Set(blobRequests).size,
+      'the second call joined the first: no file was fetched twice',
+    );
   });
 
   it('accepts a document from a newer publisher that adds fields', async () => {
@@ -1102,6 +1115,123 @@ describe('Subscriber', () => {
       'the layout from before downloads were kept per publisher',
     );
     assert.deepEqual(await installedIds(), ['band-a']);
+  });
+
+  it('polls each publisher independently: a stalled one holds up only itself', async () => {
+    await makeBand('band-a');
+    await publish();
+    // A second publisher whose server accepts the request and never answers.
+    const SLOW = 'SlowPublisherWallet11111111111111111111111111';
+    let release: () => void = () => undefined;
+    const hanging = http.createServer((_req, res) => {
+      release = () => res.destroy();
+    });
+    await new Promise<void>((resolve) =>
+      hanging.listen(0, '127.0.0.1', resolve),
+    );
+    const address = hanging.address();
+    assert(address !== null && typeof address === 'object');
+    const registry: GatewayRegistry = {
+      lookup: async (wallet) =>
+        wallet === SLOW
+          ? {
+              wallet: SLOW,
+              observerAddress: signer.keyId,
+              url: `http://127.0.0.1:${address.port}`,
+              status: 'joined' as const,
+            }
+          : {
+              wallet: WALLET,
+              observerAddress: signer.keyId,
+              url: origin,
+              status: 'joined' as const,
+            },
+    };
+    try {
+      const subscriber = makeSubscriber({
+        registry,
+        // The stalled one first, which a serial poll would wait on.
+        subscribe: [{ publisher: SLOW }, { publisher: WALLET }],
+      });
+      const poll = subscriber.pollOnce();
+      // The healthy publisher's band installs while the other still hangs.
+      let installed = false;
+      for (let i = 0; i < 200 && !installed; i++) {
+        installed = (await installedIds()).includes('band-a');
+        if (!installed) await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert(installed, 'band-a installed while the other publisher stalled');
+      release();
+      await poll;
+    } finally {
+      release();
+      hanging.closeAllConnections();
+      await new Promise<void>((resolve) => hanging.close(() => resolve()));
+    }
+  });
+
+  it('keeps the manifest-age alarm climbing while a publisher is unreachable', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    const issued = Date.parse(
+      JSON.parse(
+        await fs.readFile(path.join(pubDir, 'publication.json'), 'utf8'),
+      ).issuedAt,
+    );
+    const age = async () =>
+      (await subscriptionManifestAge.get()).values.find(
+        (v) => v.labels.publisher === WALLET,
+      )?.value;
+
+    // The publisher goes away. Nothing new is fetched, but time passes.
+    const unreachable: GatewayRegistry = { lookup: async () => undefined };
+    const realNow = manifestAgeClock.now;
+    manifestAgeClock.now = () => issued + 3_600_000;
+    try {
+      await makeSubscriber({ registry: unreachable }).pollOnce();
+      assert.equal(
+        await age(),
+        3600,
+        'an hour old, not frozen at its last fetch',
+      );
+    } finally {
+      manifestAgeClock.now = realNow;
+    }
+  });
+
+  it('stops promptly mid-download, leaving nothing half-installed', async () => {
+    await makeBand('band-a');
+    await publish();
+    // Every file download stalls until the test ends.
+    const stalled: http.ServerResponse[] = [];
+    failPartitionsWith = undefined;
+    const original = server.listeners('request')[0] as http.RequestListener;
+    server.removeAllListeners('request');
+    server.on('request', (req, res) => {
+      if (/\/blob\//.test(req.url ?? '')) {
+        res.writeHead(200, { 'content-length': '1000000' });
+        res.write('x');
+        stalled.push(res);
+        return;
+      }
+      original(req, res);
+    });
+    try {
+      const subscriber = makeSubscriber();
+      const poll = subscriber.pollOnce();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const started = Date.now();
+      await subscriber.stop();
+      await poll;
+      assert(Date.now() - started < 3000, 'stop did not wait out the download');
+      assert.deepEqual(await installedIds(), []);
+      assert.deepEqual(await dirsOnDisk('band-a'), []);
+    } finally {
+      for (const res of stalled) res.destroy();
+      server.removeAllListeners('request');
+      server.on('request', original);
+    }
   });
 
   it('keeps the files that completed, and fetches only the rest next poll', async () => {

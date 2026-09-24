@@ -117,11 +117,30 @@ export const subscriptionBytes = new promClient.Counter({
   registers: [registry],
 });
 
+/**
+ * When the newest document seen from each publisher was issued, in ms since
+ * the epoch. The age gauge is computed from this at scrape time, so it keeps
+ * climbing while a publisher is unreachable instead of freezing at the age
+ * it had when last fetched.
+ */
+export const publicationIssuedAt = new Map<string, number>();
+
+/** The clock the age gauge reads; replaceable in tests. */
+export const manifestAgeClock: { now: () => number } = {
+  now: () => Date.now(),
+};
+
 export const subscriptionManifestAge = new promClient.Gauge({
   name: 'index_subscription_manifest_age_seconds',
-  help: 'Age of the newest document seen from each publisher. Climbing past its TTL is the signal that a publisher has gone quiet; this is the alarm that matters.',
+  help: 'Age of the newest document seen from each publisher, computed at scrape time. Climbing past its TTL is the signal that a publisher has gone quiet, whether it is still answering with an old document or not answering at all; this is the alarm that matters.',
   labelNames: ['publisher'] as const,
   registers: [registry],
+  collect() {
+    const now = manifestAgeClock.now();
+    for (const [publisher, issued] of publicationIssuedAt) {
+      this.set({ publisher }, Math.max(0, (now - issued) / 1000));
+    }
+  },
 });
 
 export const subscriptionSequence = new promClient.Gauge({

@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { StateStore, SWARM_STATE_VERSION } from './state.js';
+import { applyBandChanges, StateStore, SWARM_STATE_VERSION } from './state.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'index-swarm state' });
@@ -115,5 +115,34 @@ describe('index-swarm StateStore', () => {
     assert.deepEqual(state.installed, {});
     assert.equal(state.published, undefined);
     assert.deepEqual(state.describeCache, {});
+  });
+});
+
+describe('applyBandChanges', () => {
+  const band = (dir: string) => ({ dir, files: [], installedAt: '' });
+
+  it('keeps an entry another writer added in between', () => {
+    const target: Record<string, Record<string, any>> = {
+      idx: { a: band('a') },
+    };
+    const before = { ...target.idx };
+    // Meanwhile another poll installs b.
+    target.idx.b = band('b');
+    // This writer replaces a.
+    const after = { ...before, a: band('a2') };
+
+    applyBandChanges(target, 'idx', before, after);
+
+    assert.deepEqual(Object.keys(target.idx).sort(), ['a', 'b']);
+    assert.equal(target.idx.a.dir, 'a2');
+  });
+
+  it('deletes only what the writer removed', () => {
+    const target: Record<string, Record<string, any>> = {
+      idx: { a: band('a'), b: band('b') },
+    };
+    const before = { a: target.idx.a };
+    applyBandChanges(target, 'idx', before, {});
+    assert.deepEqual(Object.keys(target.idx), ['b']);
   });
 });
