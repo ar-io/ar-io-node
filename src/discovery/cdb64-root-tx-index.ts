@@ -47,7 +47,11 @@ import {
 } from '../lib/cdb64-encoding.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import { PartitionedCdb64Reader } from '../lib/partitioned-cdb64-reader.js';
-import { Cdb64Manifest, parseManifest } from '../lib/cdb64-manifest.js';
+import {
+  Cdb64Manifest,
+  isCdb64TempDirName,
+  parseManifest,
+} from '../lib/cdb64-manifest.js';
 import * as metrics from '../metrics.js';
 
 /** Valid CDB64 file extensions */
@@ -570,7 +574,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       if (path.basename(manifestPath) !== 'manifest.json') return undefined;
       const bandDir = path.dirname(manifestPath);
       if (path.dirname(bandDir) !== dirPath) return undefined;
-      if (bandDir.endsWith('.tmp')) return undefined;
+      if (isCdb64TempDirName(bandDir)) return undefined;
       return bandDir;
     };
 
@@ -663,7 +667,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     const bands: string[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      if (entry.name.endsWith('.tmp')) continue;
+      if (isCdb64TempDirName(entry.name)) continue;
       const bandPath = path.join(dirPath, entry.name);
       if (await this.isPartitionedDirectory(bandPath)) {
         bands.push(bandPath);

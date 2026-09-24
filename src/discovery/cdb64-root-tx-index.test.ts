@@ -1233,39 +1233,43 @@ describe('Cdb64RootTxIndex', () => {
       await index.close();
     });
 
-    it('ignores a band directory that is still being written', async () => {
-      const collectionDir = path.join(tempDir, 'collection-tmp');
-      await fs.mkdir(collectionDir, { recursive: true });
+    // `.tmp.<pid>` is what the partitioned writers create; bare `.tmp` is the
+    // older convention.
+    for (const suffix of ['.tmp', `.tmp.${process.pid}`]) {
+      it(`ignores a band directory that is still being written (${suffix})`, async () => {
+        const collectionDir = path.join(tempDir, `collection${suffix}-test`);
+        await fs.mkdir(collectionDir, { recursive: true });
 
-      const readyId = createTxId(51);
-      const partialId = createTxId(52);
-      await createBand(path.join(collectionDir, 'band-ready'), [
-        { dataItemId: readyId, rootTxId: createTxId(401) },
-      ]);
-      // A `.tmp` suffix marks a band mid-install; it must not be loaded even
-      // though it already has a valid manifest.
-      await createBand(path.join(collectionDir, 'band-partial.tmp'), [
-        { dataItemId: partialId, rootTxId: createTxId(402) },
-      ]);
+        const readyId = createTxId(51);
+        const partialId = createTxId(52);
+        await createBand(path.join(collectionDir, 'band-ready'), [
+          { dataItemId: readyId, rootTxId: createTxId(401) },
+        ]);
+        // A temp suffix marks a band mid-install; it must not be loaded even
+        // though it already has a valid manifest.
+        await createBand(path.join(collectionDir, `band-partial${suffix}`), [
+          { dataItemId: partialId, rootTxId: createTxId(402) },
+        ]);
 
-      const index = new Cdb64RootTxIndex({
-        log,
-        sources: [collectionDir],
-        watch: false,
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [collectionDir],
+          watch: false,
+        });
+
+        assert(
+          (await index.getRootTx(toB64Url(readyId))) !== undefined,
+          'finished band should resolve',
+        );
+        assert.equal(
+          await index.getRootTx(toB64Url(partialId)),
+          undefined,
+          'band still being written should be ignored',
+        );
+
+        await index.close();
       });
-
-      assert(
-        (await index.getRootTx(toB64Url(readyId))) !== undefined,
-        'finished band should resolve',
-      );
-      assert.equal(
-        await index.getRootTx(toB64Url(partialId)),
-        undefined,
-        'band still being written should be ignored',
-      );
-
-      await index.close();
-    });
+    }
 
     it('serves a flat directory and a collection in the same source', async () => {
       // A directory may hold loose .cdb files, band subdirectories, or both.

@@ -42,6 +42,7 @@ import {
   serializeIndexPublication,
   signIndexPublication,
 } from '../lib/index-publication.js';
+import { isCdb64TempDirName } from '../lib/cdb64-manifest.js';
 import {
   getSolanaAddress,
   loadSolanaKeypair,
@@ -190,7 +191,7 @@ export class Publisher {
       throw error;
     }
     return entries
-      .filter((entry) => entry.isDirectory() && !entry.name.endsWith('.tmp'))
+      .filter((entry) => entry.isDirectory() && !isCdb64TempDirName(entry.name))
       .map((entry) => path.join(indexDir, entry.name))
       .sort();
   }

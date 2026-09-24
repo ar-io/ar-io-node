@@ -258,16 +258,20 @@ describe('Publisher', () => {
     assert.notEqual(after.fingerprint, cacheKey.fingerprint);
   });
 
-  it('ignores a band directory still being written', async () => {
-    await makeBand('band-ready');
-    const partial = await makeBand('band-partial');
-    await fs.rename(partial, `${partial}.tmp`);
+  // `.tmp.<pid>` is what the partitioned writers create; bare `.tmp` is the
+  // older convention.
+  for (const suffix of ['.tmp', `.tmp.${process.pid}`]) {
+    it(`ignores a band directory still being written (${suffix})`, async () => {
+      await makeBand('band-ready');
+      const partial = await makeBand('band-partial');
+      await fs.rename(partial, `${partial}${suffix}`);
 
-    await makePublisher().scanOnce();
+      await makePublisher().scanOnce();
 
-    const ids = (await readPublication()).indexes[0].bands.map((b) => b.id);
-    assert.deepEqual(ids, ['band-ready']);
-  });
+      const ids = (await readPublication()).indexes[0].bands.map((b) => b.id);
+      assert.deepEqual(ids, ['band-ready']);
+    });
+  }
 
   it('drops and retires a band that a newer one supersedes', async () => {
     const oldDir = await makeBand('band-old');
