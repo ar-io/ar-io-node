@@ -147,7 +147,7 @@ What a subscriber refuses, and why:
 |---|---|
 | A document signed by a key the registry does not name for that wallet | A signature that verifies against some other key proves only that somebody signed something |
 | A document naming a different publisher than the wallet it came from | Otherwise a relayed document could be attributed to the wrong gateway |
-| A sequence lower than one already installed | A cache or mirror replaying an older document must not roll the node back to a stale band set |
+| A sequence lower than one already seen, even if that newer document failed to install | A cache or mirror replaying an older document must not roll the node back to a stale band set |
 | Bytes that do not match the digests the document names | The signature covers the digests; the digests cover the bytes |
 | A band that passes its digests but is not a readable index | Digests prove the bytes are the ones named, not that they are servable |
 | A band that would exceed `INDEX_SWARM_MAX_DISK_BYTES` | The volume the gateway serves from is not worth filling for an index |
@@ -259,9 +259,9 @@ The subscription results that need attention:
 | `result` | Meaning | Action |
 |---|---|---|
 | `signature_failed` | A document did not verify against the registered key | Security-relevant; should be zero. Check the publisher's registry record and who answers at its URL |
-| `replayed` | A document older than one already installed | Security-relevant if sustained; a cache in front of the publisher can cause one-offs |
+| `replayed` | A document older than one already seen | Security-relevant if sustained; a cache in front of the publisher can cause one-offs |
 | `verify_failed` | Downloaded bytes did not match their signed digests | Retried every poll. Sustained means a bad mirror or disk |
-| `download_failed` | A fetch failed: a stall (no bytes for `INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS`), a connection error, or a status such as `402`/`429` from the publisher's meter. The log line carries the status | Retried every poll, resuming from the partial file. Sustained `402`/`429` means the subscriber should be allowlisted or pay |
+| `download_failed` | A fetch failed: a stall (no bytes for `INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS`; pacing for `INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC` is not counted), a connection error, or a status such as `402`/`429` from the publisher's meter. The log line carries the status | Retried every poll, resuming from the partial file. Sustained `402`/`429` means the subscriber should be allowlisted or pay |
 | `skipped_disk_budget` | The band would exceed `INDEX_SWARM_MAX_DISK_BYTES` | Raise the budget or subscribe to less |
 | `unknown_kind` | A band of a kind this build does not implement | Upgrade the sidecar, or ignore |
 | `unreachable`, `error` | The publisher or the registry could not be read | Bands already installed keep serving |
