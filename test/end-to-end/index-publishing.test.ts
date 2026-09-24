@@ -143,10 +143,19 @@ describe('Index publishing', { timeout: 600_000 }, () => {
     };
   };
 
-  const subscriberInstalled = (bandId: string) =>
-    exists(
-      path.join(subData, 'installed', 'root-tx-index', bandId, 'manifest.json'),
-    );
+  /**
+   * Whether a band is live on the subscriber: some generation of it
+   * (`installed/<index>/<band>~<generation>`) still holding its manifest.
+   */
+  const subscriberInstalled = async (bandId: string): Promise<boolean> => {
+    const root = path.join(subData, 'installed', 'root-tx-index');
+    const names = await fs.readdir(root).catch(() => [] as string[]);
+    for (const name of names) {
+      if (name !== bandId && !name.startsWith(`${bandId}~`)) continue;
+      if (await exists(path.join(root, name, 'manifest.json'))) return true;
+    }
+    return false;
+  };
 
   const subscriberMetric = async (pattern: RegExp): Promise<number> => {
     const port = subSidecar.getMappedPort(9101);

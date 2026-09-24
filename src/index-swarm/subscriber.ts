@@ -96,6 +96,9 @@ export const MAX_SEQUENCE_JUMP = 1_000_000;
 /** Distinct index names labelled per publisher on the result metric. */
 export const MAX_INDEX_LABELS_PER_PUBLISHER = 16;
 
+/** How long an untracked band directory must sit untouched to count as an orphan. */
+const UNTRACKED_MIN_AGE_MS = 10 * 60_000;
+
 /**
  * Separates a band id from its generation in an installed directory name.
  * A band id can't contain it, so no directory name is ambiguous.
@@ -259,11 +262,13 @@ export interface SubscriberOptions {
    */
   userAgent?: string;
   /**
-   * How long an old copy of a band keeps serving after its replacement is
-   * installed, before it is retired. The gateway loads a new band directory
-   * about a second after it appears (its watcher waits for writes to
-   * settle), so retiring the old one at once would leave every lookup to the
-   * band missing in between. Default 5 s.
+   * The least time an old copy of a band keeps serving after its
+   * replacement is installed. The gateway loads a new band directory a
+   * second or more after it appears (its watcher waits for writes to
+   * settle, and a busy disk is slower), so retiring the old copy at once
+   * would leave lookups to the band missing in between. The old copy is
+   * retired by the first housekeeping after this, normally the next poll.
+   * Costs only disk. Default 60 s.
    */
   replaceOverlapMs?: number;
   now?: () => Date;
@@ -312,7 +317,7 @@ export class Subscriber {
       options.userAgent !== undefined
         ? { 'user-agent': options.userAgent }
         : {};
-    this.replaceOverlapMs = options.replaceOverlapMs ?? 5_000;
+    this.replaceOverlapMs = options.replaceOverlapMs ?? 60_000;
     this.subscribedPublishers = new Set(
       options.subscribe.map((subscription) => subscription.publisher),
     );
@@ -372,6 +377,8 @@ export class Subscriber {
     if (this.maintaining === undefined) {
       this.maintaining = (async () => {
         await this.discardOrphanedDownloads();
+        await this.retireDue();
+        await this.retireUntracked();
         await this.sweep();
         await this.reportInstalled();
       })().finally(() => {
@@ -788,6 +795,8 @@ export class Subscriber {
       if (offered.has(bandId)) continue;
       if (band.publisher !== publisher) continue;
       if (band.retiredAt !== undefined) continue;
+      // A replaced copy on its way out is retired by housekeeping, not here.
+      if (band.retireAfter !== undefined) continue;
 
       // Retire against the map as it is now, not as it was before the loop:
       // retire returns a copy of what it is given, so passing the stale map
@@ -948,15 +957,29 @@ export class Subscriber {
     // Each generation of a band installs into its own directory, so the new
     // copy is loaded before the old one is retired: replacing in place left
     // a window of about a second where every lookup to the band missed.
-    const targetDir = path.join(
+    const generationDir = path.join(
       this.installedDir,
       index.name,
       `${band.id}${GENERATION_SEPARATOR}${bandGeneration(band)}`,
     );
+    // A directory some retired or retiring record still points at will be
+    // deleted by the sweep; installing into it (a rollback to a generation
+    // retired moments ago) would have the live band deleted with it.
+    const claimed = this.claimedDirs(
+      (await this.state.load()).installed[index.name],
+    );
+    const targetDir = claimed.has(path.resolve(generationDir))
+      ? `${generationDir}.${this.now().getTime()}`
+      : generationDir;
 
     // A copy already on disk (state lost, or a crash between install and
     // the state write) is adopted rather than fetched again.
-    const adopted = await this.adoptInstalledCopy(index.name, band, targetDir);
+    const adopted = await this.adoptInstalledCopy(
+      index.name,
+      band,
+      targetDir,
+      claimed,
+    );
     if (adopted !== undefined) {
       await this.recordInstall(publisher, index.name, band, adopted, live);
       this.log.info('Adopted a band already on disk', {
@@ -977,6 +1000,7 @@ export class Subscriber {
       band.id,
     );
     await fs.mkdir(incoming, { recursive: true });
+    await this.discardStaleFiles(incoming, band);
 
     // Every file is attempted and the whole band is waited on, so a file that
     // fails costs only itself: what completed stays on disk and is skipped
@@ -1101,11 +1125,11 @@ export class Subscriber {
       current,
     });
     next[band.id] = { ...next[band.id], publisher };
+    this.addPendingRetire(next, band.id, live, targetDir);
 
     await this.state.update((draft) => {
       applyBandChanges(draft.installed, index.name, current, next);
     });
-    await this.retireReplaced(index.name, band.id, live, targetDir, kind);
 
     this.count(publisher, index.name, 'installed');
     this.log.info('Installed a band', {
@@ -1126,12 +1150,15 @@ export class Subscriber {
     indexName: string,
     band: BandDescriptor,
     targetDir: string,
+    claimed: ReadonlySet<string>,
   ): Promise<string | undefined> {
     const candidates = [
       targetDir,
       path.join(this.installedDir, indexName, band.id),
     ];
     for (const dir of candidates) {
+      // Never adopt a directory already on its way out.
+      if (claimed.has(path.resolve(dir))) continue;
       let complete = true;
       for (const file of band.files) {
         const size = await completedFile(
@@ -1158,58 +1185,162 @@ export class Subscriber {
     replaced: InstalledBand | undefined,
   ): Promise<void> {
     await this.state.update((draft) => {
-      draft.installed[indexName] = {
-        ...(draft.installed[indexName] ?? {}),
-        [band.id]: {
-          dir,
-          files: band.files,
-          installedAt: this.now().toISOString(),
-          publisher,
-        },
+      const map = (draft.installed[indexName] ??= {});
+      map[band.id] = {
+        dir,
+        files: band.files,
+        installedAt: this.now().toISOString(),
+        publisher,
       };
+      this.addPendingRetire(map, band.id, replaced, dir);
     });
-    const kind = this.kinds.values().next().value;
-    if (kind !== undefined) {
-      await this.retireReplaced(indexName, band.id, replaced, dir, kind);
-    }
   }
 
   /**
-   * Retire the copy a new install replaced, once the gateway has had time
-   * to load the new one. Recorded under its own key so the sweep removes
-   * its directory after the grace period, like any other retired band.
+   * Record the copy a new install replaced as due for retirement, in the
+   * same map (and so the same state write) as the install itself.
    */
-  private async retireReplaced(
-    indexName: string,
+  private addPendingRetire(
+    map: Record<string, InstalledBand>,
     bandId: string,
     replaced: InstalledBand | undefined,
     newDir: string,
-    kind: ArtifactKind,
-  ): Promise<void> {
+  ): void {
     if (
       replaced === undefined ||
       path.resolve(replaced.dir) === path.resolve(newDir)
     ) {
       return;
     }
-    if (this.replaceOverlapMs > 0) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, this.replaceOverlapMs),
-      );
-    }
-    const retiredKey = `${bandId}${GENERATION_SEPARATOR}retired-${this.now().getTime()}`;
-    const current = {
-      ...((await this.state.load()).installed[indexName] ?? {}),
+    const now = this.now().getTime();
+    map[`${bandId}${GENERATION_SEPARATOR}replaced-${now}`] = {
+      ...replaced,
+      retireAfter: new Date(now + this.replaceOverlapMs).toISOString(),
     };
-    const next = await kind.retire({
-      bandId: retiredKey,
-      dir: replaced.dir,
-      current,
-    });
-    next[retiredKey] = { ...next[retiredKey], files: replaced.files };
-    await this.state.update((draft) => {
-      applyBandChanges(draft.installed, indexName, current, next);
-    });
+  }
+
+  /** Directories that a retired or retiring record points at. */
+  private claimedDirs(
+    map: Record<string, InstalledBand> | undefined,
+  ): Set<string> {
+    const claimed = new Set<string>();
+    for (const band of Object.values(map ?? {})) {
+      if (band.retiredAt !== undefined || band.retireAfter !== undefined) {
+        claimed.add(path.resolve(band.dir));
+      }
+    }
+    return claimed;
+  }
+
+  /** Retire replaced copies whose overlap has passed. */
+  private async retireDue(): Promise<void> {
+    const kind = this.kinds.values().next().value;
+    if (kind === undefined) return;
+    const now = this.now().getTime();
+    const state = await this.state.load();
+    for (const [indexName, live] of Object.entries(state.installed)) {
+      for (const [key, band] of Object.entries({ ...live })) {
+        if (band.retireAfter === undefined || band.retiredAt !== undefined) {
+          continue;
+        }
+        const due = Date.parse(band.retireAfter);
+        if (!Number.isNaN(due) && due > now) continue;
+        const current = {
+          ...((await this.state.load()).installed[indexName] ?? {}),
+        };
+        const next = await kind.retire({ bandId: key, dir: band.dir, current });
+        const { retireAfter: _done, ...retired } = next[key];
+        next[key] = { ...retired, files: band.files };
+        await this.state.update((draft) => {
+          applyBandChanges(draft.installed, indexName, current, next);
+        });
+      }
+    }
+  }
+
+  /**
+   * Retire band directories under `installed/` that no record points at:
+   * left by a crash, or by lost state. The gateway would otherwise serve
+   * them forever, outside the budget and never swept. Only directories
+   * untouched for a while, so an install renaming one in right now is
+   * never mistaken for an orphan.
+   */
+  private async retireUntracked(): Promise<void> {
+    const kind = this.kinds.values().next().value;
+    if (kind === undefined) return;
+    let indexes: string[];
+    try {
+      indexes = await fs.readdir(this.installedDir);
+    } catch {
+      return;
+    }
+    const now = this.now().getTime();
+    for (const indexName of indexes) {
+      const indexDir = path.join(this.installedDir, indexName);
+      let names: string[];
+      try {
+        names = await fs.readdir(indexDir);
+      } catch {
+        continue;
+      }
+      const tracked = new Set(
+        Object.values((await this.state.load()).installed[indexName] ?? {}).map(
+          (band) => path.resolve(band.dir),
+        ),
+      );
+      for (const name of names) {
+        const dir = path.join(indexDir, name);
+        if (tracked.has(path.resolve(dir))) continue;
+        let stat;
+        try {
+          stat = await fs.stat(dir);
+        } catch {
+          continue;
+        }
+        if (!stat.isDirectory()) continue;
+        // Real time, not this.now(): file times are real.
+        if (Date.now() - stat.mtimeMs < UNTRACKED_MIN_AGE_MS) continue;
+        const key = `${name}${GENERATION_SEPARATOR}untracked-${now}`;
+        const current = {
+          ...((await this.state.load()).installed[indexName] ?? {}),
+        };
+        const next = await kind.retire({ bandId: key, dir, current });
+        await this.state.update((draft) => {
+          applyBandChanges(draft.installed, indexName, current, next);
+        });
+        this.log.warn('Retired a band directory no record pointed at', {
+          index: indexName,
+          dir,
+        });
+      }
+    }
+  }
+
+  /**
+   * Remove anything in a band's download directory that isn't one of its
+   * current files or their current partials: older generations' partial
+   * and finished files would otherwise pile up (counted against the budget)
+   * and be renamed into the installed band with it.
+   */
+  private async discardStaleFiles(
+    dir: string,
+    band: BandDescriptor,
+  ): Promise<void> {
+    const keep = new Set<string>();
+    for (const file of band.files) {
+      keep.add(file.name);
+      keep.add(`${file.name}.${file.sha256.slice(0, 16)}.tmp`);
+    }
+    let names: string[];
+    try {
+      names = await fs.readdir(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (keep.has(name)) continue;
+      await fs.rm(path.join(dir, name), { recursive: true, force: true });
+    }
   }
 
   /**
@@ -1293,7 +1424,8 @@ export class Subscriber {
     const state = await this.state.load();
     for (const [indexName, bands] of Object.entries(state.installed)) {
       const live = Object.values(bands).filter(
-        (band) => band.retiredAt === undefined,
+        (band) =>
+          band.retiredAt === undefined && band.retireAfter === undefined,
       ).length;
       installedBands.set({ index: indexName }, live);
     }

@@ -394,8 +394,12 @@ data/indexes/
 
 Each copy of a band installs into its own directory, named by the band id
 and a short digest of its files. A replacement is loaded by the gateway
-before the copy it replaces is retired, so lookups to a band never miss while
-it is rebuilt. A copy already on disk whose files verify (after lost state,
+before the copy it replaces is retired: the old copy is recorded, in the same
+state write as the install, as due for retirement no sooner than a minute
+later, and the next housekeeping retires it. So lookups to a band never miss
+while it is rebuilt, and a crash in between can't orphan the old copy. A
+directory under `installed/` that no record points at (after lost state, say)
+is retired once it has sat untouched for ten minutes. A copy already on disk whose files verify (after lost state,
 for example) is adopted rather than downloaded again. A band id belongs to
 the publisher whose copy is live: another publisher offering different bytes
 under the same id is skipped and counted as `band_conflict`, rather than the

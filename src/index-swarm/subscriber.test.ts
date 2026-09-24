@@ -318,6 +318,7 @@ describe('Subscriber', () => {
       alsoSubscribedTo: string[];
       subscribe: SubscribeConfig[];
       kinds: Map<string, ArtifactKind>;
+      supersedeGraceMs: number;
     }> = {},
   ) =>
     new Subscriber({
@@ -338,7 +339,7 @@ describe('Subscriber', () => {
       installedDir: subInstalled,
       fetchTimeoutMs: 5000,
       downloadConcurrency: 4,
-      supersedeGraceMs: 0,
+      supersedeGraceMs: opts.supersedeGraceMs ?? 0,
       replaceOverlapMs: opts.replaceOverlapMs ?? 0,
       ...(opts.maxDiskBytes !== undefined
         ? { maxDiskBytes: opts.maxDiskBytes }
@@ -963,7 +964,7 @@ describe('Subscriber', () => {
     // exactly as in production.
     await makeBand('band-tip', 3);
     await publish();
-    const subscriber = makeSubscriber({ replaceOverlapMs: 2500 });
+    const subscriber = makeSubscriber({ replaceOverlapMs: 60_000 });
     await subscriber.pollOnce();
     const index = new Cdb64RootTxIndex({
       log,
@@ -985,18 +986,29 @@ describe('Subscriber', () => {
 
       let misses = 0;
       let lookups = 0;
-      let polling = true;
-      const poll = subscriber.pollOnce().finally(() => {
-        polling = false;
-      });
-      while (polling) {
-        lookups++;
-        if ((await index.getRootTx(key)) === undefined) misses++;
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-      await poll;
+      let running = true;
+      const looking = (async () => {
+        while (running) {
+          lookups++;
+          if ((await index.getRootTx(key)) === undefined) misses++;
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      })();
+      const settle = (ms: number) =>
+        new Promise((resolve) => setTimeout(resolve, ms));
 
-      assert(lookups > 100, `looked up ${lookups} times during the replace`);
+      // The replacement installs; the old copy is recorded as due later.
+      await subscriber.pollOnce();
+      // The gateway loads the new directory (its watcher waits ~1 s).
+      await settle(2500);
+      // Past the overlap, the next housekeeping retires the old copy.
+      clock = new Date(clock.getTime() + 61_000);
+      await subscriber.pollOnce();
+      await settle(1500);
+      running = false;
+      await looking;
+
+      assert(lookups > 100, `looked up ${lookups} times across the replace`);
       assert.equal(misses, 0, `${misses} of ${lookups} lookups missed`);
       const records = JSON.parse(
         await fs.readFile(
@@ -1005,6 +1017,10 @@ describe('Subscriber', () => {
         ),
       ).totalRecords;
       assert.equal(records, 5, 'the rebuilt band is the one live now');
+      // Retired and (grace 0 here) swept: only the new copy is left.
+      assert.deepEqual(await dirsOnDisk('band-tip'), [
+        path.basename(await bandDir('band-tip')),
+      ]);
     } finally {
       await index.close();
     }
@@ -1315,6 +1331,98 @@ describe('Subscriber', () => {
 
     const bands = (await subState.load()).installed['root-tx-index'];
     assert.deepEqual(Object.keys(bands), ['fresh'], 'swept old, kept fresh');
+  });
+
+  it('never carries stale download files into an installed band', async () => {
+    await makeBand('band-a');
+    await publish();
+    // Left by older generations of this band: a partial under an old digest,
+    // and a finished file the current band doesn't have.
+    const incoming = path.join(subIncoming, WALLET, 'root-tx-index', 'band-a');
+    await fs.mkdir(incoming, { recursive: true });
+    await fs.writeFile(
+      path.join(incoming, `00.cdb.${'e'.repeat(16)}.tmp`),
+      'old',
+    );
+    await fs.writeFile(path.join(incoming, 'gone.cdb'), 'old');
+
+    await makeSubscriber().pollOnce();
+
+    const installed = await fs.readdir(await bandDir('band-a'));
+    assert.equal(installed.includes('gone.cdb'), false);
+    assert.equal(
+      installed.some((n) => n.endsWith('.tmp')),
+      false,
+    );
+  });
+
+  it('retires a band directory no record points at, once it has sat a while', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    // Left by a crash or lost state: live to the gateway, unknown to state.
+    const root = path.join(subInstalled, 'root-tx-index');
+    const orphan = path.join(root, 'band-x~deadbeef0000');
+    const fresh = path.join(root, 'band-y~deadbeef0000');
+    for (const dir of [orphan, fresh]) {
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, 'manifest.json'), '{}');
+    }
+    const old = new Date(Date.now() - 20 * 60_000);
+    await fs.utimes(orphan, old, old);
+
+    await makeSubscriber().pollOnce();
+
+    assert.equal(existsSync(orphan), false, 'the orphan was retired and swept');
+    assert.equal(existsSync(fresh), true, 'a new directory is left alone');
+    assert.deepEqual(await installedIds(), ['band-a']);
+  });
+
+  it('keeps the live band through a rollback to a generation still being swept', async () => {
+    const key = toB64Url(txId(0));
+    await makeBand('band-tip', 3);
+    await publish();
+    // A long grace, so the retired copy's record outlives the rollback.
+    const slow = makeSubscriber({ supersedeGraceMs: 3_600_000 });
+    await slow.pollOnce();
+    const firstDir = await bandDir('band-tip');
+
+    // Rebuilt (generation B), then rolled back to the first build's exact
+    // bytes (generation A again).
+    const published = path.join(pubDir, 'root-tx-index', 'band-tip');
+    const saved = path.join(tempDir, 'band-tip-first-build');
+    await fs.cp(published, saved, { recursive: true });
+    await fs.rm(published, { recursive: true, force: true });
+    await makeBand('band-tip', 5);
+    clock = new Date(clock.getTime() + 60_000);
+    await publish();
+    await slow.pollOnce();
+    await fs.rm(published, { recursive: true, force: true });
+    await fs.cp(saved, published, { recursive: true });
+    clock = new Date(clock.getTime() + 60_000);
+    await publish();
+    await slow.pollOnce();
+
+    const liveDir = await bandDir('band-tip');
+    assert.notEqual(
+      path.resolve(liveDir),
+      path.resolve(firstDir),
+      'a directory still claimed by a retired record is not reused',
+    );
+
+    // Now the sweep runs out its grace: the live band must survive it.
+    await makeSubscriber().pollOnce();
+    assert.equal(existsSync(path.join(liveDir, 'manifest.json')), true);
+    const index = new Cdb64RootTxIndex({
+      log,
+      sources: [path.join(subInstalled, 'root-tx-index')],
+      watch: false,
+    });
+    try {
+      assert.notEqual(await index.getRootTx(key), undefined, 'still served');
+    } finally {
+      await index.close();
+    }
   });
 
   it('keeps the files that completed, and fetches only the rest next poll', async () => {

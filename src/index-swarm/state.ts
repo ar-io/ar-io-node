@@ -47,6 +47,13 @@ export interface InstalledBand {
    * pending deletion survives a restart instead of orphaning the directory.
    */
   retiredAt?: string;
+  /**
+   * For a copy that a newer install of the same band replaced: when it may
+   * be retired. Recorded in the same write as that install, so the old copy
+   * is never forgotten, even if the process dies before retiring it; until
+   * then it keeps serving while the gateway loads its replacement.
+   */
+  retireAfter?: string;
 }
 
 export interface SubscriptionState {
