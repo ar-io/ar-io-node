@@ -25,6 +25,7 @@ import { PartitionedCdb64Writer } from '../lib/partitioned-cdb64-writer.js';
 import { encodeCdb64Value } from '../lib/cdb64-encoding.js';
 import { parseManifest, serializeManifest } from '../lib/cdb64-manifest.js';
 import {
+  canonicalizeIndexPublication,
   IndexPublication,
   manifestSha256,
   parseIndexPublication,
@@ -236,6 +237,57 @@ describe('Publisher', () => {
     const doc = await readPublication();
     assert.equal(doc.sequence, 2);
     assert.equal(doc.issuedAt, clock.toISOString());
+  });
+
+  it('re-signs at once a document signed in the pre-prefix format', async () => {
+    await makeBand('band-a');
+    const publisher = makePublisher();
+    await publisher.scanOnce();
+
+    // What a publisher from before domain separation left on disk: the same
+    // document, signed over the bare canonical JSON. An upgraded subscriber
+    // refuses it, so it must not stand until the next refresh.
+    const old = await readPublication();
+    const legacySig = crypto.sign(
+      null,
+      Buffer.from(canonicalizeIndexPublication(old)),
+      signer.privateKey,
+    );
+    await fs.writeFile(
+      publicationFile,
+      JSON.stringify({
+        ...old,
+        signature: { ...old.signature, sig: legacySig.toString('base64') },
+      }),
+    );
+
+    clock = new Date(clock.getTime() + 1_000);
+    assert.equal(await publisher.scanOnce(), true);
+    const doc = await readPublication();
+    assert.equal(doc.sequence, old.sequence + 1);
+    assert.equal(
+      verifyIndexPublication(doc, crypto.createPublicKey(signer.privateKey)).ok,
+      true,
+    );
+
+    // Once re-signed, the document stands again.
+    clock = new Date(clock.getTime() + 1_000);
+    assert.equal(await publisher.scanOnce(), false);
+  });
+
+  it('re-signs at once after the observer key changes', async () => {
+    await makeBand('band-a');
+    await makePublisher().scanOnce();
+    const before = await readPublication();
+
+    const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+    signer = { ...signer, privateKey, keyId: getSolanaAddress(publicKey) };
+    clock = new Date(clock.getTime() + 1_000);
+    assert.equal(await makePublisher().scanOnce(), true);
+
+    const doc = await readPublication();
+    assert.equal(doc.sequence, before.sequence + 1);
+    assert.equal(doc.signature?.keyId, signer.keyId);
   });
 
   it('reuses the cached description while a band is untouched', async () => {

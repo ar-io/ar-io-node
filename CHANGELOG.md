@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     RPC.
   - Built to take input from other gateways safely:
     - the signature is domain-separated (`ar-io-index-publication/v1\n` before the canonical JSON);
+    - a publisher re-signs at once when its served document no longer verifies under its key (signed in the older format, or by a rotated-out observer key), instead of at the next refresh;
     - documents are bounded in size and shape;
     - band files are fetched only from the publication's origin (or `INDEX_SWARM_ALLOWED_FILE_ORIGINS`), and redirects are never followed;
     - downloads stop at their signed size while streaming, and refuse compressed bodies;
