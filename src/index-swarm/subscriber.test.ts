@@ -22,6 +22,10 @@ import { GatewayRegistry, PublisherRecord } from './gateway-registry.js';
 import { PartitionedCdb64Writer } from '../lib/partitioned-cdb64-writer.js';
 import { encodeCdb64Value } from '../lib/cdb64-encoding.js';
 import { getSolanaAddress } from '../lib/httpsig.js';
+import {
+  serializeIndexPublication,
+  signIndexPublication,
+} from '../lib/index-publication.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'index-swarm subscriber' });
@@ -249,6 +253,14 @@ describe('Subscriber', () => {
       now: () => clock,
     });
 
+  /** How often a result was counted for this publisher, over all labels. */
+  const counted = async (result: string): Promise<number> =>
+    (await subscriptionTotal.get()).values
+      .filter(
+        (v) => v.labels.publisher === WALLET && v.labels.result === result,
+      )
+      .reduce((sum, v) => sum + v.value, 0);
+
   const installedIds = async (): Promise<string[]> => {
     const state = await subState.load();
     return Object.entries(state.installed['root-tx-index'] ?? {})
@@ -292,6 +304,33 @@ describe('Subscriber', () => {
     assert.equal(second, first, 'the second call joins the first');
     await Promise.all([first, second]);
     assert.deepEqual(await installedIds(), ['band-a']);
+  });
+
+  it('accepts a document from a newer publisher that adds fields', async () => {
+    await makeBand('band-a');
+    await publish();
+    // Re-sign what the publisher wrote with members this version does not
+    // know, at every level, as a later version might add a per-file root.
+    const file = path.join(pubDir, 'publication.json');
+    const future: any = JSON.parse(await fs.readFile(file, 'utf8'));
+    delete future.signature;
+    future.addedLater = true;
+    future.indexes[0].bands[0].addedLater = { at: 'band' };
+    for (const entry of future.indexes[0].bands[0].files) {
+      entry.merkle = { 'arweave-data-root': 'x'.repeat(43) };
+    }
+    await fs.writeFile(
+      file,
+      serializeIndexPublication(
+        signIndexPublication(future, signer.privateKey, signer.keyId),
+      ),
+    );
+    const failuresBefore = await counted('signature_failed');
+
+    await makeSubscriber().pollOnce();
+
+    assert.deepEqual(await installedIds(), ['band-a']);
+    assert.equal(await counted('signature_failed'), failuresBefore);
   });
 
   it('does nothing on a second poll when the publisher has not moved', async () => {

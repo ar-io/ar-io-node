@@ -31,7 +31,7 @@ import {
   IndexEntry,
   IndexPublication,
   INDEX_PUBLICATION_MAX_BYTES,
-  parseIndexPublication,
+  parseIndexPublicationDocument,
   verifyIndexPublication,
 } from '../lib/index-publication.js';
 import { publicKeyFromSolanaAddress } from '../lib/httpsig.js';
@@ -289,8 +289,9 @@ export class Subscriber {
     }
 
     let document: IndexPublication;
+    let signed: IndexPublication;
     try {
-      document = parseIndexPublication(raw);
+      ({ publication: document, signed } = parseIndexPublicationDocument(raw));
     } catch (error: any) {
       this.log.warn('Publication is malformed', {
         publisher,
@@ -300,7 +301,8 @@ export class Subscriber {
       return;
     }
 
-    if (!this.verifyDocument(document, record)) {
+    // Verified as parsed, unknown fields included; used as validated.
+    if (!this.verifyDocument(signed, record)) {
       this.count(publisher, '', 'signature_failed');
       return;
     }

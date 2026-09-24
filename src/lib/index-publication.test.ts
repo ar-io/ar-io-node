@@ -28,6 +28,7 @@ import {
   signIndexPublication,
   validateIndexPublication,
   verifyIndexPublication,
+  parseIndexPublicationDocument,
 } from './index-publication.js';
 
 /**
@@ -268,6 +269,30 @@ describe('index publication', () => {
       const stripped: any = JSON.parse(JSON.stringify(signed));
       delete stripped.unknownFutureField;
       assert.equal(verifyIndexPublication(stripped, publicKey).ok, false);
+    });
+
+    it('verifies a parsed document that carries fields this version does not know', () => {
+      // The path a subscriber takes: bytes off the wire, parsed, verified.
+      // Unknown members at every level, as a later publisher might add them
+      // (a per-file Merkle root, say).
+      const privateKey = loadSolanaKeypair(keypairPath);
+      const future: any = JSON.parse(JSON.stringify(samplePublication()));
+      future.addedLater = { at: 'top' };
+      future.indexes[0].addedLater = 'index';
+      future.indexes[0].bands[0].addedLater = ['band'];
+      future.indexes[0].bands[0].files[0].merkle = {
+        'arweave-data-root': 'x'.repeat(43),
+      };
+      const wire = serializeIndexPublication(
+        signIndexPublication(future, privateKey, getSolanaAddress(publicKey)),
+      );
+
+      const { publication, signed } = parseIndexPublicationDocument(wire);
+      assert.equal(verifyIndexPublication(signed, publicKey).ok, true);
+      // The validated view keeps only known fields, which is exactly why it
+      // must not be what gets verified.
+      assert.equal((publication as any).addedLater, undefined);
+      assert.equal(verifyIndexPublication(publication, publicKey).ok, false);
     });
   });
 

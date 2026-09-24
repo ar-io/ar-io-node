@@ -494,6 +494,24 @@ export function validateIndexPublication(input: unknown): IndexPublication {
  * document from a remote publisher never reaches `JSON.parse`.
  */
 export function parseIndexPublication(raw: string | Buffer): IndexPublication {
+  return parseIndexPublicationDocument(raw).publication;
+}
+
+/**
+ * Parse and validate a publication, keeping the document exactly as parsed
+ * alongside the validated view.
+ *
+ * Verify the signature against `signed`, never `publication`. Validation
+ * builds `publication` from the fields this version knows, which is what the
+ * rest of a reader should use, but the signature covers every member the
+ * publisher wrote, including ones added by a later version. Verifying the
+ * rebuilt view would drop those and fail, so a version 1 reader could never
+ * accept a document from a newer publisher.
+ */
+export function parseIndexPublicationDocument(raw: string | Buffer): {
+  publication: IndexPublication;
+  signed: IndexPublication;
+} {
   const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw, 'utf8');
   if (bytes.byteLength > INDEX_PUBLICATION_MAX_BYTES) {
     fail(
@@ -509,7 +527,10 @@ export function parseIndexPublication(raw: string | Buffer): IndexPublication {
     fail('', `invalid JSON: ${error?.message ?? 'parse failed'}`);
   }
 
-  return validateIndexPublication(parsed);
+  const publication = validateIndexPublication(parsed);
+  // Validation passed, so the parsed document has at least the known shape;
+  // what it has beyond that is exactly what the signature must still cover.
+  return { publication, signed: parsed as IndexPublication };
 }
 
 /**
