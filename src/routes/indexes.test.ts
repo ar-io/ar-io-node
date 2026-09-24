@@ -256,6 +256,62 @@ describe('/ar-io/indexes routes', () => {
         await fs.writeFile(filePath, original);
       }
     });
+
+    it('serves the listed digest’s bytes after the named file is rebuilt at the same size', async () => {
+      // The response is signed with the listed digest, so the bytes must be
+      // the ones that digest was taken over, not whatever the name now holds.
+      const file = partitionFile();
+      const named = path.join(
+        publishedDir,
+        'root-tx-index',
+        'band-a',
+        file.name,
+      );
+      const original = await fs.readFile(named);
+      const rebuilt = Buffer.from(original);
+      rebuilt[rebuilt.length - 1] ^= 0xff;
+      await fs.writeFile(`${named}.rebuild`, rebuilt);
+      await fs.rename(`${named}.rebuild`, named); // a new inode, as a rebuild writes
+      try {
+        const res = await request(app)
+          .get(`/ar-io/indexes/root-tx-index/band-a/${file.name}`)
+          .buffer(true)
+          .parse((r, cb) => {
+            const chunks: Buffer[] = [];
+            r.on('data', (c: Buffer) => chunks.push(c));
+            r.on('end', () => cb(null, Buffer.concat(chunks)));
+          })
+          .expect(200);
+        assert.equal(
+          crypto
+            .createHash('sha256')
+            .update(res.body as Buffer)
+            .digest('hex'),
+          file.sha256,
+          'the bytes match the digest the response is signed with',
+        );
+        assert.equal(res.headers['x-ar-io-index-file'], file.sha256);
+      } finally {
+        await fs.writeFile(named, original);
+      }
+    });
+
+    it('refuses a name whose digest the publisher has no link for', async () => {
+      const file = partitionFile();
+      const link = path.join(publishedDir, 'blobs', file.sha256);
+      const saved = await fs.readFile(link);
+      await fs.rm(link);
+      try {
+        const res = await request(app)
+          .get(`/ar-io/indexes/root-tx-index/band-a/${file.name}`)
+          .expect(503);
+        assert.equal(res.headers['retry-after'], '60');
+        assert.equal(res.headers['cache-control'], 'no-store');
+        assert.equal(res.headers['x-ar-io-index-file'], undefined);
+      } finally {
+        await fs.writeFile(link, saved);
+      }
+    });
   });
 
   describe('bytes by content address', () => {

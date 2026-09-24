@@ -232,15 +232,15 @@ whole file, even on a partial response; full responses also carry
 `Content-Digest`. A response that serves a file also carries
 `X-AR-IO-Index-File: <sha256>`, and is signed with HTTPSIG like the document
 (below), the signature covering `Content-Digest` or, on a range,
-`Repr-Digest`. A `503` with `Retry-After` means
-the publisher is part way through replacing a band: the file on disk no longer
-has the size the document names, or, on the blob route, the digest has no
-link yet. The blob route never falls back to reading the file by name, since
+`Repr-Digest`. Both routes read the same bytes: the publisher's hard link
+for the listed digest, which pins the bytes that were hashed. On the named
+route the name is only a lookup key for that digest, so a band rebuilt under
+the same name before the next document is not served in its place. A `503`
+with `Retry-After` means the publisher is part way through replacing a band:
+the digest has no link yet, or the linked file no longer has the size the
+document names. Neither route falls back to reading the file by name, since
 only the link is known to hold that digest's bytes. Fetch the document again
-after the delay. The named route checks size only, so a rebuild at the same
-size is served under its name until the next document, and fails your digest
-check: another reason to fetch by digest. A listed file missing from disk is
-a `404`.
+after the delay.
 
 ```console
 # The band's own manifest, by name

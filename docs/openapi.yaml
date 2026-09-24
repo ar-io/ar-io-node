@@ -1124,8 +1124,11 @@ paths:
       description: |
         Serves one file of a published band. Rate limited and priced as data
         egress. Supports a single byte range, which resuming downloaders
-        use. 503 with Retry-After while the file on disk briefly
-        disagrees with the publication during a band update. Sent with
+        use. The name is only a lookup key: the bytes are read from the
+        publisher's hard link for the listed digest, so a band rebuilt in
+        place is never served under the old digest. 503 with Retry-After
+        while that link is missing or disagrees with the publication during
+        a band update. Sent with
         `Cache-Control: public, no-cache`, because a name is reused when a
         band is rebuilt; fetch by digest from the blob route for anything a
         cache should keep. Error responses carry `Cache-Control: no-store`.
@@ -1157,13 +1160,13 @@ paths:
         '402':
           description: Payment required (x402), when rate limited and payments are enabled.
         '404':
-          description: Not listed in the publication, or listed but missing on disk.
+          description: Not listed in the publication.
         '416':
           description: Range not satisfiable.
         '429':
           description: Rate limited.
         '503':
-          description: The file is being updated; retry.
+          description: The file is being updated or its digest has no link yet; retry.
           headers:
             Retry-After:
               description: Seconds to wait before retrying.

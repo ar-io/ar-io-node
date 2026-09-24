@@ -29,16 +29,17 @@ import {
 } from '../lib/index-publication.js';
 
 export interface PublishedFile {
-  /** Absolute path, built from the publication, never from a request. */
+  /**
+   * Absolute path of the publisher's hard link `blobs/<sha256>`, built from
+   * the publication, never from a request. Both routes read through it, the
+   * named one included: the link pins the bytes that were hashed, whereas
+   * the named file can be replaced by a same-size rebuild before the next
+   * scan updates the document. A missing link is answered 503, never by
+   * reading the named file instead.
+   */
   filePath: string;
   size: number;
   sha256: string;
-  /**
-   * Set on a blob entry, whose `filePath` is the publisher's hard link. A
-   * missing link is answered 503, not by reading the named file instead:
-   * nothing guarantees the named file still holds the digest's bytes.
-   */
-  isBlob?: boolean;
 }
 
 /** The publication, indexed for lookup. */
@@ -121,30 +122,21 @@ export class PublishedIndexes {
     for (const index of publication.indexes) {
       for (const band of index.bands) {
         for (const file of band.files) {
+          // Serve a digest from the publisher's hard link under blobs/,
+          // which pins exactly those bytes, whichever route asks. The named
+          // file can be replaced by a rebuild under the same band id before
+          // the next scan updates the document; bytes read through the name
+          // would then disagree with the digest this document lists and the
+          // routes sign. The name is only a lookup key for the digest, so
+          // there is no fallback to it when the link is missing.
           const entry: PublishedFile = {
-            filePath: path.join(
-              this.publishedDir,
-              index.name,
-              band.id,
-              file.name,
-            ),
+            filePath: path.join(this.publishedDir, 'blobs', file.sha256),
             size: file.size,
             sha256: file.sha256,
           };
           files.set(`${index.name}/${band.id}/${file.name}`, entry);
           if (!blobs.has(file.sha256)) {
-            // Serve a digest from the publisher's hard link under blobs/,
-            // which pins exactly those bytes. The named file can be replaced
-            // by a rebuild under the same band id before the next scan
-            // updates the document, and bytes read through the name would
-            // then disagree with the digest in the URL, in a response marked
-            // immutable that edge caches keep for a year. For the same reason
-            // there is no fallback to the name when the link is missing.
-            blobs.set(file.sha256, {
-              ...entry,
-              filePath: path.join(this.publishedDir, 'blobs', file.sha256),
-              isBlob: true,
-            });
+            blobs.set(file.sha256, entry);
           }
         }
       }

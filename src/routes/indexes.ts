@@ -186,6 +186,8 @@ export function createIndexesRouter({
         return;
       }
       const current = await currentView();
+      // The name only finds the listed digest; the entry reads the blob
+      // link, as the blob route does, so the signed digest matches the body.
       const entry = current?.files.get(`${name}/${band}/${file}`);
       if (entry === undefined) {
         notFound(res, 'file');
@@ -226,18 +228,15 @@ export function createIndexesRouter({
     try {
       stat = await fs.stat(filePath);
     } catch {
-      if (entry.isBlob === true) {
-        // The publication names this digest but the publisher has not
-        // linked it (yet). Only the link is known to hold these bytes.
-        log.warn('Published digest has no blob link', {
-          sha256: entry.sha256,
-        });
-        res.setHeader('Retry-After', '60');
-        res.status(503).type('text').send('Index file is not available yet');
-        finish(res, route, 503);
-        return;
-      }
-      notFound(res, route);
+      // The publication names this digest but the publisher has not linked
+      // it (yet). Only the link is known to hold these bytes, so the named
+      // file is not read in its place, whichever route was asked.
+      log.warn('Published digest has no blob link', {
+        sha256: entry.sha256,
+      });
+      res.setHeader('Retry-After', '60');
+      res.status(503).type('text').send('Index file is not available yet');
+      finish(res, route, 503);
       return;
     }
 
