@@ -69,7 +69,10 @@ async function main(): Promise<void> {
     });
     if (signer === undefined) {
       throw new Error(
-        'index-swarm publisher requires a registry-bound observer key: set OBSERVER_KEYPAIR_PATH or OBSERVER_PRIVATE_KEY',
+        // Under compose a keypair file arrives through
+        // INDEX_SWARM_OBSERVER_KEYPAIR_FILE, which sets OBSERVER_KEYPAIR_PATH
+        // here; run directly, OBSERVER_KEYPAIR_PATH names the file itself.
+        'index-swarm publisher requires a registry-bound observer key: set OBSERVER_PRIVATE_KEY, or INDEX_SWARM_OBSERVER_KEYPAIR_FILE (compose) / OBSERVER_KEYPAIR_PATH (direct) to the keypair file',
       );
     }
     publisher = new Publisher({

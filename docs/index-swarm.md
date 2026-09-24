@@ -63,7 +63,9 @@ INDEX_SWARM_SUBSCRIBE='[{"publisher":"<gateway wallet>","name":"root-tx-index"}]
 ```
 
 The signing identity is the gateway's registered observer key
-(`OBSERVER_KEYPAIR_PATH` or `OBSERVER_PRIVATE_KEY`), whose address is the
+(`OBSERVER_PRIVATE_KEY`, or the keypair file named by
+`INDEX_SWARM_OBSERVER_KEYPAIR_FILE`, which is mounted into the sidecar on its
+own, never the whole wallets directory), whose address is the
 `observerAddress` on the gateway's registry record. A subscriber verifies a
 publication against that record, so a publisher running on the auto-generated
 fallback key has nothing anyone can verify against and will refuse to publish.
@@ -330,7 +332,9 @@ subscriber installs meanwhile, because the cost of being wrong is disk.
 
 **`index-swarm publisher requires a registry-bound observer key`** — publishing
 is configured but no observer key is set, so nothing it signed could be
-verified by anyone.
+verified by anyone. Set `OBSERVER_PRIVATE_KEY`, or
+`INDEX_SWARM_OBSERVER_KEYPAIR_FILE` to the keypair file's host path; the
+gateway's `OBSERVER_KEYPAIR_PATH` alone does not reach the sidecar.
 
 **`The gateway's /ar-io/peers carries no registry fields`** — the gateway
 predates the registry fields on its peer list, so the sidecar cannot resolve

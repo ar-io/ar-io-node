@@ -816,8 +816,11 @@ services:
     # mean bringing this profile up could start or recreate core.
     volumes:
       - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
-      - ${WALLETS_PATH:-./wallets}:/app/wallets:ro
-      - ${SECRETS_PATH:-./secrets}:/app/secrets:ro
+      # Only the observer keypair, and only when it is kept in a file: the
+      # sidecar fetches documents from other gateways, so it sees no other
+      # key material (no wallets directory, no report-upload keys). With
+      # OBSERVER_PRIVATE_KEY instead, nothing is mounted.
+      - ${INDEX_SWARM_OBSERVER_KEYPAIR_FILE:-/dev/null}:/app/keys/observer.json:ro
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - INDEX_SWARM_LOG_LEVEL=${INDEX_SWARM_LOG_LEVEL:-info}
@@ -846,7 +849,10 @@ services:
       - INDEX_SWARM_SHUTDOWN_TIMEOUT_MS=${INDEX_SWARM_SHUTDOWN_TIMEOUT_MS:-}
       # The signing identity is the gateway's registered observer key, read
       # only: the sidecar signs what it publishes and never writes key material.
-      - OBSERVER_KEYPAIR_PATH=${OBSERVER_KEYPAIR_PATH:-}
+      # A keypair file comes in through the single-file mount above, so the
+      # gateway's own OBSERVER_KEYPAIR_PATH (a path inside its wallets
+      # directory) is not used here.
+      - OBSERVER_KEYPAIR_PATH=${INDEX_SWARM_OBSERVER_KEYPAIR_FILE:+/app/keys/observer.json}
       - OBSERVER_PRIVATE_KEY=${OBSERVER_PRIVATE_KEY:-}
     # The runtime image is distroless and carries no shell utilities beyond
     # sh and mkdir, so the check runs through node.

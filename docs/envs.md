@@ -85,11 +85,15 @@ This document describes the environment variables that can be used to configure 
 | INDEX_SWARM_LOG_MAX_SIZE                         | String               | 50m                                           | Docker json-file log rotation size for the sidecar container |
 | INDEX_SWARM_LOG_MAX_FILE                         | Number               | 3                                             | Docker json-file log rotation file count for the sidecar container |
 | INDEX_SWARM_DATA_PATH                            | String               | ./data/indexes                                | Host path mounted as the sidecar's data directory |
+| INDEX_SWARM_OBSERVER_KEYPAIR_FILE                | String               | -                                             | Host path of the observer keypair file (the file the gateway's `OBSERVER_KEYPAIR_PATH` names, as seen from the host), mounted alone into the sidecar. Leave unset when the key is given as `OBSERVER_PRIVATE_KEY`. The sidecar never sees the rest of the wallets directory |
 
 The index-swarm sidecar also reads settings it shares with the gateway:
-`OBSERVER_KEYPAIR_PATH` or `OBSERVER_PRIVATE_KEY` (the key it signs with, read
-only; publishing refuses to start without one) and `AR_IO_WALLET` (the identity
-it publishes under, which subscribers resolve in the registry). It reads the
+`OBSERVER_PRIVATE_KEY`, or the keypair file given by
+`INDEX_SWARM_OBSERVER_KEYPAIR_FILE` (the key it signs with, read only;
+publishing refuses to start without one), and `AR_IO_WALLET` (the identity it
+publishes under, which subscribers resolve in the registry). The gateway's own
+`OBSERVER_KEYPAIR_PATH` is not passed through: it names a path inside the
+wallets directory, which the sidecar does not mount. It reads the
 registry through the gateway's `/ar-io/peers` and makes no RPC calls, so it
 needs no `SOLANA_RPC_URL`.
 | CDB64_REMOTE_RETRIEVAL_ORDER                     | String               | "gateways,chunks"                             | Comma-separated list of data sources for fetching remote CDB64 files. Options: 'gateways' (trusted gateways), 'chunks' (L1 chunk reconstruction), 'tx-data' (Arweave node /tx/:id/data) |
