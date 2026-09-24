@@ -85,6 +85,12 @@ mv data/indexes/published/root-tx-index/band-tip.tmp \
 Build under a `.tmp` name and rename into place: directories ending in `.tmp`
 are skipped, so a band is never described half-written.
 
+A band must carry all of its partitions as local files. A `manifest.json`
+naming any partition by URL or Arweave ID (as the shipped remote indexes in
+`resources/` do) is refused by the publisher, and by every subscriber: its
+gateway would otherwise fetch a location the publisher chose, unchecked by
+any digest.
+
 To replace a band, prefer a fresh id per build (`band-tip-20260923T1200`,
 say) and delete the previous one after the next scan: subscribers install
 the new band, then retire the old after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`.

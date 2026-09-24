@@ -261,6 +261,12 @@ records are split into up to 256 files by the first byte of the key, and
 `manifest.json` says which file holds which prefix. You never need the whole
 band to answer one lookup.
 
+Every partition in a published band's manifest is a local `file` location,
+listed with its digest in the band's `files`. Refuse a band whose manifest
+names a partition by URL or Arweave ID: nothing in the publication checks
+bytes fetched from there, and following it lets a publisher choose what your
+client requests.
+
 1. Base64url-decode the 43-character data item ID to its 32-byte key.
 2. Fetch and verify `manifest.json`, and find the partition whose `prefix` is
    the key's first byte as two lowercase hex digits. No such partition means

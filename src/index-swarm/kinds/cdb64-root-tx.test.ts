@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import * as crypto from 'node:crypto';
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import * as fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -131,14 +132,61 @@ describe('Cdb64RootTxKind', () => {
       await fs.writeFile(manifestPath, serializeManifest(manifest));
 
       // Such a manifest describes an index read remotely, not bytes to publish.
+      await assert.rejects(() => kind.describe(dir), /http location/);
+    });
+
+    it('rejects a manifest with even one remote partition', async () => {
+      const dir = await makeBand(path.join(tempDir, 'band-mixed'));
+      const manifestPath = path.join(dir, MANIFEST_FILE);
+      const manifest = parseManifest(await fs.readFile(manifestPath, 'utf8'));
+      manifest.partitions[0].location = {
+        type: 'http',
+        url: 'https://example.com/x.cdb',
+      };
+      await fs.writeFile(manifestPath, serializeManifest(manifest));
       await assert.rejects(
         () => kind.describe(dir),
-        /names no local partition files/,
+        /may only carry local files/,
       );
     });
   });
 
   describe('validate', () => {
+    it('refuses a band whose manifest points a partition at a URL', async () => {
+      // What a hostile publisher would send: every digest correct, but one
+      // partition's location is a URL of its choosing, which the gateway's
+      // reader would fetch with no digest check.
+      const dir = await makeBand(path.join(tempDir, 'band-ssrf'));
+      const band = await kind.describe(dir);
+      const manifestPath = path.join(dir, MANIFEST_FILE);
+      const manifest = parseManifest(await fs.readFile(manifestPath, 'utf8'));
+      const victim = manifest.partitions[0];
+      const dropped =
+        victim.location.type === 'file' ? victim.location.filename : '';
+      victim.location = { type: 'http', url: 'http://169.254.169.254/x.cdb' };
+      const raw = serializeManifest(manifest);
+      await fs.writeFile(manifestPath, raw);
+      await fs.rm(path.join(dir, dropped));
+      const tampered = {
+        ...band,
+        files: band.files
+          .filter((f) => f.name !== dropped)
+          .map((f) =>
+            f.name === MANIFEST_FILE
+              ? {
+                  ...f,
+                  size: Buffer.byteLength(raw),
+                  sha256: crypto.createHash('sha256').update(raw).digest('hex'),
+                }
+              : f,
+          ),
+      };
+      await assert.rejects(
+        () => kind.validate(tampered, dir),
+        /http location; a published band may only carry local files/,
+      );
+    });
+
     it('accepts a band it just described', async () => {
       const dir = await makeBand(path.join(tempDir, 'band-ok'));
       await kind.validate(await kind.describe(dir), dir);

@@ -62,6 +62,20 @@ async function sha256File(filePath: string): Promise<string> {
   return hash.digest('hex');
 }
 
+/** Refuse a manifest with any partition that is not a local file. */
+function rejectRemotePartitions(
+  manifest: ReturnType<typeof parseManifest>,
+  where: string,
+): void {
+  for (const partition of manifest.partitions) {
+    if (partition.location.type !== 'file') {
+      throw new Error(
+        `${where}: partition ${partition.prefix} has a ${partition.location.type} location; a published band may only carry local files`,
+      );
+    }
+  }
+}
+
 export class Cdb64RootTxKind implements ArtifactKind {
   readonly kind = CDB64_ROOT_TX_KIND;
   private readonly log: Logger;
@@ -90,9 +104,12 @@ export class Cdb64RootTxKind implements ArtifactKind {
     // parseManifest validates the structure and throws with a reason.
     const manifest = parseManifest(manifestRaw);
 
-    // Only locally-present partitions belong to the band. A manifest whose
-    // partitions live elsewhere (HTTP, Arweave) describes an index this node
-    // reads remotely, not a directory of bytes it can publish.
+    // A published band is a directory of bytes and nothing else. A manifest
+    // with even one partition elsewhere (HTTP, Arweave) describes an index
+    // this node reads remotely; publishing it would hand subscribers a
+    // location to fetch rather than bytes they can check, and they refuse it.
+    rejectRemotePartitions(manifest, manifestPath);
+
     const partitionNames = manifest.partitions
       .filter((partition) => partition.location.type === 'file')
       .map((partition) =>
@@ -200,6 +217,13 @@ export class Cdb64RootTxKind implements ArtifactKind {
     const manifest = parseManifest(
       await fs.readFile(path.join(dir, MANIFEST_FILE), 'utf8'),
     );
+
+    // The gateway's partitioned reader follows HTTP and Arweave locations.
+    // Every other check here covers only local files, so a manifest naming a
+    // remote partition would make the subscriber's gateway fetch a location
+    // the publisher chose, unchecked by any digest: a server-side request
+    // the publisher controls. A published band carries its bytes or nothing.
+    rejectRemotePartitions(manifest, `Band ${band.id}`);
 
     // The manifest and the file set have to agree, or the gateway would open
     // a reader expecting partitions that are not there.
