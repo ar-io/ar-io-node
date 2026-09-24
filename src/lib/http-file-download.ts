@@ -276,9 +276,10 @@ export function completedFileHashes(): number {
 /**
  * The size of `filePath` if it exists and has the expected size and digest;
  * undefined otherwise. A file unchanged since it last verified is not
- * hashed again.
+ * hashed again. Exported so a caller can recognise a copy it already holds
+ * (such as a band installed before its state was lost) without fetching.
  */
-async function completedFile(
+export async function completedFile(
   filePath: string,
   expectedSize: number | undefined,
   expectedSha256: string,

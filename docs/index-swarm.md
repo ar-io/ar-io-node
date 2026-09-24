@@ -377,11 +377,21 @@ data/indexes/
     publication.json  # the signed document; the gateway serves it
     <index>/<band>/   # bands this node offers
     blobs/            # the same files by SHA-256, as hard links
-  incoming/           # downloads in progress; never read by the gateway
+  incoming/
+    <publisher>/<index>/<band>/  # downloads in progress, per publisher; never read by the gateway
   installed/
-    <index>/<band>/   # bands in use; the gateway loads these
+    <index>/<band>~<generation>/ # bands in use; the gateway loads these
   state.json          # hashes, sequences seen and bands installed
 ```
+
+Each copy of a band installs into its own directory, named by the band id
+and a short digest of its files. A replacement is loaded by the gateway
+before the copy it replaces is retired, so lookups to a band never miss while
+it is rebuilt. A copy already on disk whose files verify (after lost state,
+for example) is adopted rather than downloaded again. A band id belongs to
+the publisher whose copy is live: another publisher offering different bytes
+under the same id is skipped and counted as `band_conflict`, rather than the
+two replacing each other on every poll.
 
 `state.json` is re-derivable. If it is unreadable the sidecar renames it to
 `state.json.corrupt`, starts empty and carries on, because a sidecar that
@@ -432,6 +442,8 @@ The subscription results that need attention:
 | `verify_failed` | Downloaded bytes did not match their signed digests; or the document itself was malformed; or a band matched its digests but was not a readable index (its downloaded files are then deleted, not resumed) | Retried every poll. Sustained means a bad mirror, disk or publisher |
 | `download_failed` | A fetch failed: a stall (no bytes for `INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS`; pacing for `INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC` is not counted), a connection error, or a status such as `402`/`429` from the publisher's meter. The log line carries the status | Retried every poll. Files that completed are kept and not fetched again, and a partial file resumes, so each poll only fetches what is still missing. After a `402` or `429`, no new file of any band from that publisher starts until the next poll (`INDEX_SWARM_POLL_INTERVAL_SECONDS`), and bands are fetched newest heights first, so a meter's allowance goes to the most useful band. The log line carries `completeFiles` / `totalFiles`. Sustained `402`/`429` means the subscriber should be allowlisted or pay |
 | `skipped_disk_budget` | The band would exceed `INDEX_SWARM_MAX_DISK_BYTES` | Raise the budget or subscribe to less |
+| `band_conflict` | Another subscribed publisher's copy of this band id is live, with different bytes | Subscribe to one of them for that index (use `name`), or ask the publishers to use distinct band ids |
+| `sequence_jump` | A document more than 1,000,000 sequences ahead of the last one seen | Security-relevant: should be zero. Nothing is installed from it |
 | `unknown_kind` | A band of a kind this build does not implement | Upgrade the sidecar, or ignore |
 | `unreachable`, `error` | The publisher or the registry could not be read; or the publisher is not in `INDEX_SWARM_TRUSTED_PUBLISHERS`; or a band offers no HTTP location | Bands already installed keep serving |
 

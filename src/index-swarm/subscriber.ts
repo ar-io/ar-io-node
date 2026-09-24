@@ -20,6 +20,7 @@
  * unreachable, lying, or behind leaves the bands already installed exactly
  * where they are.
  */
+import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import pLimit from 'p-limit';
@@ -37,12 +38,13 @@ import {
 } from '../lib/index-publication.js';
 import { publicKeyFromSolanaAddress } from '../lib/httpsig.js';
 import {
+  completedFile,
   DownloadHttpError,
   DownloadIntegrityError,
   downloadFile,
 } from '../lib/http-file-download.js';
 import { SubscribeConfig } from './config.js';
-import { StateStore } from './state.js';
+import { InstalledBand, StateStore } from './state.js';
 import { ArtifactKind } from './kinds/types.js';
 import { GatewayRegistry, PublisherRecord } from './gateway-registry.js';
 import {
@@ -90,6 +92,58 @@ interface PollMeter {
  * At one publish a minute that is nearly two years of headroom.
  */
 export const MAX_SEQUENCE_JUMP = 1_000_000;
+
+/**
+ * Separates a band id from its generation in an installed directory name.
+ * A band id can't contain it, so no directory name is ambiguous.
+ */
+const GENERATION_SEPARATOR = '~';
+
+/** A short digest of a band's files: its identity on disk. */
+export function bandGeneration(band: BandDescriptor): string {
+  const lines = band.files
+    .map((file) => `${file.name}\0${file.size}\0${file.sha256}`)
+    .sort();
+  return crypto
+    .createHash('sha256')
+    .update(lines.join('\n'))
+    .digest('hex')
+    .slice(0, 12);
+}
+
+/** An entry of a remote-keyed map, never a prototype member. */
+function ownEntry<T>(
+  map: Record<string, T> | undefined,
+  key: string,
+): T | undefined {
+  return map !== undefined && Object.prototype.hasOwnProperty.call(map, key)
+    ? map[key]
+    : undefined;
+}
+
+/** Total size of the regular files under `dir`; 0 if it doesn't exist. */
+async function directoryBytes(dir: string): Promise<number> {
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      total += await directoryBytes(full);
+    } else if (entry.isFile()) {
+      try {
+        total += (await fs.stat(full)).size;
+      } catch {
+        // Gone since the listing; nothing to count.
+      }
+    }
+  }
+  return total;
+}
 
 /** A band naming its files on a server this node won't fetch from. */
 class DisallowedOriginError extends Error {
@@ -166,6 +220,7 @@ export type SubscriptionResult =
   | 'verify_failed'
   | 'download_failed'
   | 'skipped_disk_budget'
+  | 'band_conflict'
   | 'unknown_kind'
   | 'unreachable'
   | 'error';
@@ -200,6 +255,14 @@ export interface SubscriberOptions {
    * subscribers apart even when several share one IP.
    */
   userAgent?: string;
+  /**
+   * How long an old copy of a band keeps serving after its replacement is
+   * installed, before it is retired. The gateway loads a new band directory
+   * about a second after it appears (its watcher waits for writes to
+   * settle), so retiring the old one at once would leave every lookup to the
+   * band missing in between. Default 5 s.
+   */
+  replaceOverlapMs?: number;
   now?: () => Date;
 }
 
@@ -220,6 +283,8 @@ export class Subscriber {
   private readonly downloadRateLimitBytesPerSec?: number;
   private readonly allowedFileOrigins: ReadonlySet<string>;
   private readonly requestHeaders: Record<string, string>;
+  private readonly replaceOverlapMs: number;
+  private readonly subscribedPublishers: ReadonlySet<string>;
   private readonly now: () => Date;
 
   constructor(options: SubscriberOptions) {
@@ -244,6 +309,10 @@ export class Subscriber {
       options.userAgent !== undefined
         ? { 'user-agent': options.userAgent }
         : {};
+    this.replaceOverlapMs = options.replaceOverlapMs ?? 5_000;
+    this.subscribedPublishers = new Set(
+      options.subscribe.map((subscription) => subscription.publisher),
+    );
     this.now = options.now ?? (() => new Date());
   }
 
@@ -279,6 +348,7 @@ export class Subscriber {
         this.count(subscription.publisher, '', 'error');
       }
     }
+    await this.discardOrphanedDownloads();
     await this.sweep();
     await this.reportInstalled();
   }
@@ -356,6 +426,16 @@ export class Subscriber {
 
     const record = await this.registry.lookup(subscription.publisher);
     if (record === undefined) {
+      return undefined;
+    }
+    // The record must be the one asked for: every later check (the key, the
+    // document's publisher) is against it, so a registry answering for some
+    // other wallet would make that wallet's documents count as this one's.
+    if (record.wallet !== subscription.publisher) {
+      this.log.warn('Registry answered for a different wallet; skipping', {
+        publisher: subscription.publisher,
+        answered: record.wallet,
+      });
       return undefined;
     }
     // A URL override changes only where the bytes come from. The key that
@@ -585,16 +665,24 @@ export class Subscriber {
     }
   }
 
-  /** Bytes held by every installed band, for the disk budget. */
-  private async installedBytes(): Promise<number> {
+  /**
+   * Bytes the budget counts: every installed band (retired ones not yet
+   * swept included) and everything in `incoming/`, where partial and
+   * completed downloads wait. The live copy of a band being replaced is
+   * left out, since it is retired as soon as its replacement is in:
+   * counting it would stall a subscriber near its budget on a stale tip
+   * forever.
+   */
+  private async diskBytes(replacing?: InstalledBand): Promise<number> {
     const state = await this.state.load();
     let total = 0;
     for (const bands of Object.values(state.installed)) {
       for (const band of Object.values(bands)) {
+        if (band === replacing) continue;
         for (const file of band.files) total += file.size;
       }
     }
-    return total;
+    return total + (await directoryBytes(this.incomingDir));
   }
 
   /** Install what is new in this index, and retire what the publisher dropped. */
@@ -609,7 +697,7 @@ export class Subscriber {
 
     for (const band of bandsNewestFirst(index.bands)) {
       const state = await this.state.load();
-      const existing = state.installed[index.name]?.[band.id];
+      const existing = ownEntry(state.installed[index.name], band.id);
       // Matching on the id alone would pin a subscriber to the first copy of
       // a band the publisher rebuilds under the same id, which the rolling
       // tip band always is. A band is its files, so compare those.
@@ -636,6 +724,7 @@ export class Subscriber {
     // Scoped by publisher, so one publisher dropping a band does not remove
     // the copy another publisher still offers.
     const offered = new Set(index.bands.map((band) => band.id));
+    await this.discardUnofferedDownloads(publisher, index.name, offered);
     const state = await this.state.load();
     const current = state.installed[index.name] ?? {};
     for (const [bandId, band] of Object.entries(current)) {
@@ -689,9 +778,36 @@ export class Subscriber {
       });
       return false;
     }
+    const existing = ownEntry(
+      (await this.state.load()).installed[index.name],
+      band.id,
+    );
+    const live =
+      existing !== undefined && existing.retiredAt === undefined
+        ? existing
+        : undefined;
+    // A band id belongs to the publisher whose copy is live. Two publishers
+    // offering different bytes under one id would otherwise replace each
+    // other's copy on every poll, each paying a full download. A copy whose
+    // publisher is no longer subscribed to can be taken over.
+    if (
+      live?.publisher !== undefined &&
+      live.publisher !== publisher &&
+      this.subscribedPublishers.has(live.publisher)
+    ) {
+      this.log.warn('Band id is held by another publisher; skipping', {
+        publisher,
+        index: index.name,
+        band: band.id,
+        heldBy: live.publisher,
+      });
+      this.count(publisher, index.name, 'band_conflict');
+      return false;
+    }
+
     const bandBytes = band.files.reduce((sum, file) => sum + file.size, 0);
     if (this.maxDiskBytes !== undefined) {
-      const used = await this.installedBytes();
+      const used = await this.diskBytes(live);
       if (used + bandBytes > this.maxDiskBytes) {
         this.log.warn('Band would exceed the disk budget; skipping', {
           publisher,
@@ -739,7 +855,37 @@ export class Subscriber {
       return false;
     }
 
-    const incoming = path.join(this.incomingDir, index.name, band.id);
+    // Each generation of a band installs into its own directory, so the new
+    // copy is loaded before the old one is retired: replacing in place left
+    // a window of about a second where every lookup to the band missed.
+    const targetDir = path.join(
+      this.installedDir,
+      index.name,
+      `${band.id}${GENERATION_SEPARATOR}${bandGeneration(band)}`,
+    );
+
+    // A copy already on disk (state lost, or a crash between install and
+    // the state write) is adopted rather than fetched again.
+    const adopted = await this.adoptInstalledCopy(index.name, band, targetDir);
+    if (adopted !== undefined) {
+      await this.recordInstall(publisher, index.name, band, adopted, live);
+      this.log.info('Adopted a band already on disk', {
+        publisher,
+        index: index.name,
+        band: band.id,
+        dir: adopted,
+      });
+      return true;
+    }
+
+    // Per publisher, so two publishers' copies of one band id never resume
+    // onto each other's partial files.
+    const incoming = path.join(
+      this.incomingDir,
+      publisher,
+      index.name,
+      band.id,
+    );
     await fs.mkdir(incoming, { recursive: true });
 
     // Every file is attempted and the whole band is waited on, so a file that
@@ -759,6 +905,12 @@ export class Subscriber {
               url,
               headers: this.requestHeaders,
               destPath: path.join(incoming, file.name),
+              // Keyed by digest: a file rebuilt under the same name must
+              // never resume onto the old version's bytes.
+              partialPath: path.join(
+                incoming,
+                `${file.name}.${file.sha256.slice(0, 16)}.tmp`,
+              ),
               expectedSize: file.size,
               expectedSha256: file.sha256,
               resume: true,
@@ -848,7 +1000,6 @@ export class Subscriber {
       return false;
     }
 
-    const targetDir = path.join(this.installedDir, index.name, band.id);
     const state = await this.state.load();
     const current = state.installed[index.name] ?? {};
     const next = await kind.install({
@@ -862,6 +1013,7 @@ export class Subscriber {
     await this.state.update((draft) => {
       draft.installed[index.name] = next;
     });
+    await this.retireReplaced(index.name, band.id, live, targetDir, kind);
 
     this.count(publisher, index.name, 'installed');
     this.log.info('Installed a band', {
@@ -871,6 +1023,151 @@ export class Subscriber {
       bytes: bandBytes,
     });
     return true;
+  }
+
+  /**
+   * Find a verified copy of `band` already installed, at its generation's
+   * directory or at the pre-generation `installed/<index>/<band>` layout.
+   * Returns its directory, or undefined.
+   */
+  private async adoptInstalledCopy(
+    indexName: string,
+    band: BandDescriptor,
+    targetDir: string,
+  ): Promise<string | undefined> {
+    const candidates = [
+      targetDir,
+      path.join(this.installedDir, indexName, band.id),
+    ];
+    for (const dir of candidates) {
+      let complete = true;
+      for (const file of band.files) {
+        const size = await completedFile(
+          path.join(dir, file.name),
+          file.size,
+          file.sha256,
+        );
+        if (size === undefined) {
+          complete = false;
+          break;
+        }
+      }
+      if (complete) return dir;
+    }
+    return undefined;
+  }
+
+  /** Record an install of `band` at `dir`, retiring the copy it replaces. */
+  private async recordInstall(
+    publisher: string,
+    indexName: string,
+    band: BandDescriptor,
+    dir: string,
+    replaced: InstalledBand | undefined,
+  ): Promise<void> {
+    await this.state.update((draft) => {
+      draft.installed[indexName] = {
+        ...(draft.installed[indexName] ?? {}),
+        [band.id]: {
+          dir,
+          files: band.files,
+          installedAt: this.now().toISOString(),
+          publisher,
+        },
+      };
+    });
+    const kind = this.kinds.values().next().value;
+    if (kind !== undefined) {
+      await this.retireReplaced(indexName, band.id, replaced, dir, kind);
+    }
+  }
+
+  /**
+   * Retire the copy a new install replaced, once the gateway has had time
+   * to load the new one. Recorded under its own key so the sweep removes
+   * its directory after the grace period, like any other retired band.
+   */
+  private async retireReplaced(
+    indexName: string,
+    bandId: string,
+    replaced: InstalledBand | undefined,
+    newDir: string,
+    kind: ArtifactKind,
+  ): Promise<void> {
+    if (
+      replaced === undefined ||
+      path.resolve(replaced.dir) === path.resolve(newDir)
+    ) {
+      return;
+    }
+    if (this.replaceOverlapMs > 0) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, this.replaceOverlapMs),
+      );
+    }
+    const retiredKey = `${bandId}${GENERATION_SEPARATOR}retired-${this.now().getTime()}`;
+    const current = (await this.state.load()).installed[indexName] ?? {};
+    const next = await kind.retire({
+      bandId: retiredKey,
+      dir: replaced.dir,
+      current,
+    });
+    next[retiredKey] = { ...next[retiredKey], files: replaced.files };
+    await this.state.update((draft) => {
+      draft.installed[indexName] = next;
+    });
+  }
+
+  /**
+   * Delete downloads in `incoming/` that can no longer complete: bands this
+   * publisher no longer offers in this index. Without it, a band that failed
+   * part-way and was then dropped would hold its files forever.
+   */
+  private async discardUnofferedDownloads(
+    publisher: string,
+    indexName: string,
+    offered: ReadonlySet<string>,
+  ): Promise<void> {
+    const dir = path.join(this.incomingDir, publisher, indexName);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      if (offered.has(name)) continue;
+      await fs.rm(path.join(dir, name), { recursive: true, force: true });
+      this.log.info('Discarded a download the publisher no longer offers', {
+        publisher,
+        index: indexName,
+        band: name,
+      });
+    }
+  }
+
+  /**
+   * Delete `incoming/` entries that belong to no configured publisher: a
+   * publisher unsubscribed from, or the per-index layout used before
+   * downloads were kept per publisher.
+   */
+  private async discardOrphanedDownloads(): Promise<void> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.incomingDir);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      if (this.subscribedPublishers.has(name)) continue;
+      await fs.rm(path.join(this.incomingDir, name), {
+        recursive: true,
+        force: true,
+      });
+      this.log.info('Discarded downloads for no configured publisher', {
+        entry: name,
+      });
+    }
   }
 
   /** Delete the files of bands retired longer ago than the grace period. */

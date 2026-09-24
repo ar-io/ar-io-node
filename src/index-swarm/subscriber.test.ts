@@ -33,6 +33,8 @@ import {
   signIndexPublication,
 } from '../lib/index-publication.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import { Cdb64RootTxIndex } from '../discovery/cdb64-root-tx-index.js';
+import { toB64Url } from '../lib/encoding.js';
 
 const log = createTestLogger({ suite: 'index-swarm subscriber' });
 
@@ -303,6 +305,8 @@ describe('Subscriber', () => {
       url: string;
       userAgent: string;
       allowedFileOrigins: string[];
+      replaceOverlapMs: number;
+      alsoSubscribedTo: string[];
     }> = {},
   ) =>
     new Subscriber({
@@ -316,6 +320,7 @@ describe('Subscriber', () => {
           ...(opts.name !== undefined ? { name: opts.name } : {}),
           ...(opts.url !== undefined ? { url: opts.url } : {}),
         },
+        ...(opts.alsoSubscribedTo ?? []).map((publisher) => ({ publisher })),
       ],
       trustedPublishers: opts.trustedPublishers ?? [],
       incomingDir: subIncoming,
@@ -323,6 +328,7 @@ describe('Subscriber', () => {
       fetchTimeoutMs: 5000,
       downloadConcurrency: 4,
       supersedeGraceMs: 0,
+      replaceOverlapMs: opts.replaceOverlapMs ?? 0,
       ...(opts.maxDiskBytes !== undefined
         ? { maxDiskBytes: opts.maxDiskBytes }
         : {}),
@@ -366,6 +372,20 @@ describe('Subscriber', () => {
     return { name, size: bytes.length, sha256 };
   };
 
+  /** Where the gateway loads a live band from, as the subscriber recorded it. */
+  const bandDir = async (id: string): Promise<string> => {
+    const band = (await subState.load()).installed['root-tx-index']?.[id];
+    assert(band !== undefined && band.retiredAt === undefined, `${id} is live`);
+    return band.dir;
+  };
+
+  /** Directories on disk for a band id, any generation. */
+  const dirsOnDisk = async (id: string): Promise<string[]> => {
+    const root = path.join(subInstalled, 'root-tx-index');
+    const names = await fs.readdir(root).catch(() => [] as string[]);
+    return names.filter((n) => n === id || n.startsWith(`${id}~`));
+  };
+
   const installedIds = async (): Promise<string[]> => {
     const state = await subState.load();
     return Object.entries(state.installed['root-tx-index'] ?? {})
@@ -383,10 +403,14 @@ describe('Subscriber', () => {
 
     assert.deepEqual(await installedIds(), ['band-a', 'band-b']);
     for (const id of ['band-a', 'band-b']) {
+      const dir = await bandDir(id);
       assert.equal(
-        existsSync(
-          path.join(subInstalled, 'root-tx-index', id, 'manifest.json'),
-        ),
+        path.dirname(dir),
+        path.join(subInstalled, 'root-tx-index'),
+        `${id} is installed in the directory the gateway loads`,
+      );
+      assert.equal(
+        existsSync(path.join(dir, 'manifest.json')),
         true,
         `${id} is installed where the gateway loads it`,
       );
@@ -478,7 +502,7 @@ describe('Subscriber', () => {
     assert.equal(await counted('verify_failed'), before + 1);
     assert.equal(canaryHits, 0, 'the publisher-chosen URL was never requested');
     assert.equal(
-      existsSync(path.join(subIncoming, 'root-tx-index', 'band-a')),
+      existsSync(path.join(subIncoming, WALLET, 'root-tx-index', 'band-a')),
       false,
       'the rejected download is not kept for resuming',
     );
@@ -558,12 +582,12 @@ describe('Subscriber', () => {
     const subscriber = makeSubscriber();
     await subscriber.pollOnce();
     const first = await fs.stat(
-      path.join(subInstalled, 'root-tx-index', 'band-a', 'manifest.json'),
+      path.join(await bandDir('band-a'), 'manifest.json'),
     );
 
     await subscriber.pollOnce();
     const second = await fs.stat(
-      path.join(subInstalled, 'root-tx-index', 'band-a', 'manifest.json'),
+      path.join(await bandDir('band-a'), 'manifest.json'),
     );
     assert.equal(first.mtimeMs, second.mtimeMs, 'nothing re-downloaded');
   });
@@ -716,8 +740,8 @@ describe('Subscriber', () => {
     );
     assert.deepEqual(await installedIds(), []);
     assert.equal(
-      existsSync(path.join(subInstalled, 'root-tx-index', 'band-a')),
-      false,
+      (await dirsOnDisk('band-a')).length,
+      0,
       'nothing reaches the directory the gateway loads from',
     );
   });
@@ -733,13 +757,18 @@ describe('Subscriber', () => {
     const file = state0.indexes[0].bands[0].files.find((f: any) =>
       f.name.endsWith('.cdb'),
     );
-    const incomingBand = path.join(subIncoming, 'root-tx-index', 'band-a');
+    const incomingBand = path.join(
+      subIncoming,
+      WALLET,
+      'root-tx-index',
+      'band-a',
+    );
     await fs.mkdir(incomingBand, { recursive: true });
     const source = await fs.readFile(
       path.join(pubDir, 'root-tx-index', 'band-a', file.name),
     );
     await fs.writeFile(
-      path.join(incomingBand, `${file.name}.tmp`),
+      path.join(incomingBand, `${file.name}.${file.sha256.slice(0, 16)}.tmp`),
       source.subarray(0, Math.max(1, Math.floor(source.length / 2))),
     );
 
@@ -747,7 +776,7 @@ describe('Subscriber', () => {
 
     assert.deepEqual(await installedIds(), ['band-a']);
     const installedFile = await fs.readFile(
-      path.join(subInstalled, 'root-tx-index', 'band-a', file.name),
+      path.join(await bandDir('band-a'), file.name),
     );
     assert.deepEqual(
       installedFile,
@@ -914,6 +943,167 @@ describe('Subscriber', () => {
     );
   });
 
+  it('keeps serving a band while its replacement loads: no lookup misses', async () => {
+    // The gateway's own collection source, watching the installed directory
+    // exactly as in production.
+    await makeBand('band-tip', 3);
+    await publish();
+    const subscriber = makeSubscriber({ replaceOverlapMs: 2500 });
+    await subscriber.pollOnce();
+    const index = new Cdb64RootTxIndex({
+      log,
+      sources: [path.join(subInstalled, 'root-tx-index')],
+      watch: true,
+    });
+    const key = toB64Url(txId(0));
+    try {
+      assert.notEqual(await index.getRootTx(key), undefined, 'served before');
+
+      // The publisher rebuilds the tip under the same id.
+      await fs.rm(path.join(pubDir, 'root-tx-index', 'band-tip'), {
+        recursive: true,
+        force: true,
+      });
+      await makeBand('band-tip', 5);
+      clock = new Date(clock.getTime() + 60_000);
+      await publish();
+
+      let misses = 0;
+      let lookups = 0;
+      let polling = true;
+      const poll = subscriber.pollOnce().finally(() => {
+        polling = false;
+      });
+      while (polling) {
+        lookups++;
+        if ((await index.getRootTx(key)) === undefined) misses++;
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      await poll;
+
+      assert(lookups > 100, `looked up ${lookups} times during the replace`);
+      assert.equal(misses, 0, `${misses} of ${lookups} lookups missed`);
+      const records = JSON.parse(
+        await fs.readFile(
+          path.join(await bandDir('band-tip'), 'manifest.json'),
+          'utf8',
+        ),
+      ).totalRecords;
+      assert.equal(records, 5, 'the rebuilt band is the one live now');
+    } finally {
+      await index.close();
+    }
+  });
+
+  describe('when two publishers offer one band id', () => {
+    const OTHER = 'OtherPublisherWallet1111111111111111111111111';
+    const holdByOther = async () => {
+      await subState.update((draft) => {
+        draft.installed['root-tx-index'] = {
+          'band-a': {
+            dir: path.join(subInstalled, 'root-tx-index', 'band-a~other'),
+            files: [{ name: 'manifest.json', size: 1, sha256: 'c'.repeat(64) }],
+            installedAt: clock.toISOString(),
+            publisher: OTHER,
+          },
+        };
+      });
+    };
+
+    it('leaves the band with the publisher whose copy is live', async () => {
+      await makeBand('band-a');
+      await publish();
+      await holdByOther();
+      const before = await counted('band_conflict');
+
+      await makeSubscriber({ alsoSubscribedTo: [OTHER] }).pollOnce();
+
+      assert.equal(await counted('band_conflict'), before + 1);
+      assert.deepEqual(blobRequests, [], 'nothing was downloaded');
+      const band = (await subState.load()).installed['root-tx-index']['band-a'];
+      assert.equal(band.publisher, OTHER, 'still held by the other publisher');
+    });
+
+    it('takes over a band whose publisher is no longer subscribed to', async () => {
+      await makeBand('band-a');
+      await publish();
+      await holdByOther();
+
+      await makeSubscriber().pollOnce();
+
+      const band = (await subState.load()).installed['root-tx-index']['band-a'];
+      assert.equal(band.publisher, WALLET);
+    });
+  });
+
+  it('adopts a band already on disk instead of fetching it again', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    const dir = await bandDir('band-a');
+
+    // State is lost (or the process died between install and the write).
+    await fs.rm(path.join(tempDir, 'sub', 'state.json'), { force: true });
+    subState = new StateStore({
+      log,
+      filePath: path.join(tempDir, 'sub', 'state.json'),
+    });
+    blobRequests = [];
+
+    await makeSubscriber().pollOnce();
+
+    assert.deepEqual(blobRequests, [], 'nothing was downloaded');
+    assert.equal(await bandDir('band-a'), dir, 'the copy on disk was adopted');
+  });
+
+  it('counts downloads waiting in incoming/ against the disk budget', async () => {
+    await makeBand('band-a');
+    await publish();
+    const doc = JSON.parse(
+      await fs.readFile(path.join(pubDir, 'publication.json'), 'utf8'),
+    );
+    const bandBytes = doc.indexes[0].bands[0].files.reduce(
+      (sum: number, f: { size: number }) => sum + f.size,
+      0,
+    );
+    // Something else is already waiting in incoming/.
+    const waiting = path.join(subIncoming, WALLET, 'root-tx-index', 'band-x');
+    await fs.mkdir(waiting, { recursive: true });
+    await fs.writeFile(path.join(waiting, 'part.tmp'), Buffer.alloc(64));
+    const before = await counted('skipped_disk_budget');
+
+    await makeSubscriber({ maxDiskBytes: bandBytes + 10 }).pollOnce();
+
+    assert.equal(await counted('skipped_disk_budget'), before + 1);
+    assert.deepEqual(await installedIds(), []);
+  });
+
+  it('clears downloads nothing will finish', async () => {
+    await makeBand('band-a');
+    await publish();
+    const dropped = path.join(
+      subIncoming,
+      WALLET,
+      'root-tx-index',
+      'band-gone',
+    );
+    const oldLayout = path.join(subIncoming, 'root-tx-index', 'band-a');
+    for (const dir of [dropped, oldLayout]) {
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, 'x.tmp'), 'partial');
+    }
+
+    await makeSubscriber().pollOnce();
+
+    assert.equal(existsSync(dropped), false, 'a band no longer offered');
+    assert.equal(
+      existsSync(path.join(subIncoming, 'root-tx-index')),
+      false,
+      'the layout from before downloads were kept per publisher',
+    );
+    assert.deepEqual(await installedIds(), ['band-a']);
+  });
+
   it('keeps the files that completed, and fetches only the rest next poll', async () => {
     // A publisher behind a load balancer where one node lacks the routes
     // answers some requests 404. The files that did arrive must not be
@@ -1004,13 +1194,12 @@ describe('Subscriber', () => {
     await publish();
     const subscriber = makeSubscriber();
     await subscriber.pollOnce();
-    const manifestPath = path.join(
-      subInstalled,
-      'root-tx-index',
-      'band-tip',
-      'manifest.json',
+    const before = JSON.parse(
+      await fs.readFile(
+        path.join(await bandDir('band-tip'), 'manifest.json'),
+        'utf8',
+      ),
     );
-    const before = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
     assert.equal(before.totalRecords, 3);
 
     await fs.rm(path.join(pubDir, 'root-tx-index', 'band-tip'), {
@@ -1023,7 +1212,12 @@ describe('Subscriber', () => {
 
     await subscriber.pollOnce();
 
-    const after = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    const after = JSON.parse(
+      await fs.readFile(
+        path.join(await bandDir('band-tip'), 'manifest.json'),
+        'utf8',
+      ),
+    );
     assert.equal(after.totalRecords, 5, 'the rebuilt band replaced the old');
     const state = await subState.load();
     const published = JSON.parse(
@@ -1062,10 +1256,7 @@ describe('Subscriber', () => {
 
     assert.deepEqual(await installedIds(), ['band-a']);
     // Grace is zero here, so the sweep in the same poll removed the files.
-    assert.equal(
-      existsSync(path.join(subInstalled, 'root-tx-index', 'band-b')),
-      false,
-    );
+    assert.deepEqual(await dirsOnDisk('band-b'), []);
   });
 
   it('retires every band the publisher drops in one publication', async () => {
@@ -1096,11 +1287,7 @@ describe('Subscriber', () => {
       'both dropped bands are out of service, not only the last one retired',
     );
     for (const id of ['band-b', 'band-c']) {
-      assert.equal(
-        existsSync(path.join(subInstalled, 'root-tx-index', id)),
-        false,
-        `${id} was swept`,
-      );
+      assert.deepEqual(await dirsOnDisk(id), [], `${id} was swept`);
     }
   });
 
