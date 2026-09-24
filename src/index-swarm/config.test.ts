@@ -46,6 +46,13 @@ describe('index-swarm config', () => {
       ['a missing name', '[{"kind":"cdb64-root-tx"}]', /\[0\]\.name/],
       ['a missing kind', '[{"name":"root-tx-index"}]', /\[0\]\.kind/],
       ['an empty name', '[{"name":"","kind":"k"}]', /\[0\]\.name/],
+      ['an uppercase name', '[{"name":"Root_Tx","kind":"k"}]', /\[0\]\.name/],
+      ['a name with a slash', '[{"name":"a/b","kind":"k"}]', /\[0\]\.name/],
+      [
+        'a name over 64 characters',
+        JSON.stringify([{ name: 'a'.repeat(65), kind: 'k' }]),
+        /\[0\]\.name/,
+      ],
       [
         'a bad entry after a good one',
         '[{"name":"a","kind":"k"},{"name":"b"}]',
@@ -77,6 +84,13 @@ describe('index-swarm config', () => {
       assert.throws(
         () => parseSubscribe('[{"name":"root-tx-index"}]'),
         /\[0\]\.publisher must be a wallet address/,
+      );
+    });
+
+    it('rejects a malformed index name', () => {
+      assert.throws(
+        () => parseSubscribe('[{"publisher":"w","name":"Root_Tx"}]'),
+        /\[0\]\.name must match/,
       );
     });
 

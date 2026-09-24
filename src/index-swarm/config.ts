@@ -19,6 +19,7 @@
 import * as path from 'node:path';
 
 import * as env from '../lib/env.js';
+import { isValidIndexName } from '../lib/index-publication.js';
 
 /** One index this node publishes. */
 export interface PublishConfig {
@@ -70,8 +71,12 @@ export function parsePublish(raw: string | undefined): PublishConfig[] {
       throw new Error(`INDEX_SWARM_PUBLISH[${i}] must be an object`);
     }
     const { name, kind, filter } = entry as Record<string, unknown>;
-    if (typeof name !== 'string' || name.length === 0) {
-      throw new Error(`INDEX_SWARM_PUBLISH[${i}].name must be a string`);
+    // The name becomes a directory, a URL segment and a field of the signed
+    // document, which subscribers reject outright if it is malformed.
+    if (!isValidIndexName(name)) {
+      throw new Error(
+        `INDEX_SWARM_PUBLISH[${i}].name must match ^[a-z0-9-]{1,64}$`,
+      );
     }
     if (typeof kind !== 'string' || kind.length === 0) {
       throw new Error(`INDEX_SWARM_PUBLISH[${i}].kind must be a string`);
@@ -97,8 +102,12 @@ export function parseSubscribe(raw: string | undefined): SubscribeConfig[] {
         `INDEX_SWARM_SUBSCRIBE[${i}].publisher must be a wallet address`,
       );
     }
-    if (name !== undefined && typeof name !== 'string') {
-      throw new Error(`INDEX_SWARM_SUBSCRIBE[${i}].name must be a string`);
+    // A malformed name could never match a published index, so the
+    // subscription would silently do nothing.
+    if (name !== undefined && !isValidIndexName(name)) {
+      throw new Error(
+        `INDEX_SWARM_SUBSCRIBE[${i}].name must match ^[a-z0-9-]{1,64}$`,
+      );
     }
     if (url !== undefined && typeof url !== 'string') {
       throw new Error(`INDEX_SWARM_SUBSCRIBE[${i}].url must be a string`);
