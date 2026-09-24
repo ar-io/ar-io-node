@@ -6,14 +6,13 @@
  */
 import { strict as assert } from 'node:assert';
 import { after, before, describe, it } from 'node:test';
-import { rimraf } from 'rimraf';
 import {
   DockerComposeEnvironment,
   PullPolicy,
   StartedDockerComposeEnvironment,
   Wait,
 } from 'testcontainers';
-import { waitFor } from './utils.js';
+import { cleanDb as sharedCleanDb, waitFor } from './utils.js';
 import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
 import { fromB64Url, sha256B64Url, toB64Url } from '../../src/lib/encoding.js';
@@ -26,8 +25,10 @@ import { isTestFiltered } from '../utils.js';
 const projectRootPath = process.cwd();
 const USE_PREBUILT_IMAGE = process.env.USE_PREBUILT_IMAGE === 'true';
 
-const cleanDb = () =>
-  rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+// Routed through the shared helper rather than calling rimraf directly, so the
+// ALLOW_DESTRUCTIVE_E2E guard applies here too. A local copy of this one-liner
+// is exactly how a destructive default gets reintroduced by accident.
+const cleanDb = () => sharedCleanDb(`${projectRootPath}/data/sqlite`);
 const composeUp = async ({
   START_HEIGHT = '1',
   STOP_HEIGHT = '1',

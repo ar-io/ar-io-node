@@ -14,6 +14,7 @@ import {
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container';
 import { Environment } from 'testcontainers/build/types.js';
 import axios from 'axios';
+import * as fs from 'node:fs';
 import { rimraf } from 'rimraf';
 import { fromB64Url } from '../../src/lib/encoding.js';
 
@@ -30,8 +31,52 @@ export const getCoreContainer = async (): Promise<GenericContainer> => {
 
 const DEFAULT_TIMEOUT = 60000;
 
-export const cleanDb = (sqlitePath = `${process.cwd()}/data/sqlite`) =>
-  rimraf(`${sqlitePath}/*.db*`, { glob: true });
+/**
+ * Delete the SQLite databases so a suite starts from a known-empty index.
+ *
+ * This is destructive and its default target is `./data/sqlite` relative to the
+ * working directory, which on a machine that also *runs* a gateway is that
+ * gateway's live index — `core.db`, `bundles.db`, `data.db`, `moderation.db`,
+ * `chunks.db` and their `-wal`/`-shm` files. Losing those means a full re-sync.
+ *
+ * The guard below exists because the hazard is silent and the default is the
+ * dangerous value: an operator who clones this repo onto a live gateway and
+ * runs `yarn test:e2e` once destroys their index, having done nothing unusual.
+ * CI is safe only incidentally, because a fresh runner has no `data/` for the
+ * glob to match.
+ *
+ * So refuse by default when the target looks inhabited, and require the caller
+ * to say so explicitly. `ALLOW_DESTRUCTIVE_E2E=true` opts in; CI sets it. That
+ * inverts the default from "destroy whatever is here" to "destroy only when
+ * someone said to", which is the way round it should have been.
+ */
+export const cleanDb = async (sqlitePath = `${process.cwd()}/data/sqlite`) => {
+  if (process.env.ALLOW_DESTRUCTIVE_E2E !== 'true') {
+    // fs rather than a glob library: `glob` is only a transitive dependency
+    // here and resolves to a callback-API major, which would make this check
+    // silently pass. A guard that can fail open is worse than no guard.
+    let existing: string[] = [];
+    try {
+      existing = (await fs.promises.readdir(sqlitePath)).filter((f) =>
+        f.endsWith('.db'),
+      );
+    } catch (error: any) {
+      // No directory at all means nothing to destroy — that's the safe case.
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    if (existing.length > 0) {
+      throw new Error(
+        `Refusing to delete ${existing.length} SQLite database(s) in ${sqlitePath}.\n` +
+          `\nThe E2E suites wipe the index before running. The path above already ` +
+          `contains databases, which on a host that also runs a gateway is that ` +
+          `gateway's live index — deleting it forces a full re-sync.\n` +
+          `\nIf this is a throwaway checkout, set ALLOW_DESTRUCTIVE_E2E=true to proceed. ` +
+          `Never set it on a machine serving traffic.`,
+      );
+    }
+  }
+  return rimraf(`${sqlitePath}/*.db*`, { glob: true });
+};
 
 const isDataItemIndexed = ({
   bundlesDb,
