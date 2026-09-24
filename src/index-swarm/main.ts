@@ -171,62 +171,11 @@ async function main(): Promise<void> {
   up.set(1);
 
   let publishTimer: NodeJS.Timeout | undefined;
-  if (publisher !== undefined) {
-    const runScan = async () => {
-      if (shuttingDown) return;
-      try {
-        await publisher.scanOnce();
-      } catch (error: any) {
-        // One bad scan must not end the loop; the next one may well succeed.
-        log.error('Publish scan failed', {
-          error: error?.message,
-          stack: error?.stack,
-        });
-      }
-    };
-
-    await runScan();
-    publishTimer = setInterval(
-      () => void runScan(),
-      config.PUBLISH_SCAN_INTERVAL_MS,
-    );
-  }
-
   let pollTimer: NodeJS.Timeout | undefined;
-  if (subscriber !== undefined) {
-    const runPoll = async () => {
-      if (shuttingDown) return;
-      try {
-        // Bands installed into a gateway that cannot load them would sit on
-        // disk unread, so wait for it to be upgraded.
-        if (!(await compatibility.allowsInstalling())) return;
-        await subscriber.pollOnce();
-      } catch (error: any) {
-        // One bad poll must not end the loop.
-        log.error('Subscription poll failed', {
-          error: error?.message,
-          stack: error?.stack,
-        });
-      }
-    };
 
-    await runPoll();
-    pollTimer = setInterval(() => void runPoll(), config.POLL_INTERVAL_MS);
-  }
-
-  if (config.isIdle()) {
-    log.info(
-      'index-swarm idle: nothing configured. Set INDEX_SWARM_PUBLISH or INDEX_SWARM_SUBSCRIBE to give it work.',
-      { dataDir: config.DATA_DIR },
-    );
-  } else {
-    log.info('index-swarm started', {
-      dataDir: config.DATA_DIR,
-      publish: config.PUBLISH.map((p) => `${p.name} (${p.kind})`),
-      subscribe: config.SUBSCRIBE.map((s) => s.publisher),
-    });
-  }
-
+  // Registered before the first scan and poll: the first poll downloads every
+  // band and can run for hours, and a signal during it must still stop
+  // cleanly rather than kill the process mid-install.
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
@@ -263,6 +212,63 @@ async function main(): Promise<void> {
 
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  if (publisher !== undefined) {
+    const runScan = async () => {
+      if (shuttingDown) return;
+      try {
+        await publisher.scanOnce();
+      } catch (error: any) {
+        // One bad scan must not end the loop; the next one may well succeed.
+        log.error('Publish scan failed', {
+          error: error?.message,
+          stack: error?.stack,
+        });
+      }
+    };
+
+    await runScan();
+    if (shuttingDown) return;
+    publishTimer = setInterval(
+      () => void runScan(),
+      config.PUBLISH_SCAN_INTERVAL_MS,
+    );
+  }
+
+  if (subscriber !== undefined) {
+    const runPoll = async () => {
+      if (shuttingDown) return;
+      try {
+        // Bands installed into a gateway that cannot load them would sit on
+        // disk unread, so wait for it to be upgraded.
+        if (!(await compatibility.allowsInstalling())) return;
+        await subscriber.pollOnce();
+      } catch (error: any) {
+        // One bad poll must not end the loop.
+        log.error('Subscription poll failed', {
+          error: error?.message,
+          stack: error?.stack,
+        });
+      }
+    };
+
+    await runPoll();
+    if (shuttingDown) return;
+    pollTimer = setInterval(() => void runPoll(), config.POLL_INTERVAL_MS);
+  }
+
+  if (config.isIdle()) {
+    log.info(
+      'index-swarm idle: nothing configured. Set INDEX_SWARM_PUBLISH or INDEX_SWARM_SUBSCRIBE to give it work.',
+      { dataDir: config.DATA_DIR },
+    );
+  } else {
+    log.info('index-swarm started', {
+      dataDir: config.DATA_DIR,
+      publish: config.PUBLISH.map((p) => `${p.name} (${p.kind})`),
+      subscribe: config.SUBSCRIBE.map((s) => s.publisher),
+    });
+  }
 }
 
 main().catch((error: unknown) => {
