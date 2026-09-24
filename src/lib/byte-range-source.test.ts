@@ -11,7 +11,11 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { FileByteRangeSource, ByteRangeSource } from './byte-range-source.js';
+import {
+  FileByteRangeSource,
+  ByteRangeSource,
+  MAX_BYTE_RANGE_READ_SIZE,
+} from './byte-range-source.js';
 import { CachingByteRangeSource } from './caching-byte-range-source.js';
 
 describe('FileByteRangeSource', () => {
@@ -84,6 +88,48 @@ describe('FileByteRangeSource', () => {
       await source.read(1000, 100); // Would read past end of 1024-byte file
     }, /Short read/);
 
+    await source.close();
+  });
+
+  it('refuses a 2^31-byte read with a catchable error, not an abort', async () => {
+    // fs read asserts its length fits in an int32; before the cap, this
+    // aborted the process (SIGABRT) and took the test run with it.
+    const source = new FileByteRangeSource(testFilePath);
+    await source.open();
+    await assert.rejects(() => source.read(0, 2 ** 31), /exceeds the/);
+    await source.close();
+  });
+
+  it('refuses reads above the per-read cap before allocating', async () => {
+    const source = new FileByteRangeSource(testFilePath);
+    await source.open();
+    await assert.rejects(
+      () => source.read(0, MAX_BYTE_RANGE_READ_SIZE + 1),
+      /exceeds the 67108864-byte limit/,
+    );
+    await source.close();
+
+    const tight = new FileByteRangeSource(testFilePath, { maxReadSize: 8 });
+    await tight.open();
+    assert.equal((await tight.read(0, 8)).length, 8);
+    await assert.rejects(() => tight.read(0, 9), /exceeds the 8-byte limit/);
+    await tight.close();
+  });
+
+  it('refuses negative, fractional and unsafe ranges', async () => {
+    const source = new FileByteRangeSource(testFilePath);
+    await source.open();
+    await assert.rejects(() => source.read(-1, 4), /invalid offset/);
+    await assert.rejects(() => source.read(0, 1.5), /invalid size/);
+    await assert.rejects(() => source.read(2 ** 60, 4), /invalid offset/);
+    await source.close();
+  });
+
+  it('reports the file size once open', async () => {
+    const source = new FileByteRangeSource(testFilePath);
+    assert.equal(await source.getSize(), undefined);
+    await source.open();
+    assert.equal(await source.getSize(), 1024);
     await source.close();
   });
 

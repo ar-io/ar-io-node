@@ -8,6 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Signed index publishing (`index-swarm` sidecar, `/ar-io/indexes`)** — a
+  gateway can publish its CDB64 root-TX index bands for other gateways, and
+  subscribe to theirs. Off by default (compose profile `index-swarm`).
+  - The sidecar runs the core image with its own entrypoint. It signs a
+    publication with the gateway's registered observer key (RFC 8785, Ed25519,
+    a monotonic sequence), and resolves publishers through the gateway's
+    `/ar-io/peers`, so it makes no Solana RPC calls.
+  - Subscribers verify every document against the registry and every file
+    against its signed SHA-256. Downloads resume, skip files already on disk,
+    stop for the poll when a publisher's meter answers 402 or 429, and install
+    the newest heights first. Installed bands load without a gateway restart.
+  - New gateway routes: `GET /ar-io/indexes` (the signed document),
+    `/ar-io/indexes/<name>/<band>/<file>` and the immutable
+    `/ar-io/indexes/blob/<sha256>`. The byte routes are rate limited and
+    priced with x402 like data egress, and signed with HTTPSIG. The errors these routes return (400, 402, 404,
+    416, 429, 503) are `Cache-Control: no-store`, so a caching proxy never
+    replays one. `/ar-io/info` advertises what is published.
+  - See `docs/index-swarm.md` (operators: checklists, lookup order, running
+    behind nginx) and `docs/index-publication.md` (the protocol).
+  - `/ar-io/peers` gains each peer's registry fields (wallet, observer key,
+    stake, status), which is what lets subscribers resolve publishers without
+    RPC.
+  - Built to take input from other gateways safely:
+    - the signature is domain-separated (`ar-io-index-publication/v1\n` before the canonical JSON);
+    - documents are bounded in size and shape;
+    - band files are fetched only from the publication's origin (or `INDEX_SWARM_ALLOWED_FILE_ORIGINS`), and redirects are never followed;
+    - downloads stop at their signed size while streaming, and refuse compressed bodies;
+    - every CDB64 partition is walked and bounds-checked before a band installs, and the reader never trusts a length or pointer from the file;
+    - replacing a band never leaves a moment when lookups to it miss;
+    - one band id belongs to one publisher at a time.
+
 - **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
   item sizes for every data item in a list of root bundles, nested bundles
   included, by reading only each bundle's item index and item headers through

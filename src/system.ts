@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { PublishedIndexes } from './routes/published-indexes.js';
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
@@ -869,6 +870,16 @@ const gatewaysDataSource = new FilteredContiguousDataSource({
   dataSource: baseGatewaysDataSource,
   blockedOrigins: config.TRUSTED_GATEWAYS_BLOCKED_ORIGINS,
   blockedIpsAndCidrs: config.TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS,
+});
+
+/**
+ * What the index-swarm sidecar publishes, as the gateway sees it. One instance
+ * backs both the /ar-io/indexes routes and the `indexes` block of
+ * /ar-io/info, so a band is advertised exactly when it is servable.
+ */
+export const publishedIndexes = new PublishedIndexes({
+  log,
+  publishedDir: config.INDEXES_PUBLISHED_DIR,
 });
 
 export const arIOPeerManager = new ArIOPeerManager({

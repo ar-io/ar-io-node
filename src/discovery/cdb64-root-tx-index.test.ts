@@ -937,6 +937,788 @@ describe('Cdb64RootTxIndex', () => {
 
         await index.close();
       });
+
+      it('keeps answering throughout a reload under steady lookups', async () => {
+        const indexDir = path.join(tempDir, 'watch-manifest-steady');
+        const id = Buffer.alloc(32, 0xab);
+        id[1] = 0x03;
+        await createPartitionedIndex(indexDir, [
+          { dataItemId: id, rootTxId: createTxId(300) },
+        ]);
+
+        // Short enough for a test, long enough that a reader still in the
+        // lookup list would be closed with lookups in flight.
+        const drainKey = 'READER_DRAIN_TIMEOUT_MS';
+        const original = (Cdb64RootTxIndex as any)[drainKey];
+        (Cdb64RootTxIndex as any)[drainKey] = 400;
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [indexDir],
+          watch: true,
+        });
+        assert((await index.getRootTx(toB64Url(id))) !== undefined);
+
+        let running = true;
+        let misses = 0;
+        let lookups = 0;
+        // Several loops at once, so some lookup is nearly always in flight.
+        const loops = Array.from({ length: 8 }, async () => {
+          while (running) {
+            const result = await index.getRootTx(toB64Url(id));
+            lookups++;
+            if (result === undefined) misses++;
+          }
+        });
+
+        try {
+          // Rebuild the band in place with the same record plus another.
+          const rebuilt = path.join(tempDir, 'watch-manifest-steady-temp');
+          const other = Buffer.alloc(32, 0xcd);
+          other[1] = 0x04;
+          await createPartitionedIndex(rebuilt, [
+            { dataItemId: id, rootTxId: createTxId(300) },
+            { dataItemId: other, rootTxId: createTxId(400) },
+          ]);
+          // Replace each file by rename, as an installer does, so the old
+          // reader keeps its own bytes; the manifest goes last.
+          const files = (await fs.readdir(rebuilt)).sort((x, y) =>
+            x === 'manifest.json' ? 1 : y === 'manifest.json' ? -1 : 0,
+          );
+          for (const file of files) {
+            await fs.rename(
+              path.join(rebuilt, file),
+              path.join(indexDir, file),
+            );
+          }
+          // Until the new record is visible, then past the drain deadline.
+          for (let i = 0; i < 60; i++) {
+            if ((await index.getRootTx(toB64Url(other))) !== undefined) break;
+            await waitForWatcher(50);
+          }
+          assert(
+            (await index.getRootTx(toB64Url(other))) !== undefined,
+            'the rebuilt band was loaded',
+          );
+          await waitForWatcher(600);
+        } finally {
+          running = false;
+          await Promise.all(loops);
+          (Cdb64RootTxIndex as any)[drainKey] = original;
+          await index.close();
+        }
+
+        assert.ok(lookups > 100, `ran ${lookups} lookups`);
+        assert.equal(misses, 0, 'a record in both versions never misses');
+      });
+    });
+  });
+
+  describe('collection directories', () => {
+    /**
+     * A collection is a directory whose immediate subdirectories are each a
+     * partitioned index. Index bands published by another gateway are
+     * installed and retired underneath one of these while the node runs, so
+     * the readers have to follow without a restart.
+     */
+    const createBand = async (
+      bandDir: string,
+      entries: Array<{ dataItemId: Buffer; rootTxId: Buffer }>,
+      metadata?: Record<string, unknown>,
+    ): Promise<void> => {
+      const writer = new PartitionedCdb64Writer(
+        bandDir,
+        metadata !== undefined ? { metadata } : undefined,
+      );
+      await writer.open();
+      for (const entry of entries) {
+        await writer.add(
+          entry.dataItemId,
+          encodeCdb64Value({ rootTxId: entry.rootTxId }),
+        );
+      }
+      await writer.finalize();
+    };
+
+    /** Poll until a condition holds, so the tests do not race the watcher. */
+    const waitFor = async (
+      predicate: () => Promise<boolean>,
+      timeoutMs = 8000,
+    ): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (await predicate()) return true;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return false;
+    };
+
+    /**
+     * Install a band the way a subscriber does: build it elsewhere, then
+     * rename it into place so the directory never exists half-written.
+     */
+    const installBand = async (
+      collectionDir: string,
+      stagingDir: string,
+      bandName: string,
+      entries: Array<{ dataItemId: Buffer; rootTxId: Buffer }>,
+    ): Promise<void> => {
+      await createBand(stagingDir, entries);
+      await fs.rename(stagingDir, path.join(collectionDir, bandName));
+    };
+
+    it('loads every band in a collection directory', async () => {
+      const collectionDir = path.join(tempDir, 'collection');
+      await fs.mkdir(collectionDir, { recursive: true });
+
+      const idA = createTxId(11);
+      const idB = createTxId(22);
+      await createBand(path.join(collectionDir, 'band-a'), [
+        { dataItemId: idA, rootTxId: createTxId(101) },
+      ]);
+      await createBand(path.join(collectionDir, 'band-b'), [
+        { dataItemId: idB, rootTxId: createTxId(102) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [collectionDir],
+        watch: false,
+      });
+
+      const resultA = await index.getRootTx(toB64Url(idA));
+      const resultB = await index.getRootTx(toB64Url(idB));
+      assert.equal(resultA?.rootTxId, toB64Url(createTxId(101)));
+      assert.equal(resultB?.rootTxId, toB64Url(createTxId(102)));
+
+      await index.close();
+    });
+
+    it('picks up a band installed while running, with no restart', async () => {
+      const collectionDir = path.join(tempDir, 'collection-add');
+      await fs.mkdir(collectionDir, { recursive: true });
+
+      const existingId = createTxId(31);
+      await createBand(path.join(collectionDir, 'band-existing'), [
+        { dataItemId: existingId, rootTxId: createTxId(201) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [collectionDir],
+        watch: true,
+      });
+
+      // Initialize, and confirm the new band's key is not resolvable yet.
+      assert(
+        (await index.getRootTx(toB64Url(existingId))) !== undefined,
+        'existing band should resolve',
+      );
+      const newId = createTxId(32);
+      assert.equal(await index.getRootTx(toB64Url(newId)), undefined);
+
+      await installBand(
+        collectionDir,
+        path.join(tempDir, 'staging-new'),
+        'band-new',
+        [{ dataItemId: newId, rootTxId: createTxId(202) }],
+      );
+
+      const found = await waitFor(
+        async () => (await index.getRootTx(toB64Url(newId))) !== undefined,
+      );
+      assert(found, 'band installed at runtime should become resolvable');
+
+      const result = await index.getRootTx(toB64Url(newId));
+      assert.equal(result?.rootTxId, toB64Url(createTxId(202)));
+
+      // The band that was already there is untouched.
+      assert(
+        (await index.getRootTx(toB64Url(existingId))) !== undefined,
+        'existing band should still resolve',
+      );
+
+      await index.close();
+    });
+
+    it('reloads a band rebuilt in place, answering throughout', async () => {
+      const collectionDir = path.join(tempDir, 'collection-rebuild');
+      await fs.mkdir(collectionDir, { recursive: true });
+      const bandDir = path.join(collectionDir, 'band-tip');
+      const kept = createTxId(41);
+      const added = createTxId(42);
+      await createBand(bandDir, [
+        { dataItemId: kept, rootTxId: createTxId(401) },
+      ]);
+
+      const drainKey = 'READER_DRAIN_TIMEOUT_MS';
+      const original = (Cdb64RootTxIndex as any)[drainKey];
+      (Cdb64RootTxIndex as any)[drainKey] = 400;
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [collectionDir],
+        watch: true,
+      });
+      assert((await index.getRootTx(toB64Url(kept))) !== undefined);
+
+      let running = true;
+      let misses = 0;
+      const loops = Array.from({ length: 8 }, async () => {
+        while (running) {
+          if ((await index.getRootTx(toB64Url(kept))) === undefined) misses++;
+        }
+      });
+      try {
+        // Rebuild the same band id in place: new files renamed over the
+        // old ones, the manifest last, which the watcher sees as a change.
+        const staging = path.join(tempDir, 'collection-rebuild-staging');
+        await createBand(staging, [
+          { dataItemId: kept, rootTxId: createTxId(401) },
+          { dataItemId: added, rootTxId: createTxId(402) },
+        ]);
+        const files = (await fs.readdir(staging)).sort((x, y) =>
+          x === 'manifest.json' ? 1 : y === 'manifest.json' ? -1 : 0,
+        );
+        for (const file of files) {
+          await fs.rename(path.join(staging, file), path.join(bandDir, file));
+        }
+        assert(
+          await waitFor(
+            async () => (await index.getRootTx(toB64Url(added))) !== undefined,
+          ),
+          'the rebuilt band is loaded without a restart',
+        );
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      } finally {
+        running = false;
+        await Promise.all(loops);
+        (Cdb64RootTxIndex as any)[drainKey] = original;
+        await index.close();
+      }
+      assert.equal(misses, 0, 'a record in both versions never misses');
+    });
+
+    // chokidar reports normalised paths, so a source spelled with a trailing
+    // slash or a leading `./` must still match them.
+    const spellings: Array<[string, (dir: string) => string]> = [
+      ['a trailing slash', (dir) => `${dir}/`],
+      ['a leading ./', (dir) => `./${path.relative(process.cwd(), dir)}`],
+    ];
+    for (const [description, spell] of spellings) {
+      it(`follows installs and retirements for a source with ${description}`, async () => {
+        const collectionDir = path.join(
+          tempDir,
+          `collection-spelled-${spellings.findIndex(([d]) => d === description)}`,
+        );
+        await fs.mkdir(collectionDir, { recursive: true });
+
+        const goingId = createTxId(61);
+        const goingDir = path.join(collectionDir, 'band-going');
+        await createBand(goingDir, [
+          { dataItemId: goingId, rootTxId: createTxId(501) },
+        ]);
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [spell(collectionDir)],
+          watch: true,
+        });
+        // An assertion failure must still close the watcher, or the run hangs.
+        try {
+          assert(
+            (await index.getRootTx(toB64Url(goingId))) !== undefined,
+            'band present at startup should resolve',
+          );
+
+          const newId = createTxId(62);
+          await installBand(
+            collectionDir,
+            path.join(tempDir, `staging-spelled-${description.length}`),
+            'band-new',
+            [{ dataItemId: newId, rootTxId: createTxId(502) }],
+          );
+          assert(
+            await waitFor(
+              async () =>
+                (await index.getRootTx(toB64Url(newId))) !== undefined,
+            ),
+            'band installed at runtime should become resolvable',
+          );
+
+          await fs.rm(goingDir, { recursive: true, force: true });
+          assert(
+            await waitFor(
+              async () =>
+                (await index.getRootTx(toB64Url(goingId))) === undefined,
+            ),
+            'retired band should stop resolving',
+          );
+        } finally {
+          await index.close();
+        }
+      });
+    }
+
+    it('drops a band when it is retired', async () => {
+      const collectionDir = path.join(tempDir, 'collection-remove');
+      await fs.mkdir(collectionDir, { recursive: true });
+
+      const keptId = createTxId(41);
+      const goingId = createTxId(42);
+      await createBand(path.join(collectionDir, 'band-kept'), [
+        { dataItemId: keptId, rootTxId: createTxId(301) },
+      ]);
+      const goingDir = path.join(collectionDir, 'band-going');
+      await createBand(goingDir, [
+        { dataItemId: goingId, rootTxId: createTxId(302) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [collectionDir],
+        watch: true,
+      });
+
+      assert(
+        (await index.getRootTx(toB64Url(goingId))) !== undefined,
+        'band should resolve before removal',
+      );
+
+      await fs.rm(goingDir, { recursive: true, force: true });
+
+      const dropped = await waitFor(
+        async () => (await index.getRootTx(toB64Url(goingId))) === undefined,
+      );
+      assert(dropped, 'retired band should stop resolving');
+
+      // Retiring one band must not disturb the others.
+      const kept = await index.getRootTx(toB64Url(keptId));
+      assert.equal(kept?.rootTxId, toB64Url(createTxId(301)));
+
+      await index.close();
+    });
+
+    // `.tmp.<pid>` is what the partitioned writers create; bare `.tmp` is the
+    // older convention.
+    for (const suffix of ['.tmp', `.tmp.${process.pid}`]) {
+      it(`ignores a band directory that is still being written (${suffix})`, async () => {
+        const collectionDir = path.join(tempDir, `collection${suffix}-test`);
+        await fs.mkdir(collectionDir, { recursive: true });
+
+        const readyId = createTxId(51);
+        const partialId = createTxId(52);
+        await createBand(path.join(collectionDir, 'band-ready'), [
+          { dataItemId: readyId, rootTxId: createTxId(401) },
+        ]);
+        // A temp suffix marks a band mid-install; it must not be loaded even
+        // though it already has a valid manifest.
+        await createBand(path.join(collectionDir, `band-partial${suffix}`), [
+          { dataItemId: partialId, rootTxId: createTxId(402) },
+        ]);
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [collectionDir],
+          watch: false,
+        });
+
+        assert(
+          (await index.getRootTx(toB64Url(readyId))) !== undefined,
+          'finished band should resolve',
+        );
+        assert.equal(
+          await index.getRootTx(toB64Url(partialId)),
+          undefined,
+          'band still being written should be ignored',
+        );
+
+        await index.close();
+      });
+    }
+
+    describe('band search order', () => {
+      // One key present in every band, each mapping it to a different root,
+      // so which root comes back shows which band was searched first.
+      const key = createTxId(81);
+
+      it('searches the newest band first, whatever the names', async () => {
+        const collectionDir = path.join(tempDir, 'collection-order');
+        await fs.mkdir(collectionDir, { recursive: true });
+        // Name order is oldest first; the tip is named to sort in the middle.
+        await createBand(
+          path.join(collectionDir, 'a-h0-1000'),
+          [{ dataItemId: key, rootTxId: createTxId(801) }],
+          { heightRange: [0, 1000] },
+        );
+        await createBand(
+          path.join(collectionDir, 'b-h1950000-tip'),
+          [{ dataItemId: key, rootTxId: createTxId(803) }],
+          { heightRange: [2000, null] },
+        );
+        await createBand(
+          path.join(collectionDir, 'c-h1000-2000'),
+          [{ dataItemId: key, rootTxId: createTxId(802) }],
+          { heightRange: [1000, 2000] },
+        );
+        await createBand(path.join(collectionDir, '0-unranged'), [
+          { dataItemId: key, rootTxId: createTxId(800) },
+        ]);
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [collectionDir],
+          watch: false,
+        });
+        assert.equal(
+          (await index.getRootTx(toB64Url(key)))?.rootTxId,
+          toB64Url(createTxId(803)),
+          'the open-ended tip band answers first',
+        );
+        await index.close();
+      });
+
+      it('keeps the configured order of sources', async () => {
+        // Newest-first applies within a source only: an operator's first
+        // source still wins over a later one with a newer band.
+        const firstDir = path.join(tempDir, 'collection-first');
+        const secondDir = path.join(tempDir, 'collection-second');
+        await createBand(
+          path.join(firstDir, 'band-old'),
+          [{ dataItemId: key, rootTxId: createTxId(811) }],
+          { heightRange: [0, 1000] },
+        );
+        await createBand(
+          path.join(secondDir, 'band-tip'),
+          [{ dataItemId: key, rootTxId: createTxId(812) }],
+          { heightRange: [1000, null] },
+        );
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [firstDir, secondDir],
+          watch: false,
+        });
+        assert.equal(
+          (await index.getRootTx(toB64Url(key)))?.rootTxId,
+          toB64Url(createTxId(811)),
+        );
+        await index.close();
+      });
+
+      it('does not let a source claim the bands of a sibling sharing its prefix', async () => {
+        // `collection-sib` is a string prefix of `collection-sib2`. The first
+        // source's old band must still answer before the second's tip band.
+        const firstDir = path.join(tempDir, 'collection-sib');
+        const secondDir = path.join(tempDir, 'collection-sib2');
+        await createBand(
+          path.join(firstDir, 'band-old'),
+          [{ dataItemId: key, rootTxId: createTxId(831) }],
+          { heightRange: [0, 1000] },
+        );
+        await createBand(
+          path.join(secondDir, 'band-tip'),
+          [{ dataItemId: key, rootTxId: createTxId(832) }],
+          { heightRange: [1000, null] },
+        );
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [firstDir, secondDir],
+          watch: false,
+        });
+        assert.equal(
+          (await index.getRootTx(toB64Url(key)))?.rootTxId,
+          toB64Url(createTxId(831)),
+        );
+        await index.close();
+      });
+
+      it('orders the bands of a source written as a non-normalized path', async () => {
+        const collectionDir = path.join(tempDir, 'collection-relative');
+        await createBand(
+          path.join(collectionDir, 'a-old'),
+          [{ dataItemId: key, rootTxId: createTxId(841) }],
+          { heightRange: [0, 1000] },
+        );
+        await createBand(
+          path.join(collectionDir, 'b-tip'),
+          [{ dataItemId: key, rootTxId: createTxId(842) }],
+          { heightRange: [1000, null] },
+        );
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [
+            './' + path.relative(process.cwd(), collectionDir) + path.sep,
+          ],
+          watch: false,
+        });
+        assert.equal(
+          (await index.getRootTx(toB64Url(key)))?.rootTxId,
+          toB64Url(createTxId(842)),
+          'the tip band answers first',
+        );
+        await index.close();
+      });
+
+      it('puts a band installed at runtime in its place by height', async () => {
+        const collectionDir = path.join(tempDir, 'collection-order-add');
+        await fs.mkdir(collectionDir, { recursive: true });
+        await createBand(
+          path.join(collectionDir, 'band-a'),
+          [{ dataItemId: key, rootTxId: createTxId(821) }],
+          { heightRange: [0, 1000] },
+        );
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [collectionDir],
+          watch: true,
+        });
+        // Closed however the test ends: a live watcher keeps the run open.
+        try {
+          assert.equal(
+            (await index.getRootTx(toB64Url(key)))?.rootTxId,
+            toB64Url(createTxId(821)),
+          );
+
+          // Named to sort after the existing band, but newer, so it must be
+          // searched first once the watcher loads it.
+          await createBand(
+            path.join(tempDir, 'staging-order'),
+            [{ dataItemId: key, rootTxId: createTxId(822) }],
+            { heightRange: [1000, null] },
+          );
+          await fs.rename(
+            path.join(tempDir, 'staging-order'),
+            path.join(collectionDir, 'band-z'),
+          );
+
+          const reordered = await waitFor(
+            async () =>
+              (await index.getRootTx(toB64Url(key)))?.rootTxId ===
+              toB64Url(createTxId(822)),
+          );
+          assert(reordered, 'the newer band should be searched first');
+        } finally {
+          await index.close();
+        }
+      });
+    });
+
+    it('serves a flat directory and a collection in the same source', async () => {
+      // A directory may hold loose .cdb files, band subdirectories, or both.
+      // Supporting both keeps an existing flat directory working unchanged.
+      const mixedDir = path.join(tempDir, 'mixed');
+      await fs.mkdir(mixedDir, { recursive: true });
+
+      const looseId = createTxId(61);
+      const bandId = createTxId(62);
+      await createTestCdb(path.join(mixedDir, 'loose.cdb'), [
+        { dataItemId: looseId, rootTxId: createTxId(501) },
+      ]);
+      await createBand(path.join(mixedDir, 'band-one'), [
+        { dataItemId: bandId, rootTxId: createTxId(502) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [mixedDir],
+        watch: false,
+      });
+
+      assert.equal(
+        (await index.getRootTx(toB64Url(looseId)))?.rootTxId,
+        toB64Url(createTxId(501)),
+      );
+      assert.equal(
+        (await index.getRootTx(toB64Url(bandId)))?.rootTxId,
+        toB64Url(createTxId(502)),
+      );
+
+      await index.close();
+    });
+
+    it('watches every configured directory, not only the first', async () => {
+      // Previously a single shared watcher meant the second and later
+      // directory sources were never watched, and files added to them were
+      // silently missed until the next restart.
+      const firstDir = path.join(tempDir, 'watch-first');
+      const secondDir = path.join(tempDir, 'watch-second');
+      await fs.mkdir(firstDir, { recursive: true });
+      await fs.mkdir(secondDir, { recursive: true });
+
+      const firstId = createTxId(71);
+      await createTestCdb(path.join(firstDir, 'first.cdb'), [
+        { dataItemId: firstId, rootTxId: createTxId(601) },
+      ]);
+      const secondId = createTxId(72);
+      await createTestCdb(path.join(secondDir, 'second.cdb'), [
+        { dataItemId: secondId, rootTxId: createTxId(602) },
+      ]);
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [firstDir, secondDir],
+        watch: true,
+      });
+
+      assert(
+        (await index.getRootTx(toB64Url(firstId))) !== undefined,
+        'first directory should resolve',
+      );
+
+      // Add a file to the SECOND directory, the one that used to go unwatched.
+      const lateId = createTxId(73);
+      const stagedPath = path.join(tempDir, 'late-staged.cdb');
+      await createTestCdb(stagedPath, [
+        { dataItemId: lateId, rootTxId: createTxId(603) },
+      ]);
+      await fs.rename(stagedPath, path.join(secondDir, 'late.cdb'));
+
+      const found = await waitFor(
+        async () => (await index.getRootTx(toB64Url(lateId))) !== undefined,
+      );
+      assert(
+        found,
+        'a file added to a later directory source should be picked up',
+      );
+
+      await index.close();
+    });
+
+    describe('a directory source that does not exist yet', () => {
+      /**
+       * A subscriber's gateway usually starts before the sidecar has created
+       * the install directory. The source has to be picked up when it
+       * appears, not written off as a missing file.
+       */
+      const originalPollMs = Cdb64RootTxIndex.PENDING_DIRECTORY_POLL_MS;
+      beforeEach(() => {
+        Cdb64RootTxIndex.PENDING_DIRECTORY_POLL_MS = 50;
+      });
+      afterEach(() => {
+        Cdb64RootTxIndex.PENDING_DIRECTORY_POLL_MS = originalPollMs;
+      });
+
+      it('loads it, and bands installed into it, once it appears', async () => {
+        // Missing two levels deep, as installed/<index> is on a fresh volume.
+        const collectionDir = path.join(tempDir, 'indexes', 'installed', 'x');
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [collectionDir],
+          watch: true,
+        });
+        const firstId = createTxId(41);
+        assert.equal(await index.getRootTx(toB64Url(firstId)), undefined);
+
+        await fs.mkdir(collectionDir, { recursive: true });
+        await installBand(
+          collectionDir,
+          path.join(tempDir, 'staging-first'),
+          'band-first',
+          [{ dataItemId: firstId, rootTxId: createTxId(211) }],
+        );
+        assert(
+          await waitFor(
+            async () =>
+              (await index.getRootTx(toB64Url(firstId))) !== undefined,
+          ),
+          'band in a directory that appeared later should resolve',
+        );
+
+        // And the collection watcher is live from then on.
+        const secondId = createTxId(42);
+        await installBand(
+          collectionDir,
+          path.join(tempDir, 'staging-second'),
+          'band-second',
+          [{ dataItemId: secondId, rootTxId: createTxId(212) }],
+        );
+        assert(
+          await waitFor(
+            async () =>
+              (await index.getRootTx(toB64Url(secondId))) !== undefined,
+          ),
+          'band installed after the directory appeared should resolve',
+        );
+
+        await index.close();
+      });
+
+      it('keeps configured order when the late source loads', async () => {
+        const lateDir = path.join(tempDir, 'late');
+        const presentDir = path.join(tempDir, 'present');
+        const id = createTxId(43);
+        await createBand(path.join(presentDir, 'band'), [
+          { dataItemId: id, rootTxId: createTxId(221) },
+        ]);
+
+        // The late source is configured first, so once it loads it must win.
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [lateDir, presentDir],
+          watch: true,
+        });
+        const before = await index.getRootTx(toB64Url(id));
+        assert.equal(before?.rootTxId, toB64Url(createTxId(221)));
+
+        await fs.mkdir(lateDir, { recursive: true });
+        await installBand(lateDir, path.join(tempDir, 'staging-late'), 'band', [
+          { dataItemId: id, rootTxId: createTxId(222) },
+        ]);
+        assert(
+          await waitFor(
+            async () =>
+              (await index.getRootTx(toB64Url(id)))?.rootTxId ===
+              toB64Url(createTxId(222)),
+          ),
+          'the earlier-configured source should take precedence once loaded',
+        );
+
+        await index.close();
+      });
+
+      it('stops waiting when closed', async () => {
+        const collectionDir = path.join(tempDir, 'never');
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [collectionDir],
+          watch: true,
+        });
+        await index.getRootTx(toB64Url(createTxId(44)));
+        assert.equal((index as any).pendingDirectories.size, 1);
+
+        await index.close();
+        assert.equal((index as any).pendingDirectories.size, 0);
+
+        // Appearing after close loads nothing and starts no watcher.
+        await fs.mkdir(collectionDir, { recursive: true });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        assert.equal((index as any).watchers.size, 0);
+      });
+
+      it('does not wait for a missing file named like one', async () => {
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [path.join(tempDir, 'missing.cdb')],
+          watch: true,
+        });
+        await index.getRootTx(toB64Url(createTxId(45)));
+        assert.equal((index as any).pendingDirectories.size, 0);
+        await index.close();
+      });
+
+      it('does not wait when watching is off', async () => {
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [path.join(tempDir, 'absent')],
+          watch: false,
+        });
+        await index.getRootTx(toB64Url(createTxId(46)));
+        assert.equal((index as any).pendingDirectories.size, 0);
+        await index.close();
+      });
     });
   });
 });

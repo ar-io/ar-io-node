@@ -3463,6 +3463,16 @@ export const ARIO_ANT_PROGRAM_ID = env.varOrUndefined('ARIO_ANT_PROGRAM_ID');
 // Rate Limiter
 //
 
+/**
+ * Directory the /ar-io/indexes routes serve from: what the index-swarm
+ * sidecar publishes. Read only; the gateway never writes here. The routes
+ * serve only what the signed publication in this directory lists.
+ */
+export const INDEXES_PUBLISHED_DIR = env.varOrDefault(
+  'INDEXES_PUBLISHED_DIR',
+  'data/indexes/published',
+);
+
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
 

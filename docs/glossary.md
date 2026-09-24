@@ -232,6 +232,72 @@ the partitions and sources of a partitioned CDB64 index.
 be loaded from: local file, local directory, HTTP URL, Arweave transaction, or
 Arweave byte-range.
 
+## Index Distribution
+
+<a id="index-publication"></a> **Index Publication** — The signed JSON document
+a gateway serves at `/ar-io/indexes` listing the index artifacts it publishes,
+their bands, and where each band's files can be fetched. Signed with the
+gateway's Ed25519 observer key so it verifies against the publisher's
+registered `observerAddress` regardless of which mirror or transport delivered
+it. Distinct from an [Index Manifest](#index-manifest), which describes the
+partitions inside one CDB64 index. Specified in
+[index-publication.md](index-publication.md).
+
+<a id="band"></a> **Band** — One immutable unit of a published index, normally
+covering a block height range. Bands let a subscriber re-fetch only what
+changed: older height bands stay put while a rolling tip band is rebuilt on
+the publisher's cadence. A band's identity is the set of its file digests.
+
+<a id="artifact-kind"></a> **Artifact Kind** — The `kind` field of a published
+index, selecting the plugin that validates and installs its bands
+(`cdb64-root-tx` first). Keeps the distribution path independent of what is
+being distributed.
+
+<a id="publication-sequence"></a> **Publication Sequence** — A monotonic
+counter per publisher, paired with the previous document's SHA-256. A
+subscriber refuses a lower sequence than the highest it has *seen*, whether or
+not that newer document's bands installed, so a cached or mirrored older
+document cannot roll it back. An equal sequence is accepted:
+it is what an unchanged publisher serves on every poll.
+
+<a id="collection-source"></a> **Collection Source** — A configured CDB64
+source that is a directory *of* indexes rather than one index: each
+subdirectory holding a `manifest.json` becomes its own reader, added and
+removed at runtime without a gateway restart.
+
+<a id="index-swarm"></a> **Index Swarm Sidecar** — The optional `index-swarm`
+compose service, running the core image with its own entrypoint, that
+publishes this gateway's bands and subscribes to other gateways'. It never
+touches the gateway's databases or the chain. See
+[index-swarm.md](index-swarm.md).
+
+<a id="publisher"></a> **Publisher** — A registered gateway serving a signed
+[Index Publication](#index-publication). Only the node holding the registered
+observer key can sign one, which is why a multi-node publisher sends
+`/ar-io/indexes*` to that node.
+
+<a id="subscriber"></a> **Subscriber** — A gateway whose sidecar follows one or
+more publishers, identified by wallet: it verifies each document against the
+registry, downloads bands by digest, and installs them where its gateway's
+[Collection Source](#collection-source) loads them.
+
+<a id="blob-route"></a> **Blob Route** — `GET /ar-io/indexes/blob/<sha256>`,
+which serves a published file by its digest. The address cannot change
+meaning, so responses are immutable and safe for any cache to keep; the
+publisher serves it from a hard link that pins the exact bytes it hashed.
+
+<a id="install-retire"></a> **Install / Retire** — A subscriber *installs* a
+band by renaming a fully downloaded and verified directory into
+`installed/<index>/`, where the gateway picks it up; it *retires* one the
+publisher no longer offers by removing its manifest (the gateway stops using
+it) and deleting the directory after the
+[supersede grace period](#supersede).
+
+<a id="supersede"></a> **Supersede** — A band's `metadata.supersedes` names the
+band or bands it replaces. The publisher stops offering those at once and
+deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`; subscribers retire
+them on the same grace, so a lookup in flight never loses its band.
+
 ## Data Storage Architecture
 
 <a id="age-floor"></a> **Age Floor** - The minimum age cached data must reach

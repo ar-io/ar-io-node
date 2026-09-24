@@ -586,4 +586,41 @@ describe('buildArIoInfo', () => {
 
     assert.strictEqual(result.httpsig, undefined);
   });
+
+  describe('indexes', () => {
+    const base = {
+      wallet: 'test-wallet',
+      programIds: {
+        core: undefined,
+        gar: undefined,
+        arns: undefined,
+        ant: undefined,
+      },
+      ans104UnbundleFilter: {},
+      ans104IndexFilter: {},
+      release: 'r123',
+      bundlerUrls: [],
+    };
+
+    it('advertises published indexes where other gateways can find them', () => {
+      const result = buildArIoInfo({
+        ...base,
+        indexNames: ['root-tx-index'],
+      });
+      assert.deepStrictEqual(result.indexes, {
+        manifestUrl: '/ar-io/indexes',
+        names: ['root-tx-index'],
+      });
+    });
+
+    it('omits the block when nothing is published', () => {
+      // Absent, not empty: a crawler should not fetch a document that is not
+      // there, and an empty list would read as "publishes, but nothing".
+      assert.strictEqual(buildArIoInfo(base).indexes, undefined);
+      assert.strictEqual(
+        buildArIoInfo({ ...base, indexNames: [] }).indexes,
+        undefined,
+      );
+    });
+  });
 });

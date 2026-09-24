@@ -31,6 +31,9 @@ info:
     - **Arweave node API**: node-compatible routes (`/info`, `/tx/{txId}`,
       `/chunk/{offset}`, blocks, wallets, pricing), so existing Arweave
       clients work unchanged.
+    - **Index sharing**: a gateway can publish the indexes that locate data
+      items inside their bundles, signed with its registered observer key,
+      at `/ar-io/indexes`; other gateways and clients verify and use them.
     - **The gateway itself**: `/ar-io/info` (release, capabilities),
       `/ar-io/peers`, health checks and metrics.
 
@@ -137,6 +140,12 @@ tags:
       Query and manage rate limit bucket balances. Supports both public balance queries and top-ups via x402 payments or admin authentication.
 
       **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are experimental features subject to change. API endpoints, parameters, behavior, and configuration options (environment variables) may evolve in future releases as these systems continue to be developed. See [docs/x402-and-rate-limiting.md](https://github.com/ar-io/ar-io-node/blob/develop/docs/x402-and-rate-limiting.md) for comprehensive documentation.
+  - name: Indexes
+    description: |
+      Verifiable Index Sharing: the signed publication of the root
+      transaction indexes this gateway offers to other gateways and
+      clients, and their files by name or by SHA-256. See
+      [Index Sharing](https://docs.ar.io/learn/gateways/index-sharing).
 components:
   securitySchemes:
     bearerAuth:
@@ -1117,10 +1126,178 @@ paths:
                       - algorithm
                       - publicKey
                       - keyId
+                  indexes:
+                    type: object
+                    description: |
+                      Index artifacts this gateway publishes through its index-swarm
+                      sidecar. Present only while a valid publication exists, so a
+                      crawler can decide whether this gateway offers anything it
+                      wants without fetching the document.
+                    properties:
+                      manifestUrl:
+                        type: string
+                        description: Where the signed publication document is served
+                        example: '/ar-io/indexes'
+                      names:
+                        type: array
+                        description: Names of the indexes currently published, sorted
+                        items:
+                          type: string
+                        example: ['root-tx-index']
+                    required:
+                      - manifestUrl
+                      - names
                 required:
                   - supportedManifestVersions
                   - release
                   - bundlers
+  '/ar-io/indexes':
+    get:
+      tags: [Indexes]
+      summary: Get the index publication this gateway offers
+      description: |
+        Returns the signed document listing the index artifacts this gateway's
+        index-swarm sidecar publishes: each index, its bands, and every file in
+        each band with its size and SHA-256. The document carries a detached
+        Ed25519 signature by the gateway's registered observer key, so it
+        verifies against the gateway registry however it was obtained. When
+        HTTPSIG_ENABLED is set, the live response is also signed with
+        HTTPSIG, covering Content-Digest; a client must not require that
+        signature, since the detached one is what proves the document.
+
+        The byte routes below serve only what this document lists.
+        404 when the gateway publishes nothing. Not rate limited, so a client
+        that has run out of tokens can still learn what it could fetch. HEAD
+        is supported.
+
+        Every error response on the three /ar-io/indexes routes carries
+        `Cache-Control: no-store`, so a cache in front of the gateway never
+        keeps it. Only 200, 206 and 304 carry a cacheable value.
+      responses:
+        '200':
+          description: The publication document.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: 'public, max-age=60' }
+            ETag:
+              schema: { type: string }
+            Content-Digest:
+              schema: { type: string }
+              description: RFC 9530 SHA-256 of the body.
+            x-ar-io-index-publication:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+        '304':
+          description: Not modified.
+        '404':
+          description: 'Nothing published. Body `{}`, `Cache-Control: no-store`.'
+  '/ar-io/indexes/{name}/{band}/{file}':
+    get:
+      tags: [Indexes]
+      summary: Get a published index file by name
+      description: |
+        Serves one file of a published band. Rate limited and priced as data
+        egress. Supports a single byte range, which resuming downloaders
+        use. The name is only a lookup key: the bytes are read from the
+        publisher's hard link for the listed digest, so a band rebuilt in
+        place is never served under the old digest. 503 with Retry-After
+        while that link is missing or disagrees with the publication during
+        a band update. Sent with
+        `Cache-Control: public, no-cache`, because a name is reused when a
+        band is rebuilt; fetch by digest from the blob route for anything a
+        cache should keep. When the gateway meters these routes (a rate
+        limiter or x402 is configured) success responses carry
+        `private, no-cache` instead, so a shared cache cannot replay paid
+        bytes to a client that has not paid. Error responses carry
+        `Cache-Control: no-store`.
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: band, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: string } }
+        - { name: Range, in: header, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: The whole file.
+          headers:
+            Cache-Control: { schema: { type: string, example: 'public, no-cache' }, description: '`private, no-cache` when the gateway meters the byte routes.' }
+            ETag: { schema: { type: string }, description: The file's SHA-256, quoted. }
+            X-AR-IO-Index-File: { schema: { type: string }, description: 'The SHA-256 the publication lists for this file, hex. An HTTPSIG trigger: the response is signed.' }
+            Repr-Digest: { schema: { type: string }, description: RFC 9530 SHA-256 of the whole file. Covered by the signature. }
+            Content-Digest: { schema: { type: string }, description: RFC 9530 SHA-256 of this body. Covered by the signature. }
+            Signature: { schema: { type: string }, description: RFC 9421 signature (when HTTPSIG_ENABLED) }
+            Signature-Input: { schema: { type: string }, description: RFC 9421 covered components, key ID and creation time }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: A byte range of the file. Carries Repr-Digest but not Content-Digest. When HTTPSIG_ENABLED is set it is signed, the signature covering Repr-Digest.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '304':
+          description: Not modified.
+        '400':
+          description: Malformed name or range.
+        '402':
+          description: Payment required (x402), when rate limited and payments are enabled.
+        '404':
+          description: Not listed in the publication.
+        '416':
+          description: Range not satisfiable.
+        '429':
+          description: Rate limited.
+        '503':
+          description: The file is being updated or its digest has no link yet; retry.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: { type: string }
+  '/ar-io/indexes/blob/{sha256}':
+    get:
+      tags: [Indexes]
+      summary: Get a published index file by content address
+      description: |
+        The same bytes as the named route, addressed by SHA-256, so a client
+        that knows a digest can fetch it from any gateway publishing it.
+        Immutable by construction. Rate limited, priced and signed like the
+        named route, with the same headers, except that success responses
+        carry `Cache-Control: public, max-age=31536000, immutable`, or
+        `private, max-age=31536000, immutable` when the gateway meters the
+        byte routes, so a shared cache cannot replay paid bytes. Error
+        responses carry `Cache-Control: no-store`, so a cache never keeps a
+        402 or 429 for a year under this URL.
+      parameters:
+        - { name: sha256, in: path, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
+      responses:
+        '200':
+          description: The file.
+          headers:
+            Cache-Control: { schema: { type: string, example: 'public, max-age=31536000, immutable' }, description: '`private, max-age=31536000, immutable` when the gateway meters the byte routes.' }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: A byte range of the file.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '304':
+          description: Not modified.
+        '402':
+          description: Payment required (x402), when rate limited and payments are enabled.
+        '404':
+          description: No published file has this digest.
+        '429':
+          description: Rate limited.
+        '503':
+          description: The digest is published but not yet servable (the publisher is replacing a band or has not linked the file). Retry after `Retry-After` seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: { type: string }
   '/ar-io/peers':
     get:
       tags: [Gateway]

@@ -24,6 +24,7 @@
  */
 
 import * as fs from 'node:fs/promises';
+import { Dirent } from 'node:fs';
 import * as path from 'node:path';
 import { watch, FSWatcher } from 'chokidar';
 import winston from 'winston';
@@ -46,7 +47,12 @@ import {
 } from '../lib/cdb64-encoding.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import { PartitionedCdb64Reader } from '../lib/partitioned-cdb64-reader.js';
-import { Cdb64Manifest, parseManifest } from '../lib/cdb64-manifest.js';
+import {
+  Cdb64Manifest,
+  isCdb64TempDirName,
+  parseManifest,
+} from '../lib/cdb64-manifest.js';
+import * as metrics from '../metrics.js';
 
 /** Valid CDB64 file extensions */
 const CDB64_EXTENSIONS = ['.cdb', '.cdb64'];
@@ -164,6 +170,75 @@ interface ReaderEntry {
   sourceSpec: string;
   sourceType: string;
   isPartitioned: boolean;
+  /**
+   * Lookups currently inside this reader. A reader being retired is dropped
+   * from the lookup list immediately but closed only once this reaches zero,
+   * so a lookup already in progress finishes instead of surfacing as a miss.
+   */
+  inFlight: number;
+  /**
+   * The block heights a partitioned index covers, from its manifest's
+   * `metadata.heightRange` (`[from, to]`, `to` null for an open-ended tip
+   * band). Kept so a collection's bands can be searched newest first.
+   */
+  heightRange?: [number, number | null];
+}
+
+/**
+ * Reads a manifest's `metadata.heightRange`, or undefined when it is absent
+ * or malformed; a band without one is still served, just searched last.
+ */
+function manifestHeightRange(
+  manifest: Cdb64Manifest,
+): [number, number | null] | undefined {
+  const value = manifest.metadata?.heightRange;
+  if (!Array.isArray(value) || value.length !== 2) return undefined;
+  const [from, to] = value as unknown[];
+  if (typeof from !== 'number' || !Number.isSafeInteger(from) || from < 0) {
+    return undefined;
+  }
+  if (to === null) return [from, null];
+  if (typeof to !== 'number' || !Number.isSafeInteger(to) || to < from) {
+    return undefined;
+  }
+  return [from, to];
+}
+
+/**
+ * Search order for the readers of one directory source: newest heights first.
+ *
+ * Most lookups are for recent data, and every reader tried before the one
+ * holding a key costs a random read (on an HDD, a seek), so the tip band
+ * belongs at the front. Ordered by the top of each reader's height range (an
+ * open-ended `[from, null]` tip first), then by its bottom, both descending,
+ * then by key. Readers with no range, such as a flat directory's files, go
+ * last in key order.
+ */
+function compareNewestFirst(
+  [keyA, a]: [string, ReaderEntry],
+  [keyB, b]: [string, ReaderEntry],
+): number {
+  const top = (entry: ReaderEntry): number =>
+    entry.heightRange === undefined
+      ? -1
+      : (entry.heightRange[1] ?? Number.POSITIVE_INFINITY);
+  const bottom = (entry: ReaderEntry): number => entry.heightRange?.[0] ?? -1;
+  const byTop = top(b) - top(a);
+  if (byTop !== 0 && !Number.isNaN(byTop)) return byTop;
+  const byBottom = bottom(b) - bottom(a);
+  if (byBottom !== 0) return byBottom;
+  return keyA.localeCompare(keyB);
+}
+
+/**
+ * Whether a reader key is a path inside the directory `dir`. Keys are built
+ * with `path.join`, which normalizes, so both sides are normalized before
+ * comparing, and the match stops at a path separator: `data/idx` does not
+ * claim `data/idx2/band`.
+ */
+function isUnderDirectory(key: string, dir: string): boolean {
+  const base = path.normalize(dir).replace(/[\\/]+$/, '');
+  return path.normalize(key).startsWith(base + path.sep);
 }
 
 export class Cdb64RootTxIndex implements DataItemRootIndex {
@@ -174,8 +249,21 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   private initialized = false;
   private initializationPromise: Promise<void> | null = null;
   private watchEnabled: boolean;
-  private watcher: FSWatcher | null = null;
-  private watchedDirectory: string | null = null;
+  /**
+   * Active watchers, keyed `<kind>:<path>`. Every configured directory gets
+   * its own: a single shared watcher meant that with more than one directory
+   * source only the first was ever watched, and changes under the rest were
+   * silently missed.
+   */
+  private watchers: Map<string, FSWatcher> = new Map();
+
+  /**
+   * Directory sources that did not exist yet when the index started, each
+   * with the timer that checks for it. A sidecar creates its install
+   * directory on first use, so a gateway that starts first must wait for it
+   * rather than write it off as a missing file.
+   */
+  private pendingDirectories: Map<string, NodeJS.Timeout> = new Map();
 
   // Dependencies for remote sources
   private contiguousDataSource?: ContiguousDataSource;
@@ -240,6 +328,13 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
   /** Maximum manifest size in bytes (10 MB) */
   private static readonly MAX_MANIFEST_SIZE = 10 * 1024 * 1024;
+
+  /** How long to wait for in-flight lookups before closing a retired reader. */
+  private static readonly READER_DRAIN_TIMEOUT_MS = 5000;
+  private static readonly READER_DRAIN_POLL_MS = 25;
+
+  /** How often a directory source that does not exist yet is checked for. */
+  static PENDING_DIRECTORY_POLL_MS = 30_000;
 
   /**
    * Converts a fetch Response body to an AsyncIterable.
@@ -351,6 +446,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       sourceSpec,
       sourceType: parsed.type,
       isPartitioned: false,
+      inFlight: 0,
     };
   }
 
@@ -366,33 +462,15 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Starts watching a directory for CDB64 file changes.
-   *
-   * Note: Only one directory can be watched at a time. If multiple directory
-   * sources are configured, only the first will be watched.
+   * Starts watching a flat directory for CDB64 file additions and removals.
    */
   private startWatching(dirPath: string): void {
     if (!this.watchEnabled) return;
 
-    // Only one directory can be watched at a time
-    if (this.watchedDirectory !== null && this.watchedDirectory !== dirPath) {
-      this.log.warn(
-        'Multiple directory sources configured; only one can be watched',
-        {
-          watchedDirectory: this.watchedDirectory,
-          skippedDirectory: dirPath,
-        },
-      );
-      return;
-    }
+    const key = `files:${dirPath}`;
+    if (this.watchers.has(key)) return;
 
-    // Already watching this directory
-    if (this.watcher && this.watchedDirectory === dirPath) {
-      return;
-    }
-
-    this.watchedDirectory = dirPath;
-    this.watcher = watch(dirPath, {
+    const watcher = watch(dirPath, {
       ignored: (filePath: string) => {
         return !isCdb64File(filePath) && filePath !== dirPath;
       },
@@ -404,8 +482,9 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       },
       depth: 0,
     });
+    this.watchers.set(key, watcher);
 
-    this.watcher.on('add', async (filePath: string) => {
+    watcher.on('add', async (filePath: string) => {
       if (!isCdb64File(filePath)) return;
       await this.addFileReader(filePath).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -416,7 +495,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       });
     });
 
-    this.watcher.on('unlink', async (filePath: string) => {
+    watcher.on('unlink', async (filePath: string) => {
       if (!isCdb64File(filePath)) return;
       await this.removeReader(filePath).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -427,7 +506,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       });
     });
 
-    this.watcher.on('error', (error: unknown) => {
+    watcher.on('error', (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.log.error('CDB64 file watcher error', { error: message });
     });
@@ -441,27 +520,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   private startWatchingManifest(dirPath: string): void {
     if (!this.watchEnabled) return;
 
-    // Only one directory can be watched at a time
-    if (this.watchedDirectory !== null && this.watchedDirectory !== dirPath) {
-      this.log.warn(
-        'Multiple directory sources configured; only one can be watched',
-        {
-          watchedDirectory: this.watchedDirectory,
-          skippedDirectory: dirPath,
-        },
-      );
-      return;
-    }
+    const key = `manifest:${dirPath}`;
+    if (this.watchers.has(key)) return;
 
-    // Already watching this directory
-    if (this.watcher && this.watchedDirectory === dirPath) {
-      return;
-    }
-
-    this.watchedDirectory = dirPath;
     const manifestPath = path.join(dirPath, 'manifest.json');
 
-    this.watcher = watch(manifestPath, {
+    const watcher = watch(manifestPath, {
       persistent: true,
       ignoreInitial: true,
       awaitWriteFinish: {
@@ -469,6 +533,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         pollInterval: 100,
       },
     });
+    this.watchers.set(key, watcher);
 
     // Handler for manifest changes (reused for both 'change' and 'add' events)
     const handleManifestChange = async () => {
@@ -487,11 +552,11 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       });
     };
 
-    this.watcher.on('change', handleManifestChange);
+    watcher.on('change', handleManifestChange);
     // Handle atomic renames (common in production): unlink + add rather than change
-    this.watcher.on('add', handleManifestChange);
+    watcher.on('add', handleManifestChange);
 
-    this.watcher.on('error', (error: unknown) => {
+    watcher.on('error', (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.log.error('Manifest watcher error', { error: message });
     });
@@ -503,16 +568,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
    * Reloads a partitioned directory after manifest change.
    */
   private async reloadPartitionedDirectory(dirPath: string): Promise<void> {
-    // Close existing reader
+    // Open the replacement first and publish it before draining the old
+    // reader. Draining while the old reader is still in the lookup list
+    // lets new lookups keep entering it, so under steady traffic it never
+    // goes idle, is closed at the drain deadline with lookups in flight, and
+    // those lookups miss until the new reader arrives.
     const existingEntry = this.readerMap.get(dirPath);
-    if (existingEntry) {
-      if (existingEntry.reader.isOpen()) {
-        await existingEntry.reader.close();
-      }
-      this.readerMap.delete(dirPath);
-    }
-
-    // Create new reader with updated manifest
     try {
       const entry = await this.createPartitionedReader(dirPath, {
         type: 'partitioned-directory',
@@ -531,7 +592,222 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         path: dirPath,
         error: error.message,
       });
+      this.readerMap.delete(dirPath);
       this.rebuildReaderList();
+    } finally {
+      if (existingEntry !== undefined) {
+        await this.closeReaderWhenIdle(existingEntry);
+      }
+    }
+  }
+
+  /**
+   * Starts watching a collection directory: one whose immediate
+   * subdirectories are each a partitioned index.
+   *
+   * A band is installed by renaming a fully-written directory into place and
+   * retired by removing it, so the appearance or disappearance of a
+   * subdirectory's `manifest.json` is the signal to load or drop a reader.
+   * Watching at depth 1 with the partition files ignored keeps the watch
+   * cheap: a band holds up to 256 `.cdb` files that never need watching, and
+   * only its manifest matters here.
+   */
+  private startWatchingCollection(dirPath: string): void {
+    if (!this.watchEnabled) return;
+
+    const key = `collection:${dirPath}`;
+    if (this.watchers.has(key)) return;
+
+    const watcher = watch(dirPath, {
+      // chokidar 4 removed glob support, so the pattern is expressed as a
+      // depth-bounded watch plus a filter rather than `<dir>/*/manifest.json`.
+      ignored: (filePath: string) => isCdb64File(filePath),
+      persistent: true,
+      ignoreInitial: true,
+      awaitWriteFinish: {
+        stabilityThreshold: 1000,
+        pollInterval: 100,
+      },
+      depth: 1,
+    });
+    this.watchers.set(key, watcher);
+
+    // chokidar reports normalised paths, which a source spelled with a
+    // trailing slash or a leading `./` never equals, so compare resolved
+    // paths.
+    const resolvedDir = path.resolve(dirPath);
+
+    /**
+     * The reader key for a band directory in this collection, spelled as the
+     * startup scan spells it so both find the same reader; undefined if the
+     * directory is not an immediate child of the collection.
+     */
+    const bandKeyFor = (bandDir: string): string | undefined => {
+      if (path.resolve(path.dirname(bandDir)) !== resolvedDir) return undefined;
+      return path.join(dirPath, path.basename(bandDir));
+    };
+
+    /** The band directory a path belongs to, if it is one of ours. */
+    const bandDirFor = (manifestPath: string): string | undefined => {
+      if (path.basename(manifestPath) !== 'manifest.json') return undefined;
+      const bandDir = bandKeyFor(path.dirname(manifestPath));
+      if (bandDir === undefined || isCdb64TempDirName(bandDir)) {
+        return undefined;
+      }
+      return bandDir;
+    };
+
+    const handleBandManifest = async (manifestPath: string) => {
+      const bandDir = bandDirFor(manifestPath);
+      if (bandDir === undefined) return;
+
+      if (this.readerMap.has(bandDir)) {
+        await this.reloadPartitionedDirectory(bandDir);
+        return;
+      }
+
+      await this.initializePartitionedDirectory(bandDir, {
+        watchManifest: false,
+      });
+      this.rebuildReaderList();
+      this.log.info('CDB64 index band added', {
+        collection: dirPath,
+        band: bandDir,
+      });
+    };
+
+    watcher.on('add', (manifestPath: string) => {
+      handleBandManifest(manifestPath).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.error('Failed handling index band add', {
+          path: manifestPath,
+          error: message,
+        });
+      });
+    });
+
+    watcher.on('change', (manifestPath: string) => {
+      handleBandManifest(manifestPath).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.error('Failed handling index band change', {
+          path: manifestPath,
+          error: message,
+        });
+      });
+    });
+
+    watcher.on('unlink', (manifestPath: string) => {
+      const bandDir = bandDirFor(manifestPath);
+      if (bandDir === undefined) return;
+      this.removeReader(bandDir).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.error('Failed handling index band removal', {
+          path: bandDir,
+          error: message,
+        });
+      });
+    });
+
+    // Removing a whole band directory does not always surface as an unlink of
+    // the manifest inside it, so treat the directory going away as removal.
+    watcher.on('unlinkDir', (removedDir: string) => {
+      const bandDir = bandKeyFor(removedDir);
+      if (bandDir === undefined || !this.readerMap.has(bandDir)) return;
+      this.removeReader(bandDir).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.error('Failed handling index band directory removal', {
+          path: bandDir,
+          error: message,
+        });
+      });
+    });
+
+    watcher.on('error', (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.error('Index collection watcher error', { error: message });
+    });
+
+    this.log.info('CDB64 index collection watcher started', { path: dirPath });
+  }
+
+  /**
+   * Lists the band directories inside a collection: immediate subdirectories
+   * holding a `manifest.json`. Build directories (see
+   * {@link isCdb64TempDirName}) are skipped, so a band still being written is
+   * not loaded half-formed.
+   */
+  private async discoverBandsInDirectory(dirPath: string): Promise<string[]> {
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    const bands: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (isCdb64TempDirName(entry.name)) continue;
+      const bandPath = path.join(dirPath, entry.name);
+      if (await this.isPartitionedDirectory(bandPath)) {
+        bands.push(bandPath);
+      }
+    }
+    return bands.sort();
+  }
+
+  /**
+   * Loads every band in a collection directory and watches for more.
+   *
+   * @returns how many bands were loaded.
+   */
+  private async initializeCollectionDirectory(
+    dirPath: string,
+  ): Promise<number> {
+    const bands = await this.discoverBandsInDirectory(dirPath);
+
+    for (const bandPath of bands) {
+      await this.initializePartitionedDirectory(bandPath, {
+        watchManifest: false,
+      });
+    }
+
+    this.startWatchingCollection(dirPath);
+
+    if (bands.length > 0) {
+      this.log.info('CDB64 index collection initialized', {
+        path: dirPath,
+        bandCount: bands.length,
+      });
+    }
+
+    return bands.length;
+  }
+
+  /**
+   * Closes a reader once no lookup is inside it.
+   *
+   * Closing under an in-flight read makes that lookup throw, which the caller
+   * sees as a miss on a source that was perfectly good a moment earlier. The
+   * wait is bounded so a wedged read cannot leak the file handle forever.
+   */
+  private async closeReaderWhenIdle(entry: ReaderEntry): Promise<void> {
+    const deadline = Date.now() + Cdb64RootTxIndex.READER_DRAIN_TIMEOUT_MS;
+    while (entry.inFlight > 0 && Date.now() < deadline) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, Cdb64RootTxIndex.READER_DRAIN_POLL_MS),
+      );
+    }
+
+    if (entry.inFlight > 0) {
+      this.log.warn('Closing CDB64 reader with lookups still in flight', {
+        source: entry.sourceSpec,
+        inFlight: entry.inFlight,
+      });
+    }
+
+    if (entry.reader.isOpen()) {
+      await entry.reader.close();
     }
   }
 
@@ -539,12 +815,19 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
    * Stops watching the directory.
    */
   private async stopWatching(): Promise<void> {
-    if (this.watcher) {
-      await this.watcher.close();
-      this.watcher = null;
-      this.watchedDirectory = null;
-      this.log.info('CDB64 file watcher stopped');
+    for (const timer of this.pendingDirectories.values()) {
+      clearTimeout(timer);
     }
+    this.pendingDirectories.clear();
+
+    if (this.watchers.size === 0) return;
+
+    const watcherCount = this.watchers.size;
+    await Promise.allSettled(
+      [...this.watchers.values()].map((watcher) => watcher.close()),
+    );
+    this.watchers.clear();
+    this.log.info('CDB64 file watchers stopped', { watcherCount });
   }
 
   /**
@@ -567,6 +850,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         sourceSpec: filePath,
         sourceType: 'file',
         isPartitioned: false,
+        inFlight: 0,
       };
       this.readerMap.set(filePath, entry);
       this.rebuildReaderList();
@@ -601,11 +885,11 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     if (!entry) return;
 
     try {
-      if (entry.reader.isOpen()) {
-        await entry.reader.close();
-      }
+      // Drop it from the lookup list first so no new lookup reaches it, then
+      // wait for lookups already inside it before closing.
       this.readerMap.delete(key);
       this.rebuildReaderList();
+      await this.closeReaderWhenIdle(entry);
       this.log.info('CDB64 source removed', {
         source: key,
         type: entry.sourceType,
@@ -619,7 +903,13 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Rebuilds the readers array from the readerMap in sorted order.
+   * Rebuilds the readers array from the readerMap.
+   *
+   * Configured sources keep their configured order. Within one directory
+   * source (a flat directory's files, or a collection's bands) readers are
+   * searched newest first; see {@link compareNewestFirst}. Called on every
+   * add, reload and removal, so a band installed at runtime takes its place
+   * in that order at once.
    */
   private rebuildReaderList(): void {
     // Preserve config order: iterate sources in their original order.
@@ -629,25 +919,30 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     // those by prefix so they stay grouped under their source.
     const result: ReaderEntry[] = [];
     const claimed = new Set<string>();
+    const perSource = new Map<string, number>();
 
     for (const sourceSpec of this.sources) {
       if (this.readerMap.has(sourceSpec)) {
         result.push(this.readerMap.get(sourceSpec)!);
         claimed.add(sourceSpec);
+        perSource.set(sourceSpec, 1);
       } else {
-        // Non-partitioned directory: individual file keys start with sourceSpec.
-        // Sort alphabetically within the directory for deterministic ordering.
+        // A directory whose readers are keyed by paths under it: a flat
+        // directory's files, or a collection's bands. Searched newest band
+        // first, so a lookup for recent data does not probe every older band
+        // before reaching the tip.
         const matched: [string, ReaderEntry][] = [];
         for (const [key, entry] of this.readerMap) {
-          if (!claimed.has(key) && key.startsWith(sourceSpec)) {
+          if (!claimed.has(key) && isUnderDirectory(key, sourceSpec)) {
             matched.push([key, entry]);
             claimed.add(key);
           }
         }
-        matched.sort(([a], [b]) => a.localeCompare(b));
+        matched.sort(compareNewestFirst);
         for (const [, entry] of matched) {
           result.push(entry);
         }
+        perSource.set(sourceSpec, matched.length);
       }
     }
 
@@ -660,6 +955,13 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     }
 
     this.readers = result;
+
+    // Report per source rather than in total: a collection source's count is
+    // how many bands are currently installed, which is what drops when a band
+    // is retired and rises when one arrives.
+    for (const [sourceSpec, count] of perSource) {
+      metrics.cdb64RootTxIndexReadersGauge.set({ source: sourceSpec }, count);
+    }
   }
 
   /**
@@ -702,6 +1004,75 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       // File doesn't exist or can't be stat'd - not a directory
       return undefined;
     }
+  }
+
+  /** True only when nothing exists at the path; other errors are not. */
+  private async pathIsMissing(filePath: string): Promise<boolean> {
+    try {
+      await fs.stat(filePath);
+      return false;
+    } catch (error: any) {
+      return error?.code === 'ENOENT';
+    }
+  }
+
+  /**
+   * Checks for a directory source that does not exist yet until it does,
+   * then loads it exactly as it would have been loaded at startup.
+   *
+   * Without this, a gateway that starts before the index-swarm sidecar has
+   * created its install directory treats the path as a missing file and
+   * never looks at it again, so every band installed afterwards sits on disk
+   * unread until the gateway restarts. A timer rather than a watcher, because
+   * the missing part may be several levels deep and the gateway mounts the
+   * volume read only, so it cannot create the directory itself.
+   */
+  private waitForDirectory(dirPath: string): void {
+    if (!this.watchEnabled || this.pendingDirectories.has(dirPath)) return;
+
+    this.log.info('CDB64 directory source does not exist yet; waiting for it', {
+      path: dirPath,
+      pollMs: Cdb64RootTxIndex.PENDING_DIRECTORY_POLL_MS,
+    });
+
+    const check = async () => {
+      if (!this.pendingDirectories.has(dirPath)) return;
+      const found = await this.checkIfDirectory(dirPath);
+      // close() may have run while that was awaited.
+      if (!this.pendingDirectories.has(dirPath)) return;
+      if (found === undefined) {
+        schedule();
+        return;
+      }
+      this.pendingDirectories.delete(dirPath);
+      try {
+        if (await this.isPartitionedDirectory(found)) {
+          await this.initializePartitionedDirectory(found);
+        } else {
+          await this.initializeDirectory(found);
+        }
+        this.rebuildReaderList();
+        this.log.info('CDB64 directory source appeared and was loaded', {
+          path: found,
+        });
+      } catch (error: any) {
+        this.log.error('Failed to load CDB64 directory source', {
+          path: found,
+          error: error.message,
+        });
+      }
+    };
+
+    const schedule = () => {
+      const timer = setTimeout(() => {
+        void check();
+      }, Cdb64RootTxIndex.PENDING_DIRECTORY_POLL_MS);
+      // Waiting must never be what keeps the process alive.
+      timer.unref();
+      this.pendingDirectories.set(dirPath, timer);
+    };
+
+    schedule();
   }
 
   /**
@@ -859,12 +1230,18 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
     await reader.open();
 
-    return {
+    const entry: ReaderEntry = {
       reader,
       sourceSpec,
       sourceType: parsed.type,
       isPartitioned: true,
+      inFlight: 0,
     };
+    const heightRange = manifestHeightRange(manifest);
+    if (heightRange !== undefined) {
+      entry.heightRange = heightRange;
+    }
+    return entry;
   }
 
   /**
@@ -894,7 +1271,10 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   /**
    * Initializes a partitioned directory (has manifest.json).
    */
-  private async initializePartitionedDirectory(dirPath: string): Promise<void> {
+  private async initializePartitionedDirectory(
+    dirPath: string,
+    { watchManifest = true }: { watchManifest?: boolean } = {},
+  ): Promise<void> {
     try {
       const entry = await this.createPartitionedReader(dirPath, {
         type: 'partitioned-directory',
@@ -908,8 +1288,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         ).getTotalPartitionCount(),
       });
 
-      // Watch manifest.json for changes
-      this.startWatchingManifest(dirPath);
+      // Watch manifest.json for changes. A band inside a collection is
+      // already covered by the collection's own watcher, so it does not need
+      // one of its own.
+      if (watchManifest) {
+        this.startWatchingManifest(dirPath);
+      }
     } catch (error: any) {
       this.log.error('Failed to initialize partitioned CDB64 directory', {
         path: dirPath,
@@ -924,10 +1308,6 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   private async initializeDirectory(dirPath: string): Promise<void> {
     const files = await this.discoverFilesInDirectory(dirPath);
 
-    if (files.length === 0) {
-      this.log.warn('No CDB64 files found in directory', { path: dirPath });
-    }
-
     for (const filePath of files) {
       try {
         const source = new FileByteRangeSource(filePath);
@@ -938,6 +1318,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           sourceSpec: filePath,
           sourceType: 'file',
           isPartitioned: false,
+          inFlight: 0,
         });
       } catch (fileError: any) {
         this.log.error('Failed to initialize CDB64 file in directory', {
@@ -949,6 +1330,19 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     }
 
     this.startWatching(dirPath);
+
+    // The same directory may instead, or additionally, hold one subdirectory
+    // per index: a collection. Checking for both keeps an existing flat
+    // directory behaving exactly as before while letting a directory that
+    // bands are installed into pick them up without a restart, including
+    // while it is still empty.
+    const bandCount = await this.initializeCollectionDirectory(dirPath);
+
+    if (files.length === 0 && bandCount === 0) {
+      this.log.warn('No CDB64 files or index bands found in directory', {
+        path: dirPath,
+      });
+    }
   }
 
   /**
@@ -1000,6 +1394,17 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           continue;
         }
 
+        // A local path that does not exist and is not named like a CDB64
+        // file is a directory nothing has created yet. Wait for it.
+        if (
+          parsed.type === 'file' &&
+          !isCdb64File(parsed.path) &&
+          (await this.pathIsMissing(parsed.path))
+        ) {
+          this.waitForDirectory(parsed.path);
+          continue;
+        }
+
         // Single file or remote source
         try {
           const entry = await this.createReader(sourceSpec);
@@ -1023,7 +1428,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       this.log.info('CDB64 root TX index initialized', {
         sourceCount: this.sources.length,
         readerCount: this.readers.length,
-        watching: this.watchedDirectory !== null,
+        watcherCount: this.watchers.size,
       });
     } catch (error: any) {
       // Close any readers that were opened before the failure
@@ -1085,6 +1490,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
     // Search through all readers in order (first match wins)
     for (const entry of currentReaders) {
+      entry.inFlight += 1;
       try {
         const valueBuffer = await entry.reader.get(keyBuffer);
 
@@ -1128,6 +1534,8 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           error: message,
         });
         continue;
+      } finally {
+        entry.inFlight -= 1;
       }
     }
 

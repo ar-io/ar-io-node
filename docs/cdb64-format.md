@@ -227,6 +227,27 @@ path = [RootTxId, BundleAId, BundleBId]
 
 For path formats, the root TX ID is derived from `path[0]`, eliminating the need for a separate `r` field.
 
+### Integer Encoding
+
+`i`, `d` and `s` are non-negative integers, but a decoder must not assume a
+MessagePack integer type. The reference encoder chooses the smallest form that
+holds the value, and switches to a float from 2^32 upward:
+
+| Value | MessagePack type | First byte |
+|---|---|---|
+| 0 to 127 | positive fixint | `0x00`–`0x7f` |
+| 128 to 255 | uint 8 | `0xcc` |
+| 256 to 65,535 | uint 16 | `0xcd` |
+| 65,536 to 2^32 − 1 | uint 32 | `0xce` |
+| 2^32 to 2^53 − 1 | **float 64** | `0xcb` |
+
+The float 64 case is routine, not exotic: any item that starts more than
+4.29 GB into its root transaction has an offset in that range. It is exact,
+because every offset is a safe integer and float 64 represents all integers
+up to 2^53 − 1 exactly. A decoder should accept each of these types, and
+`uint 64` (`0xcf`) as well for values from other encoders, and treat the
+result as an integer.
+
 ### Field Mapping
 
 | MessagePack Key | Full Name | Description |

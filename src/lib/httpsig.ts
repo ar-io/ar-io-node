@@ -42,6 +42,14 @@ export const TRIGGER_HEADERS = new Set([
   'x-arns-ant-id',
   'x-arweave-chunk-data-root',
   'x-arweave-chunk-tx-id',
+  // An index publication. The document also carries its own detached
+  // signature, which survives relay; this signs the live response, binding
+  // the body through Content-Digest to what this gateway actually served.
+  'x-ar-io-index-publication',
+  // A file of a published index band, named by the SHA-256 the signed
+  // publication lists for it. Signing binds that claim, and the body through
+  // Content-Digest (or Repr-Digest on a range), to this gateway.
+  'x-ar-io-index-file',
   'x-ar-io-chunk-source-type',
 ]);
 
@@ -59,10 +67,16 @@ export const TRIGGER_HEADERS = new Set([
  * the legacy pair (`-data-item-offset`, `-data-offset`) and the aligned
  * pair (`-item-offset`, `-item-size`) are signed; the legacy pair will be
  * removed after a deprecation window per docs/glossary.md.
+ *
+ * `repr-digest` (RFC 9530) is the digest of the whole representation, and is
+ * what a range response carries instead of `content-digest`, which covers
+ * only the bytes sent. Signing it is what binds a signed 206 to the file it
+ * is part of; without it such a signature says nothing about the bytes.
  */
 export const CO_SIGNABLE_HEADERS = new Set([
   'content-type',
   'content-digest',
+  'repr-digest',
   'x-ar-io-root-data-item-offset',
   'x-ar-io-root-data-offset',
   'x-ar-io-root-item-offset',
@@ -113,6 +127,10 @@ export function isTriggerHeader(name: string): boolean {
 
 // Ed25519 SPKI DER has a fixed 12-byte prefix before the raw 32-byte public key.
 const SPKI_ED25519_PREFIX_LENGTH = 12;
+
+// The same 12 bytes, spelled out, for rebuilding a public key from raw key
+// material: SEQUENCE { SEQUENCE { OID 1.3.101.112 } BIT STRING (33, 0 unused) }.
+const SPKI_ED25519_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 // Ed25519 PKCS8 DER has a fixed 16-byte prefix before the raw 32-byte seed.
 const PKCS8_ED25519_PREFIX = Buffer.from(
@@ -275,6 +293,52 @@ export function getPublicKeyBase64Url(publicKey: crypto.KeyObject): string {
  */
 export function getSolanaAddress(publicKey: crypto.KeyObject): string {
   return bs58.encode(getRawPublicKey(publicKey));
+}
+
+/**
+ * True when `value` is the base58 encoding of a raw 32-byte Ed25519 key, the
+ * form a Solana address takes. Used to validate an address read from an
+ * untrusted document before it is turned into a key.
+ */
+export function isSolanaAddress(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    return false;
+  }
+  try {
+    return bs58.decode(value).length === 32;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rebuild an Ed25519 public key from a Solana address.
+ *
+ * The inverse of {@link getSolanaAddress}: a Solana address is the base58
+ * encoding of the raw 32-byte public key, so a verifier that has read an
+ * address from the gateway registry can reconstruct the key it needs without
+ * fetching anything further. Used to verify index publication manifests
+ * against the publisher's registered `observerAddress`.
+ *
+ * @throws if the address is not base58 or does not decode to 32 bytes.
+ */
+export function publicKeyFromSolanaAddress(address: string): crypto.KeyObject {
+  let raw: Uint8Array;
+  try {
+    raw = bs58.decode(address);
+  } catch {
+    throw new Error(`Invalid Solana address: not base58: ${address}`);
+  }
+  if (raw.length !== 32) {
+    throw new Error(
+      `Invalid Solana address: decoded ${raw.length} bytes, expected 32`,
+    );
+  }
+  return crypto.createPublicKey({
+    key: Buffer.concat([SPKI_ED25519_PREFIX, Buffer.from(raw)]),
+    format: 'der',
+    type: 'spki',
+  });
 }
 
 /**

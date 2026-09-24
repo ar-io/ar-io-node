@@ -88,7 +88,10 @@ load), use the `testing` skill in `.claude/skills/`; `release` and
   Cached and HEAD responses always emit it from the stored hash; small
   uncached responses (≤ `HTTPSIG_BODY_DIGEST_BUFFER_MAX_BYTES`, default 2 MiB)
   buffer + hash to emit it. Larger uncached bodies stream without a body
-  digest. Chunks are bounded at 256 KiB so they always carry one.
+  digest. Chunks are bounded at 256 KiB so they always carry one. Index band
+  files (`/ar-io/indexes`) are signed through the `X-AR-IO-Index-File`
+  trigger; `Repr-Digest` is co-signable too, so a signed 206 is bound to the
+  whole file.
 
 ## Conventions
 

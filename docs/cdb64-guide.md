@@ -80,6 +80,37 @@ A directory containing `manifest.json` and partitioned `.cdb` files:
 CDB64_ROOT_TX_INDEX_SOURCES=/path/to/partitioned-index/
 ```
 
+### Collection Directory
+
+A directory whose immediate subdirectories are each a partitioned index:
+
+```text
+indexes/
+  band-0-1349999/
+    manifest.json
+    00.cdb ... ff.cdb
+  band-1350000-1849999/
+    manifest.json
+    00.cdb ... ff.cdb
+```
+
+```bash
+CDB64_ROOT_TX_INDEX_SOURCES=/path/to/indexes/
+```
+
+Each subdirectory holding a `manifest.json` is loaded as its own index, so a
+collection is the right shape when indexes arrive and are retired over time
+rather than being configured once. Subdirectories whose names end in `.tmp`
+are skipped, which lets a writer build an index and then rename it into place
+without it being loaded half-written.
+
+A directory is detected as a collection at runtime; no separate setting is
+needed. It need not exist yet, either: a local source that is missing and not
+named like a `.cdb` file is checked for every 30 seconds and loaded once it
+appears, which is what lets a gateway start before the
+[index-swarm sidecar](index-swarm.md) has created its install directory. The same directory may also hold loose `.cdb` files, and both are
+loaded, so an existing flat directory keeps working exactly as before.
+
 ### HTTP URL
 
 A CDB64 file served over HTTP/HTTPS:
@@ -237,6 +268,23 @@ CDB64_ROOT_TX_INDEX_SOURCES=RootTxId:1024:5000:manifest
 ### Manifest Watching
 
 For local partitioned indexes, the gateway watches `manifest.json` for changes. When the manifest is updated (e.g., via atomic rename), the index is automatically reloaded.
+
+Every configured local directory is watched, not only the first. Earlier
+releases shared a single watcher, so with more than one directory source the
+second and later ones were never watched and changes under them were missed
+until the next restart.
+
+### Collection Watching
+
+For a collection directory, the gateway watches one level down for each
+subdirectory's `manifest.json`. A band directory renamed into place is loaded
+within a second or so, and one that is removed has its reader dropped. A
+reader being retired is taken out of the lookup order first and closed only
+once the lookups already inside it have finished, so retiring a band does not
+turn a request in flight into a miss.
+
+The `cdb64_root_tx_index_readers` metric reports open readers per configured
+source; for a collection that is the number of bands currently installed.
 
 ## Performance Tuning
 

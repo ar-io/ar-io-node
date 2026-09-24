@@ -11,7 +11,13 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { cdb64Hash, Cdb64Writer, Cdb64Reader } from './cdb64.js';
+import {
+  cdb64Hash,
+  Cdb64Writer,
+  Cdb64Reader,
+  verifyCdb64File,
+} from './cdb64.js';
+import { ByteRangeSource, FileByteRangeSource } from './byte-range-source.js';
 
 // CLI tools require the native cdb64 module - check availability for skip
 let hasNativeCdb64 = false;
@@ -709,6 +715,326 @@ describe('CDB64', () => {
 
       const outputPair = outputLines[0].split(',').slice(0, 2).join(',');
       assert.equal(outputPair, inputData[0]);
+    });
+  });
+});
+
+/**
+ * Hand-built files whose structure lies about itself.
+ *
+ * Index files can come from a remote publisher, so every offset and length
+ * in them is attacker-chosen. Each file here is a few kilobytes and passes
+ * the header-only record-count check; the reader must answer a lookup with
+ * undefined rather than trusting what the bytes claim.
+ */
+describe('CDB64 hostile input', () => {
+  let tempDir: string;
+  const key = Buffer.alloc(32, 7);
+  const hash = cdb64Hash(key);
+  const tableIndex = Number(hash % 256n);
+  const tableLength = 2;
+  const startSlot = Number((hash / 256n) % BigInt(tableLength));
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cdb64-hostile-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  /**
+   * One record at 4096 declaring the given lengths (followed by the real
+   * key and a short value), then one two-slot table whose probe slot has
+   * `key`'s hash and points at that record.
+   */
+  const craft = async ({
+    keyLength = BigInt(key.length),
+    valueLength = 4n,
+    tablePosition,
+    tableSlots = BigInt(tableLength),
+    recordPosition = 4096n,
+    name = 'hostile.cdb',
+  }: {
+    keyLength?: bigint;
+    valueLength?: bigint;
+    tablePosition?: bigint;
+    tableSlots?: bigint;
+    recordPosition?: bigint;
+    name?: string;
+  } = {}): Promise<string> => {
+    const record = Buffer.alloc(16 + key.length + 4);
+    record.writeBigUInt64LE(keyLength, 0);
+    record.writeBigUInt64LE(valueLength, 8);
+    key.copy(record, 16);
+    const realTablePosition = 4096 + record.length;
+
+    const table = Buffer.alloc(tableLength * 16);
+    table.writeBigUInt64LE(hash, startSlot * 16);
+    table.writeBigUInt64LE(recordPosition, startSlot * 16 + 8);
+
+    const header = Buffer.alloc(4096);
+    // Unused tables point at the table region with zero slots, as the
+    // writer leaves them.
+    for (let i = 0; i < 256; i++) {
+      header.writeBigUInt64LE(BigInt(realTablePosition), i * 16);
+    }
+    header.writeBigUInt64LE(
+      tablePosition ?? BigInt(realTablePosition),
+      tableIndex * 16,
+    );
+    header.writeBigUInt64LE(tableSlots, tableIndex * 16 + 8);
+
+    const filePath = path.join(tempDir, name);
+    await fs.writeFile(filePath, Buffer.concat([header, record, table]));
+    return filePath;
+  };
+
+  /** Wraps a source and records the largest read anyone asked it for. */
+  class RecordingSource implements ByteRangeSource {
+    largestRead = 0;
+    constructor(private inner: FileByteRangeSource) {}
+    async open(): Promise<void> {
+      await this.inner.open();
+    }
+    async read(offset: number, size: number): Promise<Buffer> {
+      this.largestRead = Math.max(this.largestRead, size);
+      return this.inner.read(offset, size);
+    }
+    async getSize(): Promise<number | undefined> {
+      return this.inner.getSize();
+    }
+    async close(): Promise<void> {
+      await this.inner.close();
+    }
+    isOpen(): boolean {
+      return this.inner.isOpen();
+    }
+  }
+
+  const lookup = async (
+    filePath: string,
+  ): Promise<{ value: Buffer | undefined; reader: Cdb64Reader }> => {
+    const reader = new Cdb64Reader(filePath);
+    await reader.open();
+    try {
+      return { value: await reader.get(key), reader };
+    } finally {
+      await reader.close();
+    }
+  };
+
+  it('sanity: the crafted layout is a readable, well-formed file', async () => {
+    const filePath = await craft();
+    const { value } = await lookup(filePath);
+    assert.deepEqual(value, Buffer.alloc(4));
+    assert.deepEqual(await verifyCdb64File(filePath), { records: 1 });
+  });
+
+  it('returns undefined for a key length of 2^31 instead of aborting the process', async () => {
+    // Before the fix this reached fs read with a length of 2^31 and Node
+    // aborted on an assertion (SIGABRT), taking this test process with it.
+    const filePath = await craft({ keyLength: 2n ** 31n });
+    const { value } = await lookup(filePath);
+    assert.equal(value, undefined);
+  });
+
+  it('returns undefined for key lengths past 2^53', async () => {
+    const filePath = await craft({ keyLength: 2n ** 63n });
+    const { value } = await lookup(filePath);
+    assert.equal(value, undefined);
+  });
+
+  it('returns undefined for a huge value length without asking for the bytes', async () => {
+    const filePath = await craft({ valueLength: 2n ** 30n });
+    const source = new RecordingSource(new FileByteRangeSource(filePath));
+    const reader = Cdb64Reader.fromSource(source);
+    await reader.open();
+    const value = await reader.get(key);
+    await reader.close();
+
+    assert.equal(value, undefined);
+    assert.equal(reader.getCorruptRecordCount(), 1);
+    // Header, slots and record headers only: nothing near the claimed size.
+    assert.ok(
+      source.largestRead <= 4096,
+      `largest read was ${source.largestRead} bytes`,
+    );
+  });
+
+  it('returns undefined for a value length under the cap that runs past the file', async () => {
+    const filePath = await craft({ valueLength: 512n * 1024n });
+    const { value, reader } = await lookup(filePath);
+    assert.equal(value, undefined);
+    assert.equal(reader.getCorruptRecordCount(), 1);
+  });
+
+  it('honors a tighter maxValueLength', async () => {
+    const filePath = await craft();
+    const reader = new Cdb64Reader(filePath, true, { maxValueLength: 3 });
+    await reader.open();
+    assert.equal(await reader.get(key), undefined);
+    await reader.close();
+  });
+
+  it('returns undefined for a table pointer past the end of the file', async () => {
+    const filePath = await craft({ tablePosition: 2n ** 40n });
+    const { value, reader } = await lookup(filePath);
+    assert.equal(value, undefined);
+    assert.equal(reader.getCorruptRecordCount(), 1);
+  });
+
+  it('returns undefined for a table whose slots run past the end of the file', async () => {
+    // Same record count on paper would need 2^62 records; the point is the
+    // table cannot fit.
+    const filePath = await craft({ tableSlots: 2n ** 62n });
+    const { value } = await lookup(filePath);
+    assert.equal(value, undefined);
+  });
+
+  it('returns undefined for a table pointer inside the header', async () => {
+    const filePath = await craft({ tablePosition: 16n });
+    const { value } = await lookup(filePath);
+    assert.equal(value, undefined);
+  });
+
+  it('returns undefined for a slot pointing past the record region', async () => {
+    const filePath = await craft({ recordPosition: 2n ** 40n });
+    const { value, reader } = await lookup(filePath);
+    assert.equal(value, undefined);
+    assert.equal(reader.getCorruptRecordCount(), 1);
+  });
+
+  it('refuses to iterate a record with an out-of-bounds length', async () => {
+    const filePath = await craft({ keyLength: 2n ** 31n });
+    const reader = new Cdb64Reader(filePath);
+    await reader.open();
+    await assert.rejects(async () => {
+      for await (const _entry of reader.entries()) {
+        // drain
+      }
+    }, /Invalid record at position 4096/);
+    await reader.close();
+  });
+
+  describe('verifyCdb64File', () => {
+    it('accepts files from Cdb64Writer, reading in tiny chunks', async () => {
+      const filePath = path.join(tempDir, 'real.cdb');
+      const writer = new Cdb64Writer(filePath);
+      await writer.open();
+      for (let i = 0; i < 500; i++) {
+        await writer.add(
+          Buffer.from(`key-${i}`),
+          Buffer.alloc(i % 50, i % 256),
+        );
+      }
+      await writer.finalize();
+
+      // Chunk sizes that split record headers and slots across reads.
+      for (const readChunkSize of [16, 48, 1024, 1024 * 1024]) {
+        assert.deepEqual(await verifyCdb64File(filePath, { readChunkSize }), {
+          records: 500,
+        });
+      }
+    });
+
+    it('accepts an empty database', async () => {
+      const filePath = path.join(tempDir, 'empty.cdb');
+      const writer = new Cdb64Writer(filePath);
+      await writer.open();
+      await writer.finalize();
+      assert.deepEqual(await verifyCdb64File(filePath), { records: 0 });
+    });
+
+    const rejects = async (
+      filePath: string,
+      pattern: RegExp,
+      options = {},
+    ): Promise<void> => {
+      await assert.rejects(() => verifyCdb64File(filePath, options), pattern);
+    };
+
+    it('rejects a key length past the bound', async () => {
+      await rejects(await craft({ keyLength: 2n ** 31n }), /key length/);
+    });
+
+    it('rejects a value length past the bound', async () => {
+      await rejects(await craft({ valueLength: 2n ** 30n }), /value length/);
+      await rejects(await craft({ name: 'v.cdb' }), /value length/, {
+        maxValueLength: 3,
+      });
+    });
+
+    it('rejects a record that runs into the hash tables', async () => {
+      await rejects(await craft({ valueLength: 100n }), /past the hash tables/);
+    });
+
+    it('rejects a walk that stops short of the tables', async () => {
+      // A record 6 bytes too short leaves a 6-byte tail: no room for a
+      // header, so the walk cannot end exactly on the table region.
+      await rejects(
+        await craft({ valueLength: 0n, keyLength: 30n }),
+        /would overlap the hash tables/,
+      );
+    });
+
+    it('rejects table pointers outside the file or inside the header', async () => {
+      await rejects(
+        await craft({ tablePosition: 2n ** 40n }),
+        /does not fit in the/,
+      );
+      await rejects(
+        await craft({ tableSlots: 2n ** 62n, name: 'b.cdb' }),
+        /does not fit in the/,
+      );
+      await rejects(
+        await craft({ tablePosition: 16n, name: 'c.cdb' }),
+        /does not fit in the/,
+      );
+    });
+
+    it('rejects a slot pointing outside the record region', async () => {
+      await rejects(
+        await craft({ recordPosition: 2n ** 40n }),
+        /is not a valid entry/,
+      );
+    });
+
+    it('rejects overlapping tables', async () => {
+      const filePath = await craft();
+      const bytes = await fs.readFile(filePath);
+      const other = (tableIndex + 1) % 256;
+      bytes.writeBigUInt64LE(BigInt(4096 + 16 + key.length + 4), other * 16);
+      bytes.writeBigUInt64LE(2n, other * 16 + 8);
+      await fs.writeFile(filePath, bytes);
+      await rejects(filePath, /overlap/);
+    });
+
+    it('rejects a file whose slots and records disagree', async () => {
+      // One record walked, but its table's slots are both empty.
+      await rejects(
+        await craft({ recordPosition: 0n }),
+        /hash tables index 0 records, but the file holds 1/,
+      );
+    });
+
+    it('rejects a table whose occupied run is longer than allowed', async () => {
+      const filePath = path.join(tempDir, 'dense.cdb');
+      const writer = new Cdb64Writer(filePath);
+      await writer.open();
+      for (let i = 0; i < 2000; i++) {
+        await writer.add(Buffer.from(`key-${i}`), Buffer.from('v'));
+      }
+      await writer.finalize();
+      await rejects(filePath, /occupied slots, more than the 1 allowed/, {
+        maxProbeRun: 1,
+      });
+    });
+
+    it('rejects a file shorter than the header', async () => {
+      const filePath = path.join(tempDir, 'short.cdb');
+      await fs.writeFile(filePath, Buffer.alloc(100));
+      await rejects(filePath, /shorter than the 4096-byte header/);
     });
   });
 });

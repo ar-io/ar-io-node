@@ -22,7 +22,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { Cdb64Writer, Cdb64Reader } from './cdb64.js';
+import { Cdb64Writer, Cdb64Reader, verifyCdb64File } from './cdb64.js';
 import { Packr } from 'msgpackr';
 import fc from 'fast-check';
 
@@ -343,6 +343,24 @@ describe('CDB64 Rust Interoperability', { skip: !rustCdb64 }, () => {
       }
 
       await reader.close();
+    });
+
+    it('should pass structural verification for files written by Rust', async () => {
+      const cdbPath = path.join(tempDir, 'rust-verify.cdb');
+      const rustWriter = new rustCdb64!.CdbWriter(cdbPath);
+      for (let i = 0; i < 5000; i++) {
+        const key = Buffer.alloc(32);
+        key.writeUInt32BE(i, 0);
+        key.writeUInt32BE((i * 2654435761) >>> 0, 28);
+        rustWriter.put(key, Buffer.from(`value-${i}`));
+      }
+      rustWriter.finalize();
+
+      // Index bands built by the Rust writer must survive the same walk a
+      // subscriber runs before installing one.
+      assert.deepEqual(await verifyCdb64File(cdbPath, { maxKeyLength: 32 }), {
+        records: 5000,
+      });
     });
 
     it('should return undefined for missing keys', async () => {

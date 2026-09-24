@@ -25,7 +25,25 @@ RUN yarn install
 # --production` below the source COPY, so every source change reinstalled the
 # whole tree twice.
 FROM base AS proddeps
-RUN yarn install --production
+# Install, then strip what only a compiler or a debugger ever reads. The
+# runtime stage runs compiled dist/ and does not pass --enable-source-maps, so
+# .map files are never opened, and .d.ts declarations are read only by tsc,
+# which has already run in the builder stage. Measured on the 2026-09 tree:
+# of 1,689 MB of node_modules, 551 MB was source maps, 306 MB declarations and
+# 25 MB markdown, so the image carried roughly 880 MB it could never use.
+#
+# Plain .ts sources are deliberately NOT removed: seven packages (zod, plus
+# the copies vendored under turbo-sdk and the x402 stack) resolve their entry
+# point to a .ts file, so deleting those breaks module resolution at runtime.
+#
+# Kept in the same RUN as the install so the pruned tree is the layer, rather
+# than a deletion layered on top of the full one.
+RUN yarn install --production \
+    && find node_modules -type f \
+         \( -name '*.map' \
+            -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' \
+            -o -name '*.md' -o -name '*.markdown' \) \
+         -delete
 
 # Compile. Source changes invalidate this stage and nothing above it.
 # node_modules is in .dockerignore, so this cannot clobber the install above.
