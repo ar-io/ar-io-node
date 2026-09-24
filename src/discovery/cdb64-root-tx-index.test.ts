@@ -1024,8 +1024,12 @@ describe('Cdb64RootTxIndex', () => {
     const createBand = async (
       bandDir: string,
       entries: Array<{ dataItemId: Buffer; rootTxId: Buffer }>,
+      metadata?: Record<string, unknown>,
     ): Promise<void> => {
-      const writer = new PartitionedCdb64Writer(bandDir);
+      const writer = new PartitionedCdb64Writer(
+        bandDir,
+        metadata !== undefined ? { metadata } : undefined,
+      );
       await writer.open();
       for (const entry of entries) {
         await writer.add(
@@ -1331,6 +1335,120 @@ describe('Cdb64RootTxIndex', () => {
         await index.close();
       });
     }
+
+    describe('band search order', () => {
+      // One key present in every band, each mapping it to a different root,
+      // so which root comes back shows which band was searched first.
+      const key = createTxId(81);
+
+      it('searches the newest band first, whatever the names', async () => {
+        const collectionDir = path.join(tempDir, 'collection-order');
+        await fs.mkdir(collectionDir, { recursive: true });
+        // Name order is oldest first; the tip is named to sort in the middle.
+        await createBand(
+          path.join(collectionDir, 'a-h0-1000'),
+          [{ dataItemId: key, rootTxId: createTxId(801) }],
+          { heightRange: [0, 1000] },
+        );
+        await createBand(
+          path.join(collectionDir, 'b-h1950000-tip'),
+          [{ dataItemId: key, rootTxId: createTxId(803) }],
+          { heightRange: [2000, null] },
+        );
+        await createBand(
+          path.join(collectionDir, 'c-h1000-2000'),
+          [{ dataItemId: key, rootTxId: createTxId(802) }],
+          { heightRange: [1000, 2000] },
+        );
+        await createBand(path.join(collectionDir, '0-unranged'), [
+          { dataItemId: key, rootTxId: createTxId(800) },
+        ]);
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [collectionDir],
+          watch: false,
+        });
+        assert.equal(
+          (await index.getRootTx(toB64Url(key)))?.rootTxId,
+          toB64Url(createTxId(803)),
+          'the open-ended tip band answers first',
+        );
+        await index.close();
+      });
+
+      it('keeps the configured order of sources', async () => {
+        // Newest-first applies within a source only: an operator's first
+        // source still wins over a later one with a newer band.
+        const firstDir = path.join(tempDir, 'collection-first');
+        const secondDir = path.join(tempDir, 'collection-second');
+        await createBand(
+          path.join(firstDir, 'band-old'),
+          [{ dataItemId: key, rootTxId: createTxId(811) }],
+          { heightRange: [0, 1000] },
+        );
+        await createBand(
+          path.join(secondDir, 'band-tip'),
+          [{ dataItemId: key, rootTxId: createTxId(812) }],
+          { heightRange: [1000, null] },
+        );
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [firstDir, secondDir],
+          watch: false,
+        });
+        assert.equal(
+          (await index.getRootTx(toB64Url(key)))?.rootTxId,
+          toB64Url(createTxId(811)),
+        );
+        await index.close();
+      });
+
+      it('puts a band installed at runtime in its place by height', async () => {
+        const collectionDir = path.join(tempDir, 'collection-order-add');
+        await fs.mkdir(collectionDir, { recursive: true });
+        await createBand(
+          path.join(collectionDir, 'band-a'),
+          [{ dataItemId: key, rootTxId: createTxId(821) }],
+          { heightRange: [0, 1000] },
+        );
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [collectionDir],
+          watch: true,
+        });
+        // Closed however the test ends: a live watcher keeps the run open.
+        try {
+          assert.equal(
+            (await index.getRootTx(toB64Url(key)))?.rootTxId,
+            toB64Url(createTxId(821)),
+          );
+
+          // Named to sort after the existing band, but newer, so it must be
+          // searched first once the watcher loads it.
+          await createBand(
+            path.join(tempDir, 'staging-order'),
+            [{ dataItemId: key, rootTxId: createTxId(822) }],
+            { heightRange: [1000, null] },
+          );
+          await fs.rename(
+            path.join(tempDir, 'staging-order'),
+            path.join(collectionDir, 'band-z'),
+          );
+
+          const reordered = await waitFor(
+            async () =>
+              (await index.getRootTx(toB64Url(key)))?.rootTxId ===
+              toB64Url(createTxId(822)),
+          );
+          assert(reordered, 'the newer band should be searched first');
+        } finally {
+          await index.close();
+        }
+      });
+    });
 
     it('serves a flat directory and a collection in the same source', async () => {
       // A directory may hold loose .cdb files, band subdirectories, or both.

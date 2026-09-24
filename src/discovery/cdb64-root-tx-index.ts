@@ -176,6 +176,58 @@ interface ReaderEntry {
    * so a lookup already in progress finishes instead of surfacing as a miss.
    */
   inFlight: number;
+  /**
+   * The block heights a partitioned index covers, from its manifest's
+   * `metadata.heightRange` (`[from, to]`, `to` null for an open-ended tip
+   * band). Kept so a collection's bands can be searched newest first.
+   */
+  heightRange?: [number, number | null];
+}
+
+/**
+ * Reads a manifest's `metadata.heightRange`, or undefined when it is absent
+ * or malformed; a band without one is still served, just searched last.
+ */
+function manifestHeightRange(
+  manifest: Cdb64Manifest,
+): [number, number | null] | undefined {
+  const value = manifest.metadata?.heightRange;
+  if (!Array.isArray(value) || value.length !== 2) return undefined;
+  const [from, to] = value as unknown[];
+  if (typeof from !== 'number' || !Number.isSafeInteger(from) || from < 0) {
+    return undefined;
+  }
+  if (to === null) return [from, null];
+  if (typeof to !== 'number' || !Number.isSafeInteger(to) || to < from) {
+    return undefined;
+  }
+  return [from, to];
+}
+
+/**
+ * Search order for the readers of one directory source: newest heights first.
+ *
+ * Most lookups are for recent data, and every reader tried before the one
+ * holding a key costs a random read (on an HDD, a seek), so the tip band
+ * belongs at the front. Ordered by the top of each reader's height range (an
+ * open-ended `[from, null]` tip first), then by its bottom, both descending,
+ * then by key. Readers with no range, such as a flat directory's files, go
+ * last in key order.
+ */
+function compareNewestFirst(
+  [keyA, a]: [string, ReaderEntry],
+  [keyB, b]: [string, ReaderEntry],
+): number {
+  const top = (entry: ReaderEntry): number =>
+    entry.heightRange === undefined
+      ? -1
+      : (entry.heightRange[1] ?? Number.POSITIVE_INFINITY);
+  const bottom = (entry: ReaderEntry): number => entry.heightRange?.[0] ?? -1;
+  const byTop = top(b) - top(a);
+  if (byTop !== 0 && !Number.isNaN(byTop)) return byTop;
+  const byBottom = bottom(b) - bottom(a);
+  if (byBottom !== 0) return byBottom;
+  return keyA.localeCompare(keyB);
 }
 
 export class Cdb64RootTxIndex implements DataItemRootIndex {
@@ -840,7 +892,13 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Rebuilds the readers array from the readerMap in sorted order.
+   * Rebuilds the readers array from the readerMap.
+   *
+   * Configured sources keep their configured order. Within one directory
+   * source (a flat directory's files, or a collection's bands) readers are
+   * searched newest first; see {@link compareNewestFirst}. Called on every
+   * add, reload and removal, so a band installed at runtime takes its place
+   * in that order at once.
    */
   private rebuildReaderList(): void {
     // Preserve config order: iterate sources in their original order.
@@ -858,8 +916,10 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         claimed.add(sourceSpec);
         perSource.set(sourceSpec, 1);
       } else {
-        // Non-partitioned directory: individual file keys start with sourceSpec.
-        // Sort alphabetically within the directory for deterministic ordering.
+        // A directory whose readers are keyed by paths under it: a flat
+        // directory's files, or a collection's bands. Searched newest band
+        // first, so a lookup for recent data does not probe every older band
+        // before reaching the tip.
         const matched: [string, ReaderEntry][] = [];
         for (const [key, entry] of this.readerMap) {
           if (!claimed.has(key) && key.startsWith(sourceSpec)) {
@@ -867,7 +927,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
             claimed.add(key);
           }
         }
-        matched.sort(([a], [b]) => a.localeCompare(b));
+        matched.sort(compareNewestFirst);
         for (const [, entry] of matched) {
           result.push(entry);
         }
@@ -1159,13 +1219,18 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
     await reader.open();
 
-    return {
+    const entry: ReaderEntry = {
       reader,
       sourceSpec,
       sourceType: parsed.type,
       isPartitioned: true,
       inFlight: 0,
     };
+    const heightRange = manifestHeightRange(manifest);
+    if (heightRange !== undefined) {
+      entry.heightRange = heightRange;
+    }
+    return entry;
   }
 
   /**
