@@ -655,6 +655,24 @@ export class Subscriber {
       }
     }
 
+    // An index the publisher has dropped altogether never reaches
+    // reconcileIndex, so its bands are retired here.
+    const published = new Set(document.indexes.map((index) => index.name));
+    const fallbackKind = this.kinds.values().next().value;
+    if (fallbackKind !== undefined) {
+      for (const indexName of Object.keys(
+        (await this.state.load()).installed,
+      )) {
+        if (published.has(indexName)) continue;
+        await this.retireUnoffered(
+          publisher,
+          indexName,
+          new Set(),
+          fallbackKind,
+        );
+      }
+    }
+
     await this.state.update((draft) => {
       draft.subscriptions[publisher] = {
         sequence: Math.max(document.sequence, seen),
@@ -807,10 +825,30 @@ export class Subscriber {
     // Anything this publisher installed here but no longer offers is retired.
     // Scoped by publisher, so one publisher dropping a band does not remove
     // the copy another publisher still offers.
-    const offered = new Set(index.bands.map((band) => band.id));
-    await this.discardUnofferedDownloads(publisher, index.name, offered);
+    await this.retireUnoffered(
+      publisher,
+      index.name,
+      new Set(index.bands.map((band) => band.id)),
+      kind,
+    );
+
+    return installedAnything;
+  }
+
+  /**
+   * Retire the bands this publisher installed under `indexName` that are not
+   * in `offered`, and discard its downloads of them. Called with an empty
+   * set for an index the publisher no longer publishes at all.
+   */
+  private async retireUnoffered(
+    publisher: string,
+    indexName: string,
+    offered: ReadonlySet<string>,
+    kind: ArtifactKind,
+  ): Promise<void> {
+    await this.discardUnofferedDownloads(publisher, indexName, offered);
     const state = await this.state.load();
-    const current = state.installed[index.name] ?? {};
+    const current = state.installed[indexName] ?? {};
     for (const [bandId, band] of Object.entries(current)) {
       if (offered.has(bandId)) continue;
       if (band.publisher !== publisher) continue;
@@ -824,7 +862,7 @@ export class Subscriber {
       // A snapshot, not the live map: load() returns the cached state, which
       // other polls write to while this one awaits.
       const latest = {
-        ...((await this.state.load()).installed[index.name] ?? {}),
+        ...((await this.state.load()).installed[indexName] ?? {}),
       };
       const next = await kind.retire({
         bandId,
@@ -832,16 +870,14 @@ export class Subscriber {
         current: latest,
       });
       await this.state.update((draft) => {
-        applyBandChanges(draft.installed, index.name, latest, next);
+        applyBandChanges(draft.installed, indexName, latest, next);
       });
       this.log.info('Retired a band the publisher no longer offers', {
         publisher,
-        index: index.name,
+        index: indexName,
         band: bandId,
       });
     }
-
-    return installedAnything;
   }
 
   /**

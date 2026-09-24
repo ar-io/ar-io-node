@@ -289,13 +289,17 @@ describe('Subscriber', () => {
     await writer.finalize();
   };
 
-  const publish = async (): Promise<void> => {
+  const publish = async (
+    indexes: { name: string; kind: string }[] = [
+      { name: 'root-tx-index', kind: 'cdb64-root-tx' },
+    ],
+  ): Promise<void> => {
     await new Publisher({
       log,
       state: pubState,
       kinds: createKindRegistry({ log }),
       signer,
-      publish: [{ name: 'root-tx-index', kind: 'cdb64-root-tx' }],
+      publish: indexes,
       publishedDir: pubDir,
       blobsDir: path.join(pubDir, 'blobs'),
       publicationFile: path.join(pubDir, 'publication.json'),
@@ -1704,6 +1708,23 @@ describe('Subscriber', () => {
     for (const id of ['band-b', 'band-c']) {
       assert.deepEqual(await dirsOnDisk(id), [], `${id} was swept`);
     }
+  });
+
+  it('retires the bands of an index the publisher stops publishing', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    assert.deepEqual(await installedIds(), ['band-a']);
+
+    // The publisher drops the whole index, not just its bands, so the
+    // document no longer names root-tx-index at all.
+    clock = new Date(clock.getTime() + 60_000);
+    await publish([]);
+
+    await makeSubscriber().pollOnce();
+
+    assert.deepEqual(await installedIds(), []);
+    assert.deepEqual(await dirsOnDisk('band-a'), [], 'band-a was swept');
   });
 
   it('honours an allowlist without abandoning the registry check', async () => {
