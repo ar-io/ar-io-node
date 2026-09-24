@@ -5,6 +5,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { ApolloServer, ApolloServerPlugin } from '@apollo/server';
+import {
+  ApolloServerPluginSchemaReportingDisabled,
+  ApolloServerPluginUsageReportingDisabled,
+} from '@apollo/server/plugin/disabled';
 import { ApolloServerPluginLandingPageLocalDefault } from '@apollo/server/plugin/landingPage/default';
 import { expressMiddleware } from '@as-integrations/express4';
 import express, { RequestHandler, Response } from 'express';
@@ -138,7 +142,10 @@ export const makeApolloServerMiddleware = async ({
 }: {
   db: GqlQueryable;
   txMetadataResolver?: TxMetadataResolver;
-}): Promise<RequestHandler[]> => {
+}): Promise<{
+  middleware: RequestHandler[];
+  stop: () => Promise<void>;
+}> => {
   const server = new ApolloServer<GraphQLContext>({
     typeDefs,
     resolvers,
@@ -148,6 +155,17 @@ export const makeApolloServerMiddleware = async ({
     allowBatchedHttpRequests: true,
     includeStacktraceInErrorResponses: false,
     plugins: [
+      // Telemetry off, explicitly and unconditionally.
+      //
+      // Apollo reads `APOLLO_KEY` and `APOLLO_GRAPH_REF` straight from
+      // `process.env` (`determineApolloConfig.js`), so usage reporting can be
+      // switched on by an environment variable alone, with no code change and
+      // no log line. This gateway answers queries on behalf of third parties;
+      // a stray key in a copied `.env`, a shared compose file or a CI secret
+      // would start shipping their operation signatures to Apollo. These two
+      // plugins make that impossible rather than merely unconfigured.
+      ApolloServerPluginUsageReportingDisabled(),
+      ApolloServerPluginSchemaReportingDisabled(),
       // Serves the embedded Apollo Sandbox at `GET /graphql` for browsers.
       // This replaces the retired `graphql-playground-react` UI that AS3
       // served; AS5 ships no Playground plugin. Named explicitly rather than
@@ -163,7 +181,7 @@ export const makeApolloServerMiddleware = async ({
 
   await server.start();
 
-  return [
+  const middleware: RequestHandler[] = [
     // No explicit limit: apollo-server-express 3 installed body-parser with
     // its default 100kb cap, so leaving it unset keeps the maximum accepted
     // query size exactly where it was.
@@ -184,4 +202,11 @@ export const makeApolloServerMiddleware = async ({
       },
     }),
   ];
+
+  // `stop()` runs Apollo's serverWillStop hooks and lets in-flight operations
+  // finish. Without it a restart severs live GraphQL requests mid-response,
+  // which matters here because rolling restarts are routine. Wired into the
+  // gateway's shutdown registry by the caller so it runs before the HTTP
+  // server closes.
+  return { middleware, stop: () => server.stop() };
 };

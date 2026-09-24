@@ -174,11 +174,21 @@ app.use(dataRouter);
 // mounted. Awaiting at module scope (this module already does so above)
 // replaces Apollo Server 3's `start().then(...)` nesting and keeps the
 // listen call ordered after the middleware is in place, exactly as before.
-const apolloMiddleware = await makeApolloServerMiddleware({
-  db: system.gqlQueryable,
-  txMetadataResolver: system.dataItemMetaResolver,
-});
+const { middleware: apolloMiddleware, stop: stopApolloServer } =
+  await makeApolloServerMiddleware({
+    db: system.gqlQueryable,
+    txMetadataResolver: system.dataItemMetaResolver,
+  });
 app.use('/graphql', apolloMiddleware);
+
+// Registered before the HTTP server's own handler so Apollo drains first:
+// handlers run in registration order, and stopping Apollo while the socket is
+// still open lets in-flight operations finish rather than being cut off.
+system.registerCleanupHandler('apollo-server', async () => {
+  log.debug('Stopping Apollo server...');
+  await stopApolloServer();
+  log.debug('Apollo server stopped');
+});
 
 // Terminal error handler — must be registered after every router and the
 // GraphQL middleware so it catches anything they let escape. Replaces
