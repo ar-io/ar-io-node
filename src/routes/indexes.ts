@@ -345,6 +345,12 @@ export function createIndexesRouter({
     });
 
     res.on('close', () => {
+      // pipe() does not destroy its source when the client goes away. The
+      // byte-counting 'data' listener then keeps the stream flowing, so an
+      // aborted download (routine for resumable multi-gigabyte bands) went
+      // on reading the rest of the file from disk into nothing, holding the
+      // file open meanwhile. After a normal finish this is a no-op.
+      stream.destroy();
       metrics.indexesBytesServedTotal.inc({ route }, sent);
     });
 

@@ -8,6 +8,9 @@ import { strict as assert } from 'node:assert';
 import { describe, it, before, after } from 'node:test';
 import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
+import { readdirSync, readlinkSync } from 'node:fs';
+import * as http from 'node:http';
+import { AddressInfo } from 'node:net';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import express from 'express';
@@ -326,6 +329,87 @@ describe('/ar-io/indexes routes', () => {
       // name that happens not to exist.
       await request(app).get('/ar-io/indexes/blob/not-a-digest').expect(404);
     });
+  });
+
+  describe('a client that disconnects mid-download', () => {
+    const openHandlesTo = (file: string): number => {
+      let count = 0;
+      for (const fd of readdirSync('/proc/self/fd')) {
+        try {
+          if (readlinkSync(`/proc/self/fd/${fd}`) === file) count++;
+        } catch {
+          // Closed between readdir and readlink.
+        }
+      }
+      return count;
+    };
+
+    it(
+      'stops reading and releases the file within half a second',
+      { skip: process.platform !== 'linux' },
+      async () => {
+        // Large enough that reading it to the end takes seconds (it is
+        // sparse, so it costs no disk): an aborted download must stop
+        // reading rather than drain the rest of the file into nothing.
+        const big = path.join(tempDir, 'big.bin');
+        await fs.writeFile(big, '');
+        await fs.truncate(big, 8 * 1024 ** 3);
+        const sha256 = 'a'.repeat(64);
+        const entry = { filePath: big, size: 8 * 1024 ** 3, sha256 };
+        const view = {
+          raw: Buffer.from('{}'),
+          sha256: 'b'.repeat(64),
+          names: ['root-tx-index'],
+          files: new Map(),
+          blobs: new Map([[sha256, entry]]),
+          mtimeMs: 0,
+          byteSize: 2,
+        };
+        const served = express();
+        served.use(
+          createIndexesRouter({
+            log,
+            publishedIndexes: {
+              current: async () => view,
+              publishedDir: tempDir,
+            } as never,
+          }),
+        );
+        const server = served.listen(0);
+        await new Promise((resolve) => server.once('listening', resolve));
+        const port = (server.address() as AddressInfo).port;
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const req = http.get(
+              `http://127.0.0.1:${port}/ar-io/indexes/blob/${sha256}`,
+              (res) => {
+                res.once('data', () => {
+                  // Some bytes arrived: the file is open. Walk away.
+                  req.destroy();
+                  resolve();
+                });
+              },
+            );
+            req.on('error', (error: any) => {
+              if (error?.code !== 'ECONNRESET') reject(error);
+            });
+          });
+          let open = openHandlesTo(big);
+          for (let i = 0; i < 25 && open > 0; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            open = openHandlesTo(big);
+          }
+          assert.equal(
+            open,
+            0,
+            'the aborted download still holds the file, still reading it',
+          );
+        } finally {
+          server.closeAllConnections();
+          await new Promise((resolve) => server.close(resolve));
+        }
+      },
+    );
   });
 
   describe('HTTPSIG', () => {
