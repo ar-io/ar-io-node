@@ -152,12 +152,14 @@ describe('SQLite GraphQL cursor functions', () => {
         (error: unknown) => {
           assert.ok(error instanceof GraphQLError);
           assert.equal(error.message, 'Invalid transaction cursor');
-          // The wire-visible contract: apollo-server-express 3's
-          // ValidationError produced this code and a 400. Both are pinned
-          // explicitly now that the error is a plain GraphQLError, whose
-          // Apollo Server 4+ default would otherwise be a 500.
+          // The wire-visible contract, verified against a running
+          // apollo-server-express 3 gateway: HTTP 200 with `data: null` and
+          // this error code. No `http` override, because these decoders run
+          // during resolver execution and Apollo answers resolver errors with
+          // 200 — and a batch shares one response head, so an override here
+          // would let one bad cursor set the status for every operation in it.
           assert.equal(error.extensions.code, 'GRAPHQL_VALIDATION_FAILED');
-          assert.deepEqual(error.extensions.http, { status: 400 });
+          assert.equal(error.extensions.http, undefined);
           return true;
         },
       );
@@ -191,12 +193,14 @@ describe('SQLite GraphQL cursor functions', () => {
         (error: unknown) => {
           assert.ok(error instanceof GraphQLError);
           assert.equal(error.message, 'Invalid block cursor');
-          // The wire-visible contract: apollo-server-express 3's
-          // ValidationError produced this code and a 400. Both are pinned
-          // explicitly now that the error is a plain GraphQLError, whose
-          // Apollo Server 4+ default would otherwise be a 500.
+          // The wire-visible contract, verified against a running
+          // apollo-server-express 3 gateway: HTTP 200 with `data: null` and
+          // this error code. No `http` override, because these decoders run
+          // during resolver execution and Apollo answers resolver errors with
+          // 200 — and a batch shares one response head, so an override here
+          // would let one bad cursor set the status for every operation in it.
           assert.equal(error.extensions.code, 'GRAPHQL_VALIDATION_FAILED');
-          assert.deepEqual(error.extensions.http, { status: 400 });
+          assert.equal(error.extensions.http, undefined);
           return true;
         },
       );

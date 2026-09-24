@@ -172,11 +172,16 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
   } catch (error) {
     throw new GraphQLError('Invalid transaction cursor', {
       extensions: {
-        // Preserves apollo-server-express 3's ValidationError shape: the
-        // same error code, and HTTP 400 rather than the plain GraphQLError
-        // default of 500 under Apollo Server 4+.
+        // Matches what apollo-server-express 3 put on the wire for this error,
+        // verified against a running gateway: HTTP 200, `data: null`, and
+        // `extensions.code = GRAPHQL_VALIDATION_FAILED`.
+        //
+        // Deliberately no `http` override. These decoders run during resolver
+        // execution, and Apollo answers resolver errors with 200 and an
+        // `errors` array; setting `http.status` here would both change that
+        // contract and, because batched requests share one response head,
+        // let one bad cursor set the status for an entire batch.
         code: 'GRAPHQL_VALIDATION_FAILED',
-        http: { status: 400 },
       },
     });
   }
@@ -198,11 +203,16 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
   } catch (error) {
     throw new GraphQLError('Invalid block cursor', {
       extensions: {
-        // Preserves apollo-server-express 3's ValidationError shape: the
-        // same error code, and HTTP 400 rather than the plain GraphQLError
-        // default of 500 under Apollo Server 4+.
+        // Matches what apollo-server-express 3 put on the wire for this error,
+        // verified against a running gateway: HTTP 200, `data: null`, and
+        // `extensions.code = GRAPHQL_VALIDATION_FAILED`.
+        //
+        // Deliberately no `http` override. These decoders run during resolver
+        // execution, and Apollo answers resolver errors with 200 and an
+        // `errors` array; setting `http.status` here would both change that
+        // contract and, because batched requests share one response head,
+        // let one bad cursor set the status for an entire batch.
         code: 'GRAPHQL_VALIDATION_FAILED',
-        http: { status: 400 },
       },
     });
   }
