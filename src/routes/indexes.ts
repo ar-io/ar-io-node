@@ -273,11 +273,14 @@ export function createIndexesRouter({
       }
     }
     const length = entry.size === 0 ? 0 : end - start + 1;
+    // Priced exactly as the data routes price it: what the body will carry,
+    // so a HEAD costs nothing beyond the limiter's minimum.
+    const contentSize = req.method === 'HEAD' ? 0 : length;
 
     const limitCheck = await checkPaymentAndRateLimits({
       req,
       res,
-      contentSize: length,
+      contentSize,
       contentType: 'application/octet-stream',
       requestAttributes: getRequestAttributes(req, res),
       rateLimiter,
@@ -287,6 +290,22 @@ export function createIndexesRouter({
       // The helper has already sent the 402 or 429.
       finish(res, route, res.statusCode);
       return;
+    }
+
+    // Settle the tokens the same way the data routes do: for the size that
+    // was priced, once the response has finished.
+    if (
+      rateLimiter !== undefined &&
+      limitCheck.ipTokensConsumed !== undefined
+    ) {
+      res.on('finish', () => {
+        void adjustRateLimitTokens({
+          req,
+          responseSize: contentSize,
+          initialResult: limitCheck,
+          rateLimiter,
+        });
+      });
     }
 
     // Only a response that serves the file carries the trigger, so the 402s,
@@ -315,16 +334,8 @@ export function createIndexesRouter({
       sent += (chunk as Buffer).length;
     });
 
-    // Charge for what was actually delivered, not what was predicted: a
-    // client that disconnects halfway should not pay for the rest.
     res.on('close', () => {
       metrics.indexesBytesServedTotal.inc({ route }, sent);
-      void adjustRateLimitTokens({
-        req,
-        responseSize: sent,
-        initialResult: limitCheck,
-        rateLimiter,
-      });
     });
 
     stream.on('error', (error) => {

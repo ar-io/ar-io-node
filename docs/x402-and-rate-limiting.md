@@ -76,9 +76,10 @@ The rate limiter and x402 payment system apply to data egress endpoints:
 - **Farcaster frames**: `/local/farcaster/frame/:txid`
 - **Index artifacts**: `/ar-io/indexes/:name/:band/:file` and
   `/ar-io/indexes/blob/:sha256`, published by the index-swarm sidecar.
-  Priced like data by the bytes actually sent. The publication document at
-  `/ar-io/indexes` is not metered, so an exhausted client can still learn
-  what it could fetch.
+  Priced like data: by the size of the body (the range, for a `Range`
+  request); a `HEAD` costs only the minimum and a `304` revalidation
+  nothing. The publication document at `/ar-io/indexes` is not metered, so
+  an exhausted client can still learn what it could fetch.
 - **Chunk requests**:
   - `GET /chunk/:offset` (base64url-encoded JSON, uses fixed size pricing - see note below)
   - `GET /chunk/:offset/data` (raw binary, uses fixed size pricing - see note below)

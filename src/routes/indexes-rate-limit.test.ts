@@ -26,9 +26,11 @@ process.env.ENABLE_RATE_LIMITER = 'true';
 describe('/ar-io/indexes rate limiting', () => {
   let tempDir: string;
   let app: express.Express;
-  let rateLimiter: any;
   let fileName: string;
   let fileSize: number;
+  let fileSha256: string;
+  /** A router with a fresh limiter whose IP bucket holds 1.5 copies of the file. */
+  let makeApp: (paymentProcessor?: unknown) => express.Express;
 
   before(async () => {
     const { createIndexesRouter } = await import('./indexes.js');
@@ -57,7 +59,9 @@ describe('/ar-io/indexes rate limiting', () => {
       path.join(publishedDir, 'root-tx-index', 'band-a'),
     );
     await writer.open();
-    for (let i = 0; i < 400; i++) {
+    // Enough records that a partition costs several tokens, so a HEAD priced
+    // at full size is distinguishable from one priced at the minimum.
+    for (let i = 0; i < 20_000; i++) {
       await writer.add(
         crypto.createHash('sha256').update(`k${i}`).digest(),
         encodeCdb64Value({ rootTxId: crypto.randomBytes(32) }),
@@ -91,22 +95,36 @@ describe('/ar-io/indexes rate limiting', () => {
       .sort((a, b) => b.size - a.size)[0];
     fileName = partition.name;
     fileSize = partition.size;
+    fileSha256 = partition.sha256;
 
     // An IP bucket that holds one copy of the file and not two, and refills
     // too slowly to matter within the test.
     const tokensForFile = Math.ceil(fileSize / 1024);
-    rateLimiter = new MemoryRateLimiter({
-      resourceCapacity: tokensForFile * 100,
-      resourceRefillRate: 0.001,
-      ipCapacity: Math.ceil(tokensForFile * 1.5),
-      ipRefillRate: 0.001,
-      limitsEnabled: true,
-      ipAllowlist: [],
-      capacityMultiplier: 10,
-    });
-
-    app = express();
-    app.use(createIndexesRouter({ log, publishedDir, rateLimiter }));
+    assert.ok(tokensForFile >= 4, `a file costs ${tokensForFile} tokens`);
+    makeApp = (paymentProcessor?: unknown) => {
+      const rateLimiter = new MemoryRateLimiter({
+        resourceCapacity: tokensForFile * 100,
+        resourceRefillRate: 0.001,
+        ipCapacity: Math.ceil(tokensForFile * 1.5),
+        ipRefillRate: 0.001,
+        limitsEnabled: true,
+        ipAllowlist: [],
+        capacityMultiplier: 10,
+      });
+      const made = express();
+      made.use(
+        createIndexesRouter({
+          log,
+          publishedDir,
+          rateLimiter,
+          ...(paymentProcessor !== undefined
+            ? { paymentProcessor: paymentProcessor as never }
+            : {}),
+        }),
+      );
+      return made;
+    };
+    app = makeApp();
   });
 
   after(async () => {
@@ -134,5 +152,54 @@ describe('/ar-io/indexes rate limiting', () => {
     // exhausted client unable even to learn what it could have paid for.
     await request(app).get('/ar-io/indexes').expect(200);
     await request(app).get('/ar-io/indexes').expect(200);
+  });
+
+  // Let the post-response token adjustment land.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+  it('prices a HEAD at nothing, as the data routes do', async () => {
+    const fresh = makeApp();
+    const url = `/ar-io/indexes/blob/${fileSha256}`;
+    // More HEADs than the bucket could pay for at full size.
+    for (let i = 0; i < 3; i++) {
+      await request(fresh).head(url).expect(200);
+      await settle();
+    }
+    // And the bucket still holds a full copy afterwards.
+    await request(fresh).get(url).expect(200);
+  });
+
+  it('answers a revalidation with a free 304', async () => {
+    const fresh = makeApp();
+    const url = `/ar-io/indexes/blob/${fileSha256}`;
+    for (let i = 0; i < 5; i++) {
+      await request(fresh)
+        .get(url)
+        .set('If-None-Match', `"${fileSha256}"`)
+        .expect(304);
+    }
+    await request(fresh).get(url).expect(200);
+  });
+
+  it('asks for payment rather than refusing when x402 is enabled', async () => {
+    let asked = 0;
+    const payments = {
+      isBrowserRequest: () => false,
+      calculateRequirements: () => ({}),
+      extractPayment: () => undefined,
+      verifyPayment: async () => ({ isValid: false }),
+      settlePayment: async () => ({ success: false }),
+      sendPaymentRequiredResponse: (_req: unknown, res: express.Response) => {
+        asked++;
+        res.status(402).json({ error: 'payment_required' });
+      },
+    };
+    const paid = makeApp(payments);
+    const url = `/ar-io/indexes/blob/${fileSha256}`;
+
+    await request(paid).get(url).expect(200);
+    await settle();
+    await request(paid).get(url).expect(402);
+    assert.equal(asked, 1);
   });
 });

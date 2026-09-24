@@ -240,11 +240,13 @@ $ sha256sum 00.cdb
 ## Metering
 
 The byte routes are metered like data egress. When the gateway enables its
-rate limiter, each response spends tokens in proportion to the bytes actually
-sent, and a client that runs out gets `429 Too Many Requests`. When x402 is
-enabled as well, it gets `402 Payment Required` with payment requirements
-instead, and can pay to continue. The publication document itself is never metered, so a client that has
-run out of tokens can still see what it could fetch.
+rate limiter, each response spends tokens in proportion to the size of its
+body (the range, for a `Range` request; a `HEAD` costs only the minimum, and
+a `304` nothing), and a client that runs out gets `429 Too Many Requests`.
+When x402 is enabled as well, it gets `402 Payment Required` with payment
+requirements instead, and can pay to continue. The publication document
+itself is never metered, so a client that has run out of tokens can still see
+what it could fetch.
 
 The limits and prices in force are advertised in `/ar-io/info`, in the
 `rateLimiter` and `x402` blocks (present only when enabled). See
