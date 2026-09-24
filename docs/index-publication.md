@@ -311,8 +311,10 @@ searches bands in name order and takes the first match.
 
 A complete consumer: fetch a publisher's document, verify it against a
 registered observer address, fetch the one partition that could hold an ID,
-verify it, and decode the entry. It uses the Python standard library and
-[`cryptography`](https://cryptography.io) for Ed25519; the base58 decoder,
+verify it, and decode the entry. It uses the Python standard library,
+[`cryptography`](https://cryptography.io) for Ed25519 and
+[`rfc8785`](https://pypi.org/project/rfc8785/) for the signing base
+(`pip install cryptography rfc8785`); the base58 decoder,
 MessagePack decoder and CDB64 reader are written out so that nothing is
 hidden.
 
@@ -327,7 +329,10 @@ registry, so it stays short: get it from the publisher's gateway record
 usage: lookup.py <gateway-url> <observer-address> <data-item-id> [index-name]
 """
 import base64, hashlib, json, struct, sys, urllib.request
+import rfc8785
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+PUBLICATION_MAX_BYTES = 4 * 1024 * 1024  # the protocol's document limit
 
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
@@ -340,9 +345,12 @@ def b58decode(s):
     return b"\0" * (len(s) - len(s.lstrip("1"))) + raw
 
 
-def get(url):
+def get(url, limit):
+    """Fetch at most `limit` bytes; a server can't make us buffer more."""
     with urllib.request.urlopen(url, timeout=30) as r:
-        return r.read()
+        body = r.read(limit + 1)
+    assert len(body) <= limit, url + ": response over %d bytes" % limit
+    return body
 
 
 def verify_publication(body, observer_address):
@@ -351,9 +359,10 @@ def verify_publication(body, observer_address):
     sig = doc.pop("signature")
     assert sig["alg"] == "ed25519", "unknown algorithm"
     assert sig["keyId"] == observer_address, "not the registered key"
-    # RFC 8785 for v1 documents: integers only, ASCII keys.
-    base = json.dumps(doc, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False).encode("utf-8")
+    # The signing base is the RFC 8785 (JCS) form of everything but the
+    # signature, unknown fields included. json.dumps is not a substitute: it
+    # writes 1.0 where JCS writes 1, and sorts keys differently.
+    base = rfc8785.dumps(doc)
     key = Ed25519PublicKey.from_public_bytes(b58decode(sig["keyId"]))
     key.verify(base64.b64decode(sig["sig"]), base)  # raises if invalid
     return doc
@@ -361,7 +370,7 @@ def verify_publication(body, observer_address):
 
 def fetch_file(gateway, band, name):
     entry = next(f for f in band["files"] if f["name"] == name)
-    data = get(gateway + "/ar-io/indexes/blob/" + entry["sha256"])
+    data = get(gateway + "/ar-io/indexes/blob/" + entry["sha256"], entry["size"])
     assert len(data) == entry["size"], name + ": wrong size"
     assert hashlib.sha256(data).hexdigest() == entry["sha256"], name + ": bad digest"
     return data
@@ -417,7 +426,8 @@ def b64url(raw):
 
 def main(gateway, observer_address, item_id, index_name="root-tx-index"):
     gateway = gateway.rstrip("/")
-    doc = verify_publication(get(gateway + "/ar-io/indexes"), observer_address)
+    doc = verify_publication(get(gateway + "/ar-io/indexes", PUBLICATION_MAX_BYTES),
+                             observer_address)
     index = next(x for x in doc["indexes"] if x["name"] == index_name)
     assert index["kind"] == "cdb64-root-tx", "not a root-tx index"
     key = base64.urlsafe_b64decode(item_id + "=")
