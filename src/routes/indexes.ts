@@ -47,6 +47,12 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
 /** Header whose presence makes the HTTPSIG middleware sign the response. */
 export const INDEX_PUBLICATION_HEADER = 'x-ar-io-index-publication';
 
+/**
+ * Set on a served band file, with the SHA-256 the publication lists for it.
+ * Also an HTTPSIG trigger, so the response is signed like data responses are.
+ */
+export const INDEX_FILE_HEADER = 'x-ar-io-index-file';
+
 /** Standard base64 of a hex digest, as RFC 9530 digest fields want it. */
 function digestField(hexSha256: string): string {
   return `sha-256=:${Buffer.from(hexSha256, 'hex').toString('base64')}:`;
@@ -283,6 +289,9 @@ export function createIndexesRouter({
       return;
     }
 
+    // Only a response that serves the file carries the trigger, so the 402s,
+    // 429s, 416s and 503s above go out unsigned, like the data routes'.
+    res.setHeader(INDEX_FILE_HEADER, entry.sha256);
     res.setHeader('Content-Length', String(length));
     if (partial) {
       res.setHeader('Content-Range', `bytes ${start}-${end}/${entry.size}`);

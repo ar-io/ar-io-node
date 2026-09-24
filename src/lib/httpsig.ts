@@ -46,6 +46,10 @@ export const TRIGGER_HEADERS = new Set([
   // signature, which survives relay; this signs the live response, binding
   // the body through Content-Digest to what this gateway actually served.
   'x-ar-io-index-publication',
+  // A file of a published index band, named by the SHA-256 the signed
+  // publication lists for it. Signing binds that claim, and the body through
+  // Content-Digest (or Repr-Digest on a range), to this gateway.
+  'x-ar-io-index-file',
   'x-ar-io-chunk-source-type',
 ]);
 
@@ -63,10 +67,16 @@ export const TRIGGER_HEADERS = new Set([
  * the legacy pair (`-data-item-offset`, `-data-offset`) and the aligned
  * pair (`-item-offset`, `-item-size`) are signed; the legacy pair will be
  * removed after a deprecation window per docs/glossary.md.
+ *
+ * `repr-digest` (RFC 9530) is the digest of the whole representation, and is
+ * what a range response carries instead of `content-digest`, which covers
+ * only the bytes sent. Signing it is what binds a signed 206 to the file it
+ * is part of; without it such a signature says nothing about the bytes.
  */
 export const CO_SIGNABLE_HEADERS = new Set([
   'content-type',
   'content-digest',
+  'repr-digest',
   'x-ar-io-root-data-item-offset',
   'x-ar-io-root-data-offset',
   'x-ar-io-root-item-offset',

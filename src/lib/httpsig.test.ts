@@ -55,6 +55,7 @@ describe('httpsig lib', () => {
     it('matches co-signable headers', () => {
       assert.equal(isSignableHeader('content-type'), true);
       assert.equal(isSignableHeader('content-digest'), true);
+      assert.equal(isSignableHeader('repr-digest'), true);
     });
 
     it('matches x-arweave-tag-* prefix', () => {
@@ -86,11 +87,14 @@ describe('httpsig lib', () => {
       assert.equal(isTriggerHeader('x-ar-io-data-id'), true);
       assert.equal(isTriggerHeader('x-arns-name'), true);
       assert.equal(isTriggerHeader('x-arweave-chunk-data-root'), true);
+      assert.equal(isTriggerHeader('x-ar-io-index-publication'), true);
+      assert.equal(isTriggerHeader('x-ar-io-index-file'), true);
     });
 
     it('returns false for content-type (not a trigger, only co-signable)', () => {
       assert.equal(isTriggerHeader('content-type'), false);
       assert.equal(isTriggerHeader('content-digest'), false);
+      assert.equal(isTriggerHeader('repr-digest'), false);
     });
 
     it('returns false for operational headers', () => {

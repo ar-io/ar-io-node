@@ -606,7 +606,7 @@ When enabled, the `transaction(id)` GraphQL query can resolve unindexed data ite
 
 ## HTTPSIG Response Signing
 
-Signs gateway responses with an Ed25519 key per [RFC 9421](https://www.rfc-editor.org/rfc/rfc9421) (HTTP Message Signatures). Every qualifying response gets `Signature` and `Signature-Input` headers that cryptographically bind the gateway's trust claims (verification status, ArNS resolution, data item tags) to a staked on-chain identity.
+Signs gateway responses with an Ed25519 key per [RFC 9421](https://www.rfc-editor.org/rfc/rfc9421) (HTTP Message Signatures). Every qualifying response gets `Signature` and `Signature-Input` headers that cryptographically bind the gateway's trust claims (verification status, ArNS resolution, data item tags, published index files) to a staked on-chain identity.
 
 When `OBSERVER_KEYPAIR_PATH` or `OBSERVER_PRIVATE_KEY` is set, the gateway uses the observer's Solana keypair directly as the HTTPSIG signing key. Verifiers derive the Solana address from the public key in the `keyId` and look it up in the on-chain GAR — no separate attestation document is needed. When neither is set, a standalone Ed25519 key is auto-generated (responses are signed but not verifiable against the on-chain registry). Setting both is rejected as ambiguous.
 

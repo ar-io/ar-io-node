@@ -279,7 +279,7 @@ describe('/ar-io/indexes routes', () => {
   });
 
   describe('HTTPSIG', () => {
-    it('signs the publication and leaves the byte routes unsigned', async () => {
+    const signedApp = () => {
       const { privateKey } = crypto.generateKeyPairSync('ed25519');
       const signed = express();
       signed.use(
@@ -290,22 +290,64 @@ describe('/ar-io/indexes routes', () => {
         }),
       );
       signed.use(createIndexesRouter({ log, publishedDir }));
+      return signed;
+    };
+    const covered = (res: { headers: Record<string, string> }) =>
+      res.headers['signature-input'] ?? '';
 
-      const doc = await request(signed).get('/ar-io/indexes').expect(200);
+    it('signs the publication, covering its Content-Digest', async () => {
+      const doc = await request(signedApp()).get('/ar-io/indexes').expect(200);
       assert.ok(doc.headers.signature !== undefined, 'the document is signed');
-      // Content-Digest is covered, which is what binds the body.
-      assert.match(doc.headers['signature-input'], /"content-digest"/);
-      assert.match(
-        doc.headers['signature-input'],
-        /"x-ar-io-index-publication"/,
-      );
+      assert.match(covered(doc), /"content-digest"/);
+      assert.match(covered(doc), /"x-ar-io-index-publication"/);
+    });
 
+    it('signs a band file by name and by digest, binding its Content-Digest', async () => {
       const file = partitionFile();
-      const bytes = await request(signed)
-        .get(`/ar-io/indexes/root-tx-index/band-a/${file.name}`)
-        .expect(200);
-      // Every byte is already covered by a digest the signed document names.
-      assert.equal(bytes.headers.signature, undefined);
+      const signed = signedApp();
+      for (const url of [
+        `/ar-io/indexes/root-tx-index/band-a/${file.name}`,
+        `/ar-io/indexes/blob/${file.sha256}`,
+      ]) {
+        const res = await request(signed).get(url).expect(200);
+        assert.equal(res.headers['x-ar-io-index-file'], file.sha256, url);
+        assert.ok(res.headers.signature !== undefined, `${url} is signed`);
+        assert.match(covered(res), /"x-ar-io-index-file"/);
+        assert.match(covered(res), /"content-digest"/);
+        assert.match(covered(res), /"repr-digest"/);
+      }
+    });
+
+    it('signs a range with the whole file’s Repr-Digest, and a HEAD with its Content-Digest', async () => {
+      const file = partitionFile();
+      const signed = signedApp();
+      const url = `/ar-io/indexes/blob/${file.sha256}`;
+
+      const range = await request(signed)
+        .get(url)
+        .set('Range', 'bytes=0-9')
+        .expect(206);
+      assert.equal(range.headers['content-digest'], undefined);
+      assert.match(covered(range), /"repr-digest"/);
+      assert.doesNotMatch(covered(range), /"content-digest"/);
+
+      const head = await request(signed).head(url).expect(200);
+      assert.ok(head.headers.signature !== undefined, 'HEAD is signed');
+      assert.match(covered(head), /"content-digest"/);
+    });
+
+    it('leaves a 304 and a 404 unsigned', async () => {
+      const file = partitionFile();
+      const signed = signedApp();
+      const notModified = await request(signed)
+        .get(`/ar-io/indexes/blob/${file.sha256}`)
+        .set('If-None-Match', `"${file.sha256}"`)
+        .expect(304);
+      assert.equal(notModified.headers.signature, undefined);
+      const missing = await request(signed)
+        .get(`/ar-io/indexes/blob/${'0'.repeat(64)}`)
+        .expect(404);
+      assert.equal(missing.headers.signature, undefined);
     });
   });
 

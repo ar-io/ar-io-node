@@ -182,7 +182,8 @@ the right answer.
 **The response signature.** The gateway also signs the HTTP response
 (RFC 9421, configured by the `HTTPSIG_*` settings in
 [envs.md](envs.md)), covering the status,
-`Content-Type`, `Content-Digest` and the request path. That proves which
+`Content-Type`, `Content-Digest` and the request path. It signs every
+response that serves a band file the same way. That proves which
 gateway answered, which is useful for accountability, but it is not a
 substitute for step 3: it disappears when the document is copied elsewhere,
 and the document's own signature does not.
@@ -216,7 +217,10 @@ Both byte routes support single `Range` requests (`206` with
 `Content-Range`), which is how a download resumes. Responses carry
 `ETag: "<sha256>"` and `Repr-Digest: sha-256=:<base64>:`, the digest of the
 whole file, even on a partial response; full responses also carry
-`Content-Digest`. A `503` with `Retry-After` means
+`Content-Digest`. A response that serves a file also carries
+`X-AR-IO-Index-File: <sha256>`, and is signed with HTTPSIG like the document
+(below), the signature covering `Content-Digest` or, on a range,
+`Repr-Digest`. A `503` with `Retry-After` means
 the publisher is part way through replacing a band: the file on disk no longer
 matches the document you hold. Fetch the document again after the delay.
 

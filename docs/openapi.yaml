@@ -1131,13 +1131,16 @@ paths:
           description: The whole file.
           headers:
             ETag: { schema: { type: string }, description: The file's SHA-256, quoted. }
-            Repr-Digest: { schema: { type: string }, description: RFC 9530 SHA-256 of the whole file. }
-            Content-Digest: { schema: { type: string }, description: RFC 9530 SHA-256 of this body. }
+            X-AR-IO-Index-File: { schema: { type: string }, description: 'The SHA-256 the publication lists for this file, hex. An HTTPSIG trigger: the response is signed.' }
+            Repr-Digest: { schema: { type: string }, description: RFC 9530 SHA-256 of the whole file. Covered by the signature. }
+            Content-Digest: { schema: { type: string }, description: RFC 9530 SHA-256 of this body. Covered by the signature. }
+            Signature: { schema: { type: string }, description: RFC 9421 signature (when HTTPSIG_ENABLED) }
+            Signature-Input: { schema: { type: string }, description: RFC 9421 covered components, key ID and creation time }
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
         '206':
-          description: A byte range of the file. Carries Repr-Digest but not Content-Digest.
+          description: A byte range of the file. Carries Repr-Digest but not Content-Digest, and is signed, the signature covering Repr-Digest.
         '304':
           description: Not modified.
         '400':
@@ -1159,7 +1162,8 @@ paths:
       description: |
         The same bytes as the named route, addressed by SHA-256, so a client
         that knows a digest can fetch it from any gateway publishing it.
-        Immutable by construction. Rate limited like the named route.
+        Immutable by construction. Rate limited, priced and signed like the
+        named route, with the same headers.
       parameters:
         - { name: sha256, in: path, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
       responses:
@@ -1168,8 +1172,16 @@ paths:
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
+        '206':
+          description: A byte range of the file.
+        '304':
+          description: Not modified.
+        '402':
+          description: Payment required (x402), when rate limited and payments are enabled.
         '404':
           description: No published file has this digest.
+        '429':
+          description: Rate limited.
   '/ar-io/peers':
     get:
       tags: [Gateway]
