@@ -7,7 +7,7 @@
 import * as winston from 'winston';
 import sql from 'sql-bricks';
 import { ClickHouseClient, createClient } from '@clickhouse/client';
-import { ValidationError } from 'apollo-server-express';
+import { GraphQLError } from 'graphql';
 import CircuitBreaker from 'opossum';
 
 import * as config from '../config.js';
@@ -68,7 +68,15 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
 
     return { height, blockTransactionIndex, isDataItem, id, indexedAt };
   } catch (error) {
-    throw new ValidationError('Invalid transaction cursor');
+    throw new GraphQLError('Invalid transaction cursor', {
+      extensions: {
+        // Preserves apollo-server-express 3's ValidationError shape: the
+        // same error code, and HTTP 400 rather than the plain GraphQLError
+        // default of 500 under Apollo Server 4+.
+        code: 'GRAPHQL_VALIDATION_FAILED',
+        http: { status: 400 },
+      },
+    });
   }
 }
 
@@ -86,7 +94,15 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
 
     return { height };
   } catch (error) {
-    throw new ValidationError('Invalid block cursor');
+    throw new GraphQLError('Invalid block cursor', {
+      extensions: {
+        // Preserves apollo-server-express 3's ValidationError shape: the
+        // same error code, and HTTP 400 rather than the plain GraphQLError
+        // default of 500 under Apollo Server 4+.
+        code: 'GRAPHQL_VALIDATION_FAILED',
+        http: { status: 400 },
+      },
+    });
   }
 }
 

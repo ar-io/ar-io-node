@@ -7,7 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ValidationError } from 'apollo-server-express';
+import { GraphQLError } from 'graphql';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
@@ -149,9 +149,16 @@ describe('SQLite GraphQL cursor functions', () => {
         async () => {
           decodeTransactionGqlCursor('123');
         },
-        {
-          name: ValidationError.name,
-          message: 'Invalid transaction cursor',
+        (error: unknown) => {
+          assert.ok(error instanceof GraphQLError);
+          assert.equal(error.message, 'Invalid transaction cursor');
+          // The wire-visible contract: apollo-server-express 3's
+          // ValidationError produced this code and a 400. Both are pinned
+          // explicitly now that the error is a plain GraphQLError, whose
+          // Apollo Server 4+ default would otherwise be a 500.
+          assert.equal(error.extensions.code, 'GRAPHQL_VALIDATION_FAILED');
+          assert.deepEqual(error.extensions.http, { status: 400 });
+          return true;
         },
       );
     });
@@ -181,9 +188,16 @@ describe('SQLite GraphQL cursor functions', () => {
         async () => {
           decodeBlockGqlCursor('123');
         },
-        {
-          name: ValidationError.name,
-          message: 'Invalid block cursor',
+        (error: unknown) => {
+          assert.ok(error instanceof GraphQLError);
+          assert.equal(error.message, 'Invalid block cursor');
+          // The wire-visible contract: apollo-server-express 3's
+          // ValidationError produced this code and a 400. Both are pinned
+          // explicitly now that the error is a plain GraphQLError, whose
+          // Apollo Server 4+ default would otherwise be a 500.
+          assert.equal(error.extensions.code, 'GRAPHQL_VALIDATION_FAILED');
+          assert.deepEqual(error.extensions.http, { status: 400 });
+          return true;
         },
       );
     });
