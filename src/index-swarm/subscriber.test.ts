@@ -13,7 +13,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { bandsNewestFirst, fileUrl, Subscriber } from './subscriber.js';
+import {
+  bandsNewestFirst,
+  fileUrl,
+  MAX_SEQUENCE_JUMP,
+  Subscriber,
+} from './subscriber.js';
 import { subscriptionTotal } from './metrics.js';
 import { Publisher } from './publisher.js';
 import { StateStore } from './state.js';
@@ -584,6 +589,58 @@ describe('Subscriber', () => {
       ['band-a'],
       'the replayed document installed nothing',
     );
+  });
+
+  it('refuses a sequence that jumps too far, which would lock out every genuine document', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    const seen = (await subState.load()).subscriptions[WALLET].sequence;
+
+    await makeBand('band-b');
+    clock = new Date(clock.getTime() + 60_000);
+    await publish();
+    await resign((doc) => {
+      doc.sequence = seen + MAX_SEQUENCE_JUMP + 1;
+    });
+    const before = await counted('sequence_jump');
+    await makeSubscriber().pollOnce();
+
+    assert.equal(await counted('sequence_jump'), before + 1);
+    assert.deepEqual(await installedIds(), ['band-a'], 'nothing new installed');
+    assert.equal(
+      (await subState.load()).subscriptions[WALLET].sequence,
+      seen,
+      'the huge sequence was not recorded',
+    );
+
+    // The genuine next document still works.
+    await resign((doc) => {
+      doc.sequence = seen + 1;
+    });
+    await makeSubscriber().pollOnce();
+    assert.deepEqual(await installedIds(), ['band-a', 'band-b']);
+  });
+
+  it('starts a new count when the publisher signs with a new key', async () => {
+    await makeBand('band-a');
+    await publish();
+    // What an earlier key left behind: a high sequence.
+    await subState.update((draft) => {
+      draft.subscriptions[WALLET] = {
+        sequence: 50,
+        keyId: 'OldObserverKeyThatWasRotatedAway11111111111',
+        manifestSha256: '',
+        updatedAt: clock.toISOString(),
+      };
+    });
+
+    await makeSubscriber().pollOnce();
+
+    assert.deepEqual(await installedIds(), ['band-a']);
+    const state = (await subState.load()).subscriptions[WALLET];
+    assert.equal(state.keyId, signer.keyId);
+    assert.equal(state.sequence, 1);
   });
 
   it('rejects a document signed by a key the registry does not name', async () => {

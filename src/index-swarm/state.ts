@@ -50,8 +50,14 @@ export interface InstalledBand {
 }
 
 export interface SubscriptionState {
-  /** Highest publication sequence installed from this publisher. */
+  /** Highest publication sequence seen from this publisher. */
   sequence: number;
+  /**
+   * The key that sequence was signed with. A sequence belongs to a key: a
+   * publisher that rotates its observer key starts a new count, and must not
+   * be refused forever because the old key's count was higher.
+   */
+  keyId?: string;
   /** Digest of the publication document that sequence came from. */
   manifestSha256: string;
   updatedAt: string;

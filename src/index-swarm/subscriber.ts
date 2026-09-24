@@ -85,6 +85,12 @@ interface PollMeter {
   refused: boolean;
 }
 
+/**
+ * How far past the last seen sequence a publisher's next document may be.
+ * At one publish a minute that is nearly two years of headroom.
+ */
+export const MAX_SEQUENCE_JUMP = 1_000_000;
+
 /** A band naming its files on a server this node won't fetch from. */
 class DisallowedOriginError extends Error {
   constructor(baseUrl: string) {
@@ -155,6 +161,7 @@ export type SubscriptionResult =
   | 'installed'
   | 'unchanged'
   | 'replayed'
+  | 'sequence_jump'
   | 'signature_failed'
   | 'verify_failed'
   | 'download_failed'
@@ -400,7 +407,34 @@ export class Subscriber {
     }
 
     const state = await this.state.load();
-    const seen = state.subscriptions[publisher]?.sequence ?? 0;
+    const previous = state.subscriptions[publisher];
+    const keyId = signed.signature?.keyId;
+    // A sequence belongs to the key that signed it; a rotated key starts over.
+    const sameKey = previous?.keyId === undefined || previous.keyId === keyId;
+    if (previous !== undefined && !sameKey) {
+      this.log.warn('Publisher signs with a new key; restarting its sequence', {
+        publisher,
+        previousKeyId: previous.keyId,
+        keyId,
+      });
+    }
+    const seen = sameKey ? (previous?.sequence ?? 0) : 0;
+
+    // A publisher moves one sequence per publish. A document far ahead of
+    // what has been seen would, once accepted, make every later genuine
+    // document look like a replay, locking the subscription until someone
+    // edited the state by hand: refuse it instead. First contact (nothing
+    // seen) accepts any sequence.
+    if (seen > 0 && document.sequence > seen + MAX_SEQUENCE_JUMP) {
+      this.log.warn('Refusing a publication that jumps too far ahead', {
+        publisher,
+        offered: document.sequence,
+        seen,
+        maxJump: MAX_SEQUENCE_JUMP,
+      });
+      this.count(publisher, '', 'sequence_jump');
+      return;
+    }
 
     // The sequence guards against rollback and nothing else. It deliberately
     // does not gate the reconcile below, because it records what has been
@@ -464,6 +498,7 @@ export class Subscriber {
     await this.state.update((draft) => {
       draft.subscriptions[publisher] = {
         sequence: Math.max(document.sequence, seen),
+        ...(keyId !== undefined ? { keyId } : {}),
         // The digest of the bytes as served, the same value the publisher
         // records for its own document.
         manifestSha256: manifestSha256(raw),
