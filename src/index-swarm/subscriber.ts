@@ -497,10 +497,14 @@ export class Subscriber {
       if (band.publisher !== publisher) continue;
       if (band.retiredAt !== undefined) continue;
 
+      // Retire against the map as it is now, not as it was before the loop:
+      // retire returns a copy of what it is given, so passing the stale map
+      // would undo the band retired on the previous iteration.
+      const latest = (await this.state.load()).installed[index.name] ?? {};
       const next = await kind.retire({
         bandId,
         dir: band.dir,
-        current,
+        current: latest,
       });
       await this.state.update((draft) => {
         draft.installed[index.name] = next;

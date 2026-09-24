@@ -556,6 +556,42 @@ describe('Subscriber', () => {
     );
   });
 
+  it('retires every band the publisher drops in one publication', async () => {
+    await makeBand('band-a');
+    await makeBand('band-b');
+    await makeBand('band-c');
+    await publish();
+    await makeSubscriber().pollOnce();
+    assert.deepEqual(await installedIds(), ['band-a', 'band-b', 'band-c']);
+
+    for (const id of ['band-b', 'band-c']) {
+      await fs.rm(path.join(pubDir, 'root-tx-index', id), {
+        recursive: true,
+        force: true,
+      });
+    }
+    await pubState.update((draft) => {
+      draft.describeCache = {};
+    });
+    clock = new Date(clock.getTime() + 60_000);
+    await publish();
+
+    await makeSubscriber().pollOnce();
+
+    assert.deepEqual(
+      await installedIds(),
+      ['band-a'],
+      'both dropped bands are out of service, not only the last one retired',
+    );
+    for (const id of ['band-b', 'band-c']) {
+      assert.equal(
+        existsSync(path.join(subInstalled, 'root-tx-index', id)),
+        false,
+        `${id} was swept`,
+      );
+    }
+  });
+
   it('honours an allowlist without abandoning the registry check', async () => {
     await makeBand('band-a');
     await publish();
