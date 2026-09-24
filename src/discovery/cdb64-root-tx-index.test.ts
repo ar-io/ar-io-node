@@ -1194,6 +1194,67 @@ describe('Cdb64RootTxIndex', () => {
       assert.equal(misses, 0, 'a record in both versions never misses');
     });
 
+    // chokidar reports normalised paths, so a source spelled with a trailing
+    // slash or a leading `./` must still match them.
+    const spellings: Array<[string, (dir: string) => string]> = [
+      ['a trailing slash', (dir) => `${dir}/`],
+      ['a leading ./', (dir) => `./${path.relative(process.cwd(), dir)}`],
+    ];
+    for (const [description, spell] of spellings) {
+      it(`follows installs and retirements for a source with ${description}`, async () => {
+        const collectionDir = path.join(
+          tempDir,
+          `collection-spelled-${spellings.findIndex(([d]) => d === description)}`,
+        );
+        await fs.mkdir(collectionDir, { recursive: true });
+
+        const goingId = createTxId(61);
+        const goingDir = path.join(collectionDir, 'band-going');
+        await createBand(goingDir, [
+          { dataItemId: goingId, rootTxId: createTxId(501) },
+        ]);
+
+        const index = new Cdb64RootTxIndex({
+          log,
+          sources: [spell(collectionDir)],
+          watch: true,
+        });
+        // An assertion failure must still close the watcher, or the run hangs.
+        try {
+          assert(
+            (await index.getRootTx(toB64Url(goingId))) !== undefined,
+            'band present at startup should resolve',
+          );
+
+          const newId = createTxId(62);
+          await installBand(
+            collectionDir,
+            path.join(tempDir, `staging-spelled-${description.length}`),
+            'band-new',
+            [{ dataItemId: newId, rootTxId: createTxId(502) }],
+          );
+          assert(
+            await waitFor(
+              async () =>
+                (await index.getRootTx(toB64Url(newId))) !== undefined,
+            ),
+            'band installed at runtime should become resolvable',
+          );
+
+          await fs.rm(goingDir, { recursive: true, force: true });
+          assert(
+            await waitFor(
+              async () =>
+                (await index.getRootTx(toB64Url(goingId))) === undefined,
+            ),
+            'retired band should stop resolving',
+          );
+        } finally {
+          await index.close();
+        }
+      });
+    }
+
     it('drops a band when it is retired', async () => {
       const collectionDir = path.join(tempDir, 'collection-remove');
       await fs.mkdir(collectionDir, { recursive: true });

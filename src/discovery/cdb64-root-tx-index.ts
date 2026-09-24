@@ -569,12 +569,28 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     });
     this.watchers.set(key, watcher);
 
+    // chokidar reports normalised paths, which a source spelled with a
+    // trailing slash or a leading `./` never equals, so compare resolved
+    // paths.
+    const resolvedDir = path.resolve(dirPath);
+
+    /**
+     * The reader key for a band directory in this collection, spelled as the
+     * startup scan spells it so both find the same reader; undefined if the
+     * directory is not an immediate child of the collection.
+     */
+    const bandKeyFor = (bandDir: string): string | undefined => {
+      if (path.resolve(path.dirname(bandDir)) !== resolvedDir) return undefined;
+      return path.join(dirPath, path.basename(bandDir));
+    };
+
     /** The band directory a path belongs to, if it is one of ours. */
     const bandDirFor = (manifestPath: string): string | undefined => {
       if (path.basename(manifestPath) !== 'manifest.json') return undefined;
-      const bandDir = path.dirname(manifestPath);
-      if (path.dirname(bandDir) !== dirPath) return undefined;
-      if (isCdb64TempDirName(bandDir)) return undefined;
+      const bandDir = bandKeyFor(path.dirname(manifestPath));
+      if (bandDir === undefined || isCdb64TempDirName(bandDir)) {
+        return undefined;
+      }
       return bandDir;
     };
 
@@ -631,9 +647,9 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
     // Removing a whole band directory does not always surface as an unlink of
     // the manifest inside it, so treat the directory going away as removal.
-    watcher.on('unlinkDir', (bandDir: string) => {
-      if (path.dirname(bandDir) !== dirPath) return;
-      if (!this.readerMap.has(bandDir)) return;
+    watcher.on('unlinkDir', (removedDir: string) => {
+      const bandDir = bandKeyFor(removedDir);
+      if (bandDir === undefined || !this.readerMap.has(bandDir)) return;
       this.removeReader(bandDir).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         this.log.error('Failed handling index band directory removal', {
@@ -653,8 +669,9 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
   /**
    * Lists the band directories inside a collection: immediate subdirectories
-   * holding a `manifest.json`. Directories ending in `.tmp` are skipped, so a
-   * band still being written is not loaded half-formed.
+   * holding a `manifest.json`. Build directories (see
+   * {@link isCdb64TempDirName}) are skipped, so a band still being written is
+   * not loaded half-formed.
    */
   private async discoverBandsInDirectory(dirPath: string): Promise<string[]> {
     let entries: Dirent[];
