@@ -121,6 +121,11 @@ async function main(): Promise<void> {
       downloadStallTimeoutMs: config.DOWNLOAD_STALL_TIMEOUT_MS,
       downloadConcurrency: config.DOWNLOAD_CONCURRENCY,
       supersedeGraceMs: config.SUPERSEDE_GRACE_MS,
+      allowedFileOrigins: config.ALLOWED_FILE_ORIGINS,
+      // Names the gateway, so a publisher can tell subscribers apart even
+      // when several share one IP. The wallet is already public in the
+      // registry.
+      userAgent: `ar-io-index-swarm/${release} (${config.AR_IO_WALLET ?? 'unregistered'})`,
       ...(config.MAX_DISK_BYTES !== undefined
         ? { maxDiskBytes: config.MAX_DISK_BYTES }
         : {}),

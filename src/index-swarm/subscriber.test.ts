@@ -47,10 +47,38 @@ describe('fileUrl', () => {
     );
   });
 
-  it('fetches a file on another server by name', () => {
+  it('fetches a file on another server by name, only if that server is allowed', () => {
     assert.equal(
-      fileUrl('https://gw.example', 'https://cdn.example/idx/band/', file),
+      fileUrl(
+        'https://gw.example',
+        'https://cdn.example/idx/band/',
+        file,
+        new Set(['https://cdn.example']),
+      ),
       'https://cdn.example/idx/band/00.cdb',
+    );
+    // A signed URL is still a request to wherever it points.
+    for (const baseUrl of [
+      'https://cdn.example/idx/band/',
+      'http://169.254.169.254/latest/meta-data/?x=',
+      'http://clickhouse:8123/?query=',
+    ]) {
+      assert.equal(
+        fileUrl('https://gw.example', baseUrl, file),
+        undefined,
+        baseUrl,
+      );
+    }
+  });
+
+  it("allows an absolute URL on the publication's own origin", () => {
+    assert.equal(
+      fileUrl(
+        'https://gw.example',
+        'https://gw.example/ar-io/indexes/idx/band/',
+        file,
+      ),
+      'https://gw.example/ar-io/indexes/idx/band/00.cdb',
     );
   });
 });
@@ -78,6 +106,8 @@ describe('Subscriber', () => {
   let omitContentLength: boolean;
   /** Requests for this path, which no test should ever cause. */
   let canaryHits: number;
+  /** User-Agent of every request the publisher saw. */
+  let userAgents: string[];
 
   /**
    * A real base58 address, and deliberately a different key from the one that
@@ -107,6 +137,7 @@ describe('Subscriber', () => {
     notFoundOnce = new Set();
     omitContentLength = false;
     canaryHits = 0;
+    userAgents = [];
     clock = new Date('2026-09-23T00:00:00.000Z');
 
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -129,6 +160,7 @@ describe('Subscriber', () => {
             : path.join(pubDir, urlPath.replace('/ar-io/indexes/', ''));
 
       void (async () => {
+        userAgents.push(String(req.headers['user-agent'] ?? ''));
         if (urlPath === '/canary') {
           canaryHits++;
           res.writeHead(404).end();
@@ -264,6 +296,8 @@ describe('Subscriber', () => {
       trustedPublishers: string[];
       name: string;
       url: string;
+      userAgent: string;
+      allowedFileOrigins: string[];
     }> = {},
   ) =>
     new Subscriber({
@@ -286,6 +320,10 @@ describe('Subscriber', () => {
       supersedeGraceMs: 0,
       ...(opts.maxDiskBytes !== undefined
         ? { maxDiskBytes: opts.maxDiskBytes }
+        : {}),
+      ...(opts.userAgent !== undefined ? { userAgent: opts.userAgent } : {}),
+      ...(opts.allowedFileOrigins !== undefined
+        ? { allowedFileOrigins: opts.allowedFileOrigins }
         : {}),
       now: () => clock,
     });
@@ -726,6 +764,97 @@ describe('Subscriber', () => {
       return id !== undefined ? [id] : [];
     });
     assert.deepEqual(order, ['b-tip', 'c-mid', 'a-old']);
+  });
+
+  describe('never fetches where the network would not let an outsider', () => {
+    // Stands in for an internal service on the gateway's network.
+    let internal: http.Server;
+    let internalOrigin: string;
+    let internalHits: number;
+    beforeEach(async () => {
+      internalHits = 0;
+      internal = http.createServer((_req, res) => {
+        internalHits++;
+        res.writeHead(200).end('internal');
+      });
+      await new Promise<void>((resolve) =>
+        internal.listen(0, '127.0.0.1', resolve),
+      );
+      const address = internal.address();
+      assert(address !== null && typeof address === 'object');
+      internalOrigin = `http://127.0.0.1:${address.port}`;
+    });
+    afterEach(async () => {
+      internal.closeAllConnections();
+      await new Promise<void>((resolve) => internal.close(() => resolve()));
+    });
+
+    it('skips a band whose files are on another server', async () => {
+      await makeBand('band-a');
+      await publish();
+      await resign((doc) => {
+        doc.indexes[0].bands[0].http = { baseUrl: `${internalOrigin}/x/?q=` };
+      });
+      const before = await counted('unreachable');
+
+      await makeSubscriber().pollOnce();
+
+      assert.equal(internalHits, 0, 'the internal service was never asked');
+      assert.deepEqual(await installedIds(), []);
+      assert.equal(await counted('unreachable'), before + 1);
+    });
+
+    it('fetches another server that the operator allowed', async () => {
+      await makeBand('band-a');
+      await publish();
+      await resign((doc) => {
+        doc.indexes[0].bands[0].http = { baseUrl: `${internalOrigin}/x/` };
+      });
+
+      await makeSubscriber({ allowedFileOrigins: [internalOrigin] }).pollOnce();
+
+      assert(internalHits > 0, 'the allowed server was asked');
+    });
+
+    it('does not follow a redirect from the publisher', async () => {
+      const redirecting = http.createServer((_req, res) => {
+        res
+          .writeHead(302, { location: `${internalOrigin}/ar-io/indexes` })
+          .end();
+      });
+      await new Promise<void>((resolve) =>
+        redirecting.listen(0, '127.0.0.1', resolve),
+      );
+      const address = redirecting.address();
+      assert(address !== null && typeof address === 'object');
+      try {
+        await makeSubscriber({
+          url: `http://127.0.0.1:${address.port}`,
+        }).pollOnce();
+        assert.equal(internalHits, 0, 'the redirect was not followed');
+      } finally {
+        redirecting.closeAllConnections();
+        await new Promise<void>((resolve) =>
+          redirecting.close(() => resolve()),
+        );
+      }
+    });
+  });
+
+  it('names itself on every request to a publisher', async () => {
+    await makeBand('band-a');
+    await publish();
+
+    await makeSubscriber({
+      userAgent: 'ar-io-index-swarm/test (WALLET)',
+    }).pollOnce();
+
+    assert.deepEqual(await installedIds(), ['band-a']);
+    assert(userAgents.length > 1, 'the document and the files were fetched');
+    assert.deepEqual(
+      [...new Set(userAgents)],
+      ['ar-io-index-swarm/test (WALLET)'],
+    );
   });
 
   it('keeps the files that completed, and fetches only the rest next poll', async () => {

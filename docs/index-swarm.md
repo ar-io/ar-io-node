@@ -223,6 +223,16 @@ that the publisher has gone quiet, not that its bands have gone bad.
 the registry check and never replaces it: a publisher on the list still has
 to sign with its registered key.
 
+A band's files are fetched from the publication's own origin, or from an
+origin listed in `INDEX_SWARM_ALLOWED_FILE_ORIGINS` (for a publisher that
+serves bands from a mirror or CDN). A band naming any other server is skipped.
+The document is signed, but a URL in it is still a request to wherever it
+points, and the sidecar runs on the gateway's network beside ClickHouse,
+redis and the observer. For the same reason, neither the document fetch nor
+any file download follows a redirect. Every request carries
+`User-Agent: ar-io-index-swarm/<release> (<gateway wallet>)`, so a publisher
+can tell subscribers apart even when several share one IP.
+
 ### Pointing the gateway at installed bands
 
 The subscriber installs into `data/indexes/installed/<index>/`. The gateway

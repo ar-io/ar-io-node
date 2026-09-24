@@ -268,6 +268,30 @@ export const MIN_CORE_RELEASE = env.positiveIntOrDefault(
 export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
 
 /**
+ * Origins, besides a publication's own, that a band may name for its files
+ * (`https://mirror.example`, comma-separated). Anything else is refused: a
+ * URL in a signed document is still a request to wherever it points, and
+ * from inside the gateway's network that could be an internal service.
+ */
+export const ALLOWED_FILE_ORIGINS = (
+  env.varOrUndefined('INDEX_SWARM_ALLOWED_FILE_ORIGINS') ?? ''
+)
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0)
+  .map((origin, i) => {
+    try {
+      const url = new URL(origin);
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') throw 0;
+      return url.origin;
+    } catch {
+      throw new Error(
+        `INDEX_SWARM_ALLOWED_FILE_ORIGINS[${i}] is not an http(s) origin: ${origin}`,
+      );
+    }
+  });
+
+/**
  * The gateway's registered observer key, used to sign what this node
  * publishes. Read but never written; a publisher without one refuses to run.
  */

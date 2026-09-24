@@ -85,6 +85,16 @@ interface PollMeter {
   refused: boolean;
 }
 
+/** A band naming its files on a server this node won't fetch from. */
+class DisallowedOriginError extends Error {
+  constructor(baseUrl: string) {
+    super(
+      `band files are on ${baseUrl}, which is neither the publication's origin nor in INDEX_SWARM_ALLOWED_FILE_ORIGINS`,
+    );
+    this.name = 'DisallowedOriginError';
+  }
+}
+
 /** A file not started because the publisher's meter already refused one. */
 class MeteredError extends Error {
   constructor() {
@@ -108,9 +118,26 @@ export function fileUrl(
   origin: string,
   baseUrl: string,
   file: BandFile,
-): string {
+  allowedOrigins: ReadonlySet<string> = new Set(),
+): string | undefined {
   if (/^https?:\/\//i.test(baseUrl)) {
-    return new URL(`${baseUrl}${file.name}`).toString();
+    // The document is signed, but a signed URL is still one the publisher
+    // chose, and fetching it from inside the gateway's network is a request
+    // to wherever it points: a metadata endpoint, ClickHouse, redis. The
+    // digest check protects the bytes, not the request. So another server is
+    // fetched only if it shares the publication's origin or the operator
+    // listed it.
+    let target: URL;
+    try {
+      target = new URL(`${baseUrl}${file.name}`);
+    } catch {
+      return undefined;
+    }
+    const sameOrigin = target.origin === new URL(origin).origin;
+    if (!sameOrigin && !allowedOrigins.has(target.origin)) {
+      return undefined;
+    }
+    return target.toString();
   }
   return new URL(`/ar-io/indexes/blob/${file.sha256}`, origin).toString();
 }
@@ -156,6 +183,16 @@ export interface SubscriberOptions {
   supersedeGraceMs: number;
   maxDiskBytes?: number;
   downloadRateLimitBytesPerSec?: number;
+  /**
+   * Origins (`https://host[:port]`) a band may name for its files besides
+   * the publication's own. See {@link fileUrl}.
+   */
+  allowedFileOrigins?: string[];
+  /**
+   * Sent on every request to a publisher, so a publisher can tell its
+   * subscribers apart even when several share one IP.
+   */
+  userAgent?: string;
   now?: () => Date;
 }
 
@@ -174,6 +211,8 @@ export class Subscriber {
   private readonly supersedeGraceMs: number;
   private readonly maxDiskBytes?: number;
   private readonly downloadRateLimitBytesPerSec?: number;
+  private readonly allowedFileOrigins: ReadonlySet<string>;
+  private readonly requestHeaders: Record<string, string>;
   private readonly now: () => Date;
 
   constructor(options: SubscriberOptions) {
@@ -191,6 +230,13 @@ export class Subscriber {
     this.supersedeGraceMs = options.supersedeGraceMs;
     this.maxDiskBytes = options.maxDiskBytes;
     this.downloadRateLimitBytesPerSec = options.downloadRateLimitBytesPerSec;
+    this.allowedFileOrigins = new Set(
+      (options.allowedFileOrigins ?? []).map((o) => new URL(o).origin),
+    );
+    this.requestHeaders =
+      options.userAgent !== undefined
+        ? { 'user-agent': options.userAgent }
+        : {};
     this.now = options.now ?? (() => new Date());
   }
 
@@ -248,9 +294,14 @@ export class Subscriber {
   private async fetchPublication(url: string): Promise<Buffer> {
     const response = await fetch(`${url}/ar-io/indexes`, {
       signal: AbortSignal.timeout(this.fetchTimeoutMs),
-      headers: { accept: 'application/json' },
+      headers: { ...this.requestHeaders, accept: 'application/json' },
+      // A redirect is a second request to wherever it points, chosen by
+      // whoever answers: from inside the gateway's network that can be an
+      // internal service. The publication has one address; nothing needs one.
+      redirect: 'error',
     });
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`HTTP ${response.status} ${response.statusText}`);
     }
 
@@ -631,6 +682,28 @@ export class Subscriber {
       return false;
     }
 
+    if (
+      fileUrl(
+        origin,
+        baseUrl,
+        band.files[0] ?? { name: '', size: 0, sha256: '' },
+        this.allowedFileOrigins,
+      ) === undefined
+    ) {
+      this.log.warn(
+        'Band files are on a server this node does not fetch from; skipping',
+        {
+          publisher,
+          index: index.name,
+          band: band.id,
+          baseUrl,
+          hint: 'list its origin in INDEX_SWARM_ALLOWED_FILE_ORIGINS to allow it',
+        },
+      );
+      this.count(publisher, index.name, 'unreachable');
+      return false;
+    }
+
     const incoming = path.join(this.incomingDir, index.name, band.id);
     await fs.mkdir(incoming, { recursive: true });
 
@@ -644,10 +717,12 @@ export class Subscriber {
       band.files.map((file) =>
         limit(async () => {
           if (meter.refused) throw new MeteredError();
-          const url = fileUrl(origin, baseUrl, file);
+          const url = fileUrl(origin, baseUrl, file, this.allowedFileOrigins);
+          if (url === undefined) throw new DisallowedOriginError(baseUrl);
           try {
             const result = await downloadFile({
               url,
+              headers: this.requestHeaders,
               destPath: path.join(incoming, file.name),
               expectedSize: file.size,
               expectedSha256: file.sha256,
