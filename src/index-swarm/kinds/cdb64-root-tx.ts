@@ -37,6 +37,12 @@ import {
 
 export const CDB64_ROOT_TX_KIND = 'cdb64-root-tx';
 
+/**
+ * Largest band manifest accepted, matching what the gateway's collection
+ * source will load (Cdb64RootTxIndex's MAX_MANIFEST_SIZE).
+ */
+export const MAX_BAND_MANIFEST_BYTES = 10 * 1024 * 1024;
+
 /** The manifest is part of the band and travels with it. */
 export const MANIFEST_FILE = 'manifest.json';
 
@@ -227,6 +233,17 @@ export class Cdb64RootTxKind implements ArtifactKind {
       ),
     );
 
+    // Read whole, so bounded first: the size is whatever the publisher
+    // declared, and the gateway's own reader refuses anything larger anyway.
+    const manifestFile = band.files.find((file) => file.name === MANIFEST_FILE);
+    if (
+      manifestFile === undefined ||
+      manifestFile.size > MAX_BAND_MANIFEST_BYTES
+    ) {
+      throw new Error(
+        `Band ${band.id}: ${MANIFEST_FILE} is ${manifestFile?.size ?? 'missing'} bytes, over the ${MAX_BAND_MANIFEST_BYTES} byte limit`,
+      );
+    }
     const manifest = parseManifest(
       await fs.readFile(path.join(dir, MANIFEST_FILE), 'utf8'),
     );

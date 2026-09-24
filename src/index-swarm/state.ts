@@ -252,7 +252,16 @@ export class StateStore {
       const serialized = JSON.stringify(state, null, 2);
       const tmpPath = `${this.filePath}.tmp`;
       await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-      await fs.writeFile(tmpPath, serialized, 'utf8');
+      // Flushed before the rename: after a power loss the rename can
+      // otherwise land on a file whose contents never reached the disk, which
+      // reads back empty and is quarantined, losing every record.
+      const handle = await fs.open(tmpPath, 'w');
+      try {
+        await handle.writeFile(serialized, 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
       await fs.rename(tmpPath, this.filePath);
     });
 

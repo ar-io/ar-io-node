@@ -93,6 +93,9 @@ interface PollMeter {
  */
 export const MAX_SEQUENCE_JUMP = 1_000_000;
 
+/** Distinct index names labelled per publisher on the result metric. */
+export const MAX_INDEX_LABELS_PER_PUBLISHER = 16;
+
 /**
  * Separates a band id from its generation in an installed directory name.
  * A band id can't contain it, so no directory name is ambiguous.
@@ -392,12 +395,27 @@ export class Subscriber {
     await this.maintaining?.catch(() => undefined);
   }
 
+  /** Index names seen per publisher, for bounding the metric's labels. */
+  private readonly labelledIndexes = new Map<string, Set<string>>();
+
   private count(
     publisher: string,
     index: string,
     result: SubscriptionResult,
     transport = 'http',
   ): void {
+    // Index names come from the remote document, so a publisher rotating
+    // names could otherwise grow this metric without bound.
+    let seen = this.labelledIndexes.get(publisher);
+    if (seen === undefined) {
+      seen = new Set();
+      this.labelledIndexes.set(publisher, seen);
+    }
+    if (!seen.has(index) && seen.size >= MAX_INDEX_LABELS_PER_PUBLISHER) {
+      index = '(other)';
+    } else {
+      seen.add(index);
+    }
     subscriptionTotal.inc({ publisher, index, transport, result });
   }
 

@@ -12,7 +12,11 @@ import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { Cdb64RootTxKind, MANIFEST_FILE } from './cdb64-root-tx.js';
+import {
+  Cdb64RootTxKind,
+  MANIFEST_FILE,
+  MAX_BAND_MANIFEST_BYTES,
+} from './cdb64-root-tx.js';
 import { createKindRegistry, kindFor } from './registry.js';
 import { InstalledSet } from './types.js';
 import { PartitionedCdb64Writer } from '../../lib/partitioned-cdb64-writer.js';
@@ -184,6 +188,33 @@ describe('Cdb64RootTxKind', () => {
       await assert.rejects(
         () => kind.validate(tampered, dir),
         /http location; a published band may only carry local files/,
+      );
+    });
+
+    it('refuses a manifest larger than the gateway would load, before reading it', async () => {
+      const dir = await makeBand(path.join(tempDir, 'band-huge-manifest'));
+      const band = await kind.describe(dir);
+      // Padding keeps it valid JSON, so only the size can refuse it.
+      const manifestPath = path.join(dir, MANIFEST_FILE);
+      const raw =
+        (await fs.readFile(manifestPath, 'utf8')) +
+        ' '.repeat(MAX_BAND_MANIFEST_BYTES + 1);
+      await fs.writeFile(manifestPath, raw);
+      const tampered = {
+        ...band,
+        files: band.files.map((f) =>
+          f.name === MANIFEST_FILE
+            ? {
+                ...f,
+                size: Buffer.byteLength(raw),
+                sha256: crypto.createHash('sha256').update(raw).digest('hex'),
+              }
+            : f,
+        ),
+      };
+      await assert.rejects(
+        () => kind.validate(tampered, dir),
+        /over the \d+ byte limit/,
       );
     });
 

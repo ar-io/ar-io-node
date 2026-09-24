@@ -1234,6 +1234,33 @@ describe('Subscriber', () => {
     }
   });
 
+  it('bounds the index names it labels, however many a publisher invents', async () => {
+    // The cap is per subscriber, one per process in production; clear what
+    // earlier tests in this file labelled.
+    subscriptionTotal.reset();
+    await makeBand('band-a');
+    await publish();
+    await resign((doc) => {
+      for (let i = 0; i < 40; i++) {
+        doc.indexes.push({
+          name: `invented-${i}`,
+          kind: 'no-such-kind',
+          bands: [doc.indexes[0].bands[0]],
+        });
+      }
+    });
+
+    await makeSubscriber().pollOnce();
+
+    const labels = new Set(
+      (await subscriptionTotal.get()).values
+        .filter((v) => v.labels.publisher === WALLET)
+        .map((v) => v.labels.index),
+    );
+    assert(labels.size <= 16 + 1, `${labels.size} index labels`);
+    assert(labels.has('(other)'), 'the rest share one label');
+  });
+
   it('keeps the files that completed, and fetches only the rest next poll', async () => {
     // A publisher behind a load balancer where one node lacks the routes
     // answers some requests 404. The files that did arrive must not be
