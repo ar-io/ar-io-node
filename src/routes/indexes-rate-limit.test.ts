@@ -30,7 +30,10 @@ describe('/ar-io/indexes rate limiting', () => {
   let fileSize: number;
   let fileSha256: string;
   /** A router with a fresh limiter whose IP bucket holds 1.5 copies of the file. */
-  let makeApp: (paymentProcessor?: unknown) => express.Express;
+  let makeApp: (
+    paymentProcessor?: unknown,
+    options?: { rateLimitsEnabled?: boolean },
+  ) => express.Express;
 
   before(async () => {
     const { createIndexesRouter } = await import('./indexes.js');
@@ -101,7 +104,10 @@ describe('/ar-io/indexes rate limiting', () => {
     // too slowly to matter within the test.
     const tokensForFile = Math.ceil(fileSize / 1024);
     assert.ok(tokensForFile >= 4, `a file costs ${tokensForFile} tokens`);
-    makeApp = (paymentProcessor?: unknown) => {
+    makeApp = (
+      paymentProcessor?: unknown,
+      options: { rateLimitsEnabled?: boolean } = {},
+    ) => {
       const rateLimiter = new MemoryRateLimiter({
         resourceCapacity: tokensForFile * 100,
         resourceRefillRate: 0.001,
@@ -117,6 +123,9 @@ describe('/ar-io/indexes rate limiting', () => {
           log,
           publishedDir,
           rateLimiter,
+          ...(options.rateLimitsEnabled !== undefined
+            ? { rateLimitsEnabled: options.rateLimitsEnabled }
+            : {}),
           ...(paymentProcessor !== undefined
             ? { paymentProcessor: paymentProcessor as never }
             : {}),
@@ -181,6 +190,18 @@ describe('/ar-io/indexes rate limiting', () => {
         .expect(304);
     }
     await request(fresh).get(url).expect(200);
+  });
+
+  it('keeps bytes public when the limiter exists but does not enforce', async () => {
+    // The gateway always constructs a limiter, enforcing only with
+    // ENABLE_RATE_LIMITER; an unmetered gateway must stay CDN-cacheable.
+    const res = await request(makeApp(undefined, { rateLimitsEnabled: false }))
+      .get(`/ar-io/indexes/blob/${fileSha256}`)
+      .expect(200);
+    assert.equal(
+      res.headers['cache-control'],
+      'public, max-age=31536000, immutable',
+    );
   });
 
   it('marks metered bytes private, so a shared cache cannot bypass the meter', async () => {

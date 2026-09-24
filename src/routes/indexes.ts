@@ -67,6 +67,13 @@ export interface IndexesRouterOptions {
   publishedIndexes?: PublishedIndexes;
   publishedDir?: string;
   rateLimiter?: RateLimiter;
+  /**
+   * Whether the rate limiter actually limits. The gateway always constructs
+   * one, enforcing only with ENABLE_RATE_LIMITER, so its presence alone says
+   * nothing about whether these routes are metered. Defaults to whether a
+   * limiter was given.
+   */
+  rateLimitsEnabled?: boolean;
   paymentProcessor?: PaymentProcessor;
 }
 
@@ -75,6 +82,7 @@ export function createIndexesRouter({
   publishedIndexes: suppliedIndexes,
   publishedDir: suppliedDir,
   rateLimiter,
+  rateLimitsEnabled = rateLimiter !== undefined,
   paymentProcessor,
 }: IndexesRouterOptions): Router {
   const log = parentLog.child({ class: 'IndexesRouter' });
@@ -101,10 +109,10 @@ export function createIndexesRouter({
    * to spread egress runs these routes unmetered, and gets `public`. The
    * document is never metered and stays public either way.
    */
-  const fileCacheScope =
-    rateLimiter !== undefined || paymentProcessor !== undefined
-      ? 'private'
-      : 'public';
+  const metered =
+    (rateLimiter !== undefined && rateLimitsEnabled) ||
+    paymentProcessor !== undefined;
+  const fileCacheScope = metered ? 'private' : 'public';
 
   function finish(_res: Response, route: string, status: number): void {
     metrics.indexesRequestsTotal.inc({ route, status: String(status) });

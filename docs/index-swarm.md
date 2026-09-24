@@ -335,8 +335,8 @@ Things to decide or check:
 - **Forward the client IP.** The meter keys on `X-Forwarded-For`; the stock
   config in [linux-setup.md](linux-setup.md) already sets it. Without it,
   every subscriber shares the proxy's allowance.
-- **Metered bytes are private.** "Metered" means the gateway has a rate
-  limiter or x402 configured. A shared cache serves what it holds without
+- **Metered bytes are private.** "Metered" means `ENABLE_RATE_LIMITER=true`
+  or x402 is enabled (`ENABLE_X_402_USDC_DATA_EGRESS`). A shared cache serves what it holds without
   reaching the gateway, and a `304` is free, so a cached copy of a paid file
   would reach anyone who asked the cache: no tokens spent, no `402` issued.
   A metering gateway therefore marks its byte responses `private`, which a

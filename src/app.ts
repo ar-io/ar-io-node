@@ -160,6 +160,7 @@ app.use(
     log,
     publishedIndexes: system.publishedIndexes,
     rateLimiter: system.rateLimiter,
+    rateLimitsEnabled: config.ENABLE_RATE_LIMITER,
     paymentProcessor: system.paymentProcessor,
   }),
 );
