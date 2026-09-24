@@ -311,6 +311,57 @@ describe('Publisher', () => {
     assert.equal(existsSync(stray), false);
   });
 
+  // Root ignores directory permissions, so the refused link can't be staged.
+  it(
+    'does not publish a document whose blobs could not be linked',
+    {
+      skip: process.getuid?.() === 0,
+    },
+    async () => {
+      // Subscribers fetch by digest, and the gateway answers 503 for a digest
+      // with no link, so such a document would advertise files nobody can get.
+      await makeBand('band-a');
+      await fs.mkdir(blobsDir, { recursive: true });
+      await fs.chmod(blobsDir, 0o555);
+      try {
+        await assert.rejects(makePublisher().scanOnce(), /Could not link/);
+        assert.equal(
+          existsSync(publicationFile),
+          false,
+          'nothing was published',
+        );
+      } finally {
+        await fs.chmod(blobsDir, 0o755);
+      }
+      // Once the links can be made, the next scan publishes.
+      await makePublisher().scanOnce();
+      assert.equal(existsSync(publicationFile), true);
+    },
+  );
+
+  it('restores a missing link on a scan that changes nothing else', async () => {
+    await makeBand('band-a');
+    const publisher = makePublisher();
+    await publisher.scanOnce();
+    const doc = await readPublication();
+    const digest = doc.indexes[0].bands[0].files[0].sha256;
+    await fs.rm(path.join(blobsDir, digest));
+
+    clock = new Date(clock.getTime() + 60_000);
+    await publisher.scanOnce();
+
+    assert.equal(
+      (await readPublication()).sequence,
+      doc.sequence,
+      'no republish',
+    );
+    assert.equal(
+      existsSync(path.join(blobsDir, digest)),
+      true,
+      'link restored',
+    );
+  });
+
   it('links a digest before the document that names it is published', async () => {
     // The blob route refuses a digest with no link, so a document must never
     // be visible before its links. Make the publishing rename fail, and the

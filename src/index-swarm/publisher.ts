@@ -355,23 +355,33 @@ export class Publisher {
    * a directory entry. Both paths are on the same volume, which is what makes
    * that possible. A link also pins the bytes that were hashed: a band
    * rebuilt under the same name gets a new inode, and the link keeps the old.
+   *
+   * @throws when any link could not be made. The gateway answers 503 for a
+   *   digest with no link and subscribers fetch by digest, so a document
+   *   naming one would advertise a file nobody can get; the scan fails
+   *   instead, and the next one tries again.
    */
   private async linkBlobs(indexes: IndexEntry[]): Promise<void> {
     await fs.mkdir(this.blobsDir, { recursive: true });
+    let failed = 0;
     for (const [digest, source] of this.blobSources(indexes)) {
       const target = path.join(this.blobsDir, digest);
       try {
         await fs.link(source, target);
       } catch (error: any) {
         if (error?.code === 'EEXIST') continue;
-        // Not fatal to publishing, but the gateway answers 503 for this
-        // digest until a link exists, and subscribers fetch by digest.
-        this.log.error('Could not link blob; its digest will not be served', {
+        failed++;
+        this.log.error('Could not link blob; its digest cannot be served', {
           digest,
           source,
           error: error?.message,
         });
       }
+    }
+    if (failed > 0) {
+      throw new Error(
+        `Could not link ${failed} blob(s) under ${this.blobsDir}; not publishing`,
+      );
     }
   }
 
@@ -479,6 +489,10 @@ export class Publisher {
     const stale = Number.isNaN(ageMs) || ageMs >= this.ttlMs / 2;
 
     if (!contentChanged && !stale) {
+      // The document stands, but its links must still be there: one deleted
+      // since (by hand, or by a failed earlier scan) would otherwise stay
+      // missing until the next republish. An existing link costs an EEXIST.
+      await this.linkBlobs(indexes);
       for (const entry of this.publish) {
         publishTotal.inc({ index: entry.name, result: 'unchanged' });
       }
@@ -517,11 +531,11 @@ export class Publisher {
 
     await fs.mkdir(path.dirname(this.publicationFile), { recursive: true });
     const tmpPath = `${this.publicationFile}.tmp`;
-    await fs.writeFile(tmpPath, serialized, 'utf8');
     // Link first: the blob route refuses a digest it has no link for, so
     // every digest the document names must have one before it is served.
     // Links to digests it no longer names go only once it is in place.
     await this.linkBlobs(indexes);
+    await fs.writeFile(tmpPath, serialized, 'utf8');
     await fs.rename(tmpPath, this.publicationFile);
     await this.pruneBlobs(indexes);
 

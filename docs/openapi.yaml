@@ -1164,6 +1164,10 @@ paths:
           description: Rate limited.
         '503':
           description: The file is being updated; retry.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: { type: string }
   '/ar-io/indexes/blob/{sha256}':
     get:
       tags: [Gateway]
@@ -1198,6 +1202,10 @@ paths:
           description: Rate limited.
         '503':
           description: The digest is published but not yet servable (the publisher is replacing a band or has not linked the file). Retry after `Retry-After` seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: { type: string }
   '/ar-io/peers':
     get:
       tags: [Gateway]
