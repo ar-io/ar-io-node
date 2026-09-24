@@ -33,6 +33,12 @@ export interface PublishedFile {
   filePath: string;
   size: number;
   sha256: string;
+  /**
+   * Where to read from if `filePath` is missing. Set on a blob entry, whose
+   * `filePath` is the publisher's hard link and whose fallback is the named
+   * file, for a publisher that could not make the link.
+   */
+  fallbackPath?: string;
 }
 
 /** The publication, indexed for lookup. */
@@ -127,7 +133,17 @@ export class PublishedIndexes {
           };
           files.set(`${index.name}/${band.id}/${file.name}`, entry);
           if (!blobs.has(file.sha256)) {
-            blobs.set(file.sha256, entry);
+            // Serve a digest from the publisher's hard link under blobs/,
+            // which pins exactly those bytes. The named file can be replaced
+            // by a rebuild under the same band id before the next scan
+            // updates the document, and bytes read through the name would
+            // then disagree with the digest in the URL, in a response marked
+            // immutable that edge caches keep for a year.
+            blobs.set(file.sha256, {
+              ...entry,
+              filePath: path.join(this.publishedDir, 'blobs', file.sha256),
+              fallbackPath: entry.filePath,
+            });
           }
         }
       }

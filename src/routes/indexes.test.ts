@@ -271,6 +271,56 @@ describe('/ar-io/indexes routes', () => {
         .expect(404);
     });
 
+    it('keeps serving a digest’s own bytes after the named file is rebuilt', async () => {
+      // A band rebuilt under the same id, before the next scan updates the
+      // document: same name, same size, different bytes.
+      const file = partitionFile();
+      const named = path.join(
+        publishedDir,
+        'root-tx-index',
+        'band-a',
+        file.name,
+      );
+      const original = await fs.readFile(named);
+      const rebuilt = Buffer.from(original);
+      rebuilt[rebuilt.length - 1] ^= 0xff;
+      const tmp = `${named}.rebuild`;
+      await fs.writeFile(tmp, rebuilt);
+      await fs.rename(tmp, named); // a new inode, as a rebuild writes
+      try {
+        const res = await request(app)
+          .get(`/ar-io/indexes/blob/${file.sha256}`)
+          .buffer(true)
+          .parse((r, cb) => {
+            const chunks: Buffer[] = [];
+            r.on('data', (c: Buffer) => chunks.push(c));
+            r.on('end', () => cb(null, Buffer.concat(chunks)));
+          })
+          .expect(200);
+        const served = crypto
+          .createHash('sha256')
+          .update(res.body as Buffer)
+          .digest('hex');
+        assert.equal(served, file.sha256, 'the bytes match the URL');
+      } finally {
+        await fs.writeFile(named, original);
+      }
+    });
+
+    it('falls back to the named file when the publisher has no link for a digest', async () => {
+      const file = partitionFile();
+      const link = path.join(publishedDir, 'blobs', file.sha256);
+      const saved = await fs.readFile(link);
+      await fs.rm(link);
+      try {
+        await request(app)
+          .get(`/ar-io/indexes/blob/${file.sha256}`)
+          .expect(200);
+      } finally {
+        await fs.writeFile(link, saved);
+      }
+    });
+
     it('does not treat a non-digest as a blob request', async () => {
       // Falls through to the named routes, where "blob" is just an index
       // name that happens not to exist.

@@ -204,11 +204,21 @@ export function createIndexesRouter({
     { cacheControl }: { cacheControl: string },
   ): Promise<void> {
     let stat;
+    let filePath = entry.filePath;
     try {
-      stat = await fs.stat(entry.filePath);
+      stat = await fs.stat(filePath);
     } catch {
-      notFound(res, route);
-      return;
+      if (entry.fallbackPath === undefined) {
+        notFound(res, route);
+        return;
+      }
+      try {
+        filePath = entry.fallbackPath;
+        stat = await fs.stat(filePath);
+      } catch {
+        notFound(res, route);
+        return;
+      }
     }
 
     // The file on disk no longer matches what the publication promises,
@@ -217,7 +227,7 @@ export function createIndexesRouter({
     // come back is honest, and the next publication will agree with disk.
     if (stat.size !== entry.size) {
       log.warn('Published file does not match its publication', {
-        path: entry.filePath,
+        path: filePath,
         expected: entry.size,
         actual: stat.size,
       });
@@ -329,7 +339,7 @@ export function createIndexesRouter({
     }
 
     let sent = 0;
-    const stream = createReadStream(entry.filePath, { start, end });
+    const stream = createReadStream(filePath, { start, end });
     stream.on('data', (chunk) => {
       sent += (chunk as Buffer).length;
     });
@@ -340,7 +350,7 @@ export function createIndexesRouter({
 
     stream.on('error', (error) => {
       log.warn('Failed reading a published index file', {
-        path: entry.filePath,
+        path: filePath,
         error: error.message,
       });
       res.destroy(error);
