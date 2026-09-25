@@ -119,11 +119,16 @@ describe('PublishedIndexes', () => {
   });
 
   describe('revalidating off the request path', () => {
+    /** The check in flight, if any: awaited instead of sleeping. */
+    const settled = (indexes: PublishedIndexes) =>
+      (indexes as unknown as { checking?: Promise<void> }).checking;
+
     it('answers from the view it has while a check is stuck', async () => {
       await write(['root-tx-index']);
       let clock = 0;
       let release: (() => void) | undefined;
       let stuck = false;
+      let pendingStats = 0;
       const indexes = new PublishedIndexes({
         log,
         publishedDir: tempDir,
@@ -131,7 +136,10 @@ describe('PublishedIndexes', () => {
         now: () => clock,
         stat: async (file) => {
           // A stat queued behind a saturated thread pool.
-          if (stuck) await new Promise<void>((resolve) => (release = resolve));
+          if (stuck) {
+            pendingStats++;
+            await new Promise<void>((resolve) => (release = resolve));
+          }
           return fs.stat(file);
         },
       });
@@ -140,11 +148,11 @@ describe('PublishedIndexes', () => {
 
       stuck = true;
       clock += 10_000;
-      const started = Date.now();
       assert.equal(await indexes.current(), first, 'served while checking');
       assert.equal(await indexes.current(), first);
-      assert.ok(Date.now() - started < 100, 'no request waited on the stat');
+      assert.equal(pendingStats, 1, 'one check, still unfinished, shared');
       release?.();
+      await settled(indexes);
     });
 
     it('picks up a republished document once the check has run', async () => {
@@ -164,9 +172,14 @@ describe('PublishedIndexes', () => {
         ['root-tx-index'],
         'within the revalidation interval the previous view stands',
       );
+      assert.equal(settled(indexes), undefined, 'and nothing was checked');
       clock += 5_000;
-      await indexes.current(); // starts the check, answers from the old view
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.deepEqual(
+        (await indexes.current())?.names,
+        ['root-tx-index'],
+        'the request that starts the check is answered from the old view',
+      );
+      await settled(indexes);
       assert.deepEqual((await indexes.current())?.names, [
         'root-tx-index',
         'zeta-index',
@@ -186,7 +199,7 @@ describe('PublishedIndexes', () => {
       await fs.rm(publicationFile);
       clock += 5_000;
       await indexes.current();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await settled(indexes);
       assert.equal(await indexes.current(), undefined);
     });
   });
