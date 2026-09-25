@@ -319,6 +319,11 @@ export interface SubscriberOptions {
    */
   engineUid?: number;
   engineGid?: number;
+  /**
+   * Tracker announce URLs handed to the engine even though their host is
+   * private, exactly as written. See {@link sanitizeTorrent}.
+   */
+  allowedTrackers?: string[];
   now?: () => Date;
 }
 
@@ -370,6 +375,7 @@ export class Subscriber {
   private readonly torrentCheckMs: number;
   private readonly engineUid?: number;
   private readonly engineGid?: number;
+  private readonly allowedTrackers: ReadonlySet<string>;
   private readonly now: () => Date;
 
   constructor(options: SubscriberOptions) {
@@ -409,6 +415,7 @@ export class Subscriber {
     this.torrentCheckMs = options.torrentCheckMs ?? 1_000;
     if (options.engineUid !== undefined) this.engineUid = options.engineUid;
     if (options.engineGid !== undefined) this.engineGid = options.engineGid;
+    this.allowedTrackers = new Set(options.allowedTrackers ?? []);
     this.now = options.now ?? (() => new Date());
   }
 
@@ -1527,12 +1534,16 @@ export class Subscriber {
       );
     }
     try {
-      return sanitizeTorrent(bytes, {
-        infohashV1: signed.infohashV1,
-        ...(signed.infohashV2 !== undefined
-          ? { infohashV2: signed.infohashV2 }
-          : {}),
-      });
+      return sanitizeTorrent(
+        bytes,
+        {
+          infohashV1: signed.infohashV1,
+          ...(signed.infohashV2 !== undefined
+            ? { infohashV2: signed.infohashV2 }
+            : {}),
+        },
+        this.allowedTrackers,
+      );
     } catch (error: any) {
       throw new DownloadIntegrityError(`torrent rejected: ${error?.message}`);
     }

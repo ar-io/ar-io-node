@@ -232,6 +232,26 @@ describe('sanitizeTorrent', () => {
     );
   });
 
+  it('keeps a private tracker the operator allowed', async () => {
+    const lan = 'http://192.168.2.235:6969/announce';
+    const built = await buildTorrent({
+      dir,
+      name: 'fixture',
+      pieceLength: 32768,
+      trackers: [lan, 'http://192.168.2.9:6969/announce'],
+    });
+    const top = bdecode(
+      sanitizeTorrent(built.torrent, built, new Set([lan])),
+    ) as Record<string, unknown>;
+    assert.equal((top.announce as Buffer).toString(), lan);
+    assert.deepEqual(
+      (top['announce-list'] as Buffer[][]).map((t) =>
+        t.map((u) => u.toString()),
+      ),
+      [[lan]],
+    );
+  });
+
   it('refuses a torrent that is not the expected one', async () => {
     const built = await buildTorrent({
       dir,

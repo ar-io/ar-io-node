@@ -385,7 +385,17 @@ function isPrivateAddress(ip: string): boolean {
  * @throws when the result's infohashes are not the expected ones, which
  *   would mean the info dictionary did not survive intact.
  */
-export function sanitizeTorrent(torrent: Buffer, expected: TorrentIds): Buffer {
+export function sanitizeTorrent(
+  torrent: Buffer,
+  expected: TorrentIds,
+  /**
+   * Announce URLs kept even on a private host, exactly as written: an
+   * operator's own tracker on a LAN or private network.
+   */
+  allowedTrackers: ReadonlySet<string> = new Set(),
+): Buffer {
+  const allowed = (u: string) =>
+    allowedTrackers.has(u) || isAllowedTrackerUrl(u);
   const { value, spans } = bdecodeWithSpans(torrent);
   if (
     typeof value !== 'object' ||
@@ -412,7 +422,7 @@ export function sanitizeTorrent(torrent: Buffer, expected: TorrentIds): Buffer {
       if (!Array.isArray(tier)) continue;
       const kept = tier
         .map((entry) => text(entry))
-        .filter((u): u is string => u !== undefined && isAllowedTrackerUrl(u));
+        .filter((u): u is string => u !== undefined && allowed(u));
       if (kept.length > 0) tiers.push(kept);
     }
   }
@@ -420,7 +430,7 @@ export function sanitizeTorrent(torrent: Buffer, expected: TorrentIds): Buffer {
   // Keys in sorted order, as bencode requires: announce, announce-list,
   // info, piece layers.
   const parts: Buffer[] = [Buffer.from('d')];
-  if (announce !== undefined && isAllowedTrackerUrl(announce)) {
+  if (announce !== undefined && allowed(announce)) {
     parts.push(bencode('announce'), bencode(Buffer.from(announce)));
   }
   if (tiers.length > 0) {

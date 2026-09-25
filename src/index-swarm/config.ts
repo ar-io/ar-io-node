@@ -377,6 +377,19 @@ export const TRACKERS = env
 export const PRIVATE_SWARM =
   env.varOrDefault('INDEX_SWARM_PRIVATE_SWARM', 'false') === 'true';
 
+/**
+ * Tracker announce URLs a subscriber hands its engine even though their host
+ * is private: an operator's own tracker on a LAN or private network. Exact
+ * URLs, comma separated. Every other tracker on a private address or a
+ * single-label name is dropped, because it would be a request from inside
+ * this node's network to wherever a publisher pointed it.
+ */
+export const ALLOWED_TRACKERS = env
+  .varOrDefault('INDEX_SWARM_ALLOWED_TRACKERS', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
 /** Give up on a torrent and fetch the band over HTTP after this long. */
 export const TORRENT_TIMEOUT_MS =
   env.positiveIntOrDefault('INDEX_SWARM_TORRENT_TIMEOUT_SECONDS', 3600) * 1000;

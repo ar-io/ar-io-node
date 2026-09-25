@@ -182,6 +182,7 @@ async function main(): Promise<void> {
             webSeedAfterMs: config.WEBSEED_AFTER_MS,
             engineUid: config.ENGINE_UID,
             engineGid: config.ENGINE_GID,
+            allowedTrackers: config.ALLOWED_TRACKERS,
           }
         : {}),
     });
