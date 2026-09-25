@@ -19,7 +19,9 @@
  * metrics and idles.
  */
 import * as fs from 'node:fs/promises';
+import * as dns from 'node:dns/promises';
 import * as http from 'node:http';
+import * as net from 'node:net';
 
 import * as config from './config.js';
 import { release } from '../version.js';
@@ -264,11 +266,40 @@ async function main(): Promise<void> {
   // closed: it answers only for bands this node offers right now, so its
   // port cannot be used to run anyone else's swarm.
   let tracker: http.Server | undefined;
+  let selfTimer: NodeJS.Timeout | undefined;
   if (publisher !== undefined && engine !== undefined) {
     const offering = publisher;
+    // This node as peers reach it: the host its torrents announce to. Its
+    // own engine reaches the tracker back through Docker's NAT, from a
+    // private address, and is listed under this one instead.
+    let selfAddress: string | undefined;
+    const trackerHost =
+      config.ENGINE_PUBLIC_HOST ??
+      (config.TRACKERS.length > 0
+        ? new URL(config.TRACKERS[0]).hostname.replace(/^\[|\]$/g, '')
+        : undefined);
+    const resolveSelf = async () => {
+      if (trackerHost === undefined) return;
+      try {
+        selfAddress =
+          net.isIP(trackerHost) !== 0
+            ? trackerHost
+            : (await dns.lookup(trackerHost, { family: 4 })).address;
+      } catch (error: any) {
+        log.warn('Could not resolve the tracker host', {
+          host: trackerHost,
+          error: error?.message,
+        });
+      }
+    };
+    await resolveSelf();
+    selfTimer = setInterval(() => void resolveSelf(), 600_000);
+    selfTimer.unref();
     tracker = await new ClosedTracker({
       log,
       allowed: () => trackedInfohashes(offering.offered()),
+      selfAddress: () => selfAddress,
+      trustedProxies: config.TRACKER_TRUSTED_PROXIES,
     }).listen('0.0.0.0', config.TRACKER_PORT);
     if (config.TRACKERS.length === 0) {
       log.warn(
@@ -308,6 +339,7 @@ async function main(): Promise<void> {
       if (pollTimer !== undefined) clearInterval(pollTimer);
       if (engineTimer !== undefined) clearInterval(engineTimer);
       tracker?.close();
+      if (selfTimer !== undefined) clearInterval(selfTimer);
       // Let work in progress finish, inside the timeout above: downloads
       // are aborted (they resume on the next start), but a band mid-install
       // or a document mid-write completes rather than being cut off.

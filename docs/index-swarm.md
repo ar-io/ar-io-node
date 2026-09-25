@@ -235,6 +235,43 @@ removed from the engine, and their `.torrent` files and seed directories are
 deleted. An engine that is down delays seeding to the next scan and stops
 nothing else.
 
+### Publishing torrents from a fleet behind a load balancer
+
+A large gateway is often several nodes behind an HTTP load balancer with a
+caching proxy, and only one of them holds the observer key and signs. The
+swarm needs a few things that an HTTP proxy does not give by itself:
+
+1. **One node publishes and seeds.** The signing node, the one
+   `/ar-io/indexes*` is pinned to, runs the engine and the tracker. The other
+   nodes need neither.
+2. **The engine's peer port reaches that node directly.** BitTorrent is not
+   HTTP, so the load balancer cannot carry it: publish
+   `INDEX_SWARM_ENGINE_PORT` (TCP and UDP) on the node's own public address,
+   open it in the firewall, and set `INDEX_SWARM_ENGINE_PUBLIC_HOST` to that
+   address. Without it the tracker lists this node's engine under the host of
+   its tracker URL, which for a fleet is the load balancer.
+3. **The tracker, one of two ways.**
+   - Directly: publish `INDEX_SWARM_TRACKER_PORT` on the same public address
+     and announce to `http://<that address>:6969/announce`.
+   - Through the load balancer: route `/announce` to the signing node's
+     tracker port, uncached, with `proxy_set_header X-Forwarded-For
+     $proxy_add_x_forwarded_for;`, and list the proxies' addresses in
+     `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`. Otherwise every peer appears at
+     the proxy's address, the per-address caps throttle them together, and
+     the tracker hands out an address nobody can connect to.
+4. **The `.torrent` and WebSeed routes** sit under `/ar-io/indexes`, so a pin
+   and cache rule for that prefix covers them. The WebSeed is metered like
+   the blob route and marked `private` when metered, so a shared cache does
+   not replay paid bytes.
+5. **Bound what seeding costs.** `INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC`
+   caps upload to peers, and the engine's memory grows with the bytes it
+   seeds (see [Running the engine](#running-the-engine)).
+
+Subscribers behind NAT still work: they reach the publisher's engine, and a
+reachable subscriber can be reached back. Only two peers that are both
+unreachable cannot exchange pieces with each other, and they still have the
+publisher and the WebSeed.
+
 ### Publishing cadence
 
 The publisher rescans every `INDEX_SWARM_PUBLISH_SCAN_INTERVAL_SECONDS`

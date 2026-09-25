@@ -431,6 +431,28 @@ export const ENGINE_GID = env.positiveIntOrDefault(
  * Point INDEX_SWARM_TRACKERS at it by the address peers reach it on, e.g.
  * `http://gateway.example:6969/announce`.
  */
+/**
+ * Proxies (IPs or CIDRs, comma separated) whose `X-Forwarded-For` the
+ * closed tracker believes, when it is served behind a load balancer.
+ */
+export const TRACKER_TRUSTED_PROXIES = env
+  .varOrDefault('INDEX_SWARM_TRACKER_TRUSTED_PROXIES', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/**
+ * The host peers reach this node's torrent engine on (its peer port,
+ * `INDEX_SWARM_ENGINE_PORT`). Defaults to the host of the first
+ * `INDEX_SWARM_TRACKERS` URL. Set it when the tracker is served through a
+ * load balancer that does not also forward the peer port, such as an HTTP
+ * proxy in front of a fleet: the engine is then listed under the host that
+ * actually reaches it.
+ */
+export const ENGINE_PUBLIC_HOST = env.varOrUndefined(
+  'INDEX_SWARM_ENGINE_PUBLIC_HOST',
+);
+
 export const TRACKER_PORT = env.positiveIntOrDefault(
   'INDEX_SWARM_TRACKER_PORT',
   6969,

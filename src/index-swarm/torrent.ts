@@ -365,7 +365,7 @@ function trackerHostAllowed(url: URL): boolean {
 }
 
 /** Loopback, private, link-local, CGNAT, unspecified and multicast ranges. */
-function isPrivateAddress(ip: string): boolean {
+export function isPrivateAddress(ip: string): boolean {
   if (net.isIPv4(ip)) {
     const [a, b] = ip.split('.').map(Number);
     return (

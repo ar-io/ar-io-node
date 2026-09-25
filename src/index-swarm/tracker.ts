@@ -24,6 +24,8 @@ import * as http from 'node:http';
 import { Logger } from 'winston';
 
 import { bencode } from '../lib/bencode.js';
+import { isIpInCidr } from '../lib/ip-utils.js';
+import { isPrivateAddress } from './torrent.js';
 import { trackerAnnounces, trackerPeers } from './metrics.js';
 
 export interface ClosedTrackerOptions {
@@ -56,6 +58,20 @@ export interface ClosedTrackerOptions {
    * announces each torrent it holds separately.
    */
   maxAnnouncesPerMinute?: number;
+  /**
+   * This node's address as peers reach it: the host of its tracker URL.
+   * An announce from a private address is this node's own engine, reached
+   * back through Docker's NAT, and is recorded under this address instead;
+   * otherwise the publisher, often the only seeder, would be handed out at a
+   * Docker network address nobody can reach.
+   */
+  selfAddress?: () => string | undefined;
+  /**
+   * Proxies (IPs or CIDRs) whose `X-Forwarded-For` is believed, for a
+   * tracker served behind a load balancer. Without it every peer would
+   * appear at the proxy's address.
+   */
+  trustedProxies?: string[];
   now?: () => number;
 }
 
@@ -157,6 +173,8 @@ export class ClosedTracker {
   private readonly maxPeersPerSwarm: number;
   private readonly maxPortsPerIp: number;
   private readonly maxAnnouncesPerMinute: number;
+  private readonly selfAddress: () => string | undefined;
+  private readonly trustedProxies: string[];
   private readonly now: () => number;
   /**
    * infohash hex, then `ip:port`, to the peer. Each map is in the order
@@ -176,6 +194,8 @@ export class ClosedTracker {
     this.maxPeersPerSwarm = options.maxPeersPerSwarm ?? 2000;
     this.maxPortsPerIp = options.maxPortsPerIp ?? 4;
     this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 10;
+    this.selfAddress = options.selfAddress ?? (() => undefined);
+    this.trustedProxies = options.trustedProxies ?? [];
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -200,7 +220,11 @@ export class ClosedTracker {
       trackerAnnounces.inc({ result: 'unregistered' });
       return failure('unregistered torrent');
     }
-    const ip = normalizeIp(remoteAddress);
+    let ip = normalizeIp(remoteAddress);
+    if (isPrivateAddress(ip)) {
+      const self = this.selfAddress();
+      if (self !== undefined) ip = normalizeIp(self);
+    }
     const bucket = addressBucket(ip);
 
     const now = this.now();
@@ -257,9 +281,12 @@ export class ClosedTracker {
     }
 
     // A random sample, so early entries cannot occupy every response.
+    // A peer asking from the internet can use no private address.
+    const askerPublic = !isPrivateAddress(ip);
     const pool = [...swarm.entries()]
       .filter(([k]) => k !== key)
-      .map(([, p]) => p);
+      .map(([, p]) => p)
+      .filter((p) => !askerPublic || !isPrivateAddress(p.ip));
     for (let i = pool.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [pool[i], pool[j]] = [pool[j], pool[i]];
@@ -307,6 +334,32 @@ export class ClosedTracker {
     trackerPeers.set(total);
   }
 
+  /**
+   * The announcing peer's address: the socket's, or, from a trusted proxy,
+   * the nearest `X-Forwarded-For` hop that is not itself a trusted proxy.
+   */
+  clientAddress(
+    socketAddress: string,
+    forwardedFor: string | string[] | undefined,
+  ): string {
+    const trusted = (ip: string) =>
+      this.trustedProxies.some((cidr) =>
+        cidr.includes('/') ? isIpInCidr(ip, cidr) : normalizeIp(cidr) === ip,
+      );
+    const socketIp = normalizeIp(socketAddress);
+    if (!trusted(socketIp) || forwardedFor === undefined) return socketIp;
+    const hops = (
+      Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor
+    )
+      .split(',')
+      .map((h) => normalizeIp(h.trim()))
+      .filter((h) => h.length > 0);
+    for (let i = hops.length - 1; i >= 0; i--) {
+      if (!trusted(hops[i])) return hops[i];
+    }
+    return socketIp;
+  }
+
   /** Serve it: `/announce` only; everything else is a 404. */
   listen(host: string, port: number): Promise<http.Server> {
     const server = http.createServer((req, res) => {
@@ -319,7 +372,10 @@ export class ClosedTracker {
       }
       const body = this.announce(
         q < 0 ? '' : url.slice(q + 1),
-        req.socket.remoteAddress ?? '',
+        this.clientAddress(
+          req.socket.remoteAddress ?? '',
+          req.headers['x-forwarded-for'],
+        ),
       );
       res.writeHead(200, {
         'Content-Type': 'text/plain',

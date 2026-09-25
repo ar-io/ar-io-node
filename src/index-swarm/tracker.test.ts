@@ -92,6 +92,44 @@ describe('ClosedTracker', () => {
     assert.ok(!peers.includes('203.0.113.1:1001'), 'the oldest went first');
   });
 
+  it("records this node's own engine at the address peers reach it on", () => {
+    // The engine announces through Docker's NAT, from its network gateway.
+    const t = tracker({ selfAddress: () => '198.51.100.7' });
+    t.announce(query(OURS, 51900, { left: '0' }), '172.20.0.1');
+    const peers = peersOf(decode(t.announce(query(OURS, 2000), '203.0.113.9')));
+    assert.deepEqual(peers, ['198.51.100.7:51900']);
+  });
+
+  it('gives a peer on the internet no private addresses', () => {
+    const t = tracker();
+    t.announce(query(OURS, 1001), '10.0.0.5');
+    t.announce(query(OURS, 1002), '203.0.113.2');
+    assert.deepEqual(
+      peersOf(decode(t.announce(query(OURS, 2000), '203.0.113.9'))),
+      ['203.0.113.2:1002'],
+    );
+    // A peer on the same private network still gets it.
+    assert.ok(
+      peersOf(decode(t.announce(query(OURS, 3000), '10.0.0.6'))).includes(
+        '10.0.0.5:1001',
+      ),
+    );
+  });
+
+  it('believes X-Forwarded-For only from a trusted proxy', () => {
+    const t = tracker({ trustedProxies: ['10.0.0.0/8'] });
+    assert.equal(
+      t.clientAddress('10.1.1.1', '203.0.113.9, 10.2.2.2'),
+      '203.0.113.9',
+    );
+    assert.equal(
+      t.clientAddress('198.51.100.1', '203.0.113.9'),
+      '198.51.100.1',
+      'an untrusted client cannot claim an address',
+    );
+    assert.equal(t.clientAddress('10.1.1.1', undefined), '10.1.1.1');
+  });
+
   it('counts an IPv6 /64 as one address', () => {
     const t = tracker({ maxPortsPerIp: 2, maxAnnouncesPerMinute: 1000 });
     for (const n of [1, 2, 3, 4]) {
