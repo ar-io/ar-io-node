@@ -33,7 +33,6 @@ import {
   IndexPublication,
   manifestSha256,
   parseIndexPublication,
-  torrentNameForFiles,
   verifyIndexPublication,
 } from '../lib/index-publication.js';
 import {

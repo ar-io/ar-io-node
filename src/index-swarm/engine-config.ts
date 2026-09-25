@@ -31,7 +31,40 @@ export interface EngineSettings {
   uploadLimitBytesPerSec: number;
   /** Web UI port inside the container. The sidecar must use this exact port. */
   webUiPort: number;
+  /**
+   * An IP filter file, in eMule `.dat` form, for the engine to apply to
+   * peers and trackers. Unset turns filtering off.
+   */
+  ipFilterPath?: string;
 }
+
+/**
+ * Loopback, private, link-local, carrier-grade NAT, unique-local and
+ * multicast ranges, in the eMule `.dat` form qBittorrent reads (an access
+ * level below 128 blocks).
+ *
+ * The trackers, peers and WebSeeds the engine contacts are chosen by other
+ * gateways and by the swarm. The sidecar already drops private trackers
+ * from a torrent, but a public name can resolve to a private address, a
+ * tracker can redirect, and DHT and peer exchange hand out any address.
+ * Filtering in the engine catches all of those, so it cannot be used to
+ * reach this node's own network.
+ */
+export const PRIVATE_RANGES_DAT = [
+  '0.0.0.0 - 0.255.255.255 , 000 , unspecified',
+  '10.0.0.0 - 10.255.255.255 , 000 , private',
+  '100.64.0.0 - 100.127.255.255 , 000 , carrier-grade NAT',
+  '127.0.0.0 - 127.255.255.255 , 000 , loopback',
+  '169.254.0.0 - 169.254.255.255 , 000 , link-local',
+  '172.16.0.0 - 172.31.255.255 , 000 , private',
+  '192.168.0.0 - 192.168.255.255 , 000 , private',
+  '224.0.0.0 - 255.255.255.255 , 000 , multicast and reserved',
+  ':: - ::1 , 000 , loopback',
+  'fc00:: - fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff , 000 , unique-local',
+  'fe80:: - febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff , 000 , link-local',
+  'ff00:: - ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff , 000 , multicast',
+  '',
+].join('\n');
 
 /** qBittorrent's PBKDF2 parameters for the Web UI password. */
 const PBKDF2_ITERATIONS = 100_000;
@@ -107,6 +140,14 @@ export function managedSettings(
       // which on a published port would make the gateway a public tracker
       // for arbitrary swarms. Pinned off; the sidecar runs a closed one.
       TrackerEnabled: 'false',
+      // See PRIVATE_RANGES_DAT. Applied to trackers too, not only peers.
+      'Session\\IPFilteringEnabled':
+        settings.ipFilterPath !== undefined ? 'true' : 'false',
+      'Session\\TrackerFilteringEnabled':
+        settings.ipFilterPath !== undefined ? 'true' : 'false',
+      ...(settings.ipFilterPath !== undefined
+        ? { 'Session\\IPFilter': settings.ipFilterPath }
+        : {}),
       // KiB/s in the file; the setting is in bytes for the operator.
       'Session\\GlobalUPSpeedLimit': String(
         Math.ceil(settings.uploadLimitBytesPerSec / 1024),
@@ -122,9 +163,10 @@ export function managedSettings(
       // The allowlist would exempt a whole subnet from the password; the
       // compose network is shared with the gateway and everything else.
       'WebUI\\AuthSubnetWhitelistEnabled': 'false',
-      // Only the container's own healthcheck reaches the API over loopback;
-      // it runs without the password.
-      'WebUI\\LocalHostAuth': 'false',
+      // Loopback needs the password too. The engine talks to hosts other
+      // gateways chose, and a request that reached its own loopback must
+      // not be let in; the healthcheck needs only an answer, not a login.
+      'WebUI\\LocalHostAuth': 'true',
       'WebUI\\UseUPnP': 'false',
     },
     LegalNotice: {

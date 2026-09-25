@@ -8,6 +8,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import {
+  PRIVATE_RANGES_DAT,
   EngineSettings,
   hashWebUiPassword,
   renderEngineConfig,
@@ -143,5 +144,38 @@ describe('engine config', () => {
       });
       assert.equal(value(config, 'Session\\GlobalUPSpeedLimit'), '0');
     });
+  });
+
+  it('filters private ranges for peers and trackers when given a filter file', () => {
+    const on = renderEngineConfig('', {
+      ...SETTINGS,
+      ipFilterPath: '/config/qBittorrent/private-ranges.dat',
+    });
+    assert.match(on, /Session\\IPFilteringEnabled=true/);
+    assert.match(on, /Session\\TrackerFilteringEnabled=true/);
+    assert.match(
+      on,
+      /Session\\IPFilter=\/config\/qBittorrent\/private-ranges.dat/,
+    );
+    const off = renderEngineConfig(on, SETTINGS);
+    assert.match(off, /Session\\IPFilteringEnabled=false/);
+  });
+
+  it('asks for the password on loopback too', () => {
+    assert.match(renderEngineConfig('', SETTINGS), /WebUI\\LocalHostAuth=true/);
+  });
+
+  it('blocks every private range it names', () => {
+    for (const range of [
+      '10.0.0.0',
+      '172.16.0.0',
+      '192.168.0.0',
+      '127.0.0.0',
+      '169.254.0.0',
+      '100.64.0.0',
+      'fc00::',
+    ]) {
+      assert.ok(PRIVATE_RANGES_DAT.includes(`${range} - `), range);
+    }
   });
 });

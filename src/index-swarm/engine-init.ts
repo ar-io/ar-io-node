@@ -19,18 +19,9 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import * as env from '../lib/env.js';
-import { renderEngineConfig } from './engine-config.js';
+import { PRIVATE_RANGES_DAT, renderEngineConfig } from './engine-config.js';
 import { parseEngineAuth } from './config.js';
 import log from './log.js';
-
-async function chownTree(dir: string, uid: number, gid: number): Promise<void> {
-  await fs.chown(dir, uid, gid);
-  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
-    const child = path.join(dir, entry.name);
-    if (entry.isDirectory()) await chownTree(child, uid, gid);
-    else await fs.chown(child, uid, gid);
-  }
-}
 
 async function run(): Promise<void> {
   const auth = parseEngineAuth(env.varOrUndefined('INDEX_SWARM_ENGINE_AUTH'));
@@ -62,7 +53,9 @@ async function run(): Promise<void> {
   for (const dir of ['published', 'swarm', 'installed']) {
     await fs.mkdir(path.join(dataDir, dir), { recursive: true });
   }
-  await chownTree(swarm, uid, gid);
+  // The directory only, and never through a link: the engine writes inside
+  // it, and anything it placed there is not this root process's to chown.
+  await fs.lchown(swarm, uid, gid);
 
   const file = path.join(
     configDir,
@@ -71,8 +64,22 @@ async function run(): Promise<void> {
     'qBittorrent.conf',
   );
   await fs.mkdir(path.dirname(file), { recursive: true });
+  // On unless the operator runs the swarm on a private network, where the
+  // peers themselves have private addresses.
+  const blockPrivate =
+    env.varOrDefault('INDEX_SWARM_ENGINE_BLOCK_PRIVATE', 'true') !== 'false';
+  const ipFilterPath = path.join(
+    configDir,
+    'qBittorrent',
+    'private-ranges.dat',
+  );
+  if (blockPrivate) {
+    await fs.mkdir(path.dirname(ipFilterPath), { recursive: true });
+    await fs.writeFile(ipFilterPath, PRIVATE_RANGES_DAT, { mode: 0o644 });
+  }
   const existing = await fs.readFile(file, 'utf8').catch(() => '');
   const rendered = renderEngineConfig(existing, {
+    ...(blockPrivate ? { ipFilterPath } : {}),
     username: auth.username,
     password: auth.password,
     downloadDir: swarm,
@@ -81,6 +88,8 @@ async function run(): Promise<void> {
   });
   if (rendered !== existing) {
     const tmp = `${file}.tmp`;
+    // A mode applies only when a file is created, so never reuse a stale one.
+    await fs.rm(tmp, { force: true });
     await fs.writeFile(tmp, rendered, { mode: 0o600 });
     await fs.rename(tmp, file);
   }

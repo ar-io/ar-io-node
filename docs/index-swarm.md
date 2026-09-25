@@ -209,7 +209,9 @@ A publisher runs a closed tracker in its sidecar, on
 `INDEX_SWARM_TRACKER_PORT` (default 6969), and its torrents announce to it.
 It answers only for the bands the publisher offers at that moment, under
 both of each hybrid torrent's infohashes, and refuses every other torrent
-with `unregistered torrent`. That is why it is not qBittorrent's embedded
+with `unregistered torrent`. Its port is public, so it is bounded: at most
+2,000 peers per torrent and 4 ports per address, a random sample in each
+response, 30 announces a minute per address, and a connection cap. That is why it is not qBittorrent's embedded
 tracker: that one tracks any infohash anyone announces, which on a published
 port would make the gateway a free tracker for any swarm on the internet,
 with its address in them. The engine's init pins the embedded tracker off.
@@ -327,22 +329,35 @@ is fetched through the engine:
 4. If nothing has moved for `INDEX_SWARM_WEBSEED_AFTER_SECONDS`, the
    publisher's WebSeed is turned on. Peers come first because the WebSeed is
    the publisher's metered tier.
-5. On completion every file's SHA-256 is checked again, then the band is
-   validated and installed exactly as over HTTP.
-6. The installed band is seeded from its generation directory, so every
+5. Before the engine sees the torrent, its file list is checked against the
+   band's signed files: exactly those names and sizes, plus the pad files
+   BEP 47 allows, and nothing else, no symlinks and no subdirectories. The
+   infohash pins the info dictionary, not that it describes the band.
+6. On completion the engine lets go of the torrent, and each signed file is
+   copied out of `swarm/` into the band's incoming directory, hashed as it
+   is copied, then validated and installed exactly as over HTTP. Only a
+   regular file of the signed size is read, and never through a link, and
+   the engine's own directory is never installed: a file it still held open
+   or linked could otherwise change after it was checked.
+7. The installed band is seeded from its generation directory, so every
    subscriber is also a seeder.
+
+If the engine already holds the torrent, because this node publishes the
+same bytes or seeds them from another installed copy, the band is installed
+from that copy without the engine being touched.
 
 Peers are not metered, so a band the swarm can bring still starts after the
 publisher's HTTP meter has answered `402` or `429`; if it then falls back to
 HTTP, it waits for the next poll like any other band.
 
 A download in progress is kept in `state.json`: a restart picks it up where
-the engine left it, and its timeout still counts from when it started. An
-engine error, the engine losing the torrent, or
-`INDEX_SWARM_TORRENT_TIMEOUT_SECONDS` passing abandons the torrent and its
-partial files and fetches the band over HTTP in the same poll
-(`transport_fallback`). A poll watches each unfinished torrent for up to a
-minute and then moves on; the next poll picks it up where it left off.
+the engine left it. An engine error, the engine losing the torrent, or
+`INDEX_SWARM_TORRENT_TIMEOUT_SECONDS` without progress abandons the torrent
+and its partial files and fetches the band over HTTP in the same poll
+(`transport_fallback`). A poll watches its unfinished torrents for up to a
+minute in all, not per band, and then moves on; the next poll picks them up
+where they left off. A band rebuilt under the same id drops the download of
+its old version.
 
 A band that came over HTTP instead (the engine was down or still starting,
 or the torrent was abandoned) is seeded too: once the engine answers, its
@@ -543,7 +558,8 @@ including an operator's own tuning, is left alone):
 | Upload limit | `INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC` | Peer upload is otherwise unbounded |
 | Web UI user and password | from `INDEX_SWARM_ENGINE_AUTH` | Stored as qBittorrent's own PBKDF2 hash; kept when unchanged |
 | Subnet allowlist | off | It would exempt a whole Docker network from the password |
-| Loopback without a password | on | For the container's own healthcheck only |
+| IP filter, peers and trackers | private ranges, unless `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false` | See above |
+| Loopback without a password | off | A request that reached the engine's loopback from a host another gateway chose must not be let in. The healthcheck needs only an answer |
 
 The engine sees the index directories at the same paths the sidecar does,
 because the sidecar hands it paths. It can write only `swarm/` and its own
@@ -552,11 +568,19 @@ configuration; `published/` and `installed/` are mounted read only.
 It runs on its own Docker network (`INDEX_SWARM_ENGINE_NETWORK_NAME`),
 shared only with the sidecar. The trackers, peers and WebSeeds it talks to
 are chosen by other gateways, so it must not be able to reach the gateway,
-the observer, ClickHouse or anything else on `ar-io-network`. It can still
-reach the internet, and so anything the host can: the sidecar drops trackers
-that are private addresses or single-label names, but a public name that
-resolves to a private address is not caught, so keep the host's own
-services behind a firewall as usual. Only
+the observer, ClickHouse or anything else on `ar-io-network`. Two more
+layers keep it off this node's network:
+
+- The sidecar hands the engine only trackers on public hosts, in canonical
+  form, and no WebSeed but the publisher's own.
+- The engine's IP filter refuses private, loopback, link-local and
+  carrier-grade NAT addresses for peers and trackers alike, which also
+  covers a public name that resolves to a private address, a tracker that
+  redirects, and addresses learned from DHT or peer exchange. The init
+  writes the filter on every engine start. Set
+  `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false` only when the swarm runs on a
+  private network, between gateways on one LAN, and list that network's
+  tracker in `INDEX_SWARM_ALLOWED_TRACKERS`. Only
 the peer port, `INDEX_SWARM_ENGINE_PORT` (default 51900, TCP and UDP), is
 published; open it in the host firewall for peers to connect in. The Web API
 is not published at all. It stays on the engine's network, and must be
