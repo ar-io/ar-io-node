@@ -18,6 +18,7 @@ Pick the narrowest layer that can fail on the change.
 | **Parquet / ClickHouse scripts** | `scripts/tests/parquet/test-*` | bash, run directly | Parquet export correctness & perf, ClickHouse import pipeline, TTL rules loader. Operate against a populated local DB. |
 | **Load / stability** | `tools/test-chunk-retrieval`, `tools/test-data-retrieval` | bash, run directly | Stress endpoints for FD leaks, ECONNRESET patterns, p99 latency. Needs a running gateway. |
 | **GraphQL perf probe** | `test/perf/gql-perf` | bash, `GRAPHQL_URL=… ./test/perf/gql-perf` | Ad-hoc timing comparisons across gateway endpoints. |
+| **Torrent engine contract** | `src/index-swarm/transport/contract.test.ts` | unit always; against a real engine with `INDEX_SWARM_E2E_ENGINE_URL` | The `TorrentTransport` contract. Runs against the in-memory fake in `yarn test`; set the env vars in the file's header to also run it against a real qBittorrent (turn its IP filter off, or its WebSeed test is blocked). Needed for any change to an adapter under `src/index-swarm/transport/`. |
 
 **Escalate when a change crosses boundaries.** A unit test on a SQL wrapper is not enough if the change also alters the `stable_*` schema — add or update an auto-verify adapter. A unit test on the Parquet exporter isn't enough if row counts could drift — run `scripts/tests/parquet/test-parquet-export`.
 

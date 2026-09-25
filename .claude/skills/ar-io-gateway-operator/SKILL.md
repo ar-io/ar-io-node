@@ -148,6 +148,10 @@ Two mutually-relevant env vars decide what `/` serves:
 - `APEX_ARNS_NAME` — resolve an ArNS name as the apex. Comma-separated values position-map to `ARNS_ROOT_HOST` entries when there's more than one host.
 - `ARNS_ROOT_HOST` — the gateway's primary domain(s) for ArNS subdomain resolution.
 
+### Index sharing sidecar (optional)
+
+The `index-swarm` sidecar (compose profile `index-swarm`) publishes this gateway's CDB64 root-TX index bands, signed with the observer key, and subscribes to other gateways' bands, installing them under `data/indexes/installed/` where the gateway loads them without a restart. It resolves publishers through the gateway's own `/ar-io/peers`, so it makes no RPC calls. The gateway serves `/ar-io/indexes` (the signed document) and the byte routes, metered like data. The optional torrent engine (profile `index-swarm-torrent`, `INDEX_SWARM_ENGINE_URL`) adds a BitTorrent tier: peers first, the HTTP routes as fallback, every subscriber seeding what it installs. The engine runs on its own Docker network and filters private addresses; on a LAN-only swarm set `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false`. Health: `index_subscription_manifest_age_seconds` (publisher gone quiet), `index_swarm_installed_bands`, `index_subscription_bytes_total{transport}`, `index_swarm_engine_available`. Full guide: `docs/index-swarm.md`.
+
 ### Filters and webhooks (the gateway's contract with sidecars)
 
 Three filters compose JSON expressions (`tags`, `attributes`, `or`/`and`/`always`/`never`) — see `docs/filters.md`:
@@ -232,6 +236,8 @@ Don't draw conclusions from `/ar-io/info` or `/ar-io/healthcheck` benchmarks —
 10. **Cranker started cleanly but never logs any `[crank:*]` activity** — `EpochSettings.enabled === false` on the target network. The cranker bails silently at `epoch-cranker.ts:173` (debug log only) so it doesn't burn SOL submitting ix against a paused network. Verify with `ar.io get-epoch-settings ...`. No fix on the gateway side; this is a network-operations state.
 11. **ArNS names return 404 even though `ar.io get-arns-record --name <name>` returns the record fine** — SDK version drift. `ArNSNamesCache.hydrate` paginates the on-chain registry; an SDK pin that's significantly older than the deployed `ario-arns` program may parse paginated responses incorrectly, hydrating "successfully" but with most entries missing. Logs show `Successfully hydrated ArNS names cache` quickly (~few seconds for thousands of records) followed by `Base name not found in ArNS names cache` on lookups. Fix: bump `@ar.io/sdk` in `package.json` to the latest `^4.0.0-solana.*` and rebuild.
 12. **`/ar-io/info` shows the OLD network's `programIds` after a migration / image swap** — the `.env` has explicit `CORE_IMAGE_TAG` / `ENVOY_IMAGE_TAG` / `OBSERVER_IMAGE_TAG` pins that shadow the compose defaults. Updating only the compose defaults won't move a gateway whose `.env` still pins old image tags. Either update both, or remove the explicit pins from `.env` and let compose defaults win.
+
+13. **Index bands installed but lookups still go to the network** — `ROOT_TX_LOOKUP_ORDER` must put `cdb` right after `db`, and `CDB64_ROOT_TX_INDEX_SOURCES` must start with `data/indexes/installed/root-tx-index`; both need a gateway restart. Bring the sidecar and engine up by service name (`docker compose --profile index-swarm up -d index-swarm`); a bare `up` with the profile starts every default service too.
 
 ## When something breaks: where to look
 

@@ -663,7 +663,7 @@ data/indexes/
     <index>/<band>/   # bands this node offers
     blobs/            # the same files by SHA-256, as hard links
     <index>/<band>.torrent       # with an engine: each band's torrent
-    .seed/<torrent name>/        # with an engine: what it seeds, links to blobs/
+    .seed/<v1 infohash>/         # with an engine: what it seeds, links to blobs/
   incoming/
     <publisher>/<index>/<band>/  # downloads in progress, per publisher; never read by the gateway
   installed/
