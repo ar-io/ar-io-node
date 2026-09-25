@@ -58,6 +58,12 @@ export interface InstalledBand {
    * then it keeps serving while the gateway loads its replacement.
    */
   retireAfter?: string;
+  /**
+   * The signed v1 infohash of this copy, once its `.torrent` has been
+   * fetched, checked and kept, so the copy can be seeded. Absent for a band
+   * offered over HTTP only, or whose torrent has not been fetched yet.
+   */
+  infohashV1?: string;
 }
 
 export interface SubscriptionState {
@@ -109,8 +115,17 @@ export interface DescribedBand {
   torrent?: { key: string; torrent: BandTorrent };
 }
 
-/** A band this node asked the engine to seed, keyed by the engine's id. */
+/**
+ * A band this node asked the engine to seed, keyed by `<owner>:<id>`. One
+ * engine torrent can be wanted by both loops (a node publishing and
+ * subscribing to the same bytes), so each keeps its own entry, and the
+ * engine is told to drop a torrent only when no entry still names it.
+ */
 export interface SeededBand {
+  /** The engine's id for the torrent. */
+  id: string;
+  /** The signed v1 infohash, which is how the subscriber finds its entries. */
+  infohashV1?: string;
   index: string;
   band: string;
   /** The directory handed to the engine. */
@@ -143,6 +158,32 @@ export interface SwarmState {
    * restart each loop can still take back a band it no longer wants.
    */
   seeding: Record<string, SeededBand>;
+  /**
+   * Torrent downloads in progress, by signed v1 infohash. Persisted so a
+   * restart neither resets a download's timeout nor forgets its directory.
+   */
+  downloads: Record<string, SwarmDownload>;
+}
+
+/** One band being fetched through the engine. */
+export interface SwarmDownload {
+  /** The engine's id for the torrent. */
+  id: string;
+  publisher: string;
+  index: string;
+  band: string;
+  startedAt: number;
+  lastProgress: number;
+  lastProgressAt: number;
+  /** Whether the publisher's WebSeed has been turned on for it. */
+  webSeeded: boolean;
+  /** When a poll last wanted it; one no poll wants any more is abandoned. */
+  lastSeenAt: number;
+}
+
+/** The key a seeding entry is stored under. */
+export function seedingKey(owner: SeededBand['owner'], id: string): string {
+  return `${owner}:${id}`;
 }
 
 /**
@@ -178,6 +219,7 @@ export function emptyState(): SwarmState {
     publishedBands: {},
     describeCache: {},
     seeding: {},
+    downloads: {},
   };
 }
 
@@ -195,6 +237,7 @@ function normalize(parsed: unknown): SwarmState {
     publishedBands: obj.publishedBands ?? base.publishedBands,
     describeCache: obj.describeCache ?? base.describeCache,
     seeding: obj.seeding ?? base.seeding,
+    downloads: obj.downloads ?? base.downloads,
     ...(obj.published !== undefined ? { published: obj.published } : {}),
   };
 }

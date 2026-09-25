@@ -23,7 +23,7 @@ import {
 import { MemorySwarm, MemoryTransport } from './transport/memory.js';
 import { torrentIds } from './torrent.js';
 import { publishTotal } from './metrics.js';
-import { StateStore } from './state.js';
+import { seedingKey, StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
 import { PartitionedCdb64Writer } from '../lib/partitioned-cdb64-writer.js';
 import { encodeCdb64Value } from '../lib/cdb64-encoding.js';
@@ -906,6 +906,39 @@ describe('Publisher', () => {
       assert.deepEqual(
         Object.values((await state.load()).seeding).map((s) => s.band),
         ['band-a'],
+      );
+    });
+
+    it('leaves a torrent the subscriber also seeds when it stops offering it', async () => {
+      await makeBand('band-a');
+      const transport = new MemoryTransport(new MemorySwarm());
+      const publisher = makeTorrentPublisher({ transport });
+      await publisher.scanOnce();
+      const [mine] = Object.values((await state.load()).seeding);
+      // The node also installed the same bytes as a subscriber, and seeds
+      // them under the same engine torrent.
+      await state.update((draft) => {
+        draft.seeding[seedingKey('subscriber', mine.id)] = {
+          ...mine,
+          owner: 'subscriber',
+          dir: path.join(tempDir, 'installed-copy'),
+        };
+      });
+
+      await fs.rm(path.join(publishedDir, 'root-tx-index', 'band-a'), {
+        recursive: true,
+      });
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+
+      assert.notEqual(
+        await transport.status(mine.id),
+        undefined,
+        'the engine still has it for the subscriber',
+      );
+      assert.deepEqual(
+        Object.values((await state.load()).seeding).map((s) => s.owner),
+        ['subscriber'],
       );
     });
 

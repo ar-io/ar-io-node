@@ -22,9 +22,13 @@ import {
 import {
   manifestAgeClock,
   publicationIssuedAt,
+  subscriptionBytes,
   subscriptionManifestAge,
   subscriptionTotal,
 } from './metrics.js';
+import { MemorySwarm, MemoryTransport } from './transport/memory.js';
+import { torrentIds } from './torrent.js';
+import { bdecode, bencode, BencodeValue } from '../lib/bencode.js';
 import { Publisher } from './publisher.js';
 import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
@@ -36,6 +40,7 @@ import {
   INDEX_PUBLICATION_MAX_BYTES,
   serializeIndexPublication,
   signIndexPublication,
+  torrentNameForFiles,
 } from '../lib/index-publication.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import { SubscribeConfig } from './config.js';
@@ -413,6 +418,530 @@ describe('Subscriber', () => {
       .map(([id]) => id)
       .sort();
   };
+
+  describe('over the torrent transport', () => {
+    /** Publish with torrents on, the publisher's engine in `swarm`. */
+    const publishTorrents = async (seeder?: MemoryTransport) => {
+      await new Publisher({
+        log,
+        state: pubState,
+        kinds: createKindRegistry({ log }),
+        signer,
+        publish: [{ name: 'root-tx-index', kind: 'cdb64-root-tx' }],
+        publishedDir: pubDir,
+        blobsDir: path.join(pubDir, 'blobs'),
+        publicationFile: path.join(pubDir, 'publication.json'),
+        ttlMs: 86_400_000,
+        supersedeGraceMs: 0,
+        now: () => clock,
+        torrents: {
+          ...(seeder !== undefined ? { transport: seeder } : {}),
+          trackers: [],
+          privateSwarm: false,
+        },
+      }).scanOnce();
+    };
+
+    const makeTorrentSubscriber = (
+      transport: MemoryTransport,
+      opts: Partial<{
+        webSeedAfterMs: number;
+        torrentTimeoutMs: number;
+        torrentWatchMs: number;
+        untrackedMinAgeMs: number;
+      }> = {},
+    ) =>
+      new Subscriber({
+        log,
+        state: subState,
+        kinds: createKindRegistry({ log }),
+        registry: registryFor(),
+        subscribe: [{ publisher: WALLET }],
+        trustedPublishers: [],
+        incomingDir: subIncoming,
+        installedDir: subInstalled,
+        fetchTimeoutMs: 5000,
+        downloadConcurrency: 4,
+        supersedeGraceMs: 0,
+        transport,
+        torrentTimeoutMs: opts.torrentTimeoutMs ?? 3_600_000,
+        webSeedAfterMs: opts.webSeedAfterMs ?? 3_600_000,
+        torrentWatchMs: opts.torrentWatchMs ?? 2_000,
+        torrentCheckMs: 20,
+        ...(opts.untrackedMinAgeMs !== undefined
+          ? { untrackedMinAgeMs: opts.untrackedMinAgeMs }
+          : {}),
+        now: () => clock,
+      });
+
+    /** How often a result was counted, by transport, for this publisher. */
+    const counted = async (result: string, transport: string) =>
+      (await subscriptionTotal.get()).values
+        .filter(
+          (v) =>
+            v.labels.publisher === WALLET &&
+            v.labels.result === result &&
+            v.labels.transport === transport,
+        )
+        .reduce((sum, v) => sum + v.value, 0);
+
+    const keptTorrent = (infohashV1: string) =>
+      path.join(path.dirname(subIncoming), 'torrents', `${infohashV1}.torrent`);
+
+    const bytesBy = async (transport: string) =>
+      (await subscriptionBytes.get()).values
+        .filter((v) => v.labels.transport === transport)
+        .reduce((sum, v) => sum + v.value, 0);
+
+    const installedDigests = async (bandId: string) => {
+      const dir = (await subState.load()).installed['root-tx-index'][bandId]
+        .dir;
+      const out: Record<string, string> = {};
+      for (const name of await fs.readdir(dir)) {
+        out[name] = crypto
+          .createHash('sha256')
+          .update(await fs.readFile(path.join(dir, name)))
+          .digest('hex');
+      }
+      return out;
+    };
+
+    const publishedDigests = async () => {
+      const doc = JSON.parse(
+        await fs.readFile(path.join(pubDir, 'publication.json'), 'utf8'),
+      );
+      return Object.fromEntries(
+        doc.indexes[0].bands[0].files.map(
+          (f: { name: string; sha256: string }) => [f.name, f.sha256],
+        ),
+      );
+    };
+
+    it('installs a band through add and status, from a peer, and counts it as torrent', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents(new MemoryTransport(swarm));
+      const engine = new MemoryTransport(swarm);
+      const installedBefore = await counted('installed', 'torrent');
+      const torrentBytesBefore = await bytesBy('torrent');
+      const httpBytesBefore = await bytesBy('http');
+
+      await makeTorrentSubscriber(engine).pollOnce();
+
+      assert.deepEqual(await installedIds(), ['band-a']);
+      assert.deepEqual(
+        await installedDigests('band-a'),
+        await publishedDigests(),
+      );
+      assert.equal(await counted('installed', 'torrent'), installedBefore + 1);
+      assert(
+        (await bytesBy('torrent')) > torrentBytesBefore,
+        'bytes counted as torrent',
+      );
+      assert.equal(await bytesBy('http'), httpBytesBefore, 'nothing over HTTP');
+    });
+
+    it('keeps an installed band seeding from installed/, and the publisher leaves it alone', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      const publisherEngine = new MemoryTransport(swarm);
+      await publishTorrents(publisherEngine);
+      const engine = new MemoryTransport(swarm);
+      await makeTorrentSubscriber(engine).pollOnce();
+
+      const seeding = Object.entries((await subState.load()).seeding);
+      assert.equal(seeding.length, 1);
+      const [, seeded] = seeding[0];
+      const id = seeded.id;
+      assert.equal(seeded.owner, 'subscriber');
+      assert.equal(
+        seeded.dir,
+        (await subState.load()).installed['root-tx-index']['band-a'].dir,
+        'seeded from the installed generation directory',
+      );
+      assert.equal(engine.entry(id)?.state, 'seeding');
+      assert.equal(
+        engine.entry(id)?.dir,
+        seeded.dir,
+        'seeded from where the band now lives',
+      );
+      assert(
+        existsSync(keptTorrent(seeded.infohashV1!)),
+        'the torrent is kept for re-seeding',
+      );
+    });
+
+    it('re-seeds an installed band the engine lost', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents(new MemoryTransport(swarm));
+      const engine = new MemoryTransport(swarm);
+      const subscriber = makeTorrentSubscriber(engine);
+      await subscriber.pollOnce();
+      const [{ id }] = Object.values((await subState.load()).seeding);
+
+      await engine.remove(id); // a wiped engine
+      await subscriber.pollOnce();
+      assert.equal(engine.entry(id)?.state, 'seeding');
+    });
+
+    it('falls back to HTTP when the engine reports an error, and the band still installs', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents(new MemoryTransport(swarm));
+      const engine = new MemoryTransport(swarm);
+      // Make every download on this engine fail.
+      const add = engine.add.bind(engine);
+      engine.add = async (opts) => {
+        const result = await add(opts);
+        const entry = engine.entry(result.id)!;
+        entry.state = 'error';
+        entry.error = 'simulated';
+        return result;
+      };
+      const fallbacks = await counted('transport_fallback', 'torrent');
+      const httpInstalls = await counted('installed', 'http');
+
+      await makeTorrentSubscriber(engine).pollOnce();
+
+      assert.deepEqual(await installedIds(), ['band-a']);
+      assert.deepEqual(
+        await installedDigests('band-a'),
+        await publishedDigests(),
+      );
+      assert.equal(
+        await counted('transport_fallback', 'torrent'),
+        fallbacks + 1,
+      );
+      assert.equal(await counted('installed', 'http'), httpInstalls + 1);
+    });
+
+    it('uses HTTP when the engine is down', async () => {
+      await makeBand('band-a');
+      await publishTorrents();
+      const engine = new MemoryTransport(new MemorySwarm());
+      engine.available = false;
+      await makeTorrentSubscriber(engine).pollOnce();
+      assert.deepEqual(await installedIds(), ['band-a']);
+    });
+
+    it('seeds a band it fetched over HTTP once the engine answers again', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents(new MemoryTransport(swarm));
+      const engine = new MemoryTransport(swarm);
+      engine.available = false; // still starting, as on a fresh `up`
+      const subscriber = makeTorrentSubscriber(engine);
+      await subscriber.pollOnce();
+      assert.deepEqual(await installedIds(), ['band-a']);
+      assert.deepEqual((await subState.load()).seeding, {});
+
+      engine.available = true;
+      await subscriber.pollOnce();
+
+      const seeding = Object.entries((await subState.load()).seeding);
+      assert.equal(seeding.length, 1, 'the HTTP-installed band now seeds');
+      const [, seeded] = seeding[0];
+      const id = seeded.id;
+      assert.equal(seeded.band, 'band-a');
+      assert.equal(engine.entry(id)?.state, 'seeding');
+      assert(
+        existsSync(keptTorrent(seeded.infohashV1!)),
+        'the verified torrent is kept for re-seeding',
+      );
+    });
+
+    it('seeds a band the swarm could not deliver, in the same poll as its HTTP install', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents(new MemoryTransport(swarm));
+      const engine = new MemoryTransport(swarm);
+      const add = engine.add.bind(engine);
+      engine.add = async (opts) => {
+        const result = await add(opts);
+        const entry = engine.entry(result.id)!;
+        entry.state = 'error';
+        entry.error = 'simulated';
+        return result;
+      };
+
+      await makeTorrentSubscriber(engine).pollOnce();
+
+      const seeding = Object.entries((await subState.load()).seeding);
+      assert.equal(seeding.length, 1);
+      assert.equal(engine.entry(seeding[0][1].id)?.state, 'seeding');
+    });
+
+    it('refuses a torrent that is not the one the publication signed', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents(new MemoryTransport(swarm));
+      const engine = new MemoryTransport(swarm);
+      let added = 0;
+      const add = engine.add.bind(engine);
+      engine.add = async (opts) => {
+        added++;
+        return add(opts);
+      };
+      // A different torrent served at the band's torrent URL.
+      tamper = (urlPath, body) => {
+        if (!urlPath.endsWith('.torrent')) return body;
+        const bytes = Buffer.from(body);
+        bytes[bytes.length - 3] ^= 0xff;
+        return bytes;
+      };
+      const refused = await counted('verify_failed', 'torrent');
+
+      await makeTorrentSubscriber(engine).pollOnce();
+
+      assert.equal(added, 0, 'never handed to the engine');
+      assert.equal(await counted('verify_failed', 'torrent'), refused + 1);
+      assert.deepEqual(
+        await installedIds(),
+        ['band-a'],
+        'installed over HTTP instead',
+      );
+    });
+
+    it('turns on the WebSeed only once peers are not delivering, and finishes through it', async () => {
+      await makeBand('band-a');
+      const requests: string[] = [];
+      // A swarm with no seeder; only the publisher's WebSeed can deliver.
+      const swarm = new MemorySwarm({
+        webSeed: async (url, torrentName, file) => {
+          requests.push(`${url}${torrentName}/${file}`);
+          const doc = JSON.parse(
+            await fs.readFile(path.join(pubDir, 'publication.json'), 'utf8'),
+          );
+          const band = doc.indexes[0].bands.find(
+            (b: {
+              files: Array<{ name: string; size: number; sha256: string }>;
+            }) => torrentNameForFiles(b.files) === torrentName,
+          );
+          if (band === undefined || !url.endsWith('/ar-io/indexes/webseed/'))
+            return undefined;
+          return fs.readFile(path.join(pubDir, 'root-tx-index', band.id, file));
+        },
+      });
+      await publishTorrents();
+      const engine = new MemoryTransport(swarm);
+
+      // Not stalled long enough yet: stays pending, no WebSeed.
+      await makeTorrentSubscriber(engine, { torrentWatchMs: 100 }).pollOnce();
+      assert.deepEqual(await installedIds(), []);
+      assert.equal(requests.length, 0, 'no WebSeed yet');
+
+      // Stalled: the WebSeed is turned on and delivers.
+      await makeTorrentSubscriber(engine, { webSeedAfterMs: 0 }).pollOnce();
+      assert.deepEqual(await installedIds(), ['band-a']);
+      assert(requests.length > 0);
+      assert(
+        requests.every((r) => r.startsWith(`${origin}/ar-io/indexes/webseed/`)),
+        'the WebSeed is the publisher origin’s WebSeed route',
+      );
+    });
+
+    it('carries an unfinished torrent across polls without starting it again', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents();
+      const engine = new MemoryTransport(swarm);
+      let added = 0;
+      const add = engine.add.bind(engine);
+      engine.add = async (opts) => {
+        added++;
+        return add(opts);
+      };
+      const subscriber = makeTorrentSubscriber(engine, { torrentWatchMs: 50 });
+      await subscriber.pollOnce();
+      assert.deepEqual(await installedIds(), [], 'no seeder yet');
+
+      // A seeder appears between polls.
+      const seeder = new MemoryTransport(swarm);
+      await seeder.seed({
+        torrent: await fs.readFile(
+          path.join(pubDir, 'root-tx-index', 'band-a.torrent'),
+        ),
+        dir: path.join(pubDir, 'root-tx-index', 'band-a'),
+      });
+      await subscriber.pollOnce();
+      assert.deepEqual(await installedIds(), ['band-a']);
+      assert.equal(added, 1, 'the same torrent, not a second one');
+    });
+
+    it('joins an overlapping poll instead of racing it over the same band', async () => {
+      // The live bug: a poll outlasting the interval, a second one starting,
+      // one installing the band while the other abandoned it.
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents();
+      const engine = new MemoryTransport(swarm);
+      let added = 0;
+      const add = engine.add.bind(engine);
+      engine.add = async (opts) => {
+        added++;
+        return add(opts);
+      };
+      const subscriber = makeTorrentSubscriber(engine, { torrentWatchMs: 400 });
+      const fallbacks = await counted('transport_fallback', 'torrent');
+
+      const first = subscriber.pollOnce();
+      const second = subscriber.pollOnce();
+      // The second call joins the running poll of this publisher; it does
+      // not start another, which the single add below shows.
+      // A seeder appears while the poll is watching.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new MemoryTransport(swarm).seed({
+        torrent: await fs.readFile(
+          path.join(pubDir, 'root-tx-index', 'band-a.torrent'),
+        ),
+        dir: path.join(pubDir, 'root-tx-index', 'band-a'),
+      });
+      await Promise.all([first, second]);
+
+      assert.deepEqual(await installedIds(), ['band-a']);
+      assert.equal(added, 1);
+      assert.equal(await counted('transport_fallback', 'torrent'), fallbacks);
+    });
+
+    it('abandons a torrent that outlives the timeout and fetches over HTTP', async () => {
+      await makeBand('band-a');
+      await publishTorrents();
+      const engine = new MemoryTransport(new MemorySwarm()); // nobody seeds
+      const fallbacks = await counted('transport_fallback', 'torrent');
+      await makeTorrentSubscriber(engine, { torrentTimeoutMs: 0 }).pollOnce();
+      assert.deepEqual(await installedIds(), ['band-a']);
+      assert.equal(
+        await counted('transport_fallback', 'torrent'),
+        fallbacks + 1,
+      );
+      assert.equal(
+        Object.keys((await subState.load()).seeding).length,
+        1,
+        'once the band is here over HTTP, this node seeds it: it may be the first seeder',
+      );
+    });
+
+    it('hands the engine only the signed part of a hostile torrent', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents(new MemoryTransport(swarm));
+      // A publisher rewrites what the signature does not cover: trackers
+      // and WebSeeds pointing into the subscriber's network.
+      const torrentFile = path.join(pubDir, 'root-tx-index', 'band-a.torrent');
+      const original = await fs.readFile(torrentFile);
+      const top = bdecode(original) as Record<string, BencodeValue>;
+      await fs.writeFile(
+        torrentFile,
+        bencode({
+          ...top,
+          announce: Buffer.from('http://core:4000/announce'),
+          'url-list': [Buffer.from('http://observer:5050/')],
+        }),
+      );
+
+      const engine = new MemoryTransport(swarm);
+      await makeTorrentSubscriber(engine).pollOnce();
+      assert.deepEqual(await installedIds(), ['band-a']);
+
+      const [seeded] = Object.values((await subState.load()).seeding);
+      const kept = bdecode(
+        await fs.readFile(keptTorrent(seeded.infohashV1!)),
+      ) as Record<string, unknown>;
+      assert.equal(kept['url-list'], undefined);
+      assert.equal(kept.announce, undefined);
+      assert.deepEqual(torrentIds(bencode(kept as any)), torrentIds(original));
+    });
+
+    it('keeps the timeout of a torrent download across a restart', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents();
+      const engine = new MemoryTransport(swarm);
+      // No seeder: the download waits.
+      await makeTorrentSubscriber(engine, {
+        torrentWatchMs: 20,
+        torrentTimeoutMs: 60_000,
+      }).pollOnce();
+      assert.deepEqual(await installedIds(), []);
+      assert.equal(
+        Object.keys((await subState.load()).downloads).length,
+        1,
+        'the download is in state',
+      );
+
+      // A new process, past the timeout measured from the FIRST start.
+      clock = new Date(clock.getTime() + 61_000);
+      const fallbacks = await counted('transport_fallback', 'torrent');
+      await makeTorrentSubscriber(engine, {
+        torrentWatchMs: 20,
+        torrentTimeoutMs: 60_000,
+      }).pollOnce();
+      assert.equal(
+        await counted('transport_fallback', 'torrent'),
+        fallbacks + 1,
+        'abandoned, not restarted',
+      );
+      assert.deepEqual(await installedIds(), ['band-a'], 'installed over HTTP');
+      assert.deepEqual((await subState.load()).downloads, {});
+    });
+
+    it('cleans up swarm directories and kept torrents nothing uses', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents(new MemoryTransport(swarm));
+      const engine = new MemoryTransport(swarm);
+      const swarmDir = path.join(path.dirname(subIncoming), 'swarm');
+      const orphanDir = path.join(swarmDir, 'f'.repeat(40));
+      await fs.mkdir(orphanDir, { recursive: true });
+      await fs.writeFile(path.join(orphanDir, '00.cdb'), 'partial');
+      const strayTorrent = keptTorrent('e'.repeat(40));
+      await fs.mkdir(path.dirname(strayTorrent), { recursive: true });
+      await fs.writeFile(strayTorrent, 'd4:infode');
+
+      await makeTorrentSubscriber(engine, { untrackedMinAgeMs: 0 }).pollOnce();
+
+      assert.deepEqual(await installedIds(), ['band-a']);
+      assert.equal(existsSync(orphanDir), false, 'orphan download removed');
+      assert.equal(existsSync(strayTorrent), false, 'unused torrent removed');
+      const [seeded] = Object.values((await subState.load()).seeding);
+      assert.ok(
+        existsSync(keptTorrent(seeded.infohashV1!)),
+        'the installed band keeps its torrent',
+      );
+    });
+
+    it('stops seeding a band once it is retired', async () => {
+      await makeBand('band-a');
+      await makeBand('band-b');
+      const swarm = new MemorySwarm();
+      const publisherEngine = new MemoryTransport(swarm);
+      await publishTorrents(publisherEngine);
+      const engine = new MemoryTransport(swarm);
+      const subscriber = makeTorrentSubscriber(engine);
+      await subscriber.pollOnce();
+      assert.equal(Object.keys((await subState.load()).seeding).length, 2);
+
+      await fs.rm(path.join(pubDir, 'root-tx-index', 'band-b'), {
+        recursive: true,
+      });
+      await pubState.update((draft) => {
+        draft.describeCache = {};
+      });
+      clock = new Date(clock.getTime() + 60_000);
+      await publishTorrents(publisherEngine);
+      await subscriber.pollOnce();
+
+      const left = Object.values((await subState.load()).seeding).map(
+        (s) => s.band,
+      );
+      assert.deepEqual(left, ['band-a']);
+      assert.equal(
+        existsSync(path.join(subInstalled, 'root-tx-index', 'band-b.torrent')),
+        false,
+      );
+    });
+  });
 
   it('installs every band a publisher offers', async () => {
     await makeBand('band-a');

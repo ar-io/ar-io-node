@@ -53,7 +53,12 @@ import {
   loadSolanaKeypairFromBase58,
 } from '../lib/httpsig.js';
 import * as config from './config.js';
-import { applyBandChanges, SeededBand, StateStore } from './state.js';
+import {
+  applyBandChanges,
+  SeededBand,
+  seedingKey,
+  StateStore,
+} from './state.js';
 import { ArtifactKind } from './kinds/types.js';
 import { buildTorrent } from './torrent.js';
 import { TorrentTransport } from './transport/types.js';
@@ -621,7 +626,14 @@ export class Publisher {
         try {
           const torrent = await fs.readFile(this.torrentPath(index, band.id));
           const { id } = await transport.seed({ torrent, dir });
-          wanted.set(id, { index, band: band.id, dir, owner: 'publisher' });
+          wanted.set(seedingKey('publisher', id), {
+            id,
+            infohashV1: band.torrent!.infohashV1,
+            index,
+            band: band.id,
+            dir,
+            owner: 'publisher',
+          });
           seedingByIndex.set(index, (seedingByIndex.get(index) ?? 0) + 1);
         } catch (error: any) {
           this.log.warn('Could not seed band', {
@@ -640,25 +652,29 @@ export class Publisher {
 
       const state = await this.state.load();
       // Only the publisher's own: the subscriber seeds installed bands too.
-      for (const [id, seeded] of Object.entries(state.seeding)) {
-        if (seeded.owner !== 'publisher' || wanted.has(id)) continue;
+      for (const [key, seeded] of Object.entries(state.seeding)) {
+        if (seeded.owner !== 'publisher' || wanted.has(key)) continue;
+        // The subscriber may seed the same torrent from its own copy.
+        const sharedWith = Object.values(state.seeding).some(
+          (other) => other.owner !== 'publisher' && other.id === seeded.id,
+        );
         try {
-          await transport.remove(id);
+          if (!sharedWith) await transport.remove(seeded.id);
         } catch (error: any) {
           this.log.warn('Could not stop seeding a band', {
-            id,
+            id: seeded.id,
             error: error?.message,
           });
-          wanted.set(id, seeded); // try again next scan
+          wanted.set(key, seeded); // try again next scan
         }
       }
       await this.state.update((draft) => {
-        for (const [id, seeded] of Object.entries(draft.seeding)) {
-          if (seeded.owner === 'publisher' && !wanted.has(id)) {
-            delete draft.seeding[id];
+        for (const [key, seeded] of Object.entries(draft.seeding)) {
+          if (seeded.owner === 'publisher' && !wanted.has(key)) {
+            delete draft.seeding[key];
           }
         }
-        for (const [id, seeded] of wanted) draft.seeding[id] = seeded;
+        for (const [key, seeded] of wanted) draft.seeding[key] = seeded;
       });
     }
 
