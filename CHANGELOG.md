@@ -40,6 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - replacing a band never leaves a moment when lookups to it miss;
     - one band id belongs to one publisher at a time.
     - the closed tracker lists this node's own engine under its public host instead of a Docker address, never hands private addresses to peers on the internet, and can sit behind a load balancer (`INDEX_SWARM_TRACKER_TRUSTED_PROXIES`, `INDEX_SWARM_ENGINE_PUBLIC_HOST`);
+    - seeding is bounded by default: 10 MB/s (`INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC`) and 100 GB a UTC day (`INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES`), after which the engine is throttled to 1 KiB/s until the next day, so no peer can pull terabytes from a publisher;
     - an hourly janitor removes engine torrents no state record claims (left by a state reset or a crash), after two sweeps agree;
     - a subscriber keeps a band that an offered band supersedes until that band has installed, so a replacement that takes hours to download leaves no gap in coverage;
     - a band republished with some files unchanged (a manifest edit to add `supersedes`, say) links the unchanged files from the installed copy and fetches only the rest; before, the whole band was fetched again;

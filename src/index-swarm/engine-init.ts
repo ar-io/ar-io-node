@@ -39,7 +39,7 @@ async function run(): Promise<void> {
   const uid = env.positiveIntOrDefault('INDEX_SWARM_ENGINE_UID', 1000);
   const gid = env.positiveIntOrDefault('INDEX_SWARM_ENGINE_GID', 1000);
   const uploadLimit = Number(
-    env.varOrDefault('INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC', '0'),
+    env.varOrDefault('INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC', '10000000'),
   );
   if (!Number.isSafeInteger(uploadLimit) || uploadLimit < 0) {
     throw new Error(

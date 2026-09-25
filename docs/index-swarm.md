@@ -263,9 +263,14 @@ swarm needs a few things that an HTTP proxy does not give by itself:
    and cache rule for that prefix covers them. The WebSeed is metered like
    the blob route and marked `private` when metered, so a shared cache does
    not replay paid bytes.
-5. **Bound what seeding costs.** `INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC`
-   caps upload to peers, and the engine's memory grows with the bytes it
-   seeds (see [Running the engine](#running-the-engine)).
+5. **Bound what seeding costs.** Seeding is free to peers but not to the
+   publisher: every byte is its upload, and a peer can fetch the bands again
+   and again. Two limits bound it, with defaults for any node:
+   `INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC` caps the rate (10 MB/s) and
+   `INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES` caps the day (100 GB, then 1 KiB/s
+   until the next UTC day). Raise both for a large publisher. The engine's
+   memory also grows with the bytes it seeds (see
+   [Running the engine](#running-the-engine)).
 
 Subscribers behind NAT still work: they reach the publisher's engine, and a
 reachable subscriber can be reached back. Only two peers that are both
@@ -760,6 +765,7 @@ Metrics worth a dashboard:
 | `index_subscription_sequence{publisher}` | The latest sequence seen, whether or not its bands have installed |
 | `index_swarm_installed_bands{index}` | What is installed |
 | `index_subscription_bytes_total{transport}` | Bytes actually fetched, by `http` or `torrent`. Files already on disk are not fetched again and not counted. The share by `torrent` is how much the swarm is carrying |
+| `index_swarm_upload_today_bytes`, `index_swarm_upload_throttled` | Seeding today against the daily budget; 1 means the budget is spent and seeding is throttled until the next UTC day |
 | `index_swarm_engine_available` | 1 while the torrent engine answers. Absent when none is configured, which is HTTP only by choice |
 | `index_publish_seeding_bands{index}` | Bands handed to the engine on the last scan. Below `index_publish_bands` means some are offered over HTTP only |
 | `index_swarm_tracker_announces_total{result}`, `index_swarm_tracker_peers` | The closed tracker: `ok`, `unregistered` (an infohash this node does not publish; refused), `malformed`, `rate_limited` (an address announcing one torrent too often) |

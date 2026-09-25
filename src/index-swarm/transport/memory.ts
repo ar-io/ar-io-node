@@ -213,6 +213,23 @@ export class MemoryTransport implements TorrentTransport {
     if (this.torrents.get(id) === entry) entry.state = 'seeding';
   }
 
+  /** The global upload limit last set, for tests; 0 is unlimited. */
+  uploadLimit = 0;
+  /** Added to the upload counter, for tests. */
+  extraUploaded = 0;
+
+  async uploadedBytes(): Promise<number> {
+    if (!this.available) this.down();
+    let total = this.extraUploaded;
+    for (const entry of this.torrents.values()) total += entry.bytesUp;
+    return total;
+  }
+
+  async setUploadLimit(bytesPerSecond: number): Promise<void> {
+    if (!this.available) this.down();
+    this.uploadLimit = bytesPerSecond;
+  }
+
   async list(): Promise<Array<{ id: string; savePath: string }>> {
     if (!this.available) this.down();
     return [...this.torrents.entries()].map(([id, entry]) => ({

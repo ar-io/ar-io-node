@@ -92,6 +92,15 @@ export interface TorrentTransport {
    */
   remove(id: string, opts?: { deleteData?: boolean }): Promise<void>;
 
+  /**
+   * Bytes the engine has uploaded to peers since it started. Resets when
+   * the engine restarts; the caller accounts for that.
+   */
+  uploadedBytes(): Promise<number>;
+
+  /** Set the engine's global upload rate, in bytes a second; 0 is unlimited. */
+  setUploadLimit(bytesPerSecond: number): Promise<void>;
+
   /** Every torrent the engine holds, with where its files are. */
   list(): Promise<Array<{ id: string; savePath: string }>>;
 

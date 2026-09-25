@@ -32,6 +32,7 @@ import { Publisher, loadPublisherSigner } from './publisher.js';
 import { QBittorrentTransport } from './transport/qbittorrent.js';
 import { waitForEngine } from './transport/wait.js';
 import { EngineJanitor } from './engine-janitor.js';
+import { UploadBudget } from './upload-budget.js';
 import { ClosedTracker, trackedInfohashes } from './tracker.js';
 import { isAllowedTrackerUrl } from './torrent.js';
 import { Subscriber } from './subscriber.js';
@@ -228,9 +229,26 @@ async function main(): Promise<void> {
   let janitorTimer: NodeJS.Timeout | undefined;
   if (engine !== undefined) {
     let last: boolean | undefined;
+    const budget = new UploadBudget({
+      log,
+      state,
+      transport: engine,
+      dailyLimitBytes: config.UPLOAD_DAILY_LIMIT_BYTES,
+      normalRateBytesPerSec: config.UPLOAD_LIMIT_BYTES_PER_SEC,
+    });
     const checkEngine = async () => {
       const available = await engine.isAvailable();
       engineAvailable.set(available ? 1 : 0);
+      // A restarted engine comes back at its configured rate, so the
+      // budget's setting is applied again.
+      if (available && last === false) budget.engineRestarted();
+      if (available) {
+        await budget.check().catch((error: any) =>
+          log.warn('Could not check the upload budget', {
+            error: error?.message,
+          }),
+        );
+      }
       if (available !== last) {
         const fields = { engineUrl: config.ENGINE_URL };
         if (available) log.info('Torrent engine is available', fields);

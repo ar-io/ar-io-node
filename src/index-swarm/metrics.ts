@@ -176,6 +176,18 @@ export const trackerPeers = new promClient.Gauge({
   registers: [registry],
 });
 
+export const uploadToday = new promClient.Gauge({
+  name: 'index_swarm_upload_today_bytes',
+  help: 'Bytes the torrent engine has uploaded to peers today (UTC), counted against INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES.',
+  registers: [registry],
+});
+
+export const uploadThrottled = new promClient.Gauge({
+  name: 'index_swarm_upload_throttled',
+  help: 'Whether the daily upload budget is spent and seeding is throttled until the next UTC day: 1 or 0.',
+  registers: [registry],
+});
+
 export const installedBands = new promClient.Gauge({
   name: 'index_swarm_installed_bands',
   help: 'Bands currently installed, by index.',

@@ -399,6 +399,26 @@ export const ALLOWED_TRACKERS = env
 export const ENGINE_BLOCK_PRIVATE =
   env.varOrDefault('INDEX_SWARM_ENGINE_BLOCK_PRIVATE', 'true') !== 'false';
 
+/**
+ * The engine's upload rate cap, bytes a second; 0 is unlimited. Written into
+ * the engine's config by index-swarm-engine-init, and restored by the
+ * sidecar each day after the daily budget throttled it.
+ */
+export const UPLOAD_LIMIT_BYTES_PER_SEC = env.nonNegativeIntOrDefault(
+  'INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC',
+  10_000_000,
+);
+
+/**
+ * Most the engine may upload in a UTC day, in bytes; 0 is no budget. Past
+ * it, seeding is throttled to a trickle until the next day. The rate cap
+ * bounds how fast; this bounds how much, whatever peers ask for.
+ */
+export const UPLOAD_DAILY_LIMIT_BYTES = env.nonNegativeIntOrDefault(
+  'INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES',
+  100_000_000_000,
+);
+
 /** Give up on a torrent and fetch the band over HTTP after this long. */
 export const TORRENT_TIMEOUT_MS =
   env.positiveIntOrDefault('INDEX_SWARM_TORRENT_TIMEOUT_SECONDS', 3600) * 1000;

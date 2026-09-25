@@ -163,6 +163,18 @@ export interface SwarmState {
    * restart neither resets a download's timeout nor forgets its directory.
    */
   downloads: Record<string, SwarmDownload>;
+  /** The engine's upload today, for the daily budget. */
+  uploadBudget?: UploadBudgetState;
+}
+
+/** Upload counted against the daily budget. */
+export interface UploadBudgetState {
+  /** UTC day, `YYYY-MM-DD`. */
+  day: string;
+  /** Bytes uploaded on that day. */
+  used: number;
+  /** The engine's counter when last read, to take differences from. */
+  lastCounter: number;
 }
 
 /** One band being fetched through the engine. */
@@ -240,6 +252,9 @@ function normalize(parsed: unknown): SwarmState {
     describeCache: obj.describeCache ?? base.describeCache,
     seeding: obj.seeding ?? base.seeding,
     downloads: obj.downloads ?? base.downloads,
+    ...(obj.uploadBudget !== undefined
+      ? { uploadBudget: obj.uploadBudget }
+      : {}),
     ...(obj.published !== undefined ? { published: obj.published } : {}),
   };
 }

@@ -181,6 +181,19 @@ export class QBittorrentTransport implements TorrentTransport {
     return response;
   }
 
+  async uploadedBytes(): Promise<number> {
+    const response = await this.call('transfer/info');
+    const info = (await response.json()) as { up_info_data?: number };
+    return Number(info.up_info_data ?? 0);
+  }
+
+  async setUploadLimit(bytesPerSecond: number): Promise<void> {
+    await this.call('transfer/setUploadLimit', {
+      method: 'POST',
+      body: new URLSearchParams({ limit: String(Math.max(0, bytesPerSecond)) }),
+    });
+  }
+
   async list(): Promise<Array<{ id: string; savePath: string }>> {
     const response = await this.call('torrents/info');
     const all = (await response.json()) as Array<Record<string, unknown>>;
