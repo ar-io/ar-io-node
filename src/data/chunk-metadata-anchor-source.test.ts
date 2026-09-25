@@ -360,7 +360,7 @@ describe('ChunkMetadataAnchorSource', () => {
     // than thrown errors, which is why the old `status >= 200` check let them
     // through. Escalation is now limited to statuses a GET could actually
     // improve on.
-    for (const status of [404, 429, 402, 401, 403, 500, 502, 503]) {
+    for (const status of [404, 429, 402, 401, 500, 502, 503]) {
       it(`does NOT escalate to GET when HEAD returns ${status}`, async () => {
         const stub = makeAxiosStub();
         stub.setNextHead(status, {});
@@ -384,8 +384,14 @@ describe('ChunkMetadataAnchorSource', () => {
       });
     }
 
-    for (const status of [405, 501]) {
-      it(`still escalates to GET when HEAD returns ${status} (peer lacks HEAD)`, async () => {
+    // 400/403 join 405/501 because an intermediary refusing the *method*
+    // rarely says so cleanly: WAFs and CDNs commonly answer 403, and some
+    // answer 400, where a GET to the same URL still succeeds. Flagged by
+    // CodeRabbit, which is right that HEAD handling is inconsistent across
+    // proxies even though the ar-io-node peers we actually probe answer
+    // HEAD and GET identically.
+    for (const status of [400, 403, 405, 501]) {
+      it(`still escalates to GET when HEAD returns ${status} (method refused)`, async () => {
         const stub = makeAxiosStub();
         stub.setNextHead(status, {});
         stub.setNextGet(206, chunkHeaders());

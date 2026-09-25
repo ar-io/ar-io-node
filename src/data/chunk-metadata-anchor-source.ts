@@ -284,21 +284,32 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
    * zero-byte range GET so we still get the response headers without
    * pulling the body. Returns the raw header bag for the parser.
    *
-   * Three "HEAD didn't work" cases funnel into the fallback:
+   * The fallback is for cases where the *method* is the problem, not the
+   * resource:
    * - HEAD threw (network error, peer down, peer doesn't support HEAD)
-   * - HEAD returned 405 or 501, i.e. the peer does not implement HEAD on
-   *   this route
    * - HEAD returned 2xx but stripped the X-Arweave-Chunk-* headers
    *   (some proxies do this on HEAD even though GET sets them)
+   * - HEAD returned 400, 403, 405 or 501. Proxies, WAFs and CDNs handle HEAD
+   *   inconsistently: 405/501 are the honest "method not implemented"
+   *   answers, but an intermediary that simply refuses the method often
+   *   returns 403, and a few answer 400. In all four a GET may well succeed
+   *   where the HEAD did not.
    *
-   * Any other non-2xx status does NOT fall back. A 404, 429, 402, 401/403
-   * or 5xx means the peer answered and declined, and a GET to the same URL
-   * returns the same answer, so escalating would only double the request
-   * rate against a peer that is already refusing or failing. Those throw
-   * PeerRefusedHeadError instead, which the caller counts as
-   * `peer_refused`. `validateStatus: () => true` on the shared instance
-   * means these statuses arrive here as responses rather than as thrown
-   * errors, so the distinction has to be made explicitly.
+   * A resource-or-capacity answer does NOT fall back. 404, 402, 429, 401 and
+   * 5xx (other than 501) mean the peer answered about the thing being asked
+   * for rather than about how it was asked, so a GET to the same URL repeats
+   * the same answer and only doubles the request rate against a peer that is
+   * already refusing or failing. Those throw PeerRefusedHeadError, which the
+   * caller counts as `peer_refused`.
+   *
+   * 404 specifically was checked against live peers rather than assumed:
+   * ar-io-node serves HEAD and GET from the same Express route, so the two
+   * agree, and three independent gateways returned matching statuses for an
+   * unresolvable offset (404/404, 503/503, 404/404).
+   *
+   * `validateStatus: () => true` on the shared instance means these statuses
+   * arrive here as responses rather than as thrown errors, so the distinction
+   * has to be made explicitly.
    *
    * GET errors propagate up — both methods failing means the peer is
    * unreachable and the composite should fall through to the next
@@ -341,12 +352,14 @@ export class ChunkMetadataAnchorSource implements TxBoundarySource {
       // Otherwise fall through to the GET fallback below.
     }
 
-    // Escalate only where a GET could plausibly differ from the HEAD.
+    // Escalate only where a GET could plausibly differ from the HEAD, i.e.
+    // where the status is about the method rather than about the resource.
+    // See the doc comment for why 404 is not in this set.
+    const METHOD_PROBLEM_STATUSES = new Set([400, 403, 405, 501]);
     if (
       headStatus !== undefined &&
       !(headStatus >= 200 && headStatus < 300) &&
-      headStatus !== 405 &&
-      headStatus !== 501
+      !METHOD_PROBLEM_STATUSES.has(headStatus)
     ) {
       throw new PeerRefusedHeadError(headStatus);
     }
