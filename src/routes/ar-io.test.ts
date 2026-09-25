@@ -628,11 +628,18 @@ describe('buildArIoInfo', () => {
     it('keeps a price smaller than ten decimal places', () => {
       assert.equal(plainDecimal(4.2e-11), '0.000000000042');
     });
-    it('writes common prices plainly', () => {
+
+    it('keeps every digit an operator configured', () => {
+      assert.equal(plainDecimal(0.123456789012345), '0.123456789012345');
+      assert.equal(plainDecimal(1.23456789e-15), '0.00000000000000123456789');
+    });
+
+    it('writes common and large values plainly', () => {
       assert.equal(plainDecimal(0.0000000001), '0.0000000001');
-      assert.equal(plainDecimal(1e-10 * 3), '0.0000000003');
       assert.equal(plainDecimal(0), '0');
       assert.equal(plainDecimal(1.5), '1.5');
+      assert.equal(plainDecimal(1e21), '1000000000000000000000');
+      assert.equal(plainDecimal(-2.5e-8), '-0.000000025');
     });
   });
 });
