@@ -25,6 +25,7 @@
  * Files are streamed, never read whole: a band partition can be a gigabyte.
  */
 import crypto from 'node:crypto';
+import * as net from 'node:net';
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -312,4 +313,135 @@ export function torrentIds(torrent: Buffer): TorrentIds {
         }
       : {}),
   };
+}
+
+/** Whether a tracker URL may be handed to the engine. */
+export function isAllowedTrackerUrl(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (!['http:', 'https:', 'udp:'].includes(url.protocol)) return false;
+  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (
+    host.length === 0 ||
+    host === 'localhost' ||
+    host.endsWith('.localhost')
+  ) {
+    return false;
+  }
+  if (net.isIP(host) !== 0) return !isPrivateAddress(host);
+  // A single-label name (`core`, `observer`) resolves on the compose
+  // network, not on the internet.
+  return (
+    host.includes('.') &&
+    !host.endsWith('.internal') &&
+    !host.endsWith('.local')
+  );
+}
+
+/** Loopback, private, link-local, CGNAT, unspecified and multicast ranges. */
+function isPrivateAddress(ip: string): boolean {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      a >= 224
+    );
+  }
+  const v6 = ip.toLowerCase();
+  if (v6 === '::' || v6 === '::1') return true;
+  // IPv4-mapped, dotted or in the hex form the URL parser normalizes to.
+  const dotted = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted !== null) return isPrivateAddress(dotted[1]);
+  const hex = v6.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex !== null) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return isPrivateAddress(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
+  }
+  return /^(fc|fd|fe[89ab]|ff)/.test(v6);
+}
+
+/**
+ * The part of a publisher's `.torrent` this node is willing to hand its
+ * engine: the info dictionary and v2 piece layers, byte for byte, and only
+ * the trackers on public hosts.
+ *
+ * Everything outside `info` is unsigned: the publication signs the
+ * infohashes, which cover `info` and nothing else. So a hostile publisher
+ * could otherwise point the engine's tracker announces or WebSeeds (BEP 19
+ * `url-list`, BEP 17 `httpseeds`) at services on this node's network. The
+ * subscriber adds the one WebSeed it trusts, the publisher's own, itself.
+ *
+ * @throws when the result's infohashes are not the expected ones, which
+ *   would mean the info dictionary did not survive intact.
+ */
+export function sanitizeTorrent(torrent: Buffer, expected: TorrentIds): Buffer {
+  const { value, spans } = bdecodeWithSpans(torrent);
+  if (
+    typeof value !== 'object' ||
+    Buffer.isBuffer(value) ||
+    Array.isArray(value)
+  ) {
+    throw new Error('not a torrent');
+  }
+  const top = value as { [key: string]: BencodeValue };
+  const raw = (k: string): Buffer | undefined => {
+    const span = spans.get(k);
+    return span === undefined ? undefined : torrent.subarray(span[0], span[1]);
+  };
+  const info = raw('info');
+  if (info === undefined) throw new Error('not a torrent: no info dictionary');
+
+  const text = (v: BencodeValue | undefined): string | undefined =>
+    Buffer.isBuffer(v) ? v.toString('utf8') : undefined;
+  const announce = text(top['announce']);
+  const tiers: string[][] = [];
+  const list = top['announce-list'];
+  if (Array.isArray(list)) {
+    for (const tier of list) {
+      if (!Array.isArray(tier)) continue;
+      const kept = tier
+        .map((entry) => text(entry))
+        .filter((u): u is string => u !== undefined && isAllowedTrackerUrl(u));
+      if (kept.length > 0) tiers.push(kept);
+    }
+  }
+
+  // Keys in sorted order, as bencode requires: announce, announce-list,
+  // info, piece layers.
+  const parts: Buffer[] = [Buffer.from('d')];
+  if (announce !== undefined && isAllowedTrackerUrl(announce)) {
+    parts.push(bencode('announce'), bencode(Buffer.from(announce)));
+  }
+  if (tiers.length > 0) {
+    parts.push(
+      bencode('announce-list'),
+      bencode(tiers.map((tier) => tier.map((u) => Buffer.from(u)))),
+    );
+  }
+  parts.push(bencode('info'), info);
+  const layers = raw('piece layers');
+  if (layers !== undefined) parts.push(bencode('piece layers'), layers);
+  parts.push(Buffer.from('e'));
+  const out = Buffer.concat(parts);
+
+  const ids = torrentIds(out);
+  if (
+    ids.infohashV1 !== expected.infohashV1 ||
+    (expected.infohashV2 !== undefined &&
+      ids.infohashV2 !== expected.infohashV2)
+  ) {
+    throw new Error('sanitizing changed the infohash');
+  }
+  return out;
 }

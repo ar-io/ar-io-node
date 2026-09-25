@@ -89,4 +89,12 @@ describe('bencode', () => {
     const [start, end] = spans.get('info')!;
     assert.equal(input.subarray(start, end).toString(), 'd1:ai1ee');
   });
+
+  it('decodes a __proto__ key as an ordinary key', () => {
+    const decoded = bdecode(
+      Buffer.from('d9:__proto__d12:meta versioni2eee'),
+    ) as Record<string, unknown>;
+    assert.equal(decoded['meta version'], undefined, 'nothing inherited');
+    assert.ok(Object.prototype.hasOwnProperty.call(decoded, '__proto__'));
+  });
 });

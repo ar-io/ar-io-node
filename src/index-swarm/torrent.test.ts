@@ -12,7 +12,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { bdecode } from '../lib/bencode.js';
-import { buildTorrent, torrentIds } from './torrent.js';
+import {
+  buildTorrent,
+  isAllowedTrackerUrl,
+  sanitizeTorrent,
+  torrentIds,
+} from './torrent.js';
 
 /**
  * Sizes on every boundary that matters at a 32 KiB piece: under a block,
@@ -180,5 +185,90 @@ describe('buildTorrent', () => {
       pieceLength: 32768,
     });
     assert.deepEqual(torrentIds(built.torrent), LIBTORRENT.hybrid32k);
+  });
+});
+
+describe('sanitizeTorrent', () => {
+  let dir: string;
+
+  before(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'torrent-sanitize-'));
+    for (const [name, size] of Object.entries(FIXTURE)) {
+      await fs.writeFile(path.join(dir, name), fixtureBytes(name, size));
+    }
+  });
+
+  after(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('keeps the info dictionary and public trackers, drops WebSeeds and inner-network trackers', async () => {
+    const built = await buildTorrent({
+      dir,
+      name: 'fixture',
+      pieceLength: 32768,
+      // What a hostile publisher could put outside the signed info dict.
+      webSeeds: ['http://observer:5050/'],
+      trackers: [
+        'http://core:4000/announce',
+        'http://10.0.0.5/announce',
+        'udp://tracker.example:6969/announce',
+        'http://[::1]:6969/announce',
+        'https://169.254.169.254/latest',
+      ],
+    });
+    const clean = sanitizeTorrent(built.torrent, built);
+    const top = bdecode(clean) as Record<string, unknown>;
+
+    assert.deepEqual(torrentIds(clean), torrentIds(built.torrent));
+    assert.equal(top['url-list'], undefined, 'WebSeeds dropped');
+    assert.ok('piece layers' in top, 'v2 piece layers kept');
+    assert.equal(top.announce, undefined, 'a private first tracker is dropped');
+    assert.deepEqual(
+      (top['announce-list'] as Buffer[][]).map((tier) =>
+        tier.map((u) => u.toString()),
+      ),
+      [['udp://tracker.example:6969/announce']],
+    );
+  });
+
+  it('refuses a torrent that is not the expected one', async () => {
+    const built = await buildTorrent({
+      dir,
+      name: 'fixture',
+      pieceLength: 32768,
+    });
+    assert.throws(
+      () =>
+        sanitizeTorrent(built.torrent, {
+          infohashV1: '0'.repeat(40),
+        }),
+      /changed the infohash/,
+    );
+  });
+
+  it('classifies tracker hosts', () => {
+    for (const ok of [
+      'http://tracker.example/announce',
+      'https://1.2.3.4/announce',
+      'udp://open.example:1337',
+    ]) {
+      assert.equal(isAllowedTrackerUrl(ok), true, ok);
+    }
+    for (const bad of [
+      'http://core:4000/announce',
+      'http://localhost/announce',
+      'http://127.0.0.1/announce',
+      'http://192.168.2.1/',
+      'http://172.20.0.3/',
+      'http://100.64.1.1/',
+      'http://[fd00::1]/',
+      'http://[::ffff:10.0.0.1]/',
+      'http://metadata.google.internal/',
+      'file:///etc/passwd',
+      'wss://tracker.example/',
+    ]) {
+      assert.equal(isAllowedTrackerUrl(bad), false, bad);
+    }
   });
 });

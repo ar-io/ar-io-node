@@ -113,7 +113,9 @@ export function bdecodeWithSpans(input: Buffer): DecodedWithSpans {
     }
     if (c === 0x64 /* d */) {
       pos++;
-      const dict: { [key: string]: BencodeValue } = {};
+      // No prototype: a key such as `__proto__` in hostile input must be an
+      // ordinary key, not a way to plant values every lookup would inherit.
+      const dict: { [key: string]: BencodeValue } = Object.create(null);
       let previous: Buffer | undefined;
       while (input[pos] !== 0x65) {
         if (pos >= input.length) fail('unterminated dictionary');
