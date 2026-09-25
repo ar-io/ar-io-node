@@ -24,6 +24,7 @@
  */
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { Request, Response, Router } from 'express';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
@@ -43,6 +44,8 @@ import { PaymentProcessor } from '../payments/types.js';
 import * as metrics from '../metrics.js';
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
+/** What `torrentNameForFiles` produces. */
+const TORRENT_NAME = /^[0-9a-f]{16}$/;
 
 /** Header whose presence makes the HTTPSIG middleware sign the response. */
 export const INDEX_PUBLICATION_HEADER = 'x-ar-io-index-publication';
@@ -188,6 +191,93 @@ export function createIndexesRouter({
         // The address is the digest, so these bytes can never change.
         cacheControl: `${fileCacheScope}, max-age=31536000, immutable`,
       });
+    },
+  );
+
+  // --- WebSeed -----------------------------------------------------------
+  //
+  // BEP 19 clients fetch `<url><torrent name>/<file>`. The torrent name is
+  // derived from the band's file digests, so a name and a file always mean
+  // the same bytes: like the blob route, the address cannot change meaning.
+  // Metered like the other byte routes, since the WebSeed is the
+  // publisher's HTTP tier. Registered before the named routes; anything
+  // that is not a torrent name falls through.
+
+  router.get(
+    '/ar-io/indexes/webseed/:torrentName/:file',
+    async (req: Request, res: Response, next) => {
+      const { torrentName, file } = req.params;
+      if (!TORRENT_NAME.test(torrentName)) {
+        next();
+        return;
+      }
+      if (!isValidPathSegment(file)) {
+        uncacheable(res);
+        res.status(400).type('text').send('Invalid file name');
+        finish(res, 'webseed', 400);
+        return;
+      }
+      const current = await currentView();
+      const entry = current?.webSeeds.get(`${torrentName}/${file}`);
+      if (entry === undefined) {
+        notFound(res, 'webseed');
+        return;
+      }
+      await serveFile(req, res, entry, 'webseed', {
+        cacheControl: `${fileCacheScope}, max-age=31536000, immutable`,
+      });
+    },
+  );
+
+  // --- Torrent metainfo --------------------------------------------------
+  //
+  // Not metered: a few hundred kilobytes, and a subscriber checks it against
+  // the infohashes in the signed publication before using it, so a stale or
+  // substituted file is refused rather than trusted.
+
+  router.get(
+    '/ar-io/indexes/:name/:torrent',
+    async (req: Request, res: Response, next) => {
+      const { name, torrent } = req.params;
+      if (!torrent.endsWith('.torrent')) {
+        next();
+        return;
+      }
+      const bandId = torrent.slice(0, -'.torrent'.length);
+      if (!isValidIndexName(name) || !isValidPathSegment(bandId)) {
+        uncacheable(res);
+        res.status(400).type('text').send('Invalid index or band name');
+        finish(res, 'torrent', 400);
+        return;
+      }
+      const current = await currentView();
+      if (current === undefined || !current.bands.has(`${name}/${bandId}`)) {
+        notFound(res, 'torrent');
+        return;
+      }
+
+      const torrentPath = path.join(
+        published.publishedDir,
+        name,
+        `${bandId}.torrent`,
+      );
+      let body: Buffer;
+      try {
+        body = await fs.readFile(torrentPath);
+      } catch {
+        // The band is offered but has no torrent yet, which is normal until
+        // the publisher has built one.
+        notFound(res, 'torrent');
+        return;
+      }
+      res.setHeader('Content-Type', 'application/x-bittorrent');
+      // A band rebuilt under the same id gets a new torrent, so a cache may
+      // keep this only briefly. A subscriber holding a stale copy finds the
+      // infohash disagrees with the publication and falls back to HTTP.
+      res.setHeader('Cache-Control', 'public, max-age=60');
+      res.setHeader('Content-Length', String(body.byteLength));
+      res.status(200).end(req.method === 'HEAD' ? undefined : body);
+      finish(res, 'torrent', 200);
     },
   );
 

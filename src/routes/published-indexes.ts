@@ -26,6 +26,7 @@ import { Logger } from 'winston';
 import {
   IndexPublication,
   parseIndexPublication,
+  torrentNameForFiles,
 } from '../lib/index-publication.js';
 
 export interface PublishedFile {
@@ -52,6 +53,15 @@ export interface PublicationView {
   files: Map<string, PublishedFile>;
   /** Digest to a file carrying it, for the content-addressed route. */
   blobs: Map<string, PublishedFile>;
+  /** `<index>/<band>` for every band offered, for the torrent route. */
+  bands: Set<string>;
+  /**
+   * `<torrent name>/<file>` for every band offered as a torrent, for the
+   * WebSeed route. The name is computed from the band's files, the same way
+   * the publisher named the torrent, so the publication need not carry it.
+   * Entries read the same blob hard links as the other routes.
+   */
+  webSeeds: Map<string, PublishedFile>;
   /** Stat of the publication file this view was built from. */
   mtimeMs: number;
   byteSize: number;
@@ -119,8 +129,15 @@ export class PublishedIndexes {
     const files = new Map<string, PublishedFile>();
     const blobs = new Map<string, PublishedFile>();
 
+    const bands = new Set<string>();
+    const webSeeds = new Map<string, PublishedFile>();
     for (const index of publication.indexes) {
       for (const band of index.bands) {
+        bands.add(`${index.name}/${band.id}`);
+        const torrentName =
+          band.torrent !== undefined
+            ? torrentNameForFiles(band.files)
+            : undefined;
         for (const file of band.files) {
           // Serve a digest from the publisher's hard link under blobs/,
           // which pins exactly those bytes, whichever route asks. The named
@@ -135,6 +152,9 @@ export class PublishedIndexes {
             sha256: file.sha256,
           };
           files.set(`${index.name}/${band.id}/${file.name}`, entry);
+          if (torrentName !== undefined) {
+            webSeeds.set(`${torrentName}/${file.name}`, entry);
+          }
           if (!blobs.has(file.sha256)) {
             blobs.set(file.sha256, entry);
           }
@@ -150,6 +170,8 @@ export class PublishedIndexes {
       ].sort(),
       files,
       blobs,
+      bands,
+      webSeeds,
       mtimeMs,
       byteSize,
     };

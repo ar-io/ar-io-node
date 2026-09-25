@@ -25,7 +25,11 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { Logger } from 'winston';
 
-import { BandDescriptor, BandFile } from '../lib/index-publication.js';
+import {
+  BandDescriptor,
+  BandFile,
+  BandTorrent,
+} from '../lib/index-publication.js';
 
 export const SWARM_STATE_VERSION = 1;
 
@@ -97,6 +101,25 @@ export interface PublicationState {
 export interface DescribedBand {
   fingerprint: string;
   band: BandDescriptor;
+  /**
+   * The band's torrent, built once per description: building one re-reads
+   * every byte of the band. `key` records what it was built from (the file
+   * digests, trackers and private flag), so a change to any rebuilds it.
+   */
+  torrent?: { key: string; torrent: BandTorrent };
+}
+
+/** A band this node asked the engine to seed, keyed by the engine's id. */
+export interface SeededBand {
+  index: string;
+  band: string;
+  /** The directory handed to the engine. */
+  dir: string;
+  /**
+   * Which loop asked. Each reconciles only its own, or the publisher would
+   * take back every band the subscriber seeds from installed/.
+   */
+  owner: 'publisher' | 'subscriber';
 }
 
 export interface SwarmState {
@@ -115,6 +138,11 @@ export interface SwarmState {
   published?: PublicationState;
   /** Describe results, keyed by band directory. */
   describeCache: Record<string, DescribedBand>;
+  /**
+   * What this node has asked its engine to seed. Persisted so that after a
+   * restart each loop can still take back a band it no longer wants.
+   */
+  seeding: Record<string, SeededBand>;
 }
 
 /**
@@ -149,6 +177,7 @@ export function emptyState(): SwarmState {
     installed: {},
     publishedBands: {},
     describeCache: {},
+    seeding: {},
   };
 }
 
@@ -165,6 +194,7 @@ function normalize(parsed: unknown): SwarmState {
     installed: obj.installed ?? base.installed,
     publishedBands: obj.publishedBands ?? base.publishedBands,
     describeCache: obj.describeCache ?? base.describeCache,
+    seeding: obj.seeding ?? base.seeding,
     ...(obj.published !== undefined ? { published: obj.published } : {}),
   };
 }

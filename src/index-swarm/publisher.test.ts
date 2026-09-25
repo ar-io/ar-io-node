@@ -13,11 +13,15 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import {
-  MAX_HELD_SCANS,
-  Publisher,
   loadPublisherSigner,
+  MAX_HELD_SCANS,
+  magnetFor,
+  Publisher,
+  SEED_DIR,
   supersededBands,
 } from './publisher.js';
+import { MemorySwarm, MemoryTransport } from './transport/memory.js';
+import { torrentIds } from './torrent.js';
 import { publishTotal } from './metrics.js';
 import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
@@ -29,6 +33,7 @@ import {
   IndexPublication,
   manifestSha256,
   parseIndexPublication,
+  torrentNameForFiles,
   verifyIndexPublication,
 } from '../lib/index-publication.js';
 import {
@@ -639,6 +644,304 @@ describe('Publisher', () => {
     assert.equal(await makePublisher().scanOnce(), true);
     const doc = await readPublication();
     assert.deepEqual(doc.indexes[0].bands, []);
+  });
+
+  describe('torrents', () => {
+    const makeTorrentPublisher = (
+      opts: {
+        dir?: string;
+        store?: StateStore;
+        transport?: MemoryTransport;
+        trackers?: string[];
+        privateSwarm?: boolean;
+      } = {},
+    ) => {
+      const dir = opts.dir ?? publishedDir;
+      return new Publisher({
+        log,
+        state: opts.store ?? state,
+        kinds: createKindRegistry({ log }),
+        signer,
+        publish: [{ name: 'root-tx-index', kind: 'cdb64-root-tx' }],
+        publishedDir: dir,
+        blobsDir: path.join(dir, 'blobs'),
+        publicationFile: path.join(dir, 'publication.json'),
+        ttlMs: 86_400_000,
+        supersedeGraceMs: 0,
+        now: () => clock,
+        torrents: {
+          ...(opts.transport !== undefined
+            ? { transport: opts.transport }
+            : {}),
+          trackers: opts.trackers ?? ['http://tracker.example/announce'],
+          privateSwarm: opts.privateSwarm ?? false,
+        },
+      });
+    };
+
+    const readDoc = async (dir = publishedDir) =>
+      parseIndexPublication(
+        await fs.readFile(path.join(dir, 'publication.json')),
+      );
+
+    it('offers each band as a torrent whose entry names the file it wrote', async () => {
+      await makeBand('band-a');
+      await makeTorrentPublisher().scanOnce();
+
+      const band = (await readDoc()).indexes[0].bands[0];
+      assert(band.torrent !== undefined, 'the band has a torrent entry');
+      assert.equal(
+        band.torrent.torrentUrl,
+        '/ar-io/indexes/root-tx-index/band-a.torrent',
+      );
+      const file = await fs.readFile(
+        path.join(publishedDir, 'root-tx-index', 'band-a.torrent'),
+      );
+      const ids = torrentIds(file);
+      assert.equal(band.torrent.infohashV1, ids.infohashV1);
+      assert.equal(band.torrent.infohashV2, ids.infohashV2);
+      assert.match(
+        band.torrent.magnet,
+        new RegExp(`xt=urn:btih:${ids.infohashV1}`),
+      );
+      assert.match(
+        band.torrent.magnet,
+        new RegExp(`xt=urn:btmh:1220${ids.infohashV2}`),
+      );
+    });
+
+    it('builds byte-identical torrents on two publishers holding the same bytes', async () => {
+      const source = await makeBand('band-a');
+      const otherDir = path.join(tempDir, 'other-published');
+      // A second publisher, holding a copy of the same files under another band id.
+      await fs.cp(source, path.join(otherDir, 'root-tx-index', 'band-copy'), {
+        recursive: true,
+      });
+      const otherState = new StateStore({
+        log,
+        filePath: path.join(tempDir, 'other-state.json'),
+      });
+
+      await makeTorrentPublisher().scanOnce();
+      await makeTorrentPublisher({
+        dir: otherDir,
+        store: otherState,
+      }).scanOnce();
+
+      const mine = await fs.readFile(
+        path.join(publishedDir, 'root-tx-index', 'band-a.torrent'),
+      );
+      const theirs = await fs.readFile(
+        path.join(otherDir, 'root-tx-index', 'band-copy.torrent'),
+      );
+      assert.deepEqual(theirs, mine, 'the .torrent files are byte-identical');
+      assert.equal(
+        (await readDoc(otherDir)).indexes[0].bands[0].torrent?.infohashV1,
+        (await readDoc()).indexes[0].bands[0].torrent?.infohashV1,
+      );
+    });
+
+    it('joins an overlapping scan instead of running a second', async () => {
+      await makeBand('band-a');
+      const publisher = makeTorrentPublisher();
+      const first = publisher.scanOnce();
+      const second = publisher.scanOnce();
+      assert.equal(second, first);
+      await Promise.all([first, second]);
+      assert.equal((await readDoc()).sequence, 1, 'one document, not two');
+    });
+
+    it('does not rebuild a torrent while the band is untouched', async () => {
+      await makeBand('band-a');
+      const publisher = makeTorrentPublisher();
+      await publisher.scanOnce();
+      const file = path.join(publishedDir, 'root-tx-index', 'band-a.torrent');
+      const first = statSync(file).mtimeMs;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+      assert.equal(statSync(file).mtimeMs, first);
+    });
+
+    it('rebuilds when the tracker list changes, without changing the infohash', async () => {
+      await makeBand('band-a');
+      await makeTorrentPublisher().scanOnce();
+      const before = (await readDoc()).indexes[0].bands[0].torrent!;
+      clock = new Date(clock.getTime() + 60_000);
+      await makeTorrentPublisher({
+        trackers: ['http://other.example/announce'],
+      }).scanOnce();
+      const after = (await readDoc()).indexes[0].bands[0].torrent!;
+      assert.equal(after.infohashV1, before.infohashV1);
+      assert.notEqual(after.magnet, before.magnet);
+    });
+
+    it('changes the infohash for a private swarm', async () => {
+      await makeBand('band-a');
+      await makeTorrentPublisher().scanOnce();
+      const open = (await readDoc()).indexes[0].bands[0].torrent!;
+      clock = new Date(clock.getTime() + 60_000);
+      await makeTorrentPublisher({ privateSwarm: true }).scanOnce();
+      assert.notEqual(
+        (await readDoc()).indexes[0].bands[0].torrent!.infohashV1,
+        open.infohashV1,
+      );
+    });
+
+    it('has the engine seed every offered band from where it lies', async () => {
+      await makeBand('band-a');
+      await makeBand('band-b', 5);
+      const transport = new MemoryTransport(new MemorySwarm());
+      await makeTorrentPublisher({ transport }).scanOnce();
+
+      const doc = await readDoc();
+      for (const band of doc.indexes[0].bands) {
+        const status = await transport.status(band.torrent!.infohashV1);
+        assert.equal(status?.state, 'seeding', band.id);
+      }
+      const seeding = (await state.load()).seeding;
+      assert.deepEqual(
+        Object.values(seeding)
+          .map((s) => s.band)
+          .sort(),
+        ['band-a', 'band-b'],
+      );
+      // From pinned links, not the band directory: see SEED_DIR.
+      const bandA = doc.indexes[0].bands.find((b) => b.id === 'band-a')!;
+      const seedDir = Object.values(seeding).find(
+        (s) => s.band === 'band-a',
+      )!.dir;
+      assert.equal(
+        seedDir,
+        path.join(publishedDir, SEED_DIR, torrentNameForFiles(bandA.files)),
+      );
+      for (const file of bandA.files) {
+        assert.equal(
+          statSync(path.join(seedDir, file.name)).ino,
+          statSync(path.join(publishedDir, 'blobs', file.sha256)).ino,
+          `${file.name} is a link to its blob`,
+        );
+      }
+    });
+
+    it('keeps seeding the hashed bytes when a band is rebuilt in place', async () => {
+      const bandDir = await makeBand('band-a');
+      const transport = new MemoryTransport(new MemorySwarm());
+      await makeTorrentPublisher({ transport }).scanOnce();
+      const band = (await readDoc()).indexes[0].bands[0];
+      const seedDir = Object.values((await state.load()).seeding)[0].dir;
+      const cdb = band.files.find((f) => f.name.endsWith('.cdb'))!;
+      const before = await fs.readFile(path.join(seedDir, cdb.name));
+
+      // An operator overwrites a file in place, same size, new bytes.
+      const target = path.join(bandDir, cdb.name);
+      await fs.rm(target);
+      await fs.writeFile(target, Buffer.alloc(before.byteLength, 0x5a));
+
+      const after = await fs.readFile(path.join(seedDir, cdb.name));
+      assert.deepEqual(after, before, 'the engine still reads the old bytes');
+    });
+
+    it('removes the seed directory of a band it no longer offers', async () => {
+      await makeBand('band-a');
+      await makeBand('band-b', 5);
+      const transport = new MemoryTransport(new MemorySwarm());
+      const publisher = makeTorrentPublisher({ transport });
+      await publisher.scanOnce();
+      const gone = (await readDoc()).indexes[0].bands.find(
+        (b) => b.id === 'band-b',
+      )!;
+      const goneDir = path.join(
+        publishedDir,
+        SEED_DIR,
+        torrentNameForFiles(gone.files),
+      );
+      assert.ok(existsSync(goneDir));
+
+      await fs.rm(path.join(publishedDir, 'root-tx-index', 'band-b'), {
+        recursive: true,
+      });
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+      assert.equal(existsSync(goneDir), false);
+    });
+
+    it('seeds idempotently across restarts', async () => {
+      await makeBand('band-a');
+      const transport = new MemoryTransport(new MemorySwarm());
+      await makeTorrentPublisher({ transport }).scanOnce();
+      const firstIds = Object.keys((await state.load()).seeding);
+
+      // A fresh process: new publisher, state read back from disk.
+      const reloaded = new StateStore({
+        log,
+        filePath: path.join(tempDir, 'state.json'),
+      });
+      clock = new Date(clock.getTime() + 60_000);
+      await makeTorrentPublisher({ transport, store: reloaded }).scanOnce();
+      assert.deepEqual(Object.keys((await reloaded.load()).seeding), firstIds);
+    });
+
+    it('stops seeding, and deletes the .torrent of, a band it no longer offers', async () => {
+      await makeBand('band-a');
+      await makeBand('band-b');
+      const transport = new MemoryTransport(new MemorySwarm());
+      const publisher = makeTorrentPublisher({ transport });
+      await publisher.scanOnce();
+      const gone = (await readDoc()).indexes[0].bands.find(
+        (b) => b.id === 'band-b',
+      )!;
+
+      await fs.rm(path.join(publishedDir, 'root-tx-index', 'band-b'), {
+        recursive: true,
+      });
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+
+      assert.equal(await transport.status(gone.torrent!.infohashV1), undefined);
+      assert.equal(
+        existsSync(path.join(publishedDir, 'root-tx-index', 'band-b.torrent')),
+        false,
+      );
+      assert.deepEqual(
+        Object.values((await state.load()).seeding).map((s) => s.band),
+        ['band-a'],
+      );
+    });
+
+    it('still publishes when the engine is down, and seeds once it is back', async () => {
+      await makeBand('band-a');
+      const transport = new MemoryTransport(new MemorySwarm());
+      transport.available = false;
+      const publisher = makeTorrentPublisher({ transport });
+      await publisher.scanOnce();
+      assert((await readDoc()).indexes[0].bands[0].torrent !== undefined);
+      assert.deepEqual((await state.load()).seeding, {});
+
+      transport.available = true;
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+      assert.equal(Object.keys((await state.load()).seeding).length, 1);
+    });
+
+    it('offers no torrents without the option', async () => {
+      await makeBand('band-a');
+      await makePublisher().scanOnce();
+      assert.equal((await readDoc()).indexes[0].bands[0].torrent, undefined);
+      assert.equal(
+        existsSync(path.join(publishedDir, 'root-tx-index', 'band-a.torrent')),
+        false,
+      );
+    });
+
+    it('builds magnet links naming both hashes and every tracker', () => {
+      assert.equal(
+        magnetFor('0123456789abcdef', 'a'.repeat(40), 'b'.repeat(64), [
+          'http://t/a?x=1',
+        ]),
+        `magnet:?xt=urn:btih:${'a'.repeat(40)}&xt=urn:btmh:1220${'b'.repeat(64)}&dn=0123456789abcdef&tr=http%3A%2F%2Ft%2Fa%3Fx%3D1`,
+      );
+    });
   });
 
   describe('loadPublisherSigner', () => {
