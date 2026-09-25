@@ -795,11 +795,16 @@ describe('Publisher', () => {
       await makeTorrentPublisher({ transport }).scanOnce();
 
       const doc = await readDoc();
+      const seeding = (await state.load()).seeding;
       for (const band of doc.indexes[0].bands) {
-        const status = await transport.status(band.torrent!.infohashV1);
+        // By the engine's id, which for a hybrid torrent is not the v1 hash.
+        const entry = Object.values(seeding).find(
+          (s) => s.infohashV1 === band.torrent!.infohashV1,
+        )!;
+        assert.notEqual(entry.id, band.torrent!.infohashV1);
+        const status = await transport.status(entry.id);
         assert.equal(status?.state, 'seeding', band.id);
       }
-      const seeding = (await state.load()).seeding;
       assert.deepEqual(
         Object.values(seeding)
           .map((s) => s.band)
@@ -813,7 +818,7 @@ describe('Publisher', () => {
       )!.dir;
       assert.equal(
         seedDir,
-        path.join(publishedDir, SEED_DIR, torrentNameForFiles(bandA.files)),
+        path.join(publishedDir, SEED_DIR, bandA.torrent!.infohashV1),
       );
       for (const file of bandA.files) {
         assert.equal(
@@ -854,7 +859,7 @@ describe('Publisher', () => {
       const goneDir = path.join(
         publishedDir,
         SEED_DIR,
-        torrentNameForFiles(gone.files),
+        gone.torrent!.infohashV1,
       );
       assert.ok(existsSync(goneDir));
 
@@ -891,6 +896,9 @@ describe('Publisher', () => {
       const gone = (await readDoc()).indexes[0].bands.find(
         (b) => b.id === 'band-b',
       )!;
+      const goneId = Object.values((await state.load()).seeding).find(
+        (s) => s.infohashV1 === gone.torrent!.infohashV1,
+      )!.id;
 
       await fs.rm(path.join(publishedDir, 'root-tx-index', 'band-b'), {
         recursive: true,
@@ -898,7 +906,7 @@ describe('Publisher', () => {
       clock = new Date(clock.getTime() + 60_000);
       await publisher.scanOnce();
 
-      assert.equal(await transport.status(gone.torrent!.infohashV1), undefined);
+      assert.equal(await transport.status(goneId), undefined);
       assert.equal(
         existsSync(path.join(publishedDir, 'root-tx-index', 'band-b.torrent')),
         false,
@@ -909,14 +917,14 @@ describe('Publisher', () => {
       );
     });
 
-    it('leaves a torrent the subscriber also seeds when it stops offering it', async () => {
+    it('takes back a shared torrent running from its own files, for the subscriber to re-add', async () => {
       await makeBand('band-a');
       const transport = new MemoryTransport(new MemorySwarm());
       const publisher = makeTorrentPublisher({ transport });
       await publisher.scanOnce();
       const [mine] = Object.values((await state.load()).seeding);
-      // The node also installed the same bytes as a subscriber, and seeds
-      // them under the same engine torrent.
+      // The node also subscribes to the same bytes; the engine's one copy of
+      // the torrent runs from the publisher's seed directory.
       await state.update((draft) => {
         draft.seeding[seedingKey('subscriber', mine.id)] = {
           ...mine,
@@ -931,15 +939,53 @@ describe('Publisher', () => {
       clock = new Date(clock.getTime() + 60_000);
       await publisher.scanOnce();
 
-      assert.notEqual(
+      assert.equal(
         await transport.status(mine.id),
         undefined,
-        'the engine still has it for the subscriber',
+        'not left pointing at files about to be deleted',
       );
+      assert.equal(existsSync(mine.dir), false, 'the seed directory went');
       assert.deepEqual(
         Object.values((await state.load()).seeding).map((s) => s.owner),
         ['subscriber'],
+        "the subscriber's entry stays, for it to re-add",
       );
+    });
+
+    it('re-adds a seeded torrent the engine put in error', async () => {
+      await makeBand('band-a');
+      const transport = new MemoryTransport(new MemorySwarm());
+      const publisher = makeTorrentPublisher({ transport });
+      await publisher.scanOnce();
+      const [mine] = Object.values((await state.load()).seeding);
+      transport.entry(mine.id)!.state = 'error'; // as qBittorrent's missingFiles
+
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+      assert.equal((await transport.status(mine.id))?.state, 'seeding');
+    });
+
+    it('leaves a shared torrent running from the subscriber copy alone', async () => {
+      const bandDir = await makeBand('band-a');
+      const transport = new MemoryTransport(new MemorySwarm());
+      await makeTorrentPublisher().scanOnce();
+      const torrent = await fs.readFile(
+        path.join(publishedDir, 'root-tx-index', 'band-a.torrent'),
+      );
+      // The subscriber added it first, from its installed copy.
+      const installedCopy = path.join(tempDir, 'installed-copy');
+      await fs.cp(bandDir, installedCopy, { recursive: true });
+      const { id } = await transport.seed({ torrent, dir: installedCopy });
+
+      const publisher = makeTorrentPublisher({ transport });
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+      await fs.rm(bandDir, { recursive: true });
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+
+      assert.equal((await transport.status(id))?.state, 'seeding');
+      assert.equal((await transport.status(id))?.savePath, installedCopy);
     });
 
     it('still publishes when the engine is down, and seeds once it is back', async () => {

@@ -568,6 +568,8 @@ export class Publisher {
     if (this.torrents === undefined) return;
 
     const seedRoot = path.join(this.publishedDir, SEED_DIR);
+    // By v1 infohash: the torrent name leaves the same bytes under two
+    // names indistinguishable, the infohash does not.
     const wantedDirs = new Map<
       string,
       { index: string; band: BandDescriptor }
@@ -577,10 +579,7 @@ export class Publisher {
       for (const band of index.bands) {
         if (band.torrent === undefined) continue;
         offered.add(`${band.id}.torrent`);
-        wantedDirs.set(torrentNameForFiles(band.files), {
-          index: index.name,
-          band,
-        });
+        wantedDirs.set(band.torrent.infohashV1, { index: index.name, band });
       }
       const dir = path.join(this.publishedDir, index.name);
       const names = await fs.readdir(dir).catch(() => [] as string[]);
@@ -592,10 +591,10 @@ export class Publisher {
     }
 
     // Seed directories: one per offered torrent, each file a link to its
-    // blob. An existing link is kept; the name is derived from the digests,
-    // so a directory that exists already holds these bytes.
-    for (const [name, { band }] of wantedDirs) {
-      const seedDir = path.join(seedRoot, name);
+    // blob. An existing link is kept: the directory is named by the
+    // infohash, which pins the bytes.
+    for (const [infohashV1, { band }] of wantedDirs) {
+      const seedDir = path.join(seedRoot, infohashV1);
       await fs.mkdir(seedDir, { recursive: true });
       for (const file of band.files) {
         try {
@@ -610,86 +609,108 @@ export class Publisher {
     }
 
     const transport = this.torrents.transport;
-    let available = false;
-    if (transport !== undefined) {
-      available = await transport.isAvailable();
-      // Also checked on its own schedule; updating it here keeps it from
-      // reading 0 while the publisher is visibly seeding.
-      engineAvailable.set(available ? 1 : 0);
+    if (transport === undefined) {
+      await this.pruneSeedDirs(seedRoot, wantedDirs);
+      return;
     }
+    const available = await transport.isAvailable();
+    // Also checked on its own schedule; updating it here keeps it from
+    // reading 0 while the publisher is visibly seeding.
+    engineAvailable.set(available ? 1 : 0);
+    if (!available) return;
 
     const wanted = new Map<string, SeededBand>();
-    if (transport !== undefined && available) {
-      const seedingByIndex = new Map<string, number>();
-      for (const [name, { index, band }] of wantedDirs) {
-        const dir = path.join(seedRoot, name);
-        try {
-          const torrent = await fs.readFile(this.torrentPath(index, band.id));
-          const { id } = await transport.seed({ torrent, dir });
-          wanted.set(seedingKey('publisher', id), {
-            id,
-            infohashV1: band.torrent!.infohashV1,
-            index,
-            band: band.id,
-            dir,
-            owner: 'publisher',
-          });
-          seedingByIndex.set(index, (seedingByIndex.get(index) ?? 0) + 1);
-        } catch (error: any) {
-          this.log.warn('Could not seed band', {
-            index,
-            band: band.id,
-            error: error?.message,
-          });
+    const seedingByIndex = new Map<string, number>();
+    for (const [infohashV1, { index, band }] of wantedDirs) {
+      const dir = path.join(seedRoot, infohashV1);
+      try {
+        const torrent = await fs.readFile(this.torrentPath(index, band.id));
+        let { id } = await transport.seed({ torrent, dir });
+        // An engine that lost the files (qBittorrent's missingFiles) keeps
+        // the torrent in error; give it the files again.
+        if ((await transport.status(id))?.state === 'error') {
+          await transport.remove(id);
+          ({ id } = await transport.seed({ torrent, dir }));
         }
+        wanted.set(seedingKey('publisher', id), {
+          id,
+          infohashV1,
+          index,
+          band: band.id,
+          dir,
+          owner: 'publisher',
+        });
+        seedingByIndex.set(index, (seedingByIndex.get(index) ?? 0) + 1);
+      } catch (error: any) {
+        this.log.warn('Could not seed band', {
+          index,
+          band: band.id,
+          error: error?.message,
+        });
       }
-      for (const index of indexes) {
-        publishSeedingBands.set(
-          { index: index.name },
-          seedingByIndex.get(index.name) ?? 0,
-        );
-      }
-
-      const state = await this.state.load();
-      // Only the publisher's own: the subscriber seeds installed bands too.
-      for (const [key, seeded] of Object.entries(state.seeding)) {
-        if (seeded.owner !== 'publisher' || wanted.has(key)) continue;
-        // The subscriber may seed the same torrent from its own copy.
-        const sharedWith = Object.values(state.seeding).some(
-          (other) => other.owner !== 'publisher' && other.id === seeded.id,
-        );
-        try {
-          if (!sharedWith) await transport.remove(seeded.id);
-        } catch (error: any) {
-          this.log.warn('Could not stop seeding a band', {
-            id: seeded.id,
-            error: error?.message,
-          });
-          wanted.set(key, seeded); // try again next scan
-        }
-      }
-      await this.state.update((draft) => {
-        for (const [key, seeded] of Object.entries(draft.seeding)) {
-          if (seeded.owner === 'publisher' && !wanted.has(key)) {
-            delete draft.seeding[key];
-          }
-        }
-        for (const [key, seeded] of wanted) draft.seeding[key] = seeded;
-      });
+    }
+    for (const index of indexes) {
+      publishSeedingBands.set(
+        { index: index.name },
+        seedingByIndex.get(index.name) ?? 0,
+      );
     }
 
-    // Seed directories nothing offers any more. Only once the engine has
-    // let go of them, or when there is no engine to hold them.
+    const state = await this.state.load();
+    for (const [key, seeded] of Object.entries(state.seeding)) {
+      if (seeded.owner !== 'publisher' || wanted.has(key)) continue;
+      try {
+        // The engine holds one copy of a torrent, in whichever directory it
+        // was first added to. Take it back only when that is this
+        // publisher's directory, which is about to be deleted; the
+        // subscriber, if it wants the same torrent, re-adds it from its own
+        // copy on its next pass. One running from the subscriber's copy is
+        // left alone.
+        const status = await transport.status(seeded.id);
+        if (
+          status !== undefined &&
+          (status.savePath === undefined ||
+            path.resolve(status.savePath) === path.resolve(seeded.dir))
+        ) {
+          await transport.remove(seeded.id);
+        }
+      } catch (error: any) {
+        this.log.warn('Could not stop seeding a band', {
+          id: seeded.id,
+          error: error?.message,
+        });
+        wanted.set(key, seeded); // try again next scan
+      }
+    }
+    await this.state.update((draft) => {
+      for (const [key, seeded] of Object.entries(draft.seeding)) {
+        if (seeded.owner === 'publisher' && !wanted.has(key)) {
+          delete draft.seeding[key];
+        }
+      }
+      for (const [key, seeded] of wanted) draft.seeding[key] = seeded;
+    });
+
+    await this.pruneSeedDirs(seedRoot, wantedDirs);
+  }
+
+  /**
+   * Delete seed directories nothing offers any more. Only called once the
+   * engine has let go of them, or when there is no engine to hold them.
+   */
+  private async pruneSeedDirs(
+    seedRoot: string,
+    wantedDirs: ReadonlyMap<string, unknown>,
+  ): Promise<void> {
     const stillSeeded = new Set(
       Object.values((await this.state.load()).seeding)
         .filter((seeded) => seeded.owner === 'publisher')
-        .map((seeded) => seeded.dir),
+        .map((seeded) => path.resolve(seeded.dir)),
     );
-    if (transport !== undefined && !available) return;
     const existing = await fs.readdir(seedRoot).catch(() => [] as string[]);
     for (const name of existing) {
       const dir = path.join(seedRoot, name);
-      if (wantedDirs.has(name) || stillSeeded.has(dir)) continue;
+      if (wantedDirs.has(name) || stillSeeded.has(path.resolve(dir))) continue;
       await fs.rm(dir, { recursive: true, force: true });
     }
   }

@@ -221,6 +221,10 @@ export class QBittorrentTransport implements TorrentTransport {
     return { id };
   }
 
+  idFor(torrent: Buffer): string {
+    return qbittorrentId(torrent);
+  }
+
   async add({
     torrent,
     downloadDir,
@@ -262,6 +266,9 @@ export class QBittorrentTransport implements TorrentTransport {
         Number(t.uploaded_session ?? 0),
       ),
       ...(state === 'error' ? { error: String(t.state) } : {}),
+      ...(typeof t.save_path === 'string'
+        ? { savePath: t.save_path.replace(/\/+$/, '') }
+        : {}),
     };
   }
 

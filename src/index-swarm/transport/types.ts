@@ -48,9 +48,22 @@ export interface TorrentStatus {
   bytesUp: number;
   /** The engine's own description of an `error` state, when it gives one. */
   error?: string;
+  /**
+   * The directory the engine reads and writes the torrent's files in. An
+   * engine holds one copy of a torrent, wherever it was first added, so
+   * this is how a caller tells its own download from someone else's seed.
+   */
+  savePath?: string;
 }
 
 export interface TorrentTransport {
+  /**
+   * The id the engine will know this torrent by, without asking it. Lets a
+   * caller check whether the engine already holds a torrent before adding,
+   * since adding one it holds only returns the existing one.
+   */
+  idFor(torrent: Buffer): string;
+
   /**
    * Start downloading a torrent into `downloadDir`, which receives the
    * torrent's files directly. Idempotent: adding a torrent the engine

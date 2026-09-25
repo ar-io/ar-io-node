@@ -21,7 +21,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { bdecode, BencodeValue } from '../../lib/bencode.js';
-import { torrentIds } from '../torrent.js';
+import { qbittorrentId } from './qbittorrent.js';
 import { TorrentState, TorrentStatus, TorrentTransport } from './types.js';
 
 interface TorrentFile {
@@ -97,6 +97,11 @@ export class MemorySwarm {
 }
 
 export class MemoryTransport implements TorrentTransport {
+  /** qBittorrent's rule, so tests catch any mix-up of id and v1 infohash. */
+  idFor(torrent: Buffer): string {
+    return qbittorrentId(torrent);
+  }
+
   /** Set false to simulate the engine being down. */
   available = true;
   private readonly torrents = new Map<string, Entry & { name: string }>();
@@ -119,7 +124,7 @@ export class MemoryTransport implements TorrentTransport {
 
   async seed({ torrent, dir }: { torrent: Buffer; dir: string }) {
     if (!this.available) this.down();
-    const id = torrentIds(torrent).infohashV1;
+    const id = qbittorrentId(torrent);
     if (this.torrents.has(id)) return { id };
 
     const files = torrentFiles(torrent);
@@ -158,7 +163,7 @@ export class MemoryTransport implements TorrentTransport {
     downloadDir: string;
   }) {
     if (!this.available) this.down();
-    const id = torrentIds(torrent).infohashV1;
+    const id = qbittorrentId(torrent);
     if (this.torrents.has(id)) return { id };
 
     this.torrents.set(id, {
@@ -229,6 +234,7 @@ export class MemoryTransport implements TorrentTransport {
       bytesDown: entry.bytesDown,
       bytesUp: entry.bytesUp,
       ...(entry.error !== undefined ? { error: entry.error } : {}),
+      savePath: entry.dir.replace(/\/+$/, ''),
     };
   }
 
