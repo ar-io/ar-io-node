@@ -331,8 +331,9 @@ export interface EngineAuth {
 
 /**
  * Parse `user:password`. The password may itself contain colons; the user
- * may not be empty. Unset means the engine is expected to allow this
- * sidecar's subnet without a login.
+ * may not be empty. Required with the compose engine, whose init refuses to
+ * start without it; unset only suits an engine run outside the compose
+ * profile that lets the sidecar in without a login.
  */
 export function parseEngineAuth(
   raw: string | undefined,

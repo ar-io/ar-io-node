@@ -251,8 +251,8 @@ publisher's WebSeed themselves, and only when peers stall, since engines
 otherwise treat it as one more peer and draw about half a band from it.
 
 <a id="torrent-name"></a> **Torrent Name** — The name inside a band's
-torrent: the first 16 hex characters of SHA-256 over the band's raw file
-digests in file-name order. Derived from content rather than the band id so
+torrent: the first 16 hex characters of SHA-256 over one line per file,
+`<name>\0<size>\0<sha256 hex>\n`, with files in bytewise name order. Derived from content rather than the band id so
 that publishers of the same bytes share one infohash, and so that the
 WebSeed address `<torrent name>/<file>` cannot change meaning.
 

@@ -1304,8 +1304,10 @@ paths:
       summary: Get a published index file as a BitTorrent WebSeed
       description: |
         BEP 19 WebSeed for bands offered as torrents: clients fetch
-        `<url><torrent name>/<file>`. The torrent name is derived from the
-        band's file digests, so the address cannot change meaning. Metered,
+        `<url><torrent name>/<file>`. The torrent name is the first 16 hex
+        characters of SHA-256 over one line per file,
+        `<name>\0<size>\0<sha256 hex>\n`, in bytewise name order (see
+        docs/index-publication.md), so the address cannot change meaning. Metered,
         range-capable and cached like the blob route: `public` or, when the
         gateway meters the byte routes, `private, max-age=31536000,
         immutable`; errors carry `Cache-Control: no-store`. Subscribers turn

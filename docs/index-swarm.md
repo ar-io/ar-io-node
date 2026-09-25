@@ -179,14 +179,14 @@ publication, and has the engine seed it. Without an engine there are no
 torrent entries, since a torrent nobody seeds only makes subscribers wait
 before falling back to HTTP.
 
-The engine seeds from `published/.seed/<torrent name>/`, a hard link per file
+The engine seeds from `published/.seed/<v1 infohash>/`, a hard link per file
 to its blob, not from the band directory. A band rebuilt in place under the
 same id changes the bytes behind its names; seeding the directory would hand
 peers pieces that fail their hashes until the next scan. The links pin the
 bytes that were hashed, as they do for the blob route.
 
-Torrents are deterministic. The name is derived from the band's file
-digests, not its id, and nothing publisher-specific goes in: no creation
+Torrents are deterministic. The name is derived from the band's file names,
+sizes and digests, not its id, and nothing publisher-specific goes in: no creation
 date and no WebSeed. So two publishers holding the same bytes with the same
 `INDEX_SWARM_TRACKERS` write byte-identical `.torrent` files, and any two
 share one infohash and one swarm. Subscribers add the publisher's WebSeed
@@ -211,7 +211,8 @@ It answers only for the bands the publisher offers at that moment, under
 both of each hybrid torrent's infohashes, and refuses every other torrent
 with `unregistered torrent`. Its port is public, so it is bounded: at most
 2,000 peers per torrent and 4 ports per address, a random sample in each
-response, 30 announces a minute per address, and a connection cap. That is why it is not qBittorrent's embedded
+response, 10 announces a minute per address for each torrent (an IPv6 /64
+counts as one address), and a connection cap. That is why it is not qBittorrent's embedded
 tracker: that one tracks any infohash anyone announces, which on a published
 port would make the gateway a free tracker for any swarm on the internet,
 with its address in them. The engine's init pins the embedded tracker off.
@@ -428,7 +429,8 @@ The gateway's side is five read-only routes under `/ar-io/indexes`: the
 signed publication document, each published file by name, each by its
 SHA-256, a band's `.torrent`, and the WebSeed route torrent clients fetch
 `<torrent name>/<file>` from. The WebSeed is metered and cached like the blob
-route: its address is derived from the file digests, so it cannot change
+route: its address is derived from each file's name, size and digest (see
+[Torrent Name](glossary.md#torrent-name)), so it cannot change
 meaning.
 They serve **only what the publication lists**.
 A request is looked up in a map built from the signed document rather than
@@ -717,7 +719,7 @@ Metrics worth a dashboard:
 | `index_subscription_bytes_total{transport}` | Bytes actually fetched, by `http` or `torrent`. Files already on disk are not fetched again and not counted. The share by `torrent` is how much the swarm is carrying |
 | `index_swarm_engine_available` | 1 while the torrent engine answers. Absent when none is configured, which is HTTP only by choice |
 | `index_publish_seeding_bands{index}` | Bands handed to the engine on the last scan. Below `index_publish_bands` means some are offered over HTTP only |
-| `index_swarm_tracker_announces_total{result}`, `index_swarm_tracker_peers` | The closed tracker: `ok`, `unregistered` (an infohash this node does not publish; refused), `malformed` |
+| `index_swarm_tracker_announces_total{result}`, `index_swarm_tracker_peers` | The closed tracker: `ok`, `unregistered` (an infohash this node does not publish; refused), `malformed`, `rate_limited` (an address announcing one torrent too often) |
 
 On the gateway, at `/ar-io/__gateway_metrics`:
 

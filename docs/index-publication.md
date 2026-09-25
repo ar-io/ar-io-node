@@ -126,7 +126,7 @@ shortened real example, with 254 of the 257 file entries removed:
 | `heightRange` | `[start, end]` or `[start, null]` | Optional. Block heights covered; a `null` end is still open. |
 | `records` | integer | Optional, informational. |
 | `http.baseUrl` | string | Optional. File names resolve against it. |
-| `torrent` | object | Optional. `infohashV1` (40 hex), `infohashV2` (64 hex, hybrid torrents), `magnet`, `torrentUrl`. Present only when the publisher runs a torrent engine. The torrent's name is the first 16 hex characters of SHA-256 over the band's raw file digests in file-name order, so publishers of the same bytes share one infohash. Only the info dictionary is covered by these infohashes: trackers and WebSeeds in the `.torrent` are unsigned. |
+| `torrent` | object | Optional. `infohashV1` (40 hex), `infohashV2` (64 hex, hybrid torrents), `magnet`, `torrentUrl`. Present only when the publisher runs a torrent engine. The torrent's name is the first 16 hex characters of SHA-256 over one line per file, `<name>\0<size>\0<sha256 hex>\n`, with files in bytewise name order: publishers of the same bytes share one infohash, and it is the `<torrent name>` of the WebSeed route. Only the info dictionary is covered by these infohashes: trackers and WebSeeds in the `.torrent` are unsigned. |
 | `arweave.manifestTxId` | 43-char ID | Optional. Where the band is archived on Arweave. |
 | `metadata` | object | Optional, kind-specific. |
 
