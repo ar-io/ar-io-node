@@ -317,7 +317,7 @@ naming what is published and where the document lives, which is how another
 gateway discovers publishers without fetching every gateway's document. The
 routes and that block read one shared view of the publication, so an index is
 advertised exactly when it is servable, and both drop it together if the
-document goes bad.
+document goes bad. Once it has a view, the gateway rechecks the document file every five seconds off the request path, so later requests are not held up by a slow disk; only the first request after a start waits for the file. A new document is served once a recheck has read it, normally within a few seconds, longer if the disk is slow.
 
 The byte routes are rate limited and priced like data egress (see
 [x402-and-rate-limiting.md](x402-and-rate-limiting.md)); the publication

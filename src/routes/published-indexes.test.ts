@@ -117,4 +117,90 @@ describe('PublishedIndexes', () => {
     );
     assert.ok(views.every((view) => view === views[0]));
   });
+
+  describe('revalidating off the request path', () => {
+    /** The check in flight, if any: awaited instead of sleeping. */
+    const settled = (indexes: PublishedIndexes) =>
+      (indexes as unknown as { checking?: Promise<void> }).checking;
+
+    it('answers from the view it has while a check is stuck', async () => {
+      await write(['root-tx-index']);
+      let clock = 0;
+      let release: (() => void) | undefined;
+      let stuck = false;
+      let pendingStats = 0;
+      const indexes = new PublishedIndexes({
+        log,
+        publishedDir: tempDir,
+        revalidateMs: 5_000,
+        now: () => clock,
+        stat: async (file) => {
+          // A stat queued behind a saturated thread pool.
+          if (stuck) {
+            pendingStats++;
+            await new Promise<void>((resolve) => (release = resolve));
+          }
+          return fs.stat(file);
+        },
+      });
+      const first = await indexes.current();
+      assert.ok(first !== undefined, 'the first request waits for the view');
+
+      stuck = true;
+      clock += 10_000;
+      assert.equal(await indexes.current(), first, 'served while checking');
+      assert.equal(await indexes.current(), first);
+      assert.equal(pendingStats, 1, 'one check, still unfinished, shared');
+      release?.();
+      await settled(indexes);
+    });
+
+    it('picks up a republished document once the check has run', async () => {
+      await write(['root-tx-index'], 1);
+      let clock = 0;
+      const indexes = new PublishedIndexes({
+        log,
+        publishedDir: tempDir,
+        revalidateMs: 5_000,
+        now: () => clock,
+      });
+      assert.deepEqual((await indexes.current())?.names, ['root-tx-index']);
+
+      await write(['root-tx-index', 'zeta-index'], 2);
+      assert.deepEqual(
+        (await indexes.current())?.names,
+        ['root-tx-index'],
+        'within the revalidation interval the previous view stands',
+      );
+      assert.equal(settled(indexes), undefined, 'and nothing was checked');
+      clock += 5_000;
+      assert.deepEqual(
+        (await indexes.current())?.names,
+        ['root-tx-index'],
+        'the request that starts the check is answered from the old view',
+      );
+      await settled(indexes);
+      assert.deepEqual((await indexes.current())?.names, [
+        'root-tx-index',
+        'zeta-index',
+      ]);
+    });
+
+    it('stops serving a withdrawn document once checked', async () => {
+      await write(['root-tx-index']);
+      let clock = 0;
+      const indexes = new PublishedIndexes({
+        log,
+        publishedDir: tempDir,
+        revalidateMs: 5_000,
+        now: () => clock,
+      });
+      assert.ok((await indexes.current()) !== undefined);
+      await fs.rm(publicationFile);
+      clock += 5_000;
+      await indexes.current();
+      await settled(indexes);
+      assert.equal(await indexes.current(), undefined);
+    });
+  });
 });
