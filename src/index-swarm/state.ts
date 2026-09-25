@@ -177,6 +177,8 @@ export interface SwarmDownload {
   lastProgressAt: number;
   /** Whether the publisher's WebSeed has been turned on for it. */
   webSeeded: boolean;
+  /** When it was, so the WebSeed gets its own time to deliver. */
+  webSeededAt?: number;
   /** When a poll last wanted it; one no poll wants any more is abandoned. */
   lastSeenAt: number;
 }

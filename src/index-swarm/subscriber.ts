@@ -2071,9 +2071,13 @@ export class Subscriber {
       // unreachable from the engine (a private origin under its IP filter,
       // say). HTTP from the sidecar is the next best thing; waiting out the
       // whole timeout helps nobody.
+      // Measured from when it was turned on, not from the last progress:
+      // polls are minutes apart, so by the time the WebSeed is added the
+      // last progress is already long past, and it must still get its turn.
       if (
         pending.webSeeded &&
-        now - pending.lastProgressAt >= 2 * this.webSeedAfterMs
+        now - Math.max(pending.lastProgressAt, pending.webSeededAt ?? now) >=
+          this.webSeedAfterMs
       ) {
         return this.abandonDownload(
           infohashV1,
@@ -2090,6 +2094,7 @@ export class Subscriber {
             new URL('/ar-io/indexes/webseed/', origin).toString(),
           ]);
           pending.webSeeded = true;
+          pending.webSeededAt = now;
           this.log.info('Peers are not delivering; turning on the WebSeed', {
             publisher,
             index: index.name,

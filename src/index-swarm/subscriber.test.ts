@@ -1185,6 +1185,29 @@ describe('Subscriber', () => {
       assert.deepEqual(await installedIds(), ['band-a'], 'installed over HTTP');
     });
 
+    it('gives the WebSeed its own time after turning it on, polls apart', async () => {
+      await makeBand('band-a');
+      await publishTorrents(); // no seeder
+      const engine = new MemoryTransport(new MemorySwarm());
+      let webSeeded = false;
+      engine.setWebSeeds = async () => {
+        webSeeded = true; // turned on, but delivers nothing this poll
+      };
+      const opts = { torrentWatchMs: 20, webSeedAfterMs: 60_000 };
+      await makeTorrentSubscriber(engine, opts).pollOnce();
+      // The next poll comes five minutes later, long past webSeedAfterMs.
+      clock = new Date(clock.getTime() + 300_000);
+      const fallbacks = await counted('transport_fallback', 'torrent');
+      await makeTorrentSubscriber(engine, opts).pollOnce();
+      assert.ok(webSeeded, 'the WebSeed was turned on');
+      assert.equal(
+        await counted('transport_fallback', 'torrent'),
+        fallbacks,
+        'and not given up on in the same breath',
+      );
+      assert.equal(Object.keys((await subState.load()).downloads).length, 1);
+    });
+
     it('does not time out a download that keeps making progress', async () => {
       await makeBand('band-a');
       await publishTorrents();
