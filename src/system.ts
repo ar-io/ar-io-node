@@ -880,6 +880,9 @@ const gatewaysDataSource = new FilteredContiguousDataSource({
 export const publishedIndexes = new PublishedIndexes({
   log,
   publishedDir: config.INDEXES_PUBLISHED_DIR,
+  // Checked off the request path: a stat can wait behind a saturated libuv
+  // thread pool (a cache sweep on a slow disk), and requests must not.
+  revalidateMs: 5_000,
 });
 
 export const arIOPeerManager = new ArIOPeerManager({
