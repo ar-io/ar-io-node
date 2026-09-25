@@ -1,0 +1,263 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/**
+ * A closed BitTorrent HTTP tracker (BEP 3, with BEP 23 compact and BEP 7
+ * IPv6 peer lists), for the bands this node publishes and nothing else.
+ *
+ * Closed is the point. qBittorrent's embedded tracker, the obvious
+ * alternative, tracks any infohash anyone announces: on a published port it
+ * would make every gateway a free public tracker for arbitrary swarms, and
+ * the gateway's address would appear in them. This one answers only for the
+ * infohashes the publisher is offering right now and refuses the rest with
+ * the standard "unregistered torrent" failure.
+ *
+ * State is in memory and rebuilt by announces: after a restart, peers are
+ * back within one announce interval, and subscribers turn on the WebSeed if
+ * a download stalls meanwhile.
+ */
+import * as http from 'node:http';
+import { Logger } from 'winston';
+
+import { bencode } from '../lib/bencode.js';
+import { trackerAnnounces, trackerPeers } from './metrics.js';
+
+export interface ClosedTrackerOptions {
+  log: Logger;
+  /**
+   * The infohashes this tracker answers for, as 40-character lowercase hex:
+   * the v1 infohash and, for a hybrid torrent, the first 20 bytes of the v2
+   * one, since a hybrid torrent is announced under both. Consulted on every
+   * announce, so it can change as bands come and go.
+   */
+  allowed: () => Set<string>;
+  /** Seconds between announces asked of clients. */
+  intervalSeconds?: number;
+  /** Most peers returned per announce. */
+  maxPeers?: number;
+  now?: () => number;
+}
+
+interface Peer {
+  ip: string;
+  port: number;
+  seeding: boolean;
+  seenAt: number;
+}
+
+/**
+ * Parse a query string without text-decoding it: `info_hash` and `peer_id`
+ * are raw bytes, which URL parsers decode as UTF-8 and corrupt.
+ */
+export function parseAnnounceQuery(query: string): Map<string, Buffer> {
+  const out = new Map<string, Buffer>();
+  for (const part of query.split('&')) {
+    if (part === '') continue;
+    const eq = part.indexOf('=');
+    let key: string;
+    try {
+      key = decodeURIComponent(eq < 0 ? part : part.slice(0, eq));
+    } catch {
+      continue;
+    }
+    const raw = eq < 0 ? '' : part.slice(eq + 1);
+    const bytes: number[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      const c = raw[i];
+      if (
+        c === '%' &&
+        i + 2 < raw.length &&
+        /^[0-9a-fA-F]{2}$/.test(raw.slice(i + 1, i + 3))
+      ) {
+        bytes.push(parseInt(raw.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else if (c === '+') {
+        bytes.push(0x20);
+      } else {
+        bytes.push(c.charCodeAt(0) & 0xff);
+      }
+    }
+    out.set(key, Buffer.from(bytes));
+  }
+  return out;
+}
+
+const failure = (reason: string) => bencode({ 'failure reason': reason });
+
+/** Strip the IPv4-mapped IPv6 prefix Node reports for IPv4 clients. */
+function normalizeIp(ip: string): string {
+  return ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+}
+
+function compactPeer(peer: Peer): { v4?: Buffer; v6?: Buffer } {
+  const port = Buffer.alloc(2);
+  port.writeUInt16BE(peer.port);
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(peer.ip)) {
+    return {
+      v4: Buffer.concat([Buffer.from(peer.ip.split('.').map(Number)), port]),
+    };
+  }
+  // Expand an IPv6 address to its 16 bytes.
+  const [head, tail = ''] = peer.ip.split('::');
+  const h = head === '' ? [] : head.split(':');
+  const t = tail === '' ? [] : tail.split(':');
+  const groups = [...h, ...Array(8 - h.length - t.length).fill('0'), ...t];
+  if (groups.length !== 8) return {};
+  const bytes = Buffer.alloc(16);
+  groups.forEach((g, i) => bytes.writeUInt16BE(parseInt(g, 16) || 0, i * 2));
+  return { v6: Buffer.concat([bytes, port]) };
+}
+
+export class ClosedTracker {
+  private readonly log: Logger;
+  private readonly allowed: () => Set<string>;
+  private readonly intervalSeconds: number;
+  private readonly maxPeers: number;
+  private readonly now: () => number;
+  /** infohash hex, then `ip:port`, to the peer. */
+  private readonly swarms = new Map<string, Map<string, Peer>>();
+
+  constructor(options: ClosedTrackerOptions) {
+    this.log = options.log.child({ class: 'ClosedTracker' });
+    this.allowed = options.allowed;
+    this.intervalSeconds = options.intervalSeconds ?? 300;
+    this.maxPeers = options.maxPeers ?? 50;
+    this.now = options.now ?? (() => Date.now());
+  }
+
+  /** Answer one announce. Returns the bencoded body. */
+  announce(query: string, remoteAddress: string): Buffer {
+    const params = parseAnnounceQuery(query);
+    const infoHash = params.get('info_hash');
+    const portRaw = params.get('port')?.toString('latin1');
+    const port = portRaw !== undefined ? Number(portRaw) : NaN;
+    if (infoHash === undefined || infoHash.length !== 20) {
+      trackerAnnounces.inc({ result: 'malformed' });
+      return failure('invalid info_hash');
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      trackerAnnounces.inc({ result: 'malformed' });
+      return failure('invalid port');
+    }
+    const hex = infoHash.toString('hex');
+    if (!this.allowed().has(hex)) {
+      // The closed part: whatever anyone announces, only our bands are
+      // tracked.
+      trackerAnnounces.inc({ result: 'unregistered' });
+      return failure('unregistered torrent');
+    }
+    const ip = normalizeIp(remoteAddress);
+
+    const now = this.now();
+    this.expire(now);
+    let swarm = this.swarms.get(hex);
+    if (swarm === undefined) {
+      swarm = new Map();
+      this.swarms.set(hex, swarm);
+    }
+    const key = `${ip}:${port}`;
+    const event = params.get('event')?.toString('latin1');
+    const left = Number(params.get('left')?.toString('latin1') ?? '1');
+    if (event === 'stopped') {
+      swarm.delete(key);
+    } else {
+      swarm.set(key, { ip, port, seeding: left === 0, seenAt: now });
+    }
+
+    const others = [...swarm.entries()]
+      .filter(([k]) => k !== key)
+      .map(([, p]) => p)
+      .slice(0, this.maxPeers);
+    const v4: Buffer[] = [];
+    const v6: Buffer[] = [];
+    for (const peer of others) {
+      const c = compactPeer(peer);
+      if (c.v4 !== undefined) v4.push(c.v4);
+      if (c.v6 !== undefined) v6.push(c.v6);
+    }
+    const seeders = [...swarm.values()].filter((p) => p.seeding).length;
+    trackerAnnounces.inc({ result: 'ok' });
+    this.reportPeers();
+    return bencode({
+      complete: seeders,
+      incomplete: swarm.size - seeders,
+      interval: this.intervalSeconds,
+      'min interval': Math.max(30, Math.floor(this.intervalSeconds / 4)),
+      peers: Buffer.concat(v4),
+      ...(v6.length > 0 ? { peers6: Buffer.concat(v6) } : {}),
+    });
+  }
+
+  /** Forget peers that have missed two announces, and swarms no longer offered. */
+  private expire(now: number): void {
+    const allowed = this.allowed();
+    const ttlMs = (this.intervalSeconds * 2 + 60) * 1000;
+    for (const [hex, swarm] of this.swarms) {
+      if (!allowed.has(hex)) {
+        this.swarms.delete(hex);
+        continue;
+      }
+      for (const [key, peer] of swarm) {
+        if (now - peer.seenAt > ttlMs) swarm.delete(key);
+      }
+      if (swarm.size === 0) this.swarms.delete(hex);
+    }
+  }
+
+  private reportPeers(): void {
+    let total = 0;
+    for (const swarm of this.swarms.values()) total += swarm.size;
+    trackerPeers.set(total);
+  }
+
+  /** Serve it: `/announce` only; everything else is a 404. */
+  listen(host: string, port: number): Promise<http.Server> {
+    const server = http.createServer((req, res) => {
+      const url = req.url ?? '/';
+      const q = url.indexOf('?');
+      const pathname = q < 0 ? url : url.slice(0, q);
+      if (req.method !== 'GET' || pathname !== '/announce') {
+        res.writeHead(404).end();
+        return;
+      }
+      const body = this.announce(
+        q < 0 ? '' : url.slice(q + 1),
+        req.socket.remoteAddress ?? '',
+      );
+      res.writeHead(200, {
+        'Content-Type': 'text/plain',
+        'Content-Length': String(body.length),
+      });
+      res.end(body);
+    });
+    return new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, host, () => {
+        this.log.info('Closed tracker listening', { host, port });
+        resolve(server);
+      });
+    });
+  }
+}
+
+/**
+ * The infohashes a tracker should answer for, from a publication's bands:
+ * each torrent's v1 infohash and the 20-byte prefix of its v2 infohash.
+ */
+export function trackedInfohashes(
+  bands: Array<{ torrent?: { infohashV1: string; infohashV2?: string } }>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const band of bands) {
+    if (band.torrent === undefined) continue;
+    out.add(band.torrent.infohashV1);
+    if (band.torrent.infohashV2 !== undefined) {
+      out.add(band.torrent.infohashV2.slice(0, 40));
+    }
+  }
+  return out;
+}

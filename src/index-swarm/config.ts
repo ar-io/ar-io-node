@@ -315,6 +315,96 @@ export const SHUTDOWN_TIMEOUT_MS = env.positiveIntOrDefault(
   10_000,
 );
 
+export interface EngineAuth {
+  username: string;
+  password: string;
+}
+
+/**
+ * Parse `user:password`. The password may itself contain colons; the user
+ * may not be empty. Unset means the engine is expected to allow this
+ * sidecar's subnet without a login.
+ */
+export function parseEngineAuth(
+  raw: string | undefined,
+): EngineAuth | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const colon = raw.indexOf(':');
+  if (colon <= 0) {
+    throw new Error('INDEX_SWARM_ENGINE_AUTH must be user:password');
+  }
+  return { username: raw.slice(0, colon), password: raw.slice(colon + 1) };
+}
+
+/**
+ * The torrent engine's Web API, e.g. `http://index-swarm-engine:8080`. Unset
+ * means no swarm: bands move over HTTP only. It must be the host name and
+ * port the engine itself listens on; qBittorrent refuses a Host header that
+ * differs.
+ */
+export const ENGINE_URL = env.varOrUndefined('INDEX_SWARM_ENGINE_URL');
+export const ENGINE_AUTH = parseEngineAuth(
+  env.varOrUndefined('INDEX_SWARM_ENGINE_AUTH'),
+);
+
+/**
+ * Announce URLs written into every torrent this node builds. They are
+ * outside the info dictionary, so they do not change the infohash, but they
+ * are in the `.torrent` file: publishers that want byte-identical files use
+ * the same list.
+ */
+export const TRACKERS = env
+  .varOrDefault('INDEX_SWARM_TRACKERS', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/**
+ * BEP 27 private flag on every torrent built. Clients then keep those
+ * torrents off DHT and peer exchange, so the tracker is the only way in. It
+ * is inside the info dictionary, so it changes the infohash: publishers who
+ * want one swarm must agree on it.
+ */
+export const PRIVATE_SWARM =
+  env.varOrDefault('INDEX_SWARM_PRIVATE_SWARM', 'false') === 'true';
+
+/** Give up on a torrent and fetch the band over HTTP after this long. */
+export const TORRENT_TIMEOUT_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_TORRENT_TIMEOUT_SECONDS', 3600) * 1000;
+
+/**
+ * Turn the publisher's WebSeed on once a torrent has made no progress for
+ * this long. The WebSeed is the publisher's metered tier, and engines draw
+ * about half a band from one even while peers could serve it, so it is
+ * only added when peers are not delivering.
+ */
+export const WEBSEED_AFTER_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_WEBSEED_AFTER_SECONDS', 120) * 1000;
+
+/**
+ * The engine's user and group, so the sidecar, which runs as root, can hand
+ * a band's download directory to the engine before adding it. The same
+ * values the engine container runs as.
+ */
+export const ENGINE_UID = env.positiveIntOrDefault(
+  'INDEX_SWARM_ENGINE_UID',
+  1000,
+);
+export const ENGINE_GID = env.positiveIntOrDefault(
+  'INDEX_SWARM_ENGINE_GID',
+  1000,
+);
+
+/**
+ * Port the closed tracker listens on, when this node publishes torrents.
+ * Point INDEX_SWARM_TRACKERS at it by the address peers reach it on, e.g.
+ * `http://gateway.example:6969/announce`.
+ */
+export const TRACKER_PORT = env.positiveIntOrDefault(
+  'INDEX_SWARM_TRACKER_PORT',
+  6969,
+);
+
 /** True when this process has nothing configured to do. */
 export function isIdle(): boolean {
   return PUBLISH.length === 0 && SUBSCRIBE.length === 0;
