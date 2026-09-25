@@ -66,6 +66,45 @@ const tracker = (
   });
 
 describe('ClosedTracker', () => {
+  it('keeps only a few ports per address in one torrent', () => {
+    const t = tracker({ maxPortsPerIp: 2, maxAnnouncesPerMinute: 1000 });
+    for (const port of [1001, 1002, 1003, 1004]) {
+      t.announce(query(OURS, port), '203.0.113.7');
+    }
+    const response = decode(t.announce(query(OURS, 2000), '198.51.100.1'));
+    assert.deepEqual(peersOf(response).sort(), [
+      '203.0.113.7:1003',
+      '203.0.113.7:1004',
+    ]);
+  });
+
+  it('caps the peers kept per torrent, dropping the least recently seen', () => {
+    const t = tracker({
+      maxPeersPerSwarm: 3,
+      maxPeers: 50,
+      maxAnnouncesPerMinute: 1000,
+    });
+    for (const n of [1, 2, 3, 4]) {
+      t.announce(query(OURS, 1000 + n), `203.0.113.${n}`);
+    }
+    const peers = peersOf(decode(t.announce(query(OURS, 2000), '203.0.113.9')));
+    assert.equal(peers.length, 2, 'three kept, the asker included');
+    assert.ok(!peers.includes('203.0.113.1:1001'), 'the oldest went first');
+  });
+
+  it('refuses an address announcing too often', () => {
+    const t = tracker({ maxAnnouncesPerMinute: 3 });
+    for (let i = 0; i < 3; i++)
+      t.announce(query(OURS, 1000 + i), '203.0.113.5');
+    const response = decode(t.announce(query(OURS, 1100), '203.0.113.5'));
+    assert.equal(response['failure reason'].toString(), 'slow down');
+    // Others are unaffected.
+    assert.equal(
+      decode(t.announce(query(OURS, 1200), '203.0.113.6'))['failure reason'],
+      undefined,
+    );
+  });
+
   it('refuses a torrent this node does not publish', () => {
     const response = decode(
       tracker().announce(query(THEIRS, 1111), '10.0.0.1'),

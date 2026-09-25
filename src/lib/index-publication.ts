@@ -98,7 +98,7 @@ export interface BandFile {
 
 /**
  * The name a band's torrent carries: the first 16 hex characters of SHA-256
- * over the raw file digests, concatenated in file-name order.
+ * over each file's name, size and digest, in file-name order.
  *
  * Content, not the band id, decides it, because the name is inside the info
  * dictionary: two publishers of the same bytes under different band ids
@@ -112,7 +112,10 @@ export function torrentNameForFiles(files: BandFile[]): string {
   for (const file of [...files].sort((a, b) =>
     Buffer.compare(Buffer.from(a.name), Buffer.from(b.name)),
   )) {
-    hash.update(Buffer.from(file.sha256, 'hex'));
+    // Name and size as well as the digest: two bands holding the same
+    // digests under different names are different torrents, and must not
+    // share a WebSeed address.
+    hash.update(`${file.name}\0${file.size}\0${file.sha256}\n`);
   }
   return hash.digest('hex').slice(0, 16);
 }

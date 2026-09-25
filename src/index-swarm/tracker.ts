@@ -39,6 +39,16 @@ export interface ClosedTrackerOptions {
   intervalSeconds?: number;
   /** Most peers returned per announce. */
   maxPeers?: number;
+  /**
+   * Most peers kept per torrent; the least recently seen goes first. The
+   * port is published to the internet, and each entry costs memory and a
+   * share of every response, so the table must not grow on demand.
+   */
+  maxPeersPerSwarm?: number;
+  /** Most ports one address may hold in one torrent's peer list. */
+  maxPortsPerIp?: number;
+  /** Announces one address may make per minute before it is refused. */
+  maxAnnouncesPerMinute?: number;
   now?: () => number;
 }
 
@@ -117,15 +127,28 @@ export class ClosedTracker {
   private readonly allowed: () => Set<string>;
   private readonly intervalSeconds: number;
   private readonly maxPeers: number;
+  private readonly maxPeersPerSwarm: number;
+  private readonly maxPortsPerIp: number;
+  private readonly maxAnnouncesPerMinute: number;
   private readonly now: () => number;
-  /** infohash hex, then `ip:port`, to the peer. */
+  /**
+   * infohash hex, then `ip:port`, to the peer. Each map is in the order
+   * peers were last seen, oldest first, which is what eviction relies on.
+   */
   private readonly swarms = new Map<string, Map<string, Peer>>();
+  /** Announces per address in the current minute. */
+  private readonly announcesByIp = new Map<string, number>();
+  private windowStartedAt = 0;
+  private lastExpiredAt = 0;
 
   constructor(options: ClosedTrackerOptions) {
     this.log = options.log.child({ class: 'ClosedTracker' });
     this.allowed = options.allowed;
     this.intervalSeconds = options.intervalSeconds ?? 300;
     this.maxPeers = options.maxPeers ?? 50;
+    this.maxPeersPerSwarm = options.maxPeersPerSwarm ?? 2000;
+    this.maxPortsPerIp = options.maxPortsPerIp ?? 4;
+    this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 30;
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -153,7 +176,21 @@ export class ClosedTracker {
     const ip = normalizeIp(remoteAddress);
 
     const now = this.now();
-    this.expire(now);
+    if (now - this.windowStartedAt >= 60_000) {
+      this.windowStartedAt = now;
+      this.announcesByIp.clear();
+    }
+    const count = (this.announcesByIp.get(ip) ?? 0) + 1;
+    this.announcesByIp.set(ip, count);
+    if (count > this.maxAnnouncesPerMinute) {
+      trackerAnnounces.inc({ result: 'rate_limited' });
+      return failure('slow down');
+    }
+    // Expiry walks every peer, so not on every announce.
+    if (now - this.lastExpiredAt >= 30_000) {
+      this.lastExpiredAt = now;
+      this.expire(now);
+    }
     let swarm = this.swarms.get(hex);
     if (swarm === undefined) {
       swarm = new Map();
@@ -162,16 +199,32 @@ export class ClosedTracker {
     const key = `${ip}:${port}`;
     const event = params.get('event')?.toString('latin1');
     const left = Number(params.get('left')?.toString('latin1') ?? '1');
-    if (event === 'stopped') {
-      swarm.delete(key);
-    } else {
+    // Deleted first either way, so a re-announce moves the peer to the end:
+    // the map stays in last-seen order.
+    swarm.delete(key);
+    if (event !== 'stopped') {
+      const sameIp = [...swarm.entries()].filter(([, p]) => p.ip === ip);
+      const excess = Math.max(0, sameIp.length - this.maxPortsPerIp + 1);
+      for (const [k] of sameIp.slice(0, excess)) {
+        swarm.delete(k);
+      }
+      while (swarm.size >= this.maxPeersPerSwarm) {
+        const oldest = swarm.keys().next().value;
+        if (oldest === undefined) break;
+        swarm.delete(oldest);
+      }
       swarm.set(key, { ip, port, seeding: left === 0, seenAt: now });
     }
 
-    const others = [...swarm.entries()]
+    // A random sample, so early entries cannot occupy every response.
+    const pool = [...swarm.entries()]
       .filter(([k]) => k !== key)
-      .map(([, p]) => p)
-      .slice(0, this.maxPeers);
+      .map(([, p]) => p);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const others = pool.slice(0, this.maxPeers);
     const v4: Buffer[] = [];
     const v6: Buffer[] = [];
     for (const peer of others) {
@@ -234,6 +287,11 @@ export class ClosedTracker {
       });
       res.end(body);
     });
+    // A published port: bound what any one client can hold open.
+    server.maxConnections = 512;
+    server.headersTimeout = 10_000;
+    server.requestTimeout = 10_000;
+    server.keepAliveTimeout = 5_000;
     return new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(port, host, () => {

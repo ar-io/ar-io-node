@@ -165,7 +165,7 @@ export const engineAvailable = new promClient.Gauge({
 
 export const trackerAnnounces = new promClient.Counter({
   name: 'index_swarm_tracker_announces_total',
-  help: 'Announces to the closed tracker by result: ok, unregistered (an infohash this node does not publish; refused), malformed.',
+  help: 'Announces to the closed tracker by result: ok, unregistered (an infohash this node does not publish; refused), malformed, rate_limited (one address announcing more than its share).',
   labelNames: ['result'] as const,
   registers: [registry],
 });

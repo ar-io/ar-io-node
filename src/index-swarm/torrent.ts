@@ -30,7 +30,12 @@ import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { bencode, BencodeValue, bdecodeWithSpans } from '../lib/bencode.js';
+import {
+  bdecode,
+  bencode,
+  BencodeValue,
+  bdecodeWithSpans,
+} from '../lib/bencode.js';
 
 /** 4 MiB, the piece length the design fixes for every band. */
 export const DEFAULT_PIECE_LENGTH = 4 * 1024 * 1024;
@@ -317,12 +322,29 @@ export function torrentIds(torrent: Buffer): TorrentIds {
 
 /** Whether a tracker URL may be handed to the engine. */
 export function isAllowedTrackerUrl(raw: string): boolean {
+  return canonicalTrackerUrl(raw) !== undefined;
+}
+
+/**
+ * The tracker URL as it will be handed to the engine, or undefined when it
+ * must not be. Only the canonical form is ever passed on, never the raw
+ * bytes: parsers disagree about backslashes and userinfo (`a.example\@10.0.0.1`
+ * is one host to WHATWG and another to libtorrent), so anything that could
+ * be read two ways is refused outright.
+ */
+export function canonicalTrackerUrl(raw: string): string | undefined {
+  if (/[\\@\s]/.test(raw) || raw.includes('#')) return undefined;
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    return false;
+    return undefined;
   }
+  if (url.username !== '' || url.password !== '') return undefined;
+  return trackerHostAllowed(url) ? url.href : undefined;
+}
+
+function trackerHostAllowed(url: URL): boolean {
   if (!['http:', 'https:', 'udp:'].includes(url.protocol)) return false;
   const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
   if (
@@ -368,6 +390,10 @@ function isPrivateAddress(ip: string): boolean {
     const lo = parseInt(hex[2], 16);
     return isPrivateAddress(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
   }
+  // NAT64 (64:ff9b::/96) and SIIT (::ffff:0:0/96) embed an IPv4 address a
+  // translating gateway would reach; treat them all as private rather than
+  // decode each form.
+  if (/^(64:ff9b:|::ffff:0:)/.test(v6)) return true;
   return /^(fc|fd|fe[89ab]|ff)/.test(v6);
 }
 
@@ -394,8 +420,8 @@ export function sanitizeTorrent(
    */
   allowedTrackers: ReadonlySet<string> = new Set(),
 ): Buffer {
-  const allowed = (u: string) =>
-    allowedTrackers.has(u) || isAllowedTrackerUrl(u);
+  const accept = (u: string): string | undefined =>
+    allowedTrackers.has(u) ? u : canonicalTrackerUrl(u);
   const { value, spans } = bdecodeWithSpans(torrent);
   if (
     typeof value !== 'object' ||
@@ -422,7 +448,8 @@ export function sanitizeTorrent(
       if (!Array.isArray(tier)) continue;
       const kept = tier
         .map((entry) => text(entry))
-        .filter((u): u is string => u !== undefined && allowed(u));
+        .map((u) => (u === undefined ? undefined : accept(u)))
+        .filter((u): u is string => u !== undefined);
       if (kept.length > 0) tiers.push(kept);
     }
   }
@@ -430,8 +457,9 @@ export function sanitizeTorrent(
   // Keys in sorted order, as bencode requires: announce, announce-list,
   // info, piece layers.
   const parts: Buffer[] = [Buffer.from('d')];
-  if (announce !== undefined && allowed(announce)) {
-    parts.push(bencode('announce'), bencode(Buffer.from(announce)));
+  const announceUrl = announce !== undefined ? accept(announce) : undefined;
+  if (announceUrl !== undefined) {
+    parts.push(bencode('announce'), bencode(Buffer.from(announceUrl)));
   }
   if (tiers.length > 0) {
     parts.push(
@@ -454,4 +482,125 @@ export function sanitizeTorrent(
     throw new Error('sanitizing changed the infohash');
   }
   return out;
+}
+
+/**
+ * Check that a torrent's files are exactly the band's signed files, before
+ * an engine is given it.
+ *
+ * The publication signs the infohash, which pins the info dictionary, but
+ * not that the dictionary describes the band. Without this a publisher could
+ * sign a torrent that also carries a file of any size, or a symlink, and the
+ * engine would write it into this node's disk. Accepted: a flat v1 file list
+ * of the band's files, each padded (BEP 47 `attr: p`) to a piece boundary,
+ * and, for a hybrid, a flat v2 file tree of the same files. Anything else
+ * is refused.
+ *
+ * @throws describing the first mismatch.
+ */
+export function checkTorrentFiles(
+  torrent: Buffer,
+  files: ReadonlyArray<{ name: string; size: number }>,
+): void {
+  const top = bdecode(torrent) as { [key: string]: BencodeValue };
+  const info = top['info'];
+  if (
+    typeof info !== 'object' ||
+    Buffer.isBuffer(info) ||
+    Array.isArray(info)
+  ) {
+    throw new Error('no info dictionary');
+  }
+  const dict = info as { [key: string]: BencodeValue };
+  const pieceLength = dict['piece length'];
+  if (typeof pieceLength !== 'number' || pieceLength <= 0) {
+    throw new Error('no piece length');
+  }
+  const expected = new Map(files.map((f) => [f.name, f.size]));
+  if (expected.size !== files.length)
+    throw new Error('duplicate band file names');
+
+  const list = dict['files'];
+  if (!Array.isArray(list)) throw new Error('not a multi-file torrent');
+  const seen = new Set<string>();
+  for (const raw of list) {
+    if (typeof raw !== 'object' || Buffer.isBuffer(raw) || Array.isArray(raw)) {
+      throw new Error('malformed file entry');
+    }
+    const entry = raw as { [key: string]: BencodeValue };
+    const length = entry['length'];
+    const pathList = entry['path'];
+    if (typeof length !== 'number' || length < 0 || !Array.isArray(pathList)) {
+      throw new Error('malformed file entry');
+    }
+    const segments = pathList.map((p) =>
+      Buffer.isBuffer(p) ? p.toString('utf8') : undefined,
+    );
+    const attr = Buffer.isBuffer(entry['attr'])
+      ? (entry['attr'] as Buffer).toString('latin1')
+      : entry['attr'] === undefined
+        ? undefined
+        : null;
+    if (
+      entry['symlink path'] !== undefined ||
+      Object.keys(entry).some((k) => !['length', 'path', 'attr'].includes(k))
+    ) {
+      throw new Error('file entry carries unexpected keys');
+    }
+    if (attr === 'p') {
+      if (
+        segments.length !== 2 ||
+        segments[0] !== '.pad' ||
+        length >= pieceLength
+      ) {
+        throw new Error('malformed pad file');
+      }
+      continue;
+    }
+    if (attr !== undefined)
+      throw new Error(`file attribute ${String(attr)} refused`);
+    const name = segments.length === 1 ? segments[0] : undefined;
+    if (name === undefined || !expected.has(name) || seen.has(name)) {
+      throw new Error(
+        `file ${segments.join('/')} is not one of the band's files`,
+      );
+    }
+    if (expected.get(name) !== length) {
+      throw new Error(
+        `file ${name} is ${length} bytes, signed as ${expected.get(name)}`,
+      );
+    }
+    seen.add(name);
+  }
+  if (seen.size !== expected.size)
+    throw new Error('torrent is missing band files');
+
+  const tree = dict['file tree'];
+  if (tree === undefined) return;
+  if (
+    typeof tree !== 'object' ||
+    Buffer.isBuffer(tree) ||
+    Array.isArray(tree)
+  ) {
+    throw new Error('malformed file tree');
+  }
+  const names = Object.keys(tree);
+  if (names.length !== expected.size)
+    throw new Error('file tree does not match the band');
+  for (const name of names) {
+    const node = (tree as { [key: string]: BencodeValue })[name] as {
+      [key: string]: BencodeValue;
+    };
+    const leaf = node?.[''];
+    if (
+      !expected.has(name) ||
+      Object.keys(node ?? {}).length !== 1 ||
+      typeof leaf !== 'object' ||
+      Buffer.isBuffer(leaf) ||
+      Array.isArray(leaf) ||
+      (leaf as { [key: string]: BencodeValue })['length'] !== expected.get(name)
+    ) {
+      throw new Error(`file tree entry ${name} does not match the band`);
+    }
+  }
 }

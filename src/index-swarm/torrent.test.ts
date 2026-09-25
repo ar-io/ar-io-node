@@ -11,9 +11,10 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { bdecode } from '../lib/bencode.js';
+import { bdecode, bencode } from '../lib/bencode.js';
 import {
   buildTorrent,
+  checkTorrentFiles,
   isAllowedTrackerUrl,
   sanitizeTorrent,
   torrentIds,
@@ -188,6 +189,105 @@ describe('buildTorrent', () => {
   });
 });
 
+describe('checkTorrentFiles', () => {
+  let dir: string;
+
+  before(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'torrent-files-'));
+    for (const [name, size] of Object.entries(FIXTURE)) {
+      await fs.writeFile(path.join(dir, name), fixtureBytes(name, size));
+    }
+  });
+
+  after(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const band = () =>
+    Object.entries(FIXTURE).map(([name, size]) => ({ name, size }));
+
+  it('accepts a torrent of exactly the band files', async () => {
+    const built = await buildTorrent({
+      dir,
+      name: 'fixture',
+      pieceLength: 32768,
+    });
+    checkTorrentFiles(built.torrent, band());
+  });
+
+  it('refuses a torrent carrying a file the band does not sign', async () => {
+    await fs.writeFile(path.join(dir, 'zz-extra.bin'), Buffer.alloc(100_000));
+    try {
+      const built = await buildTorrent({
+        dir,
+        name: 'fixture',
+        pieceLength: 32768,
+      });
+      assert.throws(
+        () => checkTorrentFiles(built.torrent, band()),
+        /not one of the band/,
+      );
+    } finally {
+      await fs.rm(path.join(dir, 'zz-extra.bin'));
+    }
+  });
+
+  it('refuses a torrent missing a band file, or with a different size', async () => {
+    const built = await buildTorrent({
+      dir,
+      name: 'fixture',
+      pieceLength: 32768,
+    });
+    const [first, ...rest] = band();
+    assert.throws(
+      () => checkTorrentFiles(built.torrent, rest),
+      /not one of the band/,
+    );
+    assert.throws(
+      () =>
+        checkTorrentFiles(built.torrent, [
+          { ...first, size: first.size + 1 },
+          ...rest,
+        ]),
+      /signed as/,
+    );
+  });
+
+  it('refuses symlink and nested entries', async () => {
+    const built = await buildTorrent({
+      dir,
+      name: 'fixture',
+      pieceLength: 32768,
+    });
+    const top = bdecode(built.torrent) as Record<string, any>;
+    const files = top.info.files as Array<Record<string, any>>;
+    const link = structuredClone(top);
+    link.info.files = [
+      ...files,
+      {
+        attr: Buffer.from('l'),
+        length: 0,
+        path: [Buffer.from('x')],
+        'symlink path': [Buffer.from('..')],
+      },
+    ];
+    assert.throws(
+      () => checkTorrentFiles(bencode(link), band()),
+      /unexpected keys|refused/,
+    );
+    const nested = structuredClone(top);
+    nested.info.files = files.map((f) =>
+      f.attr === undefined
+        ? { ...f, path: [Buffer.from('sub'), ...f.path] }
+        : f,
+    );
+    assert.throws(
+      () => checkTorrentFiles(bencode(nested), band()),
+      /not one of the band/,
+    );
+  });
+});
+
 describe('sanitizeTorrent', () => {
   let dir: string;
 
@@ -285,6 +385,11 @@ describe('sanitizeTorrent', () => {
       'http://[fd00::1]/',
       'http://[::ffff:10.0.0.1]/',
       'http://metadata.google.internal/',
+      'http://tracker.example.com:80\\@192.168.2.1:4000/announce',
+      'http://user@tracker.example/announce',
+      'http://tracker.example/announce#x',
+      'http://[::ffff:0:a00:1]/',
+      'http://[64:ff9b::a00:1]/',
       'file:///etc/passwd',
       'wss://tracker.example/',
     ]) {
