@@ -2315,6 +2315,10 @@ export class Subscriber {
       if (this.finishing.has(name)) continue;
       const target = path.join(this.swarmDir, name);
       if (!(await oldEnough(target))) continue;
+      // A crash between adding a torrent and recording it leaves the engine
+      // downloading into a directory nothing tracks. Its torrent was kept
+      // before the add, so the engine can be told to let go first.
+      await this.releaseOrphan(name, target);
       await fs.rm(target, { recursive: true, force: true });
     }
 
@@ -2331,6 +2335,25 @@ export class Subscriber {
       const target = path.join(this.torrentsDir, name);
       if (!(await oldEnough(target))) continue;
       await fs.rm(target, { force: true });
+    }
+  }
+
+  /** Remove an engine torrent still downloading into an orphaned directory. */
+  private async releaseOrphan(infohashV1: string, dir: string): Promise<void> {
+    const transport = this.transport;
+    if (transport === undefined || !/^[0-9a-f]{40}$/.test(infohashV1)) return;
+    try {
+      const torrent = await fs.readFile(this.keptTorrentPath(infohashV1));
+      const id = transport.idFor(torrent);
+      const status = await transport.status(id);
+      if (
+        status?.savePath !== undefined &&
+        path.resolve(status.savePath) === path.resolve(dir)
+      ) {
+        await transport.remove(id);
+      }
+    } catch {
+      // No kept torrent, or the engine is down: nothing to release now.
     }
   }
 

@@ -1210,6 +1210,36 @@ describe('Subscriber', () => {
       );
     });
 
+    it('releases an engine torrent a crash left without a record', async () => {
+      await makeBand('band-a');
+      await publishTorrents(); // no seeder
+      const engine = new MemoryTransport(new MemorySwarm());
+      await makeTorrentSubscriber(engine, { torrentWatchMs: 20 }).pollOnce();
+      const [[ih, download]] = Object.entries(
+        (await subState.load()).downloads,
+      );
+      // As if the process had died between the add and the state write.
+      await subState.update((draft) => {
+        delete draft.downloads[ih];
+      });
+      // Its publisher stops offering the band, so no poll adopts it again.
+      await fs.rm(path.join(pubDir, 'root-tx-index', 'band-a'), {
+        recursive: true,
+      });
+      clock = new Date(clock.getTime() + 60_000);
+      await publishTorrents();
+
+      await makeTorrentSubscriber(engine, {
+        torrentWatchMs: 20,
+        untrackedMinAgeMs: 0,
+      }).pollOnce();
+      assert.equal(await engine.status(download.id), undefined);
+      assert.equal(
+        existsSync(path.join(path.dirname(subIncoming), 'swarm', ih)),
+        false,
+      );
+    });
+
     it('stops seeding a band once it is retired', async () => {
       await makeBand('band-a');
       await makeBand('band-b');
