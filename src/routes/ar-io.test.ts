@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { buildArIoInfo } from './ar-io-info-builder.js';
+import { buildArIoInfo, plainDecimal } from './ar-io-info-builder.js';
 import { calculateX402Price } from '../payments/x402-pricing.js';
 
 describe('buildArIoInfo', () => {
@@ -621,6 +621,18 @@ describe('buildArIoInfo', () => {
         buildArIoInfo({ ...base, indexNames: [] }).indexes,
         undefined,
       );
+    });
+  });
+
+  describe('plainDecimal', () => {
+    it('keeps a price smaller than ten decimal places', () => {
+      assert.equal(plainDecimal(4.2e-11), '0.000000000042');
+    });
+    it('writes common prices plainly', () => {
+      assert.equal(plainDecimal(0.0000000001), '0.0000000001');
+      assert.equal(plainDecimal(1e-10 * 3), '0.0000000003');
+      assert.equal(plainDecimal(0), '0');
+      assert.equal(plainDecimal(1.5), '1.5');
     });
   });
 });

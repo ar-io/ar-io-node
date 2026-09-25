@@ -11,6 +11,22 @@ import { calculateX402Price } from '../payments/x402-pricing.js';
  * ANS-104 bundle filter configuration.
  * Controls which bundles are processed based on allow/deny lists.
  */
+/**
+ * A price as a plain decimal string, never in exponent form and never
+ * rounded away: every significant digit of the configured value, trailing
+ * zeros trimmed.
+ */
+export function plainDecimal(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  // Twelve significant digits drop float noise (1e-10 * 3 = 3.0000000000000004e-10)
+  // without losing any digit an operator could have typed.
+  const rounded = Number(value.toPrecision(12));
+  const fixed = rounded.toFixed(20);
+  return fixed.includes('.')
+    ? fixed.replace(/0+$/, '').replace(/\.$/, '')
+    : fixed;
+}
+
 export interface BundleFilter {
   allow?: string[];
   deny?: string[];
@@ -278,8 +294,10 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
       facilitatorUrl,
       dataEgress: {
         pricing: {
-          // Format as strings to avoid scientific notation in JSON (e.g., 1e-10)
-          perBytePrice: perBytePrice.toFixed(10),
+          // A plain decimal string: JSON would otherwise carry 1e-10, and a
+          // fixed number of places rounds a small price to zero (turbo's
+          // 4.2e-11 advertised as "0.0000000000").
+          perBytePrice: plainDecimal(perBytePrice),
           minPrice: minPrice.toFixed(6),
           maxPrice: maxPrice.toFixed(6),
           currency: 'USDC',
