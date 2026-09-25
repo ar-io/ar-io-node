@@ -624,7 +624,8 @@ describe('/ar-io/indexes routes', () => {
       assert.equal(res.headers['cache-control'], 'no-store');
     });
 
-    it('serves a torrent file for a published band', async () => {
+    it('does not serve a torrent for a band the document offers over HTTP only', async () => {
+      // band-a is published without torrents; a stray file must not be served.
       const torrentPath = path.join(
         publishedDir,
         'root-tx-index',
@@ -632,10 +633,9 @@ describe('/ar-io/indexes routes', () => {
       );
       await fs.writeFile(torrentPath, 'd4:infod4:name6:band-aee');
       try {
-        const res = await request(app)
+        await request(app)
           .get('/ar-io/indexes/root-tx-index/band-a.torrent')
-          .expect(200);
-        assert.equal(res.headers['content-type'], 'application/x-bittorrent');
+          .expect(404);
       } finally {
         await fs.rm(torrentPath);
       }
@@ -847,6 +847,27 @@ describe('/ar-io/indexes/webseed', () => {
       file.sha256,
     );
     assert.match(res.headers['cache-control'], /immutable/);
+  });
+
+  it('serves the torrent of a band the document offers as one', async () => {
+    const band = publication.indexes[0].bands[0];
+    const res = await request(app)
+      .get(`/ar-io/indexes/root-tx-index/${band.id}.torrent`)
+      .buffer(true)
+      .parse((r, cb) => {
+        const chunks: Buffer[] = [];
+        r.on('data', (c: Buffer) => chunks.push(c));
+        r.on('end', () => cb(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    assert.equal(res.headers['content-type'], 'application/x-bittorrent');
+    assert.equal(res.headers['cache-control'], 'public, max-age=60');
+    assert.deepEqual(
+      res.body,
+      await fs.readFile(
+        path.join(publishedDir, 'root-tx-index', `${band.id}.torrent`),
+      ),
+    );
   });
 
   it('answers a range, as WebSeed clients ask', async () => {
