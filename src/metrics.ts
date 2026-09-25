@@ -2011,6 +2011,19 @@ export const hintEmittedTotal = new promClient.Counter({
  *   - `skipped_range`: a range request, which cannot be verified end to end
  *   - `skipped_rejected`: the same offset and size were rejected recently
  */
+/**
+ * Header checks on a data item location (root, item offset, payload offset and
+ * size) taken from stored attributes or a root TX index before bytes are read
+ * from it. A rejection means the location did not hold the requested item:
+ * typically a root and an offset from different copies of an item that exists
+ * in several bundles (ar-io/ar-io-node#937).
+ */
+export const dataItemLocationCheckTotal = new promClient.Counter({
+  name: 'data_item_location_check_total',
+  help: 'Header checks on stored or indexed data item locations before serving from them',
+  labelNames: ['source', 'result'] as const,
+});
+
 export const dataItemSignatureVerificationTotal = new promClient.Counter({
   name: 'data_item_signature_verification_total',
   help: 'Outcomes of verifying data item signatures over payloads located from unverified offsets and sizes',
