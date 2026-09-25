@@ -39,7 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - every CDB64 partition is walked and bounds-checked before a band installs, and the reader never trusts a length or pointer from the file;
     - replacing a band never leaves a moment when lookups to it miss;
     - one band id belongs to one publisher at a time.
-    - the gateway checks the publication file off the request path, at most every 5 s, so index requests never wait behind a filesystem call on a saturated libuv thread pool (seen on turbo-gateway as 15–30 s responses during cache sweeps);
+    - after the first request, the gateway rechecks the publication file every 5 s off the request path, so later index requests do not wait behind a filesystem call on a saturated libuv thread pool (seen on turbo-gateway as 15–30 s responses during cache sweeps); only the first request after a start waits for the file;
 
 - **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
   item sizes for every data item in a list of root bundles, nested bundles
