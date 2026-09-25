@@ -34,6 +34,7 @@ import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
 import { GatewayRegistry, PublisherRecord } from './gateway-registry.js';
 import { PartitionedCdb64Writer } from '../lib/partitioned-cdb64-writer.js';
+import { parseManifest, serializeManifest } from '../lib/cdb64-manifest.js';
 import { encodeCdb64Value } from '../lib/cdb64-encoding.js';
 import { getSolanaAddress } from '../lib/httpsig.js';
 import {
@@ -1242,7 +1243,7 @@ describe('Subscriber', () => {
 
     it('stops seeding a band once it is retired', async () => {
       await makeBand('band-a');
-      await makeBand('band-b');
+      await makeBand('band-b', 5); // different bytes, so nothing is reused
       const swarm = new MemorySwarm();
       const publisherEngine = new MemoryTransport(swarm);
       await publishTorrents(publisherEngine);
@@ -1270,6 +1271,72 @@ describe('Subscriber', () => {
         false,
       );
     });
+  });
+
+  it('keeps a superseded band serving until its successor installs', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    const aBytes = (await subState.load()).installed['root-tx-index'][
+      'band-a'
+    ].files.reduce((sum, f) => sum + f.size, 0);
+
+    // The publisher offers band-b in place of band-a, and stops offering
+    // band-a in the same scan.
+    await makeBand('band-b', 40, { supersedes: 'band-a' });
+    clock = new Date(clock.getTime() + 60_000);
+    await publish();
+
+    // band-b can't install yet (here, the disk budget holds it back).
+    await makeSubscriber({ maxDiskBytes: aBytes + 1000 }).pollOnce();
+    assert.deepEqual(
+      await installedIds(),
+      ['band-a'],
+      'band-a still answers for its heights',
+    );
+
+    await makeSubscriber().pollOnce();
+    assert.deepEqual(await installedIds(), ['band-b'], 'then it is replaced');
+  });
+
+  it('fetches only what changed when a band is republished', async () => {
+    await makeBand('band-a', 50);
+    await publish();
+    await makeSubscriber().pollOnce();
+    assert.deepEqual(await installedIds(), ['band-a']);
+
+    // The publisher edits only the manifest (adding supersedes, say): one
+    // file of the band changes, the rest are byte-identical.
+    const manifestPath = path.join(
+      pubDir,
+      'root-tx-index',
+      'band-a',
+      'manifest.json',
+    );
+    const manifest = parseManifest(await fs.readFile(manifestPath, 'utf8'));
+    manifest.metadata = { ...manifest.metadata, note: 'edited' };
+    await fs.writeFile(manifestPath, serializeManifest(manifest));
+    clock = new Date(clock.getTime() + 60_000);
+    await publish();
+
+    const before = (await subscriptionBytes.get()).values
+      .filter((v) => v.labels.transport === 'http')
+      .reduce((sum, v) => sum + v.value, 0);
+    await makeSubscriber().pollOnce();
+    const fetched =
+      (await subscriptionBytes.get()).values
+        .filter((v) => v.labels.transport === 'http')
+        .reduce((sum, v) => sum + v.value, 0) - before;
+
+    const record = (await subState.load()).installed['root-tx-index']['band-a'];
+    const newManifest = record.files.find((f) => f.name === 'manifest.json')!;
+    assert.equal(fetched, newManifest.size, 'only the manifest was fetched');
+    assert.equal(
+      readFileSync(path.join(record.dir, 'manifest.json'), 'utf8').includes(
+        'edited',
+      ),
+      true,
+    );
   });
 
   it('installs every band a publisher offers', async () => {

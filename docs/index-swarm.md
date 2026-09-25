@@ -162,8 +162,12 @@ any digest.
 To replace a band, prefer a fresh id per build (`band-tip-20260923T1200`,
 say) with `supersedes` naming the previous one, so the publisher withdraws
 and removes it for you; without `supersedes`, delete the previous one
-yourself after the next scan. Subscribers install the new band, then retire
-the old after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`.
+yourself after the next scan. Subscribers keep serving the old band until
+the new one has installed, however long its download takes, then retire the
+old after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`. So set `supersedes` when you
+first publish the new band: publishing it without and adding `supersedes`
+later edits its manifest, which changes the band (subscribers then fetch only
+the changed file, but it is still a new version of the band).
 Swapping under the same id also works, but a directory cannot be renamed over
 a non-empty one, so there is a moment when the band is absent; a scan that
 lands in it withdraws the band until the next scan, and subscribers retire it

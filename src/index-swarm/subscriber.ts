@@ -331,6 +331,32 @@ export interface SubscriberOptions {
   now?: () => Date;
 }
 
+/**
+ * The ids superseded by an offered band that is not installed yet (no live
+ * copy with its files). A publisher withdraws a band in the same scan that
+ * offers its replacement; without this, a subscriber would retire the old
+ * band at once and miss its heights until the new one arrived.
+ */
+export function awaitingSuccessor(
+  offered: BandDescriptor[],
+  installed: Record<string, InstalledBand> | undefined,
+): Set<string> {
+  const keep = new Set<string>();
+  for (const band of offered) {
+    const raw = band.metadata?.supersedes;
+    const named = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+    if (named.length === 0) continue;
+    const copy = installed?.[band.id];
+    const ready =
+      copy !== undefined &&
+      copy.retiredAt === undefined &&
+      sameFiles(copy.files, band.files);
+    if (ready) continue;
+    for (const id of named) if (typeof id === 'string') keep.add(id);
+  }
+  return keep;
+}
+
 /** Where a file copied out of the engine's directory is written first. */
 function swarmPartialName(file: BandFile): string {
   return `${file.name}.${file.sha256.slice(0, 16)}.swarm.tmp`;
@@ -948,6 +974,10 @@ export class Subscriber {
       index.name,
       new Set(index.bands.map((band) => band.id)),
       kind,
+      awaitingSuccessor(
+        index.bands,
+        (await this.state.load()).installed[index.name],
+      ),
     );
 
     return installedAnything;
@@ -963,12 +993,19 @@ export class Subscriber {
     indexName: string,
     offered: ReadonlySet<string>,
     kind: ArtifactKind,
+    /**
+     * Bands an offered band supersedes that has not installed yet. Kept
+     * serving until it has, so a replacement that takes hours to download
+     * does not leave its heights uncovered meanwhile.
+     */
+    keep: ReadonlySet<string> = new Set(),
   ): Promise<void> {
     await this.discardUnofferedDownloads(publisher, indexName, offered);
     const state = await this.state.load();
     const current = state.installed[indexName] ?? {};
     for (const [bandId, band] of Object.entries(current)) {
       if (offered.has(bandId)) continue;
+      if (keep.has(bandId)) continue;
       if (band.publisher !== publisher) continue;
       if (band.retiredAt !== undefined) continue;
       // A replaced copy on its way out is retired by housekeeping, not here.
@@ -1180,10 +1217,40 @@ export class Subscriber {
       return true;
     }
 
-    // Peers first, when the band is offered as a torrent. A torrent still
-    // moving when this poll's watch window closes is picked up again next
-    // poll; one that fails or times out falls through to HTTP right away.
-    if (band.torrent !== undefined && this.transport !== undefined) {
+    // Per publisher, so two publishers' copies of one band id never resume
+    // onto each other's partial files.
+    const incoming = path.join(
+      this.incomingDir,
+      publisher,
+      index.name,
+      band.id,
+    );
+    // A band republished with one file changed (a manifest edit, say) is
+    // otherwise fetched whole again. Files this node already holds under the
+    // same digest are linked in instead; they were verified when installed.
+    // Only an optimisation: if it can't be done, fetch everything.
+    let missingBytes = bandBytes;
+    try {
+      await fs.mkdir(incoming, { recursive: true });
+      await this.discardStaleFiles(incoming, band);
+      missingBytes = await this.reuseInstalledFiles(index.name, band, incoming);
+    } catch (error: any) {
+      this.log.debug('Could not reuse installed files', {
+        band: band.id,
+        error: error?.message,
+      });
+    }
+
+    // Peers first, when the band is offered as a torrent and most of it is
+    // still to fetch: a torrent is all or nothing, so a band that is mostly
+    // here already is quicker over HTTP. A torrent still moving when this
+    // poll's watch window closes is picked up again next poll; one that
+    // fails or times out falls through to HTTP right away.
+    if (
+      band.torrent !== undefined &&
+      this.transport !== undefined &&
+      missingBytes * 10 >= bandBytes
+    ) {
       const outcome = await this.viaTorrent(
         publisher,
         origin,
@@ -1205,20 +1272,10 @@ export class Subscriber {
           transport: 'torrent',
         });
       }
-      // Fell back. Over HTTP the meter applies again.
-      if (meter.refused) return false;
     }
-
-    // Per publisher, so two publishers' copies of one band id never resume
-    // onto each other's partial files.
-    const incoming = path.join(
-      this.incomingDir,
-      publisher,
-      index.name,
-      band.id,
-    );
+    // Over HTTP the publisher's meter applies.
+    if (meter.refused) return false;
     await fs.mkdir(incoming, { recursive: true });
-    await this.discardStaleFiles(incoming, band);
 
     // Every file is attempted and the whole band is waited on, so a file that
     // fails costs only itself: what completed stays on disk and is skipped
@@ -1468,6 +1525,66 @@ export class Subscriber {
       return dir;
     }
     return undefined;
+  }
+
+  /**
+   * Hard-link into `incoming` every file of `band` that an installed copy
+   * of this index already holds under the same digest and size, and return
+   * the bytes still to fetch.
+   *
+   * Installed files were digest-checked when installed and a generation
+   * directory is never written in place, so a link to one is as good as a
+   * download. A link, not a copy: the bytes exist once. Downloads replace a
+   * file by renaming over it, so nothing ever writes through the link.
+   */
+  private async reuseInstalledFiles(
+    indexName: string,
+    band: BandDescriptor,
+    incoming: string,
+  ): Promise<number> {
+    const state = await this.state.load();
+    const byContent = new Map<string, string>();
+    for (const record of Object.values(state.installed[indexName] ?? {})) {
+      if (record.retiredAt !== undefined) continue;
+      for (const file of record.files) {
+        byContent.set(
+          `${file.sha256}:${file.size}`,
+          path.join(record.dir, file.name),
+        );
+      }
+    }
+    let missing = 0;
+    let reused = 0;
+    for (const file of band.files) {
+      const dest = path.join(incoming, file.name);
+      // Only a finished file carries its own name here; partials don't.
+      if ((await fs.lstat(dest).catch(() => undefined))?.isFile() === true) {
+        continue;
+      }
+      const source = byContent.get(`${file.sha256}:${file.size}`);
+      if (source !== undefined) {
+        const stat = await fs.lstat(source).catch(() => undefined);
+        if (stat?.isFile() === true && stat.size === file.size) {
+          try {
+            await fs.link(source, dest);
+            reused++;
+            continue;
+          } catch {
+            // Fall through and fetch it.
+          }
+        }
+      }
+      missing += file.size;
+    }
+    if (reused > 0) {
+      this.log.info('Reusing files already installed', {
+        index: indexName,
+        band: band.id,
+        reused,
+        toFetch: band.files.length - reused,
+      });
+    }
+    return missing;
   }
 
   // --- The torrent transport -----------------------------------------------
