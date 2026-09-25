@@ -89,7 +89,7 @@
     "qs": "6.16.0",
     "cookie": "0.7.0",
     "axios": "1.18.0",
-    "fast-xml-parser": "5.7.0",
+    "fast-xml-parser": "5.7.3",
     "multer": "2.3.0",
     "express/path-to-regexp": "0.1.13",
     "express-openapi-validator/path-to-regexp": "8.4.1",
