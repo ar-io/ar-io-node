@@ -21,10 +21,10 @@
  * a download stalls meanwhile.
  */
 import * as http from 'node:http';
+import * as net from 'node:net';
 import { Logger } from 'winston';
 
 import { bencode } from '../lib/bencode.js';
-import { isIpInCidr } from '../lib/ip-utils.js';
 import { isPrivateAddress } from './torrent.js';
 import { trackerAnnounces, trackerPeers } from './metrics.js';
 
@@ -165,6 +165,39 @@ function addressBucket(ip: string): string {
     .join(':');
 }
 
+/**
+ * The trusted proxies as a BlockList, which matches IPv4 and IPv6 addresses
+ * and subnets alike.
+ *
+ * @throws on an entry that is neither an address nor a CIDR, so a typo is a
+ *   startup error rather than a proxy silently not trusted.
+ */
+function trustedProxyList(entries: string[]): net.BlockList {
+  const list = new net.BlockList();
+  for (const entry of entries) {
+    const [address, prefix] = normalizeIp(entry).split('/');
+    const family = net.isIP(address);
+    if (family === 0) {
+      throw new Error(`Not an IP address or CIDR: ${entry}`);
+    }
+    const type = family === 6 ? 'ipv6' : 'ipv4';
+    if (prefix === undefined) {
+      list.addAddress(address, type);
+    } else {
+      const bits = Number(prefix);
+      if (
+        !Number.isInteger(bits) ||
+        bits < 0 ||
+        bits > (family === 6 ? 128 : 32)
+      ) {
+        throw new Error(`Not an IP address or CIDR: ${entry}`);
+      }
+      list.addSubnet(address, bits, type);
+    }
+  }
+  return list;
+}
+
 export class ClosedTracker {
   private readonly log: Logger;
   private readonly allowed: () => Set<string>;
@@ -174,7 +207,7 @@ export class ClosedTracker {
   private readonly maxPortsPerIp: number;
   private readonly maxAnnouncesPerMinute: number;
   private readonly selfAddress: () => string | undefined;
-  private readonly trustedProxies: string[];
+  private readonly trustedProxies: net.BlockList;
   private readonly now: () => number;
   /**
    * infohash hex, then `ip:port`, to the peer. Each map is in the order
@@ -195,7 +228,7 @@ export class ClosedTracker {
     this.maxPortsPerIp = options.maxPortsPerIp ?? 4;
     this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 10;
     this.selfAddress = options.selfAddress ?? (() => undefined);
-    this.trustedProxies = options.trustedProxies ?? [];
+    this.trustedProxies = trustedProxyList(options.trustedProxies ?? []);
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -342,10 +375,13 @@ export class ClosedTracker {
     socketAddress: string,
     forwardedFor: string | string[] | undefined,
   ): string {
-    const trusted = (ip: string) =>
-      this.trustedProxies.some((cidr) =>
-        cidr.includes('/') ? isIpInCidr(ip, cidr) : normalizeIp(cidr) === ip,
+    const trusted = (ip: string) => {
+      const family = net.isIP(ip);
+      return (
+        family !== 0 &&
+        this.trustedProxies.check(ip, family === 6 ? 'ipv6' : 'ipv4')
       );
+    };
     const socketIp = normalizeIp(socketAddress);
     if (!trusted(socketIp) || forwardedFor === undefined) return socketIp;
     const hops = (

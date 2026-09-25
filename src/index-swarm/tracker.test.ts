@@ -130,6 +130,30 @@ describe('ClosedTracker', () => {
     assert.equal(t.clientAddress('10.1.1.1', undefined), '10.1.1.1');
   });
 
+  it('trusts IPv6 proxies and single addresses too', () => {
+    const t = tracker({ trustedProxies: ['fd00::/8', '198.51.100.20'] });
+    assert.equal(t.clientAddress('fd00::5', '2001:db8::9'), '2001:db8::9');
+    assert.equal(
+      t.clientAddress('198.51.100.20', '203.0.113.9'),
+      '203.0.113.9',
+    );
+    assert.equal(
+      t.clientAddress('198.51.100.21', '203.0.113.9'),
+      '198.51.100.21',
+    );
+  });
+
+  it('refuses a trusted proxy that is not an address or CIDR', () => {
+    assert.throws(
+      () => tracker({ trustedProxies: ['lb.example'] }),
+      /Not an IP/,
+    );
+    assert.throws(
+      () => tracker({ trustedProxies: ['10.0.0.0/40'] }),
+      /Not an IP/,
+    );
+  });
+
   it('counts an IPv6 /64 as one address', () => {
     const t = tracker({ maxPortsPerIp: 2, maxAnnouncesPerMinute: 1000 });
     for (const n of [1, 2, 3, 4]) {
