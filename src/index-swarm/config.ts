@@ -141,6 +141,15 @@ export const PUBLISHED_DIR = path.join(DATA_DIR, 'published');
 export const INCOMING_DIR = path.join(DATA_DIR, 'incoming');
 /** Bands in use. The gateway loads these through its collection source. */
 export const INSTALLED_DIR = path.join(DATA_DIR, 'installed');
+
+/**
+ * Where the torrent engine downloads, one directory per torrent. The only
+ * index directory the engine may write.
+ */
+export const SWARM_DIR = path.join(DATA_DIR, 'swarm');
+
+/** Checked `.torrent` files kept for seeding installed bands. Sidecar only. */
+export const TORRENTS_DIR = path.join(DATA_DIR, 'torrents');
 /** Content-addressed links into the published bands, served by hash. */
 export const BLOBS_DIR = path.join(PUBLISHED_DIR, 'blobs');
 /** The signed document the gateway serves at /ar-io/indexes. */

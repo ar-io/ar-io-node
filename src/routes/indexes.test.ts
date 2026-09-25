@@ -656,6 +656,7 @@ describe('/ar-io/indexes routes', () => {
         await fs.rm(torrentPath);
       }
     });
+
     it('answers a malformed band name 400, uncacheable', async () => {
       const res = await request(app)
         .get('/ar-io/indexes/root-tx-index/..%2Fx.torrent')

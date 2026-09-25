@@ -911,6 +911,14 @@ export class Publisher {
     return this.inFlight;
   }
 
+  /** Bands offered by the last scan that collected, for the closed tracker. */
+  private offeredBands: BandDescriptor[] = [];
+
+  /** Every band offered as of the last scan. */
+  offered(): BandDescriptor[] {
+    return this.offeredBands;
+  }
+
   private async scan(): Promise<boolean> {
     const current = await this.currentDocument();
     const indexes: IndexEntry[] = [];
@@ -931,6 +939,7 @@ export class Publisher {
       await this.sweep();
     }
 
+    this.offeredBands = indexes.flatMap((index) => index.bands);
     const now = this.now();
 
     // Content is compared on its own, because issuedAt moves every scan and

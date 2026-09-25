@@ -19,6 +19,7 @@
  * metrics and idles.
  */
 import * as fs from 'node:fs/promises';
+import * as http from 'node:http';
 
 import * as config from './config.js';
 import { release } from '../version.js';
@@ -26,15 +27,25 @@ import log from './log.js';
 import { StateStore } from './state.js';
 import { createKindRegistry } from './kinds/registry.js';
 import { Publisher, loadPublisherSigner } from './publisher.js';
+import { QBittorrentTransport } from './transport/qbittorrent.js';
+import { waitForEngine } from './transport/wait.js';
+import { ClosedTracker, trackedInfohashes } from './tracker.js';
 import { Subscriber } from './subscriber.js';
 import { CoreGatewayRegistry } from './gateway-registry.js';
 import { CoreCompatibilityCheck } from './core-compatibility.js';
 import {
   buildInfo,
   configuredIndexes,
+  engineAvailable,
   startMetricsServer,
   up,
 } from './metrics.js';
+
+/**
+ * How long startup waits for the engine. It starts only after its init has
+ * run, and qBittorrent takes some seconds more before its Web API answers.
+ */
+const ENGINE_STARTUP_WAIT_MS = 120_000;
 
 async function main(): Promise<void> {
   // The sidecar ships in the core image, so the core's release is its own.
@@ -48,6 +59,9 @@ async function main(): Promise<void> {
     config.PUBLISHED_DIR,
     config.INCOMING_DIR,
     config.INSTALLED_DIR,
+    ...(config.ENGINE_URL !== undefined
+      ? [config.SWARM_DIR, config.TORRENTS_DIR]
+      : []),
   ]) {
     await fs.mkdir(dir, { recursive: true });
   }
@@ -60,6 +74,17 @@ async function main(): Promise<void> {
   // Publishing needs a key a subscriber can check against, so this is fatal
   // rather than a warning: a publisher that signs with an unregistered key
   // produces documents nobody can verify, which is worse than not publishing.
+  // One client for the torrent engine, shared by both loops. Unset means
+  // bands move over HTTP only.
+  const engine =
+    config.ENGINE_URL !== undefined
+      ? new QBittorrentTransport({
+          url: config.ENGINE_URL,
+          ...(config.ENGINE_AUTH ?? {}),
+          log,
+        })
+      : undefined;
+
   let publisher: Publisher | undefined;
   if (config.PUBLISH.length > 0) {
     const signer = loadPublisherSigner({
@@ -86,6 +111,17 @@ async function main(): Promise<void> {
       publicationFile: config.PUBLICATION_FILE,
       ttlMs: config.PUBLISH_TTL_MS,
       supersedeGraceMs: config.SUPERSEDE_GRACE_MS,
+      // Torrents only with an engine to seed them: a torrent nobody seeds
+      // only makes subscribers wait before falling back to HTTP.
+      ...(engine !== undefined
+        ? {
+            torrents: {
+              transport: engine,
+              trackers: config.TRACKERS,
+              privateSwarm: config.PRIVATE_SWARM,
+            },
+          }
+        : {}),
     });
     log.info('Publishing as', {
       publisher: signer.wallet,
@@ -135,6 +171,19 @@ async function main(): Promise<void> {
               config.DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC,
           }
         : {}),
+      // With an engine, bands offered as torrents come over the swarm, and
+      // every installed band that offers one is seeded on.
+      ...(engine !== undefined
+        ? {
+            transport: engine,
+            swarmDir: config.SWARM_DIR,
+            torrentsDir: config.TORRENTS_DIR,
+            torrentTimeoutMs: config.TORRENT_TIMEOUT_MS,
+            webSeedAfterMs: config.WEBSEED_AFTER_MS,
+            engineUid: config.ENGINE_UID,
+            engineGid: config.ENGINE_GID,
+          }
+        : {}),
     });
     log.info('Subscribing to publishers', {
       publishers: config.SUBSCRIBE.map((entry) => entry.publisher),
@@ -168,6 +217,49 @@ async function main(): Promise<void> {
     await compatibility.check();
   }
 
+  // Checked on its own schedule as well as by each loop, so the gauge tells
+  // an operator whether the engine answers even on a subscribe-only node.
+  let engineTimer: NodeJS.Timeout | undefined;
+  if (engine !== undefined) {
+    let last: boolean | undefined;
+    const checkEngine = async () => {
+      const available = await engine.isAvailable();
+      engineAvailable.set(available ? 1 : 0);
+      if (available !== last) {
+        const fields = { engineUrl: config.ENGINE_URL };
+        if (available) log.info('Torrent engine is available', fields);
+        else log.warn('Torrent engine is not answering', fields);
+      }
+      last = available;
+    };
+    // The engine starts after its init has run, so on a fresh `up` the
+    // sidecar is first; give it a moment before the first scan and poll
+    // decide it is not there.
+    await waitForEngine(engine, { timeoutMs: ENGINE_STARTUP_WAIT_MS });
+    await checkEngine();
+    engineTimer = setInterval(() => void checkEngine(), 60_000);
+    engineTimer.unref();
+  }
+
+  // A publisher of torrents runs the tracker its torrents announce to. It is
+  // closed: it answers only for bands this node offers right now, so its
+  // port cannot be used to run anyone else's swarm.
+  let tracker: http.Server | undefined;
+  if (publisher !== undefined && engine !== undefined) {
+    const offering = publisher;
+    tracker = await new ClosedTracker({
+      log,
+      allowed: () => trackedInfohashes(offering.offered()),
+    }).listen('0.0.0.0', config.TRACKER_PORT);
+    if (config.TRACKERS.length === 0) {
+      log.warn(
+        'Publishing torrents with no INDEX_SWARM_TRACKERS; peers can then find one another only through DHT and the WebSeed. Point it at this tracker, e.g. http://<public host>:' +
+          config.TRACKER_PORT +
+          '/announce',
+      );
+    }
+  }
+
   up.set(1);
 
   let publishTimer: NodeJS.Timeout | undefined;
@@ -195,6 +287,8 @@ async function main(): Promise<void> {
     try {
       if (publishTimer !== undefined) clearInterval(publishTimer);
       if (pollTimer !== undefined) clearInterval(pollTimer);
+      if (engineTimer !== undefined) clearInterval(engineTimer);
+      tracker?.close();
       // Let work in progress finish, inside the timeout above: downloads
       // are aborted (they resume on the next start), but a band mid-install
       // or a document mid-write completes rather than being cut off.
