@@ -213,6 +213,14 @@ export class MemoryTransport implements TorrentTransport {
     if (this.torrents.get(id) === entry) entry.state = 'seeding';
   }
 
+  async list(): Promise<Array<{ id: string; savePath: string }>> {
+    if (!this.available) this.down();
+    return [...this.torrents.entries()].map(([id, entry]) => ({
+      id,
+      savePath: entry.dir.replace(/\/+$/, ''),
+    }));
+  }
+
   async status(id: string): Promise<TorrentStatus | undefined> {
     if (!this.available) this.down();
     const entry = this.torrents.get(id);

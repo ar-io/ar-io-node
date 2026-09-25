@@ -31,6 +31,7 @@ import { createKindRegistry } from './kinds/registry.js';
 import { Publisher, loadPublisherSigner } from './publisher.js';
 import { QBittorrentTransport } from './transport/qbittorrent.js';
 import { waitForEngine } from './transport/wait.js';
+import { EngineJanitor } from './engine-janitor.js';
 import { ClosedTracker, trackedInfohashes } from './tracker.js';
 import { isAllowedTrackerUrl } from './torrent.js';
 import { Subscriber } from './subscriber.js';
@@ -224,6 +225,7 @@ async function main(): Promise<void> {
   // Checked on its own schedule as well as by each loop, so the gauge tells
   // an operator whether the engine answers even on a subscribe-only node.
   let engineTimer: NodeJS.Timeout | undefined;
+  let janitorTimer: NodeJS.Timeout | undefined;
   if (engine !== undefined) {
     let last: boolean | undefined;
     const checkEngine = async () => {
@@ -243,6 +245,24 @@ async function main(): Promise<void> {
     await checkEngine();
     engineTimer = setInterval(() => void checkEngine(), 60_000);
     engineTimer.unref();
+
+    // Torrents the engine holds that no state record claims (see
+    // engine-janitor.ts). Hourly, and only after two sweeps agree.
+    const janitor = new EngineJanitor({
+      log,
+      state,
+      transport: engine,
+      ownedDirs: [config.PUBLISHED_DIR, config.INSTALLED_DIR, config.SWARM_DIR],
+    });
+    const sweepEngine = () =>
+      void janitor
+        .sweep()
+        .catch((error: any) =>
+          log.warn('Engine sweep failed', { error: error?.message }),
+        );
+    janitorTimer = setInterval(sweepEngine, 3_600_000);
+    janitorTimer.unref();
+    setTimeout(sweepEngine, 600_000).unref();
   }
 
   // The engine's filter refuses private addresses, the WebSeed and trackers
@@ -338,6 +358,7 @@ async function main(): Promise<void> {
       if (publishTimer !== undefined) clearInterval(publishTimer);
       if (pollTimer !== undefined) clearInterval(pollTimer);
       if (engineTimer !== undefined) clearInterval(engineTimer);
+      if (janitorTimer !== undefined) clearInterval(janitorTimer);
       tracker?.close();
       if (selfTimer !== undefined) clearInterval(selfTimer);
       // Let work in progress finish, inside the timeout above: downloads

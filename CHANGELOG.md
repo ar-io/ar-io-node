@@ -39,6 +39,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - every CDB64 partition is walked and bounds-checked before a band installs, and the reader never trusts a length or pointer from the file;
     - replacing a band never leaves a moment when lookups to it miss;
     - one band id belongs to one publisher at a time.
+    - the closed tracker lists this node's own engine under its public host instead of a Docker address, never hands private addresses to peers on the internet, and can sit behind a load balancer (`INDEX_SWARM_TRACKER_TRUSTED_PROXIES`, `INDEX_SWARM_ENGINE_PUBLIC_HOST`);
+    - an hourly janitor removes engine torrents no state record claims (left by a state reset or a crash), after two sweeps agree;
     - a subscriber keeps a band that an offered band supersedes until that band has installed, so a replacement that takes hours to download leaves no gap in coverage;
     - a band republished with some files unchanged (a manifest edit to add `supersedes`, say) links the unchanged files from the installed copy and fetches only the rest; before, the whole band was fetched again;
     - after the first request, the gateway rechecks the publication file every 5 s off the request path, so later index requests do not wait behind a filesystem call on a saturated libuv thread pool (seen on turbo-gateway as 15–30 s responses during cache sweeps); only the first request after a start waits for the file;

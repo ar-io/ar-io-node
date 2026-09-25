@@ -92,6 +92,9 @@ export interface TorrentTransport {
    */
   remove(id: string, opts?: { deleteData?: boolean }): Promise<void>;
 
+  /** Every torrent the engine holds, with where its files are. */
+  list(): Promise<Array<{ id: string; savePath: string }>>;
+
   /**
    * Whether the engine is reachable and answering. Never throws, and answers
    * within about two seconds, so the subscriber can fall back to HTTP

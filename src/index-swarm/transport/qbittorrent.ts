@@ -181,6 +181,15 @@ export class QBittorrentTransport implements TorrentTransport {
     return response;
   }
 
+  async list(): Promise<Array<{ id: string; savePath: string }>> {
+    const response = await this.call('torrents/info');
+    const all = (await response.json()) as Array<Record<string, unknown>>;
+    return all.map((t) => ({
+      id: String(t.hash),
+      savePath: String(t.save_path ?? '').replace(/\/+$/, ''),
+    }));
+  }
+
   async isAvailable(): Promise<boolean> {
     try {
       const response = await this.call(

@@ -242,6 +242,24 @@ function contract(name: string, makeHarness: () => Promise<Harness>): void {
       assert.deepEqual(left, [], 'downloaded data deleted');
     });
 
+    it('lists what it holds, with where each torrent lives', async () => {
+      const dir = path.join(await fresh('list'), 'band');
+      await writeBand(dir);
+      const built = await torrentFor(dir, 'band-list-test');
+      const { id } = await harness.transport.seed({
+        torrent: built.torrent,
+        dir,
+      });
+      added.push(id);
+      assert.equal(id, harness.transport.idFor(built.torrent));
+      const entry = (await harness.transport.list()).find((t) => t.id === id);
+      assert.equal(entry?.savePath, dir.replace(/\/+$/, ''));
+      assert.equal(
+        (await harness.transport.status(id))?.savePath,
+        dir.replace(/\/+$/, ''),
+      );
+    });
+
     it('treats removing an unknown torrent as done', async () => {
       await harness.transport.remove('0'.repeat(40));
     });
