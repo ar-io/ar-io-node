@@ -45,9 +45,16 @@ export interface ClosedTrackerOptions {
    * share of every response, so the table must not grow on demand.
    */
   maxPeersPerSwarm?: number;
-  /** Most ports one address may hold in one torrent's peer list. */
+  /**
+   * Most ports one address may hold in one torrent's peer list. An IPv6
+   * address counts by its /64, which one host can hold whole.
+   */
   maxPortsPerIp?: number;
-  /** Announces one address may make per minute before it is refused. */
+  /**
+   * Announces one address (an IPv6 /64) may make per minute for one
+   * torrent before it is refused. Per torrent, because an honest engine
+   * announces each torrent it holds separately.
+   */
   maxAnnouncesPerMinute?: number;
   now?: () => number;
 }
@@ -122,6 +129,26 @@ function compactPeer(peer: Peer): { v4?: Buffer; v6?: Buffer } {
   return { v6: Buffer.concat([bytes, port]) };
 }
 
+/**
+ * What rate limits and port caps count by: an IPv4 address, or an IPv6
+ * address's /64, since one host is routinely given a whole /64.
+ */
+function addressBucket(ip: string): string {
+  if (!ip.includes(':')) return ip;
+  const [head, tail = ''] = ip.split('::');
+  const h = head === '' ? [] : head.split(':');
+  const t = tail === '' ? [] : tail.split(':');
+  const groups = [
+    ...h,
+    ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'),
+    ...t,
+  ];
+  return groups
+    .slice(0, 4)
+    .map((g) => (parseInt(g, 16) || 0).toString(16))
+    .join(':');
+}
+
 export class ClosedTracker {
   private readonly log: Logger;
   private readonly allowed: () => Set<string>;
@@ -148,7 +175,7 @@ export class ClosedTracker {
     this.maxPeers = options.maxPeers ?? 50;
     this.maxPeersPerSwarm = options.maxPeersPerSwarm ?? 2000;
     this.maxPortsPerIp = options.maxPortsPerIp ?? 4;
-    this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 30;
+    this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 10;
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -174,14 +201,16 @@ export class ClosedTracker {
       return failure('unregistered torrent');
     }
     const ip = normalizeIp(remoteAddress);
+    const bucket = addressBucket(ip);
 
     const now = this.now();
     if (now - this.windowStartedAt >= 60_000) {
       this.windowStartedAt = now;
       this.announcesByIp.clear();
     }
-    const count = (this.announcesByIp.get(ip) ?? 0) + 1;
-    this.announcesByIp.set(ip, count);
+    const rateKey = `${bucket}|${hex}`;
+    const count = (this.announcesByIp.get(rateKey) ?? 0) + 1;
+    this.announcesByIp.set(rateKey, count);
     if (count > this.maxAnnouncesPerMinute) {
       trackerAnnounces.inc({ result: 'rate_limited' });
       return failure('slow down');
@@ -203,15 +232,26 @@ export class ClosedTracker {
     // the map stays in last-seen order.
     swarm.delete(key);
     if (event !== 'stopped') {
-      const sameIp = [...swarm.entries()].filter(([, p]) => p.ip === ip);
+      const sameIp = [...swarm.entries()].filter(
+        ([, p]) => addressBucket(p.ip) === bucket,
+      );
       const excess = Math.max(0, sameIp.length - this.maxPortsPerIp + 1);
       for (const [k] of sameIp.slice(0, excess)) {
         swarm.delete(k);
       }
+      // Full: the least recently seen leecher goes first, so a flood of
+      // fresh entries cannot push out the seeders a band depends on.
       while (swarm.size >= this.maxPeersPerSwarm) {
-        const oldest = swarm.keys().next().value;
-        if (oldest === undefined) break;
-        swarm.delete(oldest);
+        let victim: string | undefined;
+        for (const [k, p] of swarm) {
+          if (!p.seeding) {
+            victim = k;
+            break;
+          }
+        }
+        victim ??= swarm.keys().next().value;
+        if (victim === undefined) break;
+        swarm.delete(victim);
       }
       swarm.set(key, { ip, port, seeding: left === 0, seenAt: now });
     }

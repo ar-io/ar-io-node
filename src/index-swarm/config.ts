@@ -390,6 +390,14 @@ export const ALLOWED_TRACKERS = env
   .map((entry) => entry.trim())
   .filter((entry) => entry.length > 0);
 
+/**
+ * Whether the engine's IP filter refuses private addresses (written by
+ * index-swarm-engine-init from the same variable). The sidecar reads it only
+ * to warn when its own settings name something the filter will block.
+ */
+export const ENGINE_BLOCK_PRIVATE =
+  env.varOrDefault('INDEX_SWARM_ENGINE_BLOCK_PRIVATE', 'true') !== 'false';
+
 /** Give up on a torrent and fetch the band over HTTP after this long. */
 export const TORRENT_TIMEOUT_MS =
   env.positiveIntOrDefault('INDEX_SWARM_TORRENT_TIMEOUT_SECONDS', 3600) * 1000;

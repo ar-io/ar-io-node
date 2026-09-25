@@ -331,6 +331,11 @@ export interface SubscriberOptions {
   now?: () => Date;
 }
 
+/** Where a file copied out of the engine's directory is written first. */
+function swarmPartialName(file: BandFile): string {
+  return `${file.name}.${file.sha256.slice(0, 16)}.swarm.tmp`;
+}
+
 /** Largest `.torrent` accepted. A band of 1024 files is well under this. */
 const MAX_TORRENT_BYTES = 16 * 1024 * 1024;
 
@@ -1078,13 +1083,19 @@ export class Subscriber {
   ): Promise<boolean> {
     const bandBytes = band.files.reduce((sum, file) => sum + file.size, 0);
     if (this.maxDiskBytes !== undefined) {
+      // A band that may come over the swarm is copied out of the engine's
+      // directory before install, so it needs its size twice for a while.
+      const need =
+        band.torrent !== undefined && this.transport !== undefined
+          ? 2 * bandBytes
+          : bandBytes;
       const used = await this.diskBytes(live, [
         path.join(this.incomingDir, publisher, index.name, band.id),
         ...(band.torrent !== undefined
           ? [path.join(this.swarmDir, band.torrent.infohashV1)]
           : []),
       ]);
-      if (used + bandBytes > this.maxDiskBytes) {
+      if (used + need > this.maxDiskBytes) {
         this.log.warn('Band would exceed the disk budget; skipping', {
           publisher,
           index: index.name,
@@ -1575,9 +1586,23 @@ export class Subscriber {
     const file = this.keptTorrentPath(signed.infohashV1);
     try {
       const kept = await fs.readFile(file);
-      if (torrentIds(kept).infohashV1 === signed.infohashV1) return kept;
+      if (torrentIds(kept).infohashV1 === signed.infohashV1) {
+        // Checked again, not trusted for having been kept: an older build
+        // may have kept it under weaker rules.
+        checkTorrentFiles(kept, band.files);
+        return sanitizeTorrent(
+          kept,
+          {
+            infohashV1: signed.infohashV1,
+            ...(signed.infohashV2 !== undefined
+              ? { infohashV2: signed.infohashV2 }
+              : {}),
+          },
+          this.allowedTrackers,
+        );
+      }
     } catch {
-      // Not kept yet, or unreadable: fetch it.
+      // Not kept, unreadable or no longer acceptable: fetch it again.
     }
     const torrent = await this.fetchTorrent(origin, band);
     await fs.mkdir(this.torrentsDir, { recursive: true });
@@ -1631,6 +1656,9 @@ export class Subscriber {
   ): Promise<string> {
     const incoming = path.join(this.incomingDir, publisher, indexName, band.id);
     await fs.mkdir(incoming, { recursive: true });
+    // Everything the install renames goes into installed/, so nothing but
+    // this band's own files may be left here.
+    await this.discardStaleFiles(incoming, band);
     for (const file of band.files) {
       let handle;
       try {
@@ -1645,10 +1673,9 @@ export class Subscriber {
           `${file.name} is not readable as a file: ${error?.code ?? error?.message}`,
         );
       }
-      const partial = path.join(
-        incoming,
-        `${file.name}.${file.sha256.slice(0, 16)}.tmp`,
-      );
+      // Not the HTTP downloader's partial name, which a failed copy would
+      // otherwise truncate and lose the resume point of.
+      const partial = path.join(incoming, swarmPartialName(file));
       try {
         const stat = await handle.stat();
         if (!stat.isFile() || stat.size !== file.size) {
@@ -1783,10 +1810,16 @@ export class Subscriber {
       try {
         const id = transport.idFor(torrent);
         const held = await transport.status(id);
+        // A held torrent with no reported location is not assumed ours.
         if (
-          held?.savePath !== undefined &&
-          path.resolve(held.savePath) !== path.resolve(dir)
+          held !== undefined &&
+          (held.savePath === undefined ||
+            path.resolve(held.savePath) !== path.resolve(dir))
         ) {
+          if (held.savePath === undefined) {
+            this.count(publisher, index.name, 'transport_fallback', 'torrent');
+            return { kind: 'fallback' };
+          }
           // The engine already holds these bytes: this node seeds them,
           // as a publisher or from another installed copy. Adding would only
           // return that torrent, so copy from where it lies instead, and
@@ -1890,7 +1923,7 @@ export class Subscriber {
       }
       if (status.state === 'seeding' && status.progress >= 1) {
         if (
-          status.savePath !== undefined &&
+          status.savePath === undefined ||
           path.resolve(status.savePath) !== path.resolve(dir)
         ) {
           // Not our download after all; leave it be.
@@ -1916,6 +1949,20 @@ export class Subscriber {
       }
       if (now - pending.lastProgressAt >= this.torrentTimeoutMs) {
         return this.abandonDownload(infohashV1, pending, 'no progress');
+      }
+      // The WebSeed was turned on and nothing has moved since either: it is
+      // unreachable from the engine (a private origin under its IP filter,
+      // say). HTTP from the sidecar is the next best thing; waiting out the
+      // whole timeout helps nobody.
+      if (
+        pending.webSeeded &&
+        now - pending.lastProgressAt >= 2 * this.webSeedAfterMs
+      ) {
+        return this.abandonDownload(
+          infohashV1,
+          pending,
+          'neither peers nor the WebSeed are delivering',
+        );
       }
       if (
         !pending.webSeeded &&
@@ -1963,10 +2010,10 @@ export class Subscriber {
     const infohashV1 = band.torrent!.infohashV1;
     this.finishing.add(infohashV1);
     try {
-      if (download !== undefined) {
-        // Stopped before the copy, so nothing is still being written.
-        await this.transport!.remove(download.id).catch(() => undefined);
-      }
+      // The engine keeps the torrent until the copy succeeds, so a copy cut
+      // short (a restart, a full disk) is tried again next poll from a
+      // download that is still complete. Its seeding cannot corrupt the
+      // copy: the digest is of the bytes as written to it.
       let staged: string;
       try {
         staged = await this.stageFromSwarm(
@@ -1976,7 +2023,20 @@ export class Subscriber {
           sourceDir,
         );
       } catch (error: any) {
-        if (!(error instanceof DownloadIntegrityError)) throw error;
+        if (!(error instanceof DownloadIntegrityError)) {
+          if (!this.stopping.signal.aborted) {
+            this.log.warn(
+              'Could not stage a torrent-fetched band; will retry',
+              {
+                publisher,
+                index: index.name,
+                band: band.id,
+                error: error?.message,
+              },
+            );
+          }
+          return { kind: 'pending' };
+        }
         this.log.warn(
           'A torrent-fetched band did not match its signed digests; fetching over HTTP',
           {
@@ -1993,6 +2053,7 @@ export class Subscriber {
         return { kind: 'fallback' };
       }
       if (download !== undefined) {
+        await this.transport!.remove(download.id).catch(() => undefined);
         await fs.rm(sourceDir, { recursive: true, force: true });
         await this.state.update((draft) => {
           delete draft.downloads[infohashV1];
@@ -2223,7 +2284,17 @@ export class Subscriber {
     const state = await this.state.load();
     for (const [infohashV1, download] of Object.entries(state.downloads)) {
       if (this.finishing.has(infohashV1)) continue;
-      if (!this.reconciledSinceStart.has(download.publisher)) continue;
+      // One no longer subscribed to is never reconciled; its downloads go.
+      if (
+        this.subscribedPublishers.has(download.publisher) &&
+        !this.reconciledSinceStart.has(download.publisher)
+      ) {
+        continue;
+      }
+      if (!this.subscribedPublishers.has(download.publisher)) {
+        await this.abandonDownload(infohashV1, download, 'unsubscribed');
+        continue;
+      }
       if (now - download.lastSeenAt >= this.torrentTimeoutMs) {
         await this.abandonDownload(infohashV1, download, 'no longer wanted');
       }
@@ -2469,6 +2540,7 @@ export class Subscriber {
     for (const file of band.files) {
       keep.add(file.name);
       keep.add(`${file.name}.${file.sha256.slice(0, 16)}.tmp`);
+      keep.add(swarmPartialName(file));
     }
     let names: string[];
     try {

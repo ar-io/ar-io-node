@@ -30,6 +30,7 @@ import { Publisher, loadPublisherSigner } from './publisher.js';
 import { QBittorrentTransport } from './transport/qbittorrent.js';
 import { waitForEngine } from './transport/wait.js';
 import { ClosedTracker, trackedInfohashes } from './tracker.js';
+import { isAllowedTrackerUrl } from './torrent.js';
 import { Subscriber } from './subscriber.js';
 import { CoreGatewayRegistry } from './gateway-registry.js';
 import { CoreCompatibilityCheck } from './core-compatibility.js';
@@ -240,6 +241,23 @@ async function main(): Promise<void> {
     await checkEngine();
     engineTimer = setInterval(() => void checkEngine(), 60_000);
     engineTimer.unref();
+  }
+
+  // The engine's filter refuses private addresses, the WebSeed and trackers
+  // included. Say so at once if a setting names one, rather than leave each
+  // band to time out onto HTTP.
+  if (engine !== undefined && config.ENGINE_BLOCK_PRIVATE) {
+    const privateHosts = [
+      ...config.ALLOWED_TRACKERS,
+      ...config.TRACKERS,
+      ...config.SUBSCRIBE.flatMap((s) => (s.url !== undefined ? [s.url] : [])),
+    ].filter((u) => !isAllowedTrackerUrl(u));
+    if (privateHosts.length > 0) {
+      log.warn(
+        'These addresses are private, and the torrent engine refuses private addresses: swarm transfers through them will fall back to HTTP. On a private network, set INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false.',
+        { addresses: privateHosts },
+      );
+    }
   }
 
   // A publisher of torrents runs the tracker its torrents announce to. It is

@@ -954,10 +954,18 @@ describe('Subscriber', () => {
         const result = await status(id);
         const dir = result?.savePath;
         if (!swapped && result?.state === 'seeding' && dir !== undefined) {
-          // A compromised engine points a finished file somewhere else.
+          // A compromised engine swaps a finished file for a link to a copy
+          // of it: the same size and digest, so only refusing to follow
+          // links catches it. Installed, the link would let whoever
+          // controls its target change the band afterwards.
           const name = (await fs.readdir(dir)).find((n) => n.endsWith('.cdb'))!;
+          const elsewhere = path.join(
+            path.dirname(subIncoming),
+            'elsewhere.cdb',
+          );
+          await fs.copyFile(path.join(dir, name), elsewhere);
           await fs.rm(path.join(dir, name));
-          await fs.symlink('/etc/hostname', path.join(dir, name));
+          await fs.symlink(elsewhere, path.join(dir, name));
           swapped = true;
         }
         return result;
@@ -1033,7 +1041,7 @@ describe('Subscriber', () => {
       );
       const opts = {
         torrentWatchMs: 20,
-        maxDiskBytes: Math.floor(bandBytes * 1.5),
+        maxDiskBytes: Math.floor(bandBytes * 2.5),
       };
       await makeTorrentSubscriber(engine, opts).pollOnce();
       // The engine has allocated the files, as libtorrent does early on.
@@ -1090,6 +1098,116 @@ describe('Subscriber', () => {
       const now = Object.keys((await subState.load()).downloads);
       assert.equal(now.length, 1);
       assert.notEqual(now[0], first, 'the old download is gone');
+    });
+
+    it('abandons the download of a publisher no longer subscribed to', async () => {
+      await makeBand('band-a');
+      await publishTorrents(); // no seeder
+      const engine = new MemoryTransport(new MemorySwarm());
+      await makeTorrentSubscriber(engine, { torrentWatchMs: 20 }).pollOnce();
+      assert.equal(Object.keys((await subState.load()).downloads).length, 1);
+
+      // Restarted with the publisher dropped from the configuration.
+      await new Subscriber({
+        log,
+        state: subState,
+        kinds: createKindRegistry({ log }),
+        registry: registryFor(),
+        subscribe: [],
+        trustedPublishers: [],
+        incomingDir: subIncoming,
+        installedDir: subInstalled,
+        fetchTimeoutMs: 5000,
+        downloadConcurrency: 4,
+        supersedeGraceMs: 0,
+        transport: engine,
+        now: () => clock,
+      }).pollOnce();
+      assert.deepEqual((await subState.load()).downloads, {});
+    });
+
+    it('keeps a complete download when staging it fails, and installs it next poll', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents(new MemoryTransport(swarm));
+      const engine = new MemoryTransport(swarm);
+      let added = 0;
+      const add = engine.add.bind(engine);
+      engine.add = async (opts) => {
+        added++;
+        return add(opts);
+      };
+      // Something in the way of the staging directory: a file where the
+      // index's incoming directory should be.
+      const blocker = path.join(subIncoming, WALLET);
+      await fs.mkdir(subIncoming, { recursive: true });
+      await fs.writeFile(blocker, 'in the way');
+
+      await makeTorrentSubscriber(engine).pollOnce();
+      assert.deepEqual(await installedIds(), []);
+      assert.equal(
+        Object.keys((await subState.load()).downloads).length,
+        1,
+        'the download is kept',
+      );
+
+      await fs.rm(blocker);
+      const httpBytes = await bytesBy('http');
+      await makeTorrentSubscriber(engine).pollOnce();
+      assert.deepEqual(await installedIds(), ['band-a']);
+      assert.equal(added, 1, 'not downloaded again');
+      assert.equal(
+        await bytesBy('http'),
+        httpBytes,
+        'installed from the kept download, not fetched over HTTP',
+      );
+    });
+
+    it('falls back to HTTP when the WebSeed does not deliver either', async () => {
+      await makeBand('band-a');
+      await publishTorrents(); // no seeder
+      const engine = new MemoryTransport(new MemorySwarm());
+      // A WebSeed the engine cannot reach, as under its IP filter.
+      engine.setWebSeeds = async () => undefined;
+      const opts = { torrentWatchMs: 20, webSeedAfterMs: 60_000 };
+      await makeTorrentSubscriber(engine, opts).pollOnce();
+      clock = new Date(clock.getTime() + 61_000);
+      await makeTorrentSubscriber(engine, opts).pollOnce();
+      assert.deepEqual(await installedIds(), [], 'WebSeed just turned on');
+      const fallbacks = await counted('transport_fallback', 'torrent');
+      clock = new Date(clock.getTime() + 61_000);
+      await makeTorrentSubscriber(engine, opts).pollOnce();
+      assert.equal(
+        await counted('transport_fallback', 'torrent'),
+        fallbacks + 1,
+      );
+      assert.deepEqual(await installedIds(), ['band-a'], 'installed over HTTP');
+    });
+
+    it('does not time out a download that keeps making progress', async () => {
+      await makeBand('band-a');
+      await publishTorrents();
+      const engine = new MemoryTransport(new MemorySwarm());
+      let progress = 0.1;
+      const status = engine.status.bind(engine);
+      engine.status = async (id) => {
+        const result = await status(id);
+        return result === undefined
+          ? undefined
+          : { ...result, state: 'downloading', progress };
+      };
+      const opts = { torrentWatchMs: 20, torrentTimeoutMs: 60_000 };
+      await makeTorrentSubscriber(engine, opts).pollOnce();
+      for (let i = 0; i < 3; i++) {
+        clock = new Date(clock.getTime() + 50_000); // 150 s in all
+        progress += 0.1;
+        await makeTorrentSubscriber(engine, opts).pollOnce();
+      }
+      assert.equal(
+        Object.keys((await subState.load()).downloads).length,
+        1,
+        'still downloading, past the timeout counted from the start',
+      );
     });
 
     it('stops seeding a band once it is retired', async () => {

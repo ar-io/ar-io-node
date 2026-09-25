@@ -92,7 +92,29 @@ describe('ClosedTracker', () => {
     assert.ok(!peers.includes('203.0.113.1:1001'), 'the oldest went first');
   });
 
-  it('refuses an address announcing too often', () => {
+  it('counts an IPv6 /64 as one address', () => {
+    const t = tracker({ maxPortsPerIp: 2, maxAnnouncesPerMinute: 1000 });
+    for (const n of [1, 2, 3, 4]) {
+      t.announce(query(OURS, 1000 + n), `2001:db8:1:2::${n}`);
+    }
+    // No v4 peers: the /64's peers are in peers6, at most two of them.
+    const response = decode(t.announce(query(OURS, 2000), '198.51.100.1'));
+    assert.equal((response.peers6 as Buffer).length / 18, 2);
+  });
+
+  it('keeps seeders when a torrent is full', () => {
+    const t = tracker({
+      maxPeersPerSwarm: 2,
+      maxAnnouncesPerMinute: 1000,
+    });
+    t.announce(query(OURS, 1001, { left: '0' }), '203.0.113.1'); // a seeder
+    t.announce(query(OURS, 1002), '203.0.113.2');
+    t.announce(query(OURS, 1003), '203.0.113.3');
+    const peers = peersOf(decode(t.announce(query(OURS, 2000), '203.0.113.9')));
+    assert.ok(peers.includes('203.0.113.1:1001'), 'the seeder survives');
+  });
+
+  it('refuses an address announcing one torrent too often', () => {
     const t = tracker({ maxAnnouncesPerMinute: 3 });
     for (let i = 0; i < 3; i++)
       t.announce(query(OURS, 1000 + i), '203.0.113.5');

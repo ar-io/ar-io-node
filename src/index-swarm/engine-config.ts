@@ -60,6 +60,8 @@ export const PRIVATE_RANGES_DAT = [
   '192.168.0.0 - 192.168.255.255 , 000 , private',
   '224.0.0.0 - 255.255.255.255 , 000 , multicast and reserved',
   ':: - ::1 , 000 , loopback',
+  '::ffff:0:0 - ::ffff:ffff:ffff , 000 , IPv4-mapped',
+  '64:ff9b:: - 64:ff9b::ffff:ffff , 000 , NAT64',
   'fc00:: - fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff , 000 , unique-local',
   'fe80:: - febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff , 000 , link-local',
   'ff00:: - ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff , 000 , multicast',

@@ -574,14 +574,16 @@ layers keep it off this node's network:
 - The sidecar hands the engine only trackers on public hosts, in canonical
   form, and no WebSeed but the publisher's own.
 - The engine's IP filter refuses private, loopback, link-local and
-  carrier-grade NAT addresses for peers and trackers alike, which also
+  carrier-grade NAT addresses for peers, trackers and WebSeeds, which also
   covers a public name that resolves to a private address, a tracker that
-  redirects, and addresses learned from DHT or peer exchange. The init
+  redirects, and peers learned from DHT or peer exchange (DHT's own traffic
+  is left to libtorrent, which ignores private nodes already). The init
   writes the filter on every engine start. Set
   `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false` only when the swarm runs on a
   private network, between gateways on one LAN, and list that network's
-  tracker in `INDEX_SWARM_ALLOWED_TRACKERS`. Only
-the peer port, `INDEX_SWARM_ENGINE_PORT` (default 51900, TCP and UDP), is
+  tracker in `INDEX_SWARM_ALLOWED_TRACKERS`.
+
+Only the peer port, `INDEX_SWARM_ENGINE_PORT` (default 51900, TCP and UDP), is
 published; open it in the host firewall for peers to connect in. The Web API
 is not published at all. It stays on the engine's network, and must be
 reached there at `index-swarm-engine:8080`: qBittorrent answers 401 to every request
