@@ -71,41 +71,108 @@ export class PublishedIndexes {
   private readonly log: Logger;
   readonly publishedDir: string;
   private readonly publicationFile: string;
+  private readonly revalidateMs: number;
+  private readonly stat: (
+    file: string,
+  ) => Promise<{ mtimeMs: number; size: number }>;
+  private readonly now: () => number;
   private view: PublicationView | undefined;
   private loading: Promise<PublicationView | undefined> | undefined;
+  /** When the file was last checked; undefined until the first check ends. */
+  private checkedAt: number | undefined;
+  private checking: Promise<void> | undefined;
 
-  constructor({ log, publishedDir }: { log: Logger; publishedDir: string }) {
+  /**
+   * @param revalidateMs how long a view is served before the file is looked
+   *   at again. At 0 every request checks the file first. Above 0 the check
+   *   runs off the request path: a request is answered from the view it
+   *   has, and only the very first waits. That matters because a stat runs
+   *   on libuv's shared thread pool, which other I/O (a cache sweep on a
+   *   slow disk, say) can saturate for tens of seconds, and a request for a
+   *   few-kilobyte document must not wait behind it. The sidecar replaces
+   *   the file by rename, so serving the previous document for a few seconds
+   *   more is harmless.
+   */
+  constructor({
+    log,
+    publishedDir,
+    revalidateMs = 0,
+    stat = (file) => fs.stat(file),
+    now = () => Date.now(),
+  }: {
+    log: Logger;
+    publishedDir: string;
+    revalidateMs?: number;
+    stat?: (file: string) => Promise<{ mtimeMs: number; size: number }>;
+    now?: () => number;
+  }) {
     this.log = log.child({ class: 'PublishedIndexes' });
     this.publishedDir = publishedDir;
     this.publicationFile = path.join(publishedDir, 'publication.json');
+    this.revalidateMs = revalidateMs;
+    this.stat = stat;
+    this.now = now;
   }
 
   /** The current view, or undefined when nothing valid is published. */
   async current(): Promise<PublicationView | undefined> {
+    const checkedAt = this.checkedAt;
+    if (
+      checkedAt !== undefined &&
+      this.revalidateMs > 0 &&
+      this.now() - checkedAt < this.revalidateMs
+    ) {
+      return this.view;
+    }
+    const revalidation = this.revalidate();
+    if (checkedAt !== undefined && this.revalidateMs > 0) {
+      // Stale while revalidating: the check finishes in the background.
+      return this.view;
+    }
+    await revalidation;
+    return this.view;
+  }
+
+  /** Look at the file once, rebuilding the view if it changed. Shared. */
+  private revalidate(): Promise<void> {
+    this.checking ??= this.check()
+      .catch((error: any) => {
+        this.log.warn('Could not check the published index document', {
+          path: this.publicationFile,
+          error: error?.message,
+        });
+      })
+      .finally(() => {
+        this.checking = undefined;
+      });
+    return this.checking;
+  }
+
+  private async check(): Promise<void> {
     let stat;
     try {
-      stat = await fs.stat(this.publicationFile);
+      stat = await this.stat(this.publicationFile);
     } catch {
       this.view = undefined;
-      return undefined;
+      this.checkedAt = this.now();
+      return;
     }
 
     const cached = this.view;
     if (
-      cached !== undefined &&
-      cached.mtimeMs === stat.mtimeMs &&
-      cached.byteSize === stat.size
+      cached === undefined ||
+      cached.mtimeMs !== stat.mtimeMs ||
+      cached.byteSize !== stat.size
     ) {
-      return cached;
+      // Concurrent readers arriving just after a republish share one rebuild.
+      if (this.loading === undefined) {
+        this.loading = this.build(stat.mtimeMs, stat.size).finally(() => {
+          this.loading = undefined;
+        });
+      }
+      await this.loading;
     }
-
-    // Concurrent readers arriving just after a republish share one rebuild.
-    if (this.loading === undefined) {
-      this.loading = this.build(stat.mtimeMs, stat.size).finally(() => {
-        this.loading = undefined;
-      });
-    }
-    return this.loading;
+    this.checkedAt = this.now();
   }
 
   private async build(
