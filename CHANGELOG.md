@@ -40,6 +40,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - replacing a band never leaves a moment when lookups to it miss;
     - one band id belongs to one publisher at a time.
 
+- **Index bands over BitTorrent (compose profile `index-swarm-torrent`)** —
+  with a torrent engine configured (`INDEX_SWARM_ENGINE_URL`), publishers
+  also offer every band as a deterministic hybrid v1/v2 torrent and seed it,
+  and subscribers fetch from peers first, turn on the publisher's metered
+  WebSeed only when peers stall, fall back to HTTP on any failure, and seed
+  every band they install. Off unless the engine runs; HTTP-only nodes are
+  unaffected.
+  - The engine is qBittorrent-nox 5.2.3, pinned by digest, on its own Docker
+    network shared only with the sidecar, so it cannot reach the gateway, the
+    observer or other services. It mounts the published and installed bands
+    read only and writes only to `swarm/`.
+  - A publisher runs a closed tracker that answers only for the bands it
+    offers, and seeds from hard links to its blobs, so a band rebuilt in
+    place is never served with bytes that fail their pieces.
+  - A subscriber checks every `.torrent` against the signed infohashes and
+    hands its engine only the info dictionary and trackers on public hosts:
+    nothing outside the info dictionary is signed. Every file is hashed again
+    before install. Downloads survive a restart without resetting their
+    timeout.
+  - New gateway routes: `/ar-io/indexes/<name>/<band>.torrent` and the BEP 19
+    WebSeed `/ar-io/indexes/webseed/<torrent name>/<file>`, metered and
+    cached like the blob route.
+  - See `docs/index-swarm.md#torrent-engine`.
+
 - **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
   item sizes for every data item in a list of root bundles, nested bundles
   included, by reading only each bundle's item index and item headers through
