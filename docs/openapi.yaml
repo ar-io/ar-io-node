@@ -1336,10 +1336,16 @@ paths:
           description: Payment required (x402), when rate limited and payments are enabled.
         '404':
           description: No torrent this gateway offers has this name and file.
+        '416':
+          description: The range cannot be satisfied.
         '429':
           description: Rate limited.
         '503':
           description: The file is published but not yet servable. Retry after `Retry-After` seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: { type: string }
   '/ar-io/indexes/{name}/{band}.torrent':
     get:
       tags: [Indexes]
