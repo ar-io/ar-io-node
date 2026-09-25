@@ -26,7 +26,7 @@ export interface EngineSettings {
   username: string;
   password: string;
   /** Where downloads land; the only directory the engine may write data to. */
-  incomingDir: string;
+  downloadDir: string;
   /** Upload cap in bytes per second; 0 is unlimited. */
   uploadLimitBytesPerSec: number;
   /** Web UI port inside the container. The sidecar must use this exact port. */
@@ -95,9 +95,9 @@ export function managedSettings(
       // once. A gateway seeds every band it holds, so a queue would silently
       // leave most of them unseeded.
       'Session\\QueueingSystemEnabled': 'false',
-      // Downloads land in incoming/ and nowhere else. The image's default
+      // Downloads land in swarm/ and nowhere else. The image's default
       // config sends partial files to a temp path outside the mounts.
-      'Session\\DefaultSavePath': settings.incomingDir,
+      'Session\\DefaultSavePath': settings.downloadDir,
       'Session\\TempPathEnabled': 'false',
       // Automatic management would move files to the default save path,
       // which for a seeded band means moving it out of published/.

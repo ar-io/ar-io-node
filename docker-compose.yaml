@@ -814,6 +814,10 @@ services:
     # Deliberately no depends_on. The sidecar shares only a volume with the
     # gateway and works whether or not it is up, and a dependency here would
     # mean bringing this profile up could start or recreate core.
+    # The closed tracker, which a publisher of torrents runs. Nothing listens
+    # on a node that does not publish them.
+    ports:
+      - '${INDEX_SWARM_TRACKER_PORT:-6969}:${INDEX_SWARM_TRACKER_PORT:-6969}/tcp'
     volumes:
       - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
       # Only the observer keypair, and only when it is kept in a file: the
@@ -840,6 +844,17 @@ services:
       - INDEX_SWARM_MAX_DISK_BYTES=${INDEX_SWARM_MAX_DISK_BYTES:-}
       - INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC:-}
       - INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS=${INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS:-}
+      # The swarm tier, on only when INDEX_SWARM_ENGINE_URL is set and the
+      # index-swarm-torrent profile runs the engine.
+      - INDEX_SWARM_ENGINE_URL=${INDEX_SWARM_ENGINE_URL:-}
+      - INDEX_SWARM_ENGINE_AUTH=${INDEX_SWARM_ENGINE_AUTH:-}
+      - INDEX_SWARM_TRACKERS=${INDEX_SWARM_TRACKERS:-}
+      - INDEX_SWARM_TRACKER_PORT=${INDEX_SWARM_TRACKER_PORT:-6969}
+      - INDEX_SWARM_PRIVATE_SWARM=${INDEX_SWARM_PRIVATE_SWARM:-}
+      - INDEX_SWARM_TORRENT_TIMEOUT_SECONDS=${INDEX_SWARM_TORRENT_TIMEOUT_SECONDS:-}
+      - INDEX_SWARM_WEBSEED_AFTER_SECONDS=${INDEX_SWARM_WEBSEED_AFTER_SECONDS:-}
+      - INDEX_SWARM_ENGINE_UID=${INDEX_SWARM_ENGINE_UID:-1000}
+      - INDEX_SWARM_ENGINE_GID=${INDEX_SWARM_ENGINE_GID:-1000}
       # Identity, shared with the gateway. Registry records come from the
       # gateway's /ar-io/peers, so the sidecar needs no RPC settings.
       - AR_IO_WALLET=${AR_IO_WALLET:-}
@@ -881,6 +896,92 @@ services:
         max-file: '${INDEX_SWARM_LOG_MAX_FILE:-3}'
     networks:
       - ar-io-network
+      # Where it reaches the torrent engine's Web API.
+      - index-swarm-engine
+    labels:
+      autoheal: ${RUN_AUTOHEAL:-false}
+
+  # Writes the settings the swarm depends on into the torrent engine's config
+  # before each engine start, then exits. The engine image has no way to take
+  # a Web UI password from the environment; without this it would invent one
+  # per start that the sidecar could never know. Fails, and so keeps the
+  # engine down, when INDEX_SWARM_ENGINE_AUTH is unset.
+  index-swarm-engine-init:
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/engine-init.js']
+    profiles:
+      - index-swarm-torrent
+    restart: 'no'
+    volumes:
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
+      - ${INDEX_SWARM_ENGINE_CONFIG_PATH:-./data/index-swarm-engine}:/config
+    environment:
+      - INDEX_SWARM_LOG_FORMAT=${INDEX_SWARM_LOG_FORMAT:-simple}
+      - INDEX_SWARM_ENGINE_AUTH=${INDEX_SWARM_ENGINE_AUTH:-}
+      - INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC:-0}
+      - INDEX_SWARM_ENGINE_UID=${INDEX_SWARM_ENGINE_UID:-1000}
+      - INDEX_SWARM_ENGINE_GID=${INDEX_SWARM_ENGINE_GID:-1000}
+    logging:
+      driver: json-file
+      options:
+        max-size: '${INDEX_SWARM_LOG_MAX_SIZE:-50m}'
+        max-file: '${INDEX_SWARM_LOG_MAX_FILE:-3}'
+    network_mode: none
+
+  # The torrent engine: qBittorrent-nox on libtorrent 2, pinned by digest
+  # (docs/index-swarm.md#why-qbittorrent). The sidecar drives it over its
+  # Web API; nothing else does. It sees the index directories at the same
+  # paths as the sidecar, because the sidecar hands it paths.
+  index-swarm-engine:
+    image: qbittorrentofficial/qbittorrent-nox:5.2.3-lt2-1@sha256:f269c2aae56f1bf8caddd77a59e7ba2a278919d8401213266b8fe154c6ac1043
+    profiles:
+      - index-swarm-torrent
+    restart: unless-stopped
+    depends_on:
+      index-swarm-engine-init:
+        condition: service_completed_successfully
+    # The image runs tini itself. The grace period lets it save resume data,
+    # which is what spares a restart from rechecking every seeded band.
+    stop_grace_period: 30s
+    volumes:
+      - ${INDEX_SWARM_ENGINE_CONFIG_PATH:-./data/index-swarm-engine}:/config
+      # Seeds what this node publishes and what it has installed, and can
+      # write neither: the gateway serves and loads those directories. The
+      # publisher seeds from published/.seed/, hard links to the blobs.
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}/published:/app/data/indexes/published:ro
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}/installed:/app/data/indexes/installed:ro
+      # The only place it may write.
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}/swarm:/app/data/indexes/swarm
+    environment:
+      - QBT_LEGAL_NOTICE=confirm
+      - QBT_TORRENTING_PORT=${INDEX_SWARM_ENGINE_PORT:-51900}
+      - PUID=${INDEX_SWARM_ENGINE_UID:-1000}
+      - PGID=${INDEX_SWARM_ENGINE_GID:-1000}
+      - UMASK=022
+    # Only the peer port reaches the host. The Web API stays on the engine's
+    # own network, where the sidecar reaches it as index-swarm-engine:8080;
+    # it must be reached at that same port, because qBittorrent refuses a
+    # Host header naming another.
+    ports:
+      - '${INDEX_SWARM_ENGINE_PORT:-51900}:${INDEX_SWARM_ENGINE_PORT:-51900}/tcp'
+      - '${INDEX_SWARM_ENGINE_PORT:-51900}:${INDEX_SWARM_ENGINE_PORT:-51900}/udp'
+    healthcheck:
+      # Loopback needs no password (the init sets WebUI\LocalHostAuth=false).
+      test: ['CMD', 'curl', '-fsS', '-o', '/dev/null', 'http://127.0.0.1:8080/api/v2/app/webapiVersion']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: '${INDEX_SWARM_LOG_MAX_SIZE:-50m}'
+        max-file: '${INDEX_SWARM_LOG_MAX_FILE:-3}'
+    # Its own network, shared only with the sidecar. Trackers, peers and
+    # WebSeeds are chosen by other gateways, so the engine must not be able
+    # to reach core, the observer or anything else on ar-io-network.
+    networks:
+      - index-swarm-engine
     labels:
       autoheal: ${RUN_AUTOHEAL:-false}
 
@@ -901,3 +1002,5 @@ volumes:
 networks:
   ar-io-network:
     name: ${DOCKER_NETWORK_NAME:-ar-io-network}
+  index-swarm-engine:
+    name: ${INDEX_SWARM_ENGINE_NETWORK_NAME:-ar-io-index-swarm-engine}

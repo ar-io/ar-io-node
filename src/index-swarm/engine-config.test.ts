@@ -25,7 +25,7 @@ const QBITTORRENT_ADMINADMIN =
 const SETTINGS: EngineSettings = {
   username: 'swarm',
   password: 'correct horse',
-  incomingDir: '/app/data/indexes/incoming',
+  downloadDir: '/app/data/indexes/swarm',
   uploadLimitBytesPerSec: 5 * 1024 * 1024,
   webUiPort: 8080,
 };
@@ -80,7 +80,7 @@ describe('engine config', () => {
       const config = renderEngineConfig(IMAGE_DEFAULT, SETTINGS);
       assert.equal(
         value(config, 'Session\\DefaultSavePath'),
-        '/app/data/indexes/incoming',
+        '/app/data/indexes/swarm',
       );
       assert.equal(value(config, 'Session\\TempPathEnabled'), 'false');
       assert.equal(value(config, 'Session\\QueueingSystemEnabled'), 'false');

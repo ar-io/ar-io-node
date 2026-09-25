@@ -10,7 +10,7 @@
  * engine start (the `index-swarm-engine-init` compose service).
  *
  * It writes the settings the swarm depends on into qBittorrent's config
- * (see `engine-config.ts`) and hands `incoming/` to the engine's user, then
+ * (see `engine-config.ts`) and hands `swarm/` to the engine's user, then
  * exits. The engine waits for it to succeed, so a missing credential stops
  * the engine with a message here instead of starting one nobody can log in
  * to. It runs as root in the core image; the engine never does.
@@ -56,13 +56,13 @@ async function run(): Promise<void> {
     );
   }
 
-  // The engine may write only to incoming/. The other two exist so the
+  // The engine may write only to swarm/. The other two exist so the
   // read-only mounts have something to mount.
-  const incoming = path.join(dataDir, 'incoming');
-  for (const dir of ['published', 'incoming', 'installed']) {
+  const swarm = path.join(dataDir, 'swarm');
+  for (const dir of ['published', 'swarm', 'installed']) {
     await fs.mkdir(path.join(dataDir, dir), { recursive: true });
   }
-  await chownTree(incoming, uid, gid);
+  await chownTree(swarm, uid, gid);
 
   const file = path.join(
     configDir,
@@ -75,7 +75,7 @@ async function run(): Promise<void> {
   const rendered = renderEngineConfig(existing, {
     username: auth.username,
     password: auth.password,
-    incomingDir: incoming,
+    downloadDir: swarm,
     uploadLimitBytesPerSec: uploadLimit,
     webUiPort: 8080,
   });
@@ -88,7 +88,7 @@ async function run(): Promise<void> {
   log.info('Torrent engine configured', {
     configFile: file,
     changed: rendered !== existing,
-    incoming,
+    swarm,
     uploadLimitBytesPerSec: uploadLimit,
   });
 }
