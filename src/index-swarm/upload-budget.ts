@@ -64,9 +64,11 @@ export class UploadBudget {
     await state.update((draft) => {
       const previous = draft.uploadBudget;
       // A lower reading means the engine restarted and counts from zero.
+      // With no saved day, what the engine already uploaded is charged in
+      // full: it may well be today's, and erring high only throttles early.
       const delta =
         previous === undefined
-          ? 0
+          ? counter
           : counter >= previous.lastCounter
             ? counter - previous.lastCounter
             : counter;
@@ -77,12 +79,13 @@ export class UploadBudget {
     uploadToday.set(used);
     const over = dailyLimitBytes > 0 && used >= dailyLimitBytes;
     uploadThrottled.set(over ? 1 : 0);
-    // Set whenever the answer changes, and on the first check, which also
-    // puts it back after the engine restarted with its configured rate.
+    // Applied on every check, not only when the answer changes: an engine
+    // that restarted between two checks comes back at its configured rate,
+    // and nothing else would put the throttle back. One idempotent call.
+    await transport.setUploadLimit(
+      over ? THROTTLED_BYTES_PER_SEC : normalRateBytesPerSec,
+    );
     if (over !== this.throttled) {
-      await transport.setUploadLimit(
-        over ? THROTTLED_BYTES_PER_SEC : normalRateBytesPerSec,
-      );
       if (over) {
         log.warn(
           'Daily upload budget spent; seeding is throttled until tomorrow (UTC)',

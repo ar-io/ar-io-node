@@ -175,7 +175,11 @@ function addressBucket(ip: string): string {
 function trustedProxyList(entries: string[]): net.BlockList {
   const list = new net.BlockList();
   for (const entry of entries) {
-    const [address, prefix] = normalizeIp(entry).split('/');
+    // Strictly `address` or `address/bits`: a typo such as `10.0.0.0/`
+    // would otherwise read as /0 and trust every address.
+    const match = /^([^/]+)(?:\/(\d{1,3}))?$/.exec(entry.trim());
+    const address = match === null ? '' : normalizeIp(match[1]);
+    const prefix = match?.[2];
     const family = net.isIP(address);
     if (family === 0) {
       throw new Error(`Not an IP address or CIDR: ${entry}`);

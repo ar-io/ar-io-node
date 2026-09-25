@@ -152,6 +152,13 @@ describe('ClosedTracker', () => {
       () => tracker({ trustedProxies: ['10.0.0.0/40'] }),
       /Not an IP/,
     );
+    for (const typo of ['10.0.0.0/', '10.0.0.0/8/9', '/8', '10.0.0.0/x']) {
+      assert.throws(
+        () => tracker({ trustedProxies: [typo] }),
+        /Not an IP/,
+        typo,
+      );
+    }
   });
 
   it('counts an IPv6 /64 as one address', () => {

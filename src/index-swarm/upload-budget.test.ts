@@ -75,4 +75,22 @@ describe('UploadBudget', () => {
     assert.equal(await again.check(), 110 * GB);
     assert.equal(transport.uploadLimit, THROTTLED_BYTES_PER_SEC);
   });
+
+  it('charges what the engine already uploaded when there is no saved day', async () => {
+    transport.extraUploaded = 150 * GB;
+    assert.equal(await budget().check(), 150 * GB);
+    assert.equal(transport.uploadLimit, THROTTLED_BYTES_PER_SEC);
+  });
+
+  it('puts the throttle back after an engine restart it did not see', async () => {
+    const b = budget();
+    transport.extraUploaded = 101 * GB;
+    await b.check();
+    assert.equal(transport.uploadLimit, THROTTLED_BYTES_PER_SEC);
+    // Between two checks the engine restarts at its configured rate.
+    transport.uploadLimit = 10_485_760;
+    transport.extraUploaded = 1 * GB;
+    await b.check();
+    assert.equal(transport.uploadLimit, THROTTLED_BYTES_PER_SEC);
+  });
 });
