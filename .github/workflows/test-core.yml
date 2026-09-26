@@ -25,10 +25,6 @@ jobs:
       - run: yarn --immutable --immutable-cache
       - run: yarn build
       - run: yarn lint:check
-      # Typecheck including test files. `yarn build` uses tsconfig.prod.json,
-      # which excludes **/*.test.ts, and `yarn test` runs via a type-stripping
-      # loader — so without this, type errors in test code reach no CI gate.
-      - run: yarn typecheck
       - run: yarn test:ci
       - name: Build core Docker image
         if: matrix.os == 'ubuntu-latest'
@@ -39,3 +35,27 @@ jobs:
         env:
           TEST_SKIP_TAGS: flaky
           USE_PREBUILT_IMAGE: 'true'
+          # The E2E suites wipe ./data/sqlite before running. cleanDb refuses to
+          # do that unless this is set, so a developer can't lose a live gateway
+          # index by running `yarn test:e2e` locally. A CI runner has no index to
+          # lose, so opting in here is safe.
+          ALLOW_DESTRUCTIVE_E2E: 'true'
+
+      # Typecheck including test files. `yarn build` uses tsconfig.prod.json,
+      # which excludes **/*.test.ts, and `yarn test` runs via a type-stripping
+      # loader — so without this, type errors in test code reach no CI gate.
+      #
+      # Runs AFTER the test steps, deliberately. `shell: bash -e` aborts the job
+      # at the first failing step, so while this sat before them a single type
+      # error meant the unit suite, the image build and the E2E suites were all
+      # skipped — and the job still reported plainly as "failure", so the
+      # skipping was invisible. This workflow is dispatch-only and had
+      # accumulated enough type errors to make everything below it unreachable.
+      # Ordering it last keeps it a gate without letting it mask the tests.
+      #
+      # `if: !cancelled()` because an omitted `if` implies `success()`, which
+      # would swap one masking problem for its mirror image: a failing test
+      # suite would then hide type errors instead of the other way round. This
+      # way both are always reported from a single run.
+      - run: yarn typecheck
+        if: ${{ !cancelled() }}
