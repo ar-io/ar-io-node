@@ -176,6 +176,24 @@ search, because a range cannot be verified end to end. Outcomes are counted in
 the recorded size. The size is optional and ignored by readers that predate it,
 so indexes that include it remain readable by older gateways.
 
+A complete location (item offset, payload offset and payload size), whether
+from an index or from stored data attributes, gets the same header check before
+any bytes are read from it. The same item can exist under one ID in several
+bundles, and chunk verification only proves that bytes belong to the root, not
+that they are this item, so a root paired with another copy's offset would
+otherwise serve the wrong bytes marked verified
+([#937](https://github.com/ar-io/ar-io-node/issues/937)). A header read cannot
+confirm the payload size, since the header does not record it. A location that
+is not confirmed is not served, and one from an index is not stored; resolution
+continues with the bundle search (for stored attributes, only when
+`ENABLE_DATA_ITEM_ROOT_TX_SEARCH` is on). A rejected stored location is not
+removed, so it is checked again on each uncached request. Outcomes are counted in
+`data_item_location_check_total{source,result}`, where `source` is
+`stored_attributes`, `attributes_traversal`, `root_tx_index` or
+`root_tx_index_fallback`, and `result` is `confirmed` or `rejected`. `rejected`
+also counts headers that could not be read, so a rise can mean upstream read
+failures as well as wrong locations.
+
 Observability (per-node Prometheus metrics):
 
 - `composite_root_tx_exit_reason_total{reason,winning_source}` — one increment
