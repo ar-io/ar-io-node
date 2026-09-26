@@ -5,6 +5,11 @@ on: [workflow_dispatch]
 jobs:
   test:
     strategy:
+      # Without this, a macOS failure cancels the in-flight ubuntu job, and
+      # ubuntu is the only one that builds the image and runs E2E. Since macOS
+      # skips both, it reaches typecheck far sooner and takes ubuntu down with
+      # it mid-build.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
