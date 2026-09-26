@@ -343,6 +343,76 @@ export class RootParentDataSource implements ContiguousDataSource {
   }
 
   /**
+   * Confirms, with one bounded header read, that the data item at
+   * `(rootTxId, itemOffset)` is the requested item and that its payload
+   * starts at `dataOffset`, before any bytes are read from that location.
+   *
+   * `dataSize` is not confirmed: an ANS-104 header does not record its
+   * payload length, so the size is only used to bound the read.
+   *
+   * A root and an offset that describe different copies of the same item
+   * cannot be told apart by chunk verification: chunks prove the bytes belong
+   * to the root, not that they are this item. Items signed deterministically
+   * exist under one ID in several bundles, so a stored root paired with an
+   * offset taken from another copy reads the wrong bytes, with the right
+   * length, and they verify (ar-io/ar-io-node#937).
+   *
+   * A header that cannot be read (e.g. an upstream timeout) is not confirmed
+   * either; the header parser does not distinguish a failed read from bytes
+   * that are not a data item header. If the request was aborted, the abort is
+   * rethrown instead of falling through to slower resolution.
+   *
+   * @returns `true` only when the header at the offset is the requested item
+   */
+  private async confirmItemLocation({
+    id,
+    rootTxId,
+    itemOffset,
+    dataOffset,
+    dataSize,
+    signal,
+    source,
+  }: {
+    id: string;
+    rootTxId: string;
+    itemOffset: number;
+    dataOffset: number;
+    dataSize: number;
+    signal?: AbortSignal;
+    /** Where the location came from, for logs and metrics. */
+    source: string;
+  }): Promise<boolean> {
+    const headerSize = dataOffset - itemOffset;
+    const located =
+      Number.isSafeInteger(headerSize) && headerSize > 0 && dataSize >= 0
+        ? await this.resolveItemAtOffset({
+            id,
+            rootTxId,
+            itemOffset,
+            itemSize: headerSize + dataSize,
+            expectedDataOffset: dataOffset,
+            signal,
+            source,
+          })
+        : null;
+    if (located === null) {
+      signal?.throwIfAborted();
+    }
+    const confirmed = located !== null;
+    metrics.dataItemLocationCheckTotal.inc({
+      source,
+      result: confirmed ? 'confirmed' : 'rejected',
+    });
+    if (!confirmed) {
+      this.log.warn(
+        'Data item location not confirmed by its header; not serving from it',
+        { id, rootTxId, itemOffset, dataOffset, dataSize, source },
+      );
+    }
+    return confirmed;
+  }
+
+  /**
    * Streams a payload located from an offset and size that nothing else vouches
    * for (a direct offset hint, or a root TX index value that records the item
    * size) through signature verification.
@@ -1078,10 +1148,28 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       // Step 1: Try attributes-based traversal first
       span.addEvent('Attempting attributes-based traversal');
-      const attributesTraversal = await this.traverseToRootUsingAttributes(
+      let attributesTraversal = await this.traverseToRootUsingAttributes(
         id,
         originalAttributes,
       );
+
+      if (
+        attributesTraversal &&
+        !(await this.confirmItemLocation({
+          id,
+          rootTxId: attributesTraversal.rootTxId,
+          itemOffset: attributesTraversal.totalOffset,
+          dataOffset: attributesTraversal.rootDataOffset,
+          dataSize: attributesTraversal.size,
+          signal,
+          source: attributesTraversal.fromPreComputed
+            ? 'stored_attributes'
+            : 'attributes_traversal',
+        }))
+      ) {
+        span.addEvent('Attributes location rejected by header check');
+        attributesTraversal = null;
+      }
 
       if (attributesTraversal) {
         const {
@@ -1231,6 +1319,7 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       let rootTxId: string | undefined;
       let rootResult: any;
+      let indexLocationConfirmed = false;
       try {
         // Local-first: accept any result carrying a rootTxId so the lookup
         // short-circuits on a local source (db/cdb) instead of probing remote
@@ -1250,10 +1339,31 @@ export class RootParentDataSource implements ContiguousDataSource {
         // stored only when the source also reports the payload size: an index
         // that records just the item size (a CDB64 value with `s`) is not
         // trusted for it until the payload has verified below.
+        // A complete location (item offset, payload offset and payload size)
+        // is served directly below, so confirm the header at it first. The
+        // index may describe another copy of an item that exists in several
+        // bundles (ar-io/ar-io-node#937).
         if (
           rootTxId !== undefined &&
           rootResult?.rootOffset !== undefined &&
-          rootResult?.rootDataOffset !== undefined
+          rootResult?.rootDataOffset !== undefined &&
+          rootResult?.dataSize !== undefined
+        ) {
+          indexLocationConfirmed = await this.confirmItemLocation({
+            id,
+            rootTxId,
+            itemOffset: rootResult.rootOffset,
+            dataOffset: rootResult.rootDataOffset,
+            dataSize: rootResult.dataSize,
+            signal,
+            source: 'root_tx_index',
+          });
+        }
+        if (
+          rootTxId !== undefined &&
+          rootResult?.rootOffset !== undefined &&
+          rootResult?.rootDataOffset !== undefined &&
+          indexLocationConfirmed
         ) {
           const attributesToStore: Record<string, unknown> = {
             rootTransactionId: rootTxId,
@@ -1339,7 +1449,8 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       if (
         rootResult?.rootDataOffset !== undefined &&
-        rootResult?.dataSize !== undefined
+        rootResult?.dataSize !== undefined &&
+        indexLocationConfirmed
       ) {
         // Use Turbo offsets directly
         offset = {
@@ -1484,6 +1595,24 @@ export class RootParentDataSource implements ContiguousDataSource {
                 signal,
               );
               bundleParseResult = fallback.result;
+              // The full lookup may return the location rejected above, or
+              // offsets (or a path) for another copy of the item under a
+              // different root, while they are read from this root
+              // (ar-io/ar-io-node#937).
+              if (
+                bundleParseResult !== null &&
+                !(await this.confirmItemLocation({
+                  id,
+                  rootTxId,
+                  itemOffset: bundleParseResult.itemOffset,
+                  dataOffset: bundleParseResult.dataOffset,
+                  dataSize: bundleParseResult.dataSize,
+                  signal,
+                  source: 'root_tx_index_fallback',
+                }))
+              ) {
+                bundleParseResult = null;
+              }
               offsetParseSpan.setAttributes({
                 'offset.method': fallback.method,
               });
