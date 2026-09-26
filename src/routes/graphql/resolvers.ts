@@ -59,8 +59,24 @@ export const DEFAULT_PAGE_SIZE = 10;
 export const MAX_PAGE_SIZE = 1000;
 const NOT_FOUND = '<not-found>';
 
+/**
+ * Resolve the effective page size for a connection query.
+ *
+ * Clamps at both ends. The upper bound is the obvious one; the lower bound
+ * exists because `Math.min` alone let a negative `first` straight through —
+ * `Math.min(-5, 1000)` is `-5`. That value reached the query layer, where it
+ * did not act as "return five rows backwards" but as no effective limit at
+ * all: `transactions(first: -5)` was observed making a gateway attempt a
+ * 22.9-million-row ClickHouse scan before the server's own row cap stopped it.
+ *
+ * That made an unauthenticated GraphQL request an easy way to spend a large
+ * amount of someone else's database budget, so the floor matters more than the
+ * ceiling here. `first: 0` is also raised to 1 rather than honoured, since a
+ * zero-row page is indistinguishable from a client mistake and the connection
+ * contract has no use for it.
+ */
 export function getPageSize({ first }: { first?: number }) {
-  return Math.min(first ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
+  return Math.max(1, Math.min(first ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE));
 }
 
 function findFieldSelection(
