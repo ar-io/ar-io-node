@@ -386,6 +386,13 @@ export class CompositeArNSResolver implements NameResolver {
       // defensive against future drift around the ternary above.
       if (usedCachedFallback && cachedResolution) {
         span.addEvent('Resolved by cache fallback');
+        // Counted, not just traced. This is a stale answer: the cached value
+        // is returned because fresh resolution was still in flight when the
+        // fallback timeout fired, so a recently-changed target will not be
+        // reflected here. Without a metric this path was visible only to
+        // operators running a trace collector, which is why "my ArNS change
+        // hasn't propagated" was hard to diagnose from the gateway side.
+        metrics.arnsCachedResolutionFallbackOnTimeoutCounter.inc();
         return cachedResolution;
       }
       // If fresh resolution resolved fast with no resolved id (e.g.,

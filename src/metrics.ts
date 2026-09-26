@@ -860,6 +860,27 @@ export const arnsCachedResolutionFallbackOnEmptyCounter =
     help: 'Count of times CompositeArNSResolver returned a cached resolution because fresh resolution had no resolved id (no error/timeout)',
   });
 
+/**
+ * Counts the *other* stale-serve path: fresh resolution was still running when
+ * `ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS` (default 250ms) elapsed, so the
+ * previously cached resolution was returned instead.
+ *
+ * This is the more likely of the two paths to fire in practice, because 250ms
+ * is a tight budget for an on-chain lookup, and it was previously visible only
+ * as an OTEL span event. An operator reading metrics alone could not tell that
+ * a name was being answered from a stale cache rather than resolved, which
+ * makes "my target change hasn't propagated" effectively undiagnosable without
+ * a trace collector.
+ *
+ * Read alongside `arns_cache_miss_total`: the ratio is how often a miss
+ * degraded into a stale answer rather than a fresh one.
+ */
+export const arnsCachedResolutionFallbackOnTimeoutCounter =
+  new promClient.Counter({
+    name: 'arns_cached_resolution_fallback_on_timeout_total',
+    help: 'Count of times CompositeArNSResolver returned a cached (possibly stale) resolution because fresh resolution exceeded ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS',
+  });
+
 export const arnsNameCacheDurationSummary = new promClient.Summary({
   name: 'arns_name_cache_duration_ms',
   help: 'Time in ms it takes to fetch and cache arns base names',
@@ -916,9 +937,26 @@ export const arnsNameCacheDebounceTriggeredCounter = new promClient.Counter({
   labelNames: ['type'],
 });
 
+/**
+ * @deprecated Misnamed: prom-client's `startTimer()` observes **seconds**, so
+ * despite the `_ms` suffix the recorded values are seconds. A p99 that reads
+ * `0.12` is 120ms, not 0.12ms. Kept so existing dashboards don't break;
+ * prefer `arnsResolutionDurationSeconds` below, which is named for what it
+ * actually records.
+ */
 export const arnsResolutionTime = new promClient.Summary({
   name: 'arns_resolution_time_ms',
-  help: 'Time in ms it takes to resolve an arns name',
+  help: 'DEPRECATED (values are SECONDS despite the _ms name; use arns_resolution_duration_seconds). Time to resolve an arns name',
+});
+
+/**
+ * Correctly-named replacement for `arns_resolution_time_ms`, following the
+ * Prometheus convention of base units with a `_seconds` suffix. Observes the
+ * same measurement.
+ */
+export const arnsResolutionDurationSeconds = new promClient.Summary({
+  name: 'arns_resolution_duration_seconds',
+  help: 'Seconds taken to resolve an ArNS name, measured in the ArNS middleware (includes cache hits)',
 });
 
 export const arnsResolutionResolverCount = new promClient.Counter({
