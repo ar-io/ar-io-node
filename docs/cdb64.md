@@ -132,7 +132,7 @@ result is actionable when the caller can proceed without further lookups:
 
 | Exit reason        | Condition                                             | Notes                                             |
 | ------------------ | ----------------------------------------------------- | ------------------------------------------------- |
-| `complete_offsets` | `rootOffset` + `rootDataOffset` + `size` + `dataSize` | Full offsets; one header check, no bundle search  |
+| `complete_offsets` | `rootOffset` + `rootDataOffset` + `size` + `dataSize` | One header check; bundle search only if it fails  |
 | `l1_root`          | `rootTxId === id`                                     | Definitive L1 root; passthrough                   |
 | `offsets`          | `rootOffset` + `rootDataOffset` present               | The CDB64 case; see [Item size](#item-size)       |
 | `path`             | non-empty `path`                                      | Enables path-guided bundle navigation             |
