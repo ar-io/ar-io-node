@@ -5,6 +5,14 @@ on: [push, workflow_dispatch]
 jobs:
   test:
     strategy:
+      # A macOS failure must not cancel the in-flight ubuntu job. Only ubuntu
+      # builds the core image and runs E2E, and because macOS skips both it
+      # reaches the later steps far sooner — so with the default fail-fast it
+      # takes ubuntu down mid-build and E2E never runs at all. Observed exactly
+      # that: macOS failed on typecheck while ubuntu was still building the
+      # image, and the E2E step reported "skipped" on a run dispatched
+      # specifically to exercise it.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
