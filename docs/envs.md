@@ -656,7 +656,37 @@ for the rules-file format and behavior.
 
 | ENV_NAME                    | TYPE    | DEFAULT_VALUE                        | DESCRIPTION                                                                                                  |
 | --------------------------- | ------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| CLICKHOUSE_URL              | String  | undefined                            | ClickHouse HTTP endpoint the core service reads from, e.g. `http://clickhouse:8123` under the bundled compose file. Unset disables the ClickHouse read path; GraphQL is served from SQLite instead |
+| CLICKHOUSE_USER             | String  | undefined                            | ClickHouse username for the core service. Set explicitly whenever your ClickHouse uses an account other than `default`. Both the core and the importer fall back to `default` when unset, so the hazard is the importer and the core holding different effective credentials rather than one side defaulting differently. See the note below |
+| CLICKHOUSE_PASSWORD         | String  | undefined                            | Password for `CLICKHOUSE_USER`                                                                                |
 | CLICKHOUSE_TTL_RULES_PATH   | String  | ./config/clickhouse-ttl-rules.yaml   | Path to the YAML file of tag- and owner-based TTL rules loaded into ClickHouse before each import cycle       |
+
+> **A credential mismatch fails in a misleading way.** The importer and the core
+> connect separately: `clickhouse-auto-import` is a bash script that defaults
+> the user at the point of use (`export CLICKHOUSE_USER="${CLICKHOUSE_USER:-default}"`
+> in `scripts/lib/common.sh`), while the core passes what `src/config.ts` read
+> into `@clickhouse/client`. Both land on `default` when nothing is set, so an
+> unset user is not itself a mismatch; the failure case is the two ending up
+> with different effective credentials, for instance when only one environment
+> carries the password for a non-default account.
+>
+> What makes it expensive is the shape of the failure rather than the failure
+> itself. Imports keep succeeding, so ClickHouse looks healthy, the healthcheck
+> stays green, and `blocks(...)` and `/raw/<id>` keep working, while the stable
+> ClickHouse `transactions` leg fails. The gateway's own logs do not carry the
+> reason, because the rejection is raised ClickHouse-side; depending on
+> configuration you may see
+> `Failed to read ClickHouse max height; skipping boundary optimization`, which
+> only appears when SQLite boundary optimization is enabled and is not
+> necessarily reported as a timeout. Confirm against ClickHouse directly rather
+> than inferring from the gateway:
+>
+> ```sql
+> SELECT * FROM system.text_log WHERE message LIKE '%Authentication failed%'
+> ORDER BY event_time DESC LIMIT 10;
+> ```
+>
+> A `Code: 194` entry naming a user you did not intend is the signature.
 
 ## ClickHouse Auto-Import Daemon
 
