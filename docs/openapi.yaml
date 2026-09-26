@@ -2935,7 +2935,8 @@ paths:
         - Pagination and sorting
         - Rich metadata including sizes, content types, and signatures
 
-        See the GraphQL Playground at `/graphql` for full schema documentation and interactive querying.
+        Open `/graphql` in a browser for the Apollo Sandbox, an interactive
+        query UI with full schema documentation.
       requestBody:
         required: true
         content:

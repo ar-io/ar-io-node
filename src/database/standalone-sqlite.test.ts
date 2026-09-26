@@ -7,7 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ValidationError } from 'apollo-server-express';
+import { GraphQLError } from 'graphql';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
@@ -149,9 +149,18 @@ describe('SQLite GraphQL cursor functions', () => {
         async () => {
           decodeTransactionGqlCursor('123');
         },
-        {
-          name: ValidationError.name,
-          message: 'Invalid transaction cursor',
+        (error: unknown) => {
+          assert.ok(error instanceof GraphQLError);
+          assert.equal(error.message, 'Invalid transaction cursor');
+          // The wire-visible contract, verified against a running
+          // apollo-server-express 3 gateway: HTTP 200 with `data: null` and
+          // this error code. No `http` override, because these decoders run
+          // during resolver execution and Apollo answers resolver errors with
+          // 200 — and a batch shares one response head, so an override here
+          // would let one bad cursor set the status for every operation in it.
+          assert.equal(error.extensions.code, 'GRAPHQL_VALIDATION_FAILED');
+          assert.equal(error.extensions.http, undefined);
+          return true;
         },
       );
     });
@@ -181,9 +190,18 @@ describe('SQLite GraphQL cursor functions', () => {
         async () => {
           decodeBlockGqlCursor('123');
         },
-        {
-          name: ValidationError.name,
-          message: 'Invalid block cursor',
+        (error: unknown) => {
+          assert.ok(error instanceof GraphQLError);
+          assert.equal(error.message, 'Invalid block cursor');
+          // The wire-visible contract, verified against a running
+          // apollo-server-express 3 gateway: HTTP 200 with `data: null` and
+          // this error code. No `http` override, because these decoders run
+          // during resolver execution and Apollo answers resolver errors with
+          // 200 — and a batch shares one response head, so an override here
+          // would let one bad cursor set the status for every operation in it.
+          assert.equal(error.extensions.code, 'GRAPHQL_VALIDATION_FAILED');
+          assert.equal(error.extensions.http, undefined);
+          return true;
         },
       );
     });
