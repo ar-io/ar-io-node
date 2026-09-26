@@ -345,8 +345,10 @@ export class RootParentDataSource implements ContiguousDataSource {
   /**
    * Confirms, with one bounded header read, that the data item at
    * `(rootTxId, itemOffset)` is the requested item and that its payload
-   * starts at `dataOffset` and is `dataSize` bytes, before any bytes are read
-   * from that location.
+   * starts at `dataOffset`, before any bytes are read from that location.
+   *
+   * `dataSize` is not confirmed: an ANS-104 header does not record its
+   * payload length, so the size is only used to bound the read.
    *
    * A root and an offset that describe different copies of the same item
    * cannot be told apart by chunk verification: chunks prove the bytes belong
@@ -354,6 +356,11 @@ export class RootParentDataSource implements ContiguousDataSource {
    * exist under one ID in several bundles, so a stored root paired with an
    * offset taken from another copy reads the wrong bytes, with the right
    * length, and they verify (ar-io/ar-io-node#937).
+   *
+   * A header that cannot be read (e.g. an upstream timeout) is not confirmed
+   * either; the header parser does not distinguish a failed read from bytes
+   * that are not a data item header. If the request was aborted, the abort is
+   * rethrown instead of falling through to slower resolution.
    *
    * @returns `true` only when the header at the offset is the requested item
    */
@@ -388,14 +395,17 @@ export class RootParentDataSource implements ContiguousDataSource {
             source,
           })
         : null;
-    const confirmed = located !== null && located.dataSize === dataSize;
+    if (located === null) {
+      signal?.throwIfAborted();
+    }
+    const confirmed = located !== null;
     metrics.dataItemLocationCheckTotal.inc({
       source,
       result: confirmed ? 'confirmed' : 'rejected',
     });
     if (!confirmed) {
       this.log.warn(
-        'Data item location does not hold the requested item; not serving from it',
+        'Data item location not confirmed by its header; not serving from it',
         { id, rootTxId, itemOffset, dataOffset, dataSize, source },
       );
     }
@@ -1585,6 +1595,24 @@ export class RootParentDataSource implements ContiguousDataSource {
                 signal,
               );
               bundleParseResult = fallback.result;
+              // The full lookup may return the location rejected above, or
+              // offsets (or a path) for another copy of the item under a
+              // different root, while they are read from this root
+              // (ar-io/ar-io-node#937).
+              if (
+                bundleParseResult !== null &&
+                !(await this.confirmItemLocation({
+                  id,
+                  rootTxId,
+                  itemOffset: bundleParseResult.itemOffset,
+                  dataOffset: bundleParseResult.dataOffset,
+                  dataSize: bundleParseResult.dataSize,
+                  signal,
+                  source: 'root_tx_index_fallback',
+                }))
+              ) {
+                bundleParseResult = null;
+              }
               offsetParseSpan.setAttributes({
                 'offset.method': fallback.method,
               });
