@@ -194,8 +194,10 @@ bytes that were hashed, as they do for the blob route.
 Torrents are deterministic. The name is derived from the band's file names,
 sizes and digests, not its id, and nothing publisher-specific goes in: no creation
 date and no WebSeed. So two publishers holding the same bytes with the same
-`INDEX_SWARM_TRACKERS` write byte-identical `.torrent` files, and any two
-share one infohash and one swarm. Subscribers add the publisher's WebSeed
+`INDEX_SWARM_PRIVATE_SWARM` share one infohash and one swarm; the private
+flag is inside the info dictionary, so publishers that differ on it do not.
+With the same `INDEX_SWARM_TRACKERS` too, their `.torrent` files are
+byte-identical. Subscribers add the publisher's WebSeed
 (`/ar-io/indexes/webseed/`) themselves, and only when peers are not
 delivering, because engines otherwise pull about half of a band from it even
 with a seeder available, and it is the metered tier.
@@ -630,7 +632,9 @@ the observer, ClickHouse or anything else on `ar-io-network`. Two more
 layers keep it off this node's network:
 
 - The sidecar hands the engine only trackers on public hosts, in canonical
-  form, and no WebSeed but the publisher's own.
+  form, and no WebSeed but the publisher's own. The one exception is a
+  tracker the operator lists in `INDEX_SWARM_ALLOWED_TRACKERS`, which is
+  useful only with `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false`.
 - The engine's IP filter refuses private, loopback, link-local and
   carrier-grade NAT addresses for peers, trackers and WebSeeds, which also
   covers a public name that resolves to a private address, a tracker that

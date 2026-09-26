@@ -129,6 +129,8 @@ export class QBittorrentTransport implements TorrentTransport {
         username: this.username,
         password: this.password,
       }),
+      // A redirect would resend the password to wherever it points.
+      redirect: 'error',
       signal: AbortSignal.timeout(timeoutMs),
     });
     const body = (await response.text()).trim();
@@ -159,6 +161,8 @@ export class QBittorrentTransport implements TorrentTransport {
         method: init.method ?? 'GET',
         ...(init.body !== undefined ? { body: init.body } : {}),
         headers: this.cookie !== undefined ? { cookie: this.cookie } : {},
+        // Nor may the session cookie follow one.
+        redirect: 'error',
         signal: AbortSignal.timeout(timeoutMs),
       });
     let response = await attempt();

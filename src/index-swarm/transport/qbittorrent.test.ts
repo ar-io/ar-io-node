@@ -160,6 +160,45 @@ describe('QBittorrentTransport', () => {
       );
     });
 
+    it('follows no redirect, so neither the password nor the cookie leaves the engine', async () => {
+      handle = (req, res) => {
+        if (req.path === '/elsewhere') {
+          res.end('2.15.1');
+          return;
+        }
+        if (req.path === '/api/v2/auth/login') {
+          // 307 would resend the POST body, password and all.
+          res.writeHead(307, { Location: '/elsewhere' }).end();
+          return;
+        }
+        if (req.cookie === undefined) {
+          res.writeHead(403).end('Forbidden');
+          return;
+        }
+        res.writeHead(308, { Location: '/elsewhere' }).end();
+      };
+      const transport = new QBittorrentTransport({
+        url,
+        username: 'u',
+        password: 'p',
+      });
+      assert.equal(await transport.isAvailable(), false);
+      assert.deepEqual(
+        seen.map((s) => s.path),
+        ['/api/v2/app/webapiVersion', '/api/v2/auth/login'],
+      );
+
+      // With a session already held, an API call that redirects is not
+      // followed either.
+      seen = [];
+      (transport as unknown as { cookie: string }).cookie = 'QBT_SID_8080=abc';
+      assert.equal(await transport.isAvailable(), false);
+      assert.deepEqual(
+        seen.map((s) => s.path),
+        ['/api/v2/app/webapiVersion'],
+      );
+    });
+
     it('accepts a 4.x login too', async () => {
       handle = (req, res) => {
         if (req.path === '/api/v2/auth/login') {
