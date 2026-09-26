@@ -22,7 +22,7 @@
  */
 import crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { constants as fsConstants, existsSync } from 'node:fs';
 import * as path from 'node:path';
 import pLimit from 'p-limit';
 import { Logger } from 'winston';
@@ -45,10 +45,20 @@ import {
   downloadFile,
 } from '../lib/http-file-download.js';
 import { SubscribeConfig } from './config.js';
-import { applyBandChanges, InstalledBand, StateStore } from './state.js';
+import {
+  applyBandChanges,
+  InstalledBand,
+  SeededBand,
+  seedingKey,
+  StateStore,
+  SwarmDownload,
+} from './state.js';
 import { ArtifactKind } from './kinds/types.js';
 import { GatewayRegistry, PublisherRecord } from './gateway-registry.js';
+import { checkTorrentFiles, sanitizeTorrent, torrentIds } from './torrent.js';
+import { TorrentTransport } from './transport/types.js';
 import {
+  engineAvailable,
   installedBands,
   subscriptionBytes,
   publicationIssuedAt,
@@ -86,6 +96,10 @@ export function bandsNewestFirst(bands: BandDescriptor[]): BandDescriptor[] {
 /** Whether a publisher's meter has refused this subscriber during one poll. */
 interface PollMeter {
   refused: boolean;
+  /** Whether the torrent engine answered, once asked this poll. */
+  engineUp?: boolean;
+  /** When this poll stops watching torrents, shared by all its bands. */
+  watchUntil?: number;
 }
 
 /**
@@ -230,6 +244,7 @@ export type SubscriptionResult =
   | 'band_conflict'
   | 'unknown_kind'
   | 'unreachable'
+  | 'transport_fallback'
   | 'error';
 
 export interface SubscriberOptions {
@@ -277,8 +292,83 @@ export interface SubscriberOptions {
    * it is retired as an orphan. Default 10 minutes.
    */
   untrackedMinAgeMs?: number;
+  /**
+   * The torrent engine. Unset, or unavailable, every band moves over HTTP;
+   * set, a band offered as a torrent is fetched from peers first and every
+   * installed band that offers one is seeded.
+   */
+  transport?: TorrentTransport;
+  /**
+   * Where the engine downloads, one directory per torrent. The only place
+   * the engine may write, and on the same filesystem as installedDir, so an
+   * install is a rename. Default `<incomingDir>/../swarm`.
+   */
+  swarmDir?: string;
+  /**
+   * Checked `.torrent` files kept for seeding, by v1 infohash. Only the
+   * sidecar reads them. Default `<incomingDir>/../torrents`.
+   */
+  torrentsDir?: string;
+  /** Give up on a torrent and fetch over HTTP after this long. */
+  torrentTimeoutMs?: number;
+  /** Turn the publisher's WebSeed on once a torrent has not moved for this long. */
+  webSeedAfterMs?: number;
+  /** How long one poll watches a torrent before leaving it for the next. */
+  torrentWatchMs?: number;
+  /** How often a watched torrent is checked. */
+  torrentCheckMs?: number;
+  /**
+   * The engine's user and group. The sidecar runs as root and the engine
+   * does not, so a download directory is handed to the engine before use.
+   */
+  engineUid?: number;
+  engineGid?: number;
+  /**
+   * Tracker announce URLs handed to the engine even though their host is
+   * private, exactly as written. See {@link sanitizeTorrent}.
+   */
+  allowedTrackers?: string[];
   now?: () => Date;
 }
+
+/**
+ * The ids superseded by an offered band that is not installed yet (no live
+ * copy with its files). A publisher withdraws a band in the same scan that
+ * offers its replacement; without this, a subscriber would retire the old
+ * band at once and miss its heights until the new one arrived.
+ */
+export function awaitingSuccessor(
+  offered: BandDescriptor[],
+  installed: Record<string, InstalledBand> | undefined,
+): Set<string> {
+  const keep = new Set<string>();
+  for (const band of offered) {
+    const raw = band.metadata?.supersedes;
+    const named = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+    if (named.length === 0) continue;
+    const copy = installed?.[band.id];
+    const ready =
+      copy !== undefined &&
+      copy.retiredAt === undefined &&
+      sameFiles(copy.files, band.files);
+    if (ready) continue;
+    for (const id of named) if (typeof id === 'string') keep.add(id);
+  }
+  return keep;
+}
+
+/** Where a file copied out of the engine's directory is written first. */
+function swarmPartialName(file: BandFile): string {
+  return `${file.name}.${file.sha256.slice(0, 16)}.swarm.tmp`;
+}
+
+/** Largest `.torrent` accepted. A band of 1024 files is well under this. */
+const MAX_TORRENT_BYTES = 16 * 1024 * 1024;
+
+type TorrentOutcome =
+  | { kind: 'pending' }
+  | { kind: 'fallback' }
+  | { kind: 'done'; dir: string };
 
 export class Subscriber {
   private readonly log: Logger;
@@ -300,6 +390,16 @@ export class Subscriber {
   private readonly replaceOverlapMs: number;
   private readonly untrackedMinAgeMs: number;
   private readonly subscribedPublishers: ReadonlySet<string>;
+  private readonly transport?: TorrentTransport;
+  private readonly swarmDir: string;
+  private readonly torrentsDir: string;
+  private readonly torrentTimeoutMs: number;
+  private readonly webSeedAfterMs: number;
+  private readonly torrentWatchMs: number;
+  private readonly torrentCheckMs: number;
+  private readonly engineUid?: number;
+  private readonly engineGid?: number;
+  private readonly allowedTrackers: ReadonlySet<string>;
   private readonly now: () => Date;
 
   constructor(options: SubscriberOptions) {
@@ -329,6 +429,17 @@ export class Subscriber {
     this.subscribedPublishers = new Set(
       options.subscribe.map((subscription) => subscription.publisher),
     );
+    if (options.transport !== undefined) this.transport = options.transport;
+    const dataDir = path.dirname(options.incomingDir);
+    this.swarmDir = options.swarmDir ?? path.join(dataDir, 'swarm');
+    this.torrentsDir = options.torrentsDir ?? path.join(dataDir, 'torrents');
+    this.torrentTimeoutMs = options.torrentTimeoutMs ?? 3_600_000;
+    this.webSeedAfterMs = options.webSeedAfterMs ?? 120_000;
+    this.torrentWatchMs = options.torrentWatchMs ?? 60_000;
+    this.torrentCheckMs = options.torrentCheckMs ?? 1_000;
+    if (options.engineUid !== undefined) this.engineUid = options.engineUid;
+    if (options.engineGid !== undefined) this.engineGid = options.engineGid;
+    this.allowedTrackers = new Set(options.allowedTrackers ?? []);
     this.now = options.now ?? (() => new Date());
   }
 
@@ -337,6 +448,8 @@ export class Subscriber {
   private maintaining: Promise<void> | undefined;
   /** `<index>/<band>` ids being installed right now, by any publisher. */
   private readonly installing = new Set<string>();
+  /** v1 infohashes whose completed download is being staged right now. */
+  private readonly finishing = new Set<string>();
   /**
    * Publishers whose document has been fetched, verified and reconciled at
    * least once since startup. Until every configured publisher is in here,
@@ -395,6 +508,10 @@ export class Subscriber {
         await this.retireDue();
         await this.retireUnsubscribed();
         await this.retireUntracked();
+        await this.cleanSwarm();
+        // Before the sweep, so the engine lets go of a retired copy before
+        // its files are deleted.
+        await this.reconcileSeeding();
         await this.sweep();
         await this.reportInstalled();
       })().finally(() => {
@@ -772,7 +889,18 @@ export class Subscriber {
    * counting it would stall a subscriber near its budget on a stale tip
    * forever.
    */
-  private async diskBytes(replacing?: InstalledBand): Promise<number> {
+  /**
+   * Bytes the subscriber holds on disk: installed copies, plus downloads in
+   * progress.
+   *
+   * @param ownPartials this band's own partial downloads, left out: they
+   *   are part of the band's size, which the caller adds, and counting them
+   *   too would refuse a band that is already most of the way down.
+   */
+  private async diskBytes(
+    replacing?: InstalledBand,
+    ownPartials: string[] = [],
+  ): Promise<number> {
     const state = await this.state.load();
     let total = 0;
     for (const bands of Object.values(state.installed)) {
@@ -781,7 +909,14 @@ export class Subscriber {
         for (const file of band.files) total += file.size;
       }
     }
-    return total + (await directoryBytes(this.incomingDir));
+    let own = 0;
+    for (const dir of ownPartials) own += await directoryBytes(dir);
+    return (
+      total +
+      (await directoryBytes(this.incomingDir)) +
+      (await directoryBytes(this.swarmDir)) -
+      own
+    );
   }
 
   /** Install what is new in this index, and retire what the publisher dropped. */
@@ -808,6 +943,15 @@ export class Subscriber {
         // reinstall rather than trust a record the gateway can't serve.
         existsSync(path.join(existing.dir, 'manifest.json'))
       ) {
+        // However it was installed (over HTTP, adopted from disk), a band
+        // the swarm can have is seeded once its torrent is kept.
+        await this.keepTorrentFor(
+          publisher,
+          origin,
+          index.name,
+          band,
+          existing,
+        );
         continue;
       }
 
@@ -830,6 +974,10 @@ export class Subscriber {
       index.name,
       new Set(index.bands.map((band) => band.id)),
       kind,
+      awaitingSuccessor(
+        index.bands,
+        (await this.state.load()).installed[index.name],
+      ),
     );
 
     return installedAnything;
@@ -845,12 +993,19 @@ export class Subscriber {
     indexName: string,
     offered: ReadonlySet<string>,
     kind: ArtifactKind,
+    /**
+     * Bands an offered band supersedes that has not installed yet. Kept
+     * serving until it has, so a replacement that takes hours to download
+     * does not leave its heights uncovered meanwhile.
+     */
+    keep: ReadonlySet<string> = new Set(),
   ): Promise<void> {
     await this.discardUnofferedDownloads(publisher, indexName, offered);
     const state = await this.state.load();
     const current = state.installed[indexName] ?? {};
     for (const [bandId, band] of Object.entries(current)) {
       if (offered.has(bandId)) continue;
+      if (keep.has(bandId)) continue;
       if (band.publisher !== publisher) continue;
       if (band.retiredAt !== undefined) continue;
       // A replaced copy on its way out is retired by housekeeping, not here.
@@ -894,7 +1049,10 @@ export class Subscriber {
     kind: ArtifactKind,
     meter: PollMeter,
   ): Promise<boolean> {
-    if (meter.refused) {
+    // A band the swarm can bring is not held back by the meter: peers are
+    // not metered. If it falls back to HTTP, it waits there instead.
+    const viaSwarm = band.torrent !== undefined && this.transport !== undefined;
+    if (meter.refused && !viaSwarm) {
       // Not a failure of this band: the publisher's meter has already said
       // no this poll, and asking again would only collect another refusal.
       this.log.debug('Publisher is metering this subscriber; band waits', {
@@ -962,8 +1120,19 @@ export class Subscriber {
   ): Promise<boolean> {
     const bandBytes = band.files.reduce((sum, file) => sum + file.size, 0);
     if (this.maxDiskBytes !== undefined) {
-      const used = await this.diskBytes(live);
-      if (used + bandBytes > this.maxDiskBytes) {
+      // A band that may come over the swarm is copied out of the engine's
+      // directory before install, so it needs its size twice for a while.
+      const need =
+        band.torrent !== undefined && this.transport !== undefined
+          ? 2 * bandBytes
+          : bandBytes;
+      const used = await this.diskBytes(live, [
+        path.join(this.incomingDir, publisher, index.name, band.id),
+        ...(band.torrent !== undefined
+          ? [path.join(this.swarmDir, band.torrent.infohashV1)]
+          : []),
+      ]);
+      if (used + need > this.maxDiskBytes) {
         this.log.warn('Band would exceed the disk budget; skipping', {
           publisher,
           index: index.name,
@@ -1056,8 +1225,57 @@ export class Subscriber {
       index.name,
       band.id,
     );
+    // A band republished with one file changed (a manifest edit, say) is
+    // otherwise fetched whole again. Files this node already holds under the
+    // same digest are linked in instead; they were verified when installed.
+    // Only an optimisation: if it can't be done, fetch everything.
+    let missingBytes = bandBytes;
+    try {
+      await fs.mkdir(incoming, { recursive: true });
+      await this.discardStaleFiles(incoming, band);
+      missingBytes = await this.reuseInstalledFiles(index.name, band, incoming);
+    } catch (error: any) {
+      this.log.debug('Could not reuse installed files', {
+        band: band.id,
+        error: error?.message,
+      });
+    }
+
+    // Peers first, when the band is offered as a torrent and most of it is
+    // still to fetch: a torrent is all or nothing, so a band that is mostly
+    // here already is quicker over HTTP. A torrent still moving when this
+    // poll's watch window closes is picked up again next poll; one that
+    // fails or times out falls through to HTTP right away.
+    if (
+      band.torrent !== undefined &&
+      this.transport !== undefined &&
+      missingBytes * 10 >= bandBytes
+    ) {
+      const outcome = await this.viaTorrent(
+        publisher,
+        origin,
+        index,
+        band,
+        meter,
+      );
+      if (outcome.kind === 'pending') return false;
+      if (outcome.kind === 'done') {
+        return this.finishInstall({
+          publisher,
+          index,
+          band,
+          kind,
+          sourceDir: outcome.dir,
+          targetDir,
+          live,
+          bandBytes,
+          transport: 'torrent',
+        });
+      }
+    }
+    // Over HTTP the publisher's meter applies.
+    if (meter.refused) return false;
     await fs.mkdir(incoming, { recursive: true });
-    await this.discardStaleFiles(incoming, band);
 
     // Every file is attempted and the whole band is waited on, so a file that
     // fails costs only itself: what completed stays on disk and is skipped
@@ -1156,8 +1374,51 @@ export class Subscriber {
       return false;
     }
 
+    return this.finishInstall({
+      publisher,
+      index,
+      band,
+      kind,
+      sourceDir: incoming,
+      targetDir,
+      live,
+      bandBytes,
+      transport: 'http',
+    });
+  }
+
+  /**
+   * Validate and install a band whose files are complete in `sourceDir`,
+   * however they got there.
+   *
+   * Either way the files in `sourceDir` were written by this process and
+   * hashed as they were written: the HTTP downloader checks every digest,
+   * and a torrent's files are copied out of the engine's directory and
+   * hashed on the way (see {@link stageFromSwarm}).
+   */
+  private async finishInstall({
+    publisher,
+    index,
+    band,
+    kind,
+    sourceDir,
+    targetDir,
+    live,
+    bandBytes,
+    transport,
+  }: {
+    publisher: string;
+    index: IndexEntry;
+    band: BandDescriptor;
+    kind: ArtifactKind;
+    sourceDir: string;
+    targetDir: string;
+    live: InstalledBand | undefined;
+    bandBytes: number;
+    transport: 'http' | 'torrent';
+  }): Promise<boolean> {
     try {
-      await kind.validate(band, incoming);
+      await kind.validate(band, sourceDir);
     } catch (error: any) {
       // Bytes that match their digests but are not the shape this kind can
       // serve must not reach the gateway, and must not be resumed onto.
@@ -1167,8 +1428,8 @@ export class Subscriber {
         band: band.id,
         error: error?.message,
       });
-      await fs.rm(incoming, { recursive: true, force: true });
-      this.count(publisher, index.name, 'verify_failed');
+      await fs.rm(sourceDir, { recursive: true, force: true });
+      this.count(publisher, index.name, 'verify_failed', transport);
       return false;
     }
 
@@ -1177,23 +1438,35 @@ export class Subscriber {
     const current = { ...(state.installed[index.name] ?? {}) };
     const next = await kind.install({
       band,
-      sourceDir: incoming,
+      sourceDir,
       targetDir,
       current,
     });
-    next[band.id] = { ...next[band.id], publisher };
+    // A torrent-fetched band's torrent was kept when it was added, so the
+    // copy can be seeded at once.
+    const keptInfohash =
+      band.torrent !== undefined &&
+      existsSync(this.keptTorrentPath(band.torrent.infohashV1))
+        ? band.torrent.infohashV1
+        : undefined;
+    next[band.id] = {
+      ...next[band.id],
+      publisher,
+      ...(keptInfohash !== undefined ? { infohashV1: keptInfohash } : {}),
+    };
     this.addPendingRetire(next, band.id, live, targetDir);
 
     await this.state.update((draft) => {
       applyBandChanges(draft.installed, index.name, current, next);
     });
 
-    this.count(publisher, index.name, 'installed');
+    this.count(publisher, index.name, 'installed', transport);
     this.log.info('Installed a band', {
       publisher,
       index: index.name,
       band: band.id,
       bytes: bandBytes,
+      transport,
     });
     return true;
   }
@@ -1252,6 +1525,958 @@ export class Subscriber {
       return dir;
     }
     return undefined;
+  }
+
+  /**
+   * Hard-link into `incoming` every file of `band` that an installed copy
+   * of this index already holds under the same digest and size, and return
+   * the bytes still to fetch.
+   *
+   * Installed files were digest-checked when installed and a generation
+   * directory is never written in place, so a link to one is as good as a
+   * download. A link, not a copy: the bytes exist once. Downloads replace a
+   * file by renaming over it, so nothing ever writes through the link.
+   */
+  private async reuseInstalledFiles(
+    indexName: string,
+    band: BandDescriptor,
+    incoming: string,
+  ): Promise<number> {
+    const state = await this.state.load();
+    const byContent = new Map<string, string>();
+    for (const record of Object.values(state.installed[indexName] ?? {})) {
+      if (record.retiredAt !== undefined) continue;
+      for (const file of record.files) {
+        byContent.set(
+          `${file.sha256}:${file.size}`,
+          path.join(record.dir, file.name),
+        );
+      }
+    }
+    let missing = 0;
+    let reused = 0;
+    for (const file of band.files) {
+      const dest = path.join(incoming, file.name);
+      // Only a finished file carries its own name here; partials don't.
+      if ((await fs.lstat(dest).catch(() => undefined))?.isFile() === true) {
+        continue;
+      }
+      const source = byContent.get(`${file.sha256}:${file.size}`);
+      if (source !== undefined) {
+        const stat = await fs.lstat(source).catch(() => undefined);
+        if (stat?.isFile() === true && stat.size === file.size) {
+          try {
+            await fs.link(source, dest);
+            reused++;
+            continue;
+          } catch {
+            // Fall through and fetch it.
+          }
+        }
+      }
+      missing += file.size;
+    }
+    if (reused > 0) {
+      this.log.info('Reusing files already installed', {
+        index: indexName,
+        band: band.id,
+        reused,
+        toFetch: band.files.length - reused,
+      });
+    }
+    return missing;
+  }
+
+  // --- The torrent transport -----------------------------------------------
+
+  private keptTorrentPath(infohashV1: string): string {
+    return path.join(this.torrentsDir, `${infohashV1}.torrent`);
+  }
+
+  /** Whether the engine answers, asked once per poll rather than per band. */
+  private async engineUp(meter: PollMeter): Promise<boolean> {
+    if (this.transport === undefined) return false;
+    meter.engineUp ??= await this.transport.isAvailable();
+    return meter.engineUp;
+  }
+
+  /**
+   * Fetch a band's `.torrent`, check it is the one the signed publication
+   * names and that it describes exactly the band's files, and strip what the
+   * signature does not cover.
+   *
+   * The publication signs the infohashes and the infohash covers every
+   * piece, so a torrent that matches them can only yield the signed bytes;
+   * checking its file list keeps it from carrying anything else. The request
+   * itself follows the same rules as a band file: only from the
+   * publication's origin or an allowed one, no redirects, a bounded body.
+   */
+  private async fetchTorrent(
+    origin: string,
+    band: BandDescriptor,
+  ): Promise<Buffer> {
+    const signed = band.torrent!;
+    let url: URL;
+    try {
+      url = new URL(signed.torrentUrl, origin);
+    } catch {
+      throw new DownloadIntegrityError(
+        `torrent URL ${signed.torrentUrl} is not a URL`,
+      );
+    }
+    if (
+      url.origin !== new URL(origin).origin &&
+      !this.allowedFileOrigins.has(url.origin)
+    ) {
+      throw new DisallowedOriginError(signed.torrentUrl);
+    }
+    const response = await fetch(url, {
+      headers: { ...this.requestHeaders, 'accept-encoding': 'identity' },
+      redirect: 'manual',
+      signal: AbortSignal.any([
+        AbortSignal.timeout(this.fetchTimeoutMs),
+        this.stopping.signal,
+      ]),
+    });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new DownloadHttpError(response.status, response.statusText);
+    }
+    const declared = Number(response.headers.get('content-length') ?? '0');
+    if (declared > MAX_TORRENT_BYTES) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new DownloadIntegrityError(`torrent is ${declared} bytes`);
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of response.body ?? []) {
+      total += chunk.byteLength;
+      if (total > MAX_TORRENT_BYTES) {
+        throw new DownloadIntegrityError(
+          `torrent exceeds ${MAX_TORRENT_BYTES} bytes`,
+        );
+      }
+      chunks.push(Buffer.from(chunk));
+    }
+    const bytes = Buffer.concat(chunks);
+
+    let ids;
+    try {
+      ids = torrentIds(bytes);
+    } catch (error: any) {
+      throw new DownloadIntegrityError(`not a torrent: ${error?.message}`);
+    }
+    if (
+      ids.infohashV1 !== signed.infohashV1 ||
+      (signed.infohashV2 !== undefined && ids.infohashV2 !== signed.infohashV2)
+    ) {
+      throw new DownloadIntegrityError(
+        `torrent infohash ${ids.infohashV1} is not the signed ${signed.infohashV1}`,
+      );
+    }
+    try {
+      checkTorrentFiles(bytes, band.files);
+      return sanitizeTorrent(
+        bytes,
+        {
+          infohashV1: signed.infohashV1,
+          ...(signed.infohashV2 !== undefined
+            ? { infohashV2: signed.infohashV2 }
+            : {}),
+        },
+        this.allowedTrackers,
+      );
+    } catch (error: any) {
+      throw new DownloadIntegrityError(`torrent rejected: ${error?.message}`);
+    }
+  }
+
+  /**
+   * The band's checked torrent: the one kept on disk when it still names
+   * the signed infohash, otherwise fetched and kept.
+   */
+  private async obtainTorrent(
+    origin: string,
+    band: BandDescriptor,
+  ): Promise<Buffer> {
+    const signed = band.torrent!;
+    const file = this.keptTorrentPath(signed.infohashV1);
+    try {
+      const kept = await fs.readFile(file);
+      if (torrentIds(kept).infohashV1 === signed.infohashV1) {
+        // Checked again, not trusted for having been kept: an older build
+        // may have kept it under weaker rules.
+        checkTorrentFiles(kept, band.files);
+        return sanitizeTorrent(
+          kept,
+          {
+            infohashV1: signed.infohashV1,
+            ...(signed.infohashV2 !== undefined
+              ? { infohashV2: signed.infohashV2 }
+              : {}),
+          },
+          this.allowedTrackers,
+        );
+      }
+    } catch {
+      // Not kept, unreadable or no longer acceptable: fetch it again.
+    }
+    const torrent = await this.fetchTorrent(origin, band);
+    await fs.mkdir(this.torrentsDir, { recursive: true });
+    const tmp = `${file}.tmp`;
+    await fs.writeFile(tmp, torrent);
+    await fs.rename(tmp, file);
+    return torrent;
+  }
+
+  /**
+   * Make `dir` a fresh, real directory owned by the engine's user.
+   *
+   * The engine can write the parent, so whatever is at that name may be its
+   * doing: a symlink or a file there is removed rather than followed, and
+   * only the directory itself is chowned (`lchown`, no walk), so nothing the
+   * engine planted can redirect a root-run chown.
+   */
+  private async prepareSwarmDir(dir: string): Promise<void> {
+    await fs.mkdir(this.swarmDir, { recursive: true });
+    const existing = await fs.lstat(dir).catch(() => undefined);
+    if (existing !== undefined && !existing.isDirectory()) {
+      await fs.rm(dir, { force: true });
+    }
+    if (existing === undefined || !existing.isDirectory()) {
+      await fs.mkdir(dir);
+    }
+    if (this.engineUid !== undefined) {
+      await fs.lchown(dir, this.engineUid, this.engineGid ?? this.engineUid);
+    }
+  }
+
+  /**
+   * Copy a band's signed files from `sourceDir` into the band's incoming
+   * directory, hashing each as it is copied, and return that directory.
+   *
+   * What the engine wrote, or a directory it may still hold open, is never
+   * installed itself: a file it keeps a descriptor or a hard link to could
+   * be rewritten after it was hashed. The copy is owned by this process and
+   * is the bytes that were hashed. Each source is opened without following
+   * links and must be a regular file of the signed size, so a symlink or a
+   * FIFO in its place is refused rather than read.
+   *
+   * @throws DownloadIntegrityError when any file is missing or does not
+   *   match its signed digest.
+   */
+  private async stageFromSwarm(
+    publisher: string,
+    indexName: string,
+    band: BandDescriptor,
+    sourceDir: string,
+  ): Promise<string> {
+    const incoming = path.join(this.incomingDir, publisher, indexName, band.id);
+    await fs.mkdir(incoming, { recursive: true });
+    // Everything the install renames goes into installed/, so nothing but
+    // this band's own files may be left here.
+    await this.discardStaleFiles(incoming, band);
+    for (const file of band.files) {
+      let handle;
+      try {
+        handle = await fs.open(
+          path.join(sourceDir, file.name),
+          fsConstants.O_RDONLY |
+            fsConstants.O_NOFOLLOW |
+            fsConstants.O_NONBLOCK,
+        );
+      } catch (error: any) {
+        throw new DownloadIntegrityError(
+          `${file.name} is not readable as a file: ${error?.code ?? error?.message}`,
+        );
+      }
+      // Not the HTTP downloader's partial name, which a failed copy would
+      // otherwise truncate and lose the resume point of.
+      const partial = path.join(incoming, swarmPartialName(file));
+      try {
+        const stat = await handle.stat();
+        if (!stat.isFile() || stat.size !== file.size) {
+          throw new DownloadIntegrityError(
+            `${file.name} is not a ${file.size}-byte file`,
+          );
+        }
+        const hash = crypto.createHash('sha256');
+        const out = await fs.open(partial, 'w');
+        try {
+          let position = 0;
+          const buffer = Buffer.alloc(1 << 20);
+          for (;;) {
+            if (this.stopping.signal.aborted) {
+              throw new Error('stopping');
+            }
+            const { bytesRead } = await handle.read(
+              buffer,
+              0,
+              buffer.length,
+              position,
+            );
+            if (bytesRead === 0) break;
+            const chunk = buffer.subarray(0, bytesRead);
+            hash.update(chunk);
+            await out.write(chunk);
+            position += bytesRead;
+            if (position > file.size) break;
+          }
+          if (position !== file.size || hash.digest('hex') !== file.sha256) {
+            throw new DownloadIntegrityError(
+              `${file.name} does not match its signed digest`,
+            );
+          }
+        } finally {
+          await out.close();
+        }
+        await fs.rename(partial, path.join(incoming, file.name));
+      } catch (error) {
+        await fs.rm(partial, { force: true });
+        throw error;
+      } finally {
+        await handle.close();
+      }
+    }
+    return incoming;
+  }
+
+  /**
+   * Move one band forward through the engine, within this poll's watch
+   * window.
+   *
+   * The window is shared by every band of the poll, so a poll never blocks
+   * for long however many torrents are in flight: one still going when the
+   * window closes is picked up on the next poll, its progress kept in state
+   * so a restart resumes it rather than starting over. A torrent that errors,
+   * or makes no progress for the timeout, is abandoned and the band fetched
+   * over HTTP at once. Peers come first; the publisher's WebSeed, which is
+   * its metered tier, is turned on only once nothing has moved for a while.
+   */
+  private async viaTorrent(
+    publisher: string,
+    origin: string,
+    index: IndexEntry,
+    band: BandDescriptor,
+    meter: PollMeter,
+  ): Promise<TorrentOutcome> {
+    const transport = this.transport!;
+    const infohashV1 = band.torrent!.infohashV1;
+    const dir = path.join(this.swarmDir, infohashV1);
+    meter.watchUntil ??= Date.now() + this.torrentWatchMs;
+
+    // A rebuild of this band under the same id has a new infohash; the old
+    // download is dropped rather than left running.
+    for (const [other, download] of Object.entries(
+      (await this.state.load()).downloads,
+    )) {
+      if (
+        other !== infohashV1 &&
+        download.publisher === publisher &&
+        download.index === index.name &&
+        download.band === band.id
+      ) {
+        await this.abandonDownload(other, download, 'the band was rebuilt');
+      }
+    }
+
+    let download: SwarmDownload | undefined = (await this.state.load())
+      .downloads[infohashV1];
+
+    if (!(await this.engineUp(meter))) {
+      // A download already under way waits for the engine to come back,
+      // inside its timeout; a new one goes straight to HTTP.
+      if (
+        download !== undefined &&
+        this.now().getTime() - download.lastProgressAt < this.torrentTimeoutMs
+      ) {
+        return { kind: 'pending' };
+      }
+      this.count(publisher, index.name, 'transport_fallback', 'torrent');
+      return { kind: 'fallback' };
+    }
+
+    if (download === undefined) {
+      let torrent: Buffer;
+      try {
+        torrent = await this.obtainTorrent(origin, band);
+      } catch (error: any) {
+        const integrity =
+          error instanceof DownloadIntegrityError ||
+          error instanceof DisallowedOriginError;
+        this.log.warn(
+          integrity
+            ? 'Torrent does not match the signed publication; fetching over HTTP'
+            : 'Could not fetch torrent; fetching over HTTP',
+          {
+            publisher,
+            index: index.name,
+            band: band.id,
+            error: error?.message,
+          },
+        );
+        this.count(
+          publisher,
+          index.name,
+          integrity ? 'verify_failed' : 'download_failed',
+          'torrent',
+        );
+        return { kind: 'fallback' };
+      }
+
+      try {
+        const id = transport.idFor(torrent);
+        const held = await transport.status(id);
+        // A held torrent with no reported location is not assumed ours.
+        if (
+          held !== undefined &&
+          (held.savePath === undefined ||
+            path.resolve(held.savePath) !== path.resolve(dir))
+        ) {
+          if (held.savePath === undefined) {
+            this.count(publisher, index.name, 'transport_fallback', 'torrent');
+            return { kind: 'fallback' };
+          }
+          // The engine already holds these bytes: this node seeds them,
+          // as a publisher or from another installed copy. Adding would only
+          // return that torrent, so copy from where it lies instead, and
+          // leave the engine alone.
+          if (held.state !== 'seeding' || held.progress < 1) {
+            this.count(publisher, index.name, 'transport_fallback', 'torrent');
+            return { kind: 'fallback' };
+          }
+          return await this.finishFromSwarm(
+            publisher,
+            index,
+            band,
+            held.savePath,
+            undefined,
+          );
+        }
+        if (held === undefined) {
+          await this.prepareSwarmDir(dir);
+          await transport.add({ torrent, downloadDir: dir });
+        }
+        // Otherwise the engine already downloads into our own directory,
+        // after state was lost: pick it up.
+        const now = this.now().getTime();
+        download = {
+          id,
+          publisher,
+          index: index.name,
+          band: band.id,
+          startedAt: now,
+          lastProgress: 0,
+          lastProgressAt: now,
+          webSeeded: false,
+          lastSeenAt: now,
+        };
+        const record = download;
+        await this.state.update((draft) => {
+          draft.downloads[infohashV1] = record;
+        });
+        this.log.info('Fetching band through the torrent engine', {
+          publisher,
+          index: index.name,
+          band: band.id,
+          infohashV1,
+        });
+      } catch (error: any) {
+        if (error instanceof DownloadIntegrityError) {
+          this.count(publisher, index.name, 'verify_failed', 'torrent');
+          return { kind: 'fallback' };
+        }
+        this.log.warn('Could not add torrent; fetching over HTTP', {
+          publisher,
+          index: index.name,
+          band: band.id,
+          error: error?.message,
+        });
+        this.count(publisher, index.name, 'transport_fallback', 'torrent');
+        return { kind: 'fallback' };
+      }
+    }
+
+    const pending: SwarmDownload = {
+      ...download,
+      lastSeenAt: this.now().getTime(),
+    };
+    const save = () =>
+      this.state.update((draft) => {
+        // Only while it is still ours to save: a concurrent abandon wins.
+        if (draft.downloads[infohashV1] !== undefined) {
+          draft.downloads[infohashV1] = { ...pending };
+        }
+      });
+
+    for (;;) {
+      if (this.stopping.signal.aborted) {
+        await save();
+        return { kind: 'pending' };
+      }
+      const now = this.now().getTime();
+      let status;
+      try {
+        status = await transport.status(pending.id);
+      } catch {
+        // The engine may be restarting. Its torrent survives that, so keep
+        // waiting until the timeout rather than starting the band over.
+        if (now - pending.lastProgressAt >= this.torrentTimeoutMs) {
+          return this.abandonDownload(
+            infohashV1,
+            pending,
+            'no progress while the engine was unreachable',
+          );
+        }
+        await save();
+        return { kind: 'pending' };
+      }
+      if (status === undefined) {
+        return this.abandonDownload(
+          infohashV1,
+          pending,
+          'the engine no longer has the torrent',
+        );
+      }
+      if (status.state === 'seeding' && status.progress >= 1) {
+        if (
+          status.savePath === undefined ||
+          path.resolve(status.savePath) !== path.resolve(dir)
+        ) {
+          // Not our download after all; leave it be.
+          await this.state.update((draft) => {
+            delete draft.downloads[infohashV1];
+          });
+          this.count(publisher, index.name, 'transport_fallback', 'torrent');
+          return { kind: 'fallback' };
+        }
+        subscriptionBytes.inc({ transport: 'torrent' }, status.bytesDown);
+        return this.finishFromSwarm(publisher, index, band, dir, pending);
+      }
+      if (status.state === 'error') {
+        return this.abandonDownload(
+          infohashV1,
+          pending,
+          `engine reported an error: ${status.error ?? 'unknown'}`,
+        );
+      }
+      if (status.progress > pending.lastProgress) {
+        pending.lastProgress = status.progress;
+        pending.lastProgressAt = now;
+      }
+      if (now - pending.lastProgressAt >= this.torrentTimeoutMs) {
+        return this.abandonDownload(infohashV1, pending, 'no progress');
+      }
+      // The WebSeed was turned on and nothing has moved since either: it is
+      // unreachable from the engine (a private origin under its IP filter,
+      // say). HTTP from the sidecar is the next best thing; waiting out the
+      // whole timeout helps nobody.
+      // Measured from when it was turned on, not from the last progress:
+      // polls are minutes apart, so by the time the WebSeed is added the
+      // last progress is already long past, and it must still get its turn.
+      if (
+        pending.webSeeded &&
+        now - Math.max(pending.lastProgressAt, pending.webSeededAt ?? now) >=
+          this.webSeedAfterMs
+      ) {
+        return this.abandonDownload(
+          infohashV1,
+          pending,
+          'neither peers nor the WebSeed are delivering',
+        );
+      }
+      if (
+        !pending.webSeeded &&
+        now - pending.lastProgressAt >= this.webSeedAfterMs
+      ) {
+        try {
+          await transport.setWebSeeds(pending.id, [
+            new URL('/ar-io/indexes/webseed/', origin).toString(),
+          ]);
+          pending.webSeeded = true;
+          pending.webSeededAt = now;
+          this.log.info('Peers are not delivering; turning on the WebSeed', {
+            publisher,
+            index: index.name,
+            band: band.id,
+          });
+        } catch (error: any) {
+          this.log.warn('Could not turn on the WebSeed', {
+            publisher,
+            index: index.name,
+            band: band.id,
+            error: error?.message,
+          });
+        }
+      }
+      if (Date.now() >= meter.watchUntil) {
+        await save();
+        return { kind: 'pending' };
+      }
+      await new Promise((resolve) => setTimeout(resolve, this.torrentCheckMs));
+    }
+  }
+
+  /**
+   * Stage a completed torrent's files for install. For our own download,
+   * the engine lets go of it first and its directory is deleted after; a
+   * copy the engine is seeding for someone else is only read.
+   */
+  private async finishFromSwarm(
+    publisher: string,
+    index: IndexEntry,
+    band: BandDescriptor,
+    sourceDir: string,
+    download: SwarmDownload | undefined,
+  ): Promise<TorrentOutcome> {
+    const infohashV1 = band.torrent!.infohashV1;
+    this.finishing.add(infohashV1);
+    try {
+      // The engine keeps the torrent until the copy succeeds, so a copy cut
+      // short (a restart, a full disk) is tried again next poll from a
+      // download that is still complete. Its seeding cannot corrupt the
+      // copy: the digest is of the bytes as written to it.
+      let staged: string;
+      try {
+        staged = await this.stageFromSwarm(
+          publisher,
+          index.name,
+          band,
+          sourceDir,
+        );
+      } catch (error: any) {
+        if (!(error instanceof DownloadIntegrityError)) {
+          if (!this.stopping.signal.aborted) {
+            this.log.warn(
+              'Could not stage a torrent-fetched band; will retry',
+              {
+                publisher,
+                index: index.name,
+                band: band.id,
+                error: error?.message,
+              },
+            );
+          }
+          return { kind: 'pending' };
+        }
+        this.log.warn(
+          'A torrent-fetched band did not match its signed digests; fetching over HTTP',
+          {
+            publisher,
+            index: index.name,
+            band: band.id,
+            error: error.message,
+          },
+        );
+        this.count(publisher, index.name, 'verify_failed', 'torrent');
+        if (download !== undefined) {
+          await this.abandonDownload(infohashV1, download, 'bad bytes', false);
+        }
+        return { kind: 'fallback' };
+      }
+      if (download !== undefined) {
+        await this.transport!.remove(download.id).catch(() => undefined);
+        await fs.rm(sourceDir, { recursive: true, force: true });
+        await this.state.update((draft) => {
+          delete draft.downloads[infohashV1];
+        });
+      }
+      return { kind: 'done', dir: staged };
+    } finally {
+      this.finishing.delete(infohashV1);
+    }
+  }
+
+  /**
+   * Drop a torrent download and its partial files. The engine is told to
+   * forget it but never to delete data: the directory removed is always
+   * the one this subscriber made for it.
+   */
+  private async abandonDownload(
+    infohashV1: string,
+    download: SwarmDownload,
+    reason: string,
+    count = true,
+  ): Promise<TorrentOutcome> {
+    await this.transport?.remove(download.id).catch(() => undefined);
+    await fs.rm(path.join(this.swarmDir, infohashV1), {
+      recursive: true,
+      force: true,
+    });
+    await this.state.update((draft) => {
+      delete draft.downloads[infohashV1];
+    });
+    this.log.warn('Abandoning torrent; fetching over HTTP', {
+      publisher: download.publisher,
+      index: download.index,
+      band: download.band,
+      reason,
+    });
+    if (count) {
+      this.count(
+        download.publisher,
+        download.index,
+        'transport_fallback',
+        'torrent',
+      );
+    }
+    return { kind: 'fallback' };
+  }
+
+  /**
+   * Keep the torrent of an installed band that offers one, and record its
+   * infohash on the copy, so housekeeping seeds it. A band fetched over HTTP
+   * or adopted from disk has no kept torrent until this runs; a failure is
+   * retried on the next poll. Only for this publisher's own copy, so two
+   * publishers of one band id never take turns rewriting it.
+   */
+  private async keepTorrentFor(
+    publisher: string,
+    origin: string,
+    indexName: string,
+    band: BandDescriptor,
+    installed: InstalledBand,
+  ): Promise<void> {
+    const signed = band.torrent;
+    if (this.transport === undefined || signed === undefined) return;
+    if (
+      installed.publisher !== undefined &&
+      installed.publisher !== publisher
+    ) {
+      return;
+    }
+    if (
+      installed.infohashV1 === signed.infohashV1 &&
+      existsSync(this.keptTorrentPath(signed.infohashV1))
+    ) {
+      return;
+    }
+    try {
+      await this.obtainTorrent(origin, band);
+    } catch (error: any) {
+      // Retried every poll; not worth a warning each time.
+      this.log.debug('Could not fetch the torrent of an installed band', {
+        index: indexName,
+        band: band.id,
+        error: error?.message,
+      });
+      return;
+    }
+    await this.state.update((draft) => {
+      const record = draft.installed[indexName]?.[band.id];
+      // Only the copy that was checked: a newer install may have landed.
+      if (record !== undefined && record.dir === installed.dir) {
+        record.infohashV1 = signed.infohashV1;
+      }
+    });
+  }
+
+  /**
+   * Make the engine seed every installed copy that has a kept torrent, and
+   * nothing else of the subscriber's.
+   *
+   * Driven by state alone: a live copy (not retired) with an infohash and a
+   * kept torrent is wanted, one directory per infohash. Runs before the
+   * sweep, so the engine lets go of a retired copy before its files are
+   * deleted, and re-adds anything a restarted or wiped engine lost or put
+   * in error.
+   */
+  private async reconcileSeeding(): Promise<void> {
+    const transport = this.transport;
+    if (transport === undefined) return;
+    const available = await transport.isAvailable();
+    engineAvailable.set(available ? 1 : 0);
+    if (!available) return;
+
+    const state = await this.state.load();
+    const wanted = new Map<
+      string,
+      { index: string; band: string; dir: string }
+    >();
+    for (const [indexName, bands] of Object.entries(state.installed)) {
+      for (const [key, record] of Object.entries(bands)) {
+        if (record.retiredAt !== undefined) continue;
+        if (record.infohashV1 === undefined) continue;
+        if (!existsSync(this.keptTorrentPath(record.infohashV1))) continue;
+        if (!wanted.has(record.infohashV1)) {
+          wanted.set(record.infohashV1, {
+            index: indexName,
+            band: key,
+            dir: record.dir,
+          });
+        }
+      }
+    }
+
+    const mine = Object.entries(state.seeding).filter(
+      ([, seeded]) => seeded.owner === 'subscriber',
+    );
+    for (const [key, seeded] of mine) {
+      const want =
+        seeded.infohashV1 !== undefined
+          ? wanted.get(seeded.infohashV1)
+          : undefined;
+      if (
+        want !== undefined &&
+        path.resolve(want.dir) === path.resolve(seeded.dir)
+      ) {
+        continue;
+      }
+      // Retired, or now seeded from another copy of the same bytes. The
+      // engine's one copy of the torrent is taken back only if it runs from
+      // this directory; the publisher, if it offers the same bytes, re-adds
+      // it from its own on its next scan.
+      try {
+        const status = await transport.status(seeded.id);
+        if (
+          status !== undefined &&
+          (status.savePath === undefined ||
+            path.resolve(status.savePath) === path.resolve(seeded.dir))
+        ) {
+          await transport.remove(seeded.id);
+        }
+        await this.state.update((draft) => {
+          delete draft.seeding[key];
+        });
+      } catch (error: any) {
+        this.log.warn('Could not stop seeding a band', {
+          index: seeded.index,
+          band: seeded.band,
+          error: error?.message,
+        });
+      }
+    }
+
+    const current = (await this.state.load()).seeding;
+    for (const [infohashV1, want] of wanted) {
+      const existing = Object.values(current).find(
+        (seeded) =>
+          seeded.owner === 'subscriber' && seeded.infohashV1 === infohashV1,
+      );
+      try {
+        const status =
+          existing !== undefined
+            ? await transport.status(existing.id)
+            : undefined;
+        if (status !== undefined && status.state !== 'error') continue;
+        if (status?.state === 'error') await transport.remove(existing!.id);
+        const torrent = await fs.readFile(this.keptTorrentPath(infohashV1));
+        const { id } = await transport.seed({ torrent, dir: want.dir });
+        const entry: SeededBand = {
+          id,
+          infohashV1,
+          index: want.index,
+          band: want.band,
+          dir: want.dir,
+          owner: 'subscriber',
+        };
+        await this.state.update((draft) => {
+          draft.seeding[seedingKey('subscriber', id)] = entry;
+        });
+        this.log.info(
+          existing === undefined
+            ? 'Seeding an installed band'
+            : 'Re-seeding an installed band the engine had lost',
+          { index: want.index, band: want.band, infohashV1 },
+        );
+      } catch (error: any) {
+        this.log.warn('Could not seed an installed band', {
+          index: want.index,
+          band: want.band,
+          error: error?.message,
+        });
+      }
+    }
+  }
+
+  /**
+   * Housekeeping for the swarm's own directories: abandon downloads no poll
+   * has wanted for a whole torrent timeout (the publisher dropped the band,
+   * or it was installed another way), delete download directories and kept
+   * torrents nothing uses.
+   *
+   * A download is abandoned only once its publisher has been reconciled
+   * since startup, so one a first poll would pick up again is never
+   * mistaken for unwanted, and a publisher that is down holds up only its
+   * own downloads. Anything on disk without a record must also have sat a
+   * while, since a record is written just after its directory.
+   */
+  private async cleanSwarm(): Promise<void> {
+    const now = this.now().getTime();
+    const state = await this.state.load();
+    for (const [infohashV1, download] of Object.entries(state.downloads)) {
+      if (this.finishing.has(infohashV1)) continue;
+      // One no longer subscribed to is never reconciled; its downloads go.
+      if (
+        this.subscribedPublishers.has(download.publisher) &&
+        !this.reconciledSinceStart.has(download.publisher)
+      ) {
+        continue;
+      }
+      if (!this.subscribedPublishers.has(download.publisher)) {
+        await this.abandonDownload(infohashV1, download, 'unsubscribed');
+        continue;
+      }
+      if (now - download.lastSeenAt >= this.torrentTimeoutMs) {
+        await this.abandonDownload(infohashV1, download, 'no longer wanted');
+      }
+    }
+
+    const after = await this.state.load();
+    // File times are wall-clock time, whatever clock the subscriber runs on.
+    const oldEnough = async (target: string): Promise<boolean> => {
+      const stat = await fs.lstat(target).catch(() => undefined);
+      return (
+        stat !== undefined &&
+        Date.now() - stat.ctimeMs >= this.untrackedMinAgeMs
+      );
+    };
+    const names = await fs.readdir(this.swarmDir).catch(() => [] as string[]);
+    for (const name of names) {
+      if (Object.prototype.hasOwnProperty.call(after.downloads, name)) continue;
+      if (this.finishing.has(name)) continue;
+      const target = path.join(this.swarmDir, name);
+      if (!(await oldEnough(target))) continue;
+      // A crash between adding a torrent and recording it leaves the engine
+      // downloading into a directory nothing tracks. Its torrent was kept
+      // before the add, so the engine can be told to let go first.
+      await this.releaseOrphan(name, target);
+      await fs.rm(target, { recursive: true, force: true });
+    }
+
+    const used = new Set<string>(Object.keys(after.downloads));
+    for (const bands of Object.values(after.installed)) {
+      for (const record of Object.values(bands)) {
+        if (record.infohashV1 !== undefined) used.add(record.infohashV1);
+      }
+    }
+    const kept = await fs.readdir(this.torrentsDir).catch(() => [] as string[]);
+    for (const name of kept) {
+      if (!name.endsWith('.torrent')) continue;
+      if (used.has(name.slice(0, -'.torrent'.length))) continue;
+      const target = path.join(this.torrentsDir, name);
+      if (!(await oldEnough(target))) continue;
+      await fs.rm(target, { force: true });
+    }
+  }
+
+  /** Remove an engine torrent still downloading into an orphaned directory. */
+  private async releaseOrphan(infohashV1: string, dir: string): Promise<void> {
+    const transport = this.transport;
+    if (transport === undefined || !/^[0-9a-f]{40}$/.test(infohashV1)) return;
+    try {
+      const torrent = await fs.readFile(this.keptTorrentPath(infohashV1));
+      const id = transport.idFor(torrent);
+      const status = await transport.status(id);
+      if (
+        status?.savePath !== undefined &&
+        path.resolve(status.savePath) === path.resolve(dir)
+      ) {
+        await transport.remove(id);
+      }
+    } catch {
+      // No kept torrent, or the engine is down: nothing to release now.
+    }
   }
 
   /** Record an install of `band` at `dir`, retiring the copy it replaces. */
@@ -1460,6 +2685,7 @@ export class Subscriber {
     for (const file of band.files) {
       keep.add(file.name);
       keep.add(`${file.name}.${file.sha256.slice(0, 16)}.tmp`);
+      keep.add(swarmPartialName(file));
     }
     let names: string[];
     try {

@@ -97,10 +97,30 @@ export interface BandFile {
 }
 
 /**
- * Where a band can be fetched from as a torrent. Reserved for a torrent
- * transport: publishers in this release never set it, but it is validated so
- * a document from a publisher that does still parses.
+ * The name a band's torrent carries: the first 16 hex characters of SHA-256
+ * over each file's name, size and digest, in file-name order.
+ *
+ * Content, not the band id, decides it, because the name is inside the info
+ * dictionary: two publishers of the same bytes under different band ids
+ * must still produce one infohash and join one swarm. It is also what a
+ * WebSeed request carries (`<url><name>/<file>`), so the gateway can serve
+ * WebSeeds without the publication naming the torrent: it computes the same
+ * thing from the files.
  */
+export function torrentNameForFiles(files: BandFile[]): string {
+  const hash = crypto.createHash('sha256');
+  for (const file of [...files].sort((a, b) =>
+    Buffer.compare(Buffer.from(a.name), Buffer.from(b.name)),
+  )) {
+    // Name and size as well as the digest: two bands holding the same
+    // digests under different names are different torrents, and must not
+    // share a WebSeed address.
+    hash.update(`${file.name}\0${file.size}\0${file.sha256}\n`);
+  }
+  return hash.digest('hex').slice(0, 16);
+}
+
+/** Where a band can be fetched from as a torrent. */
 export interface BandTorrent {
   /** Lowercase hex SHA-1 infohash (BitTorrent v1). Always present. */
   infohashV1: string;

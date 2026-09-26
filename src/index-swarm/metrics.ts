@@ -89,6 +89,13 @@ export const publishBands = new promClient.Gauge({
   registers: [registry],
 });
 
+export const publishSeedingBands = new promClient.Gauge({
+  name: 'index_publish_seeding_bands',
+  help: 'Bands handed to the torrent engine to seed on the last scan, by index. Below index_publish_bands means some bands are offered over HTTP only; absent when no engine is configured.',
+  labelNames: ['index'] as const,
+  registers: [registry],
+});
+
 export const publishManifestAge = new promClient.Gauge({
   name: 'index_publish_manifest_age_seconds',
   help: 'Age of the published document. Climbing past the configured TTL means subscribers are seeing this publisher as stale.',
@@ -147,6 +154,37 @@ export const subscriptionSequence = new promClient.Gauge({
   name: 'index_subscription_sequence',
   help: 'Latest publication sequence seen from each publisher, whether or not its bands have installed yet. The replay guard compares against this.',
   labelNames: ['publisher'] as const,
+  registers: [registry],
+});
+
+export const engineAvailable = new promClient.Gauge({
+  name: 'index_swarm_engine_available',
+  help: 'Whether the torrent engine answers: 1 or 0. Absent when no engine is configured, which is HTTP-only by choice rather than an outage.',
+  registers: [registry],
+});
+
+export const trackerAnnounces = new promClient.Counter({
+  name: 'index_swarm_tracker_announces_total',
+  help: 'Announces to the closed tracker by result: ok, unregistered (an infohash this node does not publish; refused), malformed, rate_limited (one address announcing more than its share).',
+  labelNames: ['result'] as const,
+  registers: [registry],
+});
+
+export const trackerPeers = new promClient.Gauge({
+  name: 'index_swarm_tracker_peers',
+  help: 'Peers the closed tracker currently knows, across every band it tracks.',
+  registers: [registry],
+});
+
+export const uploadToday = new promClient.Gauge({
+  name: 'index_swarm_upload_today_bytes',
+  help: 'Bytes the torrent engine has uploaded to peers today (UTC), counted against INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES.',
+  registers: [registry],
+});
+
+export const uploadThrottled = new promClient.Gauge({
+  name: 'index_swarm_upload_throttled',
+  help: 'Whether the daily upload budget is spent and seeding is throttled until the next UTC day: 1 or 0.',
   registers: [registry],
 });
 

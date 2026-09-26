@@ -12,8 +12,10 @@ compose profile behaves exactly as it did.
 Publishing and subscribing work over HTTP: a publisher signs and serves its
 bands, a subscriber verifies, downloads and installs them, and the gateway
 beside it loads them without a restart. Every subscriber fetches from the
-publisher's metered HTTP routes. (The document has a reserved `torrent`
-field for a peer-to-peer transport; nothing in this build sets or reads it.)
+publisher's metered HTTP routes, unless a torrent engine is configured: then
+bands also move peer to peer. A publisher seeds a torrent of every band, a
+subscriber fetches from peers first and falls back to HTTP, and every
+subscriber seeds what it installed. See [Torrent engine](#torrent-engine).
 
 ## Quick start
 
@@ -160,12 +162,130 @@ any digest.
 To replace a band, prefer a fresh id per build (`band-tip-20260923T1200`,
 say) with `supersedes` naming the previous one, so the publisher withdraws
 and removes it for you; without `supersedes`, delete the previous one
-yourself after the next scan. Subscribers install the new band, then retire
-the old after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`.
+yourself after the next scan. When the new band names the old one in
+`supersedes`, subscribers keep serving the old band until the new one has
+installed, however long its download takes, then retire the old after
+`INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`. Without `supersedes`, a subscriber
+retires a band as soon as the publisher stops offering it. So set `supersedes` when you
+first publish the new band: publishing it without and adding `supersedes`
+later edits its manifest, which changes the band (subscribers then fetch only
+the changed file, but it is still a new version of the band).
 Swapping under the same id also works, but a directory cannot be renamed over
 a non-empty one, so there is a moment when the band is absent; a scan that
 lands in it withdraws the band until the next scan, and subscribers retire it
 in the meantime.
+
+### Publishing torrents
+
+With `INDEX_SWARM_ENGINE_URL` set, the publisher also offers every band as
+a torrent: it builds one when the band is first described or changes,
+writes it to `published/<index>/<band>.torrent`, adds a `torrent` entry
+(both infohashes, a magnet link, the `.torrent` URL) to the band in the
+publication, and has the engine seed it. Without an engine there are no
+torrent entries, since a torrent nobody seeds only makes subscribers wait
+before falling back to HTTP.
+
+The engine seeds from `published/.seed/<v1 infohash>/`, a hard link per file
+to its blob, not from the band directory. A band rebuilt in place under the
+same id changes the bytes behind its names; seeding the directory would hand
+peers pieces that fail their hashes until the next scan. The links pin the
+bytes that were hashed, as they do for the blob route.
+
+Torrents are deterministic. The name is derived from the band's file names,
+sizes and digests, not its id, and nothing publisher-specific goes in: no creation
+date and no WebSeed. So two publishers holding the same bytes with the same
+`INDEX_SWARM_PRIVATE_SWARM` share one infohash and one swarm; the private
+flag is inside the info dictionary, so publishers that differ on it do not.
+With the same `INDEX_SWARM_TRACKERS` too, their `.torrent` files are
+byte-identical. Subscribers add the publisher's WebSeed
+(`/ar-io/indexes/webseed/`) themselves, and only when peers are not
+delivering, because engines otherwise pull about half of a band from it even
+with a seeder available, and it is the metered tier.
+
+`INDEX_SWARM_TRACKERS` sets the announce list; point it at this node's own
+tracker (below) by the address peers reach it on. Subscribers pass on to
+their engine only trackers on public hosts, so a name such as `core` or a
+private address is dropped there. The engine also runs DHT and peer exchange,
+so peers can find one another without the tracker.
+`INDEX_SWARM_PRIVATE_SWARM=true` sets the BEP 27 private flag, which turns
+DHT and peer exchange off for those torrents. It is inside the infohash, so
+publishers who want one swarm must agree on it.
+
+### The tracker
+
+A publisher runs a closed tracker in its sidecar, on
+`INDEX_SWARM_TRACKER_PORT` (default 6969), and its torrents announce to it.
+It answers only for the bands the publisher offers at that moment, under
+both of each hybrid torrent's infohashes, and refuses every other torrent
+with `unregistered torrent`. Its port is public, so it is bounded: at most
+2,000 peers per torrent and 4 ports per address, a random sample in each
+response, 10 announces a minute per address for each torrent (an IPv6 /64
+counts as one address), and a connection cap. That is why it is not qBittorrent's embedded
+tracker: that one tracks any infohash anyone announces, which on a published
+port would make the gateway a free tracker for any swarm on the internet,
+with its address in them. The engine's init pins the embedded tracker off.
+
+The tracker always lists this node's own engine for its bands, at
+`INDEX_SWARM_ENGINE_PUBLIC_HOST` (or the tracker URL's host) and
+`INDEX_SWARM_ENGINE_PORT`, whether or not the engine's own announce reaches
+it. That announce often doesn't: on a host with an INPUT firewall, a
+container's request to its host's own public address is short-circuited
+inside Docker and refused, while announces from real peers arrive through
+the public interface as usual.
+
+The tracker keeps its peers in memory. After a restart they are back within
+one announce interval (300 s); meanwhile peers still find one another through
+DHT, and a subscriber whose download stalls turns on the WebSeed. It is served
+straight from the sidecar and sees each peer's real address, so put nothing
+that rewrites source addresses in front of it.
+
+Every scan reconciles the engine with the publication: bands offered are
+seeded (a status check when they already are), bands no longer offered are
+removed from the engine, and their `.torrent` files and seed directories are
+deleted. An engine that is down delays seeding to the next scan and stops
+nothing else.
+
+### Publishing torrents from a fleet behind a load balancer
+
+A large gateway is often several nodes behind an HTTP load balancer with a
+caching proxy, and only one of them holds the observer key and signs. The
+swarm needs a few things that an HTTP proxy does not give by itself:
+
+1. **One node publishes and seeds.** The signing node, the one
+   `/ar-io/indexes*` is pinned to, runs the engine and the tracker. The other
+   nodes need neither.
+2. **The engine's peer port reaches that node directly.** BitTorrent is not
+   HTTP, so the load balancer cannot carry it: publish
+   `INDEX_SWARM_ENGINE_PORT` (TCP and UDP) on the node's own public address,
+   open it in the firewall, and set `INDEX_SWARM_ENGINE_PUBLIC_HOST` to that
+   address. Without it the tracker lists this node's engine under the host of
+   its tracker URL, which for a fleet is the load balancer.
+3. **The tracker, one of two ways.**
+   - Directly: publish `INDEX_SWARM_TRACKER_PORT` on the same public address
+     and announce to `http://<that address>:6969/announce`.
+   - Through the load balancer: route `/announce` to the signing node's
+     tracker port, uncached, with `proxy_set_header X-Forwarded-For
+     $proxy_add_x_forwarded_for;`, and list the proxies' addresses in
+     `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`. Otherwise every peer appears at
+     the proxy's address, the per-address caps throttle them together, and
+     the tracker hands out an address nobody can connect to.
+4. **The `.torrent` and WebSeed routes** sit under `/ar-io/indexes`, so a pin
+   and cache rule for that prefix covers them. The WebSeed is metered like
+   the blob route and marked `private` when metered, so a shared cache does
+   not replay paid bytes.
+5. **Bound what seeding costs.** Seeding is free to peers but not to the
+   publisher: every byte is its upload, and a peer can fetch the bands again
+   and again. Two limits bound it, with defaults for any node:
+   `INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC` caps the rate (10 MB/s) and
+   `INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES` caps the day (100 GB, then 1 KiB/s
+   until the next UTC day). Raise both for a large publisher. The engine's
+   memory also grows with the bytes it seeds (see
+   [Running the engine](#running-the-engine)).
+
+Subscribers behind NAT still work: they reach the publisher's engine, and a
+reachable subscriber can be reached back. Only two peers that are both
+unreachable cannot exchange pieces with each other, and they still have the
+publisher and the WebSeed.
 
 ### Publishing cadence
 
@@ -246,6 +366,68 @@ publishers whose registered URL you would let your gateway call. And removing
 a publisher from `INDEX_SWARM_SUBSCRIBE` retires the bands it installed: no
 longer subscribing means no longer trusting it for what the gateway serves.
 
+#### Over the swarm
+
+With `INDEX_SWARM_ENGINE_URL` set, a band the publication offers as a torrent
+is fetched through the engine:
+
+1. The `.torrent` is fetched from the publisher under the same rules as a
+   band file (the publication's origin or `INDEX_SWARM_ALLOWED_FILE_ORIGINS`,
+   no redirects, a bounded size) and checked against the infohashes the
+   publication signed. A mismatch is refused before the engine ever sees it
+   (`verify_failed`, transport `torrent`), and the band is fetched over HTTP.
+2. Only the signed part reaches the engine. The infohash covers the info
+   dictionary and nothing else, so the trackers and WebSeeds around it are
+   the publisher's to choose, and the engine would request them from inside
+   this node's network. The sidecar keeps the info dictionary and piece
+   layers byte for byte and only trackers on public hosts, drops every
+   WebSeed, and checks the infohashes again. The checked torrent is kept in
+   `torrents/<infohash>.torrent`.
+3. The engine downloads into `swarm/<infohash>/`, handed to its user
+   (`INDEX_SWARM_ENGINE_UID`) since the sidecar runs as root, with peers only.
+4. If nothing has moved for `INDEX_SWARM_WEBSEED_AFTER_SECONDS`, the
+   publisher's WebSeed is turned on. Peers come first because the WebSeed is
+   the publisher's metered tier.
+5. Before the engine sees the torrent, its file list is checked against the
+   band's signed files: exactly those names and sizes, plus the pad files
+   BEP 47 allows, and nothing else, no symlinks and no subdirectories. The
+   infohash pins the info dictionary, not that it describes the band.
+6. On completion the engine lets go of the torrent, and each signed file is
+   copied out of `swarm/` into the band's incoming directory, hashed as it
+   is copied, then validated and installed exactly as over HTTP. Only a
+   regular file of the signed size is read, and never through a link, and
+   the engine's own directory is never installed: a file it still held open
+   or linked could otherwise change after it was checked.
+7. The installed band is seeded from its generation directory, so every
+   subscriber is also a seeder.
+
+If the engine already holds the torrent, because this node publishes the
+same bytes or seeds them from another installed copy, the band is installed
+from that copy without the engine being touched.
+
+Peers are not metered, so a band the swarm can bring still starts after the
+publisher's HTTP meter has answered `402` or `429`; if it then falls back to
+HTTP, it waits for the next poll like any other band.
+
+A download in progress is kept in `state.json`: a restart picks it up where
+the engine left it. An engine error, the engine losing the torrent, or
+`INDEX_SWARM_TORRENT_TIMEOUT_SECONDS` without progress abandons the torrent
+and its partial files and fetches the band over HTTP in the same poll
+(`transport_fallback`). A poll watches its unfinished torrents for up to a
+minute in all, not per band, and then moves on; the next poll picks them up
+where they left off. A band rebuilt under the same id drops the download of
+its old version.
+
+A band that came over HTTP instead (the engine was down or still starting,
+or the torrent was abandoned) is seeded too: once the engine answers, its
+`.torrent` is fetched and checked the same way. Housekeeping seeds exactly
+the live copies that have a kept torrent, re-adds any a restarted engine
+lost, and lets go of a retired copy before its files are deleted. At startup
+the sidecar waits up to two minutes for the engine, so a fresh start does
+not send the first poll to HTTP just because the engine was a few seconds
+behind. Download directories and kept torrents that nothing uses any more are
+deleted.
+
 ### Pointing the gateway at installed bands
 
 The subscriber installs into `data/indexes/installed/<index>/`. The gateway
@@ -301,8 +483,13 @@ need a gateway restart.
 
 ### What the gateway serves
 
-The gateway's side is three read-only routes under `/ar-io/indexes`: the signed
-publication document, each published file by name, and each by its SHA-256.
+The gateway's side is five read-only routes under `/ar-io/indexes`: the
+signed publication document, each published file by name, each by its
+SHA-256, a band's `.torrent`, and the WebSeed route torrent clients fetch
+`<torrent name>/<file>` from. The WebSeed is metered and cached like the blob
+route: its address is derived from each file's name, size and digest (see
+[Torrent Name](glossary.md#torrent-name)), so it cannot change
+meaning.
 They serve **only what the publication lists**.
 A request is looked up in a map built from the signed document rather than
 joined onto a path, so anything else in the directory, such as a band still
@@ -387,6 +574,146 @@ location ^~ /ar-io/indexes {
 }
 ```
 
+## Torrent engine
+
+The swarm runs through a torrent engine in a separate container, in its own
+compose profile, `index-swarm-torrent`, which the sidecar drives over its
+Web API. Without it, and without `INDEX_SWARM_ENGINE_URL`, everything moves
+over HTTP as before.
+
+### Running the engine
+
+```bash
+# .env
+INDEX_SWARM_ENGINE_AUTH=swarm:<a long random password>
+INDEX_SWARM_ENGINE_URL=http://index-swarm-engine:8080
+```
+
+```bash
+docker compose --profile index-swarm --profile index-swarm-torrent \
+  up -d index-swarm index-swarm-engine
+```
+
+Name the services, as for the sidecar alone: a bare
+`docker compose --profile index-swarm up` also starts every default service.
+Recreate `index-swarm` too when turning the engine on, so it reads
+`INDEX_SWARM_ENGINE_URL` and joins the engine's network.
+Starting the engine runs `index-swarm-engine-init` first, a one-shot
+container that writes the settings below into the engine's configuration and
+exits. The engine waits for it, so without `INDEX_SWARM_ENGINE_AUTH` the init
+fails with a message saying so and the engine never starts; qBittorrent would
+otherwise invent a password on every start that the sidecar could not know.
+
+What the init manages, on every engine start (everything else in the file,
+including an operator's own tuning, is left alone):
+
+| Setting | Value | Why |
+|---|---|---|
+| DHT, peer exchange | on | Peers find one another even while a publisher's tracker is restarting |
+| Local service discovery, UPnP | off | Local broadcasts and router port mapping help nobody on a hosted server |
+| Embedded tracker | off | It is an open tracker; the sidecar runs a closed one |
+| Torrent queueing | off | qBittorrent keeps only a few torrents active by default; a gateway seeds every band it holds |
+| Save path | `swarm/`, no temp path | The only directory the engine can write data to |
+| Automatic torrent management | off | It would move a seeded band out of `published/` |
+| Upload limit | `INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC` | Peer upload is otherwise unbounded |
+| Web UI user and password | from `INDEX_SWARM_ENGINE_AUTH` | Stored as qBittorrent's own PBKDF2 hash; kept when unchanged |
+| Subnet allowlist | off | It would exempt a whole Docker network from the password |
+| IP filter, peers and trackers | private ranges, unless `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false` | See above |
+| Loopback without a password | off | A request that reached the engine's loopback from a host another gateway chose must not be let in. The healthcheck needs only an answer |
+
+The engine sees the index directories at the same paths the sidecar does,
+because the sidecar hands it paths. It can write only `swarm/` and its own
+configuration; `published/` and `installed/` are mounted read only.
+
+It runs on its own Docker network (`INDEX_SWARM_ENGINE_NETWORK_NAME`),
+shared only with the sidecar. The trackers, peers and WebSeeds it talks to
+are chosen by other gateways, so it must not be able to reach the gateway,
+the observer, ClickHouse or anything else on `ar-io-network`. Two more
+layers keep it off this node's network:
+
+- The sidecar hands the engine only trackers on public hosts, in canonical
+  form, and no WebSeed but the publisher's own. The one exception is a
+  tracker the operator lists in `INDEX_SWARM_ALLOWED_TRACKERS`, which is
+  useful only with `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false`.
+- The engine's IP filter refuses private, loopback, link-local and
+  carrier-grade NAT addresses for peers, trackers and WebSeeds, which also
+  covers a public name that resolves to a private address, a tracker that
+  redirects, and peers learned from DHT or peer exchange (DHT's own traffic
+  is left to libtorrent, which ignores private nodes already). The init
+  writes the filter on every engine start. Set
+  `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false` only when the swarm runs on a
+  private network, between gateways on one LAN, and list that network's
+  tracker in `INDEX_SWARM_ALLOWED_TRACKERS`.
+
+Only the peer port, `INDEX_SWARM_ENGINE_PORT` (default 6881, TCP and UDP), is
+published; open it in the host firewall for peers to connect in. The Web API
+is not published at all. It stays on the engine's network, and must be
+reached there at `index-swarm-engine:8080`: qBittorrent answers 401 to every request
+whose Host header names another port.
+
+`index_swarm_engine_available` can read 0 for a moment after both start
+together, because the sidecar's first check may land before the engine is
+listening; the next check flips it.
+
+Notes from running it:
+
+- **Memory.** libtorrent 2 maps the files it seeds, and mapped pages count as
+  resident memory: an engine seeding 22 GiB showed about 100 MiB of its own
+  memory and up to 830 MiB of mapped file pages. They are shared and
+  reclaimable, but they count against a container memory limit, so size any
+  limit for them, or alert on anonymous memory rather than RSS.
+- **Reach it at its own port.** qBittorrent answers 401 to every request,
+  the login included, when the `Host` header names a different port or host
+  than it listens on, which is what publishing its API port under another
+  number does. The sidecar reports that case by name.
+- **Failed logins are not retried**, because qBittorrent bans an address
+  after five. Check `INDEX_SWARM_ENGINE_AUTH` if the engine refuses the
+  sidecar.
+
+### Why qBittorrent
+
+The engine is **qBittorrent-nox 5.2.3 on libtorrent 2.0.13**
+(`qbittorrentofficial/qbittorrent-nox:5.2.3-lt2-1`), driven through its
+**Web API 2.15.1**. It was chosen over Transmission and rqbit by running all
+three through the same test on 2026-09-23: seed a 256-file band from a
+read-only mount, then fetch it on a second instance from the WebSeed alone,
+from a peer alone, and from both, using the deterministic hybrid v1 + v2
+torrents the sidecar builds.
+
+| | qBittorrent 5.2.3 | Transmission 4.1.3 | rqbit 9.0.1 |
+|---|---|---|---|
+| Hybrid v1 + v2 | Yes, verifies both | v1 half only; pad files treated as real files | v1 half only |
+| Seeds from a read-only mount | Yes, writes nothing | v1 torrents only | **No**: opens files read-write, add fails |
+| Verifies on add, 20 GiB, cold, SSD | 59 s | Not at all (trusts sizes); forced verify 50 s | n/a |
+| WebSeed only, 2.2 GB | 9.5 s | 20 s | **No WebSeed support** |
+| Peer only, 2.2 GB | 64 s | 49 s | not run |
+| Both, 21.6 GB | 181 s, 48% from the WebSeed | 276 s, 54% from the WebSeed | |
+| WebSeeds changed at runtime | Yes (`addWebSeeds`, `removeWebSeeds`) | No, read only | |
+| Files in a directory not named after the torrent | `contentLayout=NoSubfolder` | `torrent-rename-path` | `output_folder` |
+| Memory, seeding 22 GiB, idle | 98 MiB anonymous, plus up to 833 MiB of mapped file pages | 2 MiB anonymous, 6 MiB resident | |
+| Time from add to first WebSeed request | 0.5 to 1.2 s | 2.9 to 3.8 s | |
+| API | REST, cookie login or subnet allowlist | JSON-RPC with a session-id header | REST, no auth |
+| Image | 182 MB | 84 MB | 29 MB, and must run as root |
+
+**Why not Transmission.** It reads only the v1 half of a hybrid torrent and
+treats its BEP 47 pad files as real files, so a hybrid band never completes:
+it requests `.pad/<n>` from the WebSeed and tries to rename the finished
+files to `.part` on the read-only mount. Using it would mean giving up v2 and
+cross-publisher deduplication, and it cannot change a torrent's WebSeeds
+while running.
+
+**Why not rqbit.** It cannot seed from a read-only mount, and the engine must
+never be able to modify what the gateway serves. It also has no WebSeed
+support, which removes the fallback the design depends on.
+
+Two findings from that test shaped the rest of the design. Engines treat a
+WebSeed as one more peer, and both drew about half of a band from it while a
+full-speed seeder was available; so torrents carry no WebSeed, and a
+subscriber adds the publisher's only when peers stall. And every file, the
+last included, is padded to a piece boundary, which is what libtorrent
+itself does: a band built by the sidecar and one built by libtorrent from
+the same files share both infohashes and join one swarm.
+
 ## Volume layout
 
 ```text
@@ -395,10 +722,14 @@ data/indexes/
     publication.json  # the signed document; the gateway serves it
     <index>/<band>/   # bands this node offers
     blobs/            # the same files by SHA-256, as hard links
+    <index>/<band>.torrent       # with an engine: each band's torrent
+    .seed/<v1 infohash>/         # with an engine: what it seeds, links to blobs/
   incoming/
     <publisher>/<index>/<band>/  # downloads in progress, per publisher; never read by the gateway
   installed/
     <index>/<band>~<generation>/ # bands in use; the gateway loads these
+  swarm/<infohash>/   # with an engine: torrent downloads; the engine's only writable directory
+  torrents/<infohash>.torrent    # with an engine: checked torrents kept for seeding
   state.json          # hashes, sequences seen and bands installed
 ```
 
@@ -445,13 +776,17 @@ Metrics worth a dashboard:
 | `index_subscription_manifest_age_seconds{publisher}` | Age of the newest document from each publisher, computed at scrape time. **The alarm that matters**: climbing past the publisher's TTL means it has gone quiet, whether it still answers with an old document or does not answer at all |
 | `index_subscription_sequence{publisher}` | The latest sequence seen, whether or not its bands have installed |
 | `index_swarm_installed_bands{index}` | What is installed |
-| `index_subscription_bytes_total{transport}` | Bytes actually fetched (only `http` in this build). Files already on disk are not fetched again and not counted |
+| `index_subscription_bytes_total{transport}` | Bytes actually fetched, by `http` or `torrent`. Files already on disk are not fetched again and not counted. The share by `torrent` is how much the swarm is carrying |
+| `index_swarm_upload_today_bytes`, `index_swarm_upload_throttled` | Seeding today against the daily budget; 1 means the budget is spent and seeding is throttled until the next UTC day |
+| `index_swarm_engine_available` | 1 while the torrent engine answers. Absent when none is configured, which is HTTP only by choice |
+| `index_publish_seeding_bands{index}` | Bands handed to the engine on the last scan. Below `index_publish_bands` means some are offered over HTTP only |
+| `index_swarm_tracker_announces_total{result}`, `index_swarm_tracker_peers` | The closed tracker: `ok`, `unregistered` (an infohash this node does not publish; refused), `malformed`, `rate_limited` (an address announcing one torrent too often) |
 
 On the gateway, at `/ar-io/__gateway_metrics`:
 
 | Metric | Read it as |
 |---|---|
-| `indexes_requests_total{route,status}` | Requests to the index routes (`publication`, `file`, `blob`) by status. On a publisher, `402` and `429` are the meter at work |
+| `indexes_requests_total{route,status}` | Requests to the index routes (`publication`, `file`, `blob`, `torrent`, `webseed`) by status. On a publisher, `402` and `429` are the meter at work |
 | `indexes_bytes_served_total{route}` | Bytes served by the index routes |
 | `root_tx_lookup_total{source="cdb64",status}` | How often installed bands answered a lookup, on a subscriber |
 
@@ -467,6 +802,7 @@ The subscription results that need attention:
 | `band_conflict` | Another subscribed publisher's copy of this band id is live, with different bytes | Subscribe to one of them for that index (use `name`), or ask the publishers to use distinct band ids |
 | `sequence_jump` | A document more than 1,000,000 sequences ahead of the last one seen | Security-relevant: should be zero. Nothing is installed from it |
 | `unknown_kind` | A band of a kind this build does not implement | Upgrade the sidecar, or ignore |
+| `transport_fallback` (transport `torrent`) | A torrent was not used: the engine was down, errored or lost it, or it timed out | The band is fetched over HTTP in the same poll. Sustained means an engine problem or no peers |
 | `unreachable`, `error` | The publisher or the registry could not be read; or the publisher is not in `INDEX_SWARM_TRUSTED_PUBLISHERS`; or a band offers no HTTP location | Bands already installed keep serving |
 
 ## Operational notes
@@ -517,7 +853,11 @@ Subscribers see that document age and, once it expires, alarm. To remove the
 feature entirely:
 
 1. `docker compose --profile index-swarm stop index-swarm`, then
-   `docker compose --profile index-swarm rm -f index-swarm`.
+   `docker compose --profile index-swarm rm -f index-swarm`. With the engine,
+   also `docker compose --profile index-swarm-torrent stop index-swarm-engine`
+   and remove it and `index-swarm-engine-init` the same way; then
+   `data/indexes/swarm/`, `data/indexes/torrents/` and
+   `data/index-swarm-engine/` can be deleted.
 2. On a subscriber, restore the previous `CDB64_ROOT_TX_INDEX_SOURCES` and
    restart the gateway, then delete `data/indexes/installed/`. In that order,
    so the gateway is no longer holding the files open when they go.

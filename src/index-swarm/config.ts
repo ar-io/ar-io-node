@@ -141,6 +141,15 @@ export const PUBLISHED_DIR = path.join(DATA_DIR, 'published');
 export const INCOMING_DIR = path.join(DATA_DIR, 'incoming');
 /** Bands in use. The gateway loads these through its collection source. */
 export const INSTALLED_DIR = path.join(DATA_DIR, 'installed');
+
+/**
+ * Where the torrent engine downloads, one directory per torrent. The only
+ * index directory the engine may write.
+ */
+export const SWARM_DIR = path.join(DATA_DIR, 'swarm');
+
+/** Checked `.torrent` files kept for seeding installed bands. Sidecar only. */
+export const TORRENTS_DIR = path.join(DATA_DIR, 'torrents');
 /** Content-addressed links into the published bands, served by hash. */
 export const BLOBS_DIR = path.join(PUBLISHED_DIR, 'blobs');
 /** The signed document the gateway serves at /ar-io/indexes. */
@@ -313,6 +322,182 @@ export const OBSERVER_PRIVATE_KEY = env.varOrUndefined('OBSERVER_PRIVATE_KEY');
 export const SHUTDOWN_TIMEOUT_MS = env.positiveIntOrDefault(
   'INDEX_SWARM_SHUTDOWN_TIMEOUT_MS',
   10_000,
+);
+
+export interface EngineAuth {
+  username: string;
+  password: string;
+}
+
+/**
+ * Parse `user:password`. The password may itself contain colons; the user
+ * may not be empty. Required with the compose engine, whose init refuses to
+ * start without it; unset only suits an engine run outside the compose
+ * profile that lets the sidecar in without a login.
+ */
+export function parseEngineAuth(
+  raw: string | undefined,
+): EngineAuth | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const colon = raw.indexOf(':');
+  if (colon <= 0) {
+    throw new Error('INDEX_SWARM_ENGINE_AUTH must be user:password');
+  }
+  const password = raw.slice(colon + 1);
+  // A generator that failed (no openssl on the host, say) leaves `user:`;
+  // refuse that rather than start an engine with an empty password.
+  if (password.length < MIN_ENGINE_PASSWORD_LENGTH) {
+    throw new Error(
+      `INDEX_SWARM_ENGINE_AUTH's password must be at least ${MIN_ENGINE_PASSWORD_LENGTH} characters`,
+    );
+  }
+  return { username: raw.slice(0, colon), password };
+}
+
+/** Shortest engine Web UI password accepted. */
+export const MIN_ENGINE_PASSWORD_LENGTH = 16;
+
+/**
+ * The torrent engine's Web API, e.g. `http://index-swarm-engine:8080`. Unset
+ * means no swarm: bands move over HTTP only. It must be the host name and
+ * port the engine itself listens on; qBittorrent refuses a Host header that
+ * differs.
+ */
+export const ENGINE_URL = env.varOrUndefined('INDEX_SWARM_ENGINE_URL');
+export const ENGINE_AUTH = parseEngineAuth(
+  env.varOrUndefined('INDEX_SWARM_ENGINE_AUTH'),
+);
+
+/**
+ * Announce URLs written into every torrent this node builds. They are
+ * outside the info dictionary, so they do not change the infohash, but they
+ * are in the `.torrent` file: publishers that want byte-identical files use
+ * the same list.
+ */
+export const TRACKERS = env
+  .varOrDefault('INDEX_SWARM_TRACKERS', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/**
+ * BEP 27 private flag on every torrent built. Clients then keep those
+ * torrents off DHT and peer exchange, so the tracker is the only way in. It
+ * is inside the info dictionary, so it changes the infohash: publishers who
+ * want one swarm must agree on it.
+ */
+export const PRIVATE_SWARM =
+  env.varOrDefault('INDEX_SWARM_PRIVATE_SWARM', 'false') === 'true';
+
+/**
+ * Tracker announce URLs a subscriber hands its engine even though their host
+ * is private: an operator's own tracker on a LAN or private network. Exact
+ * URLs, comma separated. Every other tracker on a private address or a
+ * single-label name is dropped, because it would be a request from inside
+ * this node's network to wherever a publisher pointed it.
+ */
+export const ALLOWED_TRACKERS = env
+  .varOrDefault('INDEX_SWARM_ALLOWED_TRACKERS', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/**
+ * Whether the engine's IP filter refuses private addresses (written by
+ * index-swarm-engine-init from the same variable). The sidecar reads it only
+ * to warn when its own settings name something the filter will block.
+ */
+export const ENGINE_BLOCK_PRIVATE =
+  env.varOrDefault('INDEX_SWARM_ENGINE_BLOCK_PRIVATE', 'true') !== 'false';
+
+/**
+ * The engine's upload rate cap, bytes a second; 0 is unlimited. Written into
+ * the engine's config by index-swarm-engine-init, and restored by the
+ * sidecar each day after the daily budget throttled it.
+ */
+export const UPLOAD_LIMIT_BYTES_PER_SEC = env.nonNegativeIntOrDefault(
+  'INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC',
+  10_000_000,
+);
+
+/**
+ * Most the engine may upload in a UTC day, in bytes; 0 is no budget. Past
+ * it, seeding is throttled to a trickle until the next day. The rate cap
+ * bounds how fast; this bounds how much, whatever peers ask for.
+ */
+export const UPLOAD_DAILY_LIMIT_BYTES = env.nonNegativeIntOrDefault(
+  'INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES',
+  100_000_000_000,
+);
+
+/** Give up on a torrent and fetch the band over HTTP after this long. */
+export const TORRENT_TIMEOUT_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_TORRENT_TIMEOUT_SECONDS', 3600) * 1000;
+
+/**
+ * Turn the publisher's WebSeed on once a torrent has made no progress for
+ * this long. The WebSeed is the publisher's metered tier, and engines draw
+ * about half a band from one even while peers could serve it, so it is
+ * only added when peers are not delivering.
+ */
+export const WEBSEED_AFTER_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_WEBSEED_AFTER_SECONDS', 120) * 1000;
+
+/**
+ * The engine's user and group, so the sidecar, which runs as root, can hand
+ * a band's download directory to the engine before adding it. The same
+ * values the engine container runs as.
+ */
+export const ENGINE_UID = env.positiveIntOrDefault(
+  'INDEX_SWARM_ENGINE_UID',
+  1000,
+);
+export const ENGINE_GID = env.positiveIntOrDefault(
+  'INDEX_SWARM_ENGINE_GID',
+  1000,
+);
+
+/**
+ * Port the closed tracker listens on, when this node publishes torrents.
+ * Point INDEX_SWARM_TRACKERS at it by the address peers reach it on, e.g.
+ * `http://gateway.example:6969/announce`.
+ */
+/**
+ * Proxies (IPs or CIDRs, comma separated) whose `X-Forwarded-For` the
+ * closed tracker believes, when it is served behind a load balancer.
+ */
+export const TRACKER_TRUSTED_PROXIES = env
+  .varOrDefault('INDEX_SWARM_TRACKER_TRUSTED_PROXIES', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/**
+ * The host peers reach this node's torrent engine on (its peer port,
+ * `INDEX_SWARM_ENGINE_PORT`). Defaults to the host of the first
+ * `INDEX_SWARM_TRACKERS` URL. Set it when the tracker is served through a
+ * load balancer that does not also forward the peer port, such as an HTTP
+ * proxy in front of a fleet: the engine is then listed under the host that
+ * actually reaches it.
+ */
+export const ENGINE_PUBLIC_HOST = env.varOrUndefined(
+  'INDEX_SWARM_ENGINE_PUBLIC_HOST',
+);
+
+/**
+ * The torrent engine's peer port, TCP and UDP. Below the ephemeral range
+ * (32768-60999 on Linux), so an outbound socket can never hold it when the
+ * engine starts. The tracker lists this node's engine at
+ * INDEX_SWARM_ENGINE_PUBLIC_HOST and this port.
+ */
+export const ENGINE_PORT = env.positiveIntOrDefault(
+  'INDEX_SWARM_ENGINE_PORT',
+  6881,
+);
+
+export const TRACKER_PORT = env.positiveIntOrDefault(
+  'INDEX_SWARM_TRACKER_PORT',
+  6969,
 );
 
 /** True when this process has nothing configured to do. */

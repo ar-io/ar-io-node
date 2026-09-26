@@ -74,8 +74,10 @@ The rate limiter and x402 payment system apply to data egress endpoints:
 - **Raw data requests**: `/raw/:txid`
 - **ArNS resolved content**: All requests resolved through ArNS names
 - **Farcaster frames**: `/local/farcaster/frame/:txid`
-- **Index artifacts**: `/ar-io/indexes/:name/:band/:file` and
-  `/ar-io/indexes/blob/:sha256`, published by the index-swarm sidecar.
+- **Index artifacts**: `/ar-io/indexes/:name/:band/:file`,
+  `/ar-io/indexes/blob/:sha256` and the WebSeed route
+  `/ar-io/indexes/webseed/:torrentName/:file`, published by the index-swarm
+  sidecar. The torrent swarm itself is not metered: it is the free path.
   Priced like data: by the size of the body (the range, for a `Range`
   request); a `HEAD` costs only the minimum and a `304` revalidation
   nothing. The publication document at `/ar-io/indexes` is not metered, so

@@ -243,6 +243,19 @@ it. Distinct from an [Index Manifest](#index-manifest), which describes the
 partitions inside one CDB64 index. Specified in
 [index-publication.md](index-publication.md).
 
+<a id="webseed"></a> **WebSeed** — An HTTP URL (BEP 19) that serves the
+same bytes as the swarm, so a download completes even with no peers. On a
+gateway it is `/ar-io/indexes/webseed/`, rate limited and x402-priced while
+the swarm itself is free. Index torrents do not list it: subscribers add a
+publisher's WebSeed themselves, and only when peers stall, since engines
+otherwise treat it as one more peer and draw about half a band from it.
+
+<a id="torrent-name"></a> **Torrent Name** — The name inside a band's
+torrent: the first 16 hex characters of SHA-256 over one line per file,
+`<name>\0<size>\0<sha256 hex>\n`, with files in bytewise name order. Derived from content rather than the band id so
+that publishers of the same bytes share one infohash, and so that the
+WebSeed address `<torrent name>/<file>` cannot change meaning.
+
 <a id="band"></a> **Band** — One immutable unit of a published index, normally
 covering a block height range. Bands let a subscriber re-fetch only what
 changed: older height bands stay put while a rolling tip band is rebuilt on

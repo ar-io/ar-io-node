@@ -1298,6 +1298,79 @@ paths:
             Retry-After:
               description: Seconds to wait before retrying.
               schema: { type: string }
+  '/ar-io/indexes/webseed/{torrentName}/{file}':
+    get:
+      tags: [Indexes]
+      summary: Get a published index file as a BitTorrent WebSeed
+      description: |
+        BEP 19 WebSeed for bands offered as torrents: clients fetch
+        `<url><torrent name>/<file>`. The torrent name is the first 16 hex
+        characters of SHA-256 over one line per file,
+        `<name>\0<size>\0<sha256 hex>\n`, in bytewise name order (see
+        docs/index-publication.md), so the address cannot change meaning. Metered,
+        range-capable and cached like the blob route: `public` or, when the
+        gateway meters the byte routes, `private, max-age=31536000,
+        immutable`; errors carry `Cache-Control: no-store`. Subscribers turn
+        it on only when peers are not delivering, since it is the
+        publisher's metered tier.
+      parameters:
+        - { name: torrentName, in: path, required: true, schema: { type: string, pattern: '^[0-9a-f]{16}$' } }
+        - { name: file, in: path, required: true, schema: { type: string } }
+        - { name: Range, in: header, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: The file.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: A byte range of the file.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '304':
+          description: Not modified.
+        '400':
+          description: Malformed file name.
+        '402':
+          description: Payment required (x402), when rate limited and payments are enabled.
+        '404':
+          description: No torrent this gateway offers has this name and file.
+        '416':
+          description: The range cannot be satisfied.
+        '429':
+          description: Rate limited.
+        '503':
+          description: The file is published but not yet servable. Retry after `Retry-After` seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: { type: string }
+  '/ar-io/indexes/{name}/{band}.torrent':
+    get:
+      tags: [Indexes]
+      summary: Get a published band's torrent
+      description: |
+        The `.torrent` for a band the publication offers as a torrent. Not
+        metered. A client must check it against the infohashes in the signed
+        publication before using it, and should hand an engine only the info
+        dictionary and trackers it trusts: nothing outside the info
+        dictionary is covered by the signature. `Cache-Control: public,
+        max-age=60`, since a band rebuilt under the same id gets a new
+        torrent; errors carry `no-store`.
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: band, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The torrent metainfo.
+          content:
+            application/x-bittorrent:
+              schema: { type: string, format: binary }
+        '400':
+          description: Malformed index or band name.
+        '404':
+          description: The band is not offered, or has no torrent yet.
   '/ar-io/peers':
     get:
       tags: [Gateway]

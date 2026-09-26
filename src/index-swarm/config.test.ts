@@ -7,7 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { parsePublish, parseSubscribe } from './config.js';
+import { parseEngineAuth, parsePublish, parseSubscribe } from './config.js';
 
 describe('index-swarm config', () => {
   describe('parsePublish', () => {
@@ -112,6 +112,22 @@ describe('index-swarm config', () => {
         () => parseSubscribe('[{"publisher":"w","url":42}]'),
         /\[0\]\.url must be a string/,
       );
+    });
+  });
+
+  describe('parseEngineAuth', () => {
+    it('parses user:password, colons allowed in the password', () => {
+      assert.deepEqual(parseEngineAuth('swarm:abcdefgh:ijklmnop'), {
+        username: 'swarm',
+        password: 'abcdefgh:ijklmnop',
+      });
+      assert.equal(parseEngineAuth(undefined), undefined);
+    });
+
+    it('refuses an empty or short password', () => {
+      // What a failed generator (no openssl) leaves behind.
+      assert.throws(() => parseEngineAuth('swarm:'), /at least 16/);
+      assert.throws(() => parseEngineAuth('swarm:short'), /at least 16/);
     });
   });
 });

@@ -39,7 +39,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - every CDB64 partition is walked and bounds-checked before a band installs, and the reader never trusts a length or pointer from the file;
     - replacing a band never leaves a moment when lookups to it miss;
     - one band id belongs to one publisher at a time.
+    - the closed tracker lists this node's own engine under its public host instead of a Docker address, never hands private addresses to peers on the internet, and can sit behind a load balancer (`INDEX_SWARM_TRACKER_TRUSTED_PROXIES`, `INDEX_SWARM_ENGINE_PUBLIC_HOST`);
+    - the tracker always lists the publisher's own engine, so a host firewall that refuses the engine's announce to itself does not hide the publisher; the default peer port is 6881, below the ephemeral range, and a short or empty engine password is refused (found by turbo-gateway's rollout);
+    - seeding is bounded by default: 10 MB/s (`INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC`) and 100 GB a UTC day (`INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES`), after which the engine is throttled to 1 KiB/s until the next day, so no peer can pull terabytes from a publisher;
+    - an hourly janitor removes engine torrents no state record claims (left by a state reset or a crash), after two sweeps agree;
+    - a subscriber keeps a band that an offered band supersedes until that band has installed, so a replacement that takes hours to download leaves no gap in coverage;
+    - a band republished with some files unchanged (a manifest edit to add `supersedes`, say) links the unchanged files from the installed copy and fetches only the rest; before, the whole band was fetched again;
     - after the first request, the gateway rechecks the publication file every 5 s off the request path, so later index requests do not wait behind a filesystem call on a saturated libuv thread pool (seen on turbo-gateway as 15–30 s responses during cache sweeps); only the first request after a start waits for the file;
+
+- **Index bands over BitTorrent (compose profile `index-swarm-torrent`)** —
+  with a torrent engine configured (`INDEX_SWARM_ENGINE_URL`), publishers
+  also offer every band as a deterministic hybrid v1/v2 torrent and seed it,
+  and subscribers fetch from peers first, turn on the publisher's metered
+  WebSeed only when peers stall, fall back to HTTP on any failure, and seed
+  every band they install. Off unless the engine runs; HTTP-only nodes are
+  unaffected.
+  - The engine is qBittorrent-nox 5.2.3, pinned by digest, on its own Docker
+    network shared only with the sidecar, so it cannot reach the gateway, the
+    observer or other services. It mounts the published and installed bands
+    read only and writes only to `swarm/`.
+  - A publisher runs a closed tracker that answers only for the bands it
+    offers, and seeds from hard links to its blobs, so a band rebuilt in
+    place is never served with bytes that fail their pieces.
+  - A subscriber checks every `.torrent` against the signed infohashes and
+    hands its engine only the info dictionary and trackers on public hosts:
+    nothing outside the info dictionary is signed. Every file is hashed again
+    before install. Downloads survive a restart without resetting their
+    timeout.
+  - New gateway routes: `/ar-io/indexes/<name>/<band>.torrent` and the BEP 19
+    WebSeed `/ar-io/indexes/webseed/<torrent name>/<file>`, metered and
+    cached like the blob route.
+  - See `docs/index-swarm.md#torrent-engine`.
 
 - **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
   item sizes for every data item in a list of root bundles, nested bundles
