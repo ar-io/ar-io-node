@@ -67,6 +67,14 @@ export interface ClosedTrackerOptions {
    */
   selfAddress?: () => string | undefined;
   /**
+   * This node's own engine, as peers reach it: always listed for the bands
+   * this tracker serves, whether or not its announce gets through. On a host
+   * with an INPUT firewall the engine's announce to its own public address is
+   * short-circuited inside Docker and refused, and the publisher, often the
+   * only seeder, would then never be listed.
+   */
+  selfPeer?: () => { ip: string; port: number } | undefined;
+  /**
    * Proxies (IPs or CIDRs) whose `X-Forwarded-For` is believed, for a
    * tracker served behind a load balancer. Without it every peer would
    * appear at the proxy's address.
@@ -211,6 +219,7 @@ export class ClosedTracker {
   private readonly maxPortsPerIp: number;
   private readonly maxAnnouncesPerMinute: number;
   private readonly selfAddress: () => string | undefined;
+  private readonly selfPeer: () => { ip: string; port: number } | undefined;
   private readonly trustedProxies: net.BlockList;
   private readonly now: () => number;
   /**
@@ -232,6 +241,7 @@ export class ClosedTracker {
     this.maxPortsPerIp = options.maxPortsPerIp ?? 4;
     this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 10;
     this.selfAddress = options.selfAddress ?? (() => undefined);
+    this.selfPeer = options.selfPeer ?? (() => undefined);
     this.trustedProxies = trustedProxyList(options.trustedProxies ?? []);
     this.now = options.now ?? (() => Date.now());
   }
@@ -329,6 +339,23 @@ export class ClosedTracker {
       [pool[i], pool[j]] = [pool[j], pool[i]];
     }
     const others = pool.slice(0, this.maxPeers);
+    // This node's engine first, unless it is the one asking or is already
+    // listed from its own announce.
+    const self = this.selfPeer();
+    if (
+      self !== undefined &&
+      `${normalizeIp(self.ip)}:${self.port}` !== key &&
+      !(askerPublic && isPrivateAddress(normalizeIp(self.ip))) &&
+      !others.some((p) => p.ip === normalizeIp(self.ip) && p.port === self.port)
+    ) {
+      others.unshift({
+        ip: normalizeIp(self.ip),
+        port: self.port,
+        seeding: true,
+        seenAt: now,
+      });
+      if (others.length > this.maxPeers) others.pop();
+    }
     const v4: Buffer[] = [];
     const v6: Buffer[] = [];
     for (const peer of others) {

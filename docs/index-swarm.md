@@ -223,6 +223,14 @@ tracker: that one tracks any infohash anyone announces, which on a published
 port would make the gateway a free tracker for any swarm on the internet,
 with its address in them. The engine's init pins the embedded tracker off.
 
+The tracker always lists this node's own engine for its bands, at
+`INDEX_SWARM_ENGINE_PUBLIC_HOST` (or the tracker URL's host) and
+`INDEX_SWARM_ENGINE_PORT`, whether or not the engine's own announce reaches
+it. That announce often doesn't: on a host with an INPUT firewall, a
+container's request to its host's own public address is short-circuited
+inside Docker and refused, while announces from real peers arrive through
+the public interface as usual.
+
 The tracker keeps its peers in memory. After a restart they are back within
 one announce interval (300 s); meanwhile peers still find one another through
 DHT, and a subscriber whose download stalls turns on the WebSeed. It is served
@@ -633,7 +641,7 @@ layers keep it off this node's network:
   private network, between gateways on one LAN, and list that network's
   tracker in `INDEX_SWARM_ALLOWED_TRACKERS`.
 
-Only the peer port, `INDEX_SWARM_ENGINE_PORT` (default 51900, TCP and UDP), is
+Only the peer port, `INDEX_SWARM_ENGINE_PORT` (default 6881, TCP and UDP), is
 published; open it in the host firewall for peers to connect in. The Web API
 is not published at all. It stays on the engine's network, and must be
 reached there at `index-swarm-engine:8080`: qBittorrent answers 401 to every request

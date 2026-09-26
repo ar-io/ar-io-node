@@ -337,6 +337,10 @@ async function main(): Promise<void> {
       log,
       allowed: () => trackedInfohashes(offering.offered()),
       selfAddress: () => selfAddress,
+      selfPeer: () =>
+        selfAddress !== undefined
+          ? { ip: selfAddress, port: config.ENGINE_PORT }
+          : undefined,
       trustedProxies: config.TRACKER_TRUSTED_PROXIES,
     }).listen('0.0.0.0', config.TRACKER_PORT);
     if (config.TRACKERS.length === 0) {

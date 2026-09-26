@@ -100,6 +100,29 @@ describe('ClosedTracker', () => {
     assert.deepEqual(peers, ['198.51.100.7:51900']);
   });
 
+  it("lists this node's own engine even when its announce never arrives", () => {
+    // On a host with an INPUT firewall the engine's announce to its own
+    // public address is refused, so the tracker never hears from it.
+    const t = tracker({
+      selfPeer: () => ({ ip: '167.235.37.218', port: 6881 }),
+    });
+    const peers = peersOf(decode(t.announce(query(OURS, 2000), '203.0.113.9')));
+    assert.deepEqual(peers, ['167.235.37.218:6881']);
+    // Not twice once it does announce, and not to itself.
+    t.announce(query(OURS, 6881, { left: '0' }), '167.235.37.218');
+    assert.deepEqual(
+      peersOf(decode(t.announce(query(OURS, 2001), '203.0.113.10'))).filter(
+        (p) => p === '167.235.37.218:6881',
+      ).length,
+      1,
+    );
+    assert.ok(
+      !peersOf(
+        decode(t.announce(query(OURS, 6881), '167.235.37.218')),
+      ).includes('167.235.37.218:6881'),
+    );
+  });
+
   it('gives a peer on the internet no private addresses', () => {
     const t = tracker();
     t.announce(query(OURS, 1001), '10.0.0.5');

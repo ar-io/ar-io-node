@@ -854,6 +854,7 @@ services:
       - INDEX_SWARM_TRACKER_PORT=${INDEX_SWARM_TRACKER_PORT:-6969}
       - INDEX_SWARM_TRACKER_TRUSTED_PROXIES=${INDEX_SWARM_TRACKER_TRUSTED_PROXIES:-}
       - INDEX_SWARM_ENGINE_PUBLIC_HOST=${INDEX_SWARM_ENGINE_PUBLIC_HOST:-}
+      - INDEX_SWARM_ENGINE_PORT=${INDEX_SWARM_ENGINE_PORT:-6881}
       - INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC:-10000000}
       - INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES=${INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES:-100000000000}
       - INDEX_SWARM_PRIVATE_SWARM=${INDEX_SWARM_PRIVATE_SWARM:-}
@@ -961,7 +962,7 @@ services:
       - ${INDEX_SWARM_DATA_PATH:-./data/indexes}/swarm:/app/data/indexes/swarm
     environment:
       - QBT_LEGAL_NOTICE=confirm
-      - QBT_TORRENTING_PORT=${INDEX_SWARM_ENGINE_PORT:-51900}
+      - QBT_TORRENTING_PORT=${INDEX_SWARM_ENGINE_PORT:-6881}
       - PUID=${INDEX_SWARM_ENGINE_UID:-1000}
       - PGID=${INDEX_SWARM_ENGINE_GID:-1000}
       - UMASK=022
@@ -970,8 +971,8 @@ services:
     # it must be reached at that same port, because qBittorrent refuses a
     # Host header naming another.
     ports:
-      - '${INDEX_SWARM_ENGINE_PORT:-51900}:${INDEX_SWARM_ENGINE_PORT:-51900}/tcp'
-      - '${INDEX_SWARM_ENGINE_PORT:-51900}:${INDEX_SWARM_ENGINE_PORT:-51900}/udp'
+      - '${INDEX_SWARM_ENGINE_PORT:-6881}:${INDEX_SWARM_ENGINE_PORT:-6881}/tcp'
+      - '${INDEX_SWARM_ENGINE_PORT:-6881}:${INDEX_SWARM_ENGINE_PORT:-6881}/udp'
     healthcheck:
       # Any HTTP answer is healthy: the API asks for a login even on
       # loopback, so a 403 still means the engine is up.

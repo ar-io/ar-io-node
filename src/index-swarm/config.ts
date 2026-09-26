@@ -343,8 +343,19 @@ export function parseEngineAuth(
   if (colon <= 0) {
     throw new Error('INDEX_SWARM_ENGINE_AUTH must be user:password');
   }
-  return { username: raw.slice(0, colon), password: raw.slice(colon + 1) };
+  const password = raw.slice(colon + 1);
+  // A generator that failed (no openssl on the host, say) leaves `user:`;
+  // refuse that rather than start an engine with an empty password.
+  if (password.length < MIN_ENGINE_PASSWORD_LENGTH) {
+    throw new Error(
+      `INDEX_SWARM_ENGINE_AUTH's password must be at least ${MIN_ENGINE_PASSWORD_LENGTH} characters`,
+    );
+  }
+  return { username: raw.slice(0, colon), password };
 }
+
+/** Shortest engine Web UI password accepted. */
+export const MIN_ENGINE_PASSWORD_LENGTH = 16;
 
 /**
  * The torrent engine's Web API, e.g. `http://index-swarm-engine:8080`. Unset
@@ -471,6 +482,17 @@ export const TRACKER_TRUSTED_PROXIES = env
  */
 export const ENGINE_PUBLIC_HOST = env.varOrUndefined(
   'INDEX_SWARM_ENGINE_PUBLIC_HOST',
+);
+
+/**
+ * The torrent engine's peer port, TCP and UDP. Below the ephemeral range
+ * (32768-60999 on Linux), so an outbound socket can never hold it when the
+ * engine starts. The tracker lists this node's engine at
+ * INDEX_SWARM_ENGINE_PUBLIC_HOST and this port.
+ */
+export const ENGINE_PORT = env.positiveIntOrDefault(
+  'INDEX_SWARM_ENGINE_PORT',
+  6881,
 );
 
 export const TRACKER_PORT = env.positiveIntOrDefault(
