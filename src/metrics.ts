@@ -2034,6 +2034,27 @@ export const hintEmittedTotal = new promClient.Counter({
 });
 
 /**
+ * Header checks on a data item location (root, item offset and payload offset)
+ * taken from stored attributes or a root TX index before bytes are read from
+ * it. The payload size is not checked; a header does not record it.
+ *
+ * Labels:
+ * - `source`: `stored_attributes`, `attributes_traversal`, `root_tx_index`,
+ *   `root_tx_index_fallback`
+ * - `result`:
+ *   - `confirmed`: the header at the offset is the requested item and ends at
+ *     the recorded payload offset
+ *   - `rejected`: not confirmed, so the location was not used. Usually a root
+ *     and an offset from different copies of an item that exists in several
+ *     bundles (ar-io/ar-io-node#937), but also a header that could not be read
+ */
+export const dataItemLocationCheckTotal = new promClient.Counter({
+  name: 'data_item_location_check_total',
+  help: 'Header checks on stored or indexed data item locations before serving from them',
+  labelNames: ['source', 'result'] as const,
+});
+
+/**
  * Outcomes of verifying a data item's signature over a payload located from an
  * offset and size nothing else vouches for.
  *

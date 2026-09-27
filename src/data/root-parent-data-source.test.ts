@@ -115,6 +115,18 @@ async function readRebased(outcome: string): Promise<number> {
   );
 }
 
+/**
+ * The header check on stored and indexed data item locations
+ * (ar-io/ar-io-node#937) has its own suite, 'data item location confirmation'.
+ * Tests elsewhere exercise the paths around it, so they treat every location
+ * as confirmed.
+ */
+function stubLocationCheck(source: RootParentDataSource, confirmed = true) {
+  const check = mock.fn(async () => confirmed);
+  (source as any).confirmItemLocation = check;
+  return check;
+}
+
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
   let dataSource: ContiguousDataSource;
@@ -146,6 +158,7 @@ describe('RootParentDataSource', () => {
       dataItemRootTxIndex,
       ans104OffsetSource,
     });
+    stubLocationCheck(rootParentDataSource);
   });
 
   afterEach(() => {
@@ -1027,6 +1040,7 @@ describe('RootParentDataSource', () => {
         ans104OffsetSource,
         fallbackToLegacyTraversal: false,
       });
+      stubLocationCheck(noFallbackSource);
 
       // Mock missing attributes
       (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
@@ -1448,6 +1462,7 @@ describe('RootParentDataSource', () => {
           dataItemRootTxIndex,
           ans104OffsetSource,
         });
+        stubLocationCheck(rootParentDataSource);
 
         const rootId = 'root-tx';
         const dataStream = Readable.from([Buffer.from('data')]);
@@ -1645,6 +1660,7 @@ describe('RootParentDataSource', () => {
         dataItemRootTxIndex,
         ans104OffsetSource,
       });
+      stubLocationCheck(rootParentDataSource);
 
       // Mock attributes matching the legacy data
       (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
@@ -3145,7 +3161,7 @@ describe('RootParentDataSource', () => {
       );
     });
 
-    it('serves results that carry the payload size directly, without a header read', async () => {
+    it('serves results that carry the payload size directly after confirming the location', async () => {
       mockIndexResult({
         rootOffset: 900,
         rootDataOffset: 1000,
@@ -3156,9 +3172,23 @@ describe('RootParentDataSource', () => {
 
       const result = await rootParentDataSource.getData({ id: ITEM });
 
-      assert.strictEqual(
-        (ans104OffsetSource.parseDataItemHeader as any).mock.calls.length,
-        0,
+      // One location check (stubbed here; see 'data item location
+      // confirmation'), then served directly with no bundle search.
+      const check = (rootParentDataSource as any).confirmItemLocation;
+      assert.strictEqual(check.mock.calls.length, 1);
+      assert.deepStrictEqual(
+        {
+          itemOffset: check.mock.calls[0].arguments[0].itemOffset,
+          dataOffset: check.mock.calls[0].arguments[0].dataOffset,
+          dataSize: check.mock.calls[0].arguments[0].dataSize,
+          source: check.mock.calls[0].arguments[0].source,
+        },
+        {
+          itemOffset: 900,
+          dataOffset: 1000,
+          dataSize: 500,
+          source: 'root_tx_index',
+        },
       );
       assert.strictEqual(
         (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
@@ -3573,6 +3603,271 @@ describe('RootParentDataSource', () => {
       const result = await rootParentDataSource.getData({ id: dataItemId });
 
       assert.strictEqual(result.sourceContentType, 'text/html');
+    });
+  });
+
+  // ar-io/ar-io-node#937: an item signed deterministically exists under one ID
+  // in several bundles. A stored or indexed location can pair one copy's root
+  // with another copy's offset; chunk verification then passes (the bytes do
+  // belong to the root) while the bytes are another item's. Offsets below are
+  // from the production case: the stored pair pointed 174 bytes of header and
+  // a 212,554-byte payload at 5,818,712 in a bundle whose own index places
+  // the item at 56,536,714.
+  describe('data item location confirmation', () => {
+    const ITEM = 'multi-copy-item';
+    const ROOT = 'multi-copy-root';
+    const WRONG = { itemOffset: 5818712, dataOffset: 5818886 };
+    const RIGHT = { itemOffset: 56536714, dataOffset: 56536888 };
+    const HEADER = 174;
+    const SIZE = 212554;
+    let source: RootParentDataSource;
+
+    const readCheck = async (src: string, result: string) => {
+      const metric = await metrics.dataItemLocationCheckTotal.get();
+      return (
+        metric.values.find(
+          (v: any) => v.labels.source === src && v.labels.result === result,
+        )?.value ?? 0
+      );
+    };
+    const fetchedOffsets = () =>
+      (dataSource.getData as any).mock.calls.map(
+        (call: any) => call.arguments[0].region?.offset,
+      );
+    const storedItemOffsets = () =>
+      (dataAttributesStore.setDataAttributes as any).mock.calls
+        .map((call: any) => call.arguments[1].rootDataItemOffset)
+        .filter((offset: unknown) => offset !== undefined);
+
+    beforeEach(() => {
+      source = new RootParentDataSource({
+        log,
+        dataSource,
+        dataAttributesStore,
+        dataItemRootTxIndex,
+        ans104OffsetSource,
+      });
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+      // The header at the wrong offset belongs to another item; the header
+      // at the right offset is this item's.
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async (rootTxId: string, itemOffset: number) => {
+          if (rootTxId === ROOT && itemOffset === RIGHT.itemOffset) {
+            return { id: ITEM, headerSize: HEADER, payloadSize: SIZE };
+          }
+          if (rootTxId === ROOT && itemOffset === WRONG.itemOffset) {
+            return {
+              id: 'another-item',
+              headerSize: HEADER,
+              payloadSize: SIZE,
+            };
+          }
+          throw new Error('no data item header at this offset');
+        },
+      );
+      // The bundle's own index, used by the fallback search.
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: RIGHT.itemOffset,
+          dataOffset: RIGHT.dataOffset,
+          itemSize: HEADER + SIZE,
+          dataSize: SIZE,
+        }),
+      );
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId: ROOT }),
+      );
+      (dataSource.getData as any).mock.mockImplementation(
+        async ({ region }: any) => ({
+          stream: Readable.from([Buffer.alloc(region?.size ?? SIZE)]),
+          size: region?.size ?? SIZE,
+          verified: true,
+          trusted: true,
+          cached: false,
+        }),
+      );
+    });
+
+    const storeLocation = (location: {
+      itemOffset: number;
+      dataOffset: number;
+    }) =>
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) =>
+          id === ITEM
+            ? {
+                rootTransactionId: ROOT,
+                rootDataItemOffset: location.itemOffset,
+                rootDataOffset: location.dataOffset,
+                size: SIZE,
+              }
+            : null,
+      );
+
+    it('does not serve from a stored location whose header is another item', async () => {
+      storeLocation(WRONG);
+      const rejected = await readCheck('stored_attributes', 'rejected');
+
+      const result = await source.getData({ id: ITEM });
+
+      assert.strictEqual(result.size, SIZE);
+      assert.deepStrictEqual(fetchedOffsets(), [RIGHT.dataOffset]);
+      assert.ok(!storedItemOffsets().includes(WRONG.itemOffset));
+      assert.strictEqual(
+        await readCheck('stored_attributes', 'rejected'),
+        rejected + 1,
+      );
+    });
+
+    it('serves a stored location once its header is confirmed', async () => {
+      storeLocation(RIGHT);
+      const confirmed = await readCheck('stored_attributes', 'confirmed');
+
+      await source.getData({ id: ITEM });
+
+      assert.deepStrictEqual(fetchedOffsets(), [RIGHT.dataOffset]);
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        0,
+      );
+      assert.strictEqual(
+        await readCheck('stored_attributes', 'confirmed'),
+        confirmed + 1,
+      );
+    });
+
+    it('treats a stored location whose header cannot be read as unconfirmed', async () => {
+      storeLocation({ itemOffset: 1234, dataOffset: 1234 + HEADER });
+
+      await source.getData({ id: ITEM });
+
+      assert.deepStrictEqual(fetchedOffsets(), [RIGHT.dataOffset]);
+    });
+
+    it('neither stores nor serves a complete index location whose header is another item', async () => {
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({
+          rootTxId: ROOT,
+          rootOffset: WRONG.itemOffset,
+          rootDataOffset: WRONG.dataOffset,
+          dataSize: SIZE,
+        }),
+      );
+      const rejected = await readCheck('root_tx_index', 'rejected');
+
+      await source.getData({ id: ITEM });
+
+      assert.deepStrictEqual(fetchedOffsets(), [RIGHT.dataOffset]);
+      assert.ok(!storedItemOffsets().includes(WRONG.itemOffset));
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        1,
+      );
+      assert.strictEqual(
+        await readCheck('root_tx_index', 'rejected'),
+        rejected + 1,
+      );
+    });
+
+    it('stores and serves a complete index location once its header is confirmed', async () => {
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({
+          rootTxId: ROOT,
+          rootOffset: RIGHT.itemOffset,
+          rootDataOffset: RIGHT.dataOffset,
+          dataSize: SIZE,
+        }),
+      );
+
+      await source.getData({ id: ITEM });
+
+      assert.deepStrictEqual(fetchedOffsets(), [RIGHT.dataOffset]);
+      assert.ok(storedItemOffsets().includes(RIGHT.itemOffset));
+      assert.strictEqual(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
+        0,
+      );
+    });
+
+    it('does not serve a rejected index location returned again by the fallback lookup', async () => {
+      // A nested item: the root bundle's own index does not list it, so
+      // resolution falls back to a full lookup, which returns the same
+      // location that was just rejected.
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({
+          rootTxId: ROOT,
+          rootOffset: WRONG.itemOffset,
+          rootDataOffset: WRONG.dataOffset,
+          dataSize: SIZE,
+        }),
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => null,
+      );
+      const rejected = await readCheck('root_tx_index_fallback', 'rejected');
+
+      await assert.rejects(source.getData({ id: ITEM }), /not found/);
+
+      assert.ok(!fetchedOffsets().includes(WRONG.dataOffset));
+      assert.ok(!storedItemOffsets().includes(WRONG.itemOffset));
+      assert.strictEqual(
+        await readCheck('root_tx_index_fallback', 'rejected'),
+        rejected + 1,
+      );
+    });
+
+    it('serves a fallback lookup location once its header is confirmed', async () => {
+      // The local lookup has only the root; the full lookup has the offsets.
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async (_id: string, opts?: { accept?: unknown }) =>
+          opts?.accept !== undefined
+            ? { rootTxId: ROOT }
+            : {
+                rootTxId: ROOT,
+                rootOffset: RIGHT.itemOffset,
+                rootDataOffset: RIGHT.dataOffset,
+                dataSize: SIZE,
+              },
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => null,
+      );
+      const confirmed = await readCheck('root_tx_index_fallback', 'confirmed');
+
+      await source.getData({ id: ITEM });
+
+      assert.deepStrictEqual(fetchedOffsets(), [RIGHT.dataOffset]);
+      assert.strictEqual(
+        await readCheck('root_tx_index_fallback', 'confirmed'),
+        confirmed + 1,
+      );
+    });
+
+    it('stops instead of falling back when the request aborts during the header check', async () => {
+      storeLocation(RIGHT);
+      const controller = new AbortController();
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => {
+          controller.abort();
+          throw new Error('aborted');
+        },
+      );
+
+      await assert.rejects(
+        source.getData({ id: ITEM, signal: controller.signal }),
+        { name: 'AbortError' },
+      );
+
+      assert.strictEqual(
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
+        0,
+      );
+      assert.deepStrictEqual(fetchedOffsets(), []);
     });
   });
 });
