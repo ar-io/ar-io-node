@@ -6,7 +6,9 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
+import * as net from 'node:net';
 
+import { isPrivateAddress } from './torrent.js';
 import {
   PRIVATE_RANGES_DAT,
   EngineSettings,
@@ -85,6 +87,14 @@ describe('engine config', () => {
       );
       assert.equal(value(config, 'Session\\TempPathEnabled'), 'false');
       assert.equal(value(config, 'Session\\QueueingSystemEnabled'), 'false');
+      // No ratio or seeding-time limit stops a seeded band.
+      for (const limit of [
+        'Session\\GlobalMaxRatio',
+        'Session\\GlobalMaxSeedingMinutes',
+        'Session\\GlobalMaxInactiveSeedingMinutes',
+      ]) {
+        assert.equal(value(config, limit), '-1', limit);
+      }
       assert.equal(value(config, 'Session\\DHTEnabled'), 'true');
       assert.equal(value(config, 'Session\\PeXEnabled'), 'true');
       assert.equal(value(config, 'Session\\LSDEnabled'), 'false');
@@ -165,17 +175,60 @@ describe('engine config', () => {
     assert.match(renderEngineConfig('', SETTINGS), /WebUI\\LocalHostAuth=true/);
   });
 
-  it('blocks every private range it names', () => {
-    for (const range of [
-      '10.0.0.0',
-      '172.16.0.0',
-      '192.168.0.0',
-      '127.0.0.0',
-      '169.254.0.0',
-      '100.64.0.0',
-      'fc00::',
-    ]) {
-      assert.ok(PRIVATE_RANGES_DAT.includes(`${range} - `), range);
+  it('blocks exactly what the sidecar treats as private', () => {
+    // The engine gets these as ranges, the sidecar checks with
+    // isPrivateAddress; they must agree, at every edge and just past it.
+    // One list per family, as libtorrent keeps them: Node's BlockList
+    // would otherwise apply the IPv4-mapped IPv6 range to every IPv4
+    // address.
+    const lists = { ipv4: new net.BlockList(), ipv6: new net.BlockList() };
+    const lines = PRIVATE_RANGES_DAT.split('\n').filter((l) => l !== '');
+    const probes: string[] = [];
+    const step = (ip: string, by: number): string | undefined => {
+      if (!net.isIPv4(ip)) return undefined;
+      const n = ip.split('.').reduce((acc, o) => acc * 256 + Number(o), 0) + by;
+      if (n < 0 || n > 0xffffffff) return undefined;
+      return [24, 16, 8, 0]
+        .map((sh) => Math.floor(n / 2 ** sh) % 256)
+        .join('.');
+    };
+    for (const line of lines) {
+      const [start, end] = line
+        .split(',')[0]
+        .split(' - ')
+        .map((x) => x.trim());
+      const family = net.isIPv6(start) ? 'ipv6' : 'ipv4';
+      lists[family].addRange(start, end, family);
+      probes.push(start, end);
+      for (const p of [step(start, -1), step(end, 1)]) {
+        if (p !== undefined) probes.push(p);
+      }
+    }
+    // Known private addresses, so a range missing from the file shows too.
+    probes.push(
+      '10.20.30.40',
+      '100.100.1.1',
+      '127.1.2.3',
+      '169.254.9.9',
+      '172.20.0.1',
+      '192.168.200.1',
+      '224.0.0.1',
+      '0.1.2.3',
+      '::1',
+      'fc00::1',
+      'fd12::1',
+      'fe80::1',
+      'feb0::1',
+      'ff02::1',
+      // And public ones.
+      '8.8.8.8',
+      '1.1.1.1',
+      '2001:db8::1',
+      '2606:4700::1111',
+    );
+    for (const ip of probes) {
+      const family = net.isIPv6(ip) ? 'ipv6' : 'ipv4';
+      assert.equal(lists[family].check(ip, family), isPrivateAddress(ip), ip);
     }
   });
 });

@@ -291,18 +291,12 @@ export class QBittorrentTransport implements TorrentTransport {
     return {
       state,
       progress: Number(t.progress),
-      peers: Number(t.num_seeds ?? 0) + Number(t.num_leechs ?? 0),
-      // The all-time counters are updated only when qBittorrent saves resume
-      // data; the session ones move as bytes do. A seeder that had served a
-      // whole band still reported 0 all-time uploaded, so take whichever
-      // is larger.
+      // The all-time counter is updated only when qBittorrent saves resume
+      // data; the session one moves as bytes do (a seeder that had served a
+      // whole band still reported 0 all-time uploaded). Take the larger.
       bytesDown: Math.max(
         Number(t.downloaded ?? 0),
         Number(t.downloaded_session ?? 0),
-      ),
-      bytesUp: Math.max(
-        Number(t.uploaded ?? 0),
-        Number(t.uploaded_session ?? 0),
       ),
       ...(state === 'error' ? { error: String(t.state) } : {}),
       ...(typeof t.save_path === 'string'
@@ -334,12 +328,13 @@ export class QBittorrentTransport implements TorrentTransport {
     }
   }
 
-  async remove(id: string, opts: { deleteData?: boolean } = {}): Promise<void> {
+  async remove(id: string): Promise<void> {
     await this.call('torrents/delete', {
       method: 'POST',
       body: new URLSearchParams({
         hashes: id,
-        deleteFiles: opts.deleteData === true ? 'true' : 'false',
+        // Never the files: see TorrentTransport.remove.
+        deleteFiles: 'false',
       }),
     });
     await this.waitFor(id, (status) => status === undefined);

@@ -396,6 +396,24 @@ describe('QBittorrentTransport', () => {
     });
   });
 
+  it('removes a torrent without its files, whatever it holds', async () => {
+    const posted: string[] = [];
+    handle = (req, res) => {
+      if (req.path === '/api/v2/torrents/delete') {
+        posted.push(req.body);
+        res.end();
+        return;
+      }
+      // Gone once deleted, so remove() can return.
+      res.end('[]');
+    };
+    await new QBittorrentTransport({ url }).remove('abc');
+    assert.equal(posted.length, 1);
+    const form = new URLSearchParams(posted[0]);
+    assert.equal(form.get('hashes'), 'abc');
+    assert.equal(form.get('deleteFiles'), 'false');
+  });
+
   describe('status', () => {
     it('maps the engine state and counts seeds and leechers as peers', async () => {
       handle = (_req, res) =>
@@ -414,28 +432,26 @@ describe('QBittorrentTransport', () => {
       assert.deepEqual(await new QBittorrentTransport({ url }).status('abc'), {
         state: 'downloading',
         progress: 0.25,
-        peers: 5,
         bytesDown: 10,
-        bytesUp: 4,
       });
     });
 
     it('reports the session counters while the all-time ones lag', async () => {
-      // What qBittorrent 5.2.3 reported for a seeder that had just served a band.
+      // qBittorrent 5.2.3 leaves the all-time counters at 0 until it saves
+      // resume data, as seen for a band just transferred.
       handle = (_req, res) =>
         res.end(
           JSON.stringify([
             {
               state: 'stalledUP',
               progress: 1,
-              uploaded: 0,
-              uploaded_session: 24936448,
               downloaded: 0,
+              downloaded_session: 24936448,
             },
           ]),
         );
       const status = await new QBittorrentTransport({ url }).status('abc');
-      assert.equal(status?.bytesUp, 24936448);
+      assert.equal(status?.bytesDown, 24936448);
     });
 
     it('reports an error state with what the engine called it', async () => {

@@ -125,6 +125,58 @@ describe('ClosedTracker', () => {
     );
   });
 
+  it('records no new peer past the global cap, but still answers it', () => {
+    const OTHER = Buffer.alloc(20, 0x11);
+    const t = tracker({
+      allowed: () => new Set([OURS.toString('hex'), OTHER.toString('hex')]),
+      maxPeersTotal: 3,
+      maxAnnouncesPerMinute: 1000,
+    });
+    t.announce(query(OURS, 1001), '203.0.113.1');
+    t.announce(query(OURS, 1002), '203.0.113.2');
+    t.announce(query(OTHER, 1003), '203.0.113.3');
+    // Full across both torrents: the newcomer gets peers, is not kept.
+    const late = decode(t.announce(query(OURS, 1004), '203.0.113.4'));
+    assert.deepEqual(peersOf(late).sort(), [
+      '203.0.113.1:1001',
+      '203.0.113.2:1002',
+    ]);
+    assert.ok(
+      !peersOf(decode(t.announce(query(OURS, 1005), '203.0.113.5'))).includes(
+        '203.0.113.4:1004',
+      ),
+    );
+    // A peer already kept still re-announces.
+    assert.equal(
+      decode(t.announce(query(OURS, 1001), '203.0.113.1'))['failure reason'],
+      undefined,
+    );
+  });
+
+  it('hands out at most maxPeers peers per answer', () => {
+    const t = tracker({ maxPeers: 5, maxAnnouncesPerMinute: 1000 });
+    for (let i = 1; i <= 12; i++) {
+      t.announce(query(OURS, 1000 + i), `203.0.113.${i}`);
+    }
+    assert.equal(
+      peersOf(decode(t.announce(query(OURS, 2000), '198.51.100.1'))).length,
+      5,
+    );
+  });
+
+  it('never hands a peer on the internet its own engine at a private address', () => {
+    const t = tracker({ selfPeer: () => ({ ip: '192.168.1.5', port: 6881 }) });
+    assert.deepEqual(
+      peersOf(decode(t.announce(query(OURS, 2000), '203.0.113.9'))),
+      [],
+    );
+    assert.deepEqual(
+      peersOf(decode(t.announce(query(OURS, 3000), '192.168.1.9'))),
+      ['192.168.1.5:6881', '203.0.113.9:2000'],
+      'a peer on the same network gets it, first',
+    );
+  });
+
   it('gives a peer on the internet no private addresses', () => {
     const t = tracker();
     t.announce(query(OURS, 1001), '10.0.0.5');
@@ -151,6 +203,12 @@ describe('ClosedTracker', () => {
       t.clientAddress('198.51.100.1', '203.0.113.9'),
       '198.51.100.1',
       'an untrusted client cannot claim an address',
+    );
+    // A client can prepend whatever it likes; the proxy appends what it
+    // saw. So the answer is the nearest hop that is not a proxy.
+    assert.equal(
+      t.clientAddress('10.1.1.1', '6.6.6.6, 203.0.113.9, 10.2.2.2'),
+      '203.0.113.9',
     );
     assert.equal(t.clientAddress('10.1.1.1', undefined), '10.1.1.1');
   });
@@ -210,8 +268,15 @@ describe('ClosedTracker', () => {
 
   it('refuses an address announcing one torrent too often', () => {
     const t = tracker({ maxAnnouncesPerMinute: 3 });
-    for (let i = 0; i < 3; i++)
-      t.announce(query(OURS, 1000 + i), '203.0.113.5');
+    for (let i = 0; i < 3; i++) {
+      assert.equal(
+        decode(t.announce(query(OURS, 1000 + i), '203.0.113.5'))[
+          'failure reason'
+        ],
+        undefined,
+        `announce ${i + 1} of 3 is allowed`,
+      );
+    }
     const response = decode(t.announce(query(OURS, 1100), '203.0.113.5'));
     assert.equal(response['failure reason'].toString(), 'slow down');
     // Others are unaffected.
@@ -263,10 +328,17 @@ describe('ClosedTracker', () => {
     let now = 0;
     const t = tracker({ intervalSeconds: 60, now: () => now });
     t.announce(query(OURS, 1111), '10.0.0.1');
-    now += (60 * 2 + 61) * 1000;
+    // One missed announce is not enough.
+    now += 90_000;
     assert.deepEqual(
       peersOf(decode(t.announce(query(OURS, 2222), '10.0.0.2'))),
+      ['10.0.0.1:1111'],
+    );
+    now += (60 * 2 + 61) * 1000;
+    assert.deepEqual(
+      peersOf(decode(t.announce(query(OURS, 3333), '10.0.0.3'))),
       [],
+      'both have now missed two',
     );
   });
 

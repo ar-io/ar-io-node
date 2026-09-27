@@ -209,10 +209,9 @@ function contract(name: string, makeHarness: () => Promise<Harness>): void {
       );
     });
 
-    it('forgets a torrent and keeps its data unless told otherwise', async () => {
+    it('forgets a torrent and keeps its data', async () => {
       const base = await fresh('remove');
       const source = path.join(base, 'source');
-      const target = path.join(base, 'target');
       await writeBand(source);
       const built = await torrentFor(source, 'band-remove-test');
 
@@ -228,18 +227,6 @@ function contract(name: string, makeHarness: () => Promise<Harness>): void {
       await harness.transport.remove(kept.id);
       assert.equal(await harness.transport.status(kept.id), undefined);
       assert.equal(Object.keys(await digests(source)).length, 3, 'data kept');
-
-      const other = await torrentFor(source, 'band-remove-test-2');
-      const { id } = await harness.transport.add({
-        torrent: other.torrent,
-        downloadDir: target,
-      });
-      await harness.provide(id, other, source);
-      await waitForStatus(harness.transport, id, (s) => s?.state === 'seeding');
-      await harness.transport.remove(id, { deleteData: true });
-      assert.equal(await harness.transport.status(id), undefined);
-      const left = await fs.readdir(target).catch(() => [] as string[]);
-      assert.deepEqual(left, [], 'downloaded data deleted');
     });
 
     it('lists what it holds, with where each torrent lives', async () => {

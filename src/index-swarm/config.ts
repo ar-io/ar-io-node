@@ -400,15 +400,6 @@ export const TRACKERS = env
   .filter((entry) => entry.length > 0);
 
 /**
- * BEP 27 private flag on every torrent built. Clients then keep those
- * torrents off DHT and peer exchange, so the tracker is the only way in. It
- * is inside the info dictionary, so it changes the infohash: publishers who
- * want one swarm must agree on it.
- */
-export const PRIVATE_SWARM =
-  env.varOrDefault('INDEX_SWARM_PRIVATE_SWARM', 'false') === 'true';
-
-/**
  * Tracker announce URLs a subscriber hands its engine even though their host
  * is private: an operator's own tracker on a LAN or private network. Exact
  * URLs, comma separated. Every other tracker on a private address or a

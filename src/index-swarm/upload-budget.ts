@@ -103,9 +103,4 @@ export class UploadBudget {
     }
     return used;
   }
-
-  /** Forget the last setting, so the next check applies it again. */
-  engineRestarted(): void {
-    this.throttled = undefined;
-  }
 }

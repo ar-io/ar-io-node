@@ -4,10 +4,9 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 
 import * as config from '../config.js';
+import { directoryBytes } from '../disk.js';
 import { QBittorrentTransport } from '../transport/qbittorrent.js';
 import { INSTALLED_ROOT_TX_SOURCE } from './setup-plan.js';
 
@@ -303,20 +302,6 @@ async function fetchText(url: string): Promise<string | undefined> {
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) return undefined;
     return await response.text();
-  } catch {
-    return undefined;
-  }
-}
-
-async function directoryBytes(dir: string): Promise<number | undefined> {
-  try {
-    let total = 0;
-    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) total += (await directoryBytes(full)) ?? 0;
-      else if (entry.isFile()) total += (await fs.stat(full)).size;
-    }
-    return total;
   } catch {
     return undefined;
   }

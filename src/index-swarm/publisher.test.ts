@@ -33,6 +33,7 @@ import {
   IndexPublication,
   manifestSha256,
   parseIndexPublication,
+  PUBLISHED_TORRENT_DIR,
   verifyIndexPublication,
 } from '../lib/index-publication.js';
 import {
@@ -724,12 +725,12 @@ describe('Publisher', () => {
         store?: StateStore;
         transport?: MemoryTransport;
         trackers?: string[];
-        privateSwarm?: boolean;
+        log?: Logger;
       } = {},
     ) => {
       const dir = opts.dir ?? publishedDir;
       return new Publisher({
-        log,
+        log: opts.log ?? log,
         state: opts.store ?? state,
         kinds: createKindRegistry({ log }),
         signer,
@@ -745,7 +746,6 @@ describe('Publisher', () => {
             ? { transport: opts.transport }
             : {}),
           trackers: opts.trackers ?? ['http://tracker.example/announce'],
-          privateSwarm: opts.privateSwarm ?? false,
         },
       });
     };
@@ -755,19 +755,31 @@ describe('Publisher', () => {
         await fs.readFile(path.join(dir, 'publication.json')),
       );
 
+    /** The .torrent the publisher wrote for a band, found by its signed infohash. */
+    const torrentFileOf = async (bandId: string, dir = publishedDir) => {
+      const band = (await readDoc(dir)).indexes[0].bands.find(
+        (b) => b.id === bandId,
+      );
+      assert(band?.torrent !== undefined, `${bandId} has a torrent`);
+      return path.join(
+        dir,
+        PUBLISHED_TORRENT_DIR,
+        `${band.torrent.infohashV1}.torrent`,
+      );
+    };
+
     it('offers each band as a torrent whose entry names the file it wrote', async () => {
       await makeBand('band-a');
       await makeTorrentPublisher().scanOnce();
 
       const band = (await readDoc()).indexes[0].bands[0];
       assert(band.torrent !== undefined, 'the band has a torrent entry');
+      // Addressed by the infohash, so a rebuild under the same id moves.
       assert.equal(
         band.torrent.torrentUrl,
-        '/ar-io/indexes/root-tx-index/band-a.torrent',
+        `/ar-io/indexes/torrents/${band.torrent.infohashV1}.torrent`,
       );
-      const file = await fs.readFile(
-        path.join(publishedDir, 'root-tx-index', 'band-a.torrent'),
-      );
+      const file = await fs.readFile(await torrentFileOf('band-a'));
       const ids = torrentIds(file);
       assert.equal(band.torrent.infohashV1, ids.infohashV1);
       assert.equal(band.torrent.infohashV2, ids.infohashV2);
@@ -799,11 +811,9 @@ describe('Publisher', () => {
         store: otherState,
       }).scanOnce();
 
-      const mine = await fs.readFile(
-        path.join(publishedDir, 'root-tx-index', 'band-a.torrent'),
-      );
+      const mine = await fs.readFile(await torrentFileOf('band-a'));
       const theirs = await fs.readFile(
-        path.join(otherDir, 'root-tx-index', 'band-copy.torrent'),
+        await torrentFileOf('band-copy', otherDir),
       );
       assert.deepEqual(theirs, mine, 'the .torrent files are byte-identical');
       assert.equal(
@@ -822,11 +832,47 @@ describe('Publisher', () => {
       assert.equal((await readDoc()).sequence, 1, 'one document, not two');
     });
 
+    it('builds the torrent again when its file is gone', async () => {
+      await makeBand('band-a');
+      const publisher = makeTorrentPublisher();
+      await publisher.scanOnce();
+      const file = await torrentFileOf('band-a');
+      await fs.rm(file);
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+      assert.equal(existsSync(file), true);
+    });
+
+    it('offers no torrent for bytes that changed since the band was hashed', async () => {
+      const dir = await makeBand('band-a');
+      const { recording, warnings } = recordingLog();
+      const publisher = makeTorrentPublisher({ log: recording });
+      await publisher.scanOnce();
+      const torrentFile = await torrentFileOf('band-a');
+
+      // A rebuild landing between hashing and the torrent build: the cached
+      // description's digest no longer matches the bytes on disk.
+      await state.update((draft) => {
+        const band = draft.describeCache[dir].band;
+        band.files[0] = { ...band.files[0], sha256: 'f'.repeat(64) };
+      });
+      await fs.rm(torrentFile); // so the torrent is built again
+
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+      const band = (await readDoc()).indexes[0].bands[0];
+      assert.equal(band.torrent, undefined, 'HTTP only, not a wrong torrent');
+      assert.ok(
+        warnings.some((w) => /changed since they were hashed/.test(w)),
+        warnings.join('\n'),
+      );
+    });
+
     it('does not rebuild a torrent while the band is untouched', async () => {
       await makeBand('band-a');
       const publisher = makeTorrentPublisher();
       await publisher.scanOnce();
-      const file = path.join(publishedDir, 'root-tx-index', 'band-a.torrent');
+      const file = await torrentFileOf('band-a');
       const first = statSync(file).mtimeMs;
       await new Promise((resolve) => setTimeout(resolve, 20));
       clock = new Date(clock.getTime() + 60_000);
@@ -845,18 +891,6 @@ describe('Publisher', () => {
       const after = (await readDoc()).indexes[0].bands[0].torrent!;
       assert.equal(after.infohashV1, before.infohashV1);
       assert.notEqual(after.magnet, before.magnet);
-    });
-
-    it('changes the infohash for a private swarm', async () => {
-      await makeBand('band-a');
-      await makeTorrentPublisher().scanOnce();
-      const open = (await readDoc()).indexes[0].bands[0].torrent!;
-      clock = new Date(clock.getTime() + 60_000);
-      await makeTorrentPublisher({ privateSwarm: true }).scanOnce();
-      assert.notEqual(
-        (await readDoc()).indexes[0].bands[0].torrent!.infohashV1,
-        open.infohashV1,
-      );
     });
 
     it('has the engine seed every offered band from where it lies', async () => {
@@ -900,22 +934,45 @@ describe('Publisher', () => {
       }
     });
 
-    it('keeps seeding the hashed bytes when a band is rebuilt in place', async () => {
+    it('seeds a band rebuilt in place from the hashed bytes, then under its new torrent', async () => {
       const bandDir = await makeBand('band-a');
       const transport = new MemoryTransport(new MemorySwarm());
-      await makeTorrentPublisher({ transport }).scanOnce();
-      const band = (await readDoc()).indexes[0].bands[0];
-      const seedDir = Object.values((await state.load()).seeding)[0].dir;
-      const cdb = band.files.find((f) => f.name.endsWith('.cdb'))!;
-      const before = await fs.readFile(path.join(seedDir, cdb.name));
+      const publisher = makeTorrentPublisher({ transport });
+      await publisher.scanOnce();
+      const old = (await readDoc()).indexes[0].bands[0];
+      const oldSeed = path.join(
+        publishedDir,
+        SEED_DIR,
+        old.torrent!.infohashV1,
+      );
+      const cdb = old.files.find((f) => f.name.endsWith('.cdb'))!;
+      const oldBytes = await fs.readFile(path.join(oldSeed, cdb.name));
 
-      // An operator overwrites a file in place, same size, new bytes.
-      const target = path.join(bandDir, cdb.name);
-      await fs.rm(target);
-      await fs.writeFile(target, Buffer.alloc(before.byteLength, 0x5a));
+      // Rebuilt in place, as writers do: a new file under the same name.
+      const fresh = Buffer.alloc(oldBytes.byteLength, 0x5a);
+      await fs.rm(path.join(bandDir, cdb.name));
+      await fs.writeFile(path.join(bandDir, cdb.name), fresh);
+      // Until the next scan the engine still serves what was hashed.
+      assert.deepEqual(
+        await fs.readFile(path.join(oldSeed, cdb.name)),
+        oldBytes,
+      );
 
-      const after = await fs.readFile(path.join(seedDir, cdb.name));
-      assert.deepEqual(after, before, 'the engine still reads the old bytes');
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+      const now = (await readDoc()).indexes[0].bands[0];
+      assert.notEqual(now.torrent!.infohashV1, old.torrent!.infohashV1);
+      const newSeed = path.join(
+        publishedDir,
+        SEED_DIR,
+        now.torrent!.infohashV1,
+      );
+      assert.deepEqual(await fs.readFile(path.join(newSeed, cdb.name)), fresh);
+      assert.equal(existsSync(oldSeed), false, 'the old torrent is gone');
+      assert.deepEqual(
+        Object.values((await state.load()).seeding).map((x) => x.infohashV1),
+        [now.torrent!.infohashV1],
+      );
     });
 
     it('removes the seed directory of a band it no longer offers', async () => {
@@ -979,7 +1036,13 @@ describe('Publisher', () => {
 
       assert.equal(await transport.status(goneId), undefined);
       assert.equal(
-        existsSync(path.join(publishedDir, 'root-tx-index', 'band-b.torrent')),
+        existsSync(
+          path.join(
+            publishedDir,
+            PUBLISHED_TORRENT_DIR,
+            `${gone.torrent!.infohashV1}.torrent`,
+          ),
+        ),
         false,
       );
       assert.deepEqual(
@@ -1023,26 +1086,28 @@ describe('Publisher', () => {
       );
     });
 
-    it('re-adds a seeded torrent the engine put in error', async () => {
-      await makeBand('band-a');
-      const transport = new MemoryTransport(new MemorySwarm());
-      const publisher = makeTorrentPublisher({ transport });
-      await publisher.scanOnce();
-      const [mine] = Object.values((await state.load()).seeding);
-      transport.entry(mine.id)!.state = 'error'; // as qBittorrent's missingFiles
+    // Error is qBittorrent's missingFiles; stopped is a pause by hand or a
+    // ratio or seeding-time limit.
+    for (const stuck of ['error', 'stopped'] as const) {
+      it(`re-adds a seeded torrent the engine left ${stuck === 'error' ? 'in error' : 'stopped'}`, async () => {
+        await makeBand('band-a');
+        const transport = new MemoryTransport(new MemorySwarm());
+        const publisher = makeTorrentPublisher({ transport });
+        await publisher.scanOnce();
+        const [mine] = Object.values((await state.load()).seeding);
+        transport.entry(mine.id)!.state = stuck;
 
-      clock = new Date(clock.getTime() + 60_000);
-      await publisher.scanOnce();
-      assert.equal((await transport.status(mine.id))?.state, 'seeding');
-    });
+        clock = new Date(clock.getTime() + 60_000);
+        await publisher.scanOnce();
+        assert.equal((await transport.status(mine.id))?.state, 'seeding');
+      });
+    }
 
     it('leaves a shared torrent running from the subscriber copy alone', async () => {
       const bandDir = await makeBand('band-a');
       const transport = new MemoryTransport(new MemorySwarm());
       await makeTorrentPublisher().scanOnce();
-      const torrent = await fs.readFile(
-        path.join(publishedDir, 'root-tx-index', 'band-a.torrent'),
-      );
+      const torrent = await fs.readFile(await torrentFileOf('band-a'));
       // The subscriber added it first, from its installed copy.
       const installedCopy = path.join(tempDir, 'installed-copy');
       await fs.cp(bandDir, installedCopy, { recursive: true });
@@ -1079,7 +1144,7 @@ describe('Publisher', () => {
       await makePublisher().scanOnce();
       assert.equal((await readDoc()).indexes[0].bands[0].torrent, undefined);
       assert.equal(
-        existsSync(path.join(publishedDir, 'root-tx-index', 'band-a.torrent')),
+        existsSync(path.join(publishedDir, PUBLISHED_TORRENT_DIR)),
         false,
       );
     });

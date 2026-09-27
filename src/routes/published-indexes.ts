@@ -53,8 +53,8 @@ export interface PublicationView {
   files: Map<string, PublishedFile>;
   /** Digest to a file carrying it, for the content-addressed route. */
   blobs: Map<string, PublishedFile>;
-  /** `<index>/<band>` for every band offered as a torrent, for the torrent route. */
-  bands: Set<string>;
+  /** The v1 infohash of every band offered as a torrent, for the torrent route. */
+  torrents: Set<string>;
   /**
    * `<torrent name>/<file>` for every band offered as a torrent, for the
    * WebSeed route. The name is computed from the band's files, the same way
@@ -196,12 +196,12 @@ export class PublishedIndexes {
     const files = new Map<string, PublishedFile>();
     const blobs = new Map<string, PublishedFile>();
 
-    const bands = new Set<string>();
+    const torrents = new Set<string>();
     const webSeeds = new Map<string, PublishedFile>();
     for (const index of publication.indexes) {
       for (const band of index.bands) {
         // Only bands the signed document offers as torrents.
-        if (band.torrent !== undefined) bands.add(`${index.name}/${band.id}`);
+        if (band.torrent !== undefined) torrents.add(band.torrent.infohashV1);
         const torrentName =
           band.torrent !== undefined
             ? torrentNameForFiles(band.files)
@@ -238,7 +238,7 @@ export class PublishedIndexes {
       ].sort(),
       files,
       blobs,
-      bands,
+      torrents,
       webSeeds,
       mtimeMs,
       byteSize,

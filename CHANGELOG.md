@@ -67,7 +67,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     nothing outside the info dictionary is signed. Every file is hashed again
     before install. Downloads survive a restart without resetting their
     timeout.
-  - New gateway routes: `/ar-io/indexes/<name>/<band>.torrent` and the BEP 19
+  - New gateway routes: `/ar-io/indexes/torrents/<v1 infohash>.torrent` and the BEP 19
     WebSeed `/ar-io/indexes/webseed/<torrent name>/<file>`, metered and
     cached like the blob route.
   - See `docs/index-swarm.md#torrent-engine`.

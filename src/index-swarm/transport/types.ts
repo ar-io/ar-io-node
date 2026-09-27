@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import * as path from 'node:path';
 
 /**
  * The seam between the sidecar and a torrent engine.
@@ -37,15 +38,12 @@ export interface TorrentStatus {
   state: TorrentState;
   /** Fraction of the wanted bytes the engine holds and has verified, 0 to 1. */
   progress: number;
-  /** Peers connected, seeds and leechers together. WebSeeds are not peers. */
-  peers: number;
   /**
-   * Transfer counters. They can trail `state` and `progress` by a second or
-   * so (qBittorrent reports a download complete before its counter catches
-   * up), so decide completion from those, never from these.
+   * Bytes downloaded. It can trail `state` and `progress` by a second or so
+   * (qBittorrent reports a download complete before its counter catches up),
+   * so decide completion from those, never from this.
    */
   bytesDown: number;
-  bytesUp: number;
   /** The engine's own description of an `error` state, when it gives one. */
   error?: string;
   /**
@@ -54,6 +52,14 @@ export interface TorrentStatus {
    * this is how a caller tells its own download from someone else's seed.
    */
   savePath?: string;
+}
+
+/**
+ * Whether the engine keeps a torrent's files in `dir`. False when it does
+ * not say: callers decide what an unknown location means for them.
+ */
+export function savedIn(savePath: string | undefined, dir: string): boolean {
+  return savePath !== undefined && path.resolve(savePath) === path.resolve(dir);
 }
 
 export interface TorrentTransport {
@@ -85,12 +91,12 @@ export interface TorrentTransport {
   setWebSeeds(id: string, urls: string[]): Promise<void>;
 
   /**
-   * Forget a torrent. Data is kept unless `deleteData` is set; a seeded band
-   * is never deleted through here, because the engine does not own it.
-   * Resolves once the engine no longer lists it. Removing an unknown id is
-   * not an error.
+   * Forget a torrent, always keeping its files: the engine never owns
+   * them, and a seeded band's are installed or published data. Resolves
+   * once the engine no longer lists it. Removing an unknown id is not an
+   * error.
    */
-  remove(id: string, opts?: { deleteData?: boolean }): Promise<void>;
+  remove(id: string): Promise<void>;
 
   /**
    * Bytes the engine has uploaded to peers since it started. Resets when

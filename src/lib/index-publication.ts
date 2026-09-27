@@ -69,6 +69,13 @@ function isReservedName(value: string): boolean {
  * with tens of bands of 257 files each; these are far above that and far
  * below what would let one document fan out into a flood of requests.
  */
+/**
+ * Where a publisher keeps its built `.torrent` files, under `published/`,
+ * each named `<v1 infohash>.torrent`; the gateway serves them from there.
+ * Dot-prefixed, so no index name can collide with it.
+ */
+export const PUBLISHED_TORRENT_DIR = '.torrents';
+
 export const INDEX_PUBLICATION_MAX_INDEXES = 64;
 export const INDEX_PUBLICATION_MAX_BANDS_PER_INDEX = 1024;
 export const INDEX_PUBLICATION_MAX_FILES_PER_BAND = 1024;

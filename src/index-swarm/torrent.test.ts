@@ -16,6 +16,7 @@ import {
   buildTorrent,
   checkTorrentFiles,
   isAllowedTrackerUrl,
+  isPrivateAddress,
   sanitizeTorrent,
   torrentIds,
 } from './torrent.js';
@@ -33,6 +34,14 @@ const FIXTURE: Record<string, number> = {
   'e.bin': 100000,
   'f.bin': 131072,
 };
+
+/**
+ * A deep copy of a decoded torrent that keeps its Buffers: structuredClone
+ * turns them into plain Uint8Arrays, which no longer read as paths or
+ * strings, so every tampered copy would fail for that reason alone.
+ */
+const clone = <T>(value: T): T =>
+  bdecode(bencode(value as never)) as unknown as T;
 
 /** Reproducible bytes, the same generator the goldens were built from. */
 const fixtureBytes = (name: string, size: number): Buffer => {
@@ -156,22 +165,6 @@ describe('buildTorrent', () => {
     assert.deepEqual(ids(listed), LIBTORRENT.hybrid32k);
   });
 
-  it('sets the private flag inside the info dictionary, changing the infohash', async () => {
-    const open = await buildTorrent({
-      dir,
-      name: 'fixture',
-      pieceLength: 32768,
-    });
-    const priv = await buildTorrent({
-      dir,
-      name: 'fixture',
-      pieceLength: 32768,
-      private: true,
-    });
-    assert.notEqual(priv.infohashV1, open.infohashV1);
-    assert.equal(((bdecode(priv.torrent) as any).info as any).private, 1);
-  });
-
   it('refuses a piece length BEP 52 does not allow', async () => {
     await assert.rejects(
       buildTorrent({ dir, name: 'x', pieceLength: 3 * 16384 }),
@@ -232,7 +225,21 @@ describe('checkTorrentFiles', () => {
     }
   });
 
-  it('refuses a torrent missing a band file, or with a different size', async () => {
+  it('refuses a torrent missing a band file', async () => {
+    const [first, ...rest] = band();
+    const built = await buildTorrent({
+      dir,
+      name: 'fixture',
+      files: rest.map((f) => f.name),
+      pieceLength: 32768,
+    });
+    assert.throws(
+      () => checkTorrentFiles(built.torrent, [first, ...rest]),
+      /missing band files/,
+    );
+  });
+
+  it('refuses a file whose size is not the signed one', async () => {
     const built = await buildTorrent({
       dir,
       name: 'fixture',
@@ -240,16 +247,95 @@ describe('checkTorrentFiles', () => {
     });
     const [first, ...rest] = band();
     assert.throws(
-      () => checkTorrentFiles(built.torrent, rest),
-      /not one of the band/,
-    );
-    assert.throws(
       () =>
         checkTorrentFiles(built.torrent, [
           { ...first, size: first.size + 1 },
           ...rest,
         ]),
       /signed as/,
+    );
+  });
+
+  /** The fixture's hybrid torrent, decoded for tampering. */
+  const decoded = async () =>
+    bdecode(
+      (await buildTorrent({ dir, name: 'fixture', pieceLength: 32768 }))
+        .torrent,
+    ) as Record<string, any>;
+
+  it('refuses pad entries that are not pads: too long, or not under .pad/', async () => {
+    const top = await decoded();
+    const files = top.info.files as Array<Record<string, any>>;
+    assert.ok(
+      files.some((f) => f.attr?.toString() === 'p'),
+      'the fixture has pads',
+    );
+    const long = clone(top);
+    long.info.files = files.map((f) =>
+      f.attr?.toString() === 'p' ? { ...f, length: 32768 } : f,
+    );
+    assert.throws(
+      () => checkTorrentFiles(bencode(long), band()),
+      /malformed pad/,
+    );
+    const elsewhere = clone(top);
+    elsewhere.info.files = files.map((f) =>
+      f.attr?.toString() === 'p'
+        ? { ...f, path: [Buffer.from('x'), f.path[1]] }
+        : f,
+    );
+    assert.throws(
+      () => checkTorrentFiles(bencode(elsewhere), band()),
+      /malformed pad/,
+    );
+  });
+
+  it('refuses a piece length that is not a sane power of two', async () => {
+    for (const bad of [0, 1000, 16383, 49152, 128 * 1024 * 1024]) {
+      const top = await decoded();
+      top.info['piece length'] = bad;
+      assert.throws(
+        () => checkTorrentFiles(bencode(top), band()),
+        /piece length/,
+        String(bad),
+      );
+    }
+  });
+
+  it('refuses a file list padded out far beyond the band', async () => {
+    const top = await decoded();
+    const pad = {
+      attr: Buffer.from('p'),
+      length: 1,
+      path: [Buffer.from('.pad'), Buffer.from('1')],
+    };
+    top.info.files = [...top.info.files, ...Array(20).fill(pad)];
+    assert.throws(
+      () => checkTorrentFiles(bencode(top), band()),
+      /more file entries/,
+    );
+  });
+
+  it('refuses a v2 file tree that disagrees with the v1 file list', async () => {
+    const top = await decoded();
+    assert.ok(top.info['file tree'] !== undefined, 'hybrid');
+    const wrongLength = clone(top);
+    wrongLength.info['file tree']['a.bin'][''].length = 2;
+    assert.throws(
+      () => checkTorrentFiles(bencode(wrongLength), band()),
+      /file tree entry a\.bin/,
+    );
+    const extra = clone(top);
+    extra.info['file tree']['zz.bin'] = { '': { length: 1 } };
+    assert.throws(
+      () => checkTorrentFiles(bencode(extra), band()),
+      /file tree does not match/,
+    );
+    const missing = clone(top);
+    delete missing.info['file tree']['a.bin'];
+    assert.throws(
+      () => checkTorrentFiles(bencode(missing), band()),
+      /file tree does not match/,
     );
   });
 
@@ -261,7 +347,7 @@ describe('checkTorrentFiles', () => {
     });
     const top = bdecode(built.torrent) as Record<string, any>;
     const files = top.info.files as Array<Record<string, any>>;
-    const link = structuredClone(top);
+    const link = clone(top);
     link.info.files = [
       ...files,
       {
@@ -275,7 +361,19 @@ describe('checkTorrentFiles', () => {
       () => checkTorrentFiles(bencode(link), band()),
       /unexpected keys|refused/,
     );
-    const nested = structuredClone(top);
+    // A real band file with a link target added: its name and size are
+    // right, so only the check on unexpected keys can refuse it.
+    const disguised = clone(top);
+    disguised.info.files = files.map((f) =>
+      f.path[0].toString() === 'a.bin'
+        ? { ...f, 'symlink path': [Buffer.from('..')] }
+        : f,
+    );
+    assert.throws(
+      () => checkTorrentFiles(bencode(disguised), band()),
+      /unexpected keys/,
+    );
+    const nested = clone(top);
     nested.info.files = files.map((f) =>
       f.attr === undefined
         ? { ...f, path: [Buffer.from('sub'), ...f.path] }
@@ -365,6 +463,46 @@ describe('sanitizeTorrent', () => {
         }),
       /changed the infohash/,
     );
+  });
+
+  it('draws the private ranges at their exact edges', () => {
+    for (const ip of [
+      '10.0.0.0',
+      '10.255.255.255',
+      '100.64.0.0',
+      '100.127.255.255',
+      '127.0.0.1',
+      '169.254.0.1',
+      '172.16.0.0',
+      '172.31.255.255',
+      '192.168.0.1',
+      '224.0.0.0',
+      '255.255.255.255',
+      '0.0.0.0',
+      '::',
+      '::1',
+      'fc00::1',
+      'fe80::1',
+      'febf::1',
+      'ff02::1',
+    ]) {
+      assert.equal(isPrivateAddress(ip), true, ip);
+    }
+    for (const ip of [
+      '9.255.255.255',
+      '11.0.0.0',
+      '100.63.255.255',
+      '100.128.0.0',
+      '169.253.255.255',
+      '172.15.255.255',
+      '172.32.0.0',
+      '192.167.255.255',
+      '223.255.255.255',
+      '2001:db8::1',
+      'fec0::1',
+    ]) {
+      assert.equal(isPrivateAddress(ip), false, ip);
+    }
   });
 
   it('classifies tracker hosts', () => {

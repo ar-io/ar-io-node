@@ -110,7 +110,7 @@ export interface DescribedBand {
   /**
    * The band's torrent, built once per description: building one re-reads
    * every byte of the band. `key` records what it was built from (the file
-   * digests, trackers and private flag), so a change to any rebuilds it.
+   * digests and trackers), so a change to either rebuilds it.
    */
   torrent?: { key: string; torrent: BandTorrent };
 }
@@ -193,6 +193,11 @@ export interface SwarmDownload {
   webSeededAt?: number;
   /** When a poll last wanted it; one no poll wants any more is abandoned. */
   lastSeenAt: number;
+  /**
+   * The band's size. Held against the disk budget from the moment the
+   * torrent is added, since the engine writes as pieces arrive.
+   */
+  bytes?: number;
 }
 
 /** The key a seeding entry is stored under. */
@@ -318,11 +323,16 @@ export class StateStore {
       this.cache = emptyState();
     }
 
-    if (this.cache.version !== SWARM_STATE_VERSION) {
-      this.log.warn('Sidecar state has an unexpected version', {
-        found: this.cache.version,
-        expected: SWARM_STATE_VERSION,
-      });
+    // A newer sidecar's file: this code would drop what it does not know on
+    // the next write, and a downgrade would lose it for good. Refuse rather
+    // than guess; an older version only lacks fields, which load as empty.
+    if (this.cache.version > SWARM_STATE_VERSION) {
+      const found = this.cache.version;
+      this.cache = undefined;
+      this.loadPromise = undefined;
+      throw new Error(
+        `${this.filePath} was written by a newer sidecar (state version ${found}, this one understands ${SWARM_STATE_VERSION}); run that version, or move the file aside to start over`,
+      );
     }
 
     return this.cache;

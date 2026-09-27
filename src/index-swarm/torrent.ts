@@ -40,6 +40,9 @@ import {
 /** 4 MiB, the piece length the design fixes for every band. */
 export const DEFAULT_PIECE_LENGTH = 4 * 1024 * 1024;
 
+/** Largest piece length a subscriber accepts: 64 MiB. */
+const MAX_PIECE_LENGTH = 64 * 1024 * 1024;
+
 /** BEP 52 hashes files in 16 KiB blocks. */
 const BLOCK = 16 * 1024;
 const ZERO_HASH = Buffer.alloc(32);
@@ -58,11 +61,6 @@ export interface BuildTorrentOptions {
   trackers?: string[];
   /** Only these file names, when given; otherwise every file in `dir`. */
   files?: string[];
-  /**
-   * BEP 27 private flag. Inside the info dictionary, so it changes the
-   * infohash: publishers that want one swarm must agree on it.
-   */
-  private?: boolean;
 }
 
 export interface TorrentIds {
@@ -77,6 +75,11 @@ export interface BuiltTorrent extends TorrentIds {
   name: string;
   pieceLength: number;
   pieces: number;
+  /**
+   * Each file as it was read, with its SHA-256: computed in the same pass,
+   * so a caller can check the torrent covers the bytes it means to offer.
+   */
+  files: Array<{ name: string; size: number; sha256: string }>;
 }
 
 /** Streams v1 pieces: SHA-1 over the concatenated files and pads. */
@@ -167,8 +170,9 @@ async function hashFile(
   filePath: string,
   v1: V1Pieces,
   wantLeaves: boolean,
-): Promise<{ length: number; leaves: Buffer[] }> {
+): Promise<{ length: number; leaves: Buffer[]; sha256: string }> {
   const leaves: Buffer[] = [];
+  const whole = crypto.createHash('sha256');
   let block = crypto.createHash('sha256');
   let inBlock = 0;
   let length = 0;
@@ -176,6 +180,7 @@ async function hashFile(
     highWaterMark: 1024 * 1024,
   }) as AsyncIterable<Buffer>) {
     v1.update(chunk);
+    whole.update(chunk);
     length += chunk.length;
     if (!wantLeaves) continue;
     let offset = 0;
@@ -194,7 +199,7 @@ async function hashFile(
   if (wantLeaves && (inBlock > 0 || leaves.length === 0)) {
     leaves.push(block.digest());
   }
-  return { length, leaves };
+  return { length, leaves, sha256: whole.digest('hex') };
 }
 
 /** Build a torrent for a band directory. */
@@ -225,12 +230,14 @@ export async function buildTorrent(
   const fileTree: { [name: string]: BencodeValue } = {};
   const pieceLayers: { [root: string]: BencodeValue } = {};
 
+  const read: BuiltTorrent['files'] = [];
   for (const name of names) {
-    const { length, leaves } = await hashFile(
+    const { length, leaves, sha256 } = await hashFile(
       path.join(options.dir, name),
       v1,
       hybrid,
     );
+    read.push({ name, size: length, sha256 });
     files.push({ length, path: [name] });
     if (!hybrid) continue;
 
@@ -262,7 +269,6 @@ export async function buildTorrent(
     info['file tree'] = fileTree;
     info['meta version'] = 2;
   }
-  if (options.private === true) info.private = 1;
 
   const torrent: { [key: string]: BencodeValue } = { info };
   const trackers = options.trackers ?? [];
@@ -283,6 +289,7 @@ export async function buildTorrent(
     name: options.name,
     pieceLength,
     pieces: (info.pieces as Buffer).length / 20,
+    files: read,
     ...ids,
   };
 }
@@ -513,8 +520,16 @@ export function checkTorrentFiles(
   }
   const dict = info as { [key: string]: BencodeValue };
   const pieceLength = dict['piece length'];
-  if (typeof pieceLength !== 'number' || pieceLength <= 0) {
-    throw new Error('no piece length');
+  // What BEP 52 allows (a power of two, at least one block), and no larger
+  // than any band needs: a huge piece would have the engine hash and hold
+  // that much at once.
+  if (
+    typeof pieceLength !== 'number' ||
+    pieceLength < BLOCK ||
+    pieceLength > MAX_PIECE_LENGTH ||
+    (pieceLength & (pieceLength - 1)) !== 0
+  ) {
+    throw new Error(`piece length ${String(pieceLength)} refused`);
   }
   const expected = new Map(files.map((f) => [f.name, f.size]));
   if (expected.size !== files.length)
@@ -522,6 +537,10 @@ export function checkTorrentFiles(
 
   const list = dict['files'];
   if (!Array.isArray(list)) throw new Error('not a multi-file torrent');
+  // A pad follows a file, so a real torrent has fewer pads than files.
+  if (list.length > 2 * files.length) {
+    throw new Error('more file entries than a band needs');
+  }
   const seen = new Set<string>();
   for (const raw of list) {
     if (typeof raw !== 'object' || Buffer.isBuffer(raw) || Array.isArray(raw)) {

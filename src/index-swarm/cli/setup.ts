@@ -117,8 +117,17 @@ async function main(): Promise<void> {
   try {
     text = await fs.readFile(envPath, 'utf8');
   } catch (error: any) {
-    if (error?.code !== 'ENOENT')
+    if (error?.code !== 'ENOENT') {
       fail(`cannot read ${envPath}: ${error.message}`);
+    }
+    // Missing is a new file; a link to a file this process cannot see is
+    // not, and reading it as empty would replace it with only these keys.
+    const link = await fs.lstat(envPath).catch(() => undefined);
+    if (link !== undefined) {
+      fail(
+        `${envPath} is a link to a file that cannot be read from here; point --env-file at the file itself`,
+      );
+    }
   }
   const env = new EnvFile(text);
   const plan = planSetup(env, options, () =>

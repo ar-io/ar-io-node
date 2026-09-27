@@ -310,9 +310,11 @@ export function planSetup(
     }
   }
 
+  // With errors nothing is written or restarted, so this matters only
+  // for a plan that goes ahead.
   const engineOn =
-    plan.changes.some((c) => c.key === 'INDEX_SWARM_ENGINE_AUTH') ||
-    (auth !== undefined && plan.errors.length === 0);
+    auth !== undefined ||
+    plan.changes.some((c) => c.key === 'INDEX_SWARM_ENGINE_AUTH');
   if (engineOn) {
     plan.profiles.push('index-swarm-torrent');
     plan.services = [

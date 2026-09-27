@@ -41,6 +41,7 @@ import {
   IndexPublication,
   isValidPathSegment,
   manifestSha256,
+  PUBLISHED_TORRENT_DIR,
   serializeIndexPublication,
   signIndexPublication,
   torrentNameForFiles,
@@ -61,7 +62,7 @@ import {
 } from './state.js';
 import { ArtifactKind } from './kinds/types.js';
 import { buildTorrent } from './torrent.js';
-import { TorrentTransport } from './transport/types.js';
+import { savedIn, TorrentTransport } from './transport/types.js';
 import {
   engineAvailable,
   publishBands,
@@ -249,8 +250,6 @@ export interface PublisherTorrents {
   transport?: TorrentTransport;
   /** Announce URLs, written into every torrent. */
   trackers: string[];
-  /** BEP 27 private flag. Part of the infohash, so publishers must agree. */
-  privateSwarm: boolean;
 }
 
 /**
@@ -510,8 +509,19 @@ export class Publisher {
     return indexEntry;
   }
 
-  private torrentPath(indexName: string, bandId: string): string {
-    return path.join(this.publishedDir, indexName, `${bandId}.torrent`);
+  /**
+   * A torrent is stored and served under its v1 infohash, which the signed
+   * publication names. A band rebuilt under the same id gets a new infohash
+   * and a new address, so a subscriber holding the previous document can
+   * never be handed the new torrent for it (or a cache the old one for the
+   * new document).
+   */
+  private torrentPath(infohashV1: string): string {
+    return path.join(
+      this.publishedDir,
+      PUBLISHED_TORRENT_DIR,
+      `${infohashV1}.torrent`,
+    );
   }
 
   /**
@@ -531,15 +541,15 @@ export class Publisher {
     band: BandDescriptor,
   ): Promise<BandTorrent | undefined> {
     if (this.torrents === undefined) return undefined;
-    const { trackers, privateSwarm } = this.torrents;
+    const { trackers } = this.torrents;
     const name = torrentNameForFiles(band.files);
-    const key = JSON.stringify({ name, trackers, privateSwarm });
-    const file = this.torrentPath(indexName, band.id);
-
+    const key = JSON.stringify({ name, trackers });
     const state = await this.state.load();
     const cached = state.describeCache[dir]?.torrent;
     if (cached?.key === key) {
-      const onDisk = await fs.stat(file).catch(() => undefined);
+      const onDisk = await fs
+        .stat(this.torrentPath(cached.torrent.infohashV1))
+        .catch(() => undefined);
       if (onDisk !== undefined) return cached.torrent;
     }
 
@@ -550,7 +560,6 @@ export class Publisher {
         name,
         files: band.files.map((f) => f.name),
         trackers,
-        private: privateSwarm,
       });
     } catch (error: any) {
       // Still offered over HTTP; only the swarm is missing for it.
@@ -561,7 +570,24 @@ export class Publisher {
       });
       return undefined;
     }
+    // Built from the directory, which a rebuild can change after the band
+    // was hashed: offer it only if it covers exactly the digests signed.
+    const signed = new Map(band.files.map((f) => [f.name, f]));
+    const mismatch = built.files.find(
+      (f) =>
+        signed.get(f.name)?.sha256 !== f.sha256 ||
+        signed.get(f.name)?.size !== f.size,
+    );
+    if (mismatch !== undefined || built.files.length !== signed.size) {
+      this.log.warn(
+        'Band files changed since they were hashed; offering it over HTTP only until the next scan',
+        { index: indexName, band: band.id, file: mismatch?.name },
+      );
+      return undefined;
+    }
 
+    const file = this.torrentPath(built.infohashV1);
+    await fs.mkdir(path.dirname(file), { recursive: true });
     const tmp = `${file}.tmp`;
     await fs.writeFile(tmp, built.torrent);
     await fs.rename(tmp, file);
@@ -577,7 +603,7 @@ export class Publisher {
         built.infohashV2,
         trackers,
       ),
-      torrentUrl: `/ar-io/indexes/${indexName}/${band.id}.torrent`,
+      torrentUrl: `/ar-io/indexes/torrents/${built.infohashV1}.torrent`,
     };
     await this.state.update((draft) => {
       const described = draft.describeCache[dir];
@@ -613,18 +639,15 @@ export class Publisher {
       { index: string; band: BandDescriptor }
     >();
     for (const index of indexes) {
-      const offered = new Set<string>();
       for (const band of index.bands) {
         if (band.torrent === undefined) continue;
-        offered.add(`${band.id}.torrent`);
         wantedDirs.set(band.torrent.infohashV1, { index: index.name, band });
       }
-      const dir = path.join(this.publishedDir, index.name);
-      const names = await fs.readdir(dir).catch(() => [] as string[]);
-      for (const name of names) {
-        if (name.endsWith('.torrent') && !offered.has(name)) {
-          await fs.rm(path.join(dir, name), { force: true });
-        }
+    }
+    const torrentDir = path.join(this.publishedDir, PUBLISHED_TORRENT_DIR);
+    for (const name of await fs.readdir(torrentDir).catch(() => [])) {
+      if (!wantedDirs.has(name.replace(/\.torrent$/, ''))) {
+        await fs.rm(path.join(torrentDir, name), { force: true });
       }
     }
 
@@ -662,11 +685,13 @@ export class Publisher {
     for (const [infohashV1, { index, band }] of wantedDirs) {
       const dir = path.join(seedRoot, infohashV1);
       try {
-        const torrent = await fs.readFile(this.torrentPath(index, band.id));
+        const torrent = await fs.readFile(this.torrentPath(infohashV1));
         let { id } = await transport.seed({ torrent, dir });
         // An engine that lost the files (qBittorrent's missingFiles) keeps
-        // the torrent in error; give it the files again.
-        if ((await transport.status(id))?.state === 'error') {
+        // the torrent in error, and a torrent stopped by hand or by a limit
+        // stays stopped; add it again either way.
+        const held = (await transport.status(id))?.state;
+        if (held === 'error' || held === 'stopped') {
           await transport.remove(id);
           ({ id } = await transport.seed({ torrent, dir }));
         }
@@ -708,7 +733,7 @@ export class Publisher {
         if (
           status !== undefined &&
           (status.savePath === undefined ||
-            path.resolve(status.savePath) === path.resolve(seeded.dir))
+            savedIn(status.savePath, seeded.dir))
         ) {
           await transport.remove(seeded.id);
         }

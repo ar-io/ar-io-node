@@ -35,12 +35,12 @@ describe('UploadBudget', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  const budget = () =>
+  const budget = (dailyLimitBytes = 100 * GB) =>
     new UploadBudget({
       log,
       state,
       transport,
-      dailyLimitBytes: 100 * GB,
+      dailyLimitBytes,
       normalRateBytesPerSec: 10_485_760,
       now: () => clock,
     });
@@ -60,6 +60,23 @@ describe('UploadBudget', () => {
     clock = new Date('2026-09-27T00:01:00Z');
     transport.extraUploaded = 102 * GB;
     assert.equal(await b.check(), GB, 'only what the new day uploaded');
+    assert.equal(transport.uploadLimit, 10_485_760);
+  });
+
+  it('throttles at the limit exactly, not a byte before', async () => {
+    const b = budget(1000);
+    transport.extraUploaded = 999;
+    await b.check();
+    assert.equal(transport.uploadLimit, 10_485_760);
+    transport.extraUploaded = 1000;
+    await b.check();
+    assert.equal(transport.uploadLimit, THROTTLED_BYTES_PER_SEC);
+  });
+
+  it('never throttles with no budget (0)', async () => {
+    const b = budget(0);
+    transport.extraUploaded = 1000 * GB;
+    await b.check();
     assert.equal(transport.uploadLimit, 10_485_760);
   });
 

@@ -10,10 +10,9 @@
  * claims.
  *
  * The engine keeps its own resume data, so it outlives the sidecar's state:
- * after a state reset, a crash between an add and its state write, or an
- * upgrade from a build that kept torrents elsewhere, it goes on holding
- * torrents that neither the publisher nor the subscriber will ever take
- * back. They seed stale files, or sit in error once the files go. The
+ * after a state reset or a crash between an add and its state write, it goes
+ * on holding torrents that neither the publisher nor the subscriber will
+ * ever take back. They seed stale files, or sit in error once the files go. The
  * janitor removes them, never with their data, and only those whose files
  * are under this node's index directories: the engine is the sidecar's, but
  * nothing else it holds is this code's to judge.

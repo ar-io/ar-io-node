@@ -255,9 +255,7 @@ export class MemoryTransport implements TorrentTransport {
     return {
       state: entry.state,
       progress: total === 0 ? 1 : have / total,
-      peers: this.swarm.seederOf(id, this) !== undefined ? 1 : 0,
       bytesDown: entry.bytesDown,
-      bytesUp: entry.bytesUp,
       ...(entry.error !== undefined ? { error: entry.error } : {}),
       savePath: entry.dir.replace(/\/+$/, ''),
     };
@@ -275,16 +273,11 @@ export class MemoryTransport implements TorrentTransport {
     return [...(this.torrents.get(id)?.webSeeds ?? [])];
   }
 
-  async remove(id: string, opts: { deleteData?: boolean } = {}): Promise<void> {
+  async remove(id: string): Promise<void> {
     if (!this.available) this.down();
     const entry = this.torrents.get(id);
     if (entry === undefined) return;
     this.torrents.delete(id);
-    if (opts.deleteData === true) {
-      for (const file of entry.files) {
-        await fs.rm(path.join(entry.dir, file.name), { force: true });
-      }
-    }
   }
 }
 

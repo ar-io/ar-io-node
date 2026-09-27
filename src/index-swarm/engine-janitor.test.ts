@@ -53,6 +53,8 @@ describe('sweepEngine', () => {
       path.join(tempDir, 'someone-else'),
       'theirs',
     );
+    // Shares the directory's name as a prefix, but is not inside it.
+    const sibling = await seedIn(transport, `${published}-other`, 'sibling');
     await state.update((draft) => {
       draft.seeding[seedingKey('publisher', claimed)] = {
         id: claimed,
@@ -78,6 +80,11 @@ describe('sweepEngine', () => {
       await transport.status(elsewhere),
       undefined,
       'nothing outside its directories is touched',
+    );
+    assert.notEqual(
+      await transport.status(sibling),
+      undefined,
+      'nor a directory whose name merely starts the same',
     );
   });
 

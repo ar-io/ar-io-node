@@ -138,6 +138,12 @@ export function managedSettings(
       // which for a seeded band means moving it out of published/.
       'Session\\DisableAutoTMMByDefault': 'true',
       'Session\\AddTorrentStopped': 'false',
+      // Seeding never stops on a ratio or a seeding time: a gateway seeds
+      // what it holds for as long as it holds it (the upload budget bounds
+      // the cost). A limit reached would leave the torrent stopped.
+      'Session\\GlobalMaxRatio': '-1',
+      'Session\\GlobalMaxSeedingMinutes': '-1',
+      'Session\\GlobalMaxInactiveSeedingMinutes': '-1',
       // qBittorrent's embedded tracker tracks any infohash anyone announces,
       // which on a published port would make the gateway a public tracker
       // for arbitrary swarms. Pinned off; the sidecar runs a closed one.

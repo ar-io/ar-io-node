@@ -35,28 +35,42 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-if [[ "${ENV_FILE}" == /* ]]; then
-  echo "index-swarm-setup: --env-file must be relative to $(pwd)" >&2
-  exit 1
+# The file itself, not a link to it: only its directory is mounted into the
+# container, so a link (tools/wt makes .env one) would point nowhere there.
+if [[ -e "${ENV_FILE}" ]]; then
+  ENV_REAL="$(realpath -e "${ENV_FILE}")"
+else
+  ENV_REAL="$(realpath -m "${ENV_FILE}")"
+  if [[ -L "${ENV_FILE}" ]]; then
+    echo "index-swarm-setup: ${ENV_FILE} is a link to a missing file (${ENV_REAL})" >&2
+    exit 1
+  fi
 fi
+ENV_DIR="$(dirname "${ENV_REAL}")"
+ENV_NAME="$(basename "${ENV_REAL}")"
 
 # The image the gateway runs, so the tool matches its release.
 TAG="$(sed -n 's/^CORE_IMAGE_TAG=//p' "${ENV_FILE}" 2>/dev/null | tail -n1 | tr -d "'\"" || true)"
 IMAGE="${INDEX_SWARM_SETUP_IMAGE:-ghcr.io/ar-io/ar-io-core:${TAG:-latest}}"
 
-if ! docker run --rm --entrypoint /nodejs/bin/node "${IMAGE}" \
-  -e "require('fs').accessSync('/app/dist/index-swarm/cli/setup.js')" >/dev/null 2>&1; then
-  echo "index-swarm-setup: ${IMAGE} has no setup tool; it predates it." >&2
-  echo "Set CORE_IMAGE_TAG to a release that has it, or run with INDEX_SWARM_SETUP_IMAGE=<image>." >&2
+if ! probe="$(docker run --rm --entrypoint /nodejs/bin/node "${IMAGE}" \
+  -e "require('fs').accessSync('/app/dist/index-swarm/cli/setup.js')" 2>&1)"; then
+  if grep -q "no such file or directory, access" <<<"${probe}"; then
+    echo "index-swarm-setup: ${IMAGE} predates this tool." >&2
+    echo "Set CORE_IMAGE_TAG to a release that has it, or run with INDEX_SWARM_SETUP_IMAGE=<image>." >&2
+  else
+    echo "index-swarm-setup: could not run ${IMAGE}:" >&2
+    echo "${probe}" >&2
+  fi
   exit 1
 fi
 
 # Report on stderr, one summary line on stdout.
 SUMMARY="$(docker run --rm \
   --user "$(id -u):$(id -g)" \
-  -v "$(pwd):/work" -w /work \
+  -v "${ENV_DIR}:/work" -w /work \
   --entrypoint /nodejs/bin/node \
-  "${IMAGE}" /app/dist/index-swarm/cli/setup.js --file "/work/${ENV_FILE}" \
+  "${IMAGE}" /app/dist/index-swarm/cli/setup.js --file "/work/${ENV_NAME}" \
   ${ARGS[@]+"${ARGS[@]}"})"
 
 for arg in ${ARGS[@]+"${ARGS[@]}"}; do
@@ -78,6 +92,10 @@ done
 # (log rotation, local tweaks) are kept. Without a running gateway, compose's
 # own defaults (docker-compose.yaml plus docker-compose.override.yaml).
 COMPOSE=(docker compose)
+# The file just edited is the one compose must read.
+if [[ "${ENV_REAL}" != "$(realpath -m .env)" ]]; then
+  COMPOSE+=(--env-file "${ENV_FILE}")
+fi
 CORE_CONTAINER="$(docker ps -q \
   --filter "label=com.docker.compose.service=core" \
   --filter "label=com.docker.compose.project.working_dir=$(pwd)" | head -n1)"
@@ -89,7 +107,8 @@ fi
 # The gateway also needs recreating when it runs with values older than the
 # file's, as after an earlier run without --restart.
 env_value() {
-  sed -n "s/^$1=//p" "${ENV_FILE}" | tail -n1 | tr -d "'\""
+  sed -n "s/^$1=//p" "${ENV_FILE}" | tail -n1 |
+    sed -E "s/^'(.*)'[[:space:]]*$/\1/; t; s/^\"(.*)\"[[:space:]]*$/\1/; t; s/[[:space:]]+#.*$//"
 }
 if [[ -n "${CORE_CONTAINER}" && "${RESTART_CORE}" != 1 ]]; then
   RUNNING_ENV="$(docker inspect -f '{{ range .Config.Env }}{{ println . }}{{ end }}' "${CORE_CONTAINER}")"

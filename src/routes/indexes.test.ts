@@ -25,6 +25,7 @@ import { encodeCdb64Value } from '../lib/cdb64-encoding.js';
 import {
   IndexPublication,
   parseIndexPublication,
+  PUBLISHED_TORRENT_DIR,
   torrentNameForFiles,
 } from '../lib/index-publication.js';
 import { bdecode } from '../lib/bencode.js';
@@ -617,51 +618,38 @@ describe('/ar-io/indexes routes', () => {
   });
 
   describe('torrent metainfo', () => {
-    it('is 404 for a published band with no torrent yet', async () => {
-      const res = await request(app)
-        .get('/ar-io/indexes/root-tx-index/band-a.torrent')
-        .expect(404);
-      assert.equal(res.headers['cache-control'], 'no-store');
-    });
+    const IH = 'a'.repeat(40);
 
     it('does not serve a torrent for a band the document offers over HTTP only', async () => {
-      // band-a is published without torrents; a stray file must not be served.
-      const torrentPath = path.join(
-        publishedDir,
-        'root-tx-index',
-        'band-a.torrent',
+      // band-a is published without torrents; a stray file under any
+      // infohash must not be served.
+      const dir = path.join(publishedDir, PUBLISHED_TORRENT_DIR);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(
+        path.join(dir, `${IH}.torrent`),
+        'd4:infod4:name1:xee',
       );
-      await fs.writeFile(torrentPath, 'd4:infod4:name6:band-aee');
       try {
-        await request(app)
-          .get('/ar-io/indexes/root-tx-index/band-a.torrent')
+        const res = await request(app)
+          .get(`/ar-io/indexes/torrents/${IH}.torrent`)
           .expect(404);
+        assert.equal(res.headers['cache-control'], 'no-store');
       } finally {
-        await fs.rm(torrentPath);
+        await fs.rm(dir, { recursive: true });
       }
     });
 
-    it('does not serve a torrent for a band no publication lists', async () => {
-      const torrentPath = path.join(
-        publishedDir,
-        'root-tx-index',
-        'band-x.torrent',
-      );
-      await fs.writeFile(torrentPath, 'd4:infod4:name6:band-xee');
-      try {
-        await request(app)
-          .get('/ar-io/indexes/root-tx-index/band-x.torrent')
-          .expect(404);
-      } finally {
-        await fs.rm(torrentPath);
+    it('answers anything but <40 hex>.torrent 400, uncacheable', async () => {
+      for (const name of [
+        '..%2Fx.torrent',
+        `${IH.toUpperCase()}.torrent`,
+        IH,
+      ]) {
+        const res = await request(app)
+          .get(`/ar-io/indexes/torrents/${name}`)
+          .expect(400);
+        assert.equal(res.headers['cache-control'], 'no-store', name);
       }
-    });
-
-    it('answers a malformed band name 400, uncacheable', async () => {
-      const res = await request(app)
-        .get('/ar-io/indexes/root-tx-index/..%2Fx.torrent')
-        .expect(400);
-      assert.equal(res.headers['cache-control'], 'no-store');
     });
   });
 
@@ -806,7 +794,7 @@ describe('/ar-io/indexes/webseed', () => {
       publicationFile: path.join(publishedDir, 'publication.json'),
       ttlMs: 86_400_000,
       supersedeGraceMs: 0,
-      torrents: { trackers: [], privateSwarm: false },
+      torrents: { trackers: [] },
     }).scanOnce();
     publication = parseIndexPublication(
       await fs.readFile(path.join(publishedDir, 'publication.json')),
@@ -819,12 +807,17 @@ describe('/ar-io/indexes/webseed', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  const torrentFileOf = (band: { torrent?: { infohashV1: string } }) =>
+    path.join(
+      publishedDir,
+      PUBLISHED_TORRENT_DIR,
+      `${band.torrent!.infohashV1}.torrent`,
+    );
+
   it('serves a band file under the name its torrent carries, as immutable', async () => {
     const band = publication.indexes[0].bands[0];
     // The name a client will use is the one inside the .torrent itself.
-    const torrent = await fs.readFile(
-      path.join(publishedDir, 'root-tx-index', `${band.id}.torrent`),
-    );
+    const torrent = await fs.readFile(torrentFileOf(band));
     const info = (bdecode(torrent) as any).info;
     const name = (info.name as Buffer).toString();
     assert.equal(name, torrentNameForFiles(band.files));
@@ -849,10 +842,14 @@ describe('/ar-io/indexes/webseed', () => {
     assert.match(res.headers['cache-control'], /immutable/);
   });
 
-  it('serves the torrent of a band the document offers as one', async () => {
+  it('serves the torrent of a band the document offers as one, at the signed URL', async () => {
     const band = publication.indexes[0].bands[0];
+    assert.equal(
+      band.torrent?.torrentUrl,
+      `/ar-io/indexes/torrents/${band.torrent?.infohashV1}.torrent`,
+    );
     const res = await request(app)
-      .get(`/ar-io/indexes/root-tx-index/${band.id}.torrent`)
+      .get(band.torrent!.torrentUrl!)
       .buffer(true)
       .parse((r, cb) => {
         const chunks: Buffer[] = [];
@@ -861,13 +858,19 @@ describe('/ar-io/indexes/webseed', () => {
       })
       .expect(200);
     assert.equal(res.headers['content-type'], 'application/x-bittorrent');
-    assert.equal(res.headers['cache-control'], 'public, max-age=60');
-    assert.deepEqual(
-      res.body,
-      await fs.readFile(
-        path.join(publishedDir, 'root-tx-index', `${band.id}.torrent`),
-      ),
+    assert.equal(res.headers['cache-control'], 'public, max-age=86400');
+    assert.deepEqual(res.body, await fs.readFile(torrentFileOf(band)));
+  });
+
+  it('serves no torrent for an infohash the document no longer offers', async () => {
+    const stale = 'b'.repeat(40);
+    await fs.writeFile(
+      path.join(publishedDir, PUBLISHED_TORRENT_DIR, `${stale}.torrent`),
+      'd4:infod4:name1:xee',
     );
+    await request(app)
+      .get(`/ar-io/indexes/torrents/${stale}.torrent`)
+      .expect(404);
   });
 
   it('answers a range, as WebSeed clients ask', async () => {

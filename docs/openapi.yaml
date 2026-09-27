@@ -1346,21 +1346,25 @@ paths:
             Retry-After:
               description: Seconds to wait before retrying.
               schema: { type: string }
-  '/ar-io/indexes/{name}/{band}.torrent':
+  '/ar-io/indexes/torrents/{infohash}.torrent':
     get:
       tags: [Indexes]
-      summary: Get a published band's torrent
+      summary: Get a published band's torrent, by its v1 infohash
       description: |
-        The `.torrent` for a band the publication offers as a torrent. Not
+        The `.torrent` for a band the publication offers as a torrent, at the
+        `torrentUrl` the band's signed entry names. Addressed by the v1
+        infohash, so a band rebuilt under the same id gets a new address. Not
         metered. A client must check it against the infohashes in the signed
         publication before using it, and should hand an engine only the info
         dictionary and trackers it trusts: nothing outside the info
         dictionary is covered by the signature. `Cache-Control: public,
-        max-age=60`, since a band rebuilt under the same id gets a new
-        torrent; errors carry `no-store`.
+        max-age=86400` (only the tracker list, outside the infohash, can
+        change under one address); errors carry `no-store`.
       parameters:
-        - { name: name, in: path, required: true, schema: { type: string } }
-        - { name: band, in: path, required: true, schema: { type: string } }
+        - name: infohash
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[0-9a-f]{40}$' }
       responses:
         '200':
           description: The torrent metainfo.
@@ -1368,9 +1372,9 @@ paths:
             application/x-bittorrent:
               schema: { type: string, format: binary }
         '400':
-          description: Malformed index or band name.
+          description: Not a 40-character lowercase hex infohash.
         '404':
-          description: The band is not offered, or has no torrent yet.
+          description: No band the publication offers has this infohash, or its torrent is not built yet.
   '/ar-io/peers':
     get:
       tags: [Gateway]

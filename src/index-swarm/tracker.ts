@@ -26,7 +26,7 @@ import { Logger } from 'winston';
 
 import { bencode } from '../lib/bencode.js';
 import { isPrivateAddress } from './torrent.js';
-import { trackerAnnounces, trackerPeers } from './metrics.js';
+import { setTrackerPeerCount, trackerAnnounces } from './metrics.js';
 
 export interface ClosedTrackerOptions {
   log: Logger;
@@ -47,6 +47,12 @@ export interface ClosedTrackerOptions {
    * share of every response, so the table must not grow on demand.
    */
   maxPeersPerSwarm?: number;
+  /**
+   * Most peers kept across every torrent. Past it a new peer is still
+   * answered, but not recorded, so the table cannot grow with the number of
+   * bands a publisher offers times the addresses an attacker holds.
+   */
+  maxPeersTotal?: number;
   /**
    * Most ports one address may hold in one torrent's peer list. An IPv6
    * address counts by its /64, which one host can hold whole.
@@ -224,6 +230,7 @@ export class ClosedTracker {
   private readonly intervalSeconds: number;
   private readonly maxPeers: number;
   private readonly maxPeersPerSwarm: number;
+  private readonly maxPeersTotal: number;
   private readonly maxPortsPerIp: number;
   private readonly maxAnnouncesPerMinute: number;
   private readonly selfAddress: () => string | undefined;
@@ -247,6 +254,8 @@ export class ClosedTracker {
     this.intervalSeconds = options.intervalSeconds ?? 300;
     this.maxPeers = options.maxPeers ?? 50;
     this.maxPeersPerSwarm = options.maxPeersPerSwarm ?? 2000;
+    this.maxPeersTotal = options.maxPeersTotal ?? 50_000;
+    setTrackerPeerCount(() => this.peerCount());
     this.maxPortsPerIp = options.maxPortsPerIp ?? 4;
     this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 10;
     this.selfAddress = options.selfAddress ?? (() => undefined);
@@ -311,8 +320,10 @@ export class ClosedTracker {
     const left = Number(params.get('left')?.toString('latin1') ?? '1');
     // Deleted first either way, so a re-announce moves the peer to the end:
     // the map stays in last-seen order.
-    swarm.delete(key);
-    if (event !== 'stopped') {
+    const known = swarm.delete(key);
+    let total = 0;
+    for (const s of this.swarms.values()) total += s.size;
+    if (event !== 'stopped' && (known || total < this.maxPeersTotal)) {
       const sameIp = [...swarm.entries()].filter(
         ([, p]) => addressBucket(p.ip) === bucket,
       );
@@ -375,7 +386,6 @@ export class ClosedTracker {
     }
     const seeders = [...swarm.values()].filter((p) => p.seeding).length;
     trackerAnnounces.inc({ result: 'ok' });
-    this.reportPeers();
     return bencode({
       complete: seeders,
       incomplete: swarm.size - seeders,
@@ -402,8 +412,11 @@ export class ClosedTracker {
     }
   }
 
-  /** Peers per torrent, each counted once however many hashes it uses. */
-  private reportPeers(): void {
+  /**
+   * Peers per torrent, each counted once however many hashes it uses.
+   * Walks every peer, so it runs when metrics are read, not per announce.
+   */
+  private peerCount(): number {
     const torrentOf = this.torrentOf();
     const byTorrent = new Map<string, Set<string>>();
     for (const [hex, swarm] of this.swarms) {
@@ -417,7 +430,7 @@ export class ClosedTracker {
     }
     let total = 0;
     for (const peers of byTorrent.values()) total += peers.size;
-    trackerPeers.set(total);
+    return total;
   }
 
   /**

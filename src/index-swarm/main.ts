@@ -127,7 +127,6 @@ async function main(): Promise<void> {
             torrents: {
               transport: engine,
               trackers: config.TRACKERS,
-              privateSwarm: config.PRIVATE_SWARM,
             },
           }
         : {}),
@@ -243,9 +242,6 @@ async function main(): Promise<void> {
     const checkEngine = async () => {
       const available = await engine.isAvailable();
       engineAvailable.set(available ? 1 : 0);
-      // A restarted engine comes back at its configured rate, so the
-      // budget's setting is applied again.
-      if (available && last === false) budget.engineRestarted();
       if (available) {
         await budget.check().catch((error: any) =>
           log.warn('Could not check the upload budget', {

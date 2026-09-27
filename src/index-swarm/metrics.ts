@@ -170,8 +170,18 @@ export const trackerAnnounces = new promClient.Counter({
   registers: [registry],
 });
 
+let trackerPeerCount: (() => number) | undefined;
+
+/** Where the tracker's peer gauge reads from, when metrics are collected. */
+export function setTrackerPeerCount(count: () => number): void {
+  trackerPeerCount = count;
+}
+
 export const trackerPeers = new promClient.Gauge({
   name: 'index_swarm_tracker_peers',
+  collect() {
+    if (trackerPeerCount !== undefined) this.set(trackerPeerCount());
+  },
   help: 'Peers the closed tracker currently knows, summed over the bands it tracks: each peer once per band, although a hybrid torrent is announced under two hashes.',
   registers: [registry],
 });

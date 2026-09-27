@@ -32,6 +32,7 @@ import { Logger } from 'winston';
 import {
   isValidIndexName,
   isValidPathSegment,
+  PUBLISHED_TORRENT_DIR,
 } from '../lib/index-publication.js';
 import { PublishedFile, PublishedIndexes } from './published-indexes.js';
 import {
@@ -231,50 +232,45 @@ export function createIndexesRouter({
 
   // --- Torrent metainfo --------------------------------------------------
   //
-  // Not metered: a few hundred kilobytes, and a subscriber checks it against
-  // the infohashes in the signed publication before using it, so a stale or
-  // substituted file is refused rather than trusted.
+  // By v1 infohash, the address the signed publication names: a band rebuilt
+  // under the same id gets a new infohash and so a new address, and a given
+  // address only ever serves that torrent. Not metered: a few hundred
+  // kilobytes, and a subscriber checks it against the signed infohashes
+  // anyway. Only the tracker list, outside the info dictionary, can change
+  // under one address, so it is cacheable for a while but not immutable.
 
   router.get(
-    '/ar-io/indexes/:name/:torrent',
-    async (req: Request, res: Response, next) => {
-      const { name, torrent } = req.params;
-      if (!torrent.endsWith('.torrent')) {
-        next();
-        return;
-      }
-      const bandId = torrent.slice(0, -'.torrent'.length);
-      if (!isValidIndexName(name) || !isValidPathSegment(bandId)) {
+    '/ar-io/indexes/torrents/:file',
+    async (req: Request, res: Response) => {
+      const match = /^([0-9a-f]{40})\.torrent$/.exec(req.params.file);
+      if (match === null) {
         uncacheable(res);
-        res.status(400).type('text').send('Invalid index or band name');
+        res.status(400).type('text').send('Invalid torrent name');
         finish(res, 'torrent', 400);
         return;
       }
+      const infohashV1 = match[1];
       const current = await currentView();
-      if (current === undefined || !current.bands.has(`${name}/${bandId}`)) {
+      if (current === undefined || !current.torrents.has(infohashV1)) {
         notFound(res, 'torrent');
         return;
       }
-
-      const torrentPath = path.join(
-        published.publishedDir,
-        name,
-        `${bandId}.torrent`,
-      );
       let body: Buffer;
       try {
-        body = await fs.readFile(torrentPath);
+        body = await fs.readFile(
+          path.join(
+            published.publishedDir,
+            PUBLISHED_TORRENT_DIR,
+            `${infohashV1}.torrent`,
+          ),
+        );
       } catch {
-        // The band is offered but has no torrent yet, which is normal until
-        // the publisher has built one.
+        // Offered, but the publisher has not built it yet.
         notFound(res, 'torrent');
         return;
       }
       res.setHeader('Content-Type', 'application/x-bittorrent');
-      // A band rebuilt under the same id gets a new torrent, so a cache may
-      // keep this only briefly. A subscriber holding a stale copy finds the
-      // infohash disagrees with the publication and falls back to HTTP.
-      res.setHeader('Cache-Control', 'public, max-age=60');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
       res.setHeader('Content-Length', String(body.byteLength));
       res.status(200).end(req.method === 'HEAD' ? undefined : body);
       finish(res, 'torrent', 200);
