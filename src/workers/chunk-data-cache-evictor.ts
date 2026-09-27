@@ -324,9 +324,15 @@ export class ChunkDataCacheEvictor {
    *
    * "Everything left is too young" is only benign if the index holds enough to
    * matter. When the bytes it tracks could not reach the low watermark even
-   * after every row ages out, the cache is mostly untracked (the index is
-   * missing writes, ar-io-node #944) and waiting will never help: that is
-   * warned about, at most once per INDEX_COVERAGE_WARN_INTERVAL_MS.
+   * after every row ages out, waiting will never help: that is warned about, at
+   * most once per INDEX_COVERAGE_WARN_INTERVAL_MS.
+   *
+   * The warning names two causes because the check cannot tell them apart.
+   * Pressure is measured with statfs over the whole filesystem, so either the
+   * index is missing chunk writes (ar-io-node #944), or the volume also holds
+   * data this evictor does not own (a contiguous cache, databases) and chunk
+   * eviction alone cannot reach the watermark. Naming only the first would
+   * send the operator of a shared volume hunting index drift that is not there.
    */
   private async logEmptyCandidates(
     usage: { usedPercent: number; totalBytes: number; usedBytes: number },
@@ -362,7 +368,7 @@ export class ChunkDataCacheEvictor {
       if (now - this.lastCoverageWarnAt >= INDEX_COVERAGE_WARN_INTERVAL_MS) {
         this.lastCoverageWarnAt = now;
         this.log.warn(
-          'Chunk cache index tracks too little to reach the low watermark even after its age floor passes; most cached chunks are untracked',
+          'Chunk cache index tracks too little to reach the low watermark even after its age floor passes; either most cached chunks are untracked (run the backfill) or the volume holds data other than the chunk cache',
           {
             usedPercent,
             indexedBytes,

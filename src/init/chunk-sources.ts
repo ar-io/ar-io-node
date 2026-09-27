@@ -122,9 +122,9 @@ function getChunkMetadataSource({
  *
  * @param chunkDataStore - Store the read-through cache writes to. Pass the
  *   gateway's shared store so that chunks cached on the serving path reach the
- *   chunk eviction index (ADR 005); a store built here has no index, and its
- *   writes are invisible to the evictor. Defaults to an unindexed store for
- *   callers that do not use the index.
+ *   chunk eviction index (ADR 005). Required on purpose: an optional store with
+ *   an unindexed default is how ar-io-node #944 happened, and `system.ts` has
+ *   no unit test that would notice the argument going missing.
  */
 export function createChunkDataSource({
   log,
@@ -143,7 +143,7 @@ export function createChunkDataSource({
   arIOChunkSource?: ArIOChunkSource;
   chunkDataRetrievalOrder: string[];
   chunkDataSourceParallelism: number;
-  chunkDataStore?: ChunkDataStore;
+  chunkDataStore: ChunkDataStore;
 }): ChunkDataByAnySource {
   const chunkDataSources: ChunkDataByAnySource[] = [];
 
@@ -183,8 +183,7 @@ export function createChunkDataSource({
   return new ReadThroughChunkDataCache({
     log,
     chunkSource: compositeChunkDataSource,
-    chunkDataStore:
-      chunkDataStore ?? new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
+    chunkDataStore,
   });
 }
 
