@@ -1541,6 +1541,65 @@ describe('Subscriber', () => {
       });
     }
 
+    it('lets go of a download the engine reports finished somewhere else', async () => {
+      await makeBand('band-a');
+      await publishTorrents(); // no seeder: the download waits
+      const engine = new MemoryTransport(new MemorySwarm());
+      const opts = { torrentWatchMs: 20 };
+      await makeTorrentSubscriber(engine, opts).pollOnce();
+      const [[ih, { id }]] = Object.entries((await subState.load()).downloads);
+
+      // The engine now says it is complete, but in a directory not ours:
+      // whoever put it there still seeds it, so it must stay in the engine.
+      const status = engine.status.bind(engine);
+      engine.status = async (id) => {
+        const s = await status(id);
+        return s === undefined
+          ? s
+          : { ...s, state: 'seeding', progress: 1, savePath: '/elsewhere' };
+      };
+      const refused = await counted('verify_failed', 'torrent');
+      clock = new Date(clock.getTime() + 60_000);
+      await makeTorrentSubscriber(engine, opts).pollOnce();
+
+      assert.equal((await subState.load()).downloads[ih], undefined);
+      assert.deepEqual(await installedIds(), ['band-a'], 'over HTTP');
+      // Not someone else's bytes judged as ours: no false tampering signal.
+      assert.equal(await counted('verify_failed', 'torrent'), refused);
+      assert.notEqual(engine.entry(id), undefined, 'left in the engine');
+    });
+
+    it('does not copy from a torrent the engine holds but will not say where', async () => {
+      await makeBand('band-a');
+      const swarm = new MemorySwarm();
+      await publishTorrents();
+      const engine = new MemoryTransport(swarm);
+      // The engine seeds this torrent, complete, from somewhere it does not
+      // report: nothing is known about those files, so none are copied.
+      await engine.seed({
+        torrent: await fs.readFile(await publishedTorrent('band-a')),
+        dir: path.join(pubDir, 'root-tx-index', 'band-a'),
+      });
+      const status = engine.status.bind(engine);
+      engine.status = async (id) => {
+        const s = await status(id);
+        if (s === undefined) return s;
+        const { savePath: _hidden, ...rest } = s;
+        return rest;
+      };
+      const fellBack = await counted('transport_fallback', 'torrent');
+      const viaTorrent = await counted('installed', 'torrent');
+
+      await makeTorrentSubscriber(engine).pollOnce();
+
+      assert.equal(
+        await counted('transport_fallback', 'torrent'),
+        fellBack + 1,
+      );
+      assert.equal(await counted('installed', 'torrent'), viaTorrent);
+      assert.deepEqual(await installedIds(), ['band-a'], 'over HTTP');
+    });
+
     it('does not copy from a torrent the engine holds elsewhere unless it is complete', async () => {
       await makeBand('band-a');
       await publishTorrents();
