@@ -136,6 +136,17 @@ const responseSentPlugin: ApolloServerPlugin<GraphQLContext> = {
  *   batch, so it stays on.
  * - `includeStacktraceInErrorResponses: false` — the AS4+ spelling of AS3's
  *   `debug: false`.
+ *
+ * One more is set for shutdown ordering, not compatibility:
+ *
+ * - `stopOnTerminationSignals: false` — outside NODE_ENV=test, Apollo installs
+ *   its own SIGINT/SIGTERM handlers (`maybeRegisterTerminationSignalHandlers`
+ *   in `ApolloServer.js`) that call `stop()` the moment the signal lands and
+ *   then re-raise it. That races the gateway's shutdown registry: Apollo would
+ *   be stopped while the HTTP listener is still accepting, so every GraphQL
+ *   request arriving during shutdown gets "cannot execute GraphQL operations
+ *   after the server has stopped". The registry in `app.ts` owns shutdown
+ *   instead. (AS3 had the same handlers; this was never ordered correctly.)
  */
 export const makeApolloServerMiddleware = async ({
   db,
@@ -155,6 +166,7 @@ export const makeApolloServerMiddleware = async ({
     csrfPrevention: false,
     allowBatchedHttpRequests: true,
     includeStacktraceInErrorResponses: false,
+    stopOnTerminationSignals: false,
     plugins: [
       // Telemetry off, explicitly and unconditionally.
       //
@@ -207,10 +219,10 @@ export const makeApolloServerMiddleware = async ({
     }),
   ];
 
-  // `stop()` runs Apollo's serverWillStop hooks and lets in-flight operations
-  // finish. Without it a restart severs live GraphQL requests mid-response,
-  // which matters here because rolling restarts are routine. Wired into the
-  // gateway's shutdown registry by the caller so it runs before the HTTP
-  // server closes.
+  // `stop()` runs Apollo's serverWillStop hooks and disposes its plugins. It
+  // does NOT drain in-flight operations — no drain plugin is registered, so
+  // draining is the HTTP listener's job. The caller wires this into the
+  // gateway's shutdown registry AFTER the HTTP server handler, so it runs only
+  // once the listener has closed and its connections have finished.
   return { middleware, stop: () => server.stop() };
 };

@@ -214,7 +214,10 @@ const server: Server = app.listen(config.PORT, () => {
   // Stopping Apollo first would leave the socket open in front of a server
   // that no longer starts operations, so a request arriving in that window
   // fails instead of being served or refused cleanly. `server.stop()` does not
-  // drain an Express listener on its own.
+  // drain an Express listener on its own. This ordering holds only because
+  // Apollo's own signal handlers are disabled (`stopOnTerminationSignals:
+  // false` in routes/graphql/index.ts); with them on, Apollo stops at SIGTERM,
+  // before this registry runs at all.
   system.registerCleanupHandler('apollo-server', async () => {
     log.debug('Stopping Apollo server...');
     await stopApolloServer();
