@@ -357,16 +357,35 @@ export function parseEngineAuth(
 /** Shortest engine Web UI password accepted. */
 export const MIN_ENGINE_PASSWORD_LENGTH = 16;
 
-/**
- * The torrent engine's Web API, e.g. `http://index-swarm-engine:8080`. Unset
- * means no swarm: bands move over HTTP only. It must be the host name and
- * port the engine itself listens on; qBittorrent refuses a Host header that
- * differs.
- */
-export const ENGINE_URL = env.varOrUndefined('INDEX_SWARM_ENGINE_URL');
+/** The compose engine's Web API, as the sidecar reaches it. */
+export const DEFAULT_ENGINE_URL = 'http://index-swarm-engine:8080';
+
 export const ENGINE_AUTH = parseEngineAuth(
   env.varOrUndefined('INDEX_SWARM_ENGINE_AUTH'),
 );
+
+/**
+ * The torrent engine's Web API. It must be the host name and port the engine
+ * itself listens on; qBittorrent refuses a Host header that differs.
+ *
+ * Unset, it follows from `INDEX_SWARM_ENGINE_AUTH`: the compose engine will
+ * not start without a password, so a password set means the compose engine
+ * at {@link DEFAULT_ENGINE_URL}. With neither there is no swarm, and bands
+ * move over HTTP only. An engine that is configured but not answering costs
+ * nothing either: bands move over HTTP until it answers.
+ */
+export const ENGINE_URL = resolveEngineUrl(
+  env.varOrUndefined('INDEX_SWARM_ENGINE_URL'),
+  ENGINE_AUTH,
+);
+
+export function resolveEngineUrl(
+  explicit: string | undefined,
+  auth: EngineAuth | undefined,
+): string | undefined {
+  if (explicit !== undefined) return explicit;
+  return auth !== undefined ? DEFAULT_ENGINE_URL : undefined;
+}
 
 /**
  * Announce URLs written into every torrent this node builds. They are

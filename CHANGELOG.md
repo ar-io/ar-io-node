@@ -48,7 +48,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - after the first request, the gateway rechecks the publication file every 5 s off the request path, so later index requests do not wait behind a filesystem call on a saturated libuv thread pool (seen on turbo-gateway as 15–30 s responses during cache sweeps); only the first request after a start waits for the file;
 
 - **Index bands over BitTorrent (compose profile `index-swarm-torrent`)** —
-  with a torrent engine configured (`INDEX_SWARM_ENGINE_URL`), publishers
+  with a torrent engine configured (`INDEX_SWARM_ENGINE_AUTH`, which points
+  the sidecar at the compose engine), publishers
   also offer every band as a deterministic hybrid v1/v2 torrent and seed it,
   and subscribers fetch from peers first, turn on the publisher's metered
   WebSeed only when peers stall, fall back to HTTP on any failure, and seed
@@ -70,6 +71,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     WebSeed `/ar-io/indexes/webseed/<torrent name>/<file>`, metered and
     cached like the blob route.
   - See `docs/index-swarm.md#torrent-engine`.
+
+- **`tools/index-swarm-setup` and `tools/index-swarm-status`** — set up
+  index sharing in one command and check it in another. Setup edits `.env`
+  idempotently (backing it up first): subscribes to a publisher, points the
+  gateway at the installed bands and fixes the root-TX lookup order,
+  generates the torrent engine's password, and with `--restart` recreates
+  only what the changes need, by service name, with the running gateway's
+  own compose files. Status runs inside the sidecar and reports each check
+  (publication accepted, bands installed and loaded by the gateway, lookups
+  reaching them, engine reachable from the internet, upload budget) with the
+  fix for anything wrong. Both need only Docker. See
+  `docs/index-swarm.md#quick-start`.
 
 - **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
   item sizes for every data item in a list of root bundles, nested bundles

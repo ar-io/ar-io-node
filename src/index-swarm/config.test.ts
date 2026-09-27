@@ -7,7 +7,13 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { parseEngineAuth, parsePublish, parseSubscribe } from './config.js';
+import {
+  DEFAULT_ENGINE_URL,
+  parseEngineAuth,
+  parsePublish,
+  parseSubscribe,
+  resolveEngineUrl,
+} from './config.js';
 
 describe('index-swarm config', () => {
   describe('parsePublish', () => {
@@ -112,6 +118,29 @@ describe('index-swarm config', () => {
         () => parseSubscribe('[{"publisher":"w","url":42}]'),
         /\[0\]\.url must be a string/,
       );
+    });
+  });
+
+  describe('resolveEngineUrl', () => {
+    const auth = { username: 'swarm', password: 'x'.repeat(16) };
+
+    it('takes the compose engine when only a password is set', () => {
+      assert.equal(resolveEngineUrl(undefined, auth), DEFAULT_ENGINE_URL);
+    });
+
+    it('keeps an explicit URL', () => {
+      assert.equal(
+        resolveEngineUrl('http://engine.example:9090', auth),
+        'http://engine.example:9090',
+      );
+      assert.equal(
+        resolveEngineUrl('http://engine.example:9090', undefined),
+        'http://engine.example:9090',
+      );
+    });
+
+    it('means no swarm with neither', () => {
+      assert.equal(resolveEngineUrl(undefined, undefined), undefined);
     });
   });
 

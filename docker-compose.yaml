@@ -844,8 +844,9 @@ services:
       - INDEX_SWARM_MAX_DISK_BYTES=${INDEX_SWARM_MAX_DISK_BYTES:-}
       - INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC:-}
       - INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS=${INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS:-}
-      # The swarm tier, on only when INDEX_SWARM_ENGINE_URL is set and the
-      # index-swarm-torrent profile runs the engine.
+      # The swarm tier: on when INDEX_SWARM_ENGINE_AUTH is set (the URL then
+      # defaults to the compose engine) and the index-swarm-torrent profile
+      # runs the engine.
       - INDEX_SWARM_ENGINE_URL=${INDEX_SWARM_ENGINE_URL:-}
       - INDEX_SWARM_ENGINE_AUTH=${INDEX_SWARM_ENGINE_AUTH:-}
       - INDEX_SWARM_TRACKERS=${INDEX_SWARM_TRACKERS:-}

@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Set up index sharing (the index-swarm sidecar, and optionally BitTorrent)
+# in .env, then optionally restart what the changes need. Idempotent: run it
+# again to add a publisher or turn on torrents.
+#
+# Usage (from the gateway's directory, where .env and docker-compose.yaml are):
+#   ./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --restart
+#   ./tools/index-swarm-setup --publish --torrent --public-host <ip> --restart
+#   ./tools/index-swarm-setup --help
+#
+# The .env logic runs in the core image (CORE_IMAGE_TAG), so the host needs
+# only Docker. --restart recreates, by service name, only what the changes
+# need, using the same compose files the running gateway was started with.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/.."
+
+ENV_FILE=".env"
+RESTART=false
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --restart) RESTART=true; ARGS+=("$1") ;;
+    --env-file) ENV_FILE="$2"; shift ;;
+    --env-file=*) ENV_FILE="${1#--env-file=}" ;;
+    *) ARGS+=("$1") ;;
+  esac
+  shift
+done
+if [[ "${ENV_FILE}" == /* ]]; then
+  echo "index-swarm-setup: --env-file must be relative to $(pwd)" >&2
+  exit 1
+fi
+
+# The image the gateway runs, so the tool matches its release.
+TAG="$(sed -n 's/^CORE_IMAGE_TAG=//p' "${ENV_FILE}" 2>/dev/null | tail -n1 | tr -d "'\"" || true)"
+IMAGE="${INDEX_SWARM_SETUP_IMAGE:-ghcr.io/ar-io/ar-io-core:${TAG:-latest}}"
+
+if ! docker run --rm --entrypoint /nodejs/bin/node "${IMAGE}" \
+  -e "require('fs').accessSync('/app/dist/index-swarm/cli/setup.js')" >/dev/null 2>&1; then
+  echo "index-swarm-setup: ${IMAGE} has no setup tool; it predates it." >&2
+  echo "Set CORE_IMAGE_TAG to a release that has it, or run with INDEX_SWARM_SETUP_IMAGE=<image>." >&2
+  exit 1
+fi
+
+# Report on stderr, one summary line on stdout.
+SUMMARY="$(docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$(pwd):/work" -w /work \
+  --entrypoint /nodejs/bin/node \
+  "${IMAGE}" /app/dist/index-swarm/cli/setup.js --file "/work/${ENV_FILE}" \
+  ${ARGS[@]+"${ARGS[@]}"})"
+
+for arg in ${ARGS[@]+"${ARGS[@]}"}; do
+  case "${arg}" in --dry-run|-h|--help) exit 0 ;; esac
+done
+
+RESTART_CORE=0
+PROFILES=""
+SERVICES=""
+for field in ${SUMMARY}; do
+  case "${field}" in
+    core=*) RESTART_CORE="${field#core=}" ;;
+    profiles=*) PROFILES="${field#profiles=}" ;;
+    services=*) SERVICES="${field#services=}" ;;
+  esac
+done
+
+# The compose files the running gateway was started with, so override files
+# (log rotation, local tweaks) are kept. Without a running gateway, compose's
+# own defaults (docker-compose.yaml plus docker-compose.override.yaml).
+COMPOSE=(docker compose)
+CORE_CONTAINER="$(docker ps -q \
+  --filter "label=com.docker.compose.service=core" \
+  --filter "label=com.docker.compose.project.working_dir=$(pwd)" | head -n1)"
+if [[ -n "${CORE_CONTAINER}" ]]; then
+  FILES="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "${CORE_CONTAINER}")"
+  IFS=',' read -r -a FILE_LIST <<<"${FILES}"
+  for file in "${FILE_LIST[@]}"; do COMPOSE+=(-f "${file}"); done
+fi
+# The gateway also needs recreating when it runs with values older than the
+# file's, as after an earlier run without --restart.
+env_value() {
+  sed -n "s/^$1=//p" "${ENV_FILE}" | tail -n1 | tr -d "'\""
+}
+if [[ -n "${CORE_CONTAINER}" && "${RESTART_CORE}" != 1 ]]; then
+  RUNNING_ENV="$(docker inspect -f '{{ range .Config.Env }}{{ println . }}{{ end }}' "${CORE_CONTAINER}")"
+  for key in CDB64_ROOT_TX_INDEX_SOURCES ROOT_TX_LOOKUP_ORDER; do
+    running="$(sed -n "s/^${key}=//p" <<<"${RUNNING_ENV}" | tail -n1)"
+    if [[ "${running}" != "$(env_value "${key}")" ]]; then RESTART_CORE=1; fi
+  done
+fi
+
+PROFILE_ARGS=()
+IFS=',' read -r -a PROFILE_LIST <<<"${PROFILES}"
+for profile in "${PROFILE_LIST[@]}"; do PROFILE_ARGS+=(--profile "${profile}"); done
+IFS=',' read -r -a SERVICE_LIST <<<"${SERVICES}"
+
+core_cmd="${COMPOSE[*]} up -d --no-deps core"
+swarm_cmd="${COMPOSE[*]} ${PROFILE_ARGS[*]} up -d --no-deps ${SERVICE_LIST[*]}"
+
+if [[ "${RESTART}" != true ]]; then
+  echo >&2
+  echo "To apply it:" >&2
+  [[ "${RESTART_CORE}" == 1 ]] && echo "  ${core_cmd}" >&2
+  echo "  ${swarm_cmd}" >&2
+  echo "Or run this again with --restart. Then check it: ./tools/index-swarm-status" >&2
+  exit 0
+fi
+
+if [[ "${RESTART_CORE}" == 1 ]]; then
+  echo >&2
+  echo "Recreating the gateway (it reads the new index sources)..." >&2
+  "${COMPOSE[@]}" up -d --no-deps core
+  # Wait for it, so the sidecar's release check finds it up.
+  NEW_CORE="$(docker ps -q \
+    --filter "label=com.docker.compose.service=core" \
+    --filter "label=com.docker.compose.project.working_dir=$(pwd)" | head -n1)"
+  for _ in $(seq 1 60); do
+    health="$(docker inspect -f '{{ if .State.Health }}{{ .State.Health.Status }}{{ else }}{{ .State.Status }}{{ end }}' "${NEW_CORE}" 2>/dev/null || true)"
+    [[ "${health}" == healthy || "${health}" == running ]] && break
+    sleep 5
+  done
+  echo "Gateway: ${health:-unknown}" >&2
+fi
+
+echo >&2
+echo "Starting ${SERVICE_LIST[*]}..." >&2
+"${COMPOSE[@]}" "${PROFILE_ARGS[@]}" up -d --no-deps "${SERVICE_LIST[@]}"
+echo >&2
+echo "Done. In a few minutes, check it: ./tools/index-swarm-status" >&2

@@ -191,6 +191,19 @@ export class QBittorrentTransport implements TorrentTransport {
     return Number(info.up_info_data ?? 0);
   }
 
+  /**
+   * What the engine knows of its own reachability: `connected` once a peer
+   * has connected in, `firewalled` while none has, `disconnected` with no
+   * network. Not part of {@link TorrentTransport}; the status tool reads it.
+   */
+  async connectionStatus(): Promise<string | undefined> {
+    const response = await this.call('transfer/info');
+    const info = (await response.json()) as { connection_status?: unknown };
+    return typeof info.connection_status === 'string'
+      ? info.connection_status
+      : undefined;
+  }
+
   async setUploadLimit(bytesPerSecond: number): Promise<void> {
     await this.call('transfer/setUploadLimit', {
       method: 'POST',

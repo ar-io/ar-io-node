@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Is index sharing working here? Checks the sidecar, the bands it installed
+# and whether the gateway uses them, publishing, and the torrent engine, and
+# says how to fix what isn't. Read-only. Exits 1 when a check fails.
+#
+# Usage (from the gateway's directory):
+#   ./tools/index-swarm-status
+#
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/.."
+
+find_service() {
+  docker ps -q \
+    --filter "label=com.docker.compose.service=$1" \
+    --filter "label=com.docker.compose.project.working_dir=$(pwd)" | head -n1
+}
+
+SIDECAR="$(find_service index-swarm)"
+if [[ -z "${SIDECAR}" ]]; then
+  echo "The index-swarm sidecar is not running in $(pwd)." >&2
+  echo "Set it up and start it: ./tools/index-swarm-setup --help" >&2
+  exit 1
+fi
+
+if ! docker exec "${SIDECAR}" /nodejs/bin/node \
+  -e "require('fs').accessSync('/app/dist/index-swarm/cli/status.js')" >/dev/null 2>&1; then
+  echo "The running sidecar's image predates this tool; upgrade CORE_IMAGE_TAG." >&2
+  exit 1
+fi
+
+exec docker exec "${SIDECAR}" /nodejs/bin/node /app/dist/index-swarm/cli/status.js

@@ -17,6 +17,10 @@ import type { HttpSigSignerContext } from './lib/httpsig.js';
 import { release } from './version.js';
 import logger from './log.js';
 import { verificationPriorities } from './constants.js';
+import {
+  DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES,
+  DEFAULT_ROOT_TX_LOOKUP_ORDER,
+} from './lib/root-tx-defaults.js';
 
 //
 // HTTP server
@@ -796,7 +800,7 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
 //               costs the peer a full retrieval cascade — list it *after*
 //               'peers' so it only serves peers that lack the endpoint.
 export const ROOT_TX_LOOKUP_ORDER = env
-  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql,hyperbeam,cdb')
+  .varOrDefault('ROOT_TX_LOOKUP_ORDER', DEFAULT_ROOT_TX_LOOKUP_ORDER)
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
@@ -815,7 +819,7 @@ export const CDB64_ROOT_TX_INDEX_WATCH =
 export const CDB64_ROOT_TX_INDEX_SOURCES = env
   .varOrDefault(
     'CDB64_ROOT_TX_INDEX_SOURCES',
-    'resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000,resources/cdb64-root-tx-index-non-ao-non-redstone-without-content-type-to-height-1820000,resources/cdb64-root-tx-index-ao-to-height-1820000',
+    DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES,
   )
   .split(',')
   .map((s) => s.trim())
