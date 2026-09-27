@@ -12,6 +12,7 @@ import { afterEach, before, beforeEach, describe, it } from 'node:test';
 import crypto from 'node:crypto';
 
 import { FsChunkDataStore } from './fs-chunk-data-store.js';
+import * as metrics from '../metrics.js';
 import { ChunkData, ChunkDataCacheIndex } from '../types.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
@@ -646,6 +647,22 @@ describe('FsChunkDataStore', () => {
       assert.ok(fs.existsSync(chunkPath()));
       assert.deepEqual(fs.readFileSync(chunkPath()), payload);
       assert.equal(await indexedStore.has(dataRoot, relativeOffset), true);
+    });
+
+    it('counts a failed index write instead of only logging it', async () => {
+      // A failing hook leaves the index silently behind the disk (ar-io-node
+      // #944); the counter is what makes that visible.
+      const failures = async () =>
+        (await metrics.chunkCacheIndexHookErrorsTotal.get()).values.find(
+          (v) => v.labels.hook === 'write',
+        )?.value ?? 0;
+      const before = await failures();
+      index.saveError = new Error('index unavailable');
+
+      await indexedStore.set(dataRoot, relativeOffset, chunkData);
+      await flush();
+
+      assert.equal(await failures(), before + 1);
     });
 
     it('does not block the chunk write when the index never settles', async () => {

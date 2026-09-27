@@ -16,6 +16,10 @@ import { currentUnixTimestamp } from '../lib/time.js';
 // rather than one unbounded pass; the next sweep resumes.
 const MAX_BATCHES_PER_SWEEP = 50;
 
+// Sweeps run about once a minute; an index-coverage warning at that rate would
+// bury everything else in the log.
+const INDEX_COVERAGE_WARN_INTERVAL_MS = 15 * 60 * 1000;
+
 // Concurrent data-root unlinks per batch comes from
 // config.CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY, derived from
 // UV_THREADPOOL_SIZE. Deliberately NOT a fixed constant: each fs.rm(recursive)
@@ -132,6 +136,7 @@ export class ChunkDataCacheEvictor {
 
   private timer: NodeJS.Timeout | undefined;
   private sweeping = false;
+  private lastCoverageWarnAt = 0;
 
   constructor({
     log,
@@ -225,16 +230,28 @@ export class ChunkDataCacheEvictor {
     }
   }
 
-  // { usedPercent, freeBytes } for the cache filesystem, or undefined on error.
+  // Usage of the cache filesystem, or undefined on error. usedBytes is counted
+  // the same way as usedPercent (against bavail), so the two agree.
   private async diskUsage(): Promise<
-    { usedPercent: number; freeBytes: number } | undefined
+    | {
+        usedPercent: number;
+        freeBytes: number;
+        totalBytes: number;
+        usedBytes: number;
+      }
+    | undefined
   > {
     try {
       const stats = await fs.promises.statfs(this.usagePath);
       const total = stats.blocks;
       const usedPercent =
         total > 0 ? ((total - stats.bavail) / total) * 100 : 0;
-      return { usedPercent, freeBytes: stats.bavail * stats.bsize };
+      return {
+        usedPercent,
+        freeBytes: stats.bavail * stats.bsize,
+        totalBytes: total * stats.bsize,
+        usedBytes: (total - stats.bavail) * stats.bsize,
+      };
     } catch (error: any) {
       this.log.warn('Failed to read filesystem usage', {
         usagePath: this.usagePath,
@@ -304,11 +321,18 @@ export class ChunkDataCacheEvictor {
    * problem: conflating them sends an operator hunting index drift that is not
    * there. A count that cannot be read is treated as the benign case -- the
    * drift warning is only worth emitting when the index is provably empty.
+   *
+   * "Everything left is too young" is only benign if the index holds enough to
+   * matter. When the bytes it tracks could not reach the low watermark even
+   * after every row ages out, the cache is mostly untracked (the index is
+   * missing writes, ar-io-node #944) and waiting will never help: that is
+   * warned about, at most once per INDEX_COVERAGE_WARN_INTERVAL_MS.
    */
   private async logEmptyCandidates(
-    usedPercent: number | undefined,
+    usage: { usedPercent: number; totalBytes: number; usedBytes: number },
     maxLastWrite: number,
   ): Promise<void> {
+    const { usedPercent } = usage;
     const remainingRows = await this.cacheIndex
       .countChunkDataCacheEntries()
       .catch(() => undefined);
@@ -321,11 +345,42 @@ export class ChunkDataCacheEvictor {
       return;
     }
 
+    const indexedBytes = await this.cacheIndex
+      .sumChunkDataCacheBytes()
+      .catch(() => undefined);
+    const bytesToFree =
+      this.lowWatermarkPercent > 0
+        ? usage.usedBytes - (usage.totalBytes * this.lowWatermarkPercent) / 100
+        : undefined;
+    if (
+      indexedBytes !== undefined &&
+      bytesToFree !== undefined &&
+      bytesToFree > 0 &&
+      indexedBytes < bytesToFree
+    ) {
+      const now = Date.now();
+      if (now - this.lastCoverageWarnAt >= INDEX_COVERAGE_WARN_INTERVAL_MS) {
+        this.lastCoverageWarnAt = now;
+        this.log.warn(
+          'Chunk cache index tracks too little to reach the low watermark even after its age floor passes; most cached chunks are untracked',
+          {
+            usedPercent,
+            indexedBytes,
+            bytesToFree,
+            remainingRows,
+            lowWatermarkPercent: this.lowWatermarkPercent,
+          },
+        );
+        return;
+      }
+    }
+
     this.log.info(
       'All remaining chunk cache index entries are inside the age floor; deferring eviction',
       {
         usedPercent,
         remainingRows,
+        indexedBytes,
         minAgeSeconds: this.minAgeSeconds,
         maxLastWrite,
       },
@@ -390,7 +445,7 @@ export class ChunkDataCacheEvictor {
             this.batchSize,
           );
         if (candidates.length === 0) {
-          await this.logEmptyCandidates(usage.usedPercent, maxLastWrite);
+          await this.logEmptyCandidates(usage, maxLastWrite);
           break;
         }
 
@@ -405,7 +460,7 @@ export class ChunkDataCacheEvictor {
           );
         }
         if (selected.length === 0) {
-          await this.logEmptyCandidates(usage.usedPercent, maxLastWrite);
+          await this.logEmptyCandidates(usage, maxLastWrite);
           break;
         }
 

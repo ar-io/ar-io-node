@@ -116,6 +116,16 @@ function getChunkMetadataSource({
   }
 }
 
+/**
+ * Creates the chunk data source: the configured sources behind a composite,
+ * wrapped in a read-through cache.
+ *
+ * @param chunkDataStore - Store the read-through cache writes to. Pass the
+ *   gateway's shared store so that chunks cached on the serving path reach the
+ *   chunk eviction index (ADR 005); a store built here has no index, and its
+ *   writes are invisible to the evictor. Defaults to an unindexed store for
+ *   callers that do not use the index.
+ */
 export function createChunkDataSource({
   log,
   arweaveClient,
@@ -124,6 +134,7 @@ export function createChunkDataSource({
   arIOChunkSource,
   chunkDataRetrievalOrder,
   chunkDataSourceParallelism,
+  chunkDataStore,
 }: {
   log: winston.Logger;
   arweaveClient: ArweaveCompositeClient;
@@ -132,6 +143,7 @@ export function createChunkDataSource({
   arIOChunkSource?: ArIOChunkSource;
   chunkDataRetrievalOrder: string[];
   chunkDataSourceParallelism: number;
+  chunkDataStore?: ChunkDataStore;
 }): ChunkDataByAnySource {
   const chunkDataSources: ChunkDataByAnySource[] = [];
 
@@ -171,7 +183,8 @@ export function createChunkDataSource({
   return new ReadThroughChunkDataCache({
     log,
     chunkSource: compositeChunkDataSource,
-    chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
+    chunkDataStore:
+      chunkDataStore ?? new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
   });
 }
 
@@ -270,6 +283,7 @@ export function createChunkSourcesWithStores({
   chunkMetadataRetrievalOrder,
   chunkDataSourceParallelism,
   chunkMetadataSourceParallelism,
+  chunkDataStore: providedChunkDataStore,
 }: {
   log: winston.Logger;
   arweaveClient: ArweaveCompositeClient;
@@ -281,6 +295,8 @@ export function createChunkSourcesWithStores({
   chunkMetadataRetrievalOrder: string[];
   chunkDataSourceParallelism: number;
   chunkMetadataSourceParallelism: number;
+  /** Shared store to cache into; see createChunkDataSource. */
+  chunkDataStore?: ChunkDataStore;
 }): ChunkSourcesWithStores {
   // Create chunk data sources
   const chunkDataSources: ChunkDataByAnySource[] = [];
@@ -321,7 +337,9 @@ export function createChunkSourcesWithStores({
   });
 
   // Create stores
-  const chunkDataStore = new FsChunkDataStore({ log, baseDir: 'data/chunks' });
+  const chunkDataStore =
+    providedChunkDataStore ??
+    new FsChunkDataStore({ log, baseDir: 'data/chunks' });
   const chunkMetadataStore = new FsChunkMetadataStore({
     log,
     baseDir: 'data/chunks/metadata',
