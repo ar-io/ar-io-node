@@ -40,6 +40,7 @@ import {
   publicKeyFromSolanaAddress,
 } from '../lib/httpsig.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import { Logger } from 'winston';
 
 const log = createTestLogger({ suite: 'index-swarm publisher' });
 
@@ -85,9 +86,13 @@ describe('Publisher', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  const makePublisher = (ttlMs = 86_400_000, supersedeGraceMs = 0) =>
+  const makePublisher = (
+    ttlMs = 86_400_000,
+    supersedeGraceMs = 0,
+    publisherLog: Logger = log,
+  ) =>
     new Publisher({
-      log,
+      log: publisherLog,
       state,
       kinds: createKindRegistry({ log }),
       signer,
@@ -532,6 +537,73 @@ describe('Publisher', () => {
     // Retirement removes the manifest, which is what stops it being served;
     // the sweep (grace 0 here) then removes the directory.
     assert.equal(existsSync(oldDir), false);
+  });
+
+  /** A logger that also records the messages its children warn with. */
+  const recordingLog = () => {
+    const warnings: string[] = [];
+    const base = createTestLogger({ suite: 'index-swarm publisher warnings' });
+    const recording = Object.create(base) as Logger;
+    recording.child = (meta: object) => {
+      const child = base.child(meta);
+      return new Proxy(child, {
+        get(target, prop) {
+          if (prop === 'warn') {
+            return (message: string, ...rest: unknown[]) => {
+              warnings.push(message);
+              return (target.warn as (...args: unknown[]) => Logger)(
+                message,
+                ...rest,
+              );
+            };
+          }
+          const value = Reflect.get(target, prop);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    };
+    return { recording, warnings };
+  };
+
+  it('does not describe a retired band again while its grace runs', async () => {
+    const oldDir = await makeBand('band-old');
+    await makeBand('band-new', 3, { supersedes: 'band-old' });
+    const { recording, warnings } = recordingLog();
+    const publisher = makePublisher(86_400_000, 300_000, recording);
+
+    await publisher.scanOnce();
+    for (let i = 0; i < 3; i++) {
+      clock = new Date(clock.getTime() + 60_000);
+      await publisher.scanOnce();
+    }
+
+    assert.equal(existsSync(oldDir), true, 'kept until the grace ends');
+    assert.deepEqual(
+      (await readPublication()).indexes[0].bands.map((b) => b.id),
+      ['band-new'],
+    );
+    assert.deepEqual(warnings, [], 'no warning for the retired band');
+  });
+
+  it('warns once when a band supersedes an id this publisher does not hold', async () => {
+    const oldDir = await makeBand('band-old');
+    await makeBand('band-new', 3, { supersedes: 'band-old.torrent' });
+    const { recording, warnings } = recordingLog();
+    const publisher = makePublisher(86_400_000, 0, recording);
+
+    await publisher.scanOnce();
+    clock = new Date(clock.getTime() + 60_000);
+    await publisher.scanOnce();
+
+    assert.deepEqual(warnings, [
+      'Band supersedes an id this publisher does not hold; it retires nothing',
+    ]);
+    // The claim retires nothing: both bands are still offered.
+    assert.equal(existsSync(oldDir), true);
+    assert.deepEqual(
+      (await readPublication()).indexes[0].bands.map((b) => b.id).sort(),
+      ['band-new', 'band-old'],
+    );
   });
 
   it('hard-links every published file under its digest, and prunes stale links', async () => {

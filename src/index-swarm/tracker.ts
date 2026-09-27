@@ -75,6 +75,14 @@ export interface ClosedTrackerOptions {
    */
   selfPeer?: () => { ip: string; port: number } | undefined;
   /**
+   * Which torrent each tracked infohash belongs to, as infohash to a key
+   * shared by every hash of one torrent. A hybrid torrent is announced under
+   * its v1 hash and its truncated v2 hash, two swarms of the same peers, and
+   * the peer gauge counts each peer once per torrent. Without it every
+   * infohash is its own torrent.
+   */
+  torrentOf?: () => ReadonlyMap<string, string>;
+  /**
    * Proxies (IPs or CIDRs) whose `X-Forwarded-For` is believed, for a
    * tracker served behind a load balancer. Without it every peer would
    * appear at the proxy's address.
@@ -220,6 +228,7 @@ export class ClosedTracker {
   private readonly maxAnnouncesPerMinute: number;
   private readonly selfAddress: () => string | undefined;
   private readonly selfPeer: () => { ip: string; port: number } | undefined;
+  private readonly torrentOf: () => ReadonlyMap<string, string>;
   private readonly trustedProxies: net.BlockList;
   private readonly now: () => number;
   /**
@@ -242,6 +251,7 @@ export class ClosedTracker {
     this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 10;
     this.selfAddress = options.selfAddress ?? (() => undefined);
     this.selfPeer = options.selfPeer ?? (() => undefined);
+    this.torrentOf = options.torrentOf ?? (() => new Map());
     this.trustedProxies = trustedProxyList(options.trustedProxies ?? []);
     this.now = options.now ?? (() => Date.now());
   }
@@ -392,9 +402,21 @@ export class ClosedTracker {
     }
   }
 
+  /** Peers per torrent, each counted once however many hashes it uses. */
   private reportPeers(): void {
+    const torrentOf = this.torrentOf();
+    const byTorrent = new Map<string, Set<string>>();
+    for (const [hex, swarm] of this.swarms) {
+      const torrent = torrentOf.get(hex) ?? hex;
+      let peers = byTorrent.get(torrent);
+      if (peers === undefined) {
+        peers = new Set();
+        byTorrent.set(torrent, peers);
+      }
+      for (const key of swarm.keys()) peers.add(key);
+    }
     let total = 0;
-    for (const swarm of this.swarms.values()) total += swarm.size;
+    for (const peers of byTorrent.values()) total += peers.size;
     trackerPeers.set(total);
   }
 
@@ -472,12 +494,22 @@ export class ClosedTracker {
 export function trackedInfohashes(
   bands: Array<{ torrent?: { infohashV1: string; infohashV2?: string } }>,
 ): Set<string> {
-  const out = new Set<string>();
+  return new Set(torrentsByInfohash(bands).keys());
+}
+
+/**
+ * Each tracked infohash to the torrent it belongs to, named by its v1
+ * infohash, so a hybrid torrent's two hashes map to one key.
+ */
+export function torrentsByInfohash(
+  bands: Array<{ torrent?: { infohashV1: string; infohashV2?: string } }>,
+): Map<string, string> {
+  const out = new Map<string, string>();
   for (const band of bands) {
     if (band.torrent === undefined) continue;
-    out.add(band.torrent.infohashV1);
+    out.set(band.torrent.infohashV1, band.torrent.infohashV1);
     if (band.torrent.infohashV2 !== undefined) {
-      out.add(band.torrent.infohashV2.slice(0, 40));
+      out.set(band.torrent.infohashV2.slice(0, 40), band.torrent.infohashV1);
     }
   }
   return out;

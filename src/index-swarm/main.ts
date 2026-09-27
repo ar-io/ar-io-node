@@ -33,7 +33,11 @@ import { QBittorrentTransport } from './transport/qbittorrent.js';
 import { waitForEngine } from './transport/wait.js';
 import { EngineJanitor } from './engine-janitor.js';
 import { UploadBudget } from './upload-budget.js';
-import { ClosedTracker, trackedInfohashes } from './tracker.js';
+import {
+  ClosedTracker,
+  torrentsByInfohash,
+  trackedInfohashes,
+} from './tracker.js';
 import { isAllowedTrackerUrl } from './torrent.js';
 import { Subscriber } from './subscriber.js';
 import { CoreGatewayRegistry } from './gateway-registry.js';
@@ -336,6 +340,7 @@ async function main(): Promise<void> {
     tracker = await new ClosedTracker({
       log,
       allowed: () => trackedInfohashes(offering.offered()),
+      torrentOf: () => torrentsByInfohash(offering.offered()),
       selfAddress: () => selfAddress,
       selfPeer: () =>
         selfAddress !== undefined

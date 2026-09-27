@@ -13,8 +13,10 @@ import { createTestLogger } from '../../test/test-logger.js';
 import {
   ClosedTracker,
   parseAnnounceQuery,
+  torrentsByInfohash,
   trackedInfohashes,
 } from './tracker.js';
+import { trackerPeers } from './metrics.js';
 
 const log = createTestLogger({ suite: 'ClosedTracker' });
 
@@ -266,6 +268,23 @@ describe('ClosedTracker', () => {
       peersOf(decode(t.announce(query(OURS, 2222), '10.0.0.2'))),
       [],
     );
+  });
+
+  it("counts a hybrid torrent's peers once, not once per hash", async () => {
+    const v1 = OURS.toString('hex');
+    const v2 = THEIRS.toString('hex');
+    const bands = [
+      { torrent: { infohashV1: v1, infohashV2: v2 + 'ff'.repeat(12) } },
+    ];
+    const t = tracker({
+      allowed: () => trackedInfohashes(bands),
+      torrentOf: () => torrentsByInfohash(bands),
+    });
+    // One engine announces under both hashes; another under v1 only.
+    t.announce(query(OURS, 1111), '203.0.113.1');
+    t.announce(query(THEIRS, 1111), '203.0.113.1');
+    t.announce(query(OURS, 2222), '203.0.113.2');
+    assert.equal((await trackerPeers.get()).values[0].value, 2);
   });
 
   it('stops tracking a band once it is no longer offered', () => {

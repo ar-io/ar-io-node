@@ -347,6 +347,7 @@ export class Publisher {
     kind: ArtifactKind,
     indexName: string,
     dir: string,
+    knownIds: ReadonlySet<string> = new Set(),
   ): Promise<BandDescriptor | undefined> {
     let fingerprint: string;
     try {
@@ -391,6 +392,29 @@ export class Publisher {
       files: band.files.length,
     });
 
+    // Checked once, when the band is new: a claim naming a band this
+    // publisher has never held retires nothing, and is usually a typo (a
+    // file name for an id, say) that would otherwise pass unnoticed. Later
+    // scans reuse the description, so a target swept after its grace does
+    // not warn again.
+    const claim = band.metadata?.supersedes;
+    const targets = (
+      typeof claim === 'string' ? [claim] : Array.isArray(claim) ? claim : []
+    ).filter((id): id is string => typeof id === 'string');
+    for (const target of targets) {
+      if (target !== band.id && !knownIds.has(target)) {
+        this.log.warn(
+          'Band supersedes an id this publisher does not hold; it retires nothing',
+          {
+            index: indexName,
+            band: band.id,
+            supersedes: target,
+            validId: isValidPathSegment(target),
+          },
+        );
+      }
+    }
+
     return band;
   }
 
@@ -418,9 +442,23 @@ export class Publisher {
     }
 
     const dirs = await this.bandDirs(entry.name);
+    const held = (await this.state.load()).publishedBands[entry.name] ?? {};
+    const knownIds = new Set([
+      ...dirs.map((dir) => path.basename(dir)),
+      ...Object.keys(held),
+    ]);
     const described: Array<{ dir: string; band: BandDescriptor }> = [];
     for (const dir of dirs) {
-      const band = await this.describeBand(kind, entry.name, dir);
+      // A retired band keeps its directory until the grace ends, but its
+      // manifest is gone at once; describing it would only warn every scan.
+      const id = path.basename(dir);
+      if (
+        Object.prototype.hasOwnProperty.call(held, id) &&
+        held[id].retiredAt !== undefined
+      ) {
+        continue;
+      }
+      const band = await this.describeBand(kind, entry.name, dir, knownIds);
       if (band !== undefined) {
         this.describeFailures.delete(dir);
         described.push({ dir, band });

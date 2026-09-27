@@ -170,6 +170,10 @@ retires a band as soon as the publisher stops offering it. So set `supersedes` w
 first publish the new band: publishing it without and adding `supersedes`
 later edits its manifest, which changes the band (subscribers then fetch only
 the changed file, but it is still a new version of the band).
+A `supersedes` naming an id this publisher does not hold (a file name
+instead of a band id, say) retires nothing; the publisher warns once, when it
+first describes the new band. While a retired band's grace runs, its
+directory stays but it is no longer described or offered.
 Swapping under the same id also works, but a directory cannot be renamed over
 a non-empty one, so there is a moment when the band is absent; a scan that
 lands in it withdraws the band until the next scan, and subscribers retire it
@@ -231,7 +235,9 @@ The tracker always lists this node's own engine for its bands, at
 it. That announce often doesn't: on a host with an INPUT firewall, a
 container's request to its host's own public address is short-circuited
 inside Docker and refused, while announces from real peers arrive through
-the public interface as usual.
+the public interface as usual. For the same reason the engine can find its
+own public address among its peers and try to connect to itself; the
+firewall refuses that too, and it does no harm.
 
 The tracker keeps its peers in memory. After a restart they are back within
 one announce interval (300 s); meanwhile peers still find one another through
@@ -646,7 +652,11 @@ layers keep it off this node's network:
   tracker in `INDEX_SWARM_ALLOWED_TRACKERS`.
 
 Only the peer port, `INDEX_SWARM_ENGINE_PORT` (default 6881, TCP and UDP), is
-published; open it in the host firewall for peers to connect in. The Web API
+published; open it in the host firewall for peers to connect in. Ports
+Docker publishes, this one and the tracker's, are forwarded before the
+host's INPUT chain sees them, so a host firewall (nixos-fw, ufw) neither
+blocks nor protects them; to restrict them, filter in the `DOCKER-USER`
+chain. The Web API
 is not published at all. It stays on the engine's network, and must be
 reached there at `index-swarm-engine:8080`: qBittorrent answers 401 to every request
 whose Host header names another port.
@@ -780,7 +790,7 @@ Metrics worth a dashboard:
 | `index_swarm_upload_today_bytes`, `index_swarm_upload_throttled` | Seeding today against the daily budget; 1 means the budget is spent and seeding is throttled until the next UTC day |
 | `index_swarm_engine_available` | 1 while the torrent engine answers. Absent when none is configured, which is HTTP only by choice |
 | `index_publish_seeding_bands{index}` | Bands handed to the engine on the last scan. Below `index_publish_bands` means some are offered over HTTP only |
-| `index_swarm_tracker_announces_total{result}`, `index_swarm_tracker_peers` | The closed tracker: `ok`, `unregistered` (an infohash this node does not publish; refused), `malformed`, `rate_limited` (an address announcing one torrent too often) |
+| `index_swarm_tracker_announces_total{result}`, `index_swarm_tracker_peers` | The closed tracker: `ok`, `unregistered` (an infohash this node does not publish; refused), `malformed`, `rate_limited` (an address announcing one torrent too often). The peer gauge counts each peer once per torrent it is in, although a hybrid torrent is announced under two hashes |
 
 On the gateway, at `/ar-io/__gateway_metrics`:
 

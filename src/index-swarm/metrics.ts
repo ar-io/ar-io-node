@@ -172,7 +172,7 @@ export const trackerAnnounces = new promClient.Counter({
 
 export const trackerPeers = new promClient.Gauge({
   name: 'index_swarm_tracker_peers',
-  help: 'Peers the closed tracker currently knows, across every band it tracks.',
+  help: 'Peers the closed tracker currently knows, summed over the bands it tracks: each peer once per band, although a hybrid torrent is announced under two hashes.',
   registers: [registry],
 });
 
