@@ -321,9 +321,12 @@ Two signals show when coverage is failing:
   15 minutes) that the index "tracks too little to reach the low watermark". It
   has two possible causes, and the check cannot tell them apart: the index is
   missing chunk writes, or the volume also holds data the chunk evictor does not
-  own (pressure is measured over the whole filesystem). On a dedicated chunk
-  volume it means the first. Without it, the evictor only logs that it is
-  "deferring eviction", which reads as benign.
+  own (pressure is measured over the whole filesystem). Only a volume that holds
+  nothing but the chunk cache rules out the second. In the other sweeps where
+  every row is inside the age floor — between warnings, or when the index does
+  track enough bytes — the evictor logs "deferring eviction" at info level
+  instead. That line is benign only when the index tracks enough, so check for
+  the warning before reading it as healthy.
 - **`chunk_cache_index_hook_errors_total{hook="write"|"read"}`** counts index
   updates that failed. The hooks are fire-and-forget, so a failure never fails
   the chunk write — this counter is the only place it shows. It stays at 0 when
