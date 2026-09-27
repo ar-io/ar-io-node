@@ -372,7 +372,7 @@ async function main(): Promise<void> {
         sidecar,
         gatewayText !== undefined ? parseMetrics(gatewayText) : undefined,
         config.SUBSCRIBE,
-        await directoryBytes(config.INSTALLED_DIR),
+        await directoryBytes(config.INSTALLED_DIR).catch(() => undefined),
       ),
     );
   }
