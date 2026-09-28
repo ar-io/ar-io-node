@@ -36,12 +36,15 @@ import { Logger } from 'winston';
 
 import {
   BandDescriptor,
+  BandTorrent,
   IndexEntry,
   IndexPublication,
   isValidPathSegment,
   manifestSha256,
+  PUBLISHED_TORRENT_DIR,
   serializeIndexPublication,
   signIndexPublication,
+  torrentNameForFiles,
   verifyIndexPublication,
 } from '../lib/index-publication.js';
 import { isCdb64TempDirName } from '../lib/cdb64-manifest.js';
@@ -51,10 +54,19 @@ import {
   loadSolanaKeypairFromBase58,
 } from '../lib/httpsig.js';
 import * as config from './config.js';
-import { applyBandChanges, StateStore } from './state.js';
-import { ArtifactKind } from './kinds/types.js';
 import {
+  applyBandChanges,
+  SeededBand,
+  seedingKey,
+  StateStore,
+} from './state.js';
+import { ArtifactKind } from './kinds/types.js';
+import { buildTorrent } from './torrent.js';
+import { savedIn, TorrentTransport } from './transport/types.js';
+import {
+  engineAvailable,
   publishBands,
+  publishSeedingBands,
   publishDescribeDuration,
   publishManifestAge,
   publishSequence,
@@ -223,8 +235,49 @@ export interface PublisherOptions {
   publicationFile: string;
   ttlMs: number;
   supersedeGraceMs: number;
+  /**
+   * Offer bands as torrents too. Unset, the publication carries no torrent
+   * entries, which is right when no engine is running: a torrent nobody
+   * seeds only makes subscribers wait before falling back to HTTP.
+   */
+  torrents?: PublisherTorrents;
   /** Injectable for tests. */
   now?: () => Date;
+}
+
+export interface PublisherTorrents {
+  /** The engine that seeds them. Unset builds and advertises without seeding. */
+  transport?: TorrentTransport;
+  /** Announce URLs, written into every torrent. */
+  trackers: string[];
+}
+
+/**
+ * Where the engine seeds a band from: one directory per torrent under
+ * `published/.seed/`, holding a hard link per file to `blobs/<sha256>`.
+ *
+ * Not the band directory itself. A band rebuilt in place under the same id
+ * changes the bytes behind its names while the engine is still serving the
+ * old torrent, and peers would be handed pieces that fail their hashes. A
+ * link pins the bytes that were hashed, as it does for the blob route. The
+ * leading dot keeps the directory clear of every valid index name.
+ */
+export const SEED_DIR = '.seed';
+
+/** A magnet link naming both infohashes, so v1 and v2 clients find the swarm. */
+export function magnetFor(
+  name: string,
+  infohashV1: string,
+  infohashV2: string | undefined,
+  trackers: string[],
+): string {
+  const parts = [`xt=urn:btih:${infohashV1}`];
+  if (infohashV2 !== undefined) parts.push(`xt=urn:btmh:1220${infohashV2}`);
+  parts.push(`dn=${encodeURIComponent(name)}`);
+  for (const tracker of trackers) {
+    parts.push(`tr=${encodeURIComponent(tracker)}`);
+  }
+  return `magnet:?${parts.join('&')}`;
 }
 
 export class Publisher {
@@ -238,6 +291,7 @@ export class Publisher {
   private readonly publicationFile: string;
   private readonly ttlMs: number;
   private readonly supersedeGraceMs: number;
+  private readonly torrents?: PublisherTorrents;
   private readonly now: () => Date;
 
   constructor(options: PublisherOptions) {
@@ -251,6 +305,7 @@ export class Publisher {
     this.publicationFile = options.publicationFile;
     this.ttlMs = options.ttlMs;
     this.supersedeGraceMs = options.supersedeGraceMs;
+    if (options.torrents !== undefined) this.torrents = options.torrents;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -291,6 +346,7 @@ export class Publisher {
     kind: ArtifactKind,
     indexName: string,
     dir: string,
+    knownIds: ReadonlySet<string> = new Set(),
   ): Promise<BandDescriptor | undefined> {
     let fingerprint: string;
     try {
@@ -335,6 +391,29 @@ export class Publisher {
       files: band.files.length,
     });
 
+    // Checked once, when the band is new: a claim naming a band this
+    // publisher has never held retires nothing, and is usually a typo (a
+    // file name for an id, say) that would otherwise pass unnoticed. Later
+    // scans reuse the description, so a target swept after its grace does
+    // not warn again.
+    const claim = band.metadata?.supersedes;
+    const targets = (
+      typeof claim === 'string' ? [claim] : Array.isArray(claim) ? claim : []
+    ).filter((id): id is string => typeof id === 'string');
+    for (const target of targets) {
+      if (target !== band.id && !knownIds.has(target)) {
+        this.log.warn(
+          'Band supersedes an id this publisher does not hold; it retires nothing',
+          {
+            index: indexName,
+            band: band.id,
+            supersedes: target,
+            validId: isValidPathSegment(target),
+          },
+        );
+      }
+    }
+
     return band;
   }
 
@@ -362,9 +441,23 @@ export class Publisher {
     }
 
     const dirs = await this.bandDirs(entry.name);
+    const held = (await this.state.load()).publishedBands[entry.name] ?? {};
+    const knownIds = new Set([
+      ...dirs.map((dir) => path.basename(dir)),
+      ...Object.keys(held),
+    ]);
     const described: Array<{ dir: string; band: BandDescriptor }> = [];
     for (const dir of dirs) {
-      const band = await this.describeBand(kind, entry.name, dir);
+      // A retired band keeps its directory until the grace ends, but its
+      // manifest is gone at once; describing it would only warn every scan.
+      const id = path.basename(dir);
+      if (
+        Object.prototype.hasOwnProperty.call(held, id) &&
+        held[id].retiredAt !== undefined
+      ) {
+        continue;
+      }
+      const band = await this.describeBand(kind, entry.name, dir, knownIds);
       if (band !== undefined) {
         this.describeFailures.delete(dir);
         described.push({ dir, band });
@@ -394,18 +487,295 @@ export class Publisher {
 
     publishBands.set({ index: entry.name }, live.length);
 
+    const bands: BandDescriptor[] = [];
+    for (const { dir, band } of live) {
+      const offered: BandDescriptor = {
+        ...band,
+        http: { baseUrl: `/ar-io/indexes/${entry.name}/${band.id}/` },
+      };
+      const torrent = await this.torrentFor(entry.name, dir, band);
+      if (torrent !== undefined) offered.torrent = torrent;
+      bands.push(offered);
+    }
+
     const indexEntry: IndexEntry = {
       name: entry.name,
       kind: entry.kind,
-      bands: live.map(({ band }) => ({
-        ...band,
-        http: { baseUrl: `/ar-io/indexes/${entry.name}/${band.id}/` },
-      })),
+      bands,
     };
     if (entry.filter !== undefined) {
       indexEntry.filter = entry.filter;
     }
     return indexEntry;
+  }
+
+  /**
+   * A torrent is stored and served under its v1 infohash, which the signed
+   * publication names. A band rebuilt under the same id gets a new infohash
+   * and a new address, so a subscriber holding the previous document can
+   * never be handed the new torrent for it (or a cache the old one for the
+   * new document).
+   */
+  private torrentPath(infohashV1: string): string {
+    return path.join(
+      this.publishedDir,
+      PUBLISHED_TORRENT_DIR,
+      `${infohashV1}.torrent`,
+    );
+  }
+
+  /**
+   * The band's torrent entry, building the torrent only when the band's
+   * files or the torrent settings changed since the last build.
+   *
+   * The `.torrent` goes to `published/<index>/<band>.torrent`, next to the
+   * band rather than inside it, so it is never one of the band's own files.
+   * Nothing in it depends on which publisher built it: no creation date, no
+   * WebSeed (subscribers add the publisher's WebSeed themselves, and only
+   * when peers stall), so two publishers of the same bytes with the same
+   * trackers write byte-identical files.
+   */
+  private async torrentFor(
+    indexName: string,
+    dir: string,
+    band: BandDescriptor,
+  ): Promise<BandTorrent | undefined> {
+    if (this.torrents === undefined) return undefined;
+    const { trackers } = this.torrents;
+    const name = torrentNameForFiles(band.files);
+    const key = JSON.stringify({ name, trackers });
+    const state = await this.state.load();
+    const cached = state.describeCache[dir]?.torrent;
+    if (cached?.key === key) {
+      const onDisk = await fs
+        .stat(this.torrentPath(cached.torrent.infohashV1))
+        .catch(() => undefined);
+      if (onDisk !== undefined) return cached.torrent;
+    }
+
+    let built;
+    try {
+      built = await buildTorrent({
+        dir,
+        name,
+        files: band.files.map((f) => f.name),
+        trackers,
+      });
+    } catch (error: any) {
+      // Still offered over HTTP; only the swarm is missing for it.
+      this.log.warn('Could not build a torrent for band', {
+        index: indexName,
+        band: band.id,
+        error: error?.message,
+      });
+      return undefined;
+    }
+    // Built from the directory, which a rebuild can change after the band
+    // was hashed: offer it only if it covers exactly the digests signed.
+    const signed = new Map(band.files.map((f) => [f.name, f]));
+    const mismatch = built.files.find(
+      (f) =>
+        signed.get(f.name)?.sha256 !== f.sha256 ||
+        signed.get(f.name)?.size !== f.size,
+    );
+    if (mismatch !== undefined || built.files.length !== signed.size) {
+      this.log.warn(
+        'Band files changed since they were hashed; offering it over HTTP only until the next scan',
+        { index: indexName, band: band.id, file: mismatch?.name },
+      );
+      return undefined;
+    }
+
+    const file = this.torrentPath(built.infohashV1);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    await fs.writeFile(tmp, built.torrent);
+    await fs.rename(tmp, file);
+
+    const torrent: BandTorrent = {
+      infohashV1: built.infohashV1,
+      ...(built.infohashV2 !== undefined
+        ? { infohashV2: built.infohashV2 }
+        : {}),
+      magnet: magnetFor(
+        built.name,
+        built.infohashV1,
+        built.infohashV2,
+        trackers,
+      ),
+      torrentUrl: `/ar-io/indexes/torrents/${built.infohashV1}.torrent`,
+    };
+    await this.state.update((draft) => {
+      const described = draft.describeCache[dir];
+      if (described !== undefined) described.torrent = { key, torrent };
+    });
+    this.log.info('Built torrent for band', {
+      index: indexName,
+      band: band.id,
+      infohashV1: built.infohashV1,
+      pieces: built.pieces,
+    });
+    return torrent;
+  }
+
+  /**
+   * Make the engine seed exactly the bands offered, from pinned links, and
+   * remove what is no longer offered: `.torrent` files, seed directories
+   * and the engine's torrents.
+   *
+   * Runs after the blobs are linked, since the seed directories link to
+   * them. Seeding an already-seeded torrent is a status check, so an
+   * unchanged scan costs one call per band. An engine that is down is not an
+   * error: the next scan catches up, and subscribers fall back to HTTP.
+   */
+  private async reconcileSeeding(indexes: IndexEntry[]): Promise<void> {
+    if (this.torrents === undefined) return;
+
+    const seedRoot = path.join(this.publishedDir, SEED_DIR);
+    // By v1 infohash: the torrent name leaves the same bytes under two
+    // names indistinguishable, the infohash does not.
+    const wantedDirs = new Map<
+      string,
+      { index: string; band: BandDescriptor }
+    >();
+    for (const index of indexes) {
+      for (const band of index.bands) {
+        if (band.torrent === undefined) continue;
+        wantedDirs.set(band.torrent.infohashV1, { index: index.name, band });
+      }
+    }
+    const torrentDir = path.join(this.publishedDir, PUBLISHED_TORRENT_DIR);
+    for (const name of await fs.readdir(torrentDir).catch(() => [])) {
+      if (!wantedDirs.has(name.replace(/\.torrent$/, ''))) {
+        await fs.rm(path.join(torrentDir, name), { force: true });
+      }
+    }
+
+    // Seed directories: one per offered torrent, each file a link to its
+    // blob. An existing link is kept: the directory is named by the
+    // infohash, which pins the bytes.
+    for (const [infohashV1, { band }] of wantedDirs) {
+      const seedDir = path.join(seedRoot, infohashV1);
+      await fs.mkdir(seedDir, { recursive: true });
+      for (const file of band.files) {
+        try {
+          await fs.link(
+            path.join(this.blobsDir, file.sha256),
+            path.join(seedDir, file.name),
+          );
+        } catch (error: any) {
+          if (error?.code !== 'EEXIST') throw error;
+        }
+      }
+    }
+
+    const transport = this.torrents.transport;
+    if (transport === undefined) {
+      await this.pruneSeedDirs(seedRoot, wantedDirs);
+      return;
+    }
+    const available = await transport.isAvailable();
+    // Also checked on its own schedule; updating it here keeps it from
+    // reading 0 while the publisher is visibly seeding.
+    engineAvailable.set(available ? 1 : 0);
+    if (!available) return;
+
+    const wanted = new Map<string, SeededBand>();
+    const seedingByIndex = new Map<string, number>();
+    for (const [infohashV1, { index, band }] of wantedDirs) {
+      const dir = path.join(seedRoot, infohashV1);
+      try {
+        const torrent = await fs.readFile(this.torrentPath(infohashV1));
+        let { id } = await transport.seed({ torrent, dir });
+        // An engine that lost the files (qBittorrent's missingFiles) keeps
+        // the torrent in error, and a torrent stopped by hand or by a limit
+        // stays stopped; add it again either way.
+        const held = (await transport.status(id))?.state;
+        if (held === 'error' || held === 'stopped') {
+          await transport.remove(id);
+          ({ id } = await transport.seed({ torrent, dir }));
+        }
+        wanted.set(seedingKey('publisher', id), {
+          id,
+          infohashV1,
+          index,
+          band: band.id,
+          dir,
+          owner: 'publisher',
+        });
+        seedingByIndex.set(index, (seedingByIndex.get(index) ?? 0) + 1);
+      } catch (error: any) {
+        this.log.warn('Could not seed band', {
+          index,
+          band: band.id,
+          error: error?.message,
+        });
+      }
+    }
+    for (const index of indexes) {
+      publishSeedingBands.set(
+        { index: index.name },
+        seedingByIndex.get(index.name) ?? 0,
+      );
+    }
+
+    const state = await this.state.load();
+    for (const [key, seeded] of Object.entries(state.seeding)) {
+      if (seeded.owner !== 'publisher' || wanted.has(key)) continue;
+      try {
+        // The engine holds one copy of a torrent, in whichever directory it
+        // was first added to. Take it back only when that is this
+        // publisher's directory, which is about to be deleted; the
+        // subscriber, if it wants the same torrent, re-adds it from its own
+        // copy on its next pass. One running from the subscriber's copy is
+        // left alone.
+        const status = await transport.status(seeded.id);
+        if (
+          status !== undefined &&
+          (status.savePath === undefined ||
+            savedIn(status.savePath, seeded.dir))
+        ) {
+          await transport.remove(seeded.id);
+        }
+      } catch (error: any) {
+        this.log.warn('Could not stop seeding a band', {
+          id: seeded.id,
+          error: error?.message,
+        });
+        wanted.set(key, seeded); // try again next scan
+      }
+    }
+    await this.state.update((draft) => {
+      for (const [key, seeded] of Object.entries(draft.seeding)) {
+        if (seeded.owner === 'publisher' && !wanted.has(key)) {
+          delete draft.seeding[key];
+        }
+      }
+      for (const [key, seeded] of wanted) draft.seeding[key] = seeded;
+    });
+
+    await this.pruneSeedDirs(seedRoot, wantedDirs);
+  }
+
+  /**
+   * Delete seed directories nothing offers any more. Only called once the
+   * engine has let go of them, or when there is no engine to hold them.
+   */
+  private async pruneSeedDirs(
+    seedRoot: string,
+    wantedDirs: ReadonlyMap<string, unknown>,
+  ): Promise<void> {
+    const stillSeeded = new Set(
+      Object.values((await this.state.load()).seeding)
+        .filter((seeded) => seeded.owner === 'publisher')
+        .map((seeded) => path.resolve(seeded.dir)),
+    );
+    const existing = await fs.readdir(seedRoot).catch(() => [] as string[]);
+    for (const name of existing) {
+      const dir = path.join(seedRoot, name);
+      if (wantedDirs.has(name) || stillSeeded.has(path.resolve(dir))) continue;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   }
 
   /** Consecutive scans each band directory has failed to describe. */
@@ -625,6 +995,14 @@ export class Publisher {
     return this.inFlight;
   }
 
+  /** Bands offered by the last scan that collected, for the closed tracker. */
+  private offeredBands: BandDescriptor[] = [];
+
+  /** Every band offered as of the last scan. */
+  offered(): BandDescriptor[] {
+    return this.offeredBands;
+  }
+
   private async scan(): Promise<boolean> {
     const current = await this.currentDocument();
     const indexes: IndexEntry[] = [];
@@ -645,6 +1023,7 @@ export class Publisher {
       await this.sweep();
     }
 
+    this.offeredBands = indexes.flatMap((index) => index.bands);
     const now = this.now();
 
     // Content is compared on its own, because issuedAt moves every scan and
@@ -687,6 +1066,7 @@ export class Publisher {
       // since (by hand, or by a failed earlier scan) would otherwise stay
       // missing until the next republish. An existing link costs an EEXIST.
       await this.linkBlobs(indexes);
+      await this.reconcileSeeding(indexes);
       for (const entry of this.publish) {
         publishTotal.inc({ index: entry.name, result: 'unchanged' });
       }
@@ -732,6 +1112,7 @@ export class Publisher {
     await fs.writeFile(tmpPath, serialized, 'utf8');
     await fs.rename(tmpPath, this.publicationFile);
     await this.pruneBlobs(indexes);
+    await this.reconcileSeeding(indexes);
 
     await this.state.update((draft) => {
       draft.published = {

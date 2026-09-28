@@ -116,6 +116,21 @@ describe('index-swarm StateStore', () => {
     assert.equal(state.published, undefined);
     assert.deepEqual(state.describeCache, {});
   });
+
+  it('refuses a file from a newer sidecar, and leaves it as it was', async () => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const newer = JSON.stringify({
+      version: SWARM_STATE_VERSION + 1,
+      somethingNew: { kept: true },
+    });
+    await fs.writeFile(filePath, newer);
+
+    await assert.rejects(
+      new StateStore({ log, filePath }).load(),
+      /written by a newer sidecar/,
+    );
+    assert.equal(await fs.readFile(filePath, 'utf8'), newer);
+  });
 });
 
 describe('applyBandChanges', () => {

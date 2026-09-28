@@ -4,6 +4,17 @@ This directory contains development and documentation tools for the AR.IO Node p
 
 ## Tools
 
+### `index-swarm-setup` and `index-swarm-status`
+Set up index sharing (the `index-swarm` sidecar, optionally over BitTorrent) and check it works. `index-swarm-setup` edits `.env` idempotently (backing it up first) and, with `--restart`, recreates only what the changes need, by service name, using the running gateway's own compose files. `index-swarm-status` runs inside the sidecar and reports each check as ok/WARN/FAIL with the fix; it exits 1 on a failure. Both need only Docker: they run in the core image. See [Quick start](../docs/index-swarm.md#quick-start) and [setup and status scripts](../docs/index-swarm.md#setup-and-status-scripts).
+
+**Usage:**
+```bash
+./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --dry-run
+./tools/index-swarm-setup --subscribe <publisher wallet> --torrent --restart
+./tools/index-swarm-setup --publish --torrent --public-host <public IP> --restart
+./tools/index-swarm-status
+```
+
 ### `fetch-with-hint`
 Fetches a data item from the gateway using client-supplied root TX ID and nesting path hints. Resolves the root L1 transaction via GraphQL `bundledIn` traversal, then sends the request with `X-AR-IO-Root-Transaction-Id` and `X-AR-IO-Root-Path` headers so the gateway can skip server-side index lookups. Alternatively, can supply pre-computed byte offsets to skip bundle parsing entirely.
 
