@@ -13,7 +13,7 @@ set -euo pipefail
 #      the matching `transactions` rows by primary key, as GraphQL does.
 #
 # The test writes to and truncates tables. It refuses to run against a server
-# whose `transactions` table already holds rows, unless
+# where any table it truncates already holds rows, unless
 # ALLOW_DESTRUCTIVE_CLICKHOUSE_TEST=true. Point it at a throwaway server with
 # CLICKHOUSE_HOST / CLICKHOUSE_PORT.
 
@@ -41,17 +41,22 @@ ch_query() {
         --query "$1"
 }
 
-existing_rows=$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'transactions'")
-if [[ "$existing_rows" == "1" ]]; then
-    existing_rows=$(ch_query "SELECT count() FROM transactions")
-else
-    existing_rows=0
-fi
-if [[ "$existing_rows" != "0" && "${ALLOW_DESTRUCTIVE_CLICKHOUSE_TEST:-false}" != "true" ]]; then
-    echo "✗ Refusing to run: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT already has $existing_rows rows in transactions."
-    echo "  This test truncates tables. Use a throwaway ClickHouse server, or set"
-    echo "  ALLOW_DESTRUCTIVE_CLICKHOUSE_TEST=true if this server's data is disposable."
-    exit 1
+# Every table this test truncates must be empty (or missing) unless the
+# caller says the server's data is disposable. Staging tables matter too: they
+# can hold another import's rows between staging and migration.
+TRUNCATED_TABLES=(transactions transaction_ids staging_blocks staging_transactions staging_tags)
+if [[ "${ALLOW_DESTRUCTIVE_CLICKHOUSE_TEST:-false}" != "true" ]]; then
+    for table in "${TRUNCATED_TABLES[@]}"; do
+        exists=$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = '$table'")
+        [[ "$exists" == "1" ]] || continue
+        rows=$(ch_query "SELECT count() FROM $table")
+        if [[ "$rows" != "0" ]]; then
+            echo "✗ Refusing to run: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT already has $rows rows in $table."
+            echo "  This test truncates tables. Use a throwaway ClickHouse server, or set"
+            echo "  ALLOW_DESTRUCTIVE_CLICKHOUSE_TEST=true if this server's data is disposable."
+            exit 1
+        fi
+    done
 fi
 
 failures=0
@@ -79,7 +84,7 @@ check "transaction_ids exists" "1" \
 check "transaction_ids_mv exists" "1" \
     "$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'transaction_ids_mv'")"
 
-for table in transactions transaction_ids staging_blocks staging_transactions staging_tags; do
+for table in "${TRUNCATED_TABLES[@]}"; do
     ch_query "TRUNCATE TABLE $table"
 done
 
@@ -138,7 +143,7 @@ check "bundledIn read by parent prefix" "item-b1" \
     "$(ch_query "SELECT arrayStringConcat(groupArray(id), ',') FROM transactions AS t FINAL
       WHERE t.parent_id IN ('nested-b') AND t.height IN (${H1}) AND (t.height, t.block_transaction_index) IN ((${H1}, 3))")"
 
-for table in transactions transaction_ids staging_blocks staging_transactions staging_tags; do
+for table in "${TRUNCATED_TABLES[@]}"; do
     ch_query "TRUNCATE TABLE $table"
 done
 

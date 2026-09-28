@@ -1139,7 +1139,8 @@ describe('CompositeClickHouseDatabase', () => {
     });
 
     it('reads ids by the primary keys resolved through transaction_ids', async () => {
-      const before = await idLookupCount('ids', 'resolved');
+      // id('c') is not in transaction_ids, so the lookup is resolved_partial.
+      const before = await idLookupCount('ids', 'resolved_partial');
       const { composite, lookupQueries, stableQueries } = buildLookupComposite({
         idLookupEnabled: true,
         lookupRows: [
@@ -1198,10 +1199,11 @@ describe('CompositeClickHouseDatabase', () => {
         result.edges.map((e) => e.node.id).sort(),
         [id('a'), id('b')].sort(),
       );
-      assert.equal(await idLookupCount('ids', 'resolved'), before + 1);
+      assert.equal(await idLookupCount('ids', 'resolved_partial'), before + 1);
     });
 
     it('keeps every key when one id exists in two bundles', async () => {
+      const before = await idLookupCount('ids', 'resolved');
       const { composite, stableQueries } = buildLookupComposite({
         idLookupEnabled: true,
         lookupRows: [
@@ -1226,6 +1228,7 @@ describe('CompositeClickHouseDatabase', () => {
       assert.ok(stable.includes('t.height IN (100, 300)'));
       assert.ok(stable.includes(`(100, 2, 1, unhex('${hex(id('a'))}'))`));
       assert.ok(stable.includes(`(300, 7, 1, unhex('${hex(id('a'))}'))`));
+      assert.equal(await idLookupCount('ids', 'resolved'), before + 1);
     });
 
     it('skips the stable query when no id is in transaction_ids', async () => {

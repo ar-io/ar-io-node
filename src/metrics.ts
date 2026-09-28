@@ -832,6 +832,9 @@ export const clickhouseGqlTooManyRowsTotal = new promClient.Counter({
  * - `filter`: `ids` or `bundledIn`
  * - `outcome`:
  *   - `resolved`: the stable query was narrowed to the resolved primary keys
+ *   - `resolved_partial` (`ids` only): narrowed to the ids found; some
+ *     requested ids are not in ClickHouse (not yet stable, or nonexistent). A
+ *     high share right after enabling can mean the backfill is incomplete
  *   - `none_found`: no requested id is in ClickHouse, so the stable query was
  *     skipped
  *   - `partial`: some `bundledIn` parents were not found, so the query ran

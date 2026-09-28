@@ -319,8 +319,11 @@ treated as absent from ClickHouse. The table takes about 1 GiB per 30M rows
 (~14 GiB at 414M). Its rows can outlive their `transactions` rows, e.g. after
 a re-import; the primary-key read then simply finds nothing.
 
-`clickhouse_gql_id_lookup_total{filter, outcome}` counts the outcomes
-(`resolved`, `none_found`, `partial`, `error`).
+`clickhouse_gql_id_lookup_total{filter, outcome}` counts the outcomes:
+`resolved`, `resolved_partial` (`ids` narrowed to those found, others not in
+ClickHouse; a high share right after enabling can mean the backfill is
+incomplete), `none_found`, `partial` (`bundledIn` ran unnarrowed) and
+`error`.
 
 ## `ReplacingMergeTree` deduplication
 

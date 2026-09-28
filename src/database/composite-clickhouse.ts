@@ -1167,7 +1167,16 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         });
         return { noMatches: true };
       }
-      metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'resolved' });
+      // Some ids missing is normal (not yet stable in ClickHouse, or
+      // nonexistent), but counted apart so a lookup table that is missing
+      // rows (e.g. an unfinished backfill) shows up.
+      const found = new Set(rows.map((r) => r.idHex));
+      metrics.clickhouseGqlIdLookupTotal.inc({
+        filter,
+        outcome: ids.every((id) => found.has(b64UrlToHex(id)))
+          ? 'resolved'
+          : 'resolved_partial',
+      });
       const keys = rows.map(
         (r) =>
           `(${r.height}, ${r.blockTransactionIndex}, ` +
