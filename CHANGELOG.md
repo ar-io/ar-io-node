@@ -180,8 +180,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   that is not a trusted proxy. Allowlists (`RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`,
   `CHUNK_INGEST_CACHE_ALLOWLIST`) are checked against that address only.
   **Behind a CDN or a load balancer on public addresses, add its ranges to
-  `TRUSTED_PROXIES`**, or every client behind it shares its address. The
-  index-swarm tracker uses the same code for `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`.
+  `TRUSTED_PROXIES`**, or every client behind it shares its address; the same
+  goes for nginx on a different public host than Envoy. Envoy now appends the
+  address that connected to it to `X-Forwarded-For` (`use_remote_address`,
+  keeping the downstream `X-Forwarded-Proto`), so a client reaching port 3000
+  directly cannot choose its address either: **upgrade the Envoy image with
+  core**. The index-swarm tracker uses the same code for
+  `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`.
 
 - The `tx-data` retrieval source no longer treats an unmined transaction as
   data. A node answers `202 Pending` for a transaction it has not mined, and

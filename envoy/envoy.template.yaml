@@ -20,6 +20,16 @@ static_resources:
                 '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: ingress_http
                 codec_type: AUTO
+                #! Append the address that connected to Envoy to
+                #! X-Forwarded-For. Core believes that header only from trusted
+                #! proxies (TRUSTED_PROXIES), and Envoy is one; without this,
+                #! a client connecting straight to this port would choose the
+                #! address core uses for rate limits, x402 and allowlists.
+                use_remote_address: true
+                #! Keep the downstream X-Forwarded-Proto (nginx terminating
+                #! TLS says https); with no trusted hop Envoy would reset it
+                #! from its own connection, which is plain HTTP.
+                xff_num_trusted_hops: 1
                 route_config:
                   name: local_route
                   virtual_hosts:

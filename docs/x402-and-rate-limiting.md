@@ -1397,6 +1397,16 @@ address whatever its headers say, so it cannot claim an allowlisted address
 or a fresh rate-limit bucket. Behind a trusted proxy, only the hop that proxy
 recorded counts.
 
+**Envoy is one of the proxies.** In the standard compose setup requests reach
+core through Envoy (port 3000), on the private Docker network, so core trusts
+it. Envoy appends the address that connected to it to `X-Forwarded-For`
+(`use_remote_address`), so a client connecting straight to port 3000 is still
+identified by its own address. Upgrade the Envoy image together with core:
+an older Envoy passes the client's header on unchanged. A proxy in front of
+Envoy on the same host or private network (nginx, say) is trusted by default;
+one on another public host must be added to `TRUSTED_PROXIES`, or its address
+is taken as every client's.
+
 **A gateway the internet reaches directly**, with no proxy in front, can set
 `TRUSTED_PROXIES=none`, so no header is ever believed.
 
