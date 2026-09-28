@@ -355,7 +355,8 @@ swarm needs a few things that an HTTP proxy does not give by itself:
    HTTP, so the load balancer cannot carry it: publish
    `INDEX_SWARM_ENGINE_PORT` (TCP and UDP) on the node's own public address,
    make sure the internet reaches it there (a Docker-published port bypasses
-   the host's INPUT firewall; restrict it in `DOCKER-USER`), and set
+   the host's INPUT firewall; see [running the engine](#running-the-engine)
+   for how to restrict it), and set
    `INDEX_SWARM_ENGINE_PUBLIC_HOST` to that address. Without it the tracker lists this node's engine under the host of
    its tracker URL, which for a fleet is the load balancer.
 3. **The tracker, one of two ways.**
@@ -782,8 +783,11 @@ Only the peer port, `INDEX_SWARM_ENGINE_PORT` (default 6881, TCP and UDP), is
 published; peers must be able to reach it from the internet. Ports
 Docker publishes, this one and the tracker's, are forwarded before the
 host's INPUT chain sees them, so a host firewall (nixos-fw, ufw) neither
-blocks nor protects them; to restrict them, filter in the `DOCKER-USER`
-chain. The Web API
+blocks nor protects them. To restrict them, filter where Docker forwards:
+with Docker's default iptables backend, in the `DOCKER-USER` chain; with
+its nftables backend (`"firewall-backend": "nftables"`), which has no
+`DOCKER-USER`, in a chain of your own table on the `forward` hook, at a
+priority before Docker's. The Web API
 is not published at all. It stays on the engine's network, reached at
 `index-swarm-engine:8080` (see "Reach it at its own port" below).
 
