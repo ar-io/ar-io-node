@@ -3507,6 +3507,26 @@ export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
   '20',
 );
 
+/**
+ * Proxies (IPs or CIDRs) whose `X-Forwarded-For` and `X-Real-IP` are
+ * believed when working out which client a request came from, for rate
+ * limits, x402 and allowlists. The default trusts loopback, private,
+ * carrier-grade NAT and link-local addresses, where nginx or a load balancer
+ * normally sits; add a CDN's or a public load balancer's ranges when one is
+ * in front, or every client behind it shares its address. `none` trusts no
+ * proxy, for a gateway the internet reaches directly.
+ */
+const TRUSTED_PROXIES_VALUE = env.varOrDefault(
+  'TRUSTED_PROXIES',
+  '127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,::1/128,fc00::/7,fe80::/10',
+);
+export const TRUSTED_PROXIES =
+  TRUSTED_PROXIES_VALUE.trim() === 'none'
+    ? []
+    : TRUSTED_PROXIES_VALUE.split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+
 export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
   env
     .varOrUndefined('RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST')

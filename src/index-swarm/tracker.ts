@@ -25,6 +25,10 @@ import * as net from 'node:net';
 import { Logger } from 'winston';
 
 import { bencode } from '../lib/bencode.js';
+import {
+  clientAddressBehindProxies,
+  parseTrustedProxies,
+} from '../lib/trusted-proxies.js';
 import { isPrivateAddress } from './torrent.js';
 import { setTrackerPeerCount, trackerAnnounces } from './metrics.js';
 
@@ -194,36 +198,6 @@ function addressBucket(ip: string): string {
  * @throws on an entry that is neither an address nor a CIDR, so a typo is a
  *   startup error rather than a proxy silently not trusted.
  */
-function trustedProxyList(entries: string[]): net.BlockList {
-  const list = new net.BlockList();
-  for (const entry of entries) {
-    // Strictly `address` or `address/bits`: a typo such as `10.0.0.0/`
-    // would otherwise read as /0 and trust every address.
-    const match = /^([^/]+)(?:\/(\d{1,3}))?$/.exec(entry.trim());
-    const address = match === null ? '' : normalizeIp(match[1]);
-    const prefix = match?.[2];
-    const family = net.isIP(address);
-    if (family === 0) {
-      throw new Error(`Not an IP address or CIDR: ${entry}`);
-    }
-    const type = family === 6 ? 'ipv6' : 'ipv4';
-    if (prefix === undefined) {
-      list.addAddress(address, type);
-    } else {
-      const bits = Number(prefix);
-      if (
-        !Number.isInteger(bits) ||
-        bits < 0 ||
-        bits > (family === 6 ? 128 : 32)
-      ) {
-        throw new Error(`Not an IP address or CIDR: ${entry}`);
-      }
-      list.addSubnet(address, bits, type);
-    }
-  }
-  return list;
-}
-
 export class ClosedTracker {
   private readonly log: Logger;
   private readonly allowed: () => Set<string>;
@@ -261,7 +235,7 @@ export class ClosedTracker {
     this.selfAddress = options.selfAddress ?? (() => undefined);
     this.selfPeer = options.selfPeer ?? (() => undefined);
     this.torrentOf = options.torrentOf ?? (() => new Map());
-    this.trustedProxies = trustedProxyList(options.trustedProxies ?? []);
+    this.trustedProxies = parseTrustedProxies(options.trustedProxies ?? []);
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -441,25 +415,11 @@ export class ClosedTracker {
     socketAddress: string,
     forwardedFor: string | string[] | undefined,
   ): string {
-    const trusted = (ip: string) => {
-      const family = net.isIP(ip);
-      return (
-        family !== 0 &&
-        this.trustedProxies.check(ip, family === 6 ? 'ipv6' : 'ipv4')
-      );
-    };
-    const socketIp = normalizeIp(socketAddress);
-    if (!trusted(socketIp) || forwardedFor === undefined) return socketIp;
-    const hops = (
-      Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor
-    )
-      .split(',')
-      .map((h) => normalizeIp(h.trim()))
-      .filter((h) => h.length > 0);
-    for (let i = hops.length - 1; i >= 0; i--) {
-      if (!trusted(hops[i])) return hops[i];
-    }
-    return socketIp;
+    return clientAddressBehindProxies(
+      socketAddress,
+      forwardedFor,
+      this.trustedProxies,
+    );
   }
 
   /** Serve it: `/announce` only; everything else is a 404. */

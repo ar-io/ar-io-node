@@ -121,6 +121,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Default observer image bumped to `fe159f5a`** — `OBSERVER_IMAGE_TAG` moves
+  from `0e956b08` (2026-08-30, `@ar.io/sdk` 4.3.0-alpha.2) to the current
+  `ar-io-observer` build on `@ar.io/sdk` 4.5.0. Observing is unchanged:
+  `save_observations` did not change in the gateway registry's Wave 2 upgrade,
+  so gateways on the previous image still submit correctly. The embedded epoch
+  cranker (`ENABLE_EPOCH_CRANKING=true`) needs this image. Since Wave 2,
+  `create_epoch`, `finalize_gone` and `compound_delegation_rewards` take new
+  accounts, and the previous image's client fails on them. The cranker also
+  now finalizes departed gateways in the only window the program allows it
+  (between an epoch's distribution and the next epoch's creation), and claims
+  delegations off leaving and delegation-disabled gateways into each
+  delegate's withdrawal vault. The cranker wallet pays each vault's rent (at
+  most about 0.0029 SOL, which the delegate recovers), and the sweep pauses
+  while the wallet holds under 0.5 SOL. Operators who pin `OBSERVER_IMAGE_TAG`
+  in `.env` must update it there too, since that shadows the compose default
+  (ar-io/ar-io-observer#143).
+
 - **OpenAPI spec: current introduction, and the real version.** The spec's
   front matter (what the gateway serves, how to verify responses with the
   `X-AR-IO-*` trust headers and HTTP signatures, rate limits and x402, errors,
@@ -150,6 +167,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   cache of resolved geometry.
 
 ### Fixed
+
+- **Client addresses from proxy headers could be forged** — the gateway took
+  the leftmost `X-Forwarded-For` address (or `X-Real-IP`) as the client,
+  whoever sent it, and exempted a request when *any* address in its headers
+  was allowlisted. A client could claim an allowlisted address and skip the
+  rate limit and x402 payment, or claim a new address on each request for a
+  fresh rate-limit bucket (and free allowance) every time. Proxy headers are
+  now believed only from proxies in the new `TRUSTED_PROXIES` (default:
+  loopback, private, carrier-grade NAT and link-local addresses, where nginx
+  normally sits); behind one, the client is the nearest `X-Forwarded-For` hop
+  that is not a trusted proxy. Allowlists (`RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`,
+  `CHUNK_INGEST_CACHE_ALLOWLIST`) are checked against that address only.
+  **Behind a CDN or a load balancer on public addresses, add its ranges to
+  `TRUSTED_PROXIES`**, or every client behind it shares its address; the same
+  goes for nginx on a different public host than Envoy. Envoy now appends the
+  address that connected to it to `X-Forwarded-For` (`use_remote_address`,
+  keeping the downstream `X-Forwarded-Proto`), so a client reaching port 3000
+  directly cannot choose its address either: **upgrade the Envoy image with
+  core**. The index-swarm tracker uses the same code for
+  `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`.
 
 - The `tx-data` retrieval source no longer treats an unmined transaction as
   data. A node answers `202 Pending` for a transaction it has not mined, and

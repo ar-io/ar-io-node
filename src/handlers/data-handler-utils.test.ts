@@ -15,6 +15,7 @@ import type { PaymentProcessor } from '../payments/types.js';
 // without it. Each test file runs in its own process, so this cannot leak.
 process.env.ENABLE_RATE_LIMITER = 'true';
 const { checkPaymentAndRateLimits } = await import('./data-handler-utils.js');
+const { MemoryRateLimiter } = await import('../limiter/memory-rate-limiter.js');
 
 const createRequest = (): Request => {
   const headers: Record<string, string> = { host: 'gateway.example.com' };
@@ -60,6 +61,59 @@ const processor = (calculateRequirements: () => unknown) =>
   }) as unknown as PaymentProcessor;
 
 describe('checkPaymentAndRateLimits', () => {
+  describe('the allowlist', () => {
+    // A real limiter: one 400-token request exhausts a client's bucket.
+    const limiter = () =>
+      new MemoryRateLimiter({
+        resourceCapacity: 1_000_000,
+        resourceRefillRate: 0,
+        ipCapacity: 500,
+        ipRefillRate: 0,
+        limitsEnabled: true,
+        ipAllowlist: ['10.20.30.40'],
+        capacityMultiplier: 1,
+        maxBuckets: 100,
+      });
+    // Through nginx on the private network (trusted by default).
+    const viaProxy = (forwardedFor: string): Request => {
+      const req = createRequest();
+      (req.headers as Record<string, string>)['x-forwarded-for'] = forwardedFor;
+      (req as any).socket = { remoteAddress: '10.0.0.1' };
+      return req;
+    };
+    const check = (rateLimiter: RateLimiter, req: Request) =>
+      checkPaymentAndRateLimits({
+        req,
+        res: createResponse(),
+        id: 'abc',
+        contentSize: 400 * 1024,
+        requestAttributes: { hops: 0, clientIps: [] },
+        rateLimiter,
+      });
+
+    it('exempts an allowlisted client that a trusted proxy recorded', async () => {
+      const rateLimiter = limiter();
+      for (let i = 0; i < 3; i++) {
+        assert.equal(
+          (await check(rateLimiter, viaProxy('10.20.30.40'))).allowed,
+          true,
+        );
+      }
+    });
+
+    it('does not exempt a client that only claims an allowlisted address', async () => {
+      // The client wrote 10.20.30.40; nginx appended the real 198.18.0.99.
+      const rateLimiter = limiter();
+      const spoof = () => viaProxy('10.20.30.40, 198.18.0.99');
+      assert.equal((await check(rateLimiter, spoof())).allowed, true);
+      assert.equal(
+        (await check(rateLimiter, spoof())).allowed,
+        false,
+        'limited like anyone else',
+      );
+    });
+  });
+
   it('answers 402 when the limit is exceeded and a price can be quoted', async () => {
     const res = createResponse();
     const paymentProcessor = processor(() => ({ maxAmountRequired: '100' }));
