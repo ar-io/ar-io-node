@@ -628,17 +628,18 @@ describe('MemoryRateLimiter', () => {
 
   describe('Proxy IP extraction', () => {
     it('should extract client IP from X-Forwarded-For header', async () => {
+      // The proxy (10.0.0.1, trusted by default) appends the address it saw.
       const req1 = createMockRequest({
         ip: '10.0.0.1', // Proxy IP
         headers: {
-          'x-forwarded-for': '203.0.113.42, 198.51.100.10',
+          'x-forwarded-for': '203.0.113.42',
           host: 'test.example.com',
         },
       });
       const req2 = createMockRequest({
         ip: '10.0.0.1', // Same proxy IP
         headers: {
-          'x-forwarded-for': '198.18.0.99, 198.51.100.10',
+          'x-forwarded-for': '198.18.0.99',
           host: 'test.example.com',
         },
       });
@@ -749,49 +750,93 @@ describe('MemoryRateLimiter', () => {
       const req = createMockRequest({
         ip: '10.0.0.1', // Proxy IP
         headers: {
-          'x-forwarded-for': '203.0.113.42, 198.51.100.10',
+          'x-forwarded-for': '203.0.113.42',
           host: 'test.example.com',
         },
       });
       const res = createMockResponse();
 
-      // Extract IPs for allowlist check (same as data-handler-utils.ts does)
-      const { clientIps } = extractAllClientIPs(req);
-
-      // Verify allowlist recognizes the client
+      // The check data-handler-utils.ts makes: the client address only.
+      const { clientIp } = extractAllClientIPs(req);
+      assert.strictEqual(clientIp, '203.0.113.42');
       assert.strictEqual(
-        allowlistLimiter.isAllowlisted(clientIps),
+        allowlistLimiter.isAllowlisted([clientIp!]),
         true,
         'Allowlist should recognize client IP from proxy headers',
       );
 
-      // Exhaust tokens to verify bucket key uses same IP
       await allowlistLimiter.checkLimit(req, res, 500);
 
-      // Create another request with same proxy but different client IP
+      // Another client through the same proxy: not allowlisted, own bucket.
       const req2 = createMockRequest({
-        ip: '10.0.0.1', // Same proxy IP
+        ip: '10.0.0.1',
         headers: {
-          'x-forwarded-for': '198.18.0.99, 198.51.100.10',
+          'x-forwarded-for': '198.18.0.99',
           host: 'test.example.com',
         },
       });
-
-      // This should NOT be allowlisted and should have separate bucket
-      const { clientIps: clientIps2 } = extractAllClientIPs(req2);
+      const { clientIp: clientIp2 } = extractAllClientIPs(req2);
       assert.strictEqual(
-        allowlistLimiter.isAllowlisted(clientIps2),
+        allowlistLimiter.isAllowlisted([clientIp2!]),
         false,
         'Different client IP should not be allowlisted',
       );
-
-      // Should have full tokens (different IP bucket)
       const result = await allowlistLimiter.checkLimit(req2, res, 400);
       assert.strictEqual(
         result.allowed,
         true,
         'Different client IP should have separate bucket',
       );
+    });
+
+    it('should not let a client claim an allowlisted address in its own X-Forwarded-For', () => {
+      const allowlistLimiter = new MemoryRateLimiter({
+        resourceCapacity: 1000,
+        resourceRefillRate: 10,
+        ipCapacity: 500,
+        ipRefillRate: 5,
+        limitsEnabled: true,
+        ipAllowlist: ['10.20.30.40'],
+        capacityMultiplier: 10,
+        maxBuckets: 100,
+      });
+      // The client sent "10.20.30.40"; nginx appended the real address.
+      const req = createMockRequest({
+        ip: '10.0.0.1',
+        headers: { 'x-forwarded-for': '10.20.30.40, 198.18.0.99' },
+      });
+      const { clientIp, clientIps } = extractAllClientIPs(req);
+      assert.strictEqual(clientIp, '198.18.0.99');
+      assert.ok(clientIps.includes('10.20.30.40'), 'still logged');
+      assert.strictEqual(allowlistLimiter.isAllowlisted([clientIp!]), false);
+    });
+
+    it('should not give a client a fresh bucket for each address it claims', async () => {
+      const res = createMockResponse();
+      const spoofed = (claim: string) =>
+        createMockRequest({
+          ip: '10.0.0.1',
+          headers: { 'x-forwarded-for': `${claim}, 198.18.0.99` },
+        });
+      await limiter.checkLimit(spoofed('1.1.1.1'), res, 500);
+      const result = await limiter.checkLimit(spoofed('2.2.2.2'), res, 500);
+      assert.strictEqual(
+        result.allowed,
+        false,
+        'one client, one bucket, whatever it claims',
+      );
+    });
+
+    it('should ignore X-Forwarded-For from a client that is not a trusted proxy', async () => {
+      const res = createMockResponse();
+      const direct = (claim: string) =>
+        createMockRequest({
+          ip: '198.18.0.99', // connects straight to the gateway
+          headers: { 'x-forwarded-for': claim },
+        });
+      await limiter.checkLimit(direct('1.1.1.1'), res, 500);
+      const result = await limiter.checkLimit(direct('2.2.2.2'), res, 500);
+      assert.strictEqual(result.allowed, false);
     });
 
     it('should handle requests without proxy headers using direct IP', async () => {

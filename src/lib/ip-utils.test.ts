@@ -16,6 +16,7 @@ import {
   isAnyIpAllowlisted,
   isAnyIpBlocked,
 } from './ip-utils.js';
+import { parseTrustedProxies } from './trusted-proxies.js';
 
 describe('IP Utilities', () => {
   describe('isValidIpFormat', () => {
@@ -105,39 +106,94 @@ describe('IP Utilities', () => {
       return req;
     }
 
-    it('should extract IPs from X-Forwarded-For header', () => {
+    // 10.0.0.1 is a proxy on the private network, trusted by default.
+    it('takes the address a trusted proxy appended to X-Forwarded-For', () => {
       const req = createMockRequest('10.0.0.1', {
-        'x-forwarded-for': '203.0.113.1, 192.168.1.1, 172.16.0.1',
+        'x-forwarded-for': '203.0.113.1',
+      });
+
+      const result = extractAllClientIPs(req);
+
+      assert.strictEqual(result.clientIp, '203.0.113.1');
+      assert.deepStrictEqual(result.clientIps, ['203.0.113.1', '10.0.0.1']);
+    });
+
+    it('reads X-Forwarded-For from the right, past every trusted proxy', () => {
+      // A client claimed 198.51.100.7; the first proxy saw 203.0.113.1; a
+      // second, private proxy (172.16.0.1) passed it on.
+      const req = createMockRequest('10.0.0.1', {
+        'x-forwarded-for': '198.51.100.7, 203.0.113.1, 172.16.0.1',
+      });
+
+      const result = extractAllClientIPs(req);
+
+      assert.strictEqual(result.clientIp, '203.0.113.1');
+      // Every address is still listed, for logs and blocklists.
+      assert.deepStrictEqual(result.clientIps, [
+        '198.51.100.7',
+        '203.0.113.1',
+        '172.16.0.1',
+        '10.0.0.1',
+      ]);
+    });
+
+    it('ignores the headers of a client that is not a trusted proxy', () => {
+      const req = createMockRequest('198.51.100.9', {
+        'x-forwarded-for': '203.0.113.1',
+        'x-real-ip': '203.0.113.2',
+      });
+
+      assert.strictEqual(extractAllClientIPs(req).clientIp, '198.51.100.9');
+    });
+
+    it('ignores X-Real-IP from a client that is not a trusted proxy', () => {
+      const req = createMockRequest('198.51.100.9', {
+        'x-real-ip': '10.20.30.40',
+      });
+
+      assert.strictEqual(extractAllClientIPs(req).clientIp, '198.51.100.9');
+    });
+
+    it('believes proxies it is told to trust, and only those', () => {
+      const cdn = parseTrustedProxies(['10.0.0.0/8', '198.51.100.0/24']);
+      const req = createMockRequest('10.0.0.1', {
+        'x-forwarded-for': '203.0.113.1, 198.51.100.10',
+      });
+
+      assert.strictEqual(extractAllClientIPs(req, cdn).clientIp, '203.0.113.1');
+      assert.strictEqual(
+        extractAllClientIPs(req, parseTrustedProxies([])).clientIp,
+        '10.0.0.1',
+        'no proxy trusted: the connecting address',
+      );
+    });
+
+    it('takes the leftmost hop when every hop is a trusted proxy', () => {
+      // A client inside the proxies' own network.
+      const req = createMockRequest('10.0.0.1', {
+        'x-forwarded-for': '192.168.1.5, 172.16.0.1',
+      });
+
+      assert.strictEqual(extractAllClientIPs(req).clientIp, '192.168.1.5');
+    });
+
+    it('handles X-Forwarded-For as array', () => {
+      const req = createMockRequest('10.0.0.1', {
+        'x-forwarded-for': ['198.51.100.7, 203.0.113.1', '172.16.0.1'],
       });
 
       const result = extractAllClientIPs(req);
 
       assert.strictEqual(result.clientIp, '203.0.113.1');
       assert.deepStrictEqual(result.clientIps, [
+        '198.51.100.7',
         '203.0.113.1',
-        '192.168.1.1',
         '172.16.0.1',
         '10.0.0.1',
       ]);
     });
 
-    it('should handle X-Forwarded-For as array', () => {
-      const req = createMockRequest('10.0.0.1', {
-        'x-forwarded-for': ['203.0.113.1, 192.168.1.1', '172.16.0.1'],
-      });
-
-      const result = extractAllClientIPs(req);
-
-      assert.strictEqual(result.clientIp, '203.0.113.1');
-      assert.deepStrictEqual(result.clientIps, [
-        '203.0.113.1',
-        '192.168.1.1',
-        '172.16.0.1',
-        '10.0.0.1',
-      ]);
-    });
-
-    it('should extract IPs from X-Real-IP header', () => {
+    it('uses X-Real-IP from a trusted proxy when there is no X-Forwarded-For', () => {
       const req = createMockRequest('10.0.0.1', {
         'x-real-ip': '198.51.100.1',
       });
@@ -148,39 +204,56 @@ describe('IP Utilities', () => {
       assert.deepStrictEqual(result.clientIps, ['198.51.100.1', '10.0.0.1']);
     });
 
-    it('should extract IP from socket.remoteAddress', () => {
-      const req = createMockRequest('10.0.0.1', {}, '127.0.0.1');
+    it('prefers X-Forwarded-For to X-Real-IP', () => {
+      const req = createMockRequest('10.0.0.1', {
+        'x-forwarded-for': '203.0.113.1',
+        'x-real-ip': '198.51.100.1',
+      });
+
+      assert.strictEqual(extractAllClientIPs(req).clientIp, '203.0.113.1');
+    });
+
+    it('prefers socket.remoteAddress to req.ip for the connecting address', () => {
+      const req = createMockRequest('10.0.0.1', {}, '198.51.100.20');
 
       const result = extractAllClientIPs(req);
 
-      assert.strictEqual(result.clientIp, '127.0.0.1');
-      assert.deepStrictEqual(result.clientIps, ['127.0.0.1', '10.0.0.1']);
+      assert.strictEqual(result.clientIp, '198.51.100.20');
+      assert.deepStrictEqual(result.clientIps, ['198.51.100.20', '10.0.0.1']);
     });
 
-    it('should normalize IPv4-mapped IPv6 addresses', () => {
+    it('normalizes IPv4-mapped IPv6 addresses', () => {
       const req = createMockRequest('10.0.0.1', {
-        'x-forwarded-for': '::ffff:192.168.1.1',
+        'x-forwarded-for': '::ffff:203.0.113.1',
       });
 
       const result = extractAllClientIPs(req);
 
-      assert.strictEqual(result.clientIp, '192.168.1.1');
-      assert.deepStrictEqual(result.clientIps, ['192.168.1.1', '10.0.0.1']);
+      assert.strictEqual(result.clientIp, '203.0.113.1');
+      assert.deepStrictEqual(result.clientIps, ['203.0.113.1', '10.0.0.1']);
     });
 
-    it('should skip invalid and unknown IPs', () => {
+    it('treats an IPv4-mapped proxy address as the proxy', () => {
+      const req = createMockRequest('', { 'x-forwarded-for': '203.0.113.1' });
+      (req as any).socket = { remoteAddress: '::ffff:10.0.0.1' };
+      (req as any).ip = undefined;
+
+      assert.strictEqual(extractAllClientIPs(req).clientIp, '203.0.113.1');
+    });
+
+    it('skips invalid and unknown entries', () => {
       const req = createMockRequest('10.0.0.1', {
         'x-forwarded-for':
-          'unknown, invalid-ip, , 192.168.1.1, 256.256.256.256',
+          'unknown, invalid-ip, , 203.0.113.1, 256.256.256.256',
       });
 
       const result = extractAllClientIPs(req);
 
-      assert.strictEqual(result.clientIp, '192.168.1.1');
-      assert.deepStrictEqual(result.clientIps, ['192.168.1.1', '10.0.0.1']);
+      assert.strictEqual(result.clientIp, '203.0.113.1');
+      assert.deepStrictEqual(result.clientIps, ['203.0.113.1', '10.0.0.1']);
     });
 
-    it('should handle empty headers gracefully', () => {
+    it('handles empty headers gracefully', () => {
       const req = createMockRequest('10.0.0.1', {
         'x-forwarded-for': '',
         'x-real-ip': '',
@@ -192,7 +265,7 @@ describe('IP Utilities', () => {
       assert.deepStrictEqual(result.clientIps, ['10.0.0.1']);
     });
 
-    it('should deduplicate IPs', () => {
+    it('deduplicates addresses', () => {
       const req = createMockRequest(
         '192.168.1.1',
         {
@@ -204,11 +277,11 @@ describe('IP Utilities', () => {
 
       const result = extractAllClientIPs(req);
 
-      assert.strictEqual(result.clientIp, '192.168.1.1');
       assert.deepStrictEqual(result.clientIps, ['192.168.1.1', '10.0.0.1']);
     });
 
-    it('should handle missing req.ip gracefully', () => {
+    it('has no client address without a connection address', () => {
+      // Headers alone prove nothing about who sent them.
       const req = createMockRequest('', {
         'x-forwarded-for': '203.0.113.1',
       });
@@ -216,7 +289,7 @@ describe('IP Utilities', () => {
 
       const result = extractAllClientIPs(req);
 
-      assert.strictEqual(result.clientIp, '203.0.113.1');
+      assert.strictEqual(result.clientIp, undefined);
       assert.deepStrictEqual(result.clientIps, ['203.0.113.1']);
     });
   });
