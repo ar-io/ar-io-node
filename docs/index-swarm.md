@@ -438,7 +438,7 @@ What a subscriber refuses, and why:
 | A band that passes its digests but is not a readable index | Digests prove the bytes are the ones named, not that they are servable |
 | A band that would exceed `INDEX_SWARM_MAX_DISK_BYTES` | The volume the gateway serves from is not worth filling for an index |
 | A publisher not in `INDEX_SWARM_TRUSTED_PUBLISHERS`, when that list is set | Counted as `unreachable`, with a warning naming the publisher |
-| A band with no HTTP location | Counted as `unreachable`; nothing in this build can fetch it |
+| A band with no HTTP location | Counted as `unreachable`, even with a torrent entry: HTTP is the fallback every download relies on |
 
 An expired document is installed anyway, with a warning: expiry is a signal
 that the publisher has gone quiet, not that its bands have gone bad.
@@ -750,7 +750,7 @@ layers keep it off this node's network:
   tracker in `INDEX_SWARM_ALLOWED_TRACKERS`.
 
 Only the peer port, `INDEX_SWARM_ENGINE_PORT` (default 6881, TCP and UDP), is
-published; open it in the host firewall for peers to connect in. Ports
+published; peers must be able to reach it from the internet. Ports
 Docker publishes, this one and the tracker's, are forwarded before the
 host's INPUT chain sees them, so a host firewall (nixos-fw, ufw) neither
 blocks nor protects them; to restrict them, filter in the `DOCKER-USER`
