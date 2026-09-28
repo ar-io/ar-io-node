@@ -354,8 +354,10 @@ swarm needs a few things that an HTTP proxy does not give by itself:
 2. **The engine's peer port reaches that node directly.** BitTorrent is not
    HTTP, so the load balancer cannot carry it: publish
    `INDEX_SWARM_ENGINE_PORT` (TCP and UDP) on the node's own public address,
-   open it in the firewall, and set `INDEX_SWARM_ENGINE_PUBLIC_HOST` to that
-   address. Without it the tracker lists this node's engine under the host of
+   make sure the internet reaches it there (a Docker-published port bypasses
+   the host's INPUT firewall; see [running the engine](#running-the-engine)
+   for how to restrict it), and set
+   `INDEX_SWARM_ENGINE_PUBLIC_HOST` to that address. Without it the tracker lists this node's engine under the host of
    its tracker URL, which for a fleet is the load balancer.
 3. **The tracker, one of two ways.**
    - Directly: publish `INDEX_SWARM_TRACKER_PORT` on the same public address
@@ -369,7 +371,15 @@ swarm needs a few things that an HTTP proxy does not give by itself:
 4. **The `.torrent` and WebSeed routes** sit under `/ar-io/indexes`, so a pin
    and cache rule for that prefix covers them. The WebSeed is metered like
    the blob route and marked `private` when metered, so a shared cache does
-   not replay paid bytes.
+   not replay paid bytes; the `.torrent` route is unmetered and cacheable
+   (see [running behind nginx](#running-behind-nginx)).
+   **Metering needs no extra configuration.** The rate limiter and x402
+   apply to the byte routes (files by name, by digest, and the WebSeed) as
+   they do to data; the document and `.torrent` files are free; peer
+   transfer and tracker announces never touch the gateway, and the upload
+   budget below bounds them. With the prefix pinned, all metering happens on
+   the one node, so per-address limits stay consistent even when the nodes'
+   limiters are not shared.
 5. **Bound what seeding costs.** Seeding is free to peers but not to the
    publisher: every byte is its upload, and a peer can fetch the bands again
    and again. Two limits bound it, with defaults for any node:
@@ -378,6 +388,24 @@ swarm needs a few things that an HTTP proxy does not give by itself:
    until the next UTC day). Raise both for a large publisher. The engine's
    memory also grows with the bytes it seeds (see
    [Running the engine](#running-the-engine)).
+
+**The other nodes and the index.** If another node answers root-TX lookups
+from its own disk, it needs the bands installed too. Subscribe it over HTTP to
+the fleet's own publication, pointed at the publishing node directly with
+the entry's `url`:
+
+```bash
+INDEX_SWARM_SUBSCRIBE='[{"publisher":"<fleet wallet>","name":"root-tx-index","url":"http://<publishing node>:4000"}]'
+```
+
+`url` changes only where the document and files are fetched from; the
+signature is still checked against the registered observer key, so an
+internal address is safe. That node is then a client of the publisher's
+meter: list its address in `RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST` on the
+publishing node (allowlisted clients skip rate limits and x402; this needs
+the rate limiter enabled). It needs no torrent engine: between two nodes in
+one network, HTTP is simpler, and a swarm there would also need
+`INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false` and an allowed LAN tracker.
 
 Subscribers behind NAT still work: they reach the publisher's engine, and a
 reachable subscriber can be reached back. Only two peers that are both
@@ -438,7 +466,7 @@ What a subscriber refuses, and why:
 | A band that passes its digests but is not a readable index | Digests prove the bytes are the ones named, not that they are servable |
 | A band that would exceed `INDEX_SWARM_MAX_DISK_BYTES` | The volume the gateway serves from is not worth filling for an index |
 | A publisher not in `INDEX_SWARM_TRUSTED_PUBLISHERS`, when that list is set | Counted as `unreachable`, with a warning naming the publisher |
-| A band with no HTTP location | Counted as `unreachable`; nothing in this build can fetch it |
+| A band with no HTTP location | Counted as `unreachable`, even with a torrent entry: HTTP is the fallback every download relies on |
 
 An expired document is installed anyway, with a warning: expiry is a signal
 that the publisher has gone quiet, not that its bands have gone bad.
@@ -624,6 +652,8 @@ What the gateway sends:
 | The document, `200`/`304` | `public, max-age=60` | A subscriber tolerates a document a minute old: the sequence cannot go backwards and `expiresAt` bounds it |
 | A blob (by digest), `200`/`206`/`304` | `private, max-age=31536000, immutable` when metered, else `public, ...` | The address is the digest, so the bytes can never change |
 | A file by name, `200`/`206`/`304` | `private, no-cache` when metered, else `public, no-cache` | A name is not an address; a rebuild under the same name must be revalidated (the `ETag` is the digest, so an unchanged file costs a `304`) |
+| A WebSeed file, `200`/`206`/`304` | As a blob | Its address (torrent name and file name) is derived from the digests, so it cannot change meaning |
+| A `.torrent`, `200` | `public, max-age=86400`, never metered | Addressed by infohash; only the tracker list, outside the infohash, can change under one address |
 | **Every error** (400, 402, 404, 416, 429, 503) | `no-store` | So a cache never keeps a refusal or a gap and replays it. nginx honours an upstream `Cache-Control` ahead of its own `proxy_cache_valid` rules |
 
 Things to decide or check:
@@ -750,11 +780,14 @@ layers keep it off this node's network:
   tracker in `INDEX_SWARM_ALLOWED_TRACKERS`.
 
 Only the peer port, `INDEX_SWARM_ENGINE_PORT` (default 6881, TCP and UDP), is
-published; open it in the host firewall for peers to connect in. Ports
+published; peers must be able to reach it from the internet. Ports
 Docker publishes, this one and the tracker's, are forwarded before the
 host's INPUT chain sees them, so a host firewall (nixos-fw, ufw) neither
-blocks nor protects them; to restrict them, filter in the `DOCKER-USER`
-chain. The Web API
+blocks nor protects them. To restrict them, filter where Docker forwards:
+with Docker's default iptables backend, in the `DOCKER-USER` chain; with
+its nftables backend (`"firewall-backend": "nftables"`), which has no
+`DOCKER-USER`, in a chain of your own table on the `forward` hook, at a
+priority before Docker's. The Web API
 is not published at all. It stays on the engine's network, reached at
 `index-swarm-engine:8080` (see "Reach it at its own port" below).
 

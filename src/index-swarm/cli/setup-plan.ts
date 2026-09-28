@@ -325,7 +325,7 @@ export function planSetup(
     const port =
       options.enginePort ?? env.get('INDEX_SWARM_ENGINE_PORT') ?? '6881';
     plan.notes.push(
-      `Open port ${port} (TCP and UDP) to the internet for peers. Docker-published ports bypass the host's INPUT firewall; restrict them in the DOCKER-USER chain if you need to.`,
+      `Open port ${port} (TCP and UDP) to the internet for peers. Docker-published ports bypass the host's INPUT firewall; to restrict them, filter where Docker forwards (the DOCKER-USER chain with Docker's default iptables backend; see "Running the engine" in docs/index-swarm.md).`,
     );
     if (options.publish || env.get('INDEX_SWARM_PUBLISH') !== undefined) {
       plan.notes.push(
