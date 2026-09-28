@@ -121,6 +121,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Default observer image bumped to `fe159f5a`** — `OBSERVER_IMAGE_TAG` moves
+  from `0e956b08` (2026-08-30, `@ar.io/sdk` 4.3.0-alpha.2) to the current
+  `ar-io-observer` build on `@ar.io/sdk` 4.5.0. Observing is unchanged:
+  `save_observations` did not change in the gateway registry's Wave 2 upgrade,
+  so gateways on the previous image still submit correctly. The embedded epoch
+  cranker (`ENABLE_EPOCH_CRANKING=true`) needs this image. Since Wave 2,
+  `create_epoch`, `finalize_gone` and `compound_delegation_rewards` take new
+  accounts, and the previous image's client fails on them. The cranker also
+  now finalizes departed gateways in the only window the program allows it
+  (between an epoch's distribution and the next epoch's creation), and claims
+  delegations off leaving and delegation-disabled gateways into each
+  delegate's withdrawal vault. The cranker wallet pays each vault's rent (at
+  most about 0.0029 SOL, which the delegate recovers), and the sweep pauses
+  while the wallet holds under 0.5 SOL. Operators who pin `OBSERVER_IMAGE_TAG`
+  in `.env` must update it there too, since that shadows the compose default
+  (ar-io/ar-io-observer#143).
+
 - **OpenAPI spec: current introduction, and the real version.** The spec's
   front matter (what the gateway serves, how to verify responses with the
   `X-AR-IO-*` trust headers and HTTP signatures, rate limits and x402, errors,
