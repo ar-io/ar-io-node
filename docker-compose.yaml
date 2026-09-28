@@ -592,11 +592,13 @@ services:
       - clickhouse
     # Without this the container defaults to `restart: no`, so a host reboot
     # or a Docker daemon restart brings every other service back and leaves
-    # ClickHouse down. Core then throws `getaddrinfo ENOTFOUND clickhouse`
-    # while wiring the ClickHouse-backed GraphQL queryable, which the
-    # `uncaughtException` handler in src/system.ts logs without exiting, so
-    # `app.listen()` is never reached: the process stays up, the workers keep
-    # indexing, and the gateway serves nothing until someone notices.
+    # ClickHouse down. With CLICKHOUSE_STREAMING_ENABLED=true that takes the
+    # gateway with it: core's boot fails in `clickhouseStreamer.start()` with
+    # `getaddrinfo ENOTFOUND clickhouse` before `app.listen()` runs. Core now
+    # exits and restart-loops in that case rather than sitting there with no
+    # HTTP listener (see `markStartupComplete` in src/system.ts), so this
+    # policy is what actually gets the pair back up; without it core just
+    # loops against a ClickHouse that is never coming back on its own.
     restart: unless-stopped
     ports:
       - ${CLICKHOUSE_PORT_2:-8123}:8123
