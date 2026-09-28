@@ -78,6 +78,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **GraphQL runs on Apollo Server 5** (from `apollo-server-express` 3, which
+  has been end-of-life since October 2024). Queries, results, batching, GET
+  requests, CSRF behavior and the invalid-cursor error are unchanged. What
+  clients and operators can see:
+  - GraphQL responses now carry `Cache-Control: no-store`. A CDN or proxy
+    that cached GET `/graphql` responses stops caching them.
+  - Malformed requests (a missing or non-JSON body, an empty batch) still get
+    HTTP 400, but with a JSON `errors` body (`BAD_REQUEST`) instead of plain
+    text. An unknown or missing `operationName` now reports
+    `OPERATION_RESOLUTION_FAILURE` instead of `INTERNAL_SERVER_ERROR`.
+  - `GET /graphql` in a browser serves the Apollo Sandbox instead of GraphQL
+    Playground.
+  - New metric `graphql_http_batch_size`: operations per HTTP request.
+
 - **OpenAPI spec: current introduction, and the real version.** The spec's
   front matter (what the gateway serves, how to verify responses with the
   `X-AR-IO-*` trust headers and HTTP signatures, rate limits and x402, errors,
@@ -107,6 +121,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   cache of resolved geometry.
 
 ### Fixed
+
+- GraphQL no longer fails with HTTP 500 ("Cannot execute GraphQL operations
+  after the server has stopped") while the gateway shuts down. Apollo's own
+  signal handler used to stop GraphQL while the listener was still accepting
+  requests; the listener now closes first. Under load, a `docker stop` of the
+  previous release answered about 27,000 requests with that error.
 
 - The `tx-data` retrieval source no longer treats an unmined transaction as
   data. A node answers `202 Pending` for a transaction it has not mined, and
