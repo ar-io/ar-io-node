@@ -823,6 +823,27 @@ export const clickhouseGqlTooManyRowsTotal = new promClient.Counter({
   labelNames: ['filter', 'recovery', 'id_count'] as const,
 });
 
+/**
+ * Outcomes of resolving GQL `ids` or `bundledIn` parent ids through the
+ * ClickHouse `transaction_ids` lookup table before the stable-leg query
+ * (only when CLICKHOUSE_GQL_ID_LOOKUP_ENABLED is true).
+ *
+ * Labels:
+ * - `filter`: `ids` or `bundledIn`
+ * - `outcome`:
+ *   - `resolved`: the stable query was narrowed to the resolved primary keys
+ *   - `none_found`: no requested id is in ClickHouse, so the stable query was
+ *     skipped
+ *   - `partial`: some `bundledIn` parents were not found, so the query ran
+ *     unnarrowed, as before
+ *   - `error`: the lookup failed, so the query ran unnarrowed, as before
+ */
+export const clickhouseGqlIdLookupTotal = new promClient.Counter({
+  name: 'clickhouse_gql_id_lookup_total',
+  help: 'Outcomes of resolving GQL ids / bundledIn parents through the ClickHouse transaction_ids table.',
+  labelNames: ['filter', 'outcome'] as const,
+});
+
 //
 // Redis Cache Metrics
 //

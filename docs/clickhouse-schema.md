@@ -181,7 +181,7 @@ storage, while still eliminating ~99 % of granules for a miss.
 
 | Index                 | Column         | Granularity | Purpose                                              |
 |-----------------------|----------------|-------------|------------------------------------------------------|
-| `id_bloom`            | `id`           | 1           | Point lookups (`transactions(ids: [...])`)           |
+| `id_bloom`            | `id`           | 1           | Point lookups (`transactions(ids: [...])`) when the id lookup below is off |
 | `target_bloom`        | `target`       | 1           | Recipient filter                                     |
 | `owner_address_bloom` | `owner_address`| 1           | Owner filter on the main table (see below)           |
 | `tag_names_bloom`     | `tag_names`    | 4           | `has(tag_names, ...)`                                |
@@ -235,6 +235,92 @@ Two subtleties:
   setting tells the engine to rebuild the projection from scratch when
   a merge needs to deduplicate, rather than attempting an in-place
   patch that could leave the projection inconsistent.
+
+## Id lookup table: `transaction_ids`
+
+`transactions` is sorted by height, so an `ids` lookup has only `id_bloom` to
+go on. A 1 % bloom filter passes about 1 % of *all* granules per looked-up id,
+so its cost grows with the table. At ~414M rows (50,798 granules), one id
+keeps ~505 granules (~4.1M rows) and three ids keep ~1,460 (~12M rows), over
+the default 10M `max_rows_to_read`. `bundledIn` has no index at all and scans
+`parent_id` until the cap stops it.
+
+`transaction_ids` maps each id to its `transactions` primary-key prefix:
+
+```sql
+CREATE TABLE transaction_ids (
+  id BLOB NOT NULL,
+  height UInt32 NOT NULL,
+  block_transaction_index UInt16,
+  is_data_item Boolean,
+  inserted_at DateTime,
+  expires_at Nullable(DateTime)
+) Engine = ReplacingMergeTree(inserted_at)
+ORDER BY (id, height, block_transaction_index, is_data_item)
+TTL ifNull(expires_at, toDateTime(0)) DELETE WHERE expires_at IS NOT NULL
+SETTINGS index_granularity = 1024;
+```
+
+With `CLICKHOUSE_GQL_ID_LOOKUP_ENABLED=true`, the stable leg of an `ids` or
+`bundledIn` query first looks the ids up here, then adds the resolved keys to
+its `WHERE`:
+
+- `ids`: `(t.height, t.block_transaction_index, t.is_data_item, t.id) IN (...)`.
+  If no id is found, the stable query is skipped; the SQLite and unstable legs
+  still run.
+- `bundledIn`: a bundle's items share its `height` and
+  `block_transaction_index` (at any nesting depth), so the stable leg reads
+  `(t.height, t.block_transaction_index) IN (...)`. If any parent is missing,
+  the query runs unnarrowed, as before, because the missing parent's items can
+  still be present (for example when an index filter skipped the parent).
+
+A standalone `t.height IN (...)` accompanies the tuple predicate so partition
+pruning applies (see [Cursor predicate split](#cursor-predicate-split)). A
+failed lookup falls back to the unnarrowed query.
+
+A lookup reads about one 1,024-row granule per id per part of
+`transaction_ids`, and the primary-key read about one 8,192-row granule per
+id, whatever the size of `transactions`. Measured on 30M synthetic rows:
+
+| Query | `id_bloom` / scan | Lookup + primary-key read |
+|---|---|---|
+| `ids` × 3 | 789,444 rows | 3,072 + 17,086 |
+| `ids` × 100 | 18,508,016 rows | 102,400 + 850,698 |
+| `bundledIn` × 1 | 30,000,000 rows | 1,024 + 8,192 |
+
+### Why a table, not a projection
+
+Projections are stored per part, and `transactions` is partitioned by height,
+so an id-ordered projection still reads one granule per part per id: 442,368
+rows for 3 ids across 18 parts, 8,192 each. `transaction_ids` is unpartitioned
+and merges into few parts, and its smaller granules shrink each point read.
+Giving the projection its own `index_granularity` (`WITH SETTINGS (...)`) is
+a syntax error on 24.8, the documented minimum, and a failing statement in
+`schema.sql` aborts `clickhouse-import`.
+
+### Population and rollout
+
+`transaction_ids_mv` inserts into `transaction_ids` on every insert into
+`transactions`, which is how `clickhouse-import` writes. Both are created by
+`schema.sql` on the next import cycle. Rows already in `transactions` need a
+one-time backfill, safe to run while imports continue and to re-run
+(duplicates collapse in the `ReplacingMergeTree`):
+
+```sql
+INSERT INTO transaction_ids
+SELECT id, height, block_transaction_index, is_data_item, inserted_at, expires_at
+FROM transactions;
+```
+
+On a large table, run it one partition at a time
+(`WHERE intDiv(height, 100000) = N`). Only then set
+`CLICKHOUSE_GQL_ID_LOOKUP_ENABLED=true`: an id missing from the table is
+treated as absent from ClickHouse. The table takes about 1 GiB per 30M rows
+(~14 GiB at 414M). Its rows can outlive their `transactions` rows, e.g. after
+a re-import; the primary-key read then simply finds nothing.
+
+`clickhouse_gql_id_lookup_total{filter, outcome}` counts the outcomes
+(`resolved`, `none_found`, `partial`, `error`).
 
 ## `ReplacingMergeTree` deduplication
 

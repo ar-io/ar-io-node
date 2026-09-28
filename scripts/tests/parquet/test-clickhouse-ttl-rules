@@ -245,8 +245,8 @@ source "$SCRIPT_DIR/../../clickhouse-import" >/dev/null
 SHOW_TIMING=${SHOW_TIMING:-false}
 migrate_staging_to_final "$TEST_PARTITION_NAME" >/dev/null
 
-L1_EXPIRES=$(ch_query "SELECT isNull(expires_at) FROM transactions WHERE height = ${TEST_L1_HEIGHT} FINAL" | tr -d '[:space:]')
-L2_EXPIRES_NOT_NULL=$(ch_query "SELECT isNotNull(expires_at) FROM transactions WHERE height = ${TEST_L2_HEIGHT} FINAL" | tr -d '[:space:]')
+L1_EXPIRES=$(ch_query "SELECT isNull(expires_at) FROM transactions FINAL WHERE height = ${TEST_L1_HEIGHT}" | tr -d '[:space:]')
+L2_EXPIRES_NOT_NULL=$(ch_query "SELECT isNotNull(expires_at) FROM transactions FINAL WHERE height = ${TEST_L2_HEIGHT}" | tr -d '[:space:]')
 
 if [ "$L1_EXPIRES" = "1" ]; then
     echo "✓ L1 row (is_data_item=false) has expires_at IS NULL"

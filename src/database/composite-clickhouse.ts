@@ -240,6 +240,19 @@ interface EncodedGqlFilters {
   }>;
 }
 
+// Primary-key prefixes of the rows a stable-leg query can match, resolved
+// through the `transaction_ids` lookup table (see resolveStablePkPrefix).
+// Added to the stable-leg WHERE so `transactions` is read by primary key
+// instead of through `id_bloom` or a `parent_id` scan.
+interface StablePkPrefix {
+  // Standalone height list: the partition pruner on intDiv(height, 100000)
+  // does not decompose the tuple predicate below.
+  heights: number[];
+  // `(t.height, t.block_transaction_index, t.is_data_item, t.id) IN (...)` for
+  // `ids`, or `(t.height, t.block_transaction_index) IN (...)` for `bundledIn`.
+  predicateSql: string;
+}
+
 export class CompositeClickHouseDatabase implements GqlQueryable {
   private log: winston.Logger;
   private clickhouseClient: ClickHouseClient;
@@ -269,6 +282,10 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
   // (e.g. drive/folder/snapshot). `file` is intentionally absent — see
   // ownerProjectionApplies and config.CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES.
   private ownerProjectionEntityTypes: Set<string>;
+  // Resolve `ids` / `bundledIn` parents through `transaction_ids` and read the
+  // stable leg by primary key. Off by default; see
+  // CLICKHOUSE_GQL_ID_LOOKUP_ENABLED.
+  private idLookupEnabled: boolean;
   // When set, GQL `transactions` queries provably confined to L1 by this
   // (monotone) filter are served from the L1-only SQLite index, skipping
   // ClickHouse entirely — see gql-l1-routing.ts and
@@ -289,6 +306,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     skipSqliteReads = false,
     ownerProjectionRoutingEnabled = false,
     ownerProjectionEntityTypes = [],
+    idLookupEnabled = false,
     l1OnlyRoutingFilter,
     sqliteCircuitBreakerOptions = {
       timeout: config.CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS,
@@ -312,6 +330,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     skipSqliteReads?: boolean;
     ownerProjectionRoutingEnabled?: boolean;
     ownerProjectionEntityTypes?: string[];
+    idLookupEnabled?: boolean;
     // Monotone filter classifying L1-only-routable queries. Omit (or pass a
     // NeverMatch) to disable routing.
     l1OnlyRoutingFilter?: ItemFilter;
@@ -340,6 +359,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     this.skipSqliteReads = skipSqliteReads;
     this.ownerProjectionRoutingEnabled = ownerProjectionRoutingEnabled;
     this.ownerProjectionEntityTypes = new Set(ownerProjectionEntityTypes);
+    this.idLookupEnabled = idLookupEnabled;
     this.l1OnlyRoutingFilter = l1OnlyRoutingFilter;
 
     this.sqliteBreaker = new CircuitBreaker(
@@ -550,6 +570,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     bundledIn,
     tags = [],
     encoded,
+    pkPrefix,
   }: {
     query: sql.SelectStatement;
     cursor?: string;
@@ -564,6 +585,9 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     // Optional pre-encoded forms shared across CH legs. When omitted
     // (single-leg callers and tests) the encoding happens inline.
     encoded?: EncodedGqlFilters;
+    // Stable leg only: primary-key prefixes resolved through
+    // `transaction_ids`. The id / parent_id filters above still apply.
+    pkPrefix?: StablePkPrefix;
   }) {
     const maxDbHeight = Infinity;
     const prepared =
@@ -604,6 +628,11 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
 
     if (prepared.bundledInList !== undefined) {
       query.where(sql.in('t.parent_id', prepared.bundledInList));
+    }
+
+    if (pkPrefix !== undefined) {
+      query.where(sql.in('t.height', pkPrefix.heights));
+      query.where(sql(pkPrefix.predicateSql));
     }
 
     const {
@@ -797,6 +826,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     bundledIn,
     tags,
     encoded,
+    pkPrefix,
   }: {
     pageSize: number;
     cursor?: string;
@@ -809,6 +839,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     bundledIn?: string[] | null;
     tags: { name: string; values: string[] }[];
     encoded: EncodedGqlFilters;
+    pkPrefix?: StablePkPrefix;
   }): Promise<GqlTransactionsResult['edges'][0]['node'][]> {
     const query = this.getGqlTransactionsBaseSql();
     this.addGqlTransactionFilters({
@@ -823,6 +854,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       bundledIn,
       tags,
       encoded,
+      pkPrefix,
     });
     const windowSql = this.buildChTransactionsSql({
       innerSql: query.toString(),
@@ -865,6 +897,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     bundledIn,
     tags,
     encoded,
+    pkPrefix,
   }: {
     pageSize: number;
     cursor?: string;
@@ -877,6 +910,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     bundledIn?: string[] | null;
     tags: { name: string; values: string[] }[];
     encoded: EncodedGqlFilters;
+    pkPrefix?: StablePkPrefix;
   }): Promise<GqlTransactionsResult['edges'][0]['node'][]> {
     const target = pageSize + 1;
 
@@ -948,6 +982,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
           bundledIn,
           tags,
           encoded,
+          pkPrefix,
         });
       } catch (err) {
         // Window still too dense: halve the span and retry the same edge.
@@ -1029,6 +1064,141 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         ? hexToB64Url(tx.block_previous_block)
         : null,
       parentId: tx.parent_id ? hexToB64Url(tx.parent_id) : null,
+    };
+  }
+
+  /**
+   * Looks up the `transactions` primary-key prefix of each id in the
+   * `transaction_ids` table. The table is sorted by id, so this reads about
+   * one granule per id, whatever the size of `transactions`.
+   *
+   * An id can map to more than one prefix: the same signed data item can
+   * exist in several bundles. Ids not in the table are simply absent.
+   */
+  private async lookupPkPrefixes(ids: string[]): Promise<
+    {
+      height: number;
+      blockTransactionIndex: number;
+      isDataItem: boolean;
+      idHex: string;
+    }[]
+  > {
+    // The hex column must not be aliased `id`: ClickHouse resolves an alias
+    // before a column of the same name, even in WHERE, so `id IN (...)` would
+    // compare the hex string against the binary ids. That reads the whole
+    // table (no primary-key use) and matches nothing.
+    const query = sql
+      .select()
+      .distinct(
+        'l.height AS height',
+        'l.block_transaction_index AS block_transaction_index',
+        'l.is_data_item AS is_data_item',
+        'hex(l.id) AS id_hex',
+      )
+      .from('transaction_ids AS l')
+      .where(sql.in('l.id', inB64UrlStrings(ids)));
+    const row = await this.clickhouseClient.query({
+      query:
+        `${query.toString()} ` +
+        `SETTINGS max_rows_to_read = ${config.CLICKHOUSE_GQL_MAX_ROWS_TO_READ}`,
+    });
+    const jsonRow = await row.json();
+    return (jsonRow.data as any[]).map((r) => ({
+      height: Number(r.height),
+      blockTransactionIndex: Number(r.block_transaction_index),
+      isDataItem: Boolean(r.is_data_item),
+      idHex: String(r.id_hex).toLowerCase(),
+    }));
+  }
+
+  /**
+   * Narrows the stable leg of an `ids` or `bundledIn` query to primary-key
+   * prefixes resolved through `transaction_ids` (only when the id lookup is
+   * enabled). Without it, an id lookup reads ~1% of all granules per id
+   * through `id_bloom`, and `bundledIn` scans `parent_id` until
+   * `max_rows_to_read` stops it.
+   *
+   * - `ids`: the stable leg reads exactly the resolved
+   *   (height, block_transaction_index, is_data_item, id) keys. When no id
+   *   is found, `noMatches` is set and the stable query is skipped.
+   * - `bundledIn`: a bundle's items share its height and
+   *   block_transaction_index (at any nesting depth), so the stable leg reads
+   *   only those (height, block_transaction_index) pairs. If any parent is
+   *   missing from the table, nothing is narrowed and the query runs as
+   *   before: the missing parent's items could still be in `transactions`.
+   *
+   * A failed lookup also leaves the query as before.
+   */
+  private async resolveStablePkPrefix({
+    ids,
+    bundledIn,
+  }: {
+    ids: string[];
+    bundledIn?: string[] | null;
+  }): Promise<{ pkPrefix?: StablePkPrefix; noMatches: boolean }> {
+    if (!this.idLookupEnabled) return { noMatches: false };
+    const filter =
+      ids.length > 0
+        ? 'ids'
+        : Array.isArray(bundledIn) && bundledIn.length > 0
+          ? 'bundledIn'
+          : undefined;
+    if (filter === undefined) return { noMatches: false };
+    const requested = filter === 'ids' ? ids : (bundledIn as string[]);
+
+    let rows: Awaited<ReturnType<typeof this.lookupPkPrefixes>>;
+    try {
+      rows = await this.lookupPkPrefixes(requested);
+    } catch (err: any) {
+      metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'error' });
+      this.log.warn(
+        'ClickHouse id lookup failed; querying without primary-key narrowing',
+        { filter, count: requested.length, message: err?.message },
+      );
+      return { noMatches: false };
+    }
+
+    const heights = [...new Set(rows.map((r) => r.height))];
+    if (filter === 'ids') {
+      if (rows.length === 0) {
+        metrics.clickhouseGqlIdLookupTotal.inc({
+          filter,
+          outcome: 'none_found',
+        });
+        return { noMatches: true };
+      }
+      metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'resolved' });
+      const keys = rows.map(
+        (r) =>
+          `(${r.height}, ${r.blockTransactionIndex}, ` +
+          `${r.isDataItem ? 1 : 0}, unhex('${r.idHex}'))`,
+      );
+      return {
+        noMatches: false,
+        pkPrefix: {
+          heights,
+          predicateSql:
+            '(t.height, t.block_transaction_index, t.is_data_item, t.id) IN ' +
+            `(${keys.join(', ')})`,
+        },
+      };
+    }
+
+    const found = new Set(rows.map((r) => r.idHex));
+    if (!requested.every((id) => found.has(b64UrlToHex(id)))) {
+      metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'partial' });
+      return { noMatches: false };
+    }
+    metrics.clickhouseGqlIdLookupTotal.inc({ filter, outcome: 'resolved' });
+    const pairs = [
+      ...new Set(rows.map((r) => `(${r.height}, ${r.blockTransactionIndex})`)),
+    ];
+    return {
+      noMatches: false,
+      pkPrefix: {
+        heights,
+        predicateSql: `(t.height, t.block_transaction_index) IN (${pairs.join(', ')})`,
+      },
     };
   }
 
@@ -1129,36 +1299,6 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       tags,
     });
 
-    // STABLE LEG — `transactions`. Always queried; this is CH's primary
-    // role and any failure here surfaces to the caller (fail-fast).
-    const stableQuery = this.getGqlTransactionsBaseSql();
-    this.addGqlTransactionFilters({
-      query: stableQuery,
-      cursor,
-      sortOrder,
-      ids,
-      recipients,
-      owners,
-      minHeight,
-      maxHeight,
-      bundledIn,
-      tags,
-      encoded: encodedFilters,
-    });
-    const stableSql = this.buildChTransactionsSql({
-      innerSql: stableQuery.toString(),
-      pageSize,
-      sortOrder,
-      recipients,
-      owners,
-      ids,
-      tags,
-    });
-
-    this.log.debug('Querying ClickHouse stable transactions...', {
-      sql: stableSql,
-    });
-
     // Resolve the SQLite boundary from the *cached* ClickHouse max height
     // only, so we can launch both legs in parallel without a blocking
     // roundtrip. Cold cache → skip the optimization and let merge-time
@@ -1179,7 +1319,47 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       }
     }
 
+    // STABLE LEG — `transactions`. Always queried; this is CH's primary
+    // role and any failure here surfaces to the caller (fail-fast). When the
+    // id lookup is enabled, `ids` / `bundledIn` are first resolved to primary
+    // keys through `transaction_ids` (inside this leg, so the other legs don't
+    // wait on it).
     const chStablePromise = (async () => {
+      const { pkPrefix, noMatches } = await this.resolveStablePkPrefix({
+        ids,
+        bundledIn,
+      });
+      if (noMatches) return [];
+
+      const stableQuery = this.getGqlTransactionsBaseSql();
+      this.addGqlTransactionFilters({
+        query: stableQuery,
+        cursor,
+        sortOrder,
+        ids,
+        recipients,
+        owners,
+        minHeight,
+        maxHeight,
+        bundledIn,
+        tags,
+        encoded: encodedFilters,
+        pkPrefix,
+      });
+      const stableSql = this.buildChTransactionsSql({
+        innerSql: stableQuery.toString(),
+        pageSize,
+        sortOrder,
+        recipients,
+        owners,
+        ids,
+        tags,
+      });
+
+      this.log.debug('Querying ClickHouse stable transactions...', {
+        sql: stableSql,
+      });
+
       try {
         const row = await this.clickhouseClient.query({ query: stableSql });
         const jsonRow = await row.json();
@@ -1247,6 +1427,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
               bundledIn,
               tags,
               encoded: encodedFilters,
+              pkPrefix,
             });
           }
         }

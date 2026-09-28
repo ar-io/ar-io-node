@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Integration test for the ClickHouse id lookup table (`transaction_ids`).
+# Runs the real schema and import code against a ClickHouse server:
+#   1. Applies the schema twice through initialize_clickhouse_schema, which
+#      runs on every import cycle, so it must be idempotent.
+#   2. Moves staging rows into `transactions` with migrate_staging_to_final and
+#      checks that `transaction_ids_mv` recorded each id's primary-key prefix.
+#   3. Re-imports the same rows and checks the lookup table deduplicates.
+#   4. Runs the documented one-time backfill, twice, and checks the result.
+#   5. Resolves ids and a bundledIn parent through the lookup table and reads
+#      the matching `transactions` rows by primary key, as GraphQL does.
+#
+# The test writes to and truncates tables. It refuses to run against a server
+# whose `transactions` table already holds rows, unless
+# ALLOW_DESTRUCTIVE_CLICKHOUSE_TEST=true. Point it at a throwaway server with
+# CLICKHOUSE_HOST / CLICKHOUSE_PORT.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../lib/common.sh"
+
+echo "Testing ClickHouse id lookup table"
+echo "=================================="
+echo
+
+load_env
+load_clickhouse_config
+
+if ! command -v clickhouse >/dev/null 2>&1; then
+    echo "✗ clickhouse client not installed; cannot run this test"
+    exit 1
+fi
+
+ch_query() {
+    clickhouse client \
+        --host "$CLICKHOUSE_HOST" \
+        --port "$CLICKHOUSE_PORT" \
+        --user "$CLICKHOUSE_USER" \
+        --password "$CLICKHOUSE_PASSWORD" \
+        --query "$1"
+}
+
+existing_rows=$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'transactions'")
+if [[ "$existing_rows" == "1" ]]; then
+    existing_rows=$(ch_query "SELECT count() FROM transactions")
+else
+    existing_rows=0
+fi
+if [[ "$existing_rows" != "0" && "${ALLOW_DESTRUCTIVE_CLICKHOUSE_TEST:-false}" != "true" ]]; then
+    echo "✗ Refusing to run: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT already has $existing_rows rows in transactions."
+    echo "  This test truncates tables. Use a throwaway ClickHouse server, or set"
+    echo "  ALLOW_DESTRUCTIVE_CLICKHOUSE_TEST=true if this server's data is disposable."
+    exit 1
+fi
+
+failures=0
+check() {
+    local name=$1 expected=$2 actual=$3
+    if [[ "$expected" == "$actual" ]]; then
+        echo "✓ $name"
+    else
+        echo "✗ $name: expected '$expected', got '$actual'"
+        failures=$((failures + 1))
+    fi
+}
+
+# Source the import script for initialize_clickhouse_schema and
+# migrate_staging_to_final without running its CLI. The schema paths it uses
+# are relative to the repository root.
+cd "$SCRIPT_DIR/../../.."
+source "scripts/clickhouse-import" >/dev/null
+
+echo "Step 1: apply the schema twice"
+initialize_clickhouse_schema >/dev/null
+initialize_clickhouse_schema >/dev/null
+check "transaction_ids exists" "1" \
+    "$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'transaction_ids'")"
+check "transaction_ids_mv exists" "1" \
+    "$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'transaction_ids_mv'")"
+
+for table in transactions transaction_ids staging_blocks staging_transactions staging_tags; do
+    ch_query "TRUNCATE TABLE $table"
+done
+
+# A bundle (L1, height H1, block_transaction_index 3) with two data items, a
+# nested bundle item with one child of its own, and an unrelated L1 tx at H2.
+# Data items carry their root transaction's height and block_transaction_index.
+H1=1900001
+H2=1900002
+ch_query "INSERT INTO staging_blocks (indep_hash, height, previous_block, nonce, hash, block_timestamp, tx_count) VALUES ('',${H1},'','','',0,1), ('',${H2},'','','',0,1)"
+ch_query "INSERT INTO staging_transactions (id, indexed_at, block_transaction_index, is_data_item, target, quantity, reward, anchor, data_size, content_type, format, height, owner_address, data_root, parent, \"offset\", \"size\", data_offset, owner_offset, owner_size, owner, signature_offset, signature_size, signature_type, root_transaction_id, root_parent_offset) VALUES
+  ('bundle-a',0,3,false,'',0,0,'',0,'',2,${H1},'','','',0,0,0,0,0,'',0,0,1,'',0),
+  ('item-a1',0,3,true,'',0,0,'',0,'',1,${H1},'','','bundle-a',0,0,0,0,0,'',0,0,1,'bundle-a',0),
+  ('item-a2',0,3,true,'',0,0,'',0,'',1,${H1},'','','bundle-a',0,0,0,0,0,'',0,0,1,'bundle-a',0),
+  ('nested-b',0,3,true,'',0,0,'',0,'',1,${H1},'','','bundle-a',0,0,0,0,0,'',0,0,1,'bundle-a',0),
+  ('item-b1',0,3,true,'',0,0,'',0,'',1,${H1},'','','nested-b',0,0,0,0,0,'',0,0,1,'bundle-a',0),
+  ('other-l1',0,0,false,'',0,0,'',0,'',2,${H2},'','','',0,0,0,0,0,'',0,0,1,'',0)"
+
+echo
+echo "Step 2: import into transactions; the view records each id"
+migrate_staging_to_final "height=${H1}-${H2}" >/dev/null
+check "transactions rows" "6" "$(ch_query "SELECT count() FROM transactions FINAL")"
+check "transaction_ids rows" "6" "$(ch_query "SELECT count() FROM transaction_ids FINAL")"
+check "item-a1 prefix" "${H1}	3	true" \
+    "$(ch_query "SELECT height, block_transaction_index, is_data_item FROM transaction_ids FINAL WHERE id = 'item-a1' FORMAT TSV")"
+check "other-l1 prefix" "${H2}	0	false" \
+    "$(ch_query "SELECT height, block_transaction_index, is_data_item FROM transaction_ids FINAL WHERE id = 'other-l1' FORMAT TSV")"
+
+echo
+echo "Step 3: re-import the same rows; the lookup table deduplicates"
+migrate_staging_to_final "height=${H1}-${H2}" >/dev/null
+ch_query "OPTIMIZE TABLE transaction_ids FINAL"
+check "transaction_ids rows after re-import" "6" "$(ch_query "SELECT count() FROM transaction_ids")"
+
+echo
+echo "Step 4: documented backfill, run twice"
+ch_query "TRUNCATE TABLE transaction_ids"
+backfill="INSERT INTO transaction_ids SELECT id, height, block_transaction_index, is_data_item, inserted_at, expires_at FROM transactions"
+ch_query "$backfill"
+ch_query "$backfill"
+ch_query "OPTIMIZE TABLE transaction_ids FINAL"
+check "transaction_ids rows after backfill" "6" "$(ch_query "SELECT count() FROM transaction_ids")"
+
+echo
+echo "Step 5: resolve through the lookup table, read transactions by primary key"
+check "ids lookup, including an unknown id" "3" \
+    "$(ch_query "SELECT count() FROM transaction_ids WHERE id IN ('item-a1', 'item-b1', 'other-l1', 'missing')")"
+check "ids read by primary-key prefix" "item-a1,item-b1,other-l1" \
+    "$(ch_query "SELECT arrayStringConcat(arraySort(groupArray(id)), ',') FROM transactions AS t FINAL
+      WHERE t.id IN ('item-a1', 'item-b1', 'other-l1')
+        AND t.height IN (${H1}, ${H2})
+        AND (t.height, t.block_transaction_index, t.is_data_item, t.id) IN
+            ((${H1}, 3, 1, 'item-a1'), (${H1}, 3, 1, 'item-b1'), (${H2}, 0, 0, 'other-l1'))")"
+parent_prefix=$(ch_query "SELECT height, block_transaction_index FROM transaction_ids WHERE id = 'nested-b' FORMAT TSV")
+check "nested bundle parent prefix" "${H1}	3" "$parent_prefix"
+check "bundledIn read by parent prefix" "item-b1" \
+    "$(ch_query "SELECT arrayStringConcat(groupArray(id), ',') FROM transactions AS t FINAL
+      WHERE t.parent_id IN ('nested-b') AND t.height IN (${H1}) AND (t.height, t.block_transaction_index) IN ((${H1}, 3))")"
+
+for table in transactions transaction_ids staging_blocks staging_transactions staging_tags; do
+    ch_query "TRUNCATE TABLE $table"
+done
+
+echo
+if [[ $failures -gt 0 ]]; then
+    echo "✗ $failures check(s) failed"
+    exit 1
+fi
+echo "✓ All id lookup checks passed"
