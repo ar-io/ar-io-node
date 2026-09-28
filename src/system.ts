@@ -172,6 +172,38 @@ export function registerCleanupHandler(
   log.debug(`Registered cleanup handler: ${name}`);
 }
 
+/**
+ * Flipped by {@link markStartupComplete} once the HTTP listener is bound.
+ *
+ * Until then an uncaught exception means a startup dependency failed, and
+ * swallowing it leaves the process in the worst possible state: alive, with
+ * workers indexing, but with no HTTP listener, because the top-level `await`
+ * in app.ts that threw never resolves and `app.listen()` is never reached.
+ * Nothing in the container reports unhealthy on its own account and the
+ * gateway serves nothing.
+ *
+ * That is not hypothetical. A host reboot on 2026-09-27 brought every
+ * container back except ClickHouse, whose compose service had no `restart:`
+ * policy. Core's `clickhouseStreamer.start()` schema validation threw
+ * `getaddrinfo ENOTFOUND clickhouse`, this handler logged it and returned,
+ * and the gateway answered nothing for 26 hours while looking up.
+ *
+ * Exiting instead is safe because the window is tiny: a healthy boot on a
+ * production gateway binds the listener 3.5 seconds after the container
+ * starts. A transient error inside that window costs one restart; the
+ * existing log-and-continue behaviour is unchanged for the whole of the
+ * steady-state lifetime after it.
+ */
+let startupComplete = false;
+
+/**
+ * Called from app.ts inside the `app.listen` callback. After this point an
+ * uncaught exception is logged and tolerated, as it always has been.
+ */
+export function markStartupComplete(): void {
+  startupComplete = true;
+}
+
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
   // Extract fields rather than passing the error object. A rejected axios
@@ -188,7 +220,18 @@ process.on('uncaughtException', (error) => {
         .map((e: any) => e?.message ?? String(e)),
       errorCount: (error as AggregateError).errors.length,
     }),
+    // Distinguishes "this killed the boot" from "this happened while
+    // serving" in one grep, without a second log line.
+    duringStartup: !startupComplete,
   });
+
+  if (!startupComplete) {
+    // Exit non-zero so the container restart policy retries, rather than
+    // leaving a listener-less process behind. The timer is deliberately not
+    // unref'd: it must fire, and it gives winston's transports a moment to
+    // flush the line above, which is the only record of why the boot died.
+    setTimeout(() => process.exit(1), 1000);
+  }
 });
 
 const arweave = Arweave.init({});

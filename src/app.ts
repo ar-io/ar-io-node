@@ -194,6 +194,12 @@ apolloServerInstanceGql.start().then(() => {
   server = app.listen(config.PORT, () => {
     log.info(`Listening on port ${config.PORT}`);
 
+    // Startup is over: from here an uncaught exception is logged and
+    // tolerated. Before here it exits, so a failed startup dependency can't
+    // leave a listener-less process running. See `markStartupComplete` in
+    // system.ts.
+    system.markStartupComplete();
+
     // Keep core's keepalive idle window wider than Envoy's upstream
     // idle_timeout so Envoy always recycles a pooled connection before core
     // closes it — otherwise Envoy races a request onto a connection core is
