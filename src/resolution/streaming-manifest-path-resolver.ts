@@ -155,8 +155,24 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
     // Persist the manifest root's index/fallback id so future requests — and
     // future process lifetimes — can serve it without fetching the body. Only
     // the root resolves via 'index'/'fallback'; sub-paths are never stored.
+    //
+    // Trusted bytes only. A row here is durable, has no TTL and no
+    // invalidation path, so a manifest body from a source that lied would pin
+    // the wrong index id for this manifest forever — where before this store
+    // existed it only spoiled the one response. `trusted` is the right gate
+    // rather than `verified`: only tx-chunks-data-source sets `verified: true`
+    // (it reconstructs from L1 chunks and hashes them), so gating on that
+    // would leave the store empty for the trusted gateways, S3 and Turbo that
+    // serve most manifest bodies in practice. `trusted: false` is precisely
+    // the AR.IO peer mesh and gateways not in TRUSTED_GATEWAYS_URLS, which is
+    // the population this guard is for.
+    //
+    // The in-memory cache above is deliberately not gated: it is bounded,
+    // evicted under pressure and gone on restart, so it stays as close to the
+    // pre-cache behaviour of re-resolving per request as a cache can.
     if (
       this.store !== undefined &&
+      data.trusted &&
       this.normalizePath(path) === '' &&
       resolvedId !== undefined &&
       (resolutionType === 'index' || resolutionType === 'fallback')

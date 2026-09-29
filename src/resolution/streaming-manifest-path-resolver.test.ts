@@ -23,11 +23,16 @@ const MOBILE_CSS_ID = 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ';
 // v0.2.0 index id fixture resolves its root to this id.
 const V020_INDEX_ID = 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU';
 
-const makeData = (stream: Readable): ContiguousData => ({
+// Defaults to trusted, which is what the persistence path requires; the
+// untrusted case is exercised explicitly where it matters.
+const makeData = (
+  stream: Readable,
+  { trusted = true }: { trusted?: boolean } = {},
+): ContiguousData => ({
   stream,
   size: 0,
   verified: false,
-  trusted: false,
+  trusted,
   cached: false,
 });
 
@@ -194,6 +199,33 @@ describe('StreamingManifestPathResolver', () => {
       assert.equal(store.saved[0].id, 'm2');
       assert.equal(store.saved[0].indexId, V020_INDEX_ID);
       assert.equal(store.saved[0].fallbackId, undefined);
+    });
+
+    it('does not persist a resolution read from an untrusted source', async () => {
+      const store = new FakeStore();
+      const resolver = new StreamingManifestPathResolver({ log, store });
+
+      // A row in the store is durable, has no TTL and no invalidation path, so
+      // bytes from the AR.IO peer mesh or an untrusted gateway must never
+      // reach it — they would pin the wrong index id for this manifest
+      // forever. Serving the resolution is still fine; only persisting is not.
+      const fromData = await resolver.resolveFromData(
+        makeData(exampleManifestStreamV020IndexId(), { trusted: false }),
+        'm-untrusted',
+        undefined,
+      );
+      assert.equal(fromData.resolvedId, V020_INDEX_ID);
+      assert.equal(fromData.resolutionType, 'index');
+      assert.equal(store.saved.length, 0);
+
+      // ...and nothing was written that a later cold-cache read could serve.
+      const coldResolver = new StreamingManifestPathResolver({ log, store });
+      const cold = await coldResolver.resolveFromIndex(
+        'm-untrusted',
+        undefined,
+      );
+      assert.equal(cold.complete, false);
+      assert.equal(cold.resolvedId, undefined);
     });
 
     it('does not persist sub-path resolutions', async () => {
