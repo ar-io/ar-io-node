@@ -25,7 +25,7 @@ Rel(user, gateway, "User makes request for data to AR.IO Gateway.", "HTTPS")
 Rel(gateway, core, "Gateway routes the request to Core Service.")
 BiRel(core, index, "Core checks for requested data in gateway index.")
 BiRel(core, network,"")
-BiRel(core, arweave, "Core requests any missing data from the AR.IO Network or trusted Arweave Node.", "HTTPS")
+BiRel(core, arweave, "Core requests any missing data from trusted gateways, the AR.IO Network, or Arweave nodes.", "HTTPS")
 Rel(core, user, "Core serves the requested data to User.")
 
 
