@@ -46,10 +46,10 @@ Rel(core, headers, "Saves header data")
 Rel(core, contiguous, "Saves contiguous data")
 
 Rel(core, redis, "Caches chain data and ArNS resolutions")
-Rel(core, clickhouse, "Streams stable history to it and queries it for GraphQL")
+Rel(core, clickhouse, "Stable history: Parquet export, loaded by clickhouse-auto-import. Optional: streams the unstable head. Queried for GraphQL")
 Rel(core, indexes, "Serves published indexes and loads installed ones", "read only")
 
-Rel(sidecar, indexes, "Signs and writes published indexes, verifies and installs others")
+Rel(sidecar, indexes, "Writes its signed publication; verifies others' signatures and band digests, installs their bands")
 Rel(sidecar, core, "Reads the gateway registry", "/ar-io/peers")
 Rel(sidecar, peers, "Fetches other gateways' signed indexes", "HTTPS")
 Rel(sidecar, engine, "Drives over its Web API")

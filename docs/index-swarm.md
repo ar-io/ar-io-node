@@ -492,7 +492,7 @@ flowchart LR
   lb -->|"everything else"| c2
   lb -.->|"everything else"| c1
   peers <-->|"pieces, direct to the node's<br/>public address"| e1
-  peers -->|"announce: direct, or<br/>/announce via the LB"| s1
+  peers -->|"announce: direct to :6969,<br/>or /announce via the LB"| s1
   s2 -->|"subscription url = signing node, port 4000<br/>(allowlisted on its meter)"| c1
 ```
 
