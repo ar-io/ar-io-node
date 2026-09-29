@@ -187,12 +187,31 @@ confirm the payload size, since the header does not record it. A location that
 is not confirmed is not served, and one from an index is not stored; resolution
 continues with the bundle search (for stored attributes, only when
 `ENABLE_DATA_ITEM_ROOT_TX_SEARCH` is on). A rejected stored location is not
-removed, so it is checked again on each uncached request. Outcomes are counted in
-`data_item_location_check_total{source,result}`, where `source` is
-`stored_attributes`, `attributes_traversal`, `root_tx_index` or
-`root_tx_index_fallback`, and `result` is `confirmed` or `rejected`. `rejected`
-also counts headers that could not be read, so a rise can mean upstream read
-failures as well as wrong locations.
+removed, so it is checked again on each uncached request.
+
+A location can also fail because its root is not an L1 transaction but a
+bundle that is itself a data item: the item was recorded relative to the
+bundle it sits in, one level too shallow
+([#959](https://github.com/ar-io/ar-io-node/issues/959)). Its bytes are
+correct, but the header cannot be read from a data item as if it were an L1
+transaction. When a header cannot be read at all, the gateway looks the
+recorded root up as a bundle (its stored attributes, then the root TX index,
+where CDB64 answers locally), adds the bundle's payload offset, and checks the
+header again at the resulting location in the enclosing root, walking up to 10
+enclosing bundles. A location confirmed this way is served and stored in place
+of the rejected one. Correctly rooted items, and roots that could be read but
+hold the wrong header, never take this path.
+
+Outcomes are counted in `data_item_location_check_total{source,result,reason}`,
+where `source` is `stored_attributes`, `attributes_traversal`,
+`root_tx_index` or `root_tx_index_fallback`, or one of the first three with a
+`_rebased` suffix for recovered locations, and `result` is `confirmed` or
+`rejected`. A rejection's `reason` is `header_unreadable` (no header could be
+parsed there: the read failed, for example because the root is a bundled data
+item, or the bytes are not a header),
+`id_mismatch` (the header belongs to another item) or `offset_mismatch` (the
+header does not end at the recorded payload offset). Only `id_mismatch` means
+a location would have served another item's bytes.
 
 Observability (per-node Prometheus metrics):
 

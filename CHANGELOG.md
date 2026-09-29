@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Nested data items stored with an intermediate bundle as their root were
+  served as 404s** (#959). An item inside a bundle that is itself a data item
+  could be recorded with that bundle as its root and offsets measured in the
+  bundle's payload. The bytes there are the item's, but since #937 every
+  stored location has its header checked before use, and the check reads the
+  recorded root as an L1 transaction, which it is not. The stored-root rebase
+  only helps when the bundle has attributes of its own; without them the
+  location was rejected, a local-first root TX lookup returned the same
+  location, and the request failed. When a header cannot be read at all, the
+  gateway now looks the recorded root up as a bundle, in its stored attributes
+  and then the root TX index (CDB64 answers locally), adds the bundle's
+  payload offset, checks the header again in the enclosing root, and serves
+  and stores the location only once it is confirmed. On turbo-gateway.com about 5,500 of 5.1M stored locations per
+  node had this shape.
+- `data_item_location_check_total` gains a `reason` label on rejections:
+  `header_unreadable`, `id_mismatch` or `offset_mismatch`. Before, every
+  rejection looked alike, so read failures and roots that are data items read
+  as wrong locations; only `id_mismatch` means another item's bytes. Recovered
+  locations are counted under sources ending in `_rebased`.
+
 ## [Release 84] - 2026-09-29
 
 This is a **recommended release** focused on **index sharing between gateways,
