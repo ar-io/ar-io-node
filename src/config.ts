@@ -17,6 +17,10 @@ import type { HttpSigSignerContext } from './lib/httpsig.js';
 import { release } from './version.js';
 import logger from './log.js';
 import { verificationPriorities } from './constants.js';
+import {
+  DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES,
+  DEFAULT_ROOT_TX_LOOKUP_ORDER,
+} from './lib/root-tx-defaults.js';
 
 //
 // HTTP server
@@ -786,6 +790,15 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
     300,
   );
 
+// LRU cache size for resolved manifest paths. Keyed by (manifest id, path);
+// values are immutable per manifest transaction, so no TTL is needed. Caching
+// resolutions lets repeat requests for the same manifest path skip re-fetching
+// and re-parsing the manifest body.
+export const MANIFEST_RESOLUTION_CACHE_SIZE = env.positiveIntOrDefault(
+  'MANIFEST_RESOLUTION_CACHE_SIZE',
+  5000,
+);
+
 // Root TX index lookup order configuration.
 // Available sources: 'db', 'peers', 'gateways', 'graphql', 'hyperbeam', 'cdb',
 // 'turbo'. Sources are probed in order and the first actionable result wins.
@@ -796,7 +809,7 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
 //               costs the peer a full retrieval cascade — list it *after*
 //               'peers' so it only serves peers that lack the endpoint.
 export const ROOT_TX_LOOKUP_ORDER = env
-  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql,hyperbeam,cdb')
+  .varOrDefault('ROOT_TX_LOOKUP_ORDER', DEFAULT_ROOT_TX_LOOKUP_ORDER)
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
@@ -815,7 +828,7 @@ export const CDB64_ROOT_TX_INDEX_WATCH =
 export const CDB64_ROOT_TX_INDEX_SOURCES = env
   .varOrDefault(
     'CDB64_ROOT_TX_INDEX_SOURCES',
-    'resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000,resources/cdb64-root-tx-index-non-ao-non-redstone-without-content-type-to-height-1820000,resources/cdb64-root-tx-index-ao-to-height-1820000',
+    DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES,
   )
   .split(',')
   .map((s) => s.trim())
@@ -1336,6 +1349,27 @@ export const TX_CHUNKS_GEOMETRY_CACHE_SIZE = env.positiveIntOrDefault(
 export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
   'CHUNK_SERVE_DEADLINE_MS',
   12000,
+);
+
+// Wall-clock deadline (ms) for serving a chunk request that arrived from
+// another gateway (X-AR-IO-Hops >= 1), applied instead of
+// CHUNK_SERVE_DEADLINE_MS.
+//
+// A peer gives us one second before it gives up (PEER_REQUEST_TIMEOUT_MS in
+// ar-io-chunk-source.ts) and then goes to its own sources, so work past that
+// point is delivered to nobody. Measured on a production gateway pair: ~1.09M
+// chunk serves per day hit the 12s cap across two nodes, while a cold fetch
+// completes in ~600ms at the median -- so the cost is concentrated in a tail
+// that no caller is still waiting for.
+//
+// The default is deliberately well above the caller's 1s rather than equal to
+// it: a fetch that is nearly done is worth finishing (it populates the cache
+// for later readers), and one second is this implementation's timeout, not a
+// protocol guarantee -- other clients may wait longer. 0 falls back to
+// CHUNK_SERVE_DEADLINE_MS, preserving existing behavior.
+export const CHUNK_PEER_ORIGIN_DEADLINE_MS = env.nonNegativeIntOrDefault(
+  'CHUNK_PEER_ORIGIN_DEADLINE_MS',
+  3000,
 );
 
 // How to treat chunk requests forwarded by another AR.IO gateway
@@ -3512,6 +3546,28 @@ export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
   'RATE_LIMITER_IP_REFILL_PER_SEC',
   '20',
 );
+
+/**
+ * Proxies (IPs or CIDRs) whose `X-Forwarded-For` and `X-Real-IP` are
+ * believed when working out which client a request came from, for rate
+ * limits, x402 and allowlists. The default trusts loopback, private,
+ * carrier-grade NAT and link-local addresses, where nginx or a load balancer
+ * normally sits; add a CDN's or a public load balancer's ranges when one is
+ * in front, or every client behind it shares its address. `none` trusts no
+ * proxy: only for a core that clients reach directly, with no Envoy in front.
+ * Every request that comes through Envoy (the standard path, port 3000) would
+ * otherwise carry Envoy's address, and all of them would share one bucket.
+ */
+const TRUSTED_PROXIES_VALUE = env.varOrDefault(
+  'TRUSTED_PROXIES',
+  '127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,::1/128,fc00::/7,fe80::/10',
+);
+export const TRUSTED_PROXIES =
+  TRUSTED_PROXIES_VALUE.trim() === 'none'
+    ? []
+    : TRUSTED_PROXIES_VALUE.split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
 
 export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
   env

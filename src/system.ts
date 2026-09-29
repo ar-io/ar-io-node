@@ -924,6 +924,23 @@ export const chunkMetaDataSource = createChunkMetadataSource({
   chunkMetadataSourceParallelism: config.CHUNK_METADATA_SOURCE_PARALLELISM,
 });
 
+// Chunk cache eviction index handle (ADR 005). Handed to the store only when
+// the feature is enabled, so an absent handle disables the write/read hooks
+// entirely. `db` structurally satisfies ChunkDataCacheIndex.
+const chunkDataCacheIndex: ChunkDataCacheIndex | undefined =
+  config.ENABLE_CHUNK_DATA_CACHE_INDEX ? db : undefined;
+
+// The one chunk data store. Created before the chunk data source so that the
+// read-through cache writes through it: chunks cached on the serving path must
+// reach the eviction index, or the evictor never sees them and the cache is
+// reclaimed only by the filesystem walk (ar-io-node #944). Also the
+// ChunkRetrievalService fast path (cache lookup by absoluteOffset).
+export const chunkDataStore = new FsChunkDataStore({
+  log,
+  baseDir: 'data/chunks',
+  chunkDataCacheIndex,
+});
+
 const chunkDataSource = createChunkDataSource({
   log,
   arweaveClient,
@@ -932,6 +949,7 @@ const chunkDataSource = createChunkDataSource({
   arIOChunkSource,
   chunkDataRetrievalOrder: config.CHUNK_DATA_RETRIEVAL_ORDER,
   chunkDataSourceParallelism: config.CHUNK_DATA_SOURCE_PARALLELISM,
+  chunkDataStore,
 });
 
 const fullChunkSource = new FullChunkSource(
@@ -956,19 +974,6 @@ export const chunkSource =
         },
       })
     : fullChunkSource;
-
-// Chunk cache eviction index handle (ADR 005). Handed to the store only when
-// the feature is enabled, so an absent handle disables the write/read hooks
-// entirely. `db` structurally satisfies ChunkDataCacheIndex.
-const chunkDataCacheIndex: ChunkDataCacheIndex | undefined =
-  config.ENABLE_CHUNK_DATA_CACHE_INDEX ? db : undefined;
-
-// Create stores for ChunkRetrievalService fast path (cache lookup by absoluteOffset)
-export const chunkDataStore = new FsChunkDataStore({
-  log,
-  baseDir: 'data/chunks',
-  chunkDataCacheIndex,
-});
 
 export const chunkMetadataStore = new FsChunkMetadataStore({
   log,
@@ -1905,6 +1910,8 @@ metrics.registerQueueLengthGauge('matchedItemBuffer', {
 
 export const manifestPathResolver = new StreamingManifestPathResolver({
   log,
+  cacheSize: config.MANIFEST_RESOLUTION_CACHE_SIZE,
+  store: db,
 });
 
 export const arnsResolutionCache = new KvArNSResolutionStore({

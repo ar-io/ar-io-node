@@ -47,6 +47,49 @@ describe('buildResolverSignal', () => {
     metrics.graphqlResolverCancellationsCounter.reset();
   });
 
+  // Regression guard. The nested `signalState` holder is only necessary because
+  // Apollo shallow-clones the context before handing it to plugins, so a
+  // root-level flag would be set on the clone and never observed here. That
+  // clone was wrongly believed to have been removed in Apollo Server 5, and the
+  // resulting bug is silent: every completed request gets counted as a
+  // client disconnect. This reproduces Apollo's exact clone
+  // (`Object.assign(Object.create(Object.getPrototypeOf(o)), o)` — see
+  // `@apollo/server/dist/esm/ApolloServer.js`) and asserts the nested write
+  // still lands, while a root-level write does not.
+  it("survives Apollo's shallow clone of the context (nested holder required)", async () => {
+    const cloneObject = <T extends object>(object: T): T =>
+      Object.assign(Object.create(Object.getPrototypeOf(object)), object);
+
+    const signalState: ResolverSignalState = { responseSent: false };
+    // The shape src/routes/graphql/index.ts builds: flag nested, not on root.
+    const context = { responseSent: false, signalState };
+
+    const res = new FakeRes() as unknown as Response;
+    const signal = buildResolverSignal(res, signalState);
+
+    // What Apollo hands the plugin.
+    const pluginView = cloneObject(context);
+
+    // A root-level write is lost to the clone — this is the trap.
+    pluginView.responseSent = true;
+    assert.equal(
+      context.responseSent,
+      false,
+      'root-level writes must NOT reach the original context; if this fails, ' +
+        'Apollo stopped cloning and the comments in resolver-signal.ts need updating',
+    );
+
+    // The nested write reaches the instance the signal closed over.
+    pluginView.signalState.responseSent = true;
+    assert.equal(signalState.responseSent, true);
+
+    // So a normal end-of-response close is not counted as a disconnect.
+    res.emit('close');
+    await new Promise((r) => setImmediate(r));
+    assert.equal(signal.aborted, false);
+    assert.equal(await cancelCount('client_disconnect'), 0);
+  });
+
   it('does NOT count when ctx.responseSent is set (Apollo plugin path)', async () => {
     // Authoritative success signal: the responseSentPlugin sets
     // ctx.responseSent = true during willSendResponse, BEFORE the

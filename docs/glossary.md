@@ -243,6 +243,19 @@ it. Distinct from an [Index Manifest](#index-manifest), which describes the
 partitions inside one CDB64 index. Specified in
 [index-publication.md](index-publication.md).
 
+<a id="webseed"></a> **WebSeed** — An HTTP URL (BEP 19) that serves the
+same bytes as the swarm, so a download completes even with no peers. On a
+gateway it is `/ar-io/indexes/webseed/`, rate limited and x402-priced while
+the swarm itself is free. Index torrents do not list it: subscribers add a
+publisher's WebSeed themselves, and only when peers stall, since engines
+otherwise treat it as one more peer and draw about half a band from it.
+
+<a id="torrent-name"></a> **Torrent Name** — The name inside a band's
+torrent: the first 16 hex characters of SHA-256 over one line per file,
+`<name>\0<size>\0<sha256 hex>\n`, with files in bytewise name order. Derived from content rather than the band id so
+that publishers of the same bytes share one infohash, and so that the
+WebSeed address `<torrent name>/<file>` cannot change meaning.
+
 <a id="band"></a> **Band** — One immutable unit of a published index, normally
 covering a block height range. Bands let a subscriber re-fetch only what
 changed: older height bands stay put while a rolling tip band is rebuilt on
@@ -434,6 +447,18 @@ fallback path handling for 404 errors.
 
 **Manifest** - A special JSON document that maps paths to [item IDs](#item-id),
 enabling directory-like navigation of Arweave data.
+
+<a id="manifest-resolution-index"></a> **Manifest Resolution Index** - A table
+in `data.db` (`manifest_resolutions`) recording the `index`/`fallback` item id a
+manifest transaction resolves its root to, so a root request can be answered
+with one primary-key lookup instead of re-fetching and re-parsing the manifest
+body — including after a restart, or when the body is no longer retrievable.
+Populated lazily on request, and only from bytes that arrived from a trusted
+source: a row has no TTL and no invalidation path, so an untrusted body would
+pin the wrong id permanently. A manifest transaction is immutable, so a stored
+resolution never needs invalidating. Sub-paths are not stored (the table holds
+no path map) and are served from an in-memory LRU sized by
+`MANIFEST_RESOLUTION_CACHE_SIZE`.
 
 **Sandbox** - A security mechanism that redirects data access to unique
 subdomains based on the [item ID](#item-id). Each item gets its own

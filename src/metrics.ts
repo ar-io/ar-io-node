@@ -76,6 +76,19 @@ export const unhandledRequestErrorsCounter = new promClient.Counter({
   labelNames: ['method', 'status'],
 });
 
+/**
+ * Chunk serves cut short by the peer-origin deadline
+ * (CHUNK_PEER_ORIGIN_DEADLINE_MS) rather than the general one. Separated from
+ * chunk_serve_deadline_exceeded_total so an operator can see what the shorter
+ * deadline actually costs before lowering it further -- these are requests a
+ * peer would otherwise have waited on, though its own timeout is 1s.
+ */
+export const chunkPeerOriginDeadlineExceededCounter = new promClient.Counter({
+  name: 'chunk_peer_origin_deadline_exceeded_total',
+  help: 'Chunk serves aborted by the peer-origin deadline',
+  labelNames: ['method'],
+});
+
 // Chunk serves cut short by the handler's wall-clock deadline
 // (CHUNK_SERVE_DEADLINE_MS). A rising rate means the retrieval cascade is
 // routinely exceeding the deadline — tune the deadline or the upstream load,
@@ -509,6 +522,23 @@ dataItemLastIndexedTimestampSeconds.setToCurrentTime();
 //
 // GraphQL resolver metrics
 //
+
+export const graphqlHttpBatchSize = new promClient.Histogram({
+  name: 'graphql_http_batch_size',
+  help:
+    'Operations per inbound GraphQL POST whose body parsed. 1 for an ordinary ' +
+    'request; greater than 1 when a client posts a JSON array and Apollo ' +
+    'executes the whole array in parallel. Measured before Apollo, so `_count` ' +
+    'is those POSTs and `_sum` the operations they produced. Excludes GETs ' +
+    '(which cannot batch, and would fold in Sandbox landing-page views) and ' +
+    'bodies that failed to parse (diverted to the Express error flow before ' +
+    'this middleware). Apollo offers no cap on batch size, and the rate limiter ' +
+    'counts HTTP requests rather than operations, so the gap between _sum and ' +
+    '_count is the amplification available to a caller. Exists to answer ' +
+    'whether any client batches at all: if this stays flat at 1, batching can ' +
+    'be turned off outright rather than bounded.',
+  buckets: [1, 2, 5, 10, 25, 50, 100, 500],
+});
 
 export const graphqlRequestsCounter = new promClient.Counter({
   name: 'graphql_requests_total',
@@ -1477,6 +1507,22 @@ export const chunkCacheIndexUnlinkRefusedTotal = new promClient.Counter({
 export const chunkCacheIndexSkippedFloorTotal = new promClient.Counter({
   name: 'chunk_cache_index_skipped_floor_total',
   help: 'Chunk cache index eviction candidates excluded by the minimum age floor',
+});
+
+// Chunk cache index hooks that failed. The hooks are fire-and-forget (a failed
+// index write must never fail the chunk write), so without this counter a
+// failing hook looks the same as a healthy one: the index simply stops growing.
+// It cannot see a store that was never given the index at all (ar-io-node
+// #944) -- no hook runs, so nothing fails; the evictor's index-coverage warning
+// is what catches that. Both labels start at 0 so an alert on the first
+// failure has a series to compare against.
+export const chunkCacheIndexHookErrorsTotal = createCounter({
+  name: 'chunk_cache_index_hook_errors_total',
+  help: 'Chunk cache index write/read hook calls that failed',
+  labelNames: ['hook'],
+  expectedLabelNames: {
+    hook: ['write', 'read'],
+  },
 });
 
 //

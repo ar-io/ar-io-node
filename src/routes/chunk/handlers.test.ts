@@ -17,8 +17,10 @@ import {
   withChunkServeDeadline,
   ChunkServeTimeoutError,
   classifyChunkRetrievalError,
+  selectChunkServeDeadline,
 } from './handlers.js';
 import { ChunkNotFoundError } from '../../data/chunk-retrieval-service.js';
+import * as config from '../../config.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 
@@ -1228,5 +1230,53 @@ describe('classifyChunkRetrievalError', () => {
       false,
     );
     assert.strictEqual(v.statusCode, 502);
+  });
+
+  // A peer gives us 1s (PEER_REQUEST_TIMEOUT_MS) before falling back to its own
+  // sources, while the general serve deadline is 12s. Work past the caller's
+  // patience is delivered to nobody but still holds a thread and the disk.
+  describe('peer-origin serve deadline', () => {
+    // Both deadlines are read from the environment when config.ts is imported
+    // and cannot be varied per test, and CHUNK_PEER_ORIGIN_DEADLINE_MS=0 is a
+    // documented opt-out that falls back to the general deadline. So the
+    // expectation follows whichever configuration the suite is running under
+    // rather than assuming the default is in force.
+    const optedOut = config.CHUNK_PEER_ORIGIN_DEADLINE_MS === 0;
+    const expectedPeerOriginDeadline = optedOut
+      ? config.CHUNK_SERVE_DEADLINE_MS
+      : config.CHUNK_PEER_ORIGIN_DEADLINE_MS;
+
+    it('applies the shorter deadline to a request forwarded by a gateway', () => {
+      const { deadlineMs, peerOrigin, peerOriginDeadlineApplied } =
+        selectChunkServeDeadline({
+          hops: 1,
+        } as any);
+      assert.equal(peerOrigin, true);
+      assert.equal(deadlineMs, expectedPeerOriginDeadline);
+      // The metric key: true only when the peer-origin deadline is the one in
+      // force, so the opt-out doesn't report a cost it didn't impose.
+      assert.equal(peerOriginDeadlineApplied, !optedOut);
+    });
+
+    it('leaves a direct user request on the general deadline', () => {
+      for (const attrs of [undefined, { hops: 0 } as any]) {
+        const { deadlineMs, peerOrigin, peerOriginDeadlineApplied } =
+          selectChunkServeDeadline(attrs);
+        assert.equal(peerOrigin, false, `hops=${attrs?.hops}`);
+        assert.equal(deadlineMs, config.CHUNK_SERVE_DEADLINE_MS);
+        assert.equal(
+          peerOriginDeadlineApplied,
+          false,
+          `hops=${attrs?.hops} must never be attributed to the peer-origin deadline`,
+        );
+      }
+    });
+
+    it('counts deeper forwarding as peer origin too', () => {
+      assert.equal(
+        selectChunkServeDeadline({ hops: 5 } as any).peerOrigin,
+        true,
+      );
+    });
   });
 });

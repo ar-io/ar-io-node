@@ -1,0 +1,13 @@
+{
+  "manifest": "arweave/paths",
+  "version": "0.2.0",
+  "paths": {
+    "index.html": {
+      "id": "cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI"
+    }
+  },
+  "index": {
+    "path": "index.html",
+    "id": "QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU"
+  }
+}
