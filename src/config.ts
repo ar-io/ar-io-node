@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createFilter } from './filters.js';
 import { assertMonotoneFilter } from './database/gql-l1-routing.js';
 import * as env from './lib/env.js';
+import { resolveFacilitatorKeyId } from './payments/facilitator-utils.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
 import { release } from './version.js';
@@ -397,6 +398,30 @@ export const GATEWAY_MAX_FREE_SOCKETS_PER_HOST = parsePerHostNumber(
   4,
 );
 
+// Socket caps for the non-data outbound clients — root TX discovery sources and
+// the GraphQL fan-out. These are low-volume metadata lookups against a handful
+// of upstreams, so the caps are modest; the point of pooling here is not
+// throughput but avoiding a per-request `dns.lookup()`, which queues on the
+// libuv threadpool behind filesystem I/O (see src/lib/http-agent.ts). Node's
+// Agent keys its pool by host:port, so these apply per origin.
+export const OUTBOUND_MAX_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'OUTBOUND_MAX_SOCKETS_PER_HOST',
+  16,
+);
+// Defaults to the same value as OUTBOUND_MAX_SOCKETS_PER_HOST, deliberately.
+// maxFreeSockets bounds *idle* sockets: any concurrency above it means the
+// excess sockets are destroyed once they go idle and reopened on the next
+// request — and every reopen is a fresh `dns.lookup()`, the exact cost this
+// pooling exists to avoid. The data path caps free sockets well below max
+// because its objective is throughput management against many hosts; here the
+// objective is maximizing reuse across a handful of upstreams, so holding the
+// full set idle is the point. Cost is a few idle sockets per origin, retired
+// anyway by the agent's idle timeout.
+export const OUTBOUND_MAX_FREE_SOCKETS_PER_HOST = env.positiveIntOrDefault(
+  'OUTBOUND_MAX_FREE_SOCKETS_PER_HOST',
+  OUTBOUND_MAX_SOCKETS_PER_HOST,
+);
+
 // Kill-switch for the untrusted-gateway provenance-param omission. By default
 // (false) the `ar-io-*` query params are NOT sent to untrusted gateways
 // (`trusted: false`), because CDN-fronted gateways such as arweave.net (behind
@@ -678,6 +703,54 @@ export const GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
 
+// Peer AR.IO nodes queried for root TX offsets via `GET /ar-io/offsets/:id`.
+// Same `{ url: priority }` shape as GATEWAYS_ROOT_TX_URLS (lower number =
+// higher priority). Defaults to empty: unlike the header-based `gateways`
+// source, this endpoint only exists on nodes running a release that serves it,
+// so peers are opted in explicitly rather than guessed at.
+export const PEERS_ROOT_TX_URLS = JSON.parse(
+  env.varOrDefault('PEERS_ROOT_TX_URLS', '{}'),
+) as Record<string, number>;
+
+// Validate peer root TX URLs and priorities
+Object.entries(PEERS_ROOT_TX_URLS).forEach(([url, priority]) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in PEERS_ROOT_TX_URLS: ${url}`);
+  }
+  if (typeof priority !== 'number' || priority <= 0) {
+    throw new Error(
+      `Invalid priority in PEERS_ROOT_TX_URLS for ${url}: ${priority}`,
+    );
+  }
+});
+
+// Peer root TX lookup request configuration. The default is aggressive
+// relative to the `gateways` source (10s) because this endpoint is a single
+// indexed read on the peer — a slow response means the peer is unhealthy, not
+// that the work is genuinely expensive, so failing over quickly is correct.
+export const PEERS_ROOT_TX_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+  'PEERS_ROOT_TX_REQUEST_TIMEOUT_MS',
+  '2000',
+);
+
+// Peer root TX lookup rate limiting. Far more permissive than the `gateways`
+// source for the same reason: the peer answers from its index, so this is not
+// a probe that needs throttling to protect the remote node.
+export const PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '100',
+);
+export const PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL = +env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+  '600', // 600 per minute = 10 per second
+);
+export const PEERS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'PEERS_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
+
 // Chain-anchored chunk metadata source (offset → tx + data_root via
 // reference-peer `/chunk/{offset}/data` headers, cross-checked against
 // the chain). Fast-path replacement for the log₂(height) block binary
@@ -722,7 +795,15 @@ export const MANIFEST_RESOLUTION_CACHE_SIZE = env.positiveIntOrDefault(
   5000,
 );
 
-// Root TX index lookup order configuration
+// Root TX index lookup order configuration.
+// Available sources: 'db', 'peers', 'gateways', 'graphql', 'hyperbeam', 'cdb',
+// 'turbo'. Sources are probed in order and the first actionable result wins.
+// - 'peers':    GET /ar-io/offsets/:id against peer AR.IO nodes. One indexed
+//               read on the peer; cheap whether it hits or misses.
+// - 'gateways': HEAD /raw/:id against peer AR.IO gateways, harvesting
+//               X-AR-IO-Root-* headers. Works against any release, but a miss
+//               costs the peer a full retrieval cascade — list it *after*
+//               'peers' so it only serves peers that lack the endpoint.
 export const ROOT_TX_LOOKUP_ORDER = env
   .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql,hyperbeam,cdb')
   .split(',')
@@ -874,6 +955,25 @@ export const PEER_CANDIDATE_COUNT = env.positiveIntOrDefault(
   'PEER_CANDIDATE_COUNT',
   5,
 );
+
+// Exclude gateways the registry reports as `leaving` from the peer pool.
+//
+// A gateway leaves either because its operator withdrew it or because the
+// network marked it non-responsive for 30 consecutive epochs. In both cases it
+// should no longer be serving requests, and the second makes `leaving` a
+// network-consensus liveness signal rather than a mere intent flag.
+//
+// Without this the pool is roughly half corpses: on turbo-gateway gw1
+// (2026-08-28) 334 of 646 registered gateways were `leaving`, and peer errors
+// were dominated by `ENOTFOUND` against hostnames that no longer resolve. Every
+// such peer is a retrieval slot spent to rediscover, one DNS timeout at a time,
+// something the registry already knew.
+//
+// Only an explicit 'leaving' is excluded; unknown or absent status is kept, so
+// a registry that stops reporting status degrades to the previous behaviour
+// instead of emptying the peer list. Set false to restore that behaviour.
+export const SKIP_LEAVING_GATEWAYS =
+  env.varOrDefault('SKIP_LEAVING_GATEWAYS', 'true') === 'true';
 
 // Hedged request configuration
 export const PEER_HEDGE_DELAY_MS = env.nonNegativeIntOrDefault(
@@ -1175,16 +1275,24 @@ export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
 
 // Chunk data retrieval priority order (comma-separated list of sources)
 // Available sources: 'ar-io-network', 'arweave-network', 'legacy-s3'
+//
+// 'arweave-network' (miners) leads by default: miners are protocol-incentivized
+// to store and serve arbitrary chunks, while AR.IO gateways only hold what they
+// happened to cache. Asking the gateway layer first turns the common case into a
+// near-certain miss, and the misses concentrate on whichever gateway originated
+// the data. 'ar-io-network' stays in the chain as a fallback for chunks the
+// miner set cannot serve.
 export const CHUNK_DATA_RETRIEVAL_ORDER = env
-  .varOrDefault('CHUNK_DATA_RETRIEVAL_ORDER', 'ar-io-network,arweave-network')
+  .varOrDefault('CHUNK_DATA_RETRIEVAL_ORDER', 'arweave-network,ar-io-network')
   .split(',');
 
 // Chunk metadata retrieval priority order (comma-separated list of sources)
 // Available sources: 'ar-io-network', 'arweave-network', 'legacy-psql'
+// Ordered miners-first for the same reason as CHUNK_DATA_RETRIEVAL_ORDER above.
 export const CHUNK_METADATA_RETRIEVAL_ORDER = env
   .varOrDefault(
     'CHUNK_METADATA_RETRIEVAL_ORDER',
-    'ar-io-network,arweave-network',
+    'arweave-network,ar-io-network',
   )
   .split(',');
 
@@ -1211,6 +1319,20 @@ export const CHUNK_FIRST_DATA_TIMEOUT_MS = env.nonNegativeIntOrDefault(
   10000,
 );
 
+// Resolve TxChunksDataSource geometry (data_root, offset, size) from the local
+// stable transactions index before the trusted node. Every cold range read
+// otherwise costs two trusted-node requests, which share a 5 req/s budget with
+// the transaction offset importer.
+export const TX_CHUNKS_GEOMETRY_DB_ENABLED =
+  env.varOrDefault('TX_CHUNKS_GEOMETRY_DB_ENABLED', 'true') === 'true';
+
+// Maximum entries in TxChunksDataSource's in-memory cache of locally resolved
+// geometry. Entries are immutable (stable transactions only).
+export const TX_CHUNKS_GEOMETRY_CACHE_SIZE = env.positiveIntOrDefault(
+  'TX_CHUNKS_GEOMETRY_CACHE_SIZE',
+  10000,
+);
+
 // Wall-clock deadline (ms) for serving a single chunk request
 // (/chunk/:offset and /chunk/:offset/data). The per-source timeouts in the
 // retrieval cascade are additive with no overall ceiling, and some awaited
@@ -1224,6 +1346,35 @@ export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
   'CHUNK_SERVE_DEADLINE_MS',
   12000,
 );
+
+// How to treat chunk requests forwarded by another AR.IO gateway
+// (X-AR-IO-Hops >= 1): `off`, `audit` or `enforce`.
+//
+// A peer that asks us for a chunk gives us one second before it gives up
+// (PEER_REQUEST_TIMEOUT_MS in ar-io-chunk-source.ts), while the serve
+// deadline that bounds our own cascade is CHUNK_SERVE_DEADLINE_MS. Remote
+// work started for that caller therefore outlives its patience, and the
+// caller already has its own miner path. The AR.IO peer sources bound
+// forwarding depth with validateHopCount, but the boundary lookup and the
+// Arweave node path carry no such bound, so `enforce` closes that gap at the
+// serve boundary rather than in each source.
+//
+// `audit` changes nothing and records what enforcing would have cost, via
+// chunk_peer_origin_audit_total. Run it before enforcing on any gateway
+// that originates data: a chunk ingested at upload time has no
+// absolute-offset index entry, so it misses the local cache lookup and is
+// reachable only through boundary resolution, which `enforce` skips.
+//
+// Defaults to `off`, preserving existing behavior.
+export const CHUNK_PEER_ORIGIN_MODE = (() => {
+  const value = env.varOrDefault('CHUNK_PEER_ORIGIN_MODE', 'off');
+  if (value !== 'off' && value !== 'audit' && value !== 'enforce') {
+    throw new Error(
+      `Invalid CHUNK_PEER_ORIGIN_MODE: ${value}. Must be off, audit or enforce`,
+    );
+  }
+  return value;
+})();
 
 // Chain fallback for chunk offset requests
 export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =
@@ -2014,12 +2165,36 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
 );
 
 // Max concurrent readdir/stat syscalls during the cleanup tree walk. The walk is
+// Size of the libuv thread pool backing every `fs.promises` call. Node's own
+// default is 4; the runtime reads this from the environment at startup, so this
+// constant only mirrors it for sizing decisions here.
+export const UV_THREADPOOL_SIZE =
+  +env.varOrDefault('UV_THREADPOOL_SIZE', '4') || 4;
+
 // dominated by directory-traversal I/O latency on large, deeply-sharded caches;
 // raising this hides that latency (parallel traversal) at the cost of more
 // concurrent filesystem load. Lower it if the walk contends with request I/O.
+//
+// The default is derived from the libuv thread pool rather than fixed, because
+// that pool is the resource actually being contended. Every `fs.promises` call
+// -- each walk `stat()`, and every filesystem operation on the request path --
+// is served by it, and it is small by default (`UV_THREADPOOL_SIZE`, 4).
+//
+// A fixed default cannot be safe across deployments: 64 is 16x oversubscribed
+// against a stock pool, and on a host that raises the pool to 64 it lets a
+// single worker consume all of it. Several workers run concurrently (chunk data
+// plus one per staging directory), so they must each stay well under the pool
+// size for the total to leave room for request handling.
+//
+// /16 keeps the total for a typical four-worker deployment at a quarter of the
+// pool. That is deliberately conservative: an over-large value degrades the
+// service in a way that is hard to read (the event loop and CPU stay healthy
+// while the process cannot answer HTTP at all), whereas an over-small value
+// only makes cleanup slower. Raise it if cleanup cannot keep up and the pool
+// has headroom.
 export const FS_CLEANUP_WORKER_WALK_CONCURRENCY = +env.varOrDefault(
   'FS_CLEANUP_WORKER_WALK_CONCURRENCY',
-  '64',
+  `${Math.max(1, Math.floor(UV_THREADPOOL_SIZE / 16))}`,
 );
 
 // Cache TTL for the SQLite worker's getDebugInfo response. The /ar-io/admin/debug
@@ -2436,6 +2611,67 @@ export const CHUNK_DATA_CACHE_CLEANUP_THRESHOLD = +env.varOrDefault(
   `${60 * 60 * 4}`, // 4 hours by default
 );
 
+// Disk-pressure watermarks for the chunk data cache cleanup walk. The three
+// watermarks below are opt-in and 0 by default, which keeps the pure age-based
+// behavior: the worker only consults filesystem usage when at least one of them
+// is set. CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS is not a watermark but the
+// floor they escalate against, and it carries a non-zero default; it only takes
+// effect once one of the watermarks turns escalation on.
+//
+// Without them the walk runs unconditionally, which on a large cache atop
+// spinning storage means it never stops: a tree with tens of millions of
+// inodes cannot be traversed within FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION,
+// so a pass never completes and the device stays saturated even when the
+// filesystem has ample free space. Mirrors the equivalent settings on the
+// contiguous data cache.
+
+// Skip the cleanup walk entirely while usage is below this percent (0 disables
+// skipping, i.e. always walk). This is the setting that lets a healthy disk
+// avoid the walk altogether.
+export const CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT = env.percentOrDefault(
+  'CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT',
+  0,
+);
+
+// Escalate to aggressive cleanup at/above this percent, draining back to the
+// low watermark (0 disables).
+export const CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT = env.percentOrDefault(
+  'CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT',
+  0,
+);
+
+// Force aggressive cleanup when free space drops below this many bytes,
+// regardless of percent watermarks (0 disables).
+export const CHUNK_DATA_CACHE_MIN_FREE_BYTES = env.nonNegativeIntOrDefault(
+  'CHUNK_DATA_CACHE_MIN_FREE_BYTES',
+  0,
+);
+
+// Hard floor under aggressive cleanup: never evict chunk data younger than
+// this, however tight disk pressure gets.
+export const CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS =
+  env.nonNegativeIntOrDefault(
+    'CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS',
+    60 * 60, // 1 hour
+  );
+
+// Fail fast on a watermark pair that can never drain. The worker latches into
+// the aggressive regime at the high watermark and only clears below the low one,
+// so a low watermark at or above the high one leaves it latched permanently.
+// A low watermark of 0 is fine: the latch has an explicit escape for it.
+if (
+  CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT > 0 &&
+  CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT > 0 &&
+  CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT >=
+    CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT
+) {
+  throw new Error(
+    'CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT must be below ' +
+      'CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT when both are enabled, got: ' +
+      `${CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT} >= ${CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT}`,
+  );
+}
+
 // Whether or not to cleanup dead symlinks in chunk cache directories
 export const ENABLE_CHUNK_SYMLINK_CLEANUP =
   env.varOrDefault('ENABLE_CHUNK_SYMLINK_CLEANUP', 'true') === 'true';
@@ -2446,6 +2682,95 @@ export const CHUNK_SYMLINK_CLEANUP_INTERVAL = +env.varOrDefault(
   `${60 * 60 * 24}`, // 24 hours by default
 );
 
+// Chunk data cache cleanup INDEX (ADR 005). When enabled, each cached chunk
+// records {data_root, size, last_write, last_access, tier} in a SQLite index at
+// write time, and a disk-pressure evictor reclaims by querying the (SSD-backed)
+// DB instead of walking the HDD-backed chunk tree. Mirrors the contiguous data
+// cache index below, and uses the same LOW/HIGH_WATERMARK_PERCENT +
+// MIN_FREE_BYTES thresholds above.
+export const ENABLE_CHUNK_DATA_CACHE_INDEX =
+  env.varOrDefault('ENABLE_CHUNK_DATA_CACHE_INDEX', 'false') === 'true';
+
+// How often the index-driven evictor checks disk pressure (ms).
+export const CHUNK_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
+  env.positiveIntOrDefault(
+    'CHUNK_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS',
+    60000,
+  );
+
+// Max index rows considered (and chunks unlinked) per batch within a sweep.
+// Concurrent data-root directory removals per eviction batch. DERIVED from
+// UV_THREADPOOL_SIZE rather than fixed, because every fs.rm(recursive) occupies
+// a libuv thread for the whole walk-and-unlink: a hard-coded 50 takes the
+// entire pool on a stock node (UV_THREADPOOL_SIZE defaults to 4) and queues
+// every chunk read behind it -- on a device that is, by definition, already
+// saturated when the evictor is running. Same shape as
+// FS_CLEANUP_WORKER_WALK_CONCURRENCY, one eighth of the pool rather than a
+// sixteenth because these are removals rather than a sustained walk.
+export const CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY =
+  env.positiveIntOrDefault(
+    'CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY',
+    Math.max(1, Math.floor(UV_THREADPOOL_SIZE / 8)),
+  );
+
+export const CHUNK_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
+  env.positiveIntOrDefault('CHUNK_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', 1000);
+
+// Bytes the evictor aims to free per eviction batch. Chunk eviction has to be
+// SIZE-AWARE, not purely coldest-first: the median data_root holds ~2 chunks
+// (~512 KiB), so a coldest-first batch of N rows can free almost nothing while
+// still paying N index reads and N unlinks. Evicting toward a byte target
+// instead lets a sweep make real progress against disk pressure.
+export const CHUNK_DATA_CACHE_INDEX_EVICTION_TARGET_BYTES =
+  env.nonNegativeIntOrDefault(
+    'CHUNK_DATA_CACHE_INDEX_EVICTION_TARGET_BYTES',
+    1073741824, // 1 GiB
+  );
+
+// Whether to refresh a cached chunk's last_access on cache HITS. On => LRU
+// eviction; off => FIFO by cache-write time. Operators fronted by an edge cache
+// see only a fraction of reads at the core, so the recency signal is weak
+// there and turning this off avoids the extra index writes.
+export const CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ =
+  env.varOrDefault('CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ', 'true') === 'true';
+
+// One-time backfill/reconciler: on startup, walk the existing on-disk chunk
+// cache once and seed index rows for chunks not already tracked
+// (insert-if-absent, so live entries are untouched). Needed to adopt a
+// pre-existing cache that predates the index; enable once, then disable. The
+// walk is HDD-bound and runs in the background without blocking startup.
+export const ENABLE_CHUNK_DATA_CACHE_INDEX_BACKFILL =
+  env.varOrDefault('ENABLE_CHUNK_DATA_CACHE_INDEX_BACKFILL', 'false') ===
+  'true';
+
+// Rows buffered per backfill insert transaction.
+export const CHUNK_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE =
+  env.positiveIntOrDefault('CHUNK_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE', 2000);
+
+// RESERVED / CURRENTLY INERT -- the "hybrid tail" knobs from ADR 005
+// Departure 2. The idea is to leave data roots with only a handful of chunks
+// (a long tail that the index would track at a poor bytes-per-row ratio) to the
+// filesystem-walk cleanup worker, and index only the large roots. Nothing reads
+// these two values yet: the knobs exist so the shape is settled and the
+// deployment surface is stable, but ENABLING THE FLAG DOES NOTHING TODAY.
+// Wire the behavior before documenting it as functional.
+export const ENABLE_CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL =
+  env.varOrDefault('ENABLE_CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL', 'false') ===
+  'true';
+
+// RESERVED / CURRENTLY INERT (see above): the chunk count at or below which a
+// data root would be treated as "tail" and left to the filesystem walk.
+export const CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL_CHUNK_THRESHOLD =
+  env.positiveIntOrDefault(
+    'CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL_CHUNK_THRESHOLD',
+    100,
+  );
+
+// NOTE: the eviction age floor for this index
+// (CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS) is DERIVED, not read from the
+// environment, and is declared further down alongside the chunk ingest cache
+// settings it depends on. See "Chunk data cache index eviction age floor".
+
 //
 // Contiguous data caching
 //
@@ -2454,6 +2779,38 @@ export const CHUNK_SYMLINK_CLEANUP_INTERVAL = +env.varOrDefault(
 export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
   'CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD',
   '',
+);
+
+// Whether to sweep orphaned files out of the download staging directories
+// (`data/contiguous/tmp`, `data/tmp/ans-104`, `data/tmp/data-root`).
+//
+// `FsDataStore` writes every cache entry to a random temp path first, then
+// renames it into the content-addressed blob tree on success (or unlinks it on
+// failure). A temp file that outlives its request is therefore always garbage:
+// it was abandoned by a process crash, a pipeline that never settled, or a
+// failed unlink.
+//
+// Nothing else reclaims those files. The index-driven evictor deletes by
+// content hash (`data/<hh>/<hh>/<hash>`), and the backfill reconciler only
+// walks the blob tree — neither can see the staging directory. The filesystem
+// cleanup worker covers it only incidentally, via its `data/contiguous` parent
+// path, and that worker is not constructed when the cache index is enabled. So
+// switching to the index evictor silently removes the staging directory's only
+// garbage collector, and orphans accumulate without bound.
+//
+// This sweeper runs regardless of which eviction strategy is in use.
+export const ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP =
+  env.varOrDefault('ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP', 'true') ===
+  'true';
+
+// Age in seconds past which a file in the staging directory is considered
+// orphaned. Must comfortably exceed the longest legitimate single cache write:
+// a slow, large upstream fetch can hold a temp file open for a long time, and
+// deleting one in flight loses that entry (the rename then fails and the
+// request falls back to upstream).
+export const CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD = +env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD',
+  `${60 * 60 * 6}`, // 6 hours
 );
 
 // The delay in seconds before the first contiguous data cache cleanup runs.
@@ -2528,6 +2885,26 @@ export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
 // Max index rows evicted (and blobs unlinked) per batch within a sweep.
 export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
   +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', '1000');
+
+// Concurrent blob unlinks per eviction batch. DERIVED from UV_THREADPOOL_SIZE
+// for the same reason as CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY: every
+// unlink occupies a libuv thread, so a hard-coded 50 takes the entire pool on a
+// stock node (UV_THREADPOOL_SIZE defaults to 4) and queues every other file
+// operation behind it -- on a device that is, by definition, already saturated
+// when the evictor is running.
+export const CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY =
+  env.positiveIntOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY',
+    Math.max(1, Math.floor(UV_THREADPOOL_SIZE / 8)),
+  );
+
+// Batches per sweep. batchSize * this is the upper bound on unlinks issued by a
+// single sweep, so it bounds how long one sweep can hold the disk and the pool.
+export const CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP =
+  env.positiveIntOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP',
+    50,
+  );
 
 // Whether to refresh a cache entry's last_access (and promote its tier on a
 // preferred-ArNS read) on cache HITS. On => LRU eviction; off => FIFO by
@@ -2638,8 +3015,14 @@ export const ARNS_CACHE_MAX_KEYS = +env.varOrDefault(
   '10000',
 );
 
+// Resolve ArNS names authoritatively from chain first (on-demand ANT lookups),
+// falling back to a trusted-gateway hop only if the on-demand resolver fails.
+// This makes each gateway self-sufficient rather than a client of a few trusted
+// gateways (more decentralized) and reads the source of truth (the ANT record)
+// instead of another gateway's possibly-stale cached answer. Operators can revert
+// to the previous behavior with ARNS_RESOLVER_PRIORITY_ORDER=gateway,on-demand.
 export const ARNS_RESOLVER_PRIORITY_ORDER = env
-  .varOrDefault('ARNS_RESOLVER_PRIORITY_ORDER', 'gateway,on-demand')
+  .varOrDefault('ARNS_RESOLVER_PRIORITY_ORDER', 'on-demand,gateway')
   .split(',');
 
 export const ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
@@ -2647,9 +3030,20 @@ export const ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
   '3000',
 );
 
+// Budget for the LAST resolver in the chain, which is allowed to run longer
+// than the others because nothing follows it.
+//
+// Lowered from 30000 alongside the on-demand-first default above, because that
+// flip is what makes this timeout user-visible. The gateway resolver is now
+// last, so a name that does not exist costs the full on-demand attempt
+// (bounded by ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS, ~3s) and then the whole of
+// this budget before 404ing. At 30000 that is a ~33s 404; measured on a
+// production gateway running this order since 2026-06-08, and the reason that
+// operator has overridden it to 5000 ever since. Real names are unaffected:
+// on-demand resolves them first and never reaches this resolver.
 export const ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
   'ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS',
-  '30000',
+  '5000',
 );
 
 export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(
@@ -2707,6 +3101,39 @@ export const ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS =
     'ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS',
     `${2 * 60}`, // 2 minutes
   );
+
+/**
+ * Page size used when walking the ArNS registry during name-cache hydration.
+ *
+ * This is a round-trip control, not a memory control. The Solana-backed
+ * `getArNSRecords` has no server-side cursor: every call issues a full
+ * `getProgramAccounts` scan of the ArNS program and then slices the result
+ * client-side. A page size below the registry size therefore repeats that
+ * scan once per page and discards all but one slice.
+ *
+ * Larger values are safe: a backend that caps the page server-side simply
+ * returns fewer items plus a cursor, and the hydration loop continues as
+ * before.
+ */
+export const ARNS_NAME_LIST_PAGE_SIZE = env.positiveIntOrDefault(
+  'ARNS_NAME_LIST_PAGE_SIZE',
+  10_000,
+);
+
+/**
+ * Per-page fetch attempts made by the name-cache hydration loop.
+ *
+ * These sit on top of whatever the `ARIORead` implementation already does:
+ * the Solana reader wraps every call in the SDK's `withRetry` (3 attempts),
+ * so the effective worst case is `ARNS_NAME_LIST_MAX_RETRIES * 3` requests
+ * for a single page -- and on that reader each request is a full
+ * `getProgramAccounts` scan of the ArNS program. Lower it where the reader
+ * already retries on your behalf.
+ */
+export const ARNS_NAME_LIST_MAX_RETRIES = env.positiveIntOrDefault(
+  'ARNS_NAME_LIST_MAX_RETRIES',
+  3,
+);
 
 export const ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS =
   +env.varOrDefault(
@@ -2827,9 +3254,26 @@ export const LEGACY_AWS_S3_ENDPOINT = env.varOrUndefined(
 // Whether or not to bypass the header cache
 export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
 
-// Whether or not to bypass the data cache (read-through data cache)
+// Whether or not to bypass the data cache (read-through data cache) entirely:
+// no reads from it, no writes to it, no background range caching.
+//
+// Prefer SKIP_DATA_CACHE_WRITES when the goal is to stop a full cache volume
+// from growing: this flag also stops *serving* from the existing cache, so
+// every request falls through to upstream, and it stops the cache index being
+// populated (which is what the evictor needs in order to reclaim anything).
 export const SKIP_DATA_CACHE =
   env.varOrDefault('SKIP_DATA_CACHE', 'false') === 'true';
+
+// Whether to stop writing new entries to the contiguous data cache while
+// continuing to serve reads from it.
+//
+// This is the "stop the bleeding" control for a cache volume under disk
+// pressure. Unlike SKIP_DATA_CACHE it leaves the read path and the cache index
+// intact, so cached data keeps being served and the index-driven evictor can
+// keep reclaiming space. SKIP_DATA_CACHE implies this.
+export const SKIP_DATA_CACHE_WRITES =
+  env.varOrDefault('SKIP_DATA_CACHE_WRITES', 'false') === 'true' ||
+  SKIP_DATA_CACHE;
 
 //
 // Negative data cache
@@ -2898,6 +3342,92 @@ export const BACKGROUND_CACHE_RANGE_CONCURRENCY = env.positiveIntOrDefault(
   1,
 );
 
+// Guards on the foreground (on-demand) full-item cache write path. Both
+// default to unbounded, preserving pre-existing behavior; set them to bound
+// how much unfinished data can accumulate in contiguous/tmp during a burst.
+//
+// 0 disables the cap: any size is eligible for a foreground cache write.
+export const FOREGROUND_CACHE_MAX_SIZE = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_MAX_SIZE',
+  0,
+);
+
+// 0 disables the limit: unlimited concurrent foreground cache writes. When
+// set, requests beyond the limit are still served -- they just stream through
+// without being written to the cache.
+export const FOREGROUND_CACHE_CONCURRENCY = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_CONCURRENCY',
+  0,
+);
+
+// How long a request will wait to be served by another request's in-flight
+// fetch of the same ID before giving up and fetching independently.
+//
+// This is the safety valve on foreground coalescing. A leader whose stream
+// wedges never reaches its pipeline callback, so without a bound its map entry
+// would outlive it and park every later request for that ID for the life of
+// the process -- turning a transient stall into permanent unavailability for
+// one ID. Timing out restores pre-coalescing behavior (each request fetches
+// for itself) for exactly the wedged case. Matches the wall-clock convention
+// of ANS104_UNBUNDLE_GET_DATA_WALL_CLOCK_TIMEOUT_MS. 0 waits indefinitely.
+export const FOREGROUND_CACHE_COALESCE_TIMEOUT_MS = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_COALESCE_TIMEOUT_MS',
+  300000,
+);
+
+// Smallest known object size, in bytes, that is eligible for foreground
+// coalescing. Below it a request fetches for itself exactly as it did before
+// coalescing existed.
+//
+// Coalescing trades time-to-first-byte for deduplication: a waiter is served
+// from the blob the leader finalizes, so it receives nothing until the leader
+// finishes. That trade is worth making for a large object, where the duplicate
+// cost is measured in gigabytes and the caller is going to wait regardless. It
+// is a poor trade for a small one, which duplicates cheaply and completes fast.
+//
+// Measured on a saturated production gateway carrying ~1 TB of staged
+// duplicates: objects over 1 GiB accounted for 94.8% of redundant bytes and
+// everything under 100 MiB for 0.2%. A 100 MiB floor there would have retained
+// 99.83% of the reclaimed bytes while leaving roughly half of all staged
+// objects, by count, streaming independently.
+//
+// The size used is the one already known from the attributes store at the
+// point coalescing is decided -- data.size is not available until the upstream
+// fetch returns, which is after a leader has claimed the ID. An object whose
+// size is unknown is therefore treated as eligible, so the floor can only ever
+// narrow coalescing where the object is positively known to be small and can
+// never weaken stampede protection relative to leaving it unset.
+//
+// 0 disables the floor: every eligible full-object fetch coalesces.
+export const FOREGROUND_CACHE_COALESCE_MIN_SIZE = env.nonNegativeIntOrDefault(
+  'FOREGROUND_CACHE_COALESCE_MIN_SIZE',
+  0,
+);
+
+// How many times one request may attach to another's in-flight fetch before
+// giving up on sharing and fetching for itself. Minimum 1.
+//
+// This is leader re-election. With a single attempt, a leader that fails
+// releases all of its waiters at once and every one of them starts its own
+// fetch in the same tick -- the same total work as having no coalescing, but
+// delivered as one synchronised burst instead of spread over the arrivals that
+// produced it. Allowing a second attempt lets the first waiter back through
+// claim the ID and the rest attach to it, so a failure costs one retry rather
+// than a fan-out.
+//
+// Only a genuine failure re-elects. A leader that succeeded without caching
+// would be followed by a new leader declined by the same policy, and a leader
+// that timed out still owns its map entry, so re-attaching would wait on the
+// fetch we just abandoned. Both send the waiter straight to its own fetch.
+//
+// Each attempt can cost up to FOREGROUND_CACHE_COALESCE_TIMEOUT_MS in the
+// worst case, so raising this raises the worst-case wait proportionally. 2 is
+// one re-election; 1 restores the un-elected behavior exactly.
+export const FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS = env.positiveIntOrDefault(
+  'FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS',
+  2,
+);
+
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',
@@ -2941,6 +3471,16 @@ export const ARIO_ANT_PROGRAM_ID = env.varOrUndefined('ARIO_ANT_PROGRAM_ID');
 //
 // Rate Limiter
 //
+
+/**
+ * Directory the /ar-io/indexes routes serve from: what the index-swarm
+ * sidecar publishes. Read only; the gateway never writes here. The routes
+ * serve only what the signed publication in this directory lists.
+ */
+export const INDEXES_PUBLISHED_DIR = env.varOrDefault(
+  'INDEXES_PUBLISHED_DIR',
+  'data/indexes/published',
+);
 
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
@@ -3043,6 +3583,94 @@ export const CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS =
     3600, // 1 hour
   );
 
+//
+// Chunk data cache index eviction age floor (ADR 005)
+//
+
+/**
+ * Derive the minimum age a cached chunk must reach before the index-driven
+ * evictor may reclaim it.
+ *
+ * This is a CORRECTNESS control, not a tuning knob, which is why it is derived
+ * rather than read from its own environment variable: an operator-settable
+ * floor can silently drift out of step with the ingest configuration it has to
+ * respect, and the resulting failure is invisible.
+ *
+ * When the optimistic chunk ingest cache is on, this gateway is the only place
+ * a freshly POSTed chunk lives until its data root confirms on chain. Evicting
+ * such a chunk before its confirmation window closes breaks upload propagation
+ * -- and it breaks it SILENTLY: the poster got its 200, the chunk simply is not
+ * there any more when the network comes asking, so the failure surfaces (if at
+ * all) as an unrelated "data unavailable" much later.
+ *
+ * The ingest cache has two confirmation leashes:
+ *   - CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS (default 21600 / 6h) for
+ *     open-ingest chunks, and
+ *   - CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS (default 86400 / 24h)
+ *     for allowlisted posters.
+ * BOTH are taken into account. The allowlist timeout is the longer only at
+ * stock defaults; they are independent settings, so relying on that ordering
+ * would leave an open-ingest chunk evictable before its window closes the
+ * moment an operator raises the open timeout. Taking
+ * CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS alone would leave an allowlisted
+ * chunk evictable well before its confirmation window expires -- on the
+ * production gw2 configuration (AGGRESSIVE=7200, ALLOWLIST_TIMEOUT=14400) that
+ * gap is 2h; at stock defaults (3600 vs 86400) it is 23h.
+ *
+ * So: with ingest caching ON the floor is max(aggressive min age, allowlist
+ * confirmation timeout) -- 86400s / 24h at stock defaults, 14400s / 4h on gw2.
+ * With ingest caching OFF (the default) there is no locally-originated chunk to
+ * protect and the floor is just CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
+ * the same floor the filesystem-walk cleanup worker honors.
+ *
+ * Exported as a pure function so the derivation can be tested independently of
+ * the module-load-time environment parsing.
+ */
+export function deriveChunkDataCacheMinAgeSeconds({
+  ingestCacheEnabled,
+  aggressiveMinAgeSeconds,
+  confirmationTimeoutSeconds,
+  allowlistConfirmationTimeoutSeconds,
+}: {
+  ingestCacheEnabled: boolean;
+  aggressiveMinAgeSeconds: number;
+  confirmationTimeoutSeconds: number;
+  allowlistConfirmationTimeoutSeconds: number;
+}): number {
+  if (!ingestCacheEnabled) {
+    return aggressiveMinAgeSeconds;
+  }
+  // Take the maximum of BOTH confirmation windows, not just the allowlist one.
+  // They are independent environment variables: the allowlist timeout is the
+  // longer only at stock defaults, and an operator who raises
+  // CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS above it would otherwise get a
+  // floor below the open-ingest window -- reintroducing exactly the silent
+  // eviction-before-confirmation this derivation exists to prevent. Deriving
+  // from the actual configuration rather than from the default ordering is the
+  // whole point.
+  return Math.max(
+    aggressiveMinAgeSeconds,
+    confirmationTimeoutSeconds,
+    allowlistConfirmationTimeoutSeconds,
+  );
+}
+
+// Chunks younger than this are never eviction candidates, however tight disk
+// pressure gets. ORDERING CONSTRAINT: this must be declared after all three of
+// its inputs -- CHUNK_INGEST_CACHE_ENABLED (the master gate, default false),
+// CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS (default 3600) and
+// CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS (default 86400). Moving
+// it up next to the other CHUNK_DATA_CACHE_INDEX_* knobs would read them as
+// undefined (TDZ / NaN), which is why it lives down here instead.
+export const CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS =
+  deriveChunkDataCacheMinAgeSeconds({
+    ingestCacheEnabled: CHUNK_INGEST_CACHE_ENABLED,
+    aggressiveMinAgeSeconds: CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS,
+    confirmationTimeoutSeconds: CHUNK_INGEST_CONFIRMATION_TIMEOUT_SECONDS,
+    allowlistConfirmationTimeoutSeconds:
+      CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS,
+  });
+
 // ArNS names to exclude from rate limiting
 export const RATE_LIMITER_ARNS_ALLOWLIST =
   env
@@ -3108,8 +3736,17 @@ export const X_402_USDC_SETTLE_TIMEOUT_MS = +env.varOrDefault(
   '5000', // 5 seconds
 );
 
-// Paywall customization (optional)
+// Paywall customization (optional). This is the PUBLIC CDP Client API key used
+// to brand/serve the paywall UI. It is NOT a facilitator credential — passing it
+// where an API key id belongs makes CDP reject every verify with 401.
 export const X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+
+// CDP API key ID, paired with CDP_API_KEY_SECRET to authenticate against the
+// Coinbase facilitator. Required for mainnet (`base`); without a working pair
+// the SDK silently falls back to X_402_USDC_FACILITATOR_URL, which for the
+// common `facilitator.x402.rs` value supports testnets ONLY, so payments fail
+// either way.
+export const X_402_CDP_API_KEY_ID = env.varOrUndefined('CDP_API_KEY_ID');
 
 // CDP Secret API Key for session token generation (optional)
 // Load from file if CDP_API_KEY_SECRET_FILE is set, otherwise use CDP_API_KEY_SECRET
@@ -3128,6 +3765,64 @@ if (CDP_API_KEY_SECRET_FILE !== undefined) {
 }
 
 export const X_402_CDP_CLIENT_SECRET = env.varOrUndefined('CDP_API_KEY_SECRET');
+
+/**
+ * The credential actually used to authenticate against the Coinbase
+ * facilitator.
+ *
+ * Prefers CDP_API_KEY_ID. Falls back to X_402_CDP_CLIENT_KEY because operators
+ * who hit the 401 before this was fixed were told, correctly for the code at
+ * the time, to put their API key id in X_402_CDP_CLIENT_KEY. Reading only
+ * CDP_API_KEY_ID would turn that working workaround into a silent fallback to
+ * X_402_USDC_FACILITATOR_URL — which for the common `facilitator.x402.rs` value
+ * cannot settle on mainnet at all. Breaking a working deployment while fixing a
+ * broken one is not an acceptable trade, so the fallback stays and is warned
+ * about instead.
+ */
+export const X_402_CDP_FACILITATOR_KEY_ID = resolveFacilitatorKeyId(
+  X_402_CDP_API_KEY_ID,
+  X_402_CDP_CLIENT_KEY,
+);
+
+if (
+  ENABLE_X_402_USDC_DATA_EGRESS &&
+  X_402_CDP_API_KEY_ID === undefined &&
+  X_402_CDP_CLIENT_KEY !== undefined
+) {
+  console.warn(
+    '[x402] Authenticating the CDP facilitator with X_402_CDP_CLIENT_KEY. ' +
+      'That variable is the PUBLIC paywall client key; the facilitator wants an ' +
+      'API key id. Set CDP_API_KEY_ID instead — this fallback exists only so ' +
+      'that pre-existing workarounds keep working, and it also leaks the value ' +
+      'into the paywall HTML.',
+  );
+}
+
+/**
+ * Mainnet cannot settle without working CDP credentials. When either is
+ * missing the SDK silently falls back to X_402_USDC_FACILITATOR_URL, and the
+ * facilitators commonly configured there (facilitator.x402.rs, x402.org)
+ * support testnets only — so every payment fails verification while the
+ * gateway keeps advertising x402 as enabled.
+ *
+ * This warns rather than throws: a custom mainnet-capable facilitator URL is a
+ * legitimate configuration, and refusing to boot would take down deployments
+ * that are merely mis-earning rather than mis-serving.
+ */
+if (
+  ENABLE_X_402_USDC_DATA_EGRESS &&
+  X_402_USDC_NETWORK === 'base' &&
+  (X_402_CDP_FACILITATOR_KEY_ID === undefined ||
+    X_402_CDP_CLIENT_SECRET === undefined)
+) {
+  console.warn(
+    '[x402] MAINNET IS ENABLED WITHOUT COMPLETE CDP CREDENTIALS. ' +
+      `Falling back to ${X_402_USDC_FACILITATOR_URL}. Unless that facilitator ` +
+      'supports Base mainnet, EVERY payment will fail verification and the ' +
+      'gateway will earn nothing while still returning 402s. Set CDP_API_KEY_ID ' +
+      'and CDP_API_KEY_SECRET.',
+  );
+}
 
 // Validate X402 requires rate limiter
 if (ENABLE_X_402_USDC_DATA_EGRESS && !ENABLE_RATE_LIMITER) {

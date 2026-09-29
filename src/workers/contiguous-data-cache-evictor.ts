@@ -12,14 +12,20 @@ import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 import { ContiguousDataCacheIndex, ContiguousDataStore } from '../types.js';
 
-// Bound work per sweep so a large backlog is reclaimed over several sweeps
-// rather than one unbounded pass; the next sweep resumes.
-const MAX_BATCHES_PER_SWEEP = 50;
-
-// Concurrent blob unlinks per batch. The index row deletes are already batched
-// into one transaction; the unlinks are the remaining (HDD-bound) cost, so run
-// them in parallel to saturate the disk instead of one seek at a time.
-const UNLINK_CONCURRENCY = 50;
+// Explicit limits are validated rather than clamped: Math.max(1, NaN) is NaN,
+// which makes the sweep loop run zero batches and evict nothing; Infinity
+// removes the bound entirely; and a fractional unlinkConcurrency makes p-limit
+// throw mid-sweep, after the index rows are deleted but before the blobs are
+// unlinked, leaving orphans for the reconciler. Failing at construction is the
+// only outcome that cannot silently misbehave in production.
+function positiveIntLimit(name: string, value: number): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(
+      `${name} must be a positive integer, received ${String(value)}`,
+    );
+  }
+  return value;
+}
 
 /**
  * Disk-pressure evictor for the contiguous data cache, driven by the SQLite
@@ -44,6 +50,8 @@ export class ContiguousDataCacheEvictor {
   private minFreeBytes: number;
   private intervalMs: number;
   private batchSize: number;
+  private unlinkConcurrency: number;
+  private maxBatchesPerSweep: number;
 
   private timer: NodeJS.Timeout | undefined;
   private sweeping = false;
@@ -58,6 +66,8 @@ export class ContiguousDataCacheEvictor {
     minFreeBytes = config.CONTIGUOUS_DATA_CACHE_MIN_FREE_BYTES,
     intervalMs = config.CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS,
     batchSize = config.CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE,
+    unlinkConcurrency = config.CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY,
+    maxBatchesPerSweep = config.CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP,
   }: {
     log: Logger;
     dataStore: ContiguousDataStore;
@@ -68,6 +78,8 @@ export class ContiguousDataCacheEvictor {
     minFreeBytes?: number;
     intervalMs?: number;
     batchSize?: number;
+    unlinkConcurrency?: number;
+    maxBatchesPerSweep?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataStore = dataStore;
@@ -78,6 +90,14 @@ export class ContiguousDataCacheEvictor {
     this.minFreeBytes = minFreeBytes;
     this.intervalMs = intervalMs;
     this.batchSize = Math.max(1, batchSize);
+    this.unlinkConcurrency = positiveIntLimit(
+      'unlinkConcurrency',
+      unlinkConcurrency,
+    );
+    this.maxBatchesPerSweep = positiveIntLimit(
+      'maxBatchesPerSweep',
+      maxBatchesPerSweep,
+    );
   }
 
   start(): void {
@@ -169,7 +189,7 @@ export class ContiguousDataCacheEvictor {
 
       let evicted = 0;
       let bytesFreed = 0;
-      for (let batch = 0; batch < MAX_BATCHES_PER_SWEEP; batch++) {
+      for (let batch = 0; batch < this.maxBatchesPerSweep; batch++) {
         const candidates =
           await this.cacheIndex.selectContiguousDataCacheEvictionCandidates(
             this.batchSize,
@@ -201,7 +221,7 @@ export class ContiguousDataCacheEvictor {
           metrics.cacheIndexEvictedTotal.inc({ reason: 'disk_pressure' });
           metrics.cacheIndexEvictedBytesTotal.inc(size);
         }
-        const unlinkLimit = pLimit(UNLINK_CONCURRENCY);
+        const unlinkLimit = pLimit(this.unlinkConcurrency);
         await Promise.all(
           deletedHashes.map((hash) =>
             unlinkLimit(() =>

@@ -37,7 +37,23 @@ export interface PeerSuccessMetrics {
 
 export type WeightCategory = 'data' | 'chunk' | string;
 
-export interface FormattedPeer {
+/**
+ * What the gateway registry says about a peer, kept from the same read that
+ * supplies its URL. Public on-chain data, surfaced so that a consumer of the
+ * peer list (the index-swarm sidecar, a client choosing gateways) does not
+ * have to read the registry again itself.
+ */
+export interface PeerRegistryRecord {
+  /** The gateway's registered wallet. */
+  wallet: string;
+  /** The key the gateway observes and signs with. */
+  observerAddress?: string;
+  /** The operator's own stake, as the registry reports it. */
+  operatorStake?: number;
+  status?: string;
+}
+
+export interface FormattedPeer extends Partial<PeerRegistryRecord> {
   url: string;
   weights: Record<WeightCategory, number>;
 }
@@ -54,6 +70,8 @@ export class ArIOPeerManager implements WithFormattedPeers {
   private updatePeersRefreshIntervalMs: number;
   private networkProcess: ARIORead;
   private peers: Record<string, string> = {};
+  /** Registry fields for each peer, by wallet; replaced with `peers`. */
+  private records: Record<string, PeerRegistryRecord> = {};
   private intervalId?: NodeJS.Timeout;
 
   // Weight management per category
@@ -441,7 +459,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
   ): Record<string, FormattedPeer> {
     const peers: Record<string, FormattedPeer> = {};
 
-    for (const [_walletAddress, url] of Object.entries(this.getPeers())) {
+    for (const [walletAddress, url] of Object.entries(this.getPeers())) {
       try {
         const urlObj = new URL(url);
         const defaultPort = urlObj.protocol === 'https:' ? '443' : '80';
@@ -456,6 +474,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
         }
 
         peers[key] = {
+          ...this.records[walletAddress],
           url: url,
           weights,
         };
@@ -493,12 +512,34 @@ export class ArIOPeerManager implements WithFormattedPeers {
     await this.updatePeerList();
   }
 
+  /**
+   * Refresh the peer pool from the AR.IO gateway registry.
+   *
+   * Pages through the registry, rebuilds the hash ring, and reconciles the
+   * per-category weight maps so new peers start at the category default and
+   * departed peers stop being selected.
+   *
+   * Two gateways are excluded: our own (by wallet), and any the registry
+   * reports as `leaving`. A gateway leaves either because its operator
+   * withdrew it or because the network marked it non-responsive for 30
+   * consecutive epochs, so the status doubles as a consensus liveness signal.
+   * Only an explicit `leaving` is filtered — see {@link
+   * config.SKIP_LEAVING_GATEWAYS} for why unknown status is deliberately kept
+   * — and exclusions are counted by `ar_io_peers_skipped_leaving_total`.
+   *
+   * A registry fetch failure leaves the previous peer list in place rather
+   * than emptying it.
+   */
   private async updatePeerList(): Promise<void> {
     const log = this.log.child({ method: 'updatePeerList' });
     log.info('Fetching AR.IO network peer list');
 
     const peers: Record<string, string> = {};
+    const records: Record<string, PeerRegistryRecord> = {};
+    const skipLeaving = config.SKIP_LEAVING_GATEWAYS;
+    let skippedLeaving = 0;
     let cursor: string | undefined;
+    let failed = false;
     do {
       try {
         const { nextCursor, items } =
@@ -516,8 +557,43 @@ export class ArIOPeerManager implements WithFormattedPeers {
             continue;
           }
 
+          // Skip gateways the registry says are on their way out.
+          //
+          // A gateway leaves the network either because its operator withdrew
+          // it or because the network marked it as non-responsive for 30
+          // consecutive epochs. Either way it should no longer be receiving
+          // requests, and the second case makes `leaving` a consensus signal
+          // that the gateway is dead -- observed by the whole network rather
+          // than rediscovered locally, one DNS timeout at a time.
+          //
+          // Measured on turbo-gateway gw1 (2026-08-28): 334 of 646 registered
+          // gateways were `leaving`, and they accounted for the bulk of the
+          // peer failures -- 40% of all peer errors were `ENOTFOUND` against
+          // hostnames that no longer resolve.
+          //
+          // Deliberately excludes ONLY on an explicit 'leaving'. A gateway
+          // whose status is absent or unrecognised is kept, so a registry or
+          // SDK that does not report status degrades to the previous behaviour
+          // rather than emptying the peer list.
+          if (skipLeaving && gateway.status === 'leaving') {
+            skippedLeaving++;
+            continue;
+          }
+
           peers[gateway.gatewayAddress] =
             `${gateway.settings.protocol}://${gateway.settings.fqdn}`;
+          records[gateway.gatewayAddress] = {
+            wallet: gateway.gatewayAddress,
+            ...(typeof gateway.observerAddress === 'string'
+              ? { observerAddress: gateway.observerAddress }
+              : {}),
+            ...(typeof gateway.operatorStake === 'number'
+              ? { operatorStake: gateway.operatorStake }
+              : {}),
+            ...(typeof gateway.status === 'string'
+              ? { status: gateway.status }
+              : {}),
+          };
         }
         cursor = nextCursor;
       } catch (error: any) {
@@ -528,16 +604,27 @@ export class ArIOPeerManager implements WithFormattedPeers {
             stack: error.stack,
           },
         );
+        failed = true;
         break;
       }
     } while (cursor !== undefined);
 
+    // Keep what we had. Applying a failed read would replace the peer list
+    // with the pages fetched before the error, which on a first-page failure
+    // is nothing at all, and every peer-first retrieval would fail until the
+    // next successful refresh.
+    if (failed) return;
+
     log.info('Successfully fetched AR.IO network peer list', {
       count: Object.keys(peers).length,
+      skippedLeaving,
+      skipLeavingEnabled: skipLeaving,
     });
+    metrics.arIOPeersSkippedLeavingTotal.inc(skippedLeaving);
 
     const oldPeers = this.peers;
     this.peers = peers;
+    this.records = records;
     this.hashRing.rebuild(Object.values(peers));
 
     // Update weights for all categories

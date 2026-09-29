@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { buildArIoInfo } from './ar-io-info-builder.js';
+import { buildArIoInfo, plainDecimal } from './ar-io-info-builder.js';
 import { calculateX402Price } from '../payments/x402-pricing.js';
 
 describe('buildArIoInfo', () => {
@@ -585,5 +585,61 @@ describe('buildArIoInfo', () => {
     });
 
     assert.strictEqual(result.httpsig, undefined);
+  });
+
+  describe('indexes', () => {
+    const base = {
+      wallet: 'test-wallet',
+      programIds: {
+        core: undefined,
+        gar: undefined,
+        arns: undefined,
+        ant: undefined,
+      },
+      ans104UnbundleFilter: {},
+      ans104IndexFilter: {},
+      release: 'r123',
+      bundlerUrls: [],
+    };
+
+    it('advertises published indexes where other gateways can find them', () => {
+      const result = buildArIoInfo({
+        ...base,
+        indexNames: ['root-tx-index'],
+      });
+      assert.deepStrictEqual(result.indexes, {
+        manifestUrl: '/ar-io/indexes',
+        names: ['root-tx-index'],
+      });
+    });
+
+    it('omits the block when nothing is published', () => {
+      // Absent, not empty: a crawler should not fetch a document that is not
+      // there, and an empty list would read as "publishes, but nothing".
+      assert.strictEqual(buildArIoInfo(base).indexes, undefined);
+      assert.strictEqual(
+        buildArIoInfo({ ...base, indexNames: [] }).indexes,
+        undefined,
+      );
+    });
+  });
+
+  describe('plainDecimal', () => {
+    it('keeps a price smaller than ten decimal places', () => {
+      assert.equal(plainDecimal(4.2e-11), '0.000000000042');
+    });
+
+    it('keeps every digit an operator configured', () => {
+      assert.equal(plainDecimal(0.123456789012345), '0.123456789012345');
+      assert.equal(plainDecimal(1.23456789e-15), '0.00000000000000123456789');
+    });
+
+    it('writes common and large values plainly', () => {
+      assert.equal(plainDecimal(0.0000000001), '0.0000000001');
+      assert.equal(plainDecimal(0), '0');
+      assert.equal(plainDecimal(1.5), '1.5');
+      assert.equal(plainDecimal(1e21), '1000000000000000000000');
+      assert.equal(plainDecimal(-2.5e-8), '-0.000000025');
+    });
   });
 });

@@ -15,8 +15,10 @@ import { createRequestIdMiddleware } from './middleware/request-id.js';
 import { createDefaultCacheControlMiddleware } from './middleware/cache-control.js';
 import { createErrorHandlerMiddleware } from './middleware/error-handler.js';
 import { createHttpSigMiddleware } from './middleware/httpsig.js';
+import { warnIfWalkConcurrencyUnsafe } from './workers/fs-cleanup-worker.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
+import { createIndexesRouter } from './routes/indexes.js';
 import { arnsRouter } from './routes/arns.js';
 import { chunkRouter } from './routes/chunk/index.js';
 import { dataRouter } from './routes/data/index.js';
@@ -45,10 +47,32 @@ system.headerFsCacheCleanupWorker?.start();
 
 system.contiguousDataFsCacheCleanupWorker?.start();
 
+for (const worker of system.stagingCleanupWorkers) {
+  worker.start();
+}
+
+// All cleanup walks share one libuv thread pool with the request path; warn if
+// they are collectively configured to crowd it out.
+warnIfWalkConcurrencyUnsafe(
+  [
+    system.headerFsCacheCleanupWorker,
+    system.contiguousDataFsCacheCleanupWorker,
+    system.chunkDataFsCacheCleanupWorker,
+    ...system.stagingCleanupWorkers,
+  ],
+  log,
+);
+
 system.contiguousDataCacheEvictor?.start();
 
 // One-time cache index backfill (background; does not block startup).
 void system.contiguousDataCacheReconciler?.run();
+
+system.chunkDataCacheEvictor?.start();
+
+// One-time chunk cache index backfill (background; does not block startup).
+// This is the last full walk of the chunk cache the node ever needs.
+void system.chunkDataCacheReconciler?.run();
 
 system.chunkDataFsCacheCleanupWorker?.start();
 
@@ -129,6 +153,17 @@ if (system.rateLimiter !== undefined) {
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);
+// Index artifacts published by the index-swarm sidecar. Mounted ahead of the
+// data router, whose `/:id` catch-all would otherwise claim these paths.
+app.use(
+  createIndexesRouter({
+    log,
+    publishedIndexes: system.publishedIndexes,
+    rateLimiter: system.rateLimiter,
+    rateLimitsEnabled: config.ENABLE_RATE_LIMITER,
+    paymentProcessor: system.paymentProcessor,
+  }),
+);
 app.use(datasetsRouter);
 app.use(chunkRouter);
 app.use(rootRouter);

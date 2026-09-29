@@ -122,6 +122,7 @@ export function withChunkServeDeadline<T>(
  *
  *   - client hung up mid-retrieval                    → 499 (Client Closed Request)
  *   - chunk not locatable / not retrievable in time   → 404 (Not Found)
+ *   - retrieval cancelled internally                  → 404 (Not Found)
  *   - upstreams reachable but served bad data         → 502 (Bad Gateway)
  *
  * Timeouts — both per-source timeouts and our own wall-clock serve deadline —
@@ -160,6 +161,16 @@ export function classifyChunkRetrievalError(
   // not-retrievable-in-time → 404, same as a wrapped ChunkNotFoundError.
   if (error?.name === 'TimeoutError' || /timeout/i.test(error?.message ?? '')) {
     return { statusCode: 404, errorType: 'upstream_timeout' };
+  }
+  // An AbortError that reaches here is an *internal* cancellation, because a
+  // client disconnect already returned above: a source's own abort signal, or
+  // a losing peer cancelled once another won. That is the same condition as a
+  // timeout, so it takes the same 404 rather than falling through to 502.
+  // Without this a cancelled fetch is reported as a server-side gateway fault,
+  // which inflates the 5xx count the wall-clock deadline exists to protect and
+  // denies nginx the cacheable negative it gets for every other failure.
+  if (error?.name === 'AbortError') {
+    return { statusCode: 404, errorType: 'upstream_aborted' };
   }
   return { statusCode: 502, errorType: 'upstream_unavailable' };
 }

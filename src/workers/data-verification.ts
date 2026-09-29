@@ -42,6 +42,7 @@ export class DataVerificationWorker {
     | undefined;
 
   private workerCount: number;
+  private optimisticTxIndexingEnabled: boolean;
   private queue: queueAsPromised<
     { rootTxId: string; dataIds: string[] },
     void | boolean
@@ -60,6 +61,7 @@ export class DataVerificationWorker {
     workerCount = config.BACKGROUND_DATA_VERIFICATION_WORKER_COUNT,
     streamTimeout = config.BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS,
     interval = config.BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS * 1000,
+    optimisticTxIndexingEnabled = config.OPTIMISTIC_TX_INDEXING_ENABLED,
   }: {
     log: winston.Logger;
     contiguousDataIndex: ContiguousDataIndex;
@@ -75,12 +77,14 @@ export class DataVerificationWorker {
     workerCount?: number;
     streamTimeout?: number;
     interval?: number;
+    optimisticTxIndexingEnabled?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.contiguousDataIndex = contiguousDataIndex;
     this.dataItemRootTxIndex = dataItemRootTxIndex;
     this.workerCount = workerCount;
     this.interval = interval;
+    this.optimisticTxIndexingEnabled = optimisticTxIndexingEnabled;
     this.queue = fastq.promise(
       this.verifyDataRoot.bind(this),
       Math.max(workerCount, 1),
@@ -204,7 +208,21 @@ export class DataVerificationWorker {
       // the root tx isn't in the index at all — and must fall through to the
       // normal indexedDataRoot===undefined path (which queues unbundling and
       // burns a retry), not be treated as an unpenalized optimistic-unmined row.
-      if (dataAttributes !== undefined && dataAttributes.height == null) {
+      //
+      // GATED on OPTIMISTIC_TX_INDEXING_ENABLED. A NULL height only implies
+      // "optimistically indexed, not yet mined" when that feature is the thing
+      // creating NULL-height rows. With it off, a NULL height means only that
+      // this gateway has not imported the tx's block — which is routine for
+      // txs indexed through admin/queue-tx, backfills, or any selectively
+      // synced deployment, and says nothing about whether the tx is mined.
+      // Withholding there stalls verification permanently for long-mined data:
+      // withholding burns no retry, so the item never ages out, and the log
+      // below is debug-level, so nothing surfaces.
+      if (
+        this.optimisticTxIndexingEnabled &&
+        dataAttributes !== undefined &&
+        dataAttributes.height == null
+      ) {
         withheldUnconfirmed = true;
         metrics.optimisticTxVerificationBlockedCounter.inc();
         log.debug('Withholding verification: root tx not yet mined');

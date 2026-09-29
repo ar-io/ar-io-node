@@ -53,3 +53,54 @@ export function createTestLogger(options?: {
 
   return log.child(testMetadata);
 }
+
+/**
+ * Create a test logger that also records the level of every call made through
+ * it, including calls made via `.child()`.
+ *
+ * Classes under test typically log through `log.child({ class })`, so a spy
+ * installed on the returned logger's methods would never observe their calls.
+ * This wrapper delegates to {@link createTestLogger} -- so output still reaches
+ * `logs/test.log` -- while appending each level to a shared array, and
+ * re-wraps any child logger it creates.
+ *
+ * @param options - Same options as {@link createTestLogger}
+ * @returns The wrapped logger, the recorded levels, and the recorded
+ *          `{ level, message }` entries
+ *
+ * @example
+ * ```typescript
+ * const { logger, levels } = createRecordingTestLogger({ suite: 'MySource' });
+ * const source = new MySource({ log: logger });
+ * await source.doThing();
+ * assert.equal(levels.includes('error'), false);
+ * ```
+ */
+export function createRecordingTestLogger(options?: {
+  suite?: string;
+  test?: string;
+  metadata?: Record<string, any>;
+}): {
+  logger: winston.Logger;
+  levels: string[];
+  entries: { level: string; message: string }[];
+} {
+  const levels: string[] = [];
+  const entries: { level: string; message: string }[] = [];
+
+  const wrap = (inner: winston.Logger): winston.Logger => {
+    const proxy = Object.create(inner) as winston.Logger;
+    for (const level of ['debug', 'info', 'warn', 'error'] as const) {
+      (proxy as any)[level] = (...args: any[]) => {
+        levels.push(level);
+        entries.push({ level, message: String(args[0] ?? '') });
+        return (inner as any)[level](...args);
+      };
+    }
+    (proxy as any).child = (meta: Record<string, any>) =>
+      wrap(inner.child(meta));
+    return proxy;
+  };
+
+  return { logger: wrap(createTestLogger(options)), levels, entries };
+}

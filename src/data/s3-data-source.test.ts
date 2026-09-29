@@ -325,6 +325,45 @@ describe('S3DataSource', () => {
       assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 1);
     });
 
+    it('should rethrow a 404 without counting it as a source error', async () => {
+      // aws-lite cannot parse an error body from a HEAD 404, so the message is
+      // uninformative; statusCode is the only reliable signal.
+      const notFound: any = new Error(
+        '@aws-lite/client: S3.HeadObject: unknown error',
+      );
+      notFound.statusCode = 404;
+      mockAwsClient.S3.HeadObject = mock.fn(async () => {
+        throw notFound;
+      });
+
+      // Must still throw, and throw *this* error: SequentialDataSource
+      // advances the retrieval cascade on exceptions, so swallowing it would
+      // strand the request here.
+      await assert.rejects(
+        s3DataSource.getData({ id: testId }),
+        (err: any) => err === notFound && err.statusCode === 404,
+      );
+
+      // A miss is not a failure -- S3 is first in the retrieval order, so most
+      // probes are for data that was never uploaded via Turbo.
+      assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 0);
+    });
+
+    it('should count a non-404 S3 failure as a source error', async () => {
+      const denied: any = new Error('@aws-lite/client: S3.HeadObject: denied');
+      denied.statusCode = 403;
+      mockAwsClient.S3.HeadObject = mock.fn(async () => {
+        throw denied;
+      });
+
+      await assert.rejects(
+        s3DataSource.getData({ id: testId }),
+        (err: any) => err === denied && err.statusCode === 403,
+      );
+
+      assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 1);
+    });
+
     it('should throw error and increment metric when Body is missing', async () => {
       mockS3Client.GetObject = mock.fn(async () => ({
         ContentLength: 10,

@@ -62,6 +62,27 @@ describe('getPageSize', () => {
     const first = MAX_PAGE_SIZE + 1;
     assert.equal(MAX_PAGE_SIZE, getPageSize({ first }));
   });
+
+  // The upper clamp was the only one for a long time, which let a negative
+  // `first` through unchanged: `Math.min(-5, 1000)` is `-5`. That did not
+  // behave as a small backwards page, it behaved as no limit — a live gateway
+  // answered `transactions(first: -5)` by attempting a 22.9-million-row
+  // ClickHouse scan. An unauthenticated query should not be able to do that.
+  for (const first of [-1, -5, -1000, Number.MIN_SAFE_INTEGER]) {
+    it(`should clamp a negative 'first' (${first}) up to 1`, () => {
+      assert.equal(1, getPageSize({ first }));
+    });
+  }
+
+  it("should clamp 'first' of 0 up to 1", () => {
+    // A zero-row page is indistinguishable from a client mistake, and the
+    // connection contract has no use for one.
+    assert.equal(1, getPageSize({ first: 0 }));
+  });
+
+  it('should still honour the smallest legitimate page size', () => {
+    assert.equal(1, getPageSize({ first: 1 }));
+  });
 });
 
 describe('resolveTxRecipient', () => {

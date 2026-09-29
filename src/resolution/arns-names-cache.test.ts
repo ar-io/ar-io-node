@@ -5,11 +5,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { after, beforeEach, describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 import winston from 'winston';
 import { ArNSNamesCache } from './arns-names-cache.js';
 import { ARIORead, Logger as ARIOLogger } from '@ar.io/sdk';
 import { NodeKvStore } from '../store/node-kv-store.js';
+import * as metrics from '../metrics.js';
 
 // disable sdk logging to reduce noise
 ARIOLogger.default.setLogLevel('none');
@@ -26,17 +27,33 @@ describe('ArNSNamesCache', () => {
 
   let registryCache: NodeKvStore;
 
+  /**
+   * Wait for a condition rather than a fixed delay. How many turns a hydration
+   * takes depends on the mocked reader and on runner speed, so a `setTimeout`
+   * long enough today is a flake tomorrow. Where the cache exposes a promise to
+   * await -- `getCachedArNSBaseName` awaits an in-flight hydration before
+   * re-reading -- prefer that over this.
+   */
+  const waitFor = async (
+    predicate: () => boolean,
+    label: string,
+    timeoutMs = 5000,
+  ) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${label}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+
   beforeEach(async () => {
     // new cache for each test
     registryCache = new NodeKvStore({
       ttlSeconds: 1,
       maxKeys: 100,
     });
-  });
-
-  after(async () => {
-    // exit forcefully due to intentional non-awaited promises in ArNSNamesCache
-    process.exit(0);
   });
 
   it('should fetch and cache names on initialization', async () => {
@@ -465,6 +482,10 @@ describe('ArNSNamesCache', () => {
     const name3 = await debounceCache.getCachedArNSBaseName('name-3');
     assert.equal(name3, undefined);
 
+    // A miss-triggered hydration is fire-and-forget in KvDebounceStore.get,
+    // so the call above returns before the retries have run.
+    await waitFor(() => callCount >= 8, 'the second hydration to finish');
+
     // Initial hydration: 1 (first page) + 3 (retries for second page) = 4
     // Cache miss triggers new hydration: 1 (first page) + 3 (retries) = 4
     // Total = 8
@@ -476,6 +497,11 @@ describe('ArNSNamesCache', () => {
     const debounceCache = new ArNSNamesCache({
       log,
       registryCache,
+      // Without this the cache inherits the 120s production default, so the
+      // 2.1s wait below can never cross the debounce and the second round of
+      // hydration attempts never fires. Matches the other debounce tests,
+      // which all pass an explicit short TTL.
+      cacheMissDebounceTtl: 1000,
       networkProcess: {
         getArNSRecords: async () => {
           callCount++;
@@ -503,5 +529,215 @@ describe('ArNSNamesCache', () => {
 
     // Should have made 3 more attempts (no circuit breaker blocking)
     assert.equal(callCount, 6);
+  });
+
+  /**
+   * Hydration writes used to be fire-and-forget and uncaught, so any store
+   * error became an unhandled rejection. system.ts installs an
+   * `uncaughtException` handler, so the process survived and the damage was
+   * silent instead: one uncaught exception per failed write, and a names
+   * cache reporting entries it never wrote. Both stores reach that path in
+   * normal operation -- `NodeKvStore` throws `Cache max keys amount
+   * exceeded` once the registry outgrows ARNS_CACHE_MAX_KEYS, and
+   * `RedisKvStore` rejects while Redis is unreachable.
+   */
+  it('survives store write failures without an unhandled rejection', async () => {
+    const REGISTRY_SIZE = 10;
+    const failuresBefore = (
+      await metrics.arnsNameCacheHydrationWriteFailuresCounter.get()
+    ).values[0].value;
+    // room for two names; every later write throws ECACHEFULL
+    const tinyCache = new NodeKvStore({ ttlSeconds: 60, maxKeys: 2 });
+    const cache = new ArNSNamesCache({
+      log,
+      registryCache: tinyCache,
+      networkProcess: {
+        getArNSRecords: async () => ({
+          items: Array.from({ length: REGISTRY_SIZE }, (_, i) => ({
+            name: `name-${i}`,
+            processId: `process-${i}`,
+          })),
+          nextCursor: undefined,
+        }),
+      } as unknown as ARIORead,
+    });
+
+    // no sleep needed: getCachedArNSBaseName awaits the in-flight hydration
+    // before re-reading, so the writes are all settled once it returns
+
+    // the writes that fit still landed
+    assert.deepEqual(await cache.getCachedArNSBaseName('name-0'), {
+      name: 'name-0',
+      processId: 'process-0',
+    });
+
+    // and the failures are countable, not just loggable -- a partial cache is
+    // otherwise indistinguishable from names that were never registered
+    const after = (
+      await metrics.arnsNameCacheHydrationWriteFailuresCounter.get()
+    ).values[0].value;
+    assert.equal(after - failuresBefore, REGISTRY_SIZE - 2);
+
+    await cache.close();
+  });
+
+  /**
+   * Regression guard for redundant registry scans during hydration.
+   *
+   * The Solana-backed `getArNSRecords` has no server-side cursor: each call
+   * runs a full `getProgramAccounts` scan and slices client-side. With the
+   * previous hard-coded `limit: 1000`, a 2,998-name registry cost three full
+   * scans per hydration -- two of which re-fetched data page one already had.
+   */
+  it('requests a page large enough to walk the registry in one call', async () => {
+    const limits: (number | undefined)[] = [];
+    new ArNSNamesCache({
+      log,
+      registryCache,
+      networkProcess: {
+        getArNSRecords: async ({ limit }: { limit?: number }) => {
+          limits.push(limit);
+          return {
+            items: [{ name: 'a', processId: 'p' }],
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as ARIORead,
+    });
+
+    await waitFor(() => limits.length >= 1, 'the first page request');
+
+    assert.equal(limits.length, 1);
+    // must be well above a realistic registry so one page covers it
+    assert.ok(
+      (limits[0] ?? 0) >= 10_000,
+      `expected default page size >= 10000, got ${limits[0]}`,
+    );
+  });
+
+  it('makes exactly one request when the registry fits in a single page', async () => {
+    let callCount = 0;
+    const REGISTRY_SIZE = 2998; // production size at time of writing
+    // the shared registryCache caps at 100 keys; size one for a full registry
+    const bigCache = new NodeKvStore({ ttlSeconds: 60, maxKeys: 20_000 });
+    const cache = new ArNSNamesCache({
+      log,
+      registryCache: bigCache,
+      pageSize: 10_000,
+      networkProcess: {
+        getArNSRecords: async ({ limit }: { limit?: number }) => {
+          callCount++;
+          const size = Math.min(limit ?? 0, REGISTRY_SIZE);
+          return {
+            items: Array.from({ length: size }, (_, i) => ({
+              name: `name-${i}`,
+              processId: `process-${i}`,
+            })),
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as ARIORead,
+    });
+
+    await cache.getCachedArNSBaseName('name-0');
+    assert.equal(callCount, 1);
+  });
+
+  it('still paginates when the backend caps the page size server-side', async () => {
+    // Raising the limit must stay safe for readers that enforce their own cap:
+    // they return fewer items plus a cursor, and the loop continues.
+    const SERVER_CAP = 1000;
+    const TOTAL = 2500;
+    let callCount = 0;
+    const bigCache = new NodeKvStore({ ttlSeconds: 60, maxKeys: 20_000 });
+    const cache = new ArNSNamesCache({
+      log,
+      registryCache: bigCache,
+      pageSize: 10_000,
+      networkProcess: {
+        getArNSRecords: async ({ cursor }: { cursor?: string }) => {
+          callCount++;
+          const start = cursor !== undefined ? parseInt(cursor, 10) : 0;
+          const end = Math.min(start + SERVER_CAP, TOTAL);
+          return {
+            items: Array.from({ length: end - start }, (_, i) => ({
+              name: `name-${start + i}`,
+              processId: `process-${start + i}`,
+            })),
+            nextCursor: end < TOTAL ? String(end) : undefined,
+          };
+        },
+      } as unknown as ARIORead,
+    });
+
+    // the read awaits the in-flight hydration, so no fixed delay is needed
+    // 1000 + 1000 + 500 => 3 calls, and every name cached
+    assert.deepEqual(await cache.getCachedArNSBaseName('name-2499'), {
+      name: 'name-2499',
+      processId: 'process-2499',
+    });
+    assert.equal(callCount, 3);
+  });
+
+  it('honours a configurable maxRetries (the reader may already retry)', async () => {
+    let callCount = 0;
+    const cache = new ArNSNamesCache({
+      log,
+      registryCache,
+      maxRetries: 1,
+      networkProcess: {
+        getArNSRecords: async () => {
+          callCount++;
+          throw new Error('rpc down');
+        },
+      } as unknown as ARIORead,
+    });
+
+    // getCachedArNSBaseName awaits the in-flight hydration, so the attempts
+    // are already exhausted by the time it returns
+    await cache.getCachedArNSBaseName('any-name');
+
+    // one attempt, not the default three
+    assert.equal(callCount, 1);
+  });
+
+  /**
+   * Guard the hydration options. Both arrive from `+env.varOrDefault(...)`,
+   * so a typo'd env var reaches the constructor as NaN.
+   *
+   *  - pageSize < 1: `paginate` returns an empty page but still reports
+   *    hasMore with an unchanged cursor -> the do/while never terminates.
+   *  - maxRetries < 1: the inner while never runs, the loop exits on the
+   *    first pass and hydration reports success with an empty cache.
+   */
+  it('rejects non-positive or non-integer hydration options', async () => {
+    const networkProcess = {
+      getArNSRecords: async () => ({ items: [], nextCursor: undefined }),
+    } as unknown as ARIORead;
+
+    for (const bad of [0, -1, 1.5, NaN, Infinity]) {
+      assert.throws(
+        () =>
+          new ArNSNamesCache({
+            log,
+            registryCache,
+            networkProcess,
+            pageSize: bad,
+          }),
+        /pageSize must be a positive integer/,
+        `pageSize=${bad} should be rejected`,
+      );
+      assert.throws(
+        () =>
+          new ArNSNamesCache({
+            log,
+            registryCache,
+            networkProcess,
+            maxRetries: bad,
+          }),
+        /maxRetries must be a positive integer/,
+        `maxRetries=${bad} should be rejected`,
+      );
+    }
   });
 });

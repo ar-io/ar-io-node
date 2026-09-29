@@ -8,7 +8,6 @@ import { Span } from '@opentelemetry/api';
 import { default as axios } from 'axios';
 import http from 'node:http';
 import https from 'node:https';
-import { performance } from 'node:perf_hooks';
 import winston from 'winston';
 
 import * as config from '../config.js';
@@ -19,6 +18,7 @@ import {
   parseContentLength,
   parseContentRange,
 } from '../lib/http-utils.js';
+import { BASE_AGENT_OPTIONS, instrumentAgent } from '../lib/http-agent.js';
 import { shuffleArray } from '../lib/random.js';
 import {
   detectLoopInViaChain,
@@ -39,23 +39,13 @@ import {
 
 const MAX_DATA_HOPS = 3;
 
-// Base keep-alive agent options shared by every per-gateway agent. Reusing
-// TCP+TLS connections across requests avoids per-request handshake cost, slashes
-// kernel TIME_WAIT churn, and gives upstream connections a chance to settle into
-// stable buffer sizes (which matters at high ANS104_DOWNLOAD_WORKERS).
-// maxSockets / maxFreeSockets are set per agent in getAgent() so trusted peers
-// and untrusted (CDN-fronted) gateways can be capped independently.
-const AGENT_OPTIONS = {
-  keepAlive: true,
-  keepAliveMsecs: 30_000,
-  // Idle-socket timeout: must stay strictly below the peer gateway's server
-  // keep-alive timeout (HTTP_KEEP_ALIVE_TIMEOUT_MS, default 60s) so this client
-  // retires an idle keep-alive socket before the peer closes it. Equal timeouts
-  // race — the client reuses a socket the server is simultaneously FIN-closing —
-  // stalling the request until the teardown resolves. See
-  // GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS in config.ts.
-  timeout: config.GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS,
-} as const;
+// Keep-alive options come from the shared outbound-agent module so this data
+// path and the metadata clients (root TX discovery, GraphQL fan-out) cannot
+// drift apart on the idle-timeout invariant. maxSockets / maxFreeSockets are
+// still set per agent in getAgent() below, so trusted peers and untrusted
+// (CDN-fronted) gateways can be capped independently — a distinction the
+// metadata clients don't need.
+const AGENT_OPTIONS = BASE_AGENT_OPTIONS;
 
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -151,13 +141,13 @@ export class GatewaysDataSource implements ContiguousDataSource {
     return agent;
   }
 
-  // Instruments an agent's socket lifecycle so we can see outbound-side stalls
-  // that never reach the wire. Node calls `Agent.addRequest` when a
-  // ClientRequest needs a socket; the request's 'socket' event fires once a
-  // socket is assigned (immediately when one is available, or after a wait when
-  // the pool is at capacity or a reused socket is being torn down). Timing
-  // addRequest -> 'socket' isolates the keep-alive pool/reuse phase from the
-  // request/response phase; connect time is measured separately for new sockets.
+  // Wraps the shared socket-lifecycle instrumentation, mapping its samples onto
+  // this data path's per-gateway metrics. The per-URL label is affordable here
+  // because the gateway list is a small, operator-configured set; the metadata
+  // clients label by component instead.
+  //
+  // For TLS gateways (https://, e.g. arweave.net) connect time is measured to
+  // 'secureConnect' rather than 'connect', so it reflects TCP + TLS.
   private instrumentAgent(
     agent: http.Agent | https.Agent,
     gatewayUrl: string,
@@ -165,48 +155,31 @@ export class GatewaysDataSource implements ContiguousDataSource {
     const log = this.log;
     const slowThresholdMs =
       config.GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS;
-    // `addRequest` is not in the public type surface; wrap it on the instance.
-    const agentAny = agent as unknown as {
-      addRequest: (req: http.ClientRequest, ...rest: unknown[]) => void;
-    };
-    const originalAddRequest = agentAny.addRequest.bind(agent);
-    agentAny.addRequest = function (
-      req: http.ClientRequest,
-      ...rest: unknown[]
-    ): void {
-      const requestedAt = performance.now();
-      req.once('socket', (socket: import('node:net').Socket) => {
-        const acquisitionSeconds = (performance.now() - requestedAt) / 1000;
-        const isNewSocket = socket.connecting === true;
+
+    instrumentAgent({
+      agent,
+      isTls: gatewayUrl.startsWith('https://'),
+      observe: ({ acquisitionSeconds, reused, connectSeconds }) => {
+        if (connectSeconds !== undefined) {
+          metrics.gatewaySocketConnectSeconds.observe(
+            { gateway_url: gatewayUrl },
+            connectSeconds,
+          );
+          return;
+        }
         metrics.gatewaySocketAcquisitionSeconds.observe(
-          { gateway_url: gatewayUrl, reused: String(!isNewSocket) },
+          { gateway_url: gatewayUrl, reused: String(reused) },
           acquisitionSeconds,
         );
         if (acquisitionSeconds * 1000 >= slowThresholdMs) {
           log.warn('Slow gateway socket acquisition', {
             gatewayUrl,
             acquisitionMs: Math.round(acquisitionSeconds * 1000),
-            reused: !isNewSocket,
+            reused,
           });
         }
-        if (isNewSocket) {
-          const connectStartedAt = performance.now();
-          // For TLS gateways (https://, e.g. arweave.net) the full handshake
-          // completes at 'secureConnect', not 'connect' — measure to that so the
-          // metric reflects TCP + TLS rather than TCP alone.
-          const connectEvent = gatewayUrl.startsWith('https://')
-            ? 'secureConnect'
-            : 'connect';
-          socket.once(connectEvent, () => {
-            metrics.gatewaySocketConnectSeconds.observe(
-              { gateway_url: gatewayUrl },
-              (performance.now() - connectStartedAt) / 1000,
-            );
-          });
-        }
-      });
-      return originalAddRequest(req, ...rest);
-    };
+      },
+    });
   }
 
   /**
@@ -226,6 +199,13 @@ export class GatewaysDataSource implements ContiguousDataSource {
    * The `TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS` kill-switch (default off)
    * reverts to the legacy behavior of sending the query params to every
    * gateway, including untrusted ones.
+   */
+  /**
+   * Logging contract: a peer returning 404 (does not hold the data) or 429
+   * (throttling us), and a cancelled request, are all routine in a multi-peer
+   * cascade and are logged at debug. Every other outcome is logged at error or
+   * warn. `getDataErrorsTotal` is incremented only when *all* gateways fail,
+   * not per-peer.
    */
   async getData({
     id,
@@ -358,12 +338,30 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 return response;
               },
               (error) => {
-                if (error.response) {
-                  this.log.error('Axios response error', {
+                if (axios.isCancel(error)) {
+                  // The caller disconnected, or a faster peer already won the
+                  // race. Neither is a fault of this gateway.
+                  this.log.debug('Axios request canceled', {
+                    message: error.message,
+                  });
+                } else if (error.response) {
+                  const details = {
                     url: error.response.config.url,
                     status: error.response.status,
                     headers: error.response.headers,
-                  });
+                  };
+                  // 404 means this peer simply does not hold the data; 429
+                  // means it is throttling us. Both are routine in a
+                  // multi-peer cascade and must not be reported as errors --
+                  // doing so buries genuine 5xx faults in noise.
+                  if (
+                    error.response.status === 404 ||
+                    error.response.status === 429
+                  ) {
+                    this.log.debug('Axios response error', details);
+                  } else {
+                    this.log.error('Axios response error', details);
+                  }
                 } else {
                   this.log.error('Axios network error', {
                     message: error.message,
@@ -483,11 +481,17 @@ export class GatewaysDataSource implements ContiguousDataSource {
                       : '200',
                     'gateways.request.duration_ms': gatewayRequestDuration,
                   });
-                  throw new Error(
-                    `Unexpected status code from gateway: ${response.status}. Expected ${
-                      isRangedRequest ? '200 or 206' : '200'
-                    }.`,
-                  );
+                  // Carry the upstream status on the error so the
+                  // per-gateway handler below can tell a routine 404/429 from
+                  // a genuine fault without re-parsing this message.
+                  const statusError: Error & { gatewayStatus?: number } =
+                    new Error(
+                      `Unexpected status code from gateway: ${response.status}. Expected ${
+                        isRangedRequest ? '200 or 206' : '200'
+                      }.`,
+                    );
+                  statusError.gatewayStatus = response.status;
+                  throw statusError;
                 }
 
                 // PE-9099: caller-supplied content-type predicate. Used by
@@ -645,7 +649,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   'gateway.request_duration_ms': gatewayRequestDuration,
                   'gateway.response_status': response.status,
                   'data.size': contentLength,
-                  'data.content_type': response.headers['content-type'],
+                  'data.content_type': response.headers['content-type'] as
+                    | string
+                    | undefined,
                 });
 
                 span.addEvent('Gateway request successful', {
@@ -747,7 +753,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
                         ?.total,
                   verified: false,
                   trusted: gatewayTrusted,
-                  sourceContentType: response.headers['content-type'],
+                  sourceContentType: response.headers['content-type'] as
+                    | string
+                    | undefined,
                   cached: false,
                   requestAttributes: parseRequestAttributesHeaders({
                     headers: response.headers as { [key: string]: string },
@@ -794,12 +802,29 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   'gateways.request.duration_ms': gatewayRequestDuration,
                 });
 
-                this.log.warn('Failed to fetch from gateway', {
+                // A peer that lacks the data (404), is throttling us (429),
+                // or a cancelled request are all routine in a multi-peer
+                // cascade -- the next gateway or tier handles them. Only
+                // genuine faults warrant a warning; exhausting every tier is
+                // still reported by the caller.
+                const expectedOutcome =
+                  axios.isCancel(error) ||
+                  error.gatewayStatus === 404 ||
+                  error.gatewayStatus === 429;
+                const failureDetails = {
                   gatewayUrl,
                   priority,
                   path,
                   error: error.message,
-                });
+                };
+                if (expectedOutcome) {
+                  this.log.debug(
+                    'Failed to fetch from gateway',
+                    failureDetails,
+                  );
+                } else {
+                  this.log.warn('Failed to fetch from gateway', failureDetails);
+                }
               }
             }
           }

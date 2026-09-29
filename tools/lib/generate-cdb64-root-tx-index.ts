@@ -9,11 +9,12 @@
  * CLI tool to generate a CDB64 root TX index from a CSV file.
  *
  * CSV format:
- *   data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
+ *   data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_size
  *
  * - data_item_id and root_tx_id are always required (base64url-encoded IDs)
  * - path column contains JSON array of base64url IDs for nested bundles (optional)
  * - offset columns are optional; if present, complete format is used
+ * - data_item_size is optional and requires both offset columns
  *
  * Supports all 4 CDB64 value formats:
  * - Simple: rootTxId only
@@ -45,6 +46,7 @@ import {
   printUsage,
   looksLikeHeader,
   parseBase64UrlId,
+  parseDataItemSize,
   parseOffset,
   parsePath,
   printGenerationSummary,
@@ -152,6 +154,9 @@ async function generateIndex(config: Config): Promise<void> {
           );
         }
 
+        // Optional item size (column 6), only valid alongside both offsets
+        const dataItemSize = parseDataItemSize(parts, hasOffset1 && hasOffset2);
+
         // Build value based on format type
         let value: Cdb64RootTxValue;
         if (path !== undefined) {
@@ -166,6 +171,7 @@ async function generateIndex(config: Config): Promise<void> {
               path,
               rootDataItemOffset,
               rootDataOffset,
+              dataItemSize,
             };
             stats.pathCompleteCount++;
           } else {
@@ -184,6 +190,7 @@ async function generateIndex(config: Config): Promise<void> {
               rootTxId,
               rootDataItemOffset,
               rootDataOffset,
+              dataItemSize,
             };
             stats.completeCount++;
           } else {
@@ -193,6 +200,9 @@ async function generateIndex(config: Config): Promise<void> {
         }
 
         await writer.add(dataItemId, encodeCdb64Value(value));
+        if (dataItemSize !== undefined) {
+          stats.dataItemSizeCount++;
+        }
         stats.recordCount++;
 
         // Progress indicator

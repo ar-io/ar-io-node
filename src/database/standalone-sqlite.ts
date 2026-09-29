@@ -61,6 +61,7 @@ import {
   TransactionAttributes,
   ChunkPlacement,
   ChunkPlacementRef,
+  TxGeometry,
 } from '../types.js';
 import * as config from '../config.js';
 import { DetailedError } from '../lib/error.js';
@@ -474,7 +475,26 @@ export class StandaloneSqliteDatabaseWorker {
   resetBundlesToHeightFn: Sqlite.Transaction;
   resetCoreToHeightFn: Sqlite.Transaction;
   insertTxFn: Sqlite.Transaction;
+  /**
+   * Full-claim data item write: the caller knows the complete root atom
+   * (`parent_id`, `root_transaction_id`, and the offset/size fields). Used by
+   * the unbundle pipeline and the on-demand metadata resolver.
+   *
+   * Tag rows go through {@link writeNewDataItemTags}, which clears the
+   * unrooted set before writing so an optimistic write of the same data item
+   * cannot survive alongside the rooted one.
+   */
   insertDataItemFn: Sqlite.Transaction;
+  /**
+   * Optimistic data item write: the caller has no root-atom knowledge. Used by
+   * the admin queue-data-item route.
+   *
+   * The row-level root atom is hardcoded NULL by `insertOptimisticDataItem`,
+   * and the tag rows are written unrooted for the same reason — see
+   * {@link writeNewDataItemTags}, which also skips them once a rooted set
+   * exists. `bundle_data_items` is deliberately not written: it records actual
+   * unbundle observations, not optimistic claims.
+   */
   insertOptimisticDataItemFn: Sqlite.Transaction;
   insertBlockAndTxsFn: Sqlite.Transaction;
   saveCoreStableDataFn: Sqlite.Transaction;
@@ -630,12 +650,12 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreTagValue.run(row);
         }
 
-        for (const row of rows.newDataItemTags) {
-          this.stmts.bundles.upsertNewDataItemTag.run({
-            ...row,
-            height,
-          });
-        }
+        this.writeNewDataItemTags({
+          dataItemId: rows.newDataItem.id,
+          rootTransactionId: rows.newDataItem.root_transaction_id,
+          tagRows: rows.newDataItemTags,
+          height,
+        });
 
         for (const row of rows.wallets) {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
@@ -656,11 +676,9 @@ export class StandaloneSqliteDatabaseWorker {
     );
 
     // Optimistic path: caller has no tuple knowledge. Used by the admin
-    // queue-data-item route. INSERT-if-absent for the data item row;
-    // never updates the root-atom fields on conflict. Tag rows still
-    // upsert the always-known optimistic metadata. We deliberately skip
-    // the bundle_data_items write — that table records actual unbundle
-    // observations, not optimistic claims.
+    // queue-data-item route. INSERT-if-absent for the data item row; never
+    // updates the root-atom fields on conflict. See the insertOptimisticDataItemFn
+    // declaration for the tag-row contract.
     this.insertOptimisticDataItemFn = this.dbs.bundles.transaction(
       (item: NormalizedDataItem, height?: number) => {
         const rows = dataItemToDbRows(item, height);
@@ -673,12 +691,15 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreTagValue.run(row);
         }
 
-        for (const row of rows.newDataItemTags) {
-          this.stmts.bundles.upsertNewDataItemTag.run({
-            ...row,
-            height,
-          });
-        }
+        // `rootTransactionId: null` mirrors the hardcoded NULLs in
+        // insertOptimisticDataItem: a caller with no tuple knowledge must not
+        // write a root here even if one is bound on the item.
+        this.writeNewDataItemTags({
+          dataItemId: rows.newDataItem.id,
+          rootTransactionId: null,
+          tagRows: rows.newDataItemTags,
+          height,
+        });
 
         for (const row of rows.wallets) {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
@@ -1242,6 +1263,161 @@ export class StandaloneSqliteDatabaseWorker {
     return txn(hashes);
   }
 
+  // --- Chunk data cache eviction index (chunks.db) ---
+  //
+  // data_root crosses the worker boundary as base64url (the on-disk directory
+  // name the evictor needs) and is stored as a BLOB, matching chunk_placements
+  // so the two can be joined. Same convention as the placement methods above.
+
+  saveChunkDataCacheEntry(entry: {
+    dataRoot: string;
+    size: number;
+    lastWrite: number;
+    tier: number;
+  }) {
+    this.stmts.chunks.saveChunkDataCacheEntry.run({
+      data_root: fromB64Url(entry.dataRoot),
+      size: entry.size,
+      last_write: entry.lastWrite,
+      tier: entry.tier,
+    });
+  }
+
+  touchChunkDataCacheEntry(dataRoot: string, lastAccess: number, tier: number) {
+    this.stmts.chunks.touchChunkDataCacheEntry.run({
+      data_root: fromB64Url(dataRoot),
+      last_access: lastAccess,
+      tier,
+    });
+  }
+
+  insertChunkDataCacheEntriesIfAbsent(
+    entries: {
+      dataRoot: string;
+      size: number;
+      chunkCount: number;
+      lastWrite: number;
+      lastAccess: number;
+      tier: number;
+    }[],
+  ) {
+    const stmt = this.stmts.chunks.insertChunkDataCacheEntryIfAbsent;
+    const txn = this.dbs.chunks.transaction(
+      (
+        rows: {
+          dataRoot: string;
+          size: number;
+          chunkCount: number;
+          lastWrite: number;
+          lastAccess: number;
+          tier: number;
+        }[],
+      ) => {
+        for (const row of rows) {
+          stmt.run({
+            data_root: fromB64Url(row.dataRoot),
+            size: row.size,
+            chunk_count: row.chunkCount,
+            last_write: row.lastWrite,
+            last_access: row.lastAccess,
+            tier: row.tier,
+          });
+        }
+      },
+    );
+    txn(entries);
+  }
+
+  selectChunkDataCacheEvictionCandidates(
+    maxLastWrite: number,
+    limit: number,
+  ): {
+    dataRoot: string;
+    size: number;
+    chunkCount: number;
+    lastWrite: number;
+  }[] {
+    const rows = this.stmts.chunks.selectChunkDataCacheEvictionCandidates.all({
+      max_last_write: maxLastWrite,
+      limit,
+    });
+    return rows.map((row: any) => ({
+      dataRoot: toB64Url(row.data_root),
+      size: row.size,
+      chunkCount: row.chunk_count,
+      // Returned so ChunkDataCacheEvictor can re-assert the age floor itself
+      // rather than trusting this query's WHERE clause. The floor is the one
+      // control whose failure is silent, so it is checked on both sides.
+      lastWrite: row.last_write,
+    }));
+  }
+
+  // Batch delete: removes many rows in one transaction and returns only the
+  // data roots whose DELETE actually changed a row. That return value is the
+  // delete-before-unlink race guard -- the caller unlinks the on-disk data_root
+  // directory for those and only those, so a concurrent sweep (or a re-ingest
+  // that already replaced the row) never unlinks bytes it does not own.
+  deleteChunkDataCacheEntries(
+    dataRoots: string[],
+    maxLastWrite: number,
+  ): string[] {
+    const stmt = this.stmts.chunks.deleteChunkDataCacheEntry;
+    const txn = this.dbs.chunks.transaction((rows: string[]): string[] => {
+      const deleted: string[] = [];
+      for (const dataRoot of rows) {
+        // A row whose last_write advanced past the floor since selection
+        // deletes 0 rows and is therefore never unlinked. See the statement.
+        if (
+          stmt.run({
+            data_root: fromB64Url(dataRoot),
+            max_last_write: maxLastWrite,
+          }).changes > 0
+        ) {
+          deleted.push(dataRoot);
+        }
+      }
+      return deleted;
+    });
+    return txn(dataRoots);
+  }
+
+  sumChunkDataCacheBytes(): number {
+    const row: any = this.stmts.chunks.sumChunkDataCacheBytes.get();
+    return row.total_bytes as number;
+  }
+
+  countChunkDataCacheEntries(): number {
+    const row: any = this.stmts.chunks.countChunkDataCacheEntries.get();
+    return row.count as number;
+  }
+
+  /**
+   * Look up the chunk-read geometry (data_root, END offset, data size) of a
+   * stable transaction by id.
+   *
+   * @param txId - base64url transaction id
+   * @returns the geometry, or `undefined` when the transaction is not a stable
+   *   row with both `offset` and `data_root` populated
+   */
+  getTxGeometry(txId: string): TxGeometry | undefined {
+    const row = this.stmts.core.selectStableTransactionGeometryById.get({
+      id: fromB64Url(txId),
+    });
+    if (
+      row === undefined ||
+      row.data_root == null ||
+      row.offset == null ||
+      row.data_size == null
+    ) {
+      return undefined;
+    }
+    return {
+      dataRoot: toB64Url(row.data_root),
+      offset: row.offset,
+      size: row.data_size,
+    };
+  }
+
   getTxByOffset(offset: number): TxByOffsetResult {
     const result = this.stmts.core.selectStableTransactionOffsetById.get({
       offset,
@@ -1318,6 +1494,60 @@ export class StandaloneSqliteDatabaseWorker {
       }
     }
     return id;
+  }
+
+  /**
+   * Write a data item's tag rows, keeping at most one set per data item id.
+   *
+   * `new_data_item_tags` carries `root_transaction_id` in its primary key and
+   * SQLite treats every NULL there as distinct from every other NULL. An
+   * unrooted set therefore never conflicts with anything, so it cannot be
+   * replaced by a later upsert — it has to be deleted. Two invariants follow:
+   *
+   * - The unrooted set is cleared before every write, so a repeated write
+   *   replaces its own rows instead of stacking a second copy.
+   * - An unrooted write is skipped once a rooted set exists. Tags are
+   *   immutable per data item id, so the two sets carry the same tags and
+   *   GraphQL — which looks tags up by `data_item_id` alone — would return
+   *   each one twice.
+   *
+   * `rootTransactionId` is applied to every row rather than taken from the
+   * rows themselves, so a caller with no root-atom knowledge cannot write a
+   * rooted set by accident.
+   */
+  private writeNewDataItemTags({
+    dataItemId,
+    rootTransactionId,
+    tagRows,
+    height,
+  }: {
+    dataItemId: Buffer;
+    rootTransactionId: Buffer | null;
+    tagRows: ReturnType<typeof dataItemToDbRows>['newDataItemTags'];
+    height?: number;
+  }) {
+    this.stmts.bundles.deleteOptimisticNewDataItemTags.run({
+      data_item_id: dataItemId,
+    });
+
+    if (rootTransactionId === null) {
+      const rootedTagsExist =
+        this.stmts.bundles.selectRootedNewDataItemTag.get({
+          data_item_id: dataItemId,
+        }) !== undefined;
+
+      if (rootedTagsExist) {
+        return;
+      }
+    }
+
+    for (const row of tagRows) {
+      this.stmts.bundles.upsertNewDataItemTag.run({
+        ...row,
+        root_transaction_id: rootTransactionId,
+        height,
+      });
+    }
   }
 
   saveDataItem(item: NormalizedDataItem, isOptimistic = false) {
@@ -1797,10 +2027,16 @@ export class StandaloneSqliteDatabaseWorker {
       });
     }
 
-    if (this.insertDataHashCache.get(hash)) {
+    // Dedupe on (hash, content type) rather than hash alone. `insertDataHash`
+    // can now heal a row whose content type is the `application/octet-stream`
+    // placeholder, and keying on the hash alone would let this in-process memo
+    // swallow exactly the write that heals it — the repeat suppressed is the
+    // one carrying the better value.
+    const insertDataHashCacheKey = `${hash}|${contentType ?? ''}`;
+    if (this.insertDataHashCache.get(insertDataHashCacheKey)) {
       return;
     }
-    this.insertDataHashCache.set(hash, true);
+    this.insertDataHashCache.set(insertDataHashCacheKey, true);
 
     this.stmts.data.insertDataHash.run({
       hash: hashBuffer,
@@ -3853,6 +4089,18 @@ export class StandaloneSqliteDatabase
   }
 
   /**
+   * Look up the chunk-read geometry of a stable transaction on a core read
+   * worker. See {@link StandaloneSqliteDatabaseWorker.getTxGeometry}.
+   *
+   * @param txId - base64url transaction id
+   * @returns the geometry, or `undefined` when no stable row with both
+   *   `offset` and `data_root` exists
+   */
+  getTxGeometry(txId: string): Promise<TxGeometry | undefined> {
+    return this.queueRead('core', 'getTxGeometry', [txId]);
+  }
+
+  /**
    * Queue-wrapper for the worker's {@link StandaloneSqliteDatabaseWorker.getBlockByWeaveOffset}:
    * resolve an absolute weave `offset` to its containing stable block (with the
    * predecessor's weave size for bracket validation). See
@@ -3994,6 +4242,75 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'deleteContiguousDataCacheEntries', [
       hashes,
     ]);
+  }
+
+  // --- Chunk data cache eviction index (chunks.db; routed through the `data`
+  // worker pool -- chunks.db has no pool of its own). ---
+
+  saveChunkDataCacheEntry(entry: {
+    dataRoot: string;
+    size: number;
+    lastWrite: number;
+    tier: number;
+  }): Promise<void> {
+    return this.queueWrite('data', 'saveChunkDataCacheEntry', [entry]);
+  }
+
+  touchChunkDataCacheEntry(
+    dataRoot: string,
+    lastAccess: number,
+    tier: number,
+  ): Promise<void> {
+    return this.queueWrite('data', 'touchChunkDataCacheEntry', [
+      dataRoot,
+      lastAccess,
+      tier,
+    ]);
+  }
+
+  insertChunkDataCacheEntriesIfAbsent(
+    entries: {
+      dataRoot: string;
+      size: number;
+      chunkCount: number;
+      lastWrite: number;
+      lastAccess: number;
+      tier: number;
+    }[],
+  ): Promise<void> {
+    return this.queueWrite('data', 'insertChunkDataCacheEntriesIfAbsent', [
+      entries,
+    ]);
+  }
+
+  selectChunkDataCacheEvictionCandidates(
+    maxLastWrite: number,
+    limit: number,
+  ): Promise<
+    { dataRoot: string; size: number; chunkCount: number; lastWrite: number }[]
+  > {
+    return this.queueRead('data', 'selectChunkDataCacheEvictionCandidates', [
+      maxLastWrite,
+      limit,
+    ]);
+  }
+
+  deleteChunkDataCacheEntries(
+    dataRoots: string[],
+    maxLastWrite: number,
+  ): Promise<string[]> {
+    return this.queueWrite('data', 'deleteChunkDataCacheEntries', [
+      dataRoots,
+      maxLastWrite,
+    ]);
+  }
+
+  sumChunkDataCacheBytes(): Promise<number> {
+    return this.queueRead('data', 'sumChunkDataCacheBytes', undefined);
+  }
+
+  countChunkDataCacheEntries(): Promise<number> {
+    return this.queueRead('data', 'countChunkDataCacheEntries', undefined);
   }
 
   async saveDataItem(
@@ -4150,6 +4467,24 @@ export class StandaloneSqliteDatabase
     return debugInfo;
   }
 
+  /**
+   * Queues an item's content attributes — hash, size, content type, and its
+   * position within the root transaction — for persistence.
+   *
+   * Writes are deduped over a {@link DEDUPE_CACHE_TTL_MS} window keyed on the
+   * item ID **plus every field a write can correct**: its root coordinates
+   * (`rootTransactionId`, `rootDataItemOffset`, `rootDataOffset`) and its
+   * `contentType`. A repeat write carrying all the same values is dropped,
+   * which is what the cache exists for; a write that moves the item to a
+   * different root, or that carries a different content type, always reaches
+   * the queue. Keying on the ID alone let whichever retrieval finished first
+   * inside the window win, so a correction arriving behind an unchanged write
+   * was silently discarded — the root coordinates and the content type are in
+   * the key because each was a correction being lost that way.
+   *
+   * Callers that invalidate an item must clear every dedupe entry for it, not
+   * just the bare ID — see {@link clearDataHash}.
+   */
   saveDataContentAttributes({
     id,
     parentId,
@@ -4187,14 +4522,40 @@ export class StandaloneSqliteDatabase
     rootDataOffset?: number;
     trusted?: boolean;
   }) {
-    if (this.saveDataContentAttributesCache.get(id)) {
+    // Dedupe on the root coordinates rather than the ID alone. Keying on the ID
+    // made the first writer within the TTL win: a retrieval that resolved
+    // before RootParentDataSource would re-persist the item's existing root,
+    // claim the slot, and a corrected root from the rebase walk arriving inside
+    // the same window was silently dropped. Including the root fields keeps
+    // suppressing writes that would change nothing, while letting a write that
+    // actually moves the item's root coordinates through every time.
+    //
+    // This can only admit writes the ID-only key would have suppressed, never
+    // suppress ones it allowed, and the extra writes are limited to genuine
+    // corrections — so the protection this cache exists to give the write
+    // queue is preserved.
+    //
+    // `contentType` is in the key for the same reason: a retrieval that
+    // resolved the item's content type only from the bundle around it claims
+    // the slot first, and the write carrying the item's real type — the one
+    // that heals `contiguous_data.original_source_content_type` — arrives
+    // inside the same window and would otherwise be the one dropped.
+    const dedupeKey = [
+      id,
+      rootTransactionId ?? '',
+      rootDataItemOffset ?? '',
+      rootDataOffset ?? '',
+      contentType ?? '',
+    ].join('|');
+
+    if (this.saveDataContentAttributesCache.get(dedupeKey)) {
       metrics.sqliteMethodDuplicateCallsCounter.inc({
         method: 'saveDataContentAttributes',
       });
       return Promise.resolve();
     }
 
-    this.saveDataContentAttributesCache.set(id, true);
+    this.saveDataContentAttributesCache.set(dedupeKey, true);
 
     return this.queueWrite('data', 'saveDataContentAttributes', [
       {
@@ -4424,8 +4785,25 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getRootTxFromCoreAndBundles', [id]);
   }
 
+  /**
+   * Clears an item's cached data hash, used when cache re-verification finds a
+   * mismatch and the blob is evicted.
+   *
+   * Also drops every `saveDataContentAttributes` dedupe entry for the item.
+   * Those keys carry the item's root coordinates, so deleting the bare ID would
+   * match nothing and the re-save that must follow an eviction would be
+   * suppressed until the TTL expired — leaving the row with a null hash. The
+   * scan is over a cache bounded at {@link DEDUPE_CACHE_MAX_SIZE}, and this
+   * path only runs on a verification mismatch, so the cost is not on any hot
+   * route. `|` cannot appear in a base64url ID, so the prefix is unambiguous.
+   */
   async clearDataHash(id: string) {
-    this.saveDataContentAttributesCache.delete(id);
+    const prefix = `${id}|`;
+    for (const key of [...this.saveDataContentAttributesCache.keys()]) {
+      if (key === id || key.startsWith(prefix)) {
+        this.saveDataContentAttributesCache.delete(key);
+      }
+    }
     return this.queueWrite('data', 'clearDataHash', [id]);
   }
 
@@ -4549,6 +4927,9 @@ if (!isMainThread) {
           const tx = worker.getTxByOffset(args[0]);
           parentPort?.postMessage(tx);
           break;
+        case 'getTxGeometry':
+          parentPort?.postMessage(worker.getTxGeometry(args[0]));
+          break;
         case 'getBlockByWeaveOffset':
           const blockByWeaveOffset = worker.getBlockByWeaveOffset(args[0]);
           parentPort?.postMessage(blockByWeaveOffset);
@@ -4626,6 +5007,34 @@ if (!isMainThread) {
           parentPort?.postMessage(
             worker.deleteContiguousDataCacheEntries(args[0]),
           );
+          break;
+        case 'saveChunkDataCacheEntry':
+          worker.saveChunkDataCacheEntry(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'touchChunkDataCacheEntry':
+          worker.touchChunkDataCacheEntry(args[0], args[1], args[2]);
+          parentPort?.postMessage(null);
+          break;
+        case 'insertChunkDataCacheEntriesIfAbsent':
+          worker.insertChunkDataCacheEntriesIfAbsent(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'selectChunkDataCacheEvictionCandidates':
+          parentPort?.postMessage(
+            worker.selectChunkDataCacheEvictionCandidates(args[0], args[1]),
+          );
+          break;
+        case 'deleteChunkDataCacheEntries':
+          parentPort?.postMessage(
+            worker.deleteChunkDataCacheEntries(args[0], args[1]),
+          );
+          break;
+        case 'sumChunkDataCacheBytes':
+          parentPort?.postMessage(worker.sumChunkDataCacheBytes());
+          break;
+        case 'countChunkDataCacheEntries':
+          parentPort?.postMessage(worker.countChunkDataCacheEntries());
           break;
         case 'countConfirmedDataRoots':
           parentPort?.postMessage(worker.countConfirmedDataRoots());

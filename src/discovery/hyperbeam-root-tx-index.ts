@@ -15,6 +15,7 @@ import {
   TxBoundarySource,
 } from '../types.js';
 import { Ans104OffsetSource } from '../data/ans104-offset-source.js';
+import { createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
@@ -86,6 +87,7 @@ export class HyperBeamRootTxIndex implements DataItemRootIndex {
 
     this.axiosInstance = axios.create({
       timeout: requestTimeoutMs,
+      ...createAgentPair({ client: 'HyperBeamRootTxIndex', log: this.log }),
     });
   }
 

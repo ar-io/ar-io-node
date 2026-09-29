@@ -332,12 +332,12 @@ describe('ArNS 404s', { skip: true }, function () {
       });
 
       assert.match(
-        res.headers['cache-control'] ?? '',
+        String(res.headers['cache-control'] ?? ''),
         /max-age=\d+, must-revalidate/,
       );
       // 60s default; reject any value pointing at the data-layer ladder
       // (12h = 43200, 30d = 2592000, etc.).
-      const maxAgeMatch = (res.headers['cache-control'] ?? '').match(
+      const maxAgeMatch = String(res.headers['cache-control'] ?? '').match(
         /max-age=(\d+)/,
       );
       assert.ok(maxAgeMatch !== null);
@@ -419,10 +419,10 @@ describe('ArNS 404s', { skip: true }, function () {
       });
 
       assert.match(
-        res.headers['cache-control'] ?? '',
+        String(res.headers['cache-control'] ?? ''),
         /max-age=\d+, must-revalidate/,
       );
-      const maxAgeMatch = (res.headers['cache-control'] ?? '').match(
+      const maxAgeMatch = String(res.headers['cache-control'] ?? '').match(
         /max-age=(\d+)/,
       );
       assert.ok(maxAgeMatch !== null);
@@ -478,7 +478,7 @@ describe(
 
       // Critical: must NOT inherit CACHE_UNSTABLE_TRUSTED_MAX_AGE (43200s)
       // or any data-layer ladder value.
-      const cacheControl = res.headers['cache-control'] ?? '';
+      const cacheControl = String(res.headers['cache-control'] ?? '');
       assert.match(cacheControl, /must-revalidate/);
       assert.ok(!cacheControl.includes('immutable'));
       const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
@@ -519,12 +519,12 @@ describe('ArNS apex (APEX_TX_ID)', { skip: true }, function () {
 
     assert.strictEqual(res.status, 200);
     assert.match(
-      res.headers['cache-control'] ?? '',
+      String(res.headers['cache-control'] ?? ''),
       /max-age=\d+, must-revalidate/,
     );
     // Default CACHE_APEX_MAX_AGE is 3600s. Reject any value pointing at the
     // data-layer ladder (12h = 43200, 30d = 2592000, etc.).
-    const maxAgeMatch = (res.headers['cache-control'] ?? '').match(
+    const maxAgeMatch = String(res.headers['cache-control'] ?? '').match(
       /max-age=(\d+)/,
     );
     assert.ok(maxAgeMatch !== null);
@@ -533,6 +533,8 @@ describe('ArNS apex (APEX_TX_ID)', { skip: true }, function () {
       `expected apex max-age <= 7200, got ${maxAgeMatch[1]}`,
     );
     // And not `immutable` — operators must be able to rotate APEX_TX_ID.
-    assert.ok(!(res.headers['cache-control'] ?? '').includes('immutable'));
+    assert.ok(
+      !String(res.headers['cache-control'] ?? '').includes('immutable'),
+    );
   });
 });

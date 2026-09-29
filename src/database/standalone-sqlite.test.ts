@@ -251,6 +251,60 @@ describe('StandaloneSqliteDatabase', () => {
   });
 
   describe('offsets', () => {
+    it('should return stable transaction geometry via getTxGeometry only when offset and data_root are set', async () => {
+      const completeId = 'Gm0rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
+      const noOffsetId = 'Gm1rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
+      const noDataRootId = 'Gm2rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
+      const dataRoot = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
+
+      const insert = coreDb.prepare(`
+        INSERT INTO stable_transactions (
+          id, height, block_transaction_index, format, last_tx, owner_address,
+          quantity, reward, tag_count, offset, data_size, data_root
+        ) VALUES (
+          @id, 1, @block_transaction_index, 2, @last_tx, @owner_address,
+          '0', '0', 0, @offset, 256000, @data_root
+        )
+      `);
+      const base = {
+        last_tx: Buffer.alloc(32),
+        owner_address: Buffer.alloc(32),
+      };
+      insert.run({
+        ...base,
+        id: fromB64Url(completeId),
+        block_transaction_index: 10,
+        offset: 51530681583862,
+        data_root: fromB64Url(dataRoot),
+      });
+      insert.run({
+        ...base,
+        id: fromB64Url(noOffsetId),
+        block_transaction_index: 11,
+        offset: null,
+        data_root: fromB64Url(dataRoot),
+      });
+      insert.run({
+        ...base,
+        id: fromB64Url(noDataRootId),
+        block_transaction_index: 12,
+        offset: 51530681583862,
+        data_root: null,
+      });
+
+      assert.deepEqual(await db.getTxGeometry(completeId), {
+        dataRoot,
+        offset: 51530681583862,
+        size: 256000,
+      });
+      assert.equal(await db.getTxGeometry(noOffsetId), undefined);
+      assert.equal(await db.getTxGeometry(noDataRootId), undefined);
+      assert.equal(
+        await db.getTxGeometry('Gm3rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E'),
+        undefined,
+      );
+    });
+
     it('should save offsets into the database and then be discoverable via getTxByOffset', async () => {
       const tx1id = '_H6KgmI_ZfSdSlf9r2xzDh_ebJnvQtTYLUBQlnRjIdM';
       const tx2id = 'UTjG9QyeQ8dJgghq_7JRYb3iTAvlc0IgVN3OfJFGwNk';
@@ -2143,6 +2197,205 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('saveDataContentAttributes dedupe', () => {
+    // The write dedupe is keyed on the root coordinates, not the ID alone.
+    // Keyed on the ID, the first writer inside the 7-minute TTL won: a
+    // retrieval resolving before RootParentDataSource re-persisted the item's
+    // existing root and claimed the slot, so a corrected root arriving in the
+    // same window was dropped and the row stayed mis-rooted.
+    // 43-char base64url: the final character carries only 2 significant bits,
+    // so it must be canonical or the value will not survive a decode/encode
+    // round trip through the index.
+    const ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0';
+    const INTERMEDIATE = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0';
+    const L1_ROOT = 'cccccccccccccccccccccccccccccccccccccccccc0';
+
+    it('lets a corrected root through inside the dedupe window', async () => {
+      await db.saveDataContentAttributes({
+        id: ID,
+        hash: 'hash',
+        dataSize: 94,
+        rootTransactionId: INTERMEDIATE,
+        rootDataItemOffset: 160,
+        rootDataOffset: 1409,
+      });
+
+      // Same values again: nothing changes, so this should be suppressed.
+      await db.saveDataContentAttributes({
+        id: ID,
+        hash: 'hash',
+        dataSize: 94,
+        rootTransactionId: INTERMEDIATE,
+        rootDataItemOffset: 160,
+        rootDataOffset: 1409,
+      });
+
+      assert.equal(
+        (await db.getDataAttributes(ID))?.rootTransactionId,
+        INTERMEDIATE,
+      );
+
+      // A rebase onto the real L1 root, well inside the TTL. Keyed on the ID
+      // this was dropped; it must land.
+      await db.saveDataContentAttributes({
+        id: ID,
+        hash: 'hash',
+        dataSize: 94,
+        rootTransactionId: L1_ROOT,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+      });
+
+      const corrected = await db.getDataAttributes(ID);
+      assert.equal(corrected?.rootTransactionId, L1_ROOT);
+      assert.equal(corrected?.rootDataItemOffset, 2997951);
+      assert.equal(corrected?.rootDataOffset, 2999200);
+    });
+
+    it('lets an identical re-save through after clearDataHash', async () => {
+      const EVICTED = 'dddddddddddddddddddddddddddddddddddddddddd0';
+      const attrs = {
+        id: EVICTED,
+        // A hash unique to this test. `insertDataHashCache` is an in-process
+        // LRU that outlives the per-test database reset, so reusing a hash
+        // another test already wrote makes insertDataHash a no-op here and the
+        // contiguous_data row never appears.
+        hash: 'clearDataHashRegression',
+        dataSize: 94,
+        rootTransactionId: L1_ROOT,
+        rootDataItemOffset: 2997951,
+        rootDataOffset: 2999200,
+      };
+
+      await db.saveDataContentAttributes(attrs);
+      const initialHash = (await db.getDataAttributes(EVICTED))?.hash;
+      assert.notEqual(initialHash, undefined, 'hash should be set');
+
+      // Cache re-verification found a mismatch and evicted the blob.
+      await db.clearDataHash(EVICTED);
+      assert.equal(
+        (await db.getDataAttributes(EVICTED))?.hash,
+        undefined,
+        'hash should be cleared',
+      );
+
+      // The re-save carries identical root coordinates and lands inside the
+      // dedupe TTL. Because the keys embed those coordinates, clearing by bare
+      // ID would miss them and this write would be suppressed, stranding the
+      // row with a null hash until the window expired.
+      await db.saveDataContentAttributes(attrs);
+      assert.equal(
+        (await db.getDataAttributes(EVICTED))?.hash,
+        initialHash,
+        'the original hash must be restored: the dedupe entry should have been invalidated',
+      );
+    });
+  });
+
+  // `contiguous_data.original_source_content_type` is keyed by the data hash
+  // and, for an item this gateway has not indexed, it is the only content type
+  // getDataAttributes can return. It used to be write-once, so an item served
+  // even a single time with the `application/octet-stream` placeholder — the
+  // ANS-104 envelope's own type, which a bundle-range read reports when the
+  // item's tags were never read — downloaded instead of rendering forever.
+  describe('content type healing', () => {
+    // Both dedupe caches in front of these writes — the main thread's
+    // saveDataContentAttributes LRU and the worker's insertDataHashCache —
+    // outlive the per-test database reset, so every case needs an ID and a
+    // hash no other case has written, or its writes are silently suppressed.
+    //
+    // 43-char base64url; the final character carries only 2 significant bits,
+    // so it must be canonical to survive a decode/encode round trip.
+    const idFor = (label: string) => label.padEnd(42, 'x') + '0';
+
+    const save = (id: string, hash: string, contentType?: string) =>
+      db.saveDataContentAttributes({ id, hash, dataSize: 5357, contentType });
+
+    const contentTypeOf = async (id: string) =>
+      (await db.getDataAttributes(id))?.contentType ?? undefined;
+
+    it('replaces the octet-stream placeholder with a real content type', async () => {
+      const id = idFor('heal-placeholder');
+      await save(id, 'heal-placeholder', 'application/octet-stream');
+      assert.equal(await contentTypeOf(id), 'application/octet-stream');
+
+      await save(id, 'heal-placeholder', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('fills in a null content type', async () => {
+      const id = idFor('heal-null');
+      await save(id, 'heal-null', undefined);
+      assert.equal(await contentTypeOf(id), undefined);
+
+      await save(id, 'heal-null', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('matches the placeholder with parameters and odd casing', async () => {
+      const id = idFor('heal-normalized');
+      await save(id, 'heal-normalized', 'Application/Octet-Stream; x=1');
+
+      await save(id, 'heal-normalized', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('treats a structured-suffix type as real, not as the placeholder', async () => {
+      // `application/octet-stream+json` is a specific type of its own, not the
+      // placeholder — a prefix match would have let text/html replace it.
+      const id = idFor('heal-structured-suffix');
+      await save(id, 'heal-structured-suffix', 'application/octet-stream+json');
+
+      await save(id, 'heal-structured-suffix', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'application/octet-stream+json');
+    });
+
+    it('never overwrites one real content type with another', async () => {
+      const id = idFor('heal-no-flap');
+      await save(id, 'heal-no-flap', 'text/html');
+
+      await save(id, 'heal-no-flap', 'image/png');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('never falls back from a real content type to the placeholder', async () => {
+      const id = idFor('heal-no-regress');
+      await save(id, 'heal-no-regress', 'text/html');
+
+      await save(id, 'heal-no-regress', 'application/octet-stream');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('heals a byte-identical re-upload, which shares the poisoned row', async () => {
+      // The reported symptom: re-uploading the file produced a new data item
+      // ID that hashed to the same bytes, so it inherited the placeholder and
+      // the re-upload appeared to change nothing.
+      const original = idFor('heal-reupload-original');
+      const reupload = idFor('heal-reupload-new');
+      await save(original, 'heal-reupload', 'application/octet-stream');
+      assert.equal(
+        await contentTypeOf(reupload),
+        undefined,
+        'the re-upload has no row of its own yet',
+      );
+
+      await save(reupload, 'heal-reupload', 'text/html');
+
+      assert.equal(await contentTypeOf(reupload), 'text/html');
+      assert.equal(
+        await contentTypeOf(original),
+        'text/html',
+        'the original ID shares the row, so it heals too',
+      );
+    });
+  });
+
   describe('getVerifiableDataIds', () => {
     it("should return an empty list if there's no verifiable data ids", async () => {
       const emptyDbIds = await db.getVerifiableDataIds();
@@ -2503,6 +2756,188 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(row.owner_offset, 50);
       assert.equal(row.owner_size, 32);
       assert.equal(row.signature_type, 1);
+    });
+  });
+
+  describe('optimistic tag rows superseded by the unbundle write', () => {
+    // Regression: new_data_item_tags carries root_transaction_id in its
+    // primary key and the optimistic path writes NULL there. The later
+    // unbundle write of the same data item therefore does not conflict --
+    // it leaves a second, parallel tag set, and the GraphQL tag lookup
+    // (which filters on data_item_id alone) returns every tag twice.
+    const itemId = 'b3B0aW1pc3RpYy10YWctZHVwLWl0ZW0tMDAwMQAAAAA';
+    const parentId = 'b3B0aW1pc3RpYy10YWctZHVwLXBhcmVudC0wMQAAAAA';
+    const rootTxId = 'b3B0aW1pc3RpYy10YWctZHVwLXJvb3QtMDAwMQAAAAA';
+
+    const tags = [
+      {
+        name: toB64Url(Buffer.from('App-Name')),
+        value: toB64Url(Buffer.from('ArDrive-App')),
+      },
+      {
+        name: toB64Url(Buffer.from('Entity-Type')),
+        value: toB64Url(Buffer.from('drive-state')),
+      },
+    ];
+
+    const optimisticItem = {
+      anchor: 'YW5jaG9y',
+      data_hash: null,
+      data_offset: null,
+      data_size: 1234,
+      id: itemId,
+      index: null,
+      offset: null,
+      owner: 'b3duZXI',
+      owner_address: 'b3duZXJfYWRkcmVzcw',
+      owner_offset: null,
+      owner_size: null,
+      parent_id: null,
+      parent_index: null,
+      root_parent_offset: null,
+      root_tx_id: null,
+      signature: 'c2lnbmF0dXJl',
+      signature_offset: null,
+      signature_size: null,
+      signature_type: null,
+      size: null,
+      tags,
+      target: 'dGFyZ2V0',
+    } as unknown as NormalizedDataItem;
+
+    const unbundledItem = {
+      ...optimisticItem,
+      data_offset: 100,
+      filter: '{"always": true}',
+      index: 0,
+      offset: 200,
+      owner_offset: 50,
+      owner_size: 32,
+      parent_id: parentId,
+      parent_index: 0,
+      root_parent_offset: 300,
+      root_tx_id: rootTxId,
+      signature_offset: 60,
+      signature_size: 32,
+      signature_type: 1,
+      size: 1234,
+    } as unknown as NormalizedDataItem;
+
+    const tagRowsById = () =>
+      bundlesDb
+        .prepare(
+          `SELECT root_transaction_id IS NULL AS optimistic, COUNT(*) AS count
+           FROM new_data_item_tags
+           WHERE data_item_id = @id
+           GROUP BY optimistic
+           ORDER BY optimistic`,
+        )
+        .all({ id: fromB64Url(itemId) }) as {
+        optimistic: number;
+        count: number;
+      }[];
+
+    it('drops the optimistic tag rows once the real root is known', async () => {
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'the optimistic write should leave one tag set with a NULL root',
+      );
+
+      await db.saveDataItem(unbundledItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'the unbundle write should replace the optimistic tag set, not add to it',
+      );
+    });
+
+    it('returns each tag once over GraphQL', async () => {
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+      await db.saveDataItem(unbundledItem);
+
+      const { edges } = await db.getGqlTransactions({
+        pageSize: 10,
+        ids: [itemId],
+      });
+
+      assert.equal(edges.length, 1);
+      assert.deepEqual(edges[0].node.tags, [
+        { name: 'App-Name', value: 'ArDrive-App' },
+        { name: 'Entity-Type', value: 'drive-state' },
+      ]);
+    });
+
+    it('keeps a repeated optimistic write idempotent', async () => {
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'a repeated optimistic write must replace its own tag set, not stack a second one',
+      );
+    });
+
+    it('does not re-add optimistic tags after the unbundle write', async () => {
+      // The admin queue-data-item route can be replayed after the bundle
+      // has already been unbundled (see the PE-9073 re-POST case above).
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+      await db.saveDataItem(unbundledItem);
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'the rooted tag set must survive an optimistic re-POST on its own',
+      );
+    });
+
+    it('keeps a repeated unrooted full write idempotent', async () => {
+      // The full-claim path is only reached with a root today, but the
+      // unrooted tag set must stay single-copy either way -- NULL roots do
+      // not conflict, so nothing else would deduplicate them.
+      await db.saveDataItem(optimisticItem);
+      await db.saveDataItem(optimisticItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'a repeated unrooted write must replace its own tag set',
+      );
+
+      await db.saveDataItem(unbundledItem);
+      await db.saveDataItem(optimisticItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'an unrooted write must not add a set alongside the rooted one',
+      );
+    });
+
+    it('writes unrooted tag rows when an optimistic write carries a root', async () => {
+      // insertOptimisticDataItem hardcodes NULL for the row-level root atom.
+      // The tag rows follow the same contract, so a caller that binds a root
+      // on the optimistic path cannot create a rooted set.
+      await db.saveDataItem(unbundledItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'an optimistic write must not claim a root on its tag rows',
+      );
+
+      await db.saveDataItem(unbundledItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'the unbundle write should still replace that set',
+      );
     });
   });
 

@@ -40,3 +40,31 @@ export function calculateX402Price(
   const priceInUSD = contentLength * config.perBytePrice;
   return Math.min(Math.max(priceInUSD, config.minPrice), config.maxPrice);
 }
+
+/**
+ * Convert a USD price to a whole number of the payment asset's atomic units,
+ * rounding up so that no non-zero price is quoted as free.
+ *
+ * x402's own string path (`processPriceToAtomicAmount('$0.0079', network)`)
+ * is not usable for computed prices: it multiplies a float by
+ * `10 ** decimals` and stringifies the result, which quotes amounts such as
+ * "7900.000000000001" that no client can pay, and its money schema rejects
+ * any price under $0.0001. Rounding the price to a few decimals first only
+ * moves the problem, from float noise to prices that round to zero.
+ *
+ * @param priceUsd - Price in USD, as returned by calculateX402Price
+ * @param decimals - Decimals of the payment asset (6 for USDC)
+ * @returns Atomic units, at least 1
+ */
+export function x402PriceToAtomicUnits(
+  priceUsd: number,
+  decimals: number,
+): bigint {
+  if (!Number.isFinite(priceUsd) || priceUsd < 0) {
+    throw new Error(`Invalid x402 price: ${priceUsd}`);
+  }
+  // Drop float noise before rounding up: 0.0079 * 1e6 is 7900.000000000001,
+  // which would otherwise round up to 7901.
+  const scaled = Number((priceUsd * 10 ** decimals).toPrecision(12));
+  return BigInt(Math.max(1, Math.ceil(scaled)));
+}

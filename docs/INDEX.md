@@ -22,6 +22,7 @@ Fast, offline lookups for data item to root transaction mappings.
 | [CDB64 Operator Guide](cdb64-guide.md) | Configuration, deployment, and troubleshooting |
 | [CDB64 Tools Reference](cdb64-tools.md) | CLI tools for creating indexes |
 | [CDB64 Format Specification](cdb64-format.md) | Technical file format details |
+| [Index Publication Protocol](index-publication.md) | Discovering, verifying and reading the index artifacts a gateway publishes, with a reference client |
 
 ### Rate Limiting & Payments
 
@@ -60,6 +61,7 @@ Fast, offline lookups for data item to root transaction mappings.
 | Document | Description |
 |----------|-------------|
 | [Deployment Topologies](deployment-topologies.md) | Proxy edge, shared ClickHouse, partitioning, and app-split topologies |
+| [Index Swarm Sidecar](index-swarm.md) | Publishing index artifacts to other gateways and subscribing to theirs, as an optional sidecar: quick-start checklists, lookup order, running behind nginx |
 
 ## Reference
 
@@ -85,6 +87,7 @@ Technical details about Arweave data structures.
 | [002 - ArNS Cache Timing](madr/002-arns-cache-timing.md) | ArNS resolution caching strategy |
 | [003 - ArNS Undername Limits](madr/003-arns-undername-limits.md) | Undername resolution limits |
 | [004 - Optimistic L1 Transaction Indexing](madr/004-optimistic-l1-tx-indexing.md) | Index a signed L1 tx before it mines + the never-serve-as-permanent guard |
+| [005 - Chunk Data Cache Indexed Eviction](madr/005-chunk-data-cache-indexed-eviction.md) | Per-dataRoot SQLite eviction index for the chunk cache, with a derived ingest-confirmation age floor |
 
 ## Testing
 

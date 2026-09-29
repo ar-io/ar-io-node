@@ -232,16 +232,158 @@ the partitions and sources of a partitioned CDB64 index.
 be loaded from: local file, local directory, HTTP URL, Arweave transaction, or
 Arweave byte-range.
 
+## Index Distribution
+
+<a id="index-publication"></a> **Index Publication** — The signed JSON document
+a gateway serves at `/ar-io/indexes` listing the index artifacts it publishes,
+their bands, and where each band's files can be fetched. Signed with the
+gateway's Ed25519 observer key so it verifies against the publisher's
+registered `observerAddress` regardless of which mirror or transport delivered
+it. Distinct from an [Index Manifest](#index-manifest), which describes the
+partitions inside one CDB64 index. Specified in
+[index-publication.md](index-publication.md).
+
+<a id="band"></a> **Band** — One immutable unit of a published index, normally
+covering a block height range. Bands let a subscriber re-fetch only what
+changed: older height bands stay put while a rolling tip band is rebuilt on
+the publisher's cadence. A band's identity is the set of its file digests.
+
+<a id="artifact-kind"></a> **Artifact Kind** — The `kind` field of a published
+index, selecting the plugin that validates and installs its bands
+(`cdb64-root-tx` first). Keeps the distribution path independent of what is
+being distributed.
+
+<a id="publication-sequence"></a> **Publication Sequence** — A monotonic
+counter per publisher, paired with the previous document's SHA-256. A
+subscriber refuses a lower sequence than the highest it has *seen*, whether or
+not that newer document's bands installed, so a cached or mirrored older
+document cannot roll it back. An equal sequence is accepted:
+it is what an unchanged publisher serves on every poll.
+
+<a id="collection-source"></a> **Collection Source** — A configured CDB64
+source that is a directory *of* indexes rather than one index: each
+subdirectory holding a `manifest.json` becomes its own reader, added and
+removed at runtime without a gateway restart.
+
+<a id="index-swarm"></a> **Index Swarm Sidecar** — The optional `index-swarm`
+compose service, running the core image with its own entrypoint, that
+publishes this gateway's bands and subscribes to other gateways'. It never
+touches the gateway's databases or the chain. See
+[index-swarm.md](index-swarm.md).
+
+<a id="publisher"></a> **Publisher** — A registered gateway serving a signed
+[Index Publication](#index-publication). Only the node holding the registered
+observer key can sign one, which is why a multi-node publisher sends
+`/ar-io/indexes*` to that node.
+
+<a id="subscriber"></a> **Subscriber** — A gateway whose sidecar follows one or
+more publishers, identified by wallet: it verifies each document against the
+registry, downloads bands by digest, and installs them where its gateway's
+[Collection Source](#collection-source) loads them.
+
+<a id="blob-route"></a> **Blob Route** — `GET /ar-io/indexes/blob/<sha256>`,
+which serves a published file by its digest. The address cannot change
+meaning, so responses are immutable and safe for any cache to keep; the
+publisher serves it from a hard link that pins the exact bytes it hashed.
+
+<a id="install-retire"></a> **Install / Retire** — A subscriber *installs* a
+band by renaming a fully downloaded and verified directory into
+`installed/<index>/`, where the gateway picks it up; it *retires* one the
+publisher no longer offers by removing its manifest (the gateway stops using
+it) and deleting the directory after the
+[supersede grace period](#supersede).
+
+<a id="supersede"></a> **Supersede** — A band's `metadata.supersedes` names the
+band or bands it replaces. The publisher stops offering those at once and
+deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`; subscribers retire
+them on the same grace, so a lookup in flight never loses its band.
+
 ## Data Storage Architecture
+
+<a id="age-floor"></a> **Age Floor** - The minimum age cached data must reach
+before a reclaimer may delete it. For the contiguous cache this is
+`AGGRESSIVE_MIN_AGE_SECONDS`, honoured by the
+[filesystem-walk reclaimer](#filesystem-walk-reclaimer) and deliberately
+**ignored** by the [index evictor](#index-evictor). For the chunk cache it is a
+**correctness control**, not a tuning knob: the chunk index evictor must never
+reclaim a chunk whose ingest confirmation window is still open, so the floor is
+_derived_ in code as
+`max(CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS, CHUNK_INGEST_ALLOWLIST_CONFIRMATION_TIMEOUT_SECONDS)`
+when `CHUNK_INGEST_CACHE_ENABLED` (exposed as
+`CHUNK_DATA_CACHE_INDEX_MIN_AGE_SECONDS`, with no environment variable of its
+own) and enforced both in SQL and again per candidate. Violating it breaks
+upload propagation silently. See
+[cache cleanup](./cache-cleanup.md) and [ADR 005](./madr/005-chunk-data-cache-indexed-eviction.md).
 
 **Cache Store** - High-speed storage layer (Redis or filesystem) for frequently
 accessed data chunks and headers.
+
+<a id="chunk-data-cache-index"></a> **Chunk Data Cache Index** - The
+`chunk_data_cache` table in [`chunks.db`](#databases), one row per
+[data root](#data-root), that lets the chunk cache be reclaimed by query instead
+of by directory traversal. Each row aggregates the whole
+`by-dataroot/<hh>/<hh>/<dataRoot>/` directory: summed `size`, `chunk_count`,
+`last_write` (MAX write time — the [age floor](#age-floor) field, advanced on
+every chunk write and never by a read), `last_access` (MAX read time, LRU
+ordering only) and `tier`. Populated by a write hook on
+`FsChunkDataStore.set()`, refreshed by a read hook
+(`CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ`), seeded for a pre-existing cache by a
+one-time insert-if-absent backfill, and consumed by the chunk
+[index evictor](#index-evictor). Gated on `ENABLE_CHUNK_DATA_CACHE_INDEX`.
 
 **Chunk Data Store** - Backend storage for transaction chunks. Supports multiple
 implementations including filesystem and S3.
 
 **Contiguous Data Store** - Storage backend for complete transaction data.
 Manages both data files and verification metadata.
+
+<a id="filesystem-walk-reclaimer"></a> **Filesystem-Walk Reclaimer** -
+`FsCleanupWorker`: reclaims a cache by periodically walking the sharded
+directory tree and deleting files older than an effective TTL. Discovery cost is
+`O(files)` random-access I/O, so on a large cache it becomes the bottleneck —
+measured on a production chunk cache spending 93.9 s of every 94.9 s batch cycle
+traversing rather than deleting. Contrast the [index evictor](#index-evictor);
+the walk worker is still useful as an occasional reconciler for files the index
+does not know about.
+
+<a id="hybrid-tail"></a> **Hybrid Tail** - Proposed refinement to
+[data root](#data-root)-granular chunk eviction (ADR 005, Departure 2) for the
+extreme size skew of the chunk cache: the median data root holds ~2 chunks while
+the top 1% hold ~50% of all chunks. Above a chunk-count threshold a data root
+would be tracked (or evicted) at finer granularity, so a single hot chunk cannot
+pin a multi-gigabyte all-or-nothing eviction unit, while the small-tail majority
+stays whole-unit. `ENABLE_CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL` and
+`CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL_CHUNK_THRESHOLD` are **reserved and inert** —
+nothing reads them yet.
+
+<a id="index-evictor"></a> **Index Evictor** - A reclaimer that decides _what_ to
+delete by querying a SQLite cache index instead of walking the cache tree, so
+discovery is O(log n) rather than O(files); disk usage (`statfs`) remains the
+authoritative signal for _whether_ to delete. Two exist:
+`ContiguousDataCacheEvictor` (per-blob, LRU by `last_access`, tiered by
+preferred ArNS, no [age floor](#age-floor)) and `ChunkDataCacheEvictor`
+(per [data root](#data-root), size-aware — it accumulates candidates to a byte
+target rather than evicting a fixed number of coldest rows — and it **must**
+honour an age floor). Contrast the
+[filesystem-walk reclaimer](#filesystem-walk-reclaimer).
+
+<a id="original-source-content-type"></a> **Original Source Content Type** - The
+`contiguous_data.original_source_content_type` column: the content type a
+response is served with when the item is not in the local index.
+`getDataAttributes` prefers the tags-derived content type from
+`stable_transactions` / `new_transactions` / `bundles.*_data_items` and falls
+back to this column, so for any data item whose parent [bundle](#bundle) this
+gateway has never unbundled, this column _is_ the content type. Two properties
+make it easy to get wrong. It is keyed by the **data hash**, not the data item
+ID, so it is shared by every byte-identical upload — re-uploading a file cannot
+give it a different content type here. And it only ever transitions from the
+`application/octet-stream` placeholder (or NULL) to a real type, never between
+two real types, so two byte-identical items with conflicting `Content-Type` tags
+cannot flap the row. The placeholder is what a
+[bundle](#bundle)-range read reports — an ANS-104 bundle's own content type —
+so a data item served without its tags ever being read would otherwise be typed
+as the envelope around it. Unbundling the parent bundle
+(`POST /ar-io/admin/queue-bundle`) takes precedence over this column entirely.
 
 ## Data Verification
 
@@ -392,10 +534,18 @@ receiving side can skip the resolver work it would otherwise do. Three kinds
 exist today: a root [transaction ID](#transaction) (`X-AR-IO-Root-Transaction-Id`),
 a parent path of intermediate bundle IDs (`X-AR-IO-Root-Path`), and a byte
 range within the root tx pointing at the [data item](#data-item)
-(`X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size`). Hints are always
-re-validated by the receiving gateway against parsed-header IDs before serving
-bytes — a wrong hint produces a fallthrough, never wrong bytes — so emitting
-one adds no trust surface.
+(`X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size`).
+
+Root and path hints only choose which bundle to read; the item's offset and
+size still come from that bundle's own index. A wrong one therefore produces a
+fallthrough, and gateways forward them to each other.
+
+A byte-range hint's size cannot be checked against a bundle index, so it is
+handled differently:
+
+- It is honored only for requests without a `Range` header.
+- The payload is served only if the item's signature verifies over it.
+- It is not forwarded to other gateways.
 
 **Naming-symmetry note**: response headers historically used the longer pair
 `X-AR-IO-Root-Data-Item-Offset` / `X-AR-IO-Root-Data-Offset`, while the
@@ -405,6 +555,18 @@ work, ar-io-node responses now emit BOTH the legacy pair and the aligned pair
 so cache-and-replay can copy headers between request and response without
 renaming. The legacy headers remain for backwards compatibility and will be
 removed after a deprecation window.
+
+<a id="offsets-endpoint"></a> **Offsets Endpoint** - `GET /ar-io/offsets/:id`,
+which serves a [data item's](#data-item) location within its root
+[transaction](#transaction) directly from the node's index, as JSON. It carries
+the same values a [retrieval hint](#retrieval-hint) does, but as a first-class
+lookup rather than a byproduct of serving bytes: `HEAD /raw/:id` only emits the
+`X-AR-IO-Root-*` headers after a *successful data retrieval*, so on a cache miss
+it runs the node's whole `ON_DEMAND_RETRIEVAL_ORDER` cascade first. The offsets
+endpoint performs a single indexed read and never touches contiguous data, so a
+miss costs the same as a hit. Consumed by the `peers` entry in
+`ROOT_TX_LOOKUP_ORDER`, which supersedes the header-scraping `gateways` entry
+for peers that serve it.
 
 <a id="chain-anchored-offset"></a> **Chain-Anchored Offset** - A
 [transaction offset](#transaction-offset) reported by an untrusted peer (via

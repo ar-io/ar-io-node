@@ -12,7 +12,10 @@ import { RequestAttributes } from '../types.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 import { Readable } from 'node:stream';
-import { createTestLogger } from '../../test/test-logger.js';
+import {
+  createTestLogger,
+  createRecordingTestLogger,
+} from '../../test/test-logger.js';
 
 const axiosMockCommonParams = (config: any) => ({
   interceptors: {
@@ -1423,5 +1426,128 @@ describe('GatewayDataSource', () => {
         assert.equal(data.trusted, false);
       });
     });
+  });
+});
+
+describe('GatewaysDataSource response interceptor', () => {
+  // The suite mocks axios.create, so the interceptor never runs against a real
+  // request. Capture the rejection handler it registers and drive it directly.
+  /**
+   * Build a source with the given logger and return the rejection handler its
+   * response interceptor registers. The suite mocks `axios.create`, so the
+   * interceptor never runs against a real request and must be driven directly.
+   */
+  const captureRejectionHandler = async (recorder: any) => {
+    let onRejected: ((e: any) => any) | undefined;
+    mockedAxiosInstance.interceptors.response.use = (_ok: any, rej: any) => {
+      onRejected = rej;
+    };
+
+    const source = new GatewaysDataSource({
+      log: recorder,
+      trustedGatewaysUrls: {
+        'https://gateway.domain': { priority: 1, trusted: true },
+      },
+    });
+    await source.getData({ id: 'some-id', requestAttributes }).catch(() => {});
+    return onRejected;
+  };
+
+  it('logs a peer 404 at debug, not error', async () => {
+    const { logger: recorder, levels } = createRecordingTestLogger({
+      suite: 'GatewaysDataSource',
+    });
+    const onRejected = await captureRejectionHandler(recorder);
+    assert.ok(onRejected !== undefined);
+
+    levels.length = 0;
+    await onRejected({
+      response: { status: 404, config: { url: '/raw/x' }, headers: {} },
+    }).catch(() => {});
+
+    // A 404 means the peer does not hold the data -- routine in a cascade.
+    assert.equal(levels.includes('error'), false);
+    assert.ok(levels.includes('debug'));
+  });
+
+  it('logs a peer 429 at debug, not error', async () => {
+    const { logger: recorder, levels } = createRecordingTestLogger({
+      suite: 'GatewaysDataSource',
+    });
+    const onRejected = await captureRejectionHandler(recorder);
+    assert.ok(onRejected !== undefined);
+
+    levels.length = 0;
+    await onRejected({
+      response: { status: 429, config: { url: '/raw/x' }, headers: {} },
+    }).catch(() => {});
+
+    assert.equal(levels.includes('error'), false);
+    assert.ok(levels.includes('debug'));
+  });
+
+  it('logs a cancellation at debug, not error', async () => {
+    const { logger: recorder, levels } = createRecordingTestLogger({
+      suite: 'GatewaysDataSource',
+    });
+    const onRejected = await captureRejectionHandler(recorder);
+    assert.ok(onRejected !== undefined);
+
+    levels.length = 0;
+    await onRejected(new axios.CanceledError('canceled')).catch(() => {});
+
+    // A cancel is the caller disconnecting, not a gateway fault.
+    assert.equal(levels.includes('error'), false);
+    assert.ok(levels.includes('debug'));
+  });
+
+  it('logs a peer 404 failure at debug, not warn, through the full getData path', async () => {
+    const { logger, entries } = createRecordingTestLogger({
+      suite: 'GatewaysDataSource',
+    });
+    mockedAxiosInstance.request = async () => ({
+      status: 404,
+      data: { destroy: mock.fn() },
+      headers: {},
+    });
+
+    const source = new GatewaysDataSource({
+      log: logger,
+      trustedGatewaysUrls: {
+        'https://gateway.domain': { priority: 1, trusted: true },
+      },
+    });
+    await source
+      .getData({ id: 'missing-id', requestAttributes })
+      .catch(() => {});
+
+    // The per-gateway line must not be a warning for a routine 404. The
+    // tier-exhausted warning is expected and deliberately left alone.
+    const perGateway = entries.filter((e) =>
+      e.message.includes('Failed to fetch from gateway'),
+    );
+    assert.ok(
+      perGateway.length > 0,
+      'expected the per-gateway line to be logged',
+    );
+    assert.equal(
+      perGateway.every((e) => e.level === 'debug'),
+      true,
+    );
+  });
+
+  it('still logs a genuine 5xx at error', async () => {
+    const { logger: recorder, levels } = createRecordingTestLogger({
+      suite: 'GatewaysDataSource',
+    });
+    const onRejected = await captureRejectionHandler(recorder);
+    assert.ok(onRejected !== undefined);
+
+    levels.length = 0;
+    await onRejected({
+      response: { status: 503, config: { url: '/raw/x' }, headers: {} },
+    }).catch(() => {});
+
+    assert.ok(levels.includes('error'));
   });
 });

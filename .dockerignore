@@ -8,6 +8,11 @@ envoy/
 *.db*
 data/
 
+# Git worktrees created by ./tools/wt add. Each has its own node_modules and
+# data/ directory, so a handful of them can add tens of GB to the build
+# context - enough to exhaust the Docker daemon's disk part-way through COPY.
+wt/
+
 # Node
 node_modules/
 

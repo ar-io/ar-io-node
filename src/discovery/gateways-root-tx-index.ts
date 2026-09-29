@@ -10,7 +10,12 @@ import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
-import { parseNonNegativeInt } from '../lib/http-utils.js';
+import {
+  discardResponseBody,
+  parseContentRange,
+  parseNonNegativeInt,
+} from '../lib/http-utils.js';
+import { createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
@@ -45,6 +50,7 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
   private readonly axiosInstance: AxiosInstance;
   private readonly cache?: LRUCache<string, CachedGatewayOffsets>;
   private readonly limiters: Map<string, TokenBucket>;
+  private readonly requestTimeoutMs: number;
 
   constructor({
     log,
@@ -65,6 +71,7 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.cache = cache;
+    this.requestTimeoutMs = requestTimeoutMs;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -95,12 +102,29 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
     // Initialize axios instance
     this.axiosInstance = axios.create({
       timeout: requestTimeoutMs,
+      ...createAgentPair({ client: 'GatewaysRootTxIndex', log: this.log }),
       headers: {
         'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
       },
     });
   }
 
+  /**
+   * Asks the trusted gateways, in priority order, where a data item lives.
+   *
+   * Each gateway's `/raw/<id>` response headers are read (HEAD, falling back
+   * to a zero-byte range GET). The first response that names a root
+   * transaction wins; offsets and sizes are parsed from its
+   * `X-AR-IO-Root-*` headers when present. Results are cached per ID.
+   *
+   * @param id - Data item ID to locate
+   * @returns The root transaction ID with whatever the gateway reported:
+   *   `rootOffset` and `rootDataOffset` within the root, `contentType` from
+   *   `Content-Type`, `dataSize` (the payload size) from `Content-Length`, and
+   *   `size` (the whole item) from `X-AR-IO-Root-Item-Size`, or else computed
+   *   as header size plus `dataSize` when both offsets are known. Returns
+   *   `undefined` when no gateway reports a root transaction.
+   */
   async getRootTx(id: string): Promise<
     | {
         rootTxId: string;
@@ -170,15 +194,27 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
             const rootDataOffsetStr =
               response.headers['x-ar-io-root-data-offset'];
             const rootItemSizeStr = response.headers['x-ar-io-root-item-size'];
-            const contentType = response.headers['content-type'];
-            const contentLengthStr = response.headers['content-length'];
+            const contentType = response.headers['content-type'] as
+              | string
+              | undefined;
+            const contentLengthStr = response.headers['content-length'] as
+              | string
+              | undefined;
 
             // Root transaction ID found - offsets can only be present if root ID exists
             if (rootTxId) {
               const rootOffset = parseNonNegativeInt(rootOffsetStr);
               const rootDataOffset = parseNonNegativeInt(rootDataOffsetStr);
-              // Content-Length is the size of the data, not the full data item with headers
-              const dataSize = parseNonNegativeInt(contentLengthStr);
+              // The payload size (not the whole item). A HEAD response carries it
+              // as Content-Length. The range-GET fallback answers 206 with
+              // Content-Length: 1, the length of the byte it returned, so there
+              // the size is the Content-Range total. Without a total it stays
+              // unknown: a size of 1 would make the caller serve and record a
+              // single byte as the whole payload.
+              const dataSize =
+                response.status === 206
+                  ? parseContentRange(response.headers['content-range'])?.total
+                  : parseNonNegativeInt(contentLengthStr);
               // Prefer the explicit `Root-Item-Size` header when emitted;
               // otherwise compute the legacy way: header size + data size.
               const explicitItemSize = parseNonNegativeInt(rootItemSizeStr);
@@ -266,7 +302,9 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
    * those behind CDNs or proxies — don't support HEAD on this route even
    * though the upstream gateway would. `bytes=0-0` is the smallest legal
    * range; the server returns 1 byte of body we discard, and the headers
-   * are what we want.
+   * are what we want. The body is received as a stream and discarded by
+   * {@link discardResponseBody}: a peer that ignores the range and sends the
+   * whole item has its connection closed instead of the item being buffered.
    *
    * 404 is treated as a definitive "item doesn't exist on this peer" and
    * propagated to the caller — falling back to GET would just hit the
@@ -286,10 +324,22 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
         throw err;
       }
       // Network error, 405 Method Not Allowed, 5xx, etc. — try GET.
-      return this.axiosInstance.get(url, {
-        headers: { Range: 'bytes=0-0' },
-        responseType: 'arraybuffer',
-      });
+      try {
+        const response = await this.axiosInstance.get(url, {
+          headers: { Range: 'bytes=0-0' },
+          responseType: 'stream',
+        });
+        await discardResponseBody(response.data, {
+          timeoutMs: this.requestTimeoutMs,
+        });
+        return response;
+      } catch (getErr: any) {
+        // An error status still carries an unread body stream.
+        await discardResponseBody(getErr?.response?.data, {
+          timeoutMs: this.requestTimeoutMs,
+        });
+        throw getErr;
+      }
     }
   }
 }

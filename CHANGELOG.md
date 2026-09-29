@@ -8,6 +8,456 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Signed index publishing (`index-swarm` sidecar, `/ar-io/indexes`)** — a
+  gateway can publish its CDB64 root-TX index bands for other gateways, and
+  subscribe to theirs. Off by default (compose profile `index-swarm`).
+  - The sidecar runs the core image with its own entrypoint. It signs a
+    publication with the gateway's registered observer key (RFC 8785, Ed25519,
+    a monotonic sequence), and resolves publishers through the gateway's
+    `/ar-io/peers`, so it makes no Solana RPC calls.
+  - Subscribers verify every document against the registry and every file
+    against its signed SHA-256. Downloads resume, skip files already on disk,
+    stop for the poll when a publisher's meter answers 402 or 429, and install
+    the newest heights first. Installed bands load without a gateway restart.
+  - New gateway routes: `GET /ar-io/indexes` (the signed document),
+    `/ar-io/indexes/<name>/<band>/<file>` and the immutable
+    `/ar-io/indexes/blob/<sha256>`. The byte routes are rate limited and
+    priced with x402 like data egress, and signed with HTTPSIG. The errors these routes return (400, 402, 404,
+    416, 429, 503) are `Cache-Control: no-store`, so a caching proxy never
+    replays one. `/ar-io/info` advertises what is published.
+  - See `docs/index-swarm.md` (operators: checklists, lookup order, running
+    behind nginx) and `docs/index-publication.md` (the protocol).
+  - `/ar-io/peers` gains each peer's registry fields (wallet, observer key,
+    stake, status), which is what lets subscribers resolve publishers without
+    RPC.
+  - Built to take input from other gateways safely:
+    - the signature is domain-separated (`ar-io-index-publication/v1\n` before the canonical JSON);
+    - a publisher re-signs at once when its served document no longer verifies under its key (signed in the older format, or by a rotated-out observer key), instead of at the next refresh;
+    - documents are bounded in size and shape;
+    - band files are fetched only from the publication's origin (or `INDEX_SWARM_ALLOWED_FILE_ORIGINS`), and redirects are never followed;
+    - downloads stop at their signed size while streaming, and refuse compressed bodies;
+    - every CDB64 partition is walked and bounds-checked before a band installs, and the reader never trusts a length or pointer from the file;
+    - replacing a band never leaves a moment when lookups to it miss;
+    - one band id belongs to one publisher at a time.
+    - after the first request, the gateway rechecks the publication file every 5 s off the request path, so later index requests do not wait behind a filesystem call on a saturated libuv thread pool (seen on turbo-gateway as 15–30 s responses during cache sweeps); only the first request after a start waits for the file;
+
+- **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
+  item sizes for every data item in a list of root bundles, nested bundles
+  included, by reading only each bundle's item index and item headers through
+  a gateway's `/raw` range requests. Each item's header is decoded and its
+  signature hashed to confirm the ID, and a bundle whose items do not add up to
+  its size is rejected rather than indexed. Header reads are coalesced (bundles
+  of small items read in 1 MiB windows, bundles of large items a few KiB per
+  item), roots are scanned in parallel, and a progress file makes long runs
+  resumable. An optional details CSV records each item's signature type and
+  content type. An item with an unknown signature type is skipped with a
+  warning instead of failing its root, rows are staged in part files so memory
+  doesn't grow with a root's row count, requests are rate limited (10 per
+  second by default, `--requests-per-second`) with `429` responses retried
+  after their `Retry-After`, and IDs the gateway reports as data items are
+  refused.
+
+- **Item size in CDB64 root TX index values** — CDB64 values can now record
+  the total data item size (`s`, header + payload) alongside the two root
+  offsets. The generate tools accept it as an optional sixth CSV column,
+  `data_item_size`, and `export-cdb64-root-tx-index` writes it. An offset
+  without a size tells the gateway where an item starts but not where it ends,
+  so every CDB64 hit still searched the root bundle's header for the item: the
+  item count, the whole ID index, then the item header, each a separate range
+  read of the root bundle. With the size recorded, the gateway reads the item
+  header once at the recorded offset, checks that its signature hashes to the
+  requested ID and that the header ends at the recorded payload offset, and
+  serves the payload with the item's own content type. The payload goes
+  through the same signature verification as direct offset hints, and the
+  offsets are saved only once it verifies. Any mismatch, and any range
+  request, falls back to the bundle search. The key is optional and ignored by
+  readers that predate it, so existing indexes behave as before and new ones
+  stay readable by older gateways. A size inconsistent with its offsets is
+  ignored rather than invalidating the entry. Items located this way are
+  counted as `root_tx_local_resolve_total{outcome="index_offsets"}`.
+
+### Changed
+
+- **OpenAPI spec: current introduction, and the real version.** The spec's
+  front matter (what the gateway serves, how to verify responses with the
+  `X-AR-IO-*` trust headers and HTTP signatures, rate limits and x402, errors,
+  authentication) replaces text from the project's first release. `/openapi.json`
+  and `/api-docs` now report the running gateway's release as `info.version`,
+  instead of a fixed `0.0.1`. The spec also gains a relative `servers` entry,
+  so "Try it out" targets the gateway serving the page, and the current logo.
+
+- **`root_tx_lookup_total{has_offsets}` now means both root offsets came
+  back**, for every source. It used to also require `size` and `dataSize`. A
+  CDB64 index never returns `dataSize` (it returns `size` only when the entry
+  recorded one), so every index hit read `false`.
+  A new `has_size` label records whether the item size came back. Queries
+  filtering on `has_offsets="true"` will now count CDB64 hits, and any other
+  source's hits that carry offsets without a data size.
+
+- `TxChunksDataSource` now resolves a transaction's chunk-read geometry
+  (`data_root`, offset and size) from the local stable transactions index
+  before asking the trusted node, falling back to the chain on a miss. Every
+  cold range read previously cost two trusted-node requests, which share a
+  5 req/s budget with the transaction offset importer, so a busy gateway spent
+  most of that budget re-reading geometry it already had indexed and starved
+  the importer. A read that fails using local geometry re-checks it against
+  the chain, at most once per transaction per hour, and retries only if the
+  two disagree. Set `TX_CHUNKS_GEOMETRY_DB_ENABLED=false` to restore the
+  previous behavior; `TX_CHUNKS_GEOMETRY_CACHE_SIZE` bounds the in-memory
+  cache of resolved geometry.
+
+### Fixed
+
+- The `tx-data` retrieval source no longer treats an unmined transaction as
+  data. A node answers `202 Pending` for a transaction it has not mined, and
+  that text was decoded as the transaction's data with a `NaN` size, which then
+  broke x402 pricing, let the request skip rate-limit token accounting, and
+  made a metrics call throw from inside the stream's `end` handler. The source
+  now accepts only `200` answers, requires a whole-number `data_size`, and
+  rejects data whose length differs from it, so the request moves on to the
+  next source.
+- The trusted-gateways root TX lookup no longer records a 1-byte payload size
+  when a gateway rejects its HEAD request. The lookup then falls back to a
+  `Range: bytes=0-0` GET, whose `Content-Length` is 1; that value was taken as
+  the item's payload size, so the item could be served, cached and recorded as
+  a single byte. The size now comes from the `Content-Range` total, and is left
+  unknown when the response has none, in which case the item is located by
+  searching its bundle instead.
+- Payloads located by a direct offset hint (`X-AR-IO-Root-Item-Offset` +
+  `X-AR-IO-Root-Item-Size`) are now checked against the data item's signature
+  before they are served in full, cached, or have their offsets saved.
+  Previously the hinted size was taken as given, so an incorrect size could
+  frame a truncated or over-long payload under that ID. Range requests carrying
+  these hints now resolve through the bundle's own index, and the two hint
+  headers are no longer forwarded to other gateways; root transaction and path
+  hints are unchanged. Outcomes are counted in
+  `data_item_signature_verification_total`.
+
+- Stopped GraphQL returning every tag twice for a recently uploaded data item.
+  Optimistically indexed data items are written with a NULL
+  `root_transaction_id`, which is part of the `new_data_item_tags` primary key.
+  SQLite treats those NULLs as distinct, so the later unbundle write added a
+  second tag set instead of replacing the first, and the tag lookup returned
+  both. The unbundle path now removes the optimistic tag rows, and the
+  optimistic path replaces its own rows rather than stacking a second copy.
+
+## [Release 83] - 2026-09-01
+
+This is a **recommended release** focused on **data-retrieval correctness,
+chunk cache management, and decentralized ArNS resolution**. Key highlights
+include a fix for truncated upstream bodies being cached and re-served as
+complete data — the mechanism by which a one-byte fragment propagates between
+gateways — plus enforcement of the blocklist on manifest-resolved paths,
+index-driven eviction and backfill for the chunk data cache, coalescing of
+concurrent requests for the same uncached object, and ArNS now resolving
+on-demand from chain by default so each gateway is self-sufficient rather than
+a client of a few trusted gateways. Gateways the registry reports as `leaving`
+are no longer used as peers or spent on observation, and the bundled observer
+is updated for ADR-0029 epoch rent refunds.
+
+### Added
+
+- **Disk-pressure watermarks for the chunk data cache** —
+  `CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT`,
+  `CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT`,
+  `CHUNK_DATA_CACHE_MIN_FREE_BYTES` and
+  `CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS` bring the chunk cache cleanup
+  walk in line with the contiguous data cache, which already had them. With a
+  low watermark set the walk is skipped entirely while the filesystem has
+  headroom, instead of running unconditionally. This matters on large caches
+  atop spinning storage: the walk is metadata-bound, so a tree with tens of
+  millions of inodes cannot be traversed within
+  `FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION` — a pass never completes and the
+  device stays saturated even with terabytes free. Previously the only escape
+  was `ENABLE_CHUNK_DATA_CACHE_CLEANUP=false`, which stops reclamation
+  altogether and lets the cache grow unbounded. All four default to the
+  existing behavior, so nothing changes unless they are set.
+
+- **Leader re-election on a failed foreground fetch** — a leader that fails
+  releases every waiter at once, and each of them then started its own fetch in
+  the same tick. That is the same total work as no coalescing at all, delivered
+  as one synchronised burst instead of spread across the arrivals that produced
+  it -- strictly a worse shape than the problem coalescing was added to fix.
+
+  A waiter released by a *failure* now re-enters with one attempt spent: the
+  first back through finds the ID unowned and claims it, and the rest attach to
+  that new leader. `FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS` (default 2, minimum
+  1) bounds the chain so a succession of dying leaders cannot park a request
+  indefinitely; 1 restores the previous behavior exactly.
+
+  Re-election is deliberately limited to failures. The in-flight promise now
+  reports `cached` / `uncached` / `failed` rather than a bare boolean, because
+  the old `false` conflated three endings. A leader that succeeded but declined
+  to cache (size cap, concurrency cap, zero-length) would be
+  followed by a new leader declined by the same policy, and a leader that timed
+  out still owns its map entry, so re-attaching would wait on the fetch just
+  abandoned. Both send the waiter straight to its own fetch. Re-elections are counted by
+  `foreground_cache_re_elections_total`, kept separate from
+  `foreground_cache_coalesced_outcome_total` so that counter still records
+  exactly one terminal outcome per attached request.
+
+- **A size floor on foreground coalescing** — `FOREGROUND_CACHE_COALESCE_MIN_SIZE`
+  exempts objects known to be smaller than it, which then fetch for themselves
+  exactly as they did before coalescing existed. Coalescing serves a waiter
+  from the blob the leader finalizes, so it costs that waiter the whole
+  download in time-to-first-byte. That is worth paying on a multi-gigabyte
+  object whose duplicates are measured in gigabytes; it is a poor trade on a
+  small one that duplicates cheaply and finishes fast.
+
+  Sized against the production stampede above: objects over 1 GiB were 94.8%
+  of the redundant bytes and everything under 100 MiB was 0.2%, so a 100 MiB
+  floor there would have retained 99.83% of the reclaimed bytes (223.6 of
+  224.0 GB) while leaving about half of all staged objects, by count,
+  streaming independently.
+
+  **Defaults to 0 — no floor — so behavior is unchanged unless it is set.**
+  The size compared is the one already resolved from the attributes store at
+  the point coalescing is decided; `data.size` is not available until the
+  upstream fetch returns, which is after a leader has claimed the ID. An
+  object of unknown size is therefore treated as eligible, so the floor can
+  only narrow coalescing where an object is positively known to be small and
+  can never make stampede protection weaker than leaving it unset. Exemptions
+  are counted as `foreground_cache_skipped_total{reason="below_coalesce_floor"}`;
+  compare it against `already_pending` to judge whether the floor is too high.
+
+- **Bounds on foreground cache writes** — `FOREGROUND_CACHE_MAX_SIZE` and
+  `FOREGROUND_CACHE_CONCURRENCY` cap how much unfinished data a burst of
+  *distinct* large objects can accumulate in `contiguous/tmp`, mirroring the
+  guards background range caching already had. Exceeding either serves the
+  request normally and skips only the cache write. The concurrency budget is
+  process-wide, shared by the on-demand and background caches, because both
+  stage to the same directory.
+
+  **Both default to unbounded, deliberately.** Coalescing alone removes the
+  duplication of *identical* objects and needs no configuration, but a burst
+  of *distinct* large objects is only bounded once these are set -- upgrading
+  does not inherit that protection. Any finite default would silently stop a
+  busy gateway caching most of what it serves, which is not a change to make
+  on an operator's behalf; set them explicitly per deployment.
+
+- **Index-driven chunk cache eviction and backfill** — the chunk data cache is
+  now tracked in a `chunk_data_cache` index, so eviction reclaims by age and
+  size against disk watermarks instead of walking the filesystem, and a
+  backfill reconciler adopts pre-existing files into the index. Tuned by the
+  `CHUNK_DATA_CACHE_INDEX_*` variables (eviction interval, batch size, target
+  bytes, unlink concurrency, update-on-read) and
+  `CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS`.
+
+### Changed
+
+- **ArNS resolves on-demand (from chain) by default** — the default
+  `ARNS_RESOLVER_PRIORITY_ORDER` is now `on-demand,gateway`. Each gateway reads
+  the ANT record itself and only falls back to a trusted-gateway hop if that
+  fails, making gateways self-sufficient rather than clients of a few trusted
+  gateways. The bundled observer now references this node's own gateway
+  (`ARNS_ROOT_HOST`) by default. `ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS` drops
+  from `30000` to `5000` in the same change: with the gateway resolver now last,
+  a name that does not exist previously cost ~3s on-demand plus the full 30s
+  budget before 404ing. Restore the old behaviour with
+  `ARNS_RESOLVER_PRIORITY_ORDER=gateway,on-demand`.
+
+- **Gateways leaving the network are no longer used as peers** — a gateway is
+  `leaving` either because its operator withdrew it or because the network
+  marked it non-responsive for 30 consecutive epochs, so it should not be
+  receiving requests. Measured on turbo-gateway gw1: 334 of 646 registered
+  gateways were `leaving`, and 40% of all peer errors were `ENOTFOUND` against
+  hostnames that no longer resolve. Controlled by `SKIP_LEAVING_GATEWAYS`
+  (default true); only an explicit `leaving` is excluded, so a registry that
+  stops reporting status degrades to the previous behaviour rather than
+  emptying the peer list. Counted by `ar_io_peers_skipped_leaving_total`.
+
+- **Bundled observer updated to `0e956b08`** — adds the matching
+  leaving-gateway filter on the observation path (about half of each epoch's
+  observation budget was spent on gateways that always fail) and bumps
+  `@ar.io/sdk` to 4.3.0-alpha.2 for ADR-0029, so `close_epoch` refunds epoch
+  rent to the account that created the epoch.
+
+### Fixed
+
+- **Truncated upstream bodies are no longer cached** — `data.size` comes from
+  the peer's `Content-Length`, so a gateway serving a fragment reports a size
+  matching the bytes it sends: the existing size check passed and the fragment
+  was stored as complete, then served on to the next gateway. Retrieved bodies
+  are now also checked against the item's indexed ANS-104 payload size, which
+  is derived from the bundle header rather than from retrieval. Rejections are
+  counted by `short_reads_rejected_total`. The check stands down when those
+  attributes are unavailable, so L1 transactions are unaffected.
+
+- **Blocklisted data items are enforced on manifest paths** — an item blocked
+  by ID or hash still returned 200 through any manifest or ArNS path that
+  resolved to it, while `/raw/<id>` correctly returned 451. The resolved-item
+  checks now also respond 503 rather than serving when the blocklist backend
+  errors, so an outage cannot silently reopen the bypass.
+
+- **x402 CDP facilitator authentication** — the CDP facilitator was not
+  authenticated with its API key id, the fallback to the configured facilitator
+  URL failed silently rather than surfacing, a blank credential was treated as
+  configured, and the paywall client key was conflated with the facilitator
+  credential. Settlement must now be confirmed before a payment is treated as
+  successful.
+
+- **Concurrent requests for one uncached object no longer stampede** — on a
+  full-object cache miss `ReadThroughDataCache.getData` ran an upstream fetch
+  and opened a staging file per request, with nothing checking whether a fetch
+  for the same ID was already running. Seen in production as 59 concurrent
+  partial copies of one 1.5 GB bundle: 1,434 open descriptors under
+  `contiguous/tmp`, ~253 GB staged across only 18 distinct objects of which
+  83% was redundant. It is self-amplifying — the duplicated writes saturate
+  the disk, so no copy finishes, so every new request is also a miss and
+  starts another copy. The first caller for an ID is now the sole owner of the
+  fetch, the staging file and the tee; concurrent callers wait on it rather
+  than starting their own. When it finalizes they are served from the blob it
+  wrote. When it does not -- it failed, or it stalled past
+  `FOREGROUND_CACHE_COALESCE_TIMEOUT_MS` (default 300000) -- there is no
+  shared blob to serve, so each waiter falls back to fetching independently,
+  which is the pre-existing behavior for exactly that case. Those two
+  outcomes are visible as `refetched` and `timed_out` on
+  `foreground_cache_coalesced_outcome_total`. Waiters hold no reference to
+  the shared fetch, so one aborting can neither cancel it nor orphan its
+  staging file, and the timeout keeps a stalled fetch from parking later
+  requests for that ID indefinitely.
+
+  **Operator note — the cache-miss signal for this failure is gone.** A
+  coalesced request is served from the cache, so it now reports the same
+  cache-hit semantics as a request arriving a moment later (`X-Cache: HIT`,
+  `Content-Digest`, conditional-request eligibility) and counts as a hit
+  rather than a miss. Hit-rate dashboards will move, and more importantly
+  `contiguous_data_cache_miss_total` no longer rises when many requests
+  converge on one uncached object -- which was the signal this failure mode
+  used to produce. Use `foreground_cache_skipped_total{reason="already_pending"}`
+  to detect recurrence instead: it counts exactly the requests that would
+  previously have started a duplicate fetch, so a sustained rise is the
+  stampede re-forming. `foreground_cache_coalesced_outcome_total{outcome}`
+  breaks those down into `cache_hit` (the leader cached, waiter served from
+  disk), `refetched` (the leader cached nothing) and `timed_out` (the leader
+  stalled past the bound).
+
+  The fix also **converts** part of the load rather than removing it: the
+  leader writes once, then each waiter opens its own read of the finalized
+  blob (measured: 49 reads for 50 concurrent requests). That is the same
+  shape as N concurrent requests for an already-cached object, and far
+  cheaper than N concurrent multi-GB writes, but the reads all begin at the
+  moment the leader finalizes rather than being spread over time.
+
+## [Release 82] - 2026-08-13
+
+This is a **recommended release** focused on **data-retrieval correctness and
+outbound connection health**. Key highlights include a new
+`GET /ar-io/offsets/:id` endpoint that serves root transaction offsets straight
+from the local index, with a matching `peers` lookup source so a miss costs the
+peer one indexed read instead of a full retrieval cascade; detection and repair
+of mis-rooted data items, whose stored root could be an intermediate bundle and
+so sent chunk retrieval after chunks that cannot exist; keep-alive pooling and
+per-host socket caps for outbound clients, removing a per-request DNS lookup
+that queued behind filesystem I/O; configurable SQLite read workers with
+queue-wait and slow-query instrumentation; GraphQL routing that steers
+owner-filtered and L1-only queries away from ClickHouse row-cap failures; and an
+opt-in SSD-resident cache index with a disk-pressure evictor for large
+spinning-disk caches. It also fixes an offset-index scan that could pin a read
+worker for minutes on a miss, an Envoy route timeout that cut GiB-scale
+downloads mid-stream, and a Docker build context that could exhaust the daemon's
+disk and take down every container on the host.
+
+### Added
+
+- **Root TX offsets endpoint** — new `GET /ar-io/offsets/:id` serves a data
+  item's position inside its root transaction straight from the local index,
+  without touching contiguous data. The previous way to ask a peer for offsets
+  was `HEAD /raw/:id`, whose headers are a byproduct of a successful retrieval:
+  on a cache miss the peer walked its whole `ON_DEMAND_RETRIEVAL_ORDER` cascade
+  before answering. Offsets now resolve for any item the node has unbundled and
+  indexed, including items with no bytes cached locally. A matching `peers`
+  lookup source (`PEERS_ROOT_TX_URLS`, selectable in `ROOT_TX_LOOKUP_ORDER`)
+  consumes it, with priority tiers, per-peer rate limits, and a shared LRU.
+  There is no `HEAD /raw` fallback by design — compose one explicitly with
+  `db,peers,gateways,...` (#837, PE-9135).
+- **SSD-resident cache cleanup index and disk-pressure evictor** — an
+  alternative reclaimer for the contiguous data cache that keeps eviction
+  discovery off the HDD. A `contiguous_data_cache` table records
+  `{hash, size, cached_at, last_access, tier}` per cached blob; an interval
+  sweep driven by `statfs` evicts least-recently-accessed first, general tier
+  before preferred, and drains to the low watermark. Reads refresh
+  `last_access` and promote a blob's tier on a preferred-ArNS hit
+  (`CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ`, default `true`; set `false`
+  for FIFO). A resumable one-time backfill adopts a pre-existing cache. Off by
+  default (`ENABLE_CONTIGUOUS_DATA_CACHE_INDEX`); see the new
+  `CONTIGUOUS_DATA_CACHE_INDEX_*` env vars and `docs/cache-cleanup.md`
+  (#823, PE-9131).
+- **`PUT /ar-io/admin/unblock-data` admin endpoint** — lifts a data block
+  created with `block-data`, by `id` or `hash`. Moderation previously had
+  `block-data`, `block-name`, and `unblock-name` but no way to reverse a data
+  block short of editing `moderation.db` by hand. Idempotent; blocked data is
+  checked per request, so an unblock takes effect immediately (#821).
+- **GraphQL `owner_projection` routing** — owner-filtered `transactions`
+  queries can be routed through the owner-ordered projection instead of the
+  height-ordered main table, where a sparse owner's rows scatter across
+  millions of granules and can trip the ClickHouse row cap. Covers no-id owner
+  queries (with a reactive height-windowing fallback) and `owners + ids`
+  queries. Off by default; see
+  `CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED` and
+  `CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES` (#796, #800).
+- **GraphQL L1-only query routing** — `GQL_L1_ONLY_ROUTING_FILTER` classifies
+  which `transactions` queries are provably confined to the base layer and
+  answers them from the SQLite `stable_transactions` tag PK seek, skipping
+  ClickHouse and its `max_rows_to_read` cap entirely. Uses the composable
+  filter DSL restricted to its monotone subset; `not`, `isNestedBundle`, and
+  `hashPartition` are rejected at startup. The filter is an operator assertion
+  — routed queries intentionally exclude bundled data-item matches. Default
+  `{"never": true}` (off). New `graphql_l1_only_routing_total` metric (#810).
+- **Configurable SQLite read workers and queue instrumentation** — reads were
+  serialized in one worker thread per pool. `CORE_SQLITE_READ_WORKER_COUNT`
+  (default `1`) and `DATA_SQLITE_READ_WORKER_COUNT` (default `2`) add read
+  concurrency. Queue wait and service time are now separate metrics
+  (`standalone_sqlite_method_queue_wait_seconds` vs `..._service_seconds`), and
+  `SQLITE_SLOW_QUERY_LOG_THRESHOLD_MS` (default `1000`) logs slow operations
+  with a queue/service breakdown to identify the responsible method during a
+  jam (#817).
+- **Per-host outbound socket caps and socket-acquisition instrumentation** —
+  `GATEWAY_MAX_SOCKETS_PER_HOST` (default `16`),
+  `GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST`, and
+  `GATEWAY_MAX_FREE_SOCKETS_PER_HOST` (default `4`) bound outbound concurrency
+  per gateway host, each accepting a bare integer or a per-host object. Trusted
+  and untrusted gateways get separate caps so a CDN-fronted upstream is not
+  overwhelmed. New `gateway_socket_acquisition_seconds` and
+  `gateway_socket_connect_seconds` metrics (the latter now includes the TLS
+  handshake for https gateways) plus a slow-acquisition warning
+  (`GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS`) surface pool waits
+  before a request reaches the wire.
+- **Connection pooling for non-data outbound clients** — root TX discovery
+  sources and the GraphQL fan-out now share keep-alive agents
+  (`OUTBOUND_MAX_SOCKETS_PER_HOST`, `OUTBOUND_MAX_FREE_SOCKETS_PER_HOST`). The
+  goal is not throughput but avoiding a per-request `dns.lookup()`, which
+  queues on the libuv threadpool behind filesystem I/O and can time out before
+  a socket opens. Watch `outbound_socket_acquisition_seconds{reused="false"}`
+  (#840, PE-9136).
+- **Envoy circuit breakers for the core cluster** — `max_connections`,
+  `max_pending_requests`, and `max_requests` for `ario_gateways` now default to
+  `16384` instead of Envoy's `1024`, with a retry budget
+  (`ENVOY_ARIO_GATEWAY_RETRY_BUDGET_PERCENT`, default `20`) replacing the
+  default `max_retries` of 3. At Envoy's defaults a slow core pinned the pool,
+  further requests failed instantly with `reset reason: overflow` (503), and
+  client retries kept it pinned so the cluster never drained (#841).
+- **Manifest resolution metrics** — the two resolution sites in the data
+  handler are now instrumented. `manifest_resolutions_total{source,
+  resolution_type}` splits resolutions by source (`index` = served from the
+  resolution index without parsing the body, `data` = on-demand body parse) and
+  by outcome (path / index / fallback / unresolved); the index-vs-data ratio is
+  the effectiveness signal for the index and its cache.
+  `manifest_unresolved_root_total` counts root/index requests that resolve to
+  nothing — a malformed-manifest signal that previously surfaced only as a user
+  404. `manifest_resolution_duration_seconds{source}` records latency by source
+  (#835).
+- **ClickHouse `TOO_MANY_ROWS` observability** — Code 158 responses are now
+  logged and counted at the origin, so row-cap failures are attributable to a
+  query shape instead of surfacing only as GraphQL errors (#816).
+- **`TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS` kill-switch** — set `true` to
+  restore the legacy behavior of sending `ar-io-*` provenance query params to
+  every gateway (see Changed) (#798).
+- **Dedicated Turbo AWS client** — the Turbo S3 data source can use its own
+  credentials and endpoint via `TURBO_AWS_REGION`, `TURBO_AWS_ENDPOINT`, and
+  the optional `TURBO_AWS_*` credential vars. The client is created only when
+  both region and endpoint are set; otherwise the default AWS client is reused
+  (#794, PE-9125).
 - **Opt-in chunk over-propagation** — `CHUNK_POST_CONTINUE_PAST_THRESHOLD`
   (default `false`) keeps broadcasting a chunk to every selected peer after the
   success threshold is met, maximizing redundancy instead of stopping early. The
@@ -18,14 +468,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Untrusted gateways no longer receive `ar-io-*` provenance query params** —
+  gateways configured with `"trusted": false` in `TRUSTED_GATEWAYS_URLS` now get
+  provenance via `X-AR-IO-*` headers only. Required for CDN-fronted gateways
+  such as `arweave.net`, whose CDN returns 502 on those query params. Revert
+  with `TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS=true` (#798).
+- **Local-first root TX offset resolution** — `RootParentDataSource` now
+  resolves offsets from the local index before consulting remote sources, and
+  the composite lookup short-circuits as soon as a source returns an actionable
+  result instead of polling the rest of `ROOT_TX_LOOKUP_ORDER`. Callers can pass
+  an `accept` predicate to define what counts as actionable (#827, #828, #829,
+  PE-9134).
+- **Offset-to-block resolution runs locally** — locating the block that
+  contains an absolute offset used a chain binary search of roughly
+  `log2(height)` sequential `GET /block/height/{h}` calls to the trusted node
+  (~1.5s each), often exceeding `CHUNK_SERVE_DEADLINE_MS` and returning 504.
+  A local index over `stable_blocks.weave_size` is consulted first and trusted
+  only under a tight bracket, with re-verification and a fallback to the chain
+  search on any gap, stale index, or unstable-tip offset. The block returned is
+  identical. New `block_offset_resolution_total` metric (#801, #807).
+- **Idle outbound gateway sockets are retired before the peer closes them** —
+  `GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS` (default `50000`) must stay below the
+  peer's server keep-alive timeout (`HTTP_KEEP_ALIVE_TIMEOUT_MS`, default
+  `60000`). Reusing a socket the server is simultaneously closing caused ~8-10s
+  peer-fetch stalls.
 - **Chunk-post fan-out narrows to the configured threshold** — now that HTTP 303
   counts as a successful (temporary) acceptance (see Fixed), broadcasts stop at
   `CHUNK_POST_MIN_SUCCESS_COUNT` as intended instead of grinding the full peer
   list. Operators who relied on the prior 303-handling bug's accidental wide
   spread can restore it with `CHUNK_POST_CONTINUE_PAST_THRESHOLD=true` (#819).
+- **Default observer image bumped to `15e285b0`** — `OBSERVER_IMAGE_TAG` moves
+  from `308b6777` (2026-06-20) to the current `ar-io-observer` release build,
+  picking up the full ArNS lease lifecycle in the epoch cranker, adaptive
+  cranker poll/cleanup intervals derived from epoch duration, the
+  `LeaveWindowNotExpired` (6079) not-ready classification, failed-gateway
+  summary attribution fixes, and `@ar.io/sdk` 4.1.0 (stable, mainnet). It also
+  raises ArNS prune throughput: `prune_name_to_returned` is the only
+  deadline-bound step in the lease lifecycle, and draining one name per scan
+  capped conversion at roughly the rate leases expire, so any backlog was
+  permanent and each name aging out of its return-auction window lost that
+  auction for good. `CRANK_POLL_INTERVAL_MS` and `CLEANUP_MIN_INTERVAL_MS` are
+  now optional — unset, the cranker derives them from the epoch duration; an
+  explicit value still wins. Those two plus the new
+  `CLEANUP_TO_RETURNED_TXS_PER_CYCLE` (default `10`) are now forwarded to the
+  observer container so they can be set from `.env`; leaving them empty keeps
+  the derived default. Operators who pin `OBSERVER_IMAGE_TAG` in `.env` must
+  update it there too, since that shadows the compose default (#842, #845).
+- Test files are now typechecked in CI (#809).
 
 ### Fixed
 
+- **Background verification no longer withholds unmined data when optimistic
+  indexing is off** — the serving guard withheld verification whenever the root
+  transaction had a `NULL` height, reading that as "optimistically indexed, not
+  yet mined". That meaning only holds when optimistic L1 transaction indexing is
+  what creates `NULL`-height rows. With `OPTIMISTIC_TX_INDEXING_ENABLED` false
+  (the default), a `NULL` height means only that this node has not imported the
+  transaction's block — routine for transactions indexed via
+  `admin/queue-tx`, backfills, or any selectively synced deployment. The result
+  was permanent, silent starvation: withholding burns no retry, so the item
+  never aged out, and the log is debug-level, so nothing surfaced. The guard is
+  now gated on the feature that justifies it (#855).
+- **Observer cranker settings reachable from `.env`** — `CRANK_BATCH_SIZE`,
+  `CRANK_CLOSE_EPOCHS`, `CRANK_EPOCH_RETENTION`, `CRANK_WARN_BALANCE_SOL`,
+  `CRANK_CRITICAL_BALANCE_SOL`, `CLEANUP_BATCH_SIZE`,
+  `CLEANUP_FAILURE_THRESHOLD`, `MAX_CLEANUP_TXS_PER_CYCLE`,
+  `ALT_RECLAIM_SCAN_LIMIT` and `OBSERVED_GATEWAY_HOSTS` are read by the observer
+  but were never passed into its container, so setting them in `.env` had no
+  effect. Forwarded with the established empty-default pattern and documented,
+  completing what #842 (poll/cleanup intervals) and #846 (prune budget) started.
+  An empty value resolves to each setting's existing default, so nothing changes
+  unless an operator sets one (#857).
 - **Chunk POST treats HTTP 303 ("temporary") as success** — Arweave tip/ingress
   nodes return 303 when they validate and persist a chunk into their disk pool
   without being its long-term home (`ar_disk_pool:add_chunk/6 -> temporary`).
@@ -34,6 +547,109 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   consecutive-failure early exit — grinding the full non-preferred peer list
   (p95 ~33s). 303 now counts toward the overall and preferred success
   thresholds (#819).
+- **Chunk metadata cache keyed by the full data root** — metadata was bucketed
+  by only the first four base64url characters of the data root plus the relative
+  offset, so transactions whose data roots share a 4-character prefix shared
+  slots. Relative offset 0 collides constantly, and the read path served one
+  transaction's `data_path` for another, failing merkle validation with
+  "Failed to parse data_path: invalid proof" until the entry was removed by
+  hand. The full data root is now in the path, with a read-time `data_root`
+  check that deletes mismatches and treats them as misses (#820, PE-9129).
+- **Zero-length chunk cache poison is rejected and self-healed** — nothing
+  validated chunk length, so a source that once returned an empty chunk was
+  persisted and re-served forever: `has()` reported a hit on the 0-byte file,
+  `get()` served an empty chunk, and the streaming loop never advanced,
+  re-requesting the same offset indefinitely. Every layer now refuses to persist
+  and refuses to serve zero-length chunks, deleting the poisoned file on read.
+- **Chunk streaming guarded against non-terminating loops** — a stream that
+  stops making forward progress now fails instead of spinning (#799, PE-9127).
+- **Optimistic chunk confirmation is sticky per `data_root`** — confirmation
+  was a one-shot `UPDATE` fired by `TX_INDEXED` that only touched placements
+  present at that instant. A multi-GB bundle streams its chunks in over a far
+  longer window, so most arrived afterwards, were never confirmed, and hit the
+  ingest TTL — leaving a gappy, unservable set that fell through to peers which
+  did not yet have the bundle. Chunks ingested after the confirm event now
+  self-confirm, with markers pruned by a GC sweep
+  (`CHUNK_INGEST_CONFIRMED_ROOT_RETENTION_SECONDS`, default `3600`) (#815).
+- **`getTxByOffset` misses no longer scan the offset index to the end** — the
+  span predicate sat inside the index scan, so a miss (an offset in a coverage
+  gap) walked `stable_transactions_offset_idx` from the offset to the end of the
+  table with a row fetch per entry — tens of seconds to minutes on a
+  production-sized DB (up to 110s observed), each one pinning a read worker and
+  holding the requesting peer's socket. A miss now costs the same single index
+  probe as a hit (#818).
+- **`MAX(stable_blocks.block_timestamp)` no longer full-scans** — the query ran
+  over ~2M rows (~900 MB) with no index. Called infrequently, the pages fell out
+  of the page cache between calls and the scan became disk-bound, holding the
+  core read worker — and, inline in `saveBlockAndTxs`, the write worker — for
+  8-13s on busy hosts. Now a covering reverse index seek (#822, PE-9130).
+- **Apex `/raw` no longer times out mid-stream** — the `root_service` catch-all
+  inherited Envoy's default 15s route timeout, an absolute cap on total request
+  duration regardless of whether the body was still streaming, so large objects
+  streamed to normal-speed clients were reset (HTTP/2 `RST_STREAM CANCEL`, curl
+  92). Clients finishing under 15s were unaffected, which made it look
+  intermittent. `/raw/` now gets a dedicated `timeout: 0s` route mirroring the
+  sandbox data route; the catch-all keeps its finite default for small endpoints
+  (#826, PE-9132).
+- **Truthful `hasNextPage` when id-dedup collapses a full ClickHouse page** —
+  windowed `transactions` queries could return a partial page with
+  `hasNextPage: false` and no error, silently stranding every subsequent page.
+  The ClickHouse legs fetch `pageSize + 1` rows with a full-key `LIMIT 1 BY`,
+  but the composite deduped by `id` alone; stale rows sharing an `id` and height
+  while differing on `block_transaction_index` collapsed only in the id-dedup,
+  making a full leg look short (#792, PE-9124).
+- **`bundledIn` queries are never routed to the L1-only path** — routing them
+  would drop every data-item result the query exists to return (#810).
+- **Mis-rooted data items are detected and repaired on retrieval** — a stored
+  root transaction ID is not always an L1 transaction. When the parent chain
+  was incomplete as offsets were computed, the traversal stopped at the first
+  ancestor it held no attributes for — often an intermediate bundle — and
+  persisted that as the root; the pre-computed short-circuit then returned it
+  forever without validating it. Chunk retrieval requires an L1 transaction, so
+  a bundled root sent `TxChunksDataSource` after chunks that cannot exist,
+  polling up to `ARWEAVE_PEER_CHUNK_GET_MAX_PEER_ATTEMPT_COUNT` peers at ~90s
+  per request before the tier gave up and the request 404'd. The stored root is
+  now validated locally and, when itself bundled, walked to the real root with
+  offsets rebased by each parent's payload offset. The correction is persisted
+  only when the chain resolves fully to an L1 transaction, and the traversal
+  fallback no longer persists a root inferred from an unindexed ancestor — that
+  guess is what mis-rooted items in the first place. A chain that cycles
+  discards the partial rebase and returns the stored pair unchanged, since a
+  half-rebased root is worse than an uncorrected one. New
+  `root_tx_stored_root_rebased_total{outcome}` metric with `resolved`,
+  `incomplete`, and `lookup_failed` outcomes (#843).
+- **Attribute-write dedupe keyed on the root coordinates** —
+  `saveDataContentAttributes` deduped on the data item ID alone with a 7-minute
+  TTL, so whichever writer arrived first won and every later write for that ID
+  was discarded regardless of what it carried. A retrieval that beat
+  `RootParentDataSource` re-wrote the existing root attributes unchanged and
+  claimed the slot, so a corrected root arriving inside the same window was
+  thrown away and the row stayed mis-rooted until the entry expired. The key
+  now includes the three root fields, so a write that changes nothing is still
+  suppressed while a genuine correction always reaches the queue. Observed on a
+  canary gateway: 346 suppressed duplicate calls in ~40 minutes, and a
+  confirmed rebase onto the L1 root dropped because an unchanged write had
+  landed 65 seconds earlier. `clearDataHash` now invalidates every dedupe key
+  belonging to an item, so the re-save after a verification mismatch is no
+  longer suppressed and the row is not left with a null hash (#843).
+- **Git worktrees excluded from the Docker build context** — `./tools/wt add`
+  creates worktrees under `wt/`, each with its own `node_modules` and `data/`,
+  and nothing excluded them. Measured on one gateway, `wt/` alone was 31 GB
+  across 9 worktrees, taking the build context from ~2.5 GB to over 30 GB;
+  combined with accumulated build cache that exhausted the daemon's disk
+  part-way through `COPY`, which crashed dockerd and SIGKILLed every running
+  container. `COPY . .` drops to ~0.4s on that host after the change. `logs/`
+  is deliberately *not* excluded: `logs/.gitkeep` is tracked and the winston
+  file transport does not create the directory, so excluding it breaks running
+  the test suite inside a container (#844, #846).
+- Outbound keep-alive agents created by a client are now destroyed on cleanup,
+  and free sockets default to the active cap so pooled connections are actually
+  reused (#840, PE-9136).
+
+### Removed
+
+- Dead `ARWEAVE_PEER_CHUNK_POST_*` env vars, which had no remaining effect
+  (#795).
 
 ## [Release 81] - 2026-06-20
 

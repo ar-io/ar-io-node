@@ -73,6 +73,20 @@ export function nonNegativeIntOrDefault(
   return value;
 }
 
+export function percentOrDefault(
+  envVarName: string,
+  defaultValue: number,
+): number {
+  const raw = varOrDefault(envVarName, String(defaultValue));
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > 100) {
+    throw new Error(
+      `${envVarName} must be an integer percentage in 0..100, got: ${raw}`,
+    );
+  }
+  return value;
+}
+
 export function enumOrDefault<T extends string>(
   envVarName: string,
   validValues: readonly T[],

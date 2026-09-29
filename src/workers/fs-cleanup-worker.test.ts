@@ -10,8 +10,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, afterEach, before, describe, it, mock } from 'node:test';
 
+import * as config from '../config.js';
 import { createTestLogger } from '../../test/test-logger.js';
-import { CleanupContext, FsCleanupWorker } from './fs-cleanup-worker.js';
+import {
+  CleanupContext,
+  FsCleanupWorker,
+  warnIfWalkConcurrencyUnsafe,
+  NORMAL_CONTEXT,
+  scaledThresholdSeconds,
+} from './fs-cleanup-worker.js';
 
 const log = createTestLogger();
 
@@ -271,5 +278,156 @@ describe('FsCleanupWorker.getBatch parallel walk', () => {
     const { batch, keptFileCount } = await worker.getBatch(root, root);
     assert.equal(batch.length, 0);
     assert.equal(keptFileCount, files.length);
+  });
+});
+
+describe('FsCleanupWorker.processBatch', () => {
+  let root: string;
+
+  afterEach(() => {
+    mock.restoreAll();
+  });
+
+  after(async () => {
+    await fs.promises.rm(root, { recursive: true, force: true });
+  });
+
+  before(async () => {
+    root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'fscw-del-'));
+    await fs.promises.writeFile(path.join(root, 'a-gone'), 'x');
+    await fs.promises.writeFile(path.join(root, 'b-present'), 'x');
+    await fs.promises.writeFile(path.join(root, 'c-present'), 'x');
+  });
+
+  // A selected file can legitimately disappear between the stat that selected
+  // it and the unlink: a concurrent cleaner removed it, or -- in a staging
+  // directory -- FsDataStore.finalize() renamed it into the blob tree. That
+  // must not abort the batch, because an aborted batch also skips the lastPath
+  // advance and the walk stops making progress.
+  it('tolerates files that vanish before deletion and still advances', async () => {
+    const deleted: string[] = [];
+    const worker = makeWorker({
+      basePath: root,
+      shouldDelete: async () => true,
+      walkConcurrency: 2,
+      deleteCallback: async (file: string) => {
+        if (file.endsWith('a-gone')) {
+          const err: any = new Error('ENOENT: no such file or directory');
+          err.code = 'ENOENT';
+          throw err;
+        }
+        deleted.push(file);
+      },
+    });
+
+    await assert.doesNotReject(() => worker.processBatch());
+
+    // The surviving files were still deleted despite the ENOENT.
+    assert.deepEqual(deleted.sort(), [
+      path.join(root, 'b-present'),
+      path.join(root, 'c-present'),
+    ]);
+  });
+});
+
+describe('warnIfWalkConcurrencyUnsafe', () => {
+  afterEach(() => {
+    mock.restoreAll();
+  });
+
+  // config reads UV_THREADPOOL_SIZE once at import, so these assert relative to
+  // the value the module actually resolved rather than mutating the environment.
+  const pool = config.UV_THREADPOOL_SIZE;
+  const budget = Math.max(1, Math.floor(pool / 2));
+
+  function captureWarn() {
+    const calls: any[] = [];
+    const child = log.child({});
+    mock.method(child, 'warn', (...args: any[]) => calls.push(args));
+    return { child, calls };
+  }
+
+  it('warns when workers collectively exceed half the thread pool', () => {
+    const { child, calls } = captureWarn();
+    // Two workers each taking the whole pool: unambiguously over budget.
+    const workers = [1, 2].map(() => makeWorker({ walkConcurrency: pool }));
+    warnIfWalkConcurrencyUnsafe(workers, child);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][1].totalWalkConcurrency, pool * 2);
+    assert.equal(calls[0][1].uvThreadpoolSize, pool);
+    assert.equal(calls[0][1].recommendedMaxTotal, budget);
+  });
+
+  it('stays quiet for a single worker at the derived default', () => {
+    const { child, calls } = captureWarn();
+    const workers = [
+      makeWorker({
+        walkConcurrency: config.FS_CLEANUP_WORKER_WALK_CONCURRENCY,
+      }),
+    ];
+    warnIfWalkConcurrencyUnsafe(workers, child);
+    assert.equal(calls.length, 0);
+  });
+
+  // On a stock pool (4) the minimum viable concurrency of 1 per worker already
+  // reaches the whole pool once several workers are enabled, so the warning
+  // fires and tells the operator to raise UV_THREADPOOL_SIZE. That is the
+  // intended advice, not a false positive -- assert it rather than tune it away.
+  it('derives a default that scales with the pool', () => {
+    assert.equal(
+      config.FS_CLEANUP_WORKER_WALK_CONCURRENCY,
+      Math.max(1, Math.floor(config.UV_THREADPOOL_SIZE / 16)),
+    );
+    assert.ok(config.FS_CLEANUP_WORKER_WALK_CONCURRENCY >= 1);
+    assert.ok(
+      config.FS_CLEANUP_WORKER_WALK_CONCURRENCY <= config.UV_THREADPOOL_SIZE,
+    );
+  });
+
+  it('ignores undefined (disabled) workers', () => {
+    const { child, calls } = captureWarn();
+    warnIfWalkConcurrencyUnsafe([undefined, undefined], child);
+    assert.equal(calls.length, 0);
+  });
+});
+
+describe('scaledThresholdSeconds', () => {
+  it('returns the base threshold unchanged under NORMAL_CONTEXT', () => {
+    // This is the no-regression guarantee for callers that leave watermarks
+    // disabled: every batch runs with NORMAL_CONTEXT, so retention must be
+    // byte-for-byte what it was before the context was threaded through.
+    for (const base of [0, 1, 3600, 14_400, 2_592_000]) {
+      assert.equal(scaledThresholdSeconds(base, NORMAL_CONTEXT), base);
+    }
+  });
+
+  it('tightens retention as pressure rises', () => {
+    const ctx: CleanupContext = {
+      thresholdScale: 0.25,
+      minAgeSeconds: 0,
+      regime: 'aggressive',
+    };
+    assert.equal(scaledThresholdSeconds(14_400, ctx), 3600);
+  });
+
+  it('never evicts below the minimum-age floor', () => {
+    // thresholdScale 0 would otherwise make everything eligible; the floor is
+    // what stops aggressive cleanup from evicting freshly-written data.
+    const ctx: CleanupContext = {
+      thresholdScale: 0,
+      minAgeSeconds: 3600,
+      regime: 'aggressive',
+    };
+    assert.equal(scaledThresholdSeconds(14_400, ctx), 3600);
+  });
+
+  it('takes the floor when it exceeds the scaled threshold', () => {
+    const ctx: CleanupContext = {
+      thresholdScale: 0.1,
+      minAgeSeconds: 7200,
+      regime: 'aggressive',
+    };
+    // scaled = 1440s, floor = 7200s -> floor wins
+    assert.equal(scaledThresholdSeconds(14_400, ctx), 7200);
   });
 });

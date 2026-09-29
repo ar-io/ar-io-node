@@ -18,6 +18,22 @@ const DEFAULT_CACHE_MISS_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS * 1000;
 const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS * 1000;
+const DEFAULT_PAGE_SIZE = config.ARNS_NAME_LIST_PAGE_SIZE;
+/**
+ * Per-page attempts made here, on top of whatever the `ARIORead`
+ * implementation already does internally. See ARNS_NAME_LIST_MAX_RETRIES.
+ */
+const DEFAULT_MAX_RETRIES = config.ARNS_NAME_LIST_MAX_RETRIES;
+
+/**
+ * How many registry writes are kept in flight at once during hydration.
+ *
+ * A page can now hold the whole registry, and every write is a real I/O call
+ * on the configured store, so the page is drained in bounded chunks: it caps
+ * in-flight work on the store, and yields to the event loop between chunks
+ * instead of queueing thousands of operations in one uninterrupted pass.
+ */
+const CACHE_WRITE_CHUNK_SIZE = 500;
 
 /**
  * Wraps an ArNS registry cache in a debounce cache that automatically refreshes
@@ -32,6 +48,8 @@ export class ArNSNamesCache {
   private networkProcess: ARIORead;
   private arnsRegistryKvCache: KVBufferStore;
   private arnsDebounceCache: KvDebounceStore;
+  private pageSize: number;
+  private maxRetries: number;
 
   constructor({
     log,
@@ -39,13 +57,35 @@ export class ArNSNamesCache {
     networkProcess,
     cacheMissDebounceTtl = DEFAULT_CACHE_MISS_DEBOUNCE_TTL,
     cacheHitDebounceTtl = DEFAULT_CACHE_HIT_DEBOUNCE_TTL,
+    pageSize = DEFAULT_PAGE_SIZE,
+    maxRetries = DEFAULT_MAX_RETRIES,
   }: {
     log: winston.Logger;
     registryCache: KVBufferStore;
     networkProcess: ARIORead;
     cacheMissDebounceTtl?: number;
     cacheHitDebounceTtl?: number;
+    pageSize?: number;
+    maxRetries?: number;
   }) {
+    // Both values come from `+env.varOrDefault(...)`, so a malformed env var
+    // arrives here as NaN. Fail loudly at construction rather than degrading
+    // silently: pageSize < 1 makes `paginate` return an empty page while
+    // still reporting hasMore, so the hydration loop never terminates; and
+    // maxRetries < 1 skips the fetch entirely and reports a successful
+    // hydration with an empty cache.
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1) {
+      throw new Error(
+        `ArNSNamesCache: pageSize must be a positive integer, got ${pageSize}`,
+      );
+    }
+    if (!Number.isSafeInteger(maxRetries) || maxRetries < 1) {
+      throw new Error(
+        `ArNSNamesCache: maxRetries must be a positive integer, got ${maxRetries}`,
+      );
+    }
+    this.pageSize = pageSize;
+    this.maxRetries = maxRetries;
     this.log = log.child({
       class: 'ArNSNamesCache',
     });
@@ -68,6 +108,12 @@ export class ArNSNamesCache {
    * Paginate through all the names in the registry and hydrate the cache
    * with the names and their associated processId and undernameLimits. The ar-io-sdk
    * retries requests 3 times with exponential backoff by default.
+   *
+   * Note on page size: the Solana-backed `getArNSRecords` paginates
+   * client-side -- each call runs a full `getProgramAccounts` scan of the ArNS
+   * program and slices the result. A page size smaller than the registry
+   * therefore repeats that scan once per page. `pageSize` defaults to
+   * ARNS_NAME_LIST_PAGE_SIZE so a typical registry is walked in one request.
    */
   private async hydrateArNSNamesCache(parentSpan?: Span) {
     const span = parentSpan
@@ -82,11 +128,13 @@ export class ArNSNamesCache {
       this.log.info('Hydrating ArNS names cache...');
       let cursor: string | undefined = undefined;
       const start = Date.now();
-      const maxRetries = 3;
+      const maxRetries = this.maxRetries;
       let totalPages = 0;
       let failedPages = 0;
       let totalRetries = 0;
       let cachedNames = 0;
+      let failedWrites = 0;
+      let firstWriteError: any;
 
       do {
         let retryCount = 0;
@@ -99,13 +147,57 @@ export class ArNSNamesCache {
               items: records,
               nextCursor,
             }: PaginationResult<ArNSNameDataWithName> =
-              await this.networkProcess.getArNSRecords({ cursor, limit: 1000 });
+              await this.networkProcess.getArNSRecords({
+                cursor,
+                limit: this.pageSize,
+              });
+
+            /**
+             * Writes are chunked and their failures collected rather than
+             * issued as one uncaught fire-and-forget burst. Both stores can
+             * fail here in normal operation: `NodeKvStore` throws
+             * `Cache max keys amount exceeded` once the registry outgrows
+             * ARNS_CACHE_MAX_KEYS, and `RedisKvStore` rejects while Redis is
+             * unreachable.
+             *
+             * Uncaught, each failed write became its own unhandled rejection.
+             * The `uncaughtException` handler in system.ts keeps the process
+             * alive, so the cost was not a crash but a silent one: measured
+             * against a 3007-name registry with ARNS_CACHE_MAX_KEYS=1000,
+             * 2007 uncaught exceptions, and a gauge still reporting 3007
+             * entries for a cache holding 1000. Two thirds of ArNS names
+             * 404ed with nothing in the logs naming the cause.
+             *
+             * A failed write is counted and logged instead of aborting the
+             * page: losing one name to a transient store error should not
+             * discard the rest of the registry or trigger a full re-scan.
+             */
+            let pendingWrites: Promise<void>[] = [];
+            const flushWrites = async () => {
+              await Promise.all(pendingWrites);
+              pendingWrites = [];
+            };
 
             for (const record of records) {
-              // do not await, avoid blocking the event loop
-              this.setCachedArNSBaseName(record.name, record);
-              cachedNames++;
+              pendingWrites.push(
+                this.setCachedArNSBaseName(record.name, record).then(
+                  () => {
+                    cachedNames++;
+                  },
+                  (writeError: any) => {
+                    failedWrites++;
+                    firstWriteError ??= writeError;
+                    metrics.arnsNameCacheHydrationWriteFailuresCounter.inc();
+                  },
+                ),
+              );
+
+              if (pendingWrites.length >= CACHE_WRITE_CHUNK_SIZE) {
+                await flushWrites();
+              }
             }
+
+            await flushWrites();
 
             metrics.arnsNameCacheHydrationPagesCounter.inc();
 
@@ -150,10 +242,24 @@ export class ArNSNamesCache {
         'arns.cache.hydration.failed_pages': failedPages,
         'arns.cache.hydration.total_retries': totalRetries,
         'arns.cache.hydration.cached_names': cachedNames,
+        'arns.cache.hydration.failed_writes': failedWrites,
         'arns.cache.hydration.success': true,
       });
 
+      // Counts names actually written, so the gauge reports the cache the
+      // resolver can read rather than the number of records fetched.
       metrics.arnsBaseNameCacheEntriesGauge.set(cachedNames);
+
+      if (failedWrites > 0) {
+        // A partially hydrated cache resolves some names and 404s the rest,
+        // which is otherwise indistinguishable from a name that was never
+        // registered. Make it loud.
+        this.log.error('Failed to cache some ArNS names during hydration', {
+          failedWrites,
+          cachedNames,
+          error: firstWriteError?.message,
+        });
+      }
 
       this.log.info('Successfully hydrated ArNS names cache');
     } catch (error: any) {

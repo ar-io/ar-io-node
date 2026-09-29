@@ -8,11 +8,13 @@ import Sqlite, { Database } from 'better-sqlite3';
 import {
   DockerComposeEnvironment,
   GenericContainer,
+  StartedDockerComposeEnvironment,
   Wait,
 } from 'testcontainers';
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container';
 import { Environment } from 'testcontainers/build/types.js';
 import axios from 'axios';
+import * as fs from 'node:fs';
 import { rimraf } from 'rimraf';
 import { fromB64Url } from '../../src/lib/encoding.js';
 
@@ -29,8 +31,58 @@ export const getCoreContainer = async (): Promise<GenericContainer> => {
 
 const DEFAULT_TIMEOUT = 60000;
 
-export const cleanDb = (sqlitePath = `${process.cwd()}/data/sqlite`) =>
-  rimraf(`${sqlitePath}/*.db*`, { glob: true });
+/**
+ * Delete the SQLite databases so a suite starts from a known-empty index.
+ *
+ * This is destructive and its default target is `./data/sqlite` relative to the
+ * working directory, which on a machine that also *runs* a gateway is that
+ * gateway's live index — `core.db`, `bundles.db`, `data.db`, `moderation.db`,
+ * `chunks.db` and their `-wal`/`-shm` files. Losing those means a full re-sync.
+ *
+ * The guard below exists because the hazard is silent and the default is the
+ * dangerous value: an operator who clones this repo onto a live gateway and
+ * runs `yarn test:e2e` once destroys their index, having done nothing unusual.
+ * CI is safe only incidentally, because a fresh runner has no `data/` for the
+ * glob to match.
+ *
+ * So refuse by default when the target looks inhabited, and require the caller
+ * to say so explicitly. `ALLOW_DESTRUCTIVE_E2E=true` opts in; CI sets it. That
+ * inverts the default from "destroy whatever is here" to "destroy only when
+ * someone said to", which is the way round it should have been.
+ */
+export const cleanDb = async (sqlitePath = `${process.cwd()}/data/sqlite`) => {
+  if (process.env.ALLOW_DESTRUCTIVE_E2E !== 'true') {
+    // fs rather than a glob library: `glob` is only a transitive dependency
+    // here and resolves to a callback-API major, which would make this check
+    // silently pass. A guard that can fail open is worse than no guard.
+    let existing: string[] = [];
+    try {
+      // Must match the rimraf glob below exactly. `*.db*` deletes anything
+      // containing `.db`, which includes the `-wal` and `-shm` sidecars and
+      // files like `snapshot.db.bak`. An earlier version of this guard tested
+      // `endsWith('.db')`, so a directory holding only sidecars or a backup
+      // looked empty to the guard and was then deleted by the glob: a guard
+      // that failed open, which is worse than no guard.
+      existing = (await fs.promises.readdir(sqlitePath)).filter((f) =>
+        f.includes('.db'),
+      );
+    } catch (error: any) {
+      // No directory at all means nothing to destroy — that's the safe case.
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    if (existing.length > 0) {
+      throw new Error(
+        `Refusing to delete ${existing.length} SQLite database(s) in ${sqlitePath}.\n` +
+          `\nThe E2E suites wipe the index before running. The path above already ` +
+          `contains databases, which on a host that also runs a gateway is that ` +
+          `gateway's live index — deleting it forces a full re-sync.\n` +
+          `\nIf this is a throwaway checkout, set ALLOW_DESTRUCTIVE_E2E=true to proceed. ` +
+          `Never set it on a machine serving traffic.`,
+      );
+    }
+  }
+  return rimraf(`${sqlitePath}/*.db*`, { glob: true });
+};
 
 const isDataItemIndexed = ({
   bundlesDb,
@@ -120,9 +172,26 @@ export const composeUp = async ({
   ANS104_UNBUNDLE_FILTER = '{"always": true}',
   ANS104_INDEX_FILTER = '{"always": true}',
   ADMIN_API_KEY = 'secret',
-  TRUSTED_NODE_URL = 'https://arweave.net',
+  // arweave.net sits behind a CDN that rate-limits CI egress IPs. A 429 with a
+  // large Retry-After stalls the block importer past the test timeout, so the
+  // chain source points at an Arweave node instead. Override with
+  // E2E_TRUSTED_NODE_URL to repoint without a code change.
+  TRUSTED_NODE_URL = process.env.E2E_TRUSTED_NODE_URL ??
+    'http://peers.arweave.xyz:1984',
   TRUSTED_GATEWAYS_URLS = '{"https://arweave.net": 1, "https://turbo-gateway.com": 2}',
   BACKGROUND_RETRIEVAL_ORDER = 'trusted-gateways',
+  // The 10s production default is too short for this cascade. arweave.net
+  // (priority 1) intermittently rate-limits CI egress with a 429, and the
+  // priority 2 gateways need more than 30s to serve an object that is not
+  // already in their cache. A timed-out request still warms them, so the
+  // fetch completes; it just needs more room than 10s. Measured: >30s cold,
+  // ~1.2s once warm.
+  TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = '45000',
+  // Passed explicitly rather than left to process env inheritance so the
+  // compose suites run the same image the job just built. Defaulting to
+  // `latest` makes compose pull the published image, which is a different
+  // build than the commit under test.
+  CORE_IMAGE_TAG = process.env.CORE_IMAGE_TAG ?? 'latest',
   ...ENVIRONMENT
 }: Environment = {}) => {
   // disable .env file read
@@ -143,6 +212,8 @@ export const composeUp = async ({
     TRUSTED_NODE_URL,
     TRUSTED_GATEWAYS_URLS,
     BACKGROUND_RETRIEVAL_ORDER,
+    TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
+    CORE_IMAGE_TAG,
     ...ENVIRONMENT,
   });
 
@@ -155,7 +226,15 @@ export const composeUp = async ({
     .up(['core']);
 };
 
-const waitFor = <T>({
+/**
+ * Poll `check` until `validate` passes or `timeout` elapses.
+ *
+ * `timeoutMessage` and `waitingMessage` accept a function so they can report
+ * the value actually observed. Passing a plain string builds the message once,
+ * before polling starts, which makes it stale for anything that changes while
+ * waiting.
+ */
+export const waitFor = <T>({
   check,
   validate,
   timeout = DEFAULT_TIMEOUT,
@@ -167,8 +246,8 @@ const waitFor = <T>({
   validate: (result: T) => boolean;
   timeout?: number;
   interval?: number;
-  timeoutMessage: string;
-  waitingMessage?: string;
+  timeoutMessage: string | ((lastResult: T) => string);
+  waitingMessage?: string | ((lastResult: T) => string);
 }): Promise<T> => {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
@@ -182,11 +261,21 @@ const waitFor = <T>({
         }
 
         if (waitingMessage !== undefined) {
-          console.log(waitingMessage);
+          console.log(
+            typeof waitingMessage === 'function'
+              ? waitingMessage(result)
+              : waitingMessage,
+          );
         }
 
         if (Date.now() - startTime >= timeout) {
-          reject(new Error(timeoutMessage));
+          reject(
+            new Error(
+              typeof timeoutMessage === 'function'
+                ? timeoutMessage(result)
+                : timeoutMessage,
+            ),
+          );
           return;
         }
 
@@ -216,9 +305,83 @@ export const waitForBlocks = ({
     validate: (height) => height === stopHeight,
     timeout,
     interval,
-    timeoutMessage: `Timeout waiting for blocks to reach height ${stopHeight}`,
-    waitingMessage: `Waiting for blocks to import... Current height: ${getMaxHeight(coreDb)['MAX(height)']}, Target: ${stopHeight}`,
+    timeoutMessage: (height) =>
+      `Timeout waiting for blocks to reach height ${stopHeight}. Current height: ${height}`,
+    waitingMessage: (height) =>
+      `Waiting for blocks to import... Current height: ${height}, Target: ${stopHeight}`,
   });
+};
+
+/**
+ * Print the core container's recent logs.
+ *
+ * The workflow's job-level dump cannot see these. Testcontainers reaps each
+ * suite's containers as it goes, so by the time a job-level step runs, the
+ * container that actually failed is long gone. This runs inside the failing
+ * hook, while the container is still up.
+ */
+export const dumpCoreLogs = async (
+  compose: StartedDockerComposeEnvironment,
+  {
+    serviceName = 'core-1',
+    collectMs = 3000,
+    tailLines = 200,
+  }: { serviceName?: string; collectMs?: number; tailLines?: number } = {},
+) => {
+  try {
+    // Ask Docker for the tail. Without this, logs() replays the stream from
+    // the container's first line, so a bounded collection window returns
+    // startup output rather than whatever happened just before the failure.
+    const stream = await compose
+      .getContainer(serviceName)
+      .logs({ tail: tailLines });
+    const chunks: string[] = [];
+
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        stream.destroy();
+        resolve();
+      };
+      // logs() follows the stream, so stop after a bounded window rather
+      // than waiting for an end event that only arrives on container exit.
+      const timer = setTimeout(finish, collectMs);
+
+      stream.on('data', (chunk) => chunks.push(chunk.toString('utf8')));
+      stream.on('end', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      stream.on('error', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+
+    console.log(
+      `===== ${serviceName} logs (last ${tailLines} lines) =====\n${chunks.join('')}\n===== end ${serviceName} logs =====`,
+    );
+  } catch (error) {
+    console.log(`Could not capture ${serviceName} logs:`, error);
+  }
+};
+
+/**
+ * Run `fn`, dumping the core container's logs if it throws, then rethrow.
+ *
+ * Wrap the waits in a `before` hook with this so a timeout arrives with the
+ * upstream detail attached instead of a bare message.
+ */
+export const withCoreLogsOnFailure = async <T>(
+  compose: StartedDockerComposeEnvironment,
+  fn: () => Promise<T>,
+  opts?: Parameters<typeof dumpCoreLogs>[1],
+): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error) {
+    await dumpCoreLogs(compose, opts);
+    throw error;
+  }
 };
 
 export const waitForLogMessage = ({

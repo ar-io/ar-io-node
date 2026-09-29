@@ -195,6 +195,12 @@ sources, set `CDB64_ROOT_TX_INDEX_SOURCES`. See [docs/envs.md](docs/envs.md)
 for all CDB64 configuration options and [docs/cdb64-guide.md](docs/cdb64-guide.md)
 for operational guidance.
 
+Gateways can also share fresher indexes with each other: the optional
+`index-swarm` sidecar publishes this gateway's bands, signed with its observer
+key, and subscribes to other gateways' bands, which the gateway loads without a
+restart. See [docs/index-swarm.md](docs/index-swarm.md) to run it and
+[docs/index-publication.md](docs/index-publication.md) for the protocol.
+
 ### Webhook Emission
 
 The ar.io gateway includes a feature to emit webhooks to specified servers when a transaction or data item is indexed and matches a predefined filter. This feature allows for real-time notifications and integrations based on the transaction and data indexing.

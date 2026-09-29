@@ -20,6 +20,7 @@ import { Span } from '@opentelemetry/api';
 import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { extractAllClientIPs } from '../../lib/ip-utils.js';
+import * as metrics from '../../metrics.js';
 import {
   parseViaHeader,
   detectLoopInViaChain,
@@ -33,6 +34,7 @@ import {
   ContiguousDataSource,
   DataAttributesSource,
   ManifestPathResolver,
+  ManifestResolution,
   RequestAttributes,
 } from '../../types.js';
 import { RateLimiter } from '../../limiter/types.js';
@@ -1379,12 +1381,55 @@ export const createRawDataHandler = ({
   });
 };
 
+/**
+ * Record Prometheus metrics for a single manifest path resolution.
+ *
+ * Exported for testing.
+ *
+ * @param source - `index` when the persistent/cached index produced the
+ *   outcome, or `data` when the manifest body was parsed on demand.
+ * @param resolution - The resolution result; `resolvedId`/`resolutionType`
+ *   drive the `resolution_type` label (`unresolved` when nothing matched).
+ * @param manifestPath - The requested sub-path (undefined/empty is the root);
+ *   an unresolved root increments `manifest_unresolved_root_total`.
+ * @param durationMs - Resolution wall-clock time, in milliseconds.
+ */
+export const recordManifestResolutionMetrics = ({
+  source,
+  resolution,
+  manifestPath,
+  durationMs,
+}: {
+  source: 'index' | 'data';
+  resolution: ManifestResolution;
+  manifestPath: string | undefined;
+  durationMs: number;
+}): void => {
+  const resolutionType =
+    resolution.resolvedId !== undefined && resolution.resolutionType
+      ? resolution.resolutionType
+      : 'unresolved';
+  metrics.manifestResolutionsTotal.inc({
+    source,
+    resolution_type: resolutionType,
+  });
+  metrics.manifestResolutionDurationSeconds.observe(
+    { source },
+    durationMs / 1000,
+  );
+  const isRoot = (manifestPath ?? '').replace(/\/+$/g, '') === '';
+  if (isRoot && resolution.resolvedId === undefined) {
+    metrics.manifestUnresolvedRootTotal.inc();
+  }
+};
+
 const sendManifestResponse = async ({
   log,
   req,
   res,
   dataSource,
   dataAttributesSource,
+  dataBlockListValidator,
   dataItemMetaResolver,
   id,
   resolvedId,
@@ -1401,6 +1446,7 @@ const sendManifestResponse = async ({
   res: Response;
   dataSource: ContiguousDataSource;
   dataAttributesSource: DataAttributesSource;
+  dataBlockListValidator: DataBlockListValidator;
   dataItemMetaResolver?: TxMetadataResolver;
   id: string;
   resolvedId: string | undefined;
@@ -1425,6 +1471,35 @@ const sendManifestResponse = async ({
       return true;
     }
 
+    // Return 451 if the manifest-resolved data item is blocked by ID.
+    // The top-level handler only checks the request id — which for a manifest
+    // path is the manifest tx, not the item it resolves to. Without this check
+    // blocked content stays reachable via any manifest that references it.
+    try {
+      if (await dataBlockListValidator.isIdBlocked(resolvedId)) {
+        parentSpan?.setAttribute('http.status_code', 451);
+        parentSpan?.setAttribute('data.error', 'id_blocked');
+        sendBlocked(res, resolvedId);
+        // Indicate response was sent
+        return true;
+      }
+    } catch (error: any) {
+      parentSpan?.recordException(error);
+      parentSpan?.setAttribute('http.status_code', 503);
+      parentSpan?.setAttribute('data.error', 'blocklist_check_failed');
+      log.error('Error checking blocklist:', {
+        dataId: resolvedId,
+        message: error.message,
+        stack: error.stack,
+      });
+      // Fail closed: if we cannot confirm the resolved item is unblocked, do
+      // not serve it — otherwise a validator outage silently reopens the
+      // manifest-path bypass this check exists to close.
+      res.status(503).send('Unable to verify content policy for this item');
+      // Indicate response was sent
+      return true;
+    }
+
     let dataAttributes: ContiguousDataAttributes | undefined;
     try {
       dataAttributes = await dataAttributesSource.getDataAttributes(resolvedId);
@@ -1436,6 +1511,32 @@ const sendManifestResponse = async ({
       });
       // Indicate response was NOT sent
       return false;
+    }
+
+    // Return 451 if the manifest-resolved data item is blocked by hash.
+    if (dataAttributes?.hash !== undefined) {
+      try {
+        if (await dataBlockListValidator.isHashBlocked(dataAttributes.hash)) {
+          parentSpan?.setAttribute('http.status_code', 451);
+          parentSpan?.setAttribute('data.error', 'hash_blocked');
+          sendBlocked(res, resolvedId);
+          // Indicate response was sent
+          return true;
+        }
+      } catch (error: any) {
+        parentSpan?.recordException(error);
+        parentSpan?.setAttribute('http.status_code', 503);
+        parentSpan?.setAttribute('data.error', 'blocklist_check_failed');
+        log.error('Error checking blocklist:', {
+          dataId: resolvedId,
+          message: error.message,
+          stack: error.stack,
+        });
+        // Fail closed (see the id-blocked branch above).
+        res.status(503).send('Unable to verify content policy for this item');
+        // Indicate response was sent
+        return true;
+      }
     }
 
     // Retrieve data based on ID resolved from manifest path or index
@@ -1758,6 +1859,17 @@ export const createDataHandler = ({
             'manifest.resolution_duration_ms',
             manifestDuration,
           );
+          // Only count `index` when the index actually determined the outcome
+          // (complete). A miss (`complete: false`) falls through and is counted
+          // at the data-parse site below.
+          if (manifestResolution.complete) {
+            recordManifestResolutionMetrics({
+              source: 'index',
+              resolution: manifestResolution,
+              manifestPath,
+              durationMs: manifestDuration,
+            });
+          }
           if (
             manifestResolution.resolvedId !== undefined &&
             manifestResolution.resolvedId !== ''
@@ -1777,6 +1889,7 @@ export const createDataHandler = ({
               res,
               dataAttributesSource,
               dataSource,
+              dataBlockListValidator,
               dataItemMetaResolver,
               requestAttributes,
               rateLimiter,
@@ -1899,6 +2012,12 @@ export const createDataHandler = ({
             'manifest.resolution_from_data_duration_ms',
             manifestDuration,
           );
+          recordManifestResolutionMetrics({
+            source: 'data',
+            resolution: manifestResolution,
+            manifestPath,
+            durationMs: manifestDuration,
+          });
 
           // The original stream is no longer needed after path resolution
           data.stream.destroy();
@@ -1912,6 +2031,7 @@ export const createDataHandler = ({
               res,
               dataAttributesSource,
               dataSource,
+              dataBlockListValidator,
               dataItemMetaResolver,
               requestAttributes,
               rateLimiter,

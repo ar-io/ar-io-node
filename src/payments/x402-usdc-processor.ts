@@ -15,11 +15,7 @@ import {
 } from 'x402/types';
 import { decodePayment } from 'x402/schemes';
 import { createFacilitatorConfigFromCredentials } from './facilitator-utils.js';
-import {
-  processPriceToAtomicAmount,
-  toJsonSafe,
-  getPaywallHtml,
-} from 'x402/shared';
+import { getDefaultAsset, toJsonSafe, getPaywallHtml } from 'x402/shared';
 import log from '../log.js';
 import {
   PaymentProcessor,
@@ -27,7 +23,7 @@ import {
   PaymentSettlementResult,
   PaymentRequirementsContext,
 } from './types.js';
-import { calculateX402Price } from './x402-pricing.js';
+import { calculateX402Price, x402PriceToAtomicUnits } from './x402-pricing.js';
 
 /**
  * Configuration options for x402 USDC payment processor
@@ -41,12 +37,22 @@ export interface X402UsdcProcessorConfig {
   facilitatorUrl: `${string}://${string}`;
   settleTimeoutMs: number;
   version: number;
-  // Paywall customization
+  /**
+   * PUBLIC CDP Client API key, embedded in the paywall HTML for the onramp
+   * widget. NOT a facilitator credential — see {@link cdpApiKeyId}.
+   */
   cdpClientKey?: string;
   appName?: string;
   appLogo?: string;
   sessionTokenEndpoint?: string;
-  // CDP API secret for coinbase facilitator access
+  /**
+   * CDP API key ID, paired with {@link cdpClientSecret} to authenticate against
+   * the Coinbase facilitator. NOT the same value as {@link cdpClientKey}:
+   * passing the public client key here makes CDP reject every verify with 401,
+   * which surfaces to callers only as a generic payment verification failure.
+   */
+  cdpApiKeyId?: string;
+  /** CDP API key secret, paired with {@link cdpApiKeyId}. */
   cdpClientSecret?: string;
 }
 
@@ -67,20 +73,11 @@ export class X402UsdcProcessor implements PaymentProcessor {
     this.config = config;
 
     const facilitatorConfig = createFacilitatorConfigFromCredentials(
-      this.config.cdpClientKey,
+      this.config.cdpApiKeyId,
       this.config.cdpClientSecret,
       config.facilitatorUrl,
     );
     this.facilitator = useFacilitator(facilitatorConfig);
-  }
-
-  /**
-   * Calculate x402 USDC per byte egress price based on content size
-   */
-  private calculatePrice(contentLength: number): string {
-    const price = calculateX402Price(contentLength, this.config);
-    // Format to 3 decimal places for consistent, readable pricing
-    return `$${price.toFixed(3)}`;
   }
 
   /**
@@ -154,27 +151,26 @@ export class X402UsdcProcessor implements PaymentProcessor {
   public calculateRequirements(
     context: PaymentRequirementsContext,
   ): PaymentRequirements {
-    const price = this.calculatePrice(context.contentSize);
-    const atomicAssetPrice = processPriceToAtomicAmount(
-      price,
-      this.config.network,
-    );
-
-    if ('error' in atomicAssetPrice) {
-      throw new Error(`Invalid price format: ${price}`);
-    }
+    // Priced in whole atomic units of the asset, not through x402's "$0.001"
+    // string path: see x402PriceToAtomicUnits for why that path cannot be
+    // used for a computed per-byte price.
+    const asset = getDefaultAsset(this.config.network);
+    const maxAmountRequired = x402PriceToAtomicUnits(
+      calculateX402Price(context.contentSize, this.config),
+      asset.decimals,
+    ).toString();
 
     return {
       scheme: 'exact' as const,
       description: `AR.IO Gateway data egress for ${context.contentSize} bytes`,
       network: this.config.network,
-      maxAmountRequired: atomicAssetPrice.maxAmountRequired,
+      maxAmountRequired,
       payTo: this.config.walletAddress,
-      asset: atomicAssetPrice.asset.address,
+      asset: asset.address,
       resource: `${context.protocol}://${context.host}${context.originalUrl}`,
       mimeType: context.contentType,
       maxTimeoutSeconds: 300, // 5 minutes
-      extra: (atomicAssetPrice.asset as ERC20TokenAmount['asset']).eip712,
+      extra: (asset as ERC20TokenAmount['asset']).eip712,
     };
   }
 

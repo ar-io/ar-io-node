@@ -29,6 +29,7 @@ import {
 } from '../lib/validation.js';
 import { secp256k1OwnerFromTx } from '../lib/ecdsa-public-key-recover.js';
 import * as metrics from '../metrics.js';
+import { AgentPair, createAgentPair } from '../lib/http-agent.js';
 import * as config from '../config.js';
 import { tracer } from '../tracing.js';
 import {
@@ -190,6 +191,8 @@ export class ArweaveCompositeClient
   // Trusted node
   private trustedNodeUrl: string;
   private trustedNodeAxios;
+  // Keep-alive agents owned by this client; torn down in cleanup().
+  private trustedNodeAgents: AgentPair;
 
   // Peer management
   public peerManager: ArweavePeerManager;
@@ -390,9 +393,14 @@ export class ArweaveCompositeClient
     });
 
     // Initialize trusted node Axios with automatic retries
+    this.trustedNodeAgents = createAgentPair({
+      client: 'ArweaveCompositeClient',
+      log: this.log,
+    });
     this.trustedNodeAxios = axios.create({
       baseURL: this.trustedNodeUrl,
       timeout: requestTimeout,
+      ...this.trustedNodeAgents,
       headers: {
         'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
       },
@@ -489,6 +497,11 @@ export class ArweaveCompositeClient
   }
 
   private async postChunkToPeer(task: ChunkPostTask): Promise<ChunkPostResult> {
+    // Assigned just before the request so the catch can ask whether the abort
+    // was our own deadline firing rather than a caller cancelling. Created
+    // lazily: the dry-run paths below return without posting, and creating the
+    // signal up front would arm a timer per call for nothing.
+    let abortSignal: AbortSignal | undefined;
     try {
       this.failureSimulator.maybeFail();
 
@@ -509,6 +522,7 @@ export class ArweaveCompositeClient
           metrics.arweaveChunkPostCounter.inc({
             endpoint: task.peer,
             status: 'success',
+            reason: 'dry_run',
           });
 
           return {
@@ -540,6 +554,7 @@ export class ArweaveCompositeClient
           metrics.arweaveChunkPostCounter.inc({
             endpoint: task.peer,
             status: 'fail',
+            reason: 'invalid_chunk',
           });
 
           return {
@@ -592,6 +607,7 @@ export class ArweaveCompositeClient
           metrics.arweaveChunkPostCounter.inc({
             endpoint: task.peer,
             status: 'fail',
+            reason: 'invalid_proof',
           });
 
           return {
@@ -603,6 +619,7 @@ export class ArweaveCompositeClient
         metrics.arweaveChunkPostCounter.inc({
           endpoint: task.peer,
           status: 'success',
+          reason: 'dry_run',
         });
 
         return {
@@ -611,11 +628,13 @@ export class ArweaveCompositeClient
         };
       }
 
+      abortSignal = AbortSignal.timeout(task.abortTimeout);
+
       const response = await axios({
         method: 'POST',
         url: `${task.peer}/chunk`,
         data: task.chunk,
-        signal: AbortSignal.timeout(task.abortTimeout),
+        signal: abortSignal,
         timeout: task.responseTimeout,
         headers: task.headers,
         // An arweave node returns 200 when it will store the chunk long-term and
@@ -635,6 +654,7 @@ export class ArweaveCompositeClient
       metrics.arweaveChunkPostCounter.inc({
         endpoint: task.peer,
         status: 'success',
+        reason: String(response.status),
       });
       if (temporary) {
         metrics.arweaveChunkPostTemporaryCounter.inc({ endpoint: task.peer });
@@ -649,24 +669,58 @@ export class ArweaveCompositeClient
       let canceled = false;
       let timedOut = false;
 
-      if (axios.isAxiosError(error)) {
-        timedOut = error.code === 'ECONNABORTED';
-        canceled = error.code === 'ERR_CANCELED';
+      const isAxiosError = axios.isAxiosError(error);
+      if (isAxiosError) {
+        // ECONNABORTED is the response timeout. An AbortSignal.timeout() firing
+        // surfaces as ERR_CANCELED, indistinguishable from a caller cancelling —
+        // but it is our own deadline, not the caller's, and abortTimeout is
+        // normally the lower of the two, so this is the common case. Ask the
+        // signal which it was: AbortSignal.timeout() sets reason to a
+        // TimeoutError DOMException, while an explicit abort does not.
+        // Misreporting it matters beyond the metric: aggregateStatusCode() maps
+        // canceled to 499 (Client Closed Request), blaming the uploader for a
+        // deadline of ours, where timedOut maps to 504.
+        const abortedByOurDeadline =
+          abortSignal?.aborted === true &&
+          abortSignal.reason?.name === 'TimeoutError';
+        timedOut = error.code === 'ECONNABORTED' || abortedByOurDeadline;
+        canceled = error.code === 'ERR_CANCELED' && !abortedByOurDeadline;
       }
+
+      // A peer that answered tells us why it refused the chunk (400 unknown
+      // data root, 429 rate limited, 503 overloaded); one that did not answer
+      // is a timeout, our own abort, or unreachable. These call for completely
+      // different operator responses, so record which it was.
+      const statusCode = error.response?.status;
+      const reason =
+        statusCode !== undefined
+          ? String(statusCode)
+          : timedOut
+            ? 'timeout'
+            : canceled
+              ? 'canceled'
+              : isAxiosError
+                ? 'network'
+                : // Not an HTTP failure at all: a throw from our own code path
+                  // (e.g. the failure simulator). Calling it "network" would
+                  // send an operator looking at the wrong thing.
+                  'error';
 
       metrics.arweaveChunkPostCounter.inc({
         endpoint: task.peer,
         status: 'fail',
+        reason,
       });
 
       this.log.debug('Failed to POST chunk to peer:', {
         peer: task.peer,
         error: error.message,
+        reason,
       });
 
       return {
         success: false,
-        statusCode: error.response?.status,
+        statusCode,
         error: error.message,
         canceled,
         timedOut,
@@ -1507,6 +1561,17 @@ export class ArweaveCompositeClient
       this.failureSimulator.maybeFail();
       signal?.throwIfAborted();
 
+      // A caller that asked for local sources only has declined the network,
+      // and every path below this point is a request to an Arweave node.
+      // Declining here rather than in each caller keeps the rule in one
+      // place: getChunkDataByAny and getChunkMetadataByAny both funnel
+      // through this method.
+      if (params.requestAttributes?.localSourcesOnly === true) {
+        throw new Error(
+          'Arweave network chunk retrieval skipped: request is local-sources-only',
+        );
+      }
+
       const cacheKey = JSON.stringify({
         absoluteOffset,
         txSize,
@@ -1737,6 +1802,22 @@ export class ArweaveCompositeClient
     }
   }
 
+  /**
+   * Fetches a transaction's data from the trusted node via `/tx/{id}/data`
+   * and `/tx/{id}/data_size`.
+   *
+   * Both requests must answer `200`. Any other status, including the `202
+   * Pending` a node returns for an unmined transaction, throws so the caller
+   * can fall through to the next data source. The size must be a non-negative
+   * safe integer, and the decoded data must be exactly that many bytes.
+   *
+   * @param id - Transaction ID.
+   * @param region - Optional byte range. When given, the stream carries only
+   * that slice of the data and the reported size is `region.size`.
+   * @param signal - Aborts the request when triggered.
+   * @returns The data as an unverified, trusted, uncached stream.
+   * @throws When the node has no usable data or the size check fails.
+   */
   async getData({
     id,
     region,
@@ -1763,12 +1844,33 @@ export class ArweaveCompositeClient
         }),
       ]);
 
+      // A node answers 202 "Pending" for a transaction it knows about but has
+      // not mined. That body is a status string, not data, so anything but a
+      // 200 is not a usable answer: decoding "Pending" would yield a few junk
+      // bytes and a NaN size.
+      if (dataResponse.status !== 200 || dataSizeResponse.status !== 200) {
+        throw new Error(
+          `Transaction data unavailable (data ${dataResponse.status}, data_size ${dataSizeResponse.status})`,
+        );
+      }
+
       if (!dataResponse.data) {
         throw Error('No transaction data');
       }
 
-      const size = +dataSizeResponse.data;
+      const size = Number(dataSizeResponse.data);
+      if (!Number.isSafeInteger(size) || size < 0) {
+        throw new Error(
+          `Invalid transaction data size: ${String(dataSizeResponse.data).slice(0, 32)}`,
+        );
+      }
+
       let txData = fromB64Url(dataResponse.data);
+      if (txData.length !== size) {
+        throw new Error(
+          `Transaction data is ${txData.length} bytes but data_size is ${size}`,
+        );
+      }
 
       if (region) {
         txData = txData.subarray(region.offset, region.offset + region.size);
@@ -1793,8 +1895,13 @@ export class ArweaveCompositeClient
           request_type: requestType,
         });
 
-        // Track bytes streamed
+        // Track bytes streamed. A non-finite value would poison the counter
+        // and make the histogram throw from inside this 'end' listener, which
+        // also skips any 'end' listeners registered after it.
         const bytesStreamed = region ? region.size : size;
+        if (!Number.isFinite(bytesStreamed)) {
+          return;
+        }
         metrics.getDataStreamBytesTotal.inc(
           {
             class: this.constructor.name,
@@ -1904,6 +2011,8 @@ export class ArweaveCompositeClient
         return {
           successCount: 0,
           preferredSuccessCount: 0,
+          temporarySuccessCount: 0,
+          longTermSuccessCount: 0,
           failureCount: 0,
           results: [],
         };
@@ -2097,6 +2206,7 @@ export class ArweaveCompositeClient
               statusCode,
               canceled: result.canceled ?? false,
               timedOut: result.timedOut ?? false,
+              temporary: result.temporary ?? false,
             };
           } catch (error: any) {
             failureCount++;
@@ -2131,10 +2241,28 @@ export class ArweaveCompositeClient
         }
       }
 
+      // Derived from `results` rather than incremented in the workers: the
+      // counters above are deliberately racy (they only gate early
+      // termination), while these are reported to callers.
+      const temporarySuccessCount = results.filter(
+        (r) => r.success && r.temporary === true,
+      ).length;
+      const longTermSuccessCount = results.filter(
+        (r) => r.success && r.temporary !== true,
+      ).length;
+
       const duration = Date.now() - startTime;
 
       span.setAttribute('chunk.broadcast.duration_ms', duration);
       span.setAttribute('chunk.broadcast.success_count', successCount);
+      span.setAttribute(
+        'chunk.broadcast.temporary_success_count',
+        temporarySuccessCount,
+      );
+      span.setAttribute(
+        'chunk.broadcast.long_term_success_count',
+        longTermSuccessCount,
+      );
       span.setAttribute(
         'chunk.broadcast.preferred_success_count',
         preferredSuccessCount,
@@ -2182,6 +2310,8 @@ export class ArweaveCompositeClient
       this.log.debug('Chunk broadcast complete', {
         successCount,
         preferredSuccessCount,
+        temporarySuccessCount,
+        longTermSuccessCount,
         failureCount,
         consecutive4xxFailures,
         totalPeers: sortedPeers.length,
@@ -2201,6 +2331,8 @@ export class ArweaveCompositeClient
       return {
         successCount,
         preferredSuccessCount,
+        temporarySuccessCount,
+        longTermSuccessCount,
         failureCount,
         results,
       };
@@ -2838,6 +2970,12 @@ export class ArweaveCompositeClient
    * Should be called when the client is no longer needed (e.g., in tests)
    */
   cleanup(): void {
+    // Destroy the keep-alive agents this client owns. They hold idle sockets
+    // open until their idle timeout, so a client discarded without this leaves
+    // its pool lingering past the lifecycle.
+    this.trustedNodeAgents.httpAgent.destroy();
+    this.trustedNodeAgents.httpsAgent.destroy();
+
     // Clear the bucket filler interval
     if (this.bucketFillerInterval) {
       clearInterval(this.bucketFillerInterval);

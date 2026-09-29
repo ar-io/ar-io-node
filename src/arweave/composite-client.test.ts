@@ -5,18 +5,52 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it, beforeEach, afterEach, mock } from 'node:test';
+import { describe, it, after, beforeEach, afterEach, mock } from 'node:test';
 import http from 'node:http';
 import { AddressInfo } from 'node:net';
 import { default as Arweave } from 'arweave';
 
 import { ArweaveCompositeClient } from './composite-client.js';
+import { toB64Url } from '../lib/encoding.js';
 import { UniformFailureSimulator } from '../lib/chaos.js';
 import { ArweavePeerManager } from '../peers/arweave-peer-manager.js';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 import log from '../log.js';
 
 describe('ArweaveCompositeClient', () => {
+  // TEMPORARY DIAGNOSTIC — remove once the leak is identified.
+  //
+  // This file's assertions all pass in ~350ms, then its process fails to exit,
+  // so node's runner waits on the child forever. Before --test-timeout was
+  // added that silently consumed the job's full 60-minute budget and skipped
+  // the `images` job that publishes release containers. A lingering handle
+  // emits nothing by definition, which is why four occurrences produced no
+  // usable logs.
+  //
+  // It does not reproduce locally: this file passes alone on Node 20.11.1 and
+  // 22.13.0, passes paired with the file that follows it, and the full
+  // `test:ci` completes under c8 and pinned to two cores. It only leaks inside
+  // the full suite on CI, so asking the process what it still holds is the
+  // remaining way to identify it.
+  after(async () => {
+    const immediate = process.getActiveResourcesInfo();
+    // close() is asynchronous: a handle can still be listed while it is being
+    // torn down. Sample again after the loop has had a chance to reap them, so
+    // a genuine leak is distinguishable from one merely in flight.
+    await new Promise((r) => setTimeout(r, 250));
+    const settled = process.getActiveResourcesInfo();
+    const count = (a: string[]) =>
+      a.reduce<Record<string, number>>(
+        (m, k) => ({ ...m, [k]: (m[k] ?? 0) + 1 }),
+        {},
+      );
+
+    console.log(
+      `[leak-probe] immediate=${JSON.stringify(count(immediate))} settled=${JSON.stringify(count(settled))}`,
+    );
+  });
+
   let mockBlockStore: any;
   let mockTxStore: any;
   let mockPeerManager: any;
@@ -496,6 +530,88 @@ describe('ArweaveCompositeClient', () => {
       assert.equal(result.success, false);
       assert.equal(result.statusCode, 500);
     });
+
+    // The failure counter is what an operator reads when a peer starts
+    // rejecting chunks. Without a reason, a peer refusing the chunk (400), one
+    // rate-limiting us (429) and one we cannot reach are indistinguishable,
+    // and each calls for a different response.
+    const failReasonCount = async (endpoint: string, reason: string) => {
+      const { values } = await metrics.arweaveChunkPostCounter.get();
+      const sample = values.find(
+        (v: any) =>
+          v.labels.endpoint === endpoint &&
+          v.labels.status === 'fail' &&
+          v.labels.reason === reason,
+      );
+      return sample?.value ?? 0;
+    };
+
+    it('labels a peer-rejected post with the peer’s status code', async () => {
+      respond = (res) => res.writeHead(429).end();
+      const client = createTestClient();
+      const before = await failReasonCount(baseUrl, '429');
+      await post(client);
+      assert.equal(await failReasonCount(baseUrl, '429'), before + 1);
+    });
+
+    // The abort deadline is normally the LOWER of the two, so this is the common
+    // timeout path. AbortSignal.timeout() surfaces as ERR_CANCELED, which would
+    // otherwise be reported as a caller cancellation — and aggregateStatusCode()
+    // turns that into 499 (Client Closed Request), blaming the uploader for our
+    // own deadline.
+    it('reports our own abort deadline as a timeout, not a cancellation', async () => {
+      respond = () => undefined; // never answer
+      const client: any = createTestClient();
+      const before = await failReasonCount(baseUrl, 'timeout');
+      const result = await client.postChunkToPeer({
+        peer: baseUrl,
+        chunk: {} as any,
+        abortTimeout: 50, // fires first
+        responseTimeout: 5000,
+        headers: {},
+      });
+      assert.equal(result.success, false);
+      assert.equal(result.timedOut, true);
+      assert.equal(result.canceled, false);
+      assert.equal(await failReasonCount(baseUrl, 'timeout'), before + 1);
+    });
+
+    it('labels accepted posts with the status the peer returned', async () => {
+      const successReasonCount = async (endpoint: string, reason: string) => {
+        const { values } = await metrics.arweaveChunkPostCounter.get();
+        const s = values.find(
+          (v: any) =>
+            v.labels.endpoint === endpoint &&
+            v.labels.status === 'success' &&
+            v.labels.reason === reason,
+        );
+        return s?.value ?? 0;
+      };
+      respond = (res) => res.writeHead(303).end();
+      const client = createTestClient();
+      const before = await successReasonCount(baseUrl, '303');
+      await post(client);
+      assert.equal(await successReasonCount(baseUrl, '303'), before + 1);
+    });
+
+    it('labels a post the peer never answers as a timeout, not a status code', async () => {
+      // Never respond: the request must hit responseTimeout rather than any
+      // HTTP status, so the reason has to come from the error, not a response.
+      respond = () => undefined;
+      const client: any = createTestClient();
+      const before = await failReasonCount(baseUrl, 'timeout');
+      const result = await client.postChunkToPeer({
+        peer: baseUrl,
+        chunk: {} as any,
+        abortTimeout: 5000,
+        responseTimeout: 50,
+        headers: {},
+      });
+      assert.equal(result.success, false);
+      assert.equal(result.timedOut, true);
+      assert.equal(result.statusCode, undefined);
+      assert.equal(await failReasonCount(baseUrl, 'timeout'), before + 1);
+    });
   });
 
   // Verifies the CHUNK_POST_CONTINUE_PAST_THRESHOLD behavior against real
@@ -524,11 +640,22 @@ describe('ArweaveCompositeClient', () => {
     };
 
     afterEach(async () => {
+      // close() alone leaves the handle alive until every connection ends, and
+      // the dead peers here are deliberately destroying sockets mid-request, so
+      // some are always in flight when a test finishes. Drop the connections
+      // first, then wait for the listener itself.
+      const all = [...servers, ...deadServers];
+      for (const s of all) {
+        s.closeAllConnections?.();
+      }
       await Promise.all(
-        [...servers, ...deadServers].map(
+        all.map(
           (s) => new Promise<void>((resolve) => s.close(() => resolve())),
         ),
       );
+      // `servers` was never cleared, so each afterEach re-closed every server
+      // from every earlier test in this describe.
+      servers = [];
       deadServers = [];
     });
 
@@ -582,6 +709,46 @@ describe('ArweaveCompositeClient', () => {
       assert.equal(result.successCount, urls.length);
     });
 
+    // successCount alone cannot tell "peers that will keep this chunk" from
+    // "peers that parked it in a disk pool they will drain", because a 303 is
+    // counted as a success (correctly — it is still propagation). The split is
+    // reported so callers can see which they got.
+    it('splits successes into long-term (200) and temporary (303)', async () => {
+      await startServers(2, 200);
+      const longTerm = [...urls];
+      // startServers resets `servers`/`urls`, so hold on to the first batch and
+      // restore both lists afterwards — otherwise afterEach never closes those
+      // listeners and this file leaks handles.
+      const longTermServers = [...servers];
+      await startServers(3, 303);
+      const temporary = [...urls];
+      servers = [...longTermServers, ...servers];
+      urls = [...longTerm, ...temporary];
+      mockPeerManager.getPeerUrls = mock.fn(() => urls);
+      mockPeerManager.selectPeers = mock.fn(() => urls);
+
+      const client = createTestClient();
+      const result = await broadcast(client, true);
+
+      assert.equal(result.successCount, urls.length);
+      assert.equal(result.longTermSuccessCount, longTerm.length);
+      assert.equal(result.temporarySuccessCount, temporary.length);
+      assert.equal(
+        result.longTermSuccessCount + result.temporarySuccessCount,
+        result.successCount,
+      );
+    });
+
+    it('counts a broadcast accepted only into disk pools as entirely temporary', async () => {
+      await startServers(4, 303);
+      const client = createTestClient();
+      const result = await broadcast(client, true);
+
+      assert.equal(result.successCount, urls.length);
+      assert.equal(result.temporarySuccessCount, urls.length);
+      assert.equal(result.longTermSuccessCount, 0);
+    });
+
     it('bails out of the dead peer tail in continuePastThreshold mode', async () => {
       const deadUrls = await makeDeadUrls(25);
       // Three live peers first, then a long dead tail.
@@ -633,6 +800,128 @@ describe('ArweaveCompositeClient', () => {
         `expected the threshold to be met through the dead prefix, got ${result.successCount}`,
       );
       assert.equal(result.successCount, live.length);
+    });
+  });
+
+  describe('getData', () => {
+    const BASE_URL = 'https://test.example.com';
+
+    /** A client whose trusted node answers /data and /data_size as given. */
+    const clientAnswering = (
+      data: { status: number; data: unknown },
+      dataSize: { status: number; data: unknown },
+    ) => {
+      const client = createTestClient();
+      (client as any).trustedNodeRequestBucket = 10;
+      (client as any).trustedNodeAxios = mock.fn(
+        async (request: { url: string }) => ({
+          ...(request.url.endsWith('/data_size') ? dataSize : data),
+          config: { baseURL: BASE_URL },
+        }),
+      );
+      return client;
+    };
+
+    const readAll = async (stream: NodeJS.ReadableStream) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) {
+        chunks.push(Buffer.from(chunk as Buffer));
+      }
+      return Buffer.concat(chunks);
+    };
+
+    const payload = Buffer.from('hello world');
+
+    it('serves a mined transaction and lets later end listeners run', async () => {
+      // axios parses the plain-number /data_size body as JSON.
+      const client = clientAnswering(
+        { status: 200, data: toB64Url(payload) },
+        { status: 200, data: payload.length },
+      );
+
+      const result = await client.getData({ id: 'mined-tx' });
+      let laterEndListenerRan = false;
+      result.stream.on('end', () => {
+        laterEndListenerRan = true;
+      });
+
+      assert.equal(result.size, payload.length);
+      assert.deepEqual(await readAll(result.stream), payload);
+      assert.equal(laterEndListenerRan, true);
+    });
+
+    it('serves the requested region of a mined transaction', async () => {
+      const client = clientAnswering(
+        { status: 200, data: toB64Url(payload) },
+        { status: 200, data: String(payload.length) },
+      );
+
+      const result = await client.getData({
+        id: 'mined-tx',
+        region: { offset: 6, size: 5 },
+      });
+
+      assert.equal(result.size, 5);
+      assert.equal((await readAll(result.stream)).toString(), 'world');
+    });
+
+    it('keeps later end listeners running when a region size is not finite', async () => {
+      // Recording NaN would throw from inside the 'end' listener, and a
+      // throwing listener stops the ones registered after it.
+      const client = clientAnswering(
+        { status: 200, data: toB64Url(payload) },
+        { status: 200, data: payload.length },
+      );
+
+      const result = await client.getData({
+        id: 'mined-tx',
+        region: { offset: 0, size: Number.NaN },
+      });
+      let laterEndListenerRan = false;
+      result.stream.on('end', () => {
+        laterEndListenerRan = true;
+      });
+      await readAll(result.stream);
+
+      assert.equal(laterEndListenerRan, true);
+    });
+
+    it('rejects a transaction the node reports as pending', async () => {
+      // An unmined transaction: the node answers 202 with the text "Pending"
+      // on both routes. Serving it would yield junk bytes and a NaN size.
+      const client = clientAnswering(
+        { status: 202, data: 'Pending' },
+        { status: 202, data: 'Pending' },
+      );
+
+      await assert.rejects(
+        client.getData({ id: 'pending-tx' }),
+        /Transaction data unavailable \(data 202, data_size 202\)/,
+      );
+    });
+
+    it('rejects a size that is not a non-negative integer', async () => {
+      const client = clientAnswering(
+        { status: 200, data: toB64Url(payload) },
+        { status: 200, data: 'not-a-number' },
+      );
+
+      await assert.rejects(
+        client.getData({ id: 'mined-tx' }),
+        /Invalid transaction data size: not-a-number/,
+      );
+    });
+
+    it('rejects data whose length differs from data_size', async () => {
+      const client = clientAnswering(
+        { status: 200, data: toB64Url(payload) },
+        { status: 200, data: payload.length + 1 },
+      );
+
+      await assert.rejects(
+        client.getData({ id: 'mined-tx' }),
+        /Transaction data is 11 bytes but data_size is 12/,
+      );
     });
   });
 });

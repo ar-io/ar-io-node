@@ -43,6 +43,8 @@ interface ScatterPartitionState {
   stream: WriteStream;
   recordCount: number;
   filePath: string;
+  /** First error emitted by the scatter stream, surfaced to the caller. */
+  error?: Error;
 }
 
 export interface StreamingPartitionedCdb64WriterOptions {
@@ -102,8 +104,12 @@ export class StreamingPartitionedCdb64Writer {
    * Adds a key-value pair to the appropriate partition's scatter file.
    * The scatter file format per record is:
    *   [key_len: uint32 LE][value_len: uint32 LE][key bytes][value bytes]
+   *
+   * Awaits stream drain when the scatter stream signals backpressure. Without
+   * this the producer (a sqlite/CSV scan running at ~250k rows/s) outruns the
+   * 256 scatter streams and Node buffers the difference without bound.
    */
-  add(key: Buffer, value: Buffer): void {
+  async add(key: Buffer, value: Buffer): Promise<void> {
     if (!this.opened) {
       throw new Error('Writer not opened. Call open() first.');
     }
@@ -120,15 +126,30 @@ export class StreamingPartitionedCdb64Writer {
       const prefix = indexToPrefix(partitionIndex);
       const filePath = path.join(this.scatterDir, `${prefix}.scatter`);
       const stream = createWriteStream(filePath);
-
-      this.partitions[partitionIndex] = {
+      const state: ScatterPartitionState = {
         stream,
         recordCount: 0,
         filePath,
       };
+
+      // A scatter stream with no 'error' listener turns any I/O failure
+      // (ENOSPC, EACCES, EMFILE) into an uncaught exception. Streams open
+      // lazily, so the failure arrives after add() has already returned, and an
+      // EventEmitter 'error' event cannot be intercepted by the caller's
+      // try/catch — so abort() never runs and the temp directory is orphaned.
+      // Record the error here and surface it from the next add() or finalize().
+      stream.on('error', (error: Error) => {
+        state.error ??= error;
+      });
+
+      this.partitions[partitionIndex] = state;
     }
 
     const partition = this.partitions[partitionIndex]!;
+
+    if (partition.error !== undefined) {
+      throw partition.error;
+    }
 
     // Write length-prefixed record: [keyLen u32 LE][valueLen u32 LE][key][value]
     const header = Buffer.allocUnsafe(8);
@@ -137,9 +158,52 @@ export class StreamingPartitionedCdb64Writer {
 
     partition.stream.write(header);
     partition.stream.write(key);
-    partition.stream.write(value);
+    // Backpressure is cumulative on the stream: if an earlier write pushed the
+    // buffer past highWaterMark this final write returns false too, so checking
+    // it alone is sufficient.
+    const backpressured = !partition.stream.write(value);
 
+    // The writes above already buffered the record, so count it before waiting:
+    // a stream closed mid-wait must not drop a record the stream already holds.
     partition.recordCount++;
+
+    if (backpressured) {
+      await this.waitForDrain(partition.stream);
+    }
+  }
+
+  /**
+   * Resolves once the scatter stream drains.
+   *
+   * A destroyed or ended stream emits `close`, never `drain`, so waiting on
+   * `drain` alone would hang forever if `abort()` (which destroys) or
+   * `finalize()` (which ends) ran while a write was backpressured. Settle on
+   * whichever event arrives first.
+   */
+  private async waitForDrain(stream: WriteStream): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        stream.off('drain', onDrain);
+        stream.off('close', onClose);
+        stream.off('error', onError);
+      };
+      const onDrain = () => {
+        cleanup();
+        resolve();
+      };
+      const onClose = () => {
+        cleanup();
+        reject(new Error('Scatter stream closed while awaiting drain'));
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+
+      stream.once('drain', onDrain);
+      stream.once('close', onClose);
+      stream.once('error', onError);
+    });
   }
 
   async finalize(): Promise<Cdb64Manifest> {
@@ -166,6 +230,15 @@ export class StreamingPartitionedCdb64Writer {
       }
     }
     await Promise.all(closePromises);
+
+    // Surface any error the scatter streams recorded during phase 1 rather than
+    // building an index from a scatter file that was never fully written.
+    for (let i = 0; i < 256; i++) {
+      const partition = this.partitions[i];
+      if (partition?.error !== undefined) {
+        throw partition.error;
+      }
+    }
 
     // Phase 2: build each partition sequentially
     const partitionInfos: PartitionInfo[] = [];

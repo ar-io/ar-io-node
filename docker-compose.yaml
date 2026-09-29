@@ -29,6 +29,10 @@ services:
       - TVAL_ARWEAVE_PEER_DNS_RECORDS=${ARWEAVE_PEER_DNS_RECORDS:-peers.arweave.xyz}
       - TVAL_ARWEAVE_PEER_DNS_PORT=${ARWEAVE_PEER_DNS_PORT:-1984}
       - TVAL_ARIO_GATEWAY_UPSTREAM_IDLE_TIMEOUT=${ENVOY_ARIO_GATEWAY_UPSTREAM_IDLE_TIMEOUT:-55s}
+      - TVAL_ARIO_GATEWAY_MAX_CONNECTIONS=${ENVOY_ARIO_GATEWAY_MAX_CONNECTIONS:-16384}
+      - TVAL_ARIO_GATEWAY_MAX_PENDING_REQUESTS=${ENVOY_ARIO_GATEWAY_MAX_PENDING_REQUESTS:-16384}
+      - TVAL_ARIO_GATEWAY_MAX_REQUESTS=${ENVOY_ARIO_GATEWAY_MAX_REQUESTS:-16384}
+      - TVAL_ARIO_GATEWAY_RETRY_BUDGET_PERCENT=${ENVOY_ARIO_GATEWAY_RETRY_BUDGET_PERCENT:-20}
     volumes:
       - envoy-eds-data:/data/envoy-eds
     ulimits:
@@ -60,6 +64,9 @@ services:
       - ${DATASETS_PATH:-./data/datasets}:/app/data/datasets
       - ${ETL_STAGING_PATH:-./data/etl/staging}:/app/data/etl/staging
       - ${CDB64_ROOT_TX_INDEX_DATA_PATH:-./data/cdb64-root-tx-index}:/app/data/cdb64-root-tx-index
+      # Index artifacts the index-swarm sidecar publishes and installs. Read
+      # only: core serves published/ and loads installed/, and never writes.
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes:ro
       - ${KEYS_DATA_PATH:-./data/keys}:/app/data/keys
       - ${WALLETS_PATH:-./wallets}:/app/wallets:ro
       - ${SECRETS_PATH:-./secrets}:/app/secrets:ro
@@ -67,6 +74,7 @@ services:
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
+      - INDEXES_PUBLISHED_DIR=${INDEXES_PUBLISHED_DIR:-}
       - LOG_FORMAT=${CORE_LOG_FORMAT:-simple}
       - LOG_FILTER=${CORE_LOG_FILTER:-}
       - LOG_ALL_STACKTRACES=${CORE_LOG_ALL_STACKTRACES:-}
@@ -79,6 +87,8 @@ services:
       - GATEWAY_MAX_SOCKETS_PER_HOST=${GATEWAY_MAX_SOCKETS_PER_HOST:-}
       - GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST=${GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST:-}
       - GATEWAY_MAX_FREE_SOCKETS_PER_HOST=${GATEWAY_MAX_FREE_SOCKETS_PER_HOST:-}
+      - OUTBOUND_MAX_SOCKETS_PER_HOST=${OUTBOUND_MAX_SOCKETS_PER_HOST:-}
+      - OUTBOUND_MAX_FREE_SOCKETS_PER_HOST=${OUTBOUND_MAX_FREE_SOCKETS_PER_HOST:-}
       - TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS=${TRUSTED_GATEWAYS_SEND_UNTRUSTED_PARAMS:-}
       - TRUSTED_GATEWAYS_BLOCKED_ORIGINS=${TRUSTED_GATEWAYS_BLOCKED_ORIGINS:-}
       - TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS=${TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS:-}
@@ -88,6 +98,9 @@ services:
       - STOP_HEIGHT=${STOP_HEIGHT:-}
       - SKIP_CACHE=${SKIP_CACHE:-}
       - SKIP_DATA_CACHE=${SKIP_DATA_CACHE:-}
+      - SKIP_DATA_CACHE_WRITES=${SKIP_DATA_CACHE_WRITES:-}
+      - ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP=${ENABLE_CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP:-}
+      - CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD=${CONTIGUOUS_DATA_CACHE_TEMP_CLEANUP_THRESHOLD:-}
       - STREAM_STALL_TIMEOUT_MS=${STREAM_STALL_TIMEOUT_MS:-}
       - STREAM_REQUEST_TIMEOUT_MS=${STREAM_REQUEST_TIMEOUT_MS:-}
       - HTTP_KEEP_ALIVE_TIMEOUT_MS=${HTTP_KEEP_ALIVE_TIMEOUT_MS:-}
@@ -165,7 +178,10 @@ services:
       - CHUNK_METADATA_SOURCE_PARALLELISM=${CHUNK_METADATA_SOURCE_PARALLELISM:-}
       - CHUNK_REQUEST_CONCURRENCY=${CHUNK_REQUEST_CONCURRENCY:-}
       - CHUNK_FIRST_DATA_TIMEOUT_MS=${CHUNK_FIRST_DATA_TIMEOUT_MS:-}
+      - TX_CHUNKS_GEOMETRY_DB_ENABLED=${TX_CHUNKS_GEOMETRY_DB_ENABLED:-}
+      - TX_CHUNKS_GEOMETRY_CACHE_SIZE=${TX_CHUNKS_GEOMETRY_CACHE_SIZE:-}
       - CHUNK_SERVE_DEADLINE_MS=${CHUNK_SERVE_DEADLINE_MS:-}
+      - CHUNK_PEER_ORIGIN_MODE=${CHUNK_PEER_ORIGIN_MODE:-}
       - CHUNK_GET_BASE64_SIZE_BYTES=${CHUNK_GET_BASE64_SIZE_BYTES:-}
       - CHUNK_METADATA_CACHE_TYPE=${CHUNK_METADATA_CACHE_TYPE:-redis}
       - CONTIGUOUS_METADATA_CACHE_TYPE=${CONTIGUOUS_METADATA_CACHE_TYPE:-}
@@ -197,13 +213,32 @@ services:
       - CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ=${CONTIGUOUS_DATA_CACHE_INDEX_UPDATE_ON_READ:-}
       - ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL=${ENABLE_CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL:-}
       - CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE=${CONTIGUOUS_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE:-}
+      - ENABLE_CHUNK_DATA_CACHE_INDEX=${ENABLE_CHUNK_DATA_CACHE_INDEX:-}
+      - CHUNK_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS=${CHUNK_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS:-}
+      - CHUNK_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE=${CHUNK_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE:-}
+      - CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY=${CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY:-}
+      - CHUNK_DATA_CACHE_INDEX_EVICTION_TARGET_BYTES=${CHUNK_DATA_CACHE_INDEX_EVICTION_TARGET_BYTES:-}
+      - CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ=${CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ:-}
+      - ENABLE_CHUNK_DATA_CACHE_INDEX_BACKFILL=${ENABLE_CHUNK_DATA_CACHE_INDEX_BACKFILL:-}
+      - CHUNK_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE=${CHUNK_DATA_CACHE_INDEX_BACKFILL_BATCH_SIZE:-}
+      - ENABLE_CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL=${ENABLE_CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL:-}
+      - CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL_CHUNK_THRESHOLD=${CHUNK_DATA_CACHE_INDEX_HYBRID_TAIL_CHUNK_THRESHOLD:-}
       # Node.js libuv threadpool size (fs/dns/crypto). Default 4; raising it
       # reduces contention for the filesystem cache-cleanup walk under load.
       - UV_THREADPOOL_SIZE=${UV_THREADPOOL_SIZE:-}
       - CHUNK_DATA_CACHE_CLEANUP_THRESHOLD=${CHUNK_DATA_CACHE_CLEANUP_THRESHOLD:-}
+      - CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT=${CHUNK_DATA_CACHE_LOW_WATERMARK_PERCENT:-}
+      - CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT=${CHUNK_DATA_CACHE_HIGH_WATERMARK_PERCENT:-}
+      - CHUNK_DATA_CACHE_MIN_FREE_BYTES=${CHUNK_DATA_CACHE_MIN_FREE_BYTES:-}
+      - CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS=${CHUNK_DATA_CACHE_AGGRESSIVE_MIN_AGE_SECONDS:-}
       - ENABLE_CHUNK_DATA_CACHE_CLEANUP=${ENABLE_CHUNK_DATA_CACHE_CLEANUP:-}
       - BACKGROUND_CACHE_RANGE_MAX_SIZE=${BACKGROUND_CACHE_RANGE_MAX_SIZE:-}
       - BACKGROUND_CACHE_RANGE_CONCURRENCY=${BACKGROUND_CACHE_RANGE_CONCURRENCY:-}
+      - FOREGROUND_CACHE_MAX_SIZE=${FOREGROUND_CACHE_MAX_SIZE:-}
+      - FOREGROUND_CACHE_CONCURRENCY=${FOREGROUND_CACHE_CONCURRENCY:-}
+      - FOREGROUND_CACHE_COALESCE_TIMEOUT_MS=${FOREGROUND_CACHE_COALESCE_TIMEOUT_MS:-}
+      - FOREGROUND_CACHE_COALESCE_MIN_SIZE=${FOREGROUND_CACHE_COALESCE_MIN_SIZE:-}
+      - FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS=${FOREGROUND_CACHE_COALESCE_MAX_ATTEMPTS:-}
       - CACHE_DEFAULT_MAX_AGE=${CACHE_DEFAULT_MAX_AGE:-}
       - CACHE_STABLE_MAX_AGE=${CACHE_STABLE_MAX_AGE:-}
       - CACHE_UNSTABLE_TRUSTED_MAX_AGE=${CACHE_UNSTABLE_TRUSTED_MAX_AGE:-}
@@ -233,6 +268,8 @@ services:
       - ARNS_MAX_CONCURRENT_RESOLUTIONS=${ARNS_MAX_CONCURRENT_RESOLUTIONS:-}
       - ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS=${ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS:-}
       - ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS=${ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS:-}
+      - ARNS_NAME_LIST_PAGE_SIZE=${ARNS_NAME_LIST_PAGE_SIZE:-}
+      - ARNS_NAME_LIST_MAX_RETRIES=${ARNS_NAME_LIST_MAX_RETRIES:-}
       - ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS=${ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS:-}
       - ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS=${ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS:-}
       - ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE=${ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE:-}
@@ -278,7 +315,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-82-pre}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-84-pre}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT=${CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT:-}
       - CHUNK_POST_MAX_CONSECUTIVE_FAILURES=${CHUNK_POST_MAX_CONSECUTIVE_FAILURES:-}
@@ -347,6 +384,11 @@ services:
       - GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE=${GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE:-}
       - GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL=${GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL:-}
       - GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL=${GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL:-}
+      - PEERS_ROOT_TX_URLS=${PEERS_ROOT_TX_URLS:-}
+      - PEERS_ROOT_TX_REQUEST_TIMEOUT_MS=${PEERS_ROOT_TX_REQUEST_TIMEOUT_MS:-}
+      - PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE=${PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE:-}
+      - PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL=${PEERS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL:-}
+      - PEERS_ROOT_TX_RATE_LIMIT_INTERVAL=${PEERS_ROOT_TX_RATE_LIMIT_INTERVAL:-}
       - GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED=${GRAPHQL_ON_DEMAND_RESOLUTION_ENABLED:-}
       - GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT=${GRAPHQL_ON_DEMAND_RESOLUTION_MAX_CONCURRENT:-}
       - GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS=${GRAPHQL_ON_DEMAND_RESOLUTION_TIMEOUT_MS:-}
@@ -609,7 +651,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-308b6777d0df4a45f59a1984bcb0874a50f58965}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-0e956b0802d132b7cdc14305c93ec3a8fe61a24a}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -630,6 +672,24 @@ services:
       # Cranker (Solana-only). When unset, observer skips cranking.
       - ENABLE_EPOCH_CRANKING=${ENABLE_EPOCH_CRANKING:-}
       - ENABLE_CLEANUP=${ENABLE_CLEANUP:-}
+      # Cranker cadence. Both are optional: left empty the observer derives
+      # them from the epoch duration (see the observer's
+      # `src/epoch/adaptive-intervals.ts`); an explicit value always wins.
+      # Empty is safe — the observer's `varOrUndefined` treats a blank env
+      # var as unset rather than feeding '' to the positive-integer check.
+      - CRANK_POLL_INTERVAL_MS=${CRANK_POLL_INTERVAL_MS:-}
+      - CLEANUP_MIN_INTERVAL_MS=${CLEANUP_MIN_INTERVAL_MS:-}
+      - CLEANUP_TO_RETURNED_TXS_PER_CYCLE=${CLEANUP_TO_RETURNED_TXS_PER_CYCLE:-}
+      - CRANK_BATCH_SIZE=${CRANK_BATCH_SIZE:-}
+      - CRANK_CLOSE_EPOCHS=${CRANK_CLOSE_EPOCHS:-}
+      - CRANK_EPOCH_RETENTION=${CRANK_EPOCH_RETENTION:-}
+      - CRANK_WARN_BALANCE_SOL=${CRANK_WARN_BALANCE_SOL:-}
+      - CRANK_CRITICAL_BALANCE_SOL=${CRANK_CRITICAL_BALANCE_SOL:-}
+      - CLEANUP_BATCH_SIZE=${CLEANUP_BATCH_SIZE:-}
+      - CLEANUP_FAILURE_THRESHOLD=${CLEANUP_FAILURE_THRESHOLD:-}
+      - MAX_CLEANUP_TXS_PER_CYCLE=${MAX_CLEANUP_TXS_PER_CYCLE:-}
+      - ALT_RECLAIM_SCAN_LIMIT=${ALT_RECLAIM_SCAN_LIMIT:-}
+      - OBSERVED_GATEWAY_HOSTS=${OBSERVED_GATEWAY_HOSTS:-}
       # Solana wallet identities (operator/observer/upload). All four
       # supported configurations are documented in the observer's
       # `src/wallet-config.ts`. Each role accepts EITHER a JSON-file path
@@ -658,10 +718,17 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-82-pre}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-84-pre}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       # Reference Gateway Configuration
-      - REFERENCE_GATEWAY_HOSTS=${REFERENCE_GATEWAY_HOSTS:-}
+      # The bundled observer references THIS node's own gateway by default (its
+      # ARNS_ROOT_HOST), rather than external gateways. Since the gateway now
+      # resolves ArNS on-demand (authoritatively, from chain), self-reference is
+      # both authoritative and more decentralized — the observer forms its own
+      # chain-derived view and the protocol aggregates observers by majority.
+      # Falls back to the observer's own default (turbo/ar-io.net) if neither
+      # REFERENCE_GATEWAY_HOSTS nor ARNS_ROOT_HOST is set.
+      - REFERENCE_GATEWAY_HOSTS=${REFERENCE_GATEWAY_HOSTS:-${ARNS_ROOT_HOST:-}}
       - REFERENCE_GATEWAY_NETWORK_ONLY=${REFERENCE_GATEWAY_NETWORK_ONLY:-}
       - REFERENCE_GATEWAY_NETWORK_FALLBACK=${REFERENCE_GATEWAY_NETWORK_FALLBACK:-}
       - REFERENCE_GATEWAY_CONSENSUS_SIZE=${REFERENCE_GATEWAY_CONSENSUS_SIZE:-}
@@ -723,6 +790,100 @@ services:
       - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX=${AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX:-}
     networks:
       - ar-io-network
+
+  # Publishes the index artifacts this gateway offers, and subscribes to those
+  # published by other gateways, installing and retiring bands under the
+  # running node. Off unless the index-swarm profile is enabled.
+  #
+  # Runs the core image rather than one of its own: the sidecar is compiled
+  # into the same dist/ tree and needs no dependency core does not already
+  # have, so a separate image would be roughly a gigabyte of duplicate layers
+  # per operator for code that is already present.
+  index-swarm:
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    build:
+      context: .
+    entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/main.js']
+    profiles:
+      - index-swarm
+    restart: unless-stopped
+    # Proper PID 1, so signals reach the process and exited children are
+    # reaped. Without it a wedged process cannot be stopped without a kill,
+    # which is how a band install gets left half-written.
+    init: true
+    stop_grace_period: 30s
+    # Deliberately no depends_on. The sidecar shares only a volume with the
+    # gateway and works whether or not it is up, and a dependency here would
+    # mean bringing this profile up could start or recreate core.
+    volumes:
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
+      # Only the observer keypair, and only when it is kept in a file: the
+      # sidecar fetches documents from other gateways, so it sees no other
+      # key material (no wallets directory, no report-upload keys). With
+      # OBSERVER_PRIVATE_KEY instead, nothing is mounted.
+      - ${INDEX_SWARM_OBSERVER_KEYPAIR_FILE:-/dev/null}:/app/keys/observer.json:ro
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - INDEX_SWARM_LOG_LEVEL=${INDEX_SWARM_LOG_LEVEL:-info}
+      - INDEX_SWARM_LOG_FORMAT=${INDEX_SWARM_LOG_FORMAT:-simple}
+      - INDEX_SWARM_DATA_DIR=/app/data/indexes
+      - INDEX_SWARM_PUBLISH=${INDEX_SWARM_PUBLISH:-}
+      - INDEX_SWARM_SUBSCRIBE=${INDEX_SWARM_SUBSCRIBE:-}
+      - INDEX_SWARM_TRUSTED_PUBLISHERS=${INDEX_SWARM_TRUSTED_PUBLISHERS:-}
+      - INDEX_SWARM_ALLOWED_FILE_ORIGINS=${INDEX_SWARM_ALLOWED_FILE_ORIGINS:-}
+      - INDEX_SWARM_PUBLISH_SCAN_INTERVAL_SECONDS=${INDEX_SWARM_PUBLISH_SCAN_INTERVAL_SECONDS:-}
+      - INDEX_SWARM_PUBLISH_TTL_SECONDS=${INDEX_SWARM_PUBLISH_TTL_SECONDS:-}
+      - INDEX_SWARM_SUPERSEDE_GRACE_SECONDS=${INDEX_SWARM_SUPERSEDE_GRACE_SECONDS:-}
+      - INDEX_SWARM_POLL_INTERVAL_SECONDS=${INDEX_SWARM_POLL_INTERVAL_SECONDS:-}
+      - INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS=${INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS:-}
+      - INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS=${INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS:-}
+      - INDEX_SWARM_DOWNLOAD_CONCURRENCY=${INDEX_SWARM_DOWNLOAD_CONCURRENCY:-}
+      - INDEX_SWARM_MAX_DISK_BYTES=${INDEX_SWARM_MAX_DISK_BYTES:-}
+      - INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC:-}
+      - INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS=${INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS:-}
+      # Identity, shared with the gateway. Registry records come from the
+      # gateway's /ar-io/peers, so the sidecar needs no RPC settings.
+      - AR_IO_WALLET=${AR_IO_WALLET:-}
+      - INDEX_SWARM_METRICS_PORT=${INDEX_SWARM_METRICS_PORT:-9101}
+      - INDEX_SWARM_METRICS_HOST=${INDEX_SWARM_METRICS_HOST:-0.0.0.0}
+      - INDEX_SWARM_CORE_URL=${INDEX_SWARM_CORE_URL:-http://core:4000}
+      - INDEX_SWARM_MIN_CORE_RELEASE=${INDEX_SWARM_MIN_CORE_RELEASE:-}
+      - INDEX_SWARM_SHUTDOWN_TIMEOUT_MS=${INDEX_SWARM_SHUTDOWN_TIMEOUT_MS:-}
+      # The signing identity is the gateway's registered observer key, read
+      # only: the sidecar signs what it publishes and never writes key material.
+      # A keypair file comes in through the single-file mount above, so the
+      # gateway's own OBSERVER_KEYPAIR_PATH (a path inside its wallets
+      # directory) is not used here.
+      # Set INDEX_SWARM_OBSERVER_KEYPAIR_FILE or OBSERVER_PRIVATE_KEY, not
+      # both: with both, publishing refuses to start.
+      - OBSERVER_KEYPAIR_PATH=${INDEX_SWARM_OBSERVER_KEYPAIR_FILE:+/app/keys/observer.json}
+      - OBSERVER_PRIVATE_KEY=${OBSERVER_PRIVATE_KEY:-}
+    # The runtime image is distroless and carries no shell utilities beyond
+    # sh and mkdir, so the check runs through node.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          '/nodejs/bin/node',
+          '-e',
+          "fetch('http://127.0.0.1:${INDEX_SWARM_METRICS_PORT:-9101}/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    # Docker's json-file driver is unbounded by default, which on a long-lived
+    # gateway quietly fills the disk holding /var/lib/docker. Capped here so a
+    # new service cannot reintroduce that.
+    logging:
+      driver: json-file
+      options:
+        max-size: '${INDEX_SWARM_LOG_MAX_SIZE:-50m}'
+        max-file: '${INDEX_SWARM_LOG_MAX_FILE:-3}'
+    networks:
+      - ar-io-network
+    labels:
+      autoheal: ${RUN_AUTOHEAL:-false}
 
   autoheal:
     image: willfarrell/autoheal@sha256:fd2c5500ab9210be9fa0d365162301eb0d16923f1d9a36de887f5d1751c6eb8c

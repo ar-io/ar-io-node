@@ -17,6 +17,7 @@ import {
   indexToPrefix,
   prefixToIndex,
   createEmptyManifest,
+  isCdb64TempDirName,
 } from './cdb64-manifest.js';
 
 describe('cdb64-manifest', () => {
@@ -697,6 +698,21 @@ describe('cdb64-manifest', () => {
       const parsed = parseManifest(json);
 
       assert.deepStrictEqual(parsed, original);
+    });
+  });
+
+  describe('isCdb64TempDirName', () => {
+    it('matches the names the writers build into', () => {
+      assert.equal(isCdb64TempDirName('band-1.tmp'), true);
+      assert.equal(isCdb64TempDirName('band-1.tmp.4242'), true);
+      assert.equal(isCdb64TempDirName('/data/index/band-1.tmp.4242'), true);
+    });
+
+    it('does not match finished bands', () => {
+      assert.equal(isCdb64TempDirName('band-1'), false);
+      assert.equal(isCdb64TempDirName('tmp-band'), false);
+      assert.equal(isCdb64TempDirName('band.tmp.old'), false);
+      assert.equal(isCdb64TempDirName('band.tmpx'), false);
     });
   });
 

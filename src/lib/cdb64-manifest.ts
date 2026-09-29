@@ -288,6 +288,21 @@ export function serializeManifest(manifest: Cdb64Manifest): string {
 }
 
 /**
+ * Whether a directory name marks a partitioned index still being written.
+ *
+ * The partitioned writers build into `<outputDir>.tmp.<pid>` and rename it
+ * into place when done; older tooling used a bare `.tmp` suffix. A reader or
+ * publisher must skip both: the directory can hold a complete-looking
+ * manifest before its partitions are final, and a crashed build leaves it
+ * behind for good.
+ *
+ * @param name - Directory name or path
+ */
+export function isCdb64TempDirName(name: string): boolean {
+  return /\.tmp(\.\d+)?$/.test(name);
+}
+
+/**
  * Gets the partition prefix for a key.
  * The prefix is the first byte of the key as a 2-character lowercase hex string.
  *
