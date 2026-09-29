@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Soft deadline for GraphQL fan-out (`GATEWAYS_GQL_SOFT_DEADLINE_ENABLED`,
+  off by default; `GATEWAYS_GQL_SOFT_DEADLINE_MS`, default 2000).** A gateway
+  that fans `transactions` and `blocks` out to other gateways
+  (`GATEWAYS_GQL_URLS`) waits for every upstream, so one slow upstream held
+  every list query for its full request timeout. With the deadline on, once
+  one source has answered with results, the merge waits at most the deadline
+  for the rest and returns a partial result with an `UPSTREAM_SOFT_DEADLINE`
+  warning per source it cut. An empty answer does not start the deadline:
+  the local index usually answers first and is empty for exactly the data
+  fan-out exists to find. Cut requests keep running, so the circuit breaker
+  still records their real outcome. New metric
+  `gateways_gql_soft_deadline_source_cut_total{source}`. A partial page can
+  omit items that sort before ones it includes, so a client paging with
+  cursors may skip them.
+
 - **ClickHouse id lookup table for GraphQL `ids` and `bundledIn`
   (`CLICKHOUSE_GQL_ID_LOOKUP_ENABLED`, off by default)** (#946). On a large
   ClickHouse `transactions` table, `transactions(ids: [...])` with 3 or more
