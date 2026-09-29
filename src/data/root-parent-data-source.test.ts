@@ -4275,6 +4275,143 @@ describe('RootParentDataSource', () => {
       );
     });
 
+    it('falls back to the index when reading the bundle attributes fails', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === BUNDLE) throw new Error('attributes store unavailable');
+          return id === ITEM
+            ? {
+                rootTransactionId: BUNDLE,
+                rootDataItemOffset: STORED.itemOffset,
+                rootDataOffset: STORED.dataOffset,
+                size: SIZE,
+              }
+            : undefined;
+        },
+      );
+
+      const result = await source.getData({ id: ITEM });
+      await readAndSettle(result.stream);
+
+      assert.deepStrictEqual(fetches(), [
+        { id: L1, region: { offset: REBASED.dataOffset, size: SIZE } },
+      ]);
+      assert.ok(rootLookups().includes(BUNDLE));
+    });
+
+    it('gives up, serving nothing, when the bundle lookup throws', async () => {
+      bundleLookup = async () => {
+        throw new Error('root TX index unavailable');
+      };
+
+      await assert.rejects(source.getData({ id: ITEM }));
+
+      assert.deepStrictEqual(fetches(), []);
+      assert.deepStrictEqual(stored(), []);
+    });
+
+    it('serves an item it cannot signature-verify from the rebased location, without storing it', async () => {
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async (rootTxId: string, itemOffset: number) => {
+          if (rootTxId === L1 && itemOffset === REBASED.itemOffset) {
+            return {
+              ...fx.header,
+              signedFields: { ...fx.header.signedFields, signatureType: 999 },
+            };
+          }
+          throw new Error(`no chunks for ${rootTxId}`);
+        },
+      );
+      const unsupported = await readVerification(
+        'rebased_location',
+        'unsupported_signature_type',
+      );
+
+      const result = await source.getData({ id: ITEM });
+      assert.deepStrictEqual(await readAndSettle(result.stream), PAYLOAD);
+
+      assert.deepStrictEqual(fetches(), [
+        { id: L1, region: { offset: REBASED.dataOffset, size: SIZE } },
+      ]);
+      assert.deepStrictEqual(stored(), []);
+      assert.strictEqual(
+        await readVerification(
+          'rebased_location',
+          'unsupported_signature_type',
+        ),
+        unsupported + 1,
+      );
+    });
+
+    it('does not rebase an index item offset that records no payload offset', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => undefined,
+      );
+      // Item offset and size only: the header size, and so the payload size,
+      // cannot be derived.
+      itemLookup = async () => ({
+        rootTxId: BUNDLE,
+        rootOffset: STORED.itemOffset,
+        size: HEADER + SIZE,
+      });
+
+      await assert.rejects(source.getData({ id: ITEM }));
+
+      assert.ok(!rootLookups().includes(BUNDLE));
+      assert.deepStrictEqual(fetches(), []);
+    });
+
+    it('searches the bundle as before when an index item offset cannot be rebased', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => undefined,
+      );
+      itemLookup = async () => ({
+        rootTxId: BUNDLE,
+        rootOffset: STORED.itemOffset,
+        rootDataOffset: STORED.dataOffset,
+        size: HEADER + SIZE,
+      });
+      bundleLookup = async () => undefined;
+
+      await assert.rejects(source.getData({ id: ITEM }));
+
+      assert.strictEqual(
+        rootLookups().filter((id: string) => id === BUNDLE).length,
+        1,
+      );
+      assert.ok(
+        (ans104OffsetSource.getDataItemOffset as any).mock.calls.length > 0,
+        'falls through to the bundle search',
+      );
+      assert.deepStrictEqual(fetches(), []);
+    });
+
+    it('stops, without looking for the bundle, when the request aborts during an index item offset read', async () => {
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => undefined,
+      );
+      itemLookup = async () => ({
+        rootTxId: BUNDLE,
+        rootOffset: STORED.itemOffset,
+        rootDataOffset: STORED.dataOffset,
+        size: HEADER + SIZE,
+      });
+      const controller = new AbortController();
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => {
+          controller.abort();
+          throw new Error('aborted');
+        },
+      );
+
+      await assert.rejects(
+        source.getData({ id: ITEM, signal: controller.signal }),
+        { name: 'AbortError' },
+      );
+      assert.ok(!rootLookups().includes(BUNDLE));
+      assert.deepStrictEqual(fetches(), []);
+    });
+
     it("uses the bundle's own attributes before the index", async () => {
       (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) =>
