@@ -3976,6 +3976,8 @@ describe('RootParentDataSource', () => {
         rootDataOffset: REBASED.dataOffset,
         itemSize: HEADER + SIZE,
         size: SIZE,
+        // From the item's header, so later requests keep it.
+        contentType: 'text/plain',
       },
     ];
 
@@ -4261,9 +4263,10 @@ describe('RootParentDataSource', () => {
             attrs.rootTransactionId === L1 &&
             attrs.rootDataItemOffset === REBASED.itemOffset &&
             attrs.rootDataOffset === REBASED.dataOffset &&
-            attrs.size === SIZE,
+            attrs.size === SIZE &&
+            attrs.contentType === 'text/plain',
         ),
-        'the rebased location is stored once verified',
+        'the rebased location and its content type are stored once verified',
       );
       assert.ok(
         !stored().some(([, attrs]: any) => attrs.rootTransactionId === BUNDLE),

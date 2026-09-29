@@ -712,6 +712,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       dataOffset: number;
       dataSize: number;
       signedFields?: DataItemSignedFields;
+      contentType?: string;
     },
     region: Region | undefined,
   ):
@@ -740,16 +741,22 @@ export class RootParentDataSource implements ContiguousDataSource {
       });
       return undefined;
     }
+    const attributesToStore: Record<string, unknown> = {
+      rootTransactionId: rebased.rootTxId,
+      rootDataItemOffset: rebased.itemOffset,
+      rootDataOffset: rebased.dataOffset,
+      itemSize: rebased.dataOffset - rebased.itemOffset + rebased.dataSize,
+      size: rebased.dataSize,
+    };
+    // The item's own content type, from the confirmed header, so later
+    // requests served from the stored location keep it.
+    if (rebased.contentType !== undefined) {
+      attributesToStore.contentType = rebased.contentType;
+    }
     return {
       signedFields,
       rejectionKey: this.rebasedRejectionKey(id, rebased),
-      attributesToStore: {
-        rootTransactionId: rebased.rootTxId,
-        rootDataItemOffset: rebased.itemOffset,
-        rootDataOffset: rebased.dataOffset,
-        itemSize: rebased.dataOffset - rebased.itemOffset + rebased.dataSize,
-        size: rebased.dataSize,
-      },
+      attributesToStore,
       source: REBASED_LOCATION,
     };
   }
