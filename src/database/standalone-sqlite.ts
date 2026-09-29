@@ -4610,7 +4610,7 @@ export class StandaloneSqliteDatabase
     return this.queueRead('bundles', 'getBundle', [id]);
   }
 
-  getGqlTransactions({
+  async getGqlTransactions({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -4635,6 +4635,12 @@ export class StandaloneSqliteDatabase
     tags?: { name: string; values: string[] }[];
     l1Only?: boolean;
   }) {
+    // Validate the cursor here, in the calling thread, before the worker sees
+    // it. An error thrown inside the worker reaches the caller re-wrapped as a
+    // generic 'Error in StandaloneSqlite worker' (INTERNAL_SERVER_ERROR), so the
+    // decoder's GRAPHQL_VALIDATION_FAILED error would be lost. A valid cursor is
+    // decoded again in the worker; that costs a base64 and JSON parse.
+    decodeTransactionGqlCursor(cursor);
     return this.queueRead('gql', 'getGqlTransactions', [
       {
         pageSize,
@@ -4656,7 +4662,7 @@ export class StandaloneSqliteDatabase
     return this.queueRead('gql', 'getGqlTransaction', [{ id }]);
   }
 
-  getGqlBlocks({
+  async getGqlBlocks({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -4671,6 +4677,8 @@ export class StandaloneSqliteDatabase
     minHeight?: number;
     maxHeight?: number;
   }) {
+    // See getGqlTransactions: validate before the worker re-wraps the error.
+    decodeBlockGqlCursor(cursor);
     return this.queueRead('gql', 'getGqlBlocks', [
       {
         pageSize,

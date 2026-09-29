@@ -268,6 +268,50 @@ describe('StandaloneSqliteDatabase', () => {
     db.stop();
   });
 
+  // Through the worker-backed database, not the decoder alone: an error thrown
+  // inside the worker thread reaches the caller re-wrapped as a generic
+  // 'Error in StandaloneSqlite worker' (INTERNAL_SERVER_ERROR), so an invalid
+  // cursor has to be rejected before the worker sees it.
+  describe('GraphQL cursor validation', () => {
+    const assertInvalidCursor = (message: string) => (error: unknown) => {
+      assert.ok(error instanceof GraphQLError);
+      assert.equal(error.message, message);
+      assert.equal(error.extensions.code, 'GRAPHQL_VALIDATION_FAILED');
+      assert.equal(error.extensions.http, undefined);
+      return true;
+    };
+
+    it('rejects an invalid transaction cursor as GRAPHQL_VALIDATION_FAILED', async () => {
+      await assert.rejects(
+        db.getGqlTransactions({ pageSize: 1, cursor: '123' }),
+        assertInvalidCursor('Invalid transaction cursor'),
+      );
+    });
+
+    it('rejects an invalid block cursor as GRAPHQL_VALIDATION_FAILED', async () => {
+      await assert.rejects(
+        db.getGqlBlocks({ pageSize: 1, cursor: '123' }),
+        assertInvalidCursor('Invalid block cursor'),
+      );
+    });
+
+    it('passes a valid transaction cursor through to the worker', async () => {
+      const result = await db.getGqlTransactions({
+        pageSize: 1,
+        cursor: CURSOR,
+      });
+      assert.ok(Array.isArray(result.edges));
+    });
+
+    it('passes a valid block cursor through to the worker', async () => {
+      const result = await db.getGqlBlocks({
+        pageSize: 1,
+        cursor: 'WzExMzhd',
+      });
+      assert.ok(Array.isArray(result.edges));
+    });
+  });
+
   describe('offsets', () => {
     it('should return stable transaction geometry via getTxGeometry only when offset and data_root are set', async () => {
       const completeId = 'Gm0rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
