@@ -32,13 +32,15 @@ if ! command -v clickhouse >/dev/null 2>&1; then
     exit 1
 fi
 
+# stdin is closed explicitly: `clickhouse client` appends piped stdin to an
+# INSERT ... VALUES, so an open non-terminal stdin would make it wait forever.
 ch_query() {
     clickhouse client \
         --host "$CLICKHOUSE_HOST" \
         --port "$CLICKHOUSE_PORT" \
         --user "$CLICKHOUSE_USER" \
         --password "$CLICKHOUSE_PASSWORD" \
-        --query "$1"
+        --query "$1" </dev/null
 }
 
 # Every table this test truncates must be empty (or missing) unless the
@@ -83,6 +85,10 @@ check "transaction_ids exists" "1" \
     "$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'transaction_ids'")"
 check "transaction_ids_mv exists" "1" \
     "$(ch_query "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'transaction_ids_mv'")"
+# No TTL: a lookup row must never be deleted before its transactions row,
+# and a TTL copied at insert time misses later expires_at extensions.
+check "transaction_ids has no TTL" "0" \
+    "$(ch_query "SELECT position(engine_full, ' TTL ') > 0 FROM system.tables WHERE database = currentDatabase() AND name = 'transaction_ids'")"
 
 for table in "${TRUNCATED_TABLES[@]}"; do
     ch_query "TRUNCATE TABLE $table"

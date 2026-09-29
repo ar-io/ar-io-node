@@ -257,7 +257,6 @@ CREATE TABLE transaction_ids (
   expires_at Nullable(DateTime)
 ) Engine = ReplacingMergeTree(inserted_at)
 ORDER BY (id, height, block_transaction_index, is_data_item)
-TTL ifNull(expires_at, toDateTime(0)) DELETE WHERE expires_at IS NOT NULL
 SETTINGS index_granularity = 1024;
 ```
 
@@ -303,8 +302,10 @@ a syntax error on 24.8, the documented minimum, and a failing statement in
 `transaction_ids_mv` inserts into `transaction_ids` on every insert into
 `transactions`, which is how `clickhouse-import` writes. Both are created by
 `schema.sql` on the next import cycle. Rows already in `transactions` need a
-one-time backfill, safe to run while imports continue and to re-run
-(duplicates collapse in the `ReplacingMergeTree`):
+one-time backfill, run after the view exists: the view only sees inserts made
+after it was created, so a backfill run first would miss every row imported
+between the backfill and the view's creation. It is safe to run while imports
+continue and to re-run (duplicates collapse in the `ReplacingMergeTree`):
 
 ```sql
 INSERT INTO transaction_ids
@@ -316,8 +317,15 @@ On a large table, run it one partition at a time
 (`WHERE intDiv(height, 100000) = N`). Only then set
 `CLICKHOUSE_GQL_ID_LOOKUP_ENABLED=true`: an id missing from the table is
 treated as absent from ClickHouse. The table takes about 1 GiB per 30M rows
-(~14 GiB at 414M). Its rows can outlive their `transactions` rows, e.g. after
-a re-import; the primary-key read then simply finds nothing.
+(~14 GiB at 414M).
+
+The table has no TTL, on purpose. A lookup row deleted while its
+`transactions` row still exists makes that transaction vanish from `ids`
+results, and a TTL copied from `expires_at` at insert time would do exactly
+that after an `ALTER TABLE transactions UPDATE expires_at` that extends
+retention (see [TTL](#ttl)), since the view only sees inserts. Rows that outlive
+their `transactions` rows, after expiry or a re-import, are harmless: the
+primary-key read then finds nothing. They cost about 41 bytes each.
 
 `clickhouse_gql_id_lookup_total{filter, outcome}` counts the outcomes:
 `resolved`, `resolved_partial` (`ids` narrowed to those found, others not in

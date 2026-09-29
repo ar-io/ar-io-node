@@ -182,8 +182,14 @@ ALTER TABLE transactions ADD INDEX IF NOT EXISTS owner_address_bloom (owner_addr
 --     merges into few parts.
 --   * index_granularity = 1024: a point lookup reads one granule, so smaller
 --     granules read fewer rows.
---   * Rows can outlive their `transactions` rows (e.g. after a re-import).
---     That is harmless: the primary-key read then finds nothing.
+--   * No TTL. A lookup row must never be deleted while its `transactions`
+--     row exists: GraphQL treats an id missing here as absent from ClickHouse
+--     and would silently drop it from results. A TTL copied from `expires_at`
+--     at insert time would do exactly that after any later
+--     `ALTER TABLE transactions UPDATE expires_at` that extends retention
+--     (the view only sees inserts). Rows outliving their `transactions` rows
+--     (after expiry or a re-import) are harmless: the primary-key read then
+--     finds nothing. `expires_at` is kept only because the view writes it.
 --
 -- Populated by `transaction_ids_mv` on every insert into `transactions`. Rows
 -- already in `transactions` need a one-time backfill (see below); GraphQL only
@@ -198,7 +204,6 @@ CREATE TABLE IF NOT EXISTS transaction_ids (
   expires_at Nullable(DateTime)
 ) Engine = ReplacingMergeTree(inserted_at)
 ORDER BY (id, height, block_transaction_index, is_data_item)
-TTL ifNull(expires_at, toDateTime(0)) DELETE WHERE expires_at IS NOT NULL
 SETTINGS index_granularity = 1024;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS transaction_ids_mv TO transaction_ids AS
