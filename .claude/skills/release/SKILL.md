@@ -16,12 +16,18 @@ commits, and interpretation.
 3. **Finalize** — wait for image builds, pin image SHAs in docker-compose, commit.
 4. **Test** — bring up each docker compose profile, verify stability.
 5. **Tag & publish** — git tag, push, create GitHub release.
-6. **Merge to main** — fast-forward `main` to the release commit.
+6. **Merge to main** — merge `develop` into `main` through a PR.
 7. **Post-release** — bump to `N+1-pre`, reset image tags to `latest`, add new
    `[Unreleased]` changelog section, commit.
 
 Work one phase at a time. Stop and confirm with the user before phases with
 external side effects: tag push, GitHub release creation, merge to main.
+
+Run the release from a dedicated worktree with `develop` checked out (for
+example `git worktree add ../node-wt-release develop`), never from a directory
+a live gateway runs its compose stack from: Phase 4 runs `docker compose down`,
+and the release tools edit `docker-compose.yaml`. The tools need Node 20
+(`nvm use`); under Node 16 they fail with `bad option: --import`.
 
 ## Phase 1 — Preflight
 
@@ -31,7 +37,10 @@ Also check:
 
 - `git rev-parse --abbrev-ref HEAD` — must be `develop`
 - `git status --porcelain` — must be empty (clean working tree)
-- `yarn audit` — review output; bail if high-severity vulnerabilities surface
+- `yarn audit` — review output. For each high or critical advisory, check
+  whether it is reachable at runtime (trace the dependency path with
+  `yarn audit --json`) and whether it is new since the last release. Stop for
+  the user only on one that is reachable or new; report the rest.
 
 From `release-info` output, verify:
 
@@ -100,14 +109,11 @@ a 1-paragraph summary in the style of prior releases (see `[Release 74]` and
 most impactful entries in Added/Changed/Fixed. Verify the paragraph is
 present before committing.
 
-Find the Jira ticket for the release (search Jira or recent git log for a
-`PE-####` referencing "Release N"). If none is found, ask the user.
-
 Commit:
 
 ```bash
 git add CHANGELOG.md src/version.ts docker-compose.yaml
-git commit -m "chore: prepare release <N> (PE-####)"
+git commit -m "chore: prepare release <N>"
 git push origin develop
 ```
 
@@ -137,6 +143,32 @@ for image in ar-io-envoy ar-io-core ar-io-clickhouse-auto-import ar-io-litestrea
 done
 ```
 
+The packages API needs the `read:packages` scope (`gh auth refresh -s
+read:packages`). Without it, derive each SHA from git instead. Every image
+workflow builds on a push to `develop` that touches its `paths:` filter and
+tags the image with that push's commit, so the newest image is the newest
+first-parent commit on `develop` touching those paths:
+
+```bash
+git log --first-parent --format=%H -1 develop -- envoy/                          # ar-io-envoy
+git log --first-parent --format=%H -1 develop -- litestream/                     # ar-io-litestream
+git log --first-parent --format=%H -1 develop -- $(paths from build-clickhouse-auto-import.yml)
+```
+
+`ar-io-core` is the commit being released (the head of `develop`, after any
+last merges). The clickhouse-auto-import filter includes
+`src/database/clickhouse/**` and `src/database/composite-clickhouse.ts`, so a
+ClickHouse schema change moves it too. Confirm every candidate exists before
+pinning it:
+
+```bash
+docker manifest inspect ghcr.io/ar-io/<image>:<sha> >/dev/null && echo ok
+```
+
+If a change lands on `develop` after the prepare commit and belongs in the
+release, merge it, wait for its build, and pin that core image instead; the
+prepare commit does not need redoing.
+
 Map image name → env var:
 
 | Image                            | Env var                             |
@@ -158,7 +190,7 @@ Commit:
 
 ```bash
 git add docker-compose.yaml
-git commit -m "chore: finalize release <N> with image SHAs (PE-####)"
+git commit -m "chore: finalize release <N> with image SHAs"
 git push origin develop
 ```
 
@@ -196,6 +228,22 @@ containers. Report each profile's outcome back to the user before moving on.
 
 Final cleanup: run the `down-all` cleanup above.
 
+**On a host that runs a live gateway**, never run these from that gateway's
+compose directory: `down` there stops production. Either:
+
+- test the default and clickhouse profiles by moving the live gateway onto the
+  release image (`CORE_IMAGE_TAG` and, if it changed, `ENVOY_IMAGE_TAG` in its
+  `.env`, then recreate with its own `-f` files), and check health, logs and
+  requests through every layer; and
+- start the remaining profiles' services in an isolated project from the
+  release worktree, which cannot touch the live containers:
+
+  ```bash
+  docker compose -p r<N>-profile-test --profile litestream --profile otel \
+    up -d --no-deps litestream otel-collector
+  docker compose -p r<N>-profile-test --profile litestream --profile otel down
+  ```
+
 ## Phase 5 — Tag & publish
 
 **Pause and confirm with user before this phase.**
@@ -213,7 +261,9 @@ within each block (paragraph or bullet) into a single logical line; preserve
 blank lines between blocks and heading lines as-is.
 
 **Link each image SHA** to its GHCR package version page so readers can
-inspect the exact image. Resolve the HTML URL via:
+inspect the exact image (without `read:packages`, link the package page,
+`https://github.com/orgs/ar-io/packages/container/package/<image>`, as r83 and
+r84 did). Resolve the HTML URL via:
 
 ```bash
 gh api "/orgs/ar-io/packages/container/<image>/versions" \
@@ -229,18 +279,25 @@ Then format the entry as:
 Include `OBSERVER_IMAGE_TAG` (resolve via the `ar-io-observer` package) even
 though it's not release-managed — operators still want the link.
 
-Example reformatter (run against the extracted Release N section):
+Example reformatter (run against the extracted Release N section). It keeps
+each list item, nested ones included, on its own line; joining a whole block
+into one line would run sub-bullets together:
 
 ```python
 import re, sys
 text = sys.stdin.read()
-blocks = re.split(r'\n[ \t]*\n', text.rstrip())
-for b in blocks:
-    lines = b.splitlines()
+for block in re.split(r'\n[ \t]*\n', text.rstrip()):
+    lines = block.splitlines()
     if lines and lines[0].lstrip().startswith('#'):
         print('\n'.join(lines))
     else:
-        print(' '.join(l.strip() for l in lines if l.strip()))
+        items = []
+        for line in lines:
+            if re.match(r'^\s*[-*] ', line) or line.strip().startswith('```') or not items:
+                items.append(line.rstrip())
+            else:
+                items[-1] += ' ' + line.strip()
+        print('\n'.join(items))
     print()
 ```
 
@@ -260,15 +317,16 @@ available. Poll with the same `gh api .../actions/runs` query as Phase 3 at
 
 ## Phase 6 — Merge to main
 
-**Pause and confirm with user before this phase.** Typical flow (adjust if
-the project uses PRs-to-main):
+**Pause and confirm with user before this phase.** `main` carries the merge
+commits of earlier promotions, so it cannot fast-forward to `develop`. Promote
+through a PR titled `Release <N> → main` (see #877 and #960 for the body: tag,
+pinned images, what was tested), check it has no conflicts, and merge it with
+a merge commit:
 
 ```bash
-git checkout main
-git pull
-git merge --ff-only develop
-git push origin main
-git checkout develop
+gh pr create --base main --head develop --title "Release <N> → main" --body-file <notes>
+gh pr merge <PR> --merge
+git fetch origin && git diff --quiet r<N> origin/main && echo "main matches r<N>"
 ```
 
 ## Phase 7 — Post-release
@@ -288,7 +346,7 @@ Commit:
 
 ```bash
 git add src/version.ts docker-compose.yaml CHANGELOG.md
-git commit -m "chore: begin development of release <N+1> (PE-####)"
+git commit -m "chore: begin development of release <N+1>"
 git push origin develop
 ```
 
@@ -321,8 +379,9 @@ undone, ask the user how to proceed (likely a forward-fixing commit).
 
 ## Conventions
 
-- Commit message format: `chore: <phase summary> (PE-####)`.
-- Find the Jira ref via `git log -20 --pretty=%s | grep -oE 'PE-[0-9]+' | head -1`
-  or ask the user.
+- Commit message format: `chore: <phase summary>`. The project no longer uses
+  Jira; do not add `PE-####` references.
+- `develop` requires a review for PRs but not for admins, so the release
+  commits pushed directly bypass it. Say so to the user.
 - Prefer `./tools/release-info --json` for programmatic state checks.
 - Each narrow tool is idempotent where possible — a no-op message is fine.
