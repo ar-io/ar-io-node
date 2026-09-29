@@ -2499,6 +2499,75 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(verifiableIds.length, 1);
       assert.deepEqual(verifiableIds, [DATA_ITEM_ID]);
     });
+
+    const insertVerificationRow = ({
+      priority,
+      retries,
+      verified = false,
+    }: {
+      priority: number | null;
+      retries: number | null;
+      verified?: boolean;
+    }) => {
+      const id = crypto.randomBytes(32);
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data_ids (
+             id, verified, indexed_at, verification_priority,
+             verification_retry_count
+           ) VALUES (@id, @verified, 0, @priority, @retries)`,
+        )
+        .run({ id, verified: verified ? 1 : 0, priority, retries });
+      return toB64Url(id);
+    };
+
+    it('selects only rows at or above a positive minimum, in priority order, excluding exhausted retries', () => {
+      const preferred = insertVerificationRow({ priority: 80, retries: null });
+      const arns = insertVerificationRow({ priority: 60, retries: 2 });
+      insertVerificationRow({ priority: 60, retries: 5 }); // retries exhausted
+      insertVerificationRow({ priority: 40, retries: null }); // below minimum
+      insertVerificationRow({ priority: null, retries: null }); // unprioritized
+      insertVerificationRow({ priority: 90, retries: null, verified: true });
+
+      assert.deepEqual(dbWorker.getVerifiableDataIds(60, 5), [preferred, arns]);
+    });
+
+    it('counts unprioritized rows as priority 0 when the minimum is zero or below', () => {
+      const prioritized = insertVerificationRow({ priority: 60, retries: 1 });
+      const unprioritized = insertVerificationRow({
+        priority: null,
+        retries: null,
+      });
+      insertVerificationRow({ priority: null, retries: 5 }); // retries exhausted
+
+      assert.deepEqual(dbWorker.getVerifiableDataIds(0, 5), [
+        prioritized,
+        unprioritized,
+      ]);
+    });
+
+    // The bare range comparison is what lets SQLite seek. With COALESCE around
+    // the column it walks every unverified row whenever fewer than LIMIT rows
+    // qualify, which took minutes per sweep on a gateway with a large data.db.
+    it('seeks into the priority index rather than scanning it', () => {
+      const stmt = loadSql(
+        fileURLToPath(new URL('./sql/data', import.meta.url)),
+      )['selectVerifiableContiguousDataIds'];
+      assert.ok(stmt !== undefined, 'statement not found');
+      const details = (
+        dataDb.prepare(`EXPLAIN QUERY PLAN ${stmt}`).all({
+          min_verification_priority: 60,
+          max_verification_retries: 5,
+        }) as { detail: string }[]
+      )
+        .map((row) => row.detail)
+        .join('\n');
+      assert.match(
+        details,
+        /SEARCH cd USING (COVERING )?INDEX contiguous_data_ids_verification_priority_retry_idx \(verification_priority>\?\)/,
+        `plan must seek on verification_priority, got:\n${details}`,
+      );
+    });
   });
 
   describe('getRootTx', () => {
@@ -3003,96 +3072,92 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
-  // skipping for now as it works when running the test individually
-  describe.skip('saveVerificationStatus', () => {
-    const dataItemRootTxId = '0000000000000000000000000000000000000000000';
-    const dataItem = {
-      anchor: 'a',
-      dataOffset: 10,
-      dataSize: 1,
-      id: DATA_ITEM_ID,
-      offset: 10,
-      owner: 'a',
-      ownerOffset: 1,
-      ownerSize: 1,
-      sigName: 'a',
-      signature: 'a',
-      signatureOffset: 1,
-      signatureSize: 1,
-      signatureType: 1,
-      size: 1,
-      tags: [],
-      target: 'a',
-    };
-    const normalizedDataItem = normalizeAns104DataItem({
-      rootTxId: dataItemRootTxId,
-      parentId: dataItemRootTxId,
-      parentIndex: -1,
-      index: 0,
-      ans104DataItem: dataItem,
-      filter: '',
-      dataHash: '',
-      rootParentOffset: 0,
+  describe('saveVerificationStatus', () => {
+    // Fresh IDs: saveDataContentAttributes dedupes writes for 7 minutes on the
+    // main thread, so an ID another test already wrote would be skipped here
+    // after afterEach empties the table.
+    const newId = () => toB64Url(crypto.randomBytes(32));
+    const rootTxId = newId();
+    const otherRootTxId = newId();
+    const itemUnderRoot = newId();
+    const itemUnderOtherRoot = newId();
+
+    const verifiedById = () =>
+      new Map(
+        (
+          dataDb
+            .prepare('SELECT id, verified FROM contiguous_data_ids')
+            .all() as { id: Buffer; verified: number }[]
+        ).map((row) => [toB64Url(row.id), row.verified]),
+      );
+
+    it('marks the root transaction and only the data items under it as verified', async () => {
+      await db.saveDataContentAttributes({
+        id: rootTxId,
+        hash: 'hash',
+        dataSize: 10,
+      });
+      await db.saveDataContentAttributes({
+        id: itemUnderRoot,
+        hash: 'hash',
+        dataSize: 10,
+        rootTransactionId: rootTxId,
+      });
+      await db.saveDataContentAttributes({
+        id: itemUnderOtherRoot,
+        hash: 'hash',
+        dataSize: 10,
+        rootTransactionId: otherRootTxId,
+      });
+
+      assert.deepEqual(
+        verifiedById(),
+        new Map([
+          [rootTxId, 0],
+          [itemUnderRoot, 0],
+          [itemUnderOtherRoot, 0],
+        ]),
+      );
+
+      await db.saveVerificationStatus(rootTxId);
+
+      assert.deepEqual(
+        verifiedById(),
+        new Map([
+          [rootTxId, 1],
+          [itemUnderRoot, 1],
+          [itemUnderOtherRoot, 0],
+        ]),
+      );
     });
-    const anotherDataItem = { ...normalizedDataItem };
-    anotherDataItem.id = 'WxQdMByPoNZgUFDMbvtC5sB2OHv0LDVsRQZex7qrwUY';
-    anotherDataItem.parent_id = '2222222222222222222222222222222222222222222';
-    anotherDataItem.root_tx_id = '2222222222222222222222222222222222222222222';
 
-    it('should set only bundled items as verified when bundle is set as verified', async () => {
-      await db.saveDataContentAttributes({
-        id: dataItemRootTxId,
-        hash: 'hash',
-        dataSize: 10,
-      });
-
-      await db.saveDataContentAttributes({
-        id: normalizedDataItem.id,
-        parentId: normalizedDataItem.parent_id ?? undefined,
-        hash: 'hash',
-        dataSize: 10,
-      });
-
-      await db.saveDataContentAttributes({
-        id: anotherDataItem.id,
-        parentId: anotherDataItem.parent_id ?? undefined,
-        hash: 'hash',
-        dataSize: 10,
-      });
-
-      await db.saveDataItem(normalizedDataItem);
-      await db.saveDataItem(anotherDataItem);
-
-      const sql = `
-        SELECT * FROM contiguous_data_ids;
-      `;
-      const contiguousDataIds = dataDb
-        .prepare(sql)
-        .all()
-        .map((row) => ({ id: toB64Url(row.id), verified: row.verified }));
-
-      assert.equal(contiguousDataIds.length, 3);
-      assert.equal(contiguousDataIds[0].id, dataItemRootTxId);
-      assert.equal(contiguousDataIds[0].verified, 0);
-      assert.equal(contiguousDataIds[1].id, normalizedDataItem.id);
-      assert.equal(contiguousDataIds[1].verified, 0);
-      assert.equal(contiguousDataIds[2].id, anotherDataItem.id);
-      assert.equal(contiguousDataIds[2].verified, 0);
-
-      await db.saveVerificationStatus(dataItemRootTxId);
-
-      const contiguousDataIdsUpdated = dataDb
-        .prepare(sql)
-        .all()
-        .map((row) => ({ id: toB64Url(row.id), verified: row.verified }));
-
-      assert.equal(contiguousDataIdsUpdated.length, 3);
-      assert.equal(contiguousDataIdsUpdated[0].id, dataItemRootTxId);
-      assert.equal(contiguousDataIdsUpdated[0].verified, 1);
-      assert.equal(contiguousDataIdsUpdated[1].id, normalizedDataItem.id);
-      assert.equal(contiguousDataIdsUpdated[1].verified, 1);
-      assert.equal(contiguousDataIdsUpdated[2].id, anotherDataItem.id);
-      assert.equal(contiguousDataIdsUpdated[2].verified, 0);
+    // Both sides of the OR must be index probes. Before
+    // contiguous_data_ids_root_transaction_id_idx this statement scanned the
+    // whole table on every verification while holding the data.db writer.
+    it('probes the primary key and the root transaction index, never scanning the table', () => {
+      const stmt = loadSql(
+        fileURLToPath(new URL('./sql/data', import.meta.url)),
+      )['updateDataItemVerificationStatus'];
+      assert.ok(stmt !== undefined, 'statement not found');
+      const details = (
+        dataDb
+          .prepare(`EXPLAIN QUERY PLAN ${stmt}`)
+          .all({ id: fromB64Url(rootTxId), verified_at: 0 }) as {
+          detail: string;
+        }[]
+      )
+        .map((row) => row.detail)
+        .join('\n');
+      assert.match(
+        details,
+        /contiguous_data_ids_root_transaction_id_idx \(root_transaction_id=\?\)/,
+        `plan must probe the root transaction index, got:\n${details}`,
+      );
+      assert.doesNotMatch(
+        details,
+        /SCAN contiguous_data_ids/,
+        `plan must not scan contiguous_data_ids, got:\n${details}`,
+      );
     });
   });
 

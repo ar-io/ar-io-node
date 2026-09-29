@@ -53,3 +53,6 @@ CREATE TABLE manifest_resolutions (
   fallback_id BLOB,
   resolved_at INTEGER NOT NULL
 );
+CREATE INDEX contiguous_data_ids_root_transaction_id_idx
+  ON contiguous_data_ids (root_transaction_id)
+  WHERE root_transaction_id IS NOT NULL;

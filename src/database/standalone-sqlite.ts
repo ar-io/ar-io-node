@@ -3450,11 +3450,28 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
-  getVerifiableDataIds() {
-    // TODO: make this a parameter (method or constructor) with a default
-    const minVerificationPriority = config.MIN_DATA_VERIFICATION_PRIORITY;
-    const maxVerificationRetries = config.MAX_VERIFICATION_RETRIES;
-    const dataIds = this.stmts.data.selectVerifiableContiguousDataIds.all({
+  /**
+   * Return up to 1000 unverified data IDs for background verification,
+   * highest priority first, fewest retries first.
+   *
+   * A positive minimum can never admit an unprioritized (NULL) row, so it uses
+   * the statement that seeks straight to the qualifying priority range. A
+   * minimum of zero or below counts NULL as priority 0 and so admits every
+   * unverified row; that case uses the statement that keeps the COALESCE.
+   *
+   * @param minVerificationPriority Lowest priority to include.
+   * @param maxVerificationRetries Rows with this many retries or more are left out.
+   */
+  getVerifiableDataIds(
+    minVerificationPriority = config.MIN_DATA_VERIFICATION_PRIORITY,
+    maxVerificationRetries = config.MAX_VERIFICATION_RETRIES,
+  ) {
+    const stmt =
+      minVerificationPriority > 0
+        ? this.stmts.data.selectVerifiableContiguousDataIds
+        : this.stmts.data
+            .selectVerifiableContiguousDataIdsIncludingUnprioritized;
+    const dataIds = stmt.all({
       min_verification_priority: minVerificationPriority,
       max_verification_retries: maxVerificationRetries,
     });
