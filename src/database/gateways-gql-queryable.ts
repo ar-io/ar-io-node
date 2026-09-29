@@ -727,6 +727,22 @@ function compareTxRichness(
   return 0;
 }
 
+/**
+ * Reason attached to a fan-out source that had not responded by the soft
+ * deadline (see GATEWAYS_GQL_SOFT_DEADLINE_ENABLED). Distinguished from a real
+ * upstream failure by its `code` so `handleSourceFailures` can surface it as a
+ * dedicated `UPSTREAM_SOFT_DEADLINE` warning and log it at debug rather than
+ * warn. The underlying request is not aborted — it keeps running so the
+ * per-upstream circuit breaker still records its true outcome.
+ */
+class SoftDeadlineExceededError extends Error {
+  readonly code = 'ESOFTDEADLINE';
+  constructor(deadlineMs: number) {
+    super(`GraphQL fan-out soft deadline (${deadlineMs}ms) exceeded`);
+    this.name = 'SoftDeadlineExceededError';
+  }
+}
+
 export class GatewaysGqlQueryable
   implements GqlQueryable, SelectionAwareGqlQueryable
 {
@@ -734,6 +750,8 @@ export class GatewaysGqlQueryable
   private readonly log: winston.Logger;
   private readonly sources: GqlQueryable[];
   private readonly sourceLabels: string[];
+  private readonly softDeadlineEnabled: boolean;
+  private readonly softDeadlineMs: number;
 
   constructor({
     log,
@@ -748,6 +766,8 @@ export class GatewaysGqlQueryable
         config.GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
       resetTimeout: config.GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
     },
+    softDeadlineEnabled = config.GATEWAYS_GQL_SOFT_DEADLINE_ENABLED,
+    softDeadlineMs = config.GATEWAYS_GQL_SOFT_DEADLINE_MS,
     axiosInstance,
   }: {
     log: winston.Logger;
@@ -755,9 +775,13 @@ export class GatewaysGqlQueryable
     localGqlQueryable?: GqlQueryable;
     requestTimeoutMs?: number;
     circuitBreakerOptions?: CircuitBreaker.Options;
+    softDeadlineEnabled?: boolean;
+    softDeadlineMs?: number;
     axiosInstance?: AxiosInstance;
   }) {
     this.log = log.child({ class: 'GatewaysGqlQueryable' });
+    this.softDeadlineEnabled = softDeadlineEnabled;
+    this.softDeadlineMs = softDeadlineMs;
 
     if (urls.length === 0 && localGqlQueryable === undefined) {
       throw new Error(
@@ -790,6 +814,8 @@ export class GatewaysGqlQueryable
     log: winston.Logger;
     sources: GqlQueryable[];
     labels?: string[];
+    softDeadlineEnabled?: boolean;
+    softDeadlineMs?: number;
   }): GatewaysGqlQueryable {
     if (params.sources.length === 0) {
       throw new Error('forTesting requires at least one source');
@@ -798,6 +824,8 @@ export class GatewaysGqlQueryable
       log: params.log,
       urls: [],
       localGqlQueryable: params.sources[0],
+      softDeadlineEnabled: params.softDeadlineEnabled,
+      softDeadlineMs: params.softDeadlineMs,
     });
 
     (merger as any).sources = params.sources;
@@ -881,8 +909,9 @@ export class GatewaysGqlQueryable
     args: TransactionQueryArgs,
   ): Promise<GqlTransactionsResult> {
     const sortOrder = args.sortOrder ?? 'HEIGHT_DESC';
-    const results = await Promise.allSettled(
+    const results = await this.settleWithSoftDeadline(
       this.sources.map((source) => source.getGqlTransactions(args)),
+      (result) => result.edges.length > 0,
     );
     const failureWarnings = this.handleSourceFailures(
       results,
@@ -923,8 +952,9 @@ export class GatewaysGqlQueryable
 
   async getGqlBlocks(args: BlockQueryArgs): Promise<GqlBlocksResult> {
     const sortOrder = args.sortOrder ?? 'HEIGHT_DESC';
-    const results = await Promise.allSettled(
+    const results = await this.settleWithSoftDeadline(
       this.sources.map((source) => source.getGqlBlocks(args)),
+      (result) => result.edges.length > 0,
     );
     const failureWarnings = this.handleSourceFailures(
       results,
@@ -1120,6 +1150,90 @@ export class GatewaysGqlQueryable
     });
   }
 
+  /**
+   * Settle every fan-out source, optionally bounded by the soft deadline.
+   *
+   * With the soft deadline disabled this is exactly `Promise.allSettled` — the
+   * merge waits for every source (each bounded by the per-upstream request
+   * timeout). With it enabled, the deadline timer is armed only after the
+   * first source fulfills with a result that `isUsable` accepts; once it fires,
+   * any source that has not settled is reported as a
+   * `SoftDeadlineExceededError` rejection so the caller merges whatever arrived
+   * and surfaces the rest as warnings. Arming on the first usable fulfillment
+   * (rather than at call time) guarantees an all-slow moment never turns a
+   * would-succeed query into a failure.
+   *
+   * `isUsable` matters because a fast *empty* answer is common: the local
+   * index (included by default, GATEWAYS_GQL_INCLUDE_LOCAL) usually answers
+   * first, and is empty for exactly the data fan-out exists to find. Arming on
+   * it would cut off the slower upstream that holds the data and return an
+   * empty page where waiting would have returned the right one.
+   *
+   * The source promises are never aborted here — they keep running so the
+   * per-upstream circuit breaker still observes their real success/timeout.
+   * Each carries a rejection handler, so a laggard that rejects after we have
+   * returned does not surface as an unhandled rejection.
+   */
+  private settleWithSoftDeadline<T>(
+    promises: Promise<T>[],
+    isUsable: (value: T) => boolean = () => true,
+  ): Promise<PromiseSettledResult<T>[]> {
+    if (!this.softDeadlineEnabled || promises.length === 0) {
+      return Promise.allSettled(promises);
+    }
+
+    const reflected = promises.map((p) =>
+      p.then(
+        (value): PromiseSettledResult<T> => ({ status: 'fulfilled', value }),
+        (reason): PromiseSettledResult<T> => ({ status: 'rejected', reason }),
+      ),
+    );
+
+    const settled: (PromiseSettledResult<T> | undefined)[] = new Array(
+      reflected.length,
+    ).fill(undefined);
+    let pending = reflected.length;
+
+    return new Promise<void>((resolve) => {
+      let timer: NodeJS.Timeout | undefined;
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        if (timer !== undefined) clearTimeout(timer);
+        resolve();
+      };
+
+      reflected.forEach((r, i) => {
+        void r.then((res) => {
+          if (settled[i] === undefined) {
+            settled[i] = res;
+            pending--;
+          }
+          if (pending === 0) {
+            finish();
+          } else if (
+            res.status === 'fulfilled' &&
+            timer === undefined &&
+            isUsable(res.value)
+          ) {
+            // Arm the deadline only once we hold a usable result.
+            timer = setTimeout(finish, this.softDeadlineMs);
+            if (typeof timer.unref === 'function') timer.unref();
+          }
+        });
+      });
+    }).then(() =>
+      settled.map(
+        (res) =>
+          res ?? {
+            status: 'rejected' as const,
+            reason: new SoftDeadlineExceededError(this.softDeadlineMs),
+          },
+      ),
+    );
+  }
+
   private handleSourceFailures(
     results: PromiseSettledResult<unknown>[],
     method: string,
@@ -1135,7 +1249,16 @@ export class GatewaysGqlQueryable
     if (failures.length === 0) return [];
 
     for (const f of failures) {
-      const level = f.r.reason?.code === 'EOPENBREAKER' ? 'debug' : 'warn';
+      const code = f.r.reason?.code;
+      // Circuit-open and soft-deadline cuts are expected, low-signal
+      // degradations — log them at debug so they don't drown real upstream
+      // errors. Soft-deadline cuts also get their own counter so operators
+      // can see how often (and against which source) the deadline bites.
+      const level =
+        code === 'EOPENBREAKER' || code === 'ESOFTDEADLINE' ? 'debug' : 'warn';
+      if (code === 'ESOFTDEADLINE') {
+        metrics.gatewaysGqlSoftDeadlineSourceCutTotal.inc({ source: f.label });
+      }
       this.log[level]('Upstream source failed', {
         method,
         args,
@@ -1154,13 +1277,29 @@ export class GatewaysGqlQueryable
     // the caller knows the merge is missing contributions, instead of
     // silently returning reduced results.
     return failures.map((f) => ({
-      code:
-        f.r.reason?.code === 'EOPENBREAKER'
-          ? 'UPSTREAM_CIRCUIT_OPEN'
-          : 'UPSTREAM_UNAVAILABLE',
+      code: warningCodeForReason(f.r.reason),
       message: f.r.reason?.message ?? String(f.r.reason),
       source: f.label,
     }));
+  }
+}
+
+/**
+ * Map a settled-source rejection reason to the GraphQL warning code surfaced
+ * to callers: an open circuit breaker becomes `UPSTREAM_CIRCUIT_OPEN`, a soft
+ * deadline cut (`SoftDeadlineExceededError`) becomes `UPSTREAM_SOFT_DEADLINE`,
+ * and anything else (a real upstream error or request timeout) becomes
+ * `UPSTREAM_UNAVAILABLE`.
+ */
+function warningCodeForReason(reason: unknown): string {
+  const code = (reason as { code?: unknown } | null | undefined)?.code;
+  switch (code) {
+    case 'EOPENBREAKER':
+      return 'UPSTREAM_CIRCUIT_OPEN';
+    case 'ESOFTDEADLINE':
+      return 'UPSTREAM_SOFT_DEADLINE';
+    default:
+      return 'UPSTREAM_UNAVAILABLE';
   }
 }
 

@@ -37,7 +37,9 @@ const GRAPHQL_BUNDLE_QUERY = `
   }
 `;
 
-// Query for metadata retrieval - only used for the original item
+// Query for metadata retrieval - only used for the original item.
+// `tags` is requested alongside `data.type` because `data.type` is not
+// universally populated — see `contentTypeFromNode`.
 const GRAPHQL_METADATA_QUERY = `
   query getMetadata($id: ID!) {
     transaction(id: $id) {
@@ -45,6 +47,10 @@ const GRAPHQL_METADATA_QUERY = `
       data {
         type
         size
+      }
+      tags {
+        name
+        value
       }
     }
   }
@@ -61,11 +67,39 @@ const GRAPHQL_BATCH_QUERY = `
           id
           bundledIn { id }
           data { type size }
+          tags { name value }
         }
       }
     }
   }
 `;
+
+/**
+ * Derives a data item's content type from a GraphQL transaction node.
+ *
+ * `data.type` is the natural field, but it is not reliably populated: for
+ * bundled data items some indexers (arweave.net among them) return `null` for
+ * `data.type` while still returning the item's `Content-Type` tag verbatim. A
+ * missing content type here is not harmless — the caller is resolving an item
+ * that this gateway has not indexed, and with nothing to report the item ends
+ * up served (and cached) with the content type of the bundle that contains it.
+ * So fall back to the tag, which is the value `data.type` is derived from.
+ *
+ * The first `Content-Type` tag wins, matched case-insensitively, mirroring
+ * `ans104-offset-source`'s header parsing so both routes agree.
+ */
+const contentTypeFromNode = (node: {
+  data?: { type?: string | null } | null;
+  tags?: { name?: string | null; value?: string | null }[] | null;
+}): string | undefined => {
+  if (typeof node.data?.type === 'string' && node.data.type.length > 0) {
+    return node.data.type;
+  }
+  const tag = node.tags?.find((t) => t?.name?.toLowerCase() === 'content-type');
+  return typeof tag?.value === 'string' && tag.value.length > 0
+    ? tag.value
+    : undefined;
+};
 
 const DEFAULT_REQUEST_RETRY_COUNT = 3;
 
@@ -238,7 +272,7 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
         if (node?.id == null) continue;
         out.set(node.id, {
           bundleId: node.bundledIn?.id,
-          contentType: node.data?.type,
+          contentType: contentTypeFromNode(node),
           size: node.data?.size,
         });
       }
@@ -588,7 +622,7 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
               const transaction = response.data.data.transaction;
 
               return {
-                contentType: transaction.data?.type,
+                contentType: contentTypeFromNode(transaction),
                 size: transaction.data?.size,
               };
             }

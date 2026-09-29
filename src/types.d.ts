@@ -229,6 +229,21 @@ export interface ChainOffsetIndex {
 }
 
 /**
+ * Chunk-read geometry of a transaction: the base64url data_root, the END weave
+ * offset, and the data size — the same values `/tx/{id}/data_root` and
+ * `/tx/{id}/offset` return.
+ */
+export interface TxGeometry {
+  dataRoot: string;
+  offset: number;
+  size: number;
+}
+
+export interface TxGeometrySource {
+  getTxGeometry(txId: string): Promise<TxGeometry | undefined>;
+}
+
+/**
  * A cached chunk's placement row in chunks.db. Serves as both the chunk
  * metadata index (keyed by data_root + relative_offset) and the optimistic
  * ingest ledger (origin / cached_at / confirmed_at drive GC). BLOB-valued
@@ -404,6 +419,14 @@ export interface TxBoundary {
   dataSize: number;
   /** Absolute weave offset (end offset of transaction) */
   weaveOffset: number;
+  /**
+   * Which source in CompositeTxBoundarySource answered, set by that
+   * composite. `db` is the only one that resolves without a network call;
+   * `anchor` HEADs a peer, `tx_path` fetches an unvalidated chunk from AR.IO
+   * peers, and `chain` binary-searches the chain. Callers that need to know
+   * whether resolution stayed local read this rather than inferring it.
+   */
+  source?: 'db' | 'anchor' | 'tx_path' | 'chain';
 }
 
 /**
@@ -415,6 +438,7 @@ export interface TxBoundarySource {
   getTxBoundary(
     absoluteOffset: bigint,
     signal?: AbortSignal,
+    requestAttributes?: RequestAttributes,
   ): Promise<TxBoundary | null>;
 }
 
@@ -680,6 +704,18 @@ export interface RequestAttributes {
   /** When true, remote data sources (AR.IO peers, trusted gateways) should be
    * skipped to prevent request loops from compute-origin callers like HyperBEAM. */
   skipRemoteForwarding?: boolean;
+  /**
+   * When true, answer using only what this gateway can reach without asking
+   * the network: its local caches, its own index, and operator-owned storage
+   * backends. Arweave nodes, the chain, and the peer chunk-metadata anchor
+   * probe are all declined.
+   *
+   * Distinct from `skipRemoteForwarding`, which covers the AR.IO peer layer
+   * only. Set both to deny every network source; `skipRemoteForwarding` alone
+   * keeps its existing meaning for compute-origin callers, which may still
+   * reach Arweave nodes.
+   */
+  localSourcesOnly?: boolean;
   /** Chain of gateway identities this request has traversed, for loop detection */
   via?: string[];
   /** Client-supplied root transaction ID hint for fast-path resolution */
@@ -900,6 +936,8 @@ type BroadcastChunkResponses = {
   statusCode: number;
   canceled: boolean;
   timedOut: boolean;
+  /** Peer answered 303: stored in its disk pool, not its long-term home. */
+  temporary?: boolean;
   skipped?: boolean;
   skipReason?:
     | 'success_threshold'
@@ -911,6 +949,22 @@ interface BroadcastChunkResult {
   successCount: number;
   preferredSuccessCount: number;
   failureCount: number;
+  /**
+   * How many accepting peers answered 303 ("temporary"): they
+   * persisted the chunk into their disk pool but are not the long-term home for
+   * that offset. `longTermSuccessCount` is the 200 remainder. Both outcomes are
+   * successful propagation — a chunk whose transaction is still pending has no
+   * absolute offset yet, so 303 is the expected answer even from the tip nodes
+   * — but the split is the difference between "peers that will keep this" and
+   * "peers that will drop it when their disk pool matures", which callers
+   * cannot otherwise see.
+   *
+   * Both are derived from `results`, which is authoritative, rather than from
+   * the early-termination counters above — so their sum can differ slightly
+   * from `successCount`, which is deliberately racy.
+   */
+  temporarySuccessCount: number;
+  longTermSuccessCount: number;
   results: BroadcastChunkResponses[];
 }
 
@@ -1390,6 +1444,25 @@ export interface ManifestPathResolver {
   ): Promise<ManifestResolution>;
 }
 
+/**
+ * Persistent store of resolved manifest index/fallback ids, keyed by manifest
+ * transaction id. A manifest transaction is immutable, so these values never
+ * change once computed; the store lets a manifest root/index be served without
+ * re-fetching or re-parsing the manifest body.
+ */
+export interface ManifestResolutionStore {
+  getManifestResolution(
+    id: string,
+  ): Promise<{ indexId?: string; fallbackId?: string } | undefined>;
+
+  saveManifestResolution(args: {
+    id: string;
+    indexId?: string;
+    fallbackId?: string;
+    resolvedAt: number;
+  }): Promise<void>;
+}
+
 export interface ValidNameResolution {
   name: string;
   statusCode?: number;
@@ -1547,7 +1620,15 @@ export interface WithPeers<T> {
 }
 
 export interface WithFormattedPeers {
-  getFormattedPeers(
-    categories: string[],
-  ): Record<string, { url: string; weights: Record<string, number> }>;
+  getFormattedPeers(categories: string[]): Record<
+    string,
+    {
+      url: string;
+      weights: Record<string, number>;
+      wallet?: string;
+      observerAddress?: string;
+      operatorStake?: number;
+      status?: string;
+    }
+  >;
 }

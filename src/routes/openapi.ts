@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
+import { release } from '../version.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const openApiRouter = Router();
@@ -29,6 +31,9 @@ export const openApiRouter = Router();
 const openapiDocument = YAML.parse(
   fs.readFileSync(__dirname + '/../../docs/openapi.yaml', 'utf8'),
 );
+// Gateways upgrade independently, so the spec a gateway serves reports that
+// gateway's release rather than whatever the file last said.
+openapiDocument.info.version = release;
 openApiRouter.get('/openapi.json', (_req, res) => {
   res.json(openapiDocument);
 });

@@ -7,6 +7,7 @@
 
 import { Request, Response } from 'express';
 import { Span } from '@opentelemetry/api';
+import { PaymentRequirements } from 'x402/types';
 import log from '../log.js';
 import * as config from '../config.js';
 import { startChildSpan } from '../tracing.js';
@@ -111,12 +112,13 @@ export async function checkPaymentAndRateLimits({
     span.setAttribute('client.ip', clientIp ?? 'unknown');
     span.setAttribute('client.ips', clientIps.join(','));
 
-    // Check if ANY IP in the chain is allowlisted - if so, skip all checks
-    if (rateLimiter?.isAllowlisted(clientIps)) {
+    // An allowlisted client skips every check. Only the client itself counts,
+    // never the other addresses in its headers, which it can write freely.
+    if (clientIp !== undefined && rateLimiter?.isAllowlisted([clientIp])) {
       span.setAttribute('allowlisted', true);
       log.debug('Client is allowlisted, skipping checks', {
         id,
-        clientIps,
+        clientIp,
       });
       return { allowed: true };
     }
@@ -357,15 +359,29 @@ export async function checkPaymentAndRateLimits({
           rateLimitBytesBlockedTotal.inc({ domain }, contentSize);
 
           // If payment processor exists and payment not verified, return 402
+          let requirements: PaymentRequirements | undefined;
           if (paymentProcessor !== undefined && !paymentVerified) {
-            const requirements = paymentProcessor.calculateRequirements({
-              contentSize,
-              protocol: config.SANDBOX_PROTOCOL ?? req.protocol,
-              host: host,
-              originalUrl: req.originalUrl,
-              contentType: contentType ?? 'application/octet-stream',
-            } as PaymentRequirementsContext);
+            try {
+              requirements = paymentProcessor.calculateRequirements({
+                contentSize,
+                protocol: config.SANDBOX_PROTOCOL ?? req.protocol,
+                host: host,
+                originalUrl: req.originalUrl,
+                contentType: contentType ?? 'application/octet-stream',
+              } as PaymentRequirementsContext);
+            } catch (error: any) {
+              // The limit has already been decided. Failing to quote a price
+              // must not turn a denial into a free response, which is what the
+              // catch below would do: answer 429 instead.
+              rateLimitSpan.recordException(error);
+              log.error('Failed to build payment requirements', {
+                id,
+                error: error.message,
+              });
+            }
+          }
 
+          if (paymentProcessor !== undefined && requirements !== undefined) {
             paymentProcessor.sendPaymentRequiredResponse(
               req,
               res,

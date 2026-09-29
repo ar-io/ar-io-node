@@ -84,3 +84,15 @@ SELECT c.height AS height,
 FROM candidate c
 ORDER BY c.weave_size ASC, c.height ASC, c.is_unstable ASC
 LIMIT 1;
+
+-- selectStableTransactionGeometryById
+-- Chunk-read geometry (data_root, END offset, data_size) of a stable
+-- transaction. Stable rows are immutable, so TxChunksDataSource can use this
+-- instead of two trusted-node round trips per range read. Rows the offset
+-- importer has not reached yet (offset IS NULL) are not returned; callers fall
+-- back to the chain for those.
+SELECT data_root, offset, data_size
+FROM stable_transactions
+WHERE id = @id
+  AND offset IS NOT NULL
+  AND data_root IS NOT NULL;

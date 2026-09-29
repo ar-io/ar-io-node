@@ -7,7 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ValidationError } from 'apollo-server-express';
+import { GraphQLError } from 'graphql';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
@@ -149,9 +149,18 @@ describe('SQLite GraphQL cursor functions', () => {
         async () => {
           decodeTransactionGqlCursor('123');
         },
-        {
-          name: ValidationError.name,
-          message: 'Invalid transaction cursor',
+        (error: unknown) => {
+          assert.ok(error instanceof GraphQLError);
+          assert.equal(error.message, 'Invalid transaction cursor');
+          // The wire-visible contract, verified against a running
+          // apollo-server-express 3 gateway: HTTP 200 with `data: null` and
+          // this error code. No `http` override, because these decoders run
+          // during resolver execution and Apollo answers resolver errors with
+          // 200 — and a batch shares one response head, so an override here
+          // would let one bad cursor set the status for every operation in it.
+          assert.equal(error.extensions.code, 'GRAPHQL_VALIDATION_FAILED');
+          assert.equal(error.extensions.http, undefined);
+          return true;
         },
       );
     });
@@ -181,9 +190,18 @@ describe('SQLite GraphQL cursor functions', () => {
         async () => {
           decodeBlockGqlCursor('123');
         },
-        {
-          name: ValidationError.name,
-          message: 'Invalid block cursor',
+        (error: unknown) => {
+          assert.ok(error instanceof GraphQLError);
+          assert.equal(error.message, 'Invalid block cursor');
+          // The wire-visible contract, verified against a running
+          // apollo-server-express 3 gateway: HTTP 200 with `data: null` and
+          // this error code. No `http` override, because these decoders run
+          // during resolver execution and Apollo answers resolver errors with
+          // 200 — and a batch shares one response head, so an override here
+          // would let one bad cursor set the status for every operation in it.
+          assert.equal(error.extensions.code, 'GRAPHQL_VALIDATION_FAILED');
+          assert.equal(error.extensions.http, undefined);
+          return true;
         },
       );
     });
@@ -250,7 +268,105 @@ describe('StandaloneSqliteDatabase', () => {
     db.stop();
   });
 
+  // Through the worker-backed database, not the decoder alone: an error thrown
+  // inside the worker thread reaches the caller re-wrapped as a generic
+  // 'Error in StandaloneSqlite worker' (INTERNAL_SERVER_ERROR), so an invalid
+  // cursor has to be rejected before the worker sees it.
+  describe('GraphQL cursor validation', () => {
+    const assertInvalidCursor = (message: string) => (error: unknown) => {
+      assert.ok(error instanceof GraphQLError);
+      assert.equal(error.message, message);
+      assert.equal(error.extensions.code, 'GRAPHQL_VALIDATION_FAILED');
+      assert.equal(error.extensions.http, undefined);
+      return true;
+    };
+
+    it('rejects an invalid transaction cursor as GRAPHQL_VALIDATION_FAILED', async () => {
+      await assert.rejects(
+        db.getGqlTransactions({ pageSize: 1, cursor: '123' }),
+        assertInvalidCursor('Invalid transaction cursor'),
+      );
+    });
+
+    it('rejects an invalid block cursor as GRAPHQL_VALIDATION_FAILED', async () => {
+      await assert.rejects(
+        db.getGqlBlocks({ pageSize: 1, cursor: '123' }),
+        assertInvalidCursor('Invalid block cursor'),
+      );
+    });
+
+    it('passes a valid transaction cursor through to the worker', async () => {
+      const result = await db.getGqlTransactions({
+        pageSize: 1,
+        cursor: CURSOR,
+      });
+      assert.ok(Array.isArray(result.edges));
+    });
+
+    it('passes a valid block cursor through to the worker', async () => {
+      const result = await db.getGqlBlocks({
+        pageSize: 1,
+        cursor: 'WzExMzhd',
+      });
+      assert.ok(Array.isArray(result.edges));
+    });
+  });
+
   describe('offsets', () => {
+    it('should return stable transaction geometry via getTxGeometry only when offset and data_root are set', async () => {
+      const completeId = 'Gm0rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
+      const noOffsetId = 'Gm1rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
+      const noDataRootId = 'Gm2rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E';
+      const dataRoot = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
+
+      const insert = coreDb.prepare(`
+        INSERT INTO stable_transactions (
+          id, height, block_transaction_index, format, last_tx, owner_address,
+          quantity, reward, tag_count, offset, data_size, data_root
+        ) VALUES (
+          @id, 1, @block_transaction_index, 2, @last_tx, @owner_address,
+          '0', '0', 0, @offset, 256000, @data_root
+        )
+      `);
+      const base = {
+        last_tx: Buffer.alloc(32),
+        owner_address: Buffer.alloc(32),
+      };
+      insert.run({
+        ...base,
+        id: fromB64Url(completeId),
+        block_transaction_index: 10,
+        offset: 51530681583862,
+        data_root: fromB64Url(dataRoot),
+      });
+      insert.run({
+        ...base,
+        id: fromB64Url(noOffsetId),
+        block_transaction_index: 11,
+        offset: null,
+        data_root: fromB64Url(dataRoot),
+      });
+      insert.run({
+        ...base,
+        id: fromB64Url(noDataRootId),
+        block_transaction_index: 12,
+        offset: 51530681583862,
+        data_root: null,
+      });
+
+      assert.deepEqual(await db.getTxGeometry(completeId), {
+        dataRoot,
+        offset: 51530681583862,
+        size: 256000,
+      });
+      assert.equal(await db.getTxGeometry(noOffsetId), undefined);
+      assert.equal(await db.getTxGeometry(noDataRootId), undefined);
+      assert.equal(
+        await db.getTxGeometry('Gm3rYd8Eq2wqBqk3JdxYl7c3v8m9mZ0p2Qn1l2o3p4E'),
+        undefined,
+      );
+    });
+
     it('should save offsets into the database and then be discoverable via getTxByOffset', async () => {
       const tx1id = '_H6KgmI_ZfSdSlf9r2xzDh_ebJnvQtTYLUBQlnRjIdM';
       const tx2id = 'UTjG9QyeQ8dJgghq_7JRYb3iTAvlc0IgVN3OfJFGwNk';
@@ -2238,6 +2354,110 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  // `contiguous_data.original_source_content_type` is keyed by the data hash
+  // and, for an item this gateway has not indexed, it is the only content type
+  // getDataAttributes can return. It used to be write-once, so an item served
+  // even a single time with the `application/octet-stream` placeholder — the
+  // ANS-104 envelope's own type, which a bundle-range read reports when the
+  // item's tags were never read — downloaded instead of rendering forever.
+  describe('content type healing', () => {
+    // Both dedupe caches in front of these writes — the main thread's
+    // saveDataContentAttributes LRU and the worker's insertDataHashCache —
+    // outlive the per-test database reset, so every case needs an ID and a
+    // hash no other case has written, or its writes are silently suppressed.
+    //
+    // 43-char base64url; the final character carries only 2 significant bits,
+    // so it must be canonical to survive a decode/encode round trip.
+    const idFor = (label: string) => label.padEnd(42, 'x') + '0';
+
+    const save = (id: string, hash: string, contentType?: string) =>
+      db.saveDataContentAttributes({ id, hash, dataSize: 5357, contentType });
+
+    const contentTypeOf = async (id: string) =>
+      (await db.getDataAttributes(id))?.contentType ?? undefined;
+
+    it('replaces the octet-stream placeholder with a real content type', async () => {
+      const id = idFor('heal-placeholder');
+      await save(id, 'heal-placeholder', 'application/octet-stream');
+      assert.equal(await contentTypeOf(id), 'application/octet-stream');
+
+      await save(id, 'heal-placeholder', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('fills in a null content type', async () => {
+      const id = idFor('heal-null');
+      await save(id, 'heal-null', undefined);
+      assert.equal(await contentTypeOf(id), undefined);
+
+      await save(id, 'heal-null', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('matches the placeholder with parameters and odd casing', async () => {
+      const id = idFor('heal-normalized');
+      await save(id, 'heal-normalized', 'Application/Octet-Stream; x=1');
+
+      await save(id, 'heal-normalized', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('treats a structured-suffix type as real, not as the placeholder', async () => {
+      // `application/octet-stream+json` is a specific type of its own, not the
+      // placeholder — a prefix match would have let text/html replace it.
+      const id = idFor('heal-structured-suffix');
+      await save(id, 'heal-structured-suffix', 'application/octet-stream+json');
+
+      await save(id, 'heal-structured-suffix', 'text/html');
+
+      assert.equal(await contentTypeOf(id), 'application/octet-stream+json');
+    });
+
+    it('never overwrites one real content type with another', async () => {
+      const id = idFor('heal-no-flap');
+      await save(id, 'heal-no-flap', 'text/html');
+
+      await save(id, 'heal-no-flap', 'image/png');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('never falls back from a real content type to the placeholder', async () => {
+      const id = idFor('heal-no-regress');
+      await save(id, 'heal-no-regress', 'text/html');
+
+      await save(id, 'heal-no-regress', 'application/octet-stream');
+
+      assert.equal(await contentTypeOf(id), 'text/html');
+    });
+
+    it('heals a byte-identical re-upload, which shares the poisoned row', async () => {
+      // The reported symptom: re-uploading the file produced a new data item
+      // ID that hashed to the same bytes, so it inherited the placeholder and
+      // the re-upload appeared to change nothing.
+      const original = idFor('heal-reupload-original');
+      const reupload = idFor('heal-reupload-new');
+      await save(original, 'heal-reupload', 'application/octet-stream');
+      assert.equal(
+        await contentTypeOf(reupload),
+        undefined,
+        'the re-upload has no row of its own yet',
+      );
+
+      await save(reupload, 'heal-reupload', 'text/html');
+
+      assert.equal(await contentTypeOf(reupload), 'text/html');
+      assert.equal(
+        await contentTypeOf(original),
+        'text/html',
+        'the original ID shares the row, so it heals too',
+      );
+    });
+  });
+
   describe('getVerifiableDataIds', () => {
     it("should return an empty list if there's no verifiable data ids", async () => {
       const emptyDbIds = await db.getVerifiableDataIds();
@@ -2278,6 +2498,75 @@ describe('StandaloneSqliteDatabase', () => {
       const verifiableIds = await db.getVerifiableDataIds();
       assert.equal(verifiableIds.length, 1);
       assert.deepEqual(verifiableIds, [DATA_ITEM_ID]);
+    });
+
+    const insertVerificationRow = ({
+      priority,
+      retries,
+      verified = false,
+    }: {
+      priority: number | null;
+      retries: number | null;
+      verified?: boolean;
+    }) => {
+      const id = crypto.randomBytes(32);
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data_ids (
+             id, verified, indexed_at, verification_priority,
+             verification_retry_count
+           ) VALUES (@id, @verified, 0, @priority, @retries)`,
+        )
+        .run({ id, verified: verified ? 1 : 0, priority, retries });
+      return toB64Url(id);
+    };
+
+    it('selects only rows at or above a positive minimum, in priority order, excluding exhausted retries', () => {
+      const preferred = insertVerificationRow({ priority: 80, retries: null });
+      const arns = insertVerificationRow({ priority: 60, retries: 2 });
+      insertVerificationRow({ priority: 60, retries: 5 }); // retries exhausted
+      insertVerificationRow({ priority: 40, retries: null }); // below minimum
+      insertVerificationRow({ priority: null, retries: null }); // unprioritized
+      insertVerificationRow({ priority: 90, retries: null, verified: true });
+
+      assert.deepEqual(dbWorker.getVerifiableDataIds(60, 5), [preferred, arns]);
+    });
+
+    it('counts unprioritized rows as priority 0 when the minimum is zero or below', () => {
+      const prioritized = insertVerificationRow({ priority: 60, retries: 1 });
+      const unprioritized = insertVerificationRow({
+        priority: null,
+        retries: null,
+      });
+      insertVerificationRow({ priority: null, retries: 5 }); // retries exhausted
+
+      assert.deepEqual(dbWorker.getVerifiableDataIds(0, 5), [
+        prioritized,
+        unprioritized,
+      ]);
+    });
+
+    // The bare range comparison is what lets SQLite seek. With COALESCE around
+    // the column it walks every unverified row whenever fewer than LIMIT rows
+    // qualify, which took minutes per sweep on a gateway with a large data.db.
+    it('seeks into the priority index rather than scanning it', () => {
+      const stmt = loadSql(
+        fileURLToPath(new URL('./sql/data', import.meta.url)),
+      )['selectVerifiableContiguousDataIds'];
+      assert.ok(stmt !== undefined, 'statement not found');
+      const details = (
+        dataDb.prepare(`EXPLAIN QUERY PLAN ${stmt}`).all({
+          min_verification_priority: 60,
+          max_verification_retries: 5,
+        }) as { detail: string }[]
+      )
+        .map((row) => row.detail)
+        .join('\n');
+      assert.match(
+        details,
+        /SEARCH cd USING (COVERING )?INDEX contiguous_data_ids_verification_priority_retry_idx \(verification_priority>\?\)/,
+        `plan must seek on verification_priority, got:\n${details}`,
+      );
     });
   });
 
@@ -2601,96 +2890,274 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
-  // skipping for now as it works when running the test individually
-  describe.skip('saveVerificationStatus', () => {
-    const dataItemRootTxId = '0000000000000000000000000000000000000000000';
-    const dataItem = {
-      anchor: 'a',
-      dataOffset: 10,
-      dataSize: 1,
-      id: DATA_ITEM_ID,
-      offset: 10,
-      owner: 'a',
-      ownerOffset: 1,
-      ownerSize: 1,
-      sigName: 'a',
-      signature: 'a',
-      signatureOffset: 1,
-      signatureSize: 1,
-      signatureType: 1,
-      size: 1,
-      tags: [],
-      target: 'a',
-    };
-    const normalizedDataItem = normalizeAns104DataItem({
-      rootTxId: dataItemRootTxId,
-      parentId: dataItemRootTxId,
-      parentIndex: -1,
+  describe('optimistic tag rows superseded by the unbundle write', () => {
+    // Regression: new_data_item_tags carries root_transaction_id in its
+    // primary key and the optimistic path writes NULL there. The later
+    // unbundle write of the same data item therefore does not conflict --
+    // it leaves a second, parallel tag set, and the GraphQL tag lookup
+    // (which filters on data_item_id alone) returns every tag twice.
+    const itemId = 'b3B0aW1pc3RpYy10YWctZHVwLWl0ZW0tMDAwMQAAAAA';
+    const parentId = 'b3B0aW1pc3RpYy10YWctZHVwLXBhcmVudC0wMQAAAAA';
+    const rootTxId = 'b3B0aW1pc3RpYy10YWctZHVwLXJvb3QtMDAwMQAAAAA';
+
+    const tags = [
+      {
+        name: toB64Url(Buffer.from('App-Name')),
+        value: toB64Url(Buffer.from('ArDrive-App')),
+      },
+      {
+        name: toB64Url(Buffer.from('Entity-Type')),
+        value: toB64Url(Buffer.from('drive-state')),
+      },
+    ];
+
+    const optimisticItem = {
+      anchor: 'YW5jaG9y',
+      data_hash: null,
+      data_offset: null,
+      data_size: 1234,
+      id: itemId,
+      index: null,
+      offset: null,
+      owner: 'b3duZXI',
+      owner_address: 'b3duZXJfYWRkcmVzcw',
+      owner_offset: null,
+      owner_size: null,
+      parent_id: null,
+      parent_index: null,
+      root_parent_offset: null,
+      root_tx_id: null,
+      signature: 'c2lnbmF0dXJl',
+      signature_offset: null,
+      signature_size: null,
+      signature_type: null,
+      size: null,
+      tags,
+      target: 'dGFyZ2V0',
+    } as unknown as NormalizedDataItem;
+
+    const unbundledItem = {
+      ...optimisticItem,
+      data_offset: 100,
+      filter: '{"always": true}',
       index: 0,
-      ans104DataItem: dataItem,
-      filter: '',
-      dataHash: '',
-      rootParentOffset: 0,
+      offset: 200,
+      owner_offset: 50,
+      owner_size: 32,
+      parent_id: parentId,
+      parent_index: 0,
+      root_parent_offset: 300,
+      root_tx_id: rootTxId,
+      signature_offset: 60,
+      signature_size: 32,
+      signature_type: 1,
+      size: 1234,
+    } as unknown as NormalizedDataItem;
+
+    const tagRowsById = () =>
+      bundlesDb
+        .prepare(
+          `SELECT root_transaction_id IS NULL AS optimistic, COUNT(*) AS count
+           FROM new_data_item_tags
+           WHERE data_item_id = @id
+           GROUP BY optimistic
+           ORDER BY optimistic`,
+        )
+        .all({ id: fromB64Url(itemId) }) as {
+        optimistic: number;
+        count: number;
+      }[];
+
+    it('drops the optimistic tag rows once the real root is known', async () => {
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'the optimistic write should leave one tag set with a NULL root',
+      );
+
+      await db.saveDataItem(unbundledItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'the unbundle write should replace the optimistic tag set, not add to it',
+      );
     });
-    const anotherDataItem = { ...normalizedDataItem };
-    anotherDataItem.id = 'WxQdMByPoNZgUFDMbvtC5sB2OHv0LDVsRQZex7qrwUY';
-    anotherDataItem.parent_id = '2222222222222222222222222222222222222222222';
-    anotherDataItem.root_tx_id = '2222222222222222222222222222222222222222222';
 
-    it('should set only bundled items as verified when bundle is set as verified', async () => {
+    it('returns each tag once over GraphQL', async () => {
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+      await db.saveDataItem(unbundledItem);
+
+      const { edges } = await db.getGqlTransactions({
+        pageSize: 10,
+        ids: [itemId],
+      });
+
+      assert.equal(edges.length, 1);
+      assert.deepEqual(edges[0].node.tags, [
+        { name: 'App-Name', value: 'ArDrive-App' },
+        { name: 'Entity-Type', value: 'drive-state' },
+      ]);
+    });
+
+    it('keeps a repeated optimistic write idempotent', async () => {
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'a repeated optimistic write must replace its own tag set, not stack a second one',
+      );
+    });
+
+    it('does not re-add optimistic tags after the unbundle write', async () => {
+      // The admin queue-data-item route can be replayed after the bundle
+      // has already been unbundled (see the PE-9073 re-POST case above).
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+      await db.saveDataItem(unbundledItem);
+      await db.saveDataItem(optimisticItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'the rooted tag set must survive an optimistic re-POST on its own',
+      );
+    });
+
+    it('keeps a repeated unrooted full write idempotent', async () => {
+      // The full-claim path is only reached with a root today, but the
+      // unrooted tag set must stay single-copy either way -- NULL roots do
+      // not conflict, so nothing else would deduplicate them.
+      await db.saveDataItem(optimisticItem);
+      await db.saveDataItem(optimisticItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'a repeated unrooted write must replace its own tag set',
+      );
+
+      await db.saveDataItem(unbundledItem);
+      await db.saveDataItem(optimisticItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'an unrooted write must not add a set alongside the rooted one',
+      );
+    });
+
+    it('writes unrooted tag rows when an optimistic write carries a root', async () => {
+      // insertOptimisticDataItem hardcodes NULL for the row-level root atom.
+      // The tag rows follow the same contract, so a caller that binds a root
+      // on the optimistic path cannot create a rooted set.
+      await db.saveDataItem(unbundledItem, /* isOptimistic */ true);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 1, count: tags.length }],
+        'an optimistic write must not claim a root on its tag rows',
+      );
+
+      await db.saveDataItem(unbundledItem);
+
+      assert.deepEqual(
+        tagRowsById(),
+        [{ optimistic: 0, count: tags.length }],
+        'the unbundle write should still replace that set',
+      );
+    });
+  });
+
+  describe('saveVerificationStatus', () => {
+    // Fresh IDs: saveDataContentAttributes dedupes writes for 7 minutes on the
+    // main thread, so an ID another test already wrote would be skipped here
+    // after afterEach empties the table.
+    const newId = () => toB64Url(crypto.randomBytes(32));
+    const rootTxId = newId();
+    const otherRootTxId = newId();
+    const itemUnderRoot = newId();
+    const itemUnderOtherRoot = newId();
+
+    const verifiedById = () =>
+      new Map(
+        (
+          dataDb
+            .prepare('SELECT id, verified FROM contiguous_data_ids')
+            .all() as { id: Buffer; verified: number }[]
+        ).map((row) => [toB64Url(row.id), row.verified]),
+      );
+
+    it('marks the root transaction and only the data items under it as verified', async () => {
       await db.saveDataContentAttributes({
-        id: dataItemRootTxId,
+        id: rootTxId,
         hash: 'hash',
         dataSize: 10,
       });
-
       await db.saveDataContentAttributes({
-        id: normalizedDataItem.id,
-        parentId: normalizedDataItem.parent_id ?? undefined,
+        id: itemUnderRoot,
         hash: 'hash',
         dataSize: 10,
+        rootTransactionId: rootTxId,
       });
-
       await db.saveDataContentAttributes({
-        id: anotherDataItem.id,
-        parentId: anotherDataItem.parent_id ?? undefined,
+        id: itemUnderOtherRoot,
         hash: 'hash',
         dataSize: 10,
+        rootTransactionId: otherRootTxId,
       });
 
-      await db.saveDataItem(normalizedDataItem);
-      await db.saveDataItem(anotherDataItem);
+      assert.deepEqual(
+        verifiedById(),
+        new Map([
+          [rootTxId, 0],
+          [itemUnderRoot, 0],
+          [itemUnderOtherRoot, 0],
+        ]),
+      );
 
-      const sql = `
-        SELECT * FROM contiguous_data_ids;
-      `;
-      const contiguousDataIds = dataDb
-        .prepare(sql)
-        .all()
-        .map((row) => ({ id: toB64Url(row.id), verified: row.verified }));
+      await db.saveVerificationStatus(rootTxId);
 
-      assert.equal(contiguousDataIds.length, 3);
-      assert.equal(contiguousDataIds[0].id, dataItemRootTxId);
-      assert.equal(contiguousDataIds[0].verified, 0);
-      assert.equal(contiguousDataIds[1].id, normalizedDataItem.id);
-      assert.equal(contiguousDataIds[1].verified, 0);
-      assert.equal(contiguousDataIds[2].id, anotherDataItem.id);
-      assert.equal(contiguousDataIds[2].verified, 0);
+      assert.deepEqual(
+        verifiedById(),
+        new Map([
+          [rootTxId, 1],
+          [itemUnderRoot, 1],
+          [itemUnderOtherRoot, 0],
+        ]),
+      );
+    });
 
-      await db.saveVerificationStatus(dataItemRootTxId);
-
-      const contiguousDataIdsUpdated = dataDb
-        .prepare(sql)
-        .all()
-        .map((row) => ({ id: toB64Url(row.id), verified: row.verified }));
-
-      assert.equal(contiguousDataIdsUpdated.length, 3);
-      assert.equal(contiguousDataIdsUpdated[0].id, dataItemRootTxId);
-      assert.equal(contiguousDataIdsUpdated[0].verified, 1);
-      assert.equal(contiguousDataIdsUpdated[1].id, normalizedDataItem.id);
-      assert.equal(contiguousDataIdsUpdated[1].verified, 1);
-      assert.equal(contiguousDataIdsUpdated[2].id, anotherDataItem.id);
-      assert.equal(contiguousDataIdsUpdated[2].verified, 0);
+    // Both sides of the OR must be index probes. Before
+    // contiguous_data_ids_root_transaction_id_idx this statement scanned the
+    // whole table on every verification while holding the data.db writer.
+    it('probes the primary key and the root transaction index, never scanning the table', () => {
+      const stmt = loadSql(
+        fileURLToPath(new URL('./sql/data', import.meta.url)),
+      )['updateDataItemVerificationStatus'];
+      assert.ok(stmt !== undefined, 'statement not found');
+      const details = (
+        dataDb
+          .prepare(`EXPLAIN QUERY PLAN ${stmt}`)
+          .all({ id: fromB64Url(rootTxId), verified_at: 0 }) as {
+          detail: string;
+        }[]
+      )
+        .map((row) => row.detail)
+        .join('\n');
+      assert.match(
+        details,
+        /contiguous_data_ids_root_transaction_id_idx \(root_transaction_id=\?\)/,
+        `plan must probe the root transaction index, got:\n${details}`,
+      );
+      assert.doesNotMatch(
+        details,
+        /SCAN contiguous_data_ids/,
+        `plan must not scan contiguous_data_ids, got:\n${details}`,
+      );
     });
   });
 

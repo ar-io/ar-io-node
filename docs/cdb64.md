@@ -111,6 +111,7 @@ Each data item ID maps to information about its location:
 | `rootTxId`       | The L1 Arweave transaction containing the data         |
 | `rootOffset`     | Byte offset of the data item header within the root TX |
 | `rootDataOffset` | Byte offset of the data payload within the root TX     |
+| `size`           | Total data item size, header + payload (optional)      |
 | `path`           | Bundle traversal path for nested bundles               |
 
 ### Source Priority
@@ -131,9 +132,9 @@ result is actionable when the caller can proceed without further lookups:
 
 | Exit reason        | Condition                                             | Notes                                             |
 | ------------------ | ----------------------------------------------------- | ------------------------------------------------- |
-| `complete_offsets` | `rootOffset` + `rootDataOffset` + `size` + `dataSize` | Full offsets; no header parse needed              |
+| `complete_offsets` | `rootOffset` + `rootDataOffset` + `size` + `dataSize` | One header check; bundle search only if it fails  |
 | `l1_root`          | `rootTxId === id`                                     | Definitive L1 root; passthrough                   |
-| `offsets`          | `rootOffset` + `rootDataOffset` present               | The CDB64 case; size is read from the item header |
+| `offsets`          | `rootOffset` + `rootDataOffset` present               | The CDB64 case; see [Item size](#item-size)       |
 | `path`             | non-empty `path`                                      | Enables path-guided bundle navigation             |
 | `caller_accept`    | `opts.accept(result) === true`                        | Caller-provided predicate accepted the result     |
 
@@ -147,9 +148,51 @@ a fallback and the search continues, so a later source (e.g. CDB64) can supply a
 path or offsets. If no source is actionable, the saved fallback is returned
 (`fallback`), or `undefined` if nothing resolved (`not_found`).
 
-CDB64 values carry offsets (`rootOffset`/`rootDataOffset`) but not `size`, so
-CDB64 hits terminate with the `offsets` (or `path`) reason rather than
-`complete_offsets`.
+CDB64 values never carry `dataSize` or the item's content type, so CDB64 hits
+terminate with the `offsets` (or `path`) reason rather than `complete_offsets`.
+
+### Item size
+
+An offset tells the gateway where a data item starts, but not where it ends.
+CDB64 values can optionally record the total item size (`s`, header + payload;
+the `data_item_size` CSV column), and whether they do decides how an `offsets`
+hit is served:
+
+| Value carries          | How the item is located                                                                                   | Reads before the payload |
+| ---------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------ |
+| offsets + item size    | Reads the item header at `rootOffset`, checks that its signature hashes to the requested ID and that the header ends at `rootDataOffset`, takes the payload size and content type from it, then serves the payload only if the item's signature verifies over it | 1 (bounded item header)  |
+| offsets only           | Searches the root bundle header for the item (item count, ID index, item header), as for a bare `rootTxId` | 3 or more                |
+
+If the header check fails (wrong ID, or a header that does not end at
+`rootDataOffset`), the gateway falls back to the bundle search. The recorded
+size itself can only be checked against the payload, so the payload streams
+through signature verification: its final bytes are released only once the
+item's signature verifies, and the offsets are saved only then. A wrong size
+therefore ends the response short instead of completing it, and later requests
+for that entry use the bundle search. Range requests always use the bundle
+search, because a range cannot be verified end to end. Outcomes are counted in
+`data_item_signature_verification_total{source="root_tx_index"}`. Each resolution is counted in
+`root_tx_local_resolve_total{outcome}`; `index_offsets` counts items located from
+the recorded size. The size is optional and ignored by readers that predate it,
+so indexes that include it remain readable by older gateways.
+
+A complete location (item offset, payload offset and payload size), whether
+from an index or from stored data attributes, gets the same header check before
+any bytes are read from it. The same item can exist under one ID in several
+bundles, and chunk verification only proves that bytes belong to the root, not
+that they are this item, so a root paired with another copy's offset would
+otherwise serve the wrong bytes marked verified
+([#937](https://github.com/ar-io/ar-io-node/issues/937)). A header read cannot
+confirm the payload size, since the header does not record it. A location that
+is not confirmed is not served, and one from an index is not stored; resolution
+continues with the bundle search (for stored attributes, only when
+`ENABLE_DATA_ITEM_ROOT_TX_SEARCH` is on). A rejected stored location is not
+removed, so it is checked again on each uncached request. Outcomes are counted in
+`data_item_location_check_total{source,result}`, where `source` is
+`stored_attributes`, `attributes_traversal`, `root_tx_index` or
+`root_tx_index_fallback`, and `result` is `confirmed` or `rejected`. `rejected`
+also counts headers that could not be read, so a rise can mean upstream read
+failures as well as wrong locations.
 
 Observability (per-node Prometheus metrics):
 
@@ -160,6 +203,15 @@ Observability (per-node Prometheus metrics):
   before returning. Effective short-circuiting keeps this low.
 - `root_tx_lookup_total{source="graphql"}` — total GraphQL probes; falls sharply
   once early local sources (db/cdb) short-circuit.
+- `root_tx_lookup_total{source="cdb64",status="found",has_offsets,has_size}` —
+  what each index hit returned. `has_offsets="true"` means both root offsets
+  came back; `has_size="true"` means the item size did too, which lets the
+  item be served with one ID-verified header read. An index built without
+  offsets shows up as `has_offsets="false"`. The labels apply to every
+  source, not only `cdb64`; for an L1 root (for example from `turbo`),
+  `has_size` reflects the transaction's data size rather than an item's. (Before this label was fixed it
+  also required `dataSize`, which a CDB64 index never returns, so every index
+  hit read `"false"`.)
 
 ### Partitioned Indexes
 

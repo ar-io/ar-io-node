@@ -4,7 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { ValidationError } from 'apollo-server-express';
+import { GraphQLError } from 'graphql';
 import Sqlite from 'better-sqlite3';
 import crypto from 'node:crypto';
 import os from 'node:os';
@@ -49,6 +49,7 @@ import {
   ContiguousDataAttributes,
   ContiguousDataIndex,
   DataAttributesSource,
+  ManifestResolutionStore,
   ContiguousDataParent,
   DataItemAttributes,
   GqlQueryable,
@@ -60,6 +61,7 @@ import {
   TransactionAttributes,
   ChunkPlacement,
   ChunkPlacementRef,
+  TxGeometry,
 } from '../types.js';
 import * as config from '../config.js';
 import { DetailedError } from '../lib/error.js';
@@ -169,7 +171,20 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
       id,
     };
   } catch (error) {
-    throw new ValidationError('Invalid transaction cursor');
+    throw new GraphQLError('Invalid transaction cursor', {
+      extensions: {
+        // Matches what apollo-server-express 3 put on the wire for this error,
+        // verified against a running gateway: HTTP 200, `data: null`, and
+        // `extensions.code = GRAPHQL_VALIDATION_FAILED`.
+        //
+        // Deliberately no `http` override. These decoders run during resolver
+        // execution, and Apollo answers resolver errors with 200 and an
+        // `errors` array; setting `http.status` here would both change that
+        // contract and, because batched requests share one response head,
+        // let one bad cursor set the status for an entire batch.
+        code: 'GRAPHQL_VALIDATION_FAILED',
+      },
+    });
   }
 }
 
@@ -187,7 +202,20 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
 
     return { height };
   } catch (error) {
-    throw new ValidationError('Invalid block cursor');
+    throw new GraphQLError('Invalid block cursor', {
+      extensions: {
+        // Matches what apollo-server-express 3 put on the wire for this error,
+        // verified against a running gateway: HTTP 200, `data: null`, and
+        // `extensions.code = GRAPHQL_VALIDATION_FAILED`.
+        //
+        // Deliberately no `http` override. These decoders run during resolver
+        // execution, and Apollo answers resolver errors with 200 and an
+        // `errors` array; setting `http.status` here would both change that
+        // contract and, because batched requests share one response head,
+        // let one bad cursor set the status for an entire batch.
+        code: 'GRAPHQL_VALIDATION_FAILED',
+      },
+    });
   }
 }
 
@@ -473,7 +501,26 @@ export class StandaloneSqliteDatabaseWorker {
   resetBundlesToHeightFn: Sqlite.Transaction;
   resetCoreToHeightFn: Sqlite.Transaction;
   insertTxFn: Sqlite.Transaction;
+  /**
+   * Full-claim data item write: the caller knows the complete root atom
+   * (`parent_id`, `root_transaction_id`, and the offset/size fields). Used by
+   * the unbundle pipeline and the on-demand metadata resolver.
+   *
+   * Tag rows go through {@link writeNewDataItemTags}, which clears the
+   * unrooted set before writing so an optimistic write of the same data item
+   * cannot survive alongside the rooted one.
+   */
   insertDataItemFn: Sqlite.Transaction;
+  /**
+   * Optimistic data item write: the caller has no root-atom knowledge. Used by
+   * the admin queue-data-item route.
+   *
+   * The row-level root atom is hardcoded NULL by `insertOptimisticDataItem`,
+   * and the tag rows are written unrooted for the same reason — see
+   * {@link writeNewDataItemTags}, which also skips them once a rooted set
+   * exists. `bundle_data_items` is deliberately not written: it records actual
+   * unbundle observations, not optimistic claims.
+   */
   insertOptimisticDataItemFn: Sqlite.Transaction;
   insertBlockAndTxsFn: Sqlite.Transaction;
   saveCoreStableDataFn: Sqlite.Transaction;
@@ -629,12 +676,12 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreTagValue.run(row);
         }
 
-        for (const row of rows.newDataItemTags) {
-          this.stmts.bundles.upsertNewDataItemTag.run({
-            ...row,
-            height,
-          });
-        }
+        this.writeNewDataItemTags({
+          dataItemId: rows.newDataItem.id,
+          rootTransactionId: rows.newDataItem.root_transaction_id,
+          tagRows: rows.newDataItemTags,
+          height,
+        });
 
         for (const row of rows.wallets) {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
@@ -655,11 +702,9 @@ export class StandaloneSqliteDatabaseWorker {
     );
 
     // Optimistic path: caller has no tuple knowledge. Used by the admin
-    // queue-data-item route. INSERT-if-absent for the data item row;
-    // never updates the root-atom fields on conflict. Tag rows still
-    // upsert the always-known optimistic metadata. We deliberately skip
-    // the bundle_data_items write — that table records actual unbundle
-    // observations, not optimistic claims.
+    // queue-data-item route. INSERT-if-absent for the data item row; never
+    // updates the root-atom fields on conflict. See the insertOptimisticDataItemFn
+    // declaration for the tag-row contract.
     this.insertOptimisticDataItemFn = this.dbs.bundles.transaction(
       (item: NormalizedDataItem, height?: number) => {
         const rows = dataItemToDbRows(item, height);
@@ -672,12 +717,15 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreTagValue.run(row);
         }
 
-        for (const row of rows.newDataItemTags) {
-          this.stmts.bundles.upsertNewDataItemTag.run({
-            ...row,
-            height,
-          });
-        }
+        // `rootTransactionId: null` mirrors the hardcoded NULLs in
+        // insertOptimisticDataItem: a caller with no tuple knowledge must not
+        // write a root here even if one is bound on the item.
+        this.writeNewDataItemTags({
+          dataItemId: rows.newDataItem.id,
+          rootTransactionId: null,
+          tagRows: rows.newDataItemTags,
+          height,
+        });
 
         for (const row of rows.wallets) {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
@@ -1369,6 +1417,33 @@ export class StandaloneSqliteDatabaseWorker {
     return row.count as number;
   }
 
+  /**
+   * Look up the chunk-read geometry (data_root, END offset, data size) of a
+   * stable transaction by id.
+   *
+   * @param txId - base64url transaction id
+   * @returns the geometry, or `undefined` when the transaction is not a stable
+   *   row with both `offset` and `data_root` populated
+   */
+  getTxGeometry(txId: string): TxGeometry | undefined {
+    const row = this.stmts.core.selectStableTransactionGeometryById.get({
+      id: fromB64Url(txId),
+    });
+    if (
+      row === undefined ||
+      row.data_root == null ||
+      row.offset == null ||
+      row.data_size == null
+    ) {
+      return undefined;
+    }
+    return {
+      dataRoot: toB64Url(row.data_root),
+      offset: row.offset,
+      size: row.data_size,
+    };
+  }
+
   getTxByOffset(offset: number): TxByOffsetResult {
     const result = this.stmts.core.selectStableTransactionOffsetById.get({
       offset,
@@ -1445,6 +1520,60 @@ export class StandaloneSqliteDatabaseWorker {
       }
     }
     return id;
+  }
+
+  /**
+   * Write a data item's tag rows, keeping at most one set per data item id.
+   *
+   * `new_data_item_tags` carries `root_transaction_id` in its primary key and
+   * SQLite treats every NULL there as distinct from every other NULL. An
+   * unrooted set therefore never conflicts with anything, so it cannot be
+   * replaced by a later upsert — it has to be deleted. Two invariants follow:
+   *
+   * - The unrooted set is cleared before every write, so a repeated write
+   *   replaces its own rows instead of stacking a second copy.
+   * - An unrooted write is skipped once a rooted set exists. Tags are
+   *   immutable per data item id, so the two sets carry the same tags and
+   *   GraphQL — which looks tags up by `data_item_id` alone — would return
+   *   each one twice.
+   *
+   * `rootTransactionId` is applied to every row rather than taken from the
+   * rows themselves, so a caller with no root-atom knowledge cannot write a
+   * rooted set by accident.
+   */
+  private writeNewDataItemTags({
+    dataItemId,
+    rootTransactionId,
+    tagRows,
+    height,
+  }: {
+    dataItemId: Buffer;
+    rootTransactionId: Buffer | null;
+    tagRows: ReturnType<typeof dataItemToDbRows>['newDataItemTags'];
+    height?: number;
+  }) {
+    this.stmts.bundles.deleteOptimisticNewDataItemTags.run({
+      data_item_id: dataItemId,
+    });
+
+    if (rootTransactionId === null) {
+      const rootedTagsExist =
+        this.stmts.bundles.selectRootedNewDataItemTag.get({
+          data_item_id: dataItemId,
+        }) !== undefined;
+
+      if (rootedTagsExist) {
+        return;
+      }
+    }
+
+    for (const row of tagRows) {
+      this.stmts.bundles.upsertNewDataItemTag.run({
+        ...row,
+        root_transaction_id: rootTransactionId,
+        height,
+      });
+    }
   }
 
   saveDataItem(item: NormalizedDataItem, isOptimistic = false) {
@@ -1924,10 +2053,16 @@ export class StandaloneSqliteDatabaseWorker {
       });
     }
 
-    if (this.insertDataHashCache.get(hash)) {
+    // Dedupe on (hash, content type) rather than hash alone. `insertDataHash`
+    // can now heal a row whose content type is the `application/octet-stream`
+    // placeholder, and keying on the hash alone would let this in-process memo
+    // swallow exactly the write that heals it — the repeat suppressed is the
+    // one carrying the better value.
+    const insertDataHashCacheKey = `${hash}|${contentType ?? ''}`;
+    if (this.insertDataHashCache.get(insertDataHashCacheKey)) {
       return;
     }
-    this.insertDataHashCache.set(hash, true);
+    this.insertDataHashCache.set(insertDataHashCacheKey, true);
 
     this.stmts.data.insertDataHash.run({
       hash: hashBuffer,
@@ -1935,6 +2070,38 @@ export class StandaloneSqliteDatabaseWorker {
       original_source_content_type: contentType,
       indexed_at: currentTimestamp,
       cached_at: cachedAt,
+    });
+  }
+
+  getManifestResolution(id: string) {
+    const row = this.stmts.data.selectManifestResolution.get({
+      manifest_id: fromB64Url(id),
+    });
+    if (row === undefined) {
+      return undefined;
+    }
+    return {
+      indexId: row.index_id ? toB64Url(row.index_id) : undefined,
+      fallbackId: row.fallback_id ? toB64Url(row.fallback_id) : undefined,
+    };
+  }
+
+  saveManifestResolution({
+    id,
+    indexId,
+    fallbackId,
+    resolvedAt,
+  }: {
+    id: string;
+    indexId?: string;
+    fallbackId?: string;
+    resolvedAt: number;
+  }) {
+    this.stmts.data.upsertManifestResolution.run({
+      manifest_id: fromB64Url(id),
+      index_id: indexId ? fromB64Url(indexId) : null,
+      fallback_id: fallbackId ? fromB64Url(fallbackId) : null,
+      resolved_at: resolvedAt,
     });
   }
 
@@ -3283,11 +3450,28 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
-  getVerifiableDataIds() {
-    // TODO: make this a parameter (method or constructor) with a default
-    const minVerificationPriority = config.MIN_DATA_VERIFICATION_PRIORITY;
-    const maxVerificationRetries = config.MAX_VERIFICATION_RETRIES;
-    const dataIds = this.stmts.data.selectVerifiableContiguousDataIds.all({
+  /**
+   * Return up to 1000 unverified data IDs for background verification,
+   * highest priority first, fewest retries first.
+   *
+   * A positive minimum can never admit an unprioritized (NULL) row, so it uses
+   * the statement that seeks straight to the qualifying priority range. A
+   * minimum of zero or below counts NULL as priority 0 and so admits every
+   * unverified row; that case uses the statement that keeps the COALESCE.
+   *
+   * @param minVerificationPriority Lowest priority to include.
+   * @param maxVerificationRetries Rows with this many retries or more are left out.
+   */
+  getVerifiableDataIds(
+    minVerificationPriority = config.MIN_DATA_VERIFICATION_PRIORITY,
+    maxVerificationRetries = config.MAX_VERIFICATION_RETRIES,
+  ) {
+    const stmt =
+      minVerificationPriority > 0
+        ? this.stmts.data.selectVerifiableContiguousDataIds
+        : this.stmts.data
+            .selectVerifiableContiguousDataIdsIncludingUnprioritized;
+    const dataIds = stmt.all({
       min_verification_priority: minVerificationPriority,
       max_verification_retries: maxVerificationRetries,
     });
@@ -3457,6 +3641,7 @@ export class StandaloneSqliteDatabase
     ChainOffsetIndex,
     ContiguousDataIndex,
     DataAttributesSource,
+    ManifestResolutionStore,
     GqlQueryable,
     NestedDataIndexWriter
 {
@@ -3855,17 +4040,18 @@ export class StandaloneSqliteDatabase
       }
     };
 
-    const ret = executeWithRetry();
-
-    ret.finally(() => {
+    // Return the finally-chained promise (not the bare `ret`). `.finally()`
+    // creates a derived promise that settles the same as `ret`; returning it
+    // ensures a rejection is delivered to the caller's handler instead of
+    // leaving the derived promise orphaned and unhandled. `.finally()` passes
+    // the settlement through unchanged, so caller behavior is preserved.
+    return executeWithRetry().finally(() => {
       metrics.sqliteInFlightOps.dec({
         worker: workerName,
         role,
       });
       end();
     });
-
-    return ret;
   }
 
   queueRead(
@@ -3943,6 +4129,18 @@ export class StandaloneSqliteDatabase
 
   getTxByOffset(offset: number): Promise<TxByOffsetResult> {
     return this.queueRead('core', 'getTxByOffset', [offset]);
+  }
+
+  /**
+   * Look up the chunk-read geometry of a stable transaction on a core read
+   * worker. See {@link StandaloneSqliteDatabaseWorker.getTxGeometry}.
+   *
+   * @param txId - base64url transaction id
+   * @returns the geometry, or `undefined` when no stable row with both
+   *   `offset` and `data_root` exists
+   */
+  getTxGeometry(txId: string): Promise<TxGeometry | undefined> {
+    return this.queueRead('core', 'getTxGeometry', [txId]);
   }
 
   /**
@@ -4246,6 +4444,21 @@ export class StandaloneSqliteDatabase
     }
   }
 
+  getManifestResolution(
+    id: string,
+  ): Promise<{ indexId?: string; fallbackId?: string } | undefined> {
+    return this.queueRead('data', 'getManifestResolution', [id]);
+  }
+
+  saveManifestResolution(args: {
+    id: string;
+    indexId?: string;
+    fallbackId?: string;
+    resolvedAt: number;
+  }): Promise<void> {
+    return this.queueWrite('data', 'saveManifestResolution', [args]);
+  }
+
   async getDataItemAttributes(
     id: string,
   ): Promise<DataItemAttributes | undefined> {
@@ -4302,12 +4515,15 @@ export class StandaloneSqliteDatabase
    * position within the root transaction — for persistence.
    *
    * Writes are deduped over a {@link DEDUPE_CACHE_TTL_MS} window keyed on the
-   * item ID **and its root coordinates** (`rootTransactionId`,
-   * `rootDataItemOffset`, `rootDataOffset`). A repeat write carrying the same
-   * coordinates is dropped, which is what the cache exists for; a write that
-   * moves the item to a different root always reaches the queue. Keying on the
-   * ID alone let whichever retrieval finished first inside the window win, so a
-   * corrected root arriving behind an unchanged write was silently discarded.
+   * item ID **plus every field a write can correct**: its root coordinates
+   * (`rootTransactionId`, `rootDataItemOffset`, `rootDataOffset`) and its
+   * `contentType`. A repeat write carrying all the same values is dropped,
+   * which is what the cache exists for; a write that moves the item to a
+   * different root, or that carries a different content type, always reaches
+   * the queue. Keying on the ID alone let whichever retrieval finished first
+   * inside the window win, so a correction arriving behind an unchanged write
+   * was silently discarded — the root coordinates and the content type are in
+   * the key because each was a correction being lost that way.
    *
    * Callers that invalidate an item must clear every dedupe entry for it, not
    * just the bare ID — see {@link clearDataHash}.
@@ -4361,11 +4577,18 @@ export class StandaloneSqliteDatabase
     // suppress ones it allowed, and the extra writes are limited to genuine
     // corrections — so the protection this cache exists to give the write
     // queue is preserved.
+    //
+    // `contentType` is in the key for the same reason: a retrieval that
+    // resolved the item's content type only from the bundle around it claims
+    // the slot first, and the write carrying the item's real type — the one
+    // that heals `contiguous_data.original_source_content_type` — arrives
+    // inside the same window and would otherwise be the one dropped.
     const dedupeKey = [
       id,
       rootTransactionId ?? '',
       rootDataItemOffset ?? '',
       rootDataOffset ?? '',
+      contentType ?? '',
     ].join('|');
 
     if (this.saveDataContentAttributesCache.get(dedupeKey)) {
@@ -4404,7 +4627,7 @@ export class StandaloneSqliteDatabase
     return this.queueRead('bundles', 'getBundle', [id]);
   }
 
-  getGqlTransactions({
+  async getGqlTransactions({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -4429,6 +4652,12 @@ export class StandaloneSqliteDatabase
     tags?: { name: string; values: string[] }[];
     l1Only?: boolean;
   }) {
+    // Validate the cursor here, in the calling thread, before the worker sees
+    // it. An error thrown inside the worker reaches the caller re-wrapped as a
+    // generic 'Error in StandaloneSqlite worker' (INTERNAL_SERVER_ERROR), so the
+    // decoder's GRAPHQL_VALIDATION_FAILED error would be lost. A valid cursor is
+    // decoded again in the worker; that costs a base64 and JSON parse.
+    decodeTransactionGqlCursor(cursor);
     return this.queueRead('gql', 'getGqlTransactions', [
       {
         pageSize,
@@ -4450,7 +4679,7 @@ export class StandaloneSqliteDatabase
     return this.queueRead('gql', 'getGqlTransaction', [{ id }]);
   }
 
-  getGqlBlocks({
+  async getGqlBlocks({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -4465,6 +4694,8 @@ export class StandaloneSqliteDatabase
     minHeight?: number;
     maxHeight?: number;
   }) {
+    // See getGqlTransactions: validate before the worker re-wraps the error.
+    decodeBlockGqlCursor(cursor);
     return this.queueRead('gql', 'getGqlBlocks', [
       {
         pageSize,
@@ -4747,6 +4978,9 @@ if (!isMainThread) {
           const tx = worker.getTxByOffset(args[0]);
           parentPort?.postMessage(tx);
           break;
+        case 'getTxGeometry':
+          parentPort?.postMessage(worker.getTxGeometry(args[0]));
+          break;
         case 'getBlockByWeaveOffset':
           const blockByWeaveOffset = worker.getBlockByWeaveOffset(args[0]);
           parentPort?.postMessage(blockByWeaveOffset);
@@ -4915,6 +5149,14 @@ if (!isMainThread) {
           break;
         case 'saveDataContentAttributes':
           worker.saveDataContentAttributes(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'getManifestResolution':
+          const manifestResolution = worker.getManifestResolution(args[0]);
+          parentPort?.postMessage(manifestResolution);
+          break;
+        case 'saveManifestResolution':
+          worker.saveManifestResolution(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'getBundle':

@@ -1,0 +1,516 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/**
+ * Configuration for the index-swarm sidecar.
+ *
+ * Deliberately not `src/config.ts`. That module is the gateway's, and reading
+ * it has side effects: it stats and reads key material, parses filters, and
+ * initialises HTTPSIG signing state. A sidecar that only moves files should
+ * not do any of that as a consequence of importing its settings.
+ *
+ * Every setting is read once here so a malformed value fails at startup with
+ * a clear message, rather than on the first poll hours later.
+ */
+import * as path from 'node:path';
+
+import * as env from '../lib/env.js';
+import { isValidIndexName } from '../lib/index-publication.js';
+
+/** One index this node publishes. */
+export interface PublishConfig {
+  /** Index name, matching `^[a-z0-9-]{1,64}$`. */
+  name: string;
+  /** Artifact kind, selecting the plugin that describes and installs bands. */
+  kind: string;
+  /** Opaque, passed through to the manifest for subscribers to match on. */
+  filter?: unknown;
+}
+
+/** One publisher this node subscribes to. */
+export interface SubscribeConfig {
+  /** The publishing gateway's wallet address, as registered. */
+  publisher: string;
+  /** Restrict to one index name; all of the publisher's indexes when unset. */
+  name?: string;
+  /** Override the URL derived from the publisher's gateway record. */
+  url?: string;
+}
+
+function parseJson(raw: string | undefined, varName: string): unknown {
+  if (raw === undefined || raw.trim() === '') {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error: any) {
+    throw new Error(
+      `${varName} is not valid JSON: ${error?.message ?? 'parse failed'}`,
+    );
+  }
+}
+
+/**
+ * Parse the publish configuration.
+ *
+ * Takes the raw string rather than reading the environment itself, so the
+ * rules can be tested directly instead of through module-load ordering.
+ */
+export function parsePublish(raw: string | undefined): PublishConfig[] {
+  const parsed = parseJson(raw, 'INDEX_SWARM_PUBLISH');
+  if (parsed === undefined) return [];
+  if (!Array.isArray(parsed)) {
+    throw new Error('INDEX_SWARM_PUBLISH must be a JSON array');
+  }
+  return parsed.map((entry, i) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error(`INDEX_SWARM_PUBLISH[${i}] must be an object`);
+    }
+    const { name, kind, filter } = entry as Record<string, unknown>;
+    // The name becomes a directory, a URL segment and a field of the signed
+    // document, which subscribers reject outright if it is malformed.
+    if (!isValidIndexName(name)) {
+      throw new Error(
+        `INDEX_SWARM_PUBLISH[${i}].name must match ^[a-z0-9-]{1,64}$`,
+      );
+    }
+    if (typeof kind !== 'string' || kind.length === 0) {
+      throw new Error(`INDEX_SWARM_PUBLISH[${i}].kind must be a string`);
+    }
+    return { name, kind, ...(filter !== undefined ? { filter } : {}) };
+  });
+}
+
+/** Parse the subscribe configuration. See {@link parsePublish}. */
+export function parseSubscribe(raw: string | undefined): SubscribeConfig[] {
+  const parsed = parseJson(raw, 'INDEX_SWARM_SUBSCRIBE');
+  if (parsed === undefined) return [];
+  if (!Array.isArray(parsed)) {
+    throw new Error('INDEX_SWARM_SUBSCRIBE must be a JSON array');
+  }
+  const seen = new Set<string>();
+  return parsed.map((entry, i) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error(`INDEX_SWARM_SUBSCRIBE[${i}] must be an object`);
+    }
+    const { publisher, name, url } = entry as Record<string, unknown>;
+    if (typeof publisher !== 'string' || publisher.length === 0) {
+      throw new Error(
+        `INDEX_SWARM_SUBSCRIBE[${i}].publisher must be a wallet address`,
+      );
+    }
+    // A malformed name could never match a published index, so the
+    // subscription would silently do nothing.
+    if (name !== undefined && !isValidIndexName(name)) {
+      throw new Error(
+        `INDEX_SWARM_SUBSCRIBE[${i}].name must match ^[a-z0-9-]{1,64}$`,
+      );
+    }
+    if (url !== undefined && typeof url !== 'string') {
+      throw new Error(`INDEX_SWARM_SUBSCRIBE[${i}].url must be a string`);
+    }
+    // A publisher is polled once, under its first entry, so a second entry
+    // would be silently ignored.
+    if (seen.has(publisher)) {
+      throw new Error(
+        `INDEX_SWARM_SUBSCRIBE[${i}] repeats publisher ${publisher}; list it once, and omit name to take all of its indexes`,
+      );
+    }
+    seen.add(publisher);
+    return {
+      publisher,
+      ...(name !== undefined ? { name } : {}),
+      ...(url !== undefined ? { url } : {}),
+    };
+  });
+}
+
+/** Root of the shared volume the gateway also reads. */
+export const DATA_DIR = env.varOrDefault(
+  'INDEX_SWARM_DATA_DIR',
+  'data/indexes',
+);
+
+/** Bands this node offers. The gateway serves these at /ar-io/indexes. */
+export const PUBLISHED_DIR = path.join(DATA_DIR, 'published');
+/** Downloads in progress. Never read by the gateway. */
+export const INCOMING_DIR = path.join(DATA_DIR, 'incoming');
+/** Bands in use. The gateway loads these through its collection source. */
+export const INSTALLED_DIR = path.join(DATA_DIR, 'installed');
+
+/**
+ * Where the torrent engine downloads, one directory per torrent. The only
+ * index directory the engine may write.
+ */
+export const SWARM_DIR = path.join(DATA_DIR, 'swarm');
+
+/** Checked `.torrent` files kept for seeding installed bands. Sidecar only. */
+export const TORRENTS_DIR = path.join(DATA_DIR, 'torrents');
+/** Content-addressed links into the published bands, served by hash. */
+export const BLOBS_DIR = path.join(PUBLISHED_DIR, 'blobs');
+/** The signed document the gateway serves at /ar-io/indexes. */
+export const PUBLICATION_FILE = path.join(PUBLISHED_DIR, 'publication.json');
+/** Sidecar state: sequences seen, bands installed. Rebuildable from disk. */
+export const STATE_FILE = path.join(DATA_DIR, 'state.json');
+
+export const PUBLISH: PublishConfig[] = parsePublish(
+  env.varOrUndefined('INDEX_SWARM_PUBLISH'),
+);
+export const SUBSCRIBE: SubscribeConfig[] = parseSubscribe(
+  env.varOrUndefined('INDEX_SWARM_SUBSCRIBE'),
+);
+
+/** How often to look for new or changed bands. */
+export const PUBLISH_SCAN_INTERVAL_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_PUBLISH_SCAN_INTERVAL_SECONDS', 60) *
+  1000;
+
+/**
+ * How long a publication stays fresh.
+ *
+ * A subscriber alarms once `expiresAt` has passed, so this is the staleness
+ * contract rather than a cache hint. Set it to roughly twice the interval at
+ * which bands are expected to change, so an ordinary quiet period does not
+ * read as a dead publisher.
+ */
+export const PUBLISH_TTL_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_PUBLISH_TTL_SECONDS', 86_400) * 1000;
+
+/**
+ * How long a retired band's files stay on disk after it stops being served,
+ * giving anything mid-read time to finish.
+ */
+export const SUPERSEDE_GRACE_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_SUPERSEDE_GRACE_SECONDS', 300) * 1000;
+
+/** How often to poll each publisher for a new document. */
+export const POLL_INTERVAL_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_POLL_INTERVAL_SECONDS', 300) * 1000;
+
+/** Give up on a publisher that has not answered in this long. */
+export const MANIFEST_FETCH_TIMEOUT_MS = env.positiveIntOrDefault(
+  'INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS',
+  30_000,
+);
+
+/**
+ * Give up on a band file download once no bytes have arrived for this long.
+ * Band files run to gigabytes, so this bounds a stall, not the transfer: a
+ * download still moving is never cut off, however long it takes.
+ */
+export const DOWNLOAD_STALL_TIMEOUT_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS', 60) *
+  1000;
+
+/** Parallel file downloads within one band. */
+export const DOWNLOAD_CONCURRENCY = env.positiveIntOrDefault(
+  'INDEX_SWARM_DOWNLOAD_CONCURRENCY',
+  4,
+);
+
+/**
+ * Ceiling on what installed bands may occupy. A band that would take the
+ * total past this is skipped and counted rather than filling the volume the
+ * gateway serves from. Unset means no ceiling.
+ */
+export const MAX_DISK_BYTES = env.positiveIntOrUndefined(
+  'INDEX_SWARM_MAX_DISK_BYTES',
+);
+
+/**
+ * Write-rate cap while downloading a band, shared across the files it
+ * downloads at once. Unset means no cap.
+ */
+export const DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC = env.positiveIntOrUndefined(
+  'INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC',
+);
+
+/**
+ * How long one read of the gateway's peer list, which is where the sidecar
+ * gets registry records, is reused. The gateway refreshes it hourly, so
+ * reading it more often than every few minutes gains nothing.
+ */
+export const REGISTRY_CACHE_TTL_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS', 300) *
+  1000;
+
+/** Optional allowlist that tightens the registry check, never replaces it. */
+export const TRUSTED_PUBLISHERS = env
+  .varOrDefault('INDEX_SWARM_TRUSTED_PUBLISHERS', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+export const METRICS_PORT = env.positiveIntOrDefault(
+  'INDEX_SWARM_METRICS_PORT',
+  9101,
+);
+/**
+ * Bound inside the container, so the compose network can reach it and the
+ * healthcheck can too. Nothing is published to the host unless the operator
+ * maps the port.
+ */
+export const METRICS_HOST = env.varOrDefault(
+  'INDEX_SWARM_METRICS_HOST',
+  '0.0.0.0',
+);
+
+/** Where to reach the gateway, for the release-compatibility check. */
+export const CORE_URL = env.varOrDefault(
+  'INDEX_SWARM_CORE_URL',
+  'http://core:4000',
+);
+
+/**
+ * The gateway release that first understood a collection source. Below it,
+ * bands installed here would sit on disk unread, so the subscriber waits
+ * rather than filling a directory nothing loads. A pre-release counts as its
+ * release (see `parseRelease`). Confirm this against the release the feature
+ * actually ships in.
+ */
+export const MIN_CORE_RELEASE = env.positiveIntOrDefault(
+  'INDEX_SWARM_MIN_CORE_RELEASE',
+  84,
+);
+
+/**
+ * This gateway's wallet, as registered. It is the publisher's *identity*:
+ * subscribers are configured with it and look the record up by it. The
+ * observer key below is the *signer*. They are often the same key, but not
+ * always, so publishing requires the wallet rather than inferring it.
+ */
+export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
+
+/**
+ * Origins, besides a publication's own, that a band may name for its files
+ * (`https://mirror.example`, comma-separated). Anything else is refused: a
+ * URL in a signed document is still a request to wherever it points, and
+ * from inside the gateway's network that could be an internal service.
+ */
+export const ALLOWED_FILE_ORIGINS = (
+  env.varOrUndefined('INDEX_SWARM_ALLOWED_FILE_ORIGINS') ?? ''
+)
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0)
+  .map((origin, i) => {
+    try {
+      const url = new URL(origin);
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') throw 0;
+      return url.origin;
+    } catch {
+      throw new Error(
+        `INDEX_SWARM_ALLOWED_FILE_ORIGINS[${i}] is not an http(s) origin: ${origin}`,
+      );
+    }
+  });
+
+/**
+ * The gateway's registered observer key, used to sign what this node
+ * publishes. Read but never written; a publisher without one refuses to run.
+ */
+export const OBSERVER_KEYPAIR_PATH = env.varOrUndefined(
+  'OBSERVER_KEYPAIR_PATH',
+);
+export const OBSERVER_PRIVATE_KEY = env.varOrUndefined('OBSERVER_PRIVATE_KEY');
+
+/** How long to let work finish on SIGTERM before exiting anyway. */
+export const SHUTDOWN_TIMEOUT_MS = env.positiveIntOrDefault(
+  'INDEX_SWARM_SHUTDOWN_TIMEOUT_MS',
+  10_000,
+);
+
+export interface EngineAuth {
+  username: string;
+  password: string;
+}
+
+/**
+ * Parse `user:password`. The password may itself contain colons; the user
+ * may not be empty. Required with the compose engine, whose init refuses to
+ * start without it; unset only suits an engine run outside the compose
+ * profile that lets the sidecar in without a login.
+ */
+export function parseEngineAuth(
+  raw: string | undefined,
+): EngineAuth | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const colon = raw.indexOf(':');
+  if (colon <= 0) {
+    throw new Error('INDEX_SWARM_ENGINE_AUTH must be user:password');
+  }
+  const password = raw.slice(colon + 1);
+  // A generator that failed (no openssl on the host, say) leaves `user:`;
+  // refuse that rather than start an engine with an empty password.
+  if (password.length < MIN_ENGINE_PASSWORD_LENGTH) {
+    throw new Error(
+      `INDEX_SWARM_ENGINE_AUTH's password must be at least ${MIN_ENGINE_PASSWORD_LENGTH} characters`,
+    );
+  }
+  return { username: raw.slice(0, colon), password };
+}
+
+/** Shortest engine Web UI password accepted. */
+export const MIN_ENGINE_PASSWORD_LENGTH = 16;
+
+/** The compose engine's Web API, as the sidecar reaches it. */
+export const DEFAULT_ENGINE_URL = 'http://index-swarm-engine:8080';
+
+export const ENGINE_AUTH = parseEngineAuth(
+  env.varOrUndefined('INDEX_SWARM_ENGINE_AUTH'),
+);
+
+/**
+ * The torrent engine's Web API. It must be the host name and port the engine
+ * itself listens on; qBittorrent refuses a Host header that differs.
+ *
+ * Unset, it follows from `INDEX_SWARM_ENGINE_AUTH`: the compose engine will
+ * not start without a password, so a password set means the compose engine
+ * at {@link DEFAULT_ENGINE_URL}. With neither there is no swarm, and bands
+ * move over HTTP only. An engine that is configured but not answering costs
+ * nothing either: bands move over HTTP until it answers.
+ */
+export const ENGINE_URL = resolveEngineUrl(
+  env.varOrUndefined('INDEX_SWARM_ENGINE_URL'),
+  ENGINE_AUTH,
+);
+
+export function resolveEngineUrl(
+  explicit: string | undefined,
+  auth: EngineAuth | undefined,
+): string | undefined {
+  if (explicit !== undefined) return explicit;
+  return auth !== undefined ? DEFAULT_ENGINE_URL : undefined;
+}
+
+/**
+ * Announce URLs written into every torrent this node builds. They are
+ * outside the info dictionary, so they do not change the infohash, but they
+ * are in the `.torrent` file: publishers that want byte-identical files use
+ * the same list.
+ */
+export const TRACKERS = env
+  .varOrDefault('INDEX_SWARM_TRACKERS', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/**
+ * Tracker announce URLs a subscriber hands its engine even though their host
+ * is private: an operator's own tracker on a LAN or private network. Exact
+ * URLs, comma separated. Every other tracker on a private address or a
+ * single-label name is dropped, because it would be a request from inside
+ * this node's network to wherever a publisher pointed it.
+ */
+export const ALLOWED_TRACKERS = env
+  .varOrDefault('INDEX_SWARM_ALLOWED_TRACKERS', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/**
+ * Whether the engine's IP filter refuses private addresses (written by
+ * index-swarm-engine-init from the same variable). The sidecar reads it only
+ * to warn when its own settings name something the filter will block.
+ */
+export const ENGINE_BLOCK_PRIVATE =
+  env.varOrDefault('INDEX_SWARM_ENGINE_BLOCK_PRIVATE', 'true') !== 'false';
+
+/**
+ * The engine's upload rate cap, bytes a second; 0 is unlimited. Written into
+ * the engine's config by index-swarm-engine-init, and restored by the
+ * sidecar each day after the daily budget throttled it.
+ */
+export const UPLOAD_LIMIT_BYTES_PER_SEC = env.nonNegativeIntOrDefault(
+  'INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC',
+  10_000_000,
+);
+
+/**
+ * Most the engine may upload in a UTC day, in bytes; 0 is no budget. Past
+ * it, seeding is throttled to a trickle until the next day. The rate cap
+ * bounds how fast; this bounds how much, whatever peers ask for.
+ */
+export const UPLOAD_DAILY_LIMIT_BYTES = env.nonNegativeIntOrDefault(
+  'INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES',
+  100_000_000_000,
+);
+
+/** Give up on a torrent and fetch the band over HTTP after this long. */
+export const TORRENT_TIMEOUT_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_TORRENT_TIMEOUT_SECONDS', 3600) * 1000;
+
+/**
+ * Turn the publisher's WebSeed on once a torrent has made no progress for
+ * this long. The WebSeed is the publisher's metered tier, and engines draw
+ * about half a band from one even while peers could serve it, so it is
+ * only added when peers are not delivering.
+ */
+export const WEBSEED_AFTER_MS =
+  env.positiveIntOrDefault('INDEX_SWARM_WEBSEED_AFTER_SECONDS', 120) * 1000;
+
+/**
+ * The engine's user and group, so the sidecar, which runs as root, can hand
+ * a band's download directory to the engine before adding it. The same
+ * values the engine container runs as.
+ */
+export const ENGINE_UID = env.positiveIntOrDefault(
+  'INDEX_SWARM_ENGINE_UID',
+  1000,
+);
+export const ENGINE_GID = env.positiveIntOrDefault(
+  'INDEX_SWARM_ENGINE_GID',
+  1000,
+);
+
+/**
+ * Port the closed tracker listens on, when this node publishes torrents.
+ * Point INDEX_SWARM_TRACKERS at it by the address peers reach it on, e.g.
+ * `http://gateway.example:6969/announce`.
+ */
+/**
+ * Proxies (IPs or CIDRs, comma separated) whose `X-Forwarded-For` the
+ * closed tracker believes, when it is served behind a load balancer.
+ */
+export const TRACKER_TRUSTED_PROXIES = env
+  .varOrDefault('INDEX_SWARM_TRACKER_TRUSTED_PROXIES', '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+/**
+ * The host peers reach this node's torrent engine on (its peer port,
+ * `INDEX_SWARM_ENGINE_PORT`). Defaults to the host of the first
+ * `INDEX_SWARM_TRACKERS` URL. Set it when the tracker is served through a
+ * load balancer that does not also forward the peer port, such as an HTTP
+ * proxy in front of a fleet: the engine is then listed under the host that
+ * actually reaches it.
+ */
+export const ENGINE_PUBLIC_HOST = env.varOrUndefined(
+  'INDEX_SWARM_ENGINE_PUBLIC_HOST',
+);
+
+/**
+ * The torrent engine's peer port, TCP and UDP. Below the ephemeral range
+ * (32768-60999 on Linux), so an outbound socket can never hold it when the
+ * engine starts. The tracker lists this node's engine at
+ * INDEX_SWARM_ENGINE_PUBLIC_HOST and this port.
+ */
+export const ENGINE_PORT = env.positiveIntOrDefault(
+  'INDEX_SWARM_ENGINE_PORT',
+  6881,
+);
+
+export const TRACKER_PORT = env.positiveIntOrDefault(
+  'INDEX_SWARM_TRACKER_PORT',
+  6969,
+);
+
+/** True when this process has nothing configured to do. */
+export function isIdle(): boolean {
+  return PUBLISH.length === 0 && SUBSCRIBE.length === 0;
+}

@@ -11,6 +11,28 @@ import { calculateX402Price } from '../payments/x402-pricing.js';
  * ANS-104 bundle filter configuration.
  * Controls which bundles are processed based on allow/deny lists.
  */
+/**
+ * A price as a plain decimal string: the number's shortest exact form
+ * (what `String()` gives), with any exponent written out, never rounded.
+ */
+export function plainDecimal(value: number): string {
+  const text = String(value);
+  const e = text.search(/e/i);
+  if (e < 0) return text;
+  const negative = text.startsWith('-');
+  const mantissa = text.slice(negative ? 1 : 0, e);
+  const exponent = Number(text.slice(e + 1));
+  const [whole, fraction = ''] = mantissa.split('.');
+  const digits = whole + fraction;
+  const point = whole.length + exponent;
+  const sign = negative ? '-' : '';
+  if (point <= 0) return `${sign}0.${'0'.repeat(-point)}${digits}`;
+  if (point >= digits.length) {
+    return `${sign}${digits}${'0'.repeat(point - digits.length)}`;
+  }
+  return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
+}
+
 export interface BundleFilter {
   allow?: string[];
   deny?: string[];
@@ -98,6 +120,17 @@ export interface HttpsigInfo {
 }
 
 /**
+ * Index artifacts this gateway publishes, for discovery by other gateways.
+ * Present only while a valid publication exists. `manifestUrl` is where the
+ * signed publication document lives; `names` lets a crawler decide whether
+ * a publisher offers anything it wants without fetching the document.
+ */
+export interface IndexesInfo {
+  manifestUrl: string;
+  names: string[];
+}
+
+/**
  * Solana program IDs for the AR.IO Network suite. Each is a base58-encoded
  * Solana pubkey.
  */
@@ -122,6 +155,7 @@ export interface ArIoInfoResponse {
   rateLimiter?: RateLimiterInfo;
   x402?: X402Info;
   httpsig?: HttpsigInfo;
+  indexes?: IndexesInfo;
 }
 
 /**
@@ -155,6 +189,8 @@ export interface ArIoInfoConfig {
     algorithm: string;
     solanaAddress: string;
   };
+  /** Names of the indexes currently published; omitted when none. */
+  indexNames?: string[];
 }
 
 /**
@@ -264,8 +300,10 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
       facilitatorUrl,
       dataEgress: {
         pricing: {
-          // Format as strings to avoid scientific notation in JSON (e.g., 1e-10)
-          perBytePrice: perBytePrice.toFixed(10),
+          // A plain decimal string: JSON would otherwise carry 1e-10, and a
+          // fixed number of places rounds a small price to zero (turbo's
+          // 4.2e-11 advertised as "0.0000000000").
+          perBytePrice: plainDecimal(perBytePrice),
           minPrice: minPrice.toFixed(6),
           maxPrice: maxPrice.toFixed(6),
           currency: 'USDC',
@@ -284,6 +322,13 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
     response.httpsig = {
       algorithm: config.httpsig.algorithm,
       solanaAddress: config.httpsig.solanaAddress,
+    };
+  }
+
+  if (config.indexNames !== undefined && config.indexNames.length > 0) {
+    response.indexes = {
+      manifestUrl: '/ar-io/indexes',
+      names: config.indexNames,
     };
   }
 

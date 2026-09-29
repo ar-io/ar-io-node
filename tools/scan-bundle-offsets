@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Scan Bundle Offsets Tool
+#
+# Reads the item index and item headers of ANS-104 root bundles through a
+# gateway's /raw endpoint and writes every data item's offsets and size in the
+# CDB64 CSV format, for generate-cdb64-root-tx-index-rs.
+#
+# Usage: ./tools/scan-bundle-offsets --input roots.txt --output offsets.csv
+#
+# Run with --help for all options.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+exec node --no-deprecation --import ./register.js tools/lib/scan-bundle-offsets.ts "$@"

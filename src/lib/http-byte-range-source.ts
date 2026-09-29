@@ -6,7 +6,7 @@
  */
 
 import { default as axios, AxiosInstance } from 'axios';
-import { ByteRangeSource } from './byte-range-source.js';
+import { assertReadableRange, ByteRangeSource } from './byte-range-source.js';
 import { AgentPair, createAgentPair } from './http-agent.js';
 import { buildRangeHeader } from './http-utils.js';
 import { Semaphore } from './semaphore.js';
@@ -74,6 +74,10 @@ export class HttpByteRangeSource implements ByteRangeSource {
   }
 
   async read(offset: number, size: number): Promise<Buffer> {
+    // maxContentLength bounds what axios buffers, but only to `size`; the
+    // cap keeps a size taken from untrusted bytes from being that bound.
+    assertReadableRange(offset, size);
+
     if (this.semaphore) {
       await this.semaphore.acquire(this.semaphoreTimeoutMs);
     }

@@ -16,12 +16,14 @@ import { createDefaultCacheControlMiddleware } from './middleware/cache-control.
 import { createErrorHandlerMiddleware } from './middleware/error-handler.js';
 import { createHttpSigMiddleware } from './middleware/httpsig.js';
 import { warnIfWalkConcurrencyUnsafe } from './workers/fs-cleanup-worker.js';
+import { gatewayTrustedProxies } from './lib/ip-utils.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
+import { createIndexesRouter } from './routes/indexes.js';
 import { arnsRouter } from './routes/arns.js';
 import { chunkRouter } from './routes/chunk/index.js';
 import { dataRouter } from './routes/data/index.js';
-import { apolloServer } from './routes/graphql/index.js';
+import { makeApolloServerMiddleware } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
 import { datasetsRouter } from './routes/datasets.js';
 import * as system from './system.js';
@@ -52,6 +54,10 @@ for (const worker of system.stagingCleanupWorkers) {
 
 // All cleanup walks share one libuv thread pool with the request path; warn if
 // they are collectively configured to crowd it out.
+// Parsed now, so a malformed TRUSTED_PROXIES stops startup rather than
+// failing every request.
+gatewayTrustedProxies();
+
 warnIfWalkConcurrencyUnsafe(
   [
     system.headerFsCacheCleanupWorker,
@@ -152,54 +158,81 @@ if (system.rateLimiter !== undefined) {
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);
+// Index artifacts published by the index-swarm sidecar. Mounted ahead of the
+// data router, whose `/:id` catch-all would otherwise claim these paths.
+app.use(
+  createIndexesRouter({
+    log,
+    publishedIndexes: system.publishedIndexes,
+    rateLimiter: system.rateLimiter,
+    rateLimitsEnabled: config.ENABLE_RATE_LIMITER,
+    paymentProcessor: system.paymentProcessor,
+  }),
+);
 app.use(datasetsRouter);
 app.use(chunkRouter);
 app.use(rootRouter);
 app.use(dataRouter);
 
 // GraphQL
-const apolloServerInstanceGql = apolloServer(
-  system.gqlQueryable,
-  {
-    introspection: true,
-    persistedQueries: false,
-  },
-  system.dataItemMetaResolver,
-);
-
-let server: Server;
-apolloServerInstanceGql.start().then(() => {
-  apolloServerInstanceGql.applyMiddleware({
-    app,
-    path: '/graphql',
+// Apollo Server 5 requires `start()` to complete before its middleware is
+// mounted. Awaiting at module scope (this module already does so above)
+// replaces Apollo Server 3's `start().then(...)` nesting and keeps the
+// listen call ordered after the middleware is in place, exactly as before.
+const { middleware: apolloMiddleware, stop: stopApolloServer } =
+  await makeApolloServerMiddleware({
+    db: system.gqlQueryable,
+    txMetadataResolver: system.dataItemMetaResolver,
   });
+app.use('/graphql', apolloMiddleware);
 
-  // Terminal error handler — must be registered after every router and the
-  // GraphQL middleware so it catches anything they let escape. Replaces
-  // Express's default finalhandler (silent, generic 500s).
-  app.use(createErrorHandlerMiddleware({ log }));
+// Terminal error handler — must be registered after every router and the
+// GraphQL middleware so it catches anything they let escape. Replaces
+// Express's default finalhandler (silent, generic 500s).
+app.use(createErrorHandlerMiddleware({ log }));
 
-  server = app.listen(config.PORT, () => {
-    log.info(`Listening on port ${config.PORT}`);
+const server: Server = app.listen(config.PORT, () => {
+  log.info(`Listening on port ${config.PORT}`);
 
-    // Keep core's keepalive idle window wider than Envoy's upstream
-    // idle_timeout so Envoy always recycles a pooled connection before core
-    // closes it — otherwise Envoy races a request onto a connection core is
-    // tearing down and the client sees an instant reset/5xx. headersTimeout
-    // must stay strictly greater than keepAliveTimeout (Node requirement).
-    server.keepAliveTimeout = config.HTTP_KEEP_ALIVE_TIMEOUT_MS;
-    server.headersTimeout = config.HTTP_HEADERS_TIMEOUT_MS;
+  // Startup is over: from here an uncaught exception is logged and
+  // tolerated. Before here it exits, so a failed startup dependency can't
+  // leave a listener-less process running. See `markStartupComplete` in
+  // system.ts.
+  system.markStartupComplete();
 
-    // Register server cleanup handler with system shutdown registry
-    system.registerCleanupHandler('http-server', async () => {
-      return new Promise<void>((resolve) => {
-        log.debug('Closing HTTP server...');
-        server.close(() => {
-          log.debug('HTTP server closed');
-          resolve();
-        });
+  // Keep core's keepalive idle window wider than Envoy's upstream
+  // idle_timeout so Envoy always recycles a pooled connection before core
+  // closes it — otherwise Envoy races a request onto a connection core is
+  // tearing down and the client sees an instant reset/5xx. headersTimeout
+  // must stay strictly greater than keepAliveTimeout (Node requirement).
+  server.keepAliveTimeout = config.HTTP_KEEP_ALIVE_TIMEOUT_MS;
+  server.headersTimeout = config.HTTP_HEADERS_TIMEOUT_MS;
+
+  // Register server cleanup handler with system shutdown registry
+  system.registerCleanupHandler('http-server', async () => {
+    return new Promise<void>((resolve) => {
+      log.debug('Closing HTTP server...');
+      server.close(() => {
+        log.debug('HTTP server closed');
+        resolve();
       });
     });
+  });
+
+  // Registered AFTER the HTTP server handler, and the order matters. Handlers
+  // run sequentially in registration order, so the listener stops accepting
+  // and its in-flight connections finish first; only then is Apollo stopped.
+  // Stopping Apollo first would leave the socket open in front of a server
+  // that no longer starts operations, so a request arriving in that window
+  // fails instead of being served or refused cleanly. `server.stop()` does not
+  // drain an Express listener on its own. This ordering holds only because
+  // Apollo's own signal handlers are disabled (`stopOnTerminationSignals:
+  // false` in routes/graphql/index.ts); with them on, Apollo stops at SIGTERM,
+  // before this registry runs at all.
+  system.registerCleanupHandler('apollo-server', async () => {
+    log.debug('Stopping Apollo server...');
+    await stopApolloServer();
+    log.debug('Apollo server stopped');
   });
 });
 

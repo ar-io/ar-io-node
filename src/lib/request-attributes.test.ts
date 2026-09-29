@@ -471,21 +471,21 @@ describe('Request attributes functions', () => {
         assert.strictEqual(result.headers[headerNames.rootPath], undefined);
       });
 
-      it('emits Root-Item-Offset + Root-Item-Size as a pair when rootByteHint is set', () => {
+      it('does not forward Root-Item-Offset or Root-Item-Size', () => {
         const result = generateRequestAttributes({
           hops: 1,
           rootByteHint: { offset: 12345, size: 6789 },
         });
         assert.ok(result !== undefined);
-        assert.strictEqual(result.headers[headerNames.rootItemOffset], '12345');
-        assert.strictEqual(result.headers[headerNames.rootItemSize], '6789');
-        assert.deepStrictEqual(result.attributes.rootByteHint, {
-          offset: 12345,
-          size: 6789,
-        });
+        assert.strictEqual(
+          result.headers[headerNames.rootItemOffset],
+          undefined,
+        );
+        assert.strictEqual(result.headers[headerNames.rootItemSize], undefined);
+        assert.strictEqual(result.attributes.rootByteHint, undefined);
       });
 
-      it('emits all three hint kinds together', () => {
+      it('forwards root and path hints while dropping the byte hint', () => {
         const result = generateRequestAttributes({
           hops: 1,
           rootTransactionIdHint: txId,
@@ -498,8 +498,11 @@ describe('Request attributes functions', () => {
           result.headers[headerNames.rootPath],
           `${txId},${parentId}`,
         );
-        assert.strictEqual(result.headers[headerNames.rootItemOffset], '100');
-        assert.strictEqual(result.headers[headerNames.rootItemSize], '200');
+        assert.strictEqual(
+          result.headers[headerNames.rootItemOffset],
+          undefined,
+        );
+        assert.strictEqual(result.headers[headerNames.rootItemSize], undefined);
       });
     });
 
@@ -540,7 +543,7 @@ describe('Request attributes functions', () => {
     });
 
     describe('round-trip — emit then parse', () => {
-      it('preserves all three hint kinds across one emit/parse cycle', () => {
+      it('preserves root and path hints, but not the byte hint, across one emit/parse cycle', () => {
         const emitted = generateRequestAttributes({
           hops: 1,
           rootTransactionIdHint: txId,
@@ -554,10 +557,7 @@ describe('Request attributes functions', () => {
         });
         assert.strictEqual(parsed.rootTransactionIdHint, txId);
         assert.deepStrictEqual(parsed.rootPathHint, [txId, parentId]);
-        assert.deepStrictEqual(parsed.rootByteHint, {
-          offset: 100,
-          size: 200,
-        });
+        assert.strictEqual(parsed.rootByteHint, undefined);
       });
     });
   });

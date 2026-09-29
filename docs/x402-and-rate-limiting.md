@@ -12,6 +12,7 @@ traffic management and content monetization.
 - [x402 Payment Protocol Deep Dive](#x402-payment-protocol-deep-dive)
 - [Integration Topics](#integration-topics)
 - [Reference](#reference)
+- [Metrics](#metrics)
 - [Troubleshooting](#troubleshooting)
 - [Examples](#examples)
 
@@ -73,6 +74,14 @@ The rate limiter and x402 payment system apply to data egress endpoints:
 - **Raw data requests**: `/raw/:txid`
 - **ArNS resolved content**: All requests resolved through ArNS names
 - **Farcaster frames**: `/local/farcaster/frame/:txid`
+- **Index artifacts**: `/ar-io/indexes/:name/:band/:file`,
+  `/ar-io/indexes/blob/:sha256` and the WebSeed route
+  `/ar-io/indexes/webseed/:torrentName/:file`, published by the index-swarm
+  sidecar. The torrent swarm itself is not metered: it is the free path.
+  Priced like data: by the size of the body (the range, for a `Range`
+  request); a `HEAD` costs only the minimum and a `304` revalidation
+  nothing. The publication document at `/ar-io/indexes` is not metered, so
+  an exhausted client can still learn what it could fetch.
 - **Chunk requests**:
   - `GET /chunk/:offset` (base64url-encoded JSON, uses fixed size pricing - see note below)
   - `GET /chunk/:offset/data` (raw binary, uses fixed size pricing - see note below)
@@ -83,7 +92,7 @@ Currently, the following endpoints are not rate limited:
 
 - GraphQL queries (`/graphql`)
 - Chunk POST requests (`POST /chunk`)
-- Administrative endpoints (`/ar-io/*`)
+- Administrative and informational endpoints under `/ar-io/*`, except the index artifact byte routes above
 
 **Note on Chunk Pricing:** Chunk GET requests use a fixed size assumption for
 predictable pricing. This allows payment requirements to be calculated
@@ -1313,26 +1322,34 @@ doesn't receive direct client connections.
 
 #### How IP Extraction Works
 
-The rate limiter extracts client IP addresses in the following priority order:
+A client can put anything in the headers it sends, so the gateway believes
+proxy headers only from proxies it trusts (`TRUSTED_PROXIES`). By default
+those are loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7),
+carrier-grade NAT (100.64/10) and link-local addresses: where nginx or a load
+balancer in front of a gateway normally sits.
 
-1. **X-Forwarded-For header**: Extracts the first (leftmost) IP address from the
-   header chain
-   - Format: `X-Forwarded-For: client, proxy1, proxy2`
-   - Uses: `client` (203.0.113.42)
-2. **X-Real-IP header**: Uses this header when X-Forwarded-For is not present
-   - Format: `X-Real-IP: 203.0.113.42`
-3. **Direct connection IP**: Uses `socket.remoteAddress` when no proxy headers
-   are present, then falls back to `req.ip` if available
+1. **The connecting address** (`socket.remoteAddress`, else `req.ip`) is the
+   client, unless it is a trusted proxy.
+2. **Behind a trusted proxy**, the client is the nearest `X-Forwarded-For` hop
+   that is not itself a trusted proxy, read from the right. Each proxy
+   appends the address it saw, so that hop is the one a trusted proxy
+   recorded; anything a client wrote to its left is ignored.
+   - `X-Forwarded-For: 198.51.100.7, 203.0.113.42` arriving from nginx at
+     `172.18.0.2`: the client is `203.0.113.42`. `198.51.100.7` is only what
+     the client claimed.
+   - When every hop is a trusted proxy (a client inside your own network),
+     the leftmost hop is the client.
+3. **`X-Real-IP`** is used only from a trusted proxy, and only when there is
+   no `X-Forwarded-For`.
 
-**Important**: The same IP extraction logic is used for:
+**Important**: The same client address is used for:
 
 - **Rate limit bucket keys** (`rl:ip:{IP_ADDRESS}`)
 - **x402 payment crediting** (tokens added to correct client's bucket)
 - **IP allowlist checks** (exempting specific clients from limits)
 
-This consistency ensures that if a client is allowlisted, their rate limit
-bucket is also correctly identified, and any payments they make are properly
-credited.
+So an allowlisted client's bucket is also the right one, and a payment is
+credited to the client that made it.
 
 #### IPv6 Support
 
@@ -1355,35 +1372,59 @@ location / {
 }
 ```
 
-**Cloudflare:**
+**Cloudflare, or any CDN or load balancer on public addresses:**
 
-Cloudflare automatically adds X-Forwarded-For headers. No special configuration
-needed. The gateway extracts the real client IP from X-Forwarded-For.
+Add its address ranges to `TRUSTED_PROXIES` (keep the defaults if nginx sits
+between it and the gateway):
+
+```bash
+TRUSTED_PROXIES=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,::1/128,fc00::/7,fe80::/10,<the CDN's published ranges>
+```
+
+Without them the CDN's own address is taken as the client, and every visitor
+behind it shares one rate-limit bucket.
 
 **AWS Application Load Balancer:**
 
-ALBs automatically add X-Forwarded-For headers. Ensure your target group is
-configured to preserve client IPs.
+ALBs add `X-Forwarded-For`. An internal ALB on private addresses is trusted by
+default; an internet-facing one needs its subnets in `TRUSTED_PROXIES`.
 
 #### Security Considerations
 
-**Header Trust**: The gateway trusts X-Forwarded-For and X-Real-IP headers by
-default. This is generally safe when:
+**Only trusted proxies' headers count.** A client connecting straight to the
+gateway, or through a proxy not in `TRUSTED_PROXIES`, is identified by its own
+address whatever its headers say, so it cannot claim an allowlisted address
+or a fresh rate-limit bucket. Behind a trusted proxy, only the hop that proxy
+recorded counts.
 
-- Your gateway is behind a trusted proxy/CDN
-- The proxy strips existing headers from client requests
-- External clients cannot directly access your gateway
+**Envoy is one of the proxies.** In the standard compose setup requests reach
+core through Envoy (port 3000), on the private Docker network, so core trusts
+it. Envoy appends the address that connected to it to `X-Forwarded-For`
+(`use_remote_address`), so a client connecting straight to port 3000 is still
+identified by its own address. Upgrade the Envoy image together with core:
+an older Envoy passes the client's header on unchanged. A proxy in front of
+Envoy on the same host or private network (nginx, say) is trusted by default;
+one on another public host must be added to `TRUSTED_PROXIES`, or its address
+is taken as every client's.
 
-**Direct Exposure**: If your gateway is directly exposed to the internet without
-a proxy:
+**`TRUSTED_PROXIES=none`** believes no proxy header at all. It is only for a
+core that clients reach directly, with no Envoy in front. With it, every
+request that comes through Envoy (the standard path, port 3000) carries
+Envoy's own address, so all of those clients share one rate-limit bucket;
+only clients connecting to core's own port keep their addresses.
 
-- Clients could forge X-Forwarded-For headers
-- Consider using firewall rules to only allow traffic from your proxy IPs
-- Or configure your proxy to strip untrusted headers
+**Keep `TRUSTED_PROXIES` to real proxies.** Every address in it is believed
+about who the client is. The default trusts your private networks, so a host
+there could claim any address; narrow it (to nginx's address, say) if hosts
+you do not control share that network.
+
+**Allowlists** (`RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`,
+`CHUNK_INGEST_CACHE_ALLOWLIST`) are checked against the client address only,
+never the other addresses in its headers.
 
 **Express Trust Proxy**: The gateway does NOT use Express's `trust proxy`
-setting. IP extraction is handled manually via the `extractAllClientIPs()`
-utility function for more explicit control and security.
+setting. IP extraction is handled by `extractAllClientIPs()` with
+`TRUSTED_PROXIES`.
 
 #### Protocol Configuration for Proxies
 
@@ -2031,6 +2072,53 @@ curl -X POST \
   -H "Authorization: Bearer ${ADMIN_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"tokens": 1000000, "tokenType": "paid"}'
+```
+
+## Metrics
+
+Payment attempts are counted at `/ar-io/__gateway_metrics`:
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `x402_payment_total` | `outcome`, `target` | Payment attempts by the stage that ended them |
+| `x402_payment_settled_usdc_total` | `target` | USDC actually settled (atomic units converted; USDC has 6 decimals) |
+
+`outcome` values: `no_payment_header`, `invalid_target`, `missing_host`,
+`verify_failed`, `unsupported_processor`, `unsupported_payload`,
+`settle_failed`, `topup_failed`, `error` (an unexpected throw with no more
+specific stage), `settled`.
+
+`x402_payment_settled_usdc_total` is recorded **at settlement** — the point the
+funds move — while `outcome="settled"` also requires the access top-up to have
+succeeded. So revenue counts every payment collected, and
+`outcome="topup_failed"` counts payments taken where access was not granted.
+That second number is worth alerting on: it is money owed back.
+
+402 responses themselves are already countable without these, via
+`http_request_duration_seconds_count{status_code="402"}`. The counters above
+cover what happens *after* a 402 — whether anyone pays, and whether their
+payments settle.
+
+That distinction matters in one specific failure: a mainnet deployment with
+incomplete CDP credentials silently falls back to `X_402_USDC_FACILITATOR_URL`,
+and the commonly configured facilitators there support testnets only. Every
+payment then fails verification while the gateway keeps advertising x402 and
+serving 402s. Without these metrics that is indistinguishable from a paywall
+nobody has paid yet:
+
+```promql
+# paid attempts that never settled
+sum by (outcome) (rate(x402_payment_total{outcome!="settled"}[1h]))
+
+# revenue actually settled
+sum(increase(x402_payment_settled_usdc_total[24h]))
+
+# paid but not granted access — alert on this
+sum(increase(x402_payment_total{outcome="topup_failed"}[1h]))
+
+# conversion: settled payments per 402 served
+sum(increase(x402_payment_total{outcome="settled"}[24h]))
+  / sum(increase(http_request_duration_seconds_count{status_code="402"}[24h]))
 ```
 
 ## Troubleshooting

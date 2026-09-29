@@ -47,3 +47,12 @@ CREATE TABLE contiguous_data_cache (
 , last_access INTEGER);
 CREATE INDEX contiguous_data_cache_eviction_idx
   ON contiguous_data_cache (tier, last_access);
+CREATE TABLE manifest_resolutions (
+  manifest_id BLOB PRIMARY KEY,
+  index_id BLOB,
+  fallback_id BLOB,
+  resolved_at INTEGER NOT NULL
+);
+CREATE INDEX contiguous_data_ids_root_transaction_id_idx
+  ON contiguous_data_ids (root_transaction_id)
+  WHERE root_transaction_id IS NOT NULL;

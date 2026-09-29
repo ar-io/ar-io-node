@@ -17,6 +17,10 @@ import type { HttpSigSignerContext } from './lib/httpsig.js';
 import { release } from './version.js';
 import logger from './log.js';
 import { verificationPriorities } from './constants.js';
+import {
+  DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES,
+  DEFAULT_ROOT_TX_LOOKUP_ORDER,
+} from './lib/root-tx-defaults.js';
 
 //
 // HTTP server
@@ -587,6 +591,24 @@ export const GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
     30 * 1_000,
   );
 
+// Soft deadline for the GraphQL fan-out list queries (transactions/blocks).
+// When enabled, once at least one upstream has returned a usable result the
+// merge waits at most this long for the remaining upstreams, then returns a
+// partial merge with an `UPSTREAM_SOFT_DEADLINE` warning for each source that
+// had not yet responded. The abandoned requests keep running in the
+// background so the per-upstream circuit breaker still observes their true
+// outcome (a real success or timeout). The deadline is only armed after the
+// first usable result, so an all-slow moment never turns a would-succeed
+// query into a failure. When disabled (the default), the fan-out waits for
+// every upstream to settle (bounded by GATEWAYS_GQL_REQUEST_TIMEOUT_MS),
+// preserving the prior behavior.
+export const GATEWAYS_GQL_SOFT_DEADLINE_ENABLED =
+  env.varOrDefault('GATEWAYS_GQL_SOFT_DEADLINE_ENABLED', 'false') === 'true';
+export const GATEWAYS_GQL_SOFT_DEADLINE_MS = env.positiveIntOrDefault(
+  'GATEWAYS_GQL_SOFT_DEADLINE_MS',
+  2_000,
+);
+
 // GraphQL root TX lookup rate limiting
 export const GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
   'GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE',
@@ -786,6 +808,15 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
     300,
   );
 
+// LRU cache size for resolved manifest paths. Keyed by (manifest id, path);
+// values are immutable per manifest transaction, so no TTL is needed. Caching
+// resolutions lets repeat requests for the same manifest path skip re-fetching
+// and re-parsing the manifest body.
+export const MANIFEST_RESOLUTION_CACHE_SIZE = env.positiveIntOrDefault(
+  'MANIFEST_RESOLUTION_CACHE_SIZE',
+  5000,
+);
+
 // Root TX index lookup order configuration.
 // Available sources: 'db', 'peers', 'gateways', 'graphql', 'hyperbeam', 'cdb',
 // 'turbo'. Sources are probed in order and the first actionable result wins.
@@ -796,7 +827,7 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
 //               costs the peer a full retrieval cascade — list it *after*
 //               'peers' so it only serves peers that lack the endpoint.
 export const ROOT_TX_LOOKUP_ORDER = env
-  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql,hyperbeam,cdb')
+  .varOrDefault('ROOT_TX_LOOKUP_ORDER', DEFAULT_ROOT_TX_LOOKUP_ORDER)
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
@@ -815,7 +846,7 @@ export const CDB64_ROOT_TX_INDEX_WATCH =
 export const CDB64_ROOT_TX_INDEX_SOURCES = env
   .varOrDefault(
     'CDB64_ROOT_TX_INDEX_SOURCES',
-    'resources/cdb64-root-tx-index-non-ao-non-redstone-with-content-type-to-height-1820000,resources/cdb64-root-tx-index-non-ao-non-redstone-without-content-type-to-height-1820000,resources/cdb64-root-tx-index-ao-to-height-1820000',
+    DEFAULT_CDB64_ROOT_TX_INDEX_SOURCES,
   )
   .split(',')
   .map((s) => s.trim())
@@ -1266,16 +1297,24 @@ export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
 
 // Chunk data retrieval priority order (comma-separated list of sources)
 // Available sources: 'ar-io-network', 'arweave-network', 'legacy-s3'
+//
+// 'arweave-network' (miners) leads by default: miners are protocol-incentivized
+// to store and serve arbitrary chunks, while AR.IO gateways only hold what they
+// happened to cache. Asking the gateway layer first turns the common case into a
+// near-certain miss, and the misses concentrate on whichever gateway originated
+// the data. 'ar-io-network' stays in the chain as a fallback for chunks the
+// miner set cannot serve.
 export const CHUNK_DATA_RETRIEVAL_ORDER = env
-  .varOrDefault('CHUNK_DATA_RETRIEVAL_ORDER', 'ar-io-network,arweave-network')
+  .varOrDefault('CHUNK_DATA_RETRIEVAL_ORDER', 'arweave-network,ar-io-network')
   .split(',');
 
 // Chunk metadata retrieval priority order (comma-separated list of sources)
 // Available sources: 'ar-io-network', 'arweave-network', 'legacy-psql'
+// Ordered miners-first for the same reason as CHUNK_DATA_RETRIEVAL_ORDER above.
 export const CHUNK_METADATA_RETRIEVAL_ORDER = env
   .varOrDefault(
     'CHUNK_METADATA_RETRIEVAL_ORDER',
-    'ar-io-network,arweave-network',
+    'arweave-network,ar-io-network',
   )
   .split(',');
 
@@ -1302,6 +1341,20 @@ export const CHUNK_FIRST_DATA_TIMEOUT_MS = env.nonNegativeIntOrDefault(
   10000,
 );
 
+// Resolve TxChunksDataSource geometry (data_root, offset, size) from the local
+// stable transactions index before the trusted node. Every cold range read
+// otherwise costs two trusted-node requests, which share a 5 req/s budget with
+// the transaction offset importer.
+export const TX_CHUNKS_GEOMETRY_DB_ENABLED =
+  env.varOrDefault('TX_CHUNKS_GEOMETRY_DB_ENABLED', 'true') === 'true';
+
+// Maximum entries in TxChunksDataSource's in-memory cache of locally resolved
+// geometry. Entries are immutable (stable transactions only).
+export const TX_CHUNKS_GEOMETRY_CACHE_SIZE = env.positiveIntOrDefault(
+  'TX_CHUNKS_GEOMETRY_CACHE_SIZE',
+  10000,
+);
+
 // Wall-clock deadline (ms) for serving a single chunk request
 // (/chunk/:offset and /chunk/:offset/data). The per-source timeouts in the
 // retrieval cascade are additive with no overall ceiling, and some awaited
@@ -1315,6 +1368,56 @@ export const CHUNK_SERVE_DEADLINE_MS = env.nonNegativeIntOrDefault(
   'CHUNK_SERVE_DEADLINE_MS',
   12000,
 );
+
+// Wall-clock deadline (ms) for serving a chunk request that arrived from
+// another gateway (X-AR-IO-Hops >= 1), applied instead of
+// CHUNK_SERVE_DEADLINE_MS.
+//
+// A peer gives us one second before it gives up (PEER_REQUEST_TIMEOUT_MS in
+// ar-io-chunk-source.ts) and then goes to its own sources, so work past that
+// point is delivered to nobody. Measured on a production gateway pair: ~1.09M
+// chunk serves per day hit the 12s cap across two nodes, while a cold fetch
+// completes in ~600ms at the median -- so the cost is concentrated in a tail
+// that no caller is still waiting for.
+//
+// The default is deliberately well above the caller's 1s rather than equal to
+// it: a fetch that is nearly done is worth finishing (it populates the cache
+// for later readers), and one second is this implementation's timeout, not a
+// protocol guarantee -- other clients may wait longer. 0 falls back to
+// CHUNK_SERVE_DEADLINE_MS, preserving existing behavior.
+export const CHUNK_PEER_ORIGIN_DEADLINE_MS = env.nonNegativeIntOrDefault(
+  'CHUNK_PEER_ORIGIN_DEADLINE_MS',
+  3000,
+);
+
+// How to treat chunk requests forwarded by another AR.IO gateway
+// (X-AR-IO-Hops >= 1): `off`, `audit` or `enforce`.
+//
+// A peer that asks us for a chunk gives us one second before it gives up
+// (PEER_REQUEST_TIMEOUT_MS in ar-io-chunk-source.ts), while the serve
+// deadline that bounds our own cascade is CHUNK_SERVE_DEADLINE_MS. Remote
+// work started for that caller therefore outlives its patience, and the
+// caller already has its own miner path. The AR.IO peer sources bound
+// forwarding depth with validateHopCount, but the boundary lookup and the
+// Arweave node path carry no such bound, so `enforce` closes that gap at the
+// serve boundary rather than in each source.
+//
+// `audit` changes nothing and records what enforcing would have cost, via
+// chunk_peer_origin_audit_total. Run it before enforcing on any gateway
+// that originates data: a chunk ingested at upload time has no
+// absolute-offset index entry, so it misses the local cache lookup and is
+// reachable only through boundary resolution, which `enforce` skips.
+//
+// Defaults to `off`, preserving existing behavior.
+export const CHUNK_PEER_ORIGIN_MODE = (() => {
+  const value = env.varOrDefault('CHUNK_PEER_ORIGIN_MODE', 'off');
+  if (value !== 'off' && value !== 'audit' && value !== 'enforce') {
+    throw new Error(
+      `Invalid CHUNK_PEER_ORIGIN_MODE: ${value}. Must be off, audit or enforce`,
+    );
+  }
+  return value;
+})();
 
 // Chain fallback for chunk offset requests
 export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =
@@ -2247,6 +2350,16 @@ export const CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED =
     'false',
   ) === 'true';
 
+// Gate for resolving GraphQL `ids` and `bundledIn` parent ids through the
+// ClickHouse `transaction_ids` lookup table, then reading `transactions` by
+// primary key. Without it an id lookup relies on `id_bloom`, whose cost grows
+// with the table (~4M rows per id at ~400M rows), and `bundledIn` has no index.
+// Enable only once `transaction_ids` is backfilled (see
+// src/database/clickhouse/schema.sql): an id missing from the lookup table is
+// treated as absent from ClickHouse. Disabled by default.
+export const CLICKHOUSE_GQL_ID_LOOKUP_ENABLED =
+  env.varOrDefault('CLICKHOUSE_GQL_ID_LOOKUP_ENABLED', 'false') === 'true';
+
 // Comma-separated allowlist of `Entity-Type` tag values for which owner-filtered
 // GQL queries use owner_projection routing (only consulted when
 // CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED is true). These are the
@@ -2826,6 +2939,26 @@ export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_INTERVAL_MS =
 export const CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE =
   +env.varOrDefault('CONTIGUOUS_DATA_CACHE_INDEX_EVICTION_BATCH_SIZE', '1000');
 
+// Concurrent blob unlinks per eviction batch. DERIVED from UV_THREADPOOL_SIZE
+// for the same reason as CHUNK_DATA_CACHE_INDEX_UNLINK_CONCURRENCY: every
+// unlink occupies a libuv thread, so a hard-coded 50 takes the entire pool on a
+// stock node (UV_THREADPOOL_SIZE defaults to 4) and queues every other file
+// operation behind it -- on a device that is, by definition, already saturated
+// when the evictor is running.
+export const CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY =
+  env.positiveIntOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY',
+    Math.max(1, Math.floor(UV_THREADPOOL_SIZE / 8)),
+  );
+
+// Batches per sweep. batchSize * this is the upper bound on unlinks issued by a
+// single sweep, so it bounds how long one sweep can hold the disk and the pool.
+export const CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP =
+  env.positiveIntOrDefault(
+    'CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP',
+    50,
+  );
+
 // Whether to refresh a cache entry's last_access (and promote its tier on a
 // preferred-ArNS read) on cache HITS. On => LRU eviction; off => FIFO by
 // cache-write time. Operators without an edge cache see every read at the core,
@@ -3392,6 +3525,16 @@ export const ARIO_ANT_PROGRAM_ID = env.varOrUndefined('ARIO_ANT_PROGRAM_ID');
 // Rate Limiter
 //
 
+/**
+ * Directory the /ar-io/indexes routes serve from: what the index-swarm
+ * sidecar publishes. Read only; the gateway never writes here. The routes
+ * serve only what the signed publication in this directory lists.
+ */
+export const INDEXES_PUBLISHED_DIR = env.varOrDefault(
+  'INDEXES_PUBLISHED_DIR',
+  'data/indexes/published',
+);
+
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
 
@@ -3421,6 +3564,28 @@ export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
   'RATE_LIMITER_IP_REFILL_PER_SEC',
   '20',
 );
+
+/**
+ * Proxies (IPs or CIDRs) whose `X-Forwarded-For` and `X-Real-IP` are
+ * believed when working out which client a request came from, for rate
+ * limits, x402 and allowlists. The default trusts loopback, private,
+ * carrier-grade NAT and link-local addresses, where nginx or a load balancer
+ * normally sits; add a CDN's or a public load balancer's ranges when one is
+ * in front, or every client behind it shares its address. `none` trusts no
+ * proxy: only for a core that clients reach directly, with no Envoy in front.
+ * Every request that comes through Envoy (the standard path, port 3000) would
+ * otherwise carry Envoy's address, and all of them would share one bucket.
+ */
+const TRUSTED_PROXIES_VALUE = env.varOrDefault(
+  'TRUSTED_PROXIES',
+  '127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16,::1/128,fc00::/7,fe80::/10',
+);
+export const TRUSTED_PROXIES =
+  TRUSTED_PROXIES_VALUE.trim() === 'none'
+    ? []
+    : TRUSTED_PROXIES_VALUE.split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
 
 export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
   env

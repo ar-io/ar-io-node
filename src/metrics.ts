@@ -76,6 +76,19 @@ export const unhandledRequestErrorsCounter = new promClient.Counter({
   labelNames: ['method', 'status'],
 });
 
+/**
+ * Chunk serves cut short by the peer-origin deadline
+ * (CHUNK_PEER_ORIGIN_DEADLINE_MS) rather than the general one. Separated from
+ * chunk_serve_deadline_exceeded_total so an operator can see what the shorter
+ * deadline actually costs before lowering it further -- these are requests a
+ * peer would otherwise have waited on, though its own timeout is 1s.
+ */
+export const chunkPeerOriginDeadlineExceededCounter = new promClient.Counter({
+  name: 'chunk_peer_origin_deadline_exceeded_total',
+  help: 'Chunk serves aborted by the peer-origin deadline',
+  labelNames: ['method'],
+});
+
 // Chunk serves cut short by the handler's wall-clock deadline
 // (CHUNK_SERVE_DEADLINE_MS). A rising rate means the retrieval cascade is
 // routinely exceeding the deadline — tune the deadline or the upstream load,
@@ -84,6 +97,39 @@ export const chunkServeDeadlineExceededCounter = new promClient.Counter({
   name: 'chunk_serve_deadline_exceeded_total',
   help: 'Count of chunk serves aborted by the handler wall-clock deadline',
   labelNames: ['method'],
+});
+
+// Chunk serves answered from local caches only because the request arrived
+// from another AR.IO gateway (X-AR-IO-Hops >= 1) and CHUNK_PEER_ORIGIN_MODE
+// is `audit` or `enforce`. `result` is `cache_hit` when the local cache
+// satisfied the peer, `not_found` when `enforce` refused the request rather
+// than escalating it to the remote cascade.
+export const chunkServeLocalOnlyCounter = new promClient.Counter({
+  name: 'chunk_serve_local_only_total',
+  help: 'Count of peer-origin chunk serves restricted to local sources',
+  labelNames: ['result'],
+});
+
+// What enforcing CHUNK_PEER_ORIGIN_MODE would have done to a peer-origin
+// chunk request, recorded while `audit` leaves behavior unchanged.
+// `boundary` is whether offset resolution stayed local (the DB source) or
+// needed the network; `bytes` is whether the chunk came off local disk or a
+// remote source.
+//
+// **`bytes="local"` is the cost of enforcing**, whatever the boundary label:
+// this gateway held the chunk and served it. `boundary="local"` means
+// enforcing would still have served it; `boundary="remote"` means it would
+// not, because the bytes were only locatable through a network offset
+// lookup that enforcing declines. Sum both when deciding whether a gateway
+// can enforce, and do not read `boundary="local",bytes="local"` alone.
+//
+// `cancelled` means the retrieval was aborted, either by the caller
+// disconnecting or by an internal timeout. The service sees a merged signal
+// and cannot separate them; the 499 and 502 counts on the route do.
+export const chunkPeerOriginAuditCounter = new promClient.Counter({
+  name: 'chunk_peer_origin_audit_total',
+  help: 'Outcomes of peer-origin chunk serves that enforcing would have refused',
+  labelNames: ['boundary', 'bytes'],
 });
 
 // Outcome of resolving an absolute weave offset to its containing block in
@@ -134,6 +180,12 @@ export const graphqlRootTxBatchTokenWaitTimeoutTotal = new promClient.Counter({
   name: 'graphql_root_tx_batch_token_wait_timeout_total',
   help: 'Count of batches that gave up waiting for a rate-limit token, by endpoint',
   labelNames: ['endpoint'],
+});
+
+export const gatewaysGqlSoftDeadlineSourceCutTotal = new promClient.Counter({
+  name: 'gateways_gql_soft_deadline_source_cut_total',
+  help: 'Count of fan-out GraphQL upstreams dropped from a list-query merge because they had not responded by the soft deadline, by source',
+  labelNames: ['source'],
 });
 
 //
@@ -192,6 +244,32 @@ export const chunkIngestConfirmedRootsGauge = new promClient.Gauge({
 export const chunkIngestConfirmedRootsPrunedTotal = new promClient.Counter({
   name: 'chunk_ingest_confirmed_roots_pruned_total',
   help: 'Count of confirmed_data_roots markers pruned by the GC sweep',
+});
+
+//
+// Index publication routes
+//
+
+export const indexesRequestsTotal = new promClient.Counter({
+  name: 'indexes_requests_total',
+  help: 'Requests to the /ar-io/indexes routes, by route and response status.',
+  labelNames: ['route', 'status'] as const,
+});
+
+export const indexesBytesServedTotal = new promClient.Counter({
+  name: 'indexes_bytes_served_total',
+  help: 'Index bytes served over HTTP, by route. The swarm is meant to carry most of this load; a steady climb here means subscribers are leaning on the HTTP fallback.',
+  labelNames: ['route'] as const,
+});
+
+//
+// CDB64 root transaction index
+//
+
+export const cdb64RootTxIndexReadersGauge = new promClient.Gauge({
+  name: 'cdb64_root_tx_index_readers',
+  help: 'Open CDB64 root-tx index readers, by configured source. For a collection source this is the number of index bands currently installed, so it falls when a band is retired and rises when one arrives.',
+  labelNames: ['source'] as const,
 });
 
 //
@@ -451,6 +529,23 @@ dataItemLastIndexedTimestampSeconds.setToCurrentTime();
 // GraphQL resolver metrics
 //
 
+export const graphqlHttpBatchSize = new promClient.Histogram({
+  name: 'graphql_http_batch_size',
+  help:
+    'Operations per inbound GraphQL POST whose body parsed. 1 for an ordinary ' +
+    'request; greater than 1 when a client posts a JSON array and Apollo ' +
+    'executes the whole array in parallel. Measured before Apollo, so `_count` ' +
+    'is those POSTs and `_sum` the operations they produced. Excludes GETs ' +
+    '(which cannot batch, and would fold in Sandbox landing-page views) and ' +
+    'bodies that failed to parse (diverted to the Express error flow before ' +
+    'this middleware). Apollo offers no cap on batch size, and the rate limiter ' +
+    'counts HTTP requests rather than operations, so the gap between _sum and ' +
+    '_count is the amplification available to a caller. Exists to answer ' +
+    'whether any client batches at all: if this stays flat at 1, batching can ' +
+    'be turned off outright rather than bounded.',
+  buckets: [1, 2, 5, 10, 25, 50, 100, 500],
+});
+
 export const graphqlRequestsCounter = new promClient.Counter({
   name: 'graphql_requests_total',
   help:
@@ -570,10 +665,26 @@ export const arweaveTxFetchCounter = new promClient.Counter({
   labelNames: ['node_type'],
 });
 
+/**
+ * `reason` carries the outcome behind `status`:
+ *
+ * - success: the accepted HTTP status, "200" (peer will store it long-term) or
+ *   "303" (peer parked it in its disk pool), or "dry_run" when posting is
+ *   simulated. The 303 subset is also counted by
+ *   `arweave_chunk_post_temporary_total`.
+ * - fail: the peer's HTTP status as a string when it answered ("400", "429",
+ *   "503"); otherwise "timeout" (our response or abort deadline), "canceled"
+ *   (the caller aborted), "network" (unreachable), or "invalid_chunk" /
+ *   "invalid_proof" for dry-run validation failures.
+ *
+ * Without it, a peer rejecting chunks is indistinguishable from one
+ * rate-limiting us or one we cannot reach, and telling them apart otherwise
+ * takes the peer operator's own logs.
+ */
 export const arweaveChunkPostCounter = new promClient.Counter({
   name: 'arweave_chunk_post_total',
   help: 'Counts individual POST request to endpoint',
-  labelNames: ['endpoint', 'status', 'role'],
+  labelNames: ['endpoint', 'status', 'role', 'reason'],
 });
 
 /**
@@ -748,6 +859,30 @@ export const clickhouseGqlTooManyRowsTotal = new promClient.Counter({
   labelNames: ['filter', 'recovery', 'id_count'] as const,
 });
 
+/**
+ * Outcomes of resolving GQL `ids` or `bundledIn` parent ids through the
+ * ClickHouse `transaction_ids` lookup table before the stable-leg query
+ * (only when CLICKHOUSE_GQL_ID_LOOKUP_ENABLED is true).
+ *
+ * Labels:
+ * - `filter`: `ids` or `bundledIn`
+ * - `outcome`:
+ *   - `resolved`: the stable query was narrowed to the resolved primary keys
+ *   - `resolved_partial` (`ids` only): narrowed to the ids found; some
+ *     requested ids are not in ClickHouse (not yet stable, or nonexistent). A
+ *     high share right after enabling can mean the backfill is incomplete
+ *   - `none_found`: no requested id is in ClickHouse, so the stable query was
+ *     skipped
+ *   - `partial`: some `bundledIn` parents were not found, so the query ran
+ *     unnarrowed, as before
+ *   - `error`: the lookup failed, so the query ran unnarrowed, as before
+ */
+export const clickhouseGqlIdLookupTotal = new promClient.Counter({
+  name: 'clickhouse_gql_id_lookup_total',
+  help: 'Outcomes of resolving GQL ids / bundledIn parents through the ClickHouse transaction_ids table.',
+  labelNames: ['filter', 'outcome'] as const,
+});
+
 //
 // Redis Cache Metrics
 //
@@ -783,6 +918,27 @@ export const arnsCachedResolutionFallbackOnEmptyCounter =
   new promClient.Counter({
     name: 'arns_cached_resolution_fallback_on_empty_total',
     help: 'Count of times CompositeArNSResolver returned a cached resolution because fresh resolution had no resolved id (no error/timeout)',
+  });
+
+/**
+ * Counts the *other* stale-serve path: fresh resolution was still running when
+ * `ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS` (default 250ms) elapsed, so the
+ * previously cached resolution was returned instead.
+ *
+ * This is the more likely of the two paths to fire in practice, because 250ms
+ * is a tight budget for an on-chain lookup, and it was previously visible only
+ * as an OTEL span event. An operator reading metrics alone could not tell that
+ * a name was being answered from a stale cache rather than resolved, which
+ * makes "my target change hasn't propagated" effectively undiagnosable without
+ * a trace collector.
+ *
+ * Read alongside `arns_cache_miss_total`: the ratio is how often a miss
+ * degraded into a stale answer rather than a fresh one.
+ */
+export const arnsCachedResolutionFallbackOnTimeoutCounter =
+  new promClient.Counter({
+    name: 'arns_cached_resolution_fallback_on_timeout_total',
+    help: 'Count of times CompositeArNSResolver returned a cached (possibly stale) resolution because fresh resolution exceeded ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS',
   });
 
 export const arnsNameCacheDurationSummary = new promClient.Summary({
@@ -841,9 +997,26 @@ export const arnsNameCacheDebounceTriggeredCounter = new promClient.Counter({
   labelNames: ['type'],
 });
 
+/**
+ * @deprecated Misnamed: prom-client's `startTimer()` observes **seconds**, so
+ * despite the `_ms` suffix the recorded values are seconds. A p99 that reads
+ * `0.12` is 120ms, not 0.12ms. Kept so existing dashboards don't break;
+ * prefer `arnsResolutionDurationSeconds` below, which is named for what it
+ * actually records.
+ */
 export const arnsResolutionTime = new promClient.Summary({
   name: 'arns_resolution_time_ms',
-  help: 'Time in ms it takes to resolve an arns name',
+  help: 'DEPRECATED (values are SECONDS despite the _ms name; use arns_resolution_duration_seconds). Time to resolve an arns name',
+});
+
+/**
+ * Correctly-named replacement for `arns_resolution_time_ms`, following the
+ * Prometheus convention of base units with a `_seconds` suffix. Observes the
+ * same measurement.
+ */
+export const arnsResolutionDurationSeconds = new promClient.Summary({
+  name: 'arns_resolution_duration_seconds',
+  help: 'Seconds taken to resolve an ArNS name, measured in the ArNS middleware (includes cache hits)',
 });
 
 export const arnsResolutionResolverCount = new promClient.Counter({
@@ -1016,6 +1189,29 @@ export const chunkStreamAbortsTotal = new promClient.Counter({
     'Count of chunk data streams aborted by a forward-progress guard ' +
     '(zero-length chunk or chunk-count overrun)',
   labelNames: ['reason'] as const,
+});
+
+/**
+ * Where TxChunksDataSource resolved a transaction's chunk-read geometry
+ * (data_root, offset, size): a chain override recorded after a local/chain
+ * mismatch, its in-memory cache, the local stable transactions index, or the
+ * trusted-node chain lookups.
+ */
+export const txChunksGeometryLookupTotal = new promClient.Counter({
+  name: 'tx_chunks_geometry_lookup_total',
+  help: 'Count of TxChunksDataSource geometry resolutions by source and outcome',
+  labelNames: ['source', 'outcome'] as const,
+});
+
+/**
+ * Chain re-checks of locally resolved geometry after a read using it failed
+ * before its first byte (match, mismatch, chain_error, or skipped when the
+ * transaction was already verified).
+ */
+export const txChunksGeometryVerifyTotal = new promClient.Counter({
+  name: 'tx_chunks_geometry_verify_total',
+  help: 'Count of chain re-checks of local TxChunksDataSource geometry by result',
+  labelNames: ['result'] as const,
 });
 
 /**
@@ -1319,6 +1515,22 @@ export const chunkCacheIndexSkippedFloorTotal = new promClient.Counter({
   help: 'Chunk cache index eviction candidates excluded by the minimum age floor',
 });
 
+// Chunk cache index hooks that failed. The hooks are fire-and-forget (a failed
+// index write must never fail the chunk write), so without this counter a
+// failing hook looks the same as a healthy one: the index simply stops growing.
+// It cannot see a store that was never given the index at all (ar-io-node
+// #944) -- no hook runs, so nothing fails; the evictor's index-coverage warning
+// is what catches that. Both labels start at 0 so an alert on the first
+// failure has a series to compare against.
+export const chunkCacheIndexHookErrorsTotal = createCounter({
+  name: 'chunk_cache_index_hook_errors_total',
+  help: 'Chunk cache index write/read hook calls that failed',
+  labelNames: ['hook'],
+  expectedLabelNames: {
+    hook: ['write', 'read'],
+  },
+});
+
 //
 // Circuit breaker metrics
 //
@@ -1515,14 +1727,47 @@ export const rateLimitTokensConsumedTotal = new promClient.Counter({
   labelNames: ['bucket_type', 'token_type', 'domain'],
 });
 
+/**
+ * x402 payment funnel. 402 responses are already countable via
+ * http_request_duration_seconds_count{status_code="402"}; what was missing is
+ * everything after one: whether a payment verified, settled, and topped up a
+ * bucket. Without it an operator cannot tell a paywall nobody pays from one
+ * whose settlements are failing — which matters because a mainnet deployment
+ * with incomplete CDP credentials silently falls back to a facilitator that
+ * cannot settle, and keeps serving 402s while earning nothing.
+ *
+ * `outcome` is the stage that ended the attempt: `no_payment_header`,
+ * `invalid_target`, `missing_host`, `verify_failed`, `unsupported_processor`,
+ * `unsupported_payload`, `settle_failed`, `topup_failed`, `error` (an
+ * unexpected throw with no more specific stage), or `settled`.
+ *
+ * Note that `x402_payment_settled_usdc_total` is recorded at settlement, which
+ * is when the funds actually move, while `outcome="settled"` requires the
+ * access top-up to have succeeded as well. Revenue therefore counts every
+ * payment collected even when a later step failed, and
+ * `sum(x402_payment_total{outcome="topup_failed"})` is the count of payments
+ * taken without access granted — an amount owed back, and worth alerting on.
+ */
+export const x402PaymentCounter = new promClient.Counter({
+  name: 'x402_payment_total',
+  help: 'x402 payment attempts by outcome and top-up target',
+  labelNames: ['outcome', 'target'],
+});
+
+export const x402PaymentSettledUsdcCounter = new promClient.Counter({
+  name: 'x402_payment_settled_usdc_total',
+  help: 'Total USDC settled through x402 (converted from atomic units; USDC has 6 decimals)',
+  labelNames: ['target'],
+});
+
 //
 // Root TX Index metrics
 //
 
 export const rootTxLookupTotal = new promClient.Counter({
   name: 'root_tx_lookup_total',
-  help: 'Total root TX index lookups by source and status',
-  labelNames: ['source', 'status', 'has_offsets'] as const,
+  help: 'Total root TX index lookups by source and status. On a hit, has_offsets is whether both root offsets came back and has_size whether the item size did',
+  labelNames: ['source', 'status', 'has_offsets', 'has_size'] as const,
 });
 
 export const rootTxLookupDurationSummary = new promClient.Summary({
@@ -1574,7 +1819,7 @@ export const compositeRootTxSourcesProbedSummary = new promClient.Summary({
 
 export const rootTxLocalResolveTotal = new promClient.Counter({
   name: 'root_tx_local_resolve_total',
-  help: 'Outcome of RootParentDataSource local-first offset resolution for bare-rootTxId results: local (resolved by a local bundle-header scan, remote lookup avoided), remote_fallback (local scan missed and a full lookup recovered a path or direct offsets), or unresolved (neither found the item)',
+  help: 'Outcome of RootParentDataSource local-first offset resolution for root TX index results without directly usable offsets: index_offsets (the index supplied the item offset and size, located with one item-header read and served through signature verification), local (resolved by a local bundle-header scan, remote lookup avoided), remote_fallback (local scan missed and a full lookup recovered a path or direct offsets), or unresolved (neither found the item)',
   labelNames: ['outcome'] as const,
 });
 
@@ -1856,13 +2101,69 @@ export const chunkMetadataAnchorTotal = new promClient.Counter({
  * Labels (`kind`):
  * - `root_id`     — `X-AR-IO-Root-Transaction-Id` was sent
  * - `path`        — `X-AR-IO-Root-Path` was sent (comma-separated parent chain)
- * - `byte_offset` — `X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size` pair was sent
+ * - `byte_offset` — no longer emitted: item offset/size hints are not forwarded
  */
 export const hintEmittedTotal = new promClient.Counter({
   name: 'ario_hint_emitted_total',
   help: 'Retrieval-hint headers emitted on outbound forwards',
   labelNames: ['kind'],
 });
+
+/**
+ * Header checks on a data item location (root, item offset and payload offset)
+ * taken from stored attributes or a root TX index before bytes are read from
+ * it. The payload size is not checked; a header does not record it.
+ *
+ * Labels:
+ * - `source`: `stored_attributes`, `attributes_traversal`, `root_tx_index`,
+ *   `root_tx_index_fallback`
+ * - `result`:
+ *   - `confirmed`: the header at the offset is the requested item and ends at
+ *     the recorded payload offset
+ *   - `rejected`: not confirmed, so the location was not used. Usually a root
+ *     and an offset from different copies of an item that exists in several
+ *     bundles (ar-io/ar-io-node#937), but also a header that could not be read
+ */
+export const dataItemLocationCheckTotal = new promClient.Counter({
+  name: 'data_item_location_check_total',
+  help: 'Header checks on stored or indexed data item locations before serving from them',
+  labelNames: ['source', 'result'] as const,
+});
+
+/**
+ * Outcomes of verifying a data item's signature over a payload located from an
+ * offset and size nothing else vouches for.
+ *
+ * Labels:
+ * - `source`: where the offset and size came from (`direct_offset_hint`,
+ *   `root_tx_index`)
+ * - `result`:
+ *   - `verified`: the payload matched the signature and was released in full
+ *   - `invalid_signature`, `size_mismatch`: the payload was rejected before its
+ *     final bytes were released and nothing was cached or persisted
+ *   - `unsupported_signature_type`: no verifier for the item's signature type,
+ *     so the offset was not used
+ *   - `skipped_range`: a range request, which cannot be verified end to end
+ *   - `skipped_rejected`: the same offset and size were rejected recently
+ */
+export const dataItemSignatureVerificationTotal = new promClient.Counter({
+  name: 'data_item_signature_verification_total',
+  help: 'Outcomes of verifying data item signatures over payloads located from unverified offsets and sizes',
+  labelNames: ['source', 'result'] as const,
+});
+
+/**
+ * Time to finalize a payload's deep hash and check its signature, once the
+ * payload has streamed. The incremental hashing done while bytes stream is not
+ * included.
+ */
+export const dataItemSignatureVerificationDurationSeconds =
+  new promClient.Histogram({
+    name: 'data_item_signature_verification_duration_seconds',
+    help: 'Time to finalize the deep hash and check a data item signature after its payload has streamed',
+    labelNames: ['source', 'signature_type'] as const,
+    buckets: [0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1],
+  });
 
 /**
  * Counter of Content-Digest emission outcomes on data and chunk

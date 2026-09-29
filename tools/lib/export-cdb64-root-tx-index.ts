@@ -9,11 +9,12 @@
  * CLI tool to export a CDB64 root TX index to CSV format.
  *
  * CSV output format:
- *   data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
+ *   data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_size
  *
  * - data_item_id and root_tx_id are always present (base64url-encoded IDs)
  * - path column contains JSON array of base64url IDs for path-based entries
  * - offset columns are present if the value has complete format (legacy or path)
+ * - data_item_size is present when the value records the item size
  *
  * Supports all 4 CDB64 value formats:
  * - Simple: rootTxId only
@@ -34,6 +35,7 @@ import { stringify } from 'csv-stringify';
 import { Cdb64Reader } from '../../src/lib/cdb64.js';
 import {
   decodeCdb64Value,
+  getDataItemSize,
   getRootTxId,
   getPath,
   isPathValue,
@@ -64,7 +66,7 @@ Options:
   --help, -h           Show this help message
 
 CSV Output Format:
-  data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
+  data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_size
 
   - data_item_id: Base64URL-encoded data item ID (43 characters)
   - root_tx_id: Base64URL-encoded root transaction ID (43 characters)
@@ -72,6 +74,7 @@ CSV Output Format:
           Format: ["rootId","bundle1Id","bundle2Id",...,"parentId"]
   - root_data_item_offset: Byte offset (empty if not available)
   - root_data_offset: Byte offset (empty if not available)
+  - data_item_size: Total item size, header + payload (empty if not recorded)
 
 Supported Value Formats:
   - Simple: rootTxId only (legacy)
@@ -171,6 +174,7 @@ async function exportIndex(config: Config): Promise<void> {
       'path',
       'root_data_item_offset',
       'root_data_offset',
+      'data_item_size',
     ],
   });
 
@@ -182,6 +186,7 @@ async function exportIndex(config: Config): Promise<void> {
   let completeCount = 0;
   let pathCount = 0;
   let pathCompleteCount = 0;
+  let dataItemSizeCount = 0;
   let errorCount = 0;
   const startTime = Date.now();
 
@@ -199,6 +204,12 @@ async function exportIndex(config: Config): Promise<void> {
         const path = getPath(decoded);
         const pathJson = path ? JSON.stringify(path.map((id) => toB64Url(id))) : '';
 
+        // Item size is only ever present on offset formats
+        const dataItemSize = getDataItemSize(decoded);
+        if (dataItemSize !== undefined) {
+          dataItemSizeCount++;
+        }
+
         // Build CSV record based on format type
         let record: (string | number)[];
         if (isPathCompleteValue(decoded)) {
@@ -208,10 +219,11 @@ async function exportIndex(config: Config): Promise<void> {
             pathJson,
             decoded.rootDataItemOffset,
             decoded.rootDataOffset,
+            dataItemSize ?? '',
           ];
           pathCompleteCount++;
         } else if (isPathValue(decoded)) {
-          record = [dataItemId, rootTxId, pathJson, '', ''];
+          record = [dataItemId, rootTxId, pathJson, '', '', ''];
           pathCount++;
         } else if (isCompleteValue(decoded)) {
           record = [
@@ -220,10 +232,11 @@ async function exportIndex(config: Config): Promise<void> {
             '',
             decoded.rootDataItemOffset,
             decoded.rootDataOffset,
+            dataItemSize ?? '',
           ];
           completeCount++;
         } else {
-          record = [dataItemId, rootTxId, '', '', ''];
+          record = [dataItemId, rootTxId, '', '', '', ''];
           simpleCount++;
         }
 
@@ -283,6 +296,7 @@ async function exportIndex(config: Config): Promise<void> {
       console.error('  Path formats:');
       console.error(`    - Path: ${pathCount.toLocaleString()}`);
       console.error(`    - Path Complete: ${pathCompleteCount.toLocaleString()}`);
+      console.error(`  With item size: ${dataItemSizeCount.toLocaleString()}`);
       if (errorCount > 0) {
         console.error(`Errors: ${errorCount}`);
       }

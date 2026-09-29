@@ -336,8 +336,10 @@ land via the stable Parquet pipeline once they stabilize.
 
 ### Failure model
 
-Streaming is best-effort. ClickHouse availability is **not**
-required for indexing to make progress:
+Streaming is best-effort *once the gateway is running*. ClickHouse
+availability is **not** required for indexing to make progress, but with
+`CLICKHOUSE_STREAMING_ENABLED=true` it **is** required at startup: see
+the startup bullet below.
 
 - ClickHouse unreachable / errors: the streamer logs and continues.
   Rows for that flush are dropped; they will appear in
@@ -352,6 +354,14 @@ required for indexing to make progress:
   with a clear error pointing at `scripts/clickhouse-import`. This
   surfaces missing tables as a startup error rather than as
   column-mismatch errors on the first INSERT.
+- ClickHouse unreachable *at startup*: same path, and it aborts the boot.
+  `app.ts` awaits `clickhouseStreamer.start()` before `app.listen()`, so a
+  DNS or connection failure there means the HTTP listener is never bound.
+  Core logs the error with `duringStartup: true` and exits non-zero so the
+  container restart policy retries; it does not sit there indexing without
+  serving. Operators running the `clickhouse` profile should therefore make
+  sure ClickHouse has a restart policy of its own, which the bundled
+  `docker-compose.yaml` sets.
 
 Cold-start gap: data items unbundled from L1 transactions whose
 `BLOCK_TX_INDEXED` event fired before the streamer started are

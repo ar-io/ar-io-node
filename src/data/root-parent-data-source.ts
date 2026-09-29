@@ -4,8 +4,10 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { pipeline } from 'node:stream';
 import winston from 'winston';
 import { Span } from '@opentelemetry/api';
+import { LRUCache } from 'lru-cache';
 
 import {
   ContiguousData,
@@ -19,7 +21,26 @@ import {
 import { startChildSpan } from '../tracing.js';
 import { Ans104OffsetSource } from './ans104-offset-source.js';
 import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
+import {
+  DataItemSignedFields,
+  VerifyingPayloadStream,
+  isSupportedSignatureType,
+} from '../lib/data-item-signature.js';
 import * as metrics from '../metrics.js';
+
+/** Metric `source` label for payloads located by a direct offset hint. */
+const DIRECT_OFFSET_HINT = 'direct_offset_hint';
+
+/** Metric `source` label for payloads located by root TX index offsets. */
+const ROOT_TX_INDEX = 'root_tx_index';
+
+/**
+ * Creates the default cache of item offsets whose payload failed signature
+ * verification. Entries expire so an item can be retried later; the bound
+ * keeps a flood of distinct bad offsets from growing memory.
+ */
+const createRejectedOffsetCache = () =>
+  new LRUCache<string, true>({ max: 10_000, ttl: 60 * 60 * 1000 });
 
 /**
  * Data source that resolves data items to their root bundles before fetching data.
@@ -33,6 +54,7 @@ export class RootParentDataSource implements ContiguousDataSource {
   private ans104OffsetSource: Ans104OffsetSource;
   private fallbackToLegacyTraversal: boolean;
   private allowPassthroughWithoutOffsets: boolean;
+  private rejectedItemOffsets: LRUCache<string, true>;
 
   /**
    * Creates a new RootParentDataSource instance.
@@ -43,6 +65,10 @@ export class RootParentDataSource implements ContiguousDataSource {
    * @param ans104OffsetSource - Source for finding data item offsets within ANS-104 bundles (fallback)
    * @param fallbackToLegacyTraversal - Whether to search for data item root transaction when attributes are incomplete
    * @param allowPassthroughWithoutOffsets - Whether to allow data retrieval without offset information
+   * @param rejectedItemOffsets - Item offsets and sizes (from direct offset
+   *   hints or the root TX index) whose payload failed signature verification,
+   *   keyed by item, root, offset and size; later requests skip them and use
+   *   the bundle's own index
    */
   constructor({
     log,
@@ -52,6 +78,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     ans104OffsetSource,
     fallbackToLegacyTraversal = true,
     allowPassthroughWithoutOffsets = true,
+    rejectedItemOffsets = createRejectedOffsetCache(),
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
@@ -60,6 +87,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     ans104OffsetSource: Ans104OffsetSource;
     fallbackToLegacyTraversal?: boolean;
     allowPassthroughWithoutOffsets?: boolean;
+    rejectedItemOffsets?: LRUCache<string, true>;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
@@ -68,6 +96,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     this.ans104OffsetSource = ans104OffsetSource;
     this.fallbackToLegacyTraversal = fallbackToLegacyTraversal;
     this.allowPassthroughWithoutOffsets = allowPassthroughWithoutOffsets;
+    this.rejectedItemOffsets = rejectedItemOffsets;
   }
 
   /**
@@ -200,6 +229,291 @@ export class RootParentDataSource implements ContiguousDataSource {
         error: error.message,
       });
     }
+  }
+
+  /**
+   * Locates a data item's payload from a known item offset and total item size
+   * by reading the item's ANS-104 header at that offset.
+   *
+   * Serves both client-supplied direct offset hints and root TX index results
+   * that carry the item offset and size (e.g. CDB64 values with `s`). One
+   * bounded header read yields the header size, and therefore the payload
+   * offset and size, plus the item's own `Content-Type` tag, which offset
+   * indexes do not store.
+   *
+   * The ID computed from the header's signature must equal the requested ID,
+   * so a stale or wrong offset cannot serve another item's bytes. When
+   * `expectedDataOffset` is supplied (the payload offset the source recorded),
+   * the parsed header must also end exactly there. Any failure returns `null`
+   * so the caller can fall through to slower resolution.
+   *
+   * @returns The confirmed item location, or `null` when the offset could not
+   *   be confirmed.
+   */
+  private async resolveItemAtOffset({
+    id,
+    rootTxId,
+    itemOffset,
+    itemSize,
+    expectedDataOffset,
+    signal,
+    source,
+  }: {
+    id: string;
+    rootTxId: string;
+    itemOffset: number;
+    itemSize: number;
+    expectedDataOffset?: number;
+    signal?: AbortSignal;
+    /** Where the offset came from, for log messages. */
+    source: string;
+  }): Promise<{
+    itemOffset: number;
+    dataOffset: number;
+    itemSize: number;
+    dataSize: number;
+    contentType?: string;
+    /** Header fields the item's signature covers, when the parser returns them */
+    signedFields?: DataItemSignedFields;
+  } | null> {
+    let headerInfo: {
+      id: string;
+      headerSize: number;
+      payloadSize: number;
+      contentType?: string;
+      signedFields?: DataItemSignedFields;
+    };
+    try {
+      headerInfo = await this.ans104OffsetSource.parseDataItemHeader(
+        rootTxId,
+        itemOffset,
+        itemSize,
+        signal,
+      );
+    } catch (error: any) {
+      this.log.debug(
+        `Item offset resolution failed (${source}), falling through`,
+        {
+          id,
+          rootTxId,
+          itemOffset,
+          error: error.message,
+        },
+      );
+      return null;
+    }
+
+    if (headerInfo.id !== id) {
+      this.log.debug(`Item offset ID mismatch (${source}), falling through`, {
+        id,
+        headerId: headerInfo.id,
+        rootTxId,
+        itemOffset,
+      });
+      return null;
+    }
+
+    const dataOffset = itemOffset + headerInfo.headerSize;
+    if (
+      (expectedDataOffset !== undefined && dataOffset !== expectedDataOffset) ||
+      headerInfo.payloadSize < 0
+    ) {
+      this.log.debug(
+        `Item offset header disagrees with recorded offsets (${source}), falling through`,
+        {
+          id,
+          rootTxId,
+          itemOffset,
+          itemSize,
+          headerSize: headerInfo.headerSize,
+          expectedDataOffset,
+        },
+      );
+      return null;
+    }
+
+    return {
+      itemOffset,
+      dataOffset,
+      itemSize,
+      dataSize: headerInfo.payloadSize,
+      contentType: headerInfo.contentType,
+      signedFields: headerInfo.signedFields,
+    };
+  }
+
+  /**
+   * Confirms, with one bounded header read, that the data item at
+   * `(rootTxId, itemOffset)` is the requested item and that its payload
+   * starts at `dataOffset`, before any bytes are read from that location.
+   *
+   * `dataSize` is not confirmed: an ANS-104 header does not record its
+   * payload length, so the size is only used to bound the read.
+   *
+   * A root and an offset that describe different copies of the same item
+   * cannot be told apart by chunk verification: chunks prove the bytes belong
+   * to the root, not that they are this item. Items signed deterministically
+   * exist under one ID in several bundles, so a stored root paired with an
+   * offset taken from another copy reads the wrong bytes, with the right
+   * length, and they verify (ar-io/ar-io-node#937).
+   *
+   * A header that cannot be read (e.g. an upstream timeout) is not confirmed
+   * either; the header parser does not distinguish a failed read from bytes
+   * that are not a data item header. If the request was aborted, the abort is
+   * rethrown instead of falling through to slower resolution.
+   *
+   * @returns `true` only when the header at the offset is the requested item
+   */
+  private async confirmItemLocation({
+    id,
+    rootTxId,
+    itemOffset,
+    dataOffset,
+    dataSize,
+    signal,
+    source,
+  }: {
+    id: string;
+    rootTxId: string;
+    itemOffset: number;
+    dataOffset: number;
+    dataSize: number;
+    signal?: AbortSignal;
+    /** Where the location came from, for logs and metrics. */
+    source: string;
+  }): Promise<boolean> {
+    const headerSize = dataOffset - itemOffset;
+    const located =
+      Number.isSafeInteger(headerSize) && headerSize > 0 && dataSize >= 0
+        ? await this.resolveItemAtOffset({
+            id,
+            rootTxId,
+            itemOffset,
+            itemSize: headerSize + dataSize,
+            expectedDataOffset: dataOffset,
+            signal,
+            source,
+          })
+        : null;
+    if (located === null) {
+      signal?.throwIfAborted();
+    }
+    const confirmed = located !== null;
+    metrics.dataItemLocationCheckTotal.inc({
+      source,
+      result: confirmed ? 'confirmed' : 'rejected',
+    });
+    if (!confirmed) {
+      this.log.warn(
+        'Data item location not confirmed by its header; not serving from it',
+        { id, rootTxId, itemOffset, dataOffset, dataSize, source },
+      );
+    }
+    return confirmed;
+  }
+
+  /**
+   * Streams a payload located from an offset and size that nothing else vouches
+   * for (a direct offset hint, or a root TX index value that records the item
+   * size) through signature verification.
+   *
+   * The returned stream releases its final chunk only once the item's signature
+   * verifies over the payload, so a wrong size never yields a complete body.
+   * The offsets are saved, and the outcome counted, only after verification. On
+   * failure `rejectionKey` is remembered, so later requests skip this offset and
+   * use the bundle's own index.
+   *
+   * @returns The verifying stream to serve in place of `data.stream`
+   */
+  private serveVerifiedPayload({
+    data,
+    id,
+    signedFields,
+    payloadSize,
+    rejectionKey,
+    attributesToStore,
+    source,
+  }: {
+    data: ContiguousData;
+    id: string;
+    signedFields: DataItemSignedFields;
+    payloadSize: number;
+    rejectionKey: string;
+    attributesToStore: Record<string, unknown>;
+    source: typeof DIRECT_OFFSET_HINT | typeof ROOT_TX_INDEX;
+  }): ContiguousData['stream'] {
+    const verifier = new VerifyingPayloadStream({
+      fields: signedFields,
+      payloadSize,
+      onVerified: () => {
+        metrics.dataItemSignatureVerificationTotal.inc({
+          source,
+          result: 'verified',
+        });
+        // Persist the offsets only once the payload is proven to be this item's.
+        void this.tryCacheAttributes(id, attributesToStore, source);
+      },
+      onRejected: (error) => {
+        this.rejectedItemOffsets.set(rejectionKey, true);
+        metrics.dataItemSignatureVerificationTotal.inc({
+          source,
+          result: error.reason,
+        });
+        this.log.debug('Payload failed signature verification', {
+          id,
+          source,
+          rejectionKey,
+          reason: error.reason,
+        });
+      },
+      onVerificationTimed: (durationMs) => {
+        metrics.dataItemSignatureVerificationDurationSeconds.observe(
+          { source, signature_type: String(signedFields.signatureType) },
+          durationMs / 1000,
+        );
+      },
+    });
+
+    // Stream errors, including a failed verification, reach the consumer
+    // through the returned stream.
+    return pipeline(data.stream, verifier, () => {});
+  }
+
+  /**
+   * Picks the content type to report for a data item that is being served as a
+   * byte range of its root transaction.
+   *
+   * The root fetch's `sourceContentType` describes the *bundle envelope*, not
+   * the item inside it — an ANS-104 bundle is `application/octet-stream`. Using
+   * it as the item's content type makes a `text/html` item download instead of
+   * render, and the damage outlives the request: `ReadThroughDataCache` writes
+   * the served content type to `contiguous_data.original_source_content_type`,
+   * which is keyed by the data *hash*, is never rewritten once set, and is what
+   * `getDataAttributes` falls back to for any item this gateway has not indexed.
+   * One envelope-typed response therefore poisons the item permanently, is
+   * inherited by every byte-identical re-upload, and spreads to peers that copy
+   * the `Content-Type` header off our response.
+   *
+   * So when the item's own content type is unknown, report nothing and let the
+   * route handler apply its default rather than asserting the envelope's type.
+   * The one case where the fetched type does describe the item is when the item
+   * *is* the root transaction, where the fetch is of the item itself.
+   */
+  private resolveItemContentType({
+    id,
+    rootTxId,
+    itemContentType,
+    rootContentType,
+  }: {
+    id: string;
+    rootTxId: string;
+    itemContentType?: string;
+    rootContentType?: string;
+  }): string | undefined {
+    if (itemContentType !== undefined) {
+      return itemContentType;
+    }
+    return rootTxId === id ? rootContentType : undefined;
   }
 
   /**
@@ -606,66 +920,94 @@ export class RootParentDataSource implements ContiguousDataSource {
         requestAttributes?.rootPathHint?.[0] ??
         null;
       if (hintRootTxId != null) {
-        // Step 0a: Direct item offset hint — parse item header then fetch data
+        // Step 0a: Direct item offset hint — parse the item header, then serve
+        // the payload through signature verification.
+        //
+        // The size in this hint comes from the caller and nothing else vouches
+        // for it. The header ID check proves the offset points at the requested
+        // item, but a wrong size that is still larger than the header passes
+        // that check and frames the wrong bytes, which would then be served,
+        // cached and persisted under this ID. Verifying the item's signature
+        // over the payload binds the served bytes to the ID: a wrong size fails
+        // before the final bytes are released, and the offsets are stored only
+        // once the payload has verified. A range request cannot be verified end
+        // to end, so it uses the bundle's own index instead (Step 0b).
         const hintItemOffset = requestAttributes?.rootByteHint?.offset;
         const hintItemSize = requestAttributes?.rootByteHint?.size;
         if (hintItemOffset != null && hintItemSize != null) {
-          span.addEvent('Attempting direct offset hint resolution', {
-            'hint.root_tx_id': hintRootTxId,
-            'hint.item_offset': hintItemOffset,
-            'hint.item_size': hintItemSize,
-          });
+          const hintKey = `${id}:${hintRootTxId}:${hintItemOffset}:${hintItemSize}`;
+          if (region !== undefined) {
+            span.addEvent('Skipping direct offset hint for range request');
+            metrics.dataItemSignatureVerificationTotal.inc({
+              source: DIRECT_OFFSET_HINT,
+              result: 'skipped_range',
+            });
+          } else if (this.rejectedItemOffsets.has(hintKey)) {
+            span.addEvent('Skipping recently rejected direct offset hint');
+            metrics.dataItemSignatureVerificationTotal.inc({
+              source: DIRECT_OFFSET_HINT,
+              result: 'skipped_rejected',
+            });
+          } else {
+            span.addEvent('Attempting direct offset hint resolution', {
+              'hint.root_tx_id': hintRootTxId,
+              'hint.item_offset': hintItemOffset,
+              'hint.item_size': hintItemSize,
+            });
 
-          let headerInfo;
-          try {
-            // Parse the data item header to get content type and payload offset
-            headerInfo = await this.ans104OffsetSource.parseDataItemHeader(
-              hintRootTxId,
-              hintItemOffset,
-              hintItemSize,
+            // Parse the data item header for content type, payload offset
+            // and the fields its signature covers
+            const hintedItem = await this.resolveItemAtOffset({
+              id,
+              rootTxId: hintRootTxId,
+              itemOffset: hintItemOffset,
+              itemSize: hintItemSize,
               signal,
-            );
-          } catch (error: any) {
-            this.log.debug(
-              'Direct offset hint resolution failed, falling through',
-              { id, hintRootTxId, error: error.message },
-            );
-          }
+              source: 'direct offset hint',
+            });
+            const signedFields = hintedItem?.signedFields;
 
-          if (headerInfo != null) {
-            if (headerInfo.id !== id) {
+            if (hintedItem === null) {
+              // Header unusable for this ID; fall through.
+            } else if (
+              signedFields === undefined ||
+              !isSupportedSignatureType(signedFields.signatureType)
+            ) {
               this.log.debug(
-                'Direct offset hint ID mismatch, falling through',
-                { id, hintId: headerInfo.id, hintRootTxId },
+                'Direct offset hint item cannot be signature-verified, falling through',
+                {
+                  id,
+                  hintRootTxId,
+                  signatureType: signedFields?.signatureType,
+                },
               );
+              metrics.dataItemSignatureVerificationTotal.inc({
+                source: DIRECT_OFFSET_HINT,
+                result: 'unsupported_signature_type',
+              });
             } else {
-              const dataOffset = hintItemOffset + headerInfo.headerSize;
-              const dataSize = headerInfo.payloadSize;
-              const hintContentType = headerInfo.contentType;
-
-              const finalRegion = this.calculateFinalRegion(
+              const {
                 dataOffset,
                 dataSize,
-                region,
-              );
+                contentType: hintContentType,
+              } = hintedItem;
 
               span.setAttributes({
                 'traversal.method': 'direct_offset_hint',
                 'hint.root_tx_id': hintRootTxId,
-                'final.region.offset': finalRegion.offset,
-                'final.region.size': finalRegion.size,
+                'final.region.offset': dataOffset,
+                'final.region.size': dataSize,
               });
 
               const data = await this.dataSource.getData({
                 id: hintRootTxId,
                 requestAttributes,
-                region: finalRegion,
+                region: { offset: dataOffset, size: dataSize },
                 parentSpan: span,
                 signal,
                 acceptContentType,
               });
 
-              // Cache only after successful fetch to avoid poisoning from bad hints
               const attributesToStore: Record<string, unknown> = {
                 rootTransactionId: hintRootTxId,
                 rootDataItemOffset: hintItemOffset,
@@ -676,18 +1018,24 @@ export class RootParentDataSource implements ContiguousDataSource {
               if (hintContentType !== undefined) {
                 attributesToStore.contentType = hintContentType;
               }
-              await this.tryCacheAttributes(
-                id,
-                attributesToStore,
-                'direct offset hint',
-              );
 
               return {
                 ...data,
-                sourceContentType:
-                  hintContentType ??
-                  originalContentType ??
-                  data.sourceContentType,
+                stream: this.serveVerifiedPayload({
+                  data,
+                  id,
+                  signedFields,
+                  payloadSize: dataSize,
+                  rejectionKey: hintKey,
+                  attributesToStore,
+                  source: DIRECT_OFFSET_HINT,
+                }),
+                sourceContentType: this.resolveItemContentType({
+                  id,
+                  rootTxId: hintRootTxId,
+                  itemContentType: hintContentType ?? originalContentType,
+                  rootContentType: data.sourceContentType,
+                }),
               };
             }
           }
@@ -783,7 +1131,12 @@ export class RootParentDataSource implements ContiguousDataSource {
 
           return {
             ...data,
-            sourceContentType: hintContentType ?? data.sourceContentType,
+            sourceContentType: this.resolveItemContentType({
+              id,
+              rootTxId: resolvedRootTxId,
+              itemContentType: hintContentType,
+              rootContentType: data.sourceContentType,
+            }),
           };
         }
 
@@ -795,10 +1148,28 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       // Step 1: Try attributes-based traversal first
       span.addEvent('Attempting attributes-based traversal');
-      const attributesTraversal = await this.traverseToRootUsingAttributes(
+      let attributesTraversal = await this.traverseToRootUsingAttributes(
         id,
         originalAttributes,
       );
+
+      if (
+        attributesTraversal &&
+        !(await this.confirmItemLocation({
+          id,
+          rootTxId: attributesTraversal.rootTxId,
+          itemOffset: attributesTraversal.totalOffset,
+          dataOffset: attributesTraversal.rootDataOffset,
+          dataSize: attributesTraversal.size,
+          signal,
+          source: attributesTraversal.fromPreComputed
+            ? 'stored_attributes'
+            : 'attributes_traversal',
+        }))
+      ) {
+        span.addEvent('Attributes location rejected by header check');
+        attributesTraversal = null;
+      }
 
       if (attributesTraversal) {
         const {
@@ -896,7 +1267,12 @@ export class RootParentDataSource implements ContiguousDataSource {
 
           return {
             ...data,
-            sourceContentType: originalContentType ?? data.sourceContentType,
+            sourceContentType: this.resolveItemContentType({
+              id,
+              rootTxId,
+              itemContentType: originalContentType,
+              rootContentType: data.sourceContentType,
+            }),
           };
         } finally {
           fetchSpan.end();
@@ -943,6 +1319,7 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       let rootTxId: string | undefined;
       let rootResult: any;
+      let indexLocationConfirmed = false;
       try {
         // Local-first: accept any result carrying a rootTxId so the lookup
         // short-circuits on a local source (db/cdb) instead of probing remote
@@ -958,21 +1335,45 @@ export class RootParentDataSource implements ContiguousDataSource {
           'root.found': rootTxId !== undefined,
         });
 
-        // Store the discovered offsets if available (from Turbo)
+        // Store the discovered offsets if available (from Turbo). Sizes are
+        // stored only when the source also reports the payload size: an index
+        // that records just the item size (a CDB64 value with `s`) is not
+        // trusted for it until the payload has verified below.
+        // A complete location (item offset, payload offset and payload size)
+        // is served directly below, so confirm the header at it first. The
+        // index may describe another copy of an item that exists in several
+        // bundles (ar-io/ar-io-node#937).
         if (
           rootTxId !== undefined &&
           rootResult?.rootOffset !== undefined &&
-          rootResult?.rootDataOffset !== undefined
+          rootResult?.rootDataOffset !== undefined &&
+          rootResult?.dataSize !== undefined
+        ) {
+          indexLocationConfirmed = await this.confirmItemLocation({
+            id,
+            rootTxId,
+            itemOffset: rootResult.rootOffset,
+            dataOffset: rootResult.rootDataOffset,
+            dataSize: rootResult.dataSize,
+            signal,
+            source: 'root_tx_index',
+          });
+        }
+        if (
+          rootTxId !== undefined &&
+          rootResult?.rootOffset !== undefined &&
+          rootResult?.rootDataOffset !== undefined &&
+          indexLocationConfirmed
         ) {
           const attributesToStore: Record<string, unknown> = {
             rootTransactionId: rootTxId,
             rootDataItemOffset: rootResult.rootOffset,
             rootDataOffset: rootResult.rootDataOffset,
           };
-          if (rootResult.size !== undefined) {
-            attributesToStore.itemSize = rootResult.size;
-          }
           if (rootResult.dataSize !== undefined) {
+            if (rootResult.size !== undefined) {
+              attributesToStore.itemSize = rootResult.size;
+            }
             attributesToStore.size = rootResult.dataSize;
           }
           await this.tryCacheAttributes(id, attributesToStore, 'root TX index');
@@ -1036,10 +1437,20 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       // Step 2: Get offset and size (use Turbo offsets if available, otherwise parse bundle)
       let offset: { offset: number; size: number } | undefined;
+      // Set when the payload is located from root TX index offsets and must be
+      // served through signature verification.
+      let indexVerification:
+        | {
+            signedFields: DataItemSignedFields;
+            rejectionKey: string;
+            attributesToStore?: Record<string, unknown>;
+          }
+        | undefined;
 
       if (
         rootResult?.rootDataOffset !== undefined &&
-        rootResult?.dataSize !== undefined
+        rootResult?.dataSize !== undefined &&
+        indexLocationConfirmed
       ) {
         // Use Turbo offsets directly
         offset = {
@@ -1089,8 +1500,66 @@ export class RootParentDataSource implements ContiguousDataSource {
         } | null = null;
 
         try {
-          // Use path-guided navigation when path is available for faster lookup
-          if (rootResult?.path && rootResult.path.length > 0) {
+          // The index recorded the item's offset and size (e.g. a CDB64 value
+          // with `s`) but not its content type. One header read at that offset
+          // locates the payload and recovers the type, with no bundle search.
+          // Nothing else vouches for the recorded size, so the payload is served
+          // through signature verification (Step 4). A range request cannot be
+          // verified end to end, so it searches the bundle instead.
+          if (
+            rootResult?.rootOffset !== undefined &&
+            rootResult?.size !== undefined
+          ) {
+            const rejectionKey = `${id}:${rootTxId}:${rootResult.rootOffset}:${rootResult.size}`;
+            if (region !== undefined) {
+              metrics.dataItemSignatureVerificationTotal.inc({
+                source: ROOT_TX_INDEX,
+                result: 'skipped_range',
+              });
+            } else if (this.rejectedItemOffsets.has(rejectionKey)) {
+              metrics.dataItemSignatureVerificationTotal.inc({
+                source: ROOT_TX_INDEX,
+                result: 'skipped_rejected',
+              });
+            } else {
+              const indexedItem = await this.resolveItemAtOffset({
+                id,
+                rootTxId,
+                itemOffset: rootResult.rootOffset,
+                itemSize: rootResult.size,
+                expectedDataOffset: rootResult.rootDataOffset,
+                signal,
+                source: 'root TX index',
+              });
+              const signedFields = indexedItem?.signedFields;
+
+              if (indexedItem === null) {
+                // Header unusable for this ID; search the bundle instead.
+              } else if (
+                signedFields === undefined ||
+                !isSupportedSignatureType(signedFields.signatureType)
+              ) {
+                metrics.dataItemSignatureVerificationTotal.inc({
+                  source: ROOT_TX_INDEX,
+                  result: 'unsupported_signature_type',
+                });
+              } else {
+                bundleParseResult = indexedItem;
+                indexVerification = { signedFields, rejectionKey };
+                metrics.rootTxLocalResolveTotal.inc({
+                  outcome: 'index_offsets',
+                });
+                offsetParseSpan.setAttributes({
+                  'offset.method': 'index_item_offset',
+                });
+              }
+            }
+          }
+
+          if (bundleParseResult !== null) {
+            // Already resolved from the index's item offset.
+          } else if (rootResult?.path && rootResult.path.length > 0) {
+            // Use path-guided navigation when path is available for faster lookup
             bundleParseResult =
               await this.ans104OffsetSource.getDataItemOffsetWithPath(
                 id,
@@ -1126,6 +1595,24 @@ export class RootParentDataSource implements ContiguousDataSource {
                 signal,
               );
               bundleParseResult = fallback.result;
+              // The full lookup may return the location rejected above, or
+              // offsets (or a path) for another copy of the item under a
+              // different root, while they are read from this root
+              // (ar-io/ar-io-node#937).
+              if (
+                bundleParseResult !== null &&
+                !(await this.confirmItemLocation({
+                  id,
+                  rootTxId,
+                  itemOffset: bundleParseResult.itemOffset,
+                  dataOffset: bundleParseResult.dataOffset,
+                  dataSize: bundleParseResult.dataSize,
+                  signal,
+                  source: 'root_tx_index_fallback',
+                }))
+              ) {
+                bundleParseResult = null;
+              }
               offsetParseSpan.setAttributes({
                 'offset.method': fallback.method,
               });
@@ -1152,7 +1639,9 @@ export class RootParentDataSource implements ContiguousDataSource {
               originalContentType = bundleParseResult.contentType;
             }
 
-            // Store discovered offsets for future use (avoid re-parsing)
+            // Store discovered offsets for future use (avoid re-parsing).
+            // Offsets from the root TX index are stored only once the payload
+            // has verified.
             const attributesToStore: Record<string, unknown> = {
               rootTransactionId: rootTxId,
               rootDataItemOffset: bundleParseResult.itemOffset,
@@ -1163,11 +1652,15 @@ export class RootParentDataSource implements ContiguousDataSource {
             if (bundleParseResult.contentType !== undefined) {
               attributesToStore.contentType = bundleParseResult.contentType;
             }
-            await this.tryCacheAttributes(
-              id,
-              attributesToStore,
-              'bundle parsing',
-            );
+            if (indexVerification === undefined) {
+              await this.tryCacheAttributes(
+                id,
+                attributesToStore,
+                'bundle parsing',
+              );
+            } else {
+              indexVerification.attributesToStore = attributesToStore;
+            }
           }
         } finally {
           offsetParseSpan.end();
@@ -1251,10 +1744,30 @@ export class RootParentDataSource implements ContiguousDataSource {
         });
 
         // Preserve the original data item's content type if available
-        return {
-          ...data,
-          sourceContentType: originalContentType ?? data.sourceContentType,
-        };
+        const sourceContentType = this.resolveItemContentType({
+          id,
+          rootTxId,
+          itemContentType: originalContentType,
+          rootContentType: data.sourceContentType,
+        });
+
+        if (indexVerification !== undefined) {
+          return {
+            ...data,
+            stream: this.serveVerifiedPayload({
+              data,
+              id,
+              signedFields: indexVerification.signedFields,
+              payloadSize: finalRegion.size,
+              rejectionKey: indexVerification.rejectionKey,
+              attributesToStore: indexVerification.attributesToStore ?? {},
+              source: ROOT_TX_INDEX,
+            }),
+            sourceContentType,
+          };
+        }
+
+        return { ...data, sourceContentType };
       } finally {
         fetchSpan.end();
       }

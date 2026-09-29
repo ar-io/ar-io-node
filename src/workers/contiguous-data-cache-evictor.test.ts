@@ -100,6 +100,74 @@ describe('ContiguousDataCacheEvictor', () => {
     assert.equal(h.remaining.size, 20);
   });
 
+  // Every unlink occupies a libuv thread for its duration, so an unbounded (or
+  // hard-coded 50) fan-out takes the whole pool on a stock node and queues every
+  // other file operation behind it — on a disk that is already saturated, which
+  // is why the evictor is running at all.
+  it('never exceeds the configured unlink concurrency', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 95,
+      entryCount: 200,
+      freePerEvict: 1,
+    });
+    let inFlight = 0;
+    let peak = 0;
+    (h.dataStore as any).delete = async (hash: string) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setImmediate(r));
+      inFlight--;
+      h.unlinked.push(hash);
+    };
+
+    await makeEvictor(h, { batchSize: 50, unlinkConcurrency: 4 }).sweep();
+
+    assert.ok(
+      h.unlinked.length > 4,
+      `expected real work, got ${h.unlinked.length}`,
+    );
+    assert.ok(peak <= 4, `peak concurrent unlinks was ${peak}, limit was 4`);
+  });
+
+  // Clamping these would fail silently in the worst way: Math.max(1, NaN) is
+  // NaN, so the sweep loop runs zero batches and the cache never drains, while
+  // a fractional unlinkConcurrency makes p-limit throw mid-sweep — after the
+  // index rows are deleted but before the blobs are unlinked.
+  it('rejects invalid explicit limits at construction', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 90,
+      entryCount: 10,
+      freePerEvict: 5,
+    });
+    for (const bad of [Number.NaN, Infinity, 0, -1, 2.5]) {
+      assert.throws(
+        () => makeEvictor(h, { unlinkConcurrency: bad }),
+        /unlinkConcurrency must be a positive integer/,
+        `unlinkConcurrency=${bad} should be rejected`,
+      );
+      assert.throws(
+        () => makeEvictor(h, { maxBatchesPerSweep: bad }),
+        /maxBatchesPerSweep must be a positive integer/,
+        `maxBatchesPerSweep=${bad} should be rejected`,
+      );
+    }
+  });
+
+  it('bounds unlinks per sweep by batchSize * maxBatchesPerSweep', async () => {
+    const h = makeHarness({
+      initialUsedPercent: 99,
+      entryCount: 500,
+      freePerEvict: 0, // never recovers: only the sweep bound can stop it
+    });
+
+    await makeEvictor(h, { batchSize: 5, maxBatchesPerSweep: 3 }).sweep();
+
+    // The sweep must stop at the bound rather than draining the index, so the
+    // next sweep resumes instead of one pass holding the disk indefinitely.
+    assert.equal(h.unlinked.length, 15);
+    assert.equal(h.remaining.size, 485);
+  });
+
   it('evicts oldest-first until usage recovers below the low watermark', async () => {
     const h = makeHarness({
       initialUsedPercent: 90, // over high(80)

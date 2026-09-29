@@ -3170,8 +3170,19 @@ st
 
         dataSource.getData = (params: any) => {
           if (params?.id === resolvedId) {
+            // Honour the requested range, as the real source does. Returning
+            // the whole body for a range request makes the handler declare a
+            // partial length and then send more than that, which the client
+            // rejects as a protocol error rather than a failed assertion.
+            const fullData = Buffer.from('inner-content');
+            let data = fullData;
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.subarray(offset, offset + size);
+            }
+
             return Promise.resolve({
-              stream: Readable.from(Buffer.from('inner-content')),
+              stream: Readable.from(data),
               size: 13,
               verified: true,
               trusted: true,

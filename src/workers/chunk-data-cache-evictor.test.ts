@@ -337,7 +337,9 @@ describe('ChunkDataCacheEvictor', () => {
     });
     const h = makeHarness({
       initialUsedPercent: 95,
-      entries: coldEntries(5, 1000),
+      // 5 x 10 GB on the 100 GB fake disk: enough, once it ages out, to take
+      // 95% down past the 60% low watermark. Waiting is genuinely the answer.
+      entries: coldEntries(5, 10_000_000_000),
       freePerEvict: 5,
       alwaysEmpty: true, // the floor filtered everything out
     });
@@ -353,6 +355,47 @@ describe('ChunkDataCacheEvictor', () => {
     assert.ok(
       !messages.some((m) => m.includes('drained but still over pressure')),
       `drift warning must not fire, got ${JSON.stringify(messages)}`,
+    );
+    assert.equal(h.unlinked.length, 0);
+  });
+
+  // ar-io-node #944: a few fresh rows kept the drained-index warning from ever
+  // firing while ~all of the cache was untracked, so the evictor logged the
+  // benign message for weeks and freed nothing.
+  it('warns when the index tracks too little to reach the low watermark, at most once per interval', async () => {
+    const { logger, entries: logEntries } = createRecordingTestLogger({
+      suite: 'ChunkDataCacheEvictor',
+    });
+    const h = makeHarness({
+      initialUsedPercent: 95,
+      // 26 young rows, 0.33 GB in total, against 35 GB to free: gw1 on 2026-09-27.
+      entries: coldEntries(26, 12_700_000),
+      freePerEvict: 5,
+      alwaysEmpty: true, // every row is inside the age floor
+    });
+    const evictor = makeEvictor(h, { log: logger });
+    await evictor.sweep();
+    await evictor.sweep();
+
+    const messages = logEntries.map((e) => `${e.level}:${e.message}`);
+    const coverage = messages.filter(
+      (m) => m.startsWith('warn:') && m.includes('tracks too little'),
+    );
+    assert.equal(
+      coverage.length,
+      1,
+      `expected one coverage warning, got ${JSON.stringify(messages)}`,
+    );
+    // The throttled sweep falls back to the benign line rather than going quiet.
+    assert.ok(
+      messages.some(
+        (m) => m.startsWith('info:') && m.includes('inside the age floor'),
+      ),
+      `expected the info line on the throttled sweep, got ${JSON.stringify(messages)}`,
+    );
+    assert.ok(
+      !messages.some((m) => m.includes('drained but still over pressure')),
+      'the index is not empty, so the drained warning must not fire',
     );
     assert.equal(h.unlinked.length, 0);
   });

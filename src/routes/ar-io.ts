@@ -23,6 +23,7 @@ import { buildRootTxOffsets } from './ar-io-offsets-builder.js';
 import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
 import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
+import { buildGatewayPeers } from './ar-io-peers-builder.js';
 
 const arweave = Arweave.init({});
 
@@ -187,7 +188,17 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
  *   }
  * }
  */
-export const arIoInfoHandler = (_req: Request, res: Response) => {
+export const arIoInfoHandler = async (_req: Request, res: Response) => {
+  // What this gateway publishes, from the same view the /ar-io/indexes routes
+  // serve from, so an index is advertised exactly when it is servable. Any
+  // failure here only omits the block: /ar-io/info must answer regardless.
+  let indexNames: string[] | undefined;
+  try {
+    indexNames = (await system.publishedIndexes.current())?.names;
+  } catch {
+    indexNames = undefined;
+  }
+
   const response = buildArIoInfo({
     wallet: config.AR_IO_WALLET,
     programIds: {
@@ -228,6 +239,7 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
             solanaAddress: config.HTTPSIG_SIGNER.solanaAddress,
           }
         : undefined,
+    indexNames,
   });
 
   res.status(200).send(response);
@@ -319,25 +331,9 @@ arIoRouter.get('/ar-io/peers', async (_req, res) => {
 });
 
 function getGatewayPeers() {
-  const formattedPeers = system.arIOPeerManager.getFormattedPeers([
-    'data',
-    'chunk',
-  ]);
-
-  // Transform to the expected format for backward compatibility
-  const peers: Record<
-    string,
-    { url: string; dataWeight: number; chunkWeight: number }
-  > = {};
-  for (const [key, peer] of Object.entries(formattedPeers)) {
-    peers[key] = {
-      url: peer.url,
-      dataWeight: peer.weights.data,
-      chunkWeight: peer.weights.chunk,
-    };
-  }
-
-  return peers;
+  return buildGatewayPeers(
+    system.arIOPeerManager.getFormattedPeers(['data', 'chunk']),
+  );
 }
 
 // Only allow access to admin routes if the bearer token matches the admin api key

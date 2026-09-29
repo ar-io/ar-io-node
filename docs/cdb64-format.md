@@ -178,7 +178,8 @@ Used when offset information is available:
 {
   r: <Buffer 32 bytes>,  // Root transaction ID (binary)
   i: <integer>,          // Root data item offset (byte offset of data item header)
-  d: <integer>           // Root data offset (byte offset of data payload)
+  d: <integer>,          // Root data offset (byte offset of data payload)
+  s: <integer>           // Optional: total data item size (header + payload)
 }
 ```
 
@@ -204,7 +205,8 @@ Used when both path and offset information are available:
 {
   p: [<Buffer 32 bytes>, ...],  // Array of bundle IDs from root to parent
   i: <integer>,                  // Root data item offset
-  d: <integer>                   // Root data offset
+  d: <integer>,                  // Root data offset
+  s: <integer>                   // Optional: total data item size (header + payload)
 }
 ```
 
@@ -225,6 +227,27 @@ path = [RootTxId, BundleAId, BundleBId]
 
 For path formats, the root TX ID is derived from `path[0]`, eliminating the need for a separate `r` field.
 
+### Integer Encoding
+
+`i`, `d` and `s` are non-negative integers, but a decoder must not assume a
+MessagePack integer type. The reference encoder chooses the smallest form that
+holds the value, and switches to a float from 2^32 upward:
+
+| Value | MessagePack type | First byte |
+|---|---|---|
+| 0 to 127 | positive fixint | `0x00`–`0x7f` |
+| 128 to 255 | uint 8 | `0xcc` |
+| 256 to 65,535 | uint 16 | `0xcd` |
+| 65,536 to 2^32 − 1 | uint 32 | `0xce` |
+| 2^32 to 2^53 − 1 | **float 64** | `0xcb` |
+
+The float 64 case is routine, not exotic: any item that starts more than
+4.29 GB into its root transaction has an offset in that range. It is exact,
+because every offset is a safe integer and float 64 represents all integers
+up to 2^53 − 1 exactly. A decoder should accept each of these types, and
+`uint 64` (`0xcf`) as well for values from other encoders, and treat the
+result as an integer.
+
 ### Field Mapping
 
 | MessagePack Key | Full Name | Description |
@@ -233,10 +256,28 @@ For path formats, the root TX ID is derived from `path[0]`, eliminating the need
 | `p` | path | Array of 32-byte bundle IDs [root, ..., parent] |
 | `i` | rootDataItemOffset | Byte offset of nested data item within root TX |
 | `d` | rootDataOffset | Byte offset of data payload within root TX |
+| `s` | dataItemSize | Total data item size in bytes, header + payload (optional) |
 
-These offsets correspond to the HTTP headers:
+These fields correspond to the HTTP headers:
 - `i` → `X-AR-IO-Root-Data-Item-Offset`
 - `d` → `X-AR-IO-Root-Data-Offset`
+- `s` → `X-AR-IO-Data-Item-Size`
+
+### Item Size
+
+`s` is optional and only valid alongside `i` and `d`. It must be a safe integer
+no smaller than the header size (`d - i`), and `i + s` must also be a safe
+integer; a value equal to the header size describes an item with an empty
+payload. Encoders reject an `s` that violates this. Decoders ignore it and
+keep the offsets, so the entry still resolves (the reader searches the bundle
+for the item's size), and they ignore `s` on values without offsets.
+
+Offsets alone locate the start of an item but not its end, so a reader without
+`s` must search the bundle header for the item's size. With `s`, the payload is
+`d` to `i + s`, and a reader can confirm the entry by parsing the item header at
+`i`. Older decoders only read the keys above them in this table and ignore
+`s`, so adding it does not break existing readers, and values written without
+it encode to exactly the same bytes as before.
 
 ### Maximum Nesting Depth
 

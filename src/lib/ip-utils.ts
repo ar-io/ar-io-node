@@ -5,7 +5,17 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import * as net from 'node:net';
+
 import { Request } from 'express';
+
+import * as config from '../config.js';
+import {
+  clientAddressBehindProxies,
+  forwardedHops,
+  isTrustedProxy,
+  parseTrustedProxies,
+} from './trusted-proxies.js';
 
 /**
  * Validate if a string is a valid IP address format
@@ -73,104 +83,70 @@ export function normalizeIpv4MappedIpv6(ip: string): string {
   return ipv4MappedMatch ? ipv4MappedMatch[1] : ip;
 }
 
+let defaultProxies: net.BlockList | undefined;
+
 /**
- * Extract and validate all client IPs from request headers and connection
- * @param req - Express request object
- * @returns Object containing primary clientIp and array of all clientIps
+ * The gateway's trusted proxies, from `TRUSTED_PROXIES`, parsed once.
+ * Called at startup, so a malformed value stops the gateway there rather
+ * than failing every request.
  */
-export function extractAllClientIPs(req: Request): {
+export function gatewayTrustedProxies(): net.BlockList {
+  defaultProxies ??= parseTrustedProxies(config.TRUSTED_PROXIES);
+  return defaultProxies;
+}
+
+/**
+ * The client a request came from, and every address it names.
+ *
+ * `clientIp` is the one to key rate limits on and to check against an
+ * allowlist: the connecting address, or, when that is a trusted proxy
+ * (`TRUSTED_PROXIES`), the address the proxy recorded (see
+ * {@link clientAddressBehindProxies}). `X-Real-IP` is used only from a
+ * trusted proxy, and only when there is no `X-Forwarded-For`.
+ *
+ * `clientIps` is every address the request names or came through, including
+ * what the client itself put in its headers. It is for logging and for
+ * blocklists, where a false claim only hurts the claimant; never grant
+ * anything on it.
+ */
+export function extractAllClientIPs(
+  req: Request,
+  proxies: net.BlockList = gatewayTrustedProxies(),
+): {
   clientIp?: string;
   clientIps: string[];
 } {
   const clientIps: string[] = [];
+  const add = (raw: string | undefined) => {
+    if (raw === undefined) return undefined;
+    const ip = normalizeIpv4MappedIpv6(raw.trim());
+    if (ip === '' || ip.toLowerCase() === 'unknown' || !isValidIpFormat(ip)) {
+      return undefined;
+    }
+    if (!clientIps.includes(ip)) clientIps.push(ip);
+    return ip;
+  };
+
+  const forwardedFor = req.headers['x-forwarded-for'];
+  for (const hop of forwardedHops(forwardedFor)) add(hop);
+  const realIpHeader = req.headers['x-real-ip'];
+  const realIp = add(
+    Array.isArray(realIpHeader) ? realIpHeader[0] : realIpHeader,
+  );
+  const socketIp = add(req.socket?.remoteAddress);
+  const reqIp = add(req.ip);
+
+  // Without trust proxy set, Express's req.ip is the socket's address too.
+  const connectedFrom = socketIp ?? reqIp;
   let clientIp: string | undefined;
-
-  // Extract X-Forwarded-For header
-  const xForwardedFor = req.headers['x-forwarded-for'];
-  if (xForwardedFor !== undefined && xForwardedFor !== '') {
-    // Handle both string and string[] headers (Express can return either)
-    const forwardedValues = Array.isArray(xForwardedFor)
-      ? xForwardedFor.flatMap((h) => h.split(','))
-      : xForwardedFor.split(',');
-
-    // Process each IP with validation and normalization
-    for (const rawIp of forwardedValues) {
-      const ip = rawIp.trim();
-
-      // Skip empty, unknown, or invalid entries
-      if (!ip || ip.toLowerCase() === 'unknown') {
-        continue;
-      }
-
-      // Normalize IPv4-mapped IPv6 (::ffff:192.168.1.1 -> 192.168.1.1)
-      const normalizedIp = normalizeIpv4MappedIpv6(ip);
-
-      // Basic validation - check for valid IP format
-      if (isValidIpFormat(normalizedIp)) {
-        clientIps.push(normalizedIp);
-      }
-    }
-
-    // Keep first valid IP for backwards compatibility
-    clientIp = clientIps[0];
-  }
-
-  // Extract X-Real-IP header (commonly used by nginx)
-  const xRealIp = req.headers['x-real-ip'];
-  if (xRealIp !== undefined && xRealIp !== '') {
-    // Handle both string and string[] headers (Express can return either)
-    const realIpValue = Array.isArray(xRealIp) ? xRealIp[0] : xRealIp;
-    const trimmedRealIp = realIpValue.trim();
-
-    // Skip empty, unknown, or invalid entries
-    if (trimmedRealIp && trimmedRealIp.toLowerCase() !== 'unknown') {
-      // Normalize IPv4-mapped IPv6 (::ffff:192.168.1.1 -> 192.168.1.1)
-      const normalizedRealIp = normalizeIpv4MappedIpv6(trimmedRealIp);
-
-      // Basic validation - check for valid IP format
-      if (
-        isValidIpFormat(normalizedRealIp) &&
-        !clientIps.includes(normalizedRealIp)
-      ) {
-        clientIps.push(normalizedRealIp);
-        // Set as fallback if no X-Forwarded-For
-        if (clientIp === undefined) {
-          clientIp = normalizedRealIp;
-        }
-      }
-    }
-  }
-
-  // Always include remote address if available (even when X-Forwarded-For or X-Real-IP is present)
-  if (
-    req.socket?.remoteAddress !== undefined &&
-    req.socket.remoteAddress !== ''
-  ) {
-    const remoteIp = req.socket.remoteAddress;
-    // Normalize IPv4-mapped IPv6
-    const normalizedRemote = normalizeIpv4MappedIpv6(remoteIp);
-
-    if (!clientIps.includes(normalizedRemote)) {
-      clientIps.push(normalizedRemote);
-    }
-    // Set as fallback if no X-Forwarded-For or X-Real-IP
-    if (clientIp === undefined) {
-      clientIp = normalizedRemote;
-    }
-  }
-
-  // Fallback to req.ip if available and not already included
-  if (req.ip !== undefined && req.ip !== '' && !clientIps.includes(req.ip)) {
-    const normalizedReqIp = normalizeIpv4MappedIpv6(req.ip);
-    if (
-      isValidIpFormat(normalizedReqIp) &&
-      !clientIps.includes(normalizedReqIp)
-    ) {
-      clientIps.push(normalizedReqIp);
-      if (clientIp === undefined) {
-        clientIp = normalizedReqIp;
-      }
-    }
+  if (connectedFrom !== undefined) {
+    const trusted = isTrustedProxy(connectedFrom, proxies);
+    clientIp =
+      trusted &&
+      forwardedHops(forwardedFor).length === 0 &&
+      realIp !== undefined
+        ? realIp
+        : clientAddressBehindProxies(connectedFrom, forwardedFor, proxies);
   }
 
   return { clientIp, clientIps };

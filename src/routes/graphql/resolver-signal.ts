@@ -10,18 +10,26 @@ import * as config from '../../config.js';
 import * as metrics from '../../metrics.js';
 
 /**
- * State holder shared by reference between the Apollo context object,
- * the Apollo `willSendResponse` plugin (via the `__state` nested
- * field), and the close listeners installed by `buildResolverSignal`.
+ * State holder shared by reference between the Apollo context object (as the
+ * nested `signalState` field), the Apollo `willSendResponse` plugin, and the
+ * close listeners installed by `buildResolverSignal`.
  *
- * Why a separate nested holder rather than a flag on the context root:
- * apollo-server-core shallow-clones the context object before passing
- * it to plugins (`runHttpQuery.js:166`, `cloneObject` =
- * `Object.assign(Object.create(...), o)`). Properties on the root of
- * the user's context get cloned by value; nested object references are
- * preserved. The plugin therefore mutates the same `state` instance
- * that this signal builder closed over, which the close listener can
- * read.
+ * Why a separate nested holder rather than a flag on the context root: Apollo
+ * shallow-clones the context before handing it to plugins. In Apollo Server 5
+ * that is `@apollo/server/dist/esm/ApolloServer.js`, which builds each
+ * operation's request context with
+ * `contextValue: cloneObject(options?.contextValue ?? {})` where `cloneObject`
+ * is `Object.assign(Object.create(Object.getPrototypeOf(o)), o)`. Properties on
+ * the root get copied by value; nested object references are preserved. The
+ * plugin therefore mutates the same instance this signal builder closed over.
+ *
+ * Apollo Server 3 did the same thing in
+ * `apollo-server-core/dist/runHttpQuery.js`. The clone moved between majors but
+ * never went away, so do not "simplify" this into a root-level flag. The
+ * failure mode is silent: the flag stays false, `responseFullySent()` falls
+ * back to the unreliable `res.writableEnded` check below, and every completed
+ * request risks being counted as a `client_disconnect` cancellation.
+ * `resolver-signal.test.ts` pins this with a clone-simulating case.
  */
 export type ResolverSignalState = {
   responseSent: boolean;
@@ -37,16 +45,15 @@ export type ResolverSignalState = {
  * Lessons from earlier failed attempts (preserved here so they aren't
  * relearned):
  *
- * - `req.on('close')` is NOT a reliable abort signal in
- *   apollo-server-express. Node's IncomingMessage emits 'close' at
- *   request-parser-end time — i.e. as soon as the request body has
- *   been fully consumed — which happens BEFORE Apollo's
- *   `runHttpQuery(...).then(...)` chain has awaited its way to
- *   `res.send()`. Listening on `req.on('close')` therefore fires for
- *   every successful request, well before any "response sent" signal
- *   has had a chance to be set. We listen only on `res.on('close')`,
+ * - `req.on('close')` is NOT a reliable abort signal. Node's IncomingMessage
+ *   emits 'close' at request-parser-end time — i.e. as soon as the request
+ *   body has been fully consumed — which happens BEFORE Apollo has awaited
+ *   its way to sending the response. Listening on `req.on('close')` therefore
+ *   fires for every successful request, well before any "response sent"
+ *   signal has had a chance to be set. We listen only on `res.on('close')`,
  *   which fires when the response stream is closed (after a successful
- *   `res.end()` OR on abnormal termination).
+ *   `res.end()` OR on abnormal termination). This is a property of Node's
+ *   stream lifecycle, not of any Apollo version, so it still applies.
  *
  * - `res.writableEnded` set inside `res.end()` is in principle
  *   synchronous, but in practice it can still be observed `false` at
@@ -55,12 +62,14 @@ export type ResolverSignalState = {
  *   as the authoritative signal instead, set by the Apollo
  *   `willSendResponse` plugin in graphql/index.ts.
  *
- * - apollo-server-core shallow-clones the context object before
- *   passing it to plugins (`node_modules/apollo-server-core/dist/runHttpQuery.js:166`).
- *   Plugin mutations to root-level fields don't reach this closure.
- *   That's why the plugin sets `state.responseSent = true` on a NESTED
- *   `state` object whose reference is preserved across the shallow
- *   clone.
+ * - Apollo shallow-clones the context object before passing it to plugins, in
+ *   both Apollo Server 3 (`apollo-server-core/dist/runHttpQuery.js`) and
+ *   Apollo Server 5 (`@apollo/server/dist/esm/ApolloServer.js`, via
+ *   `cloneObject`). Plugin mutations to root-level fields don't reach this
+ *   closure. That's why the plugin sets `responseSent` on a NESTED
+ *   `signalState` object whose reference is preserved across the shallow
+ *   clone. Re-check this against the installed source on any Apollo major
+ *   bump; it was wrongly assumed fixed in 5.
  *
  * Lives in its own module (not the Apollo barrel) so tests can import
  * it without booting the full gateway via `system.ts`.
@@ -94,7 +103,7 @@ export function buildResolverSignal(
   };
   // Only listen on `res.on('close')`. `req.on('close')` fires too
   // early — at request-body-parser-end time — to be a useful abort
-  // signal under apollo-server-express. See the comment above.
+  // signal. See the comment above.
   res.once('close', onClose);
   // No synchronous pre-check. We previously had
   //   if (req.aborted === true || req.destroyed === true) onClose(...)

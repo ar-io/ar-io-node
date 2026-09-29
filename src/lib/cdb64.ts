@@ -67,31 +67,6 @@ const SLOT_SIZE = 16;
 // Number of hash tables
 const NUM_TABLES = 256;
 
-// Maximum file size supported (limited by safe integer precision for file I/O)
-const MAX_SAFE_FILE_SIZE = BigInt(Number.MAX_SAFE_INTEGER);
-
-/**
- * Safely converts a BigInt file position to Number for fs operations.
- * Throws an error if the position exceeds JavaScript's safe integer range.
- *
- * Note: Node.js fs operations use Number for file positions. While BigInt
- * can represent larger values, files >8TB (2^53 bytes) would require
- * BigInt-native I/O which Node.js doesn't support natively.
- *
- * @param position - The BigInt file position to convert
- * @returns The position as a safe Number
- * @throws Error if position exceeds MAX_SAFE_INTEGER
- */
-function toSafeFilePosition(position: bigint): number {
-  if (position > MAX_SAFE_FILE_SIZE) {
-    throw new Error(
-      `File position ${position} exceeds maximum safe integer (${Number.MAX_SAFE_INTEGER}). ` +
-        `CDB64 files larger than ~8TB are not supported.`,
-    );
-  }
-  return Number(position);
-}
-
 /**
  * DJB hash function used by CDB, extended to 64-bit.
  *
@@ -327,10 +302,86 @@ export class Cdb64Writer {
 }
 
 /**
+ * Largest key a record may declare (1 KiB).
+ *
+ * Root-transaction indexes key on 32-byte IDs. A lookup never needs this
+ * bound, since a record whose key length differs from the probe key cannot
+ * match it; it limits what entries() and verifyCdb64File accept from a file
+ * nobody has probed yet.
+ */
+export const MAX_CDB64_KEY_LENGTH = 1024;
+
+/**
+ * Default largest value a record may declare (1 MiB).
+ *
+ * The format itself carries arbitrary values, and this is the generic
+ * reader's ceiling; root-transaction values are MessagePack objects of a few
+ * hundred bytes, and index kinds that know that apply a tighter bound (see
+ * the cdb64-root-tx artifact kind). The point of any bound is that a record
+ * header is untrusted input: without one, a single crafted header turns a
+ * lookup into a multi-gigabyte allocation.
+ */
+export const MAX_CDB64_VALUE_LENGTH = 1024 * 1024;
+
+/** Record header: key_length (8) + value_length (8). */
+const RECORD_HEADER_SIZE = 16;
+
+/**
+ * Read a little-endian uint64 as a Number, or undefined if it exceeds
+ * Number.MAX_SAFE_INTEGER.
+ *
+ * Every length and offset in a CDB64 file is a uint64 the file itself
+ * asserts. Values past 2^53 cannot be a real offset or length in any file
+ * Node can read, so they are reported as undefined for the caller to treat
+ * as corruption, rather than rounded into a plausible-looking number.
+ */
+function readSafeUint64(buffer: Buffer, offset: number): number | undefined {
+  const low = buffer.readUInt32LE(offset);
+  const high = buffer.readUInt32LE(offset + 4);
+  // 2^53 - 1 has 21 bits in the high word.
+  if (high > 0x1fffff) {
+    return undefined;
+  }
+  return high * 0x100000000 + low;
+}
+
+/** A header pointer, checked once at open. */
+interface CheckedTablePointer {
+  /** Byte offset of the table. */
+  position: number;
+  /** Slot count. */
+  length: number;
+  /**
+   * False when the pointer cannot describe a table inside the file: it
+   * overlaps the header, runs past the end, or does not fit in a safe
+   * integer. Lookups that hash to such a table find nothing.
+   */
+  valid: boolean;
+}
+
+/**
+ * Options for Cdb64Reader.
+ */
+export interface Cdb64ReaderOptions {
+  /**
+   * Largest value length a record may declare (default
+   * MAX_CDB64_VALUE_LENGTH). A record declaring more is treated as corrupt.
+   */
+  maxValueLength?: number;
+}
+
+/**
  * CDB64 Reader - Performs lookups in CDB64 data.
  *
  * Supports reading from any ByteRangeSource, enabling access to CDB64 data
  * stored in local files, HTTP endpoints, or Arweave transactions.
+ *
+ * The reader treats every offset and length in the file as untrusted: an
+ * index file may come from a remote publisher. A table pointer, slot or
+ * record header that points outside the file, or declares a length past the
+ * reader's bounds, makes that lookup return undefined and is counted (see
+ * getCorruptRecordCount), rather than driving an allocation or read of
+ * whatever size the file names.
  *
  * Usage with file path (convenience):
  *   const reader = new Cdb64Reader('/path/to/data.cdb');
@@ -349,6 +400,17 @@ export class Cdb64Reader {
   private source: ByteRangeSource;
   private ownsSource: boolean;
   private tablePointers: { position: bigint; length: bigint }[] = [];
+  private checkedPointers: CheckedTablePointer[] = [];
+  private maxValueLength: number;
+  /** Source size, when the source knows it. */
+  private sourceSize: number | undefined;
+  /**
+   * Where the record region ends: the lowest valid, non-empty table
+   * position, else the source size. Undefined only for a source of unknown
+   * size with no tables.
+   */
+  private recordsEnd: number | undefined;
+  private corruptRecords = 0;
   private opened = false;
 
   /**
@@ -356,8 +418,14 @@ export class Cdb64Reader {
    * This is a convenience constructor that creates a FileByteRangeSource internally.
    *
    * @param filePath - Path to the CDB64 file
+   * @param ownsSource - Ignored for a path; the reader always owns the file
+   * @param options - Reader bounds
    */
-  constructor(filePath: string);
+  constructor(
+    filePath: string,
+    ownsSource?: boolean,
+    options?: Cdb64ReaderOptions,
+  );
 
   /**
    * Creates a reader from a ByteRangeSource.
@@ -365,10 +433,19 @@ export class Cdb64Reader {
    *
    * @param source - The ByteRangeSource to read from
    * @param ownsSource - If true, close() will also close the source
+   * @param options - Reader bounds
    */
-  constructor(source: ByteRangeSource, ownsSource?: boolean);
+  constructor(
+    source: ByteRangeSource,
+    ownsSource?: boolean,
+    options?: Cdb64ReaderOptions,
+  );
 
-  constructor(filePathOrSource: string | ByteRangeSource, ownsSource = true) {
+  constructor(
+    filePathOrSource: string | ByteRangeSource,
+    ownsSource = true,
+    { maxValueLength = MAX_CDB64_VALUE_LENGTH }: Cdb64ReaderOptions = {},
+  ) {
     if (typeof filePathOrSource === 'string') {
       this.source = new FileByteRangeSource(filePathOrSource);
       this.ownsSource = true;
@@ -376,6 +453,7 @@ export class Cdb64Reader {
       this.source = filePathOrSource;
       this.ownsSource = ownsSource;
     }
+    this.maxValueLength = maxValueLength;
   }
 
   /**
@@ -383,14 +461,22 @@ export class Cdb64Reader {
    *
    * @param source - The ByteRangeSource to read from
    * @param ownsSource - If true (default), close() will also close the source
+   * @param options - Reader bounds
    */
-  static fromSource(source: ByteRangeSource, ownsSource = true): Cdb64Reader {
-    return new Cdb64Reader(source, ownsSource);
+  static fromSource(
+    source: ByteRangeSource,
+    ownsSource = true,
+    options: Cdb64ReaderOptions = {},
+  ): Cdb64Reader {
+    return new Cdb64Reader(source, ownsSource, options);
   }
 
   /**
    * Opens the reader and reads the header.
    * For FileByteRangeSource, this also opens the underlying file.
+   *
+   * Also takes the source size (when known) and checks each table pointer
+   * against it once, so lookups never follow a pointer out of the file.
    */
   async open(): Promise<void> {
     if (this.opened) {
@@ -416,15 +502,57 @@ export class Cdb64Reader {
       throw new Error('Invalid CDB64 file: header too short');
     }
 
+    try {
+      this.sourceSize =
+        this.source.getSize !== undefined
+          ? await this.source.getSize()
+          : undefined;
+    } catch {
+      // A source that cannot say how big it is is read without that bound;
+      // the per-read size caps still apply.
+      this.sourceSize = undefined;
+    }
+
     // Parse table pointers
     this.tablePointers = [];
+    this.checkedPointers = [];
+    const limit = this.sourceSize ?? Number.MAX_SAFE_INTEGER;
     for (let i = 0; i < NUM_TABLES; i++) {
       const offset = i * POINTER_SIZE;
       this.tablePointers.push({
         position: header.readBigUInt64LE(offset),
         length: header.readBigUInt64LE(offset + 8),
       });
+
+      const position = readSafeUint64(header, offset);
+      const length = readSafeUint64(header, offset + 8);
+      const valid =
+        length === 0 ||
+        (position !== undefined &&
+          length !== undefined &&
+          position >= HEADER_SIZE &&
+          // Checked as length <= room / SLOT_SIZE so the product cannot
+          // leave safe-integer range.
+          position <= limit &&
+          length <= Math.floor((limit - position) / SLOT_SIZE));
+      this.checkedPointers.push({
+        position: position ?? 0,
+        length: length ?? 0,
+        valid,
+      });
     }
+
+    let recordsEnd = this.sourceSize;
+    for (const pointer of this.checkedPointers) {
+      if (
+        pointer.valid &&
+        pointer.length > 0 &&
+        (recordsEnd === undefined || pointer.position < recordsEnd)
+      ) {
+        recordsEnd = pointer.position;
+      }
+    }
+    this.recordsEnd = recordsEnd;
 
     this.opened = true;
   }
@@ -432,6 +560,14 @@ export class Cdb64Reader {
   /**
    * Looks up a key in the database.
    * Returns the value if found, undefined otherwise.
+   *
+   * Corrupt structure on the probe path (a table pointer or slot outside the
+   * file, a record running past the record region, a value length above the
+   * reader's bound) also returns undefined, and bumps the corruption count.
+   * A record whose key length differs from the probe key is a hash collision
+   * with some other key, so probing continues without reading its key.
+   *
+   * @throws if the reader is not open, or the source fails a read
    */
   async get(key: Buffer): Promise<Buffer | undefined> {
     if (!this.opened) {
@@ -440,58 +576,73 @@ export class Cdb64Reader {
 
     const hash = cdb64Hash(key);
     const tableIndex = Number(hash % BigInt(NUM_TABLES));
-    const pointer = this.tablePointers[tableIndex];
+    const pointer = this.checkedPointers[tableIndex];
 
+    if (!pointer.valid) {
+      this.corruptRecords++;
+      return undefined;
+    }
     // Empty table means key definitely not present
-    if (pointer.length === BigInt(0)) {
+    if (pointer.length === 0) {
       return undefined;
     }
 
-    const tableLength = Number(pointer.length);
+    const tableLength = pointer.length;
+    const recordsLimit = this.recordsEnd ?? Number.MAX_SAFE_INTEGER;
     let slot = Number((hash / BigInt(NUM_TABLES)) % BigInt(tableLength));
 
-    // Linear probe through hash table
+    // Linear probe through hash table; at most one pass over its slots.
     for (let i = 0; i < tableLength; i++) {
-      const slotPosition = pointer.position + BigInt(slot * SLOT_SIZE);
-
-      // Read slot
+      // In range: open() checked position + length * SLOT_SIZE <= size.
       const slotBuffer = await this.source.read(
-        toSafeFilePosition(slotPosition),
+        pointer.position + slot * SLOT_SIZE,
         SLOT_SIZE,
       );
 
       const slotHash = slotBuffer.readBigUInt64LE(0);
-      const recordPosition = slotBuffer.readBigUInt64LE(8);
+      const recordPosition = readSafeUint64(slotBuffer, 8);
 
       // Empty slot means key not found
-      if (recordPosition === BigInt(0)) {
+      if (recordPosition === 0) {
         return undefined;
       }
 
       // Hash match - verify key
       if (slotHash === hash) {
-        // Read record header
+        if (
+          recordPosition === undefined ||
+          recordPosition < HEADER_SIZE ||
+          recordPosition + RECORD_HEADER_SIZE > recordsLimit
+        ) {
+          this.corruptRecords++;
+          return undefined;
+        }
+
         const recordHeader = await this.source.read(
-          toSafeFilePosition(recordPosition),
-          16,
+          recordPosition,
+          RECORD_HEADER_SIZE,
         );
+        const keyLength = readSafeUint64(recordHeader, 0);
+        const valueLength = readSafeUint64(recordHeader, 8);
+        if (keyLength === undefined || valueLength === undefined) {
+          this.corruptRecords++;
+          return undefined;
+        }
 
-        const keyLength = Number(recordHeader.readBigUInt64LE(0));
-        const valueLength = Number(recordHeader.readBigUInt64LE(8));
+        if (keyLength === key.length) {
+          const keyStart = recordPosition + RECORD_HEADER_SIZE;
+          if (
+            valueLength > this.maxValueLength ||
+            keyStart + keyLength + valueLength > recordsLimit
+          ) {
+            this.corruptRecords++;
+            return undefined;
+          }
 
-        // Read and compare key
-        const recordKey = await this.source.read(
-          toSafeFilePosition(recordPosition + 16n),
-          keyLength,
-        );
-
-        if (key.equals(recordKey)) {
-          // Key matches - read and return value
-          const value = await this.source.read(
-            toSafeFilePosition(recordPosition + 16n + BigInt(keyLength)),
-            valueLength,
-          );
-          return value;
+          const recordKey = await this.source.read(keyStart, keyLength);
+          if (key.equals(recordKey)) {
+            return this.source.read(keyStart + keyLength, valueLength);
+          }
         }
       }
 
@@ -511,62 +662,60 @@ export class Cdb64Reader {
    *   for await (const { key, value } of reader.entries()) {
    *     // process key and value
    *   }
+   *
+   * @throws on a record whose lengths exceed the reader's bounds or run
+   *   past the record region
    */
   async *entries(): AsyncGenerator<{ key: Buffer; value: Buffer }> {
     if (!this.opened) {
       throw new Error('Reader not opened. Call open() first.');
     }
 
-    // Find where records end by finding the minimum hash table position
-    // Hash tables with length 0 have position pointing to where they would be,
-    // but we need to find where actual hash table data starts
-    let recordsEndPosition = BigInt(Number.MAX_SAFE_INTEGER);
-    for (const pointer of this.tablePointers) {
-      if (pointer.length > 0n && pointer.position < recordsEndPosition) {
-        recordsEndPosition = pointer.position;
-      }
-    }
-
-    // If no hash tables have entries, there are no records
-    if (recordsEndPosition === BigInt(Number.MAX_SAFE_INTEGER)) {
+    // Records run from the header to the first hash table. With no tables
+    // there are no records (and, for a source of unknown size, no way to
+    // tell where they would end).
+    const hasTables = this.checkedPointers.some(
+      (pointer) => pointer.valid && pointer.length > 0,
+    );
+    if (!hasTables || this.recordsEnd === undefined) {
       return;
     }
+    const recordsEnd = this.recordsEnd;
 
     // Scan records sequentially from after header until hash tables
-    let position = BigInt(HEADER_SIZE);
+    let position = HEADER_SIZE;
 
-    while (position < recordsEndPosition) {
-      // Read record header (key_length + value_length = 16 bytes)
-      const recordHeader = await this.source.read(
-        toSafeFilePosition(position),
-        16,
-      );
+    while (position < recordsEnd) {
+      if (position + RECORD_HEADER_SIZE > recordsEnd) {
+        throw new Error(
+          `Invalid record at position ${position}: header runs past the record region`,
+        );
+      }
+      const recordHeader = await this.source.read(position, RECORD_HEADER_SIZE);
 
-      const keyLength = Number(recordHeader.readBigUInt64LE(0));
-      const valueLength = Number(recordHeader.readBigUInt64LE(8));
+      const keyLength = readSafeUint64(recordHeader, 0);
+      const valueLength = readSafeUint64(recordHeader, 8);
 
       // Sanity check to avoid reading garbage
-      if (keyLength > 1_000_000 || valueLength > 100_000_000) {
+      if (
+        keyLength === undefined ||
+        valueLength === undefined ||
+        keyLength > MAX_CDB64_KEY_LENGTH ||
+        valueLength > this.maxValueLength ||
+        position + RECORD_HEADER_SIZE + keyLength + valueLength > recordsEnd
+      ) {
         throw new Error(
           `Invalid record at position ${position}: key=${keyLength}, value=${valueLength}`,
         );
       }
 
-      // Read key
-      const key = await this.source.read(
-        toSafeFilePosition(position + 16n),
-        keyLength,
-      );
-
-      // Read value
-      const value = await this.source.read(
-        toSafeFilePosition(position + 16n + BigInt(keyLength)),
-        valueLength,
-      );
+      const keyStart = position + RECORD_HEADER_SIZE;
+      const key = await this.source.read(keyStart, keyLength);
+      const value = await this.source.read(keyStart + keyLength, valueLength);
 
       yield { key, value };
 
-      position += BigInt(16 + keyLength + valueLength);
+      position = keyStart + keyLength + valueLength;
     }
   }
 
@@ -579,6 +728,9 @@ export class Cdb64Reader {
     }
     this.opened = false;
     this.tablePointers = [];
+    this.checkedPointers = [];
+    this.sourceSize = undefined;
+    this.recordsEnd = undefined;
   }
 
   /**
@@ -589,9 +741,289 @@ export class Cdb64Reader {
   }
 
   /**
+   * Number of lookups that stopped on corrupt structure since construction.
+   *
+   * A well-formed file never increments this; a nonzero count means the
+   * file is damaged or hostile and is worth surfacing to an operator.
+   */
+  getCorruptRecordCount(): number {
+    return this.corruptRecords;
+  }
+
+  /**
+   * Number of records in the file, read from the header.
+   *
+   * Each hash table is sized at two slots per record, so the slot counts the
+   * header already carries give the total without reading any data. Useful
+   * as a cheap integrity cross-check: a file that is the right length but
+   * zero-filled parses as a valid, empty database, which a size or digest
+   * check cannot distinguish from a real one.
+   *
+   * @throws if the reader is not open.
+   */
+  getRecordCount(): number {
+    if (!this.opened) {
+      throw new Error('Cannot count records before open()');
+    }
+    let slots = 0n;
+    for (const pointer of this.tablePointers) {
+      slots += pointer.length;
+    }
+    return Number(slots / 2n);
+  }
+
+  /**
    * Returns the underlying ByteRangeSource.
    */
   getSource(): ByteRangeSource {
     return this.source;
+  }
+}
+
+/**
+ * Longest run of occupied slots verifyCdb64File accepts in one hash table.
+ *
+ * Tables are half full, and at that load linear probing's longest cluster
+ * grows with the log of the table size: under a hundred slots even for tens
+ * of millions of records. A lookup that misses walks the whole run, so a
+ * table built with one long cluster makes every miss in it cost one read per
+ * slot; this bound keeps a hostile file from doing that.
+ */
+export const MAX_CDB64_PROBE_RUN = 1024;
+
+/** Read size for verifyCdb64File's sequential scan (1 MiB). */
+const VERIFY_READ_CHUNK_SIZE = 1024 * 1024;
+
+/**
+ * Options for verifyCdb64File.
+ */
+export interface VerifyCdb64FileOptions {
+  /** Largest key length a record may declare (default MAX_CDB64_KEY_LENGTH). */
+  maxKeyLength?: number;
+  /** Largest value length a record may declare (default MAX_CDB64_VALUE_LENGTH). */
+  maxValueLength?: number;
+  /** Longest run of occupied slots allowed (default MAX_CDB64_PROBE_RUN). */
+  maxProbeRun?: number;
+  /** Bytes read per sequential read (default 1 MiB; tests shrink it). */
+  readChunkSize?: number;
+}
+
+/**
+ * Walk a local CDB64 file end to end and prove its structure is one the
+ * reader can follow safely, throwing on the first fault.
+ *
+ * Checks that:
+ * - every non-empty table pointer lies wholly inside the file, after the
+ *   header, and no two tables overlap;
+ * - the records, walked sequentially from the end of the header, each
+ *   declare a key and value length within bounds, and the walk lands
+ *   exactly on the first table rather than inside or past it;
+ * - every occupied slot hashes to its own table and points at a record
+ *   header inside the record region;
+ * - the occupied slots number exactly the records walked, and no table has
+ *   a run of occupied slots longer than maxProbeRun.
+ *
+ * Memory is bounded by one read buffer whatever the file size, and the file
+ * is read once, in order, so a multi-gigabyte file costs one sequential
+ * pass. It does not re-hash keys or prove each slot points at the start of a
+ * record; the reader's own bounds keep either fault from doing more than
+ * returning a wrong or missing value, which a publisher could produce with
+ * well-formed bytes anyway.
+ *
+ * @param filePath - Local CDB64 file
+ * @param options - Bounds to enforce
+ * @returns The number of records in the file
+ * @throws Error describing the first structural fault found
+ */
+export async function verifyCdb64File(
+  filePath: string,
+  {
+    maxKeyLength = MAX_CDB64_KEY_LENGTH,
+    maxValueLength = MAX_CDB64_VALUE_LENGTH,
+    maxProbeRun = MAX_CDB64_PROBE_RUN,
+    readChunkSize = VERIFY_READ_CHUNK_SIZE,
+  }: VerifyCdb64FileOptions = {},
+): Promise<{ records: number }> {
+  // Whole slots per chunk, and always room for a record header.
+  const chunkSize = Math.max(
+    SLOT_SIZE,
+    Math.floor(readChunkSize / SLOT_SIZE) * SLOT_SIZE,
+  );
+
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const fileSize = (await handle.stat()).size;
+    if (fileSize < HEADER_SIZE) {
+      throw new Error(
+        `file is ${fileSize} bytes, shorter than the ${HEADER_SIZE}-byte header`,
+      );
+    }
+
+    const buffer = Buffer.allocUnsafe(Math.max(chunkSize, HEADER_SIZE));
+
+    /** Fill buffer[0, length) from the file at position, or throw. */
+    const readExactly = async (
+      position: number,
+      length: number,
+    ): Promise<void> => {
+      let done = 0;
+      while (done < length) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          done,
+          length - done,
+          position + done,
+        );
+        if (bytesRead === 0) {
+          throw new Error(`short read at offset ${position + done}`);
+        }
+        done += bytesRead;
+      }
+    };
+
+    // Header: collect the non-empty tables, checking each lies in the file.
+    await readExactly(0, HEADER_SIZE);
+    const tables: { index: number; position: number; length: number }[] = [];
+    for (let index = 0; index < NUM_TABLES; index++) {
+      const position = readSafeUint64(buffer, index * POINTER_SIZE);
+      const length = readSafeUint64(buffer, index * POINTER_SIZE + 8);
+      if (length === 0) {
+        continue;
+      }
+      if (
+        position === undefined ||
+        length === undefined ||
+        position < HEADER_SIZE ||
+        position > fileSize ||
+        length > Math.floor((fileSize - position) / SLOT_SIZE)
+      ) {
+        throw new Error(
+          `table ${index} (position ${position ?? '>2^53'}, ${length ?? '>2^53'} slots) does not fit in the ${fileSize}-byte file`,
+        );
+      }
+      tables.push({ index, position, length });
+    }
+    tables.sort((a, b) => a.position - b.position);
+    for (let i = 1; i < tables.length; i++) {
+      const previous = tables[i - 1];
+      if (
+        previous.position + previous.length * SLOT_SIZE >
+        tables[i].position
+      ) {
+        throw new Error(
+          `tables ${previous.index} and ${tables[i].index} overlap`,
+        );
+      }
+    }
+
+    // Records run from the header to the first table (or, with no tables,
+    // to the end of the file, where a well-formed empty database has none).
+    const recordsEnd = tables.length > 0 ? tables[0].position : fileSize;
+
+    let records = 0;
+    let bufferStart = 0;
+    let bufferLength = 0;
+    let position = HEADER_SIZE;
+    while (position < recordsEnd) {
+      if (position + RECORD_HEADER_SIZE > recordsEnd) {
+        throw new Error(
+          `record at offset ${position} would overlap the hash tables at ${recordsEnd}`,
+        );
+      }
+      if (
+        position < bufferStart ||
+        position + RECORD_HEADER_SIZE > bufferStart + bufferLength
+      ) {
+        // Refill from this header: bytes skipped over (keys and values)
+        // are never read unless a header shares their chunk.
+        bufferStart = position;
+        bufferLength = Math.min(chunkSize, recordsEnd - position);
+        await readExactly(bufferStart, bufferLength);
+      }
+      const offset = position - bufferStart;
+      const keyLength = readSafeUint64(buffer, offset);
+      const valueLength = readSafeUint64(buffer, offset + 8);
+      if (
+        keyLength === undefined ||
+        valueLength === undefined ||
+        keyLength > maxKeyLength ||
+        valueLength > maxValueLength
+      ) {
+        throw new Error(
+          `record at offset ${position} declares key length ${keyLength ?? '>2^53'} and value length ${valueLength ?? '>2^53'}, beyond the ${maxKeyLength}/${maxValueLength}-byte bounds`,
+        );
+      }
+      const next = position + RECORD_HEADER_SIZE + keyLength + valueLength;
+      if (next > recordsEnd) {
+        throw new Error(
+          `record at offset ${position} runs to ${next}, past the hash tables at ${recordsEnd}`,
+        );
+      }
+      records++;
+      position = next;
+    }
+
+    // Slots: each occupied one belongs to its table and points at a record.
+    let occupied = 0;
+    for (const table of tables) {
+      let run = 0;
+      let leadingRun = 0;
+      let longestRun = 0;
+      let sawEmpty = false;
+      for (let first = 0; first < table.length; ) {
+        const count = Math.min(chunkSize / SLOT_SIZE, table.length - first);
+        await readExactly(
+          table.position + first * SLOT_SIZE,
+          count * SLOT_SIZE,
+        );
+        for (let slot = 0; slot < count; slot++) {
+          const offset = slot * SLOT_SIZE;
+          const recordPosition = readSafeUint64(buffer, offset + 8);
+          if (recordPosition === 0) {
+            if (!sawEmpty) {
+              leadingRun = run;
+              sawEmpty = true;
+            }
+            run = 0;
+            continue;
+          }
+          // The table index is hash % 256, the hash's low byte.
+          if (
+            buffer[offset] !== table.index ||
+            recordPosition === undefined ||
+            recordPosition < HEADER_SIZE ||
+            recordPosition + RECORD_HEADER_SIZE > recordsEnd
+          ) {
+            throw new Error(
+              `table ${table.index} slot ${first + slot} is not a valid entry for this table`,
+            );
+          }
+          occupied++;
+          run++;
+          if (run > longestRun) {
+            longestRun = run;
+          }
+        }
+        first += count;
+      }
+      // Probing wraps, so a run at the end continues into the one at the
+      // start; a table with no empty slot is one run of its full length.
+      const wrappedRun = sawEmpty ? run + leadingRun : table.length;
+      if (Math.max(longestRun, wrappedRun) > maxProbeRun) {
+        throw new Error(
+          `table ${table.index} has a run of ${Math.max(longestRun, wrappedRun)} occupied slots, more than the ${maxProbeRun} allowed`,
+        );
+      }
+    }
+
+    if (occupied !== records) {
+      throw new Error(
+        `hash tables index ${occupied} records, but the file holds ${records}`,
+      );
+    }
+
+    return { records };
+  } finally {
+    await handle.close();
   }
 }

@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
+import * as http from 'node:http';
+import { AddressInfo } from 'node:net';
 import { afterEach, describe, it, mock } from 'node:test';
 import { LRUCache } from 'lru-cache';
 import { GatewaysRootTxIndex } from './gateways-root-tx-index.js';
@@ -331,6 +333,8 @@ describe('GatewaysRootTxIndex', () => {
               message: 'Method Not Allowed',
             }),
           ),
+          // What a server really sends for `Range: bytes=0-0`: the length of
+          // the one returned byte, with the payload size only in the total.
           get: mock.fn(() =>
             Promise.resolve({
               status: 206,
@@ -339,7 +343,8 @@ describe('GatewaysRootTxIndex', () => {
                 'x-ar-io-root-data-item-offset': '1000',
                 'x-ar-io-root-data-offset': '1500',
                 'content-type': 'text/plain',
-                'content-length': '5000',
+                'content-length': '1',
+                'content-range': 'bytes 0-0/5000',
               },
             }),
           ),
@@ -375,6 +380,89 @@ describe('GatewaysRootTxIndex', () => {
         assert.deepEqual((getCall.arguments[1] as any).headers, {
           Range: 'bytes=0-0',
         });
+        // Sizes come from the Content-Range total, not the 1-byte
+        // Content-Length of the range response.
+        assert.equal(result.dataSize, 5000);
+        assert.equal(result.size, 500 + 5000);
+        assert.equal(result.contentType, 'text/plain');
+      });
+
+      /** Builds an index whose only gateway rejects HEAD and answers `get`. */
+      const indexWithRangeFallback = (getResponse: {
+        status: number;
+        headers: Record<string, string>;
+      }) => {
+        const mockAxiosInstance = {
+          head: mock.fn(() =>
+            Promise.reject({
+              response: { status: 405 },
+              message: 'Method Not Allowed',
+            }),
+          ),
+          get: mock.fn(() => Promise.resolve(getResponse)),
+          defaults: { raxConfig: {} },
+          interceptors: {
+            request: { use: mock.fn(), eject: mock.fn() },
+            response: { use: mock.fn(), eject: mock.fn() },
+          },
+        };
+        mock.method(axios, 'create', () => mockAxiosInstance);
+        const gatewaysIndex = new GatewaysRootTxIndex({
+          log,
+          trustedGatewaysUrls: { 'https://gateway.example.com': 1 },
+          rateLimitBurstSize: 1000,
+          rateLimitTokensPerInterval: 1000,
+          rateLimitInterval: 'second',
+        });
+        for (const [, limiter] of (gatewaysIndex as any)['limiters']) {
+          limiter.content = limiter.bucketSize;
+        }
+        return gatewaysIndex;
+      };
+
+      it('leaves sizes unknown when a range response has no total', async () => {
+        // `bytes 0-0/*` (or no Content-Range at all) says nothing about the
+        // payload size. Reporting the 1-byte Content-Length instead would make
+        // callers serve and record a single byte as the whole item.
+        const gatewaysIndex = indexWithRangeFallback({
+          status: 206,
+          headers: {
+            'x-ar-io-root-transaction-id': 'root-tx-456',
+            'x-ar-io-root-data-item-offset': '1000',
+            'x-ar-io-root-data-offset': '1500',
+            'content-length': '1',
+            'content-range': 'bytes 0-0/*',
+          },
+        });
+
+        const result = await gatewaysIndex.getRootTx('test-data-item-123');
+
+        assert(result !== undefined);
+        assert.equal(result.rootTxId, 'root-tx-456');
+        assert.equal(result.rootOffset, 1000);
+        assert.equal(result.rootDataOffset, 1500);
+        assert.equal(result.dataSize, undefined);
+        assert.equal(result.size, undefined);
+      });
+
+      it('keeps an explicit item size on the range fallback', async () => {
+        const gatewaysIndex = indexWithRangeFallback({
+          status: 206,
+          headers: {
+            'x-ar-io-root-transaction-id': 'root-tx-456',
+            'x-ar-io-root-item-offset': '1000',
+            'x-ar-io-root-data-offset': '1500',
+            'x-ar-io-root-item-size': '5500',
+            'content-length': '1',
+            'content-range': 'bytes 0-0/5000',
+          },
+        });
+
+        const result = await gatewaysIndex.getRootTx('test-data-item-123');
+
+        assert(result !== undefined);
+        assert.equal(result.size, 5500);
+        assert.equal(result.dataSize, 5000);
       });
 
       it('falls back to range-GET when HEAD throws a network error', async () => {
@@ -736,6 +824,156 @@ describe('GatewaysRootTxIndex', () => {
         gateway1Calls >= 1 || gateway2Calls >= 1,
         'At least one gateway should be used',
       );
+    });
+  });
+
+  describe('range-GET fallback against a real server', () => {
+    const ROOT_HEADERS = {
+      'X-AR-IO-Root-Transaction-Id': 'root-tx-456',
+      'X-AR-IO-Root-Data-Item-Offset': '1000',
+      'X-AR-IO-Root-Data-Offset': '1500',
+    };
+
+    /**
+     * A /raw server that rejects HEAD, as some peers behind CDNs do, so every
+     * lookup takes the range-GET fallback. Records each request's client port
+     * so tests can tell whether connections were reused.
+     */
+    const startServer = async (onGet: (res: http.ServerResponse) => void) => {
+      const clientPorts: number[] = [];
+      const server = http.createServer((req, res) => {
+        clientPorts.push(req.socket.remotePort ?? -1);
+        if (req.method === 'HEAD') {
+          res.writeHead(405, { 'Content-Length': '0' });
+          res.end();
+          return;
+        }
+        onGet(res);
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, '127.0.0.1', resolve),
+      );
+      const { port } = server.address() as AddressInfo;
+      return {
+        url: `http://127.0.0.1:${port}`,
+        clientPorts,
+        close: async () => {
+          server.closeAllConnections();
+          await new Promise((resolve) => server.close(resolve));
+        },
+      };
+    };
+
+    /**
+     * Streams `total` bytes with backpressure and reports how much the client
+     * actually accepted before hanging up.
+     */
+    const streamLargeBody = (
+      res: http.ServerResponse,
+      status: number,
+      total: number,
+      headers: Record<string, string>,
+    ) => {
+      const progress = { written: 0, finished: false };
+      res.writeHead(status, { 'Content-Length': String(total), ...headers });
+      const chunk = Buffer.alloc(64 * 1024);
+      const write = () => {
+        while (progress.written < total) {
+          progress.written += chunk.length;
+          if (!res.write(chunk)) {
+            res.once('drain', write);
+            return;
+          }
+        }
+        res.end();
+        progress.finished = true;
+      };
+      write();
+      return progress;
+    };
+
+    const makeIndex = (url: string) => {
+      const index = new GatewaysRootTxIndex({
+        log,
+        trustedGatewaysUrls: { [url]: 1 },
+        requestTimeoutMs: 5000,
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
+      });
+      for (const [, limiter] of (index as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
+      return index;
+    };
+
+    const TOTAL = 64 * 1024 * 1024;
+
+    it('does not download the whole item when the peer ignores the range', async () => {
+      let progress = { written: 0, finished: false };
+      const server = await startServer((res) => {
+        progress = streamLargeBody(res, 200, TOTAL, ROOT_HEADERS);
+      });
+      try {
+        const result = await makeIndex(server.url).getRootTx('item-a');
+
+        assert(result !== undefined);
+        assert.equal(result.rootTxId, 'root-tx-456');
+        // A 200 carries the whole payload, so Content-Length is its size.
+        assert.equal(result.dataSize, TOTAL);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.equal(progress.finished, false);
+        assert.ok(
+          progress.written < TOTAL / 2,
+          `peer sent ${progress.written} of ${TOTAL} bytes`,
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
+    it('does not download a large error body either', async () => {
+      let progress = { written: 0, finished: false };
+      const server = await startServer((res) => {
+        progress = streamLargeBody(res, 500, TOTAL, {});
+      });
+      try {
+        const result = await makeIndex(server.url).getRootTx('item-a');
+
+        assert.equal(result, undefined);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.equal(progress.finished, false);
+        assert.ok(
+          progress.written < TOTAL / 2,
+          `peer sent ${progress.written} of ${TOTAL} bytes`,
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
+    it('keeps reusing the connection when the peer honours the range', async () => {
+      const server = await startServer((res) => {
+        res.writeHead(206, {
+          'Content-Length': '1',
+          'Content-Range': 'bytes 0-0/5000',
+          ...ROOT_HEADERS,
+        });
+        res.end(Buffer.from('x'));
+      });
+      try {
+        const index = makeIndex(server.url);
+        const first = await index.getRootTx('item-a');
+        const second = await index.getRootTx('item-b');
+
+        assert.equal(first?.dataSize, 5000);
+        assert.equal(second?.dataSize, 5000);
+        // HEAD and GET for each lookup, all over one keep-alive connection.
+        assert.equal(server.clientPorts.length, 4);
+        assert.equal(new Set(server.clientPorts).size, 1);
+      } finally {
+        await server.close();
+      }
     });
   });
 });

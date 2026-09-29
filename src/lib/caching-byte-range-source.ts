@@ -6,7 +6,7 @@
  */
 
 import { LRUCache } from 'lru-cache';
-import { ByteRangeSource } from './byte-range-source.js';
+import { assertReadableRange, ByteRangeSource } from './byte-range-source.js';
 
 /** Default size of the CDB64 header in bytes */
 const CDB64_HEADER_SIZE = 4096;
@@ -62,6 +62,8 @@ export class CachingByteRangeSource implements ByteRangeSource {
   }
 
   async read(offset: number, size: number): Promise<Buffer> {
+    // The wrapped source enforces this too, but a cache hit never reaches it.
+    assertReadableRange(offset, size);
     // Check if this read is entirely within the header region
     if (offset + size <= this.headerSize) {
       return this.readFromHeader(offset, size);
@@ -117,6 +119,13 @@ export class CachingByteRangeSource implements ByteRangeSource {
     this.regionCache.set(cacheKey, data);
 
     return data;
+  }
+
+  /** Size of the wrapped source, if it knows it. */
+  async getSize(): Promise<number | undefined> {
+    return this.source.getSize !== undefined
+      ? this.source.getSize()
+      : undefined;
   }
 
   async close(): Promise<void> {

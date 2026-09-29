@@ -58,6 +58,7 @@ export class FsChunkDataStore implements ChunkDataStore {
         tier: 0,
       })
       .catch((error: any) => {
+        metrics.chunkCacheIndexHookErrorsTotal.inc({ hook: 'write' });
         this.log.debug('Failed to record chunk cache index entry', {
           dataRoot,
           message: error?.message,
@@ -76,6 +77,7 @@ export class FsChunkDataStore implements ChunkDataStore {
     this.chunkDataCacheIndex
       .touchChunkDataCacheEntry(dataRoot, currentUnixTimestamp(), 0)
       .catch((error: any) => {
+        metrics.chunkCacheIndexHookErrorsTotal.inc({ hook: 'read' });
         this.log.debug('Failed to touch chunk cache index entry', {
           dataRoot,
           message: error?.message,

@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-a487df83812f30d8753d89d28f45200606c64678}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-176414664895103926bb2cd072699e72e15832fb}
     build:
       context: envoy/
     restart: unless-stopped
@@ -46,7 +46,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-4704625fe2587cdca2c53828dbc5ceefbd22b4b2}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3e72d74de4a8ca838445eee4010f5ce60ece317d}
     build:
       context: .
     restart: unless-stopped
@@ -64,6 +64,9 @@ services:
       - ${DATASETS_PATH:-./data/datasets}:/app/data/datasets
       - ${ETL_STAGING_PATH:-./data/etl/staging}:/app/data/etl/staging
       - ${CDB64_ROOT_TX_INDEX_DATA_PATH:-./data/cdb64-root-tx-index}:/app/data/cdb64-root-tx-index
+      # Index artifacts the index-swarm sidecar publishes and installs. Read
+      # only: core serves published/ and loads installed/, and never writes.
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes:ro
       - ${KEYS_DATA_PATH:-./data/keys}:/app/data/keys
       - ${WALLETS_PATH:-./wallets}:/app/wallets:ro
       - ${SECRETS_PATH:-./secrets}:/app/secrets:ro
@@ -71,6 +74,7 @@ services:
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
+      - INDEXES_PUBLISHED_DIR=${INDEXES_PUBLISHED_DIR:-}
       - LOG_FORMAT=${CORE_LOG_FORMAT:-simple}
       - LOG_FILTER=${CORE_LOG_FILTER:-}
       - LOG_ALL_STACKTRACES=${CORE_LOG_ALL_STACKTRACES:-}
@@ -159,6 +163,7 @@ services:
       - RATE_LIMITER_RESOURCE_REFILL_PER_SEC=${RATE_LIMITER_RESOURCE_REFILL_PER_SEC:-}
       - RATE_LIMITER_IP_TOKENS_PER_BUCKET=${RATE_LIMITER_IP_TOKENS_PER_BUCKET:-}
       - RATE_LIMITER_IP_REFILL_PER_SEC=${RATE_LIMITER_IP_REFILL_PER_SEC:-}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
       - RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST=${RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST:-}
       - RATE_LIMITER_ARNS_ALLOWLIST=${RATE_LIMITER_ARNS_ALLOWLIST:-}
       - NODE_MAX_OLD_SPACE_SIZE=${NODE_MAX_OLD_SPACE_SIZE:-}
@@ -174,7 +179,10 @@ services:
       - CHUNK_METADATA_SOURCE_PARALLELISM=${CHUNK_METADATA_SOURCE_PARALLELISM:-}
       - CHUNK_REQUEST_CONCURRENCY=${CHUNK_REQUEST_CONCURRENCY:-}
       - CHUNK_FIRST_DATA_TIMEOUT_MS=${CHUNK_FIRST_DATA_TIMEOUT_MS:-}
+      - TX_CHUNKS_GEOMETRY_DB_ENABLED=${TX_CHUNKS_GEOMETRY_DB_ENABLED:-}
+      - TX_CHUNKS_GEOMETRY_CACHE_SIZE=${TX_CHUNKS_GEOMETRY_CACHE_SIZE:-}
       - CHUNK_SERVE_DEADLINE_MS=${CHUNK_SERVE_DEADLINE_MS:-}
+      - CHUNK_PEER_ORIGIN_MODE=${CHUNK_PEER_ORIGIN_MODE:-}
       - CHUNK_GET_BASE64_SIZE_BYTES=${CHUNK_GET_BASE64_SIZE_BYTES:-}
       - CHUNK_METADATA_CACHE_TYPE=${CHUNK_METADATA_CACHE_TYPE:-redis}
       - CONTIGUOUS_METADATA_CACHE_TYPE=${CONTIGUOUS_METADATA_CACHE_TYPE:-}
@@ -255,6 +263,7 @@ services:
       - ARWEAVE_NODE_IGNORE_URLS=${ARWEAVE_NODE_IGNORE_URLS:-}
       - ARNS_CACHE_TTL_SECONDS=${ARNS_CACHE_TTL_SECONDS:-}
       - ARNS_CACHE_MAX_KEYS=${ARNS_CACHE_MAX_KEYS:-10000}
+      - MANIFEST_RESOLUTION_CACHE_SIZE=${MANIFEST_RESOLUTION_CACHE_SIZE:-}
       - ARNS_CACHE_TYPE=${ARNS_CACHE_TYPE:-redis}
       - ARNS_NAMES_CACHE_TTL_SECONDS=${ARNS_NAMES_CACHE_TTL_SECONDS:-}
       - ARNS_MAX_CONCURRENT_RESOLUTIONS=${ARNS_MAX_CONCURRENT_RESOLUTIONS:-}
@@ -307,7 +316,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-83}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-84}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT=${CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT:-}
       - CHUNK_POST_MAX_CONSECUTIVE_FAILURES=${CHUNK_POST_MAX_CONSECUTIVE_FAILURES:-}
@@ -401,6 +410,8 @@ services:
       - GATEWAYS_GQL_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE=${GATEWAYS_GQL_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE:-}
       - GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS=${GATEWAYS_GQL_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS:-}
       - GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS=${GATEWAYS_GQL_CIRCUIT_BREAKER_RESET_TIMEOUT_MS:-}
+      - GATEWAYS_GQL_SOFT_DEADLINE_ENABLED=${GATEWAYS_GQL_SOFT_DEADLINE_ENABLED:-}
+      - GATEWAYS_GQL_SOFT_DEADLINE_MS=${GATEWAYS_GQL_SOFT_DEADLINE_MS:-}
       - HYPERBEAM_ENDPOINT=${HYPERBEAM_ENDPOINT:-}
       - HYPERBEAM_REQUEST_TIMEOUT_MS=${HYPERBEAM_REQUEST_TIMEOUT_MS:-}
       - HYPERBEAM_ROOT_TX_RATE_LIMIT_BURST_SIZE=${HYPERBEAM_ROOT_TX_RATE_LIMIT_BURST_SIZE:-}
@@ -429,6 +440,7 @@ services:
       - CLICKHOUSE_GQL_MAX_ROWS_TO_READ=${CLICKHOUSE_GQL_MAX_ROWS_TO_READ:-}
       - CLICKHOUSE_GQL_DEDUPE_HEADROOM=${CLICKHOUSE_GQL_DEDUPE_HEADROOM:-}
       - CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED=${CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED:-}
+      - CLICKHOUSE_GQL_ID_LOOKUP_ENABLED=${CLICKHOUSE_GQL_ID_LOOKUP_ENABLED:-}
       - CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES=${CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES:-}
       - GQL_L1_ONLY_ROUTING_FILTER=${GQL_L1_ONLY_ROUTING_FILTER:-}
       - CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS=${CLICKHOUSE_SQLITE_CIRCUIT_BREAKER_TIMEOUT_MS:-}
@@ -583,6 +595,16 @@ services:
     image: clickhouse/clickhouse-server:${CLICKHOUSE_IMAGE_TAG:-26.3}
     profiles:
       - clickhouse
+    # Without this the container defaults to `restart: no`, so a host reboot
+    # or a Docker daemon restart brings every other service back and leaves
+    # ClickHouse down. With CLICKHOUSE_STREAMING_ENABLED=true that takes the
+    # gateway with it: core's boot fails in `clickhouseStreamer.start()` with
+    # `getaddrinfo ENOTFOUND clickhouse` before `app.listen()` runs. Core now
+    # exits and restart-loops in that case rather than sitting there with no
+    # HTTP listener (see `markStartupComplete` in src/system.ts), so this
+    # policy is what actually gets the pair back up; without it core just
+    # loops against a ClickHouse that is never coming back on its own.
+    restart: unless-stopped
     ports:
       - ${CLICKHOUSE_PORT_2:-8123}:8123
       - ${CLICKHOUSE_PORT_3:-8443}:8443
@@ -601,7 +623,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-d6d283a5b5c02288404b348a48c5b8c048cb9555}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-956f52564e6ff14f5682f6d26176a03b5ed9807a}
     profiles:
       - clickhouse
     build:
@@ -643,7 +665,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-0e956b0802d132b7cdc14305c93ec3a8fe61a24a}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-fe159f5a7ad1351723c48b5cb08dd2d224cc1dc2}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -710,7 +732,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-83}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-84}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       # Reference Gateway Configuration
       # The bundled observer references THIS node's own gateway by default (its
@@ -772,6 +794,10 @@ services:
       dockerfile: Dockerfile
     profiles:
       - litestream
+    # Same reason as the clickhouse service above: continuous SQLite
+    # replication that does not come back after a reboot is a backup that
+    # silently stops, which is only discovered when a restore is needed.
+    restart: unless-stopped
     volumes:
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
     environment:
@@ -782,6 +808,210 @@ services:
       - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX=${AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX:-}
     networks:
       - ar-io-network
+
+  # Publishes the index artifacts this gateway offers, and subscribes to those
+  # published by other gateways, installing and retiring bands under the
+  # running node. Off unless the index-swarm profile is enabled.
+  #
+  # Runs the core image rather than one of its own: the sidecar is compiled
+  # into the same dist/ tree and needs no dependency core does not already
+  # have, so a separate image would be roughly a gigabyte of duplicate layers
+  # per operator for code that is already present.
+  index-swarm:
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3e72d74de4a8ca838445eee4010f5ce60ece317d}
+    build:
+      context: .
+    entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/main.js']
+    profiles:
+      - index-swarm
+    restart: unless-stopped
+    # Proper PID 1, so signals reach the process and exited children are
+    # reaped. Without it a wedged process cannot be stopped without a kill,
+    # which is how a band install gets left half-written.
+    init: true
+    stop_grace_period: 30s
+    # Deliberately no depends_on. The sidecar shares only a volume with the
+    # gateway and works whether or not it is up, and a dependency here would
+    # mean bringing this profile up could start or recreate core.
+    # The closed tracker, which a publisher of torrents runs. Nothing listens
+    # on a node that does not publish them.
+    ports:
+      - '${INDEX_SWARM_TRACKER_PORT:-6969}:${INDEX_SWARM_TRACKER_PORT:-6969}/tcp'
+    volumes:
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
+      # Only the observer keypair, and only when it is kept in a file: the
+      # sidecar fetches documents from other gateways, so it sees no other
+      # key material (no wallets directory, no report-upload keys). With
+      # OBSERVER_PRIVATE_KEY instead, nothing is mounted.
+      - ${INDEX_SWARM_OBSERVER_KEYPAIR_FILE:-/dev/null}:/app/keys/observer.json:ro
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - INDEX_SWARM_LOG_LEVEL=${INDEX_SWARM_LOG_LEVEL:-info}
+      - INDEX_SWARM_LOG_FORMAT=${INDEX_SWARM_LOG_FORMAT:-simple}
+      - INDEX_SWARM_DATA_DIR=/app/data/indexes
+      - INDEX_SWARM_PUBLISH=${INDEX_SWARM_PUBLISH:-}
+      - INDEX_SWARM_SUBSCRIBE=${INDEX_SWARM_SUBSCRIBE:-}
+      - INDEX_SWARM_TRUSTED_PUBLISHERS=${INDEX_SWARM_TRUSTED_PUBLISHERS:-}
+      - INDEX_SWARM_ALLOWED_FILE_ORIGINS=${INDEX_SWARM_ALLOWED_FILE_ORIGINS:-}
+      - INDEX_SWARM_PUBLISH_SCAN_INTERVAL_SECONDS=${INDEX_SWARM_PUBLISH_SCAN_INTERVAL_SECONDS:-}
+      - INDEX_SWARM_PUBLISH_TTL_SECONDS=${INDEX_SWARM_PUBLISH_TTL_SECONDS:-}
+      - INDEX_SWARM_SUPERSEDE_GRACE_SECONDS=${INDEX_SWARM_SUPERSEDE_GRACE_SECONDS:-}
+      - INDEX_SWARM_POLL_INTERVAL_SECONDS=${INDEX_SWARM_POLL_INTERVAL_SECONDS:-}
+      - INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS=${INDEX_SWARM_MANIFEST_FETCH_TIMEOUT_MS:-}
+      - INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS=${INDEX_SWARM_DOWNLOAD_STALL_TIMEOUT_SECONDS:-}
+      - INDEX_SWARM_DOWNLOAD_CONCURRENCY=${INDEX_SWARM_DOWNLOAD_CONCURRENCY:-}
+      - INDEX_SWARM_MAX_DISK_BYTES=${INDEX_SWARM_MAX_DISK_BYTES:-}
+      - INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_DOWNLOAD_RATE_LIMIT_BYTES_PER_SEC:-}
+      - INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS=${INDEX_SWARM_REGISTRY_CACHE_TTL_SECONDS:-}
+      # The swarm tier: on when INDEX_SWARM_ENGINE_AUTH is set (the URL then
+      # defaults to the compose engine) and the index-swarm-torrent profile
+      # runs the engine.
+      - INDEX_SWARM_ENGINE_URL=${INDEX_SWARM_ENGINE_URL:-}
+      - INDEX_SWARM_ENGINE_AUTH=${INDEX_SWARM_ENGINE_AUTH:-}
+      - INDEX_SWARM_TRACKERS=${INDEX_SWARM_TRACKERS:-}
+      - INDEX_SWARM_ALLOWED_TRACKERS=${INDEX_SWARM_ALLOWED_TRACKERS:-}
+      - INDEX_SWARM_ENGINE_BLOCK_PRIVATE=${INDEX_SWARM_ENGINE_BLOCK_PRIVATE:-true}
+      - INDEX_SWARM_TRACKER_PORT=${INDEX_SWARM_TRACKER_PORT:-6969}
+      - INDEX_SWARM_TRACKER_TRUSTED_PROXIES=${INDEX_SWARM_TRACKER_TRUSTED_PROXIES:-}
+      - INDEX_SWARM_ENGINE_PUBLIC_HOST=${INDEX_SWARM_ENGINE_PUBLIC_HOST:-}
+      - INDEX_SWARM_ENGINE_PORT=${INDEX_SWARM_ENGINE_PORT:-6881}
+      - INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC:-10000000}
+      - INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES=${INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES:-100000000000}
+      - INDEX_SWARM_TORRENT_TIMEOUT_SECONDS=${INDEX_SWARM_TORRENT_TIMEOUT_SECONDS:-}
+      - INDEX_SWARM_WEBSEED_AFTER_SECONDS=${INDEX_SWARM_WEBSEED_AFTER_SECONDS:-}
+      - INDEX_SWARM_ENGINE_UID=${INDEX_SWARM_ENGINE_UID:-1000}
+      - INDEX_SWARM_ENGINE_GID=${INDEX_SWARM_ENGINE_GID:-1000}
+      # Identity, shared with the gateway. Registry records come from the
+      # gateway's /ar-io/peers, so the sidecar needs no RPC settings.
+      - AR_IO_WALLET=${AR_IO_WALLET:-}
+      - INDEX_SWARM_METRICS_PORT=${INDEX_SWARM_METRICS_PORT:-9101}
+      - INDEX_SWARM_METRICS_HOST=${INDEX_SWARM_METRICS_HOST:-0.0.0.0}
+      - INDEX_SWARM_CORE_URL=${INDEX_SWARM_CORE_URL:-http://core:4000}
+      - INDEX_SWARM_MIN_CORE_RELEASE=${INDEX_SWARM_MIN_CORE_RELEASE:-}
+      - INDEX_SWARM_SHUTDOWN_TIMEOUT_MS=${INDEX_SWARM_SHUTDOWN_TIMEOUT_MS:-}
+      # The signing identity is the gateway's registered observer key, read
+      # only: the sidecar signs what it publishes and never writes key material.
+      # A keypair file comes in through the single-file mount above, so the
+      # gateway's own OBSERVER_KEYPAIR_PATH (a path inside its wallets
+      # directory) is not used here.
+      # Set INDEX_SWARM_OBSERVER_KEYPAIR_FILE or OBSERVER_PRIVATE_KEY, not
+      # both: with both, publishing refuses to start.
+      - OBSERVER_KEYPAIR_PATH=${INDEX_SWARM_OBSERVER_KEYPAIR_FILE:+/app/keys/observer.json}
+      - OBSERVER_PRIVATE_KEY=${OBSERVER_PRIVATE_KEY:-}
+    # The runtime image is distroless and carries no shell utilities beyond
+    # sh and mkdir, so the check runs through node.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          '/nodejs/bin/node',
+          '-e',
+          "fetch('http://127.0.0.1:${INDEX_SWARM_METRICS_PORT:-9101}/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    # Docker's json-file driver is unbounded by default, which on a long-lived
+    # gateway quietly fills the disk holding /var/lib/docker. Capped here so a
+    # new service cannot reintroduce that.
+    logging:
+      driver: json-file
+      options:
+        max-size: '${INDEX_SWARM_LOG_MAX_SIZE:-50m}'
+        max-file: '${INDEX_SWARM_LOG_MAX_FILE:-3}'
+    networks:
+      - ar-io-network
+      # Where it reaches the torrent engine's Web API.
+      - index-swarm-engine
+    labels:
+      autoheal: ${RUN_AUTOHEAL:-false}
+
+  # Writes the settings the swarm depends on into the torrent engine's config
+  # before each engine start, then exits. The engine image has no way to take
+  # a Web UI password from the environment; without this it would invent one
+  # per start that the sidecar could never know. Fails, and so keeps the
+  # engine down, when INDEX_SWARM_ENGINE_AUTH is unset.
+  index-swarm-engine-init:
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3e72d74de4a8ca838445eee4010f5ce60ece317d}
+    entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/engine-init.js']
+    profiles:
+      - index-swarm-torrent
+    restart: 'no'
+    volumes:
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
+      - ${INDEX_SWARM_ENGINE_CONFIG_PATH:-./data/index-swarm-engine}:/config
+    environment:
+      - INDEX_SWARM_LOG_FORMAT=${INDEX_SWARM_LOG_FORMAT:-simple}
+      - INDEX_SWARM_ENGINE_AUTH=${INDEX_SWARM_ENGINE_AUTH:-}
+      - INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC=${INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC:-10000000}
+      - INDEX_SWARM_ENGINE_BLOCK_PRIVATE=${INDEX_SWARM_ENGINE_BLOCK_PRIVATE:-true}
+      - INDEX_SWARM_ENGINE_UID=${INDEX_SWARM_ENGINE_UID:-1000}
+      - INDEX_SWARM_ENGINE_GID=${INDEX_SWARM_ENGINE_GID:-1000}
+    logging:
+      driver: json-file
+      options:
+        max-size: '${INDEX_SWARM_LOG_MAX_SIZE:-50m}'
+        max-file: '${INDEX_SWARM_LOG_MAX_FILE:-3}'
+    network_mode: none
+
+  # The torrent engine: qBittorrent-nox on libtorrent 2, pinned by digest
+  # (docs/index-swarm.md#why-qbittorrent). The sidecar drives it over its
+  # Web API; nothing else does. It sees the index directories at the same
+  # paths as the sidecar, because the sidecar hands it paths.
+  index-swarm-engine:
+    image: qbittorrentofficial/qbittorrent-nox:5.2.3-lt2-1@sha256:f269c2aae56f1bf8caddd77a59e7ba2a278919d8401213266b8fe154c6ac1043
+    profiles:
+      - index-swarm-torrent
+    restart: unless-stopped
+    depends_on:
+      index-swarm-engine-init:
+        condition: service_completed_successfully
+    # The image runs tini itself. The grace period lets it save resume data,
+    # which is what spares a restart from rechecking every seeded band.
+    stop_grace_period: 30s
+    volumes:
+      - ${INDEX_SWARM_ENGINE_CONFIG_PATH:-./data/index-swarm-engine}:/config
+      # Seeds what this node publishes and what it has installed, and can
+      # write neither: the gateway serves and loads those directories. The
+      # publisher seeds from published/.seed/, hard links to the blobs.
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}/published:/app/data/indexes/published:ro
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}/installed:/app/data/indexes/installed:ro
+      # The only place it may write.
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}/swarm:/app/data/indexes/swarm
+    environment:
+      - QBT_LEGAL_NOTICE=confirm
+      - QBT_TORRENTING_PORT=${INDEX_SWARM_ENGINE_PORT:-6881}
+      - PUID=${INDEX_SWARM_ENGINE_UID:-1000}
+      - PGID=${INDEX_SWARM_ENGINE_GID:-1000}
+      - UMASK=022
+    # Only the peer port reaches the host. The Web API stays on the engine's
+    # own network, where the sidecar reaches it as index-swarm-engine:8080;
+    # it must be reached at that same port, because qBittorrent refuses a
+    # Host header naming another.
+    ports:
+      - '${INDEX_SWARM_ENGINE_PORT:-6881}:${INDEX_SWARM_ENGINE_PORT:-6881}/tcp'
+      - '${INDEX_SWARM_ENGINE_PORT:-6881}:${INDEX_SWARM_ENGINE_PORT:-6881}/udp'
+    healthcheck:
+      # Any HTTP answer is healthy: the API asks for a login even on
+      # loopback, so a 403 still means the engine is up.
+      test: ['CMD', 'curl', '-sS', '-o', '/dev/null', 'http://127.0.0.1:8080/api/v2/app/webapiVersion']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: '${INDEX_SWARM_LOG_MAX_SIZE:-50m}'
+        max-file: '${INDEX_SWARM_LOG_MAX_FILE:-3}'
+    # Its own network, shared only with the sidecar. Trackers, peers and
+    # WebSeeds are chosen by other gateways, so the engine must not be able
+    # to reach core, the observer or anything else on ar-io-network.
+    networks:
+      - index-swarm-engine
+    labels:
+      autoheal: ${RUN_AUTOHEAL:-false}
 
   autoheal:
     image: willfarrell/autoheal@sha256:fd2c5500ab9210be9fa0d365162301eb0d16923f1d9a36de887f5d1751c6eb8c
@@ -800,3 +1030,5 @@ volumes:
 networks:
   ar-io-network:
     name: ${DOCKER_NETWORK_NAME:-ar-io-network}
+  index-swarm-engine:
+    name: ${INDEX_SWARM_ENGINE_NETWORK_NAME:-ar-io-index-swarm-engine}

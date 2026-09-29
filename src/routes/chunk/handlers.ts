@@ -16,6 +16,7 @@ import {
   CHUNK_POST_MIN_SUCCESS_COUNT,
   CHUNK_POST_MIN_PREFERRED_SUCCESS_COUNT,
   CHUNK_SERVE_DEADLINE_MS,
+  CHUNK_PEER_ORIGIN_DEADLINE_MS,
   MAX_CHUNK_SIZE,
 } from '../../config.js';
 import * as config from '../../config.js';
@@ -24,6 +25,7 @@ import { formatContentDigest } from '../../lib/digest.js';
 import { toB64Url } from '../../lib/encoding.js';
 import type {
   BroadcastChunkResponses,
+  RequestAttributes,
   ChunkDataStore,
   ChunkMetadataStore,
   ChunkPlacementIndex,
@@ -112,6 +114,47 @@ export function withChunkServeDeadline<T>(
 }
 
 /**
+ * Picks the wall-clock deadline for one chunk serve.
+ *
+ * A request forwarded by another gateway (X-AR-IO-Hops >= 1) gets
+ * CHUNK_PEER_ORIGIN_DEADLINE_MS: that caller times out after
+ * PEER_REQUEST_TIMEOUT_MS (1s) and falls back to its own sources, so the tail
+ * of a long retrieval is delivered to nobody while still holding a libuv
+ * thread and the disk. Everything else -- including a user hitting this
+ * gateway directly -- keeps CHUNK_SERVE_DEADLINE_MS unchanged.
+ *
+ * Returns 0 (meaning "no cap") only if the selected value is 0, matching
+ * withChunkServeDeadline's contract.
+ *
+ * `peerOrigin` says where the request came from; `peerOriginDeadlineApplied`
+ * says which deadline it is running under. They differ under the
+ * CHUNK_PEER_ORIGIN_DEADLINE_MS=0 opt-out, where a peer-origin request keeps
+ * the general deadline -- and that is exactly the case the peer-origin
+ * deadline metric must not claim as its own.
+ */
+export function selectChunkServeDeadline(
+  requestAttributes: RequestAttributes | undefined,
+): {
+  deadlineMs: number;
+  peerOrigin: boolean;
+  peerOriginDeadlineApplied: boolean;
+} {
+  const peerOrigin = (requestAttributes?.hops ?? 0) >= 1;
+  if (peerOrigin && CHUNK_PEER_ORIGIN_DEADLINE_MS > 0) {
+    return {
+      deadlineMs: CHUNK_PEER_ORIGIN_DEADLINE_MS,
+      peerOrigin,
+      peerOriginDeadlineApplied: true,
+    };
+  }
+  return {
+    deadlineMs: CHUNK_SERVE_DEADLINE_MS,
+    peerOrigin,
+    peerOriginDeadlineApplied: false,
+  };
+}
+
+/**
  * Classifies a failure thrown by {@link ChunkRetrievalService.retrieveChunk}
  * into the most accurate HTTP status.
  *
@@ -122,6 +165,7 @@ export function withChunkServeDeadline<T>(
  *
  *   - client hung up mid-retrieval                    → 499 (Client Closed Request)
  *   - chunk not locatable / not retrievable in time   → 404 (Not Found)
+ *   - retrieval cancelled internally                  → 404 (Not Found)
  *   - upstreams reachable but served bad data         → 502 (Bad Gateway)
  *
  * Timeouts — both per-source timeouts and our own wall-clock serve deadline —
@@ -161,6 +205,16 @@ export function classifyChunkRetrievalError(
   if (error?.name === 'TimeoutError' || /timeout/i.test(error?.message ?? '')) {
     return { statusCode: 404, errorType: 'upstream_timeout' };
   }
+  // An AbortError that reaches here is an *internal* cancellation, because a
+  // client disconnect already returned above: a source's own abort signal, or
+  // a losing peer cancelled once another won. That is the same condition as a
+  // timeout, so it takes the same 404 rather than falling through to 502.
+  // Without this a cancelled fetch is reported as a server-side gateway fault,
+  // which inflates the 5xx count the wall-clock deadline exists to protect and
+  // denies nginx the cacheable negative it gets for every other failure.
+  if (error?.name === 'AbortError') {
+    return { statusCode: 404, errorType: 'upstream_aborted' };
+  }
   return { statusCode: 502, errorType: 'upstream_unavailable' };
 }
 
@@ -177,12 +231,14 @@ function sendChunkRetrievalError(
     span,
     log,
     offset,
+    peerOriginDeadlineApplied,
   }: {
     request: Request;
     response: Response;
     span: ReturnType<typeof tracer.startSpan>;
     log: Logger;
     offset: number;
+    peerOriginDeadlineApplied: boolean;
   },
 ): void {
   const { statusCode, errorType } = classifyChunkRetrievalError(
@@ -193,6 +249,17 @@ function sendChunkRetrievalError(
   span.setAttribute('chunk.retrieval.error', errorType);
   if (errorType === 'serve_deadline_exceeded') {
     metrics.chunkServeDeadlineExceededCounter.inc({ method: request.method });
+    // Counted separately so an operator can see what the shorter peer-origin
+    // deadline costs, without it being hidden inside the general total. Keyed
+    // on which deadline actually applied, not on whether a peer asked: under
+    // the CHUNK_PEER_ORIGIN_DEADLINE_MS=0 opt-out a peer-origin serve runs on
+    // the general 12s deadline, and counting that here would report a cost the
+    // peer-origin deadline did not impose.
+    if (peerOriginDeadlineApplied) {
+      metrics.chunkPeerOriginDeadlineExceededCounter.inc({
+        method: request.method,
+      });
+    }
   }
   if (statusCode >= 500) {
     span.recordException(error);
@@ -301,10 +368,17 @@ export const createChunkOffsetHandler = ({
         }
 
         // === RETRIEVE CHUNK VIA SERVICE ===
+        // Selected before the try so the catch below can report which deadline
+        // the serve was running under.
+        const { deadlineMs, peerOrigin, peerOriginDeadlineApplied } =
+          selectChunkServeDeadline(requestAttributes);
+        span.setAttribute('chunk.serve_deadline_ms', deadlineMs);
+        span.setAttribute('chunk.peer_origin', peerOrigin);
+
         let result;
         try {
           result = await withChunkServeDeadline(
-            CHUNK_SERVE_DEADLINE_MS,
+            deadlineMs,
             request.signal,
             (signal) =>
               chunkRetrievalService.retrieveChunk(
@@ -323,6 +397,7 @@ export const createChunkOffsetHandler = ({
             span,
             log,
             offset,
+            peerOriginDeadlineApplied,
           });
           return;
         }
@@ -562,10 +637,17 @@ export const createChunkOffsetDataHandler = ({
         }
 
         // === RETRIEVE CHUNK VIA SERVICE ===
+        // Selected before the try so the catch below can report which deadline
+        // the serve was running under.
+        const { deadlineMs, peerOrigin, peerOriginDeadlineApplied } =
+          selectChunkServeDeadline(requestAttributes);
+        span.setAttribute('chunk.serve_deadline_ms', deadlineMs);
+        span.setAttribute('chunk.peer_origin', peerOrigin);
+
         let result;
         try {
           result = await withChunkServeDeadline(
-            CHUNK_SERVE_DEADLINE_MS,
+            deadlineMs,
             request.signal,
             (signal) =>
               chunkRetrievalService.retrieveChunk(
@@ -584,6 +666,7 @@ export const createChunkOffsetDataHandler = ({
             span,
             log,
             offset,
+            peerOriginDeadlineApplied,
           });
           return;
         }

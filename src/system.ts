@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { PublishedIndexes } from './routes/published-indexes.js';
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
@@ -171,6 +172,38 @@ export function registerCleanupHandler(
   log.debug(`Registered cleanup handler: ${name}`);
 }
 
+/**
+ * Flipped by {@link markStartupComplete} once the HTTP listener is bound.
+ *
+ * Until then an uncaught exception means a startup dependency failed, and
+ * swallowing it leaves the process in the worst possible state: alive, with
+ * workers indexing, but with no HTTP listener, because the top-level `await`
+ * in app.ts that threw never resolves and `app.listen()` is never reached.
+ * Nothing in the container reports unhealthy on its own account and the
+ * gateway serves nothing.
+ *
+ * That is not hypothetical. A host reboot on 2026-09-27 brought every
+ * container back except ClickHouse, whose compose service had no `restart:`
+ * policy. Core's `clickhouseStreamer.start()` schema validation threw
+ * `getaddrinfo ENOTFOUND clickhouse`, this handler logged it and returned,
+ * and the gateway answered nothing for 26 hours while looking up.
+ *
+ * Exiting instead is safe because the window is tiny: a healthy boot on a
+ * production gateway binds the listener 3.5 seconds after the container
+ * starts. A transient error inside that window costs one restart; the
+ * existing log-and-continue behaviour is unchanged for the whole of the
+ * steady-state lifetime after it.
+ */
+let startupComplete = false;
+
+/**
+ * Called from app.ts inside the `app.listen` callback. After this point an
+ * uncaught exception is logged and tolerated, as it always has been.
+ */
+export function markStartupComplete(): void {
+  startupComplete = true;
+}
+
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
   // Extract fields rather than passing the error object. A rejected axios
@@ -187,7 +220,18 @@ process.on('uncaughtException', (error) => {
         .map((e: any) => e?.message ?? String(e)),
       errorCount: (error as AggregateError).errors.length,
     }),
+    // Distinguishes "this killed the boot" from "this happened while
+    // serving" in one grep, without a second log line.
+    duringStartup: !startupComplete,
   });
+
+  if (!startupComplete) {
+    // Exit non-zero so the container restart policy retries, rather than
+    // leaving a listener-less process behind. The timer is deliberately not
+    // unref'd: it must fire, and it gives winston's transports a moment to
+    // flush the line above, which is the only record of why the boot died.
+    setTimeout(() => process.exit(1), 1000);
+  }
 });
 
 const arweave = Arweave.init({});
@@ -410,6 +454,7 @@ export const gqlQueryable: GqlQueryable = (() => {
             config.CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED,
           ownerProjectionEntityTypes:
             config.CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES,
+          idLookupEnabled: config.CLICKHOUSE_GQL_ID_LOOKUP_ENABLED,
           // L1-only routing: serve filter-entailed base-layer queries from the
           // SQLite L1 index instead of ClickHouse. Disabled unless the filter
           // is set to something other than the default NeverMatch.
@@ -871,6 +916,20 @@ const gatewaysDataSource = new FilteredContiguousDataSource({
   blockedIpsAndCidrs: config.TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS,
 });
 
+/**
+ * What the index-swarm sidecar publishes, as the gateway sees it. One instance
+ * backs both the /ar-io/indexes routes and the `indexes` block of
+ * /ar-io/info, so a band is advertised exactly when it is servable.
+ */
+export const publishedIndexes = new PublishedIndexes({
+  log,
+  publishedDir: config.INDEXES_PUBLISHED_DIR,
+  // After the first request, rechecked off the request path every 5 s: a
+  // stat can wait behind a saturated libuv thread pool (a cache sweep on a
+  // slow disk), and requests must not.
+  revalidateMs: 5_000,
+});
+
 export const arIOPeerManager = new ArIOPeerManager({
   log,
   networkProcess,
@@ -908,6 +967,23 @@ export const chunkMetaDataSource = createChunkMetadataSource({
   chunkMetadataSourceParallelism: config.CHUNK_METADATA_SOURCE_PARALLELISM,
 });
 
+// Chunk cache eviction index handle (ADR 005). Handed to the store only when
+// the feature is enabled, so an absent handle disables the write/read hooks
+// entirely. `db` structurally satisfies ChunkDataCacheIndex.
+const chunkDataCacheIndex: ChunkDataCacheIndex | undefined =
+  config.ENABLE_CHUNK_DATA_CACHE_INDEX ? db : undefined;
+
+// The one chunk data store. Created before the chunk data source so that the
+// read-through cache writes through it: chunks cached on the serving path must
+// reach the eviction index, or the evictor never sees them and the cache is
+// reclaimed only by the filesystem walk (ar-io-node #944). Also the
+// ChunkRetrievalService fast path (cache lookup by absoluteOffset).
+export const chunkDataStore = new FsChunkDataStore({
+  log,
+  baseDir: 'data/chunks',
+  chunkDataCacheIndex,
+});
+
 const chunkDataSource = createChunkDataSource({
   log,
   arweaveClient,
@@ -916,6 +992,7 @@ const chunkDataSource = createChunkDataSource({
   arIOChunkSource,
   chunkDataRetrievalOrder: config.CHUNK_DATA_RETRIEVAL_ORDER,
   chunkDataSourceParallelism: config.CHUNK_DATA_SOURCE_PARALLELISM,
+  chunkDataStore,
 });
 
 const fullChunkSource = new FullChunkSource(
@@ -940,19 +1017,6 @@ export const chunkSource =
         },
       })
     : fullChunkSource;
-
-// Chunk cache eviction index handle (ADR 005). Handed to the store only when
-// the feature is enabled, so an absent handle disables the write/read hooks
-// entirely. `db` structurally satisfies ChunkDataCacheIndex.
-const chunkDataCacheIndex: ChunkDataCacheIndex | undefined =
-  config.ENABLE_CHUNK_DATA_CACHE_INDEX ? db : undefined;
-
-// Create stores for ChunkRetrievalService fast path (cache lookup by absoluteOffset)
-export const chunkDataStore = new FsChunkDataStore({
-  log,
-  baseDir: 'data/chunks',
-  chunkDataCacheIndex,
-});
 
 export const chunkMetadataStore = new FsChunkMetadataStore({
   log,
@@ -1041,6 +1105,7 @@ export const chunkRetrievalService = new ChunkRetrievalService({
   txBoundarySource,
   chunkDataStore,
   chunkMetadataStore,
+  peerOriginMode: config.CHUNK_PEER_ORIGIN_MODE,
 });
 
 // Optimistic chunk ingest GC: evicts cached chunks whose data_root never
@@ -1069,6 +1134,8 @@ const baseTxChunksDataSource = new TxChunksDataSource({
   chunkSource,
   concurrencyLimit: chunkRequestLimit,
   firstDataTimeoutMs: config.CHUNK_FIRST_DATA_TIMEOUT_MS,
+  txGeometrySource: config.TX_CHUNKS_GEOMETRY_DB_ENABLED ? db : undefined,
+  geometryCacheSize: config.TX_CHUNKS_GEOMETRY_CACHE_SIZE,
 });
 
 // ANS-104 offset source for parsing bundle headers from chunks
@@ -1886,6 +1953,8 @@ metrics.registerQueueLengthGauge('matchedItemBuffer', {
 
 export const manifestPathResolver = new StreamingManifestPathResolver({
   log,
+  cacheSize: config.MANIFEST_RESOLUTION_CACHE_SIZE,
+  store: db,
 });
 
 export const arnsResolutionCache = new KvArNSResolutionStore({

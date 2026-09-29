@@ -28,12 +28,15 @@ import {
 } from '../../src/lib/encoding.js';
 import {
   ArweaveChainSourceStub,
+  exampleManifestStreamInvalidIds,
   exampleManifestStreamV010,
   exampleManifestStreamV010IndexPathAtEnd,
   exampleManifestStreamV020IndexAndPathAtTheEnd,
   exampleManifestStreamV020IndexId,
   exampleManifestStreamV020IndexIdAndPath,
+  exampleManifestStreamV020FallbackFirst,
   exampleManifestStreamV020IndexPath,
+  exampleManifestStreamV020PathsBeforeIndexPathFirst,
 } from '../../test/stubs.js';
 
 const TEST_STRING = 'http://test.com';
@@ -444,6 +447,80 @@ describe('Manifest parsing', () => {
           'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI',
         );
         assert.equal(fallbackEnd.resolutionType, 'fallback');
+      });
+    });
+
+    describe('manifest v0.2.0 - index id precedence over index path', () => {
+      // Regression test: for a v0.2.0 manifest where `paths` precede `index`
+      // and `index.path` precedes `index.id`, resolution must still return
+      // `index.id` (not the id that `index.path` maps to). Before the
+      // deferred-resolution fix, the streaming parser emitted the path-derived
+      // index id first and won, so the outcome depended on JSON key order.
+      it('should return index.id regardless of key order', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamV020PathsBeforeIndexPathFirst(),
+        );
+        assert.equal(result.id, 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU');
+        assert.equal(result.resolutionType, 'index');
+      });
+    });
+
+    describe('manifest v0.2.0 - fallback declared before index/paths', () => {
+      // The `fallback` event is emitted only at stream end (after all index and
+      // path events), so a fallback that appears first in the JSON must never
+      // preempt the index or a matching path.
+      it('returns the index for the root, not the fallback', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamV020FallbackFirst(),
+        );
+        assert.equal(result.id, 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU');
+        assert.equal(result.resolutionType, 'index');
+      });
+
+      it('returns a matching path, not the fallback', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamV020FallbackFirst(),
+          'css/mobile.css',
+        );
+        assert.equal(result.id, 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ');
+        assert.equal(result.resolutionType, 'path');
+      });
+
+      it('returns the fallback only when nothing else matches', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamV020FallbackFirst(),
+          'missing',
+        );
+        assert.equal(result.id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.resolutionType, 'fallback');
+      });
+    });
+
+    describe('manifest with malformed ids', () => {
+      it('should not resolve the root when index.id and fallback.id are malformed', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamInvalidIds(),
+        );
+        assert.equal(result.id, undefined);
+        assert.equal(result.resolutionType, undefined);
+      });
+
+      it('should resolve a path with a valid id', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamInvalidIds(),
+          'good.txt',
+        );
+        assert.equal(result.id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+        assert.equal(result.resolutionType, 'path');
+      });
+
+      it('should not resolve a path whose id is malformed', async () => {
+        const result = await resolveManifestStreamPath(
+          exampleManifestStreamInvalidIds(),
+          'bad.txt',
+        );
+        assert.equal(result.id, undefined);
+        assert.equal(result.resolutionType, undefined);
       });
     });
   });

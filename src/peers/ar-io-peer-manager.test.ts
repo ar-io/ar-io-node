@@ -489,4 +489,108 @@ describe('ArIOPeerManager', () => {
       m.stopUpdatingPeers?.();
     });
   });
+
+  describe('a registry read that fails', () => {
+    it('keeps the peer list it had rather than emptying it', async () => {
+      let fail = false;
+      const m = new ArIOPeerManager({
+        log,
+        networkProcess: {
+          getGateways: async () => {
+            if (fail) throw new Error('RPC unavailable');
+            return {
+              items: [
+                {
+                  gatewayAddress: 'a',
+                  status: 'joined',
+                  settings: { protocol: 'https', fqdn: 'a.com' },
+                },
+                {
+                  gatewayAddress: 'b',
+                  status: 'joined',
+                  settings: { protocol: 'https', fqdn: 'b.com' },
+                },
+              ],
+              hasMore: false,
+              nextCursor: undefined,
+            };
+          },
+        } as unknown as ARIORead,
+        nodeWallet: 'localNode',
+        initialCategories: ['test'],
+        updatePeersRefreshIntervalMs: 3600000,
+      });
+      await m.refreshPeers();
+      assert.equal(m.getPeerUrls().length, 2);
+
+      const fields = (formatted: ReturnType<typeof m.getFormattedPeers>) =>
+        Object.values(formatted)
+          .map((p) => ({ url: p.url, wallet: p.wallet, status: p.status }))
+          .sort((x, y) => x.url.localeCompare(y.url));
+      const before = fields(m.getFormattedPeers(['test']));
+      assert.equal(before.length, 2);
+      assert.ok(before.every((p) => p.wallet !== undefined));
+
+      fail = true;
+      await m.refreshPeers();
+      assert.equal(
+        m.getPeerUrls().length,
+        2,
+        'a failed refresh must not replace the peers with nothing',
+      );
+      assert.deepEqual(
+        fields(m.getFormattedPeers(['test'])),
+        before,
+        'nor the registry fields served alongside them',
+      );
+      m.stopUpdatingPeers?.();
+    });
+  });
+
+  describe('registry fields', () => {
+    it('carries each peer’s wallet, observer, stake and status from the same read', async () => {
+      const m = new ArIOPeerManager({
+        log,
+        networkProcess: {
+          getGateways: async () => ({
+            items: [
+              {
+                gatewayAddress: 'wallet-a',
+                observerAddress: 'observer-a',
+                operatorStake: 50_000_000_000,
+                status: 'joined',
+                settings: { protocol: 'https', fqdn: 'a.com' },
+              },
+              {
+                gatewayAddress: 'wallet-b',
+                settings: { protocol: 'https', fqdn: 'b.com' },
+              },
+            ],
+            hasMore: false,
+            nextCursor: undefined,
+          }),
+        } as unknown as ARIORead,
+        nodeWallet: 'localNode',
+        initialCategories: ['data'],
+        updatePeersRefreshIntervalMs: 3600000,
+      });
+      await m.refreshPeers();
+      const peers = m.getFormattedPeers(['data']);
+      assert.deepEqual(
+        { ...peers['a.com:443'], weights: undefined },
+        {
+          wallet: 'wallet-a',
+          observerAddress: 'observer-a',
+          operatorStake: 50_000_000_000,
+          status: 'joined',
+          url: 'https://a.com',
+          weights: undefined,
+        },
+      );
+      // A registry that omits fields yields a peer without them, not a broken one.
+      assert.equal(peers['b.com:443'].wallet, 'wallet-b');
+      assert.equal(peers['b.com:443'].observerAddress, undefined);
+      m.stopUpdatingPeers?.();
+    });
+  });
 });

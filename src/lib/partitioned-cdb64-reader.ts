@@ -54,6 +54,8 @@ import { ContiguousDataSource } from '../types.js';
 interface PartitionState {
   reader: Cdb64Reader;
   source: ByteRangeSource;
+  /** Set once the partition's first corrupt lookup has been logged. */
+  corruptionLogged?: boolean;
 }
 
 /**
@@ -227,7 +229,20 @@ export class PartitionedCdb64Reader {
 
     // Perform lookup
     try {
-      return await state.reader.get(key);
+      const value = await state.reader.get(key);
+      // The reader answers a corrupt structure with undefined; say so once
+      // per partition so a damaged or hostile file is visible without a
+      // warning on every lookup that hits it.
+      if (
+        state.corruptionLogged !== true &&
+        state.reader.getCorruptRecordCount() > 0
+      ) {
+        state.corruptionLogged = true;
+        this.log.warn('Corrupt CDB64 partition structure; lookups miss', {
+          prefix: partitionIndex.toString(16).padStart(2, '0'),
+        });
+      }
+      return value;
     } catch (error) {
       this.log.debug('Partition lookup error', {
         prefix: partitionIndex.toString(16).padStart(2, '0'),

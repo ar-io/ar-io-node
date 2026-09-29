@@ -157,12 +157,18 @@ export const createArnsMiddleware = ({
         // NOTE: Errors and in-flight resolution deduplication are expected to be
         // handled by the resolver.
         const resolutionStart = Date.now();
+        // Both timers observe the same measurement. `arnsResolutionTime` is
+        // retained under its misleading `_ms` name so existing dashboards keep
+        // working; `arnsResolutionDurationSeconds` is the correctly-named one
+        // to migrate to. prom-client's startTimer observes seconds in both.
         const end = metrics.arnsResolutionTime.startTimer();
+        const endSeconds = metrics.arnsResolutionDurationSeconds.startTimer();
         const resolution = await nameResolver.resolve({
           name: arnsSubdomain,
         });
         const { resolvedId, ttl, antId, resolvedAt, limit, index } = resolution;
         end();
+        endSeconds();
         const resolutionDuration = Date.now() - resolutionStart;
         span.setAttribute('arns.resolution_duration_ms', resolutionDuration);
 

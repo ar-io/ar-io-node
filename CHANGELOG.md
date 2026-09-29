@@ -4,6 +4,477 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 84] - 2026-09-29
+
+This is a **recommended release** focused on **index sharing between gateways,
+serving the right bytes and content type, and closing two ways to avoid rate
+limits and payment**. Key highlights include the `index-swarm` sidecar, which
+publishes and subscribes to signed CDB64 index bands over HTTP and optionally
+BitTorrent; a check of each data item's header before its bytes are served from
+a stored or indexed location, and fixes that stop items being served with their
+bundle's content type; `X-Forwarded-For` trusted only from known proxies
+(**upgrade the Envoy image with core**); x402 prices quoted in whole atomic
+units, so requests over their limit are no longer served free when a price
+could not be quoted; chunk retrieval asking Arweave nodes before AR.IO peers by
+default; GraphQL on Apollo Server 5; and a background verification fix whose
+migration builds a new index at startup, which can take several minutes on a
+large `data.db`.
+
+### Added
+
+- **Soft deadline for GraphQL fan-out (`GATEWAYS_GQL_SOFT_DEADLINE_ENABLED`,
+  off by default; `GATEWAYS_GQL_SOFT_DEADLINE_MS`, default 2000).** A gateway
+  that fans `transactions` and `blocks` out to other gateways
+  (`GATEWAYS_GQL_URLS`) waits for every upstream, so one slow upstream held
+  every list query for its full request timeout. With the deadline on, once
+  one source has answered with results, the merge waits at most the deadline
+  for the rest and returns a partial result with an `UPSTREAM_SOFT_DEADLINE`
+  warning per source it cut. An empty answer does not start the deadline:
+  the local index usually answers first and is empty for exactly the data
+  fan-out exists to find. Cut requests keep running, so the circuit breaker
+  still records their real outcome. New metric
+  `gateways_gql_soft_deadline_source_cut_total{source}`. A partial page can
+  omit items that sort before ones it includes, so a client paging with
+  cursors may skip them.
+
+- **ClickHouse id lookup table for GraphQL `ids` and `bundledIn`
+  (`CLICKHOUSE_GQL_ID_LOOKUP_ENABLED`, off by default)** (#946). On a large
+  ClickHouse `transactions` table, `transactions(ids: [...])` with 3 or more
+  ids and any `bundledIn` query failed with `TOO_MANY_ROWS`: `id_bloom` passes
+  ~1% of all granules per id, and `parent_id` has no index.
+  - New table `transaction_ids` (id → primary-key prefix), filled by
+    `transaction_ids_mv` on every insert. `schema.sql` creates both on the next
+    import; existing rows need a one-time backfill `INSERT`, documented there
+    and in `docs/clickhouse-schema.md`.
+  - With the flag on, the stable leg resolves ids (or `bundledIn` parents)
+    there first and reads `transactions` by primary key. On 30M test rows, 3
+    ids read ~20K rows instead of ~790K, 100 ids ~953K instead of ~18.5M, and
+    one bundle ~9K instead of 30M.
+  - Enable only after the backfill: an id missing from the table is treated as
+    absent from ClickHouse. A `bundledIn` query with a parent missing from the
+    table, and a failed lookup, run as before.
+  - New metric `clickhouse_gql_id_lookup_total{filter, outcome}`.
+
+- **Signed index publishing (`index-swarm` sidecar, `/ar-io/indexes`)** — a
+  gateway can publish its CDB64 root-TX index bands for other gateways, and
+  subscribe to theirs. Off by default (compose profile `index-swarm`).
+  - The sidecar runs the core image with its own entrypoint. It signs a
+    publication with the gateway's registered observer key (RFC 8785, Ed25519,
+    a monotonic sequence), and resolves publishers through the gateway's
+    `/ar-io/peers`, so it makes no Solana RPC calls.
+  - Subscribers verify every document against the registry and every file
+    against its signed SHA-256. Downloads resume, skip files already on disk,
+    stop for the poll when a publisher's meter answers 402 or 429, and install
+    the newest heights first. Installed bands load without a gateway restart.
+  - New gateway routes: `GET /ar-io/indexes` (the signed document),
+    `/ar-io/indexes/<name>/<band>/<file>` and the immutable
+    `/ar-io/indexes/blob/<sha256>`. The byte routes are rate limited and
+    priced with x402 like data egress, and signed with HTTPSIG. The errors these routes return (400, 402, 404,
+    416, 429, 503) are `Cache-Control: no-store`, so a caching proxy never
+    replays one. `/ar-io/info` advertises what is published.
+  - See `docs/index-swarm.md` (operators: checklists, lookup order, running
+    behind nginx) and `docs/index-publication.md` (the protocol).
+  - `/ar-io/peers` gains each peer's registry fields (wallet, observer key,
+    stake, status), which is what lets subscribers resolve publishers without
+    RPC.
+  - Built to take input from other gateways safely:
+    - the signature is domain-separated (`ar-io-index-publication/v1\n` before the canonical JSON);
+    - a publisher re-signs at once when its served document no longer verifies under its key (signed in the older format, or by a rotated-out observer key), instead of at the next refresh;
+    - documents are bounded in size and shape;
+    - band files are fetched only from the publication's origin (or `INDEX_SWARM_ALLOWED_FILE_ORIGINS`), and redirects are never followed;
+    - downloads stop at their signed size while streaming, and refuse compressed bodies;
+    - every CDB64 partition is walked and bounds-checked before a band installs, and the reader never trusts a length or pointer from the file;
+    - replacing a band never leaves a moment when lookups to it miss;
+    - one band id belongs to one publisher at a time.
+    - the closed tracker lists this node's own engine under its public host instead of a Docker address, never hands private addresses to peers on the internet, and can sit behind a load balancer (`INDEX_SWARM_TRACKER_TRUSTED_PROXIES`, `INDEX_SWARM_ENGINE_PUBLIC_HOST`);
+    - the tracker always lists the publisher's own engine, so a host firewall that refuses the engine's announce to itself does not hide the publisher; the default peer port is 6881, below the ephemeral range, and a short or empty engine password is refused (found by turbo-gateway's rollout);
+    - seeding is bounded by default: 10 MB/s (`INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC`) and 100 GB a UTC day (`INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES`), after which the engine is throttled to 1 KiB/s until the next day, so no peer can pull terabytes from a publisher;
+    - an hourly janitor removes engine torrents no state record claims (left by a state reset or a crash), after two sweeps agree;
+    - a subscriber keeps a band that an offered band supersedes until that band has installed, so a replacement that takes hours to download leaves no gap in coverage;
+    - a band republished with some files unchanged (a manifest edit to add `supersedes`, say) links the unchanged files from the installed copy and fetches only the rest; before, the whole band was fetched again;
+    - after the first request, the gateway rechecks the publication file every 5 s off the request path, so later index requests do not wait behind a filesystem call on a saturated libuv thread pool (seen on turbo-gateway as 15–30 s responses during cache sweeps); only the first request after a start waits for the file;
+
+- **Index bands over BitTorrent (compose profile `index-swarm-torrent`)** —
+  with a torrent engine configured (`INDEX_SWARM_ENGINE_AUTH`, which points
+  the sidecar at the compose engine), publishers
+  also offer every band as a deterministic hybrid v1/v2 torrent and seed it,
+  and subscribers fetch from peers first, turn on the publisher's metered
+  WebSeed only when peers stall, fall back to HTTP on any failure, and seed
+  every band they install. Off unless the engine runs; HTTP-only nodes are
+  unaffected.
+  - The engine is qBittorrent-nox 5.2.3, pinned by digest, on its own Docker
+    network shared only with the sidecar, so it cannot reach the gateway, the
+    observer or other services. It mounts the published and installed bands
+    read only and writes only to `swarm/`.
+  - A publisher runs a closed tracker that answers only for the bands it
+    offers, and seeds from hard links to its blobs, so a band rebuilt in
+    place is never served with bytes that fail their pieces.
+  - A subscriber checks every `.torrent` against the signed infohashes and
+    hands its engine only the info dictionary and trackers on public hosts:
+    nothing outside the info dictionary is signed. Every file is hashed again
+    before install. Downloads survive a restart without resetting their
+    timeout.
+  - New gateway routes: `/ar-io/indexes/torrents/<v1 infohash>.torrent` and the BEP 19
+    WebSeed `/ar-io/indexes/webseed/<torrent name>/<file>`, metered and
+    cached like the blob route.
+  - See `docs/index-swarm.md#torrent-engine`.
+
+- **`tools/index-swarm-setup` and `tools/index-swarm-status`** — set up
+  index sharing in one command and check it in another. Setup edits `.env`
+  idempotently (backing it up first): subscribes to a publisher, points the
+  gateway at the installed bands and fixes the root-TX lookup order,
+  generates the torrent engine's password, defaults the disk budget for
+  installed bands to 50 GiB when none is set (`--max-disk-gib` changes it,
+  also for an existing subscriber), and with `--restart` recreates only what
+  the changes need, by service name, with the running gateway's own compose
+  files. Status runs inside the sidecar and reports each check (publication
+  accepted, bands installed and loaded by the gateway, lookups reaching them,
+  disk budget, engine reachable from the internet, upload budget) with the fix
+  for anything wrong. Both need only Docker. To subscribe to turbo-gateway.com, today's
+  publisher:
+  `./tools/index-swarm-setup --subscribe 34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5 --torrent --restart`,
+  then open port 6881 (TCP and UDP). See `docs/index-swarm.md#quick-start`.
+
+- **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
+  item sizes for every data item in a list of root bundles, nested bundles
+  included, by reading only each bundle's item index and item headers through
+  a gateway's `/raw` range requests. Each item's header is decoded and its
+  signature hashed to confirm the ID, and a bundle whose items do not add up to
+  its size is rejected rather than indexed. Header reads are coalesced (bundles
+  of small items read in 1 MiB windows, bundles of large items a few KiB per
+  item), roots are scanned in parallel, and a progress file makes long runs
+  resumable. An optional details CSV records each item's signature type and
+  content type. An item with an unknown signature type is skipped with a
+  warning instead of failing its root, rows are staged in part files so memory
+  doesn't grow with a root's row count, requests are rate limited (10 per
+  second by default, `--requests-per-second`) with `429` responses retried
+  after their `Retry-After`, and IDs the gateway reports as data items are
+  refused.
+
+- **Item size in CDB64 root TX index values** — CDB64 values can now record
+  the total data item size (`s`, header + payload) alongside the two root
+  offsets. The generate tools accept it as an optional sixth CSV column,
+  `data_item_size`, and `export-cdb64-root-tx-index` writes it. An offset
+  without a size tells the gateway where an item starts but not where it ends,
+  so every CDB64 hit still searched the root bundle's header for the item: the
+  item count, the whole ID index, then the item header, each a separate range
+  read of the root bundle. With the size recorded, the gateway reads the item
+  header once at the recorded offset, checks that its signature hashes to the
+  requested ID and that the header ends at the recorded payload offset, and
+  serves the payload with the item's own content type. The payload goes
+  through the same signature verification as direct offset hints, and the
+  offsets are saved only once it verifies. Any mismatch, and any range
+  request, falls back to the bundle search. The key is optional and ignored by
+  readers that predate it, so existing indexes behave as before and new ones
+  stay readable by older gateways. A size inconsistent with its offsets is
+  ignored rather than invalidating the entry. Items located this way are
+  counted as `root_tx_local_resolve_total{outcome="index_offsets"}`.
+
+- **Peer-origin chunk modes (`CHUNK_PEER_ORIGIN_MODE`, default `off`).** A
+  chunk request forwarded by another AR.IO gateway (`X-AR-IO-Hops` of 1 or
+  more) can be answered from this gateway's own sources only. `enforce` uses
+  the local cache, the local index and operator storage such as S3, makes no
+  network requests for that peer, and answers 404 when none of them has the
+  chunk. `audit` changes nothing and records what `enforce` would have done in
+  `chunk_peer_origin_audit_total{boundary,bytes}`. `enforce` outcomes are
+  counted in `chunk_serve_local_only_total{result}`. An invalid value stops
+  startup. Requests from other clients are unaffected.
+
+- **Manifest resolutions are cached and stored.** Resolved manifest paths are
+  kept in an in-memory cache (`MANIFEST_RESOLUTION_CACHE_SIZE`, default 5000),
+  so each asset request against the same manifest no longer re-parses it. On a
+  7,784-path manifest a repeat resolution went from about 57 ms to under 1 ms.
+  A manifest's index and fallback are also stored in a new `data.db` table,
+  `manifest_resolutions`, so they survive restarts and can be served while the
+  manifest body is briefly unavailable. Only manifest bodies from trusted
+  sources are written to the table.
+
+- **x402 payment metrics.** `x402_payment_total{outcome,target}` records how
+  each payment attempt ended (for example `verify_failed`, `settle_failed`,
+  `settled`), and `x402_payment_settled_usdc_total{target}` records the USDC
+  settled. A payment that settles but then fails to grant access is counted as
+  `outcome="topup_failed"` and its USDC is still recorded. See
+  `docs/x402-and-rate-limiting.md`.
+
+- **Chunk POST failure reasons.** `arweave_chunk_post_total` has a `reason`
+  label: the peer's HTTP status when it answered, or `timeout`, `canceled` or
+  `network`; successful posts carry `200` (stored) or `303` (held in the
+  peer's disk pool) and `dry_run` when posting is simulated. Our own
+  `CHUNK_POST_ABORT_TIMEOUT_MS` deadline is now reported as a timeout (504)
+  rather than as the uploader cancelling (499).
+
+- **ArNS metrics.** `arns_cached_resolution_fallback_on_timeout_total` counts
+  requests answered from a cached (possibly stale) resolution because a fresh
+  one took longer than `ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS`.
+  `arns_resolution_duration_seconds` is added because `arns_resolution_time_ms`
+  has always recorded seconds; the old name still works but is deprecated.
+
+### Changed
+
+- **Default observer image bumped to `fe159f5a`** — `OBSERVER_IMAGE_TAG` moves
+  from `0e956b08` (2026-08-30, `@ar.io/sdk` 4.3.0-alpha.2) to the current
+  `ar-io-observer` build on `@ar.io/sdk` 4.5.0. Observing is unchanged:
+  `save_observations` did not change in the gateway registry's Wave 2 upgrade,
+  so gateways on the previous image still submit correctly. The embedded epoch
+  cranker (`ENABLE_EPOCH_CRANKING=true`) needs this image. Since Wave 2,
+  `create_epoch`, `finalize_gone` and `compound_delegation_rewards` take new
+  accounts, and the previous image's client fails on them. The cranker also
+  now finalizes departed gateways in the only window the program allows it
+  (between an epoch's distribution and the next epoch's creation), and claims
+  delegations off leaving and delegation-disabled gateways into each
+  delegate's withdrawal vault. The cranker wallet pays each vault's rent (at
+  most about 0.0029 SOL, which the delegate recovers), and the sweep pauses
+  while the wallet holds under 0.5 SOL. Operators who pin `OBSERVER_IMAGE_TAG`
+  in `.env` must update it there too, since that shadows the compose default
+  (ar-io/ar-io-observer#143).
+
+- **GraphQL runs on Apollo Server 5** (from `apollo-server-express` 3, which
+  has been end-of-life since October 2024). Queries, results, batching, GET
+  requests, CSRF behavior and the invalid-cursor error are unchanged. What
+  clients and operators can see:
+  - GraphQL responses now carry `Cache-Control: no-store`. A CDN or proxy
+    that cached GET `/graphql` responses stops caching them.
+  - Malformed requests (a missing or non-JSON body, an empty batch) still get
+    HTTP 400, but with a JSON `errors` body (`BAD_REQUEST`) instead of plain
+    text. An unknown or missing `operationName` now reports
+    `OPERATION_RESOLUTION_FAILURE` instead of `INTERNAL_SERVER_ERROR`.
+  - `GET /graphql` in a browser serves the Apollo Sandbox instead of GraphQL
+    Playground.
+  - New metric `graphql_http_batch_size`: operations per HTTP request.
+
+- **OpenAPI spec: current introduction, and the real version.** The spec's
+  front matter (what the gateway serves, how to verify responses with the
+  `X-AR-IO-*` trust headers and HTTP signatures, rate limits and x402, errors,
+  authentication) replaces text from the project's first release. `/openapi.json`
+  and `/api-docs` now report the running gateway's release as `info.version`,
+  instead of a fixed `0.0.1`. The spec also gains a relative `servers` entry,
+  so "Try it out" targets the gateway serving the page, and the current logo.
+
+- **`root_tx_lookup_total{has_offsets}` now means both root offsets came
+  back**, for every source. It used to also require `size` and `dataSize`. A
+  CDB64 index never returns `dataSize` (it returns `size` only when the entry
+  recorded one), so every index hit read `false`.
+  A new `has_size` label records whether the item size came back. Queries
+  filtering on `has_offsets="true"` will now count CDB64 hits, and any other
+  source's hits that carry offsets without a data size.
+
+- `TxChunksDataSource` now resolves a transaction's chunk-read geometry
+  (`data_root`, offset and size) from the local stable transactions index
+  before asking the trusted node, falling back to the chain on a miss. Every
+  cold range read previously cost two trusted-node requests, which share a
+  5 req/s budget with the transaction offset importer, so a busy gateway spent
+  most of that budget re-reading geometry it already had indexed and starved
+  the importer. A read that fails using local geometry re-checks it against
+  the chain, at most once per transaction per hour, and retries only if the
+  two disagree. Set `TX_CHUNKS_GEOMETRY_DB_ENABLED=false` to restore the
+  previous behavior; `TX_CHUNKS_GEOMETRY_CACHE_SIZE` bounds the in-memory
+  cache of resolved geometry.
+
+- **Chunk retrieval asks Arweave nodes before AR.IO peers.** The defaults of
+  `CHUNK_DATA_RETRIEVAL_ORDER` and `CHUNK_METADATA_RETRIEVAL_ORDER` are now
+  `arweave-network,ar-io-network` (were `ar-io-network,arweave-network`).
+  Peers only hold what they happened to cache, so asking them first was mostly
+  misses. Peers stay as the fallback. This moves first requests onto Arweave
+  nodes, which on a gateway that knows few nodes means mostly
+  `TRUSTED_NODE_URL`. Set the old value to keep the previous order.
+
+- **Forwarded chunk requests have a shorter deadline**
+  (`CHUNK_PEER_ORIGIN_DEADLINE_MS`, default 3000). A request from another
+  gateway used the general `CHUNK_SERVE_DEADLINE_MS` (12000), but the asking
+  gateway gives up after one second, so later work reached no one. Requests
+  from other clients are unchanged. `0` restores the general deadline. Hits
+  are counted in `chunk_peer_origin_deadline_exceeded_total`.
+
+- **The contiguous cache evictor deletes fewer files at once by default.** It
+  deleted 50 files at a time and up to 50 batches per sweep, which could fill
+  the libuv thread pool and stall every other file operation.
+  `CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY` now defaults to
+  `UV_THREADPOOL_SIZE / 8` (at least 1, so 1 on a default thread pool of 4),
+  and `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP` (default 50) makes
+  the sweep bound configurable. A gateway whose cache grows faster than it is
+  evicted can raise the concurrency.
+
+### Fixed
+
+- **Background data verification no longer scans the whole `data.db`
+  `contiguous_data_ids` table.**
+  - Marking a root transaction verified (`WHERE id = @id OR
+    root_transaction_id = @id`) had no index on `root_transaction_id`, so every
+    verification read the whole table while holding the single `data.db`
+    writer. On a gateway with 99M rows each one took about 10 minutes, the
+    writer spent half its time on them, and other `data.db` writes queued
+    behind them (chunk placement confirmations waited about 3 minutes each).
+    A new partial index, `contiguous_data_ids_root_transaction_id_idx`, makes
+    it two index lookups.
+  - Selecting the next batch to verify wrapped `verification_priority` in
+    `COALESCE`, so SQLite walked every unverified row whenever fewer than 1000
+    qualified. It now seeks to the qualifying range: 229 s became 0.02 s on
+    the same gateway.
+  - A `MIN_DATA_VERIFICATION_PRIORITY` of 0 or below still counts
+    unprioritized data as priority 0 and verifies everything.
+  - **Upgrade note:** the migration builds the new index at startup. On a
+    72 GB `data.db` (99M rows) on a SATA SSD it took about 11.5 minutes and
+    added 3.8 GiB, so the gateway starts that much later on the first boot
+    after upgrading.
+- An invalid `after` cursor on GraphQL `transactions` or `blocks` now returns
+  `GRAPHQL_VALIDATION_FAILED` on gateways that answer from SQLite. The cursor
+  was decoded inside the SQLite worker thread, which re-wraps any error as
+  `Error in StandaloneSqlite worker` (`INTERNAL_SERVER_ERROR`), so only
+  ClickHouse-backed gateways returned the validation error. The cursor is now
+  checked before the query reaches the worker.
+
+- **Client addresses from proxy headers could be forged** — the gateway took
+  the leftmost `X-Forwarded-For` address (or `X-Real-IP`) as the client,
+  whoever sent it, and exempted a request when *any* address in its headers
+  was allowlisted. A client could claim an allowlisted address and skip the
+  rate limit and x402 payment, or claim a new address on each request for a
+  fresh rate-limit bucket (and free allowance) every time. Proxy headers are
+  now believed only from proxies in the new `TRUSTED_PROXIES` (default:
+  loopback, private, carrier-grade NAT and link-local addresses, where nginx
+  normally sits); behind one, the client is the nearest `X-Forwarded-For` hop
+  that is not a trusted proxy. Allowlists (`RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`,
+  `CHUNK_INGEST_CACHE_ALLOWLIST`) are checked against that address only.
+  **Behind a CDN or a load balancer on public addresses, add its ranges to
+  `TRUSTED_PROXIES`**, or every client behind it shares its address; the same
+  goes for nginx on a different public host than Envoy. Envoy now appends the
+  address that connected to it to `X-Forwarded-For` (`use_remote_address`,
+  keeping the downstream `X-Forwarded-Proto`), so a client reaching port 3000
+  directly cannot choose its address either: **upgrade the Envoy image with
+  core**. The index-swarm tracker uses the same code for
+  `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`.
+
+- GraphQL no longer fails with HTTP 500 ("Cannot execute GraphQL operations
+  after the server has stopped") while the gateway shuts down. Apollo's own
+  signal handler used to stop GraphQL while the listener was still accepting
+  requests; the listener now closes first. Under load, a `docker stop` of the
+  previous release answered about 27,000 requests with that error.
+
+- `scripts/clickhouse-import` defines its functions again when sourced. The
+  guard that skips the CLI returned before any function was defined, so tests
+  that source it for `migrate_staging_to_final` failed with "command not
+  found". `scripts/tests/parquet/test-clickhouse-ttl-rules` also placed `FINAL`
+  after `WHERE`, a syntax error; it now passes end to end.
+
+- The `tx-data` retrieval source no longer treats an unmined transaction as
+  data. A node answers `202 Pending` for a transaction it has not mined, and
+  that text was decoded as the transaction's data with a `NaN` size, which then
+  broke x402 pricing, let the request skip rate-limit token accounting, and
+  made a metrics call throw from inside the stream's `end` handler. The source
+  now accepts only `200` answers, requires a whole-number `data_size`, and
+  rejects data whose length differs from it, so the request moves on to the
+  next source.
+- The trusted-gateways root TX lookup no longer records a 1-byte payload size
+  when a gateway rejects its HEAD request. The lookup then falls back to a
+  `Range: bytes=0-0` GET, whose `Content-Length` is 1; that value was taken as
+  the item's payload size, so the item could be served, cached and recorded as
+  a single byte. The size now comes from the `Content-Range` total, and is left
+  unknown when the response has none, in which case the item is located by
+  searching its bundle instead.
+- Payloads located by a direct offset hint (`X-AR-IO-Root-Item-Offset` +
+  `X-AR-IO-Root-Item-Size`) are now checked against the data item's signature
+  before they are served in full, cached, or have their offsets saved.
+  Previously the hinted size was taken as given, so an incorrect size could
+  frame a truncated or over-long payload under that ID. Range requests carrying
+  these hints now resolve through the bundle's own index, and the two hint
+  headers are no longer forwarded to other gateways; root transaction and path
+  hints are unchanged. Outcomes are counted in
+  `data_item_signature_verification_total`.
+
+- Stopped GraphQL returning every tag twice for a recently uploaded data item.
+  Optimistically indexed data items are written with a NULL
+  `root_transaction_id`, which is part of the `new_data_item_tags` primary key.
+  SQLite treats those NULLs as distinct, so the later unbundle write added a
+  second tag set instead of replacing the first, and the tag lookup returned
+  both. The unbundle path now removes the optimistic tag rows, and the
+  optimistic path replaces its own rows rather than stacking a second copy.
+
+- **Data items were served with their bundle's content type.** When an item's
+  own content type was unknown, the gateway reported the bundle's
+  `application/octet-stream`, so HTML pages downloaded instead of rendering.
+  That type was then stored against the data hash and kept for the item, and
+  for any byte-identical re-upload, for good. Now:
+  - an item's content type is left unset rather than taken from its bundle;
+  - a stored `application/octet-stream` is replaced once a real content type
+    is known (never the reverse);
+  - the GraphQL root TX lookup reads the `Content-Type` tag when an
+    indexer's `data.type` is null;
+  - an incomplete in-memory attributes entry expires instead of hiding the
+    stored content type until restart.
+
+- **Another item's bytes could be served under the requested ID** (#937). An
+  item signed the same way can exist in several bundles, and a stored location
+  or a root TX index result could pair one copy's root with another copy's
+  offset. Before reading from such a location, the gateway now reads the item
+  header there and checks that its signature matches the requested ID. A
+  location that fails is not used, and index offsets are saved only after they
+  pass. Outcomes are counted in `data_item_location_check_total{source,result}`.
+
+- **Requests over their rate limit could be served free** when their x402 price
+  could not be quoted. Prices were passed to x402 as a 3-decimal dollar
+  string, so any price under $0.0005 became `$0.000`, which x402 rejects (at
+  $0.045/GiB with a $0.0001 minimum, every item under about 12 MB), and other
+  prices could come out as fractional amounts no client can pay. Prices are now computed in
+  whole atomic units of the asset, and a price that still cannot be quoted
+  gets a 429 instead of free access. `/ar-io/info` also advertised any
+  per-byte price below 1e-10 USDC as `0`; it now shows the exact value.
+
+- **HTTP signatures now cover every `X-ArNS-*` header.** Five
+  (`X-ArNS-Basename`, `-Record`, `-Resolved-At`, `-Undername-Limit`,
+  `-Record-Index`) were sent unsigned on signed ArNS responses.
+
+- **A negative GraphQL `first` removed the page limit.** `transactions(first:
+  -5)` ran an unbounded query. `first` is now clamped to at least 1.
+
+- **The gateway could hang at startup with no HTTP listener.** An error thrown
+  by a startup dependency before the listener was bound was logged and
+  swallowed, leaving the indexing workers running and nothing serving (on one
+  gateway, 26 hours after ClickHouse was unreachable at boot). The process now
+  exits so its restart policy retries. `clickhouse` and `litestream` also get
+  `restart: unless-stopped`; they were the only compose services without it,
+  so they stayed down after a host reboot.
+
+- Malformed or oversized request bodies are answered with their 400 or 413
+  instead of a logged 500. On `/graphql` the reply uses GraphQL's error shape
+  (`BAD_REQUEST`).
+
+- **The chunk eviction index missed chunks cached while serving**, so the
+  evictor had almost nothing to delete and the chunk cache was reclaimed only
+  by the filesystem cleanup worker. Cached chunks are now indexed. The evictor
+  warns when the index tracks too little of the cache to reach its target,
+  and `chunk_cache_index_hook_errors_total{hook}` counts failed index writes.
+  Chunks cached before the upgrade need the one-off backfill described in
+  `docs/cache-cleanup.md`.
+
+- **Chunk metadata requests to peers were doubled** when a peer refused a HEAD.
+  Any non-2xx HEAD was repeated as a GET, which returns the same 404, 429 or
+  5xx. The GET fallback now runs only when HEAD threw, came back without the
+  chunk headers, or answered 400, 403, 405 or 501. Refusals are counted as
+  `peer_refused` in `ario_chunk_metadata_anchor_total`. A chunk fetch that
+  another source cancelled internally now answers 404, like a timeout, instead
+  of 502.
+
+- The header-only `Range: bytes=0-0` fallback used for root TX and chunk
+  metadata lookups no longer buffers a whole response in memory when a peer
+  ignores the range.
+
+- The peer list is kept when a registry refresh fails. A failed read used to
+  replace it with whatever had been fetched, often nothing, so peer retrieval
+  failed until the next refresh up to an hour later.
+
+- Manifest index precedence is deterministic: `index.id` wins over
+  `index.path` whatever the JSON key order, so gateways agree on the index.
+  Entries whose ID is not a valid 43-character ID are ignored.
+
+- CDB64 directory sources: every configured directory is watched, not just
+  the first; a directory missing at startup is loaded once it appears instead
+  of never; and a replaced or retired index is closed only after the lookups
+  already inside it finish, so they no longer miss.
+
+- `export-sqlite-to-cdb64` and the other CDB64 generate tools no longer grow
+  memory without bound (about 840 MiB per million rows), no longer hang when
+  a partition stream closes during backpressure, and clean up their temporary
+  files when a write fails instead of crashing.
+
 ## [Release 83] - 2026-09-01
 
 This is a **recommended release** focused on **data-retrieval correctness,

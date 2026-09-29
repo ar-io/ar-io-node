@@ -232,6 +232,85 @@ the partitions and sources of a partitioned CDB64 index.
 be loaded from: local file, local directory, HTTP URL, Arweave transaction, or
 Arweave byte-range.
 
+## Index Distribution
+
+<a id="index-publication"></a> **Index Publication** — The signed JSON document
+a gateway serves at `/ar-io/indexes` listing the index artifacts it publishes,
+their bands, and where each band's files can be fetched. Signed with the
+gateway's Ed25519 observer key so it verifies against the publisher's
+registered `observerAddress` regardless of which mirror or transport delivered
+it. Distinct from an [Index Manifest](#index-manifest), which describes the
+partitions inside one CDB64 index. Specified in
+[index-publication.md](index-publication.md).
+
+<a id="webseed"></a> **WebSeed** — An HTTP URL (BEP 19) that serves the
+same bytes as the swarm, so a download completes even with no peers. On a
+gateway it is `/ar-io/indexes/webseed/`, rate limited and x402-priced while
+the swarm itself is free. Index torrents do not list it: subscribers add a
+publisher's WebSeed themselves, and only when peers stall, since engines
+otherwise treat it as one more peer and draw about half a band from it.
+
+<a id="torrent-name"></a> **Torrent Name** — The name inside a band's
+torrent: the first 16 hex characters of SHA-256 over one line per file,
+`<name>\0<size>\0<sha256 hex>\n`, with files in bytewise name order. Derived from content rather than the band id so
+that publishers of the same bytes share one infohash, and so that the
+WebSeed address `<torrent name>/<file>` cannot change meaning.
+
+<a id="band"></a> **Band** — One immutable unit of a published index, normally
+covering a block height range. Bands let a subscriber re-fetch only what
+changed: older height bands stay put while a rolling tip band is rebuilt on
+the publisher's cadence. A band's identity is the set of its file digests.
+
+<a id="artifact-kind"></a> **Artifact Kind** — The `kind` field of a published
+index, selecting the plugin that validates and installs its bands
+(`cdb64-root-tx` first). Keeps the distribution path independent of what is
+being distributed.
+
+<a id="publication-sequence"></a> **Publication Sequence** — A monotonic
+counter per publisher, paired with the previous document's SHA-256. A
+subscriber refuses a lower sequence than the highest it has *seen*, whether or
+not that newer document's bands installed, so a cached or mirrored older
+document cannot roll it back. An equal sequence is accepted:
+it is what an unchanged publisher serves on every poll.
+
+<a id="collection-source"></a> **Collection Source** — A configured CDB64
+source that is a directory *of* indexes rather than one index: each
+subdirectory holding a `manifest.json` becomes its own reader, added and
+removed at runtime without a gateway restart.
+
+<a id="index-swarm"></a> **Index Swarm Sidecar** — The optional `index-swarm`
+compose service, running the core image with its own entrypoint, that
+publishes this gateway's bands and subscribes to other gateways'. It never
+touches the gateway's databases or the chain. See
+[index-swarm.md](index-swarm.md).
+
+<a id="publisher"></a> **Publisher** — A registered gateway serving a signed
+[Index Publication](#index-publication). Only the node holding the registered
+observer key can sign one, which is why a multi-node publisher sends
+`/ar-io/indexes*` to that node.
+
+<a id="subscriber"></a> **Subscriber** — A gateway whose sidecar follows one or
+more publishers, identified by wallet: it verifies each document against the
+registry, downloads bands by digest, and installs them where its gateway's
+[Collection Source](#collection-source) loads them.
+
+<a id="blob-route"></a> **Blob Route** — `GET /ar-io/indexes/blob/<sha256>`,
+which serves a published file by its digest. The address cannot change
+meaning, so responses are immutable and safe for any cache to keep; the
+publisher serves it from a hard link that pins the exact bytes it hashed.
+
+<a id="install-retire"></a> **Install / Retire** — A subscriber *installs* a
+band by renaming a fully downloaded and verified directory into
+`installed/<index>/`, where the gateway picks it up; it *retires* one the
+publisher no longer offers by removing its manifest (the gateway stops using
+it) and deleting the directory after the
+[supersede grace period](#supersede).
+
+<a id="supersede"></a> **Supersede** — A band's `metadata.supersedes` names the
+band or bands it replaces. The publisher stops offering those at once and
+deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`; subscribers retire
+them on the same grace, so a lookup in flight never loses its band.
+
 ## Data Storage Architecture
 
 <a id="age-floor"></a> **Age Floor** - The minimum age cached data must reach
@@ -301,6 +380,24 @@ target rather than evicting a fixed number of coldest rows — and it **must**
 honour an age floor). Contrast the
 [filesystem-walk reclaimer](#filesystem-walk-reclaimer).
 
+<a id="original-source-content-type"></a> **Original Source Content Type** - The
+`contiguous_data.original_source_content_type` column: the content type a
+response is served with when the item is not in the local index.
+`getDataAttributes` prefers the tags-derived content type from
+`stable_transactions` / `new_transactions` / `bundles.*_data_items` and falls
+back to this column, so for any data item whose parent [bundle](#bundle) this
+gateway has never unbundled, this column _is_ the content type. Two properties
+make it easy to get wrong. It is keyed by the **data hash**, not the data item
+ID, so it is shared by every byte-identical upload — re-uploading a file cannot
+give it a different content type here. And it only ever transitions from the
+`application/octet-stream` placeholder (or NULL) to a real type, never between
+two real types, so two byte-identical items with conflicting `Content-Type` tags
+cannot flap the row. The placeholder is what a
+[bundle](#bundle)-range read reports — an ANS-104 bundle's own content type —
+so a data item served without its tags ever being read would otherwise be typed
+as the envelope around it. Unbundling the parent bundle
+(`POST /ar-io/admin/queue-bundle`) takes precedence over this column entirely.
+
 ## Data Verification
 
 **Data Verification** - The process of cryptographically verifying data
@@ -350,6 +447,18 @@ fallback path handling for 404 errors.
 
 **Manifest** - A special JSON document that maps paths to [item IDs](#item-id),
 enabling directory-like navigation of Arweave data.
+
+<a id="manifest-resolution-index"></a> **Manifest Resolution Index** - A table
+in `data.db` (`manifest_resolutions`) recording the `index`/`fallback` item id a
+manifest transaction resolves its root to, so a root request can be answered
+with one primary-key lookup instead of re-fetching and re-parsing the manifest
+body — including after a restart, or when the body is no longer retrievable.
+Populated lazily on request, and only from bytes that arrived from a trusted
+source: a row has no TTL and no invalidation path, so an untrusted body would
+pin the wrong id permanently. A manifest transaction is immutable, so a stored
+resolution never needs invalidating. Sub-paths are not stored (the table holds
+no path map) and are served from an in-memory LRU sized by
+`MANIFEST_RESOLUTION_CACHE_SIZE`.
 
 **Sandbox** - A security mechanism that redirects data access to unique
 subdomains based on the [item ID](#item-id). Each item gets its own
@@ -450,10 +559,18 @@ receiving side can skip the resolver work it would otherwise do. Three kinds
 exist today: a root [transaction ID](#transaction) (`X-AR-IO-Root-Transaction-Id`),
 a parent path of intermediate bundle IDs (`X-AR-IO-Root-Path`), and a byte
 range within the root tx pointing at the [data item](#data-item)
-(`X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size`). Hints are always
-re-validated by the receiving gateway against parsed-header IDs before serving
-bytes — a wrong hint produces a fallthrough, never wrong bytes — so emitting
-one adds no trust surface.
+(`X-AR-IO-Root-Item-Offset` + `X-AR-IO-Root-Item-Size`).
+
+Root and path hints only choose which bundle to read; the item's offset and
+size still come from that bundle's own index. A wrong one therefore produces a
+fallthrough, and gateways forward them to each other.
+
+A byte-range hint's size cannot be checked against a bundle index, so it is
+handled differently:
+
+- It is honored only for requests without a `Range` header.
+- The payload is served only if the item's signature verifies over it.
+- It is not forwarded to other gateways.
 
 **Naming-symmetry note**: response headers historically used the longer pair
 `X-AR-IO-Root-Data-Item-Offset` / `X-AR-IO-Root-Data-Offset`, while the

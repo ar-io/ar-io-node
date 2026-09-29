@@ -1,4 +1,18 @@
 -- insertDataHash
+-- `original_source_content_type` is keyed by the data hash, so it is shared by
+-- every byte-identical upload and, for items this gateway has not indexed, it
+-- is the only content type `selectDataAttributes` can return. Under a plain
+-- DO NOTHING the first write was permanent: an item served once with the
+-- placeholder `application/octet-stream` (the ANS-104 envelope's own type,
+-- which a bundle-range read reports when the item's tags were never read) kept
+-- downloading instead of rendering forever, and re-uploading the file could not
+-- clear it because the new item hashes to the same row.
+--
+-- So allow exactly one transition — placeholder to real value — and never the
+-- reverse. Genuinely binary data keeps its octet-stream type because the only
+-- content type on offer for it is also octet-stream; nothing here can overwrite
+-- a specific type with another specific type, so two byte-identical items with
+-- conflicting `Content-Type` tags cannot flap the row between them.
 INSERT INTO contiguous_data (
   hash,
   data_size,
@@ -11,7 +25,33 @@ INSERT INTO contiguous_data (
   :original_source_content_type,
   :indexed_at,
   :cached_at
-) ON CONFLICT DO NOTHING
+--
+-- The placeholder is matched as a whole media type, not as a prefix: bare, or
+-- followed by parameters after a `;` or whitespace. A prefix match would also
+-- catch distinct specific types that merely start with the same characters —
+-- `application/octet-stream+json` is a structured-suffix type of its own, and
+-- treating it as the placeholder would let a later write replace it.
+) ON CONFLICT(hash) DO UPDATE SET
+  original_source_content_type = excluded.original_source_content_type
+WHERE
+  excluded.original_source_content_type IS NOT NULL
+  AND NOT (
+    lower(trim(excluded.original_source_content_type))
+      = 'application/octet-stream'
+    OR lower(trim(excluded.original_source_content_type))
+      LIKE 'application/octet-stream;%'
+    OR lower(trim(excluded.original_source_content_type))
+      LIKE 'application/octet-stream %'
+  )
+  AND (
+    contiguous_data.original_source_content_type IS NULL
+    OR lower(trim(contiguous_data.original_source_content_type))
+      = 'application/octet-stream'
+    OR lower(trim(contiguous_data.original_source_content_type))
+      LIKE 'application/octet-stream;%'
+    OR lower(trim(contiguous_data.original_source_content_type))
+      LIKE 'application/octet-stream %'
+  )
 
 -- insertDataId
 WITH ParentStatus AS (
