@@ -152,6 +152,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   ignored rather than invalidating the entry. Items located this way are
   counted as `root_tx_local_resolve_total{outcome="index_offsets"}`.
 
+- **Peer-origin chunk modes (`CHUNK_PEER_ORIGIN_MODE`, default `off`).** A
+  chunk request forwarded by another AR.IO gateway (`X-AR-IO-Hops` of 1 or
+  more) can be answered from this gateway's own sources only. `enforce` uses
+  the local cache, the local index and operator storage such as S3, makes no
+  network requests for that peer, and answers 404 when none of them has the
+  chunk. `audit` changes nothing and records what `enforce` would have done in
+  `chunk_peer_origin_audit_total{boundary,bytes}`. `enforce` outcomes are
+  counted in `chunk_serve_local_only_total{result}`. An invalid value stops
+  startup. Requests from other clients are unaffected.
+
+- **Manifest resolutions are cached and stored.** Resolved manifest paths are
+  kept in an in-memory cache (`MANIFEST_RESOLUTION_CACHE_SIZE`, default 5000),
+  so each asset request against the same manifest no longer re-parses it. On a
+  7,784-path manifest a repeat resolution went from about 57 ms to under 1 ms.
+  A manifest's index and fallback are also stored in a new `data.db` table,
+  `manifest_resolutions`, so they survive restarts and can be served while the
+  manifest body is briefly unavailable. Only manifest bodies from trusted
+  sources are written to the table.
+
+- **x402 payment metrics.** `x402_payment_total{outcome,target}` records how
+  each payment attempt ended (for example `verify_failed`, `settle_failed`,
+  `settled`), and `x402_payment_settled_usdc_total{target}` records the USDC
+  settled. A payment that settles but then fails to grant access is counted as
+  `outcome="topup_failed"` and its USDC is still recorded. See
+  `docs/x402-and-rate-limiting.md`.
+
+- **Chunk POST failure reasons.** `arweave_chunk_post_total` has a `reason`
+  label: the peer's HTTP status when it answered, or `timeout`, `canceled` or
+  `network`; successful posts carry `200` (stored) or `303` (held in the
+  peer's disk pool) and `dry_run` when posting is simulated. Our own
+  `CHUNK_POST_ABORT_TIMEOUT_MS` deadline is now reported as a timeout (504)
+  rather than as the uploader cancelling (499).
+
+- **ArNS metrics.** `arns_cached_resolution_fallback_on_timeout_total` counts
+  requests answered from a cached (possibly stale) resolution because a fresh
+  one took longer than `ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS`.
+  `arns_resolution_duration_seconds` is added because `arns_resolution_time_ms`
+  has always recorded seconds; the old name still works but is deprecated.
+
 ### Changed
 
 - **Default observer image bumped to `fe159f5a`** — `OBSERVER_IMAGE_TAG` moves
@@ -212,6 +251,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   two disagree. Set `TX_CHUNKS_GEOMETRY_DB_ENABLED=false` to restore the
   previous behavior; `TX_CHUNKS_GEOMETRY_CACHE_SIZE` bounds the in-memory
   cache of resolved geometry.
+
+- **Chunk retrieval asks Arweave nodes before AR.IO peers.** The defaults of
+  `CHUNK_DATA_RETRIEVAL_ORDER` and `CHUNK_METADATA_RETRIEVAL_ORDER` are now
+  `arweave-network,ar-io-network` (were `ar-io-network,arweave-network`).
+  Peers only hold what they happened to cache, so asking them first was mostly
+  misses. Peers stay as the fallback. This moves first requests onto Arweave
+  nodes, which on a gateway that knows few nodes means mostly
+  `TRUSTED_NODE_URL`. Set the old value to keep the previous order.
+
+- **Forwarded chunk requests have a shorter deadline**
+  (`CHUNK_PEER_ORIGIN_DEADLINE_MS`, default 3000). A request from another
+  gateway used the general `CHUNK_SERVE_DEADLINE_MS` (12000), but the asking
+  gateway gives up after one second, so later work reached no one. Requests
+  from other clients are unchanged. `0` restores the general deadline. Hits
+  are counted in `chunk_peer_origin_deadline_exceeded_total`.
+
+- **The contiguous cache evictor deletes fewer files at once by default.** It
+  deleted 50 files at a time and up to 50 batches per sweep, which could fill
+  the libuv thread pool and stall every other file operation.
+  `CONTIGUOUS_DATA_CACHE_INDEX_UNLINK_CONCURRENCY` now defaults to
+  `UV_THREADPOOL_SIZE / 8` (at least 1, so 1 on a default thread pool of 4),
+  and `CONTIGUOUS_DATA_CACHE_INDEX_MAX_BATCHES_PER_SWEEP` (default 50) makes
+  the sweep bound configurable. A gateway whose cache grows faster than it is
+  evicted can raise the concurrency.
 
 ### Fixed
 
@@ -306,6 +369,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   second tag set instead of replacing the first, and the tag lookup returned
   both. The unbundle path now removes the optimistic tag rows, and the
   optimistic path replaces its own rows rather than stacking a second copy.
+
+- **Data items were served with their bundle's content type.** When an item's
+  own content type was unknown, the gateway reported the bundle's
+  `application/octet-stream`, so HTML pages downloaded instead of rendering.
+  That type was then stored against the data hash and kept for the item, and
+  for any byte-identical re-upload, for good. Now:
+  - an item's content type is left unset rather than taken from its bundle;
+  - a stored `application/octet-stream` is replaced once a real content type
+    is known (never the reverse);
+  - the GraphQL root TX lookup reads the `Content-Type` tag when an
+    indexer's `data.type` is null;
+  - an incomplete in-memory attributes entry expires instead of hiding the
+    stored content type until restart.
+
+- **Another item's bytes could be served under the requested ID** (#937). An
+  item signed the same way can exist in several bundles, and a stored location
+  or a root TX index result could pair one copy's root with another copy's
+  offset. Before reading from such a location, the gateway now reads the item
+  header there and checks that its signature matches the requested ID. A
+  location that fails is not used, and index offsets are saved only after they
+  pass. Outcomes are counted in `data_item_location_check_total{source,result}`.
+
+- **Requests over their rate limit could be served free** when their x402 price
+  could not be quoted. Prices were passed to x402 as a 3-decimal dollar
+  string, so any price under $0.0005 became `$0.000`, which x402 rejects (at
+  $0.045/GiB with a $0.0001 minimum, every item under about 12 MB), and other
+  prices could come out as fractional amounts no client can pay. Prices are now computed in
+  whole atomic units of the asset, and a price that still cannot be quoted
+  gets a 429 instead of free access. `/ar-io/info` also advertised any
+  per-byte price below 1e-10 USDC as `0`; it now shows the exact value.
+
+- **HTTP signatures now cover every `X-ArNS-*` header.** Five
+  (`X-ArNS-Basename`, `-Record`, `-Resolved-At`, `-Undername-Limit`,
+  `-Record-Index`) were sent unsigned on signed ArNS responses.
+
+- **A negative GraphQL `first` removed the page limit.** `transactions(first:
+  -5)` ran an unbounded query. `first` is now clamped to at least 1.
+
+- **The gateway could hang at startup with no HTTP listener.** An error thrown
+  by a startup dependency before the listener was bound was logged and
+  swallowed, leaving the indexing workers running and nothing serving (on one
+  gateway, 26 hours after ClickHouse was unreachable at boot). The process now
+  exits so its restart policy retries. `clickhouse` and `litestream` also get
+  `restart: unless-stopped`; they were the only compose services without it,
+  so they stayed down after a host reboot.
+
+- Malformed or oversized request bodies are answered with their 400 or 413
+  instead of a logged 500. On `/graphql` the reply uses GraphQL's error shape
+  (`BAD_REQUEST`).
+
+- **The chunk eviction index missed chunks cached while serving**, so the
+  evictor had almost nothing to delete and the chunk cache was reclaimed only
+  by the filesystem cleanup worker. Cached chunks are now indexed. The evictor
+  warns when the index tracks too little of the cache to reach its target,
+  and `chunk_cache_index_hook_errors_total{hook}` counts failed index writes.
+  Chunks cached before the upgrade need the one-off backfill described in
+  `docs/cache-cleanup.md`.
+
+- **Chunk metadata requests to peers were doubled** when a peer refused a HEAD.
+  Any non-2xx HEAD was repeated as a GET, which returns the same 404, 429 or
+  5xx. The GET fallback now runs only when HEAD threw, came back without the
+  chunk headers, or answered 400, 403, 405 or 501. Refusals are counted as
+  `peer_refused` in `ario_chunk_metadata_anchor_total`. A chunk fetch that
+  another source cancelled internally now answers 404, like a timeout, instead
+  of 502.
+
+- The header-only `Range: bytes=0-0` fallback used for root TX and chunk
+  metadata lookups no longer buffers a whole response in memory when a peer
+  ignores the range.
+
+- The peer list is kept when a registry refresh fails. A failed read used to
+  replace it with whatever had been fetched, often nothing, so peer retrieval
+  failed until the next refresh up to an hour later.
+
+- Manifest index precedence is deterministic: `index.id` wins over
+  `index.path` whatever the JSON key order, so gateways agree on the index.
+  Entries whose ID is not a valid 43-character ID are ignored.
+
+- CDB64 directory sources: every configured directory is watched, not just
+  the first; a directory missing at startup is loaded once it appears instead
+  of never; and a replaced or retired index is closed only after the lookups
+  already inside it finish, so they no longer miss.
+
+- `export-sqlite-to-cdb64` and the other CDB64 generate tools no longer grow
+  memory without bound (about 840 MiB per million rows), no longer hang when
+  a partition stream closes during backpressure, and clean up their temporary
+  files when a write fails instead of crashing.
 
 ## [Release 83] - 2026-09-01
 
