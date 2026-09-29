@@ -15,16 +15,23 @@ Person(user, "End User")
 Component(arweave, "Arweave Blockweave")
 Component(network, "AR.IO Network")
 
+Component(peers, "Other Gateways and BitTorrent Peers", "Index Sharing (optional)")
+
 System_Boundary(ar-io, "AR.IO Gateway"){
     Component(core, "AR.IO Core Service")
     Component(envoy, "Envoy Service")
     Component(observer, "Observer Service")
+    ContainerDb(redis, "Redis", "Chain and ArNS cache")
+    ContainerDb(clickhouse, "ClickHouse", "Optional: stable GraphQL history")
+    Component(sidecar, "Index Swarm Sidecar", "Optional: publishes and subscribes to signed indexes")
+    Component(engine, "Torrent Engine", "Optional: moves index bands peer to peer")
 
     ContainerDb(chunks, "Chunk data")
     ContainerDb(headers, "Header Data")
     ContainerDb(contiguous, "Contiguous Data")
     ContainerDb(reports, "Observer Reports")
-    ContainerDb(index, "Chain and Bundle Index")
+    ContainerDb(index, "Chain and Bundle Index", "SQLite: core, data, bundles, moderation, chunks")
+    ContainerDb(indexes, "Shared Indexes", "data/indexes: published and installed CDB64 bands")
 }
 
 ' Relationships
@@ -38,8 +45,23 @@ Rel(core, chunks, "Saves chunked data")
 Rel(core, headers, "Saves header data")
 Rel(core, contiguous, "Saves contiguous data")
 
+Rel(core, redis, "Caches chain data and ArNS resolutions")
+Rel(core, clickhouse, "Streams stable history to it and queries it for GraphQL")
+Rel(core, indexes, "Serves published indexes and loads installed ones", "read only")
+
+Rel(sidecar, indexes, "Signs and writes published indexes, verifies and installs others")
+Rel(sidecar, core, "Reads the gateway registry", "/ar-io/peers")
+Rel(sidecar, peers, "Fetches other gateways' signed indexes", "HTTPS")
+Rel(sidecar, engine, "Drives over its Web API")
+BiRel(engine, peers, "Exchanges index pieces", "BitTorrent")
+
 Rel(observer, reports, "saves observer reports")
-Rel(observer, network, "Checks the ability of other gateways in the AR.IO Network to resolve ArNS names", "HTTPS")
+Rel(observer, network, "Checks other gateways' ArNS resolution and data, and submits observations", "HTTPS")
+
+' Layout hints: keep the index-sharing pieces together on the left
+Lay_Right(sidecar, observer)
+Lay_Down(sidecar, engine)
+Lay_Left(indexes, chunks)
 
 ' Legend
 SHOW_LEGEND()

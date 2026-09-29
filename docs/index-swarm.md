@@ -161,6 +161,67 @@ engine services.
 | Never touches | The gateway's databases, its process, or the chain: it makes no RPC calls. It signs with the observer key, read only, and never writes key material. |
 | If it dies | Nothing degrades. Bands already installed keep serving; the gateway does not depend on the sidecar being up. |
 
+### On one node
+
+```mermaid
+flowchart LR
+  net(("Clients and<br/>other gateways"))
+  peers(("BitTorrent<br/>peers"))
+
+  subgraph host["One gateway host"]
+    envoy["Envoy :3000"]
+    core["core<br/>(the gateway)"]
+    sidecar["index-swarm sidecar<br/>publisher · subscriber<br/>tracker :6969"]
+    engine["torrent engine :6881<br/>(own Docker network)"]
+    dir[("data/indexes")]
+  end
+
+  net -->|"GET /ar-io/indexes"| envoy --> core
+  core -->|"read only"| dir
+  sidecar -->|"publishes, installs"| dir
+  engine -->|"writes swarm/ only"| dir
+  sidecar -->|"registry (/ar-io/peers)"| core
+  sidecar -->|"Web API"| engine
+  sidecar -->|"fetches publications<br/>and bands over HTTP"| net
+  engine <-->|"pieces"| peers
+  peers -->|"announce"| sidecar
+```
+
+The sidecar and the engine are optional and each in its own compose profile.
+Without the engine everything moves over HTTP and there is no tracker or peer
+port; without the sidecar the gateway serves nothing under `/ar-io/indexes`
+and loads only the CDB64 sources it is given. The engine is on a network of
+its own, so the only thing it can reach on the node is the sidecar.
+
+### How a band moves
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant P as Publisher sidecar
+  participant PG as Publishing gateway
+  participant S as Subscriber sidecar
+  participant SG as Subscriber's gateway
+
+  Note over P: every 60 s: scan published/<index>/
+  P->>P: hash changed files, sign a new document<br/>if bands changed or half its TTL has passed
+  P->>PG: publication.json in published/<br/>(served within seconds)
+  loop every 300 s, per publisher
+    S->>SG: GET /ar-io/peers (registry, cached)
+    S->>PG: GET /ar-io/indexes
+    S->>S: key = registered observer key?<br/>sequence not lower than seen?<br/>band within the disk budget?
+    alt band offered as a torrent, engine running
+      S->>S: from peers (WebSeed only if stalled),<br/>HTTP if the torrent fails
+    else
+      S->>PG: GET /ar-io/indexes/blob/<sha256>
+    end
+    S->>S: every file = signed size and SHA-256?<br/>readable index?
+    S->>S: install into installed/<index>/<band>~<generation>/
+  end
+  Note over SG: watches its CDB64 sources:<br/>loads the new band, then the old copy is retired
+  SG->>SG: root-TX lookups answer from local disk
+```
+
 ## Running it
 
 ```bash
@@ -407,6 +468,34 @@ the rate limiter enabled). It needs no torrent engine: between two nodes in
 one network, HTTP is simpler, and a swarm there would also need
 `INDEX_SWARM_ENGINE_BLOCK_PRIVATE=false` and an allowed LAN tracker.
 
+```mermaid
+flowchart LR
+  peers(("Subscribers<br/>and peers"))
+  clients(("HTTP clients"))
+
+  subgraph fleet["Fleet"]
+    lb["Load balancer<br/>+ caching proxy"]
+    subgraph n1["Signing node"]
+      c1["core"]
+      s1["sidecar: publisher<br/>+ tracker :6969"]
+      e1["engine :6881"]
+    end
+    subgraph n2["Other node"]
+      c2["core"]
+      s2["sidecar: subscriber<br/>(HTTP only)"]
+    end
+  end
+
+  clients --> lb
+  peers -->|"documents, band files,<br/>.torrent, WebSeed"| lb
+  lb -->|"/ar-io/indexes*"| c1
+  lb -->|"everything else"| c2
+  lb -.->|"everything else"| c1
+  peers <-->|"pieces, direct to the node's<br/>public address"| e1
+  peers -->|"announce: direct, or<br/>/announce via the LB"| s1
+  s2 -->|"subscription url = signing node, port 4000<br/>(allowlisted on its meter)"| c1
+```
+
 Subscribers behind NAT still work: they reach the publisher's engine, and a
 reachable subscriber can be reached back. Only two peers that are both
 unreachable cannot exchange pieces with each other, and they still have the
@@ -467,6 +556,27 @@ What a subscriber refuses, and why:
 | A band that would exceed `INDEX_SWARM_MAX_DISK_BYTES` | The volume the gateway serves from is not worth filling for an index |
 | A publisher not in `INDEX_SWARM_TRUSTED_PUBLISHERS`, when that list is set | Counted as `unreachable`, with a warning naming the publisher |
 | A band with no HTTP location | Counted as `unreachable`, even with a torrent entry: HTTP is the fallback every download relies on |
+
+Per band, on each poll:
+
+```mermaid
+flowchart TD
+  start["Band in a verified publication"] --> same{"Already installed<br/>with these digests?"}
+  same -->|yes| done["Nothing to do"]
+  same -->|no| budget{"Fits<br/>INDEX_SWARM_MAX_DISK_BYTES?"}
+  budget -->|no| skip["Skipped, retried next poll"]
+  budget -->|yes| tor{"Torrent entry and<br/>engine running?"}
+  tor -->|no| http["Files over HTTP from the<br/>publication's origin"]
+  tor -->|yes| check{".torrent matches the signed<br/>infohashes and file list?"}
+  check -->|no| http
+  check -->|yes| swarm["Download from peers;<br/>WebSeed if nothing moves"]
+  swarm -->|"error, lost, or<br/>no progress"| http
+  swarm -->|complete| verify
+  http --> verify{"Every file's size and SHA-256<br/>as signed? Readable index?"}
+  verify -->|no| skip
+  verify -->|yes| install["Install a new generation;<br/>retire the old one a minute later"]
+  install --> seed["Seed it, if an engine runs"]
+```
 
 An expired document is installed anyway, with a warning: expiry is a signal
 that the publisher has gone quiet, not that its bands have gone bad.
