@@ -1042,6 +1042,36 @@ describe('GatewaysGqlQueryable soft deadline', () => {
     assert.equal(result.warnings, undefined);
   });
 
+  it('does not arm the deadline on an empty result, so a fast empty source cannot cut off the one with the data', async () => {
+    // The local index usually answers first and is empty for exactly the data
+    // fan-out exists to find. Armed on that empty answer, the 30ms deadline
+    // would cut off the upstream holding the data (150ms) and return an empty
+    // page; it must wait for the first non-empty result instead.
+    const merger = GatewaysGqlQueryable.forTesting({
+      log,
+      sources: [
+        new FakeQueryable({ transactions: [] }),
+        new DelayedTxQueryable(
+          { transactions: [txAt({ id: 'data', height: 100 })] },
+          150,
+        ),
+      ],
+      labels: ['<local>', 'http://has-the-data.example'],
+      softDeadlineEnabled: true,
+      softDeadlineMs: 30,
+    });
+    const result = await merger.getGqlTransactions({
+      pageSize: 10,
+      sortOrder: 'HEIGHT_DESC',
+      tags: [],
+    });
+    assert.deepEqual(
+      result.edges.map((e) => e.node.id),
+      ['data'],
+    );
+    assert.equal(result.warnings, undefined);
+  });
+
   it('applies the soft deadline to block queries too', async () => {
     class DelayedBlockQueryable extends FakeQueryable {
       constructor(

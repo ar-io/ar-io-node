@@ -911,6 +911,7 @@ export class GatewaysGqlQueryable
     const sortOrder = args.sortOrder ?? 'HEIGHT_DESC';
     const results = await this.settleWithSoftDeadline(
       this.sources.map((source) => source.getGqlTransactions(args)),
+      (result) => result.edges.length > 0,
     );
     const failureWarnings = this.handleSourceFailures(
       results,
@@ -953,6 +954,7 @@ export class GatewaysGqlQueryable
     const sortOrder = args.sortOrder ?? 'HEIGHT_DESC';
     const results = await this.settleWithSoftDeadline(
       this.sources.map((source) => source.getGqlBlocks(args)),
+      (result) => result.edges.length > 0,
     );
     const failureWarnings = this.handleSourceFailures(
       results,
@@ -1154,11 +1156,18 @@ export class GatewaysGqlQueryable
    * With the soft deadline disabled this is exactly `Promise.allSettled` — the
    * merge waits for every source (each bounded by the per-upstream request
    * timeout). With it enabled, the deadline timer is armed only after the
-   * first source *fulfills*; once it fires, any source that has not settled is
-   * reported as a `SoftDeadlineExceededError` rejection so the caller merges
-   * whatever arrived and surfaces the rest as warnings. Arming on the first
-   * fulfillment (rather than at call time) guarantees an all-slow moment never
-   * turns a would-succeed query into a failure.
+   * first source fulfills with a result that `isUsable` accepts; once it fires,
+   * any source that has not settled is reported as a
+   * `SoftDeadlineExceededError` rejection so the caller merges whatever arrived
+   * and surfaces the rest as warnings. Arming on the first usable fulfillment
+   * (rather than at call time) guarantees an all-slow moment never turns a
+   * would-succeed query into a failure.
+   *
+   * `isUsable` matters because a fast *empty* answer is common: the local
+   * index (included by default, GATEWAYS_GQL_INCLUDE_LOCAL) usually answers
+   * first, and is empty for exactly the data fan-out exists to find. Arming on
+   * it would cut off the slower upstream that holds the data and return an
+   * empty page where waiting would have returned the right one.
    *
    * The source promises are never aborted here — they keep running so the
    * per-upstream circuit breaker still observes their real success/timeout.
@@ -1167,6 +1176,7 @@ export class GatewaysGqlQueryable
    */
   private settleWithSoftDeadline<T>(
     promises: Promise<T>[],
+    isUsable: (value: T) => boolean = () => true,
   ): Promise<PromiseSettledResult<T>[]> {
     if (!this.softDeadlineEnabled || promises.length === 0) {
       return Promise.allSettled(promises);
@@ -1202,7 +1212,11 @@ export class GatewaysGqlQueryable
           }
           if (pending === 0) {
             finish();
-          } else if (res.status === 'fulfilled' && timer === undefined) {
+          } else if (
+            res.status === 'fulfilled' &&
+            timer === undefined &&
+            isUsable(res.value)
+          ) {
             // Arm the deadline only once we hold a usable result.
             timer = setTimeout(finish, this.softDeadlineMs);
             if (typeof timer.unref === 'function') timer.unref();
