@@ -144,21 +144,38 @@ done
 ```
 
 The packages API needs the `read:packages` scope (`gh auth refresh -s
-read:packages`). Without it, derive each SHA from git instead. Every image
-workflow builds on a push to `develop` that touches its `paths:` filter and
-tags the image with that push's commit, so the newest image is the newest
-first-parent commit on `develop` touching those paths:
+read:packages`). Without it, take each SHA from the image workflow's last
+successful run on `develop`. Each workflow tags its image with the commit
+that triggered the run (`github.sha`), so that run's head SHA is the newest
+published tag, and a failed or skipped build cannot yield a SHA with no image:
 
 ```bash
-git log --first-parent --format=%H -1 develop -- envoy/                          # ar-io-envoy
-git log --first-parent --format=%H -1 develop -- litestream/                     # ar-io-litestream
-git log --first-parent --format=%H -1 develop -- $(paths from build-clickhouse-auto-import.yml)
+for wf in build-envoy build-clickhouse-auto-import build-litestream; do
+  echo "$wf: $(gh run list --workflow "$wf.yml" --branch develop --status success \
+    --limit 1 --json headSha -q '.[0].headSha')"
+done
 ```
 
-`ar-io-core` is the commit being released (the head of `develop`, after any
-last merges). The clickhouse-auto-import filter includes
-`src/database/clickhouse/**` and `src/database/composite-clickhouse.ts`, so a
-ClickHouse schema change moves it too. Confirm every candidate exists before
+Run history expires. A workflow that has not built for a long time lists no
+runs (litestream's image dates from 2024). Then keep the previous release's
+pin, after checking nothing under that workflow's `paths:` changed since:
+
+```bash
+git show r<N-1>:docker-compose.yaml | grep 'ar-io-litestream:'
+git log --oneline r<N-1>..develop -- litestream/          # must print nothing
+```
+
+The paths each workflow builds on, for that check:
+
+| Workflow | Paths |
+| --- | --- |
+| `build-envoy` | `envoy/` |
+| `build-litestream` | `litestream/` |
+| `build-clickhouse-auto-import` | `Dockerfile.clickhouse-auto-import scripts/clickhouse-auto-import scripts/clickhouse-import scripts/parquet-export scripts/lib/common.sh src/database/clickhouse/ src/database/duckdb/ src/workers/parquet-exporter.ts src/database/composite-clickhouse.ts` |
+
+So a ClickHouse schema change moves `ar-io-clickhouse-auto-import` as well as
+core. `ar-io-core` is the commit being released (the head of `develop`, after
+any last merges). Whatever the source, confirm every SHA is published before
 pinning it:
 
 ```bash
@@ -279,26 +296,38 @@ Then format the entry as:
 Include `OBSERVER_IMAGE_TAG` (resolve via the `ar-io-observer` package) even
 though it's not release-managed — operators still want the link.
 
-Example reformatter (run against the extracted Release N section). It keeps
-each list item, nested ones included, on its own line; joining a whole block
-into one line would run sub-bullets together:
+Example reformatter (run against the extracted Release N section). It joins
+the wrapped lines of each paragraph or list item, keeps every list item
+(nested ones included) on its own line, and copies fenced code blocks
+verbatim, blank lines included:
 
 ```python
 import re, sys
-text = sys.stdin.read()
-for block in re.split(r'\n[ \t]*\n', text.rstrip()):
-    lines = block.splitlines()
-    if lines and lines[0].lstrip().startswith('#'):
-        print('\n'.join(lines))
+out, current, fenced = [], None, False
+def flush():
+    global current
+    if current is not None:
+        out.append(current)
+        current = None
+for line in sys.stdin.read().rstrip().splitlines():
+    if line.strip().startswith('```'):
+        flush()
+        out.append(line.rstrip())
+        fenced = not fenced
+    elif fenced:
+        out.append(line.rstrip())
+    elif not line.strip():
+        flush()
+        out.append('')
+    elif line.lstrip().startswith('#') or re.match(r'^\s*[-*] ', line):
+        flush()
+        current = line.rstrip()
+    elif current is None:
+        current = line.rstrip()
     else:
-        items = []
-        for line in lines:
-            if re.match(r'^\s*[-*] ', line) or line.strip().startswith('```') or not items:
-                items.append(line.rstrip())
-            else:
-                items[-1] += ' ' + line.strip()
-        print('\n'.join(items))
-    print()
+        current += ' ' + line.strip()
+flush()
+print('\n'.join(out))
 ```
 
 Then:
