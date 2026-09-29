@@ -182,6 +182,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- An invalid `after` cursor on GraphQL `transactions` or `blocks` now returns
+  `GRAPHQL_VALIDATION_FAILED` on gateways that answer from SQLite. The cursor
+  was decoded inside the SQLite worker thread, which re-wraps any error as
+  `Error in StandaloneSqlite worker` (`INTERNAL_SERVER_ERROR`), so only
+  ClickHouse-backed gateways returned the validation error. The cursor is now
+  checked before the query reaches the worker.
+
 - **Client addresses from proxy headers could be forged** — the gateway took
   the leftmost `X-Forwarded-For` address (or `X-Real-IP`) as the client,
   whoever sent it, and exempted a request when *any* address in its headers
