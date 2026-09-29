@@ -790,6 +790,15 @@ export const CHUNK_METADATA_ANCHOR_TX_CACHE_TTL_SECONDS =
     300,
   );
 
+// LRU cache size for resolved manifest paths. Keyed by (manifest id, path);
+// values are immutable per manifest transaction, so no TTL is needed. Caching
+// resolutions lets repeat requests for the same manifest path skip re-fetching
+// and re-parsing the manifest body.
+export const MANIFEST_RESOLUTION_CACHE_SIZE = env.positiveIntOrDefault(
+  'MANIFEST_RESOLUTION_CACHE_SIZE',
+  5000,
+);
+
 // Root TX index lookup order configuration.
 // Available sources: 'db', 'peers', 'gateways', 'graphql', 'hyperbeam', 'cdb',
 // 'turbo'. Sources are probed in order and the first actionable result wins.

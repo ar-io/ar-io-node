@@ -448,6 +448,18 @@ fallback path handling for 404 errors.
 **Manifest** - A special JSON document that maps paths to [item IDs](#item-id),
 enabling directory-like navigation of Arweave data.
 
+<a id="manifest-resolution-index"></a> **Manifest Resolution Index** - A table
+in `data.db` (`manifest_resolutions`) recording the `index`/`fallback` item id a
+manifest transaction resolves its root to, so a root request can be answered
+with one primary-key lookup instead of re-fetching and re-parsing the manifest
+body — including after a restart, or when the body is no longer retrievable.
+Populated lazily on request, and only from bytes that arrived from a trusted
+source: a row has no TTL and no invalidation path, so an untrusted body would
+pin the wrong id permanently. A manifest transaction is immutable, so a stored
+resolution never needs invalidating. Sub-paths are not stored (the table holds
+no path map) and are served from an in-memory LRU sized by
+`MANIFEST_RESOLUTION_CACHE_SIZE`.
+
 **Sandbox** - A security mechanism that redirects data access to unique
 subdomains based on the [item ID](#item-id). Each item gets its own
 base32-encoded subdomain, providing browser origin isolation between different
