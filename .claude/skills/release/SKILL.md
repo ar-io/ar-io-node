@@ -298,7 +298,7 @@ though it's not release-managed — operators still want the link.
 
 Example reformatter (run against the extracted Release N section). It joins
 the wrapped lines of each paragraph or list item, keeps every list item
-(nested ones included) on its own line, and copies fenced code blocks
+(bulleted or numbered, nested ones included) on its own line, and copies fenced code blocks
 verbatim, blank lines included:
 
 ```python
@@ -319,7 +319,7 @@ for line in sys.stdin.read().rstrip().splitlines():
     elif not line.strip():
         flush()
         out.append('')
-    elif line.lstrip().startswith('#') or re.match(r'^\s*[-*] ', line):
+    elif line.lstrip().startswith('#') or re.match(r'^\s*(?:[-*+]|\d+[.)])\s+', line):
         flush()
         current = line.rstrip()
     elif current is None:
