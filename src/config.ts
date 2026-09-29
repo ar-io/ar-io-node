@@ -3514,7 +3514,9 @@ export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
  * carrier-grade NAT and link-local addresses, where nginx or a load balancer
  * normally sits; add a CDN's or a public load balancer's ranges when one is
  * in front, or every client behind it shares its address. `none` trusts no
- * proxy, for a gateway the internet reaches directly.
+ * proxy: only for a core that clients reach directly, with no Envoy in front.
+ * Every request that comes through Envoy (the standard path, port 3000) would
+ * otherwise carry Envoy's address, and all of them would share one bucket.
  */
 const TRUSTED_PROXIES_VALUE = env.varOrDefault(
   'TRUSTED_PROXIES',
