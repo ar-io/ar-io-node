@@ -123,13 +123,16 @@ large `data.db`.
   index sharing in one command and check it in another. Setup edits `.env`
   idempotently (backing it up first): subscribes to a publisher, points the
   gateway at the installed bands and fixes the root-TX lookup order,
-  generates the torrent engine's password, and with `--restart` recreates
-  only what the changes need, by service name, with the running gateway's
-  own compose files. Status runs inside the sidecar and reports each check
-  (publication accepted, bands installed and loaded by the gateway, lookups
-  reaching them, engine reachable from the internet, upload budget) with the
-  fix for anything wrong. Both need only Docker. See
-  `docs/index-swarm.md#quick-start`.
+  generates the torrent engine's password, sets a 50 GiB disk budget for
+  installed bands, and with `--restart` recreates only what the changes need,
+  by service name, with the running gateway's own compose files. Status runs
+  inside the sidecar and reports each check (publication accepted, bands
+  installed and loaded by the gateway, lookups reaching them, disk budget,
+  engine reachable from the internet, upload budget) with the fix for anything
+  wrong. Both need only Docker. To subscribe to turbo-gateway.com, today's
+  publisher:
+  `./tools/index-swarm-setup --subscribe 34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5 --torrent --restart`,
+  then open port 6881 (TCP and UDP). See `docs/index-swarm.md#quick-start`.
 
 - **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
   item sizes for every data item in a list of root bundles, nested bundles

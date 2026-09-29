@@ -54,7 +54,7 @@ describe('planSetup', () => {
     );
     assert.equal(
       valueOf(p, 'INDEX_SWARM_MAX_DISK_BYTES'),
-      String(25 * 1024 ** 3),
+      String(50 * 1024 ** 3),
     );
     assert.equal(
       valueOf(p, 'CDB64_ROOT_TX_INDEX_SOURCES'),

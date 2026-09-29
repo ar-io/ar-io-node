@@ -32,7 +32,7 @@ publisher or turn on torrents; it only changes what is missing.
   --public-host <addr>   This node's public IP, where peers reach its engine
                          (and, when publishing, its tracker).
   --engine-port <n>      The engine's peer port (default 6881).
-  --max-disk-gib <n>     Disk for installed bands (default 25 GiB).
+  --max-disk-gib <n>     Disk for installed bands (default 50 GiB).
   --no-gateway           Leave CDB64_ROOT_TX_INDEX_SOURCES and
                          ROOT_TX_LOOKUP_ORDER alone.
   --dry-run              Show the changes; write nothing.

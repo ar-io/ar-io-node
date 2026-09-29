@@ -24,7 +24,12 @@ export const ROOT_TX_INDEX = 'root-tx-index';
 export const INSTALLED_ROOT_TX_SOURCE = 'data/indexes/installed/root-tx-index';
 /** The lookup order a subscriber wants: the installed bands right after the local DB. */
 export const SUBSCRIBER_LOOKUP_ORDER = 'db,cdb,gateways,graphql';
-export const DEFAULT_MAX_DISK_GIB = 25;
+/**
+ * Disk for installed bands when the operator names none. Twice the size of the
+ * full index published today (about 21 GB), because a band being replaced stays
+ * installed until its successor is, so both copies are on disk for a while.
+ */
+export const DEFAULT_MAX_DISK_GIB = 50;
 const TRACKER_PORT_DEFAULT = '6969';
 const ENGINE_USER = 'swarm';
 

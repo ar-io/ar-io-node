@@ -102,6 +102,48 @@ root_tx_lookup_total{source="gateways",status="found"} 9`);
     );
   });
 
+  it('warns when bands were skipped for the disk budget, and says how to raise it', () => {
+    const skipped = [
+      ...sidecar,
+      ...parseMetrics(
+        `index_subscription_total{publisher="${TURBO}",index="root-tx-index",transport="http",result="skipped_disk_budget"} 3`,
+      ),
+    ];
+    const warning = subscriberChecks(
+      skipped,
+      gateway(),
+      [{ publisher: TURBO }],
+      undefined,
+      25 * 1024 ** 3,
+    ).find((c) => /exceed INDEX_SWARM_MAX_DISK_BYTES/.test(c.text));
+    assert.equal(warning?.level, 'warn');
+    assert.match(warning?.text ?? '', /skipped 3 times/);
+    assert.match(warning?.text ?? '', /\(26\.8 GB\)/);
+    assert.match(warning?.fix ?? '', /--max-disk-gib <n> --restart/);
+  });
+
+  it('warns when installed bands fill most of the disk budget, and not before', () => {
+    const near = subscriberChecks(
+      sidecar,
+      gateway(),
+      [{ publisher: TURBO }],
+      23e9,
+      25 * 1024 ** 3,
+    );
+    const warning = near.find((c) => /of the .* budget/.test(c.text));
+    assert.equal(warning?.level, 'warn');
+    assert.match(warning?.text ?? '', /23\.0 GB of the 26\.8 GB/);
+
+    const roomy = subscriberChecks(
+      sidecar,
+      gateway(),
+      [{ publisher: TURBO }],
+      23e9,
+      50 * 1024 ** 3,
+    );
+    assert.deepEqual(levels(roomy), ['ok', 'ok', 'ok', 'ok']);
+  });
+
   it('warns, not fails, before the first publication', () => {
     const checks = subscriberChecks(
       [],

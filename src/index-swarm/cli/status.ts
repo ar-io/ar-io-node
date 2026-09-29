@@ -83,6 +83,9 @@ export function formatAge(seconds: number): string {
   return `${(seconds / 86400).toFixed(1)} days`;
 }
 
+/** Warn when installed bands fill more than this share of the disk budget. */
+const DISK_BUDGET_WARN_FRACTION = 0.8;
+
 const short = (wallet: string) =>
   wallet.length > 12 ? `${wallet.slice(0, 6)}…${wallet.slice(-4)}` : wallet;
 
@@ -96,6 +99,7 @@ export function subscriberChecks(
   gateway: Sample[] | undefined,
   subscribe: Array<{ publisher: string }>,
   installedBytes: number | undefined,
+  maxDiskBytes?: number,
 ): Check[] {
   const checks: Check[] = [];
   for (const { publisher } of subscribe) {
@@ -141,6 +145,16 @@ export function subscriberChecks(
         fix: 'Usually the publisher’s meter (402/429) or the network; it resumes by itself.',
       });
     }
+    // Counted once per poll that finds a band too big, so this is attempts,
+    // not bands. Until there is room, new bands never arrive.
+    const overBudget = failures('skipped_disk_budget');
+    if (overBudget > 0) {
+      checks.push({
+        level: 'warn',
+        text: `${short(publisher)}: bands skipped ${overBudget} times since the sidecar started because they would exceed INDEX_SWARM_MAX_DISK_BYTES${maxDiskBytes !== undefined ? ` (${formatBytes(maxDiskBytes)})` : ''}`,
+        fix: 'New bands stop arriving until they fit. Raise the budget: tools/index-swarm-setup --max-disk-gib <n> --restart.',
+      });
+    }
   }
 
   const installed = sum(sidecar, 'index_swarm_installed_bands');
@@ -153,6 +167,19 @@ export function subscriberChecks(
         }
       : {}),
   });
+  // A replaced band stays installed until its successor is, so a subscriber
+  // near its budget cannot take the next replacement and falls behind quietly.
+  if (
+    maxDiskBytes !== undefined &&
+    installedBytes !== undefined &&
+    installedBytes > DISK_BUDGET_WARN_FRACTION * maxDiskBytes
+  ) {
+    checks.push({
+      level: 'warn',
+      text: `Installed bands use ${formatBytes(installedBytes)} of the ${formatBytes(maxDiskBytes)} INDEX_SWARM_MAX_DISK_BYTES budget`,
+      fix: 'A replacement band needs room next to the one it replaces. Raise the budget: tools/index-swarm-setup --max-disk-gib <n> --restart.',
+    });
+  }
 
   if (gateway === undefined) {
     checks.push({
@@ -373,6 +400,7 @@ async function main(): Promise<void> {
         gatewayText !== undefined ? parseMetrics(gatewayText) : undefined,
         config.SUBSCRIBE,
         await directoryBytes(config.INSTALLED_DIR).catch(() => undefined),
+        config.MAX_DISK_BYTES,
       ),
     );
   }

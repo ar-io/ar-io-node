@@ -29,10 +29,14 @@ replace are under [doing it by hand](#doing-it-by-hand).
 
 1. Run a gateway release that ships `tools/index-swarm-setup` (the sidecar
    runs the same image, `CORE_IMAGE_TAG`).
-2. Set it up and start it:
+2. Set it up and start it. Today the network's publisher is turbo-gateway.com,
+   whose registered gateway wallet is
+   `34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5`:
    ```bash
-   ./tools/index-swarm-setup --subscribe <publisher gateway wallet> --torrent --restart
+   ./tools/index-swarm-setup --subscribe 34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5 --torrent --restart
    ```
+   To subscribe to another publisher, pass its gateway wallet instead; any
+   gateway that publishes shows it as `publisher` in its `/ar-io/indexes`.
    This subscribes to the publisher's root-TX index, points the gateway at
    the installed bands (and puts them right after the local database in the
    lookup order), generates the torrent engine's password, and restarts what
@@ -91,7 +95,7 @@ A gateway can do both: pass `--subscribe` and `--publish` together.
 
 | Flag | Effect |
 |---|---|
-| `--subscribe <wallet>` | Adds the publisher to `INDEX_SWARM_SUBSCRIBE` (repeatable; existing entries are kept). Sets `INDEX_SWARM_MAX_DISK_BYTES` to 25 GiB if unset. Puts `data/indexes/installed/root-tx-index` first in `CDB64_ROOT_TX_INDEX_SOURCES`, keeping what was there (or, if unset, the shipped default), and moves `cdb` right after `db` in `ROOT_TX_LOOKUP_ORDER` (unset: `db,cdb,gateways,graphql`) |
+| `--subscribe <wallet>` | Adds the publisher to `INDEX_SWARM_SUBSCRIBE` (repeatable; existing entries are kept). Sets `INDEX_SWARM_MAX_DISK_BYTES` to 50 GiB if unset (about twice the full index published today, since a band being replaced stays installed until its successor is). Puts `data/indexes/installed/root-tx-index` first in `CDB64_ROOT_TX_INDEX_SOURCES`, keeping what was there (or, if unset, the shipped default), and moves `cdb` right after `db` in `ROOT_TX_LOOKUP_ORDER` (unset: `db,cdb,gateways,graphql`) |
 | `--publish` | Adds `root-tx-index` to `INDEX_SWARM_PUBLISH`. Refuses, writing nothing, without a registered key or `AR_IO_WALLET`. With `--torrent` and a public host, sets `INDEX_SWARM_TRACKERS` to this node's tracker |
 | `--torrent` | Generates `INDEX_SWARM_ENGINE_AUTH` (`swarm:` and 48 random hex characters; never printed) if unset. That alone turns the engine on: `INDEX_SWARM_ENGINE_URL` defaults to the compose engine |
 | `--public-host <addr>`, `--engine-port <n>` | `INDEX_SWARM_ENGINE_PUBLIC_HOST`, `INDEX_SWARM_ENGINE_PORT` |
@@ -118,6 +122,9 @@ sees exactly what the sidecar sees, and checks:
 - installed bands and their size; that the gateway reads the installed
   directory and has every band loaded; that root-TX lookups reach the
   bands;
+- the disk budget: a warning when bands were skipped because they would
+  exceed `INDEX_SWARM_MAX_DISK_BYTES` (new bands then stop arriving), and when
+  installed bands fill more than 80% of it;
 - publishing: the document served, its expiry, and how many bands seed;
 - the torrent engine: that it answers, whether any peer has connected in
   (the engine's own reachability, so a closed port shows), and the day's
@@ -132,7 +139,7 @@ directly:
 
 ```bash
 INDEX_SWARM_SUBSCRIBE='[{"publisher":"<publisher gateway wallet>","name":"root-tx-index"}]'
-INDEX_SWARM_MAX_DISK_BYTES=26843545600   # 25 GiB; size it to what the publisher offers
+INDEX_SWARM_MAX_DISK_BYTES=53687091200   # 50 GiB; about twice what the publisher offers
 CDB64_ROOT_TX_INDEX_SOURCES=data/indexes/installed/root-tx-index,<previous sources>
 ROOT_TX_LOOKUP_ORDER=db,cdb,gateways,graphql
 INDEX_SWARM_ENGINE_AUTH=swarm:<openssl rand -hex 24>   # only for BitTorrent
