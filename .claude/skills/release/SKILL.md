@@ -174,7 +174,16 @@ The paths each workflow builds on, for that check:
 | `build-clickhouse-auto-import` | `Dockerfile.clickhouse-auto-import scripts/clickhouse-auto-import scripts/clickhouse-import scripts/parquet-export scripts/lib/common.sh src/database/clickhouse/ src/database/duckdb/ src/workers/parquet-exporter.ts src/database/composite-clickhouse.ts` |
 
 So a ClickHouse schema change moves `ar-io-clickhouse-auto-import` as well as
-core. `ar-io-core` is the commit being released (the head of `develop`, after
+core.
+
+A newer build that failed leaves the last successful run pointing at an older
+image, so check that nothing under the workflow's paths changed after the SHA
+you picked. This must print nothing; if it prints a commit, fix or rerun that
+build rather than pin the older image:
+
+```bash
+git log --oneline --first-parent <sha>..develop -- <paths from the table>
+``` `ar-io-core` is the commit being released (the head of `develop`, after
 any last merges). Whatever the source, confirm every SHA is published before
 pinning it:
 
@@ -303,19 +312,24 @@ verbatim, blank lines included:
 
 ```python
 import re, sys
-out, current, fenced = [], None, False
+out, current, fence = [], None, None  # fence: the opening marker while inside a block
 def flush():
     global current
     if current is not None:
         out.append(current)
         current = None
 for line in sys.stdin.read().rstrip().splitlines():
-    if line.strip().startswith('```'):
+    marker = re.match(r'^\s*(`{3,}|~{3,})', line)
+    if fence is None and marker:
         flush()
+        fence = marker.group(1)
         out.append(line.rstrip())
-        fenced = not fenced
-    elif fenced:
+    elif fence is not None:
         out.append(line.rstrip())
+        # A block closes only on a bare fence of the same character, at least as long.
+        close = re.match(r'^\s*(`{3,}|~{3,})\s*$', line)
+        if close and close.group(1)[0] == fence[0] and len(close.group(1)) >= len(fence):
+            fence = None
     elif not line.strip():
         flush()
         out.append('')
