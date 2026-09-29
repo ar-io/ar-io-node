@@ -1408,9 +1408,10 @@ one on another public host must be added to `TRUSTED_PROXIES`, or its address
 is taken as every client's.
 
 **`TRUSTED_PROXIES=none`** believes no proxy header at all. It is only for a
-core that clients reach directly, with no Envoy in front: the standard compose
-setup always has Envoy, and with `none` Envoy's own address would become every
-client's, so all of them would share one rate-limit bucket.
+core that clients reach directly, with no Envoy in front. With it, every
+request that comes through Envoy (the standard path, port 3000) carries
+Envoy's own address, so all of those clients share one rate-limit bucket;
+only clients connecting to core's own port keep their addresses.
 
 **Keep `TRUSTED_PROXIES` to real proxies.** Every address in it is believed
 about who the client is. The default trusts your private networks, so a host
