@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **ClickHouse id lookup table for GraphQL `ids` and `bundledIn`
+  (`CLICKHOUSE_GQL_ID_LOOKUP_ENABLED`, off by default)** (#946). On a large
+  ClickHouse `transactions` table, `transactions(ids: [...])` with 3 or more
+  ids and any `bundledIn` query failed with `TOO_MANY_ROWS`: `id_bloom` passes
+  ~1% of all granules per id, and `parent_id` has no index.
+  - New table `transaction_ids` (id → primary-key prefix), filled by
+    `transaction_ids_mv` on every insert. `schema.sql` creates both on the next
+    import; existing rows need a one-time backfill `INSERT`, documented there
+    and in `docs/clickhouse-schema.md`.
+  - With the flag on, the stable leg resolves ids (or `bundledIn` parents)
+    there first and reads `transactions` by primary key. On 30M test rows, 3
+    ids read ~20K rows instead of ~790K, 100 ids ~953K instead of ~18.5M, and
+    one bundle ~9K instead of 30M.
+  - Enable only after the backfill: an id missing from the table is treated as
+    absent from ClickHouse. A `bundledIn` query with a parent missing from the
+    table, and a failed lookup, run as before.
+  - New metric `clickhouse_gql_id_lookup_total{filter, outcome}`.
+
 - **Signed index publishing (`index-swarm` sidecar, `/ar-io/indexes`)** — a
   gateway can publish its CDB64 root-TX index bands for other gateways, and
   subscribe to theirs. Off by default (compose profile `index-swarm`).
@@ -39,7 +57,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - every CDB64 partition is walked and bounds-checked before a band installs, and the reader never trusts a length or pointer from the file;
     - replacing a band never leaves a moment when lookups to it miss;
     - one band id belongs to one publisher at a time.
+    - the closed tracker lists this node's own engine under its public host instead of a Docker address, never hands private addresses to peers on the internet, and can sit behind a load balancer (`INDEX_SWARM_TRACKER_TRUSTED_PROXIES`, `INDEX_SWARM_ENGINE_PUBLIC_HOST`);
+    - the tracker always lists the publisher's own engine, so a host firewall that refuses the engine's announce to itself does not hide the publisher; the default peer port is 6881, below the ephemeral range, and a short or empty engine password is refused (found by turbo-gateway's rollout);
+    - seeding is bounded by default: 10 MB/s (`INDEX_SWARM_UPLOAD_LIMIT_BYTES_PER_SEC`) and 100 GB a UTC day (`INDEX_SWARM_UPLOAD_DAILY_LIMIT_BYTES`), after which the engine is throttled to 1 KiB/s until the next day, so no peer can pull terabytes from a publisher;
+    - an hourly janitor removes engine torrents no state record claims (left by a state reset or a crash), after two sweeps agree;
+    - a subscriber keeps a band that an offered band supersedes until that band has installed, so a replacement that takes hours to download leaves no gap in coverage;
+    - a band republished with some files unchanged (a manifest edit to add `supersedes`, say) links the unchanged files from the installed copy and fetches only the rest; before, the whole band was fetched again;
     - after the first request, the gateway rechecks the publication file every 5 s off the request path, so later index requests do not wait behind a filesystem call on a saturated libuv thread pool (seen on turbo-gateway as 15–30 s responses during cache sweeps); only the first request after a start waits for the file;
+
+- **Index bands over BitTorrent (compose profile `index-swarm-torrent`)** —
+  with a torrent engine configured (`INDEX_SWARM_ENGINE_AUTH`, which points
+  the sidecar at the compose engine), publishers
+  also offer every band as a deterministic hybrid v1/v2 torrent and seed it,
+  and subscribers fetch from peers first, turn on the publisher's metered
+  WebSeed only when peers stall, fall back to HTTP on any failure, and seed
+  every band they install. Off unless the engine runs; HTTP-only nodes are
+  unaffected.
+  - The engine is qBittorrent-nox 5.2.3, pinned by digest, on its own Docker
+    network shared only with the sidecar, so it cannot reach the gateway, the
+    observer or other services. It mounts the published and installed bands
+    read only and writes only to `swarm/`.
+  - A publisher runs a closed tracker that answers only for the bands it
+    offers, and seeds from hard links to its blobs, so a band rebuilt in
+    place is never served with bytes that fail their pieces.
+  - A subscriber checks every `.torrent` against the signed infohashes and
+    hands its engine only the info dictionary and trackers on public hosts:
+    nothing outside the info dictionary is signed. Every file is hashed again
+    before install. Downloads survive a restart without resetting their
+    timeout.
+  - New gateway routes: `/ar-io/indexes/torrents/<v1 infohash>.torrent` and the BEP 19
+    WebSeed `/ar-io/indexes/webseed/<torrent name>/<file>`, metered and
+    cached like the blob route.
+  - See `docs/index-swarm.md#torrent-engine`.
+
+- **`tools/index-swarm-setup` and `tools/index-swarm-status`** — set up
+  index sharing in one command and check it in another. Setup edits `.env`
+  idempotently (backing it up first): subscribes to a publisher, points the
+  gateway at the installed bands and fixes the root-TX lookup order,
+  generates the torrent engine's password, and with `--restart` recreates
+  only what the changes need, by service name, with the running gateway's
+  own compose files. Status runs inside the sidecar and reports each check
+  (publication accepted, bands installed and loaded by the gateway, lookups
+  reaching them, engine reachable from the internet, upload budget) with the
+  fix for anything wrong. Both need only Docker. See
+  `docs/index-swarm.md#quick-start`.
 
 - **`tools/scan-bundle-offsets`** — builds CDB64 CSV input with offsets and
   item sizes for every data item in a list of root bundles, nested bundles
@@ -78,6 +139,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Default observer image bumped to `fe159f5a`** — `OBSERVER_IMAGE_TAG` moves
+  from `0e956b08` (2026-08-30, `@ar.io/sdk` 4.3.0-alpha.2) to the current
+  `ar-io-observer` build on `@ar.io/sdk` 4.5.0. Observing is unchanged:
+  `save_observations` did not change in the gateway registry's Wave 2 upgrade,
+  so gateways on the previous image still submit correctly. The embedded epoch
+  cranker (`ENABLE_EPOCH_CRANKING=true`) needs this image. Since Wave 2,
+  `create_epoch`, `finalize_gone` and `compound_delegation_rewards` take new
+  accounts, and the previous image's client fails on them. The cranker also
+  now finalizes departed gateways in the only window the program allows it
+  (between an epoch's distribution and the next epoch's creation), and claims
+  delegations off leaving and delegation-disabled gateways into each
+  delegate's withdrawal vault. The cranker wallet pays each vault's rent (at
+  most about 0.0029 SOL, which the delegate recovers), and the sweep pauses
+  while the wallet holds under 0.5 SOL. Operators who pin `OBSERVER_IMAGE_TAG`
+  in `.env` must update it there too, since that shadows the compose default
+  (ar-io/ar-io-observer#143).
+
+- **GraphQL runs on Apollo Server 5** (from `apollo-server-express` 3, which
+  has been end-of-life since October 2024). Queries, results, batching, GET
+  requests, CSRF behavior and the invalid-cursor error are unchanged. What
+  clients and operators can see:
+  - GraphQL responses now carry `Cache-Control: no-store`. A CDN or proxy
+    that cached GET `/graphql` responses stops caching them.
+  - Malformed requests (a missing or non-JSON body, an empty batch) still get
+    HTTP 400, but with a JSON `errors` body (`BAD_REQUEST`) instead of plain
+    text. An unknown or missing `operationName` now reports
+    `OPERATION_RESOLUTION_FAILURE` instead of `INTERNAL_SERVER_ERROR`.
+  - `GET /graphql` in a browser serves the Apollo Sandbox instead of GraphQL
+    Playground.
+  - New metric `graphql_http_batch_size`: operations per HTTP request.
+
 - **OpenAPI spec: current introduction, and the real version.** The spec's
   front matter (what the gateway serves, how to verify responses with the
   `X-AR-IO-*` trust headers and HTTP signatures, rate limits and x402, errors,
@@ -107,6 +199,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   cache of resolved geometry.
 
 ### Fixed
+
+- **Client addresses from proxy headers could be forged** — the gateway took
+  the leftmost `X-Forwarded-For` address (or `X-Real-IP`) as the client,
+  whoever sent it, and exempted a request when *any* address in its headers
+  was allowlisted. A client could claim an allowlisted address and skip the
+  rate limit and x402 payment, or claim a new address on each request for a
+  fresh rate-limit bucket (and free allowance) every time. Proxy headers are
+  now believed only from proxies in the new `TRUSTED_PROXIES` (default:
+  loopback, private, carrier-grade NAT and link-local addresses, where nginx
+  normally sits); behind one, the client is the nearest `X-Forwarded-For` hop
+  that is not a trusted proxy. Allowlists (`RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`,
+  `CHUNK_INGEST_CACHE_ALLOWLIST`) are checked against that address only.
+  **Behind a CDN or a load balancer on public addresses, add its ranges to
+  `TRUSTED_PROXIES`**, or every client behind it shares its address; the same
+  goes for nginx on a different public host than Envoy. Envoy now appends the
+  address that connected to it to `X-Forwarded-For` (`use_remote_address`,
+  keeping the downstream `X-Forwarded-Proto`), so a client reaching port 3000
+  directly cannot choose its address either: **upgrade the Envoy image with
+  core**. The index-swarm tracker uses the same code for
+  `INDEX_SWARM_TRACKER_TRUSTED_PROXIES`.
+
+- GraphQL no longer fails with HTTP 500 ("Cannot execute GraphQL operations
+  after the server has stopped") while the gateway shuts down. Apollo's own
+  signal handler used to stop GraphQL while the listener was still accepting
+  requests; the listener now closes first. Under load, a `docker stop` of the
+  previous release answered about 27,000 requests with that error.
+
+- `scripts/clickhouse-import` defines its functions again when sourced. The
+  guard that skips the CLI returned before any function was defined, so tests
+  that source it for `migrate_staging_to_final` failed with "command not
+  found". `scripts/tests/parquet/test-clickhouse-ttl-rules` also placed `FINAL`
+  after `WHERE`, a syntax error; it now passes end to end.
 
 - The `tx-data` retrieval source no longer treats an unmined transaction as
   data. A node answers `202 Pending` for a transaction it has not mined, and

@@ -516,6 +516,7 @@ export async function cleanClickHouseTables(
       'staging_transactions',
       'staging_tags',
       'transactions',
+      'transaction_ids',
       'new_blocks',
       'new_transactions',
     ];

@@ -68,6 +68,31 @@ describe('createErrorHandlerMiddleware', () => {
     assert.equal(res.status, 499);
   });
 
+  it('maps a malformed JSON body to 400, not 500', async () => {
+    // Real body-parser, so the error shape is the one production sees.
+    const app = express();
+    app.post('/test', express.json(), (_req, res) => res.json({ ok: true }));
+    app.use(createErrorHandlerMiddleware({ log }));
+
+    const res = await request(app)
+      .post('/test')
+      .set('Content-Type', 'application/json')
+      .send('{"query": ');
+    assert.equal(res.status, 400);
+  });
+
+  it('keeps a 4xx error that is not marked exposable as a 500', async () => {
+    // Only http-errors' `expose: true` is trusted; an arbitrary error that
+    // happens to carry a status must not leak its message to the client.
+    const app = buildApp((_req, _res, next) =>
+      next(Object.assign(new Error('internal detail'), { status: 404 })),
+    );
+
+    const res = await request(app).get('/test');
+    assert.equal(res.status, 500);
+    assert.equal(res.text, 'Internal server error');
+  });
+
   it('delegates to the default handler when headers are already sent', () => {
     const handler = createErrorHandlerMiddleware({ log });
     let forwarded: unknown;

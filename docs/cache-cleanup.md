@@ -297,6 +297,42 @@ The same staged rollout proven on the contiguous side:
    `chunk_cache_index_skipped_floor_total` against `df`.
 4. **Compare** against an un-migrated node before rolling out fleet-wide.
 
+### Index coverage: which writes are tracked
+
+Every chunk the gateway caches is indexed: chunks cached on the serving path
+(the read-through cache) and chunks cached by optimistic ingest (`POST /chunk`).
+Cache hits refresh `last_access` too, when
+`CHUNK_DATA_CACHE_INDEX_UPDATE_ON_READ` is on.
+
+Images before ar-io-node #944 was fixed indexed **only** the ingest path; the
+read-through cache wrote through a separate store with no index attached. On
+those images the evictor works until the backfill's rows are used up and then
+frees nothing, while the chunk volume keeps filling. After upgrading, run the
+backfill once more (see step 2 above) to adopt everything cached in the
+meantime. The backfill resumes from its checkpoint if one exists, so delete a
+leftover `data/tmp/chunk-cache-index-backfill-checkpoint` from an interrupted
+earlier pass first, or the shards before it are skipped.
+
+Two signals show when coverage is failing:
+
+- **The index-coverage warning.** When the disk is over pressure, every indexed
+  row is inside the age floor, and the index's total bytes could not reach the
+  low watermark even once they all age out, the evictor warns (at most once per
+  15 minutes) that the index "tracks too little to reach the low watermark". It
+  has two possible causes, and the check cannot tell them apart: the index is
+  missing chunk writes, or the volume also holds data the chunk evictor does not
+  own (pressure is measured over the whole filesystem). Only a volume that holds
+  nothing but the chunk cache rules out the second. In the other sweeps where
+  every row is inside the age floor — between warnings, or when the index does
+  track enough bytes — the evictor logs "deferring eviction" at info level
+  instead. That line is benign only when the index tracks enough, so check for
+  the warning before reading it as healthy.
+- **`chunk_cache_index_hook_errors_total{hook="write"|"read"}`** counts index
+  updates that failed. The hooks are fire-and-forget, so a failure never fails
+  the chunk write — this counter is the only place it shows. It stays at 0 when
+  a store was never given the index at all; the coverage warning is what catches
+  that case.
+
 ### Keep the walk worker available as a reconciler
 
 Leave `ENABLE_CHUNK_DATA_CACHE_CLEANUP` on (or re-enable it periodically). Index

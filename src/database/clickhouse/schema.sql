@@ -160,6 +160,72 @@ ALTER TABLE transactions ADD INDEX IF NOT EXISTS owner_address_bloom (owner_addr
 -- AND NOT is_done`.
 
 -- =============================================================================
+-- Id lookup: id -> primary-key prefix
+-- =============================================================================
+--
+-- `transactions` is sorted by (height, block_transaction_index, is_data_item,
+-- id), so finding rows by id alone relies on `id_bloom`. A 1% bloom filter
+-- passes ~1% of all granules per looked-up id, so the cost of an id lookup
+-- grows with the table: ~4M rows per id at ~400M rows, enough for 3 ids to
+-- trip `max_rows_to_read`. `bundledIn` has no index at all and scans until
+-- the cap stops it.
+--
+-- `transaction_ids` maps each id to its primary-key prefix. GraphQL resolves
+-- `ids` (and `bundledIn` parent ids, whose items share the parent's height and
+-- block_transaction_index) here first, then reads `transactions` by primary
+-- key. A lookup reads about one granule per id, whatever the table size.
+--
+-- Deliberate choices (do not "fix"):
+--   * A table, not a projection. Projections are stored per part, and
+--     `transactions` is partitioned by height, so an id-ordered projection
+--     still reads one granule per part per id. This table is unpartitioned and
+--     merges into few parts.
+--   * index_granularity = 1024: a point lookup reads one granule, so smaller
+--     granules read fewer rows.
+--   * No TTL. A lookup row must never be deleted while its `transactions`
+--     row exists: GraphQL treats an id missing here as absent from ClickHouse
+--     and would silently drop it from results. A TTL copied from `expires_at`
+--     at insert time would do exactly that after any later
+--     `ALTER TABLE transactions UPDATE expires_at` that extends retention
+--     (the view only sees inserts). Rows outliving their `transactions` rows
+--     (after expiry or a re-import) are harmless: the primary-key read then
+--     finds nothing. `expires_at` is kept only because the view writes it.
+--
+-- Populated by `transaction_ids_mv` on every insert into `transactions`. Rows
+-- already in `transactions` need a one-time backfill (see below); GraphQL only
+-- uses this table when CLICKHOUSE_GQL_ID_LOOKUP_ENABLED=true, which should be
+-- set after the backfill completes.
+CREATE TABLE IF NOT EXISTS transaction_ids (
+  id BLOB NOT NULL,
+  height UInt32 NOT NULL,
+  block_transaction_index UInt16,
+  is_data_item Boolean,
+  inserted_at DateTime,
+  expires_at Nullable(DateTime)
+) Engine = ReplacingMergeTree(inserted_at)
+ORDER BY (id, height, block_transaction_index, is_data_item)
+SETTINGS index_granularity = 1024;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS transaction_ids_mv TO transaction_ids AS
+SELECT id, height, block_transaction_index, is_data_item, inserted_at, expires_at
+FROM transactions;
+
+-- One-time manual backfill of `transaction_ids` for rows inserted into
+-- `transactions` before the materialized view existed. Not run automatically
+-- because it reads every row of `transactions` and would re-run on each
+-- clickhouse-import cycle. Rows the view also inserts are deduplicated by the
+-- ReplacingMergeTree, so it is safe to run while imports continue, and to
+-- re-run. Run once against an existing node:
+--
+--   INSERT INTO transaction_ids
+--   SELECT id, height, block_transaction_index, is_data_item, inserted_at, expires_at
+--   FROM transactions;
+--
+-- On a large table, run it one partition at a time to bound memory, e.g.
+-- `... FROM transactions WHERE intDiv(height, 100000) = 17`. Then set
+-- CLICKHOUSE_GQL_ID_LOOKUP_ENABLED=true.
+
+-- =============================================================================
 -- Streaming pipeline: unstable head (mirrors the SQLite new_* tables)
 -- =============================================================================
 --

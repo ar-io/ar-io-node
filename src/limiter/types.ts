@@ -81,8 +81,10 @@ export interface RateLimiter {
   adjustTokens(req: Request, context: TokenAdjustmentContext): Promise<void>;
 
   /**
-   * Check if any IP in the chain is allowlisted
-   * @param clientIps Array of client IP addresses from request
+   * Check whether any of the given addresses is allowlisted. Pass only the
+   * trustworthy client address (`extractAllClientIPs(req).clientIp`), never
+   * the full `clientIps`: those include headers the client writes itself.
+   * @param clientIps Client addresses to check
    * @returns boolean indicating if any IP is allowlisted
    */
   isAllowlisted(clientIps: string[]): boolean;

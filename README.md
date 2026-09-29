@@ -198,7 +198,10 @@ for operational guidance.
 Gateways can also share fresher indexes with each other: the optional
 `index-swarm` sidecar publishes this gateway's bands, signed with its observer
 key, and subscribes to other gateways' bands, which the gateway loads without a
-restart. See [docs/index-swarm.md](docs/index-swarm.md) to run it and
+restart. Bands move over the publisher's metered HTTP routes, and, with the
+optional torrent engine (compose profile `index-swarm-torrent`), peer to peer
+as well, every subscriber seeding what it installs. See
+[docs/index-swarm.md](docs/index-swarm.md) to run it and
 [docs/index-publication.md](docs/index-publication.md) for the protocol.
 
 ### Webhook Emission

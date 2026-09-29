@@ -55,6 +55,27 @@ export function createErrorHandlerMiddleware({
       return;
     }
 
+    // A client error raised by middleware — body-parser's malformed JSON,
+    // oversized payload or unsupported charset — carries its own 4xx status
+    // and `expose: true` (the http-errors convention). That is the client's
+    // fault, not ours: answer with its status and don't log a stack. Express's
+    // default finalhandler honoured this; replacing it had turned every
+    // malformed GraphQL body into a logged 500.
+    const clientStatus = error?.status ?? error?.statusCode;
+    if (
+      error?.expose === true &&
+      Number.isInteger(clientStatus) &&
+      clientStatus >= 400 &&
+      clientStatus < 500
+    ) {
+      metrics.unhandledRequestErrorsCounter.inc({
+        method: req.method,
+        status: String(clientStatus),
+      });
+      res.status(clientStatus).send(error.message);
+      return;
+    }
+
     // Genuinely unexpected: respond 500, but — unlike the default
     // finalhandler — record what happened so the throwing path is findable.
     metrics.unhandledRequestErrorsCounter.inc({

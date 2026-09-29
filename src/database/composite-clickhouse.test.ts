@@ -1047,4 +1047,339 @@ describe('CompositeClickHouseDatabase', () => {
       );
     });
   });
+
+  describe('transaction_ids id lookup', () => {
+    // Sum of `clickhouse_gql_id_lookup_total` for one filter/outcome pair.
+    const idLookupCount = async (
+      filter: 'ids' | 'bundledIn',
+      outcome: string,
+    ): Promise<number> => {
+      const out = await metrics.clickhouseGqlIdLookupTotal.get();
+      return out.values
+        .filter(
+          (v) => v.labels.filter === filter && v.labels.outcome === outcome,
+        )
+        .reduce((sum, v) => sum + v.value, 0);
+    };
+
+    // A lookup row as ClickHouse returns it: `hex(id)` is upper case.
+    const lookupRow = (params: {
+      id: string;
+      height: number;
+      blockTransactionIndex: number;
+      isDataItem: boolean;
+    }) => ({
+      height: params.height,
+      block_transaction_index: params.blockTransactionIndex,
+      is_data_item: params.isDataItem,
+      id_hex: b64UrlToHex(params.id).toUpperCase(),
+    });
+
+    // Composite whose stub client answers the lookup (`FROM transaction_ids`)
+    // and stable (`FROM transactions`) queries separately, recording every
+    // SQL string it receives.
+    const buildLookupComposite = ({
+      idLookupEnabled,
+      lookupRows = [],
+      lookupReject,
+      stableRows = [],
+      sqliteStub = sqlite,
+    }: {
+      idLookupEnabled: boolean;
+      lookupRows?: any[];
+      lookupReject?: Error;
+      stableRows?: any[];
+      sqliteStub?: GqlQueryable;
+    }) => {
+      const composite = new CompositeClickHouseDatabase({
+        log,
+        gqlQueryable: sqliteStub,
+        url: 'http://localhost:0',
+        idLookupEnabled,
+      });
+      const queries: string[] = [];
+      (composite as any).clickhouseClient = {
+        async query({ query: sqlStr }: { query: string }) {
+          queries.push(sqlStr);
+          if (sqlStr.includes('FROM transaction_ids')) {
+            if (lookupReject !== undefined) throw lookupReject;
+            return { json: async () => ({ data: lookupRows }) };
+          }
+          return { json: async () => ({ data: stableRows }) };
+        },
+      };
+      const lookupQueries = () =>
+        queries.filter((q) => q.includes('FROM transaction_ids'));
+      const stableQueries = () =>
+        queries.filter((q) => q.includes('FROM transactions AS t'));
+      return { composite, lookupQueries, stableQueries };
+    };
+
+    const hex = (x: string) => b64UrlToHex(x);
+
+    it('does not query transaction_ids when disabled (default)', async () => {
+      const { composite, lookupQueries, stableQueries } = buildLookupComposite({
+        idLookupEnabled: false,
+        stableRows: [chRow({ id: id('a'), height: 100 })],
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        ids: [id('a'), id('b'), id('c')],
+      });
+
+      assert.equal(lookupQueries().length, 0);
+      assert.equal(stableQueries().length, 1);
+      assert.ok(!stableQueries()[0].includes('t.block_transaction_index) IN'));
+      assert.ok(!stableQueries()[0].includes('t.id) IN'));
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        [id('a')],
+      );
+    });
+
+    it('reads ids by the primary keys resolved through transaction_ids', async () => {
+      // id('c') is not in transaction_ids, so the lookup is resolved_partial.
+      const before = await idLookupCount('ids', 'resolved_partial');
+      const { composite, lookupQueries, stableQueries } = buildLookupComposite({
+        idLookupEnabled: true,
+        lookupRows: [
+          lookupRow({
+            id: id('a'),
+            height: 100,
+            blockTransactionIndex: 2,
+            isDataItem: true,
+          }),
+          lookupRow({
+            id: id('b'),
+            height: 200,
+            blockTransactionIndex: 0,
+            isDataItem: false,
+          }),
+        ],
+        stableRows: [
+          chRow({
+            id: id('a'),
+            height: 100,
+            blockTransactionIndex: 2,
+            isDataItem: true,
+          }),
+          chRow({ id: id('b'), height: 200 }),
+        ],
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        ids: [id('a'), id('b'), id('c')],
+      });
+
+      assert.equal(lookupQueries().length, 1);
+      const lookup = lookupQueries()[0];
+      assert.ok(lookup.includes(`unhex('${hex(id('c'))}')`));
+      assert.match(lookup, /SETTINGS max_rows_to_read = \d+/);
+      // The id filter must reference the binary column. An alias named `id`
+      // (e.g. `hex(id) AS id`) would shadow it in WHERE and match nothing.
+      assert.match(lookup, /WHERE l\.id IN \(/);
+      assert.ok(!/ AS id\b/.test(lookup));
+
+      assert.equal(stableQueries().length, 1);
+      const stable = stableQueries()[0];
+      assert.ok(stable.includes('t.height IN (100, 200)'));
+      assert.ok(
+        stable.includes(
+          '(t.height, t.block_transaction_index, t.is_data_item, t.id) IN ' +
+            `((100, 2, 1, unhex('${hex(id('a'))}')), ` +
+            `(200, 0, 0, unhex('${hex(id('b'))}')))`,
+        ),
+      );
+      // The id filter itself still applies.
+      assert.ok(stable.includes(`unhex('${hex(id('c'))}')`));
+
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id).sort(),
+        [id('a'), id('b')].sort(),
+      );
+      assert.equal(await idLookupCount('ids', 'resolved_partial'), before + 1);
+    });
+
+    it('keeps every key when one id exists in two bundles', async () => {
+      const before = await idLookupCount('ids', 'resolved');
+      const { composite, stableQueries } = buildLookupComposite({
+        idLookupEnabled: true,
+        lookupRows: [
+          lookupRow({
+            id: id('a'),
+            height: 100,
+            blockTransactionIndex: 2,
+            isDataItem: true,
+          }),
+          lookupRow({
+            id: id('a'),
+            height: 300,
+            blockTransactionIndex: 7,
+            isDataItem: true,
+          }),
+        ],
+      });
+
+      await composite.getGqlTransactions({ pageSize: 10, ids: [id('a')] });
+
+      const stable = stableQueries()[0];
+      assert.ok(stable.includes('t.height IN (100, 300)'));
+      assert.ok(stable.includes(`(100, 2, 1, unhex('${hex(id('a'))}'))`));
+      assert.ok(stable.includes(`(300, 7, 1, unhex('${hex(id('a'))}'))`));
+      assert.equal(await idLookupCount('ids', 'resolved'), before + 1);
+    });
+
+    it('skips the stable query when no id is in transaction_ids', async () => {
+      const before = await idLookupCount('ids', 'none_found');
+      const recent = sqliteTx({ id: id('recent'), height: 500 });
+      const { composite, stableQueries } = buildLookupComposite({
+        idLookupEnabled: true,
+        lookupRows: [],
+        sqliteStub: makeSqliteStub({
+          transactions: {
+            pageInfo: { hasNextPage: false },
+            edges: [sqliteEdge(recent)],
+          },
+        }),
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        ids: [id('recent'), id('nope')],
+      });
+
+      assert.equal(stableQueries().length, 0);
+      // The other legs still answer: an id not yet in ClickHouse comes from
+      // SQLite.
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        [id('recent')],
+      );
+      assert.equal(await idLookupCount('ids', 'none_found'), before + 1);
+    });
+
+    it('reads bundledIn by the parent height and block_transaction_index', async () => {
+      const before = await idLookupCount('bundledIn', 'resolved');
+      const { composite, lookupQueries, stableQueries } = buildLookupComposite({
+        idLookupEnabled: true,
+        lookupRows: [
+          lookupRow({
+            id: id('bundle'),
+            height: 100,
+            blockTransactionIndex: 2,
+            isDataItem: false,
+          }),
+          lookupRow({
+            id: id('nested'),
+            height: 100,
+            blockTransactionIndex: 2,
+            isDataItem: true,
+          }),
+        ],
+      });
+
+      await composite.getGqlTransactions({
+        pageSize: 10,
+        bundledIn: [id('bundle'), id('nested')],
+      });
+
+      assert.equal(lookupQueries().length, 1);
+      const stable = stableQueries()[0];
+      assert.ok(stable.includes('t.height IN (100)'));
+      assert.ok(
+        stable.includes('(t.height, t.block_transaction_index) IN ((100, 2))'),
+      );
+      // The parent filter itself still applies.
+      assert.ok(stable.includes(`unhex('${hex(id('nested'))}')`));
+      assert.equal(await idLookupCount('bundledIn', 'resolved'), before + 1);
+    });
+
+    it('does not narrow bundledIn when a parent is missing', async () => {
+      const before = await idLookupCount('bundledIn', 'partial');
+      const { composite, stableQueries } = buildLookupComposite({
+        idLookupEnabled: true,
+        lookupRows: [
+          lookupRow({
+            id: id('bundle'),
+            height: 100,
+            blockTransactionIndex: 2,
+            isDataItem: false,
+          }),
+        ],
+      });
+
+      await composite.getGqlTransactions({
+        pageSize: 10,
+        bundledIn: [id('bundle'), id('gone')],
+      });
+
+      assert.equal(stableQueries().length, 1);
+      assert.ok(!stableQueries()[0].includes('t.block_transaction_index) IN'));
+      assert.equal(await idLookupCount('bundledIn', 'partial'), before + 1);
+    });
+
+    it('queries without narrowing when the lookup fails', async () => {
+      const before = await idLookupCount('ids', 'error');
+      const { composite, stableQueries } = buildLookupComposite({
+        idLookupEnabled: true,
+        lookupReject: new Error('Code: 60. UNKNOWN_TABLE transaction_ids'),
+        stableRows: [chRow({ id: id('a'), height: 100 })],
+      });
+
+      const result = await composite.getGqlTransactions({
+        pageSize: 10,
+        ids: [id('a')],
+      });
+
+      assert.equal(stableQueries().length, 1);
+      assert.ok(!stableQueries()[0].includes('t.id) IN'));
+      assert.deepEqual(
+        result.edges.map((e) => e.node.id),
+        [id('a')],
+      );
+      assert.equal(await idLookupCount('ids', 'error'), before + 1);
+    });
+
+    it('resolves ids, not parents, when both ids and bundledIn are given', async () => {
+      const { composite, lookupQueries, stableQueries } = buildLookupComposite({
+        idLookupEnabled: true,
+        lookupRows: [
+          lookupRow({
+            id: id('a'),
+            height: 100,
+            blockTransactionIndex: 2,
+            isDataItem: true,
+          }),
+        ],
+      });
+
+      await composite.getGqlTransactions({
+        pageSize: 10,
+        ids: [id('a')],
+        bundledIn: [id('bundle')],
+      });
+
+      assert.ok(lookupQueries()[0].includes(`unhex('${hex(id('a'))}')`));
+      assert.ok(!lookupQueries()[0].includes(hex(id('bundle'))));
+      const stable = stableQueries()[0];
+      assert.ok(stable.includes(`(100, 2, 1, unhex('${hex(id('a'))}'))`));
+      assert.ok(stable.includes(`unhex('${hex(id('bundle'))}')`));
+    });
+
+    it('does not look up queries without ids or bundledIn', async () => {
+      const { composite, lookupQueries, stableQueries } = buildLookupComposite({
+        idLookupEnabled: true,
+      });
+
+      await composite.getGqlTransactions({
+        pageSize: 10,
+        tags: [{ name: 'App-Name', values: ['ArDrive-App'] }],
+      });
+
+      assert.equal(lookupQueries().length, 0);
+      assert.equal(stableQueries().length, 1);
+    });
+  });
 });

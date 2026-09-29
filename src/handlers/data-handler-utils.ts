@@ -112,12 +112,13 @@ export async function checkPaymentAndRateLimits({
     span.setAttribute('client.ip', clientIp ?? 'unknown');
     span.setAttribute('client.ips', clientIps.join(','));
 
-    // Check if ANY IP in the chain is allowlisted - if so, skip all checks
-    if (rateLimiter?.isAllowlisted(clientIps)) {
+    // An allowlisted client skips every check. Only the client itself counts,
+    // never the other addresses in its headers, which it can write freely.
+    if (clientIp !== undefined && rateLimiter?.isAllowlisted([clientIp])) {
       span.setAttribute('allowlisted', true);
       log.debug('Client is allowlisted, skipping checks', {
         id,
-        clientIps,
+        clientIp,
       });
       return { allowed: true };
     }
