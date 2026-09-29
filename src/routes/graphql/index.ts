@@ -11,7 +11,11 @@ import {
 } from '@apollo/server/plugin/disabled';
 import { ApolloServerPluginLandingPageLocalDefault } from '@apollo/server/plugin/landingPage/default';
 import { expressMiddleware } from '@as-integrations/express4';
-import express, { RequestHandler, Response } from 'express';
+import express, {
+  ErrorRequestHandler,
+  RequestHandler,
+  Response,
+} from 'express';
 import { gql } from 'graphql-tag';
 import { readFileSync } from 'node:fs';
 
@@ -20,6 +24,7 @@ import * as metrics from '../../metrics.js';
 import { GqlQueryable, GqlWarning } from '../../types.js';
 import { resolvers } from './resolvers.js';
 import { recordGraphqlBatchSize } from './batch-size.js';
+import { graphqlBodyParseError } from './body-parse-error.js';
 import { buildResolverSignal, ResolverSignalState } from './resolver-signal.js';
 
 /**
@@ -155,7 +160,7 @@ export const makeApolloServerMiddleware = async ({
   db: GqlQueryable;
   txMetadataResolver?: TxMetadataResolver;
 }): Promise<{
-  middleware: RequestHandler[];
+  middleware: (RequestHandler | ErrorRequestHandler)[];
   stop: () => Promise<void>;
 }> => {
   const server = new ApolloServer<GraphQLContext>({
@@ -194,11 +199,14 @@ export const makeApolloServerMiddleware = async ({
 
   await server.start();
 
-  const middleware: RequestHandler[] = [
+  const middleware: (RequestHandler | ErrorRequestHandler)[] = [
     // No explicit limit: apollo-server-express 3 installed body-parser with
     // its default 100kb cap, so leaving it unset keeps the maximum accepted
     // query size exactly where it was.
     express.json(),
+    // A body the parser rejects never reaches Apollo; answer it in the same
+    // GraphQL error shape Apollo uses for every other malformed request.
+    graphqlBodyParseError,
     // Records operations-per-request so we can decide whether to cap batching
     // or disable it outright. See the module for why it sits here.
     recordGraphqlBatchSize,
