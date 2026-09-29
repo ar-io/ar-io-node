@@ -1407,8 +1407,10 @@ Envoy on the same host or private network (nginx, say) is trusted by default;
 one on another public host must be added to `TRUSTED_PROXIES`, or its address
 is taken as every client's.
 
-**A gateway the internet reaches directly**, with no proxy in front, can set
-`TRUSTED_PROXIES=none`, so no header is ever believed.
+**`TRUSTED_PROXIES=none`** believes no proxy header at all. It is only for a
+core that clients reach directly, with no Envoy in front: the standard compose
+setup always has Envoy, and with `none` Envoy's own address would become every
+client's, so all of them would share one rate-limit bucket.
 
 **Keep `TRUSTED_PROXIES` to real proxies.** Every address in it is believed
 about who the client is. The default trusts your private networks, so a host
