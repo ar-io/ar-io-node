@@ -215,6 +215,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Background data verification no longer scans the whole `data.db`
+  `contiguous_data_ids` table.**
+  - Marking a root transaction verified (`WHERE id = @id OR
+    root_transaction_id = @id`) had no index on `root_transaction_id`, so every
+    verification read the whole table while holding the single `data.db`
+    writer. On a gateway with 99M rows each one took about 10 minutes, the
+    writer spent half its time on them, and other `data.db` writes queued
+    behind them (chunk placement confirmations waited about 3 minutes each).
+    A new partial index, `contiguous_data_ids_root_transaction_id_idx`, makes
+    it two index lookups.
+  - Selecting the next batch to verify wrapped `verification_priority` in
+    `COALESCE`, so SQLite walked every unverified row whenever fewer than 1000
+    qualified. It now seeks to the qualifying range: 229 s became 0.02 s on
+    the same gateway.
+  - A `MIN_DATA_VERIFICATION_PRIORITY` of 0 or below still counts
+    unprioritized data as priority 0 and verifies everything.
+  - **Upgrade note:** the migration builds the new index at startup. On a
+    72 GB `data.db` (99M rows) on a SATA SSD it took about 11.5 minutes and
+    added 3.8 GiB, so the gateway starts that much later on the first boot
+    after upgrading.
 - An invalid `after` cursor on GraphQL `transactions` or `blocks` now returns
   `GRAPHQL_VALIDATION_FAILED` on gateways that answer from SQLite. The cursor
   was decoded inside the SQLite worker thread, which re-wraps any error as
