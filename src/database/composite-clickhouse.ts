@@ -7,7 +7,7 @@
 import * as winston from 'winston';
 import sql from 'sql-bricks';
 import { ClickHouseClient, createClient } from '@clickhouse/client';
-import { ValidationError } from 'apollo-server-express';
+import { GraphQLError } from 'graphql';
 import CircuitBreaker from 'opossum';
 
 import * as config from '../config.js';
@@ -68,7 +68,20 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
 
     return { height, blockTransactionIndex, isDataItem, id, indexedAt };
   } catch (error) {
-    throw new ValidationError('Invalid transaction cursor');
+    throw new GraphQLError('Invalid transaction cursor', {
+      extensions: {
+        // Matches what apollo-server-express 3 put on the wire for this error,
+        // verified against a running gateway: HTTP 200, `data: null`, and
+        // `extensions.code = GRAPHQL_VALIDATION_FAILED`.
+        //
+        // Deliberately no `http` override. These decoders run during resolver
+        // execution, and Apollo answers resolver errors with 200 and an
+        // `errors` array; setting `http.status` here would both change that
+        // contract and, because batched requests share one response head,
+        // let one bad cursor set the status for an entire batch.
+        code: 'GRAPHQL_VALIDATION_FAILED',
+      },
+    });
   }
 }
 
@@ -86,7 +99,20 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
 
     return { height };
   } catch (error) {
-    throw new ValidationError('Invalid block cursor');
+    throw new GraphQLError('Invalid block cursor', {
+      extensions: {
+        // Matches what apollo-server-express 3 put on the wire for this error,
+        // verified against a running gateway: HTTP 200, `data: null`, and
+        // `extensions.code = GRAPHQL_VALIDATION_FAILED`.
+        //
+        // Deliberately no `http` override. These decoders run during resolver
+        // execution, and Apollo answers resolver errors with 200 and an
+        // `errors` array; setting `http.status` here would both change that
+        // contract and, because batched requests share one response head,
+        // let one bad cursor set the status for an entire batch.
+        code: 'GRAPHQL_VALIDATION_FAILED',
+      },
+    });
   }
 }
 
