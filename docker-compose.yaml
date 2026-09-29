@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-176414664895103926bb2cd072699e72e15832fb}
     build:
       context: envoy/
     restart: unless-stopped
@@ -46,7 +46,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3e72d74de4a8ca838445eee4010f5ce60ece317d}
     build:
       context: .
     restart: unless-stopped
@@ -623,7 +623,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-956f52564e6ff14f5682f6d26176a03b5ed9807a}
     profiles:
       - clickhouse
     build:
@@ -788,7 +788,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
     build:
       context: litestream/
       dockerfile: Dockerfile
@@ -818,7 +818,7 @@ services:
   # have, so a separate image would be roughly a gigabyte of duplicate layers
   # per operator for code that is already present.
   index-swarm:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3e72d74de4a8ca838445eee4010f5ce60ece317d}
     build:
       context: .
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/main.js']
@@ -933,7 +933,7 @@ services:
   # per start that the sidecar could never know. Fails, and so keeps the
   # engine down, when INDEX_SWARM_ENGINE_AUTH is unset.
   index-swarm-engine-init:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3e72d74de4a8ca838445eee4010f5ce60ece317d}
     entrypoint: ['/nodejs/bin/node', 'dist/index-swarm/engine-init.js']
     profiles:
       - index-swarm-torrent
