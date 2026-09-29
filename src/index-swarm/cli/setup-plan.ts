@@ -141,6 +141,17 @@ export function planSetup(
     return plan;
   }
 
+  // An explicit budget applies to any gateway set up here, not only one
+  // being subscribed now: it is how index-swarm-status tells an existing
+  // subscriber to make room.
+  if (options.maxDiskGiB !== undefined) {
+    set({
+      key: 'INDEX_SWARM_MAX_DISK_BYTES',
+      value: String(Math.round(options.maxDiskGiB * 1024 ** 3)),
+      reason: `${options.maxDiskGiB} GiB for installed bands`,
+    });
+  }
+
   // Subscribing.
   if (options.subscribe.length > 0) {
     let current: ReturnType<typeof parseSubscribe>;
@@ -174,13 +185,10 @@ export function planSetup(
       reason: 'the publishers to subscribe to',
     });
 
-    if (options.maxDiskGiB !== undefined) {
-      set({
-        key: 'INDEX_SWARM_MAX_DISK_BYTES',
-        value: String(Math.round(options.maxDiskGiB * 1024 ** 3)),
-        reason: `${options.maxDiskGiB} GiB for installed bands`,
-      });
-    } else if (env.get('INDEX_SWARM_MAX_DISK_BYTES') === undefined) {
+    if (
+      options.maxDiskGiB === undefined &&
+      env.get('INDEX_SWARM_MAX_DISK_BYTES') === undefined
+    ) {
       set({
         key: 'INDEX_SWARM_MAX_DISK_BYTES',
         value: String(DEFAULT_MAX_DISK_GIB * 1024 ** 3),

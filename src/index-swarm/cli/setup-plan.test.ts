@@ -66,6 +66,23 @@ describe('planSetup', () => {
     assert.deepEqual(p.profiles, ['index-swarm']);
   });
 
+  it("raises an existing subscriber's budget with --max-disk-gib alone, without restarting the gateway", () => {
+    const existing = apply('', { subscribe: [TURBO] });
+    const p = plan(
+      existing.replace(String(50 * 1024 ** 3), String(25 * 1024 ** 3)),
+      {
+        maxDiskGiB: 60,
+      },
+    );
+    assert.deepEqual(p.errors, []);
+    assert.deepEqual(
+      p.changes.map((c) => [c.key, c.value]),
+      [['INDEX_SWARM_MAX_DISK_BYTES', String(60 * 1024 ** 3)]],
+    );
+    assert.equal(p.restartCore, false);
+    assert.deepEqual(p.services, ['index-swarm']);
+  });
+
   it('is idempotent: a second run changes nothing and restarts no gateway', () => {
     const once = apply('', { subscribe: [TURBO], torrent: true });
     const again = plan(once, { subscribe: [TURBO], torrent: true });
