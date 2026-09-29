@@ -125,15 +125,33 @@ export function withChunkServeDeadline<T>(
  *
  * Returns 0 (meaning "no cap") only if the selected value is 0, matching
  * withChunkServeDeadline's contract.
+ *
+ * `peerOrigin` says where the request came from; `peerOriginDeadlineApplied`
+ * says which deadline it is running under. They differ under the
+ * CHUNK_PEER_ORIGIN_DEADLINE_MS=0 opt-out, where a peer-origin request keeps
+ * the general deadline -- and that is exactly the case the peer-origin
+ * deadline metric must not claim as its own.
  */
 export function selectChunkServeDeadline(
   requestAttributes: RequestAttributes | undefined,
-): { deadlineMs: number; peerOrigin: boolean } {
+): {
+  deadlineMs: number;
+  peerOrigin: boolean;
+  peerOriginDeadlineApplied: boolean;
+} {
   const peerOrigin = (requestAttributes?.hops ?? 0) >= 1;
   if (peerOrigin && CHUNK_PEER_ORIGIN_DEADLINE_MS > 0) {
-    return { deadlineMs: CHUNK_PEER_ORIGIN_DEADLINE_MS, peerOrigin };
+    return {
+      deadlineMs: CHUNK_PEER_ORIGIN_DEADLINE_MS,
+      peerOrigin,
+      peerOriginDeadlineApplied: true,
+    };
   }
-  return { deadlineMs: CHUNK_SERVE_DEADLINE_MS, peerOrigin };
+  return {
+    deadlineMs: CHUNK_SERVE_DEADLINE_MS,
+    peerOrigin,
+    peerOriginDeadlineApplied: false,
+  };
 }
 
 /**
@@ -213,12 +231,14 @@ function sendChunkRetrievalError(
     span,
     log,
     offset,
+    peerOriginDeadlineApplied,
   }: {
     request: Request;
     response: Response;
     span: ReturnType<typeof tracer.startSpan>;
     log: Logger;
     offset: number;
+    peerOriginDeadlineApplied: boolean;
   },
 ): void {
   const { statusCode, errorType } = classifyChunkRetrievalError(
@@ -230,8 +250,12 @@ function sendChunkRetrievalError(
   if (errorType === 'serve_deadline_exceeded') {
     metrics.chunkServeDeadlineExceededCounter.inc({ method: request.method });
     // Counted separately so an operator can see what the shorter peer-origin
-    // deadline costs, without it being hidden inside the general total.
-    if ((getRequestAttributes(request, response)?.hops ?? 0) >= 1) {
+    // deadline costs, without it being hidden inside the general total. Keyed
+    // on which deadline actually applied, not on whether a peer asked: under
+    // the CHUNK_PEER_ORIGIN_DEADLINE_MS=0 opt-out a peer-origin serve runs on
+    // the general 12s deadline, and counting that here would report a cost the
+    // peer-origin deadline did not impose.
+    if (peerOriginDeadlineApplied) {
       metrics.chunkPeerOriginDeadlineExceededCounter.inc({
         method: request.method,
       });
@@ -344,12 +368,15 @@ export const createChunkOffsetHandler = ({
         }
 
         // === RETRIEVE CHUNK VIA SERVICE ===
+        // Selected before the try so the catch below can report which deadline
+        // the serve was running under.
+        const { deadlineMs, peerOrigin, peerOriginDeadlineApplied } =
+          selectChunkServeDeadline(requestAttributes);
+        span.setAttribute('chunk.serve_deadline_ms', deadlineMs);
+        span.setAttribute('chunk.peer_origin', peerOrigin);
+
         let result;
         try {
-          const { deadlineMs, peerOrigin } =
-            selectChunkServeDeadline(requestAttributes);
-          span.setAttribute('chunk.serve_deadline_ms', deadlineMs);
-          span.setAttribute('chunk.peer_origin', peerOrigin);
           result = await withChunkServeDeadline(
             deadlineMs,
             request.signal,
@@ -370,6 +397,7 @@ export const createChunkOffsetHandler = ({
             span,
             log,
             offset,
+            peerOriginDeadlineApplied,
           });
           return;
         }
@@ -609,12 +637,15 @@ export const createChunkOffsetDataHandler = ({
         }
 
         // === RETRIEVE CHUNK VIA SERVICE ===
+        // Selected before the try so the catch below can report which deadline
+        // the serve was running under.
+        const { deadlineMs, peerOrigin, peerOriginDeadlineApplied } =
+          selectChunkServeDeadline(requestAttributes);
+        span.setAttribute('chunk.serve_deadline_ms', deadlineMs);
+        span.setAttribute('chunk.peer_origin', peerOrigin);
+
         let result;
         try {
-          const { deadlineMs, peerOrigin } =
-            selectChunkServeDeadline(requestAttributes);
-          span.setAttribute('chunk.serve_deadline_ms', deadlineMs);
-          span.setAttribute('chunk.peer_origin', peerOrigin);
           result = await withChunkServeDeadline(
             deadlineMs,
             request.signal,
@@ -635,6 +666,7 @@ export const createChunkOffsetDataHandler = ({
             span,
             log,
             offset,
+            peerOriginDeadlineApplied,
           });
           return;
         }
