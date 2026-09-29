@@ -1485,6 +1485,22 @@ export const chunkCacheIndexSkippedFloorTotal = new promClient.Counter({
   help: 'Chunk cache index eviction candidates excluded by the minimum age floor',
 });
 
+// Chunk cache index hooks that failed. The hooks are fire-and-forget (a failed
+// index write must never fail the chunk write), so without this counter a
+// failing hook looks the same as a healthy one: the index simply stops growing.
+// It cannot see a store that was never given the index at all (ar-io-node
+// #944) -- no hook runs, so nothing fails; the evictor's index-coverage warning
+// is what catches that. Both labels start at 0 so an alert on the first
+// failure has a series to compare against.
+export const chunkCacheIndexHookErrorsTotal = createCounter({
+  name: 'chunk_cache_index_hook_errors_total',
+  help: 'Chunk cache index write/read hook calls that failed',
+  labelNames: ['hook'],
+  expectedLabelNames: {
+    hook: ['write', 'read'],
+  },
+});
+
 //
 // Circuit breaker metrics
 //

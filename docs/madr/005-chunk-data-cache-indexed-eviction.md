@@ -363,7 +363,7 @@ with **one deliberate deviation** — `last_write` in place of `cached_at`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS chunk_data_cache (
-  data_root    TEXT    NOT NULL PRIMARY KEY,  -- b64url, matches on-disk dir name
+  data_root    BLOB    NOT NULL PRIMARY KEY,  -- raw bytes; b64url is the dir name
   size         INTEGER NOT NULL,              -- summed bytes of chunks under it
   chunk_count  INTEGER NOT NULL,              -- drives the hybrid-tail threshold
   last_write   INTEGER NOT NULL,              -- MAX(write time) — the age floor
@@ -376,9 +376,10 @@ CREATE INDEX IF NOT EXISTS chunk_data_cache_eviction_idx
 
 It lives in `chunks.db`, not `data.db` — following the `chunk_placements`
 precedent noted in the gw2 measurements, so eviction bookkeeping churns its own
-WAL rather than a 2.9 GB shared database. `data_root` is TEXT (not BLOB, unlike
-`chunk_placements`) because it must round-trip unchanged into the on-disk
-directory name the evictor unlinks.
+WAL rather than a 2.9 GB shared database. `data_root` is a BLOB, matching
+`chunk_placements` so the two tables can be joined; the evictor converts it back
+to b64url for the on-disk directory name it unlinks. (It was proposed as TEXT
+for that round-trip; see Risks and Open Questions for why it changed.)
 
 **Why `last_write` and not `cached_at`.** The proposed schema mirrored
 `contiguous_data_cache`, where `cached_at` is the immutable first-write time.
