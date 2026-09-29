@@ -195,23 +195,35 @@ bundle it sits in, one level too shallow
 ([#959](https://github.com/ar-io/ar-io-node/issues/959)). Its bytes are
 correct, but the header cannot be read from a data item as if it were an L1
 transaction. When a header cannot be read at all, the gateway looks the
-recorded root up as a bundle (its stored attributes, then the root TX index,
-where CDB64 answers locally), adds the bundle's payload offset, and checks the
-header again at the resulting location in the enclosing root, walking up to 10
-enclosing bundles. A location confirmed this way is served and stored in place
-of the rejected one. Correctly rooted items, and roots that could be read but
-hold the wrong header, never take this path.
+recorded root up as a bundle (its stored attributes, then the root TX index),
+adds the bundle's payload offset, and checks the header again at the resulting
+location in the enclosing root, walking up to 10 enclosing bundles. The root
+TX index lookup follows `ROOT_TX_LOOKUP_ORDER`: with `cdb` early in the order,
+CDB64 answers it locally; with the default order it reaches remote sources
+first. The recovery runs at most once per location per request. It also runs
+when a correctly rooted item's header read fails (an upstream outage), where
+it costs one root TX lookup for the root; roots that were read but hold the
+wrong header never take it.
 
-Outcomes are counted in `data_item_location_check_total{source,result,reason}`,
-where `source` is `stored_attributes`, `attributes_traversal`,
-`root_tx_index` or `root_tx_index_fallback`, or one of the first three with a
-`_rebased` suffix for recovered locations, and `result` is `confirmed` or
-`rejected`. A rejection's `reason` is `header_unreadable` (no header could be
-parsed there: the read failed, for example because the root is a bundled data
-item, or the bytes are not a header),
-`id_mismatch` (the header belongs to another item) or `offset_mismatch` (the
-header does not end at the recorded payload offset). Only `id_mismatch` means
-a location would have served another item's bytes.
+A recovered location's header is confirmed, but its payload size is not, so a
+full read is served through signature verification and the location is stored
+only once the payload verifies; a location whose payload fails is not offered
+again for an hour. A range request is served from the confirmed location but
+not stored, since it cannot be verified end to end. Outcomes are counted in
+`data_item_signature_verification_total{source="rebased_location"}`.
+
+Header checks are counted in
+`data_item_location_check_total{source,result,reason}`, where `source` is
+`stored_attributes`, `attributes_traversal`, `root_tx_index` or
+`root_tx_index_fallback`, or one of the first three with a `_rebased` suffix
+for recovered locations, and `result` is `confirmed` or `rejected`. A
+rejection's `reason` is `header_unreadable` (no header could be parsed there:
+the read failed, for example because the root is a bundled data item, or the
+bytes are not a header), `id_mismatch` (the header belongs to another item) or
+`offset_mismatch` (the header is the item's but does not end at the recorded
+payload offset). Both `id_mismatch` and `offset_mismatch` are locations that
+would have served wrong bytes; `header_unreadable` is usually a read failure
+or a mis-rooted nested item.
 
 Observability (per-node Prometheus metrics):
 

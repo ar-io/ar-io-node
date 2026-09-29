@@ -236,8 +236,12 @@ describe('RootParentDataSource: nested item stored under its enclosing bundle', 
     const cdb = await cdbIndex(true);
     try {
       const data = await source(store, cdb).getData({ id: item.id });
+      assert.deepStrictEqual(writes, [], 'nothing stored before verification');
 
+      // The payload is served through signature verification over the real
+      // item signature; the location is stored once it verifies.
       assert.deepStrictEqual(await readAll(data.stream), PAYLOAD);
+      await new Promise((resolve) => setImmediate(resolve));
       assert.deepStrictEqual(writes, [
         [
           item.id,
@@ -245,6 +249,7 @@ describe('RootParentDataSource: nested item stored under its enclosing bundle', 
             rootTransactionId: L1,
             rootDataItemOffset: expected.itemOffset,
             rootDataOffset: expected.dataOffset,
+            itemSize: item.getRaw().length,
             size: PAYLOAD.length,
           },
         ],

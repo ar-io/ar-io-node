@@ -35,6 +35,17 @@ const DIRECT_OFFSET_HINT = 'direct_offset_hint';
 const ROOT_TX_INDEX = 'root_tx_index';
 
 /**
+ * Metric `source` label for payloads at a location recovered by rebasing a
+ * rejected location onto its enclosing root (ar-io/ar-io-node#959).
+ */
+const REBASED_LOCATION = 'rebased_location';
+
+type VerifiedPayloadSource =
+  | typeof DIRECT_OFFSET_HINT
+  | typeof ROOT_TX_INDEX
+  | typeof REBASED_LOCATION;
+
+/**
  * Why a data item location was not confirmed by its header:
  * - `header_unreadable`: no data item header could be parsed at the offset
  *   (the read failed, for example because the root is itself a bundled data
@@ -394,6 +405,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     signal,
     source,
     onReject,
+    onConfirmed,
   }: {
     id: string;
     rootTxId: string;
@@ -405,6 +417,14 @@ export class RootParentDataSource implements ContiguousDataSource {
     source: string;
     /** Told why the location was not confirmed, when it returns `false`. */
     onReject?: (reason: LocationRejectionReason) => void;
+    /**
+     * Given what the confirmed header says about the item: the fields its
+     * signature covers and its own content type, when the parser supplied them.
+     */
+    onConfirmed?: (header: {
+      signedFields?: DataItemSignedFields;
+      contentType?: string;
+    }) => void;
   }): Promise<boolean> {
     const headerSize = dataOffset - itemOffset;
     // A malformed location (no room for a header, or a negative size) is
@@ -431,6 +451,10 @@ export class RootParentDataSource implements ContiguousDataSource {
     const confirmed = located !== null;
     if (confirmed) {
       metrics.dataItemLocationCheckTotal.inc({ source, result: 'confirmed' });
+      onConfirmed?.({
+        signedFields: located.signedFields,
+        contentType: located.contentType,
+      });
     } else {
       metrics.dataItemLocationCheckTotal.inc({
         source,
@@ -453,8 +477,10 @@ export class RootParentDataSource implements ContiguousDataSource {
    *
    * Tries the bundle's stored attributes, then the root TX index. The index
    * lookup accepts the first result that either places the bundle in another
-   * root with a payload offset, or names the bundle as its own (L1) root, so
-   * a local source such as CDB64 answers without probing remote ones.
+   * root with a payload offset, or names the bundle as its own (L1) root. When
+   * a local source such as CDB64 comes early in `ROOT_TX_LOOKUP_ORDER`, it
+   * answers without remote sources being probed; otherwise the lookup probes
+   * sources in the configured order, as any root TX lookup does.
    *
    * @returns The bundle's root and payload offset, or `null` when neither
    *   source shows it is bundled (it may be an L1 transaction).
@@ -522,16 +548,24 @@ export class RootParentDataSource implements ContiguousDataSource {
    * root TX lookup returns the same stored location again.
    *
    * Callers run it only when the rejected header could not be read at all
-   * (`header_unreadable`), so correctly rooted items pay nothing, and neither
-   * does a root that was read but held the wrong header: a root whose bytes
-   * could be read is not the unreadable bundle this recovers from. Walks up
-   * at most `MAX_BUNDLE_NESTING_DEPTH` bundles, adding each bundle's payload
-   * offset, and stops at the first location whose header is confirmed, or
-   * whose root is read but holds the wrong header. Every candidate is checked
-   * with `confirmItemLocation`, so a wrong answer from an index cannot serve
-   * another item's bytes.
+   * (`header_unreadable`). A root that was read but held the wrong header is
+   * not the unreadable bundle this recovers from, and is skipped. An
+   * unreadable header on a correctly rooted item (a failed upstream read)
+   * does run it, which costs one root TX lookup for the root; `attempted`
+   * bounds that to once per location per request. Walks up at most
+   * `MAX_BUNDLE_NESTING_DEPTH` bundles, adding each bundle's payload offset,
+   * and stops at the first location whose header is confirmed, or whose root
+   * is read but holds the wrong header.
    *
-   * @returns The confirmed location in the real root, or `null`.
+   * Every candidate's header is checked with `confirmItemLocation`, so a
+   * wrong answer from an index cannot place another item's header. The
+   * header does not vouch for the payload size, so callers serve a full read
+   * through signature verification (see `planRebasedVerification`) and store
+   * the location only once it verifies. A candidate that failed verification
+   * before is not offered again.
+   *
+   * @returns The confirmed location in the real root, with the header fields
+   *   its signature covers, or `null`.
    */
   private async rebaseRejectedLocation({
     id,
@@ -541,6 +575,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     dataSize,
     signal,
     source,
+    attempted,
   }: {
     id: string;
     rootTxId: string;
@@ -550,17 +585,31 @@ export class RootParentDataSource implements ContiguousDataSource {
     signal?: AbortSignal;
     /** Metric `source` label for the rebased location's header check. */
     source: string;
+    /** Locations already tried in this request; updated here. */
+    attempted: Set<string>;
   }): Promise<{
     rootTxId: string;
     itemOffset: number;
     dataOffset: number;
     dataSize: number;
+    signedFields?: DataItemSignedFields;
+    contentType?: string;
   } | null> {
+    // Step 2's index lookup often returns the location Step 1 just failed to
+    // recover; do not walk it twice.
+    const attemptKey = `${rootTxId}:${itemOffset}:${dataOffset}:${dataSize}`;
+    if (attempted.has(attemptKey)) {
+      return null;
+    }
+    attempted.add(attemptKey);
+
     const visited = new Set<string>([id, rootTxId]);
     let candidate = { rootTxId, itemOffset, dataOffset, dataSize };
 
     for (let hop = 0; hop < MAX_BUNDLE_NESTING_DEPTH; hop++) {
+      signal?.throwIfAborted();
       const bundle = await this.findBundleLocation(candidate.rootTxId);
+      signal?.throwIfAborted();
       // A chain that leads back to the item or to a bundle already walked is
       // corrupt; nothing on it can be trusted.
       if (bundle === null || visited.has(bundle.rootTxId)) {
@@ -575,7 +624,18 @@ export class RootParentDataSource implements ContiguousDataSource {
         dataSize,
       };
 
+      // A payload here failed signature verification on an earlier request.
+      if (
+        this.rejectedItemOffsets.has(this.rebasedRejectionKey(id, candidate))
+      ) {
+        return null;
+      }
+
       const rejection: { reason?: LocationRejectionReason } = {};
+      const confirmation: {
+        signedFields?: DataItemSignedFields;
+        contentType?: string;
+      } = {};
       if (
         await this.confirmItemLocation({
           id,
@@ -588,6 +648,10 @@ export class RootParentDataSource implements ContiguousDataSource {
           onReject: (reason) => {
             rejection.reason = reason;
           },
+          onConfirmed: (header) => {
+            confirmation.signedFields = header.signedFields;
+            confirmation.contentType = header.contentType;
+          },
         })
       ) {
         this.log.info('Rebased rejected location onto its enclosing root', {
@@ -597,7 +661,11 @@ export class RootParentDataSource implements ContiguousDataSource {
           rebasedItemOffset: candidate.itemOffset,
           hops: hop + 1,
         });
-        return candidate;
+        return {
+          ...candidate,
+          signedFields: confirmation.signedFields,
+          contentType: confirmation.contentType,
+        };
       }
       // The enclosing root was read, and the item is not where the index
       // placed it. Walking further up cannot fix a wrong offset.
@@ -607,6 +675,83 @@ export class RootParentDataSource implements ContiguousDataSource {
     }
 
     return null;
+  }
+
+  /** Key under which a rebased location's failed verification is remembered. */
+  private rebasedRejectionKey(
+    id: string,
+    location: {
+      rootTxId: string;
+      itemOffset: number;
+      dataOffset: number;
+      dataSize: number;
+    },
+  ): string {
+    const itemSize =
+      location.dataOffset - location.itemOffset + location.dataSize;
+    return `${id}:${location.rootTxId}:${location.itemOffset}:${itemSize}`;
+  }
+
+  /**
+   * Decides how a rebased location is served. Its header was confirmed, but
+   * the payload size came from the rejected location and nothing vouches for
+   * it, so a full read is served through signature verification and the
+   * location is stored only once the payload verifies. A range request cannot
+   * be verified end to end, and an item whose signature type is not supported
+   * cannot be verified at all: both are served from the confirmed location,
+   * and neither is stored.
+   *
+   * @returns The verification to apply, or `undefined` to serve unverified
+   *   and store nothing
+   */
+  private planRebasedVerification(
+    id: string,
+    rebased: {
+      rootTxId: string;
+      itemOffset: number;
+      dataOffset: number;
+      dataSize: number;
+      signedFields?: DataItemSignedFields;
+    },
+    region: Region | undefined,
+  ):
+    | {
+        signedFields: DataItemSignedFields;
+        rejectionKey: string;
+        attributesToStore: Record<string, unknown>;
+        source: VerifiedPayloadSource;
+      }
+    | undefined {
+    if (region !== undefined) {
+      metrics.dataItemSignatureVerificationTotal.inc({
+        source: REBASED_LOCATION,
+        result: 'skipped_range',
+      });
+      return undefined;
+    }
+    const signedFields = rebased.signedFields;
+    if (
+      signedFields === undefined ||
+      !isSupportedSignatureType(signedFields.signatureType)
+    ) {
+      metrics.dataItemSignatureVerificationTotal.inc({
+        source: REBASED_LOCATION,
+        result: 'unsupported_signature_type',
+      });
+      return undefined;
+    }
+    return {
+      signedFields,
+      rejectionKey: this.rebasedRejectionKey(id, rebased),
+      attributesToStore: {
+        rootTransactionId: rebased.rootTxId,
+        rootDataItemOffset: rebased.itemOffset,
+        rootDataOffset: rebased.dataOffset,
+        itemSize: rebased.dataOffset - rebased.itemOffset + rebased.dataSize,
+        size: rebased.dataSize,
+      },
+      source: REBASED_LOCATION,
+    };
   }
 
   /**
@@ -637,7 +782,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     payloadSize: number;
     rejectionKey: string;
     attributesToStore: Record<string, unknown>;
-    source: typeof DIRECT_OFFSET_HINT | typeof ROOT_TX_INDEX;
+    source: VerifiedPayloadSource;
   }): ContiguousData['stream'] {
     const verifier = new VerifyingPayloadStream({
       fields: signedFields,
@@ -1343,12 +1488,21 @@ export class RootParentDataSource implements ContiguousDataSource {
         );
       }
 
+      // Rejected locations whose recovery was already attempted in this
+      // request (see `rebaseRejectedLocation`).
+      const rebaseAttempts = new Set<string>();
+
       // Step 1: Try attributes-based traversal first
       span.addEvent('Attempting attributes-based traversal');
       let attributesTraversal = await this.traverseToRootUsingAttributes(
         id,
         originalAttributes,
       );
+      // Set when the attributes location was rebased and its payload must be
+      // served through signature verification before it is stored.
+      let attributesVerification:
+        | ReturnType<RootParentDataSource['planRebasedVerification']>
+        | undefined;
 
       if (attributesTraversal) {
         const checkSource = attributesTraversal.fromPreComputed
@@ -1380,6 +1534,7 @@ export class RootParentDataSource implements ContiguousDataSource {
               ? await this.rebaseRejectedLocation({
                   ...location,
                   source: `${checkSource}_rebased`,
+                  attempted: rebaseAttempts,
                 })
               : null;
           attributesTraversal =
@@ -1390,12 +1545,19 @@ export class RootParentDataSource implements ContiguousDataSource {
                   totalOffset: rebased.itemOffset,
                   rootDataOffset: rebased.dataOffset,
                   size: rebased.dataSize,
-                  // Confirmed in the real root: store it, replacing the
-                  // location that failed.
                   fromPreComputed: false,
+                  // Not stored here: a full read stores it once its payload
+                  // verifies (attributesVerification); a range read never does.
+                  provisional: true,
                 };
           if (rebased !== null) {
             span.addEvent('Rejected attributes location rebased');
+            originalContentType ??= rebased.contentType;
+            attributesVerification = this.planRebasedVerification(
+              id,
+              rebased,
+              region,
+            );
           }
         }
       }
@@ -1494,15 +1656,28 @@ export class RootParentDataSource implements ContiguousDataSource {
             },
           );
 
-          return {
-            ...data,
-            sourceContentType: this.resolveItemContentType({
-              id,
-              rootTxId,
-              itemContentType: originalContentType,
-              rootContentType: data.sourceContentType,
-            }),
-          };
+          const sourceContentType = this.resolveItemContentType({
+            id,
+            rootTxId,
+            itemContentType: originalContentType,
+            rootContentType: data.sourceContentType,
+          });
+          if (attributesVerification !== undefined) {
+            return {
+              ...data,
+              stream: this.serveVerifiedPayload({
+                data,
+                id,
+                signedFields: attributesVerification.signedFields,
+                payloadSize: finalRegion.size,
+                rejectionKey: attributesVerification.rejectionKey,
+                attributesToStore: attributesVerification.attributesToStore,
+                source: attributesVerification.source,
+              }),
+              sourceContentType,
+            };
+          }
+          return { ...data, sourceContentType };
         } finally {
           fetchSpan.end();
         }
@@ -1549,6 +1724,13 @@ export class RootParentDataSource implements ContiguousDataSource {
       let rootTxId: string | undefined;
       let rootResult: any;
       let indexLocationConfirmed = false;
+      // Set when the index location was rebased onto its enclosing root: it is
+      // then stored only after its payload verifies (rebasedIndexVerification),
+      // not when its header is confirmed.
+      let indexRebased = false;
+      let rebasedIndexVerification:
+        | ReturnType<RootParentDataSource['planRebasedVerification']>
+        | undefined;
       try {
         // Local-first: accept any result carrying a rootTxId so the lookup
         // short-circuits on a local source (db/cdb) instead of probing remote
@@ -1603,6 +1785,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             const rebased = await this.rebaseRejectedLocation({
               ...location,
               source: 'root_tx_index_rebased',
+              attempted: rebaseAttempts,
             });
             if (rebased !== null) {
               rootTxId = rebased.rootTxId;
@@ -1616,7 +1799,16 @@ export class RootParentDataSource implements ContiguousDataSource {
                 dataSize: rebased.dataSize,
                 path: undefined,
               };
+              if (rebased.contentType !== undefined) {
+                rootResult.contentType ??= rebased.contentType;
+              }
               indexLocationConfirmed = true;
+              indexRebased = true;
+              rebasedIndexVerification = this.planRebasedVerification(
+                id,
+                rebased,
+                region,
+              );
             }
           }
         }
@@ -1624,7 +1816,8 @@ export class RootParentDataSource implements ContiguousDataSource {
           rootTxId !== undefined &&
           rootResult?.rootOffset !== undefined &&
           rootResult?.rootDataOffset !== undefined &&
-          indexLocationConfirmed
+          indexLocationConfirmed &&
+          !indexRebased
         ) {
           const attributesToStore: Record<string, unknown> = {
             rootTransactionId: rootTxId,
@@ -1705,8 +1898,9 @@ export class RootParentDataSource implements ContiguousDataSource {
             signedFields: DataItemSignedFields;
             rejectionKey: string;
             attributesToStore?: Record<string, unknown>;
+            source?: VerifiedPayloadSource;
           }
-        | undefined;
+        | undefined = rebasedIndexVerification;
 
       if (
         rootResult?.rootDataOffset !== undefined &&
@@ -1783,6 +1977,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                 result: 'skipped_rejected',
               });
             } else {
+              const indexedRejection: { reason?: LocationRejectionReason } = {};
               const indexedItem = await this.resolveItemAtOffset({
                 id,
                 rootTxId,
@@ -1791,11 +1986,64 @@ export class RootParentDataSource implements ContiguousDataSource {
                 expectedDataOffset: rootResult.rootDataOffset,
                 signal,
                 source: 'root TX index',
+                onReject: (reason) => {
+                  indexedRejection.reason = reason;
+                },
               });
               const signedFields = indexedItem?.signedFields;
 
               if (indexedItem === null) {
-                // Header unusable for this ID; search the bundle instead.
+                signal?.throwIfAborted();
+                // Header unusable for this ID. If nothing could be read, the
+                // recorded root may be a bundle that is itself a data item
+                // (ar-io/ar-io-node#959); otherwise search the bundle instead.
+                const headerSize =
+                  rootResult.rootDataOffset !== undefined
+                    ? rootResult.rootDataOffset - rootResult.rootOffset
+                    : undefined;
+                const payloadSize =
+                  headerSize !== undefined ? rootResult.size - headerSize : -1;
+                const rebased =
+                  indexedRejection.reason === 'header_unreadable' &&
+                  headerSize !== undefined &&
+                  headerSize > 0 &&
+                  payloadSize >= 0
+                    ? await this.rebaseRejectedLocation({
+                        id,
+                        rootTxId,
+                        itemOffset: rootResult.rootOffset,
+                        dataOffset: rootResult.rootDataOffset,
+                        dataSize: payloadSize,
+                        signal,
+                        source: 'root_tx_index_rebased',
+                        attempted: rebaseAttempts,
+                      })
+                    : null;
+                const plan =
+                  rebased !== null
+                    ? this.planRebasedVerification(id, rebased, region)
+                    : undefined;
+                if (rebased !== null && plan !== undefined) {
+                  rootTxId = rebased.rootTxId;
+                  bundleParseResult = {
+                    itemOffset: rebased.itemOffset,
+                    dataOffset: rebased.dataOffset,
+                    itemSize: rootResult.size,
+                    dataSize: rebased.dataSize,
+                    contentType: rebased.contentType,
+                  };
+                  indexVerification = {
+                    signedFields: plan.signedFields,
+                    rejectionKey: plan.rejectionKey,
+                    source: plan.source,
+                  };
+                  metrics.rootTxLocalResolveTotal.inc({
+                    outcome: 'index_offsets',
+                  });
+                  offsetParseSpan.setAttributes({
+                    'offset.method': 'index_item_offset_rebased',
+                  });
+                }
               } else if (
                 signedFields === undefined ||
                 !isSupportedSignatureType(signedFields.signatureType)
@@ -2022,7 +2270,7 @@ export class RootParentDataSource implements ContiguousDataSource {
               payloadSize: finalRegion.size,
               rejectionKey: indexVerification.rejectionKey,
               attributesToStore: indexVerification.attributesToStore ?? {},
-              source: ROOT_TX_INDEX,
+              source: indexVerification.source ?? ROOT_TX_INDEX,
             }),
             sourceContentType,
           };

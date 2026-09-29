@@ -3926,25 +3926,24 @@ describe('RootParentDataSource', () => {
   // stored-root rebase cannot help, and the local-first root TX lookup returns
   // the same stored location again, so the item was served as a 404.
   //
-  // Figures are from the production case on turbo-gateway.com:
-  //   item   3BX9…  stored root KsiJ… (a data item)  offsets 160 / 1268
-  //   bundle KsiJ…  in L1 QkXf…  item offset 269,559,576, payload 269,560,703
-  //   rebased: 269,560,703 + 160 = 269,560,863 and + 1268 = 269,561,971,
-  //   which is what the published CDB64 index records for the item.
+  // Offsets follow the production case on turbo-gateway.com (item 3BX9… stored
+  // under bundle KsiJ… at 160, the bundle's payload at 269,560,703 in L1
+  // QkXf…); the item is a real signed fixture, so full reads are verified.
   describe('nested root recovery', () => {
-    const ITEM = '3BX9-nested-item';
     const BUNDLE = 'KsiJ-bundle-data-item';
     const L1 = 'QkXf-l1-root';
-    const STORED = { itemOffset: 160, dataOffset: 1268 };
     const BUNDLE_IN_L1 = { itemOffset: 269559576, dataOffset: 269560703 };
-    const REBASED = {
-      itemOffset: BUNDLE_IN_L1.dataOffset + STORED.itemOffset,
-      dataOffset: BUNDLE_IN_L1.dataOffset + STORED.dataOffset,
-    };
-    const HEADER = STORED.dataOffset - STORED.itemOffset;
-    const SIZE = 3041840;
+    const PAYLOAD = Buffer.from('nested item payload');
+    let fx: Awaited<ReturnType<typeof signedItemFixture>>;
+    let ITEM: string;
+    let HEADER: number;
+    let SIZE: number;
+    let STORED: { itemOffset: number; dataOffset: number };
+    let REBASED: { itemOffset: number; dataOffset: number };
     let source: RootParentDataSource;
     let bundleLookup: (() => Promise<unknown>) | undefined;
+    let itemLookup: (() => Promise<unknown>) | undefined;
+    let payloadBytes: () => Buffer;
 
     const fetches = () =>
       (dataSource.getData as any).mock.calls.map((call: any) => ({
@@ -3959,9 +3958,40 @@ describe('RootParentDataSource', () => {
       (dataItemRootTxIndex.getRootTx as any).mock.calls.map(
         (call: any) => call.arguments[0],
       );
+    const headerReadsAt = (rootTxId: string) =>
+      (ans104OffsetSource.parseDataItemHeader as any).mock.calls.filter(
+        (call: any) => call.arguments[0] === rootTxId,
+      ).length;
+    // Stored attributes are written by the verifier once the stream ends.
+    const readAndSettle = async (stream: NodeJS.ReadableStream) => {
+      const body = await readAll(stream);
+      await new Promise((resolve) => setImmediate(resolve));
+      return body;
+    };
+    const storedRebased = () => [
+      ITEM,
+      {
+        rootTransactionId: L1,
+        rootDataItemOffset: REBASED.itemOffset,
+        rootDataOffset: REBASED.dataOffset,
+        itemSize: HEADER + SIZE,
+        size: SIZE,
+      },
+    ];
 
-    beforeEach(() => {
+    beforeEach(async () => {
+      fx = await signedItemFixture(PAYLOAD);
+      ITEM = fx.item.id;
+      HEADER = fx.headerSize;
+      SIZE = PAYLOAD.length;
+      STORED = { itemOffset: 160, dataOffset: 160 + HEADER };
+      REBASED = {
+        itemOffset: BUNDLE_IN_L1.dataOffset + STORED.itemOffset,
+        dataOffset: BUNDLE_IN_L1.dataOffset + STORED.dataOffset,
+      };
       bundleLookup = undefined;
+      itemLookup = undefined;
+      payloadBytes = () => PAYLOAD;
       source = new RootParentDataSource({
         log,
         dataSource,
@@ -3990,7 +4020,7 @@ describe('RootParentDataSource', () => {
       (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
         async (rootTxId: string, itemOffset: number) => {
           if (rootTxId === L1 && itemOffset === REBASED.itemOffset) {
-            return { id: ITEM, headerSize: HEADER, payloadSize: SIZE };
+            return fx.header;
           }
           throw new Error(`no chunks for ${rootTxId}`);
         },
@@ -4005,12 +4035,14 @@ describe('RootParentDataSource', () => {
       (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async (id: string) => {
           if (id === ITEM) {
-            return {
-              rootTxId: BUNDLE,
-              rootOffset: STORED.itemOffset,
-              rootDataOffset: STORED.dataOffset,
-              dataSize: SIZE,
-            };
+            return itemLookup !== undefined
+              ? itemLookup()
+              : {
+                  rootTxId: BUNDLE,
+                  rootOffset: STORED.itemOffset,
+                  rootDataOffset: STORED.dataOffset,
+                  dataSize: SIZE,
+                };
           }
           if (id === BUNDLE) {
             return bundleLookup !== undefined
@@ -4025,13 +4057,16 @@ describe('RootParentDataSource', () => {
         },
       );
       (dataSource.getData as any).mock.mockImplementation(
-        async ({ region }: any) => ({
-          stream: Readable.from([Buffer.alloc(region?.size ?? SIZE)]),
-          size: region?.size ?? SIZE,
-          verified: true,
-          trusted: true,
-          cached: false,
-        }),
+        async ({ region }: any) => {
+          const bytes = payloadBytes().subarray(0, region?.size ?? SIZE);
+          return {
+            stream: Readable.from([bytes]),
+            size: bytes.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+          };
+        },
       );
     });
 
@@ -4048,10 +4083,12 @@ describe('RootParentDataSource', () => {
 
       const result = await source.getData({ id: ITEM });
 
-      assert.strictEqual(result.size, SIZE);
+      assert.deepStrictEqual(await readAndSettle(result.stream), PAYLOAD);
       assert.deepStrictEqual(fetches(), [
         { id: L1, region: { offset: REBASED.dataOffset, size: SIZE } },
       ]);
+      // The stored attributes carry no content type; the item's header does.
+      assert.strictEqual(result.sourceContentType, 'text/plain');
       assert.strictEqual(
         await readLocationCheck(
           'stored_attributes',
@@ -4068,24 +4105,69 @@ describe('RootParentDataSource', () => {
       assert.deepStrictEqual(rootLookups(), [BUNDLE]);
     });
 
-    it('stores the rebased location in place of the one that failed', async () => {
-      await source.getData({ id: ITEM });
+    it('stores the rebased location once its payload verifies', async () => {
+      const verified = await readVerification('rebased_location', 'verified');
 
-      assert.deepStrictEqual(stored(), [
-        [
-          ITEM,
-          {
-            rootTransactionId: L1,
-            rootDataItemOffset: REBASED.itemOffset,
-            rootDataOffset: REBASED.dataOffset,
-            size: SIZE,
-          },
-        ],
+      const result = await source.getData({ id: ITEM });
+      assert.deepStrictEqual(
+        stored(),
+        [],
+        'nothing is stored before the payload has verified',
+      );
+      await readAndSettle(result.stream);
+
+      assert.deepStrictEqual(stored(), [storedRebased()]);
+      assert.strictEqual(
+        await readVerification('rebased_location', 'verified'),
+        verified + 1,
+      );
+    });
+
+    it('does not store a rebased location whose payload fails verification, and does not offer it again', async () => {
+      // Right header, wrong payload bytes (for example, a wrong size).
+      payloadBytes = () => Buffer.alloc(SIZE, 1);
+
+      const first = await source.getData({ id: ITEM });
+      await assert.rejects(readAll(first.stream));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepStrictEqual(stored(), []);
+
+      const readsBefore = headerReadsAt(L1);
+      const fetchesBefore = fetches().length;
+      await assert.rejects(source.getData({ id: ITEM }));
+      assert.strictEqual(
+        headerReadsAt(L1),
+        readsBefore,
+        'a rejected rebased location is not checked or served again',
+      );
+      assert.strictEqual(fetches().length, fetchesBefore);
+    });
+
+    it('serves a range from the rebased location without storing it', async () => {
+      const skipped = await readVerification(
+        'rebased_location',
+        'skipped_range',
+      );
+
+      const result = await source.getData({
+        id: ITEM,
+        region: { offset: 2, size: 5 },
+      });
+      await readAndSettle(result.stream);
+
+      assert.deepStrictEqual(fetches(), [
+        { id: L1, region: { offset: REBASED.dataOffset + 2, size: 5 } },
       ]);
+      assert.deepStrictEqual(stored(), []);
+      assert.strictEqual(
+        await readVerification('rebased_location', 'skipped_range'),
+        skipped + 1,
+      );
     });
 
     it('asks the index for the bundle, accepting a local answer that settles it', async () => {
-      await source.getData({ id: ITEM });
+      const result = await source.getData({ id: ITEM });
+      await readAndSettle(result.stream);
 
       const call = (dataItemRootTxIndex.getRootTx as any).mock.calls.find(
         (c: any) => c.arguments[0] === BUNDLE,
@@ -4102,23 +4184,35 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(accept({ rootTxId: L1 }), false);
     });
 
-    it('recovers an index location rooted at a bundle', async () => {
-      // No stored attributes: the item is found only through the index, which
-      // returns the bundle-rooted location.
+    it('recovers an index location rooted at a bundle, verifying before storing', async () => {
+      // No stored attributes: the item is found only through the index, whose
+      // result carries the item size, so step 2 would otherwise read it
+      // without a size check.
       (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => undefined,
       );
+      itemLookup = async () => ({
+        rootTxId: BUNDLE,
+        rootOffset: STORED.itemOffset,
+        rootDataOffset: STORED.dataOffset,
+        dataSize: SIZE,
+        size: HEADER + SIZE,
+      });
       const rejected = await readLocationCheck('root_tx_index', 'rejected');
       const rebased = await readLocationCheck(
         'root_tx_index_rebased',
         'confirmed',
       );
+      const verified = await readVerification('rebased_location', 'verified');
 
-      await source.getData({ id: ITEM });
+      const result = await source.getData({ id: ITEM });
+      assert.deepStrictEqual(stored(), [], 'not stored before verification');
+      assert.deepStrictEqual(await readAndSettle(result.stream), PAYLOAD);
 
       assert.deepStrictEqual(fetches(), [
         { id: L1, region: { offset: REBASED.dataOffset, size: SIZE } },
       ]);
+      assert.deepStrictEqual(stored(), [storedRebased()]);
       assert.strictEqual(
         await readLocationCheck('root_tx_index', 'rejected'),
         rejected + 1,
@@ -4127,23 +4221,57 @@ describe('RootParentDataSource', () => {
         await readLocationCheck('root_tx_index_rebased', 'confirmed'),
         rebased + 1,
       );
-      assert.ok(
-        stored().some(
-          ([id, attrs]: any) =>
-            id === ITEM &&
-            attrs.rootTransactionId === L1 &&
-            attrs.rootDataItemOffset === REBASED.itemOffset,
-        ),
-        'the rebased index location is stored',
-      );
-      assert.ok(
-        !stored().some(([, attrs]: any) => attrs.rootTransactionId === BUNDLE),
-        'the bundle-rooted location is never stored',
+      assert.strictEqual(
+        await readVerification('rebased_location', 'verified'),
+        verified + 1,
       );
       assert.strictEqual(
         (ans104OffsetSource.getDataItemOffset as any).mock.calls.length,
         0,
         'no bundle search once the location is recovered',
+      );
+    });
+
+    it('recovers an index item offset and size rooted at a bundle (no payload size)', async () => {
+      // A CDB64-style value: item offset, payload offset and total item size,
+      // but no payload size, so step 2 reads the header directly instead of
+      // confirming a complete location.
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => undefined,
+      );
+      itemLookup = async () => ({
+        rootTxId: BUNDLE,
+        rootOffset: STORED.itemOffset,
+        rootDataOffset: STORED.dataOffset,
+        size: HEADER + SIZE,
+      });
+      const verified = await readVerification('rebased_location', 'verified');
+
+      const result = await source.getData({ id: ITEM });
+      assert.deepStrictEqual(stored(), [], 'not stored before verification');
+      assert.deepStrictEqual(await readAndSettle(result.stream), PAYLOAD);
+
+      assert.deepStrictEqual(fetches(), [
+        { id: L1, region: { offset: REBASED.dataOffset, size: SIZE } },
+      ]);
+      assert.ok(
+        stored().some(
+          ([id, attrs]: any) =>
+            id === ITEM &&
+            attrs.rootTransactionId === L1 &&
+            attrs.rootDataItemOffset === REBASED.itemOffset &&
+            attrs.rootDataOffset === REBASED.dataOffset &&
+            attrs.size === SIZE,
+        ),
+        'the rebased location is stored once verified',
+      );
+      assert.ok(
+        !stored().some(([, attrs]: any) => attrs.rootTransactionId === BUNDLE),
+      );
+      assert.strictEqual(result.sourceContentType, 'text/plain');
+      assert.strictEqual(
+        await readVerification('rebased_location', 'verified'),
+        verified + 1,
       );
     });
 
@@ -4159,7 +4287,8 @@ describe('RootParentDataSource', () => {
             : undefined,
       );
 
-      await source.getData({ id: ITEM });
+      const result = await source.getData({ id: ITEM });
+      await readAndSettle(result.stream);
 
       assert.deepStrictEqual(fetches(), [
         { id: L1, region: { offset: REBASED.dataOffset, size: SIZE } },
@@ -4171,11 +4300,13 @@ describe('RootParentDataSource', () => {
       const OUTER = 'outer-bundle-data-item';
       const OUTER_IN_L1 = 5_000_000;
       const BUNDLE_IN_OUTER = 7_000;
+      bundleLookup = async () => ({
+        rootTxId: OUTER,
+        rootDataOffset: BUNDLE_IN_OUTER,
+      });
       (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async (id: string) => {
-          if (id === BUNDLE) {
-            return { rootTxId: OUTER, rootDataOffset: BUNDLE_IN_OUTER };
-          }
+          if (id === BUNDLE) return bundleLookup!();
           if (id === OUTER) {
             return { rootTxId: L1, rootDataOffset: OUTER_IN_L1 };
           }
@@ -4185,14 +4316,13 @@ describe('RootParentDataSource', () => {
       const itemOffset = STORED.itemOffset + BUNDLE_IN_OUTER + OUTER_IN_L1;
       (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
         async (rootTxId: string, offset: number) => {
-          if (rootTxId === L1 && offset === itemOffset) {
-            return { id: ITEM, headerSize: HEADER, payloadSize: SIZE };
-          }
+          if (rootTxId === L1 && offset === itemOffset) return fx.header;
           throw new Error(`no chunks for ${rootTxId}`);
         },
       );
 
-      await source.getData({ id: ITEM });
+      const result = await source.getData({ id: ITEM });
+      await readAndSettle(result.stream);
 
       assert.deepStrictEqual(fetches(), [
         {
@@ -4211,11 +4341,7 @@ describe('RootParentDataSource', () => {
       (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
         async (rootTxId: string) => {
           if (rootTxId === L1) {
-            return {
-              id: 'another-item',
-              headerSize: HEADER,
-              payloadSize: SIZE,
-            };
+            return { ...fx.header, id: 'another-item' };
           }
           throw new Error(`no chunks for ${rootTxId}`);
         },
@@ -4229,9 +4355,7 @@ describe('RootParentDataSource', () => {
       await assert.rejects(source.getData({ id: ITEM }));
 
       assert.deepStrictEqual(fetches(), []);
-      assert.ok(
-        !stored().some(([, attrs]: any) => attrs.rootTransactionId === L1),
-      );
+      assert.deepStrictEqual(stored(), []);
       assert.strictEqual(
         await readLocationCheck(
           'stored_attributes_rebased',
@@ -4242,15 +4366,33 @@ describe('RootParentDataSource', () => {
       );
     });
 
+    it('stops walking at a rebased candidate whose root was read', async () => {
+      // The enclosing root can be read, but the header there does not end at
+      // the recorded payload offset: walking further up cannot fix that.
+      const OUTER = 'outer-bundle-data-item';
+      bundleLookup = async () => ({ rootTxId: OUTER, rootDataOffset: 7_000 });
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async (rootTxId: string) => {
+          if (rootTxId === OUTER) {
+            return { ...fx.header, headerSize: HEADER + 1 };
+          }
+          throw new Error(`no chunks for ${rootTxId}`);
+        },
+      );
+
+      await assert.rejects(source.getData({ id: ITEM }));
+
+      assert.ok(
+        !rootLookups().includes(OUTER),
+        'must not look further up once a root has been read',
+      );
+    });
+
     it('does not look for an enclosing bundle when the recorded root was read', async () => {
       // The recorded root can be read, but holds another item's header there:
       // a wrong offset, not a root that is a data item.
       (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
-        async () => ({
-          id: 'another-item',
-          headerSize: HEADER,
-          payloadSize: SIZE,
-        }),
+        async () => ({ ...fx.header, id: 'another-item' }),
       );
 
       await assert.rejects(source.getData({ id: ITEM }));
@@ -4262,13 +4404,51 @@ describe('RootParentDataSource', () => {
       assert.deepStrictEqual(fetches(), []);
     });
 
-    it('gives up when nothing places the bundle, as before', async () => {
+    it('looks the bundle up once per request, even when step 2 returns the same location', async () => {
       bundleLookup = async () => undefined;
 
       await assert.rejects(source.getData({ id: ITEM }));
 
+      assert.strictEqual(
+        rootLookups().filter((id: string) => id === BUNDLE).length,
+        1,
+      );
       assert.deepStrictEqual(fetches(), []);
       assert.deepStrictEqual(stored(), []);
+    });
+
+    it('costs a correctly rooted item with a failing header read at most one lookup of its root', async () => {
+      // An L1 root whose header read fails (an upstream outage): not a nested
+      // item, but indistinguishable from one until the root is looked up.
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) =>
+          id === ITEM
+            ? {
+                rootTransactionId: L1,
+                rootDataItemOffset: REBASED.itemOffset,
+                rootDataOffset: REBASED.dataOffset,
+                size: SIZE,
+              }
+            : undefined,
+      );
+      itemLookup = async () => ({
+        rootTxId: L1,
+        rootOffset: REBASED.itemOffset,
+        rootDataOffset: REBASED.dataOffset,
+        dataSize: SIZE,
+      });
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => {
+          throw new Error('upstream 503');
+        },
+      );
+
+      await assert.rejects(source.getData({ id: ITEM }));
+
+      assert.ok(
+        rootLookups().filter((id: string) => id === L1).length <= 1,
+        'the L1 root is looked up at most once',
+      );
     });
 
     it('stops at a bundle named as its own root', async () => {
@@ -4285,11 +4465,9 @@ describe('RootParentDataSource', () => {
       await assert.rejects(source.getData({ id: ITEM }));
 
       assert.deepStrictEqual(fetches(), []);
-      const headerRoots = (
-        ans104OffsetSource.parseDataItemHeader as any
-      ).mock.calls.map((call: any) => call.arguments[0]);
-      assert.ok(
-        !headerRoots.includes(ITEM),
+      assert.strictEqual(
+        headerReadsAt(ITEM),
+        0,
         'must not read a header from the item as if it were its own root',
       );
     });
@@ -4318,6 +4496,7 @@ describe('RootParentDataSource', () => {
     });
 
     it('stops when the request aborts during the recovery', async () => {
+      // Every header read would succeed; only the abort stops the request.
       const controller = new AbortController();
       bundleLookup = async () => {
         controller.abort();
@@ -4327,17 +4506,13 @@ describe('RootParentDataSource', () => {
           rootDataOffset: BUNDLE_IN_L1.dataOffset,
         };
       };
-      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
-        async () => {
-          throw new Error('aborted');
-        },
-      );
 
       await assert.rejects(
         source.getData({ id: ITEM, signal: controller.signal }),
         { name: 'AbortError' },
       );
       assert.deepStrictEqual(fetches(), []);
+      assert.strictEqual(headerReadsAt(L1), 0);
     });
   });
 });
