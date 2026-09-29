@@ -593,6 +593,16 @@ services:
     image: clickhouse/clickhouse-server:${CLICKHOUSE_IMAGE_TAG:-26.3}
     profiles:
       - clickhouse
+    # Without this the container defaults to `restart: no`, so a host reboot
+    # or a Docker daemon restart brings every other service back and leaves
+    # ClickHouse down. With CLICKHOUSE_STREAMING_ENABLED=true that takes the
+    # gateway with it: core's boot fails in `clickhouseStreamer.start()` with
+    # `getaddrinfo ENOTFOUND clickhouse` before `app.listen()` runs. Core now
+    # exits and restart-loops in that case rather than sitting there with no
+    # HTTP listener (see `markStartupComplete` in src/system.ts), so this
+    # policy is what actually gets the pair back up; without it core just
+    # loops against a ClickHouse that is never coming back on its own.
+    restart: unless-stopped
     ports:
       - ${CLICKHOUSE_PORT_2:-8123}:8123
       - ${CLICKHOUSE_PORT_3:-8443}:8443
@@ -782,6 +792,10 @@ services:
       dockerfile: Dockerfile
     profiles:
       - litestream
+    # Same reason as the clickhouse service above: continuous SQLite
+    # replication that does not come back after a reboot is a backup that
+    # silently stops, which is only discovered when a restore is needed.
+    restart: unless-stopped
     volumes:
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
     environment:
