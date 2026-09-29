@@ -55,17 +55,10 @@ export function ingestCacheOrigin(req: Request): number | null {
   if (allowlist.length === 0) {
     return CHUNK_INGEST_ORIGIN_OPEN;
   }
-  // SPOOFABILITY (documented, not a ship gate): extractAllClientIPs trusts
-  // client-supplied X-Forwarded-For / X-Real-IP with no trusted-proxy hop
-  // handling (shared util, also used by the rate limiter + payments), so a
-  // poster can forge an allowlisted source IP. Impact is bounded — the allowlist
-  // only gates *who* is cached and the TTL tier (24h vs 6h), never content
-  // integrity (validateChunk still applies) or the disk cap; and it's moot under
-  // the default open ingest (empty allowlist). The proper fix (trusted-proxy hop
-  // parsing in ip-utils) is tracked separately. See CHUNK_INGEST_CACHE_ALLOWLIST
-  // in docs/envs.md.
-  const { clientIps } = extractAllClientIPs(req);
-  if (isAnyIpAllowlisted(clientIps, allowlist)) {
+  // Only the poster itself counts: the address a trusted proxy recorded
+  // (TRUSTED_PROXIES), never other addresses in headers it can write freely.
+  const { clientIp } = extractAllClientIPs(req);
+  if (clientIp !== undefined && isAnyIpAllowlisted([clientIp], allowlist)) {
     return CHUNK_INGEST_ORIGIN_ALLOWLISTED;
   }
   return null;

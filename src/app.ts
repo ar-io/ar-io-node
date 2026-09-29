@@ -16,6 +16,7 @@ import { createDefaultCacheControlMiddleware } from './middleware/cache-control.
 import { createErrorHandlerMiddleware } from './middleware/error-handler.js';
 import { createHttpSigMiddleware } from './middleware/httpsig.js';
 import { warnIfWalkConcurrencyUnsafe } from './workers/fs-cleanup-worker.js';
+import { gatewayTrustedProxies } from './lib/ip-utils.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { createIndexesRouter } from './routes/indexes.js';
@@ -53,6 +54,10 @@ for (const worker of system.stagingCleanupWorkers) {
 
 // All cleanup walks share one libuv thread pool with the request path; warn if
 // they are collectively configured to crowd it out.
+// Parsed now, so a malformed TRUSTED_PROXIES stops startup rather than
+// failing every request.
+gatewayTrustedProxies();
+
 warnIfWalkConcurrencyUnsafe(
   [
     system.headerFsCacheCleanupWorker,

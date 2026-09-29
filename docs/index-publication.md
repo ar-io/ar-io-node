@@ -29,8 +29,8 @@ A publisher serves one signed JSON document, the **publication**, at
 SHA-256. The signature is made with the Ed25519 key registered as the
 gateway's observer address, so the registry, not the server you asked, says
 whose document it is. The digests then make every file checkable on its own,
-so the bytes may come from the publisher, a mirror or a CDN (or, in future,
-a peer-to-peer transport) without anyone in between being trusted. Nothing in this chain vouches for
+so the bytes may come from the publisher, a mirror, a CDN or other gateways
+over BitTorrent without anyone in between being trusted. Nothing in this chain vouches for
 what an index *says*: a root-tx index entry is a claim about where an item
 lives, and a gateway checks that claim when it serves the item.
 
