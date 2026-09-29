@@ -77,11 +77,15 @@ load_clickhouse_config
 
 # When sourced (e.g. by tests that need access to migrate_staging_to_final),
 # skip argument parsing, validation, and the top-level main() invocation —
-# callers supply their own inputs and invoke functions directly.
+# callers supply their own inputs and invoke functions directly. The functions
+# themselves are still defined: the CLI-only section below is wrapped in an
+# `if` rather than returned from early, since returning here would skip them.
+IS_SOURCED=false
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-  return 0
+  IS_SOURCED=true
 fi
 
+if [[ "$IS_SOURCED" == false ]]; then
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -202,6 +206,7 @@ fi
 echo "ClickHouse Import Configuration:"
 echo "  Host: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT"
 echo "  User: $CLICKHOUSE_USER"
+fi # end of CLI-only section (skipped when sourced)
 
 sql_escape_literal() {
   local value="$1"
@@ -902,4 +907,6 @@ main() {
 }
 
 # Run main function
-main
+if [[ "$IS_SOURCED" == false ]]; then
+  main
+fi

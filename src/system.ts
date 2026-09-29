@@ -411,6 +411,7 @@ export const gqlQueryable: GqlQueryable = (() => {
             config.CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED,
           ownerProjectionEntityTypes:
             config.CLICKHOUSE_GQL_OWNER_PROJECTION_ENTITY_TYPES,
+          idLookupEnabled: config.CLICKHOUSE_GQL_ID_LOOKUP_ENABLED,
           // L1-only routing: serve filter-entailed base-layer queries from the
           // SQLite L1 index instead of ClickHouse. Disabled unless the filter
           // is set to something other than the default NeverMatch.

@@ -2332,6 +2332,16 @@ export const CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED =
     'false',
   ) === 'true';
 
+// Gate for resolving GraphQL `ids` and `bundledIn` parent ids through the
+// ClickHouse `transaction_ids` lookup table, then reading `transactions` by
+// primary key. Without it an id lookup relies on `id_bloom`, whose cost grows
+// with the table (~4M rows per id at ~400M rows), and `bundledIn` has no index.
+// Enable only once `transaction_ids` is backfilled (see
+// src/database/clickhouse/schema.sql): an id missing from the lookup table is
+// treated as absent from ClickHouse. Disabled by default.
+export const CLICKHOUSE_GQL_ID_LOOKUP_ENABLED =
+  env.varOrDefault('CLICKHOUSE_GQL_ID_LOOKUP_ENABLED', 'false') === 'true';
+
 // Comma-separated allowlist of `Entity-Type` tag values for which owner-filtered
 // GQL queries use owner_projection routing (only consulted when
 // CLICKHOUSE_GQL_OWNER_PROJECTION_ROUTING_ENABLED is true). These are the

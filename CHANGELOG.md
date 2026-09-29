@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **ClickHouse id lookup table for GraphQL `ids` and `bundledIn`
+  (`CLICKHOUSE_GQL_ID_LOOKUP_ENABLED`, off by default)** (#946). On a large
+  ClickHouse `transactions` table, `transactions(ids: [...])` with 3 or more
+  ids and any `bundledIn` query failed with `TOO_MANY_ROWS`: `id_bloom` passes
+  ~1% of all granules per id, and `parent_id` has no index.
+  - New table `transaction_ids` (id → primary-key prefix), filled by
+    `transaction_ids_mv` on every insert. `schema.sql` creates both on the next
+    import; existing rows need a one-time backfill `INSERT`, documented there
+    and in `docs/clickhouse-schema.md`.
+  - With the flag on, the stable leg resolves ids (or `bundledIn` parents)
+    there first and reads `transactions` by primary key. On 30M test rows, 3
+    ids read ~20K rows instead of ~790K, 100 ids ~953K instead of ~18.5M, and
+    one bundle ~9K instead of 30M.
+  - Enable only after the backfill: an id missing from the table is treated as
+    absent from ClickHouse. A `bundledIn` query with a parent missing from the
+    table, and a failed lookup, run as before.
+  - New metric `clickhouse_gql_id_lookup_total{filter, outcome}`.
+
 - **Signed index publishing (`index-swarm` sidecar, `/ar-io/indexes`)** — a
   gateway can publish its CDB64 root-TX index bands for other gateways, and
   subscribe to theirs. Off by default (compose profile `index-swarm`).
@@ -207,6 +225,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   signal handler used to stop GraphQL while the listener was still accepting
   requests; the listener now closes first. Under load, a `docker stop` of the
   previous release answered about 27,000 requests with that error.
+
+- `scripts/clickhouse-import` defines its functions again when sourced. The
+  guard that skips the CLI returned before any function was defined, so tests
+  that source it for `migrate_staging_to_final` failed with "command not
+  found". `scripts/tests/parquet/test-clickhouse-ttl-rules` also placed `FINAL`
+  after `WHERE`, a syntax error; it now passes end to end.
 
 - The `tx-data` retrieval source no longer treats an unmined transaction as
   data. A node answers `202 Pending` for a transaction it has not mined, and

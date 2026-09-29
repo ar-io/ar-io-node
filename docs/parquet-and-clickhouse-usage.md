@@ -350,6 +350,10 @@ WHERE 1;
 
 This is a heavy mutation and should be scheduled off-peak.
 
+Changing `expires_at` this way does not need a matching change to
+`transaction_ids`, the GraphQL id lookup table: it has no TTL, so its rows are
+never removed before the `transactions` rows they point to.
+
 ## In-place upgrade
 
 Operators upgrading an existing deployment who want to avoid the full
