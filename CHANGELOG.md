@@ -4,7 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 84] - 2026-09-29
+
+This is a **recommended release** focused on **index sharing between gateways,
+serving the right bytes and content type, and closing two ways to avoid rate
+limits and payment**. Key highlights include the `index-swarm` sidecar, which
+publishes and subscribes to signed CDB64 index bands over HTTP and optionally
+BitTorrent; a check of each data item's header before its bytes are served from
+a stored or indexed location, and fixes that stop items being served with their
+bundle's content type; `X-Forwarded-For` trusted only from known proxies
+(**upgrade the Envoy image with core**); x402 prices quoted in whole atomic
+units, so requests over their limit are no longer served free when a price
+could not be quoted; chunk retrieval asking Arweave nodes before AR.IO peers by
+default; GraphQL on Apollo Server 5; and a background verification fix whose
+migration builds a new index at startup, which can take several minutes on a
+large `data.db`.
 
 ### Added
 
