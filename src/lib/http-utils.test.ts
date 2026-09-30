@@ -17,6 +17,8 @@ import {
   handleIfNoneMatch,
   normalizeAbortError,
   parseContentLength,
+  contentEncodingOf,
+  parseContentEncoding,
   parseContentRange,
   parseNonNegativeInt,
   wouldReturn304,
@@ -105,6 +107,37 @@ describe('http-utils', () => {
 
     it('should handle zero content-length', () => {
       assert.equal(parseContentLength({ 'content-length': '0' }), 0);
+    });
+  });
+
+  describe('parseContentEncoding', () => {
+    it('returns the encoding, lowercased and trimmed', () => {
+      assert.equal(parseContentEncoding('gzip'), 'gzip');
+      assert.equal(parseContentEncoding(' GZIP '), 'gzip');
+      assert.equal(parseContentEncoding('br'), 'br');
+    });
+
+    it('treats a missing, empty or identity header as no encoding', () => {
+      assert.equal(parseContentEncoding(undefined), undefined);
+      assert.equal(parseContentEncoding(''), undefined);
+      assert.equal(parseContentEncoding('   '), undefined);
+      assert.equal(parseContentEncoding('identity'), undefined);
+      assert.equal(parseContentEncoding('Identity'), undefined);
+    });
+
+    it('keeps a list of encodings as sent', () => {
+      assert.equal(parseContentEncoding('gzip, br'), 'gzip, br');
+      assert.equal(parseContentEncoding(['gzip', 'br']), 'gzip, br');
+    });
+  });
+
+  describe('contentEncodingOf', () => {
+    it('spreads an encoding only when there is one', () => {
+      assert.deepEqual(contentEncodingOf('GZIP'), {
+        sourceContentEncoding: 'gzip',
+      });
+      assert.deepEqual(contentEncodingOf(undefined), {});
+      assert.deepEqual(contentEncodingOf('identity'), {});
     });
   });
 
