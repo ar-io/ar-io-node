@@ -30,7 +30,7 @@ import {
   parseTrustedProxies,
 } from '../lib/trusted-proxies.js';
 import { isPrivateAddress } from './torrent.js';
-import { setTrackerPeerCount, trackerAnnounces } from './metrics.js';
+import { setTrackerStats, trackerAnnounces, TrackerStats } from './metrics.js';
 
 export interface ClosedTrackerOptions {
   log: Logger;
@@ -229,7 +229,7 @@ export class ClosedTracker {
     this.maxPeers = options.maxPeers ?? 50;
     this.maxPeersPerSwarm = options.maxPeersPerSwarm ?? 2000;
     this.maxPeersTotal = options.maxPeersTotal ?? 50_000;
-    setTrackerPeerCount(() => this.peerCount());
+    setTrackerStats(() => this.stats());
     this.maxPortsPerIp = options.maxPortsPerIp ?? 4;
     this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 10;
     this.selfAddress = options.selfAddress ?? (() => undefined);
@@ -373,7 +373,7 @@ export class ClosedTracker {
   /** Forget peers that have missed two announces, and swarms no longer offered. */
   private expire(now: number): void {
     const allowed = this.allowed();
-    const ttlMs = (this.intervalSeconds * 2 + 60) * 1000;
+    const ttlMs = this.peerTtlMs();
     for (const [hex, swarm] of this.swarms) {
       if (!allowed.has(hex)) {
         this.swarms.delete(hex);
@@ -386,25 +386,57 @@ export class ClosedTracker {
     }
   }
 
+  /** How long a peer is kept without announcing: two intervals and a minute. */
+  private peerTtlMs(): number {
+    return (this.intervalSeconds * 2 + 60) * 1000;
+  }
+
   /**
-   * Peers per torrent, each counted once however many hashes it uses.
-   * Walks every peer, so it runs when metrics are read, not per announce.
+   * Peers and seeders per torrent, each peer counted once however many
+   * hashes it announces under (a seeder under any of them), plus the distinct
+   * addresses seeding anything.
+   *
+   * Counts only what {@link expire} would keep: bands still offered and peers
+   * seen within the TTL. Expiry runs on announces, so without this a swarm
+   * that went quiet would be counted as it last was. Seeding hosts are
+   * counted by address bucket (an IPv6 /64 is one address, as for the
+   * per-address limits) and leave out this node's own engine, so they count
+   * other hosts that share. Walks every peer, so it runs when metrics are
+   * read, not per announce.
    */
-  private peerCount(): number {
+  private stats(): TrackerStats {
+    const now = this.now();
+    const ttlMs = this.peerTtlMs();
+    const allowed = this.allowed();
     const torrentOf = this.torrentOf();
-    const byTorrent = new Map<string, Set<string>>();
+    const self = this.selfPeer();
+    const selfKey =
+      self === undefined ? undefined : `${normalizeIp(self.ip)}:${self.port}`;
+    const byTorrent = new Map<string, Map<string, boolean>>();
+    const seedingHosts = new Set<string>();
     for (const [hex, swarm] of this.swarms) {
+      if (!allowed.has(hex)) continue;
       const torrent = torrentOf.get(hex) ?? hex;
       let peers = byTorrent.get(torrent);
       if (peers === undefined) {
-        peers = new Set();
+        peers = new Map();
         byTorrent.set(torrent, peers);
       }
-      for (const key of swarm.keys()) peers.add(key);
+      for (const [key, peer] of swarm) {
+        if (now - peer.seenAt > ttlMs) continue;
+        peers.set(key, peers.get(key) === true || peer.seeding);
+        if (peer.seeding && key !== selfKey) {
+          seedingHosts.add(addressBucket(peer.ip));
+        }
+      }
     }
-    let total = 0;
-    for (const peers of byTorrent.values()) total += peers.size;
-    return total;
+    let peers = 0;
+    let seeders = 0;
+    for (const torrentPeers of byTorrent.values()) {
+      peers += torrentPeers.size;
+      for (const seeding of torrentPeers.values()) if (seeding) seeders += 1;
+    }
+    return { peers, seeders, seedingHosts: seedingHosts.size };
   }
 
   /**

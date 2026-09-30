@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and the remote partitions of the shipped indexes, are skipped. A new
   `offsets_lookup_total{source}` metric counts answers by `db`, `cdb64` or
   `none`.
+- The index-swarm tracker reports who shares: `index_swarm_tracker_seeders`
+  (tracked peers holding the whole band) and
+  `index_swarm_tracker_seeding_hosts` (distinct addresses seeding at least one
+  band, an IPv6 /64 counted once and this node's own engine left out: roughly
+  how many other gateways share).
 
 ### Changed
 
@@ -32,6 +37,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `index_swarm_tracker_peers` counted peers of a swarm that had gone quiet,
+  and bands no longer offered, until the next announce ran expiry. It now
+  counts only bands still offered and peers seen within the announce TTL.
 - **Gzip-encoded data fetched from a trusted gateway or AR.IO peer was served
   decompressed, still labelled `Content-Encoding: gzip`, so clients could not
   decode it.** An item uploaded gzip-compressed and tagged

@@ -16,7 +16,11 @@ import {
   torrentsByInfohash,
   trackedInfohashes,
 } from './tracker.js';
-import { trackerPeers } from './metrics.js';
+import {
+  trackerPeers,
+  trackerSeeders,
+  trackerSeedingHosts,
+} from './metrics.js';
 
 const log = createTestLogger({ suite: 'ClosedTracker' });
 
@@ -357,6 +361,106 @@ describe('ClosedTracker', () => {
     t.announce(query(THEIRS, 1111), '203.0.113.1');
     t.announce(query(OURS, 2222), '203.0.113.2');
     assert.equal((await trackerPeers.get()).values[0].value, 2);
+  });
+
+  it('counts seeders once per torrent, and seeding hosts once overall', async () => {
+    const v1 = OURS.toString('hex');
+    const v2 = THEIRS.toString('hex');
+    const hybrid = [
+      { torrent: { infohashV1: v1, infohashV2: v2 + 'ff'.repeat(12) } },
+    ];
+    const t = tracker({
+      allowed: () => trackedInfohashes(hybrid),
+      torrentOf: () => torrentsByInfohash(hybrid),
+    });
+    // A seeds, announcing complete under v1 and still counting down under
+    // v2; B is downloading; C is complete.
+    t.announce(query(OURS, 1111, { left: '0' }), '203.0.113.1');
+    t.announce(query(THEIRS, 1111), '203.0.113.1');
+    t.announce(query(OURS, 2222), '203.0.113.2');
+    t.announce(query(OURS, 3333, { left: '0' }), '203.0.113.3');
+
+    assert.equal((await trackerPeers.get()).values[0].value, 3);
+    assert.equal((await trackerSeeders.get()).values[0].value, 2);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 2);
+  });
+
+  it('counts a host seeding two bands as one seeding host', async () => {
+    const bands = [
+      {
+        torrent: {
+          infohashV1: OURS.toString('hex'),
+          infohashV2: 'aa'.repeat(32),
+        },
+      },
+      {
+        torrent: {
+          infohashV1: THEIRS.toString('hex'),
+          infohashV2: 'bb'.repeat(32),
+        },
+      },
+    ];
+    const t = tracker({
+      allowed: () => trackedInfohashes(bands),
+      torrentOf: () => torrentsByInfohash(bands),
+    });
+    t.announce(query(OURS, 1111, { left: '0' }), '203.0.113.1');
+    t.announce(query(THEIRS, 1111, { left: '0' }), '203.0.113.1');
+
+    assert.equal((await trackerSeeders.get()).values[0].value, 2);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 1);
+
+    t.announce(query(OURS, 1111, { event: 'stopped' }), '203.0.113.1');
+    t.announce(query(THEIRS, 1111, { event: 'stopped' }), '203.0.113.1');
+    assert.equal((await trackerSeeders.get()).values[0].value, 0);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 0);
+  });
+
+  it('stops counting peers that went quiet, without another announce', async () => {
+    let now = 0;
+    const t = tracker({ intervalSeconds: 60, now: () => now });
+    t.announce(query(OURS, 1111, { left: '0' }), '203.0.113.1');
+    t.announce(query(OURS, 2222), '203.0.113.2');
+    assert.equal((await trackerPeers.get()).values[0].value, 2);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 1);
+
+    // Past two intervals and a minute, with nobody announcing since.
+    now += (60 * 2 + 61) * 1000;
+    assert.equal((await trackerPeers.get()).values[0].value, 0);
+    assert.equal((await trackerSeeders.get()).values[0].value, 0);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 0);
+  });
+
+  it('stops counting a band as soon as it is withdrawn', async () => {
+    let offered = new Set([OURS.toString('hex')]);
+    const t = tracker({ allowed: () => offered });
+    t.announce(query(OURS, 1111, { left: '0' }), '203.0.113.1');
+    assert.equal((await trackerSeeders.get()).values[0].value, 1);
+
+    offered = new Set();
+    assert.equal((await trackerPeers.get()).values[0].value, 0);
+    assert.equal((await trackerSeeders.get()).values[0].value, 0);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 0);
+  });
+
+  it('counts an IPv6 /64 as one seeding host', async () => {
+    const t = tracker();
+    t.announce(query(OURS, 1111, { left: '0' }), '2001:db8:1:2::1');
+    t.announce(query(OURS, 2222, { left: '0' }), '2001:db8:1:2::2');
+
+    assert.equal((await trackerSeeders.get()).values[0].value, 2);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 1);
+  });
+
+  it("leaves this node's own engine out of the seeding hosts", async () => {
+    const t = tracker({
+      selfPeer: () => ({ ip: '203.0.113.9', port: 6881 }),
+    });
+    t.announce(query(OURS, 6881, { left: '0' }), '203.0.113.9');
+    t.announce(query(OURS, 1111, { left: '0' }), '203.0.113.1');
+
+    assert.equal((await trackerSeeders.get()).values[0].value, 2);
+    assert.equal((await trackerSeedingHosts.get()).values[0].value, 1);
   });
 
   it('stops tracking a band once it is no longer offered', () => {
