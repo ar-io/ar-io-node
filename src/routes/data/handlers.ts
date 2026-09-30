@@ -49,6 +49,7 @@ import {
   generateBoundary,
   calculateRangeResponseSize,
   handleIfNoneMatch,
+  honouredContentEncoding,
   parseNonNegativeInt,
   wouldReturn304,
 } from '../../lib/http-utils.js';
@@ -508,12 +509,15 @@ const setDataHeaders = ({
   // Use the content type from the L1 or data item index if available
   res.contentType(contentType);
 
-  // The item's indexed encoding, else the encoding its upstream reported for
-  // the bytes being served. Upstream fetches do not decode, so bytes that
-  // arrive encoded are served encoded and must say so.
-  const contentEncoding =
-    dataAttributes?.contentEncoding ?? data.sourceContentEncoding;
-  if (contentEncoding != null) {
+  // The item's indexed or recorded encoding, else the encoding its source
+  // reported for the bytes being served (its signed tags or an upstream).
+  // Upstream fetches do not decode, so bytes that arrive encoded are served
+  // encoded and must say so. Only codings clients can decode are named; any
+  // other value is served without the header, as before.
+  const contentEncoding = honouredContentEncoding(
+    dataAttributes?.contentEncoding ?? data.sourceContentEncoding,
+  );
+  if (contentEncoding !== undefined) {
     res.header('Content-Encoding', contentEncoding);
   }
 

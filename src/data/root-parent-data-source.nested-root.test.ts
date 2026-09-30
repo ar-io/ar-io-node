@@ -11,6 +11,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import {
   DataItem,
   SolanaSigner,
@@ -53,7 +54,12 @@ import { createTestLogger } from '../../test/test-logger.js';
 describe('RootParentDataSource: nested item stored under its enclosing bundle', () => {
   const log = createTestLogger({ suite: 'RootParentDataSource nested root' });
   const L1 = randomBytes(32).toString('base64url');
-  const PAYLOAD = Buffer.from('the nested item payload, served from L1');
+  // A compressed page, as a static site deployed to Arweave uploads it: the
+  // stored bytes are gzip, and its signed tags say so.
+  const PAGE = Buffer.from(
+    '<!doctype html><title>nested and compressed</title>',
+  );
+  const PAYLOAD = gzipSync(PAGE);
 
   let tempDir: string;
   let item: DataItem;
@@ -76,7 +82,10 @@ describe('RootParentDataSource: nested item stored under its enclosing bundle', 
     const signer = new SolanaSigner(bs58.encode(Buffer.concat([seed, pub])));
 
     item = createData(PAYLOAD, signer, {
-      tags: [{ name: 'Content-Type', value: 'text/plain' }],
+      tags: [
+        { name: 'Content-Type', value: 'text/html' },
+        { name: 'Content-Encoding', value: 'gzip' },
+      ],
     });
     const sibling = createData('sibling', signer);
     const innerBundle = await bundleAndSignData([item, sibling], signer);
@@ -238,9 +247,16 @@ describe('RootParentDataSource: nested item stored under its enclosing bundle', 
       const data = await source(store, cdb).getData({ id: item.id });
       assert.deepStrictEqual(writes, [], 'nothing stored before verification');
 
+      // The item's encoding comes from its own signed header, read by the real
+      // parser: this gateway has not indexed the item and needs no index.
+      assert.strictEqual(data.sourceContentEncoding, 'gzip');
+      assert.strictEqual(data.sourceContentEncodingFromTags, true);
+
       // The payload is served through signature verification over the real
       // item signature; the location is stored once it verifies.
-      assert.deepStrictEqual(await readAll(data.stream), PAYLOAD);
+      const body = await readAll(data.stream);
+      assert.deepStrictEqual(body, PAYLOAD, 'the stored gzip bytes, unchanged');
+      assert.deepStrictEqual(gunzipSync(body), PAGE);
       await new Promise((resolve) => setImmediate(resolve));
       assert.deepStrictEqual(writes, [
         [
@@ -251,7 +267,7 @@ describe('RootParentDataSource: nested item stored under its enclosing bundle', 
             rootDataOffset: expected.dataOffset,
             itemSize: item.getRaw().length,
             size: PAYLOAD.length,
-            contentType: 'text/plain',
+            contentType: 'text/html',
           },
         ],
       ]);

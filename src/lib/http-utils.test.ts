@@ -18,6 +18,7 @@ import {
   normalizeAbortError,
   parseContentLength,
   contentEncodingOf,
+  honouredContentEncoding,
   parseContentEncoding,
   parseContentRange,
   parseNonNegativeInt,
@@ -128,6 +129,25 @@ describe('http-utils', () => {
     it('keeps a list of encodings as sent', () => {
       assert.equal(parseContentEncoding('gzip, br'), 'gzip, br');
       assert.equal(parseContentEncoding(['gzip', 'br']), 'gzip, br');
+    });
+  });
+
+  describe('honouredContentEncoding', () => {
+    it('names a single coding clients decode, normalized', () => {
+      assert.equal(honouredContentEncoding('gzip'), 'gzip');
+      assert.equal(honouredContentEncoding(' GZIP '), 'gzip');
+      assert.equal(honouredContentEncoding('br'), 'br');
+      assert.equal(honouredContentEncoding('deflate'), 'deflate');
+      assert.equal(honouredContentEncoding('zstd'), 'zstd');
+    });
+
+    it('names nothing for stacked, unknown, identity or missing codings', () => {
+      assert.equal(honouredContentEncoding('gzip, br'), undefined);
+      assert.equal(honouredContentEncoding('x-custom'), undefined);
+      assert.equal(honouredContentEncoding('compress'), undefined);
+      assert.equal(honouredContentEncoding('identity'), undefined);
+      assert.equal(honouredContentEncoding(''), undefined);
+      assert.equal(honouredContentEncoding(undefined), undefined);
     });
   });
 

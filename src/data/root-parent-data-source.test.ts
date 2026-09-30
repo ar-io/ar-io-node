@@ -3440,6 +3440,194 @@ describe('RootParentDataSource', () => {
     });
   });
 
+  // A gateway that has not indexed an item (e.g. a data item in a bundle it
+  // does not unbundle) learns its Content-Encoding from the item's own signed
+  // header, which it reads to serve the item anyway. The root fetch's encoding
+  // describes the bundle and never labels the item.
+  describe("item content encoding from the item's header", () => {
+    const ROOT = 'encoded-item-root';
+    let source: RootParentDataSource;
+
+    const rootFetch = (size: number) =>
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.alloc(size)]),
+        size,
+        verified: false,
+        cached: false,
+        trusted: true,
+        sourceContentType: 'application/octet-stream',
+        // The bundle's own encoding: must not label the item.
+        sourceContentEncoding: 'br',
+      }));
+
+    beforeEach(() => {
+      source = new RootParentDataSource({
+        log,
+        dataSource,
+        dataAttributesStore,
+        dataItemRootTxIndex,
+        ans104OffsetSource,
+      });
+      (dataAttributesStore.setDataAttributes as any).mock.mockImplementation(
+        async () => {},
+      );
+    });
+
+    it('labels the item from its header on the direct offset hint path', async () => {
+      const { item, hint, header } = await signedItemFixture(
+        Buffer.from('x'.repeat(150)),
+      );
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => ({}),
+      );
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async () => ({ ...header, contentEncoding: 'gzip' }),
+      );
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([item.rawData]),
+        size: item.rawData.length,
+        verified: false,
+        cached: false,
+        trusted: true,
+        sourceContentEncoding: 'br',
+      }));
+
+      const result = await source.getData({
+        id: item.id,
+        requestAttributes: {
+          rootTransactionIdHint: ROOT,
+          rootByteHint: hint,
+          hops: 0,
+          clientIps: [],
+        },
+      });
+
+      assert.strictEqual(result.sourceContentEncoding, 'gzip');
+      assert.strictEqual(result.sourceContentEncodingFromTags, true);
+    });
+
+    it('labels the item from the header its stored location is confirmed by', async () => {
+      const ITEM = 'stored-encoded-item';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) =>
+          id === ITEM
+            ? {
+                rootTransactionId: ROOT,
+                rootDataItemOffset: 1000,
+                rootDataOffset: 1100,
+                size: 50,
+              }
+            : undefined,
+      );
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async (rootTxId: string, itemOffset: number) =>
+          rootTxId === ROOT && itemOffset === 1000
+            ? {
+                id: ITEM,
+                headerSize: 100,
+                payloadSize: 50,
+                contentEncoding: 'gzip',
+              }
+            : Promise.reject(new Error('no header here')),
+      );
+      rootFetch(50);
+
+      const result = await source.getData({ id: ITEM });
+
+      assert.strictEqual(result.sourceContentEncoding, 'gzip');
+      assert.strictEqual(result.sourceContentEncodingFromTags, true);
+    });
+
+    it('labels the item from its header on the bundle search path', async () => {
+      const ITEM = 'searched-encoded-item';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => undefined,
+      );
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId: ROOT }),
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 1000,
+          dataOffset: 1100,
+          itemSize: 150,
+          dataSize: 50,
+          contentEncoding: 'gzip',
+        }),
+      );
+      rootFetch(50);
+
+      const result = await source.getData({ id: ITEM });
+
+      assert.strictEqual(result.sourceContentEncoding, 'gzip');
+      assert.strictEqual(result.sourceContentEncodingFromTags, true);
+    });
+
+    it('labels the item from the header its fallback lookup location is confirmed by', async () => {
+      // A nested item: the root bundle's own index does not list it, so the
+      // location comes from the full lookup, which carries no encoding.
+      const ITEM = 'fallback-encoded-item';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => undefined,
+      );
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async (_id: string, opts?: { accept?: unknown }) =>
+          opts?.accept !== undefined
+            ? { rootTxId: ROOT }
+            : {
+                rootTxId: ROOT,
+                rootOffset: 1000,
+                rootDataOffset: 1100,
+                dataSize: 50,
+              },
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => null,
+      );
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async (rootTxId: string, itemOffset: number) =>
+          rootTxId === ROOT && itemOffset === 1000
+            ? {
+                id: ITEM,
+                headerSize: 100,
+                payloadSize: 50,
+                contentEncoding: 'gzip',
+              }
+            : Promise.reject(new Error('no header here')),
+      );
+      rootFetch(50);
+
+      const result = await source.getData({ id: ITEM });
+
+      assert.strictEqual(result.sourceContentEncoding, 'gzip');
+      assert.strictEqual(result.sourceContentEncodingFromTags, true);
+    });
+
+    it("reports no encoding when the item's header has none, whatever the root's", async () => {
+      const ITEM = 'searched-plain-item';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => undefined,
+      );
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId: ROOT }),
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 1000,
+          dataOffset: 1100,
+          itemSize: 150,
+          dataSize: 50,
+        }),
+      );
+      rootFetch(50);
+
+      const result = await source.getData({ id: ITEM });
+
+      assert.strictEqual(result.sourceContentEncoding, undefined);
+      assert.strictEqual(result.sourceContentEncodingFromTags, undefined);
+    });
+  });
+
   // A data item is served as a byte range of the bundle that contains it, so
   // the root fetch reports the *bundle's* content type — `application/octet-
   // stream` for every ANS-104 bundle. Reporting that as the item's type makes

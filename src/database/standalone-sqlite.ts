@@ -1748,7 +1748,11 @@ export class StandaloneSqliteDatabaseWorker {
       hash: hash ? toB64Url(hash) : undefined,
       dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
       size: txOrItemRow?.data_size ?? dataRow?.data_size,
-      contentEncoding: txOrItemRow?.content_encoding,
+      // The item's indexed tag, else the encoding recorded when its data was
+      // cached (from its signed tags or a trusted upstream). Never borrowed
+      // from another item with the same bytes: see selectDataAttributes.
+      contentEncoding:
+        txOrItemRow?.content_encoding ?? dataRow?.content_encoding ?? undefined,
       contentType,
       parentId,
       rootTransactionId,
@@ -1977,6 +1981,7 @@ export class StandaloneSqliteDatabaseWorker {
     hash,
     dataSize,
     contentType,
+    contentEncoding,
     cachedAt,
     verified,
     verificationPriority,
@@ -1996,6 +2001,7 @@ export class StandaloneSqliteDatabaseWorker {
     hash: string;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
@@ -2042,6 +2048,13 @@ export class StandaloneSqliteDatabaseWorker {
       root_data_offset: rootDataOffset ?? null,
       trusted: trusted === true ? 1 : trusted === false ? 0 : null,
     });
+
+    if (contentEncoding !== undefined) {
+      this.stmts.data.updateDataIdContentEncoding.run({
+        id: fromB64Url(id),
+        content_encoding: contentEncoding,
+      });
+    }
 
     if (dataRoot !== undefined) {
       this.stmts.data.insertDataRoot.run({
@@ -4535,6 +4548,7 @@ export class StandaloneSqliteDatabase
     hash,
     dataSize,
     contentType,
+    contentEncoding,
     verified,
     verificationPriority,
     rootTransactionId,
@@ -4553,6 +4567,7 @@ export class StandaloneSqliteDatabase
     hash: string;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
     verified?: boolean;
     verificationPriority?: number;
     rootTransactionId?: string;
@@ -4589,6 +4604,9 @@ export class StandaloneSqliteDatabase
       rootDataItemOffset ?? '',
       rootDataOffset ?? '',
       contentType ?? '',
+      // Likewise: a write that first learns the item's encoding must not be
+      // dropped as a duplicate of one that did not know it.
+      contentEncoding ?? '',
     ].join('|');
 
     if (this.saveDataContentAttributesCache.get(dedupeKey)) {
@@ -4608,6 +4626,7 @@ export class StandaloneSqliteDatabase
         hash,
         dataSize,
         contentType,
+        contentEncoding,
         verified,
         verificationPriority,
         rootTransactionId,

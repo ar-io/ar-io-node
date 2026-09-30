@@ -58,6 +58,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `foreground_cache_skipped_total{reason="encoding_mismatch"}`.
   - Bodies already cached by a reverse proxy in front of the gateway (e.g.
     nginx `proxy_cache`) keep the wrong body until they expire or are purged.
+- **Gzip-encoded data items were served without `Content-Encoding` by gateways
+  that had not indexed them**, so browsers showed compressed bytes instead of
+  the page. An item uploaded compressed and tagged `Content-Encoding: gzip` must
+  be served as the stored bytes with that header, but the header came only from
+  the index of the item's tags, which a gateway does not have for data items in
+  bundles it does not unbundle (on turbo-gateway.com, every Turbo upload). The
+  node now learns the encoding when it fetches the bytes:
+  - from the item's own signed header, which it reads to serve an item from
+    its root bundle anyway (`RootParentDataSource`);
+  - from Turbo's S3 objects: the `payload-content-encoding` metadata when
+    present, otherwise the item header at the start of the object, read in the
+    same request as the payload (full reads only);
+  - from a trusted gateway's response (see the entry above).
+  The encoding is recorded with the item (a new `contiguous_data_ids.content_encoding`
+  column, written once and never overwritten), so cache hits keep the header.
+  It is recorded per item, not per data hash, so byte-identical uploads with
+  and without the tag keep their own behaviour. An untrusted peer's encoding is
+  served but not recorded or cached
+  (`foreground_cache_skipped_total{reason="encoding_unverified"}`).
+  - Only `gzip`, `br`, `deflate` and `zstd` are named in `Content-Encoding`;
+    a list of stacked codings or an unknown value is served without the
+    header, as before.
+  - Remote CDB64 byte-range reads no longer decode a `Content-Encoding`
+    response.
+  - Items cached before this release keep serving without the header until
+    their cache entries are refreshed.
 - **Nested data items stored with an intermediate bundle as their root were
   served as 404s** (#959). An item inside a bundle that is itself a data item
   could be recorded with that bundle as its root and offsets measured in the

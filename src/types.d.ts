@@ -1014,6 +1014,13 @@ export interface ContiguousData {
    * bundle's encoding.
    */
   sourceContentEncoding?: string;
+  /**
+   * True when `sourceContentEncoding` was read from the item's own signed tags
+   * (directly from its header, or from storage metadata derived from them) rather
+   * than claimed by an upstream. Such an encoding is recorded with the cached
+   * data; an upstream's is recorded only when the upstream is trusted.
+   */
+  sourceContentEncodingFromTags?: boolean;
   cached: boolean;
   requestAttributes?: RequestAttributes;
   /**
@@ -1260,6 +1267,7 @@ export interface ContiguousDataIndex {
     hash,
     dataSize,
     contentType,
+    contentEncoding,
     cachedAt,
     verified,
     verificationPriority,
@@ -1279,6 +1287,11 @@ export interface ContiguousDataIndex {
     hash: string;
     dataSize: number;
     contentType?: string;
+    /**
+     * The item's `Content-Encoding`, recorded fill-once. Only pass one learned
+     * from the item's signed tags or a trusted upstream.
+     */
+    contentEncoding?: string;
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
