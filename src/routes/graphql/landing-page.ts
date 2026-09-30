@@ -128,7 +128,13 @@ export const graphqlLandingPage = (
  * Serves the bundled files under `/graphql/graphiql/`. Mount it first in the
  * `/graphql` chain so asset requests never reach the body parser, the batch
  * metrics or Apollo. Every file name carries a content hash, so the files are
- * cacheable forever; an unknown path is a 404, never Apollo's landing page.
+ * cacheable forever.
+ *
+ * An unknown path is answered here with a plain 404, never Apollo's landing
+ * page. It is not left to `fallthrough: false`: `send` reports a missing file
+ * as an error with `expose: false`, which the gateway's terminal handler turns
+ * into a logged 500, so a probe or a browser holding a previous build's page
+ * would fill the logs with stack traces.
  */
 export const graphiqlAssets = (
   assetsDir: string = GRAPHIQL_ASSETS_DIR,
@@ -137,11 +143,13 @@ export const graphiqlAssets = (
   router.use(
     GRAPHIQL_ASSETS_ROUTE,
     express.static(assetsDir, {
-      fallthrough: false,
       immutable: true,
       maxAge: '1y',
       index: false,
     }),
+    (_req: Request, res: Response) => {
+      res.status(404).end();
+    },
   );
   return router;
 };
