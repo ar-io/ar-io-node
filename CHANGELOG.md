@@ -58,6 +58,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     `foreground_cache_skipped_total{reason="encoding_mismatch"}`.
   - Bodies already cached by a reverse proxy in front of the gateway (e.g.
     nginx `proxy_cache`) keep the wrong body until they expire or are purged.
+- **Nested data items stored with an intermediate bundle as their root were
+  served as 404s** (#959). An item inside a bundle that is itself a data item
+  could be recorded with that bundle as its root and offsets measured in the
+  bundle's payload. The bytes there are the item's, but since #937 every
+  stored location has its header checked before use, and the check reads the
+  recorded root as an L1 transaction, which it is not. The stored-root rebase
+  only helps when the bundle has attributes of its own; without them the
+  location was rejected, a local-first root TX lookup returned the same
+  location, and the request failed. When a header cannot be read at all, the
+  gateway now looks the recorded root up as a bundle, in its stored
+  attributes and then the root TX index, adds the bundle's payload offset, and
+  checks the header again in the enclosing root. A full read of a recovered
+  location is served through signature verification, and the location is
+  stored only once the payload verifies; a range read is served but not
+  stored. The recovery runs at most once per location per request. On
+  turbo-gateway.com about 5,500 of 5.1M stored locations per node had this
+  shape; replaying 300 of them against production data, 283 were served from
+  exactly the location CDB64 records for the item, and the other 17 have no
+  index entry for their bundle.
+- `data_item_location_check_total` gains a `reason` label on rejections:
+  `header_unreadable`, `id_mismatch` or `offset_mismatch`. Before, every
+  rejection looked alike, so read failures and roots that are data items read
+  as wrong locations. Recovered locations are counted under sources ending in
+  `_rebased`, and their payload verification under
+  `data_item_signature_verification_total{source="rebased_location"}`.
 
 ## [Release 84] - 2026-09-29
 
