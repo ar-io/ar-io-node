@@ -1,0 +1,14 @@
+-- Record each item's Content-Encoding alongside its cached data.
+--
+-- An item uploaded compressed and tagged `Content-Encoding: gzip` must be served
+-- as the stored bytes with that header. The header comes from the item's
+-- indexed tags, so a gateway that has not indexed the item (a data item in a
+-- bundle it does not unbundle) served the gzip bytes without it, and browsers
+-- showed them undecoded. The node now learns the encoding when it fetches the
+-- bytes, from the item's signed tags or a trusted upstream, and records it here
+-- so cache hits keep the header.
+--
+-- Per ID, not per hash: `contiguous_data` rows are shared by every
+-- byte-identical upload, and the same bytes may be uploaded once to be decoded
+-- (tagged gzip) and once to be downloaded as a `.gz` file (untagged).
+ALTER TABLE contiguous_data_ids ADD COLUMN content_encoding TEXT;

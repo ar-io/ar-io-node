@@ -13,14 +13,86 @@ import {
   RequestAttributes,
 } from '../types.js';
 import { AwsLiteS3 } from '@aws-lite/s3-types';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import { AwsLiteClient } from '@aws-lite/client';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
 import { SpanStatusCode } from '@opentelemetry/api';
 import * as metrics from '../metrics.js';
-import { buildRangeHeader, parseContentRange } from '../lib/http-utils.js';
+import {
+  buildRangeHeader,
+  parseContentEncoding,
+  parseContentRange,
+} from '../lib/http-utils.js';
+import { decodeDataItemHeader } from '../lib/ans104-bundle-scan.js';
+
+/**
+ * Largest item header read to learn an item's Content-Encoding. ANS-104
+ * headers are a few KiB (signature, owner, and at most 4 KiB of tags), so
+ * anything larger is not read and the item is served without an encoding, as
+ * before.
+ */
+const MAX_ITEM_HEADER_READ_BYTES = 64 * 1024;
+
+/**
+ * Reads exactly `length` bytes from the start of `stream`, then hands back the
+ * rest of the stream unread: no bytes are lost, duplicated or re-requested.
+ *
+ * @throws when the stream ends or fails before `length` bytes arrive
+ */
+export function splitLeadingBytes(
+  stream: Readable,
+  length: number,
+): Promise<{ head: Buffer; rest: Readable }> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let received = 0;
+    const cleanup = () => {
+      stream.off('data', onData);
+      stream.off('end', onEnd);
+      stream.off('error', onError);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onEnd = () => {
+      cleanup();
+      reject(
+        new Error(`Stream ended after ${received} of ${length} header bytes`),
+      );
+    };
+    const onData = (chunk: Buffer) => {
+      if (received + chunk.length < length) {
+        chunks.push(chunk);
+        received += chunk.length;
+        return;
+      }
+      const needed = length - received;
+      chunks.push(chunk.subarray(0, needed));
+      cleanup();
+      stream.pause();
+
+      const rest = new PassThrough();
+      const remainder = chunk.subarray(needed);
+      if (remainder.length > 0) {
+        rest.write(remainder);
+      }
+      stream.on('error', (error) => rest.destroy(error));
+      rest.on('close', () => {
+        if (!stream.destroyed) {
+          stream.destroy();
+        }
+      });
+      stream.pipe(rest);
+      resolve({ head: Buffer.concat(chunks), rest });
+    };
+    stream.on('data', onData);
+    stream.on('end', onEnd);
+    stream.on('error', onError);
+  });
+}
 
 export class S3DataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -49,6 +121,40 @@ export class S3DataSource implements ContiguousDataSource {
     this.s3Bucket = s3Bucket;
     this.s3Prefix = s3Prefix;
     this.awsClient = awsClient;
+  }
+
+  /**
+   * The Content-Encoding from an item's own header bytes, read from the start
+   * of its object. The header must be this item's (its signature hashes to
+   * `id`) and end where the metadata says the payload starts; otherwise, or if
+   * it cannot be decoded, the encoding is left unknown and the payload is
+   * served as before.
+   */
+  private contentEncodingFromHeader(
+    id: string,
+    itemHeader: Buffer,
+    log: winston.Logger,
+  ): string | undefined {
+    try {
+      const decoded = decodeDataItemHeader(itemHeader);
+      if (
+        !decoded.complete ||
+        decoded.header.id !== id ||
+        decoded.header.headerSize !== itemHeader.length
+      ) {
+        log.debug('Item header does not match its object; encoding unknown', {
+          complete: decoded.complete,
+          headerId: decoded.complete ? decoded.header.id : undefined,
+        });
+        return undefined;
+      }
+      return parseContentEncoding(decoded.header.contentEncoding);
+    } catch (error: any) {
+      log.debug('Could not decode item header; encoding unknown', {
+        error: error.message,
+      });
+      return undefined;
+    }
   }
 
   /**
@@ -168,7 +274,23 @@ export class S3DataSource implements ContiguousDataSource {
       }
 
       // Handle non-zero-byte data
-      const startOffset = +(payloadDataStart ?? 0) + +(region?.offset ?? 0);
+      // The item's Content-Encoding. Turbo records it as metadata when the
+      // item is tagged with one; objects written before that carry none, so
+      // a full read starts at the item header instead of the payload, in the
+      // same request, and reads it from the signed tags there.
+      const metadataContentEncoding = parseContentEncoding(
+        head.Metadata?.['payload-content-encoding'],
+      );
+      const headerLength = +(payloadDataStart ?? 0);
+      const readItemHeader =
+        metadataContentEncoding === undefined &&
+        region === undefined &&
+        payloadDataStart !== undefined &&
+        Number.isSafeInteger(headerLength) &&
+        headerLength > 0 &&
+        headerLength <= MAX_ITEM_HEADER_READ_BYTES;
+      const startOffset =
+        (readItemHeader ? 0 : headerLength) + +(region?.offset ?? 0);
       const endOffset =
         region?.size !== undefined ? startOffset + region.size - 1 : undefined;
       const range = buildRangeHeader(startOffset, endOffset);
@@ -224,11 +346,26 @@ export class S3DataSource implements ContiguousDataSource {
         throw new Error('Body missing from S3 response');
       }
 
-      const stream = response.Body as Readable;
+      let stream = response.Body as Readable;
 
-      const finalSize =
+      let finalSize =
         parseContentRange(response.ContentRange)?.size ??
         response.ContentLength;
+
+      let sourceContentEncoding = metadataContentEncoding;
+      if (readItemHeader) {
+        const { head: itemHeader, rest } = await splitLeadingBytes(
+          stream,
+          headerLength,
+        );
+        stream = rest;
+        finalSize -= headerLength;
+        sourceContentEncoding = this.contentEncodingFromHeader(
+          id,
+          itemHeader,
+          log,
+        );
+      }
 
       span.setAttributes({
         's3.response.final_size': finalSize,
@@ -255,6 +392,11 @@ export class S3DataSource implements ContiguousDataSource {
         verified: false,
         trusted: true, // we only cache trusted data
         sourceContentType,
+        // From the item's signed tags: directly, or through Turbo's metadata,
+        // which it derives from them.
+        ...(sourceContentEncoding !== undefined
+          ? { sourceContentEncoding, sourceContentEncodingFromTags: true }
+          : {}),
         cached: false,
         requestAttributes: requestAttributesHeaders?.attributes,
       };

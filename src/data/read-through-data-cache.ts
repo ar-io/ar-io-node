@@ -1316,20 +1316,35 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // Failing either guard degrades to "serve the bytes, stage nothing"
       // rather than to an error -- the caller still gets its data.
       let foregroundSkipReason: string | undefined;
+      // The item's Content-Encoding to record with the cached data, when these
+      // bytes are the first to tell us what it is.
+      let contentEncodingToRecord: string | undefined;
       if (cacheEligible) {
+        const knownContentEncoding = parseContentEncoding(
+          attributes?.contentEncoding,
+        );
+        const sourceContentEncoding = data.sourceContentEncoding;
         if (
-          data.sourceContentEncoding !== undefined &&
-          data.sourceContentEncoding !==
-            parseContentEncoding(attributes?.contentEncoding)
+          sourceContentEncoding !== undefined &&
+          knownContentEncoding !== undefined &&
+          sourceContentEncoding !== knownContentEncoding
         ) {
-          // The upstream says these bytes are encoded in a way this item is not
-          // indexed as: either the item's encoding is not known here (e.g. a
-          // data item this node has not indexed), or the upstream encoded a
-          // response it should have sent as stored. The response still carries
-          // the upstream's Content-Encoding, so it is served correctly, but the
-          // blob would be cached under the item's ID without the encoding that
-          // describes it, and later cache hits would serve it without one.
+          // The bytes are encoded differently from what this item is indexed
+          // or recorded as. The response is labelled from the index, so a
+          // cached copy would be served under the wrong encoding.
           foregroundSkipReason = 'encoding_mismatch';
+        } else if (
+          sourceContentEncoding !== undefined &&
+          knownContentEncoding === undefined &&
+          data.sourceContentEncodingFromTags !== true &&
+          !data.trusted
+        ) {
+          // An untrusted upstream says the bytes are encoded and nothing else
+          // here confirms it. The response carries its Content-Encoding, but
+          // recording it would let one peer fix an encoding on an item for
+          // good (the recorded value is fill-once), and caching the bytes
+          // without it would serve them unlabelled.
+          foregroundSkipReason = 'encoding_unverified';
         } else if (
           this.foregroundCacheMaxSize > 0 &&
           data.size > this.foregroundCacheMaxSize
@@ -1354,6 +1369,17 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             sourceContentEncoding: data.sourceContentEncoding,
           });
         }
+      }
+
+      if (
+        cacheEligible &&
+        foregroundSkipReason === undefined &&
+        data.sourceContentEncoding !== undefined &&
+        parseContentEncoding(attributes?.contentEncoding) === undefined
+      ) {
+        // From the item's signed tags or a trusted upstream (anything else
+        // was skipped above), and not yet known for this item.
+        contentEncodingToRecord = data.sourceContentEncoding;
       }
 
       if (cacheEligible && foregroundSkipReason === undefined) {
@@ -1582,6 +1608,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                           hash,
                           dataSize: data.size,
                           contentType: data.sourceContentType,
+                          contentEncoding: contentEncodingToRecord,
                           cachedAt: currentUnixTimestamp(),
                           verified: data.verified,
                           verificationPriority,
@@ -1601,6 +1628,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                         hash,
                         size: data.size,
                         contentType: data.sourceContentType,
+                        // In memory too, so the next request (a cache hit)
+                        // is labelled without waiting for the index write.
+                        ...(contentEncodingToRecord !== undefined
+                          ? { contentEncoding: contentEncodingToRecord }
+                          : {}),
                         trusted: true,
                       });
                     } catch (error: any) {
@@ -1655,6 +1687,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                           hash,
                           dataSize: data.size,
                           contentType: data.sourceContentType,
+                          contentEncoding: contentEncodingToRecord,
                           cachedAt: currentUnixTimestamp(),
                           verified: false,
                           verificationPriority,
@@ -1670,6 +1703,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                         hash,
                         size: data.size,
                         contentType: data.sourceContentType,
+                        // In memory too, so the next request (a cache hit)
+                        // is labelled without waiting for the index write.
+                        ...(contentEncodingToRecord !== undefined
+                          ? { contentEncoding: contentEncodingToRecord }
+                          : {}),
                         trusted: false,
                       });
                     } catch (error: any) {

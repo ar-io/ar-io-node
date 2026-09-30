@@ -152,6 +152,17 @@ INSERT OR REPLACE INTO data_roots (
   :verified_at
 WHERE :data_root IS NOT NULL AND length(:data_root) > 0
 
+-- updateDataIdContentEncoding
+-- Fill-once: an encoding is recorded only when none is, so it is never
+-- overwritten or flapped by a later source. Deliberately separate from
+-- insertDataId, which skips verified rows: an item verified before its encoding
+-- was known must still get one.
+UPDATE contiguous_data_ids
+SET content_encoding = :content_encoding
+WHERE id = :id
+  AND content_encoding IS NULL
+  AND :content_encoding IS NOT NULL
+
 -- selectDataAttributes
 SELECT *
 FROM (
@@ -169,7 +180,8 @@ FROM (
     cdi.data_item_size,
     cdi.format_id,
     cdi.root_data_item_offset,
-    cdi.root_data_offset
+    cdi.root_data_offset,
+    cdi.content_encoding
   FROM contiguous_data cd
   JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
   WHERE cdi.id = :id
@@ -192,7 +204,10 @@ FROM (
     cdi.data_item_size,
     cdi.format_id,
     cdi.root_data_item_offset,
-    cdi.root_data_offset
+    cdi.root_data_offset,
+    -- The row joined here can belong to another item with the same bytes; an
+    -- encoding is a property of the item's own tags, so never borrow one.
+    NULL AS content_encoding
   FROM data_roots dr
   JOIN contiguous_data cd ON dr.contiguous_data_hash = cd.hash
   JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash

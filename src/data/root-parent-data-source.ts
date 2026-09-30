@@ -180,6 +180,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       itemSize: number;
       dataSize: number;
       contentType?: string;
+      contentEncoding?: string;
     } | null;
     method:
       | 'linear_then_path_fallback'
@@ -302,6 +303,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     itemSize: number;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
     /** Header fields the item's signature covers, when the parser returns them */
     signedFields?: DataItemSignedFields;
   } | null> {
@@ -310,6 +312,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       headerSize: number;
       payloadSize: number;
       contentType?: string;
+      contentEncoding?: string;
       signedFields?: DataItemSignedFields;
     };
     try {
@@ -370,6 +373,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       itemSize,
       dataSize: headerInfo.payloadSize,
       contentType: headerInfo.contentType,
+      contentEncoding: headerInfo.contentEncoding,
       signedFields: headerInfo.signedFields,
     };
   }
@@ -419,11 +423,13 @@ export class RootParentDataSource implements ContiguousDataSource {
     onReject?: (reason: LocationRejectionReason) => void;
     /**
      * Given what the confirmed header says about the item: the fields its
-     * signature covers and its own content type, when the parser supplied them.
+     * signature covers and its own content type and content encoding, when
+     * the parser supplied them.
      */
     onConfirmed?: (header: {
       signedFields?: DataItemSignedFields;
       contentType?: string;
+      contentEncoding?: string;
     }) => void;
   }): Promise<boolean> {
     const headerSize = dataOffset - itemOffset;
@@ -454,6 +460,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       onConfirmed?.({
         signedFields: located.signedFields,
         contentType: located.contentType,
+        contentEncoding: located.contentEncoding,
       });
     } else {
       metrics.dataItemLocationCheckTotal.inc({
@@ -594,6 +601,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     dataSize: number;
     signedFields?: DataItemSignedFields;
     contentType?: string;
+    contentEncoding?: string;
   } | null> {
     // Step 2's index lookup often returns the location Step 1 just failed to
     // recover; do not walk it twice.
@@ -635,6 +643,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       const confirmation: {
         signedFields?: DataItemSignedFields;
         contentType?: string;
+        contentEncoding?: string;
       } = {};
       if (
         await this.confirmItemLocation({
@@ -651,6 +660,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           onConfirmed: (header) => {
             confirmation.signedFields = header.signedFields;
             confirmation.contentType = header.contentType;
+            confirmation.contentEncoding = header.contentEncoding;
           },
         })
       ) {
@@ -665,6 +675,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           ...candidate,
           signedFields: confirmation.signedFields,
           contentType: confirmation.contentType,
+          contentEncoding: confirmation.contentEncoding,
         };
       }
       // The enclosing root was read, and the item is not where the index
@@ -713,6 +724,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       dataSize: number;
       signedFields?: DataItemSignedFields;
       contentType?: string;
+      contentEncoding?: string;
     },
     region: Region | undefined,
   ):
@@ -873,19 +885,46 @@ export class RootParentDataSource implements ContiguousDataSource {
    * whole. A byte range of the root is not encoded that way, so reporting it
    * for the item would label the item's bytes with an encoding they do not
    * have. As with the content type (see `resolveItemContentType`), only the
-   * item that *is* the root inherits it; otherwise the handler uses the
-   * item's indexed encoding, or none.
+   * item that *is* the root inherits it.
+   *
+   * The item's own encoding, from its signed header when this request read
+   * it, takes precedence: it is what lets a gateway that has not indexed the
+   * item still label its encoded bytes. `fromTags` says the encoding came from
+   * the item's signed tags, so it may be recorded with the cached data.
    */
   private resolveItemContentEncoding({
     id,
     rootTxId,
+    itemContentEncoding,
     rootContentEncoding,
+    rootContentEncodingFromTags,
   }: {
     id: string;
     rootTxId: string;
+    itemContentEncoding?: string;
     rootContentEncoding?: string;
-  }): string | undefined {
-    return rootTxId === id ? rootContentEncoding : undefined;
+    rootContentEncodingFromTags?: boolean;
+  }): {
+    sourceContentEncoding: string | undefined;
+    sourceContentEncodingFromTags: boolean | undefined;
+  } {
+    // Both keys are always set: callers spread this over the root fetch's
+    // result, whose own values must not leak through.
+    if (itemContentEncoding !== undefined) {
+      return {
+        sourceContentEncoding: itemContentEncoding,
+        sourceContentEncodingFromTags: true,
+      };
+    }
+    return rootTxId === id
+      ? {
+          sourceContentEncoding: rootContentEncoding,
+          sourceContentEncodingFromTags: rootContentEncodingFromTags,
+        }
+      : {
+          sourceContentEncoding: undefined,
+          sourceContentEncodingFromTags: undefined,
+        };
   }
 
   /**
@@ -1275,6 +1314,10 @@ export class RootParentDataSource implements ContiguousDataSource {
       // (reused by traversal to avoid a duplicate lookup)
       let originalAttributes: ContiguousDataAttributes | undefined;
       let originalContentType: string | undefined;
+      // The item's Content-Encoding from its own signed header, when this
+      // request reads it. It labels the response in preference to anything the
+      // root fetch reported (see resolveItemContentEncoding).
+      let itemContentEncoding: string | undefined;
       try {
         originalAttributes =
           await this.dataAttributesStore.getDataAttributes(id);
@@ -1363,6 +1406,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                 dataSize,
                 contentType: hintContentType,
               } = hintedItem;
+              itemContentEncoding = hintedItem.contentEncoding;
 
               span.setAttributes({
                 'traversal.method': 'direct_offset_hint',
@@ -1393,10 +1437,13 @@ export class RootParentDataSource implements ContiguousDataSource {
 
               return {
                 ...data,
-                sourceContentEncoding: this.resolveItemContentEncoding({
+                ...this.resolveItemContentEncoding({
                   id,
                   rootTxId: hintRootTxId,
+                  itemContentEncoding,
                   rootContentEncoding: data.sourceContentEncoding,
+                  rootContentEncodingFromTags:
+                    data.sourceContentEncodingFromTags,
                 }),
                 stream: this.serveVerifiedPayload({
                   data,
@@ -1431,6 +1478,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           itemSize: number;
           dataSize: number;
           contentType?: string;
+          contentEncoding?: string;
         } | null = null;
 
         try {
@@ -1483,6 +1531,7 @@ export class RootParentDataSource implements ContiguousDataSource {
 
           const hintContentType =
             bundleParseResult.contentType ?? originalContentType;
+          itemContentEncoding = bundleParseResult.contentEncoding;
 
           const data = await this.dataSource.getData({
             id: resolvedRootTxId,
@@ -1508,10 +1557,12 @@ export class RootParentDataSource implements ContiguousDataSource {
 
           return {
             ...data,
-            sourceContentEncoding: this.resolveItemContentEncoding({
+            ...this.resolveItemContentEncoding({
               id,
               rootTxId: resolvedRootTxId,
+              itemContentEncoding,
               rootContentEncoding: data.sourceContentEncoding,
+              rootContentEncodingFromTags: data.sourceContentEncodingFromTags,
             }),
             sourceContentType: this.resolveItemContentType({
               id,
@@ -1564,6 +1615,9 @@ export class RootParentDataSource implements ContiguousDataSource {
             onReject: (reason) => {
               rejection.reason = reason;
             },
+            onConfirmed: (header) => {
+              itemContentEncoding = header.contentEncoding;
+            },
           }))
         ) {
           span.addEvent('Attributes location rejected by header check');
@@ -1593,6 +1647,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           if (rebased !== null) {
             span.addEvent('Rejected attributes location rebased');
             originalContentType ??= rebased.contentType;
+            itemContentEncoding = rebased.contentEncoding;
             attributesVerification = this.planRebasedVerification(
               id,
               rebased,
@@ -1702,10 +1757,12 @@ export class RootParentDataSource implements ContiguousDataSource {
             itemContentType: originalContentType,
             rootContentType: data.sourceContentType,
           });
-          const sourceContentEncoding = this.resolveItemContentEncoding({
+          const itemEncoding = this.resolveItemContentEncoding({
             id,
             rootTxId,
+            itemContentEncoding,
             rootContentEncoding: data.sourceContentEncoding,
+            rootContentEncodingFromTags: data.sourceContentEncodingFromTags,
           });
           if (attributesVerification !== undefined) {
             return {
@@ -1720,10 +1777,10 @@ export class RootParentDataSource implements ContiguousDataSource {
                 source: attributesVerification.source,
               }),
               sourceContentType,
-              sourceContentEncoding,
+              ...itemEncoding,
             };
           }
-          return { ...data, sourceContentType, sourceContentEncoding };
+          return { ...data, sourceContentType, ...itemEncoding };
         } finally {
           fetchSpan.end();
         }
@@ -1821,6 +1878,9 @@ export class RootParentDataSource implements ContiguousDataSource {
             onReject: (reason) => {
               rejection.reason = reason;
             },
+            onConfirmed: (header) => {
+              itemContentEncoding = header.contentEncoding;
+            },
           });
           if (
             !indexLocationConfirmed &&
@@ -1848,6 +1908,7 @@ export class RootParentDataSource implements ContiguousDataSource {
               if (rebased.contentType !== undefined) {
                 rootResult.contentType ??= rebased.contentType;
               }
+              itemContentEncoding = rebased.contentEncoding;
               indexLocationConfirmed = true;
               indexRebased = true;
               rebasedIndexVerification = this.planRebasedVerification(
@@ -1998,6 +2059,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           itemSize: number;
           dataSize: number;
           contentType?: string;
+          contentEncoding?: string;
         } | null = null;
 
         try {
@@ -2077,6 +2139,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                     itemSize: rootResult.size,
                     dataSize: rebased.dataSize,
                     contentType: rebased.contentType,
+                    contentEncoding: rebased.contentEncoding,
                   };
                   indexVerification = {
                     signedFields: plan.signedFields,
@@ -2193,6 +2256,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             if (bundleParseResult.contentType !== undefined) {
               originalContentType = bundleParseResult.contentType;
             }
+            itemContentEncoding = bundleParseResult.contentEncoding;
 
             // Store discovered offsets for future use (avoid re-parsing).
             // Offsets from the root TX index are stored only once the payload
@@ -2305,16 +2369,18 @@ export class RootParentDataSource implements ContiguousDataSource {
           itemContentType: originalContentType,
           rootContentType: data.sourceContentType,
         });
-        const sourceContentEncoding = this.resolveItemContentEncoding({
+        const itemEncoding = this.resolveItemContentEncoding({
           id,
           rootTxId,
+          itemContentEncoding,
           rootContentEncoding: data.sourceContentEncoding,
+          rootContentEncodingFromTags: data.sourceContentEncodingFromTags,
         });
 
         if (indexVerification !== undefined) {
           return {
             ...data,
-            sourceContentEncoding,
+            ...itemEncoding,
             stream: this.serveVerifiedPayload({
               data,
               id,
@@ -2328,7 +2394,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           };
         }
 
-        return { ...data, sourceContentType, sourceContentEncoding };
+        return { ...data, sourceContentType, ...itemEncoding };
       } finally {
         fetchSpan.end();
       }

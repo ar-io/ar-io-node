@@ -35,6 +35,7 @@ export interface DataItemMeta {
   headerSize: number;
   payloadSize: number;
   contentType?: string;
+  contentEncoding?: string;
 }
 
 // Maximum ANS-104 data item header size calculation:
@@ -102,6 +103,7 @@ export class Ans104OffsetSource {
     itemSize: number;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
   } | null> {
     const log = this.log.child({
       method: 'getDataItemOffset',
@@ -142,6 +144,7 @@ export class Ans104OffsetSource {
           itemSize: result.itemSize,
           dataSize: result.dataSize,
           contentType: result.contentType,
+          contentEncoding: result.contentEncoding,
         });
       } else {
         metrics.ans104OffsetLookupTotal.inc({
@@ -196,6 +199,7 @@ export class Ans104OffsetSource {
     itemSize: number;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
   } | null> {
     const log = this.log.child({
       method: 'getDataItemByOffset',
@@ -236,6 +240,7 @@ export class Ans104OffsetSource {
           itemSize: result.itemSize,
           dataSize: result.dataSize,
           contentType: result.contentType,
+          contentEncoding: result.contentEncoding,
         });
       } else {
         metrics.ans104OffsetLookupTotal.inc({
@@ -287,6 +292,7 @@ export class Ans104OffsetSource {
     itemSize: number;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
   } | null> {
     const log = this.log.child({
       method: 'getDataItemOffsetWithPath',
@@ -380,6 +386,7 @@ export class Ans104OffsetSource {
     itemSize: number;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
   } | null> {
     const log = this.log.child({
       method: 'navigatePathAndFind',
@@ -474,6 +481,7 @@ export class Ans104OffsetSource {
       itemSize: targetItem.size,
       dataSize: dataItemInfo.payloadSize,
       contentType: dataItemInfo.contentType,
+      contentEncoding: dataItemInfo.contentEncoding,
     });
 
     return {
@@ -482,6 +490,7 @@ export class Ans104OffsetSource {
       itemSize: targetItem.size,
       dataSize: dataItemInfo.payloadSize,
       contentType: dataItemInfo.contentType,
+      contentEncoding: dataItemInfo.contentEncoding,
     };
   }
 
@@ -546,6 +555,7 @@ export class Ans104OffsetSource {
     itemSize: number;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
   } | null> {
     // Check for abort before starting
     signal?.throwIfAborted();
@@ -635,6 +645,7 @@ export class Ans104OffsetSource {
           itemSize: targetItem.size,
           dataSize: dataItemInfo.payloadSize,
           contentType: dataItemInfo.contentType,
+          contentEncoding: dataItemInfo.contentEncoding,
         };
       }
 
@@ -705,6 +716,7 @@ export class Ans104OffsetSource {
     itemSize: number;
     dataSize: number;
     contentType?: string;
+    contentEncoding?: string;
   } | null> {
     signal?.throwIfAborted();
 
@@ -813,6 +825,7 @@ export class Ans104OffsetSource {
           itemSize: item.size,
           dataSize: headerInfo.payloadSize,
           contentType: headerInfo.contentType,
+          contentEncoding: headerInfo.contentEncoding,
         };
       }
 
@@ -1040,6 +1053,7 @@ export class Ans104OffsetSource {
     headerSize: number;
     payloadSize: number;
     contentType?: string;
+    contentEncoding?: string;
     /**
      * The header fields the item's signature covers besides the payload, for
      * verifying a payload located from this header.
@@ -1139,6 +1153,7 @@ export class Ans104OffsetSource {
 
         // Parse tags to extract Content-Type
         let contentType: string | undefined;
+        let contentEncoding: string | undefined;
         let tagsBytes = Buffer.alloc(0);
         if (tagsBytesLength > 0) {
           bytes = await readBytes(reader, bytes, tagsBytesLength);
@@ -1151,6 +1166,11 @@ export class Ans104OffsetSource {
               (tag) => tag.name.toLowerCase() === 'content-type',
             );
             contentType = contentTypeTag?.value;
+            // Signed, so it describes the item's own bytes. First match, as
+            // the indexer and Turbo use; normalized where it is served.
+            contentEncoding = tags.find(
+              (tag) => tag.name.toLowerCase() === 'content-encoding',
+            )?.value;
           }
 
           bytes = bytes.subarray(tagsBytesLength);
@@ -1167,6 +1187,7 @@ export class Ans104OffsetSource {
           payloadSize,
           totalSize,
           contentType,
+          contentEncoding,
         });
 
         return {
@@ -1174,6 +1195,7 @@ export class Ans104OffsetSource {
           headerSize,
           payloadSize,
           contentType,
+          contentEncoding,
           signedFields: {
             signatureType,
             signature,
@@ -1299,6 +1321,7 @@ export class Ans104OffsetSource {
 
         let tags: { name: string; value: string }[] = [];
         let contentType: string | undefined;
+        let contentEncoding: string | undefined;
         if (tagsBytesLength > 0) {
           bytes = await readBytes(reader, bytes, tagsBytesLength);
           headerOffset += tagsBytesLength;
@@ -1309,6 +1332,11 @@ export class Ans104OffsetSource {
               (tag) => tag.name.toLowerCase() === 'content-type',
             );
             contentType = contentTypeTag?.value;
+            // Signed, so it describes the item's own bytes. First match, as
+            // the indexer and Turbo use; normalized where it is served.
+            contentEncoding = tags.find(
+              (tag) => tag.name.toLowerCase() === 'content-encoding',
+            )?.value;
           }
         }
 
@@ -1322,6 +1350,7 @@ export class Ans104OffsetSource {
           payloadSize,
           tagCount: tags.length,
           contentType,
+          contentEncoding,
         });
 
         return {
@@ -1340,6 +1369,7 @@ export class Ans104OffsetSource {
           headerSize,
           payloadSize,
           contentType,
+          contentEncoding,
         };
       } finally {
         destroyStream(headerData.stream);

@@ -100,6 +100,38 @@ export function parseContentEncoding(
 }
 
 /**
+ * Content codings the gateway will name in a `Content-Encoding` response
+ * header. Browsers decode all of these; anything else, including a list of
+ * stacked codings such as `gzip, br`, is served without the header, as
+ * before, rather than with one a client may not decode.
+ */
+export const HONOURED_CONTENT_ENCODINGS: ReadonlySet<string> = new Set([
+  'gzip',
+  'br',
+  'deflate',
+  'zstd',
+]);
+
+/**
+ * The `Content-Encoding` to send for an item, or `undefined` for none: the
+ * normalized value if it is a single honoured coding (see
+ * {@link HONOURED_CONTENT_ENCODINGS}), else `undefined`.
+ *
+ * @example
+ * honouredContentEncoding('GZIP') // 'gzip'
+ * honouredContentEncoding('gzip, br') // undefined
+ * honouredContentEncoding('x-custom') // undefined
+ */
+export function honouredContentEncoding(
+  contentEncoding: string | undefined,
+): string | undefined {
+  const normalized = parseContentEncoding(contentEncoding);
+  return normalized !== undefined && HONOURED_CONTENT_ENCODINGS.has(normalized)
+    ? normalized
+    : undefined;
+}
+
+/**
  * `{ sourceContentEncoding }` for an upstream `Content-Encoding` header that
  * names an encoding, or `{}` when the bytes are not encoded; for spreading into
  * a `ContiguousData` result.

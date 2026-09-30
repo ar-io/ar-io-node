@@ -203,6 +203,36 @@ describe('Data routes', () => {
         assert.deepEqual(res.body, body);
       });
 
+      it('normalizes an indexed tag value', async () => {
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({ contentEncoding: ' GZIP ' } as any),
+        };
+        serve('gzip');
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], 'gzip');
+        assert.deepEqual(res.body, body);
+      });
+
+      it('names no coding a client may not decode', async () => {
+        // Stacked codings and unknown ones are served without the header, as
+        // before, rather than with one the client cannot decode.
+        for (const encoding of ['gzip, br', 'x-custom']) {
+          app = express();
+          dataAttributesSource = {
+            getDataAttributes: () =>
+              Promise.resolve({ contentEncoding: encoding } as any),
+          };
+          serve(undefined);
+
+          const res = await get();
+
+          assert.equal(res.headers['content-encoding'], undefined, encoding);
+        }
+      });
+
       it('sends no Content-Encoding for unencoded bytes', async () => {
         serve(undefined);
 

@@ -67,6 +67,8 @@ export interface DecodedDataItemHeader {
   headerSize: number;
   /** First `Content-Type` tag value (tag name matched case-insensitively) */
   contentType?: string;
+  /** First `Content-Encoding` tag value (tag name matched case-insensitively) */
+  contentEncoding?: string;
   /** True when tagged `Bundle-Format: binary` and `Bundle-Version: 2.0.0` */
   isBundle: boolean;
 }
@@ -218,6 +220,9 @@ export function decodeDataItemHeader(buf: Buffer): DataItemHeaderDecodeResult {
       headerSize,
       contentType: tags.find((tag) => tag.name.toLowerCase() === 'content-type')
         ?.value,
+      contentEncoding: tags.find(
+        (tag) => tag.name.toLowerCase() === 'content-encoding',
+      )?.value,
       isBundle:
         tags.some(
           (tag) => tag.name === 'Bundle-Format' && tag.value === 'binary',
