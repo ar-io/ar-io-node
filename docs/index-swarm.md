@@ -43,8 +43,15 @@ replace are under [doing it by hand](#doing-it-by-hand).
    needs it, by name. Leave out `--torrent` to move bands over HTTP only.
    Run with `--dry-run` first to see the changes; `.env` is backed up before
    it is written.
-3. With `--torrent`, open port 6881, TCP and UDP, to the internet. Peers
-   connect in on it.
+3. With `--torrent`, open port 6881, TCP and UDP, to the internet if you
+   can. Peers connect in on it. For a subscriber it is recommended, not
+   required: behind NAT it still downloads from peers and seeds to the ones
+   it connects to (see the note under
+   [publishing from a fleet](#publishing-torrents-from-a-fleet-behind-a-load-balancer)).
+   The engine doesn't use UPnP, so behind a home router forward the port by
+   hand. 6881 and the tracker's 6969 are published on the host whenever the
+   sidecar and engine run, so no other program may hold them; move them with
+   `INDEX_SWARM_ENGINE_PORT` and `INDEX_SWARM_TRACKER_PORT`.
 4. Check it:
    ```bash
    ./tools/index-swarm-status
@@ -1075,7 +1082,12 @@ The subscription results that need attention:
   may come over the swarm needs its size twice, for the copy out of
   `swarm/`). The copy a band replaces is left out, so a replacement needs
   room for itself, not for both. Set the budget before subscribing to
-  anything that carries historical bands.
+  anything that carries historical bands. The budget is a ceiling, not a
+  reservation: nothing checks the filesystem's free space, so keep at least
+  the budget free where `data/indexes` lives. That directory must be one
+  filesystem (installs are renames, and a publisher seeds from hard links);
+  to move it, move all of it and set `INDEX_SWARM_DATA_PATH`, which the
+  gateway mounts too.
 - **Validating a band reads it once.** Before a band installs, every
   partition is walked end to end and every record and table pointer checked,
   so a crafted file can't reach the gateway's reader. It is sequential and
