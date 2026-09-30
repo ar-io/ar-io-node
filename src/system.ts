@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { PublishedIndexes } from './routes/published-indexes.js';
+import { UpstreamPublishedIndexes } from './routes/upstream-published-indexes.js';
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
@@ -930,6 +931,27 @@ export const publishedIndexes = new PublishedIndexes({
   // slow disk), and requests must not.
   revalidateMs: 5_000,
 });
+
+/**
+ * On a node that does not sign, what the signing node publishes, so
+ * /ar-io/info advertises it here too. Undefined unless configured.
+ */
+export const upstreamPublishedIndexes = (() => {
+  if (config.INDEXES_ADVERTISE_FROM_URL === undefined) return undefined;
+  if (config.AR_IO_WALLET === undefined) {
+    log.warn(
+      'INDEXES_ADVERTISE_FROM_URL is set but AR_IO_WALLET is not; not advertising indexes',
+    );
+    return undefined;
+  }
+  const upstream = new UpstreamPublishedIndexes({
+    log,
+    url: config.INDEXES_ADVERTISE_FROM_URL,
+    wallet: config.AR_IO_WALLET,
+  });
+  upstream.start();
+  return upstream;
+})();
 
 export const arIOPeerManager = new ArIOPeerManager({
   log,
@@ -2164,6 +2186,7 @@ export const shutdown = async (exitCode = 0) => {
     // Clean up system components
     eventEmitter.removeAllListeners();
     arIOPeerManager.stopUpdatingPeers();
+    upstreamPublishedIndexes?.stop();
     dataSqliteWalCleanupWorker?.stop();
     await arnsResolutionCache.close();
     await arnsRegistryCache.close();

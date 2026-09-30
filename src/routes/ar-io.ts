@@ -26,6 +26,7 @@ import {
 import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
 import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
+import { indexNamesToAdvertise } from './upstream-published-indexes.js';
 import { buildGatewayPeers } from './ar-io-peers-builder.js';
 
 const arweave = Arweave.init({});
@@ -195,12 +196,18 @@ export const arIoInfoHandler = async (_req: Request, res: Response) => {
   // What this gateway publishes, from the same view the /ar-io/indexes routes
   // serve from, so an index is advertised exactly when it is servable. Any
   // failure here only omits the block: /ar-io/info must answer regardless.
-  let indexNames: string[] | undefined;
+  let published: string[] | undefined;
   try {
-    indexNames = (await system.publishedIndexes.current())?.names;
+    published = (await system.publishedIndexes.current())?.names;
   } catch {
-    indexNames = undefined;
+    published = undefined;
   }
+  // A node that does not sign advertises what the signing node publishes,
+  // when configured to, so every node of a fleet answers alike.
+  const indexNames = indexNamesToAdvertise({
+    published,
+    upstream: system.upstreamPublishedIndexes?.names(),
+  });
 
   const response = buildArIoInfo({
     wallet: config.AR_IO_WALLET,

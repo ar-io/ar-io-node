@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `INDEXES_ADVERTISE_FROM_URL` lets a node that serves an operator's
+  indexes but does not sign them advertise the signing node's publication in
+  `/ar-io/info`. Behind a load balancer, `/ar-io/indexes*` already goes to
+  the signing node, but `/ar-io/info` is answered by whichever node the
+  request reaches, so a crawler saw the `indexes` block only some of the
+  time. The node fetches the document every minute, off the request path,
+  and advertises its index names only if it names this node's `AR_IO_WALLET`
+  as publisher and its signature verifies. A `404` or an invalid document
+  withdraws them at once; failed fetches withdraw them after five minutes.
+  Unset, nothing changes.
+
 - `GET /ar-io/offsets/:id` now also answers from CDB64 indexes on local
   disk, such as bands installed by Index Sharing, when the local index can't
   place the item. It still makes no network request: remote CDB64 sources,
