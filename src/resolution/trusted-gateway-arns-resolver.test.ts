@@ -128,6 +128,45 @@ describe('TrustedGatewayArNSResolver', () => {
       assert.ok(resolution.resolvedAt !== undefined);
     });
 
+    it('treats a 404 without X-ArNS-Resolved-Id as not found, without a warning', async () => {
+      // What turbo-gateway.com answers for an unregistered name.
+      interceptorId = axios.interceptors.request.use((config) => {
+        config.adapter = () =>
+          Promise.resolve({
+            status: 404,
+            statusText: 'Not Found',
+            headers: {},
+            config,
+            data: null,
+          });
+        return config;
+      });
+      const testLog = createTestLogger({
+        suite: 'TrustedGatewayArNSResolver 404',
+      });
+      const warnings: string[] = [];
+      testLog.on('data', (info: { level: string; message: unknown }) => {
+        if (info.level === 'warn') warnings.push(String(info.message));
+      });
+
+      const resolver = new TrustedGatewayArNSResolver({
+        log: testLog,
+        trustedGatewayUrl: 'https://__NAME__.turbo-gateway.com',
+      });
+      const resolution = await resolver.resolve({ name: 'payment' });
+
+      assert.deepEqual(resolution, {
+        name: 'payment',
+        resolvedId: undefined,
+        resolvedAt: undefined,
+        ttl: undefined,
+        antId: undefined,
+        limit: undefined,
+        index: undefined,
+      });
+      assert.deepEqual(warnings, []);
+    });
+
     it('should propagate antId from upstream X-ArNS-Ant-Id header', async () => {
       const upstreamAntId = 'AntPda1111111111111111111111111111111111111';
       interceptorId = axios.interceptors.request.use((config) => {
