@@ -85,8 +85,13 @@ export class HttpByteRangeSource implements ByteRangeSource {
       const response = await this.httpClient.get(this.url, {
         headers: {
           Range: buildRangeHeader(offset, offset + size - 1),
+          'Accept-Encoding': 'identity',
         },
         responseType: 'arraybuffer',
+        // A byte range is of the stored bytes. A gateway serves an item tagged
+        // Content-Encoding with that header on every response, ranges
+        // included, and axios would otherwise try to decode the slice.
+        decompress: false,
         // PE-9081: bound axios's pre-buffered allocation. Without these,
         // axios will fully buffer whatever the upstream sends before any
         // post-hoc length check fires — heap pressure is realized before

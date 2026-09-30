@@ -2136,8 +2136,8 @@ export const hintEmittedTotal = new promClient.Counter({
  */
 export const dataItemLocationCheckTotal = new promClient.Counter({
   name: 'data_item_location_check_total',
-  help: 'Header checks on stored or indexed data item locations before serving from them',
-  labelNames: ['source', 'result'] as const,
+  help: 'Header checks on stored or indexed data item locations before serving from them. On result="rejected", reason says why: header_unreadable (no header could be parsed there: the read failed, e.g. an upstream failure or a root that is a bundled data item rather than an L1 transaction, or the bytes are not a header), id_mismatch (the header belongs to another item) or offset_mismatch (the header does not end at the recorded payload offset, or the location is malformed). id_mismatch and offset_mismatch are locations that would have served wrong bytes. Sources ending in _rebased are locations recovered by adding the payload offset of a recorded root that turned out to be a bundled data item.',
+  labelNames: ['source', 'result', 'reason'] as const,
 });
 
 /**

@@ -84,7 +84,15 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       const index =
         parseInt(response.headers[headerNames.arnsIndex.toLowerCase()]) ||
         DEFAULT_ARNS_UNDERNAME_INDEX;
-      if (isValidDataId(resolvedId)) {
+      if (typeof resolvedId !== 'string') {
+        // No resolved ID is how the trusted gateway says the name doesn't
+        // resolve (a 404 for an unregistered name); it isn't an error.
+        this.log.info('Name not resolved by trusted gateway', {
+          name,
+          nameUrl,
+          statusCode: response.status,
+        });
+      } else if (isValidDataId(resolvedId)) {
         this.log.info('Resolved name', { name, nameUrl, resolvedId, ttl });
         return {
           name,

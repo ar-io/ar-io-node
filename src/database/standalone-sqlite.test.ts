@@ -910,6 +910,110 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  // An item's Content-Encoding learned when its data was cached (from its signed
+  // tags or a trusted upstream), for items whose tags are not indexed here.
+  describe('recorded content encoding', () => {
+    const itemId = toB64Url(Buffer.alloc(32, 0x31));
+    const otherItemId = toB64Url(Buffer.alloc(32, 0x32));
+    const txId = toB64Url(Buffer.alloc(32, 0x33));
+    const dataRoot = Buffer.alloc(32, 0x51);
+    // A fresh hash per test: the worker remembers hashes it has inserted
+    // (insertDataHashCache), and the suite truncates tables between tests, so
+    // a reused hash would leave no contiguous_data row to join.
+    let hashSeed = 0x60;
+    let hash = '';
+    beforeEach(() => {
+      hash = toB64Url(Buffer.alloc(32, hashSeed++));
+    });
+
+    const save = (id: string, contentEncoding?: string) =>
+      dbWorker.saveDataContentAttributes({
+        id,
+        hash,
+        dataSize: 17,
+        contentEncoding,
+      });
+
+    it('is recorded and returned when the item has no indexed tag', () => {
+      save(itemId, 'gzip');
+      assert.equal(dbWorker.getDataAttributes(itemId)?.contentEncoding, 'gzip');
+    });
+
+    it('is fill-once: a later value never overwrites it', () => {
+      save(itemId, 'gzip');
+      save(itemId, 'br');
+      save(itemId);
+      assert.equal(dbWorker.getDataAttributes(itemId)?.contentEncoding, 'gzip');
+    });
+
+    it('is recorded for an item whose row is already verified', () => {
+      // insertDataId skips verified rows; the encoding must still be recorded.
+      dataDb
+        .prepare(
+          `INSERT INTO contiguous_data_ids
+            (id, contiguous_data_hash, verified, indexed_at)
+           VALUES (@id, @hash, 1, 0)`,
+        )
+        .run({ id: fromB64Url(itemId), hash: fromB64Url(hash) });
+
+      save(itemId, 'gzip');
+
+      assert.equal(dbWorker.getDataAttributes(itemId)?.contentEncoding, 'gzip');
+    });
+
+    it("prefers the item's indexed tag", () => {
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type, content_encoding)
+           VALUES (@id, 1, 0, 2, @zero, @zero, '0', '0', 0, 17,
+             @data_root, 'text/html', 'br')`,
+        )
+        .run({
+          id: fromB64Url(txId),
+          zero: Buffer.alloc(32),
+          data_root: dataRoot,
+        });
+      save(txId, 'gzip');
+
+      assert.equal(dbWorker.getDataAttributes(txId)?.contentEncoding, 'br');
+    });
+
+    it('is never borrowed from another item with the same bytes', () => {
+      // Another item with identical bytes was cached with an encoding.
+      save(otherItemId, 'gzip');
+      // This L1 transaction has the same data root, and so the same cached
+      // blob, but no encoding of its own.
+      coreDb
+        .prepare(
+          `INSERT OR REPLACE INTO stable_transactions
+            (id, height, block_transaction_index, format, last_tx,
+             owner_address, quantity, reward, tag_count, data_size,
+             data_root, content_type)
+           VALUES (@id, 1, 0, 2, @zero, @zero, '0', '0', 0, 17,
+             @data_root, 'application/gzip')`,
+        )
+        .run({
+          id: fromB64Url(txId),
+          zero: Buffer.alloc(32),
+          data_root: dataRoot,
+        });
+      dataDb
+        .prepare(
+          `INSERT OR REPLACE INTO data_roots
+            (data_root, contiguous_data_hash, verified, indexed_at)
+           VALUES (@data_root, @hash, 0, 0)`,
+        )
+        .run({ data_root: dataRoot, hash: fromB64Url(hash) });
+
+      const attrs = dbWorker.getDataAttributes(txId);
+      assert.equal(attrs?.hash, hash, 'found through the shared data root');
+      assert.equal(attrs?.contentEncoding, undefined);
+    });
+  });
+
   describe('insertDataRoot — empty/NULL data_root guard', () => {
     const id = toB64Url(Buffer.alloc(32, 0x01));
     const hash = Buffer.alloc(32, 0x11);
@@ -2271,6 +2375,28 @@ describe('StandaloneSqliteDatabase', () => {
     const ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0';
     const INTERMEDIATE = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0';
     const L1_ROOT = 'cccccccccccccccccccccccccccccccccccccccccc0';
+
+    it('lets a write that first learns the encoding through inside the dedupe window', async () => {
+      const ENC_ID = 'dddddddddddddddddddddddddddddddddddddddddd0';
+      // Its own hash: the worker skips hashes it has already inserted, and
+      // other tests here use 'hash'.
+      await db.saveDataContentAttributes({
+        id: ENC_ID,
+        hash: 'encoding-dedupe-hash',
+        dataSize: 94,
+      });
+      await db.saveDataContentAttributes({
+        id: ENC_ID,
+        hash: 'encoding-dedupe-hash',
+        dataSize: 94,
+        contentEncoding: 'gzip',
+      });
+
+      assert.equal(
+        (await db.getDataAttributes(ENC_ID))?.contentEncoding,
+        'gzip',
+      );
+    });
 
     it('lets a corrected root through inside the dedupe window', async () => {
       await db.saveDataContentAttributes({

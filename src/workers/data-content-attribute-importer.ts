@@ -19,6 +19,7 @@ export type DataContentAttributeProperties = {
   hash: string;
   dataSize: number;
   contentType?: string;
+  contentEncoding?: string;
   cachedAt?: number;
   verified?: boolean;
   verificationPriority?: number;

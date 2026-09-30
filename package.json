@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@apollo/server": "^5.5.1",
-    "@ar.io/sdk": "^4.0.0",
+    "@ar.io/sdk": "^4.5.0",
     "@ardrive/ardrive-promise-cache": "^1.4.0",
     "@ardrive/turbo-sdk": "^1.40.2",
     "@as-integrations/express4": "^1.1.2",

@@ -6,11 +6,16 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
+import { generateKeyPairSync } from 'node:crypto';
 import { Readable } from 'node:stream';
+import { gzipSync } from 'node:zlib';
 import { AwsLiteS3 } from '@aws-lite/s3-types';
+import { SolanaSigner, createData } from '@dha-team/arbundles';
+// @ts-expect-error bs58 v4 has no type declarations
+import bs58 from 'bs58';
 import { AwsLiteClient } from '@aws-lite/client';
 
-import { S3DataSource } from './s3-data-source.js';
+import { S3DataSource, splitLeadingBytes } from './s3-data-source.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable } from './test-utils.js';
 import { createTestLogger } from '../../test/test-logger.js';
@@ -530,5 +535,290 @@ describe('S3DataSource', () => {
         assert.equal((mockS3Client.GetObject as any).mock.callCount(), 0);
       });
     });
+  });
+
+  // Turbo stores each item as its whole signed data item, with metadata
+  // saying where the payload starts. An item uploaded compressed carries a
+  // signed `Content-Encoding` tag; objects stored before Turbo recorded it as
+  // metadata (`payload-content-encoding`) have only the tag, so a full read
+  // starts at the header, in the same request, and reads it there.
+  describe('Content-Encoding', () => {
+    let signer: SolanaSigner;
+    const html = Buffer.from(
+      '<!doctype html><title>compressed on chain</title>',
+    );
+    const gzipped = gzipSync(html);
+
+    before(() => {
+      const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+      const seed = privateKey
+        .export({ format: 'der', type: 'pkcs8' })
+        .subarray(-32);
+      const pub = publicKey
+        .export({ format: 'der', type: 'spki' })
+        .subarray(-32);
+      signer = new SolanaSigner(bs58.encode(Buffer.concat([seed, pub])));
+    });
+
+    const signedItem = async (
+      payload: Buffer,
+      tags: { name: string; value: string }[],
+    ) => {
+      const item = createData(payload, signer, { tags });
+      await item.sign(signer);
+      const raw = item.getRaw();
+      return { id: item.id, raw, headerLength: raw.length - payload.length };
+    };
+
+    // Serves `raw` the way S3 does, honouring the Range header, optionally in
+    // small chunks so the header is split across several of them.
+    const storeObject = (
+      raw: Buffer,
+      metadata: Record<string, string>,
+      chunkSize = 1 << 20,
+    ) => {
+      mockAwsClient.S3.HeadObject = mock.fn(async () => ({
+        ContentLength: raw.length,
+        ContentType: 'application/octet-stream',
+        Metadata: metadata,
+        $metadata: {},
+      })) as any;
+      mockS3Client.GetObject = mock.fn(async ({ Range }: any) => {
+        const m = /^bytes=(\d+)-(\d*)$/.exec(Range ?? '');
+        const start = m ? Number(m[1]) : 0;
+        const end = m && m[2] !== '' ? Number(m[2]) : raw.length - 1;
+        const body = raw.subarray(start, end + 1);
+        const chunks: Buffer[] = [];
+        for (let i = 0; i < body.length; i += chunkSize) {
+          chunks.push(body.subarray(i, i + chunkSize));
+        }
+        return {
+          Body: Readable.from(chunks) as any,
+          ContentLength: body.length,
+          ContentType: 'application/octet-stream',
+          ContentRange: `bytes ${start}-${end}/${raw.length}`,
+          $metadata: {},
+        };
+      }) as any;
+    };
+    const requestedRange = () =>
+      (mockS3Client.GetObject as any).mock.calls[0].arguments[0].Range;
+    const readAll = async (stream: NodeJS.ReadableStream) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(chunk as Buffer);
+      return Buffer.concat(chunks);
+    };
+
+    it("reads the encoding from the item's signed header, in the same request", async () => {
+      const item = await signedItem(gzipped, [
+        { name: 'Content-Type', value: 'text/html' },
+        { name: 'Content-Encoding', value: 'gzip' },
+      ]);
+      storeObject(item.raw, {
+        'payload-data-start': String(item.headerLength),
+        'payload-content-type': 'text/html',
+      });
+
+      const result = await s3DataSource.getData({ id: item.id });
+
+      assert.deepEqual(await readAll(result.stream), gzipped);
+      assert.equal(result.size, gzipped.length);
+      assert.equal(result.totalSize, gzipped.length);
+      assert.equal(result.sourceContentEncoding, 'gzip');
+      assert.equal(result.sourceContentEncodingFromTags, true);
+      assert.equal(requestedRange(), 'bytes=0-');
+      assert.equal((mockS3Client.GetObject as any).mock.callCount(), 1);
+    });
+
+    it('splits the header off correctly when it arrives in small chunks', async () => {
+      const item = await signedItem(gzipped, [
+        { name: 'Content-Encoding', value: 'gzip' },
+      ]);
+      storeObject(
+        item.raw,
+        { 'payload-data-start': String(item.headerLength) },
+        7,
+      );
+
+      const result = await s3DataSource.getData({ id: item.id });
+
+      assert.deepEqual(await readAll(result.stream), gzipped);
+      assert.equal(result.sourceContentEncoding, 'gzip');
+    });
+
+    it('reports no encoding for an untagged item and serves it as before', async () => {
+      const item = await signedItem(html, [
+        { name: 'Content-Type', value: 'text/html' },
+      ]);
+      storeObject(item.raw, {
+        'payload-data-start': String(item.headerLength),
+      });
+
+      const result = await s3DataSource.getData({ id: item.id });
+
+      assert.deepEqual(await readAll(result.stream), html);
+      assert.equal(result.size, html.length);
+      assert.equal(result.sourceContentEncoding, undefined);
+      assert.equal(result.sourceContentEncodingFromTags, undefined);
+    });
+
+    it("uses Turbo's payload-content-encoding metadata without reading the header", async () => {
+      const item = await signedItem(gzipped, [
+        { name: 'Content-Encoding', value: 'gzip' },
+      ]);
+      storeObject(item.raw, {
+        'payload-data-start': String(item.headerLength),
+        'payload-content-encoding': 'GZIP',
+      });
+
+      const result = await s3DataSource.getData({ id: item.id });
+
+      assert.deepEqual(await readAll(result.stream), gzipped);
+      assert.equal(result.sourceContentEncoding, 'gzip');
+      assert.equal(result.sourceContentEncodingFromTags, true);
+      assert.equal(requestedRange(), `bytes=${item.headerLength}-`);
+    });
+
+    it("does not trust a header that is not the requested item's", async () => {
+      const item = await signedItem(gzipped, [
+        { name: 'Content-Encoding', value: 'gzip' },
+      ]);
+      storeObject(item.raw, {
+        'payload-data-start': String(item.headerLength),
+      });
+
+      const result = await s3DataSource.getData({ id: 'another-item-id' });
+
+      assert.deepEqual(await readAll(result.stream), gzipped);
+      assert.equal(result.sourceContentEncoding, undefined);
+    });
+
+    it('does not trust a header that ends before the recorded payload start', async () => {
+      const item = await signedItem(gzipped, [
+        { name: 'Content-Encoding', value: 'gzip' },
+      ]);
+      // Metadata says the payload starts one byte later than it does.
+      storeObject(item.raw, {
+        'payload-data-start': String(item.headerLength + 1),
+      });
+
+      const result = await s3DataSource.getData({ id: item.id });
+
+      assert.equal(result.sourceContentEncoding, undefined);
+      assert.deepEqual(
+        await readAll(result.stream),
+        gzipped.subarray(1),
+        'served from where the metadata says, as before',
+      );
+    });
+
+    it('reads a range straight from the payload, without the header', async () => {
+      const item = await signedItem(gzipped, [
+        { name: 'Content-Encoding', value: 'gzip' },
+      ]);
+      storeObject(item.raw, {
+        'payload-data-start': String(item.headerLength),
+      });
+
+      const result = await s3DataSource.getData({
+        id: item.id,
+        region: { offset: 2, size: 5 },
+      });
+
+      assert.deepEqual(await readAll(result.stream), gzipped.subarray(2, 7));
+      assert.equal(result.sourceContentEncoding, undefined);
+      assert.equal(
+        requestedRange(),
+        `bytes=${item.headerLength + 2}-${item.headerLength + 6}`,
+      );
+    });
+
+    it('fails when the object ends inside the header', async () => {
+      const item = await signedItem(gzipped, [
+        { name: 'Content-Encoding', value: 'gzip' },
+      ]);
+      // A truncated object: the metadata claims a header longer than it.
+      storeObject(item.raw.subarray(0, 10), {
+        'payload-data-start': String(item.headerLength),
+      });
+
+      await assert.rejects(s3DataSource.getData({ id: item.id }));
+    });
+  });
+});
+
+describe('splitLeadingBytes', () => {
+  const readAll = async (stream: NodeJS.ReadableStream) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks);
+  };
+
+  it('splits at a chunk boundary and in the middle of a chunk', async () => {
+    for (const chunks of [
+      ['abc', 'def'],
+      ['ab', 'cdef'],
+      ['a', 'b', 'c', 'd', 'e', 'f'],
+      ['abcdef'],
+    ]) {
+      const { head, rest } = await splitLeadingBytes(
+        Readable.from(chunks.map((c) => Buffer.from(c))),
+        3,
+      );
+      assert.equal(head.toString(), 'abc', chunks.join('|'));
+      assert.equal((await readAll(rest)).toString(), 'def', chunks.join('|'));
+    }
+  });
+
+  it('rejects when the stream ends first', async () => {
+    await assert.rejects(
+      splitLeadingBytes(Readable.from([Buffer.from('ab')]), 3),
+      /ended after 2 of 3/,
+    );
+  });
+
+  it('rejects and destroys the source when aborted before the header arrives', async () => {
+    const source = new Readable({ read() {} });
+    source.push(Buffer.from('ab'));
+    const controller = new AbortController();
+
+    const split = splitLeadingBytes(source, 3, controller.signal);
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+
+    await assert.rejects(split, { name: 'AbortError' });
+    assert.equal(source.destroyed, true);
+  });
+
+  it('does not read a source whose request is already aborted', async () => {
+    const source = new Readable({ read() {} });
+    source.push(Buffer.from('abcdef'));
+
+    await assert.rejects(splitLeadingBytes(source, 3, AbortSignal.abort()), {
+      name: 'AbortError',
+    });
+    assert.equal(source.destroyed, true);
+  });
+
+  it('leaves the rest alone when aborted after the header is split off', async () => {
+    const controller = new AbortController();
+    const { head, rest } = await splitLeadingBytes(
+      Readable.from([Buffer.from('abcdef')]),
+      3,
+      controller.signal,
+    );
+    controller.abort();
+
+    assert.equal(head.toString(), 'abc');
+    assert.equal((await readAll(rest)).toString(), 'def');
+  });
+
+  it('destroys the source when the rest is destroyed', async () => {
+    const source = new Readable({ read() {} });
+    source.push(Buffer.from('abcdef'));
+    const { rest } = await splitLeadingBytes(source, 3);
+    rest.destroy();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(source.destroyed, true);
   });
 });
