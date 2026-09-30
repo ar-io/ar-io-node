@@ -810,7 +810,17 @@ Things to decide or check:
   a load balancer spreads `/ar-io/indexes*` across nodes that don't publish,
   subscribers get `404`s from those nodes; if two nodes publish with the
   same key, their sequences diverge and subscribers refuse the lower one.
-  Send the whole prefix to the signing node.
+  Send the whole prefix to the signing node. `/ar-io/info` is different:
+  it describes the node that answered (its release, limits and prices), so
+  leave it on each node. A node without a publication of its own omits the
+  `indexes` block, so a crawler would see it on some requests and not
+  others. Set `INDEXES_ADVERTISE_FROM_URL` on every node that does not sign,
+  to the signing node's gateway (the same upstream as the `location` below):
+  the node fetches the document every minute and advertises the same
+  `indexes` block, as long as the document names its `AR_IO_WALLET` as
+  publisher and its signature verifies. It drops the block when the signing
+  node answers `404` or an invalid document, and after five minutes of
+  failed fetches.
 
 A worked example, from turbo-gateway (a two-node fleet with caching nginx on
 each node; gw1 publishes):

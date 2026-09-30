@@ -3537,6 +3537,17 @@ export const INDEXES_PUBLISHED_DIR = env.varOrDefault(
   'data/indexes/published',
 );
 
+/**
+ * For a node that serves an operator's indexes but does not sign them: the
+ * base URL of the gateway that does (e.g. `http://10.0.0.1:4000`). This node
+ * then advertises that gateway's publication in /ar-io/info, so every node
+ * behind a load balancer answers alike. Unset on the signing node and on a
+ * gateway that runs alone.
+ */
+export const INDEXES_ADVERTISE_FROM_URL = env.varOrUndefined(
+  'INDEXES_ADVERTISE_FROM_URL',
+);
+
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
 
