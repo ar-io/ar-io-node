@@ -5,7 +5,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { Handler, Request } from 'express';
-import { asyncMiddleware } from 'middleware-async';
 import url from 'node:url';
 import { base32 } from 'rfc4648';
 
@@ -64,7 +63,7 @@ export function createSandboxMiddleware({
   sandboxProtocol?: string;
   dataBlockListValidator: DataBlockListValidator;
 }): Handler {
-  return asyncMiddleware(async (req, res, next) => {
+  return (req, res, next) => {
     if (config.ARNS_ROOT_HOSTS.length === 0) {
       next();
       return;
@@ -84,28 +83,33 @@ export function createSandboxMiddleware({
         const sandboxId =
           reqSandbox !== undefined ? idFromSandbox(reqSandbox) : undefined;
         if (sandboxId !== undefined) {
-          let blocked = false;
-          try {
-            blocked = await dataBlockListValidator.isIdBlocked(sandboxId);
-          } catch (error: any) {
-            log.warn('Unable to check block list for bare sandbox root', {
-              id: sandboxId,
-              message: error.message,
-            });
-          }
-          if (blocked) {
-            res.header(
-              'Cache-Control',
-              `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
-            );
-            res
-              .status(451)
-              .send(
-                `Requested content blocked by this node's content policy. Blocked ID: ${sandboxId}`,
-              );
-            return;
-          }
-          sendNotFound(res);
+          // Only this rare branch waits on anything; every other request
+          // stays synchronous.
+          dataBlockListValidator
+            .isIdBlocked(sandboxId)
+            .catch((error: any) => {
+              log.warn('Unable to check block list for bare sandbox root', {
+                id: sandboxId,
+                message: error.message,
+              });
+              return false;
+            })
+            .then((blocked) => {
+              if (blocked) {
+                res.header(
+                  'Cache-Control',
+                  `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
+                );
+                res
+                  .status(451)
+                  .send(
+                    `Requested content blocked by this node's content policy. Blocked ID: ${sandboxId}`,
+                  );
+                return;
+              }
+              sendNotFound(res);
+            })
+            .catch(next);
           return;
         }
       }
@@ -127,5 +131,5 @@ export function createSandboxMiddleware({
     }
 
     next();
-  });
+  };
 }
