@@ -3197,6 +3197,124 @@ describe('ReadThroughDataCache', function () {
       assert.equal(reasons.length, 1);
     });
 
+    // Upstream data fetches do not decode, so bytes that arrive with a
+    // Content-Encoding are the encoded bytes. They are cached only when the
+    // item is indexed with that encoding; otherwise a later cache hit would
+    // serve encoded bytes without the header that describes them.
+    describe('upstream Content-Encoding', () => {
+      const encodedSource = (payload: string, encoding?: string) =>
+        ({
+          getData: async () => ({
+            stream: new Readable({
+              read() {
+                this.push(payload);
+                this.push(null);
+              },
+            }),
+            size: payload.length,
+            verified: true,
+            trusted: true,
+            cached: false,
+            sourceContentEncoding: encoding,
+          }),
+        }) as ContiguousDataSource;
+      const encodingMismatchSkips = () =>
+        (metrics.foregroundCacheSkippedTotal.inc as any).mock.calls.filter(
+          (c: any) => c.arguments[0]?.reason === 'encoding_mismatch',
+        ).length;
+      const readAll = async (stream: NodeJS.ReadableStream) => {
+        let received = '';
+        for await (const chunk of stream) received += chunk;
+        return received;
+      };
+
+      it('serves but does not cache encoded bytes for an item not indexed with that encoding', async () => {
+        mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
+        const { store, counters } = makeStatefulStore();
+        const { store: attributesStore } = makeStatefulAttributesStore();
+        const cache = makeCache({
+          dataSource: encodedSource('gzip bytes', 'gzip'),
+          dataStore: store,
+          dataAttributesStore: attributesStore,
+        });
+
+        const result = await cache.getData({
+          id: 'unindexed-gzip-id',
+          requestAttributes,
+        });
+
+        assert.equal(await readAll(result.stream), 'gzip bytes');
+        assert.equal(result.sourceContentEncoding, 'gzip');
+        assert.equal(counters.createWriteStream, 0);
+        assert.equal(encodingMismatchSkips(), 1);
+      });
+
+      it('caches encoded bytes for an item indexed with the same encoding', async () => {
+        mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
+        const { store, counters } = makeStatefulStore();
+        const { store: attributesStore, attributes } =
+          makeStatefulAttributesStore();
+        // Indexed tag values are compared case-insensitively.
+        attributes.set('indexed-gzip-id', { contentEncoding: 'GZIP' });
+        const cache = makeCache({
+          dataSource: encodedSource('gzip bytes', 'gzip'),
+          dataStore: store,
+          dataAttributesStore: attributesStore,
+        });
+
+        const result = await cache.getData({
+          id: 'indexed-gzip-id',
+          requestAttributes,
+        });
+
+        assert.equal(await readAll(result.stream), 'gzip bytes');
+        assert.equal(counters.createWriteStream, 1);
+        assert.equal(encodingMismatchSkips(), 0);
+      });
+
+      it('does not cache bytes whose upstream encoding differs from the indexed one', async () => {
+        mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
+        const { store, counters } = makeStatefulStore();
+        const { store: attributesStore, attributes } =
+          makeStatefulAttributesStore();
+        attributes.set('br-indexed-id', { contentEncoding: 'br' });
+        const cache = makeCache({
+          dataSource: encodedSource('gzip bytes', 'gzip'),
+          dataStore: store,
+          dataAttributesStore: attributesStore,
+        });
+
+        const result = await cache.getData({
+          id: 'br-indexed-id',
+          requestAttributes,
+        });
+
+        assert.equal(await readAll(result.stream), 'gzip bytes');
+        assert.equal(counters.createWriteStream, 0);
+        assert.equal(encodingMismatchSkips(), 1);
+      });
+
+      it('caches unencoded bytes as before', async () => {
+        mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
+        const { store, counters } = makeStatefulStore();
+        const { store: attributesStore } = makeStatefulAttributesStore();
+        const cache = makeCache({
+          dataSource: encodedSource('plain bytes'),
+          dataStore: store,
+          dataAttributesStore: attributesStore,
+        });
+
+        const result = await cache.getData({
+          id: 'plain-id',
+          requestAttributes,
+        });
+
+        assert.equal(await readAll(result.stream), 'plain bytes');
+        assert.equal(counters.createWriteStream, 1);
+        assert.equal(encodingMismatchSkips(), 0);
+      });
+    });
+
     it('serves the data but skips the cache write at foregroundCacheConcurrency', async () => {
       mock.method(metrics.foregroundCacheSkippedTotal, 'inc');
       const { store, counters } = makeStatefulStore();

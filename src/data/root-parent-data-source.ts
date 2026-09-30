@@ -866,6 +866,29 @@ export class RootParentDataSource implements ContiguousDataSource {
   }
 
   /**
+   * Picks the content encoding to report for a data item served as a byte
+   * range of its root transaction.
+   *
+   * The root fetch's `sourceContentEncoding` describes the root's bytes as a
+   * whole. A byte range of the root is not encoded that way, so reporting it
+   * for the item would label the item's bytes with an encoding they do not
+   * have. As with the content type (see `resolveItemContentType`), only the
+   * item that *is* the root inherits it; otherwise the handler uses the
+   * item's indexed encoding, or none.
+   */
+  private resolveItemContentEncoding({
+    id,
+    rootTxId,
+    rootContentEncoding,
+  }: {
+    id: string;
+    rootTxId: string;
+    rootContentEncoding?: string;
+  }): string | undefined {
+    return rootTxId === id ? rootContentEncoding : undefined;
+  }
+
+  /**
    * Validates a stored root transaction ID and, when it turns out to be an
    * intermediate bundle rather than an L1 transaction, rebases the offsets onto
    * the real root.
@@ -1370,6 +1393,11 @@ export class RootParentDataSource implements ContiguousDataSource {
 
               return {
                 ...data,
+                sourceContentEncoding: this.resolveItemContentEncoding({
+                  id,
+                  rootTxId: hintRootTxId,
+                  rootContentEncoding: data.sourceContentEncoding,
+                }),
                 stream: this.serveVerifiedPayload({
                   data,
                   id,
@@ -1480,6 +1508,11 @@ export class RootParentDataSource implements ContiguousDataSource {
 
           return {
             ...data,
+            sourceContentEncoding: this.resolveItemContentEncoding({
+              id,
+              rootTxId: resolvedRootTxId,
+              rootContentEncoding: data.sourceContentEncoding,
+            }),
             sourceContentType: this.resolveItemContentType({
               id,
               rootTxId: resolvedRootTxId,
@@ -1669,6 +1702,11 @@ export class RootParentDataSource implements ContiguousDataSource {
             itemContentType: originalContentType,
             rootContentType: data.sourceContentType,
           });
+          const sourceContentEncoding = this.resolveItemContentEncoding({
+            id,
+            rootTxId,
+            rootContentEncoding: data.sourceContentEncoding,
+          });
           if (attributesVerification !== undefined) {
             return {
               ...data,
@@ -1682,9 +1720,10 @@ export class RootParentDataSource implements ContiguousDataSource {
                 source: attributesVerification.source,
               }),
               sourceContentType,
+              sourceContentEncoding,
             };
           }
-          return { ...data, sourceContentType };
+          return { ...data, sourceContentType, sourceContentEncoding };
         } finally {
           fetchSpan.end();
         }
@@ -2266,10 +2305,16 @@ export class RootParentDataSource implements ContiguousDataSource {
           itemContentType: originalContentType,
           rootContentType: data.sourceContentType,
         });
+        const sourceContentEncoding = this.resolveItemContentEncoding({
+          id,
+          rootTxId,
+          rootContentEncoding: data.sourceContentEncoding,
+        });
 
         if (indexVerification !== undefined) {
           return {
             ...data,
+            sourceContentEncoding,
             stream: this.serveVerifiedPayload({
               data,
               id,
@@ -2283,7 +2328,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           };
         }
 
-        return { ...data, sourceContentType };
+        return { ...data, sourceContentType, sourceContentEncoding };
       } finally {
         fetchSpan.end();
       }

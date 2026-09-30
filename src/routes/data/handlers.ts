@@ -508,8 +508,13 @@ const setDataHeaders = ({
   // Use the content type from the L1 or data item index if available
   res.contentType(contentType);
 
-  if (dataAttributes?.contentEncoding != null) {
-    res.header('Content-Encoding', dataAttributes.contentEncoding);
+  // The item's indexed encoding, else the encoding its upstream reported for
+  // the bytes being served. Upstream fetches do not decode, so bytes that
+  // arrive encoded are served encoded and must say so.
+  const contentEncoding =
+    dataAttributes?.contentEncoding ?? data.sourceContentEncoding;
+  if (contentEncoding != null) {
+    res.header('Content-Encoding', contentEncoding);
   }
 
   if (dataAttributes?.rootTransactionId != null) {

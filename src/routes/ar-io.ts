@@ -19,7 +19,10 @@ import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
 import { isValidDataId, sanityCheckTx } from '../lib/validation.js';
-import { buildRootTxOffsets } from './ar-io-offsets-builder.js';
+import {
+  resolveRootTxOffsets,
+  sendRootTxOffsets,
+} from './ar-io-offsets-builder.js';
 import { validateOptimisticTxBatch } from './optimistic-tx-validation.js';
 import { evaluateDataItemQueueAdmission } from './data-item-queue-admission.js';
 import { buildArIoInfo } from './ar-io-info-builder.js';
@@ -247,16 +250,21 @@ export const arIoInfoHandler = async (_req: Request, res: Response) => {
 arIoRouter.get('/ar-io/info', arIoInfoHandler);
 
 /**
- * Root transaction offsets for a data item, served straight from the local
- * index.
+ * Root transaction offsets for a data item, from this node's own data.
  *
  * This is the cheap counterpart to probing a peer with `HEAD /raw/:id`. That
  * route emits the same offsets in `X-AR-IO-Root-*` headers, but only as a side
  * effect of a *successful data retrieval* — on a cache miss it drags the peer
  * through its entire `ON_DEMAND_RETRIEVAL_ORDER` cascade (trusted gateways,
- * chunks, ANS-104 offset scanning) before answering. This endpoint performs a
- * single indexed lookup and never reads contiguous data, so a miss costs a
- * SQLite read rather than a retrieval cascade.
+ * chunks, ANS-104 offset scanning) before answering. This endpoint never reads
+ * contiguous data and never makes a network request: it asks the local index,
+ * then CDB64 indexes on local disk (such as bands installed by Index Sharing).
+ * A hit costs one SQLite read; a miss costs that plus a read or two per local
+ * CDB64 source.
+ *
+ * A 200 is signed (HTTPSIG), with `Content-Digest` binding the body, so it is
+ * this gateway's attributable claim. The offsets are still a claim: confirm
+ * them by reading the item header at `rootOffset`.
  *
  * Consumed by `PeersRootTxIndex` via the `peers` entry in
  * `ROOT_TX_LOOKUP_ORDER`.
@@ -269,14 +277,17 @@ arIoRouter.get('/ar-io/offsets/:id', async (req: Request, res: Response) => {
   }
 
   try {
-    const offsets = buildRootTxOffsets(
-      await system.dataAttributesStore.getDataAttributes(id),
-    );
+    const resolved = await resolveRootTxOffsets({
+      attributes: await system.dataAttributesStore.getDataAttributes(id),
+      lookupLocalCdb64: () => system.lookupLocalCdb64RootTx(id),
+    });
 
-    if (offsets === undefined) {
+    if (resolved === undefined) {
+      metrics.offsetsLookupTotal.inc({ source: 'none' });
       // Not an error: this node simply cannot place the ID inside a root
       // transaction. Kept revalidatable — the answer changes once the
-      // containing bundle is unbundled and indexed.
+      // containing bundle is unbundled and indexed, or a band covering it is
+      // installed.
       res.setHeader(
         'Cache-Control',
         `public, max-age=${config.CACHE_NOT_FOUND_MAX_AGE}, must-revalidate`,
@@ -285,13 +296,8 @@ arIoRouter.get('/ar-io/offsets/:id', async (req: Request, res: Response) => {
       return;
     }
 
-    // Offsets are a property of the bundle's byte layout, so they never change
-    // once known.
-    res.setHeader(
-      'Cache-Control',
-      `public, max-age=${config.CACHE_DEFAULT_MAX_AGE}`,
-    );
-    res.json(offsets);
+    metrics.offsetsLookupTotal.inc({ source: resolved.source });
+    sendRootTxOffsets(res, resolved.offsets, config.CACHE_DEFAULT_MAX_AGE);
   } catch (error: any) {
     log.error('Failed to resolve root TX offsets', {
       id,

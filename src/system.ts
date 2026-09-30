@@ -93,6 +93,7 @@ import {
   NormalizedDataItem,
   PartialJsonTransaction,
   MatchableTxLike,
+  RootTxLookupResult,
 } from './types.js';
 import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
 import { Ans104Unbundler } from './workers/ans104-unbundler.js';
@@ -1196,6 +1197,16 @@ metrics.registerSemaphoreMetrics('cdb64_remote', cdb64HttpSemaphore);
 
 // Build root TX indexes based on configuration
 let cdb64RootTxIndex: Cdb64RootTxIndex | undefined;
+
+/**
+ * Looks an ID up in the CDB64 index's sources on local disk only, with no
+ * network request (see {@link Cdb64RootTxIndex.getLocalRootTx}). Undefined
+ * when `cdb` is not in `ROOT_TX_LOOKUP_ORDER`.
+ */
+export const lookupLocalCdb64RootTx = async (
+  id: string,
+): Promise<RootTxLookupResult | undefined> =>
+  cdb64RootTxIndex?.getLocalRootTx(id);
 const rootTxIndexes: DataItemRootIndex[] = [];
 
 for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {

@@ -6,8 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `GET /ar-io/offsets/:id` now also answers from CDB64 indexes on local
+  disk, such as bands installed by Index Sharing, when the local index can't
+  place the item. It still makes no network request: remote CDB64 sources,
+  and the remote partitions of the shipped indexes, are skipped. A new
+  `offsets_lookup_total{source}` metric counts answers by `db`, `cdb64` or
+  `none`.
+
+### Changed
+
+- `GET /ar-io/offsets/:id` answers are now signed (HTTPSIG), with a
+  `Content-Digest` binding the body and an `X-AR-IO-Root-Transaction-Id`
+  header, so an answer is the gateway's attributable claim. An answer from a
+  CDB64 index never carries `contentType` or `dataSize`.
+
 ### Fixed
 
+- **Gzip-encoded data fetched from a trusted gateway or AR.IO peer was served
+  decompressed, still labelled `Content-Encoding: gzip`, so clients could not
+  decode it.** An item uploaded gzip-compressed and tagged
+  `Content-Encoding: gzip` is served by a gateway as the stored gzip bytes with
+  that header. The node fetched it with axios, which decodes any response
+  carrying `Content-Encoding` and drops the header, even when the request asks
+  for `identity`. The node then served the decompressed body with
+  `Content-Encoding: gzip` from the item's tag (browsers fail to decode it; curl
+  `--compressed` exits 61), and never cached it, because the body did not match
+  the indexed size, so every request fetched it again. Seen on
+  turbo-gateway.com, where each node's trusted gateway is the other node, for
+  gzip-encoded observer reports.
+  - Upstream data fetches (`GatewaysDataSource`, `ArIODataSource`) no longer
+    decode, so stored bytes pass through unchanged, and report the upstream
+    `Content-Encoding` as the new `sourceContentEncoding`.
+  - A response uses the item's indexed `Content-Encoding`, else the one its
+    upstream reported for the bytes being served, so encoded bytes are never
+    served unlabelled. A data item served as a byte range of its root bundle
+    does not inherit the bundle's encoding.
+  - Bytes whose upstream encoding differs from the item's indexed encoding
+    (including an item whose encoding this node has not indexed) are served
+    but not cached, so a later cache hit cannot serve encoded bytes without
+    their header. Counted as
+    `foreground_cache_skipped_total{reason="encoding_mismatch"}`.
+  - Bodies already cached by a reverse proxy in front of the gateway (e.g.
+    nginx `proxy_cache`) keep the wrong body until they expire or are purged.
 - **Nested data items stored with an intermediate bundle as their root were
   served as 404s** (#959). An item inside a bundle that is itself a data item
   could be recorded with that bundle as its root and offsets measured in the

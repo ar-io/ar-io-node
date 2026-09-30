@@ -749,17 +749,19 @@ Object.entries(PEERS_ROOT_TX_URLS).forEach(([url, priority]) => {
 });
 
 // Peer root TX lookup request configuration. The default is aggressive
-// relative to the `gateways` source (10s) because this endpoint is a single
-// indexed read on the peer — a slow response means the peer is unhealthy, not
-// that the work is genuinely expensive, so failing over quickly is correct.
+// relative to the `gateways` source (10s) because this endpoint only reads the
+// peer's local disk (its index, then any local CDB64 indexes) — a slow
+// response means the peer is unhealthy, not that the work is genuinely
+// expensive, so failing over quickly is correct.
 export const PEERS_ROOT_TX_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   'PEERS_ROOT_TX_REQUEST_TIMEOUT_MS',
   '2000',
 );
 
 // Peer root TX lookup rate limiting. Far more permissive than the `gateways`
-// source for the same reason: the peer answers from its index, so this is not
-// a probe that needs throttling to protect the remote node.
+// source for the same reason: the peer answers from local disk, never with a
+// retrieval. A miss is the costliest answer, a read or two for each local
+// CDB64 source the peer has, which is still far cheaper than a HEAD probe.
 export const PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
   'PEERS_ROOT_TX_RATE_LIMIT_BURST_SIZE',
   '100',

@@ -164,6 +164,30 @@ function parseSourceSpec(spec: string): ParsedSource {
   return { type: 'file', path: spec };
 }
 
+/**
+ * Source types read from local disk. Every other type is fetched over the
+ * network (HTTP or Arweave).
+ */
+const LOCAL_SOURCE_TYPES: ReadonlySet<string> = new Set([
+  'file',
+  'partitioned-directory',
+]);
+
+/**
+ * What a lookup in this index returns. `dataSize` and `contentType` are never
+ * set: the index doesn't store a content type, and a location with
+ * `dataSize` is served without verifying the item's signature.
+ */
+export interface Cdb64RootTxLookupResult {
+  rootTxId: string;
+  path?: string[];
+  rootOffset?: number;
+  rootDataOffset?: number;
+  size?: number;
+  dataSize?: never;
+  contentType?: never;
+}
+
 /** Reader entry with metadata for logging (supports both single-file and partitioned readers) */
 interface ReaderEntry {
   reader: Cdb64Reader | PartitionedCdb64Reader;
@@ -1450,24 +1474,44 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   /**
    * Looks up a data item ID and returns its root transaction information.
    */
-  async getRootTx(id: string): Promise<
-    | {
-        rootTxId: string;
-        path?: string[];
-        rootOffset?: number;
-        rootDataOffset?: number;
-        contentType?: string;
-        size?: number;
-        dataSize?: number;
-      }
-    | undefined
-  > {
+  async getRootTx(id: string): Promise<Cdb64RootTxLookupResult | undefined> {
     try {
       await this.ensureInitialized();
     } catch {
       return undefined;
     }
+    return this.lookup(id, { localOnly: false });
+  }
 
+  /**
+   * Like {@link getRootTx}, but answers only from sources on local disk and
+   * never makes a network request: remote sources, and remote partitions of a
+   * local manifest (the shipped `resources/` indexes are all Arweave byte
+   * ranges), are skipped without being opened.
+   *
+   * It never waits for initialization either, since initializing can fetch
+   * remote manifests and headers. Until the index is initialized it starts
+   * initialization in the background and answers with a miss.
+   *
+   * For callers that must stay cheap on arbitrary IDs, such as the public
+   * `/ar-io/offsets/:id` route.
+   */
+  async getLocalRootTx(
+    id: string,
+  ): Promise<Cdb64RootTxLookupResult | undefined> {
+    if (!this.initialized) {
+      this.ensureInitialized().catch(() => {
+        // Logged by doInitialize; the next call retries.
+      });
+      return undefined;
+    }
+    return this.lookup(id, { localOnly: true });
+  }
+
+  private async lookup(
+    id: string,
+    { localOnly }: { localOnly: boolean },
+  ): Promise<Cdb64RootTxLookupResult | undefined> {
     // Convert base64url ID to 32-byte binary key
     let keyBuffer: Buffer;
     try {
@@ -1490,9 +1534,15 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
     // Search through all readers in order (first match wins)
     for (const entry of currentReaders) {
+      if (localOnly && !LOCAL_SOURCE_TYPES.has(entry.sourceType)) {
+        continue;
+      }
       entry.inFlight += 1;
       try {
-        const valueBuffer = await entry.reader.get(keyBuffer);
+        const valueBuffer =
+          entry.reader instanceof PartitionedCdb64Reader
+            ? await entry.reader.get(keyBuffer, { localOnly })
+            : await entry.reader.get(keyBuffer);
 
         if (valueBuffer !== undefined) {
           const value = decodeCdb64Value(valueBuffer);
@@ -1506,11 +1556,12 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
           //
           // When the value records the item size it is returned as `size` (the
           // whole item, header + payload). `dataSize` is deliberately left
-          // unset even though it could be derived: a result carrying
-          // `dataSize` is treated as ready to serve with no header read, but
-          // the index does not store the item's content type, and only reading
-          // the item header recovers it (and confirms the offset belongs to
-          // the requested ID).
+          // unset even though it could be derived: a location carrying
+          // `dataSize` is served without verifying the item's signature,
+          // while one without it goes through signature-verified serving.
+          // An index is a publisher's claim, so its answers take the
+          // verified path. The index also stores no content type; reading
+          // the item header recovers it.
           if (isPathCompleteValue(value) || isCompleteValue(value)) {
             return {
               rootTxId,

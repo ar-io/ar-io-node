@@ -1764,6 +1764,16 @@ export const x402PaymentSettledUsdcCounter = new promClient.Counter({
 // Root TX Index metrics
 //
 
+// Answers from `GET /ar-io/offsets/:id`, by what produced them: `db` for the
+// local index, `cdb64` for installed CDB64 indexes on local disk, `none` for
+// a 404. Kept apart from root_tx_lookup_total, which counts the composite
+// lookup's probes.
+export const offsetsLookupTotal = new promClient.Counter({
+  name: 'offsets_lookup_total',
+  help: 'GET /ar-io/offsets/:id answers by source (db, cdb64, or none for a 404)',
+  labelNames: ['source'] as const,
+});
+
 export const rootTxLookupTotal = new promClient.Counter({
   name: 'root_tx_lookup_total',
   help: 'Total root TX index lookups by source and status. On a hit, has_offsets is whether both root offsets came back and has_size whether the item size did',

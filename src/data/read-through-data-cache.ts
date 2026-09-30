@@ -18,6 +18,7 @@ import {
 import { verificationPriorities } from '../constants.js';
 import * as events from '../events.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { parseContentEncoding } from '../lib/http-utils.js';
 import { Semaphore } from '../lib/semaphore.js';
 import { currentUnixTimestamp } from '../lib/time.js';
 import * as metrics from '../metrics.js';
@@ -1317,6 +1318,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       let foregroundSkipReason: string | undefined;
       if (cacheEligible) {
         if (
+          data.sourceContentEncoding !== undefined &&
+          data.sourceContentEncoding !==
+            parseContentEncoding(attributes?.contentEncoding)
+        ) {
+          // The upstream says these bytes are encoded in a way this item is not
+          // indexed as: either the item's encoding is not known here (e.g. a
+          // data item this node has not indexed), or the upstream encoded a
+          // response it should have sent as stored. The response still carries
+          // the upstream's Content-Encoding, so it is served correctly, but the
+          // blob would be cached under the item's ID without the encoding that
+          // describes it, and later cache hits would serve it without one.
+          foregroundSkipReason = 'encoding_mismatch';
+        } else if (
           this.foregroundCacheMaxSize > 0 &&
           data.size > this.foregroundCacheMaxSize
         ) {
@@ -1337,6 +1351,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             id,
             reason: foregroundSkipReason,
             dataSize: data.size,
+            sourceContentEncoding: data.sourceContentEncoding,
           });
         }
       }

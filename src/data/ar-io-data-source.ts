@@ -27,7 +27,11 @@ import {
 import { headerNames } from '../constants.js';
 import { startChildSpan } from '../tracing.js';
 import { SpanStatusCode, Span } from '@opentelemetry/api';
-import { normalizeAbortError, parseContentRange } from '../lib/http-utils.js';
+import {
+  normalizeAbortError,
+  contentEncodingOf,
+  parseContentRange,
+} from '../lib/http-utils.js';
 import { ByteRangeTransform, attachStallTimeout } from '../lib/stream.js';
 import { PeerRequestLimiter } from './peer-request-limiter.js';
 import { executeHedgedRequest } from '../lib/hedged-request.js';
@@ -160,6 +164,10 @@ export class ArIODataSource implements ContiguousDataSource {
           ...headers,
         },
         responseType: 'stream',
+        // Keep the bytes exactly as sent; see GatewaysDataSource. axios
+        // otherwise decodes a Content-Encoding response, including an item
+        // stored gzip-compressed, and drops the header.
+        decompress: false,
         signal: controller.signal,
         params: {
           'ar-io-hops': requestAttributesHeaders?.attributes.hops,
@@ -598,6 +606,11 @@ export class ArIODataSource implements ContiguousDataSource {
       verified: false,
       trusted: false,
       sourceContentType: response.headers['content-type'] as string | undefined,
+      // Only present when the bytes are encoded, so unencoded results keep
+      // their shape.
+      ...contentEncodingOf(
+        response.headers['content-encoding'] as string | undefined,
+      ),
       cached: false,
       requestAttributes,
       upstreamTags: parseUpstreamTagHeaders(

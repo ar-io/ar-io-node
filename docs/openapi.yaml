@@ -774,17 +774,27 @@ paths:
       summary: Get root transaction offsets for a data item
       description: |
         Returns the location of a data item within its root L1 transaction,
-        read directly from this node's index.
+        from this node's own data: its index first, then CDB64 indexes on its
+        local disk, such as bands installed by Index Sharing.
 
         This is the cheap counterpart to `HEAD /raw/{id}`, which exposes the
         same values in `X-AR-IO-Root-*` headers but only as a side effect of a
         successful data retrieval — on a cache miss that route runs the node's
-        entire retrieval cascade before answering. This endpoint performs a
-        single indexed lookup and never reads contiguous data, so a miss is as
-        cheap as a hit.
+        entire retrieval cascade before answering. This endpoint never reads
+        contiguous data and never makes a network request. A hit costs one
+        index read; a miss costs that plus a read or two per local CDB64
+        index.
 
         Offsets resolve for any data item this node has unbundled and indexed,
-        even when none of its bytes are cached locally.
+        or that an installed CDB64 index covers, even when none of its bytes
+        are cached locally.
+
+        A 200 is signed with HTTP Message Signatures (when the gateway signs
+        responses, the default), with `Content-Digest` binding the body, so
+        it is this gateway's attributable claim. The offsets are still a
+        claim, not proof: confirm them by reading the data item header at
+        `rootOffset` (its ID must match) or with a chunk proof. An answer from
+        a CDB64 index never includes `contentType` or `dataSize`.
       parameters:
         - name: id
           in: path
@@ -795,7 +805,16 @@ paths:
             pattern: '^[a-zA-Z0-9_-]{43}$'
       responses:
         '200':
-          description: Offsets resolved from the local index
+          description: Offsets resolved from the local index or a local CDB64 index
+          headers:
+            X-AR-IO-Root-Transaction-Id:
+              description: The root transaction ID, as in the body. Its presence makes the response signed.
+              schema:
+                type: string
+            Content-Digest:
+              description: RFC 9530 SHA-256 digest of the response body, covered by the signature.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -810,9 +829,9 @@ paths:
                       type: string
                     description: |
                       Bundle traversal path from root to the immediate parent
-                      bundle. Only emitted when derivable from the index —
-                      currently the single-level case, where the parent is the
-                      root bundle.
+                      bundle. From the local index, only emitted in the
+                      single-level case, where the parent is the root bundle;
+                      a CDB64 index may give the full path.
                   rootOffset:
                     type: integer
                     description: Byte offset of the data item header within the root transaction's data.
@@ -821,13 +840,13 @@ paths:
                     description: Byte offset of the data item's payload within the root transaction's data.
                   contentType:
                     type: string
-                    description: Content type of the data item, when known.
+                    description: Content type of the data item, when known. Never set by a CDB64 index.
                   size:
                     type: integer
                     description: Total size of the data item in bytes, including its header.
                   dataSize:
                     type: integer
-                    description: Size of the data item's payload in bytes, excluding its header.
+                    description: Size of the data item's payload in bytes, excluding its header. Never set by a CDB64 index.
                 required:
                   - rootTxId
         '400':
@@ -838,8 +857,9 @@ paths:
                 type: string
         '404':
           description: |
-            This node cannot place the ID inside a root transaction — either the
-            ID is unknown to it, or it has no indexed root parent.
+            This node cannot place the ID inside a root transaction — the ID is
+            unknown to its index, or has no indexed root parent, and no local
+            CDB64 index covers it.
           content:
             text/plain:
               schema:

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import express from 'express';
 import { Readable } from 'node:stream';
 import { default as request } from 'supertest';
+import { gzipSync } from 'node:zlib';
 
 import { headerNames } from '../../constants.js';
 import * as config from '../../config.js';
@@ -131,6 +132,85 @@ describe('Data routes', () => {
         .then((res: any) => {
           assert.equal(res.body.toString(), 'testing...');
         });
+    });
+
+    describe('Content-Encoding', () => {
+      const body = Buffer.from('{"compressed":"on chain"}');
+      const gzipped = gzipSync(body);
+      // superagent decodes a gzip response before this parser sees it, so an
+      // encoding header that does not match the bytes fails the request.
+      const bufferBody = (res: any, callback: any) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      };
+      const get = () =>
+        request(app)
+          .get('/not-a-real-id')
+          .buffer(true)
+          .parse(bufferBody)
+          .expect(200);
+      const serve = (sourceContentEncoding?: string) => {
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(
+                sourceContentEncoding !== undefined ? gzipped : body,
+              ),
+              size:
+                sourceContentEncoding !== undefined
+                  ? gzipped.length
+                  : body.length,
+              verified: false,
+              trusted: true,
+              cached: false,
+              sourceContentEncoding,
+            }),
+        };
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+      };
+
+      it('labels bytes its upstream reports as gzip-encoded when the item is not indexed', async () => {
+        serve('gzip');
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], 'gzip');
+        assert.equal(res.headers['content-length'], String(gzipped.length));
+        // Decoded by the client: fails if the header does not fit the bytes.
+        assert.deepEqual(res.body, body);
+      });
+
+      it("uses the item's indexed encoding", async () => {
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({ contentEncoding: 'gzip' } as any),
+        };
+        serve('gzip');
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], 'gzip');
+        assert.deepEqual(res.body, body);
+      });
+
+      it('sends no Content-Encoding for unencoded bytes', async () => {
+        serve(undefined);
+
+        const res = await get();
+
+        assert.equal(res.headers['content-encoding'], undefined);
+        assert.deepEqual(res.body, body);
+      });
     });
 
     it('should return 200 status code and empty data for unblocked data HEAD request', async () => {

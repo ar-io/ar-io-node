@@ -3458,6 +3458,8 @@ describe('RootParentDataSource', () => {
         cached: false,
         trusted: true,
         sourceContentType: ENVELOPE,
+        // Describes the root's bytes as a whole, not a range of them.
+        sourceContentEncoding: 'gzip',
       }));
     };
 
@@ -3487,6 +3489,8 @@ describe('RootParentDataSource', () => {
         cached: false,
         trusted: true,
         sourceContentType: ENVELOPE,
+        // Describes the root's bytes as a whole, not a range of them.
+        sourceContentEncoding: 'gzip',
       }));
 
       const result = await rootParentDataSource.getData({
@@ -3504,6 +3508,7 @@ describe('RootParentDataSource', () => {
         0,
       );
       assert.strictEqual(result.sourceContentType, undefined);
+      assert.strictEqual(result.sourceContentEncoding, undefined);
     });
 
     it('does not inherit it on the bundle-parse hint path', async () => {
@@ -3530,6 +3535,7 @@ describe('RootParentDataSource', () => {
       });
 
       assert.strictEqual(result.sourceContentType, undefined);
+      assert.strictEqual(result.sourceContentEncoding, undefined);
     });
 
     it('does not inherit it on the attributes traversal path', async () => {
@@ -3550,6 +3556,7 @@ describe('RootParentDataSource', () => {
       const result = await rootParentDataSource.getData({ id: dataItemId });
 
       assert.strictEqual(result.sourceContentType, undefined);
+      assert.strictEqual(result.sourceContentEncoding, undefined);
     });
 
     it('does not inherit it on the legacy traversal path', async () => {
@@ -3572,6 +3579,7 @@ describe('RootParentDataSource', () => {
       const result = await rootParentDataSource.getData({ id: dataItemId });
 
       assert.strictEqual(result.sourceContentType, undefined);
+      assert.strictEqual(result.sourceContentEncoding, undefined);
     });
 
     it('keeps the fetched content type when the item is its own root', async () => {
@@ -3596,11 +3604,14 @@ describe('RootParentDataSource', () => {
         cached: false,
         trusted: true,
         sourceContentType: 'text/html',
+        sourceContentEncoding: 'gzip',
       }));
 
       const result = await rootParentDataSource.getData({ id: rootId });
 
       assert.strictEqual(result.sourceContentType, 'text/html');
+      // The fetch is of the item itself, so its encoding is the item's.
+      assert.strictEqual(result.sourceContentEncoding, 'gzip');
     });
 
     it('still reports a known item content type over the envelope', async () => {
