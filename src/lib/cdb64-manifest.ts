@@ -42,6 +42,20 @@ export type PartitionLocation =
   | PartitionArweaveIdLocation
   | PartitionArweaveByteRangeLocation;
 
+/**
+ * Whether a partition is read from local disk, with no network request.
+ *
+ * A manifest in a local directory can still name remote partitions (the
+ * shipped `resources/` indexes point every partition at an Arweave byte
+ * range), so whether a lookup stays local is decided per partition, not per
+ * source.
+ */
+export function isLocalPartitionLocation(
+  location: PartitionLocation,
+): location is PartitionFileLocation {
+  return location.type === 'file';
+}
+
 // Partition info - metadata about a single partition
 export interface PartitionInfo {
   /** Two-character hex prefix (00-ff) representing the first byte of keys */

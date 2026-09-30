@@ -25,7 +25,10 @@ import { Logger } from 'winston';
 import { BandDescriptor, BandFile } from '../../lib/index-publication.js';
 import { Cdb64Reader, verifyCdb64File } from '../../lib/cdb64.js';
 import { FileByteRangeSource } from '../../lib/byte-range-source.js';
-import { parseManifest } from '../../lib/cdb64-manifest.js';
+import {
+  isLocalPartitionLocation,
+  parseManifest,
+} from '../../lib/cdb64-manifest.js';
 import { InstalledBand } from '../state.js';
 import {
   ArtifactKind,
@@ -87,7 +90,7 @@ function rejectRemotePartitions(
   where: string,
 ): void {
   for (const partition of manifest.partitions) {
-    if (partition.location.type !== 'file') {
+    if (!isLocalPartitionLocation(partition.location)) {
       throw new Error(
         `${where}: partition ${partition.prefix} has a ${partition.location.type} location; a published band may only carry local files`,
       );

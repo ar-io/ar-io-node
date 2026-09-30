@@ -8,7 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `GET /ar-io/offsets/:id` now also answers from CDB64 indexes on local
+  disk, such as bands installed by Index Sharing, when the local index can't
+  place the item. It still makes no network request: remote CDB64 sources,
+  and the remote partitions of the shipped indexes, are skipped. A new
+  `offsets_lookup_total{source}` metric counts answers by `db`, `cdb64` or
+  `none`.
+
 ### Changed
+
+- `GET /ar-io/offsets/:id` answers are now signed (HTTPSIG), with a
+  `Content-Digest` binding the body and an `X-AR-IO-Root-Transaction-Id`
+  header, so an answer is the gateway's attributable claim. An answer from a
+  CDB64 index never carries `contentType` or `dataSize`.
 
 ### Fixed
 
