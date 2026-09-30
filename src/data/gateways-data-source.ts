@@ -15,6 +15,7 @@ import { TrustedGatewayConfig } from '../config.js';
 import {
   buildRangeHeader,
   normalizeAbortError,
+  contentEncodingOf,
   parseContentLength,
   parseContentRange,
 } from '../lib/http-utils.js';
@@ -428,6 +429,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   },
                   url: path,
                   responseType: 'stream',
+                  // Keep the bytes exactly as sent. axios otherwise decodes any
+                  // response carrying Content-Encoding and drops the header,
+                  // even with Accept-Encoding: identity. An upstream gateway
+                  // sends Content-Encoding for an item stored encoded (e.g. a
+                  // gzip-compressed item tagged Content-Encoding: gzip), so
+                  // decoding here served the decompressed body under the tag's
+                  // Content-Encoding, which clients cannot decode.
+                  decompress: false,
                   // Trust-dependent provenance params; see getData() TSDoc.
                   // `undefined` (not `{}`) ensures axios appends no query
                   // string at all for untrusted gateways.
@@ -756,6 +765,11 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   sourceContentType: response.headers['content-type'] as
                     | string
                     | undefined,
+                  // Only present when the bytes are encoded, so unencoded results keep
+                  // their shape.
+                  ...contentEncodingOf(
+                    response.headers['content-encoding'] as string | undefined,
+                  ),
                   cached: false,
                   requestAttributes: parseRequestAttributesHeaders({
                     headers: response.headers as { [key: string]: string },

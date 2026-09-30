@@ -1004,6 +1004,16 @@ export interface ContiguousData {
   verified: boolean;
   trusted: boolean;
   sourceContentType?: string;
+  /**
+   * The `Content-Encoding` of the bytes in `stream`, as reported by the
+   * upstream that supplied them (normalized; `identity` is `undefined`).
+   * Upstream data fetches do not decode, so encoded bytes stay encoded, the way
+   * they are stored on chain (for example a gzip-compressed item tagged
+   * `Content-Encoding: gzip`). Only set by sources that fetch the item itself;
+   * a data item served as a byte range of its root bundle does not inherit the
+   * bundle's encoding.
+   */
+  sourceContentEncoding?: string;
   cached: boolean;
   requestAttributes?: RequestAttributes;
   /**

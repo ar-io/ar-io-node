@@ -68,6 +68,50 @@ export function parseContentLength(
 }
 
 /**
+ * Normalizes an upstream `Content-Encoding` response header for use as the
+ * encoding of the bytes received.
+ *
+ * Returns `undefined` for a missing or empty header and for `identity`, which
+ * means the bytes are not encoded. Otherwise returns the lowercased, trimmed
+ * value (a list such as `gzip, br` is kept as sent: it describes the bytes as
+ * a whole).
+ *
+ * @example
+ * parseContentEncoding('gzip') // 'gzip'
+ * parseContentEncoding(' GZIP ') // 'gzip'
+ * parseContentEncoding('identity') // undefined
+ * parseContentEncoding(undefined) // undefined
+ */
+export function parseContentEncoding(
+  contentEncoding: string | string[] | undefined,
+): string | undefined {
+  const value = Array.isArray(contentEncoding)
+    ? contentEncoding.join(', ')
+    : contentEncoding;
+  const normalized = value?.trim().toLowerCase();
+  if (
+    normalized === undefined ||
+    normalized === '' ||
+    normalized === 'identity'
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+/**
+ * `{ sourceContentEncoding }` for an upstream `Content-Encoding` header that
+ * names an encoding, or `{}` when the bytes are not encoded; for spreading into
+ * a `ContiguousData` result.
+ */
+export function contentEncodingOf(
+  contentEncoding: string | string[] | undefined,
+): { sourceContentEncoding?: string } {
+  const sourceContentEncoding = parseContentEncoding(contentEncoding);
+  return sourceContentEncoding !== undefined ? { sourceContentEncoding } : {};
+}
+
+/**
  * Parse Content-Range response header.
  * Expected format: "bytes start-end/total" or "bytes start-end/*"
  *

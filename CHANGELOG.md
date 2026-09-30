@@ -12,6 +12,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Gzip-encoded data fetched from a trusted gateway or AR.IO peer was served
+  decompressed, still labelled `Content-Encoding: gzip`, so clients could not
+  decode it.** An item uploaded gzip-compressed and tagged
+  `Content-Encoding: gzip` is served by a gateway as the stored gzip bytes with
+  that header. The node fetched it with axios, which decodes any response
+  carrying `Content-Encoding` and drops the header, even when the request asks
+  for `identity`. The node then served the decompressed body with
+  `Content-Encoding: gzip` from the item's tag (browsers fail to decode it; curl
+  `--compressed` exits 61), and never cached it, because the body did not match
+  the indexed size, so every request fetched it again. Seen on
+  turbo-gateway.com, where each node's trusted gateway is the other node, for
+  gzip-encoded observer reports.
+  - Upstream data fetches (`GatewaysDataSource`, `ArIODataSource`) no longer
+    decode, so stored bytes pass through unchanged, and report the upstream
+    `Content-Encoding` as the new `sourceContentEncoding`.
+  - A response uses the item's indexed `Content-Encoding`, else the one its
+    upstream reported for the bytes being served, so encoded bytes are never
+    served unlabelled. A data item served as a byte range of its root bundle
+    does not inherit the bundle's encoding.
+  - Bytes whose upstream encoding differs from the item's indexed encoding
+    (including an item whose encoding this node has not indexed) are served
+    but not cached, so a later cache hit cannot serve encoded bytes without
+    their header. Counted as
+    `foreground_cache_skipped_total{reason="encoding_mismatch"}`.
+  - Bodies already cached by a reverse proxy in front of the gateway (e.g.
+    nginx `proxy_cache`) keep the wrong body until they expire or are purged.
+
 ## [Release 84] - 2026-09-29
 
 This is a **recommended release** focused on **index sharing between gateways,
