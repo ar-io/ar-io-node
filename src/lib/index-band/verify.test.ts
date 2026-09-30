@@ -1,0 +1,242 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+import {
+  ArweaveSigner,
+  bundleAndSignData,
+  createData,
+} from '@dha-team/arbundles';
+import Arweave from 'arweave';
+import { strict as assert } from 'node:assert';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { after, before, describe, it } from 'node:test';
+
+import { buildBand, BandSampleEntry } from './build.js';
+import {
+  checkBandHeaders,
+  RootSourceFactory,
+  sampleBandEntries,
+} from './verify.js';
+import { scanBundle, ScannedDataItem } from '../ans104-bundle-scan.js';
+import { ByteRangeSource } from '../byte-range-source.js';
+import { fromB64Url } from '../encoding.js';
+import { createTestLogger } from '../../../test/test-logger.js';
+
+const log = createTestLogger({ suite: 'checkBandHeaders' });
+const ROOT = 'VmFsaWRSb290VHhJZEZvclRoZUhlYWRlckNoZWNrMDE';
+
+class BufferByteRangeSource implements ByteRangeSource {
+  constructor(private readonly bytes: Buffer) {}
+
+  async read(offset: number, size: number): Promise<Buffer> {
+    if (offset < 0 || offset + size > this.bytes.length) {
+      throw new Error(`Read ${offset}+${size} is outside the root`);
+    }
+    return this.bytes.subarray(offset, offset + size);
+  }
+
+  async close(): Promise<void> {}
+
+  isOpen(): boolean {
+    return true;
+  }
+}
+
+describe('checkBandHeaders', () => {
+  let items: ScannedDataItem[];
+  let rootBytes: Buffer;
+  let openRoot: RootSourceFactory;
+  let tempDir: string;
+
+  before(async () => {
+    const signer = new ArweaveSigner(await Arweave.init({}).wallets.generate());
+    const bundle = await bundleAndSignData(
+      [
+        createData('first item', signer, {
+          tags: [{ name: 'Content-Type', value: 'text/plain' }],
+        }),
+        createData(Buffer.alloc(3000, 5), signer),
+        createData('third', signer, {
+          tags: [{ name: 'App-Name', value: 'header-check' }],
+        }),
+      ],
+      signer,
+    );
+    rootBytes = bundle.getRaw();
+    items = [];
+    for await (const item of scanBundle({
+      source: new BufferByteRangeSource(rootBytes),
+      rootTxId: ROOT,
+      bundleSize: rootBytes.length,
+    })) {
+      items.push(item);
+    }
+    openRoot = () => new BufferByteRangeSource(rootBytes);
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'band-verify-'));
+  });
+
+  after(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  const entry = (item: ScannedDataItem): BandSampleEntry => ({
+    id: item.id,
+    rootTxId: ROOT,
+    rootOffset: item.rootDataItemOffset,
+    rootDataOffset: item.rootDataOffset,
+  });
+
+  it('passes when every header matches its ID and offsets', async () => {
+    const result = await checkBandHeaders({
+      entries: items.map(entry),
+      totalRecords: items.length,
+      openRoot,
+      minRecords: 1,
+    });
+
+    assert.equal(result.passed, true, result.reasons.join('; '));
+    assert.equal(result.ok, items.length);
+    assert.deepEqual(result.wrong, []);
+  });
+
+  it('fails on an entry whose offsets point at another item', async () => {
+    const [first, second] = items;
+    const result = await checkBandHeaders({
+      entries: [
+        {
+          ...entry(first),
+          rootOffset: second.rootDataItemOffset,
+          rootDataOffset: second.rootDataOffset,
+        },
+        entry(second),
+      ],
+      totalRecords: 2,
+      openRoot,
+      minRecords: 1,
+    });
+
+    assert.equal(result.passed, false);
+    assert.equal(result.wrong.length, 1);
+    assert.match(result.wrong[0].reason, /is item/);
+  });
+
+  it('fails on offsets that cut the header short or run past it', async () => {
+    const [first] = items;
+    const short = await checkBandHeaders({
+      entries: [{ ...entry(first), rootDataOffset: first.rootDataOffset - 1 }],
+      totalRecords: 1,
+      openRoot,
+      minRecords: 1,
+    });
+    const long = await checkBandHeaders({
+      entries: [{ ...entry(first), rootDataOffset: first.rootDataOffset + 1 }],
+      totalRecords: 1,
+      openRoot,
+      minRecords: 1,
+    });
+
+    assert.equal(short.passed, false);
+    assert.match(short.wrong[0].reason, /runs past/);
+    assert.equal(long.passed, false);
+    assert.match(long.wrong[0].reason, /header is/);
+  });
+
+  it('fails when offsets point at bytes that are not a header', async () => {
+    const [first] = items;
+    const result = await checkBandHeaders({
+      entries: [
+        {
+          ...entry(first),
+          rootOffset: first.rootDataOffset,
+          rootDataOffset: first.rootDataOffset + 2000,
+        },
+      ],
+      totalRecords: 1,
+      openRoot,
+      minRecords: 1,
+    });
+
+    assert.equal(result.passed, false);
+    assert.equal(result.wrong.length + result.errors.length, 1);
+  });
+
+  it('counts unreadable roots against the pass ratio without calling them wrong', async () => {
+    const failing: RootSourceFactory = () => ({
+      read: async () => {
+        throw new Error('gateway unreachable');
+      },
+      close: async () => {},
+      isOpen: () => true,
+    });
+    const result = await checkBandHeaders({
+      entries: items.map(entry),
+      totalRecords: items.length,
+      openRoot: failing,
+      minRecords: 1,
+    });
+
+    assert.equal(result.passed, false);
+    assert.deepEqual(result.wrong, []);
+    assert.equal(result.errors.length, items.length);
+    assert.match(result.reasons.join(' '), /under 80%/);
+  });
+
+  it('fails a band smaller than the minimum, or with nothing to check', async () => {
+    const small = await checkBandHeaders({
+      entries: items.map(entry),
+      totalRecords: items.length,
+      openRoot,
+    });
+    const empty = await checkBandHeaders({
+      entries: [],
+      totalRecords: 5000,
+      openRoot,
+    });
+
+    assert.equal(small.passed, false);
+    assert.match(small.reasons.join(' '), /fewer than 1000/);
+    assert.equal(empty.passed, false);
+    assert.match(empty.reasons.join(' '), /no entries with offsets/);
+  });
+
+  it('checks a built band end to end, from its own sample or one read from disk', async () => {
+    const band = await buildBand({
+      log,
+      records: items.map((item) => ({
+        id: fromB64Url(item.id),
+        rootTxId: fromB64Url(ROOT),
+        rootOffset: item.rootDataItemOffset,
+        rootDataOffset: item.rootDataOffset,
+        size: item.dataItemSize,
+      })),
+      publishDir: path.join(tempDir, 'published'),
+      workDir: path.join(tempDir, 'export'),
+      publisher: 'test-publisher',
+      kind: 'd',
+      heightRange: [0, null],
+    });
+
+    const fromBuild = await checkBandHeaders({
+      entries: band.sample,
+      totalRecords: band.records,
+      openRoot,
+      minRecords: 1,
+    });
+    assert.equal(fromBuild.passed, true, fromBuild.reasons.join('; '));
+
+    const fromDisk = await sampleBandEntries(band.dir!, 10);
+    assert.equal(fromDisk.totalRecords, items.length);
+    assert.equal(fromDisk.entries.length, items.length);
+    const checked = await checkBandHeaders({
+      ...fromDisk,
+      openRoot,
+      minRecords: 1,
+    });
+    assert.equal(checked.passed, true, checked.reasons.join('; '));
+  });
+});

@@ -53,7 +53,8 @@ const ED25519_SIGNATURE_BYTES = 64;
 
 const INDEX_NAME_PATTERN = /^[a-z0-9-]{1,64}$/;
 const KIND_PATTERN = /^[a-z0-9-]{1,64}$/;
-const PATH_SEGMENT_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+/** A band id, file name or other path segment in a publication. */
+export const PATH_SEGMENT_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
 /**
  * Names that are properties of every plain object. These arrive from a
