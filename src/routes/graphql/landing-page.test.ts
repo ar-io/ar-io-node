@@ -14,6 +14,8 @@ import { expressMiddleware } from '@as-integrations/express4';
 import express from 'express';
 import request from 'supertest';
 
+import { createTestLogger } from '../../../test/test-logger.js';
+import { createErrorHandlerMiddleware } from '../../middleware/error-handler.js';
 import {
   GRAPHIQL_CSP,
   graphiqlAssets,
@@ -23,8 +25,10 @@ import {
 
 /**
  * A real Apollo Server behind the same `/graphql` chain `graphql/index.ts`
- * builds, pointed at a stand-in for `dist/graphiql`, so the page and headers
- * under test are what a browser actually receives.
+ * builds, pointed at a stand-in for `dist/graphiql`, and ending in the
+ * gateway's own terminal error handler, so the page, headers and error
+ * statuses under test are what a browser actually receives. Express's default
+ * handler is laxer than the gateway's, and hid a 500 on missing files.
  */
 const app = async (assetsDir: string) => {
   const server = new ApolloServer({
@@ -41,6 +45,11 @@ const app = async (assetsDir: string) => {
     graphiqlCsp,
     express.json(),
     expressMiddleware(server),
+  );
+  a.use(
+    createErrorHandlerMiddleware({
+      log: createTestLogger({ suite: 'GraphiQL landing page' }),
+    }),
   );
   return { a, server };
 };
