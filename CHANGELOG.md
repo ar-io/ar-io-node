@@ -48,6 +48,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `tools/index-swarm-setup --engine-port` and `--public-host` did nothing
+  without `--torrent`: moving an existing engine to another peer port printed
+  ".env already has everything" (while telling the operator to open the new
+  port) and left `INDEX_SWARM_ENGINE_PORT` unchanged. Both now apply on their
+  own, like `--max-disk-gib`, and `--restart` recreates the engine.
 - `index_swarm_tracker_peers` counted peers of a swarm that had gone quiet,
   and bands no longer offered, until the next announce ran expiry. It now
   counts only bands still offered and peers seen within the announce TTL.

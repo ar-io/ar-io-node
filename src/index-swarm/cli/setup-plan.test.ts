@@ -83,6 +83,33 @@ describe('planSetup', () => {
     assert.deepEqual(p.services, ['index-swarm']);
   });
 
+  it("moves an existing engine's peer port with --engine-port alone, restarting the engine but not the gateway", () => {
+    const existing = apply('', { subscribe: [TURBO], torrent: true });
+    const p = plan(existing, { enginePort: 6882 });
+    assert.deepEqual(p.errors, []);
+    assert.deepEqual(
+      p.changes.map((c) => [c.key, c.value]),
+      [['INDEX_SWARM_ENGINE_PORT', '6882']],
+    );
+    assert.equal(p.restartCore, false);
+    assert.deepEqual(p.services, [
+      'index-swarm-engine-init',
+      'index-swarm-engine',
+      'index-swarm',
+    ]);
+    assert.match(p.notes.join('\n'), /Open port 6882/);
+  });
+
+  it("sets an existing engine's public host with --public-host alone", () => {
+    const existing = apply('', { subscribe: [TURBO], torrent: true });
+    const p = plan(existing, { publicHost: '203.0.113.7' });
+    assert.deepEqual(p.errors, []);
+    assert.deepEqual(
+      p.changes.map((c) => [c.key, c.value]),
+      [['INDEX_SWARM_ENGINE_PUBLIC_HOST', '203.0.113.7']],
+    );
+  });
+
   it('is idempotent: a second run changes nothing and restarts no gateway', () => {
     const once = apply('', { subscribe: [TURBO], torrent: true });
     const again = plan(once, { subscribe: [TURBO], torrent: true });
