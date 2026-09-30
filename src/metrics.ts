@@ -536,7 +536,7 @@ export const graphqlHttpBatchSize = new promClient.Histogram({
     'request; greater than 1 when a client posts a JSON array and Apollo ' +
     'executes the whole array in parallel. Measured before Apollo, so `_count` ' +
     'is those POSTs and `_sum` the operations they produced. Excludes GETs ' +
-    '(which cannot batch, and would fold in Sandbox landing-page views) and ' +
+    '(which cannot batch, and would fold in GraphiQL landing-page views) and ' +
     'bodies that failed to parse (diverted to the Express error flow before ' +
     'this middleware). Apollo offers no cap on batch size, and the rate limiter ' +
     'counts HTTP requests rather than operations, so the gap between _sum and ' +

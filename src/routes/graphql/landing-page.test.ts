@@ -5,46 +5,137 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { ApolloServer } from '@apollo/server';
 import { expressMiddleware } from '@as-integrations/express4';
 import express from 'express';
 import request from 'supertest';
 
-import { graphqlLandingPage } from './landing-page.js';
+import {
+  GRAPHIQL_CSP,
+  graphiqlAssets,
+  graphiqlCsp,
+  graphqlLandingPage,
+} from './landing-page.js';
 
 /**
- * A real Apollo Server with only the landing-page plugin, mounted the way
- * `graphql/index.ts` mounts it, so the page under test is the HTML a browser
- * actually receives from `GET /graphql`.
+ * A real Apollo Server behind the same `/graphql` chain `graphql/index.ts`
+ * builds, pointed at a stand-in for `dist/graphiql`, so the page and headers
+ * under test are what a browser actually receives.
  */
-const app = async () => {
+const app = async (assetsDir: string) => {
   const server = new ApolloServer({
     typeDefs: 'type Query { ok: Boolean }',
-    plugins: [graphqlLandingPage()],
+    resolvers: { Query: { ok: () => true } },
+    plugins: [graphqlLandingPage(assetsDir)],
     stopOnTerminationSignals: false,
   });
   await server.start();
   const a = express();
-  a.use('/graphql', express.json(), expressMiddleware(server));
+  a.use(
+    '/graphql',
+    graphiqlAssets(assetsDir),
+    graphiqlCsp,
+    express.json(),
+    expressMiddleware(server),
+  );
   return { a, server };
 };
 
-describe('graphqlLandingPage', () => {
-  it('serves the embedded Sandbox with its browser telemetry off', async () => {
-    const { a, server } = await app();
+describe('GraphiQL landing page', () => {
+  let assetsDir: string;
+
+  before(async () => {
+    assetsDir = await mkdtemp(path.join(os.tmpdir(), 'graphiql-'));
+    await writeFile(
+      path.join(assetsDir, 'manifest.json'),
+      JSON.stringify({ js: 'index-ABC123.js', css: 'index-DEF456.css' }),
+    );
+    await writeFile(path.join(assetsDir, 'index-ABC123.js'), 'export {};');
+    await writeFile(path.join(assetsDir, 'index-DEF456.css'), 'body{}');
+  });
+
+  after(async () => {
+    await rm(assetsDir, { recursive: true, force: true });
+  });
+
+  it('serves the self-hosted page with a same-origin-only CSP', async () => {
+    const { a, server } = await app(assetsDir);
     try {
       const res = await request(a).get('/graphql').set('Accept', 'text/html');
 
       assert.equal(res.status, 200);
       assert.match(res.headers['content-type'], /text\/html/);
-      assert.match(res.text, /embeddableSandbox/);
-      // The embed config is serialized into the page as JSON. Asserting the
-      // pair, not just the key, is what catches a default of `true`.
-      assert.match(res.text, /"runTelemetry":false/);
-      assert.doesNotMatch(res.text, /"runTelemetry":true/);
+      assert.equal(res.headers['content-security-policy'], GRAPHIQL_CSP);
+      assert.match(
+        res.text,
+        /<script type="module" src="\/graphql\/graphiql\/index-ABC123\.js">/,
+      );
+      assert.match(res.text, /href="\/graphql\/graphiql\/index-DEF456\.css"/);
+      // Nothing on the page may come from, or report to, a third party.
+      assert.doesNotMatch(res.text, /(src|href)="(https?:)?\/\//);
+      assert.doesNotMatch(res.text, /apollographql|runTelemetry/);
     } finally {
       await server.stop();
+    }
+  });
+
+  it('serves the bundled files as immutable', async () => {
+    const { a, server } = await app(assetsDir);
+    try {
+      const res = await request(a).get('/graphql/graphiql/index-ABC123.js');
+
+      assert.equal(res.status, 200);
+      assert.match(res.headers['content-type'], /javascript/);
+      assert.match(res.headers['cache-control'], /max-age=31536000/);
+      assert.match(res.headers['cache-control'], /immutable/);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it('answers an unknown file with 404, not the landing page', async () => {
+    const { a, server } = await app(assetsDir);
+    try {
+      const res = await request(a)
+        .get('/graphql/graphiql/missing.js')
+        .set('Accept', 'text/html');
+
+      assert.equal(res.status, 404);
+      assert.doesNotMatch(res.text, /id="graphiql"/);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it('leaves GraphQL requests alone', async () => {
+    const { a, server } = await app(assetsDir);
+    try {
+      const res = await request(a).post('/graphql').send({ query: '{ ok }' });
+
+      assert.equal(res.status, 200);
+      assert.deepEqual(res.body, { data: { ok: true } });
+      assert.equal(res.headers['content-security-policy'], undefined);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it('explains how to build the page when it has not been built', async () => {
+    const empty = await mkdtemp(path.join(os.tmpdir(), 'graphiql-empty-'));
+    const { a, server } = await app(empty);
+    try {
+      const res = await request(a).get('/graphql').set('Accept', 'text/html');
+
+      assert.equal(res.status, 200);
+      assert.match(res.text, /yarn build:graphiql/);
+      assert.doesNotMatch(res.text, /<script/);
+    } finally {
+      await server.stop();
+      await rm(empty, { recursive: true, force: true });
     }
   });
 });

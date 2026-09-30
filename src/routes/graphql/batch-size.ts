@@ -42,7 +42,7 @@ export const recordGraphqlBatchSize = (
   //
   // Batching is a POST-with-a-JSON-array feature, so a GET can never carry
   // more than one operation. Counting GETs would also fold in every browser
-  // hit on the Apollo Sandbox landing page, which is not an operation at all
+  // hit on the GraphiQL landing page, which is not an operation at all
   // and would inflate the denominator with page views.
   //
   // Requests whose body failed to parse are absent for a different reason:
