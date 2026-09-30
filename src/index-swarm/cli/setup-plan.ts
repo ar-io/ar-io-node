@@ -264,7 +264,23 @@ export function planSetup(
     );
   }
 
-  // The torrent engine.
+  // The torrent engine. Like --max-disk-gib, its address and port apply
+  // without --torrent, so an operator can move an engine that already runs;
+  // with the engine off they wait in .env until it is turned on.
+  if (options.publicHost !== undefined) {
+    set({
+      key: 'INDEX_SWARM_ENGINE_PUBLIC_HOST',
+      value: options.publicHost,
+      reason: 'where peers reach this node’s engine',
+    });
+  }
+  if (options.enginePort !== undefined) {
+    set({
+      key: 'INDEX_SWARM_ENGINE_PORT',
+      value: String(options.enginePort),
+      reason: 'the engine’s peer port',
+    });
+  }
   const auth = env.get('INDEX_SWARM_ENGINE_AUTH');
   if (options.torrent) {
     if (auth === undefined) {
@@ -282,20 +298,6 @@ export function planSetup(
           `The existing INDEX_SWARM_ENGINE_AUTH is unusable (${error.message}); remove it to have one generated, then run this again.`,
         );
       }
-    }
-    if (options.publicHost !== undefined) {
-      set({
-        key: 'INDEX_SWARM_ENGINE_PUBLIC_HOST',
-        value: options.publicHost,
-        reason: 'where peers reach this node’s engine',
-      });
-    }
-    if (options.enginePort !== undefined) {
-      set({
-        key: 'INDEX_SWARM_ENGINE_PORT',
-        value: String(options.enginePort),
-        reason: 'the engine’s peer port',
-      });
     }
     const url = env.get('INDEX_SWARM_ENGINE_URL');
     if (url !== undefined && url !== DEFAULT_ENGINE_URL) {
