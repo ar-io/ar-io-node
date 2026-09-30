@@ -21,6 +21,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Content-Digest` binding the body and an `X-AR-IO-Root-Transaction-Id`
   header, so an answer is the gateway's attributable claim. An answer from a
   CDB64 index never carries `contentType` or `dataSize`.
+- The bare root of a sandbox subdomain (`GET`/`HEAD /` on
+  `<52-char base32>.<ARNS_ROOT_HOST>`) now answers **451** when the ID it
+  encodes is blocked and **404** otherwise, instead of falling through to
+  `GET /` and returning `/ar-io/info` with a 200. Abuse reports cite that bare
+  URL, so a blocked item's sandbox looked live to the reporter. Both responses
+  use the not-found TTL (`CACHE_NOT_FOUND_MAX_AGE`, `must-revalidate`) rather
+  than the 30-day blocked TTL, because an unblock never revalidates this URL.
+  Every other path on a sandbox host is unchanged.
 
 ### Fixed
 
