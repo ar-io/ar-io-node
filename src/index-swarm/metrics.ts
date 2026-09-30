@@ -176,7 +176,10 @@ export interface TrackerStats {
   peers: number;
   /** Of those, peers holding the whole band (`left=0`). */
   seeders: number;
-  /** Distinct addresses seeding at least one band. */
+  /**
+   * Distinct addresses (an IPv6 /64 counted once) seeding at least one band,
+   * other than this node's own engine.
+   */
   seedingHosts: number;
 }
 
@@ -192,7 +195,7 @@ export const trackerPeers = new promClient.Gauge({
   collect() {
     if (trackerStats !== undefined) this.set(trackerStats().peers);
   },
-  help: 'Peers the closed tracker currently knows, summed over the bands it tracks: each peer once per band, although a hybrid torrent is announced under two hashes.',
+  help: 'Peers the closed tracker currently knows, summed over the bands it offers: each peer once per band, although a hybrid torrent is announced under two hashes. Peers that have not announced within two intervals and a minute are not counted.',
   registers: [registry],
 });
 
@@ -210,7 +213,7 @@ export const trackerSeedingHosts = new promClient.Gauge({
   collect() {
     if (trackerStats !== undefined) this.set(trackerStats().seedingHosts);
   },
-  help: 'Distinct addresses seeding at least one band this tracker tracks: roughly how many gateways share the index. Peers found only through DHT or peer exchange are not seen.',
+  help: "Distinct addresses (an IPv6 /64 counted once) seeding at least one band this tracker tracks, other than this node's own engine: roughly how many other gateways share the index. As the peers report it (left=0); peers found only through DHT or peer exchange are not seen.",
   registers: [registry],
 });
 

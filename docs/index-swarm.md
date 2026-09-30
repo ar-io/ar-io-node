@@ -1013,7 +1013,7 @@ Metrics worth a dashboard:
 | `index_swarm_engine_available` | 1 while the torrent engine answers. Absent when none is configured, which is HTTP only by choice |
 | `index_publish_seeding_bands{index}` | Bands handed to the engine on the last scan. Below `index_publish_bands` means some are offered over HTTP only |
 | `index_swarm_tracker_announces_total{result}`, `index_swarm_tracker_peers` | The closed tracker: `ok`, `unregistered` (an infohash this node does not publish; refused), `malformed`, `rate_limited` (an address announcing one torrent too often). The peer gauge counts each peer once per torrent it is in, although a hybrid torrent is announced under two hashes |
-| `index_swarm_tracker_seeders`, `index_swarm_tracker_seeding_hosts` | Who shares. Seeders are the tracked peers holding the whole band (`left=0`), counted like the peer gauge; the rest are still downloading. Seeding hosts are distinct addresses seeding at least one band, roughly how many gateways share the index. Peers found only through DHT or peer exchange are not seen |
+| `index_swarm_tracker_seeders`, `index_swarm_tracker_seeding_hosts` | Who shares. Seeders are the tracked peers holding the whole band (announcing `left=0`), counted per band like the peer gauge; the rest are still downloading. Seeding hosts are the distinct addresses seeding at least one band, an IPv6 /64 counted once and this node's own engine left out: roughly how many other gateways share the index. Both are as the peers report it, and peers found only through DHT or peer exchange are not seen. Like the peer gauge, they count only bands still offered and peers that announced within two intervals and a minute |
 
 On the gateway, at `/ar-io/__gateway_metrics`:
 

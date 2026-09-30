@@ -373,7 +373,7 @@ export class ClosedTracker {
   /** Forget peers that have missed two announces, and swarms no longer offered. */
   private expire(now: number): void {
     const allowed = this.allowed();
-    const ttlMs = (this.intervalSeconds * 2 + 60) * 1000;
+    const ttlMs = this.peerTtlMs();
     for (const [hex, swarm] of this.swarms) {
       if (!allowed.has(hex)) {
         this.swarms.delete(hex);
@@ -386,17 +386,36 @@ export class ClosedTracker {
     }
   }
 
+  /** How long a peer is kept without announcing: two intervals and a minute. */
+  private peerTtlMs(): number {
+    return (this.intervalSeconds * 2 + 60) * 1000;
+  }
+
   /**
    * Peers and seeders per torrent, each peer counted once however many
    * hashes it announces under (a seeder under any of them), plus the distinct
-   * addresses seeding anything. Walks every peer, so it runs when metrics are
+   * addresses seeding anything.
+   *
+   * Counts only what {@link expire} would keep: bands still offered and peers
+   * seen within the TTL. Expiry runs on announces, so without this a swarm
+   * that went quiet would be counted as it last was. Seeding hosts are
+   * counted by address bucket (an IPv6 /64 is one address, as for the
+   * per-address limits) and leave out this node's own engine, so they count
+   * other hosts that share. Walks every peer, so it runs when metrics are
    * read, not per announce.
    */
   private stats(): TrackerStats {
+    const now = this.now();
+    const ttlMs = this.peerTtlMs();
+    const allowed = this.allowed();
     const torrentOf = this.torrentOf();
+    const self = this.selfPeer();
+    const selfKey =
+      self === undefined ? undefined : `${normalizeIp(self.ip)}:${self.port}`;
     const byTorrent = new Map<string, Map<string, boolean>>();
     const seedingHosts = new Set<string>();
     for (const [hex, swarm] of this.swarms) {
+      if (!allowed.has(hex)) continue;
       const torrent = torrentOf.get(hex) ?? hex;
       let peers = byTorrent.get(torrent);
       if (peers === undefined) {
@@ -404,8 +423,11 @@ export class ClosedTracker {
         byTorrent.set(torrent, peers);
       }
       for (const [key, peer] of swarm) {
+        if (now - peer.seenAt > ttlMs) continue;
         peers.set(key, peers.get(key) === true || peer.seeding);
-        if (peer.seeding) seedingHosts.add(peer.ip);
+        if (peer.seeding && key !== selfKey) {
+          seedingHosts.add(addressBucket(peer.ip));
+        }
       }
     }
     let peers = 0;
