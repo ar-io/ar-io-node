@@ -24,7 +24,11 @@ import { GqlQueryable, GqlWarning } from '../../types.js';
 import { resolvers } from './resolvers.js';
 import { recordGraphqlBatchSize } from './batch-size.js';
 import { graphqlBodyParseError } from './body-parse-error.js';
-import { graphqlLandingPage } from './landing-page.js';
+import {
+  graphiqlAssets,
+  graphiqlCsp,
+  graphqlLandingPage,
+} from './landing-page.js';
 import { buildResolverSignal, ResolverSignalState } from './resolver-signal.js';
 
 /**
@@ -184,10 +188,9 @@ export const makeApolloServerMiddleware = async ({
       // plugins make that impossible rather than merely unconfigured.
       ApolloServerPluginUsageReportingDisabled(),
       ApolloServerPluginSchemaReportingDisabled(),
-      // Serves the embedded Apollo Sandbox at `GET /graphql` for browsers,
-      // with the embed's own browser-side telemetry off. This replaces the
-      // retired `graphql-playground-react` UI that AS3 served; AS5 ships no
-      // Playground plugin. See `landing-page.ts`.
+      // Serves a self-hosted GraphiQL page at `GET /graphql` for browsers:
+      // no third-party scripts, no vendor login, no telemetry. See
+      // `landing-page.ts`.
       graphqlLandingPage(),
       warningsPlugin,
       requestCountPlugin,
@@ -198,6 +201,10 @@ export const makeApolloServerMiddleware = async ({
   await server.start();
 
   const middleware: (RequestHandler | ErrorRequestHandler)[] = [
+    // The GraphiQL page's bundled files, first so asset requests never reach
+    // the body parser, the batch metrics or Apollo.
+    graphiqlAssets(),
+    graphiqlCsp,
     // No explicit limit: apollo-server-express 3 installed body-parser with
     // its default 100kb cap, so leaving it unset keeps the maximum accepted
     // query size exactly where it was.

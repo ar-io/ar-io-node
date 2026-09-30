@@ -308,6 +308,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`layoutConfirmed`) so it isn't rebuilt again. See the "L1 bands" section
   of [docs/index-swarm.md](docs/index-swarm.md).
 
+- **`GET /graphql` in a browser now serves GraphiQL, bundled with its
+  Explorer plugin and served by the gateway itself, instead of the Apollo
+  Sandbox.** The page loads nothing from third parties, reports nothing to
+  anyone and has no vendor login, and it is sent with a Content-Security-Policy
+  that allows only this gateway as a source. The Explorer builds a query from
+  checkboxes over the schema, much as the Sandbox did. The bundle is built by
+  `yarn build` (or `yarn build:graphiql` on its own) into `dist/graphiql/` and
+  served under `/graphql/graphiql/`; the first visit downloads about 7 MB,
+  cached from then on. API clients are unaffected.
 - `GET /ar-io/offsets/:id` answers are now signed (HTTPSIG), with a
   `Content-Digest` binding the body and an `X-AR-IO-Root-Transaction-Id`
   header, so an answer is the gateway's attributable claim. An answer from a
