@@ -147,10 +147,12 @@ export const graphiqlAssets = (
 };
 
 /**
- * Sets the landing page's Content-Security-Policy on browser `GET`s of
- * `/graphql` itself. Apollo decides whether such a request gets the page or a
- * GraphQL response; the header is harmless on the latter, since CSP applies
- * only to documents.
+ * Sets the landing page's Content-Security-Policy on browser `GET`s under
+ * `/graphql`. Not just `/graphql` itself: Apollo answers every path under its
+ * mount, so `/graphql/anything` gets the page too. Apollo decides whether a
+ * request gets the page or a GraphQL response; the header is harmless on the
+ * latter, since CSP applies only to documents. Requests for the bundled files
+ * never get here, because `graphiqlAssets` runs first and ends them.
  */
 export const graphiqlCsp = (
   req: Request,
@@ -159,7 +161,6 @@ export const graphiqlCsp = (
 ): void => {
   if (
     req.method === 'GET' &&
-    req.path === '/' &&
     req.accepts(['application/json', 'text/html']) === 'text/html'
   ) {
     res.setHeader('Content-Security-Policy', GRAPHIQL_CSP);

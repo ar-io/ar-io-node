@@ -83,6 +83,23 @@ describe('GraphiQL landing page', () => {
     }
   });
 
+  it('sends the CSP wherever Apollo serves the page, nested paths included', async () => {
+    const { a, server } = await app(assetsDir);
+    try {
+      // Apollo answers every path under its mount, so `/graphql/anything`
+      // gets the landing page too, and must carry the same policy.
+      for (const url of ['/graphql/', '/graphql/nested/path']) {
+        const res = await request(a).get(url).set('Accept', 'text/html');
+
+        assert.equal(res.status, 200, url);
+        assert.match(res.text, /id="graphiql"/, url);
+        assert.equal(res.headers['content-security-policy'], GRAPHIQL_CSP, url);
+      }
+    } finally {
+      await server.stop();
+    }
+  });
+
   it('serves the bundled files as immutable', async () => {
     const { a, server } = await app(assetsDir);
     try {
