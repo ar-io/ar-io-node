@@ -10,12 +10,14 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { Readable } from 'node:stream';
 
 import { Cdb64RootTxIndex } from './cdb64-root-tx-index.js';
 import { Cdb64Writer } from '../lib/cdb64.js';
 import { PartitionedCdb64Writer } from '../lib/partitioned-cdb64-writer.js';
 import { encodeCdb64Value } from '../lib/cdb64-encoding.js';
 import { toB64Url } from '../lib/encoding.js';
+import { ContiguousDataSource } from '../types.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'Cdb64RootTxIndex' });
@@ -283,6 +285,228 @@ describe('Cdb64RootTxIndex', () => {
       const result2 = await index.getRootTx(toB64Url(dataItemId));
       assert(result2 !== undefined);
       assert.equal(result1.rootTxId, result2.rootTxId);
+
+      await index.close();
+    });
+  });
+
+  describe('getLocalRootTx', () => {
+    /**
+     * A contiguous data source that serves byte ranges of in-memory files by
+     * ID and records every request, standing in for Arweave so a test can
+     * tell whether a lookup went to the network.
+     */
+    const recordingDataSource = (files: Map<string, Buffer>) => {
+      const requests: string[] = [];
+      const source = {
+        async getData({
+          id,
+          region,
+        }: {
+          id: string;
+          region?: { offset: number; size: number };
+        }) {
+          requests.push(id);
+          const file = files.get(id);
+          if (file === undefined) throw new Error(`No such ID: ${id}`);
+          const offset = region?.offset ?? 0;
+          const bytes = file.subarray(
+            offset,
+            offset + (region?.size ?? file.length),
+          );
+          return {
+            stream: Readable.from([bytes]),
+            size: bytes.length,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        },
+      } as unknown as ContiguousDataSource;
+      return { source, requests };
+    };
+
+    const waitForLocal = async (
+      index: Cdb64RootTxIndex,
+      id: string,
+    ): Promise<Awaited<ReturnType<Cdb64RootTxIndex['getLocalRootTx']>>> => {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const result = await index.getLocalRootTx(id);
+        if (result !== undefined) return result;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return undefined;
+    };
+
+    const buildPartitioned = async (
+      indexDir: string,
+      entries: Array<{ dataItemId: Buffer; rootTxId: Buffer }>,
+    ): Promise<void> => {
+      const writer = new PartitionedCdb64Writer(indexDir);
+      await writer.open();
+      for (const entry of entries) {
+        await writer.add(
+          entry.dataItemId,
+          encodeCdb64Value({
+            rootTxId: entry.rootTxId,
+            rootDataItemOffset: 1000,
+            rootDataOffset: 1100,
+            dataItemSize: 600,
+          }),
+        );
+      }
+      await writer.finalize();
+    };
+
+    it('misses without waiting for initialization, then answers from a local file', async () => {
+      const cdbPath = path.join(tempDir, 'local.cdb');
+      const dataItemId = createTxId(1);
+      const rootTxId = createTxId(100);
+      await createTestCdb(cdbPath, [
+        { dataItemId, rootTxId, rootDataItemOffset: 10, rootDataOffset: 20 },
+      ]);
+
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
+      assert.equal(await index.getLocalRootTx(toB64Url(dataItemId)), undefined);
+
+      // The first call started initialization in the background.
+      const result = await waitForLocal(index, toB64Url(dataItemId));
+      assert(result !== undefined);
+      assert.equal(result.rootTxId, toB64Url(rootTxId));
+      assert.equal(result.rootOffset, 10);
+      assert.equal(result.rootDataOffset, 20);
+      assert.equal('dataSize' in result, false);
+
+      await index.close();
+    });
+
+    it('answers from a local partitioned index, with the item size but no dataSize', async () => {
+      const indexDir = path.join(tempDir, 'band');
+      const dataItemId = createTxId(2);
+      const rootTxId = createTxId(200);
+      await buildPartitioned(indexDir, [{ dataItemId, rootTxId }]);
+
+      const index = new Cdb64RootTxIndex({ log, sources: [indexDir] });
+      const result = await waitForLocal(index, toB64Url(dataItemId));
+
+      assert(result !== undefined);
+      assert.equal(result.rootTxId, toB64Url(rootTxId));
+      assert.equal(result.rootOffset, 1000);
+      assert.equal(result.size, 600);
+      assert.equal('dataSize' in result, false);
+
+      await index.close();
+    });
+
+    it('never reads a remote partition of a local manifest, even one already open', async () => {
+      // The shipped resources/ indexes are local directories whose partitions
+      // are all remote; point this band's partitions at Arweave the same way.
+      const indexDir = path.join(tempDir, 'remote-partitions');
+      const dataItemId = createTxId(3);
+      const rootTxId = createTxId(300);
+      await buildPartitioned(indexDir, [{ dataItemId, rootTxId }]);
+
+      const manifestPath = path.join(indexDir, 'manifest.json');
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf-8'));
+      const files = new Map<string, Buffer>();
+      for (const partition of manifest.partitions) {
+        const id = toB64Url(Buffer.alloc(32, parseInt(partition.prefix, 16)));
+        files.set(
+          id,
+          await fs.readFile(path.join(indexDir, partition.location.filename)),
+        );
+        partition.location = { type: 'arweave-id', id };
+      }
+      await fs.writeFile(manifestPath, JSON.stringify(manifest));
+
+      const { source, requests } = recordingDataSource(files);
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [indexDir],
+        watch: false,
+        contiguousDataSource: source,
+      });
+
+      // The full lookup does go to the network, which proves the partition
+      // is remote, and leaves it open.
+      const remote = await index.getRootTx(toB64Url(dataItemId));
+      assert.equal(remote?.rootTxId, toB64Url(rootTxId));
+      assert(requests.length > 0);
+
+      requests.length = 0;
+      assert.equal(await index.getLocalRootTx(toB64Url(dataItemId)), undefined);
+      assert.equal(requests.length, 0);
+
+      await index.close();
+    });
+
+    it('never reads a remote source', async () => {
+      const cdbPath = path.join(tempDir, 'served.cdb');
+      const dataItemId = createTxId(4);
+      const rootTxId = createTxId(400);
+      await createTestCdb(cdbPath, [
+        { dataItemId, rootTxId, rootDataItemOffset: 10, rootDataOffset: 20 },
+      ]);
+      const txId = toB64Url(createTxId(44));
+      const { source, requests } = recordingDataSource(
+        new Map([[txId, await fs.readFile(cdbPath)]]),
+      );
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [txId],
+        contiguousDataSource: source,
+      });
+
+      const remote = await index.getRootTx(toB64Url(dataItemId));
+      assert.equal(remote?.rootTxId, toB64Url(rootTxId));
+      assert(requests.length > 0);
+
+      requests.length = 0;
+      assert.equal(await index.getLocalRootTx(toB64Url(dataItemId)), undefined);
+      assert.equal(requests.length, 0);
+
+      await index.close();
+    });
+
+    it('does not wait on an initialization held up by a remote source', async () => {
+      const cdbPath = path.join(tempDir, 'beside-slow.cdb');
+      const dataItemId = createTxId(5);
+      await createTestCdb(cdbPath, [{ dataItemId, rootTxId: createTxId(500) }]);
+      // A remote source whose first read never completes.
+      const stalled = {
+        getData: () => new Promise(() => undefined),
+      } as unknown as ContiguousDataSource;
+
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [toB64Url(createTxId(55)), cdbPath],
+        contiguousDataSource: stalled,
+      });
+
+      const result = await Promise.race([
+        index.getLocalRootTx(toB64Url(dataItemId)),
+        new Promise((resolve) => setTimeout(() => resolve('waited'), 1000)),
+      ]);
+      assert.equal(result, undefined);
+
+      await index.close();
+    });
+
+    it('rejects a malformed ID', async () => {
+      const cdbPath = path.join(tempDir, 'ids.cdb');
+      await createTestCdb(cdbPath, [
+        { dataItemId: createTxId(6), rootTxId: createTxId(600) },
+      ]);
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
+      await index.getRootTx(toB64Url(createTxId(6)));
+
+      assert.equal(await index.getLocalRootTx('not-an-id'), undefined);
+      assert.equal(
+        await index.getLocalRootTx(toB64Url(Buffer.alloc(8))),
+        undefined,
+      );
 
       await index.close();
     });

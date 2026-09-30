@@ -44,6 +44,7 @@ import {
   Cdb64Manifest,
   PartitionInfo,
   PartitionLocation,
+  isLocalPartitionLocation,
   prefixToIndex,
 } from './cdb64-manifest.js';
 import { ContiguousDataSource } from '../types.js';
@@ -157,9 +158,15 @@ export class PartitionedCdb64Reader {
    * Looks up a key in the partitioned index.
    *
    * @param key - The key to look up (must be at least 1 byte)
+   * @param options.localOnly - Answer only from a partition stored on local
+   *   disk. A key whose partition has any other location is a miss, and that
+   *   partition is never opened, so the lookup makes no network request.
    * @returns The value if found, undefined otherwise
    */
-  async get(key: Buffer): Promise<Buffer | undefined> {
+  async get(
+    key: Buffer,
+    { localOnly = false }: { localOnly?: boolean } = {},
+  ): Promise<Buffer | undefined> {
     if (!this.opened) {
       throw new Error('Reader not opened. Call open() first.');
     }
@@ -174,6 +181,15 @@ export class PartitionedCdb64Reader {
     // Partition doesn't exist in manifest
     if (partitionState === null) {
       return undefined;
+    }
+
+    if (localOnly) {
+      const location = this.partitionInfoByPrefix.get(
+        partitionIndex.toString(16).padStart(2, '0'),
+      )?.location;
+      if (location === undefined || !isLocalPartitionLocation(location)) {
+        return undefined;
+      }
     }
 
     // Lazily open partition (with deduplication of concurrent opens)

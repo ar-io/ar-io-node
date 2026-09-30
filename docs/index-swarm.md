@@ -725,6 +725,15 @@ gateway and the sidecar first start does not matter. This needs
 lets bands come and go without a restart. Changing the sources variable does
 need a gateway restart.
 
+Installed bands also answer `GET /ar-io/offsets/:id`, the public endpoint
+peers and clients use to locate an item without a retrieval. It asks the
+local index first, then CDB64 sources on local disk only: remote sources,
+and the remote partitions of the shipped indexes, are never fetched for it.
+Its answers are signed, and an answer from a band carries no `dataSize` or
+`contentType`, so a consumer verifies the item before serving it. This needs
+`cdb` in `ROOT_TX_LOOKUP_ORDER` (it is in the default) and, like lookups,
+answers from bands once the gateway has loaded them.
+
 ### What the gateway serves
 
 The gateway's side is five read-only routes under `/ar-io/indexes`: the
