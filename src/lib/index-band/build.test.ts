@@ -10,12 +10,19 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { buildBand, BandRecord } from './build.js';
+import {
+  buildBand,
+  BandRecord,
+  MAX_HEADER_BYTES,
+  Reservoir,
+  StagedBand,
+} from './build.js';
 import { Cdb64RootTxKind } from '../../index-swarm/kinds/cdb64-root-tx.js';
 import {
   decodeCdb64Value,
   getDataItemSize,
   getRootTxId,
+  isCompleteValue,
 } from '../cdb64-encoding.js';
 import { parseManifest } from '../cdb64-manifest.js';
 import { PartitionedCdb64Reader } from '../partitioned-cdb64-reader.js';
@@ -144,9 +151,32 @@ describe('buildBand', () => {
     assert.ok(five !== undefined && getRootTxId(five).equals(id32(304)));
   });
 
-  it('drops records with one offset or an impossible size', async () => {
+  it('drops records with invalid offsets or heights, and keeps offsets over a bad size', async () => {
     const band = await build([
+      // Only one offset.
       { id: id32(6), rootTxId: id32(1), rootOffset: 10 },
+      // Offsets reversed, equal, negative, beyond safe integers, or spanning
+      // a header longer than any real one.
+      { id: id32(20), rootTxId: id32(1), rootOffset: 500, rootDataOffset: 100 },
+      { id: id32(21), rootTxId: id32(1), rootOffset: 100, rootDataOffset: 100 },
+      { id: id32(22), rootTxId: id32(1), rootOffset: -1, rootDataOffset: -1 },
+      {
+        id: id32(23),
+        rootTxId: id32(1),
+        rootOffset: 2 ** 60,
+        rootDataOffset: 2 ** 60 + 10,
+      },
+      {
+        id: id32(24),
+        rootTxId: id32(1),
+        rootOffset: 0,
+        rootDataOffset: MAX_HEADER_BYTES + 1,
+      },
+      // Heights that aren't non-negative integers.
+      { id: id32(25), rootTxId: id32(1), height: Number.NaN },
+      { id: id32(26), rootTxId: id32(1), height: -5 },
+      { id: id32(27), rootTxId: id32(1), height: 1.5 },
+      // A size smaller than the header: the size goes, the offsets stay.
       {
         id: id32(7),
         rootTxId: id32(1),
@@ -157,10 +187,138 @@ describe('buildBand', () => {
       { id: id32(8), rootTxId: id32(1) },
     ]);
 
-    assert.equal(band.dropped, 2);
-    assert.equal(band.records, 1);
-    assert.equal(await lookup(band.dir!, id32(6)), undefined);
-    assert.equal(await lookup(band.dir!, id32(7)), undefined);
+    assert.equal(band.dropped, 9);
+    assert.equal(band.sizeDropped, 1);
+    assert.equal(band.records, 2);
+    for (const seed of [6, 20, 21, 22, 23, 24, 25, 26, 27]) {
+      assert.equal(
+        await lookup(band.dir!, id32(seed)),
+        undefined,
+        `seed ${seed}`,
+      );
+    }
+    const kept = await lookup(band.dir!, id32(7));
+    assert.ok(kept !== undefined && isCompleteValue(kept));
+    assert.equal(kept.rootDataItemOffset, 100);
+    assert.equal(getDataItemSize(kept), undefined);
+  });
+
+  it('never lets an invalid newer record hide a valid older one', async () => {
+    const band = await build([
+      {
+        id: id32(30),
+        rootTxId: id32(301),
+        height: 10,
+        rootOffset: 5,
+        rootDataOffset: 50,
+      },
+      { id: id32(30), rootTxId: id32(302), height: 20, rootOffset: 7 },
+    ]);
+
+    const value = await lookup(band.dir!, id32(30));
+    assert.ok(value !== undefined && getRootTxId(value).equals(id32(301)));
+  });
+
+  it('prefers an entry with offsets at the same height', async () => {
+    const band = await build([
+      {
+        id: id32(31),
+        rootTxId: id32(311),
+        height: 10,
+        rootOffset: 5,
+        rootDataOffset: 50,
+      },
+      { id: id32(31), rootTxId: id32(311), height: 10 },
+    ]);
+
+    const value = await lookup(band.dir!, id32(31));
+    assert.ok(value !== undefined && isCompleteValue(value));
+  });
+
+  it('refuses a band with no valid entries, and publishes nothing', async () => {
+    await assert.rejects(build([]), /would be empty/);
+    await assert.rejects(
+      build([{ id: id32(32), rootTxId: id32(1), rootOffset: 1 }]),
+      /would be empty: 1 of the records/,
+    );
+    assert.deepEqual(await listDir(publishDir), []);
+    assert.deepEqual(await listDir(workDir), []);
+  });
+
+  it('runs beforePublish on the staged band, and discards a band it declines', async () => {
+    const records = [
+      { id: id32(33), rootTxId: id32(1), rootOffset: 0, rootDataOffset: 10 },
+    ];
+    let seen: StagedBand | undefined;
+    const declined = await build(records, {
+      beforePublish: async (band) => {
+        seen = band;
+        assert.ok(
+          (await fs.stat(path.join(band.dir, 'manifest.json'))).isFile(),
+        );
+        assert.deepEqual(await listDir(publishDir), [], 'not yet published');
+        return { publish: false, reasons: ['gate failed'] };
+      },
+    });
+
+    assert.equal(seen?.id, declined.id);
+    assert.equal(seen?.sample.length, 1);
+    assert.equal(declined.published, false);
+    assert.deepEqual(declined.rejected, ['gate failed']);
+    assert.deepEqual(await listDir(publishDir), []);
+    assert.deepEqual(await listDir(workDir), []);
+
+    const accepted = await build(records, {
+      beforePublish: async () => ({ publish: true }),
+    });
+    assert.equal(accepted.published, true);
+    assert.deepEqual(await listDir(publishDir), [accepted.id]);
+  });
+
+  it('refuses to publish over something at the target that is not a band', async () => {
+    const records = [{ id: id32(34), rootTxId: id32(1) }];
+    const { id } = await build(records, { dryRun: true });
+    await fs.mkdir(path.join(publishDir, id), { recursive: true });
+
+    await assert.rejects(build(records), /exists but is not a band/);
+  });
+
+  it('refuses a workDir inside publishDir', async () => {
+    await assert.rejects(
+      build([{ id: id32(35), rootTxId: id32(1) }], {
+        workDir: path.join(publishDir, 'scratch'),
+      }),
+      /must not be inside publishDir/,
+    );
+  });
+
+  it('fails cleanly, without crashing, when a scatter file cannot be written', async () => {
+    async function* records(): AsyncGenerator<BandRecord> {
+      yield {
+        id: Buffer.concat([Buffer.from([1]), id32(36).subarray(1)]),
+        rootTxId: id32(1),
+      };
+      // Make the next partition's scatter file impossible to open.
+      const staging = (await fs.readdir(workDir)).find((name) =>
+        name.startsWith('.band-build-'),
+      );
+      await fs.mkdir(path.join(workDir, staging!, 'scatter', '02.frames'));
+      yield {
+        id: Buffer.concat([Buffer.from([2]), id32(37).subarray(1)]),
+        rootTxId: id32(1),
+      };
+      yield {
+        id: Buffer.concat([Buffer.from([3]), id32(38).subarray(1)]),
+        rootTxId: id32(1),
+      };
+    }
+
+    await assert.rejects(
+      build([], { records: records() }),
+      /EISDIR|illegal operation/,
+    );
+    assert.deepEqual(await listDir(publishDir), []);
+    assert.deepEqual(await listDir(workDir), []);
   });
 
   it('names bands by kind, heights, publisher and content', async () => {
@@ -179,6 +337,13 @@ describe('buildBand', () => {
 
     const superseding = await build(records, { supersedes: [tip.id] });
     assert.notEqual(superseding.id, tip.id);
+    assert.equal(superseding.contentDigest, tip.contentDigest, 'same entries');
+
+    const different = await build([
+      { id: id32(9), rootTxId: id32(11), height: 5 },
+    ]);
+    assert.notEqual(different.id, tip.id, 'different entries, different id');
+    assert.notEqual(different.contentDigest, tip.contentDigest);
   });
 
   it('gives the same id for the same records in any order', async () => {
@@ -236,6 +401,25 @@ describe('buildBand', () => {
     assert.equal(band.sample.length, 8);
     for (const entry of band.sample) {
       assert.equal(entry.rootDataOffset - entry.rootOffset, 5);
+    }
+  });
+
+  it('samples uniformly (reservoir sampling)', () => {
+    // A seeded generator, so the check is deterministic.
+    let seed = 42;
+    const random = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed / 2 ** 31;
+    };
+    const hits = new Array(100).fill(0);
+    for (let trial = 0; trial < 2000; trial++) {
+      const reservoir = new Reservoir<number>(10, random);
+      for (let i = 0; i < 100; i++) reservoir.offer(i);
+      for (const i of reservoir.items) hits[i] += 1;
+    }
+    // Each item is kept with probability 10/100: about 200 of 2000 trials.
+    for (const count of hits) {
+      assert.ok(count > 140 && count < 260, `kept ${count} times`);
     }
   });
 

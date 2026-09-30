@@ -8,10 +8,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import pLimit from 'p-limit';
 
-import {
-  decodeDataItemHeader,
-  UnsupportedSignatureTypeError,
-} from '../ans104-bundle-scan.js';
+import { decodeDataItemHeader } from '../ans104-bundle-scan.js';
 import { ByteRangeSource } from '../byte-range-source.js';
 import { Cdb64Reader } from '../cdb64.js';
 import {
@@ -23,6 +20,7 @@ import {
 import { parseManifest } from '../cdb64-manifest.js';
 import { toB64Url } from '../encoding.js';
 import { HttpByteRangeSource } from '../http-byte-range-source.js';
+import { MAX_HEADER_BYTES } from './build.js';
 import type { BandSampleEntry } from './build.js';
 
 /** Opens the data of a root transaction for range reads. */
@@ -54,10 +52,6 @@ export interface HeaderCheckResult {
   errors: Array<{ id: string; error: string }>;
 }
 
-// A header this long is not a data item header: signature, owner, target,
-// anchor and tags together are at most a few kilobytes in practice.
-const MAX_HEADER_BYTES = 1024 * 1024;
-
 /**
  * Checks a band's offsets against the bytes they point at before it is
  * published.
@@ -65,10 +59,18 @@ const MAX_HEADER_BYTES = 1024 * 1024;
  * For each entry, the item header is read from the root transaction at
  * `rootOffset`, exactly `rootDataOffset - rootOffset` bytes. It passes when
  * the header decodes to exactly that length and its signature hashes to the
- * entry's ID. The band passes when no entry is wrong, at least `minOkRatio`
- * of the checked entries pass (a read that fails counts against it), and the
- * band holds at least `minRecords` entries: a signed band of wrong offsets
- * would be evidence against its publisher.
+ * entry's ID. It is wrong when the bytes aren't a data item header (an
+ * unknown signature type included), the header has another length or ID, or
+ * the range runs past the root (416). Only a transport failure (a timeout, a
+ * 5xx, a root the gateway can't find) leaves an entry unchecked.
+ *
+ * The band passes when no entry is wrong, at least `minOkRatio` of the
+ * checked entries pass (an unchecked entry counts against it), and the band
+ * holds at least `minRecords` entries: a signed band of wrong offsets would be
+ * evidence against its publisher.
+ *
+ * Limits: only entries with offsets are checked, so a root-only entry's
+ * `rootTxId` is not; nor is an item's size, which would need the whole item.
  */
 export async function checkBandHeaders({
   entries,
@@ -99,10 +101,23 @@ export async function checkBandHeaders({
         try {
           bytes = await source.read(entry.rootOffset, headerBytes);
         } catch (error) {
-          errors.push({
-            id: entry.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          // A range the root doesn't have (416) means the offsets are wrong;
+          // anything else (a timeout, a 5xx, a root the gateway can't find)
+          // means this entry couldn't be checked.
+          if (
+            (error as { response?: { status?: number } }).response?.status ===
+            416
+          ) {
+            wrong.push({
+              id: entry.id,
+              reason: 'offsets run past the end of the root transaction',
+            });
+          } else {
+            errors.push({
+              id: entry.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           return;
         } finally {
           await source.close().catch(() => undefined);
@@ -112,18 +127,15 @@ export async function checkBandHeaders({
         try {
           decoded = decodeDataItemHeader(bytes);
         } catch (error) {
-          // An unknown signature type can't be checked; anything else means
-          // the bytes at rootOffset are not a data item header.
-          if (error instanceof UnsupportedSignatureTypeError) {
-            errors.push({ id: entry.id, error: error.message });
-          } else {
-            wrong.push({
-              id: entry.id,
-              reason: `no data item header at rootOffset: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            });
-          }
+          // Bytes that don't decode as a header, an unknown signature type
+          // included, are the commonest sign of a wrong offset: the first two
+          // bytes of a payload are almost never a signature type.
+          wrong.push({
+            id: entry.id,
+            reason: `no data item header at rootOffset: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          });
           return;
         }
 

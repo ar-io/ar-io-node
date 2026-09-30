@@ -16,7 +16,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { buildBand, BandSampleEntry } from './build.js';
+import { buildBand, BandSampleEntry, MAX_HEADER_BYTES } from './build.js';
 import {
   checkBandHeaders,
   RootSourceFactory,
@@ -35,7 +35,13 @@ class BufferByteRangeSource implements ByteRangeSource {
 
   async read(offset: number, size: number): Promise<Buffer> {
     if (offset < 0 || offset + size > this.bytes.length) {
-      throw new Error(`Read ${offset}+${size} is outside the root`);
+      // As a gateway answers a range the root doesn't have.
+      throw Object.assign(
+        new Error(`Read ${offset}+${size} is outside the root`),
+        {
+          response: { status: 416 },
+        },
+      );
     }
     return this.bytes.subarray(offset, offset + size);
   }
@@ -162,7 +168,129 @@ describe('checkBandHeaders', () => {
     });
 
     assert.equal(result.passed, false);
-    assert.equal(result.wrong.length + result.errors.length, 1);
+    assert.equal(result.wrong.length, 1);
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('fails a mostly correct sample that has any entry pointing into a payload', async () => {
+    // 125 correct entries and 25 whose offsets land inside payloads: over the
+    // 80% ratio, so only classing them as wrong can fail the band.
+    const good = Array.from({ length: 125 }, (_, i) =>
+      entry(items[i % items.length]),
+    );
+    const bad = Array.from({ length: 25 }, (_, i) => {
+      const item = items[i % items.length];
+      return {
+        ...entry(item),
+        rootOffset: item.rootDataOffset,
+        rootDataOffset: item.rootDataOffset + 500,
+      };
+    });
+    const result = await checkBandHeaders({
+      entries: [...good, ...bad],
+      totalRecords: 150,
+      openRoot,
+      minRecords: 1,
+    });
+
+    assert.equal(result.passed, false);
+    assert.equal(result.ok, 125);
+    assert.equal(result.wrong.length, 25);
+  });
+
+  it('calls a range past the end of the root wrong, and a transport failure unchecked', async () => {
+    const [first] = items;
+    const answering =
+      (status: number): RootSourceFactory =>
+      () => ({
+        read: async () => {
+          throw Object.assign(new Error(`status ${status}`), {
+            response: { status },
+          });
+        },
+        close: async () => {},
+        isOpen: () => true,
+      });
+    const pastEnd = await checkBandHeaders({
+      entries: [entry(first)],
+      totalRecords: 1,
+      openRoot: answering(416),
+      minRecords: 1,
+    });
+    const unavailable = await checkBandHeaders({
+      entries: [entry(first)],
+      totalRecords: 1,
+      openRoot: answering(503),
+      minRecords: 1,
+    });
+
+    assert.equal(pastEnd.wrong.length, 1);
+    assert.match(pastEnd.wrong[0].reason, /past the end/);
+    assert.deepEqual(unavailable.wrong, []);
+    assert.equal(unavailable.errors.length, 1);
+  });
+
+  it('passes at exactly the minimum ratio, and fails just under it', async () => {
+    const good = entry(items[0]);
+    let calls = 0;
+    // The first `failures` reads fail as transport errors.
+    const flaky =
+      (failures: number): RootSourceFactory =>
+      (rootTxId) => {
+        const real = openRoot(rootTxId);
+        return {
+          read: async (offset: number, size: number) => {
+            calls += 1;
+            if (calls <= failures) throw new Error('timeout');
+            return real.read(offset, size);
+          },
+          close: async () => {},
+          isOpen: () => true,
+        };
+      };
+    const run = (failures: number) => {
+      calls = 0;
+      return checkBandHeaders({
+        entries: Array.from({ length: 10 }, () => good),
+        totalRecords: 10,
+        openRoot: flaky(failures),
+        minRecords: 1,
+        concurrency: 1,
+      });
+    };
+
+    assert.equal((await run(2)).passed, true, '8 of 10 is 80%');
+    assert.equal((await run(3)).passed, false, '7 of 10 is under 80%');
+  });
+
+  it('calls a header span over the maximum wrong without reading it', async () => {
+    let reads = 0;
+    const counting: RootSourceFactory = (rootTxId) => {
+      const real = openRoot(rootTxId);
+      return {
+        read: async (offset: number, size: number) => {
+          reads += 1;
+          return real.read(offset, size);
+        },
+        close: async () => {},
+        isOpen: () => true,
+      };
+    };
+    const [first] = items;
+    const result = await checkBandHeaders({
+      entries: [
+        {
+          ...entry(first),
+          rootDataOffset: first.rootDataItemOffset + MAX_HEADER_BYTES + 1,
+        },
+      ],
+      totalRecords: 1,
+      openRoot: counting,
+      minRecords: 1,
+    });
+
+    assert.equal(result.wrong.length, 1);
+    assert.equal(reads, 0);
   });
 
   it('counts unreadable roots against the pass ratio without calling them wrong', async () => {

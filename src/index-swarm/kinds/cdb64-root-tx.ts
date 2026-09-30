@@ -15,8 +15,6 @@
  * band live, and the manifest disappearing is what takes it out of service.
  * Every operation here is ordered around that fact.
  */
-import crypto from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import pLimit from 'p-limit';
@@ -25,6 +23,7 @@ import { Logger } from 'winston';
 import { BandDescriptor, BandFile } from '../../lib/index-publication.js';
 import { Cdb64Reader, verifyCdb64File } from '../../lib/cdb64.js';
 import { FileByteRangeSource } from '../../lib/byte-range-source.js';
+import { sha256File } from '../../lib/sha256-file.js';
 import {
   isLocalPartitionLocation,
   parseManifest,
@@ -74,15 +73,6 @@ const ROOT_TX_KEY_LENGTH = 32;
  * refusing a file that declares values of a size no real index writes.
  */
 export const MAX_ROOT_TX_VALUE_LENGTH = 64 * 1024;
-
-async function sha256File(filePath: string): Promise<string> {
-  const hash = crypto.createHash('sha256');
-  const stream = createReadStream(filePath);
-  for await (const chunk of stream) {
-    hash.update(chunk as Buffer);
-  }
-  return hash.digest('hex');
-}
 
 /** Refuse a manifest with any partition that is not a local file. */
 function rejectRemotePartitions(

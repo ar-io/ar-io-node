@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import crypto from 'node:crypto';
-import { createReadStream, createWriteStream, WriteStream } from 'node:fs';
+import { createWriteStream, WriteStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { once } from 'node:events';
@@ -13,12 +13,17 @@ import { canonicalize } from 'json-canonicalize';
 import { Logger } from 'winston';
 
 import { encodeCdb64Value } from '../cdb64-encoding.js';
-import { verifyCdb64File } from '../cdb64.js';
-import { indexToPrefix } from '../cdb64-manifest.js';
+import { Cdb64Writer, verifyCdb64File } from '../cdb64.js';
+import {
+  Cdb64Manifest,
+  indexToPrefix,
+  PartitionInfo,
+  serializeManifest,
+} from '../cdb64-manifest.js';
 import { PartitionedCdb64Reader } from '../partitioned-cdb64-reader.js';
-import { PartitionedCdb64Writer } from '../partitioned-cdb64-writer.js';
-import { PATH_SEGMENT_PATTERN } from '../index-publication.js';
+import { isValidPathSegment } from '../index-publication.js';
 import { toB64Url } from '../encoding.js';
+import { sha256File } from '../sha256-file.js';
 
 /** One root-TX index entry to put in a band. */
 export interface BandRecord {
@@ -27,9 +32,9 @@ export interface BandRecord {
   /** The root transaction ID, 32 bytes. */
   rootTxId: Buffer;
   /**
-   * The block height the item was found at. When the same ID appears more
-   * than once, the higher height wins: a re-bundled item is retrievable from
-   * its later root.
+   * The block height the item was found at, a non-negative integer. When the
+   * same ID appears more than once, the higher height wins: a re-bundled item
+   * is retrievable from its later root.
    */
   height?: number;
   /** Offset of the item (header included) within the root TX data. */
@@ -48,27 +53,52 @@ export interface BandSampleEntry {
   rootDataOffset: number;
 }
 
+/** A band built and read back, not yet published. */
+export interface StagedBand {
+  id: string;
+  /** Where the staged band is, for checks such as {@link checkBandHeaders}. */
+  dir: string;
+  records: number;
+  /** A uniform sample of entries with offsets. */
+  sample: BandSampleEntry[];
+}
+
+/** What `beforePublish` decides. */
+export interface PublishDecision {
+  publish: boolean;
+  /** Why not, when `publish` is false. */
+  reasons?: string[];
+}
+
 export interface BuildBandOptions {
   log: Logger;
   records: AsyncIterable<BandRecord> | Iterable<BandRecord>;
   /** Where the finished band is renamed to, e.g. `data/indexes/published/root-tx-index`. */
   publishDir: string;
   /**
-   * Scratch space for the build. It must be on the same filesystem as
-   * `publishDir`, since the band is moved into place with a rename.
+   * Scratch space for the build, on the same filesystem as `publishDir` (the
+   * band is moved into place with a rename) and not inside it.
    */
   workDir: string;
   /** The publishing gateway's wallet; makes band ids unique per publisher. */
   publisher: string;
   /** A short band kind, e.g. `d` (delta), `r` (recent) or `h` (history). */
   kind: string;
-  /** Block heights the band covers; `to` is null for a band at the tip. */
+  /**
+   * Block heights the band covers; `to` is null for a band at the tip. It is
+   * the caller's declaration: records' heights are not checked against it.
+   */
   heightRange: [number, number | null];
   /** Ids of bands this one replaces. */
   supersedes?: string[];
   /** Further manifest metadata. `heightRange` and `supersedes` are reserved. */
   metadata?: Record<string, unknown>;
-  /** Build and check the band, but don't move it into `publishDir`. */
+  /**
+   * Runs on the staged band before it is renamed into `publishDir`, e.g. the
+   * header check. A band it declines is discarded, never published.
+   */
+  beforePublish?: (band: StagedBand) => Promise<PublishDecision>;
+  /** Build, read back and run `beforePublish`, but don't publish. */
   dryRun?: boolean;
   /** How many entries with offsets to sample for the header check. */
   sampleSize?: number;
@@ -78,20 +108,30 @@ export interface BuildBandOptions {
 
 export interface BuiltBand {
   id: string;
-  /** Where the band now lives; undefined for a dry run. */
+  /**
+   * Digest of the partition files alone, without metadata. Two builds with
+   * the same entries share it even when their `supersedes` differ, so a
+   * scheduler can skip publishing a band whose content hasn't changed.
+   */
+  contentDigest: string;
+  /** Where the band now lives; undefined unless published or unchanged. */
   dir?: string;
-  /** False for a dry run, or when an identical band was already published. */
+  /** True when the band was renamed into `publishDir`. */
   published: boolean;
   /** True when a band with the same id, and so the same content, already existed. */
   unchanged: boolean;
+  /** Set when `beforePublish` declined the band. */
+  rejected?: string[];
   /** Entries written. */
   records: number;
   /** Entries written without offsets (root transaction only). */
   rootOnly: number;
-  /** Duplicate IDs resolved by height or input order. */
+  /** Duplicate IDs resolved by height, offsets or input order. */
   duplicates: number;
-  /** Records dropped because their offsets or size were invalid. */
+  /** Records dropped as invalid (bad height or offsets). */
   dropped: number;
+  /** Records kept without their size, because the size was invalid. */
+  sizeDropped: number;
   heightRange: [number, number | null];
   supersedes: string[];
   /** A uniform sample of entries with offsets, for {@link checkBandHeaders}. */
@@ -100,12 +140,22 @@ export interface BuiltBand {
 
 const KIND_PATTERN = /^[a-z0-9]{1,8}$/;
 const ID_BYTES = 32;
+/** A header this long is not a data item header. */
+export const MAX_HEADER_BYTES = 1024 * 1024;
 
-// One scattered record on disk: id, root, height, three offsets or sizes.
-// Numbers are doubles so any safe integer fits; -1 marks an absent value.
-const FRAME_BYTES = ID_BYTES * 2 + 8 * 4;
-const ABSENT = -1;
+// One scattered record on disk: id, root, a presence byte, then height,
+// offsets and size as doubles (exact for the safe integers they're checked to
+// be). Presence bits rather than a sentinel, so no real value can collide.
+const HAS_HEIGHT = 1;
+const HAS_OFFSETS = 2;
+const HAS_SIZE = 4;
+const FRAME_BYTES = ID_BYTES * 2 + 1 + 8 * 4;
+const FLAGS_AT = ID_BYTES * 2;
+const NUMBERS_AT = FLAGS_AT + 1;
 const READ_BACK_SAMPLE = 64;
+
+const isOffset = (value: number | undefined): value is number =>
+  value !== undefined && Number.isSafeInteger(value) && value >= 0;
 
 function assertHeightRange([from, to]: [number, number | null]): void {
   if (!Number.isSafeInteger(from) || from < 0) {
@@ -118,44 +168,71 @@ function assertHeightRange([from, to]: [number, number | null]): void {
   }
 }
 
-function writeFrame(record: BandRecord): Buffer {
+/** Whether `inner` is `outer` or a path inside it. */
+function isWithin(outer: string, inner: string): boolean {
+  const relative = path.relative(path.resolve(outer), path.resolve(inner));
+  return (
+    relative === '' ||
+    (!relative.startsWith('..') && !path.isAbsolute(relative))
+  );
+}
+
+type FrameResult =
+  | { frame: Buffer; sizeDropped: boolean }
+  | { frame: undefined; sizeDropped: false };
+
+/**
+ * Validates a record and encodes it as a frame, or returns no frame when the
+ * record is invalid: a height that isn't a non-negative safe integer, only one
+ * offset, offsets that aren't non-negative safe integers, or a header span
+ * (`rootDataOffset - rootOffset`) that is zero, negative or over
+ * {@link MAX_HEADER_BYTES}. An invalid size is dropped and the offsets kept.
+ */
+function toFrame(record: BandRecord): FrameResult {
   if (record.id.length !== ID_BYTES || record.rootTxId.length !== ID_BYTES) {
     throw new Error('Band record IDs must be 32 bytes');
   }
+  const invalid = { frame: undefined, sizeDropped: false } as const;
+  const { height, rootOffset, rootDataOffset, size } = record;
+  if (height !== undefined && !isOffset(height)) return invalid;
+
+  let flags = height !== undefined ? HAS_HEIGHT : 0;
+  let sizeDropped = false;
+  if (rootOffset !== undefined || rootDataOffset !== undefined) {
+    if (!isOffset(rootOffset) || !isOffset(rootDataOffset)) return invalid;
+    const header = rootDataOffset - rootOffset;
+    if (header <= 0 || header > MAX_HEADER_BYTES) return invalid;
+    flags |= HAS_OFFSETS;
+    if (size !== undefined) {
+      if (
+        Number.isSafeInteger(size) &&
+        size >= header &&
+        Number.isSafeInteger(rootOffset + size)
+      ) {
+        flags |= HAS_SIZE;
+      } else {
+        sizeDropped = true;
+      }
+    }
+  }
+
   const frame = Buffer.alloc(FRAME_BYTES);
   record.id.copy(frame, 0);
   record.rootTxId.copy(frame, ID_BYTES);
-  let pos = ID_BYTES * 2;
-  for (const value of [
-    record.height,
-    record.rootOffset,
-    record.rootDataOffset,
-    record.size,
-  ]) {
-    frame.writeDoubleLE(value ?? ABSENT, pos);
-    pos += 8;
-  }
-  return frame;
-}
-
-function readNumber(frame: Buffer, field: number): number | undefined {
-  const value = frame.readDoubleLE(ID_BYTES * 2 + field * 8);
-  return value === ABSENT ? undefined : value;
-}
-
-async function sha256File(filePath: string): Promise<string> {
-  const hash = crypto.createHash('sha256');
-  for await (const chunk of createReadStream(filePath)) {
-    hash.update(chunk as Buffer);
-  }
-  return hash.digest('hex');
+  frame.writeUInt8(flags, FLAGS_AT);
+  frame.writeDoubleLE(height ?? 0, NUMBERS_AT);
+  frame.writeDoubleLE(rootOffset ?? 0, NUMBERS_AT + 8);
+  frame.writeDoubleLE(rootDataOffset ?? 0, NUMBERS_AT + 16);
+  frame.writeDoubleLE(size ?? 0, NUMBERS_AT + 24);
+  return { frame, sizeDropped };
 }
 
 /**
  * Keeps a uniform random sample of a stream of unknown length (reservoir
- * sampling), so the header check can draw from every partition in one pass.
+ * sampling, Algorithm R), so the header check draws from every partition in
+ * one pass.
  */
-class Reservoir<T> {
+export class Reservoir<T> {
   readonly items: T[] = [];
   private seen = 0;
 
@@ -176,21 +253,23 @@ class Reservoir<T> {
 }
 
 /**
- * Builds one root-TX index band and moves it into the publish directory.
+ * Builds one root-TX index band, checks it, and moves it into the publish
+ * directory.
  *
- * Records are scattered to one scratch file per partition, then each
- * partition is sorted by ID and deduplicated: the higher height wins, and
- * among equal or missing heights the later record does. A record with both
- * offsets is written with them (and its size when valid); one with neither is
- * written as its root transaction alone; one with only one offset, or offsets
- * the encoding rejects, is dropped.
+ * Records are validated as they arrive (see {@link toFrame}; invalid ones
+ * are dropped before deduplication, so an invalid newer record never hides a
+ * valid older one) and scattered to one scratch file per partition. Each
+ * partition is then sorted by ID and deduplicated (the higher height wins;
+ * at equal or missing heights an entry with offsets beats one without, then
+ * the later record wins), written as its CDB64 file and finished before the
+ * next begins, so memory is bounded by the largest partition.
  *
- * The band is read back (every partition file verified, a sample looked up),
- * then named `<kind>-h<from>-<to|tip>-<publisher tag>-<content digest>`. The
- * publisher tag keeps two publishers' bands apart; the digest covers the
- * partition files and the metadata, so a rebuild with unchanged content gets
- * the same id and is not published again. An existing band is never
- * overwritten.
+ * The band is read back (every partition verified and counted, a sample
+ * looked up), named `<kind>-h<from>-<to|tip>-<publisher tag>-<digest>`, and
+ * handed to `beforePublish`; only then is it renamed into `publishDir`. The
+ * publisher tag keeps publishers' ids apart; the digest covers the partition
+ * files and the metadata. An existing band is never overwritten, a band with
+ * no entries is refused, and scratch files are always removed.
  */
 export async function buildBand({
   log: parentLog,
@@ -202,6 +281,7 @@ export async function buildBand({
   heightRange,
   supersedes = [],
   metadata = {},
+  beforePublish,
   dryRun = false,
   sampleSize = 150,
   random = Math.random,
@@ -212,7 +292,7 @@ export async function buildBand({
   }
   assertHeightRange(heightRange);
   for (const id of supersedes) {
-    if (!PATH_SEGMENT_PATTERN.test(id)) {
+    if (!isValidPathSegment(id)) {
       throw new Error(`Not a valid band id in supersedes: ${id}`);
     }
   }
@@ -221,6 +301,11 @@ export async function buildBand({
   }
   if (publisher.length === 0) {
     throw new Error('publisher is required');
+  }
+  if (isWithin(publishDir, workDir)) {
+    throw new Error(
+      `workDir (${workDir}) must not be inside publishDir (${publishDir}), where the publisher would find the build`,
+    );
   }
 
   await fs.mkdir(workDir, { recursive: true });
@@ -236,89 +321,109 @@ export async function buildBand({
   }
 
   const staging = await fs.mkdtemp(path.join(workDir, '.band-build-'));
+  let writer: Cdb64Writer | undefined;
   try {
-    // Scatter.
+    // Scatter, validating as records arrive.
     const scatterDir = path.join(staging, 'scatter');
     await fs.mkdir(scatterDir);
     const streams = new Map<number, WriteStream>();
+    let streamError: Error | undefined;
+    let dropped = 0;
+    let sizeDropped = 0;
     try {
       for await (const record of records) {
-        const frame = writeFrame(record);
+        if (streamError !== undefined) throw streamError;
+        const { frame, sizeDropped: lostSize } = toFrame(record);
+        if (frame === undefined) {
+          dropped += 1;
+          continue;
+        }
+        if (lostSize) sizeDropped += 1;
         const partition = record.id[0];
         let stream = streams.get(partition);
         if (stream === undefined) {
           stream = createWriteStream(
             path.join(scatterDir, `${indexToPrefix(partition)}.frames`),
           );
+          // Without a listener, an error while not awaiting 'drain' (ENOSPC,
+          // EACCES, EMFILE) would be an unhandled 'error' event and crash
+          // the process.
+          stream.on('error', (error) => {
+            streamError ??= error;
+          });
           streams.set(partition, stream);
         }
         if (!stream.write(frame)) await once(stream, 'drain');
       }
+      await Promise.all(
+        [...streams.values()].map(
+          (stream) =>
+            new Promise<void>((resolve, reject) => {
+              stream.end((error?: Error | null) =>
+                error ? reject(error) : resolve(),
+              );
+            }),
+        ),
+      );
+      if (streamError !== undefined) throw streamError;
     } catch (error) {
       for (const stream of streams.values()) stream.destroy();
       throw error;
     }
-    await Promise.all(
-      [...streams.values()].map(
-        (stream) =>
-          new Promise<void>((resolve, reject) => {
-            stream.end((error?: Error | null) =>
-              error ? reject(error) : resolve(),
-            );
-          }),
-      ),
-    );
 
     // Sort, deduplicate and write, one partition at a time.
-    const bandMetadata: Record<string, unknown> = {
-      ...metadata,
-      heightRange,
-      ...(supersedes.length > 0 ? { supersedes } : {}),
-    };
     const bandDir = path.join(staging, 'band');
-    const writer = new PartitionedCdb64Writer(bandDir, {
-      metadata: bandMetadata,
-    });
-    await writer.open();
-
+    await fs.mkdir(bandDir);
     const sample = new Reservoir<BandSampleEntry>(sampleSize, random);
     const readBack = new Reservoir<{ key: Buffer; value: Buffer }>(
       READ_BACK_SAMPLE,
       random,
     );
+    const partitions: PartitionInfo[] = [];
     let written = 0;
     let rootOnly = 0;
     let duplicates = 0;
-    let dropped = 0;
 
     for (const partition of [...streams.keys()].sort((a, b) => a - b)) {
-      const bytes = await fs.readFile(
-        path.join(scatterDir, `${indexToPrefix(partition)}.frames`),
+      const framesPath = path.join(
+        scatterDir,
+        `${indexToPrefix(partition)}.frames`,
       );
+      const bytes = await fs.readFile(framesPath);
       const count = bytes.length / FRAME_BYTES;
-      const frames = Array.from({ length: count }, (_, index) =>
-        bytes.subarray(index * FRAME_BYTES, (index + 1) * FRAME_BYTES),
-      );
-      // Sorted by ID, then height, then input order, so the last frame of
-      // each ID is the winner.
-      const order = frames
-        .map((frame, index) => ({
+      const order = Array.from({ length: count }, (_, index) => {
+        const frame = bytes.subarray(
+          index * FRAME_BYTES,
+          (index + 1) * FRAME_BYTES,
+        );
+        const flags = frame.readUInt8(FLAGS_AT);
+        return {
           frame,
           index,
-          height: readNumber(frame, 0) ?? -1,
-        }))
-        .sort(
-          (a, b) =>
-            Buffer.compare(
-              a.frame.subarray(0, ID_BYTES),
-              b.frame.subarray(0, ID_BYTES),
-            ) ||
-            a.height - b.height ||
-            a.index - b.index,
-        );
+          flags,
+          height:
+            (flags & HAS_HEIGHT) !== 0 ? frame.readDoubleLE(NUMBERS_AT) : -1,
+        };
+      });
+      // Sorted by ID, then height, then offsets present, then input order,
+      // so the last frame of each ID is the winner.
+      order.sort(
+        (a, b) =>
+          Buffer.compare(
+            a.frame.subarray(0, ID_BYTES),
+            b.frame.subarray(0, ID_BYTES),
+          ) ||
+          a.height - b.height ||
+          (a.flags & HAS_OFFSETS) - (b.flags & HAS_OFFSETS) ||
+          a.index - b.index,
+      );
 
+      const filename = `${indexToPrefix(partition)}.cdb`;
+      writer = new Cdb64Writer(path.join(bandDir, filename));
+      await writer.open();
+      let partitionRecords = 0;
       for (let i = 0; i < order.length; i++) {
-        const { frame } = order[i];
+        const { frame, flags } = order[i];
         const id = frame.subarray(0, ID_BYTES);
         if (
           i + 1 < order.length &&
@@ -328,62 +433,82 @@ export async function buildBand({
           continue;
         }
         const rootTxId = Buffer.from(frame.subarray(ID_BYTES, ID_BYTES * 2));
-        const rootOffset = readNumber(frame, 1);
-        const rootDataOffset = readNumber(frame, 2);
-        const size = readNumber(frame, 3);
-
         let value: Buffer;
-        try {
-          if (rootOffset === undefined && rootDataOffset === undefined) {
-            value = encodeCdb64Value({ rootTxId });
-            rootOnly += 1;
-          } else if (rootOffset === undefined || rootDataOffset === undefined) {
-            dropped += 1;
-            continue;
-          } else {
-            value = encodeCdb64Value({
-              rootTxId,
-              rootDataItemOffset: rootOffset,
-              rootDataOffset,
-              ...(size !== undefined ? { dataItemSize: size } : {}),
-            });
-            sample.offer({
-              id: toB64Url(id),
-              rootTxId: toB64Url(rootTxId),
-              rootOffset,
-              rootDataOffset,
-            });
-          }
-        } catch {
-          dropped += 1;
-          continue;
+        if ((flags & HAS_OFFSETS) === 0) {
+          value = encodeCdb64Value({ rootTxId });
+          rootOnly += 1;
+        } else {
+          const rootOffset = frame.readDoubleLE(NUMBERS_AT + 8);
+          const rootDataOffset = frame.readDoubleLE(NUMBERS_AT + 16);
+          value = encodeCdb64Value({
+            rootTxId,
+            rootDataItemOffset: rootOffset,
+            rootDataOffset,
+            ...((flags & HAS_SIZE) !== 0
+              ? { dataItemSize: frame.readDoubleLE(NUMBERS_AT + 24) }
+              : {}),
+          });
+          sample.offer({
+            id: toB64Url(id),
+            rootTxId: toB64Url(rootTxId),
+            rootOffset,
+            rootDataOffset,
+          });
         }
-
         const key = Buffer.from(id);
         await writer.add(key, value);
         readBack.offer({ key, value });
-        written += 1;
+        partitionRecords += 1;
       }
-    }
-    const manifest = await writer.finalize();
+      await writer.finalize();
+      writer = undefined;
+      await fs.rm(framesPath, { force: true });
 
-    // Read back.
-    if (manifest.totalRecords !== written) {
+      const stat = await fs.stat(path.join(bandDir, filename));
+      partitions.push({
+        prefix: indexToPrefix(partition),
+        location: { type: 'file', filename },
+        recordCount: partitionRecords,
+        size: stat.size,
+      });
+      written += partitionRecords;
+    }
+
+    if (written === 0) {
       throw new Error(
-        `Band manifest counts ${manifest.totalRecords} records, but ${written} were written`,
+        `Band would be empty: ${dropped} of the records given were invalid`,
       );
     }
-    const partitionFiles: string[] = [];
-    for (const partition of manifest.partitions) {
+
+    const bandMetadata: Record<string, unknown> = {
+      ...metadata,
+      heightRange,
+      ...(supersedes.length > 0 ? { supersedes } : {}),
+    };
+    const manifest: Cdb64Manifest = {
+      version: 1,
+      createdAt: new Date().toISOString(),
+      totalRecords: written,
+      partitions,
+      metadata: bandMetadata,
+    };
+    await fs.writeFile(
+      path.join(bandDir, 'manifest.json'),
+      serializeManifest(manifest),
+      'utf-8',
+    );
+
+    // Read back.
+    for (const partition of partitions) {
       if (partition.location.type !== 'file') continue;
-      const file = path.join(bandDir, partition.location.filename);
-      const { records: found } = await verifyCdb64File(file);
+      const { records: found } = await verifyCdb64File(
+        path.join(bandDir, partition.location.filename),
+      );
       if (found !== partition.recordCount) {
         throw new Error(
-          `Band read-back failed: ${partition.location.filename} holds ${found} records, the manifest says ${partition.recordCount}`,
+          `Band read-back failed: ${partition.location.filename} holds ${found} records, expected ${partition.recordCount}`,
         );
       }
-      partitionFiles.push(partition.location.filename);
     }
     const reader = new PartitionedCdb64Reader({
       manifest,
@@ -405,11 +530,21 @@ export async function buildBand({
     }
 
     // Name.
-    const digest = crypto.createHash('sha256');
-    for (const name of partitionFiles.sort()) {
-      digest.update(`${name}\0${await sha256File(path.join(bandDir, name))}\n`);
+    const content = crypto.createHash('sha256');
+    for (const partition of partitions) {
+      if (partition.location.type !== 'file') continue;
+      const name = partition.location.filename;
+      content.update(
+        `${name}\0${await sha256File(path.join(bandDir, name))}\n`,
+      );
     }
-    digest.update(canonicalize(bandMetadata));
+    const contentDigest = content.digest('hex');
+    const idDigest = crypto
+      .createHash('sha256')
+      .update(contentDigest)
+      .update(canonicalize(bandMetadata))
+      .digest('hex')
+      .slice(0, 12);
     const publisherTag = crypto
       .createHash('sha256')
       .update(publisher)
@@ -420,19 +555,42 @@ export async function buildBand({
       `h${heightRange[0]}`,
       heightRange[1] === null ? 'tip' : String(heightRange[1]),
       publisherTag,
-      digest.digest('hex').slice(0, 12),
+      idDigest,
     ].join('-');
 
     const result = {
       id,
+      contentDigest,
       records: written,
       rootOnly,
       duplicates,
       dropped,
+      sizeDropped,
       heightRange,
       supersedes,
       sample: sample.items,
     };
+
+    if (beforePublish !== undefined) {
+      const decision = await beforePublish({
+        id,
+        dir: bandDir,
+        records: written,
+        sample: sample.items,
+      });
+      if (!decision.publish) {
+        log.warn('Band not published: declined before publishing', {
+          id,
+          reasons: decision.reasons,
+        });
+        return {
+          ...result,
+          published: false,
+          unchanged: false,
+          rejected: decision.reasons ?? [],
+        };
+      }
+    }
 
     if (dryRun) {
       log.info('Built band (dry run, not published)', { id, records: written });
@@ -441,15 +599,47 @@ export async function buildBand({
 
     // Publish, never over an existing band.
     const target = path.join(publishDir, id);
-    const existing = await fs.stat(target).catch(() => undefined);
-    if (existing !== undefined) {
+    const isBand = async () =>
+      fs
+        .stat(path.join(target, 'manifest.json'))
+        .then(() => true)
+        .catch(() => false);
+    if (await isBand()) {
       log.info('Identical band already published', { id });
       return { ...result, dir: target, published: false, unchanged: true };
     }
-    await fs.rename(bandDir, target);
-    log.info('Published band', { id, records: written, dropped, rootOnly });
+    const occupied = await fs.stat(target).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      },
+    );
+    if (occupied) {
+      throw new Error(
+        `${target} exists but is not a band (no manifest.json); remove it before publishing`,
+      );
+    }
+    try {
+      await fs.rename(bandDir, target);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // Another build of the same id got there first.
+      if ((code === 'ENOTEMPTY' || code === 'EEXIST') && (await isBand())) {
+        return { ...result, dir: target, published: false, unchanged: true };
+      }
+      throw error;
+    }
+    log.info('Published band', {
+      id,
+      records: written,
+      dropped,
+      rootOnly,
+      sizeDropped,
+    });
     return { ...result, dir: target, published: true, unchanged: false };
   } finally {
+    await writer?.abort().catch(() => undefined);
     await fs.rm(staging, { recursive: true, force: true });
   }
 }
