@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and the remote partitions of the shipped indexes, are skipped. A new
   `offsets_lookup_total{source}` metric counts answers by `db`, `cdb64` or
   `none`.
+- The index-swarm tracker reports who shares: `index_swarm_tracker_seeders`
+  (tracked peers holding the whole band) and
+  `index_swarm_tracker_seeding_hosts` (distinct addresses seeding at least one
+  band, roughly how many gateways share). `index_swarm_tracker_peers` is
+  unchanged.
 
 ### Changed
 

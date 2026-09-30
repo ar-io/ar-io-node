@@ -170,19 +170,47 @@ export const trackerAnnounces = new promClient.Counter({
   registers: [registry],
 });
 
-let trackerPeerCount: (() => number) | undefined;
+/** What the closed tracker knows about its swarms, read when metrics are collected. */
+export interface TrackerStats {
+  /** Peers summed over the bands tracked, each once per band. */
+  peers: number;
+  /** Of those, peers holding the whole band (`left=0`). */
+  seeders: number;
+  /** Distinct addresses seeding at least one band. */
+  seedingHosts: number;
+}
 
-/** Where the tracker's peer gauge reads from, when metrics are collected. */
-export function setTrackerPeerCount(count: () => number): void {
-  trackerPeerCount = count;
+let trackerStats: (() => TrackerStats) | undefined;
+
+/** Where the tracker's gauges read from, when metrics are collected. */
+export function setTrackerStats(stats: () => TrackerStats): void {
+  trackerStats = stats;
 }
 
 export const trackerPeers = new promClient.Gauge({
   name: 'index_swarm_tracker_peers',
   collect() {
-    if (trackerPeerCount !== undefined) this.set(trackerPeerCount());
+    if (trackerStats !== undefined) this.set(trackerStats().peers);
   },
   help: 'Peers the closed tracker currently knows, summed over the bands it tracks: each peer once per band, although a hybrid torrent is announced under two hashes.',
+  registers: [registry],
+});
+
+export const trackerSeeders = new promClient.Gauge({
+  name: 'index_swarm_tracker_seeders',
+  collect() {
+    if (trackerStats !== undefined) this.set(trackerStats().seeders);
+  },
+  help: 'Peers the closed tracker knows that hold the whole band (announcing left=0), summed over bands like index_swarm_tracker_peers. The rest are still downloading.',
+  registers: [registry],
+});
+
+export const trackerSeedingHosts = new promClient.Gauge({
+  name: 'index_swarm_tracker_seeding_hosts',
+  collect() {
+    if (trackerStats !== undefined) this.set(trackerStats().seedingHosts);
+  },
+  help: 'Distinct addresses seeding at least one band this tracker tracks: roughly how many gateways share the index. Peers found only through DHT or peer exchange are not seen.',
   registers: [registry],
 });
 

@@ -30,7 +30,7 @@ import {
   parseTrustedProxies,
 } from '../lib/trusted-proxies.js';
 import { isPrivateAddress } from './torrent.js';
-import { setTrackerPeerCount, trackerAnnounces } from './metrics.js';
+import { setTrackerStats, trackerAnnounces, TrackerStats } from './metrics.js';
 
 export interface ClosedTrackerOptions {
   log: Logger;
@@ -229,7 +229,7 @@ export class ClosedTracker {
     this.maxPeers = options.maxPeers ?? 50;
     this.maxPeersPerSwarm = options.maxPeersPerSwarm ?? 2000;
     this.maxPeersTotal = options.maxPeersTotal ?? 50_000;
-    setTrackerPeerCount(() => this.peerCount());
+    setTrackerStats(() => this.stats());
     this.maxPortsPerIp = options.maxPortsPerIp ?? 4;
     this.maxAnnouncesPerMinute = options.maxAnnouncesPerMinute ?? 10;
     this.selfAddress = options.selfAddress ?? (() => undefined);
@@ -387,24 +387,34 @@ export class ClosedTracker {
   }
 
   /**
-   * Peers per torrent, each counted once however many hashes it uses.
-   * Walks every peer, so it runs when metrics are read, not per announce.
+   * Peers and seeders per torrent, each peer counted once however many
+   * hashes it announces under (a seeder under any of them), plus the distinct
+   * addresses seeding anything. Walks every peer, so it runs when metrics are
+   * read, not per announce.
    */
-  private peerCount(): number {
+  private stats(): TrackerStats {
     const torrentOf = this.torrentOf();
-    const byTorrent = new Map<string, Set<string>>();
+    const byTorrent = new Map<string, Map<string, boolean>>();
+    const seedingHosts = new Set<string>();
     for (const [hex, swarm] of this.swarms) {
       const torrent = torrentOf.get(hex) ?? hex;
       let peers = byTorrent.get(torrent);
       if (peers === undefined) {
-        peers = new Set();
+        peers = new Map();
         byTorrent.set(torrent, peers);
       }
-      for (const key of swarm.keys()) peers.add(key);
+      for (const [key, peer] of swarm) {
+        peers.set(key, peers.get(key) === true || peer.seeding);
+        if (peer.seeding) seedingHosts.add(peer.ip);
+      }
     }
-    let total = 0;
-    for (const peers of byTorrent.values()) total += peers.size;
-    return total;
+    let peers = 0;
+    let seeders = 0;
+    for (const torrentPeers of byTorrent.values()) {
+      peers += torrentPeers.size;
+      for (const seeding of torrentPeers.values()) if (seeding) seeders += 1;
+    }
+    return { peers, seeders, seedingHosts: seedingHosts.size };
   }
 
   /**
