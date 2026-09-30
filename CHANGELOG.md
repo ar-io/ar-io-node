@@ -310,10 +310,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **`GET /graphql` in a browser now serves GraphiQL, bundled with its
   Explorer plugin and served by the gateway itself, instead of the Apollo
-  Sandbox.** The page loads nothing from third parties, reports nothing to
-  anyone and has no vendor login, and it is sent with a Content-Security-Policy
-  that allows only this gateway as a source. The Explorer builds a query from
-  checkboxes over the schema, much as the Sandbox did. The bundle is built by
+  Sandbox.** The Sandbox that Release 84 introduced loaded from Apollo's CDN,
+  showed an Apollo-account login, and by default reported each visitor's
+  usage to Apollo from their browser, undoing from the browser side the
+  gateway's guarantee that it never sends query data to Apollo. The new page
+  loads nothing from third parties, reports nothing to anyone and has no
+  vendor login, and it is sent with a Content-Security-Policy that allows only
+  this gateway as a source. The Explorer builds a query from checkboxes over
+  the schema, much as the Sandbox did. The bundle is built by
   `yarn build` (or `yarn build:graphiql` on its own) into `dist/graphiql/` and
   served under `/graphql/graphiql/`; the first visit downloads about 7 MB,
   cached from then on. API clients are unaffected.
@@ -529,6 +533,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   gateway's guarantee that it never reports query data to Apollo. The embed
   now runs with telemetry off. The page otherwise looks and works the same;
   API clients are unaffected.
+
 - `index_swarm_tracker_peers` counted peers of a swarm that had gone quiet,
   and bands no longer offered, until the next announce ran expiry. It now
   counts only bands still offered and peers seen within the announce TTL.
