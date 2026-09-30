@@ -15,7 +15,8 @@ import {
   sendNotFound,
   sendPaymentRequired,
 } from '../routes/data/handlers.js';
-import { RAW_DATA_PATH_REGEX, DATA_PATH_REGEX } from '../constants.js';
+import { DATA_PATH_REGEX } from '../constants.js';
+import { isApexPassthroughPath } from './apex-passthrough.js';
 import { NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
 import * as system from '../system.js';
@@ -67,18 +68,7 @@ export const createArnsMiddleware = ({
     ) {
       // Ensure certain paths pass through even if an apex ID or ArNS name is
       // set.
-      if (
-        req.path.match(DATA_PATH_REGEX) ||
-        req.path.match(RAW_DATA_PATH_REGEX) ||
-        req.path.match(/^\/local\//) ||
-        req.path.match(/^\/ar-io\//) ||
-        req.path.match(/^\/chunk\//) ||
-        req.path.match(/^\/api-docs(?:\/|$)/) ||
-        req.path === '/openapi.json' ||
-        req.path === '/graphql' ||
-        // Allow POST /tx and POST /chunk for transaction/chunk submission
-        (req.method === 'POST' && (req.path === '/tx' || req.path === '/chunk'))
-      ) {
+      if (isApexPassthroughPath(req.method, req.path)) {
         next();
         return;
       }
