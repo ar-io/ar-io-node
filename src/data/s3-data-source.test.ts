@@ -777,6 +777,42 @@ describe('splitLeadingBytes', () => {
     );
   });
 
+  it('rejects and destroys the source when aborted before the header arrives', async () => {
+    const source = new Readable({ read() {} });
+    source.push(Buffer.from('ab'));
+    const controller = new AbortController();
+
+    const split = splitLeadingBytes(source, 3, controller.signal);
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+
+    await assert.rejects(split, { name: 'AbortError' });
+    assert.equal(source.destroyed, true);
+  });
+
+  it('does not read a source whose request is already aborted', async () => {
+    const source = new Readable({ read() {} });
+    source.push(Buffer.from('abcdef'));
+
+    await assert.rejects(splitLeadingBytes(source, 3, AbortSignal.abort()), {
+      name: 'AbortError',
+    });
+    assert.equal(source.destroyed, true);
+  });
+
+  it('leaves the rest alone when aborted after the header is split off', async () => {
+    const controller = new AbortController();
+    const { head, rest } = await splitLeadingBytes(
+      Readable.from([Buffer.from('abcdef')]),
+      3,
+      controller.signal,
+    );
+    controller.abort();
+
+    assert.equal(head.toString(), 'abc');
+    assert.equal((await readAll(rest)).toString(), 'def');
+  });
+
   it('destroys the source when the rest is destroyed', async () => {
     const source = new Readable({ read() {} });
     source.push(Buffer.from('abcdef'));

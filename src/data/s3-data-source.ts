@@ -44,6 +44,7 @@ const MAX_ITEM_HEADER_READ_BYTES = 64 * 1024;
 export function splitLeadingBytes(
   stream: Readable,
   length: number,
+  signal?: AbortSignal,
 ): Promise<{ head: Buffer; rest: Readable }> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -52,6 +53,14 @@ export function splitLeadingBytes(
       stream.off('data', onData);
       stream.off('end', onEnd);
       stream.off('error', onError);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    // Nothing has been handed back yet, so nobody else can destroy the source
+    // if the header never arrives.
+    const onAbort = () => {
+      cleanup();
+      stream.destroy();
+      reject(signal?.reason);
     };
     const onError = (error: Error) => {
       cleanup();
@@ -88,6 +97,11 @@ export function splitLeadingBytes(
       stream.pipe(rest);
       resolve({ head: Buffer.concat(chunks), rest });
     };
+    if (signal?.aborted === true) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
     stream.on('data', onData);
     stream.on('end', onEnd);
     stream.on('error', onError);
@@ -357,6 +371,7 @@ export class S3DataSource implements ContiguousDataSource {
         const { head: itemHeader, rest } = await splitLeadingBytes(
           stream,
           headerLength,
+          signal,
         );
         stream = rest;
         finalSize -= headerLength;

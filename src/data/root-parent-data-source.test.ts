@@ -3563,6 +3563,46 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.sourceContentEncodingFromTags, true);
     });
 
+    it('labels the item from the header its fallback lookup location is confirmed by', async () => {
+      // A nested item: the root bundle's own index does not list it, so the
+      // location comes from the full lookup, which carries no encoding.
+      const ITEM = 'fallback-encoded-item';
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => undefined,
+      );
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async (_id: string, opts?: { accept?: unknown }) =>
+          opts?.accept !== undefined
+            ? { rootTxId: ROOT }
+            : {
+                rootTxId: ROOT,
+                rootOffset: 1000,
+                rootDataOffset: 1100,
+                dataSize: 50,
+              },
+      );
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => null,
+      );
+      (ans104OffsetSource.parseDataItemHeader as any).mock.mockImplementation(
+        async (rootTxId: string, itemOffset: number) =>
+          rootTxId === ROOT && itemOffset === 1000
+            ? {
+                id: ITEM,
+                headerSize: 100,
+                payloadSize: 50,
+                contentEncoding: 'gzip',
+              }
+            : Promise.reject(new Error('no header here')),
+      );
+      rootFetch(50);
+
+      const result = await source.getData({ id: ITEM });
+
+      assert.strictEqual(result.sourceContentEncoding, 'gzip');
+      assert.strictEqual(result.sourceContentEncodingFromTags, true);
+    });
+
     it("reports no encoding when the item's header has none, whatever the root's", async () => {
       const ITEM = 'searched-plain-item';
       (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(

@@ -2213,6 +2213,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                 signal,
               );
               bundleParseResult = fallback.result;
+              let fallbackEncoding: string | undefined;
               // The full lookup may return the location rejected above, or
               // offsets (or a path) for another copy of the item under a
               // different root, while they are read from this root
@@ -2227,9 +2228,19 @@ export class RootParentDataSource implements ContiguousDataSource {
                   dataSize: bundleParseResult.dataSize,
                   signal,
                   source: 'root_tx_index_fallback',
+                  // The item's signed header decides its encoding, not
+                  // whichever lookup supplied the location.
+                  onConfirmed: (header) => {
+                    fallbackEncoding = header.contentEncoding;
+                  },
                 }))
               ) {
                 bundleParseResult = null;
+              } else if (bundleParseResult !== null) {
+                bundleParseResult = {
+                  ...bundleParseResult,
+                  contentEncoding: fallbackEncoding,
+                };
               }
               offsetParseSpan.setAttributes({
                 'offset.method': fallback.method,
