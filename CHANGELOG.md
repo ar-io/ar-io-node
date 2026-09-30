@@ -513,6 +513,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   ".env already has everything" (while telling the operator to open the new
   port) and left `INDEX_SWARM_ENGINE_PORT` unchanged. Both now apply on their
   own, like `--max-disk-gib`, and `--restart` recreates the engine.
+
+- **The Apollo Sandbox served at `GET /graphql` since Release 84 sent
+  telemetry to Apollo from visitors' browsers.** The Sandbox embed turns its
+  own telemetry on by default, which undid, from the browser side, the
+  gateway's guarantee that it never reports query data to Apollo. The embed
+  now runs with telemetry off. The page otherwise looks and works the same;
+  API clients are unaffected.
 - `index_swarm_tracker_peers` counted peers of a swarm that had gone quiet,
   and bands no longer offered, until the next announce ran expiry. It now
   counts only bands still offered and peers seen within the announce TTL.

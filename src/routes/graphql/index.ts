@@ -9,7 +9,6 @@ import {
   ApolloServerPluginSchemaReportingDisabled,
   ApolloServerPluginUsageReportingDisabled,
 } from '@apollo/server/plugin/disabled';
-import { ApolloServerPluginLandingPageLocalDefault } from '@apollo/server/plugin/landingPage/default';
 import { expressMiddleware } from '@as-integrations/express4';
 import express, {
   ErrorRequestHandler,
@@ -25,6 +24,7 @@ import { GqlQueryable, GqlWarning } from '../../types.js';
 import { resolvers } from './resolvers.js';
 import { recordGraphqlBatchSize } from './batch-size.js';
 import { graphqlBodyParseError } from './body-parse-error.js';
+import { graphqlLandingPage } from './landing-page.js';
 import { buildResolverSignal, ResolverSignalState } from './resolver-signal.js';
 
 /**
@@ -184,13 +184,11 @@ export const makeApolloServerMiddleware = async ({
       // plugins make that impossible rather than merely unconfigured.
       ApolloServerPluginUsageReportingDisabled(),
       ApolloServerPluginSchemaReportingDisabled(),
-      // Serves the embedded Apollo Sandbox at `GET /graphql` for browsers.
-      // This replaces the retired `graphql-playground-react` UI that AS3
-      // served; AS5 ships no Playground plugin. Named explicitly rather than
-      // left to the default, because AS5 picks the landing page from
-      // NODE_ENV and would otherwise serve a Studio splash page in
-      // production instead of a usable query UI.
-      ApolloServerPluginLandingPageLocalDefault({ embed: true }),
+      // Serves the embedded Apollo Sandbox at `GET /graphql` for browsers,
+      // with the embed's own browser-side telemetry off. This replaces the
+      // retired `graphql-playground-react` UI that AS3 served; AS5 ships no
+      // Playground plugin. See `landing-page.ts`.
+      graphqlLandingPage(),
       warningsPlugin,
       requestCountPlugin,
       responseSentPlugin,
