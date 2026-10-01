@@ -213,8 +213,13 @@ band is then refused for being under 80% checked, not for being wrong (the
 reason says how many couldn't be read, and why). Use a gateway that already
 holds the roots, typically the one whose index produced the records, or
 `https://turbo-gateway.com`; or raise `--read-timeout`. Measured on
-2026-10-01 with 4,000 recent records: `http://core:4000` on a gateway without
-those roots cached timed out on 42 of 150 reads at the 30 s default.
+2026-10-01 with 4,000 recent records on a gateway without those roots cached:
+
+| `--gateway-url` | `--read-timeout` | Result | Time |
+| --- | --- | --- | --- |
+| `http://core:4000` | 30 s (default) | Refused: 108 of 150 passed, 42 reads timed out | 3 min 47 s |
+| `http://core:4000` | 120 s | Passed: 149 of 150 | 7 min 8 s |
+| `https://turbo-gateway.com` | 30 s (default) | Passed: 149 of 150 | 40 s |
 
 ### Errors and what to do
 
