@@ -12,6 +12,8 @@ import {
 import Arweave from 'arweave';
 import { strict as assert } from 'node:assert';
 import * as fs from 'node:fs/promises';
+import * as http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -19,6 +21,7 @@ import { after, before, describe, it } from 'node:test';
 import { buildBand, BandSampleEntry, MAX_HEADER_BYTES } from './build.js';
 import {
   checkBandHeaders,
+  gatewayRootSource,
   RootSourceFactory,
   sampleBandEntries,
 } from './verify.js';
@@ -230,6 +233,60 @@ describe('checkBandHeaders', () => {
     assert.equal(unavailable.errors.length, 1);
   });
 
+  it('calls a range a gateway trims at the end of the root wrong, through a real HTTP source', async () => {
+    // Gateways answer a range that starts inside the root but runs past its
+    // end with a shorter 206 (RFC 9110), not a 416.
+    const server = http.createServer((req, res) => {
+      const match = /bytes=(\d+)-(\d+)/.exec(req.headers.range ?? '');
+      if (match === null) {
+        res.writeHead(200).end(rootBytes);
+        return;
+      }
+      const start = Number(match[1]);
+      const end = Math.min(Number(match[2]), rootBytes.length - 1);
+      if (start >= rootBytes.length) {
+        res.writeHead(416).end();
+        return;
+      }
+      res
+        .writeHead(206, {
+          'content-range': `bytes ${start}-${end}/${rootBytes.length}`,
+        })
+        .end(rootBytes.subarray(start, end + 1));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+    const roots = gatewayRootSource(`http://127.0.0.1:${port}/`);
+    try {
+      const [first] = items;
+      const trimmed = {
+        ...entry(first),
+        id: 'trimmed',
+        rootOffset: rootBytes.length - 100,
+        rootDataOffset: rootBytes.length + 500,
+      };
+      const result = await checkBandHeaders({
+        entries: [entry(first), trimmed],
+        totalRecords: 2,
+        openRoot: roots.openRoot,
+        minRecords: 1,
+      });
+
+      assert.equal(result.ok, 1, 'a correct entry passes over HTTP');
+      assert.deepEqual(
+        result.wrong.map((w) => w.id),
+        ['trimmed'],
+      );
+      assert.match(result.wrong[0].reason, /past the end/);
+      assert.deepEqual(result.errors, []);
+    } finally {
+      roots.close();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it('passes at exactly the minimum ratio, and fails just under it', async () => {
     const good = entry(items[0]);
     let calls = 0;
@@ -330,6 +387,32 @@ describe('checkBandHeaders', () => {
     assert.match(small.reasons.join(' '), /fewer than 1000/);
     assert.equal(empty.passed, false);
     assert.match(empty.reasons.join(' '), /no entries with offsets/);
+  });
+
+  it('refuses to open a partition file a manifest names outside the band', async () => {
+    const band = await buildBand({
+      log,
+      records: items.map((item) => ({
+        id: fromB64Url(item.id),
+        rootTxId: fromB64Url(ROOT),
+        rootOffset: item.rootDataItemOffset,
+        rootDataOffset: item.rootDataOffset,
+      })),
+      publishDir: path.join(tempDir, 'published-traversal'),
+      workDir: path.join(tempDir, 'export-traversal'),
+      publisher: 'test-publisher',
+      kind: 'd',
+      heightRange: [0, null],
+    });
+    const manifestPath = path.join(band.dir!, 'manifest.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    manifest.partitions[0].location.filename = '../../elsewhere.cdb';
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+
+    await assert.rejects(
+      sampleBandEntries(band.dir!, 10),
+      /not a partition file/,
+    );
   });
 
   it('checks a built band end to end, from its own sample or one read from disk', async () => {

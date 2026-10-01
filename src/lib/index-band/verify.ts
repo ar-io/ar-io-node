@@ -17,10 +17,15 @@ import {
   isCompleteValue,
   isPathCompleteValue,
 } from '../cdb64-encoding.js';
-import { parseManifest } from '../cdb64-manifest.js';
+import { PARTITION_FILE_PATTERN, parseManifest } from '../cdb64-manifest.js';
 import { toB64Url } from '../encoding.js';
-import { HttpByteRangeSource } from '../http-byte-range-source.js';
-import { MAX_HEADER_BYTES } from './build.js';
+import { createAgentPair } from '../http-agent.js';
+import {
+  createRangeHttpClient,
+  HttpByteRangeSource,
+  ShortRangeReadError,
+} from '../http-byte-range-source.js';
+import { MAX_HEADER_BYTES, Reservoir } from './build.js';
 import type { BandSampleEntry } from './build.js';
 
 /** Opens the data of a root transaction for range reads. */
@@ -36,6 +41,7 @@ export interface HeaderCheckOptions {
   minOkRatio?: number;
   /** Smallest band worth publishing (default 1,000 entries). */
   minRecords?: number;
+  /** Root reads in flight at once (default 8). */
   concurrency?: number;
 }
 
@@ -101,12 +107,14 @@ export async function checkBandHeaders({
         try {
           bytes = await source.read(entry.rootOffset, headerBytes);
         } catch (error) {
-          // A range the root doesn't have (416) means the offsets are wrong;
-          // anything else (a timeout, a 5xx, a root the gateway can't find)
-          // means this entry couldn't be checked.
+          // A range the root doesn't have means the offsets are wrong: a 416
+          // when it starts past the end, or a trimmed (short) 206 when it
+          // starts inside and runs past it. Anything else (a timeout, a 5xx,
+          // a root the gateway can't find) means it couldn't be checked.
           if (
+            error instanceof ShortRangeReadError ||
             (error as { response?: { status?: number } }).response?.status ===
-            416
+              416
           ) {
             wrong.push({
               id: entry.id,
@@ -201,12 +209,17 @@ export async function sampleBandEntries(
   const manifest = parseManifest(
     await fs.readFile(path.join(bandDir, 'manifest.json'), 'utf8'),
   );
-  const entries: BandSampleEntry[] = [];
-  let seen = 0;
+  const sample = new Reservoir<BandSampleEntry>(size, random);
   for (const partition of manifest.partitions) {
     if (partition.location.type !== 'file') {
       throw new Error(
         `Partition ${partition.prefix} is not a local file; only local bands can be checked`,
+      );
+    }
+    // The manifest may come from anywhere; open only partition files.
+    if (!PARTITION_FILE_PATTERN.test(partition.location.filename)) {
+      throw new Error(
+        `Partition ${partition.prefix} names ${JSON.stringify(partition.location.filename)}, not a partition file`,
       );
     }
     const reader = new Cdb64Reader(
@@ -219,36 +232,38 @@ export async function sampleBandEntries(
         if (!isCompleteValue(decoded) && !isPathCompleteValue(decoded)) {
           continue;
         }
-        const entry = {
+        sample.offer({
           id: toB64Url(key),
           rootTxId: toB64Url(getRootTxId(decoded)),
           rootOffset: decoded.rootDataItemOffset,
           rootDataOffset: decoded.rootDataOffset,
-        };
-        seen += 1;
-        if (entries.length < size) {
-          entries.push(entry);
-        } else {
-          const slot = Math.floor(random() * seen);
-          if (slot < size) entries[slot] = entry;
-        }
+        });
       }
     } finally {
       await reader.close();
     }
   }
-  return { entries, totalRecords: manifest.totalRecords };
+  return { entries: sample.items, totalRecords: manifest.totalRecords };
 }
 
-/** Reads root transactions through a gateway's `/raw/:id` range requests. */
+/**
+ * Reads root transactions through a gateway's `/raw/:id` range requests,
+ * sharing one HTTP client (and its keep-alive connections) across every root.
+ * Call `close` when done, or the idle connections keep the process alive.
+ */
 export function gatewayRootSource(
   gatewayUrl: string,
   timeoutMs = 30000,
-): RootSourceFactory {
+): { openRoot: RootSourceFactory; close: () => void } {
   const base = gatewayUrl.replace(/\/+$/, '');
-  return (rootTxId) =>
-    new HttpByteRangeSource({
-      url: `${base}/raw/${rootTxId}`,
-      timeout: timeoutMs,
-    });
+  const agents = createAgentPair({ client: 'index-band-verify' });
+  const httpClient = createRangeHttpClient(timeoutMs, agents);
+  return {
+    openRoot: (rootTxId) =>
+      new HttpByteRangeSource({ url: `${base}/raw/${rootTxId}`, httpClient }),
+    close: () => {
+      agents.httpAgent.destroy();
+      agents.httpsAgent.destroy();
+    },
+  };
 }

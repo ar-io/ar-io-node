@@ -137,18 +137,42 @@ describe('buildBand', () => {
     assert.ok(value !== undefined && getRootTxId(value).equals(id32(201)));
   });
 
-  it('keeps the later record among equal or missing heights', async () => {
-    const band = await build([
+  it('breaks ties among equal or missing heights the same way in any input order', async () => {
+    // Different roots for one ID at the same (or no) height: which one wins
+    // must not depend on the order the source returned them in, or the band
+    // id would change between identical rebuilds.
+    const records: BandRecord[] = [
       { id: id32(4), rootTxId: id32(301) },
       { id: id32(4), rootTxId: id32(302) },
-      { id: id32(5), rootTxId: id32(303), height: 10 },
       { id: id32(5), rootTxId: id32(304), height: 10 },
-    ]);
+      { id: id32(5), rootTxId: id32(303), height: 10 },
+      {
+        id: id32(6),
+        rootTxId: id32(305),
+        height: 10,
+        rootOffset: 0,
+        rootDataOffset: 100,
+      },
+      {
+        id: id32(6),
+        rootTxId: id32(305),
+        height: 10,
+        rootOffset: 500,
+        rootDataOffset: 600,
+      },
+    ];
+    const forward = await build(records);
+    const reversed = await build([...records].reverse(), {
+      publishDir: path.join(root, 'published-reversed'),
+    });
 
-    const four = await lookup(band.dir!, id32(4));
-    const five = await lookup(band.dir!, id32(5));
-    assert.ok(four !== undefined && getRootTxId(four).equals(id32(302)));
-    assert.ok(five !== undefined && getRootTxId(five).equals(id32(304)));
+    assert.equal(reversed.id, forward.id);
+    for (const id of [id32(4), id32(5), id32(6)]) {
+      assert.deepEqual(
+        await lookup(reversed.dir!, id),
+        await lookup(forward.dir!, id),
+      );
+    }
   });
 
   it('drops records with invalid offsets or heights, and keeps offsets over a bad size', async () => {
@@ -281,6 +305,35 @@ describe('buildBand', () => {
     await fs.mkdir(path.join(publishDir, id), { recursive: true });
 
     await assert.rejects(build(records), /exists but is not a band/);
+  });
+
+  it('refuses a target whose manifest is empty or torn, rather than call it published', async () => {
+    const records = [{ id: id32(35), rootTxId: id32(1) }];
+    const { id } = await build(records, { dryRun: true });
+    await fs.mkdir(path.join(publishDir, id), { recursive: true });
+    await fs.writeFile(path.join(publishDir, id, 'manifest.json'), '');
+
+    await assert.rejects(build(records), /exists but is not a band/);
+  });
+
+  it('publishes once when two builds of the same band race', async () => {
+    const records = Array.from({ length: 20 }, (_, i) => ({
+      id: id32(i + 40),
+      rootTxId: id32(i + 900),
+    }));
+    const [a, b] = await Promise.all([
+      build(records),
+      build(records, { workDir: path.join(root, 'export-2') }),
+    ]);
+
+    assert.equal(a.id, b.id);
+    assert.equal(
+      [a, b].filter((r) => r.published).length,
+      1,
+      'exactly one build publishes',
+    );
+    assert.ok([a, b].some((r) => r.unchanged));
+    assert.deepEqual(await listDir(publishDir), [a.id]);
   });
 
   it('refuses a workDir inside publishDir', async () => {

@@ -22,6 +22,41 @@ import { Semaphore } from './semaphore.js';
  * - CDN endpoints
  * - Dedicated index servers
  */
+/**
+ * The axios client range reads need: no response transformation, no
+ * redirects, and only 2xx accepted (a range read requires 206). Exported so
+ * callers that open many sources can share one client and its agents.
+ */
+export function createRangeHttpClient(
+  timeout: number,
+  agents: AgentPair,
+): AxiosInstance {
+  return axios.create({
+    timeout,
+    ...agents,
+    transformResponse: [],
+    maxRedirects: 0,
+    validateStatus: (status) => status >= 200 && status < 300,
+  });
+}
+
+/**
+ * A 206 with fewer bytes than asked for. A server trims a range that starts
+ * inside the resource but runs past its end (RFC 9110), so this usually means
+ * the requested range extends beyond the resource.
+ */
+export class ShortRangeReadError extends Error {
+  constructor(
+    readonly expected: number,
+    readonly received: number,
+  ) {
+    super(
+      `HTTP byte range short read: expected ${expected} bytes, got ${received}`,
+    );
+    this.name = 'ShortRangeReadError';
+  }
+}
+
 export class HttpByteRangeSource implements ByteRangeSource {
   private url: string;
   private httpClient: AxiosInstance;
@@ -58,19 +93,10 @@ export class HttpByteRangeSource implements ByteRangeSource {
     this.semaphoreTimeoutMs = semaphoreTimeoutMs;
     if (httpClient === undefined) {
       this.ownedAgents = createAgentPair({ client: 'HttpByteRangeSource' });
+      this.httpClient = createRangeHttpClient(timeout, this.ownedAgents);
+    } else {
+      this.httpClient = httpClient;
     }
-    this.httpClient =
-      httpClient ??
-      axios.create({
-        timeout,
-        ...this.ownedAgents,
-        // Disable automatic response transformation
-        transformResponse: [],
-        // Don't follow redirects automatically for range requests
-        maxRedirects: 0,
-        // Only accept 2xx status codes (we require 206 Partial Content)
-        validateStatus: (status) => status >= 200 && status < 300,
-      });
   }
 
   async read(offset: number, size: number): Promise<Buffer> {
@@ -111,9 +137,7 @@ export class HttpByteRangeSource implements ByteRangeSource {
       const buffer = Buffer.from(response.data);
 
       if (buffer.length !== size) {
-        throw new Error(
-          `HTTP byte range short read: expected ${size} bytes, got ${buffer.length}`,
-        );
+        throw new ShortRangeReadError(size, buffer.length);
       }
 
       return buffer;

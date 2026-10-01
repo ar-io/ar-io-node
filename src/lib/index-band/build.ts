@@ -12,11 +12,12 @@ import { once } from 'node:events';
 import { canonicalize } from 'json-canonicalize';
 import { Logger } from 'winston';
 
-import { encodeCdb64Value } from '../cdb64-encoding.js';
+import { encodeCdb64Value, isValidDataItemSize } from '../cdb64-encoding.js';
 import { Cdb64Writer, verifyCdb64File } from '../cdb64.js';
 import {
   Cdb64Manifest,
   indexToPrefix,
+  parseManifest,
   PartitionInfo,
   serializeManifest,
 } from '../cdb64-manifest.js';
@@ -126,7 +127,7 @@ export interface BuiltBand {
   records: number;
   /** Entries written without offsets (root transaction only). */
   rootOnly: number;
-  /** Duplicate IDs resolved by height, offsets or input order. */
+  /** Duplicate IDs resolved by height, offsets or, for a tie, record bytes. */
   duplicates: number;
   /** Records dropped as invalid (bad height or offsets). */
   dropped: number;
@@ -152,6 +153,13 @@ const HAS_SIZE = 4;
 const FRAME_BYTES = ID_BYTES * 2 + 1 + 8 * 4;
 const FLAGS_AT = ID_BYTES * 2;
 const NUMBERS_AT = FLAGS_AT + 1;
+/**
+ * Most a partition's frames file may hold: it is read into one buffer to be
+ * sorted, and `fs.readFile` refuses files of 2 GiB or more. About 22 million
+ * records per partition, so about 5.7 billion in a band.
+ */
+const MAX_PARTITION_FRAME_BYTES =
+  Math.floor((2 ** 31 - 1) / FRAME_BYTES) * FRAME_BYTES;
 const READ_BACK_SAMPLE = 64;
 
 const isOffset = (value: number | undefined): value is number =>
@@ -204,11 +212,7 @@ function toFrame(record: BandRecord): FrameResult {
     if (header <= 0 || header > MAX_HEADER_BYTES) return invalid;
     flags |= HAS_OFFSETS;
     if (size !== undefined) {
-      if (
-        Number.isSafeInteger(size) &&
-        size >= header &&
-        Number.isSafeInteger(rootOffset + size)
-      ) {
+      if (isValidDataItemSize(size, rootOffset, rootDataOffset)) {
         flags |= HAS_SIZE;
       } else {
         sizeDropped = true;
@@ -260,9 +264,11 @@ export class Reservoir<T> {
  * are dropped before deduplication, so an invalid newer record never hides a
  * valid older one) and scattered to one scratch file per partition. Each
  * partition is then sorted by ID and deduplicated (the higher height wins;
- * at equal or missing heights an entry with offsets beats one without, then
- * the later record wins), written as its CDB64 file and finished before the
- * next begins, so memory is bounded by the largest partition.
+ * at equal or missing heights an entry with offsets beats one without; any
+ * remaining tie is broken by the record's bytes, so the result doesn't depend
+ * on input order), written as its CDB64 file and finished before the next
+ * begins, so memory is bounded by the largest partition (at most about 22
+ * million records; see {@link MAX_PARTITION_FRAME_BYTES}).
  *
  * The band is read back (every partition verified and counted, a sample
  * looked up), named `<kind>-h<from>-<to|tip>-<publisher tag>-<digest>`, and
@@ -389,45 +395,64 @@ export async function buildBand({
         scatterDir,
         `${indexToPrefix(partition)}.frames`,
       );
+      const framesSize = (await fs.stat(framesPath)).size;
+      if (framesSize > MAX_PARTITION_FRAME_BYTES) {
+        throw new Error(
+          `Partition ${indexToPrefix(partition)} has ${framesSize / FRAME_BYTES} records, more than one partition can hold in memory (${MAX_PARTITION_FRAME_BYTES / FRAME_BYTES}); build the range as several bands`,
+        );
+      }
       const bytes = await fs.readFile(framesPath);
       const count = bytes.length / FRAME_BYTES;
-      const order = Array.from({ length: count }, (_, index) => {
-        const frame = bytes.subarray(
-          index * FRAME_BYTES,
-          (index + 1) * FRAME_BYTES,
+      // Sort indices over the one buffer rather than an object per record:
+      // a partition can hold millions of records.
+      const heights = new Float64Array(count);
+      const flagsOf = new Uint8Array(count);
+      for (let i = 0; i < count; i++) {
+        const at = i * FRAME_BYTES;
+        flagsOf[i] = bytes.readUInt8(at + FLAGS_AT);
+        heights[i] =
+          (flagsOf[i] & HAS_HEIGHT) !== 0
+            ? bytes.readDoubleLE(at + NUMBERS_AT)
+            : -1;
+      }
+      // Sorted by ID, then height, then offsets present, so the last frame
+      // of each ID wins. Ties between different frames break on the frame
+      // bytes, not input order, so the band (and its id) doesn't depend on
+      // the order the records arrived in.
+      const order = new Uint32Array(count);
+      for (let i = 0; i < count; i++) order[i] = i;
+      order.sort((a, b) => {
+        const atA = a * FRAME_BYTES;
+        const atB = b * FRAME_BYTES;
+        return (
+          bytes.compare(bytes, atB, atB + ID_BYTES, atA, atA + ID_BYTES) ||
+          heights[a] - heights[b] ||
+          (flagsOf[a] & HAS_OFFSETS) - (flagsOf[b] & HAS_OFFSETS) ||
+          bytes.compare(
+            bytes,
+            atB + ID_BYTES,
+            atB + FRAME_BYTES,
+            atA + ID_BYTES,
+            atA + FRAME_BYTES,
+          )
         );
-        const flags = frame.readUInt8(FLAGS_AT);
-        return {
-          frame,
-          index,
-          flags,
-          height:
-            (flags & HAS_HEIGHT) !== 0 ? frame.readDoubleLE(NUMBERS_AT) : -1,
-        };
       });
-      // Sorted by ID, then height, then offsets present, then input order,
-      // so the last frame of each ID is the winner.
-      order.sort(
-        (a, b) =>
-          Buffer.compare(
-            a.frame.subarray(0, ID_BYTES),
-            b.frame.subarray(0, ID_BYTES),
-          ) ||
-          a.height - b.height ||
-          (a.flags & HAS_OFFSETS) - (b.flags & HAS_OFFSETS) ||
-          a.index - b.index,
-      );
+      const frameAt = (i: number) =>
+        bytes.subarray(order[i] * FRAME_BYTES, (order[i] + 1) * FRAME_BYTES);
 
       const filename = `${indexToPrefix(partition)}.cdb`;
       writer = new Cdb64Writer(path.join(bandDir, filename));
       await writer.open();
       let partitionRecords = 0;
       for (let i = 0; i < order.length; i++) {
-        const { frame, flags } = order[i];
+        const frame = frameAt(i);
+        const flags = flagsOf[order[i]];
         const id = frame.subarray(0, ID_BYTES);
         if (
           i + 1 < order.length &&
-          order[i + 1].frame.subarray(0, ID_BYTES).equals(id)
+          frameAt(i + 1)
+            .subarray(0, ID_BYTES)
+            .equals(id)
         ) {
           duplicates += 1;
           continue;
@@ -497,6 +522,10 @@ export async function buildBand({
       serializeManifest(manifest),
       'utf-8',
     );
+    // The partitions are synced by their writer; make the manifest and the
+    // directory durable too, so a power cut can't publish an empty manifest.
+    await syncPath(path.join(bandDir, 'manifest.json'));
+    await syncPath(bandDir);
 
     // Read back.
     for (const partition of partitions) {
@@ -599,10 +628,16 @@ export async function buildBand({
 
     // Publish, never over an existing band.
     const target = path.join(publishDir, id);
+    // A band is a directory whose manifest parses; an empty or torn manifest
+    // (after a crash elsewhere) is not, so it is refused rather than taken
+    // as already published.
     const isBand = async () =>
       fs
-        .stat(path.join(target, 'manifest.json'))
-        .then(() => true)
+        .readFile(path.join(target, 'manifest.json'), 'utf8')
+        .then((text) => {
+          parseManifest(text);
+          return true;
+        })
         .catch(() => false);
     if (await isBand()) {
       log.info('Identical band already published', { id });
@@ -617,7 +652,7 @@ export async function buildBand({
     );
     if (occupied) {
       throw new Error(
-        `${target} exists but is not a band (no manifest.json); remove it before publishing`,
+        `${target} exists but is not a band (no readable manifest.json); remove it before publishing`,
       );
     }
     try {
@@ -630,6 +665,7 @@ export async function buildBand({
       }
       throw error;
     }
+    await syncPath(publishDir);
     log.info('Published band', {
       id,
       records: written,
@@ -641,5 +677,15 @@ export async function buildBand({
   } finally {
     await writer?.abort().catch(() => undefined);
     await fs.rm(staging, { recursive: true, force: true });
+  }
+}
+
+/** Flushes a file or directory to disk (directories so renames persist). */
+async function syncPath(target: string): Promise<void> {
+  const handle = await fs.open(target, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
