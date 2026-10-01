@@ -87,6 +87,38 @@ case "${COMMAND}" in
     # The CLI refuses to write anywhere this mount doesn't cover.
     DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes"
       -e AR_IO_NODE_CLI_DATA_DIR=/app/data/indexes)
+    # A path you give inside that directory, absolute or relative to where
+    # you ran this, is rewritten to the path the container sees, so
+    # --input "$INDEX_SWARM_DATA_PATH/records.csv" and --band-dir from a
+    # build's "dir" both work. Anything else is passed as given.
+    to_container() {
+      local value="$1" host
+      if [[ "${value}" == "-" ]]; then
+        echo "${value}"
+        return
+      fi
+      host="$(cd "${CALLER_DIR}" && realpath -m -- "${value}")"
+      if [[ "${host}" == "${DATA_PATH}" ]]; then
+        echo "data/indexes"
+      elif [[ "${host}" == "${DATA_PATH}/"* ]]; then
+        echo "data/indexes/${host#"${DATA_PATH}/"}"
+      else
+        echo "${value}"
+      fi
+    }
+    for i in "${!ARGS[@]}"; do
+      case "${ARGS[$i]}" in
+        --input|--band-dir|--publish-dir|--work-dir)
+          next=$((i + 1))
+          if [[ -n "${ARGS[$next]:-}" ]]; then
+            ARGS[$next]="$(to_container "${ARGS[$next]}")"
+          fi
+          ;;
+        --input=*|--band-dir=*|--publish-dir=*|--work-dir=*)
+          ARGS[$i]="${ARGS[$i]%%=*}=$(to_container "${ARGS[$i]#*=}")"
+          ;;
+      esac
+    done
     # Join the gateway's network, so --gateway-url http://core:4000 works.
     NETWORK="$(setting DOCKER_NETWORK_NAME)"
     NETWORK="${NETWORK:-ar-io-network}"

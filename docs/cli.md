@@ -13,6 +13,9 @@ It follows the `ar.io` CLI's conventions, so the two behave alike:
   exit code `1`. A check that fails prints its full result, as JSON, on stderr;
 - logs go to stderr too, so stdout can be parsed.
 
+If you are a script or an agent, read [For scripts and
+agents](#for-scripts-and-agents) first.
+
 ## Running it
 
 From the gateway's directory (where `.env` and `docker-compose.yaml` are),
@@ -32,19 +35,37 @@ The wrapper mounts only what a command needs:
 | any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
 
 It runs as your user, so what it writes is yours, and
-`data/indexes/published/<index>` must be writable by you. A band command
-refuses a `--publish-dir` or `--work-dir` outside `data/indexes`: anything
-else would be written inside the container and lost with it. Ctrl-C stops a
+`data/indexes/published/<index>` must be writable by you. Ctrl-C stops a
 command; a build interrupted that way leaves its scratch copy in
-`data/indexes/export/.band-build-*`, which the next build removes once it is a
-day old (or delete it yourself).
+`data/indexes/export/.band-build-*`, which the next build removes once nothing
+has been written in it for a day (or delete it yourself).
 
 Band commands never take a key. For `ar.io` commands that sign, prefer
 `--wallet-file` to `--private-key`: an inline key is visible in `ps` and
 `docker inspect`.
 
-Set `AR_IO_NODE_CLI_IMAGE` to run another image. From a checkout, run
+Settings (`CORE_IMAGE_TAG`, `INDEX_SWARM_DATA_PATH`, `DOCKER_NETWORK_NAME`)
+come from your shell if set there, else from `.env`, as for compose. Set
+`AR_IO_NODE_CLI_IMAGE` to run another image. From a checkout, run
 `node --import ./register.js src/cli/cli.ts <command>`.
+
+### Paths
+
+Inside the container, the data directory is `data/indexes`. The wrapper
+rewrites any `--input`, `--band-dir`, `--publish-dir` or `--work-dir` that
+points inside `INDEX_SWARM_DATA_PATH` (absolute, or relative to where you ran
+it) to its `data/indexes/...` form, so all of these work:
+
+```bash
+./tools/ar-io-node index-band-verify --band-dir "$INDEX_SWARM_DATA_PATH/published/root-tx-index/<band>" ...
+./tools/ar-io-node index-band-verify --band-dir data/indexes/published/root-tx-index/<band> ...
+./tools/ar-io-node index-band-verify --band-dir "$(jq -r .dir build.json)" ...   # a build's own "dir"
+```
+
+A path outside the data directory is passed through unchanged, and a band
+command refuses to write there (it would land inside the container and be
+lost). An input file elsewhere goes in on stdin: `--input - < records.csv`.
+The `dir` a build reports is the container path (`data/indexes/...`).
 
 ## `index-band-build`
 
@@ -52,16 +73,15 @@ Builds one band from CSV records, checks a sample of its headers against
 their root transactions, and publishes it:
 
 ```bash
-./tools/ar-io-node index-band-build \
+./tools/ar-io-node index-band-build --input - --skip-header \
   --publisher <this gateway's wallet> --kind d --height-range 2010500,tip \
-  --gateway-url http://core:4000 --input - < records.csv
+  --gateway-url https://turbo-gateway.com < records.csv
 ```
 
-The band is built under `--work-dir` (default `data/indexes/export`) and
-renamed into `--publish-dir` (default
-`data/indexes/published/root-tx-index`), where the index-swarm sidecar
-publishes it. Both must be on one filesystem. An existing band is never
-overwritten: building the same records again reports `"unchanged": true`.
+The band is built under `--work-dir` and renamed into `--publish-dir`, where
+the index-swarm sidecar publishes it. Both must be on one filesystem (the
+defaults are). An existing band is never overwritten: building the same
+records again reports `"unchanged": true`, without checking or writing.
 
 **Input:** CSV in the columns of `tools/generate-cdb64-root-tx-index`, plus a
 height:
@@ -70,24 +90,33 @@ height:
 data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_size,height
 ```
 
-Only the first two columns are required. `path` must be empty: bands don't
-carry nested bundle paths yet. When one ID appears more than once, the
-highest height wins; at equal heights a record with offsets beats one
-without, and any remaining tie is broken the same way whatever the input
-order, so a rebuild gives the same band id. A malformed row fails the build
-with its line number; a well-formed record the band can't use (offsets that
-don't frame a header, say) is dropped and counted.
+- Only the first two columns are required. `path` must be empty: bands don't
+  carry nested bundle paths yet.
+- When one ID appears more than once, the highest `height` wins; at equal
+  heights a record with offsets beats one without, and any remaining tie is
+  broken the same way whatever the input order, so a rebuild gives the same
+  band id.
+- A malformed row (an ID that isn't 43 base64url characters, a number that
+  isn't a non-negative integer) fails the build with its line number.
+- A well-formed record the band can't use is **dropped and counted**: offsets
+  that don't frame a header (the header span must be 1 byte to 1 MiB), only
+  one of the two offsets, or a value too large to address. A few per thousand
+  is normal for real data (37 of 4,000 in the test below); the build logs a
+  warning with the count.
 
 | Option | Meaning |
 | --- | --- |
-| `--input <path>` | The CSV, or `-` for stdin. Required. Through `tools/ar-io-node`, only `data/indexes` is mounted, so pipe the CSV in on stdin or put it under `data/indexes` |
+| `--input <path>` | The CSV, or `-` for stdin. Required |
 | `--skip-header` | Skip the CSV's first line |
-| `--publisher <wallet>` | The publishing gateway's registered wallet; band ids are unique to it. Required |
-| `--kind <kind>` | `d` (delta), `r` (recent), `h` (history), or another short name. Required |
-| `--height-range <from,to>` | The heights the band covers; `tip` as the end for a band that follows the tip. Required |
-| `--supersedes <ids>` | Comma-separated ids of the bands this one replaces |
+| `--publisher <wallet>` | The publishing gateway's registered wallet. It names the band (so ids are unique to a publisher) and is not otherwise checked. Required |
+| `--kind <kind>` | `d` (delta), `r` (recent), `h` (history), or another name of up to 8 lowercase letters and digits. Required |
+| `--height-range <from,to>` | The heights the band covers, e.g. `2010500,tip`; `tip` for a band that follows the tip. It is declared in the band's metadata (subscribers use it to order installs); records are not filtered by it. Required |
+| `--supersedes <ids>` | Comma-separated ids of bands this one replaces. Not checked against what exists: the sidecar stops offering the named bands and deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`, and warns once about an id it doesn't hold (see [band metadata](index-swarm.md#band-metadata)) |
 | `--metadata <json>` | A JSON object of extra band metadata |
-| `--gateway-url <url>` | The gateway that range-reads root transactions for the header check. Required unless `--skip-header-check` |
+| `--publish-dir <path>` | Where the band is published, one directory per band (default `data/indexes/published/root-tx-index`) |
+| `--work-dir <path>` | Scratch space for the build (default `data/indexes/export`) |
+| `--gateway-url <url>` | The gateway the header check reads root transactions from. Required unless `--skip-header-check`. See [Choosing `--gateway-url`](#choosing---gateway-url) |
+| `--read-timeout <ms>` | How long the check waits for each root read (default 30000) |
 | `--skip-header-check` | Publish without the header check |
 | `--sample-size <n>` | Entries the check samples (default 150) |
 | `--dry-run` | Build and check, but publish nothing |
@@ -95,14 +124,11 @@ don't frame a header, say) is dropped and counted.
 **The header check** samples entries with offsets and range-reads each one's
 root transaction. A band fails if any header is wrong (its signature hash
 isn't the ID, or it doesn't end where the payload starts, or the offsets run
-past the end of the root), if fewer than 80% of the sample could be checked
-and passed, or if the band has fewer than 1,000 entries. A failed band is not
-published, and the command exits 1 with the result on stderr.
-
-**Output:** the band's id and directory, whether it was published or already
-was, its record counts (`records`, `rootOnly`, `duplicates`, `dropped`,
-`sizeDropped`), its height range, what it supersedes, its content digest and
-the header check's result.
+past the end of the root), if fewer than 80% of the sample could be read and
+passed, or if the band has fewer than 1,000 entries. A failed band is not
+published, and the command exits 1 with the result on stderr. A band can pass
+with a few entries the gateway couldn't serve: they are listed in `errors`
+and count against the 80%, but aren't evidence the band is wrong.
 
 ## `index-band-verify`
 
@@ -111,12 +137,17 @@ Runs the header check on a built or installed band:
 ```bash
 ./tools/ar-io-node index-band-verify \
   --band-dir data/indexes/published/root-tx-index/<band> \
-  --gateway-url http://core:4000
+  --gateway-url https://turbo-gateway.com
 ```
 
-It prints the result (`passed`, `checked`, `ok`, and the `wrong` and
-unchecked entries) and exits 1 if the band fails. `--sample-size` sets the
-sample (default 150).
+| Option | Meaning |
+| --- | --- |
+| `--band-dir <path>` | The band's directory (it holds `manifest.json`). Required |
+| `--gateway-url <url>` | As for `index-band-build`. Required |
+| `--read-timeout <ms>` | As for `index-band-build` (default 30000) |
+| `--sample-size <n>` | Entries to check (default 150) |
+
+It prints the result and exits 1 if the band fails.
 
 ## For scripts and agents
 
@@ -134,57 +165,66 @@ script or an agent can drive it without parsing prose.
 - **Read stdout, branch on the exit code.** Never parse stderr for success;
   log lines may change.
 - `--help`, `--version` and `network-help` print text, not JSON. Each
-  command's `--help` ends with an example and this contract.
+  command's `--help` ends with an example and this contract. `--version`
+  prints the `@ar.io/sdk` version the `ar.io` commands run.
 - **No prompts.** Band commands never ask for confirmation and never take a
   key. (`ar.io` commands that write do prompt unless given
-  `--skip-confirmation`; see the SDK's own help.)
+  `--skip-confirmation`; see their help.)
 - **Safe to retry.** A band's id is derived from its content, publisher,
   kind and heights, so building the same records again gives the same id and
-  reports `"unchanged": true` without writing. A build that fails or is
-  interrupted publishes nothing.
+  reports `"unchanged": true` without checking or writing. A build that fails
+  or is interrupted publishes nothing.
+- **Paths:** pass the `dir` a build reports straight back as `--band-dir`;
+  see [Paths](#paths).
 - **No network** except range reads of root transactions from
   `--gateway-url` during the header check. Band commands make no Solana RPC
   calls.
 
 ### `index-band-build` result
 
+From a real run (4,000 records from a gateway's own index, checked against
+turbo-gateway.com):
+
 ```json
 {
-  "id": "d-h2010500-tip-f5b1208c-0dac038f25bc",
-  "dir": "data/indexes/published/root-tx-index/d-h2010500-tip-f5b1208c-0dac038f25bc",
+  "id": "d-h2000000-tip-f5b1208c-0dac038f25bc",
+  "dir": "data/indexes/published/root-tx-index/d-h2000000-tip-f5b1208c-0dac038f25bc",
   "published": true,
   "unchanged": false,
   "dryRun": false,
-  "records": 4000,
+  "records": 3963,
   "rootOnly": 0,
   "duplicates": 0,
-  "dropped": 0,
+  "dropped": 37,
   "sizeDropped": 0,
-  "heightRange": [2010500, null],
+  "heightRange": [2000000, null],
   "supersedes": [],
   "contentDigest": "…",
   "headerCheck": {
+    "status": "passed",
     "passed": true,
     "reasons": [],
-    "totalRecords": 4000,
+    "totalRecords": 3963,
     "checked": 150,
-    "ok": 150,
+    "ok": 149,
     "wrong": [],
-    "errors": []
+    "errors": [{ "id": "…", "error": "timeout of 30000ms exceeded" }]
   }
 }
 ```
 
 | Field | Meaning |
 | --- | --- |
-| `id`, `dir` | The band's id, and where it is (`null` on a dry run) |
-| `published` / `unchanged` | `published` when this run published it; `unchanged` when an identical band was already there. A band is in place when either is true |
-| `records` | Entries written. `rootOnly` of them have no offsets; `duplicates` were superseded by a better record for the same ID |
-| `dropped` / `sizeDropped` | Records refused as invalid, and records whose size was dropped while their offsets were kept |
-| `headerCheck` | The check's result; `"already-published"` when an identical band was already there (nothing is checked or written again); `"skipped"` with `--skip-header-check` |
+| `id` | The band's id |
+| `dir` | Where the band is, as a container path; `null` on a dry run of a band not already published |
+| `published` / `unchanged` | `published` when this run published it; `unchanged` when an identical band was already there. **The band is in place when either is true** |
+| `records` | Entries written. `rootOnly` of them have no offsets; `duplicates` lost to a better record for the same ID |
+| `dropped` / `sizeDropped` | Records refused as invalid (normal in small numbers), and records whose size was dropped while their offsets were kept |
+| `headerCheck.status` | Always present: `passed`, `failed`, `already-published` (an identical band was there; nothing was checked) or `skipped` (`--skip-header-check`). The other fields are present only when the check ran |
 
 A band the check refuses exits `1` and prints this object on stderr, with
-`published: false` and a `rejected` array of reasons.
+`published: false`, `headerCheck.status: "failed"` and a `rejected` array of
+reasons.
 
 ### `index-band-verify` result
 
@@ -197,12 +237,15 @@ object on stderr, when `passed` is false.
 ### Example
 
 ```bash
-out=$(./tools/ar-io-node index-band-build --input - --skip-header \
-  --publisher "$WALLET" --kind d --height-range "$FROM,tip" \
-  --gateway-url https://turbo-gateway.com < records.csv) || {
-  echo "band refused or failed; see stderr" >&2; exit 1; }
-id=$(jq -r .id <<<"$out")
-jq -e '.published or .unchanged' <<<"$out" >/dev/null
+if out=$(./tools/ar-io-node index-band-build --input - --skip-header \
+    --publisher "$WALLET" --kind d --height-range "$FROM,tip" \
+    --gateway-url https://turbo-gateway.com < records.csv); then
+  dir=$(jq -r .dir <<<"$out")              # in place: .published or .unchanged
+  ./tools/ar-io-node index-band-verify --band-dir "$dir" \
+    --gateway-url https://turbo-gateway.com >/dev/null
+else
+  echo "band refused or failed; see stderr" >&2
+fi
 ```
 
 ### Choosing `--gateway-url`
@@ -225,13 +268,17 @@ holds the roots, typically the one whose index produced the records, or
 
 | stderr says | Cause | Fix |
 | --- | --- | --- |
-| `--input … is required` (or `--publisher`, `--kind`, `--height-range`) | A required option is missing | Pass it |
+| `--input is required` (or `--publisher`, `--kind`, `--height-range`, `--band-dir`) | A required option is missing | Pass it |
+| `error: unknown option '--x'` | A misspelt or unsupported option | Check `--help` |
 | `--gateway-url is required unless --skip-header-check` | No gateway for the check | Pass `--gateway-url`, or `--skip-header-check` to publish unchecked |
-| `--input X cannot be read; through tools/ar-io-node, pipe it on stdin …` | The wrapper mounts only `data/indexes` | `--input - < X`, or put X under `data/indexes` |
+| `--input X cannot be read; through tools/ar-io-node, pipe it on stdin …` | The file isn't there, or is outside the data directory | `--input - < X`, or put X under `INDEX_SWARM_DATA_PATH` |
+| `--band-dir X is not a band (no manifest.json)` | Not a band directory, or outside the data directory | Use a path under `INDEX_SWARM_DATA_PATH`, or a build's `dir` |
 | `Line N: data_item_id is not a 43-character ID (a header line? use --skip-header)` | A header line, or a malformed ID | `--skip-header`, or fix line N |
 | `Line N: nested bundle paths are not supported in bands yet` | The `path` column is set | Leave it empty |
 | `Invalid --height-range: …` | Not `<from>,<to>` or `<from>,tip`, or `to` below `from` | Fix the range |
-| `--publish-dir … is outside data/indexes …` | Through the wrapper, only `data/indexes` is mounted | Use a directory under it |
+| `Invalid sample-size: …` (or `read-timeout`) | Not a positive integer | Fix the value |
+| `--metadata is not valid JSON` (or `must be a JSON object`) | | Pass a JSON object |
+| `--publish-dir … is outside data/indexes …` (or `--work-dir`) | Through the wrapper, only the data directory is mounted | Use a directory under it |
 | `… checked entries passed, under 80%; N could not be read …` | The gateway couldn't serve enough roots | See [Choosing `--gateway-url`](#choosing---gateway-url) |
 | `N of M checked entries are wrong` | Offsets that don't point at the item's header | Fix the source of the records; don't publish |
 | `… exists but is not a band …` | Something else is at the band's path | Remove it |
@@ -250,6 +297,7 @@ the same arguments, output and exit code:
 ./tools/ar-io-node network-help
 ```
 
-They are the SDK's commands, unchanged: they read from Solana through the
-SDK's own defaults (`--rpc-url` and the program-id options), not through the
-gateway's settings, and the gateway itself never runs them.
+They are the SDK's commands, unchanged: they use the SDK's own network
+defaults and flags (`--mainnet`, `--rpc-url` and the program-id options), not
+the gateway's settings, and the gateway itself never runs them. Check a
+command's help for which network it targets and what it needs.

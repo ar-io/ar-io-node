@@ -43,7 +43,11 @@ const sdk = sdkCli();
 applyOptions(
   program
     .name('ar-io-node')
-    .version(`@ar.io/sdk ${sdk.version}`)
+    .version(
+      `@ar.io/sdk ${sdk.version}`,
+      '-V, --version',
+      'Print the @ar.io/sdk version the ar.io commands run',
+    )
     .description('AR.IO gateway CLI')
     .helpCommand(true)
     .addHelpText(

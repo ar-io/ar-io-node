@@ -282,15 +282,26 @@ export async function indexBandBuildCLICommand(
     heightRange: band.heightRange,
     supersedes: band.supersedes,
     contentDigest: band.contentDigest,
-    // The check's result; or why there is none: an identical band was
-    // already published (nothing to check), or the check was turned off.
+    // Always an object, so a script can read headerCheck.status without
+    // checking its type. When the check didn't run, status says why: an
+    // identical band was already published, or it was turned off.
     headerCheck:
       headerCheck !== undefined
-        ? headerCheckJson(headerCheck)
-        : band.unchanged
-          ? 'already-published'
-          : 'skipped',
+        ? {
+            status: headerCheck.passed ? 'passed' : 'failed',
+            ...(headerCheckJson(headerCheck) as object),
+          }
+        : { status: band.unchanged ? 'already-published' : 'skipped' },
   };
+  if (band.dropped > 0) {
+    deps.log.warn(
+      'Records dropped as invalid (normal in small numbers): offsets that do not frame a header, only one of the two offsets, or a height or offset that is not a non-negative integer',
+      {
+        dropped: band.dropped,
+        of: band.records + band.duplicates + band.dropped,
+      },
+    );
+  }
   if (band.rejected !== undefined) {
     throw { ...output, rejected: band.rejected };
   }
@@ -311,6 +322,11 @@ export async function indexBandVerifyCLICommand(
   if (options.gatewayUrl === undefined && deps.roots === undefined) {
     throw new Error('--gateway-url is required');
   }
+  await fs.access(path.join(bandDir, 'manifest.json')).catch(() => {
+    throw new Error(
+      `--band-dir ${bandDir} is not a band (no manifest.json)${process.env.AR_IO_NODE_CLI_DATA_DIR !== undefined ? '; through tools/ar-io-node, give a path under data/indexes, such as a build\'s "dir"' : ''}`,
+    );
+  });
   const sample = await sampleBandEntries(bandDir, sampleSize);
   deps.log.info('Checking sampled headers against their roots', {
     entries: sample.entries.length,

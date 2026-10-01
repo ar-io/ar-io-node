@@ -222,6 +222,7 @@ describe('index-band-build and index-band-verify', () => {
     assert.equal(built.published, true);
     assert.equal(built.records, 1003);
     assert.equal(built.rootOnly, 1000);
+    assert.equal(built.headerCheck.status, 'passed');
     assert.equal(built.headerCheck.passed, true);
     assert.equal(built.headerCheck.ok, 3);
     assert.match(built.id, /^d-h0-tip-/);
@@ -251,12 +252,50 @@ describe('index-band-build and index-band-verify', () => {
     );
 
     assert.equal(thrown.published, false);
+    assert.equal(thrown.headerCheck.status, 'failed');
     assert.equal(thrown.headerCheck.passed, false);
     assert.ok(thrown.rejected.length > 0);
     assert.deepEqual(
       await fs.readdir(opts.publishDir).catch(() => []),
       [],
       'nothing published',
+    );
+  });
+
+  it('reports an identical band as already published, without checking it again', async () => {
+    const opts = options('again');
+    const first = (await indexBandBuildCLICommand(opts, {
+      log,
+      openInput: () => Readable.from([csv(correct)]),
+      roots,
+    })) as Record<string, any>;
+    let reads = 0;
+    const counting = {
+      openRoot: () => {
+        reads += 1;
+        return roots.openRoot();
+      },
+      close: () => {},
+    };
+    const second = (await indexBandBuildCLICommand(opts, {
+      log,
+      openInput: () => Readable.from([csv(correct)]),
+      roots: counting,
+    })) as Record<string, any>;
+
+    assert.equal(second.id, first.id);
+    assert.equal(second.unchanged, true);
+    assert.deepEqual(second.headerCheck, { status: 'already-published' });
+    assert.equal(reads, 0);
+  });
+
+  it('names a --band-dir that is not a band, instead of a raw ENOENT', async () => {
+    await assert.rejects(
+      indexBandVerifyCLICommand(
+        { bandDir: path.join(tempDir, 'no-such-band') },
+        { log, roots },
+      ),
+      /--band-dir .*no-such-band is not a band \(no manifest\.json\)/,
     );
   });
 
@@ -288,7 +327,7 @@ describe('index-band-build and index-band-verify', () => {
       { log, openInput: () => Readable.from([csv(correct)]) },
     )) as Record<string, any>;
     assert.equal(built.published, true);
-    assert.equal(built.headerCheck, 'skipped');
+    assert.deepEqual(built.headerCheck, { status: 'skipped' });
   });
 
   it('fails with one line, not a crash, when the input file is missing', async () => {
