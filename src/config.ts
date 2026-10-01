@@ -14,7 +14,6 @@ import * as env from './lib/env.js';
 import { resolveFacilitatorKeyId } from './payments/facilitator-utils.js';
 import { initHttpSig } from './lib/httpsig.js';
 import type { HttpSigSignerContext } from './lib/httpsig.js';
-import { release } from './version.js';
 import logger from './log.js';
 import { verificationPriorities } from './constants.js';
 import {
@@ -262,29 +261,13 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
-// Idle-socket timeout (ms) for the outbound trusted-gateway keep-alive agent.
-// MUST be strictly less than the peer gateway's server keep-alive timeout
-// (HTTP_KEEP_ALIVE_TIMEOUT_MS, default 60000). Equal timeouts cause a keep-alive
-// reuse race: the client reuses an idle socket at the same moment the server
-// sends its idle-close FIN, and the request stalls until the teardown resolves
-// (observed as ~8-10s peer stalls that sometimes exceed
-// TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS and are canceled before the request is
-// ever sent). Keeping the client's idle timeout below the server's guarantees
-// the client retires a socket before the server closes it.
-export const GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS = env.positiveIntOrDefault(
-  'GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS',
-  50_000,
-);
-
-// Outbound gateway socket acquisitions (time from a request needing a socket to
-// a socket being assigned) at or above this threshold are logged at `warn`.
-// Surfaces keep-alive pool waits and socket-reuse stalls that are invisible in
-// request/response timing (the request hasn't hit the wire yet).
-export const GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS =
-  env.positiveIntOrDefault(
-    'GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS',
-    1000,
-  );
+// The outbound agents' settings live with the agents (see the module).
+export {
+  GATEWAY_AGENT_IDLE_SOCKET_TIMEOUT_MS,
+  GATEWAY_SLOW_SOCKET_ACQUISITION_LOG_THRESHOLD_MS,
+  OUTBOUND_MAX_FREE_SOCKETS_PER_HOST,
+  OUTBOUND_MAX_SOCKETS_PER_HOST,
+} from './lib/outbound-http-config.js';
 
 /**
  * A socket-cap setting: either a single positive integer applied to every host,
@@ -400,30 +383,6 @@ export const GATEWAY_UNTRUSTED_MAX_SOCKETS_PER_HOST: PerHostNumber =
 export const GATEWAY_MAX_FREE_SOCKETS_PER_HOST = parsePerHostNumber(
   'GATEWAY_MAX_FREE_SOCKETS_PER_HOST',
   4,
-);
-
-// Socket caps for the non-data outbound clients — root TX discovery sources and
-// the GraphQL fan-out. These are low-volume metadata lookups against a handful
-// of upstreams, so the caps are modest; the point of pooling here is not
-// throughput but avoiding a per-request `dns.lookup()`, which queues on the
-// libuv threadpool behind filesystem I/O (see src/lib/http-agent.ts). Node's
-// Agent keys its pool by host:port, so these apply per origin.
-export const OUTBOUND_MAX_SOCKETS_PER_HOST = env.positiveIntOrDefault(
-  'OUTBOUND_MAX_SOCKETS_PER_HOST',
-  16,
-);
-// Defaults to the same value as OUTBOUND_MAX_SOCKETS_PER_HOST, deliberately.
-// maxFreeSockets bounds *idle* sockets: any concurrency above it means the
-// excess sockets are destroyed once they go idle and reopened on the next
-// request — and every reopen is a fresh `dns.lookup()`, the exact cost this
-// pooling exists to avoid. The data path caps free sockets well below max
-// because its objective is throughput management against many hosts; here the
-// objective is maximizing reuse across a handful of upstreams, so holding the
-// full set idle is the point. Cost is a few idle sockets per origin, retired
-// anyway by the agent's idle timeout.
-export const OUTBOUND_MAX_FREE_SOCKETS_PER_HOST = env.positiveIntOrDefault(
-  'OUTBOUND_MAX_FREE_SOCKETS_PER_HOST',
-  OUTBOUND_MAX_SOCKETS_PER_HOST,
 );
 
 // Kill-switch for the untrusted-gateway provenance-param omission. By default
@@ -2609,10 +2568,7 @@ export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
 // The wallet for this gateway
 export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
 
-export const AR_IO_NODE_RELEASE = env.varOrDefault(
-  'AR_IO_NODE_RELEASE',
-  release,
-);
+export { AR_IO_NODE_RELEASE } from './release.js';
 
 //
 // Apex domain customization
