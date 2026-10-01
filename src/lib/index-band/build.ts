@@ -719,9 +719,13 @@ async function sweepStaleStaging(workDir: string, log: Logger): Promise<void> {
   }
 }
 
-/** The newest mtime of a directory and everything in it (a few hundred files). */
+/**
+ * The newest mtime of a directory and everything in it (a few hundred files).
+ * `lstat`, so a symlink is a leaf: the walk never follows one out of the tree
+ * or round a loop.
+ */
 async function newestMtimeMs(dir: string): Promise<number | undefined> {
-  const stat = await fs.stat(dir).catch(() => undefined);
+  const stat = await fs.lstat(dir).catch(() => undefined);
   if (stat === undefined) return undefined;
   let newest = stat.mtimeMs;
   if (stat.isDirectory()) {

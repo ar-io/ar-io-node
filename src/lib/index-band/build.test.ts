@@ -348,10 +348,18 @@ describe('buildBand', () => {
     // leaves its staging directory's own mtime old.
     await fs.mkdir(path.join(longRunning, 'scatter'));
     await fs.writeFile(path.join(longRunning, 'scatter', '00.frames'), 'x');
+    // A symlink loop inside stale staging: the walk must not follow it.
+    await fs.symlink(stale, path.join(stale, 'loop'));
     const old = new Date(Date.now() - STALE_STAGING_MS - 60_000);
     for (const dir of [stale, other, longRunning]) {
       await fs.utimes(dir, old, old);
     }
+    await fs.lutimes(path.join(stale, 'loop'), old, old);
+    // And a link out to a directory being written now: followed, it would
+    // make the stale staging look fresh.
+    await fs.symlink(fresh, path.join(stale, 'out'));
+    await fs.lutimes(path.join(stale, 'out'), old, old);
+    await fs.utimes(stale, old, old); // adding the links touched it
 
     await build([{ id: id32(60), rootTxId: id32(61) }]);
 
