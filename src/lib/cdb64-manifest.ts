@@ -345,6 +345,13 @@ export function getPartitionIndex(key: Buffer): number {
 }
 
 /**
+ * Names of local partition files in a published band: the two-hex-digit key
+ * prefix they hold (see {@link indexToPrefix}). Anything else in a manifest
+ * from elsewhere is refused before it is opened.
+ */
+export const PARTITION_FILE_PATTERN = /^[0-9a-f]{2}\.cdb$/;
+
+/**
  * Converts a partition index (0-255) to a hex prefix string.
  *
  * @param index - The partition index (0-255)

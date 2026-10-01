@@ -15,8 +15,6 @@
  * band live, and the manifest disappearing is what takes it out of service.
  * Every operation here is ordered around that fact.
  */
-import crypto from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import pLimit from 'p-limit';
@@ -25,8 +23,10 @@ import { Logger } from 'winston';
 import { BandDescriptor, BandFile } from '../../lib/index-publication.js';
 import { Cdb64Reader, verifyCdb64File } from '../../lib/cdb64.js';
 import { FileByteRangeSource } from '../../lib/byte-range-source.js';
+import { sha256File } from '../../lib/sha256-file.js';
 import {
   isLocalPartitionLocation,
+  PARTITION_FILE_PATTERN,
   parseManifest,
 } from '../../lib/cdb64-manifest.js';
 import { InstalledBand } from '../state.js';
@@ -48,9 +48,6 @@ export const MAX_BAND_MANIFEST_BYTES = 10 * 1024 * 1024;
 
 /** The manifest is part of the band and travels with it. */
 export const MANIFEST_FILE = 'manifest.json';
-
-/** Partition files are named for the key prefix they hold. */
-const PARTITION_NAME_PATTERN = /^[0-9a-f]{2}\.cdb$/;
 
 /**
  * Concurrency for the per-file work in describe and validate.
@@ -74,15 +71,6 @@ const ROOT_TX_KEY_LENGTH = 32;
  * refusing a file that declares values of a size no real index writes.
  */
 export const MAX_ROOT_TX_VALUE_LENGTH = 64 * 1024;
-
-async function sha256File(filePath: string): Promise<string> {
-  const hash = crypto.createHash('sha256');
-  const stream = createReadStream(filePath);
-  for await (const chunk of stream) {
-    hash.update(chunk as Buffer);
-  }
-  return hash.digest('hex');
-}
 
 /** Refuse a manifest with any partition that is not a local file. */
 function rejectRemotePartitions(
@@ -208,7 +196,7 @@ export class Cdb64RootTxKind implements ArtifactKind {
     // publication schema already rejects separators and traversal; this is
     // the kind's own, narrower rule about what a CDB64 band may contain.
     for (const name of declared.keys()) {
-      if (name !== MANIFEST_FILE && !PARTITION_NAME_PATTERN.test(name)) {
+      if (name !== MANIFEST_FILE && !PARTITION_FILE_PATTERN.test(name)) {
         throw new Error(
           `Band ${band.id} contains ${JSON.stringify(name)}, which is neither ${MANIFEST_FILE} nor a partition file`,
         );
