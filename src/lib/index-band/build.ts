@@ -697,8 +697,11 @@ const STAGING_PREFIX = '.band-build-';
 
 /**
  * Removes staging directories that interrupted builds left in `workDir`: a
- * band's scratch copy can be gigabytes. Only ones untouched for
- * {@link STALE_STAGING_MS}, so a build running beside this one is left alone.
+ * band's scratch copy can be gigabytes. Only ones in which nothing has been
+ * written for {@link STALE_STAGING_MS}, so a build running beside this one is
+ * left alone, however long it has run: it writes into subdirectories, which
+ * doesn't touch the staging directory's own mtime, so the newest mtime in the
+ * whole tree is what counts.
  */
 async function sweepStaleStaging(workDir: string, log: Logger): Promise<void> {
   const entries = await fs.readdir(workDir).catch(() => [] as string[]);
@@ -706,11 +709,26 @@ async function sweepStaleStaging(workDir: string, log: Logger): Promise<void> {
   for (const name of entries) {
     if (!name.startsWith(STAGING_PREFIX)) continue;
     const dir = path.join(workDir, name);
-    const stat = await fs.stat(dir).catch(() => undefined);
-    if (stat === undefined || now - stat.mtimeMs < STALE_STAGING_MS) continue;
+    const newest = await newestMtimeMs(dir);
+    if (newest === undefined || now - newest < STALE_STAGING_MS) continue;
     log.warn('Removing a staging directory an interrupted build left', { dir });
     await fs.rm(dir, { recursive: true, force: true });
   }
+}
+
+/** The newest mtime of a directory and everything in it (a few hundred files). */
+async function newestMtimeMs(dir: string): Promise<number | undefined> {
+  const stat = await fs.stat(dir).catch(() => undefined);
+  if (stat === undefined) return undefined;
+  let newest = stat.mtimeMs;
+  if (stat.isDirectory()) {
+    const names = await fs.readdir(dir).catch(() => [] as string[]);
+    for (const name of names) {
+      const child = await newestMtimeMs(path.join(dir, name));
+      if (child !== undefined && child > newest) newest = child;
+    }
+  }
+  return newest;
 }
 
 /** Flushes a file or directory to disk (directories so renames persist). */

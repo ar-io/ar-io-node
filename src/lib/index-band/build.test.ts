@@ -341,11 +341,17 @@ describe('buildBand', () => {
     await fs.mkdir(workDir, { recursive: true });
     const stale = path.join(workDir, '.band-build-stale1');
     const fresh = path.join(workDir, '.band-build-fresh1');
+    const longRunning = path.join(workDir, '.band-build-long1');
     const other = path.join(workDir, 'not-staging');
-    for (const dir of [stale, fresh, other]) await fs.mkdir(dir);
+    for (const dir of [stale, fresh, longRunning, other]) await fs.mkdir(dir);
+    // A build that has run for over a day writes into a subdirectory, which
+    // leaves its staging directory's own mtime old.
+    await fs.mkdir(path.join(longRunning, 'scatter'));
+    await fs.writeFile(path.join(longRunning, 'scatter', '00.frames'), 'x');
     const old = new Date(Date.now() - STALE_STAGING_MS - 60_000);
-    await fs.utimes(stale, old, old);
-    await fs.utimes(other, old, old);
+    for (const dir of [stale, other, longRunning]) {
+      await fs.utimes(dir, old, old);
+    }
 
     await build([{ id: id32(60), rootTxId: id32(61) }]);
 
@@ -354,6 +360,10 @@ describe('buildBand', () => {
     assert.ok(
       left.includes('.band-build-fresh1'),
       'a running build is untouched',
+    );
+    assert.ok(
+      left.includes('.band-build-long1'),
+      'a long-running build, still writing below its top level, is untouched',
     );
     assert.ok(left.includes('not-staging'), 'other directories are untouched');
   });
