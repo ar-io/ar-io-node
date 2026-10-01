@@ -14,6 +14,7 @@ import {
   buildBand,
   BandRecord,
   MAX_HEADER_BYTES,
+  STALE_STAGING_MS,
   Reservoir,
   StagedBand,
 } from './build.js';
@@ -336,6 +337,45 @@ describe('buildBand', () => {
     assert.deepEqual(await listDir(publishDir), [a.id]);
   });
 
+  it('removes staging an interrupted build left a day ago, and leaves a fresh one', async () => {
+    await fs.mkdir(workDir, { recursive: true });
+    const stale = path.join(workDir, '.band-build-stale1');
+    const fresh = path.join(workDir, '.band-build-fresh1');
+    const longRunning = path.join(workDir, '.band-build-long1');
+    const other = path.join(workDir, 'not-staging');
+    for (const dir of [stale, fresh, longRunning, other]) await fs.mkdir(dir);
+    // A build that has run for over a day writes into a subdirectory, which
+    // leaves its staging directory's own mtime old.
+    await fs.mkdir(path.join(longRunning, 'scatter'));
+    await fs.writeFile(path.join(longRunning, 'scatter', '00.frames'), 'x');
+    // A symlink loop inside stale staging: the walk must not follow it.
+    await fs.symlink(stale, path.join(stale, 'loop'));
+    const old = new Date(Date.now() - STALE_STAGING_MS - 60_000);
+    for (const dir of [stale, other, longRunning]) {
+      await fs.utimes(dir, old, old);
+    }
+    await fs.lutimes(path.join(stale, 'loop'), old, old);
+    // And a link out to a directory being written now: followed, it would
+    // make the stale staging look fresh.
+    await fs.symlink(fresh, path.join(stale, 'out'));
+    await fs.lutimes(path.join(stale, 'out'), old, old);
+    await fs.utimes(stale, old, old); // adding the links touched it
+
+    await build([{ id: id32(60), rootTxId: id32(61) }]);
+
+    const left = await listDir(workDir);
+    assert.ok(!left.includes('.band-build-stale1'), 'stale staging removed');
+    assert.ok(
+      left.includes('.band-build-fresh1'),
+      'a running build is untouched',
+    );
+    assert.ok(
+      left.includes('.band-build-long1'),
+      'a long-running build, still writing below its top level, is untouched',
+    );
+    assert.ok(left.includes('not-staging'), 'other directories are untouched');
+  });
+
   it('refuses a workDir inside publishDir', async () => {
     await assert.rejects(
       build([{ id: id32(35), rootTxId: id32(1) }], {
@@ -425,6 +465,21 @@ describe('buildBand', () => {
     assert.equal(second.unchanged, true);
     assert.equal((await fs.stat(manifestPath)).mtimeMs, before.mtimeMs);
     assert.deepEqual(await listDir(publishDir), [first.id]);
+  });
+
+  it('skips the check before publishing when an identical band is already published', async () => {
+    const records = [{ id: id32(70), rootTxId: id32(71) }];
+    await build(records);
+    let checks = 0;
+    const again = await build(records, {
+      beforePublish: async () => {
+        checks += 1;
+        return { publish: true };
+      },
+    });
+
+    assert.equal(again.unchanged, true);
+    assert.equal(checks, 0, 'no header check for a band already published');
   });
 
   it('builds without publishing on a dry run, and leaves no scratch files', async () => {
