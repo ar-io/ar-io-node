@@ -651,6 +651,12 @@ export async function buildBand({
       },
     );
     if (occupied) {
+      // Another build of the same id may have published between the check
+      // above and this one.
+      if (await isBand()) {
+        log.info('Identical band already published', { id });
+        return { ...result, dir: target, published: false, unchanged: true };
+      }
       throw new Error(
         `${target} exists but is not a band (no readable manifest.json); remove it before publishing`,
       );
