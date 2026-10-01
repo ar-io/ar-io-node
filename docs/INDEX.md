@@ -62,6 +62,7 @@ Fast, offline lookups for data item to root transaction mappings.
 |----------|-------------|
 | [Deployment Topologies](deployment-topologies.md) | Proxy edge, shared ClickHouse, partitioning, and app-split topologies |
 | [Index Swarm Sidecar](index-swarm.md) | Publishing index artifacts to other gateways and subscribing to theirs, as an optional sidecar, over HTTP and optionally BitTorrent: the setup and status scripts, quick-start checklists, lookup order, running behind nginx, the torrent engine |
+| [The `ar-io-node` CLI](cli.md) | The gateway's command-line tool: building and checking index bands (`index-band-build`, `index-band-verify`), and every `ar.io` CLI command, run in the core image through `tools/ar-io-node` |
 
 ## Reference
 

@@ -326,7 +326,8 @@ export async function buildBand({
     );
   }
 
-  const staging = await fs.mkdtemp(path.join(workDir, '.band-build-'));
+  await sweepStaleStaging(workDir, log);
+  const staging = await fs.mkdtemp(path.join(workDir, STAGING_PREFIX));
   let writer: Cdb64Writer | undefined;
   try {
     // Scatter, validating as records arrive.
@@ -600,6 +601,25 @@ export async function buildBand({
       sample: sample.items,
     };
 
+    // The id is derived from the content, so a band already published under
+    // it is this band: nothing to check or publish again.
+    const target = path.join(publishDir, id);
+    // A band is a directory whose manifest parses; an empty or torn manifest
+    // (after a crash elsewhere) is not, so it is refused rather than taken
+    // as already published.
+    const isBand = async () =>
+      fs
+        .readFile(path.join(target, 'manifest.json'), 'utf8')
+        .then((text) => {
+          parseManifest(text);
+          return true;
+        })
+        .catch(() => false);
+    if (await isBand()) {
+      log.info('Identical band already published', { id });
+      return { ...result, dir: target, published: false, unchanged: true };
+    }
+
     if (beforePublish !== undefined) {
       const decision = await beforePublish({
         id,
@@ -627,22 +647,6 @@ export async function buildBand({
     }
 
     // Publish, never over an existing band.
-    const target = path.join(publishDir, id);
-    // A band is a directory whose manifest parses; an empty or torn manifest
-    // (after a crash elsewhere) is not, so it is refused rather than taken
-    // as already published.
-    const isBand = async () =>
-      fs
-        .readFile(path.join(target, 'manifest.json'), 'utf8')
-        .then((text) => {
-          parseManifest(text);
-          return true;
-        })
-        .catch(() => false);
-    if (await isBand()) {
-      log.info('Identical band already published', { id });
-      return { ...result, dir: target, published: false, unchanged: true };
-    }
     const occupied = await fs.stat(target).then(
       () => true,
       (error: NodeJS.ErrnoException) => {
@@ -684,6 +688,54 @@ export async function buildBand({
     await writer?.abort().catch(() => undefined);
     await fs.rm(staging, { recursive: true, force: true });
   }
+}
+
+/**
+ * Staging directories older than this are from a build that was killed
+ * (a signal skips the cleanup in `finally`), not one still running.
+ */
+export const STALE_STAGING_MS = 24 * 60 * 60 * 1000;
+
+const STAGING_PREFIX = '.band-build-';
+
+/**
+ * Removes staging directories that interrupted builds left in `workDir`: a
+ * band's scratch copy can be gigabytes. Only ones in which nothing has been
+ * written for {@link STALE_STAGING_MS}, so a build running beside this one is
+ * left alone, however long it has run: it writes into subdirectories, which
+ * doesn't touch the staging directory's own mtime, so the newest mtime in the
+ * whole tree is what counts.
+ */
+async function sweepStaleStaging(workDir: string, log: Logger): Promise<void> {
+  const entries = await fs.readdir(workDir).catch(() => [] as string[]);
+  const now = Date.now();
+  for (const name of entries) {
+    if (!name.startsWith(STAGING_PREFIX)) continue;
+    const dir = path.join(workDir, name);
+    const newest = await newestMtimeMs(dir);
+    if (newest === undefined || now - newest < STALE_STAGING_MS) continue;
+    log.warn('Removing a staging directory an interrupted build left', { dir });
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The newest mtime of a directory and everything in it (a few hundred files).
+ * `lstat`, so a symlink is a leaf: the walk never follows one out of the tree
+ * or round a loop.
+ */
+async function newestMtimeMs(dir: string): Promise<number | undefined> {
+  const stat = await fs.lstat(dir).catch(() => undefined);
+  if (stat === undefined) return undefined;
+  let newest = stat.mtimeMs;
+  if (stat.isDirectory()) {
+    const names = await fs.readdir(dir).catch(() => [] as string[]);
+    for (const name of names) {
+      const child = await newestMtimeMs(path.join(dir, name));
+      if (child !== undefined && child > newest) newest = child;
+    }
+  }
+  return newest;
 }
 
 /** Flushes a file or directory to disk (directories so renames persist). */

@@ -180,9 +180,16 @@ export async function checkBandHeaders({
   if (wrong.length > 0) {
     reasons.push(`${wrong.length} of ${checked} checked entries are wrong`);
   }
-  if (checked > 0 && ok / checked < minOkRatio) {
+  // When entries are wrong, that is the reason; the pass ratio adds nothing.
+  if (wrong.length === 0 && checked > 0 && ok / checked < minOkRatio) {
+    // Say why: an entry the gateway couldn't serve isn't a wrong one, and
+    // the usual cause is a gateway that has to fetch the roots itself.
+    const unchecked =
+      errors.length > 0
+        ? `; ${errors.length} could not be read from the gateway (most often: ${mostCommon(errors.map((e) => e.error))}), so try a gateway that has these root transactions`
+        : '';
     reasons.push(
-      `${ok} of ${checked} checked entries passed, under ${Math.round(minOkRatio * 100)}%`,
+      `${ok} of ${checked} checked entries passed, under ${Math.round(minOkRatio * 100)}%${unchecked}`,
     );
   }
 
@@ -195,6 +202,12 @@ export async function checkBandHeaders({
     wrong,
     errors,
   };
+}
+
+function mostCommon(values: string[]): string {
+  const counts = new Map<string, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
 }
 
 /**

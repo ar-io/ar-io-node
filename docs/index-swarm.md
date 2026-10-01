@@ -301,6 +301,13 @@ Build under a `.tmp` name and rename into place: directories ending in
 `.tmp`, or in `.tmp.<pid>` as the partitioned writers name their own build
 directories, are skipped, so a band is never described half-written.
 
+`ar-io-node index-band-build` does this in one step from CSV records: it
+deduplicates (the highest height wins), names the band so its id is unique to
+the publisher and changes with its content, checks a sample of its headers
+against their root transactions, and only then renames it into place, never
+over an existing band. `ar-io-node index-band-verify` runs the same check on
+any band. See [the `ar-io-node` CLI](cli.md).
+
 #### Band metadata
 
 Two optional fields in a band's `manifest.json` `metadata` change how
