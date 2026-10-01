@@ -563,7 +563,7 @@ describe('buildBand merge rules', () => {
     const many = (
       from: number,
       count: number,
-      more: Partial<BandRecord> = {},
+      more: Parameters<typeof row>[3] = {},
     ): BandRecord[] =>
       Array.from({ length: count }, (_, i) =>
         row(from + i, 1, 500, { offset: 1000 + i * 1000, ...more }),
