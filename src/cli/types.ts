@@ -38,6 +38,7 @@ export interface IndexBandBuildCLIOptions extends GlobalCLIOptions {
   publishDir: string;
   workDir: string;
   gatewayUrl?: string;
+  readTimeout?: string;
   skipHeaderCheck?: boolean;
   sampleSize?: string;
   dryRun?: boolean;
@@ -46,5 +47,6 @@ export interface IndexBandBuildCLIOptions extends GlobalCLIOptions {
 export interface IndexBandVerifyCLIOptions extends GlobalCLIOptions {
   bandDir?: string;
   gatewayUrl?: string;
+  readTimeout?: string;
   sampleSize?: string;
 }

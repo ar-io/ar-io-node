@@ -459,6 +459,21 @@ describe('buildBand', () => {
     assert.deepEqual(await listDir(publishDir), [first.id]);
   });
 
+  it('skips the check before publishing when an identical band is already published', async () => {
+    const records = [{ id: id32(70), rootTxId: id32(71) }];
+    await build(records);
+    let checks = 0;
+    const again = await build(records, {
+      beforePublish: async () => {
+        checks += 1;
+        return { publish: true };
+      },
+    });
+
+    assert.equal(again.unchanged, true);
+    assert.equal(checks, 0, 'no header check for a band already published');
+  });
+
   it('builds without publishing on a dry run, and leaves no scratch files', async () => {
     const band = await build([{ id: id32(13), rootTxId: id32(14) }], {
       dryRun: true,

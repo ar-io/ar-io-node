@@ -601,6 +601,25 @@ export async function buildBand({
       sample: sample.items,
     };
 
+    // The id is derived from the content, so a band already published under
+    // it is this band: nothing to check or publish again.
+    const target = path.join(publishDir, id);
+    // A band is a directory whose manifest parses; an empty or torn manifest
+    // (after a crash elsewhere) is not, so it is refused rather than taken
+    // as already published.
+    const isBand = async () =>
+      fs
+        .readFile(path.join(target, 'manifest.json'), 'utf8')
+        .then((text) => {
+          parseManifest(text);
+          return true;
+        })
+        .catch(() => false);
+    if (await isBand()) {
+      log.info('Identical band already published', { id });
+      return { ...result, dir: target, published: false, unchanged: true };
+    }
+
     if (beforePublish !== undefined) {
       const decision = await beforePublish({
         id,
@@ -628,22 +647,6 @@ export async function buildBand({
     }
 
     // Publish, never over an existing band.
-    const target = path.join(publishDir, id);
-    // A band is a directory whose manifest parses; an empty or torn manifest
-    // (after a crash elsewhere) is not, so it is refused rather than taken
-    // as already published.
-    const isBand = async () =>
-      fs
-        .readFile(path.join(target, 'manifest.json'), 'utf8')
-        .then((text) => {
-          parseManifest(text);
-          return true;
-        })
-        .catch(() => false);
-    if (await isBand()) {
-      log.info('Identical band already published', { id });
-      return { ...result, dir: target, published: false, unchanged: true };
-    }
     const occupied = await fs.stat(target).then(
       () => true,
       (error: NodeJS.ErrnoException) => {

@@ -19,7 +19,7 @@ export const optionMap = {
   input: {
     alias: '--input <path>',
     description:
-      'CSV of records: data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_size,height ("-" reads stdin). path must be empty',
+      'CSV of records: data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset,data_item_size,height ("-" reads stdin). path must be empty. Required',
   },
   skipHeader: {
     alias: '--skip-header',
@@ -28,16 +28,17 @@ export const optionMap = {
   publisher: {
     alias: '--publisher <wallet>',
     description:
-      "The publishing gateway's registered wallet, which makes band ids unique to it",
+      "The publishing gateway's registered wallet, which makes band ids unique to it. Required",
   },
   kind: {
     alias: '--kind <kind>',
-    description: 'Band kind, e.g. d (delta), r (recent) or h (history)',
+    description:
+      'Band kind, e.g. d (delta), r (recent) or h (history). Required',
   },
   heightRange: {
     alias: '--height-range <from,to>',
     description:
-      'Block heights the band covers; "tip" as the end for a band that follows the tip',
+      'Block heights the band covers, e.g. 2010500,tip ("tip" for a band that follows the tip). Required',
   },
   supersedes: {
     alias: '--supersedes <ids>',
@@ -61,7 +62,12 @@ export const optionMap = {
   gatewayUrl: {
     alias: '--gateway-url <url>',
     description:
-      'Gateway that range-reads root transactions for the header check (e.g. http://core:4000)',
+      'Gateway the header check range-reads root transactions from: one that holds them, e.g. https://turbo-gateway.com, or http://core:4000 for roots this gateway has',
+  },
+  readTimeout: {
+    alias: '--read-timeout <ms>',
+    description:
+      'How long the header check waits for each root range read (default 30000)',
   },
   skipHeaderCheck: {
     alias: '--skip-header-check',
@@ -78,7 +84,7 @@ export const optionMap = {
   },
   bandDir: {
     alias: '--band-dir <path>',
-    description: 'A built or installed band directory',
+    description: 'A built or installed band directory. Required',
   },
 } satisfies Record<string, CommanderOption>;
 
@@ -95,6 +101,7 @@ export const indexBandBuildOptions: CommanderOption[] = [
   optionMap.publishDir,
   optionMap.workDir,
   optionMap.gatewayUrl,
+  optionMap.readTimeout,
   optionMap.skipHeaderCheck,
   optionMap.sampleSize,
   optionMap.dryRun,
@@ -103,5 +110,6 @@ export const indexBandBuildOptions: CommanderOption[] = [
 export const indexBandVerifyOptions: CommanderOption[] = [
   optionMap.bandDir,
   optionMap.gatewayUrl,
+  optionMap.readTimeout,
   optionMap.sampleSize,
 ];

@@ -118,6 +118,121 @@ It prints the result (`passed`, `checked`, `ok`, and the `wrong` and
 unchecked entries) and exits 1 if the band fails. `--sample-size` sets the
 sample (default 150).
 
+## For scripts and agents
+
+Every `ar-io-node` command is non-interactive and answers in one shape, so a
+script or an agent can drive it without parsing prose.
+
+### The contract
+
+| | Success | Failure |
+| --- | --- | --- |
+| Exit code | `0` | `1` (`130` when interrupted with Ctrl-C) |
+| stdout | Exactly one JSON value, the command's result | Empty |
+| stderr | Log lines (`info:`, `warn:`) only | Log lines, then either one line of error text, or (for a band refused by the header check, or a failed verify) the result as JSON |
+
+- **Read stdout, branch on the exit code.** Never parse stderr for success;
+  log lines may change.
+- `--help`, `--version` and `network-help` print text, not JSON. Each
+  command's `--help` ends with an example and this contract.
+- **No prompts.** Band commands never ask for confirmation and never take a
+  key. (`ar.io` commands that write do prompt unless given
+  `--skip-confirmation`; see the SDK's own help.)
+- **Safe to retry.** A band's id is derived from its content, publisher,
+  kind and heights, so building the same records again gives the same id and
+  reports `"unchanged": true` without writing. A build that fails or is
+  interrupted publishes nothing.
+- **No network** except range reads of root transactions from
+  `--gateway-url` during the header check. Band commands make no Solana RPC
+  calls.
+
+### `index-band-build` result
+
+```json
+{
+  "id": "d-h2010500-tip-f5b1208c-0dac038f25bc",
+  "dir": "data/indexes/published/root-tx-index/d-h2010500-tip-f5b1208c-0dac038f25bc",
+  "published": true,
+  "unchanged": false,
+  "dryRun": false,
+  "records": 4000,
+  "rootOnly": 0,
+  "duplicates": 0,
+  "dropped": 0,
+  "sizeDropped": 0,
+  "heightRange": [2010500, null],
+  "supersedes": [],
+  "contentDigest": "…",
+  "headerCheck": {
+    "passed": true,
+    "reasons": [],
+    "totalRecords": 4000,
+    "checked": 150,
+    "ok": 150,
+    "wrong": [],
+    "errors": []
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `dir` | The band's id, and where it is (`null` on a dry run) |
+| `published` / `unchanged` | `published` when this run published it; `unchanged` when an identical band was already there. A band is in place when either is true |
+| `records` | Entries written. `rootOnly` of them have no offsets; `duplicates` were superseded by a better record for the same ID |
+| `dropped` / `sizeDropped` | Records refused as invalid, and records whose size was dropped while their offsets were kept |
+| `headerCheck` | The check's result; `"already-published"` when an identical band was already there (nothing is checked or written again); `"skipped"` with `--skip-header-check` |
+
+A band the check refuses exits `1` and prints this object on stderr, with
+`published: false` and a `rejected` array of reasons.
+
+### `index-band-verify` result
+
+`{ "bandDir", "passed", "reasons", "totalRecords", "checked", "ok", "wrong", "errors" }`.
+`wrong` lists entries whose header doesn't match (`id`, `reason`); `errors`
+lists entries the gateway couldn't serve (`id`, `error`), which count against
+the 80% pass ratio but are not evidence the band is wrong. Exit `1`, with the
+object on stderr, when `passed` is false.
+
+### Example
+
+```bash
+out=$(./tools/ar-io-node index-band-build --input - --skip-header \
+  --publisher "$WALLET" --kind d --height-range "$FROM,tip" \
+  --gateway-url https://turbo-gateway.com < records.csv) || {
+  echo "band refused or failed; see stderr" >&2; exit 1; }
+id=$(jq -r .id <<<"$out")
+jq -e '.published or .unchanged' <<<"$out" >/dev/null
+```
+
+### Choosing `--gateway-url`
+
+The check range-reads up to 150 root transactions. A gateway that has to
+fetch them from the network itself can time out on many of them, and the
+band is then refused for being under 80% checked, not for being wrong (the
+reason says how many couldn't be read, and why). Use a gateway that already
+holds the roots, typically the one whose index produced the records, or
+`https://turbo-gateway.com`; or raise `--read-timeout`. Measured on
+2026-10-01 with 4,000 recent records: `http://core:4000` on a gateway without
+those roots cached timed out on 42 of 150 reads at the 30 s default.
+
+### Errors and what to do
+
+| stderr says | Cause | Fix |
+| --- | --- | --- |
+| `--input … is required` (or `--publisher`, `--kind`, `--height-range`) | A required option is missing | Pass it |
+| `--gateway-url is required unless --skip-header-check` | No gateway for the check | Pass `--gateway-url`, or `--skip-header-check` to publish unchecked |
+| `--input X cannot be read; through tools/ar-io-node, pipe it on stdin …` | The wrapper mounts only `data/indexes` | `--input - < X`, or put X under `data/indexes` |
+| `Line N: data_item_id is not a 43-character ID (a header line? use --skip-header)` | A header line, or a malformed ID | `--skip-header`, or fix line N |
+| `Line N: nested bundle paths are not supported in bands yet` | The `path` column is set | Leave it empty |
+| `Invalid --height-range: …` | Not `<from>,<to>` or `<from>,tip`, or `to` below `from` | Fix the range |
+| `--publish-dir … is outside data/indexes …` | Through the wrapper, only `data/indexes` is mounted | Use a directory under it |
+| `… checked entries passed, under 80%; N could not be read …` | The gateway couldn't serve enough roots | See [Choosing `--gateway-url`](#choosing---gateway-url) |
+| `N of M checked entries are wrong` | Offsets that don't point at the item's header | Fix the source of the records; don't publish |
+| `… exists but is not a band …` | Something else is at the band's path | Remove it |
+| `workDir … and publishDir … must be on the same filesystem` | The final rename can't cross filesystems | Put both under one mount (the defaults are) |
+| `ar-io-node: … predates this tool` | `CORE_IMAGE_TAG` names an image without the CLI | Upgrade, or set `AR_IO_NODE_CLI_IMAGE` |
+
 ## `ar.io` commands
 
 Any command `ar-io-node` doesn't own runs as the `ar.io` CLI of the

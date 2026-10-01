@@ -55,6 +55,14 @@ applyOptions(
   globalOptions,
 );
 
+/** The output contract every node command keeps, at the end of its help. */
+const CONTRACT = [
+  '',
+  'Output: the result as JSON on stdout, exit 0. On failure stdout is empty and',
+  'the error (or, for a refused band, the full result as JSON) is on stderr,',
+  'exit 1. Logs go to stderr. Safe to rerun. See docs/cli.md.',
+].join('\n');
+
 makeCommand<IndexBandBuildCLIOptions>({
   name: 'index-band-build',
   description:
@@ -64,7 +72,17 @@ makeCommand<IndexBandBuildCLIOptions>({
     (await indexBandCommands()).indexBandBuildCLICommand(options, {
       log: createCliLogger({ debug: options.debug === true }),
     }),
-});
+}).addHelpText(
+  'after',
+  [
+    '',
+    'Example:',
+    '  ar-io-node index-band-build --input - --skip-header --publisher <wallet> \\',
+    '    --kind d --height-range 2010500,tip \\',
+    '    --gateway-url https://turbo-gateway.com < records.csv',
+    CONTRACT,
+  ].join('\n'),
+);
 
 makeCommand<IndexBandVerifyCLIOptions>({
   name: 'index-band-verify',
@@ -74,7 +92,17 @@ makeCommand<IndexBandVerifyCLIOptions>({
     (await indexBandCommands()).indexBandVerifyCLICommand(options, {
       log: createCliLogger({ debug: options.debug === true }),
     }),
-});
+}).addHelpText(
+  'after',
+  [
+    '',
+    'Example:',
+    '  ar-io-node index-band-verify \\',
+    '    --band-dir data/indexes/published/root-tx-index/<band> \\',
+    '    --gateway-url https://turbo-gateway.com',
+    CONTRACT,
+  ].join('\n'),
+);
 
 program
   .command('network-help')

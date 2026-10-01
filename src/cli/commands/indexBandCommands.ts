@@ -193,6 +193,7 @@ export async function indexBandBuildCLICommand(
   const supersedes = stringListFromOptions(options, 'supersedes') ?? [];
   const metadata = parseMetadata(options.metadata);
   const sampleSize = positiveIntegerFromOptions(options, 'sampleSize');
+  const readTimeout = positiveIntegerFromOptions(options, 'readTimeout');
   const check = options.skipHeaderCheck !== true;
   if (check && options.gatewayUrl === undefined && deps.roots === undefined) {
     throw new Error('--gateway-url is required unless --skip-header-check');
@@ -243,7 +244,12 @@ export async function indexBandBuildCLICommand(
       ? {
           beforePublish: async (staged) => {
             const roots =
-              deps.roots ?? gatewayRootSource(options.gatewayUrl as string);
+              deps.roots ??
+              gatewayRootSource(options.gatewayUrl as string, readTimeout);
+            deps.log.info('Checking sampled headers against their roots', {
+              entries: staged.sample.length,
+              gateway: options.gatewayUrl,
+            });
             try {
               headerCheck = await checkBandHeaders({
                 entries: staged.sample,
@@ -276,8 +282,14 @@ export async function indexBandBuildCLICommand(
     heightRange: band.heightRange,
     supersedes: band.supersedes,
     contentDigest: band.contentDigest,
+    // The check's result; or why there is none: an identical band was
+    // already published (nothing to check), or the check was turned off.
     headerCheck:
-      headerCheck !== undefined ? headerCheckJson(headerCheck) : 'skipped',
+      headerCheck !== undefined
+        ? headerCheckJson(headerCheck)
+        : band.unchanged
+          ? 'already-published'
+          : 'skipped',
   };
   if (band.rejected !== undefined) {
     throw { ...output, rejected: band.rejected };
@@ -295,11 +307,17 @@ export async function indexBandVerifyCLICommand(
 ): Promise<JsonSerializable> {
   const bandDir = requiredStringFromOptions(options, 'bandDir');
   const sampleSize = positiveIntegerFromOptions(options, 'sampleSize') ?? 150;
+  const readTimeout = positiveIntegerFromOptions(options, 'readTimeout');
   if (options.gatewayUrl === undefined && deps.roots === undefined) {
     throw new Error('--gateway-url is required');
   }
   const sample = await sampleBandEntries(bandDir, sampleSize);
-  const roots = deps.roots ?? gatewayRootSource(options.gatewayUrl as string);
+  deps.log.info('Checking sampled headers against their roots', {
+    entries: sample.entries.length,
+    gateway: options.gatewayUrl,
+  });
+  const roots =
+    deps.roots ?? gatewayRootSource(options.gatewayUrl as string, readTimeout);
   let result: HeaderCheckResult;
   try {
     result = await checkBandHeaders({ ...sample, openRoot: roots.openRoot });
