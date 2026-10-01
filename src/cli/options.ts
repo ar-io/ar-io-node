@@ -86,6 +86,28 @@ export const optionMap = {
     alias: '--band-dir <path>',
     description: 'A built or installed band directory. Required',
   },
+  source: {
+    alias: '--source <json>',
+    description:
+      'One record source as an INDEX_EXPORT_SOURCES entry, e.g. {"type":"clickhouse"}, {"type":"sqlite"} or {"type":"csv","path":"data/indexes/overlay/bundler"}. Default: this gateway\'s ClickHouse if CLICKHOUSE_URL is set, else its SQLite',
+  },
+  from: {
+    alias: '--from <height>',
+    description: 'Lowest block height to export. Required',
+  },
+  to: {
+    alias: '--to <height>',
+    description: 'Highest block height to export. Required',
+  },
+  force: {
+    alias: '--force',
+    description: 'Replace --output if it exists',
+  },
+  output: {
+    alias: '--output <path>',
+    description:
+      'Where to write the records, as CSV with a header line (read it with index-band-build --skip-header). Required',
+  },
 } satisfies Record<string, CommanderOption>;
 
 export const globalOptions: CommanderOption[] = [optionMap.debug];
@@ -112,4 +134,12 @@ export const indexBandVerifyOptions: CommanderOption[] = [
   optionMap.gatewayUrl,
   optionMap.readTimeout,
   optionMap.sampleSize,
+];
+
+export const indexBandExportOptions: CommanderOption[] = [
+  optionMap.source,
+  optionMap.from,
+  optionMap.to,
+  optionMap.output,
+  optionMap.force,
 ];
