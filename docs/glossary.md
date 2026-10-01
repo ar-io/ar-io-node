@@ -311,6 +311,22 @@ band or bands it replaces. The publisher stops offering those at once and
 deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`; subscribers retire
 them on the same grace, so a lookup in flight never loses its band.
 
+<a id="fold"></a> **Fold** — Building a band from an earlier band's entries
+plus newer rows from the index, so entries the index has since dropped (such
+as ClickHouse rows past their TTL) are kept. A folded entry counts as being at
+its band's top height: a later root beats it, an older re-export does not.
+
+<a id="overlay"></a> **Overlay** — An authoritative record source for band
+building, such as a bundler's own offsets, whose rows beat every other
+source's for the same item within the height range it covers. Overlay rows
+that changed a root or offsets are header-checked in their own sample.
+
+<a id="band-conflict"></a> **Band Conflict** — Two record sources giving the
+same item the same root at the same height and rank but different offsets or
+size. Neither is trusted: the band falls back to the item's best earlier
+entry (a folded one, or an earlier root), or leaves the item out if there is
+none, rather than sign a guess.
+
 ## Data Storage Architecture
 
 <a id="age-floor"></a> **Age Floor** - The minimum age cached data must reach
