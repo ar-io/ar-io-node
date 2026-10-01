@@ -15,7 +15,7 @@ import PrometheusMetrics from 'opossum-prometheus';
 import CircuitBreaker from 'opossum';
 import winston from 'winston';
 
-import { AR_IO_NODE_RELEASE } from './config.js';
+import { AR_IO_NODE_RELEASE } from './release.js';
 import { Semaphore } from './lib/semaphore.js';
 
 // Set default labels for all metrics
