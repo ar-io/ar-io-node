@@ -54,6 +54,13 @@ export interface BandRecord {
    */
   rank?: 0 | 1;
   /**
+   * The top of the height range a rank-1 record's source vouches for (an
+   * overlay file's coverage). A rank-0 record from a source above it, a
+   * re-bundle the overlay couldn't know of, is not outranked: it competes
+   * on height. Folded entries are always outranked.
+   */
+  coverageTo?: number;
+  /**
    * True for an entry read back from an earlier band (see
    * {@link openBandRecords}). Its `height` is that band's top, since bands
    * store no heights. At equal rank and height it beats a record that isn't
@@ -214,6 +221,11 @@ export interface BuiltBand {
   filledOffsets: number;
   /** Overlay entries that changed the root or offsets another source gave. */
   overlayChanged: number;
+  /**
+   * IDs where an overlay record stepped aside for a peer's row above the
+   * overlay's coverage (see {@link BandRecord.coverageTo}).
+   */
+  overlayOutranked: number;
   /** Records dropped as invalid (bad height or offsets). */
   dropped: number;
   /** Records kept without their size, because the size was invalid. */
@@ -242,13 +254,15 @@ const HAS_HEIGHT = 1;
 const HAS_OFFSETS = 2;
 const HAS_SIZE = 4;
 const IS_FOLDED = 8;
+const HAS_COVERAGE = 16;
 const FLAGS_AT = ID_BYTES * 2;
 const NUMBERS_AT = FLAGS_AT + 1;
 const ENTRY_BYTES = NUMBERS_AT + 8 * 4;
 const RANK_AT = ENTRY_BYTES;
 const SOURCE_AT = RANK_AT + 1;
 const TAG_AT = SOURCE_AT + 2;
-const FRAME_BYTES = TAG_AT + 1;
+const COVERAGE_AT = TAG_AT + 1;
+const FRAME_BYTES = COVERAGE_AT + 8;
 const MAX_SOURCES = 0xffff;
 const MAX_TAGS = 0xff;
 const CONFLICT_SAMPLE = 20;
@@ -346,6 +360,19 @@ function toFrame(record: BandRecord, sources: Names, tags: Names): FrameResult {
       `Band record ${toB64Url(record.id)}: a folded record needs the height of its band`,
     );
   }
+  const { coverageTo } = record;
+  if (coverageTo !== undefined) {
+    if (rank !== 1 || !isOffset(coverageTo)) {
+      throw new Error(
+        `Band record ${toB64Url(record.id)}: coverageTo is for rank-1 records, a non-negative integer`,
+      );
+    }
+    if (record.height === undefined || record.height > coverageTo) {
+      throw new Error(
+        `Band record ${toB64Url(record.id)}: height ${String(record.height)} is outside its coverage (to ${coverageTo})`,
+      );
+    }
+  }
   if (record.sampleTag === OVERLAY_CHANGED_TAG) {
     throw new Error(
       `Band record ${toB64Url(record.id)}: the sample tag ${OVERLAY_CHANGED_TAG} is the build's own`,
@@ -356,7 +383,9 @@ function toFrame(record: BandRecord, sources: Names, tags: Names): FrameResult {
   if (height !== undefined && !isOffset(height)) return invalid;
 
   let flags =
-    (height !== undefined ? HAS_HEIGHT : 0) | (folded ? IS_FOLDED : 0);
+    (height !== undefined ? HAS_HEIGHT : 0) |
+    (folded ? IS_FOLDED : 0) |
+    (coverageTo !== undefined ? HAS_COVERAGE : 0);
   let sizeDropped = false;
   if (rootOffset !== undefined || rootDataOffset !== undefined) {
     if (!isOffset(rootOffset) || !isOffset(rootDataOffset)) return invalid;
@@ -383,6 +412,7 @@ function toFrame(record: BandRecord, sources: Names, tags: Names): FrameResult {
   frame.writeUInt8(rank, RANK_AT);
   frame.writeUInt16LE(sources.number(record.source), SOURCE_AT);
   frame.writeUInt8(tags.number(record.sampleTag), TAG_AT);
+  frame.writeDoubleLE(coverageTo ?? 0, COVERAGE_AT);
   return { frame, sizeDropped };
 }
 
@@ -567,6 +597,7 @@ export async function buildBand({
     let rootTies = 0;
     let filledOffsets = 0;
     let overlayChangedCount = 0;
+    let overlayOutranked = 0;
     const conflictSample = new Reservoir<BandConflict>(CONFLICT_SAMPLE, random);
 
     for (const partition of [...streams.keys()].sort((a, b) => a - b)) {
@@ -650,6 +681,7 @@ export async function buildBand({
         if (resolved.conflict) conflicts += 1;
         if (resolved.sameSource) sameSourceDuplicates += 1;
         if (resolved.rootTie) rootTies += 1;
+        if (resolved.overlayOutranked) overlayOutranked += 1;
         if (resolved.entry === undefined) continue;
         duplicates += resolved.kept - 1;
         if (resolved.filled) filledOffsets += 1;
@@ -822,6 +854,7 @@ export async function buildBand({
       rootTies,
       filledOffsets,
       overlayChanged: overlayChangedCount,
+      overlayOutranked,
       dropped,
       sizeDropped,
       heightRange,
@@ -835,6 +868,7 @@ export async function buildBand({
       rootTies,
       filledOffsets,
       overlayChanged: overlayChangedCount,
+      overlayOutranked,
       dropped,
     };
 
@@ -965,6 +999,8 @@ interface ResolvedGroup {
   sameSource: boolean;
   /** The best records named different roots and the tie-break chose. */
   rootTie: boolean;
+  /** An overlay record lost to a peer's later height above its coverage. */
+  overlayOutranked: boolean;
 }
 
 const sameRoot = (bytes: Buffer, a: number, b: number) =>
@@ -1014,15 +1050,15 @@ function resolveGroup(
   conflictSample: Reservoir<BandConflict>,
 ): ResolvedGroup {
   const { bytes, heights, flagsOf, ranks } = frames;
-  const last = group.length - 1;
   const result: ResolvedGroup = {
-    entry: group[last],
+    entry: group[group.length - 1],
     kept: group.length,
     conflict: false,
     filled: false,
     overlayChanged: false,
     sameSource: false,
     rootTie: false,
+    overlayOutranked: false,
   };
   if (group.length === 1) {
     if ((flagsOf[group[0]] & HAS_OFFSETS) !== 0) result.offsetsFrom = group[0];
@@ -1039,6 +1075,32 @@ function resolveGroup(
       }
     }
   }
+
+  // An overlay vouches only for heights up to its coverage: a peer's row
+  // above it is a re-bundle the overlay couldn't know of, and the overlay's
+  // records step aside for the rank-0 ones (sorted first).
+  const all = group;
+  const top = group[group.length - 1];
+  if (ranks[top] > 0 && (flagsOf[top] & HAS_COVERAGE) !== 0) {
+    const coverageTo = bytes.readDoubleLE(top * FRAME_BYTES + COVERAGE_AT);
+    let firstRanked = group.length;
+    let later = false;
+    for (let x = 0; x < group.length; x++) {
+      const i = group[x];
+      if (ranks[i] > 0) {
+        firstRanked = Math.min(firstRanked, x);
+      } else if ((flagsOf[i] & IS_FOLDED) === 0 && heights[i] > coverageTo) {
+        later = true;
+      }
+    }
+    if (later) {
+      group = group.subarray(0, firstRanked);
+      result.overlayOutranked = true;
+      result.entry = group[group.length - 1];
+    }
+  }
+  const last = group.length - 1;
+  const outranked = all.length - group.length;
 
   // The best records: the run at the end sharing the winner's rank and
   // height (contiguous, given the sort order).
@@ -1091,7 +1153,7 @@ function resolveGroup(
     }
     winner = group[usable - 1];
     result.entry = winner;
-    result.kept = usable;
+    result.kept = usable + outranked;
   }
 
   if ((flagsOf[winner] & HAS_OFFSETS) !== 0) {

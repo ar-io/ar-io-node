@@ -318,8 +318,10 @@ its band's top height: a later root beats it, an older re-export does not.
 
 <a id="overlay"></a> **Overlay** — An authoritative record source for band
 building, such as a bundler's own offsets, whose rows beat every other
-source's for the same item within the height range it covers. Overlay rows
-that changed a root or offsets are header-checked in their own sample.
+source's for the same item within the height range it covers. A peer's row
+above that range (a re-bundle the overlay couldn't know of) still competes on
+height. Overlay rows that changed a root or offsets are header-checked in
+their own sample.
 
 <a id="band-conflict"></a> **Band Conflict** — Two record sources giving the
 same item the same root at the same height and rank but different offsets or

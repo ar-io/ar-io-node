@@ -152,6 +152,67 @@ describe('buildBand merge rules', () => {
       assert.ok((await rootOf(band, 1)).equals(id32(12)));
     });
 
+    it('lets a peer re-bundle above an overlay coverage beat the overlay', async () => {
+      // A weekly extract covering up to 2000700 can't know of a re-bundle
+      // at 2000900.
+      const band = await build([
+        row(1, 11, 2000500, {
+          source: 'bundler',
+          rank: 1,
+          coverageTo: 2000700,
+        }),
+        row(1, 12, 2000900, { source: 'gw1' }),
+      ]);
+      assert.ok((await rootOf(band, 1)).equals(id32(12)));
+      assert.equal(band.overlayOutranked, 1);
+      assert.equal(band.overlayChanged, 0);
+      assert.equal(band.duplicates, 1);
+    });
+
+    it('keeps an overlay over peers within its coverage, and over folded entries above it', async () => {
+      const band = await build([
+        // A peer at the coverage top: still outranked.
+        row(1, 11, 2000500, {
+          source: 'bundler',
+          rank: 1,
+          coverageTo: 2000700,
+        }),
+        row(1, 12, 2000700, { source: 'gw1' }),
+        // A folded entry above the coverage: its height is its band's top,
+        // not the item's, so it is outranked.
+        row(2, 21, 2000500, {
+          source: 'bundler',
+          rank: 1,
+          coverageTo: 2000700,
+        }),
+        row(2, 22, 2000900, { folded: true }),
+        // No coverage given: rank alone decides, as before.
+        row(3, 31, 2000500, { source: 'bundler', rank: 1 }),
+        row(3, 32, 2000900, { source: 'gw1' }),
+      ]);
+      assert.ok((await rootOf(band, 1)).equals(id32(11)));
+      assert.ok((await rootOf(band, 2)).equals(id32(21)));
+      assert.ok((await rootOf(band, 3)).equals(id32(31)));
+      assert.equal(band.overlayOutranked, 0);
+    });
+
+    it('checks the peers left after an outranked overlay for conflicts', async () => {
+      const band = await build([
+        row(1, 11, 2000500, {
+          source: 'bundler',
+          rank: 1,
+          coverageTo: 2000700,
+        }),
+        row(1, 12, 2000900, { source: 'gw1', offset: 1000 }),
+        row(1, 12, 2000900, { source: 'gw2', offset: 2000 }),
+        row(1, 13, 2000800, { source: 'gw1' }),
+      ]);
+      assert.equal(band.conflicts, 1);
+      assert.ok((await rootOf(band, 1)).equals(id32(13)));
+      // The overlay row lost; the two conflicting rows are set aside.
+      assert.equal(band.duplicates, 1);
+    });
+
     it('lets the later root win among peer rows', async () => {
       const band = await build([
         row(1, 11, 400, { source: 'gw1' }),
@@ -626,6 +687,21 @@ describe('buildBand merge rules', () => {
       await assert.rejects(
         build([{ ...filler, rank: 2 as 0 }]),
         /rank must be 0 or 1, not 2/,
+      );
+    });
+
+    it('refuses coverage on a non-overlay record, or a height outside it', async () => {
+      await assert.rejects(
+        build([{ ...filler, coverageTo: 500 }]),
+        /coverageTo is for rank-1 records/,
+      );
+      await assert.rejects(
+        build([{ ...filler, rank: 1, height: 600, coverageTo: 500 }]),
+        /outside its coverage/,
+      );
+      await assert.rejects(
+        build([{ ...filler, rank: 1, height: undefined, coverageTo: 500 }]),
+        /outside its coverage/,
       );
     });
 
