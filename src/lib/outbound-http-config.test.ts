@@ -48,4 +48,10 @@ describe('outbound HTTP agents without the gateway configuration', () => {
   it('loads the agents and metrics without loading src/config.ts', () => {
     assert.equal(importFresh('src/lib/http-agent.ts', 'src/metrics.ts'), '');
   });
+
+  it("loads the ar-io-node CLI's band commands without loading src/config.ts", () => {
+    // They range-read roots through HttpByteRangeSource; their JSON output
+    // must not be preceded by config's notice.
+    assert.equal(importFresh('src/cli/commands/indexBandCommands.ts'), '');
+  });
 });

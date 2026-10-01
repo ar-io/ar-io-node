@@ -27,16 +27,10 @@ import type {
 import { applyOptions, makeCommand } from './utils.js';
 
 /**
- * The band commands, loaded only when one runs. The band library reaches the
- * gateway's config (through `http-agent` and `metrics`), which reads the whole
- * environment and, with no `ADMIN_API_KEY`, invents one and prints it. This
- * process serves no admin API, so it sets none; and help, version and every
- * `ar.io` command never load the gateway's config at all.
+ * The band commands, loaded only when one runs, so help, version and every
+ * `ar.io` command start without the band library.
  */
-const indexBandCommands = async () => {
-  process.env.ADMIN_API_KEY ??= '';
-  return import('./commands/indexBandCommands.js');
-};
+const indexBandCommands = async () => import('./commands/indexBandCommands.js');
 
 const sdk = sdkCli();
 
