@@ -132,6 +132,11 @@ describe('checkBandHeaders', () => {
     assert.equal(result.passed, false);
     assert.equal(result.wrong.length, 1);
     assert.match(result.wrong[0].reason, /is item/);
+    // The wrong entry is the reason; no pass-ratio line beside it.
+    assert.deepEqual(
+      result.reasons.filter((reason) => /under 80%/.test(reason)),
+      [],
+    );
   });
 
   it('fails on offsets that cut the header short or run past it', async () => {
@@ -369,6 +374,13 @@ describe('checkBandHeaders', () => {
     assert.deepEqual(result.wrong, []);
     assert.equal(result.errors.length, items.length);
     assert.match(result.reasons.join(' '), /under 80%/);
+    // Says how many couldn't be read, the commonest error, and what to do.
+    assert.match(
+      result.reasons.join(' '),
+      new RegExp(
+        `${items.length} could not be read from the gateway \\(most often: gateway unreachable\\), so try a gateway that has these root transactions`,
+      ),
+    );
   });
 
   it('fails a band smaller than the minimum, or with nothing to check', async () => {
