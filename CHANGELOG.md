@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- The `ar-io-node` CLI (`tools/ar-io-node`, [docs/cli.md](docs/cli.md)),
+  in the style of the `ar.io` CLI from `@ar.io/sdk`: JSON on stdout, errors
+  on stderr, exit 1 on failure. `index-band-build` builds an index band from
+  CSV records, checks a sample of its headers against their root
+  transactions, and publishes it for the index-swarm sidecar;
+  `index-band-verify` runs that check on any band. Every other command runs
+  as the `ar.io` CLI of the SDK the gateway carries. It runs in the core
+  image and mounts only what a command needs.
+
 - `INDEXES_ADVERTISE_FROM_URL` lets a node that serves an operator's
   indexes but does not sign them advertise the signing node's publication in
   `/ar-io/info`. Behind a load balancer, `/ar-io/indexes*` already goes to

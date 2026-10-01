@@ -15,6 +15,18 @@ Set up index sharing (the `index-swarm` sidecar, optionally over BitTorrent) and
 ./tools/index-swarm-status
 ```
 
+### `ar-io-node`
+The gateway's command-line tool, in the style of the `ar.io` CLI from `@ar.io/sdk`: JSON on stdout, errors on stderr, exit 1 on failure. Its own commands build and check index bands (`index-band-build`, `index-band-verify`); any other command runs as the `ar.io` CLI with the same arguments. It runs in the core image (`CORE_IMAGE_TAG`), so it needs only Docker, and mounts only what a command needs. See [docs/cli.md](../docs/cli.md).
+
+**Usage:**
+```bash
+./tools/ar-io-node --help
+./tools/ar-io-node index-band-build --publisher <wallet> --kind d --height-range 2010500,tip \
+  --gateway-url http://core:4000 --input - < records.csv
+./tools/ar-io-node index-band-verify --band-dir data/indexes/published/root-tx-index/<band> --gateway-url http://core:4000
+./tools/ar-io-node get-gateway --address <wallet>
+```
+
 ### `fetch-with-hint`
 Fetches a data item from the gateway using client-supplied root TX ID and nesting path hints. Resolves the root L1 transaction via GraphQL `bundledIn` traversal, then sends the request with `X-AR-IO-Root-Transaction-Id` and `X-AR-IO-Root-Path` headers so the gateway can skip server-side index lookups. Alternatively, can supply pre-computed byte offsets to skip bundle parsing entirely.
 

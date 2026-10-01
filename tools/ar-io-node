@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Run the ar-io-node CLI in the core image (CORE_IMAGE_TAG), so the host needs
+# only Docker. Any command it doesn't own runs as the ar.io CLI from
+# @ar.io/sdk, with the same arguments.
+#
+# Usage (from the gateway's directory, where .env and docker-compose.yaml are):
+#   ./tools/ar-io-node --help
+#   ./tools/ar-io-node index-band-build --publisher <wallet> --kind d \
+#     --height-range 2010500,tip --gateway-url http://core:4000 --input - < records.csv
+#   ./tools/ar-io-node index-band-verify --band-dir data/indexes/published/root-tx-index/<band> \
+#     --gateway-url http://core:4000
+#   ./tools/ar-io-node get-gateway --address <wallet>
+#
+# Mounts only what a command needs: data/indexes for index-band-* commands
+# (built under data/indexes/export, beside the publish directory, so the final
+# rename stays on one filesystem), and for any other command only the
+# directory of a --wallet-file, read-only. Band commands never take a key.
+# Prefer --wallet-file to --private-key: an inline key shows in `ps` and
+# `docker inspect`.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/.."
+
+env_value() {
+  sed -n "s/^$1=//p" .env 2>/dev/null | tail -n1 | tr -d "'\"" || true
+}
+
+TAG="$(env_value CORE_IMAGE_TAG)"
+IMAGE="${AR_IO_NODE_CLI_IMAGE:-ghcr.io/ar-io/ar-io-core:${TAG:-latest}}"
+
+if ! probe="$(docker run --rm --entrypoint /nodejs/bin/node "${IMAGE}" \
+  -e "require('fs').accessSync('/app/dist/cli/cli.js')" 2>&1)"; then
+  if grep -q "no such file or directory, access" <<<"${probe}"; then
+    echo "ar-io-node: ${IMAGE} predates this tool." >&2
+    echo "Set CORE_IMAGE_TAG to a release that has it, or run with AR_IO_NODE_CLI_IMAGE=<image>." >&2
+  else
+    echo "ar-io-node: could not run ${IMAGE}:" >&2
+    echo "${probe}" >&2
+  fi
+  exit 1
+fi
+
+# -i so stdin (records, confirmation prompts) reaches the command; without it
+# the SDK's prompts exit silently. -t only on a terminal.
+DOCKER_ARGS=(--rm -i -w /app --entrypoint /nodejs/bin/node)
+if [[ -t 0 && -t 1 ]]; then
+  DOCKER_ARGS+=(-t)
+fi
+
+ARGS=("$@")
+case "${1:-}" in
+  index-band-*)
+    DATA_PATH="$(env_value INDEX_SWARM_DATA_PATH)"
+    DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
+    mkdir -p "${DATA_PATH}"
+    DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes")
+    # Join the gateway's network, so --gateway-url http://core:4000 works.
+    NETWORK="$(env_value DOCKER_NETWORK_NAME)"
+    NETWORK="${NETWORK:-ar-io-network}"
+    if docker network inspect "${NETWORK}" >/dev/null 2>&1; then
+      DOCKER_ARGS+=(--network "${NETWORK}")
+    fi
+    ;;
+  *)
+    # The ar.io CLI reads a wallet file; mount its directory read-only and
+    # point the argument at it there.
+    for i in "${!ARGS[@]}"; do
+      case "${ARGS[$i]}" in
+        -w|--wallet-file)
+          next=$((i + 1))
+          if [[ -n "${ARGS[$next]:-}" ]]; then
+            WALLET="$(realpath -e "${ARGS[$next]}")"
+            DOCKER_ARGS+=(-v "$(dirname "${WALLET}"):/wallet:ro")
+            ARGS[$next]="/wallet/$(basename "${WALLET}")"
+          fi
+          ;;
+        --wallet-file=*)
+          WALLET="$(realpath -e "${ARGS[$i]#--wallet-file=}")"
+          DOCKER_ARGS+=(-v "$(dirname "${WALLET}"):/wallet:ro")
+          ARGS[$i]="--wallet-file=/wallet/$(basename "${WALLET}")"
+          ;;
+      esac
+    done
+    ;;
+esac
+
+exec docker run "${DOCKER_ARGS[@]}" "${IMAGE}" /app/dist/cli/cli.js \
+  ${ARGS[@]+"${ARGS[@]}"}
