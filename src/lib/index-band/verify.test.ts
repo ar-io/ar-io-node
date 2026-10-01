@@ -26,35 +26,12 @@ import {
   sampleBandEntries,
 } from './verify.js';
 import { scanBundle, ScannedDataItem } from '../ans104-bundle-scan.js';
-import { ByteRangeSource } from '../byte-range-source.js';
 import { fromB64Url } from '../encoding.js';
+import { BufferByteRangeSource } from '../../../test/buffer-byte-range-source.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'checkBandHeaders' });
 const ROOT = 'VmFsaWRSb290VHhJZEZvclRoZUhlYWRlckNoZWNrMDE';
-
-class BufferByteRangeSource implements ByteRangeSource {
-  constructor(private readonly bytes: Buffer) {}
-
-  async read(offset: number, size: number): Promise<Buffer> {
-    if (offset < 0 || offset + size > this.bytes.length) {
-      // As a gateway answers a range the root doesn't have.
-      throw Object.assign(
-        new Error(`Read ${offset}+${size} is outside the root`),
-        {
-          response: { status: 416 },
-        },
-      );
-    }
-    return this.bytes.subarray(offset, offset + size);
-  }
-
-  async close(): Promise<void> {}
-
-  isOpen(): boolean {
-    return true;
-  }
-}
 
 describe('checkBandHeaders', () => {
   let items: ScannedDataItem[];

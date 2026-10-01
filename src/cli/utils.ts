@@ -23,7 +23,7 @@ import type {
   JsonSerializable,
 } from './types.js';
 
-export function stringifyJsonForCLIDisplay(json: unknown): string {
+function stringifyJsonForCLIDisplay(json: unknown): string {
   return JSON.stringify(json, null, 2);
 }
 

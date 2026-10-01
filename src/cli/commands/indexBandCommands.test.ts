@@ -27,30 +27,12 @@ import { scanBundle, ScannedDataItem } from '../../lib/ans104-bundle-scan.js';
 import { ByteRangeSource } from '../../lib/byte-range-source.js';
 import { toB64Url } from '../../lib/encoding.js';
 import type { IndexBandBuildCLIOptions } from '../types.js';
+import { BufferByteRangeSource } from '../../../test/buffer-byte-range-source.js';
 import { createTestLogger } from '../../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'indexBandCommands' });
 const ROOT = 'VmFsaWRSb290VHhJZEZvclRoZUhlYWRlckNoZWNrMDE';
 const PUBLISHER = 'ErEgD7dq1yR9W1CnVG3pEywi3qST7jqWA9nfWtxSGeBc';
-
-class BufferByteRangeSource implements ByteRangeSource {
-  constructor(private readonly bytes: Buffer) {}
-
-  async read(offset: number, size: number): Promise<Buffer> {
-    if (offset < 0 || offset + size > this.bytes.length) {
-      throw Object.assign(new Error('outside the root'), {
-        response: { status: 416 },
-      });
-    }
-    return this.bytes.subarray(offset, offset + size);
-  }
-
-  async close(): Promise<void> {}
-
-  isOpen(): boolean {
-    return true;
-  }
-}
 
 const idOf = (seed: number): string => {
   const id = Buffer.alloc(32, 7);
