@@ -11,6 +11,8 @@
  * input, and hold no index logic of their own.
  */
 import { createReadStream } from 'node:fs';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { Readable } from 'node:stream';
 import { parse } from 'csv-parse';
 import { Logger } from 'winston';
@@ -49,7 +51,9 @@ const ID_BYTES = 32;
 function parseId(value: string, column: string, line: number): Buffer {
   const id = fromB64Url(value.trim());
   if (id.length !== ID_BYTES || toB64Url(id) !== value.trim()) {
-    throw new Error(`Line ${line}: ${column} is not a 43-character ID`);
+    throw new Error(
+      `Line ${line}: ${column} is not a 43-character ID${line === 1 ? ' (a header line? use --skip-header)' : ''}`,
+    );
   }
   return id;
 }
@@ -79,9 +83,12 @@ function parseNumber(
  * that aren't.
  */
 export async function* readBandRecordsCsv(
-  input: Readable,
+  source: Readable | (() => Readable),
   { skipHeader = false }: { skipHeader?: boolean } = {},
 ): AsyncGenerator<BandRecord> {
+  // Opened here, when the band builder starts reading, so the error listener
+  // is attached before the stream can fail.
+  const input = typeof source === 'function' ? source() : source;
   const parser = input.pipe(
     parse({
       columns: false,
@@ -102,15 +109,15 @@ export async function* readBandRecordsCsv(
     if (row.length < 2) {
       throw new Error(`Line ${line}: needs at least data_item_id,root_tx_id`);
     }
+    const record: BandRecord = {
+      id: parseId(row[0], 'data_item_id', line),
+      rootTxId: parseId(row[1], 'root_tx_id', line),
+    };
     if ((row[2] ?? '').trim() !== '') {
       throw new Error(
         `Line ${line}: nested bundle paths are not supported in bands yet`,
       );
     }
-    const record: BandRecord = {
-      id: parseId(row[0], 'data_item_id', line),
-      rootTxId: parseId(row[1], 'root_tx_id', line),
-    };
     const rootOffset = parseNumber(row[3], 'root_data_item_offset', line);
     const rootDataOffset = parseNumber(row[4], 'root_data_offset', line);
     const size = parseNumber(row[5], 'data_item_size', line);
@@ -191,12 +198,34 @@ export async function indexBandBuildCLICommand(
     throw new Error('--gateway-url is required unless --skip-header-check');
   }
 
+  // Through tools/ar-io-node only data/indexes is mounted: a band written
+  // anywhere else would go to the container's own volume and vanish with it.
+  const dataRoot = process.env.AR_IO_NODE_CLI_DATA_DIR;
+  if (dataRoot !== undefined) {
+    for (const [flag, dir] of [
+      ['--publish-dir', options.publishDir],
+      ['--work-dir', options.workDir],
+    ] as const) {
+      const relative = path.relative(dataRoot, path.resolve(dir));
+      if (relative.startsWith('..') || path.isAbsolute(relative)) {
+        throw new Error(
+          `${flag} ${dir} is outside data/indexes, the only directory mounted from the host`,
+        );
+      }
+    }
+  }
+  if (deps.openInput === undefined && input !== '-') {
+    await fs.access(input).catch(() => {
+      throw new Error(
+        `--input ${input} cannot be read${dataRoot !== undefined ? '; through tools/ar-io-node, pipe it on stdin (--input -) or put it under data/indexes' : ''}`,
+      );
+    });
+  }
+
   let headerCheck: HeaderCheckResult | undefined;
   const records = readBandRecordsCsv(
-    (deps.openInput ?? defaultOpenInput)(input),
-    {
-      skipHeader: options.skipHeader === true,
-    },
+    () => (deps.openInput ?? defaultOpenInput)(input),
+    { skipHeader: options.skipHeader === true },
   );
   const band = await buildBand({
     log: deps.log,

@@ -29,7 +29,15 @@ The wrapper mounts only what a command needs:
 | Commands | Mounted |
 | --- | --- |
 | `index-band-*` | `INDEX_SWARM_DATA_PATH` (default `./data/indexes`) at `data/indexes`, and the gateway's Docker network (`DOCKER_NETWORK_NAME`, default `ar-io-network`), so `--gateway-url http://core:4000` reaches the gateway |
-| any `ar.io` command | Nothing, except the directory of a `--wallet-file`, read-only |
+| any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
+
+It runs as your user, so what it writes is yours, and
+`data/indexes/published/<index>` must be writable by you. A band command
+refuses a `--publish-dir` or `--work-dir` outside `data/indexes`: anything
+else would be written inside the container and lost with it. Ctrl-C stops a
+command; a build interrupted that way leaves its scratch copy in
+`data/indexes/export/.band-build-*`, which the next build removes once it is a
+day old (or delete it yourself).
 
 Band commands never take a key. For `ar.io` commands that sign, prefer
 `--wallet-file` to `--private-key`: an inline key is visible in `ps` and
@@ -118,6 +126,7 @@ the same arguments, output and exit code:
 
 ```bash
 ./tools/ar-io-node get-gateway --address <wallet>
+./tools/ar-io-node help get-gateway     # that command's help
 ./tools/ar-io-node network-help
 ```
 

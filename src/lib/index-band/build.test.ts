@@ -14,6 +14,7 @@ import {
   buildBand,
   BandRecord,
   MAX_HEADER_BYTES,
+  STALE_STAGING_MS,
   Reservoir,
   StagedBand,
 } from './build.js';
@@ -334,6 +335,27 @@ describe('buildBand', () => {
     );
     assert.ok([a, b].some((r) => r.unchanged));
     assert.deepEqual(await listDir(publishDir), [a.id]);
+  });
+
+  it('removes staging an interrupted build left a day ago, and leaves a fresh one', async () => {
+    await fs.mkdir(workDir, { recursive: true });
+    const stale = path.join(workDir, '.band-build-stale1');
+    const fresh = path.join(workDir, '.band-build-fresh1');
+    const other = path.join(workDir, 'not-staging');
+    for (const dir of [stale, fresh, other]) await fs.mkdir(dir);
+    const old = new Date(Date.now() - STALE_STAGING_MS - 60_000);
+    await fs.utimes(stale, old, old);
+    await fs.utimes(other, old, old);
+
+    await build([{ id: id32(60), rootTxId: id32(61) }]);
+
+    const left = await listDir(workDir);
+    assert.ok(!left.includes('.band-build-stale1'), 'stale staging removed');
+    assert.ok(
+      left.includes('.band-build-fresh1'),
+      'a running build is untouched',
+    );
+    assert.ok(left.includes('not-staging'), 'other directories are untouched');
   });
 
   it('refuses a workDir inside publishDir', async () => {

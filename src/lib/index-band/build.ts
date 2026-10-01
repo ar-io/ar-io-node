@@ -326,7 +326,8 @@ export async function buildBand({
     );
   }
 
-  const staging = await fs.mkdtemp(path.join(workDir, '.band-build-'));
+  await sweepStaleStaging(workDir, log);
+  const staging = await fs.mkdtemp(path.join(workDir, STAGING_PREFIX));
   let writer: Cdb64Writer | undefined;
   try {
     // Scatter, validating as records arrive.
@@ -683,6 +684,32 @@ export async function buildBand({
   } finally {
     await writer?.abort().catch(() => undefined);
     await fs.rm(staging, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Staging directories older than this are from a build that was killed
+ * (a signal skips the cleanup in `finally`), not one still running.
+ */
+export const STALE_STAGING_MS = 24 * 60 * 60 * 1000;
+
+const STAGING_PREFIX = '.band-build-';
+
+/**
+ * Removes staging directories that interrupted builds left in `workDir`: a
+ * band's scratch copy can be gigabytes. Only ones untouched for
+ * {@link STALE_STAGING_MS}, so a build running beside this one is left alone.
+ */
+async function sweepStaleStaging(workDir: string, log: Logger): Promise<void> {
+  const entries = await fs.readdir(workDir).catch(() => [] as string[]);
+  const now = Date.now();
+  for (const name of entries) {
+    if (!name.startsWith(STAGING_PREFIX)) continue;
+    const dir = path.join(workDir, name);
+    const stat = await fs.stat(dir).catch(() => undefined);
+    if (stat === undefined || now - stat.mtimeMs < STALE_STAGING_MS) continue;
+    log.warn('Removing a staging directory an interrupted build left', { dir });
+    await fs.rm(dir, { recursive: true, force: true });
   }
 }
 

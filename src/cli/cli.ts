@@ -19,7 +19,7 @@ import {
   indexBandBuildOptions,
   indexBandVerifyOptions,
 } from './options.js';
-import { isPassthrough, runSdkCli, sdkCli } from './passthrough.js';
+import { passthroughArgs, runSdkCli, sdkCli } from './passthrough.js';
 import type {
   IndexBandBuildCLIOptions,
   IndexBandVerifyCLIOptions,
@@ -81,10 +81,10 @@ program
   .description('List the ar.io CLI commands this tool runs for you')
   .action(async () => process.exit(await runSdkCli(['--help'])));
 
-const args = process.argv.slice(2);
 const own = new Set(program.commands.map((command) => command.name()));
-if (isPassthrough(args, own)) {
-  process.exit(await runSdkCli(args));
+const sdkArgs = passthroughArgs(process.argv.slice(2), own);
+if (sdkArgs !== undefined) {
+  process.exit(await runSdkCli(sdkArgs));
 } else {
   program.parse(process.argv);
 }

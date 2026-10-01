@@ -44,21 +44,31 @@ export function sdkCli(): { version: string; bin: string } {
 }
 
 /**
- * Whether argv (after the node and script paths) names a command this binary
- * doesn't own, and so belongs to the SDK. Options before the command, and
- * commander's own help and version flags, stay with `ar-io-node`.
+ * The arguments to hand the `ar.io` CLI when argv (after the node and script
+ * paths) names a command this binary doesn't own, or undefined when it's
+ * ours. The command is the first argument that isn't an option, so global
+ * flags before it (`--debug get-gateway`) work as they do under `ar.io`, and
+ * `help <ar.io command>` asks that command for its help.
  */
-export function isPassthrough(
+export function passthroughArgs(
   args: string[],
   ownCommands: ReadonlySet<string>,
-): boolean {
-  const command = args[0];
-  return (
-    command !== undefined &&
-    !command.startsWith('-') &&
-    command !== 'help' &&
-    !ownCommands.has(command)
-  );
+): string[] | undefined {
+  const at = args.findIndex((arg) => !arg.startsWith('-'));
+  if (at === -1) return undefined;
+  const command = args[at];
+  if (command === 'help') {
+    const topic = args[at + 1];
+    if (
+      topic === undefined ||
+      topic.startsWith('-') ||
+      ownCommands.has(topic)
+    ) {
+      return undefined;
+    }
+    return [...args.slice(0, at), topic, '--help'];
+  }
+  return ownCommands.has(command) ? undefined : args;
 }
 
 /** Runs the SDK's `ar.io` CLI with `args`, resolving to its exit code. */

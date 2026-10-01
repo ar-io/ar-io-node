@@ -119,6 +119,13 @@ describe('readBandRecordsCsv', () => {
     await assert.rejects(read(`${idOf(1)}`), /Line 1: needs at least/);
   });
 
+  it('points at --skip-header when the first line looks like a header', async () => {
+    await assert.rejects(
+      read(`data_item_id,root_tx_id,path\n${idOf(1)},${idOf(2)}`),
+      /Line 1: data_item_id .*--skip-header/,
+    );
+  });
+
   it('refuses nested bundle paths, which bands do not carry yet', async () => {
     await assert.rejects(
       read(`${idOf(1)},${idOf(2)},"[""${idOf(3)}""]"`),
@@ -282,6 +289,44 @@ describe('index-band-build and index-band-verify', () => {
     )) as Record<string, any>;
     assert.equal(built.published, true);
     assert.equal(built.headerCheck, 'skipped');
+  });
+
+  it('fails with one line, not a crash, when the input file is missing', async () => {
+    await assert.rejects(
+      indexBandBuildCLICommand(
+        options('missing-input', {
+          input: path.join(tempDir, 'nope.csv'),
+          skipHeaderCheck: true,
+        }),
+        { log },
+      ),
+      /--input .*nope\.csv cannot be read/,
+    );
+  });
+
+  it('refuses to write outside the directory the wrapper mounts', async () => {
+    const mounted = path.join(tempDir, 'mounted');
+    process.env.AR_IO_NODE_CLI_DATA_DIR = mounted;
+    try {
+      await assert.rejects(
+        indexBandBuildCLICommand(
+          options('elsewhere', { skipHeaderCheck: true }),
+          { log, openInput: () => Readable.from([csv(correct)]) },
+        ),
+        /--publish-dir .* is outside data\/indexes/,
+      );
+      const built = (await indexBandBuildCLICommand(
+        {
+          ...options('inside', { skipHeaderCheck: true }),
+          publishDir: path.join(mounted, 'published', 'root-tx-index'),
+          workDir: path.join(mounted, 'export'),
+        },
+        { log, openInput: () => Readable.from([csv(correct)]) },
+      )) as Record<string, any>;
+      assert.equal(built.published, true);
+    } finally {
+      delete process.env.AR_IO_NODE_CLI_DATA_DIR;
+    }
   });
 
   it('requires the band options, by their flag names', async () => {

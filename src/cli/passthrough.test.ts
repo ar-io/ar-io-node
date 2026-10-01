@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { isPassthrough, runSdkCli, sdkCli } from './passthrough.js';
+import { passthroughArgs, runSdkCli, sdkCli } from './passthrough.js';
 
 describe('passthrough to the ar.io CLI', () => {
   const own = new Set([
@@ -18,16 +18,39 @@ describe('passthrough to the ar.io CLI', () => {
     'network-help',
   ]);
 
-  it('sends only commands this tool does not own', () => {
-    assert.equal(isPassthrough(['get-gateway', '--address', 'x'], own), true);
+  it('sends only commands this tool does not own, with their arguments', () => {
+    const args = ['get-gateway', '--address', 'x'];
+    assert.deepEqual(passthroughArgs(args, own), args);
     assert.equal(
-      isPassthrough(['index-band-build', '--input', '-'], own),
-      false,
+      passthroughArgs(['index-band-build', '--input', '-'], own),
+      undefined,
     );
-    assert.equal(isPassthrough(['help', 'get-gateway'], own), false);
-    assert.equal(isPassthrough(['--help'], own), false);
-    assert.equal(isPassthrough(['--version'], own), false);
-    assert.equal(isPassthrough([], own), false);
+    assert.equal(passthroughArgs(['--help'], own), undefined);
+    assert.equal(passthroughArgs(['--version'], own), undefined);
+    assert.equal(passthroughArgs([], own), undefined);
+  });
+
+  it('finds the command after global flags, as ar.io does', () => {
+    const args = ['--debug', 'get-gateway', '--address', 'x'];
+    assert.deepEqual(passthroughArgs(args, own), args);
+    assert.equal(
+      passthroughArgs(['--debug', 'index-band-verify'], own),
+      undefined,
+    );
+  });
+
+  it('turns help for an ar.io command into that command asking for its help', () => {
+    assert.deepEqual(passthroughArgs(['help', 'get-gateway'], own), [
+      'get-gateway',
+      '--help',
+    ]);
+    assert.deepEqual(passthroughArgs(['--debug', 'help', 'get-gateway'], own), [
+      '--debug',
+      'get-gateway',
+      '--help',
+    ]);
+    assert.equal(passthroughArgs(['help', 'index-band-build'], own), undefined);
+    assert.equal(passthroughArgs(['help'], own), undefined);
   });
 
   it('finds the ar.io bin of the SDK the node depends on', () => {

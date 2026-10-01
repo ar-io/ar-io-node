@@ -19,21 +19,32 @@
 #
 # Mounts only what a command needs: data/indexes for index-band-* commands
 # (built under data/indexes/export, beside the publish directory, so the final
-# rename stays on one filesystem), and for any other command only the
-# directory of a --wallet-file, read-only. Band commands never take a key.
+# rename stays on one filesystem), and for any other command only the file a
+# --wallet-file names, read-only. Band commands never take a key. It runs as
+# your user, so data/indexes/published/<index> must be writable by you.
 # Prefer --wallet-file to --private-key: an inline key shows in `ps` and
 # `docker inspect`.
 
 set -euo pipefail
 
+# Paths given on the command line are relative to where it was run.
+CALLER_DIR="$(pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}/.."
 
-env_value() {
-  sed -n "s/^$1=//p" .env 2>/dev/null | tail -n1 | tr -d "'\"" || true
+# A setting as compose sees it: the shell's value, else the last one in .env
+# (quotes and an inline comment stripped, as in tools/index-swarm-setup).
+setting() {
+  if [[ -n "${!1:-}" ]]; then
+    echo "${!1}"
+    return
+  fi
+  [[ -f .env ]] || return 0
+  sed -n "s/^$1=//p" .env | tail -n1 |
+    sed -E "s/^'(.*)'[[:space:]]*$/\1/; t; s/^\"(.*)\"[[:space:]]*$/\1/; t; s/[[:space:]]+#.*$//"
 }
 
-TAG="$(env_value CORE_IMAGE_TAG)"
+TAG="$(setting CORE_IMAGE_TAG)"
 IMAGE="${AR_IO_NODE_CLI_IMAGE:-ghcr.io/ar-io/ar-io-core:${TAG:-latest}}"
 
 if ! probe="$(docker run --rm --entrypoint /nodejs/bin/node "${IMAGE}" \
@@ -48,44 +59,68 @@ if ! probe="$(docker run --rm --entrypoint /nodejs/bin/node "${IMAGE}" \
   exit 1
 fi
 
-# -i so stdin (records, confirmation prompts) reaches the command; without it
-# the SDK's prompts exit silently. -t only on a terminal.
-DOCKER_ARGS=(--rm -i -w /app --entrypoint /nodejs/bin/node)
-if [[ -t 0 && -t 1 ]]; then
+# --init so Ctrl-C and SIGTERM reach the command (node as PID 1 ignores
+# them); --user so what it writes belongs to you, as with index-swarm-setup;
+# -i so stdin (records, confirmation prompts) reaches it, since without it the
+# SDK's prompts exit silently; -t only when all three streams are a terminal.
+DOCKER_ARGS=(--rm -i --init --no-healthcheck --user "$(id -u):$(id -g)"
+  -w /app --entrypoint /nodejs/bin/node)
+if [[ -t 0 && -t 1 && -t 2 ]]; then
   DOCKER_ARGS+=(-t)
 fi
 
+# The command is the first argument that isn't an option, as the CLI sees it.
+COMMAND=""
+for arg in "$@"; do
+  if [[ "${arg}" != -* ]]; then
+    COMMAND="${arg}"
+    break
+  fi
+done
+
 ARGS=("$@")
-case "${1:-}" in
+case "${COMMAND}" in
   index-band-*)
-    DATA_PATH="$(env_value INDEX_SWARM_DATA_PATH)"
+    DATA_PATH="$(setting INDEX_SWARM_DATA_PATH)"
     DATA_PATH="$(realpath -m "${DATA_PATH:-./data/indexes}")"
     mkdir -p "${DATA_PATH}"
-    DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes")
+    # The CLI refuses to write anywhere this mount doesn't cover.
+    DOCKER_ARGS+=(-v "${DATA_PATH}:/app/data/indexes"
+      -e AR_IO_NODE_CLI_DATA_DIR=/app/data/indexes)
     # Join the gateway's network, so --gateway-url http://core:4000 works.
-    NETWORK="$(env_value DOCKER_NETWORK_NAME)"
+    NETWORK="$(setting DOCKER_NETWORK_NAME)"
     NETWORK="${NETWORK:-ar-io-network}"
     if docker network inspect "${NETWORK}" >/dev/null 2>&1; then
       DOCKER_ARGS+=(--network "${NETWORK}")
     fi
     ;;
   *)
-    # The ar.io CLI reads a wallet file; mount its directory read-only and
+    # The ar.io CLI reads a wallet file: mount just that file, read-only, and
     # point the argument at it there.
+    mounts=0
+    mount_wallet() {
+      local file
+      file="$(cd "${CALLER_DIR}" && realpath -e -- "$1")"
+      mounts=$((mounts + 1))
+      DOCKER_ARGS+=(-v "${file}:/wallet/${mounts}/$(basename "${file}"):ro")
+      WALLET_IN_CONTAINER="/wallet/${mounts}/$(basename "${file}")"
+    }
     for i in "${!ARGS[@]}"; do
       case "${ARGS[$i]}" in
         -w|--wallet-file)
           next=$((i + 1))
           if [[ -n "${ARGS[$next]:-}" ]]; then
-            WALLET="$(realpath -e "${ARGS[$next]}")"
-            DOCKER_ARGS+=(-v "$(dirname "${WALLET}"):/wallet:ro")
-            ARGS[$next]="/wallet/$(basename "${WALLET}")"
+            mount_wallet "${ARGS[$next]}"
+            ARGS[$next]="${WALLET_IN_CONTAINER}"
           fi
           ;;
         --wallet-file=*)
-          WALLET="$(realpath -e "${ARGS[$i]#--wallet-file=}")"
-          DOCKER_ARGS+=(-v "$(dirname "${WALLET}"):/wallet:ro")
-          ARGS[$i]="--wallet-file=/wallet/$(basename "${WALLET}")"
+          mount_wallet "${ARGS[$i]#--wallet-file=}"
+          ARGS[$i]="--wallet-file=${WALLET_IN_CONTAINER}"
+          ;;
+        -w?*)
+          mount_wallet "${ARGS[$i]#-w}"
+          ARGS[$i]="-w${WALLET_IN_CONTAINER}"
           ;;
       esac
     done
