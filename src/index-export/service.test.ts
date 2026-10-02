@@ -22,6 +22,7 @@ import type { BandRecord } from '../lib/index-band/build.js';
 import { BufferByteRangeSource } from '../../test/buffer-byte-range-source.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import type { ExportConfig } from './config.js';
+import { CsvOverlaySource } from './kinds/root-tx/sources/csv.js';
 import { newSourceStats, RecordSource } from './kinds/root-tx/sources/rows.js';
 import { ExportLock } from './lock.js';
 import {
@@ -543,6 +544,9 @@ describe('ExportService', () => {
     assert.match(report.failed?.message ?? '', /adopt them first/);
     assert.equal(runResult(report), 'rejected');
     assert.deepEqual(report.steps, []);
+    const state = await exportState();
+    assert.equal(state.retry, undefined);
+    assert.deepEqual(state.lastRejection?.reasons[0], 'foreign_bands');
   });
 
   it('resumes an interrupted bootstrap above the history it published', async () => {
@@ -569,6 +573,101 @@ describe('ExportService', () => {
         ['r', [2000, 2600], 'published'],
       ],
     );
+  });
+
+  it('rejects a band whose every record was invalid, but skips a range with no data', async () => {
+    // Offsets that frame no header: the band library drops them all.
+    records = records.map((r) => ({
+      ...r,
+      rootDataOffset: r.rootOffset,
+    }));
+    const report = await service().runOnce();
+    assert.equal(report.steps[0].role, 'h');
+    assert.equal(report.steps[0].result, 'rejected');
+    assert.equal(report.steps[0].reason, 'build');
+    // A range nobody indexed is nothing to cover.
+    records = [];
+    const empty = await service({ startHeight: 0 }).runOnce({ dryRun: true });
+    assert.equal(empty.steps[0].result, 'skipped');
+    assert.equal(empty.steps[0].reason, 'empty');
+  });
+
+  it('starts a new recent chain after a freeze, naming none of the old one', async () => {
+    // r [2000, 2600], folded to [2000, 2999], which freezes it.
+    await service().runOnce();
+    now += 8 * DAY;
+    for (const record of records.slice(2200)) {
+      record.height = (record.height ?? 0) + 500;
+    }
+    gw1.top = 3200;
+    const freeze = await service().runOnce();
+    assert.equal(freeze.steps[0].role, 'r');
+    assert.deepEqual(freeze.steps[0].heightRange, [2000, 2999]);
+    const frozenId = freeze.steps[0].band?.id;
+    assert.deepEqual(
+      (await exportState()).supersededHistory?.r,
+      [],
+      'a freeze ends the r chain',
+    );
+    // Even with history present, a new r above a frozen one names none of it.
+    await updateIndexState(
+      path.join(dir, 'export', 'state.json'),
+      'root-tx-index',
+      (state) => {
+        state.supersededHistory = { ...state.supersededHistory, r: ['r-old'] };
+      },
+    );
+    // A week on, a new r starts above the frozen one: it supersedes
+    // nothing, not the chain the frozen band ended.
+    now += 8 * DAY;
+    const next = await service().runOnce();
+    const fresh = next.steps.find((s) => s.role === 'r');
+    assert.deepEqual(fresh?.heightRange, [3000, 3200]);
+    assert.deepEqual(fresh?.band?.supersedes, []);
+    assert.ok((await live()).some((b) => b.id === frozenId));
+  });
+
+  it('prunes overlay files a frozen band holds, a fold after it froze', async () => {
+    const overlay = path.join(dir, 'overlay');
+    await fs.mkdir(overlay);
+    const sources = () => [
+      { source: gw1, optional: false },
+      { source: new CsvOverlaySource('bundler', overlay), optional: false },
+    ];
+    await service({}, sources).runOnce();
+    // Files written before the freeze: one wholly below the frozen top less
+    // the overlap, one reaching into it.
+    await fs.writeFile(path.join(overlay, '2000-2400.csv'), '');
+    await fs.writeFile(path.join(overlay, '2600-2700.csv'), '');
+    const old = new Date(Date.now() - 3600_000);
+    for (const name of ['2000-2400.csv', '2600-2700.csv']) {
+      await fs.utimes(path.join(overlay, name), old, old);
+    }
+    now += 8 * DAY;
+    for (const record of records.slice(2200)) {
+      record.height = (record.height ?? 0) + 500;
+    }
+    gw1.top = 3200;
+    const freeze = await service({}, sources).runOnce();
+    assert.deepEqual(freeze.steps[0].heightRange, [2000, 2999]);
+    // Date the frozen band by the service's clock.
+    const frozen = (await live()).find((b) => b.role === 'r') as OwnBand;
+    const manifestPath = path.join(frozen.dir, 'manifest.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    manifest.createdAt = new Date(now).toISOString();
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+
+    now += DAY;
+    await service({}, sources).runOnce();
+    assert.equal(
+      (await fs.readdir(overlay)).length,
+      2,
+      'too soon after the freeze',
+    );
+
+    now += 7 * DAY;
+    await service({}, sources).runOnce();
+    assert.deepEqual(await fs.readdir(overlay), ['2600-2700.csv']);
   });
 
   it('publishes a small history band rather than leave its heights uncovered', async () => {

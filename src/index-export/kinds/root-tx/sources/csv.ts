@@ -124,16 +124,24 @@ export class CsvOverlaySource implements RecordSource {
   }
 
   /**
-   * Deletes the files whose whole coverage lies within `[from, to]`: heights
-   * a frozen band holds, which nothing reads again. The service passes a
-   * range a fold behind, below the overlap a delta reads. Returns their
-   * names.
+   * Deletes the files whose whole coverage lies within `[from, to]` and that
+   * were last written before `writtenBefore` (ms): heights a frozen band
+   * holds, from files the band was built from. A file written or replaced
+   * after the band was built was never read into it, so it stays. Returns
+   * their names.
    */
-  async prune(from: number, to: number): Promise<string[]> {
+  async prune(
+    from: number,
+    to: number,
+    writtenBefore: number,
+  ): Promise<string[]> {
     const pruned: string[] = [];
     for (const file of await this.files()) {
       if (file.from < from || file.to > to) continue;
-      await fs.rm(path.join(this.dir, file.name), { force: true });
+      const filePath = path.join(this.dir, file.name);
+      const stat = await fs.stat(filePath).catch(() => undefined);
+      if (stat === undefined || stat.mtimeMs >= writtenBefore) continue;
+      await fs.rm(filePath, { force: true });
       pruned.push(file.name);
     }
     return pruned;

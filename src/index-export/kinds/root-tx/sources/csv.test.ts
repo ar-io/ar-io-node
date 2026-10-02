@@ -163,18 +163,24 @@ describe('CsvOverlaySource', () => {
     assert.equal(await source.stableHeight(), 250);
   });
 
-  it('prunes only files wholly within the range', async () => {
+  it('prunes files wholly within the range written before the band, and no others', async () => {
     await write('50-99.csv', [line(1, 60)]);
     await write('100-199.csv', [line(2, 150)]);
     await write('200-299.csv', [line(3, 250)]);
     await write('300-399.csv', [line(4, 350)]);
     await write('scratch.csv.tmp', []);
+    const builtAt = Date.now();
+    const before = new Date(builtAt - 3600_000);
+    for (const name of ['50-99.csv', '100-199.csv', '300-399.csv']) {
+      await fs.utimes(path.join(dir, name), before, before);
+    }
+    // 200-299.csv was replaced after the band was built: never read into it.
+    const after = new Date(builtAt + 60_000);
+    await fs.utimes(path.join(dir, '200-299.csv'), after, after);
     const source = new CsvOverlaySource('bundler', dir);
-    assert.deepEqual(await source.prune(100, 350), [
-      '100-199.csv',
-      '200-299.csv',
-    ]);
+    assert.deepEqual(await source.prune(100, 350, builtAt), ['100-199.csv']);
     assert.deepEqual((await fs.readdir(dir)).sort(), [
+      '200-299.csv',
       '300-399.csv',
       '50-99.csv',
       'scratch.csv.tmp',

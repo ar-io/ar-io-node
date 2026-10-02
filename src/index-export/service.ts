@@ -354,11 +354,18 @@ export class ExportService {
       });
       const history = (role: BandRole) => state.supersededHistory?.[role] ?? [];
       const run = async (step: BuildStep, bands: OwnBand[]) => {
-        // Name the bands a subscriber may still hold from before, too.
+        // Name the bands a subscriber may still hold from before, too. Not
+        // for a new r above a frozen one: it covers other heights, and a
+        // subscriber retiring the old chain for it before the frozen band
+        // arrives would lose them.
+        const inherits = step.role !== 'r' || step.fold !== undefined;
         const withHistory: BuildStep = {
           ...step,
           supersedes: [
-            ...new Set([...history(step.role), ...step.supersedes]),
+            ...new Set([
+              ...(inherits ? history(step.role) : []),
+              ...step.supersedes,
+            ]),
           ].slice(-HISTORY_KEPT * 2),
         };
         await this.checkDisk(step, bands);
@@ -367,6 +374,10 @@ export class ExportService {
         report.peakBytes += outcome.peakBytes ?? 0;
         if (outcome.result === 'published') {
           memory.superseded.push({ role: step.role, ids: step.supersedes });
+          // A frozen r ends its chain: the next r starts a new one.
+          if (step.role === 'r' && step.freezes === true) {
+            memory.chainEnded = [...(memory.chainEnded ?? []), 'r'];
+          }
         }
         log.info('Band step finished', {
           kind: outcome.role,
@@ -618,16 +629,22 @@ export class ExportService {
     bandsBefore: OwnBand[],
     ready: OpenedSource[],
   ): Promise<void> {
+    // Frozen, and published at least a fold ago.
     const frozen = bandsBefore.filter(
       (band) =>
         band.role === 'r' &&
         band.to !== null &&
-        band.top - band.from + 1 >= this.deps.config.recentMaxBlocks,
+        band.top - band.from + 1 >= this.deps.config.recentMaxBlocks &&
+        this.now() - Date.parse(band.manifest.createdAt) >= FOLD_INTERVAL_MS,
     );
     for (const { source } of ready) {
       if (!(source instanceof CsvOverlaySource)) continue;
       for (const band of frozen) {
-        const pruned = await source.prune(band.from, band.top - OVERLAP_BLOCKS);
+        const pruned = await source.prune(
+          band.from,
+          band.top - OVERLAP_BLOCKS,
+          Date.parse(band.manifest.createdAt),
+        );
         if (pruned.length > 0) {
           this.deps.log.info('Pruned overlay files a frozen band holds', {
             source: source.name,
@@ -690,6 +707,17 @@ export class ExportService {
       state.supersededHistory = {
         ...state.supersededHistory,
         [role]: [...new Set([...kept, ...ids])].slice(-HISTORY_KEPT),
+      };
+    }
+    for (const role of memory.chainEnded ?? []) {
+      state.supersededHistory = { ...state.supersededHistory, [role]: [] };
+    }
+    if (report.failed?.reason === 'foreign_bands') {
+      // A refusal needs an operator: show it as a rejection.
+      state.lastRejection = {
+        at,
+        role: 'h',
+        reasons: [report.failed.reason, report.failed.message],
       };
     }
     const result = runResult(report);
@@ -805,6 +833,8 @@ interface RunMemory {
   foldRejected?: boolean;
   overlayNewest?: Record<string, string>;
   superseded: Array<{ role: BandRole; ids: string[] }>;
+  /** Roles whose supersede history ends: a frozen r. */
+  chainEnded?: BandRole[];
 }
 
 /** A run that couldn't start, with the reason counted in metrics. */

@@ -295,8 +295,14 @@ export async function buildStepBand(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const empty = /Band would be empty/.test(message);
-    const deterministic = DETERMINISTIC.test(message);
+    // Empty because nothing was given: a range with no data, nothing to
+    // cover. Empty because every record was invalid: the records are wrong,
+    // and the same records would be again.
+    const invalid = /Band would be empty: [1-9]\d* of the records/.test(
+      message,
+    );
+    const empty = !invalid && /Band would be empty/.test(message);
+    const deterministic = invalid || DETERMINISTIC.test(message);
     const outcome: StepOutcome = {
       role: step.role,
       heightRange: step.heightRange,
