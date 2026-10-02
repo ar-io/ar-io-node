@@ -774,18 +774,10 @@ export class Subscriber {
     // An index the publisher has dropped altogether never reaches
     // reconcileIndex, so its bands are retired here.
     const published = new Set(document.indexes.map((index) => index.name));
-    const fallbackKind = this.kinds.values().next().value;
     const installed = (await this.state.load()).installed;
     for (const indexName of Object.keys(installed)) {
       if (published.has(indexName)) continue;
-      // Retired as the kind it was installed as; bands installed before
-      // kinds were recorded are root-TX's, the first kind.
-      const recorded = Object.values(installed[indexName] ?? {}).find(
-        (band) => band.kind !== undefined,
-      )?.kind;
-      const kind =
-        (recorded !== undefined ? this.kinds.get(recorded) : undefined) ??
-        fallbackKind;
+      const kind = this.kindOf(installed[indexName] ?? {});
       if (kind === undefined) continue;
       await this.retireUnoffered(publisher, indexName, new Set(), kind);
     }
@@ -2514,6 +2506,24 @@ export class Subscriber {
     }
   }
 
+  /**
+   * The kind a band was installed as, or, without a band, the one its
+   * index's bands record. Bands installed before kinds were recorded are
+   * root-TX bands: the first kind.
+   */
+  private kindOf(
+    bands: Record<string, InstalledBand>,
+    band?: InstalledBand,
+  ): ArtifactKind | undefined {
+    const recorded =
+      band?.kind ??
+      Object.values(bands).find((b) => b.kind !== undefined)?.kind;
+    return (
+      (recorded !== undefined ? this.kinds.get(recorded) : undefined) ??
+      this.kinds.values().next().value
+    );
+  }
+
   /** Record an install of `band` at `dir`, retiring the copy it replaces. */
   private async recordInstall(
     publisher: string,
@@ -2578,8 +2588,6 @@ export class Subscriber {
    * what the gateway serves; its bands should not outlive that.
    */
   private async retireUnsubscribed(): Promise<void> {
-    const kind = this.kinds.values().next().value;
-    if (kind === undefined) return;
     const state = await this.state.load();
     for (const [indexName, live] of Object.entries(state.installed)) {
       for (const [key, band] of Object.entries({ ...live })) {
@@ -2595,6 +2603,8 @@ export class Subscriber {
         const current = {
           ...((await this.state.load()).installed[indexName] ?? {}),
         };
+        const kind = this.kindOf(current, band);
+        if (kind === undefined) continue;
         const next = await kind.retire({ bandId: key, dir: band.dir, current });
         await this.state.update((draft) => {
           applyBandChanges(draft.installed, indexName, current, next);
@@ -2613,8 +2623,6 @@ export class Subscriber {
 
   /** Retire replaced copies whose overlap has passed. */
   private async retireDue(): Promise<void> {
-    const kind = this.kinds.values().next().value;
-    if (kind === undefined) return;
     const now = this.now().getTime();
     const state = await this.state.load();
     for (const [indexName, live] of Object.entries(state.installed)) {
@@ -2627,6 +2635,8 @@ export class Subscriber {
         const current = {
           ...((await this.state.load()).installed[indexName] ?? {}),
         };
+        const kind = this.kindOf(current, band);
+        if (kind === undefined) continue;
         const next = await kind.retire({ bandId: key, dir: band.dir, current });
         const { retireAfter: _done, ...retired } = next[key];
         next[key] = { ...retired, files: band.files };
@@ -2645,8 +2655,6 @@ export class Subscriber {
    * never mistaken for an orphan.
    */
   private async retireUntracked(): Promise<void> {
-    const kind = this.kinds.values().next().value;
-    if (kind === undefined) return;
     for (const publisher of this.subscribedPublishers) {
       if (!this.reconciledSinceStart.has(publisher)) return;
     }
@@ -2696,6 +2704,9 @@ export class Subscriber {
         const current = {
           ...((await this.state.load()).installed[indexName] ?? {}),
         };
+        // No record of its own: the kind the index's other bands record.
+        const kind = this.kindOf(current);
+        if (kind === undefined) continue;
         const next = await kind.retire({ bandId: key, dir, current });
         await this.state.update((draft) => {
           applyBandChanges(draft.installed, indexName, current, next);
@@ -2809,13 +2820,11 @@ export class Subscriber {
   private async sweep(): Promise<void> {
     const state = await this.state.load();
     for (const [indexName, live] of Object.entries(state.installed)) {
-      // Any kind can sweep, but the entries were installed by one; use the
-      // first that recognises the index rather than guessing.
-      const kind = this.kinds.values().next().value;
-      if (kind === undefined) continue;
       // Snapshot before awaiting: the sweep's deletes take time, and polls
       // install into this map meanwhile.
       const current = { ...live };
+      const kind = this.kindOf(current);
+      if (kind === undefined) continue;
 
       const next = await kind.sweepRetired({
         current,
