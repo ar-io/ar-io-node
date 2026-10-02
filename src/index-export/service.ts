@@ -17,6 +17,7 @@
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import Sqlite from 'better-sqlite3';
 import { Logger } from 'winston';
 
 import type { RootSourceFactory } from '../lib/index-band/verify.js';
@@ -38,6 +39,16 @@ import {
   planFold,
   PlanInput,
 } from './kinds/root-tx/planner.js';
+import { l1RangeOf } from '../lib/parquet-l1/layout.js';
+import {
+  deriveL1Bands,
+  L1_INDEX,
+  L1Outcome,
+  L1PublishedBand,
+  L1Step,
+  planL1,
+  runL1Step,
+} from './kinds/parquet-l1/kind.js';
 import { CsvOverlaySource } from './kinds/root-tx/sources/csv.js';
 import type { RecordSource } from './kinds/root-tx/sources/rows.js';
 import { ExportLock, LOCK_STALE_MS, LockHolder } from './lock.js';
@@ -60,6 +71,13 @@ export const RETRY_FIRST_MS = 15 * 60_000;
 export const RETRY_MAX_MS = 2 * 3600_000;
 /** How long the loop waits after a run that was locked out or threw. */
 export const BLOCKED_WAIT_MS = LOCK_STALE_MS;
+/**
+ * How long a run may keep starting L1 history bands: a whole-chain bootstrap
+ * (about 5 to 7 hours) spreads over runs.
+ */
+export const L1_RUN_BUDGET_MS = 4 * 3600_000;
+/** Dry-run staging this old belongs to a dry run that was killed. */
+const DRY_RUN_STALE_MS = 12 * 3600_000;
 /** Superseded band ids a new band also names, per role. */
 const HISTORY_KEPT = 8;
 
@@ -89,6 +107,10 @@ export interface RunReport {
   /** Set when the run couldn't start (a source, the disk, foreign bands). */
   failed?: { reason: string; message: string };
   steps: StepOutcome[];
+  /** The `parquet-l1` bands built, in order. */
+  l1Steps: L1Outcome[];
+  /** `parquet-l1` bands planned but left for the next run (the time budget). */
+  l1Deferred?: Array<[number, number]>;
   gateUrl: string;
   /** Disk the run's builds needed together (each step's scratch and band). */
   peakBytes: number;
@@ -147,8 +169,9 @@ export function runResult(report: RunReport): string {
     'unchanged',
     'skipped',
   ];
+  const all = [...report.steps, ...(report.l1Steps ?? [])];
   for (const result of order) {
-    if (report.steps.some((step) => step.result === result)) return result;
+    if (all.some((step) => step.result === result)) return result;
   }
   return 'nothing_due';
 }
@@ -161,6 +184,79 @@ const ok = (outcome: StepOutcome) =>
   outcome.result === 'unchanged' ||
   outcome.result === 'skipped' ||
   outcome.result === 'dry_run';
+
+/** The top of this publisher's live L1 bands: `h` the whole ranges, `d` the tip band. */
+function recordL1Bands(bands: L1PublishedBand[]): void {
+  const whole = bands.filter((b) => b.to === l1RangeOf(b.from)[1]);
+  const tip = bands.filter((b) => b.to !== l1RangeOf(b.from)[1]);
+  for (const [kind, set] of [
+    ['h', whole],
+    ['d', tip],
+  ] as const) {
+    if (set.length > 0) {
+      metrics.bandTop.set(
+        { index: L1_INDEX, kind },
+        Math.max(...set.map((b) => b.to)),
+      );
+    }
+  }
+}
+
+/** The state names of the indexes a run builds. */
+function indexNames(kinds: readonly string[]): string[] {
+  return [
+    ...(kinds.includes('root-tx-index') ? [INDEX_NAME] : []),
+    ...(kinds.includes('parquet-l1') ? [L1_INDEX] : []),
+  ];
+}
+
+/** The L1 part's outcome alone. */
+export function l1Result(report: RunReport): string {
+  return report.l1Steps.length === 0
+    ? 'nothing_due'
+    : runResult({ ...report, steps: [], failed: undefined, locked: undefined });
+}
+
+/** Bands are renamed from the work directory into place. */
+async function assertSameFilesystem(
+  workDir: string,
+  publishDir: string,
+): Promise<void> {
+  const [work, publish] = await Promise.all([
+    fs.stat(workDir),
+    fs.stat(publishDir),
+  ]);
+  if (work.dev !== publish.dev) {
+    throw new RunFailure(
+      'disk',
+      `${workDir} and ${publishDir} are on different filesystems; bands are renamed into place`,
+    );
+  }
+}
+
+/** The lowest and highest stable heights in `core.db`; -1 when it holds none. */
+function coreHeights(coreDbPath: string): { lowest: number; top: number } {
+  let db: Sqlite.Database;
+  try {
+    db = new Sqlite(coreDbPath, { readonly: true, fileMustExist: true });
+  } catch (error) {
+    throw new RunFailure(
+      'source',
+      `Cannot open ${coreDbPath} read-only: ${(error as Error).message} (it needs the gateway's -wal and -shm files, so the gateway running)`,
+    );
+  }
+  try {
+    // Separate statements: each is a single index probe.
+    const at = (sql: string) =>
+      (db.prepare(sql).pluck().get() as number | null) ?? -1;
+    return {
+      lowest: at('SELECT MIN(height) FROM stable_blocks'),
+      top: at('SELECT MAX(height) FROM stable_blocks'),
+    };
+  } finally {
+    db.close();
+  }
+}
 
 async function statfsSpace(
   dir: string,
@@ -221,6 +317,21 @@ export class ExportService {
         state.adoptions,
       ),
     );
+    if (this.deps.config.kinds.includes('parquet-l1')) {
+      const l1 = indexState(await loadState(this.stateFile), L1_INDEX);
+      for (const [role, at] of Object.entries(l1.lastSuccess)) {
+        metrics.lastSuccess.set(
+          { index: L1_INDEX, kind: role },
+          Date.parse(at) / 1000,
+        );
+      }
+      recordL1Bands(
+        await deriveL1Bands(
+          this.deps.config.l1PublishDir,
+          this.deps.config.publisher,
+        ),
+      );
+    }
   }
 
   /**
@@ -235,6 +346,7 @@ export class ExportService {
       at: new Date(this.now()).toISOString(),
       dryRun,
       steps: [],
+      l1Steps: [],
       gateUrl: config.headerCheckUrl,
       peakBytes: 0,
     };
@@ -261,18 +373,37 @@ export class ExportService {
       this.lock = acquired.lock;
     }
     try {
+      const { kinds } = this.deps.config;
       if (!dryRun) {
-        await updateIndexState(this.stateFile, INDEX_NAME, (state) => {
-          state.lastRun = { at: report.at, outcome: 'running' };
-        });
+        for (const index of indexNames(kinds)) {
+          await updateIndexState(this.stateFile, index, (state) => {
+            state.lastRun = { at: report.at, outcome: 'running' };
+          });
+        }
       }
       metrics.runInProgress.set(1);
       metrics.runStarted.set(this.now() / 1000);
-      const result = await this.run(report, options, dryRun);
+      // Staging only a run killed before its cleanup can have left: the lock
+      // is this run's.
+      if (!dryRun) await this.clearStaging();
+      const result: RunMemory = kinds.includes('root-tx-index')
+        ? await this.run(report, options, dryRun)
+        : { superseded: [] };
+      if (kinds.includes('parquet-l1')) {
+        await this.runL1(report, options, dryRun);
+      }
       if (!dryRun) {
-        await updateIndexState(this.stateFile, INDEX_NAME, (state) =>
-          this.updateState(state, report, result),
-        );
+        // Each index keeps its own outcome and retry.
+        if (kinds.includes('root-tx-index')) {
+          await updateIndexState(this.stateFile, INDEX_NAME, (state) =>
+            this.updateState(state, report, result),
+          );
+        }
+        if (kinds.includes('parquet-l1')) {
+          await updateIndexState(this.stateFile, L1_INDEX, (state) =>
+            this.updateL1State(state, report),
+          );
+        }
       }
     } finally {
       metrics.runInProgress.set(0);
@@ -301,9 +432,6 @@ export class ExportService {
     try {
       await fs.mkdir(workDir, { recursive: true });
       await fs.mkdir(publishDir, { recursive: true });
-      // Staging only a run killed before its cleanup can have left: the lock
-      // is this run's.
-      if (!dryRun) await this.clearStaging();
 
       opened = await this.deps.openSources();
       const ready = await this.reachableSources(opened);
@@ -532,6 +660,228 @@ export class ExportService {
     }
   }
 
+  /**
+   * The `parquet-l1` part of a run: every whole height range up to the
+   * stable top that isn't published, in order, then the tip band. A history
+   * band isn't started once {@link L1_RUN_BUDGET_MS} has passed, so a
+   * bootstrap of the whole chain spreads over runs; the rest is reported as
+   * deferred. A failed band stops the run's L1 part: bands are imported as a
+   * contiguous run, so later ones wait.
+   */
+  private async runL1(
+    report: RunReport,
+    options: RunOptions,
+    dryRun: boolean,
+  ): Promise<void> {
+    const { config, log } = this.deps;
+    const started = this.now();
+    const workDir = dryRun
+      ? path.join(config.workDir, 'dry-run')
+      : config.workDir;
+    const publishDir =
+      options.keepDir !== undefined
+        ? path.join(options.keepDir, L1_INDEX)
+        : config.l1PublishDir;
+    let current: L1Step | undefined;
+    try {
+      await fs.mkdir(workDir, { recursive: true });
+      await fs.mkdir(publishDir, { recursive: true });
+      const heights = coreHeights(config.coreDbPath);
+      if (heights.lowest > 0) {
+        throw new RunFailure(
+          'incomplete',
+          `core.db starts at height ${heights.lowest}: L1 bands need the chain from height 0, so a gateway that started above it (START_HEIGHT) can't build them`,
+        );
+      }
+      // One below the stable top: the block above anchors a band's last.
+      const top = Math.min(
+        heights.top - 1,
+        options.toHeight ?? Number.MAX_SAFE_INTEGER,
+      );
+      const state = indexState(await loadState(this.stateFile), L1_INDEX);
+      const bands = await deriveL1Bands(config.l1PublishDir, config.publisher);
+      const steps = planL1(bands, top, state.supersededHistory?.d ?? []);
+      const held = state.lastRejection;
+      for (const [i, step] of steps.entries()) {
+        // A rejected band waits for an operator's run, rather than being
+        // rebuilt and rejected every day.
+        if (
+          options.force !== true &&
+          held?.heightRange !== undefined &&
+          held.heightRange[0] === step.heightRange[0] &&
+          held.heightRange[1] === step.heightRange[1]
+        ) {
+          report.l1Steps.push({
+            index: L1_INDEX,
+            role: step.role,
+            heightRange: step.heightRange,
+            result: 'rejected',
+            reason: 'held',
+            details: [
+              `Rejected ${held.at} and waiting for an operator: ${held.reasons.slice(1, 2).join('')}. Repair those blocks in core.db, then run index-export --once`,
+            ],
+            seconds: 0,
+          });
+          break;
+        }
+        if (step.role === 'h' && this.now() - started >= L1_RUN_BUDGET_MS) {
+          report.l1Deferred = steps.slice(i).map((s) => s.heightRange);
+          log.info('L1 bands left for the next run', {
+            count: report.l1Deferred.length,
+          });
+          break;
+        }
+        current = step;
+        await this.checkL1Disk(bands, publishDir);
+        const outcome = await runL1Step(step, {
+          coreDbPath: config.coreDbPath,
+          workDir,
+          publishDir,
+          publisher: config.publisher,
+          dryRun: dryRun && options.keepDir === undefined,
+          log,
+        });
+        report.l1Steps.push(outcome);
+        report.peakBytes +=
+          (outcome.scratchBytes ?? 0) + (outcome.bandBytes ?? 0);
+        if (
+          outcome.result === 'rejected' ||
+          outcome.result === 'couldnt_check'
+        ) {
+          break;
+        }
+      }
+      recordL1Bands(await deriveL1Bands(config.l1PublishDir, config.publisher));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const reason = error instanceof RunFailure ? error.reason : 'source';
+      report.l1Steps.push({
+        index: L1_INDEX,
+        role: current?.role ?? 'h',
+        heightRange: current?.heightRange ?? [0, 0],
+        result: 'couldnt_check',
+        reason,
+        details: [message],
+        seconds: 0,
+      });
+      metrics.runs.inc({
+        index: L1_INDEX,
+        kind: current?.role ?? 'run',
+        result: 'couldnt_check',
+        reason,
+      });
+      log.error('L1 export stopped', { error: message });
+    }
+  }
+
+  /**
+   * Room for one L1 band: its scratch (hex text, about twice the rows' size)
+   * and the band, so about eight times the largest band published, at least
+   * 10 GiB, beyond the same margin as root-TX bands.
+   */
+  private async checkL1Disk(
+    bands: L1PublishedBand[],
+    publishDir: string,
+  ): Promise<void> {
+    const { workDir } = this.deps.config;
+    await assertSameFilesystem(workDir, publishDir);
+    const { free, total } = await (this.deps.diskSpace ?? statfsSpace)(workDir);
+    const margin = Math.max(0.05 * total, 10 * GIB);
+    const largest = await Promise.all(
+      bands.map(async (b) => {
+        let bytes = 0;
+        for (const name of await fs
+          .readdir(b.dir)
+          .catch(() => [] as string[])) {
+          bytes +=
+            (await fs.stat(path.join(b.dir, name)).catch(() => undefined))
+              ?.size ?? 0;
+        }
+        return bytes;
+      }),
+    ).then((sizes) => Math.max(0, ...sizes));
+    const need = margin + Math.max(8 * largest, 10 * GIB);
+    if (free < need) {
+      throw new RunFailure(
+        'disk',
+        `${Math.round(free / GIB)} GiB free under ${workDir}, under the ${Math.round(need / GIB)} GiB an L1 band needs (with a ${Math.round(margin / GIB)} GiB margin)`,
+      );
+    }
+  }
+
+  private updateL1State(state: IndexState, report: RunReport): void {
+    const at = report.at;
+    for (const step of report.l1Steps) {
+      if (step.result === 'published' || step.result === 'unchanged') {
+        state.lastSuccess[step.role] = at;
+        metrics.lastSuccess.set(
+          { index: L1_INDEX, kind: step.role },
+          Date.parse(at) / 1000,
+        );
+        if (
+          state.lastRejection?.heightRange?.[0] === step.heightRange[0] &&
+          state.lastRejection.heightRange[1] === step.heightRange[1]
+        ) {
+          delete state.lastRejection;
+        }
+      }
+      if (step.result === 'rejected' && step.reason !== 'held') {
+        state.lastRejection = {
+          at,
+          role: step.role,
+          reasons: [step.reason, ...(step.details ?? [])].slice(0, 25),
+          heightRange: step.heightRange,
+        };
+      }
+      if (step.result === 'published' && step.supersedes !== undefined) {
+        state.supersededHistory = {
+          ...state.supersededHistory,
+          d: [
+            ...new Set([
+              ...(state.supersededHistory?.d ?? []),
+              ...step.supersedes,
+            ]),
+          ].slice(-HISTORY_KEPT),
+        };
+      }
+    }
+    const result = l1Result(report);
+    const failed = report.l1Steps.find(
+      (s) => s.result === 'rejected' || s.result === 'couldnt_check',
+    );
+    // A core.db that lacks heights won't gain them by retrying, nor does a
+    // band held for an operator; bands left by the time budget follow soon.
+    const transient = report.l1Steps.some(
+      (s) => s.result === 'couldnt_check' && s.reason !== 'incomplete',
+    );
+    if (transient) {
+      const attempts = (state.retry?.attempts ?? 0) + 1;
+      state.retry = {
+        at: new Date(
+          this.now() +
+            Math.min(RETRY_FIRST_MS * 2 ** (attempts - 1), RETRY_MAX_MS),
+        ).toISOString(),
+        attempts,
+        reason: [failed?.reason, ...(failed?.details ?? [])].join('; '),
+      };
+    } else if (report.l1Deferred !== undefined && failed === undefined) {
+      state.retry = {
+        at: new Date(this.now() + RETRY_FIRST_MS).toISOString(),
+        attempts: 0,
+        reason: `${report.l1Deferred.length} bands left by the time budget`,
+      };
+    } else {
+      delete state.retry;
+    }
+    state.lastRun = {
+      at,
+      outcome: result,
+      ...(failed !== undefined
+        ? { detail: [failed.reason, ...(failed.details ?? [])].join('; ') }
+        : {}),
+    };
+  }
+
   /** Opens the sources that answer; an optional one that doesn't is left out. */
   private async reachableSources(
     opened: OpenedSource[],
@@ -573,14 +923,25 @@ export class ExportService {
 
   /** Removes staging that runs killed before their cleanup left. */
   private async clearStaging(): Promise<void> {
-    const names = await fs.readdir(this.deps.config.workDir);
-    for (const name of names) {
+    const { workDir } = this.deps.config;
+    for (const name of await fs.readdir(workDir)) {
       if (!name.startsWith(STAGING_PREFIX)) continue;
       this.deps.log.warn('Removing staging an interrupted run left', { name });
-      await fs.rm(path.join(this.deps.config.workDir, name), {
-        recursive: true,
-        force: true,
-      });
+      await fs.rm(path.join(workDir, name), { recursive: true, force: true });
+    }
+    // A dry run takes no lock, so one may be running beside this run: only
+    // staging older than any dry run's band is a killed one's.
+    const dryRuns = path.join(workDir, 'dry-run');
+    for (const name of await fs.readdir(dryRuns).catch(() => [] as string[])) {
+      if (!name.startsWith(STAGING_PREFIX)) continue;
+      const dir = path.join(dryRuns, name);
+      const stat = await fs.stat(dir).catch(() => undefined);
+      // The real clock: measured against file times.
+      if (stat === undefined || Date.now() - stat.mtimeMs < DRY_RUN_STALE_MS) {
+        continue;
+      }
+      this.deps.log.warn('Removing staging a killed dry run left', { name });
+      await fs.rm(dir, { recursive: true, force: true });
     }
   }
 
@@ -594,16 +955,7 @@ export class ExportService {
    */
   private async checkDisk(step: BuildStep, bands: OwnBand[]): Promise<void> {
     const { workDir, publishDir } = this.deps.config;
-    const [work, publish] = await Promise.all([
-      fs.stat(workDir),
-      fs.stat(publishDir),
-    ]);
-    if (work.dev !== publish.dev) {
-      throw new RunFailure(
-        'disk',
-        `${workDir} and ${publishDir} are on different filesystems; bands are renamed into place`,
-      );
-    }
+    await assertSameFilesystem(workDir, publishDir);
     const { free, total } = await (this.deps.diskSpace ?? statfsSpace)(workDir);
     const margin = Math.max(0.05 * total, 10 * GIB);
     const largest = bands.reduce(
@@ -722,7 +1074,7 @@ export class ExportService {
         reasons: [report.failed.reason, report.failed.message],
       };
     }
-    const result = runResult(report);
+    const result = runResult({ ...report, l1Steps: [] });
     if (result === 'couldnt_check') {
       const attempts = (state.retry?.attempts ?? 0) + 1;
       const delay = Math.min(
@@ -753,22 +1105,28 @@ export class ExportService {
    * soon after a day was missed or a run died part way.
    */
   async nextRunAt(): Promise<number> {
-    const state = indexState(await loadState(this.stateFile), INDEX_NAME);
+    const file = await loadState(this.stateFile);
+    const states = indexNames(this.deps.config.kinds).map((index) =>
+      indexState(file, index),
+    );
     const now = this.now();
     const day = new Date(now);
     day.setUTCHours(0, this.deps.config.runAtMinute, 0, 0);
     let daily = day.getTime();
     if (daily <= now) daily += 24 * 3600_000;
-    const lastRun =
-      state.lastRun === undefined ? undefined : Date.parse(state.lastRun.at);
-    const died =
-      state.lastRun?.outcome === 'running' && this.running === undefined;
-    if (lastRun === undefined || died || now - lastRun > 25 * 3600_000) {
-      daily = Math.min(daily, now + 5 * 60_000);
+    for (const state of states) {
+      const lastRun =
+        state.lastRun === undefined ? undefined : Date.parse(state.lastRun.at);
+      const died =
+        state.lastRun?.outcome === 'running' && this.running === undefined;
+      if (lastRun === undefined || died || now - lastRun > 25 * 3600_000) {
+        daily = Math.min(daily, now + 5 * 60_000);
+      }
+      const retry =
+        state.retry === undefined ? undefined : Date.parse(state.retry.at);
+      if (retry !== undefined && retry < daily) daily = Math.max(retry, now);
     }
-    const retry =
-      state.retry === undefined ? undefined : Date.parse(state.retry.at);
-    return retry !== undefined && retry < daily ? Math.max(retry, now) : daily;
+    return daily;
   }
 
   /** Starts the heartbeat and the daily loop. */

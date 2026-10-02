@@ -382,7 +382,9 @@ fold that was rejected.
   reports that the loop is alive, never whether runs succeed, so autoheal
   can't restart-loop a failing export. Run outcomes are in its metrics and
   in `./tools/index-swarm-status`. For alerting:
-  `time() - index_export_last_success_timestamp_seconds{kind="d"} > 2 * 86400 or absent(index_export_last_success_timestamp_seconds{kind="d"})`
+  `time() - index_export_last_success_timestamp_seconds{index="root-tx-index",kind="d"} > 2 * 86400 or absent(index_export_last_success_timestamp_seconds{index="root-tx-index",kind="d"})`,
+  and the same with `index="parquet-l1"` where L1 bands are built (it
+  fires through a bootstrap, until the first tip band)
   (the gauge is set again from `state.json` after a restart);
   `index_export_run_in_progress` with `index_export_run_started_timestamp_seconds`
   shows a run that is taking long.
@@ -478,6 +480,97 @@ Swapping under the same id also works, but a directory cannot be renamed over
 a non-empty one, so there is a moment when the band is absent; a scan that
 lands in it withdraws the band until the next scan, and subscribers retire it
 in the meantime.
+
+### L1 bands (`parquet-l1`)
+
+A second kind of index, `parquet-l1`, carries the Arweave base layer (L1:
+blocks, transactions, tags, owners) in Parquet, one height range per band,
+so a new gateway can import its L1 index instead of indexing the chain block
+by block, and apps can query it in place with DuckDB or Polars. A band is a
+directory of `band.json` (its heights, and per table the rows and a digest
+of them, independent of the Parquet bytes) and five Parquet files:
+`blocks`, `block_transactions`, `transactions`, `tags` (plaintext names and
+values) and `wallets`. The columns are a superset of the Parquet exporter's,
+less `indexed_at` (when a gateway indexed a row, which no two publishers
+share). `signature` is null unless the publisher keeps signatures.
+
+Published as `{"name":"parquet-l1","kind":"parquet-l1"}` in
+`INDEX_SWARM_PUBLISH`. A subscriber checks each file against the signed
+digests, then its footer and schema against the layout and the row counts in
+`band.json`, before installing it under `installed/parquet-l1/`. The gateway
+itself reads nothing there: an importer does, checking the rows against the
+chain as it goes. The sidecar loads DuckDB only to check these bands.
+
+#### Producing L1 bands
+
+`index-export` builds them from this gateway's `core.db` (read-only) when
+`INDEX_EXPORT_KINDS` includes `parquet-l1`, in the same run as root-TX bands
+and under the same lock, into `published/parquet-l1/`. List
+`{"name":"parquet-l1","kind":"parquet-l1"}` in `INDEX_SWARM_PUBLISH` as well:
+the sidecar is what retires a superseded tip band, so without it
+`published/parquet-l1/` keeps every one. It needs a `core.db` that holds
+every block from height 0; a gateway that started above it (`START_HEIGHT`)
+can't build them, and its runs say so (`incomplete`, not retried).
+
+- **Ranges.** Bands cover fixed height ranges, the same for every
+  publisher: 0 to 499,999 (the sparse early chain), then every 25,000
+  (`l1-h<from>-<to>-<publisher>-<digest>`). A range below the top is built
+  once. The range the top is in is a tip band, rebuilt each run the top has
+  moved (at most 25,000 blocks, a few minutes and a few hundred MB) and
+  superseding the ones before; at the range's end it becomes a whole band.
+  The top is one below the stable top, so the block above every band's
+  last is there to anchor it.
+- **Checks before publishing.** Every block links to the one before it and
+  is linked to by the one above, each `hash_list_merkle` follows from the
+  previous block, each block's `tx_root` is recomputed from its transactions
+  where the index holds them all, each transaction is at the height and
+  position its block lists it at, each owner's address is the SHA-256 of
+  its key, and, where the index keeps signatures
+  (`WRITE_TRANSACTION_DB_SIGNATURES`, off by default), each transaction's id
+  is the SHA-256 of its signature. Only transactions a block lists are written, with their own
+  tags: a row a fork left in `core.db` is counted (`strayTransactions`),
+  never published. A range that fails is rejected, naming the heights, and
+  nothing is written.
+- **Gaps.** A whole band is never rebuilt, so it waits (`incomplete`) while
+  the index lacks a transaction a block lists, or an owner's key. A tip band
+  publishes and counts them (`missingTransactions`, `missingWallets`); it is
+  rebuilt anyway.
+- **Rejections wait for an operator.** A rejected band stops the L1 part
+  (bands are imported in height order) and is not rebuilt by scheduled runs
+  (`held`), which would only fail the same way: repair the named blocks in
+  `core.db`, then run `--once`. A band published wrongly can't be replaced
+  under its range by the service; remove it from `published/parquet-l1/`
+  (`sudo`) and run `--once`.
+- **Time.** A bootstrap of the whole chain takes hours (on vilenarios.com:
+  19 minutes for 0 to 499,999, about 13 for each 100,000 heights after). A
+  run starts no new whole band after 4 hours; the rest are listed as
+  `l1Deferred`, and the next run starts 15 minutes later.
+- **Disk.** Before each band, room for the band and its scratch: eight
+  times the largest band published, at least 10 GiB, beyond the same
+  margin as root-TX bands. Scratch is about six times the band; DuckDB's
+  spill is capped at 16 GB and kept in the band's staging.
+- **Load on the gateway.** Reads are short, by key or index, in windows of
+  200 heights, so the gateway's WAL checkpoints aren't held back; a
+  bootstrap still reads all of `core.db` once, so schedule it off-peak.
+  The container's I/O weight only applies under an I/O scheduler that
+  honours one.
+
+Each index keeps its own outcome, retry and last run in `state.json` and in
+the metrics (`index` label), so a failing L1 band neither retries nor marks
+root-TX bands, or the reverse.
+
+```bash
+INDEX_EXPORT_KINDS=root-tx-index,parquet-l1
+# The plan and rows of what would be built, without publishing (a
+# bootstrap's plan builds every band: cap it with --to):
+docker compose --profile index-export run --rm -T index-export --once --dry-run --to 600000 > plan.json
+```
+
+**Taking L1 bands.** They are large (tens of GB for the whole chain) and a
+gateway doesn't serve from them, so a subscription takes them only when it
+names them: `"name": ["root-tx-index", "parquet-l1"]`. A subscription with
+no `name` takes the publisher's other indexes, as before. They share the
+subscriber's disk budget (`INDEX_SWARM_MAX_DISK_GIB`) with root-TX bands.
 
 ### Publishing torrents
 

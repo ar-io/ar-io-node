@@ -318,6 +318,12 @@ band and a daily delta), header-checks them, and puts them where the
 [Index Swarm Sidecar](#index-swarm) signs and offers them. See "Producing
 bands" in [index-swarm.md](index-swarm.md).
 
+<a id="parquet-l1"></a> **Parquet L1 band** (`parquet-l1`) — A band of the
+Arweave base layer (blocks, transactions, tags and owners) for one height
+range, in Parquet, with a `band.json` of per-table row counts and row
+digests. Lets a new gateway import its L1 index instead of indexing the
+chain, and apps query it in place.
+
 <a id="fold"></a> **Fold** — Building a band from an earlier band's entries
 plus newer rows from the index, so entries the index has since dropped (such
 as ClickHouse rows past their TTL) are kept. A folded entry counts as being at

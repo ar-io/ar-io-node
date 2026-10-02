@@ -19,6 +19,7 @@ import {
   MAX_ACTIVE_TORRENT_DOWNLOADS,
   MAX_SEQUENCE_JUMP,
   Subscriber,
+  takesIndex,
 } from './subscriber.js';
 import {
   manifestAgeClock,
@@ -3027,6 +3028,23 @@ describe('Subscriber', () => {
 
     await makeSubscriber({ name: 'root-tx-index' }).pollOnce();
     assert.deepEqual(await installedIds(), ['band-a']);
+  });
+
+  it('takes an opt-in kind only when the subscription names it', () => {
+    const l1 = { optIn: true };
+    const cdb = {};
+    assert.equal(takesIndex({}, 'root-tx-index', cdb), true);
+    assert.equal(takesIndex({}, 'parquet-l1', l1), false);
+    assert.equal(takesIndex({}, 'unknown', undefined), true);
+    assert.equal(takesIndex({ name: 'parquet-l1' }, 'parquet-l1', l1), true);
+    assert.equal(
+      takesIndex({ name: 'parquet-l1' }, 'root-tx-index', cdb),
+      false,
+    );
+    const both = { name: ['root-tx-index', 'parquet-l1'] };
+    assert.equal(takesIndex(both, 'root-tx-index', cdb), true);
+    assert.equal(takesIndex(both, 'parquet-l1', l1), true);
+    assert.equal(takesIndex(both, 'other', cdb), false);
   });
 
   it('keeps what is installed when the publisher is unreachable', async () => {

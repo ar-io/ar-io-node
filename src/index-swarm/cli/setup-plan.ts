@@ -170,19 +170,19 @@ export function planSetup(
       );
       return plan;
     }
-    const entries: Array<Record<string, string>> = current.map((entry) => ({
-      ...entry,
-    }));
+    const entries: Array<Record<string, string | string[]>> = current.map(
+      (entry) => ({ ...entry }),
+    );
     for (const publisher of options.subscribe) {
       const existing = current.find((e) => e.publisher === publisher);
       if (existing === undefined) {
         entries.push({ publisher, name: ROOT_TX_INDEX });
       } else if (
         existing.name !== undefined &&
-        existing.name !== ROOT_TX_INDEX
+        ![existing.name].flat().includes(ROOT_TX_INDEX)
       ) {
         plan.warnings.push(
-          `Already subscribed to ${publisher} for "${existing.name}"; left as it is.`,
+          `Already subscribed to ${publisher} for "${[existing.name].flat().join('", "')}"; left as it is.`,
         );
       }
     }

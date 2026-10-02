@@ -13,6 +13,7 @@ import {
   publisherChecks,
   subscriberChecks,
   exportChecks,
+  l1ExportChecks,
 } from './status.js';
 
 const TURBO = '34LYvMptiDvBP5sqfh1oAd6Q4qFsy4PWaZ1HTFmML7h5';
@@ -311,5 +312,80 @@ describe('exportChecks', () => {
       now,
     );
     assert.ok(checks.every((c) => c.level !== 'fail'));
+  });
+});
+
+describe('l1ExportChecks', () => {
+  const now = Date.parse('2026-10-05T12:00:00Z');
+  const hoursAgo = (hours: number) =>
+    new Date(now - hours * 3600_000).toISOString();
+  const levels = (checks: Array<{ level: string; text: string }>) =>
+    checks.map((c) => c.level);
+
+  it('fails until a tip band is built, then while it is over two days old', () => {
+    assert.deepEqual(levels(l1ExportChecks({}, now)), ['fail']);
+    assert.match(l1ExportChecks({}, now)[0].fix ?? '', /several runs/);
+    assert.deepEqual(
+      levels(l1ExportChecks({ lastSuccess: { d: hoursAgo(49) } }, now)),
+      ['fail'],
+    );
+    assert.deepEqual(
+      levels(
+        l1ExportChecks(
+          {
+            lastSuccess: { d: hoursAgo(2), h: hoursAgo(30) },
+            lastRun: { at: hoursAgo(2), outcome: 'published' },
+          },
+          now,
+        ),
+      ),
+      ['ok', 'info', 'info'],
+    );
+  });
+
+  it('warns of a run that couldn’t check, saying why', () => {
+    const checks = l1ExportChecks(
+      {
+        lastRun: {
+          at: hoursAgo(1),
+          outcome: 'couldnt_check',
+          detail: 'incomplete; core.db starts at height 1500000',
+        },
+      },
+      now,
+    );
+    assert.deepEqual(levels(checks), ['fail', 'warn']);
+    assert.match(
+      checks[1].text,
+      /\(incomplete; core.db starts at height 1500000\)/,
+    );
+  });
+
+  it('fails a recent chain-check rejection until that band succeeds, and warns of a retry', () => {
+    const rejected = {
+      lastSuccess: { d: hoursAgo(2) },
+      lastRejection: {
+        at: hoursAgo(5),
+        role: 'h',
+        reasons: ['chain', 'Heights 600000-699999 fail at 612345 (tx_root)'],
+      },
+      retry: { at: hoursAgo(-1), attempts: 2, reason: 'l1 h: disk' },
+    };
+    const checks = l1ExportChecks(rejected, now);
+    assert.deepEqual(levels(checks), ['ok', 'warn', 'fail']);
+    assert.match(checks[2].text, /612345 \(tx_root\)/);
+    assert.deepEqual(
+      levels(
+        l1ExportChecks(
+          {
+            ...rejected,
+            retry: undefined,
+            lastSuccess: { d: hoursAgo(2), h: hoursAgo(1) },
+          },
+          now,
+        ),
+      ),
+      ['ok', 'info'],
+    );
   });
 });

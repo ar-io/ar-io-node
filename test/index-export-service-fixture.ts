@@ -100,6 +100,9 @@ export class ExportServiceHarness {
   freeBytes = 0;
 
   config = (more: Partial<ExportConfig> = {}): ExportConfig => ({
+    kinds: ['root-tx-index'],
+    coreDbPath: path.join(this.dir, 'core.db'),
+    l1PublishDir: path.join(this.dir, 'published', 'parquet-l1'),
     publisher: PUBLISHER,
     sources: [],
     sourceEnv: {},
