@@ -26,7 +26,13 @@ publisher or turn on torrents; it only changes what is missing.
 
   --subscribe <wallet>   Subscribe to a publisher's root-TX index, by its
                          registered gateway wallet. Repeatable.
-  --publish              Publish this gateway's root-TX index bands.
+  --publish              Publish this gateway's root-TX index bands, built
+                         by the index-export service.
+  --start-height <n>     With --publish: the lowest height to build.
+  --header-check-url <u> With --publish: the gateway sampled headers are
+                         read from before publishing (default
+                         https://turbo-gateway.com; http://core:4000 only
+                         if this gateway holds the root data).
   --torrent              Move bands over BitTorrent too (generates the
                          engine password).
   --public-host <addr>   This node's public IP, where peers reach its engine
@@ -64,6 +70,8 @@ async function main(): Promise<void> {
         'public-host': { type: 'string' },
         'engine-port': { type: 'string' },
         'max-disk-gib': { type: 'string' },
+        'start-height': { type: 'string' },
+        'header-check-url': { type: 'string' },
         'no-gateway': { type: 'boolean' },
         'dry-run': { type: 'boolean' },
         restart: { type: 'boolean' },
@@ -106,6 +114,27 @@ async function main(): Promise<void> {
         }
       : {}),
   };
+  const startHeight = values['start-height'] as string | undefined;
+  if (startHeight !== undefined) {
+    if (!/^\d+$/.test(startHeight))
+      fail('--start-height must be a block height');
+    options.startHeight = Number(startHeight);
+  }
+  const headerCheckUrl = values['header-check-url'] as string | undefined;
+  if (headerCheckUrl !== undefined) {
+    try {
+      new URL(headerCheckUrl);
+    } catch {
+      fail('--header-check-url must be a URL');
+    }
+    options.headerCheckUrl = headerCheckUrl;
+  }
+  if (
+    (startHeight !== undefined || headerCheckUrl !== undefined) &&
+    !options.publish
+  ) {
+    fail('--start-height and --header-check-url go with --publish');
+  }
   for (const wallet of options.subscribe) {
     if (!/^[A-Za-z0-9_-]{32,64}$/.test(wallet)) {
       fail(`--subscribe ${wallet} is not a wallet address`);

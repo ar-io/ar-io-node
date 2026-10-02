@@ -44,7 +44,14 @@ export interface SetupOptions {
   maxDiskGiB?: number;
   /** Also point the gateway at the installed bands (default true). */
   gateway: boolean;
+  /** When publishing: the lowest height index-export builds. */
+  startHeight?: number;
+  /** When publishing: the gateway index-export header-checks against. */
+  headerCheckUrl?: string;
 }
+
+/** The header-check gateway when none is given: one that holds the roots. */
+export const DEFAULT_HEADER_CHECK_URL = 'https://turbo-gateway.com';
 
 export interface Change {
   key: string;
@@ -259,8 +266,46 @@ export function planSetup(
         'Publishing needs AR_IO_WALLET, the gateway’s registered wallet.',
       );
     }
+    // Building the bands: the index-export service.
+    plan.profiles.push('index-export');
+    plan.services.push('index-export');
+    const headerCheckUrl =
+      options.headerCheckUrl ??
+      env.get('INDEX_EXPORT_HEADER_CHECK_URL') ??
+      DEFAULT_HEADER_CHECK_URL;
+    set({
+      key: 'INDEX_EXPORT_HEADER_CHECK_URL',
+      value: headerCheckUrl,
+      reason:
+        'the gateway index-export reads sampled headers from before publishing',
+    });
+    if (/^https?:\/\/core(:\d+)?\/?$/.test(headerCheckUrl)) {
+      plan.warnings.push(
+        'The header check reads from this gateway. That works only if it holds these root transactions’ data; one that must fetch them times out and takes the load. Otherwise use --header-check-url https://turbo-gateway.com.',
+      );
+    }
+    if (options.startHeight !== undefined) {
+      set({
+        key: 'INDEX_EXPORT_START_HEIGHT',
+        value: String(options.startHeight),
+        reason: 'the lowest height index-export builds',
+      });
+    } else if (env.get('INDEX_EXPORT_START_HEIGHT') === undefined) {
+      plan.warnings.push(
+        'index-export needs INDEX_EXPORT_START_HEIGHT before its first run: pass --start-height <height> (e.g. 1950000), then dry-run it (see "Producing bands" in docs/index-swarm.md).',
+      );
+    }
+    const unbundle = env.get('ANS104_UNBUNDLE_FILTER');
+    if (
+      unbundle === undefined ||
+      /^\{\s*"never"\s*:\s*true\s*\}$/.test(unbundle)
+    ) {
+      plan.warnings.push(
+        'This gateway unbundles nothing (ANS104_UNBUNDLE_FILTER), so its index holds no data items to build bands from. Publishing bands is for gateways that unbundle.',
+      );
+    }
     plan.notes.push(
-      'Put finished bands under data/indexes/published/root-tx-index/<band>/ (see "Producing bands" in docs/index-swarm.md).',
+      'index-export builds bands into data/indexes/published/root-tx-index/ once a day; dry-run it first: docker compose --profile index-export run --rm index-export --once --dry-run (see "Producing bands" in docs/index-swarm.md).',
     );
   }
 
@@ -332,10 +377,11 @@ export function planSetup(
     plan.changes.some((c) => c.key === 'INDEX_SWARM_ENGINE_AUTH');
   if (engineOn) {
     plan.profiles.push('index-swarm-torrent');
+    // The engine first (its init runs before it), then what was planned.
     plan.services = [
       'index-swarm-engine-init',
       'index-swarm-engine',
-      'index-swarm',
+      ...plan.services,
     ];
     const port =
       options.enginePort ?? env.get('INDEX_SWARM_ENGINE_PORT') ?? '6881';
@@ -347,6 +393,12 @@ export function planSetup(
         `Open the tracker port ${env.get('INDEX_SWARM_TRACKER_PORT') ?? TRACKER_PORT_DEFAULT} (TCP) too.`,
       );
     }
+  }
+
+  if (plan.restartCore) {
+    plan.notes.push(
+      'Recreating the gateway applies every change to its settings in .env since it last started, not only these.',
+    );
   }
 
   for (const change of plan.changes) {

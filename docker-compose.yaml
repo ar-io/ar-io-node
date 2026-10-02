@@ -928,6 +928,83 @@ services:
     labels:
       autoheal: ${RUN_AUTOHEAL:-false}
 
+  # Builds this gateway's root-TX index bands from its own index once a day and
+  # puts them where the index-swarm sidecar signs and offers them. See
+  # "Producing bands" in docs/index-swarm.md.
+  index-export:
+    # The core image, at its own tag when set: the service can move to a
+    # release before core does, and must not run an image that predates it.
+    # Like core's, this build tags the core image.
+    image: ghcr.io/ar-io/ar-io-core:${INDEX_EXPORT_IMAGE_TAG:-${CORE_IMAGE_TAG:-latest}}
+    build:
+      context: .
+    entrypoint: ['/nodejs/bin/node', 'dist/index-export/main.js']
+    profiles:
+      - index-export
+    restart: unless-stopped
+    init: true
+    # A run in progress gets a minute to stop; its scratch is cleared at the
+    # next start.
+    stop_grace_period: 60s
+    # Deliberately no depends_on: bringing this profile up must never start or
+    # recreate core, ClickHouse or the sidecar. A source that is down makes a
+    # run "couldn't check", retried later.
+    volumes:
+      - ${INDEX_SWARM_DATA_PATH:-./data/indexes}:/app/data/indexes
+      # Read-only, for the SQLite source (gateways without ClickHouse).
+      - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite:ro
+      # Peers' ClickHouse password files, only when INDEX_EXPORT_SOURCES names
+      # a peer; otherwise nothing is mounted.
+      - ${INDEX_EXPORT_SECRETS_DIR:-/dev/null}:/run/secrets/index-export:ro
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-simple}
+      # The publisher: band ids are made unique to it.
+      - AR_IO_WALLET=${AR_IO_WALLET:-}
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - INDEX_EXPORT_SOURCES=${INDEX_EXPORT_SOURCES:-}
+      - INDEX_EXPORT_RUN_AT_UTC=${INDEX_EXPORT_RUN_AT_UTC:-04:00}
+      - INDEX_EXPORT_RECENT_MAX_BLOCKS=${INDEX_EXPORT_RECENT_MAX_BLOCKS:-100000}
+      - INDEX_EXPORT_START_HEIGHT=${INDEX_EXPORT_START_HEIGHT:-}
+      - INDEX_EXPORT_HEADER_CHECK_URL=${INDEX_EXPORT_HEADER_CHECK_URL:-}
+      - INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS=${INDEX_EXPORT_HEADER_CHECK_TIMEOUT_MS:-30000}
+      - INDEX_EXPORT_METRICS_PORT=${INDEX_EXPORT_METRICS_PORT:-9102}
+      # Bounds, so a fold can't crowd the gateway: heap and memory, a larger
+      # thread pool so file I/O doesn't starve DNS lookups, and a low share
+      # of the disk.
+      - NODE_OPTIONS=--max-old-space-size=4096
+      - UV_THREADPOOL_SIZE=16
+    mem_limit: 6g
+    blkio_config:
+      weight: 100
+    healthcheck:
+      test:
+        [
+          'CMD',
+          '/nodejs/bin/node',
+          '-e',
+          "fetch('http://127.0.0.1:${INDEX_EXPORT_METRICS_PORT:-9102}/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      # Sorting a large band's partition holds the event loop for a while:
+      # five minutes of failed checks, as /healthz itself allows, before the
+      # container counts as unhealthy.
+      interval: 30s
+      timeout: 30s
+      retries: 10
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: '${INDEX_SWARM_LOG_MAX_SIZE:-50m}'
+        max-file: '${INDEX_SWARM_LOG_MAX_FILE:-3}'
+    networks:
+      - ar-io-network
+    labels:
+      autoheal: ${RUN_AUTOHEAL:-false}
+
   # Writes the settings the swarm depends on into the torrent engine's config
   # before each engine start, then exits. The engine image has no way to take
   # a Web UI password from the environment; without this it would invent one

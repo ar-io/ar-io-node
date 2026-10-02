@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- The `index-export` service (compose profile `index-export`) builds this
+  gateway's root-TX index bands from its own index once a day and puts them
+  where the index-swarm sidecar signs and offers them: history bands cut at
+  fixed edges, a recent band folded weekly (so rows ClickHouse has expired
+  are kept) and frozen at `INDEX_EXPORT_RECENT_MAX_BLOCKS`, and a daily
+  delta published only when its content changes. Several sources merge
+  (`INDEX_EXPORT_SOURCES`: ClickHouse peers, SQLite, an overlay of a
+  bundler's own offsets). Every band is header-checked against
+  `INDEX_EXPORT_HEADER_CHECK_URL` before it publishes; a run that couldn't
+  check is retried, a rejected one waits for an operator, and nothing
+  published is withdrawn on failure. `index-swarm-setup --publish` sets it
+  up (`--start-height`, `--header-check-url`), `index-swarm-status` reports
+  it, and `prometheus.yml` scrapes it and the sidecar. See "Producing
+  bands" in [docs/index-swarm.md](docs/index-swarm.md).
+
 - `ar-io-node index-band-export` writes one record source's root-TX index
   records for a height range as the CSV `index-band-build` reads: this
   gateway's ClickHouse or SQLite, a peer's ClickHouse, or an overlay

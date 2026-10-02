@@ -295,11 +295,62 @@ describe('checkBandHeaders', () => {
         openRoot: flaky(failures),
         minRecords: 1,
         concurrency: 1,
+        retries: 0,
       });
     };
 
     assert.equal((await run(2)).passed, true, '8 of 10 is 80%');
     assert.equal((await run(3)).passed, false, '7 of 10 is under 80%');
+  });
+
+  it('retries a read that failed in transport, but never a wrong range', async () => {
+    const good = entry(items[0]);
+    let calls = 0;
+    const flaky: RootSourceFactory = (rootTxId) => {
+      const real = openRoot(rootTxId);
+      return {
+        read: async (offset: number, size: number) => {
+          calls += 1;
+          if (calls % 3 !== 0)
+            throw new Error('Request failed with status code 429');
+          return real.read(offset, size);
+        },
+        close: async () => {},
+        isOpen: () => true,
+      } as unknown as ReturnType<RootSourceFactory>;
+    };
+    const result = await checkBandHeaders({
+      entries: [good, good],
+      totalRecords: 2,
+      openRoot: flaky,
+      minRecords: 1,
+      concurrency: 1,
+      retryDelayMs: 1,
+    });
+    assert.equal(result.passed, true, result.reasons.join('; '));
+    assert.equal(calls, 6, 'two failures, then a success, per entry');
+
+    let pastEnd = 0;
+    const short: RootSourceFactory = () =>
+      ({
+        read: async () => {
+          pastEnd += 1;
+          throw Object.assign(new Error('range'), {
+            response: { status: 416 },
+          });
+        },
+        close: async () => {},
+        isOpen: () => true,
+      }) as unknown as ReturnType<RootSourceFactory>;
+    const wrong = await checkBandHeaders({
+      entries: [good],
+      totalRecords: 1,
+      openRoot: short,
+      minRecords: 1,
+      retryDelayMs: 1,
+    });
+    assert.equal(wrong.wrong.length, 1);
+    assert.equal(pastEnd, 1, 'a wrong range is read once');
   });
 
   it('calls a header span over the maximum wrong without reading it', async () => {
@@ -345,6 +396,7 @@ describe('checkBandHeaders', () => {
       totalRecords: items.length,
       openRoot: failing,
       minRecords: 1,
+      retryDelayMs: 1,
     });
 
     assert.equal(result.passed, false);

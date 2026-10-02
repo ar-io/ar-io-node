@@ -28,7 +28,14 @@ export type SourceConfig =
       optional?: boolean;
     }
   | { type: 'sqlite'; name?: string; path?: string; optional?: boolean }
-  | { type: 'csv'; name?: string; path: string; optional?: boolean };
+  | {
+      type: 'csv';
+      name?: string;
+      path: string;
+      /** 1 (default): an overlay. 0: a peer's records exported to files. */
+      rank?: 0 | 1;
+      optional?: boolean;
+    };
 
 /** The environment the sources read, passed explicitly. */
 export interface SourceEnv {
@@ -166,8 +173,19 @@ export function resolveSourceConfigs(
       case 'csv': {
         const path = optionalString(entry, 'path', at);
         if (path === undefined) throw new Error(`${at}: csv needs a path`);
+        if (entry.rank !== undefined && entry.rank !== 0 && entry.rank !== 1) {
+          throw new Error(
+            `${at}: rank must be 0 (a peer's files) or 1 (an overlay)`,
+          );
+        }
+        const rank = (entry.rank as 0 | 1 | undefined) ?? 1;
         return {
-          config: { type: 'csv', name: name ?? 'overlay', path },
+          config: {
+            type: 'csv',
+            name: name ?? (rank === 1 ? 'overlay' : 'peer-files'),
+            path,
+            rank,
+          },
           optional,
         };
       }
@@ -200,7 +218,7 @@ export function resolveSourceConfigs(
 const KEYS: Record<string, string[]> = {
   clickhouse: ['name', 'url', 'user', 'passwordFile', 'optional'],
   sqlite: ['name', 'path', 'optional'],
-  csv: ['name', 'path', 'optional'],
+  csv: ['name', 'path', 'rank', 'optional'],
 };
 
 function hostOf(url: string, at: string): string {
@@ -255,6 +273,6 @@ export async function openSource(
     case 'sqlite':
       return new SqliteRecordSource(config.name, config.path as string);
     case 'csv':
-      return new CsvOverlaySource(config.name, config.path);
+      return new CsvOverlaySource(config.name, config.path, config.rank ?? 1);
   }
 }
