@@ -771,12 +771,19 @@ export class Subscriber {
       }
     }
 
-    // An index the publisher has dropped altogether never reaches
-    // reconcileIndex, so its bands are retired here.
-    const published = new Set(document.indexes.map((index) => index.name));
+    // An index the publisher has dropped altogether, or this subscription
+    // no longer takes, never reaches reconcileIndex, so its bands are
+    // retired here.
+    const taken = new Set(
+      document.indexes
+        .filter((index) =>
+          takesIndex(subscription, index.name, this.kinds.get(index.kind)),
+        )
+        .map((index) => index.name),
+    );
     const installed = (await this.state.load()).installed;
     for (const indexName of Object.keys(installed)) {
-      if (published.has(indexName)) continue;
+      if (taken.has(indexName)) continue;
       const kind = this.kindOf(installed[indexName] ?? {});
       if (kind === undefined) continue;
       await this.retireUnoffered(publisher, indexName, new Set(), kind);
@@ -956,7 +963,7 @@ export class Subscriber {
         sameFiles(existing.files, band.files) &&
         // The record can outlive its files (a crash, an operator's rm);
         // reinstall rather than trust a record the gateway can't serve.
-        existsSync(path.join(existing.dir, 'manifest.json'))
+        existsSync(path.join(existing.dir, kind.liveFile))
       ) {
         // However it was installed (over HTTP, adopted from disk), a band
         // the swarm can have is seeded once its torrent is kept.

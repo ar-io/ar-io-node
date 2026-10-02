@@ -63,6 +63,12 @@ export interface ArtifactKind {
    * publisher offers (and that shares the disk budget).
    */
   readonly optIn?: boolean;
+  /**
+   * The file whose presence makes an installed band live (`manifest.json`,
+   * `band.json`): retiring a band removes it first, and a record whose band
+   * lacks it is reinstalled rather than trusted.
+   */
+  readonly liveFile: string;
 
   /**
    * Read a band directory and describe it for publication: its files, their
