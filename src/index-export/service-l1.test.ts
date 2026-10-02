@@ -21,7 +21,7 @@ import {
 import { buildCoreDb } from '../../test/parquet-l1-core-db.js';
 import { createTestLogger } from '../../test/test-logger.js';
 import type { ExportConfig } from './config.js';
-import { deriveL1Bands } from './kinds/parquet-l1/kind.js';
+import { deriveL1Bands, runL1Step } from './kinds/parquet-l1/kind.js';
 import { ExportService, L1_RUN_BUDGET_MS, RETRY_FIRST_MS } from './service.js';
 import { emptyIndexState, indexState, loadState } from './state.js';
 
@@ -222,6 +222,32 @@ describe('ExportService parquet-l1', () => {
     const { retry } = await stateOf('parquet-l1');
     assert.equal(retry?.attempts, 0);
     assert.match(retry?.reason ?? '', /3 bands left by the time budget/);
+  });
+
+  it('publishes nothing once another run has taken the lock', async () => {
+    const below = await publishedBelow();
+    await fs.mkdir(config().workDir, { recursive: true });
+    const outcome = await runL1Step(
+      { role: 'd', heightRange: [FIRST, TOP], supersedes: [] },
+      {
+        coreDbPath: config().coreDbPath,
+        workDir: config().workDir,
+        publishDir: config().l1PublishDir,
+        publisher: PUBLISHER,
+        dryRun: false,
+        log,
+        stillHeld: async () => false,
+      },
+    );
+    assert.deepEqual(
+      [outcome.result, outcome.reason],
+      ['couldnt_check', 'lock_lost'],
+    );
+    assert.equal((await live()).length, below);
+    assert.deepEqual(
+      (await fs.readdir(config().workDir)).filter((n) => n.startsWith('.')),
+      [],
+    );
   });
 
   it('refuses a band without room on the disk, and retries it', async () => {

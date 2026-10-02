@@ -740,6 +740,9 @@ export class ExportService {
           publisher: config.publisher,
           dryRun: dryRun && options.keepDir === undefined,
           log,
+          ...(this.lock !== undefined
+            ? { stillHeld: async () => this.lock?.held() ?? false }
+            : {}),
         });
         report.l1Steps.push(outcome);
         report.peakBytes +=

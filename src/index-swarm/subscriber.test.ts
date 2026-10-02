@@ -3063,6 +3063,39 @@ describe('Subscriber', () => {
 
     await makeSubscriber({ name: 'root-tx-index' }).pollOnce();
     assert.deepEqual(await installedIds(), ['band-a']);
+
+    // The publisher still offers it, but the subscription no longer takes
+    // it: retired, as though the publisher had dropped it.
+    await makeSubscriber({ name: 'some-other-index' }).pollOnce();
+    assert.deepEqual(await installedIds(), []);
+  });
+
+  it('keeps an installed band only while its kind’s live file is there', async () => {
+    await makeBand('band-a');
+    await publish();
+    await makeSubscriber().pollOnce();
+    const installedAt = async () =>
+      Object.values(
+        (await subState.load()).installed['root-tx-index'] ?? {},
+      ).map((band) => band.installedAt);
+    const first = await installedAt();
+
+    // Unchanged: the record and the live file stand, so it is left alone.
+    clock = new Date(clock.getTime() + 60_000);
+    await makeSubscriber().pollOnce();
+    assert.deepEqual(await installedAt(), first);
+
+    // A kind whose live file isn't there can't trust the record: the band
+    // is taken again (adopted from disk here).
+    const base = createKindRegistry({ log }).get('cdb64-root-tx')!;
+    const other: ArtifactKind = Object.assign(Object.create(base), {
+      liveFile: 'not-there.json',
+    });
+    clock = new Date(clock.getTime() + 60_000);
+    await makeSubscriber({
+      kinds: new Map([['cdb64-root-tx', other]]),
+    }).pollOnce();
+    assert.notDeepEqual(await installedAt(), first);
   });
 
   it('takes an opt-in kind only when the subscription names it', () => {

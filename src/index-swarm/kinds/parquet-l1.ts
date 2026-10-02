@@ -66,6 +66,7 @@ async function readBandFile(dir: string): Promise<ParquetL1Band> {
 export class ParquetL1Kind implements ArtifactKind {
   readonly kind = PARQUET_L1_KIND;
   readonly optIn = true;
+  readonly liveFile = BAND_FILE;
   private readonly log: Logger;
   private readonly lifecycle: BandLifecycle;
 
@@ -74,7 +75,7 @@ export class ParquetL1Kind implements ArtifactKind {
     this.lifecycle = {
       log: this.log,
       label: 'Parquet L1',
-      liveFile: BAND_FILE,
+      liveFile: this.liveFile,
     };
   }
 

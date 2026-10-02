@@ -93,6 +93,7 @@ function rejectRemotePartitions(
 
 export class Cdb64RootTxKind implements ArtifactKind {
   readonly kind = CDB64_ROOT_TX_KIND;
+  readonly liveFile = MANIFEST_FILE;
   private readonly log: Logger;
   private readonly fileConcurrency: number;
   private readonly lifecycle: BandLifecycle;
@@ -106,7 +107,11 @@ export class Cdb64RootTxKind implements ArtifactKind {
   }) {
     this.log = log.child({ class: 'Cdb64RootTxKind' });
     this.fileConcurrency = fileConcurrency;
-    this.lifecycle = { log: this.log, label: 'CDB64', liveFile: MANIFEST_FILE };
+    this.lifecycle = {
+      log: this.log,
+      label: 'CDB64',
+      liveFile: this.liveFile,
+    };
   }
 
   async describe(dir: string): Promise<BandDescriptor> {

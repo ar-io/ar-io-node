@@ -189,6 +189,7 @@ export async function runL1Step(
     publisher,
     dryRun,
     log,
+    stillHeld,
   }: {
     coreDbPath: string;
     workDir: string;
@@ -196,6 +197,11 @@ export async function runL1Step(
     publisher: string;
     dryRun: boolean;
     log: Logger;
+    /**
+     * Whether this run still holds the lock: asked just before publishing,
+     * so a run that stalled past its lock never publishes beside another.
+     */
+    stillHeld?: () => Promise<boolean>;
   },
 ): Promise<L1Outcome> {
   const started = Date.now();
@@ -241,6 +247,15 @@ export async function runL1Step(
           ...facts,
           result: 'dry_run',
           reason: 'dry_run',
+          seconds: 0,
+        };
+      } else if (stillHeld !== undefined && !(await stillHeld())) {
+        outcome = {
+          ...base,
+          ...facts,
+          result: 'couldnt_check',
+          reason: 'lock_lost',
+          details: ['another run took the lock while this one stalled'],
           seconds: 0,
         };
       } else if (exists) {

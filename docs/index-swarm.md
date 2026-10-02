@@ -570,7 +570,8 @@ docker compose --profile index-export run --rm -T index-export --once --dry-run 
 gateway doesn't serve from them, so a subscription takes them only when it
 names them: `"name": ["root-tx-index", "parquet-l1"]`. A subscription with
 no `name` takes the publisher's other indexes, as before. They share the
-subscriber's disk budget (`INDEX_SWARM_MAX_DISK_GIB`) with root-TX bands.
+subscriber's disk budget (`INDEX_SWARM_MAX_DISK_GIB`) with root-TX bands. An
+index taken off `name` has its bands retired, as when a publisher drops it.
 
 ### Publishing torrents
 
