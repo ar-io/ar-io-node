@@ -311,6 +311,13 @@ band or bands it replaces. The publisher stops offering those at once and
 deletes them after `INDEX_SWARM_SUPERSEDE_GRACE_SECONDS`; subscribers retire
 them on the same grace, so a lookup in flight never loses its band.
 
+<a id="index-export"></a> **Index Export** — The optional `index-export`
+compose service, running the core image, that builds this gateway's root-TX
+index bands from its own index once a day (history, a weekly-folded recent
+band and a daily delta), header-checks them, and puts them where the
+[Index Swarm Sidecar](#index-swarm) signs and offers them. See "Producing
+bands" in [index-swarm.md](index-swarm.md).
+
 <a id="fold"></a> **Fold** — Building a band from an earlier band's entries
 plus newer rows from the index, so entries the index has since dropped (such
 as ClickHouse rows past their TTL) are kept. A folded entry counts as being at

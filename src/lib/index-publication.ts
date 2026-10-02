@@ -763,3 +763,63 @@ export function verifyIndexPublication(
 
   return verified ? { ok: true } : { ok: false, reason: 'signature mismatch' };
 }
+
+/**
+ * The band ids that other bands in the set supersede.
+ *
+ * A self-reference is ignored, and so is every claim in a cycle (A replaces
+ * B, B replaces A): honouring them would retire, then delete, every band in
+ * it. A chain (C replaces B, B replaces A) retires A and B as intended.
+ */
+export function supersededBands(
+  bands: BandDescriptor[],
+  warn: (message: string, fields: Record<string, unknown>) => void = () =>
+    undefined,
+): Set<string> {
+  const ids = new Set(bands.map((band) => band.id));
+  const claims = new Map<string, string[]>();
+  for (const band of bands) {
+    const claim = band.metadata?.supersedes;
+    const targets = (
+      typeof claim === 'string' ? [claim] : Array.isArray(claim) ? claim : []
+    ).filter((id): id is string => typeof id === 'string');
+    const valid = targets.filter((id) => {
+      if (id === band.id) {
+        warn('Band supersedes itself; ignoring that', { band: band.id });
+        return false;
+      }
+      return true;
+    });
+    if (valid.length > 0) claims.set(band.id, valid);
+  }
+
+  // Drop every claim on a cycle among bands present in this set.
+  const onCycle = new Set<string>();
+  for (const start of claims.keys()) {
+    const stack: Array<{ id: string; path: string[] }> = [
+      { id: start, path: [start] },
+    ];
+    while (stack.length > 0) {
+      const { id, path: trail } = stack.pop()!;
+      for (const next of claims.get(id) ?? []) {
+        if (next === start) {
+          for (const member of trail) onCycle.add(member);
+        } else if (ids.has(next) && !trail.includes(next)) {
+          stack.push({ id: next, path: [...trail, next] });
+        }
+      }
+    }
+  }
+  if (onCycle.size > 0) {
+    warn('Bands supersede each other in a cycle; ignoring those claims', {
+      bands: [...onCycle].sort(),
+    });
+  }
+
+  const superseded = new Set<string>();
+  for (const [claimer, targets] of claims) {
+    if (onCycle.has(claimer)) continue;
+    for (const id of targets) superseded.add(id);
+  }
+  return superseded;
+}

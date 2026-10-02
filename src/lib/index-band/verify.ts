@@ -39,6 +39,14 @@ export interface HeaderCheckOptions {
   minRecords?: number;
   /** Root reads in flight at once (default 8). */
   concurrency?: number;
+  /**
+   * Further tries of a read that failed in transport (a timeout, a 429, a
+   * 5xx), with a growing pause (default 2): a brief outage at the gateway
+   * shouldn't leave the band unchecked. A wrong offset is never retried.
+   */
+  retries?: number;
+  /** Pause before the first retry, doubling after (default 2,000 ms). */
+  retryDelayMs?: number;
 }
 
 export interface HeaderCheckResult {
@@ -86,6 +94,8 @@ export async function checkBandHeaders({
   minOkRatio = 0.8,
   minRecords = 1000,
   concurrency = 8,
+  retries = 2,
+  retryDelayMs = 2000,
 }: HeaderCheckOptions): Promise<HeaderCheckResult> {
   const wrong: HeaderCheckResult['wrong'] = [];
   const errors: HeaderCheckResult['errors'] = [];
@@ -114,7 +124,11 @@ export async function checkBandHeaders({
         const source = openRoot(entry.rootTxId);
         let bytes: Buffer;
         try {
-          bytes = await source.read(entry.rootOffset, headerBytes);
+          bytes = await readWithRetries(
+            () => source.read(entry.rootOffset, headerBytes),
+            retries,
+            retryDelayMs,
+          );
         } catch (error) {
           // A range the root doesn't have means the offsets are wrong: a 416
           // when it starts past the end, or a trimmed (short) 206 when it
@@ -224,6 +238,28 @@ export async function checkBandHeaders({
     errors,
     byTag,
   };
+}
+
+/** A range that runs past the root: the offsets are wrong, not the network. */
+const isWrongRange = (error: unknown) =>
+  error instanceof ShortRangeReadError ||
+  (error as { response?: { status?: number } }).response?.status === 416;
+
+async function readWithRetries(
+  read: () => Promise<Buffer>,
+  retries: number,
+  delayMs: number,
+): Promise<Buffer> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await read();
+    } catch (error) {
+      if (attempt >= retries || isWrongRange(error)) throw error;
+      await new Promise((resolve) =>
+        setTimeout(resolve, delayMs * 2 ** attempt),
+      );
+    }
+  }
 }
 
 function mostCommon(values: string[]): string {

@@ -119,6 +119,8 @@ export interface StagedBand {
   records: number;
   /** Uniform samples of entries with offsets, the general one first. */
   sample: BandSampleEntry[];
+  /** As {@link BuiltBand}, so a check can skip a band whose content is unchanged. */
+  contentDigest: string;
   /** As {@link BuiltBand}, so a check can refuse a band with too many. */
   conflicts: number;
   conflictSample: BandConflict[];
@@ -263,6 +265,8 @@ const SOURCE_AT = RANK_AT + 1;
 const TAG_AT = SOURCE_AT + 2;
 const COVERAGE_AT = TAG_AT + 1;
 const FRAME_BYTES = COVERAGE_AT + 8;
+/** Scratch bytes a build writes per record given, for disk estimates. */
+export const SCATTER_RECORD_BYTES = FRAME_BYTES;
 const MAX_SOURCES = 0xffff;
 const MAX_TAGS = 0xff;
 const CONFLICT_SAMPLE = 20;
@@ -814,26 +818,14 @@ export async function buildBand({
     }
 
     // Name.
-    const content = crypto.createHash('sha256');
-    for (const partition of partitions) {
-      if (partition.location.type !== 'file') continue;
-      const name = partition.location.filename;
-      content.update(
-        `${name}\0${await sha256File(path.join(bandDir, name))}\n`,
-      );
-    }
-    const contentDigest = content.digest('hex');
+    const contentDigest = await bandContentDigest(bandDir, partitions);
     const idDigest = crypto
       .createHash('sha256')
       .update(contentDigest)
       .update(canonicalize(bandMetadata))
       .digest('hex')
       .slice(0, 12);
-    const publisherTag = crypto
-      .createHash('sha256')
-      .update(publisher)
-      .digest('hex')
-      .slice(0, 8);
+    const publisherTag = bandPublisherTag(publisher);
     const id = [
       kind,
       `h${heightRange[0]}`,
@@ -897,6 +889,7 @@ export async function buildBand({
         dir: bandDir,
         records: written,
         sample: samples,
+        contentDigest,
         conflicts,
         conflictSample: conflictSample.items,
         dropped,
@@ -1209,6 +1202,33 @@ function describeConflicts(conflicts: BandConflict[]): string[] {
     (c) =>
       `${c.id} in ${c.rootTxId}: ${c.sources.join(' vs ')}${c.fallback ? ' (fell back)' : ' (left out)'}`,
   );
+}
+
+/**
+ * The digest of a band's partition files, without its metadata: the
+ * {@link BuiltBand.contentDigest} of the build that wrote it, so a scheduler
+ * can tell a rebuild with the same entries from a published band.
+ */
+export async function bandContentDigest(
+  bandDir: string,
+  partitions: PartitionInfo[],
+): Promise<string> {
+  const content = crypto.createHash('sha256');
+  for (const partition of partitions) {
+    if (partition.location.type !== 'file') continue;
+    const name = partition.location.filename;
+    content.update(`${name}\0${await sha256File(path.join(bandDir, name))}\n`);
+  }
+  return content.digest('hex');
+}
+
+/** The part of a band id that names its publisher. */
+export function bandPublisherTag(publisher: string): string {
+  return crypto
+    .createHash('sha256')
+    .update(publisher)
+    .digest('hex')
+    .slice(0, 8);
 }
 
 /**

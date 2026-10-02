@@ -163,25 +163,19 @@ describe('CsvOverlaySource', () => {
     assert.equal(await source.stableHeight(), 250);
   });
 
-  it('prunes only files it read, unchanged, wholly within the frozen band', async () => {
+  it('prunes only files wholly within the range', async () => {
     await write('50-99.csv', [line(1, 60)]);
     await write('100-199.csv', [line(2, 150)]);
     await write('200-299.csv', [line(3, 250)]);
     await write('300-399.csv', [line(4, 350)]);
     await write('scratch.csv.tmp', []);
     const source = new CsvOverlaySource('bundler', dir);
-    await collect(source.records(100, 399));
-    // Unread: a file never built is never pruned.
-    await write('400-499.csv', [line(5, 450)]);
-    // Replaced after it was read: the correction stays.
-    await fs.rm(path.join(dir, '200-299.csv'));
-    await write('200-299.csv', [line(3, 251), line(6, 252)]);
-    // The frozen band covers 100-350: 300-399 runs past it.
-    assert.deepEqual(await source.prune(100, 350), ['100-199.csv']);
-    assert.deepEqual((await fs.readdir(dir)).sort(), [
+    assert.deepEqual(await source.prune(100, 350), [
+      '100-199.csv',
       '200-299.csv',
+    ]);
+    assert.deepEqual((await fs.readdir(dir)).sort(), [
       '300-399.csv',
-      '400-499.csv',
       '50-99.csv',
       'scratch.csv.tmp',
     ]);

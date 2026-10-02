@@ -46,15 +46,6 @@ export async function listOverlayFiles(dir: string): Promise<OverlayFile[]> {
   return files.sort((a, b) => a.from - b.from || a.to - b.to);
 }
 
-/** A file as it was when a build read it, so pruning can tell it hasn't changed. */
-interface ReadFile {
-  from: number;
-  to: number;
-  ino: number;
-  size: number;
-  mtimeMs: number;
-}
-
 /**
  * An authoritative overlay, such as a bundler's own offsets: a directory of
  * CSV files in the format `index-band-build` reads (`height` required), each
@@ -71,7 +62,6 @@ interface ReadFile {
 export class CsvOverlaySource implements RecordSource {
   readonly rank = 1;
   readonly stats: SourceStats = newSourceStats();
-  private readonly read = new Map<string, ReadFile>();
 
   constructor(
     readonly name: string,
@@ -99,14 +89,6 @@ export class CsvOverlaySource implements RecordSource {
       const filePath = path.join(this.dir, file.name);
       const handle = await fs.open(filePath, 'r');
       try {
-        const stat = await handle.stat();
-        this.read.set(file.name, {
-          from: file.from,
-          to: file.to,
-          ino: stat.ino,
-          size: stat.size,
-          mtimeMs: stat.mtimeMs,
-        });
         // Read through the handle opened above, so a file renamed over
         // this one meanwhile isn't mixed in.
         const rows = readBandRecordsCsv(
@@ -142,30 +124,19 @@ export class CsvOverlaySource implements RecordSource {
   }
 
   /**
-   * Deletes the files a frozen band was built from: those this source read
-   * whose whole coverage lies within `[from, to]`, the band's range, and
-   * that haven't changed since (a replacement dropped in meanwhile was never
-   * read, so it stays). Returns their names.
+   * Deletes the files whose whole coverage lies within `[from, to]`: heights
+   * a frozen band holds, which nothing reads again. The service passes a
+   * range a fold behind, below the overlap a delta reads. Returns their
+   * names.
    */
   async prune(from: number, to: number): Promise<string[]> {
     const pruned: string[] = [];
-    for (const [name, seen] of this.read) {
-      if (seen.from < from || seen.to > to) continue;
-      const filePath = path.join(this.dir, name);
-      const now = await fs.stat(filePath).catch(() => undefined);
-      if (
-        now === undefined ||
-        now.ino !== seen.ino ||
-        now.size !== seen.size ||
-        now.mtimeMs !== seen.mtimeMs
-      ) {
-        continue;
-      }
-      await fs.rm(filePath, { force: true });
-      this.read.delete(name);
-      pruned.push(name);
+    for (const file of await this.files()) {
+      if (file.from < from || file.to > to) continue;
+      await fs.rm(path.join(this.dir, file.name), { force: true });
+      pruned.push(file.name);
     }
-    return pruned.sort();
+    return pruned;
   }
 
   /** Seconds since the newest overlay file was written, or undefined with none. */

@@ -5,6 +5,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+
 import * as config from '../config.js';
 import { directoryBytes } from '../disk.js';
 import { QBittorrentTransport } from '../transport/qbittorrent.js';
@@ -341,6 +344,137 @@ const MARK: Record<Level, string> = {
   info: ' -- ',
 };
 
+/** What the index-export service leaves in `data/indexes/export`. */
+export interface ExportStatus {
+  state?: {
+    lastSuccess?: Partial<Record<'h' | 'r' | 'd', string>>;
+    lastRejection?: { at: string; role: string; reasons: string[] };
+    retry?: { at: string; attempts: number; reason: string };
+    lastRun?: { at: string; outcome: string };
+    overlayNewest?: Record<string, string>;
+  };
+  /** Seconds since the lock was last touched, when one is there. */
+  lockAgeSeconds?: number;
+  /** Whether this node publishes (INDEX_SWARM_PUBLISH set). */
+  publishing?: boolean;
+  /** Whether the service answered /healthz; undefined when not probed. */
+  serviceUp?: boolean;
+}
+
+const RUN_ONCE =
+  'docker compose --profile index-export run --rm -T index-export --once';
+
+/** A daily band older than this is a failure. */
+const EXPORT_DELTA_FAIL_SECONDS = 2 * 86400;
+/** An overlay older than this is stale. */
+const EXPORT_OVERLAY_WARN_SECONDS = 8 * 86400;
+/** A lock untouched this long belongs to a run that died. */
+const EXPORT_LOCK_STALE_SECONDS = 300;
+
+/** What the index-export service's state says, for a node that builds its own bands. */
+export function exportChecks(status: ExportStatus, now: number): Check[] {
+  const { state } = status;
+  if (state === undefined) {
+    return [
+      status.publishing === true
+        ? {
+            level: 'warn',
+            text: 'index-export has not run here, so this node publishes only bands built another way',
+            fix: 'If it should build them, check `docker compose logs index-export` (a configuration error stops it at start), or start it: see "Producing bands" in docs/index-swarm.md.',
+          }
+        : {
+            level: 'info',
+            text: 'index-export has not run here',
+          },
+    ];
+  }
+  const checks: Check[] = [];
+  if (status.serviceUp === false) {
+    checks.push({
+      level: 'warn',
+      text: 'The index-export service is not answering /healthz (stopped, or not started)',
+      fix: 'docker compose --profile index-export up -d --no-deps index-export, with your compose -f files; then docker compose logs index-export.',
+    });
+  }
+  const age = (at: string | undefined) =>
+    at === undefined ? undefined : (now - Date.parse(at)) / 1000;
+
+  const delta = age(state.lastSuccess?.d);
+  if (delta === undefined || delta > EXPORT_DELTA_FAIL_SECONDS) {
+    checks.push({
+      level: 'fail',
+      text:
+        delta === undefined
+          ? 'No daily band (d) has been built yet'
+          : `The daily band (d) last succeeded ${formatAge(delta)} ago`,
+      fix: `Check docker compose logs index-export and its last run below; to run now: ${RUN_ONCE}`,
+    });
+  } else {
+    checks.push({
+      level: 'ok',
+      text: `Daily band (d) last succeeded ${formatAge(delta)} ago`,
+    });
+  }
+  const recent = age(state.lastSuccess?.r);
+  if (recent !== undefined) {
+    checks.push({
+      level: recent > 8 * 86400 ? 'warn' : 'ok',
+      text: `Recent band (r) last folded ${formatAge(recent)} ago`,
+    });
+  }
+  if (state.lastRun !== undefined) {
+    checks.push({
+      level: 'info',
+      text: `Last run ${formatAge(age(state.lastRun.at) ?? 0)} ago: ${state.lastRun.outcome}`,
+    });
+  }
+  if (state.retry !== undefined) {
+    checks.push({
+      level: 'warn',
+      text: `Couldn't check (attempt ${state.retry.attempts}), retrying at ${state.retry.at}: ${state.retry.reason}`,
+    });
+  }
+  const rejection = state.lastRejection;
+  const rejected = age(rejection?.at);
+  const since =
+    rejection === undefined
+      ? undefined
+      : state.lastSuccess?.[rejection.role as 'h' | 'r' | 'd'];
+  if (
+    rejection !== undefined &&
+    rejected !== undefined &&
+    rejected < 7 * 86400 &&
+    (since === undefined || Date.parse(since) < Date.parse(rejection.at))
+  ) {
+    checks.push({
+      level: 'fail',
+      text: `A ${rejection.role} band was rejected ${formatAge(rejected)} ago: ${rejection.reasons.slice(0, 3).join('; ')}`,
+      fix: `A rejected band is not retried by itself: find why its headers or sources disagree, then rerun it: ${RUN_ONCE}`,
+    });
+  }
+  if (
+    status.lockAgeSeconds !== undefined &&
+    status.lockAgeSeconds > EXPORT_LOCK_STALE_SECONDS
+  ) {
+    checks.push({
+      level: 'warn',
+      text: `A stale lock (untouched ${formatAge(status.lockAgeSeconds)}): a run died`,
+      fix: 'The next run clears it.',
+    });
+  }
+  for (const [source, at] of Object.entries(state.overlayNewest ?? {})) {
+    const overlay = age(at) ?? 0;
+    checks.push({
+      level: overlay > EXPORT_OVERLAY_WARN_SECONDS ? 'warn' : 'ok',
+      text: `Overlay ${source}: newest file ${formatAge(overlay)} old`,
+      ...(overlay > EXPORT_OVERLAY_WARN_SECONDS
+        ? { fix: 'Check the job that writes its extracts.' }
+        : {}),
+    });
+  }
+  return checks;
+}
+
 function print(title: string, checks: Check[]): void {
   process.stdout.write(`\n${title}\n`);
   for (const check of checks) {
@@ -414,6 +548,42 @@ async function main(): Promise<void> {
       document = undefined;
     }
     section('Publishing', publisherChecks(sidecar, document, Date.now()));
+  }
+
+  const exportDir = path.join(config.DATA_DIR, 'export');
+  const exportState = await fs
+    .readFile(path.join(exportDir, 'state.json'), 'utf8')
+    .then(
+      (text) =>
+        (
+          JSON.parse(text) as {
+            indexes?: Record<string, ExportStatus['state']>;
+          }
+        ).indexes?.['root-tx-index'],
+    )
+    .catch(() => undefined);
+  if (config.PUBLISH.length > 0 || exportState !== undefined) {
+    const lock = await fs
+      .stat(path.join(exportDir, 'lock'))
+      .catch(() => undefined);
+    const serviceUp =
+      exportState === undefined
+        ? undefined
+        : (await fetchText('http://index-export:9102/healthz')) !== undefined;
+    section(
+      'Building bands (index-export)',
+      exportChecks(
+        {
+          ...(exportState !== undefined ? { state: exportState } : {}),
+          ...(lock !== undefined
+            ? { lockAgeSeconds: (Date.now() - lock.mtimeMs) / 1000 }
+            : {}),
+          publishing: config.PUBLISH.length > 0,
+          ...(serviceUp !== undefined ? { serviceUp } : {}),
+        },
+        Date.now(),
+      ),
+    );
   }
 
   if (config.ENGINE_URL !== undefined) {
