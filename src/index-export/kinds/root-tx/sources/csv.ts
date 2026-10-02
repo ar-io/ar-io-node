@@ -60,12 +60,18 @@ export async function listOverlayFiles(dir: string): Promise<OverlayFile[]> {
  * it into place, and replace a file the same way.
  */
 export class CsvOverlaySource implements RecordSource {
-  readonly rank = 1;
   readonly stats: SourceStats = newSourceStats();
 
+  /**
+   * @param rank 1 (the default) for an overlay; 0 for a peer's records
+   *   exported to files (another indexer's `index-band-export`, where its
+   *   database isn't reachable), which compete like any peer's and, like
+   *   one, cap the run's stable height at their coverage.
+   */
   constructor(
     readonly name: string,
     readonly dir: string,
+    readonly rank: 0 | 1 = 1,
   ) {}
 
   /** The top of the highest file's coverage, or -1 with no files. */
@@ -110,7 +116,9 @@ export class CsvOverlaySource implements RecordSource {
             if (height < from || height > to) continue;
             if (row.rootOffset === undefined) this.stats.rootOnly += 1;
             this.stats.records += 1;
-            yield { ...row, rank: 1, coverageTo: file.to, source: this.name };
+            yield this.rank === 1
+              ? { ...row, rank: 1, coverageTo: file.to, source: this.name }
+              : { ...row, source: this.name };
           }
         } catch (error) {
           throw new Error(

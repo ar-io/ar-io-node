@@ -559,7 +559,8 @@ export class ExportService {
     memory: RunMemory,
   ): Promise<void> {
     for (const { source } of ready) {
-      if (!(source instanceof CsvOverlaySource)) continue;
+      // Overlays only: a peer's files are kept and aged by whoever writes them.
+      if (!(source instanceof CsvOverlaySource) || source.rank !== 1) continue;
       const age = await source.ageSeconds(this.now());
       if (age === undefined) continue;
       metrics.overlayAge.set({ index: INDEX_NAME, source: source.name }, age);
@@ -638,7 +639,8 @@ export class ExportService {
         this.now() - Date.parse(band.manifest.createdAt) >= FOLD_INTERVAL_MS,
     );
     for (const { source } of ready) {
-      if (!(source instanceof CsvOverlaySource)) continue;
+      // Overlays only: a peer's files are kept and aged by whoever writes them.
+      if (!(source instanceof CsvOverlaySource) || source.rank !== 1) continue;
       for (const band of frozen) {
         const pruned = await source.prune(
           band.from,

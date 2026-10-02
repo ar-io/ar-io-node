@@ -319,7 +319,9 @@ replaced, so a subscriber that missed one still keeps its old band.
 without one. Several sources merge under one rule: the later root wins, an
 overlay (a bundler's own offsets, as coverage-named CSV files) wins within
 its coverage, and two sources disagreeing on an item's offsets are left out
-(or fall back to the earlier entry) rather than signed. Offsets are placed
+(or fall back to the earlier entry) rather than signed. Where a peer
+indexer's database isn't reachable, it can run `index-band-export` into
+coverage-named files that this service reads as a peer (`"rank": 0`). Offsets are placed
 only where proven; an item whose `root_parent_offset` is ambiguous keeps its
 root without them. `ar-io-node index-band-export` shows what one source gives
 (see [the CLI](cli.md#index-band-export)).

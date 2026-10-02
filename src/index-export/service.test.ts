@@ -627,12 +627,48 @@ describe('ExportService', () => {
     assert.ok((await live()).some((b) => b.id === frozenId));
   });
 
+  it('takes a peer’s exported files as a peer: capping the stable top and merging', async () => {
+    const files = path.join(dir, 'gw2-files');
+    await fs.mkdir(files);
+    // gw2 exported up to 2500 only, and agrees with gw1 on what it has.
+    await fs.writeFile(
+      path.join(files, '1000-2500.csv'),
+      records
+        .filter((r) => (r.height ?? 0) <= 2500)
+        .map(
+          (r) =>
+            `${toB64Url(r.id)},${toB64Url(r.rootTxId)},,${r.rootOffset},${r.rootDataOffset},${r.size},${r.height}`,
+        )
+        .join('\n') + '\n',
+    );
+    const report = await service({}, () => [
+      { source: gw1, optional: false },
+      { source: new CsvOverlaySource('gw2-files', files, 0), optional: false },
+    ]).runOnce();
+    assert.equal(report.stableTop, 2500, 'the lower peer caps the run');
+    assert.deepEqual(
+      report.steps.map((s) => [s.role, s.heightRange, s.result]),
+      [
+        ['h', [1000, 1999], 'published'],
+        ['r', [2000, 2500], 'published'],
+      ],
+    );
+    assert.equal(report.steps[0].band?.conflicts, 0);
+    assert.ok((report.steps[0].inputs['gw2-files'] ?? 0) > 0);
+  });
+
   it('prunes overlay files a frozen band holds, a fold after it froze', async () => {
     const overlay = path.join(dir, 'overlay');
     await fs.mkdir(overlay);
+    // A peer's exported files: never pruned by this service.
+    const peerFiles = path.join(dir, 'gw2-files');
+    await fs.mkdir(peerFiles);
+    await fs.writeFile(path.join(peerFiles, '2000-2400.csv'), '');
+    await fs.writeFile(path.join(peerFiles, '2401-3300.csv'), '');
     const sources = () => [
       { source: gw1, optional: false },
       { source: new CsvOverlaySource('bundler', overlay), optional: false },
+      { source: new CsvOverlaySource('gw2', peerFiles, 0), optional: false },
     ];
     await service({}, sources).runOnce();
     // Files written before the freeze: one wholly below the frozen top less
@@ -643,6 +679,7 @@ describe('ExportService', () => {
     for (const name of ['2000-2400.csv', '2600-2700.csv']) {
       await fs.utimes(path.join(overlay, name), old, old);
     }
+    await fs.utimes(path.join(peerFiles, '2000-2400.csv'), old, old);
     now += 8 * DAY;
     for (const record of records.slice(2200)) {
       record.height = (record.height ?? 0) + 500;
@@ -668,6 +705,7 @@ describe('ExportService', () => {
     now += 7 * DAY;
     await service({}, sources).runOnce();
     assert.deepEqual(await fs.readdir(overlay), ['2600-2700.csv']);
+    assert.equal((await fs.readdir(peerFiles)).length, 2, 'peer files kept');
   });
 
   it('publishes a small history band rather than leave its heights uncovered', async () => {

@@ -86,6 +86,18 @@ describe('CsvOverlaySource', () => {
     assert.equal(source.stats.records, 2);
   });
 
+  it('gives plain peer records at rank 0, still only inside each file coverage', async () => {
+    await write('100-199.csv', [line(1, 150), line(2, 250)]);
+    const source = new CsvOverlaySource('gw2-files', dir, 0);
+    assert.equal(source.rank, 0);
+    const records = await collect(source.records(100, 300));
+    assert.equal(records.length, 1);
+    assert.equal(records[0].rank, undefined);
+    assert.equal(records[0].coverageTo, undefined);
+    assert.equal(records[0].source, 'gw2-files');
+    assert.deepEqual(source.stats.dropped, { outside_coverage: 1 });
+  });
+
   it('skips files whose coverage misses the range without reading them', async () => {
     await write('100-199.csv', [line(1, 150)]);
     await write('300-399.csv', ['not,a,valid,file']);
