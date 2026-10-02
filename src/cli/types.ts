@@ -50,3 +50,11 @@ export interface IndexBandVerifyCLIOptions extends GlobalCLIOptions {
   readTimeout?: string;
   sampleSize?: string;
 }
+
+export interface IndexBandExportCLIOptions extends GlobalCLIOptions {
+  source?: string;
+  from?: string;
+  to?: string;
+  output?: string;
+  force?: boolean;
+}

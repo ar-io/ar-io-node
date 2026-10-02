@@ -32,6 +32,7 @@ The wrapper mounts only what a command needs:
 | Commands | Mounted |
 | --- | --- |
 | `index-band-*` | `INDEX_SWARM_DATA_PATH` (default `./data/indexes`) at `data/indexes`, and the gateway's Docker network (`DOCKER_NETWORK_NAME`, default `ar-io-network`), so `--gateway-url http://core:4000` reaches the gateway |
+| `index-band-export` | Also `SQLITE_DATA_PATH` (default `./data/sqlite`) read-only at `data/sqlite`; `CLICKHOUSE_URL`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`, passed by name, so not on the command line (`docker inspect` of the running container shows them); and `INDEX_EXPORT_SECRETS_DIR`, if set, read-only at `/run/secrets/index-export` for peers' password files |
 | any `ar.io` command | Nothing, except the file a `--wallet-file` (`-w`) names, read-only. A relative path is taken from where you ran the wrapper |
 
 It runs as your user, so what it writes is yours, and
@@ -52,7 +53,7 @@ come from your shell if set there, else from `.env`, as for compose. Set
 ### Paths
 
 Inside the container, the data directory is `data/indexes`. The wrapper
-rewrites any `--input`, `--band-dir`, `--publish-dir` or `--work-dir` that
+rewrites any `--input`, `--band-dir`, `--publish-dir`, `--work-dir` or `--output` that
 points inside `INDEX_SWARM_DATA_PATH` (absolute, or relative to where you ran
 it) to its `data/indexes/...` form, so all of these work:
 
@@ -149,6 +150,101 @@ Runs the header check on a built or installed band:
 
 It prints the result and exits 1 if the band fails.
 
+## `index-band-export`
+
+Writes one record source's records for a height range as CSV, the format
+`index-band-build` reads, with a header line. For checking what a source
+gives and for one-off builds; the `index-export` service merges several
+sources itself, by rank, which a CSV can't carry.
+
+```bash
+./tools/ar-io-node index-band-export --source '{"type":"clickhouse"}' \
+  --from 2010000 --to 2011000 --output data/indexes/export/records.csv
+./tools/ar-io-node index-band-build --input data/indexes/export/records.csv \
+  --skip-header --publisher <wallet> --kind d --height-range 2010000,2011000 \
+  --gateway-url https://turbo-gateway.com --dry-run
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--source <json>` | One source, as an `INDEX_EXPORT_SOURCES` entry: `{"type":"clickhouse"}` (this gateway's, from `CLICKHOUSE_*`), `{"type":"clickhouse","url":…,"user":…,"passwordFile":…}` (a peer's), `{"type":"sqlite"}` (`data/sqlite/bundles.db`, or `"path"`), or `{"type":"csv","path":…}` (an overlay directory). Default: this gateway's ClickHouse if `CLICKHOUSE_URL` is set, else its SQLite |
+| `--from <height>` / `--to <height>` | The heights to export, both included. Required |
+| `--output <path>` | The CSV to write, under `data/indexes` through the wrapper. Written under a `.partial` name and renamed when complete. Required |
+| `--force` | Replace `--output` if it exists |
+
+Where each source reads from, through the wrapper:
+
+- **This gateway's ClickHouse:** `CLICKHOUSE_URL` as the container sees it,
+  on the gateway's Docker network (`http://clickhouse:8123`, not
+  `localhost`).
+- **A peer's ClickHouse:** its `url` must be reachable from the container,
+  and `passwordFile` is the container path,
+  `/run/secrets/index-export/<file>`, readable by your user. The peer's
+  ClickHouse user must be allowed to change settings (`readonly=0` or `2`);
+  the queries set their own limits and are refused under a `readonly=1`
+  profile.
+- **SQLite:** `data/sqlite/bundles.db`, opened read-only, which needs the
+  gateway running (its `-wal` and `-shm` files present). On a gateway with
+  ClickHouse it holds only what import hasn't taken yet.
+- **An overlay:** a directory under `data/indexes`. Each file is named for
+  the heights it covers, `<from>-<to>.csv`, and files may not overlap;
+  anything else in the directory (`*.tmp`, `*.partial`, dot-files) is
+  ignored. Write a file under a temp name and rename it into place, and
+  don't preserve an old modification time (`cp -p`): the file's age is how
+  a stale overlay shows. An export renamed into an overlay directory becomes
+  authoritative over every other source within its heights, so put only a
+  bundler's own records there.
+
+What it exports, from either index:
+
+- **Data items only**, one record per item: from ClickHouse, the row at the
+  highest height, latest inserted, so a re-bundled item gives its later root.
+- **Offsets relative to the root, only where proven**: `root_parent_offset`
+  plus the item's own, when `root_parent_offset` matches the parent's
+  payload. A nested item whose `root_parent_offset` is 0 or unknown may hold
+  relative offsets (unbundled before #907 was fixed) or absolute ones
+  (resolved on demand), so it is tested against its parent's payload:
+  starting before it and fitting it as relative means relative, and it is
+  repaired (`repaired`); fitting it as absolute but running past it as
+  relative means absolute, and it is kept. Items nested deeper are placed
+  only along an unbroken chain of `root_parent_offset`s. Anything unproven
+  gives the item's root without offsets, counted in `unrepaired` by reason
+  (`ambiguous`, `no_parent`, `inconsistent`, `deep`).
+- **Left out and counted** in `dropped`: L1 transactions, items without a
+  root or whose root is the item itself, and items of size 0.
+
+ClickHouse queries are read-only and bounded (2 threads, 4 GB with a GROUP BY
+spilling to disk past 2 GB, 600 s, low priority, cancelled if the client goes
+away), a thousand blocks at a time; a window that still runs out of memory is
+retried in halves. Each item's parent comes from the same query. SQLite is
+read along its height index, 5,000 rows per statement, with parents by
+primary key.
+
+### `index-band-export` result
+
+From a real run (a thousand blocks of a gateway's own ClickHouse; the
+records then passed the header check against turbo-gateway.com, 150 of 150):
+
+```json
+{
+  "output": "data/indexes/export/records.csv",
+  "source": "clickhouse",
+  "rank": 0,
+  "heightRange": [2000000, 2000999],
+  "rowsRead": 19747,
+  "records": 19747,
+  "rootOnly": 0,
+  "repaired": 0,
+  "unrepaired": {},
+  "dropped": {},
+  "seconds": 0.3
+}
+```
+
+`dropped` counts rows left out, by reason: `not_data_item`, `no_root`,
+`root_is_item`, `zero_size`, and for an overlay `no_height` and
+`outside_coverage`.
+
 ## For scripts and agents
 
 Every `ar-io-node` command is non-interactive and answers in one shape, so a
@@ -177,8 +273,8 @@ script or an agent can drive it without parsing prose.
 - **Paths:** pass the `dir` a build reports straight back as `--band-dir`;
   see [Paths](#paths).
 - **No network** except range reads of root transactions from
-  `--gateway-url` during the header check. Band commands make no Solana RPC
-  calls.
+  `--gateway-url` during the header check, and `index-band-export`'s reads
+  from the ClickHouse it is given. Band commands make no Solana RPC calls.
 
 ### `index-band-build` result
 
